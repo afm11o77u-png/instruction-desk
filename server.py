@@ -591,6 +591,13 @@ def parse_shortages(raw, items, previous_rows):
         seen.add(line_id)
         qty=raw_row.get('qty')
         if type(qty) is not int or qty<1 or qty>99999: raise ValueError('不足数量は1以上の整数で入力してください。')
+        item=items_by.get(line_id)
+        if isinstance(item, dict):
+            ship=item.get('quantity')
+            if type(ship) is not int:
+                try: ship=int(ship)
+                except (TypeError, ValueError): ship=0
+            if qty>ship: raise ValueError('不足枚数は出荷枚数を超えられません。')
         supply=raw_row.get('supply')
         if supply not in SUPPLY:
             supply=prev.get('supply') if prev and prev.get('supply') in SUPPLY else '未発注'
