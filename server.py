@@ -18,13 +18,16 @@ DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'instructions.sqlite3'
 STOCK_DB = DATA / 'stock.sqlite3'
 def _stock_root():
+    # Prefer nested stock-desk inside this repo; keep legacy paths as transition fallbacks.
+    nested = ROOT / 'stock-desk'
+    if (nested / 'server.py').is_file(): return nested
     chosen = os.environ.get('STOCK_HOME')
     if chosen: return Path(chosen)
     sibling = ROOT.parent / 'stock-desk'
     if (sibling / 'server.py').is_file(): return sibling
     other = Path(r'D:\stock-desk')
     if (other / 'server.py').is_file(): return other
-    return sibling
+    return nested
 STOCK_ROOT = _stock_root()
 _stockdesk = None
 CONFIG = json.loads((ROOT / 'network.json').read_text(encoding='utf-8-sig')) if (ROOT / 'network.json').exists() else {}
