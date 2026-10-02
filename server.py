@@ -642,10 +642,12 @@ def floor_progress(handler,d):
         items=payload.get('items') if isinstance(payload.get('items'), list) else []
         ensure_line_ids(items)
         payload['items']=items
-        try: shortages=parse_shortages(d.get('shortages'), items, previous.get('shortages'))
-        except ValueError as e: return 400, {'error':str(e)}
-        if shortages: payload['shortages']=shortages
-        else: payload.pop('shortages', None)
+        # shortages 省略時は既存を維持（修理遅延の簡易登録など）
+        if 'shortages' in d:
+            try: shortages=parse_shortages(d.get('shortages'), items, previous.get('shortages'))
+            except ValueError as e: return 400, {'error':str(e)}
+            if shortages: payload['shortages']=shortages
+            else: payload.pop('shortages', None)
         reconcile_shortages(payload)
         payload['floorProgress']=progress
         if requested: payload['repairRequestedDate']=requested
