@@ -107,10 +107,11 @@ function openFloorSheetPreview(order){if(!order)return;previewChoice=true;previe
 function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirmationOnly=false){
  if(!list.length)return;
  if(guardPrinting())return;
- draftPreview=confirmationOnly||list.some(o=>o.status==='下書き');
+ // labelOrders() keeps null slots for blank print positions; skip those here.
+ draftPreview=confirmationOnly||list.some(o=>o&&o.status==='下書き');
  if(draftPreview){previewOnly=true;labelsOnly=false;includeLabels=false;previewChoice=false;previewOrder=null}
  document.body.classList.toggle('draftpreview',draftPreview);
- printing=true;pendingPrintIds=labelsOnly||draftPreview?[]:list.map(o=>o.id);
+ printing=true;pendingPrintIds=labelsOnly||draftPreview?[]:list.filter(Boolean).map(o=>o.id);
  try{
   $('#printarea').replaceChildren(...(labelsOnly?addressTags(list):[...list.map(printedSheet),...(includeLabels?addressTags(list):[])]));
   if(previewOnly){openPrintPreview();return}
