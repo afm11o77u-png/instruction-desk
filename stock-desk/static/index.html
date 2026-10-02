@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>在庫管理（試用）</title>
+<script>if(new URLSearchParams(location.search).get('embed')==='1')document.documentElement.classList.add('embed')</script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div>
+    <p class="eyebrow" id="eyebrow">試用版</p>
+    <h1>在庫</h1>
+  </div>
+  <nav class="switch" aria-label="画面の切替">
+    <button type="button" data-mode="masters">顧客・商品情報</button>
+    <button type="button" data-mode="stock">在庫管理</button>
+    <button type="button" id="desk">指示書デスク</button>
+  </nav>
+</header>
+<p id="desknote" class="notice" hidden>指示書デスクは、この試用アプリには入っていません。</p>
+<nav class="tabs" id="tabs" aria-label="メニュー"></nav>
+<main id="main"></main>
+<footer>
+  <button type="button" id="backup" class="quiet">バックアップを作る</button>
+  <span id="foot"></span>
+</footer>
+<dialog id="dialog"></dialog>
+<p id="toast" hidden></p>
+<script src="app.js"></script>
+</body>
+</html>

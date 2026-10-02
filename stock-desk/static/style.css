@@ -1,0 +1,58 @@
+:root{font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;color:#17211b;background:#f4f7f4;font-size:16px;line-height:1.5;--green:#186438;--line:#d5ead4}
+*{box-sizing:border-box}body{margin:0}[hidden]{display:none!important}
+button,input,select,textarea{font:inherit}button{cursor:pointer;border:1px solid #c5dcc4;background:#fff;border-radius:8px;padding:10px 14px;font-weight:700}
+button:hover{background:#eef8ef}button:disabled{opacity:.55;cursor:not-allowed}
+button:focus-visible,input:focus,select:focus,textarea:focus{outline:3px solid #5d9a72;outline-offset:2px}
+.primary{background:var(--green);border-color:var(--green);color:#fff}.primary:hover{background:#124f2e}
+.quiet{background:transparent}
+header{display:flex;justify-content:space-between;gap:16px;align-items:end;padding:22px 28px 8px}
+.eyebrow{margin:0;font-size:12px;font-weight:700;letter-spacing:.08em}h1{margin:2px 0 0;font-size:1.6rem}
+.switch{display:flex;gap:8px;flex-wrap:wrap}.switch button{min-height:44px}html.embed .switch,html.embed #desknote{display:none}
+.switch .active{background:var(--green);border-color:var(--green);color:#fff}
+#desk{color:#66756c;background:#eef1ee}
+.tabs{display:flex;gap:8px;padding:8px 28px 0;flex-wrap:wrap}.tabs button.active{box-shadow:inset 0 -3px 0 var(--green)}
+main{padding:16px 28px 28px}.notice,.provisional{background:#fff;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;padding:12px 14px;margin:0 0 14px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.bar{display:flex;gap:10px;align-items:end;padding:14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.exceltools{display:flex;gap:8px;margin-left:auto;align-items:center}.exceltools button{white-space:nowrap}
+.excelhint{margin:0;padding:0 14px 12px;color:#3d5146;font-size:13px}
+.bar label{font-size:13px;font-weight:700}.bar input,.bar select{min-width:140px}
+label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:700}
+input,select,textarea{width:100%;border:1px solid #c9dcc4;border-radius:6px;padding:10px;background:#fff;min-height:42px;font-weight:400}
+table{border-collapse:collapse;width:100%}th,td{padding:10px 12px;border-bottom:1px solid #e3efe4;text-align:left;vertical-align:top}
+th{font-size:13px;background:#f8fbf8}td .sub{display:block;color:#3d5146;font-size:13px;font-weight:400}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;background:#e7eee4;font-size:12px;font-weight:700}.badge.stop{background:#ece7e2}
+.directory-scroll{max-height:calc(100vh - 250px);overflow:auto}
+table.directory{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0}
+table.directory th:nth-child(1),table.directory td:nth-child(1){width:26%}
+table.directory th:nth-child(2),table.directory td:nth-child(2){width:18%}
+table.directory th:nth-child(3),table.directory td:nth-child(3){width:14%}
+table.directory th:nth-child(4),table.directory td:nth-child(4){width:34%}
+table.directory th:nth-child(5),table.directory td:nth-child(5){width:8%}
+table.directory th{position:sticky;top:0;z-index:1;background:#f6faf7;color:#5d7268;font-size:11px;font-weight:700;letter-spacing:.14em;padding:11px 16px;border-bottom:1px solid #d5e6da;white-space:nowrap}
+table.directory td{padding:12px 16px;border-bottom:1px solid #eef3ef;vertical-align:middle}
+table.directory tbody tr:hover td{background:#f3faf5}
+table.directory .sid{display:inline-block;width:2em;margin-right:8px;color:#8aa094;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;vertical-align:baseline}
+table.directory .nameline{display:inline-block;vertical-align:middle}
+table.directory .nameline b{font-weight:700;letter-spacing:.01em}
+table.directory .tel{font-variant-numeric:tabular-nums;letter-spacing:.04em;white-space:nowrap;color:#1b3328}
+table.directory .addr{color:#3e5248;font-size:14px;line-height:1.45}
+table.directory .blank{color:#c5d2ca}
+table.directory .pill{display:inline-block;padding:3px 10px;border-radius:999px;background:#e7f3eb;color:#145233;font-size:13px;font-weight:700;white-space:nowrap}
+table.directory .act{width:76px;text-align:right}
+table.directory .rowedit{padding:6px 12px;border-radius:999px;font-size:13px;color:#186438;background:#fff}
+table.directory tr.is-stopped td{color:#8b9790}
+table.directory tr.is-stopped .nameline b{font-weight:600}
+.money{font-variant-numeric:tabular-nums;font-weight:700}.total{display:flex;gap:18px;padding:14px;background:#f3faf4;border-bottom:1px solid var(--line)}
+.total strong{font-size:1.4rem}.parts{margin:6px 0 0;padding:0;list-style:none}.parts li{font-size:13px;font-weight:400;color:#24352c}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chips button{font-weight:700}.chips button.on{background:#186438;color:#fff;border-color:#186438}
+.links{display:flex;flex-direction:column;gap:10px}.linkrow,.sizerow{display:grid;gap:8px;align-items:end;border:1px solid var(--line);border-radius:8px;padding:10px}
+.linkrow{grid-template-columns:1.3fr 1fr auto auto auto}.sizerow{grid-template-columns:120px 1fr 1fr auto}
+.check{flex-direction:row;align-items:center;font-weight:700;gap:6px}.check input{width:auto;min-height:0}
+dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0}dialog::backdrop{background:#1e332866}
+.dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
+.dialoghead h2{margin:0;font-size:1.2rem}.dialogactions{display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line)}
+#error{color:#9a3418;font-weight:700;min-height:1.2em}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#146b28;color:#fff;padding:12px 18px;border-radius:8px}
+@media(max-width:800px){header,main,footer,.tabs{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
