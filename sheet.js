@@ -48,9 +48,13 @@ function fitAddressTags(pages){
  }
  body.replaceChildren();
 }
-let pendingPrintIds=[],printing=false,reopenEditor=false;
+let pendingPrintIds=[],printing=false,reopenEditor=false,printWatch=null;
 const previewSteps=[.5,.65,.8,1,1.15,1.3,1.45];
 let previewZoom=1.15,previewFit=true;
+function clearPrintWatch(){if(printWatch){clearTimeout(printWatch);printWatch=null}}
+function unlockPrinting(){clearPrintWatch();pendingPrintIds=[];printing=false}
+function armPrintWatch(){clearPrintWatch();printWatch=setTimeout(()=>{printWatch=null;if(!printing||document.body.classList.contains('previewing'))return;pendingPrintIds=[];printing=false;toast('印刷の応答がありませんでした。もう一度お試しください。')},90000)}
+function guardPrinting(){if(!printing)return false;if(document.body.classList.contains('previewing')){toast('印刷プレビューを表示中です。閉じてから操作してください。');return true}unlockPrinting();toast('印刷処理が途中で止まっていました。解除したので、もう一度操作してください。');return true}
 function wrapPreviewPages(){
  const area=$('#printarea');
  [...area.children].forEach((sheet,i)=>{
@@ -99,9 +103,10 @@ function showPreviewKind(kind){
   page.hidden=choice&&(previewShow==='sheet'?label:!label);
  });
 }
-function openFloorSheetPreview(order){if(!order||printing)return;previewChoice=true;previewOrder=order;previewShow='sheet';queuePrint([order],false,true,true)}
+function openFloorSheetPreview(order){if(!order)return;previewChoice=true;previewOrder=order;previewShow='sheet';queuePrint([order],false,true,true)}
 function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirmationOnly=false){
- if(printing||!list.length)return;
+ if(!list.length)return;
+ if(guardPrinting())return;
  draftPreview=confirmationOnly||list.some(o=>o.status==='下書き');
  if(draftPreview){previewOnly=true;labelsOnly=false;includeLabels=false;previewChoice=false;previewOrder=null}
  document.body.classList.toggle('draftpreview',draftPreview);
@@ -113,20 +118,21 @@ function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirm
   reopenEditor=!!$('#editor')?.open;
   if(reopenEditor)$('#editor').close();
   if(labelsOnly){printLabelFrame();return}
+  armPrintWatch();
   window.print();
  }catch(e){
-  pendingPrintIds=[];printing=false;closePrintPreview();$('#printarea').replaceChildren();
+  unlockPrinting();closePrintPreview();$('#printarea').replaceChildren();
   toast('印刷画面を開けませんでした。もう一度お試しください。');
  }
 }
-window.addEventListener('afterprint',()=>{const ids=pendingPrintIds;pendingPrintIds=[];printing=false;closePrintPreview();$('#printarea').replaceChildren();if(!ids.length)return;api('/api/orders/printed',{ids}).then(r=>{for(const o of r.orders){const i=orders.findIndex(x=>x.id===o.id);if(i>=0)orders[i]=o;if(editing?.id===o.id)editing=structuredClone(o)}render();toast(ids.length===1?'印刷したことを記録しました。':`${ids.length}件を印刷済みにしました。作業状況は変えていません。`)}).catch(e=>toast(e.message))});
-$('#previewprint').onclick=()=>{if(draftPreview||!document.body.classList.contains('previewing'))return;if($('#printarea').querySelector('.labelpage')&&!$('#printarea').querySelector('.papersheet'))printLabelFrame();else window.print()};
+window.addEventListener('afterprint',()=>{const ids=pendingPrintIds;clearPrintWatch();pendingPrintIds=[];printing=false;closePrintPreview();$('#printarea').replaceChildren();if(!ids.length)return;api('/api/orders/printed',{ids}).then(r=>{for(const o of r.orders){const i=orders.findIndex(x=>x.id===o.id);if(i>=0)orders[i]=o;if(editing?.id===o.id)editing=structuredClone(o)}render();toast(ids.length===1?'印刷したことを記録しました。':`${ids.length}件を印刷済みにしました。作業状況は変えていません。`)}).catch(e=>toast(e.message))});
+$('#previewprint').onclick=()=>{if(draftPreview||!document.body.classList.contains('previewing'))return;if($('#printarea').querySelector('.labelpage')&&!$('#printarea').querySelector('.papersheet'))printLabelFrame();else{armPrintWatch();window.print()}};
 $('#previewseesheet').onclick=()=>{showPreviewKind('sheet');previewFit=true;applyPreviewZoom();$('#printarea').scrollTop=0;$('#printarea').scrollLeft=0};
 $('#previewseelabel').onclick=()=>{if(!$('#printarea .labelpage')){toast('宛名に入れる内容がありません。');return}showPreviewKind('label');previewFit=true;applyPreviewZoom();$('#printarea').scrollTop=0;$('#printarea').scrollLeft=0};
-$('#previewchoiceprint').onclick=()=>{if(draftPreview||!document.body.classList.contains('previewing'))return;if(previewShow==='label'){if(!previewOrder)return;const pages=addressTags([previewOrder]);if(!pages.length){toast('宛名に入れる内容がありません。');return}printLabelFrame(pages,true);return}window.print()};
+$('#previewchoiceprint').onclick=()=>{if(draftPreview||!document.body.classList.contains('previewing'))return;if(previewShow==='label'){if(!previewOrder)return;const pages=addressTags([previewOrder]);if(!pages.length){toast('宛名に入れる内容がありません。');return}printLabelFrame(pages,true);return}armPrintWatch();window.print()};
 const labelPrintCss=`@page{size:A4 landscape;margin:18mm 12mm 6mm 12mm}html,body{margin:0;padding:0;background:#fff}*{box-sizing:border-box}.labelpage{width:273mm;height:186mm;margin:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;position:relative;overflow:hidden;break-after:page;page-break-after:always;background:#fff}.labelpage:last-child{break-after:auto;page-break-after:auto}.labelpage::before,.labelpage::after{content:"";position:absolute;z-index:3}.labelpage::before{left:0;right:0;top:50%;border-top:1px dashed #000}.labelpage::after{top:0;bottom:0;left:50%;border-left:1px dashed #000}.tag{min-width:0;min-height:0;height:100%;display:flex;flex-direction:column;overflow:hidden;text-align:center;color:#000;padding:2.5mm 4mm;box-sizing:border-box}.tagbody{flex:1 1 auto;min-height:0;width:100%;display:grid;grid-template-rows:31fr 18fr 47fr}.tagband{min-width:0;min-height:0;height:auto;max-height:none;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:1.5mm 2mm;box-sizing:border-box}.tagband:nth-child(1){justify-content:flex-start;padding-left:8mm}.tagband:nth-child(2){align-items:flex-start;padding-top:1.5mm}.nameband{align-items:center;padding:1.5mm 2mm 2mm}.tagmid{width:100%;height:100%;min-width:0;display:flex;align-items:center;justify-content:center}.tagmid.hassplit{display:grid;grid-template-columns:24% minmax(0,1fr);align-items:center;column-gap:2mm;padding-left:14mm}.tagcustomer,.tagdept,.tagcode,.tagjob,.tagwho{margin:0;width:100%;max-width:100%;max-height:100%;font-weight:700;line-height:1.05;overflow:hidden;text-align:center}.tagcustomer{text-align:left}.tagwho{display:flex;justify-content:center;align-items:center;gap:.5em}.tagname,.tagsama{min-width:0;white-space:nowrap}.tagcustomer,.tagdept,.tagcode,.tagjob{white-space:nowrap}.tagjob{flex:0 0 18%;height:auto;max-height:none;display:flex;align-items:center;justify-content:center;padding:1mm 2mm 1.6mm;letter-spacing:.04em;box-sizing:border-box}body{font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}`;
-function printLabelFrame(pages,keep){const list=pages||[...$('#printarea').querySelectorAll('.labelpage')];if(!list.length)return;let frame=$('#labelframe');if(!frame){frame=document.createElement('iframe');frame.id='labelframe';frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;left:-12000px;top:0;width:297mm;height:210mm;border:0';document.body.append(frame)}const doc=frame.contentDocument;doc.open();doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>宛名</title><style>${labelPrintCss}</style></head><body>${list.map(page=>page.outerHTML).join('')}</body></html>`);doc.close();const win=frame.contentWindow;const finish=()=>{win.removeEventListener('afterprint',finish);if(!keep)window.dispatchEvent(new Event('afterprint'))};win.addEventListener('afterprint',finish);win.focus();win.print()}
-$('#previewclose').onclick=()=>{pendingPrintIds=[];printing=false;closePrintPreview();$('#printarea').replaceChildren()};
+function printLabelFrame(pages,keep){const list=pages||[...$('#printarea').querySelectorAll('.labelpage')];if(!list.length){toast('宛名に入れる内容がありません。');return}let frame=$('#labelframe');if(!frame){frame=document.createElement('iframe');frame.id='labelframe';frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;left:-12000px;top:0;width:297mm;height:210mm;border:0';document.body.append(frame)}const doc=frame.contentDocument;doc.open();doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>宛名</title><style>${labelPrintCss}</style></head><body>${list.map(page=>page.outerHTML).join('')}</body></html>`);doc.close();const win=frame.contentWindow;const finish=()=>{win.removeEventListener('afterprint',finish);if(!keep)window.dispatchEvent(new Event('afterprint'))};win.addEventListener('afterprint',finish);if(!keep)armPrintWatch();win.focus();try{win.print()}catch(e){win.removeEventListener('afterprint',finish);if(!keep){unlockPrinting();closePrintPreview();$('#printarea').replaceChildren()}toast('印刷画面を開けませんでした。もう一度お試しください。')}}
+$('#previewclose').onclick=()=>{unlockPrinting();closePrintPreview();$('#printarea').replaceChildren()};
 $('#previewlarger').onclick=()=>{previewFit=false;previewZoom=previewSteps.find(z=>z>previewZoom+.001)??previewSteps.at(-1);applyPreviewZoom()};
 $('#previewsmaller').onclick=()=>{previewFit=false;previewZoom=[...previewSteps].reverse().find(z=>z<previewZoom-.001)??previewSteps[0];applyPreviewZoom()};
 $('#previewfit').onclick=()=>{previewFit=true;applyPreviewZoom();$('#printarea').scrollLeft=0};
@@ -141,7 +147,6 @@ function currentPreviewOrder(){
  return order;
 }
 $('#largepreview').onclick=()=>{
- if(printing)return;
  const order=currentPreviewOrder();if(!order)return;
  $('#formerror').textContent='';
  queuePrint([order],false,true,false,dirty||!editing?.id);
@@ -167,7 +172,7 @@ function renderLabelSets(selectId){const list=$('#labellist');if(!list)return;co
 async function loadLabelSets(selectId){if(!currentUser||(currentUser.role!=='owner'&&currentUser.role!=='floor'&&currentUser.role!=='floor2'))return;try{labelSets=await api('/api/label-sets');renderLabelSets(selectId);$('#labelmemoryerror').textContent=''}catch(e){$('#labelmemoryerror').textContent=e.message}}
 function chosenLabelSet(){const set=labelSets.find(set=>set.id===+$('#labellist').value);if(!set)throw Error('呼び出す宛名を選んでください。');return set}
 $('#labellist').onchange=()=>{const set=labelSets.find(item=>item.id===+$('#labellist').value);if(set)$('#labelname').value=set.name};
-$('#labelload').onclick=async()=>{try{const set=chosenLabelSet();if(labelOrders().length&&!confirm(`「${set.name}」の内容に置き換えますか？`))return;fillLabelCards(set.payload);$('#labelmemoryerror').textContent='';toast('記憶した宛名を呼び出しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}};
+$('#labelload').onclick=async()=>{try{const selectedId=+$('#labellist').value;if(!selectedId)throw Error('呼び出す宛名を選んでください。');await loadLabelSets(selectedId);const set=chosenLabelSet();if(labelOrders().length&&!confirm(`「${set.name}」の内容に置き換えますか？`))return;fillLabelCards(set.payload);$('#labelmemoryerror').textContent='';toast('記憶した宛名を呼び出しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}};
 async function saveLabelSet(update){try{$('#labelmemoryerror').textContent='';const chosen=update?chosenLabelSet():null;if(update&&!confirm(`「${chosen.name}」を今の入力で上書きしますか？`))return;const saved=await api('/api/label-sets/save',Object.assign({name:$('#labelname').value,slots:labelSlots()},update?{id:chosen.id,version:chosen.version}:{}));await loadLabelSets(saved.id);toast('宛名を記憶しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}}
 $('#labelsave').onclick=()=>saveLabelSet(false);
 $('#labelupdate').onclick=()=>saveLabelSet(true);
