@@ -15,7 +15,9 @@ node_modules/
 .env.*
 !.env.example
 
-# Python
+# Python 仮想環境
+.venv/
+venv/
 
 # ビルド・キャッシュ
 dist/
@@ -28,17 +30,16 @@ build/
 
 # 業務データ画像
 data/images/placement/
+data/images/names/
+
+# ネーム catalog 取込（顧客データ）
+data/name-import/
 
 # コードの自動バックアップ
 data/code-backups/
 
 # 自動生成される取込レポート
 data/*-import-report.json
-
-data/images/names/
-
-# ユーザー確認用ネーム画像
-data/images/names/
 
 # 秘密鍵・ローカル証明書
 tls/
