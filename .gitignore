@@ -1,5 +1,10 @@
 __pycache__/
 *.pyc
+
+# SQLite DBs and sidecars (desk + nested stock-desk; never commit DB contents)
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 data/*.sqlite3
 data/*.sqlite3-wal
 data/*.sqlite3-shm
@@ -45,3 +50,21 @@ data/*-import-report.json
 tls/
 
 network.json
+
+# Nested stock-desk (app source is committed; local data / secrets / caches are not)
+stock-desk/__pycache__/
+stock-desk/**/__pycache__/
+stock-desk/**/*.pyc
+stock-desk/**/*.sqlite3
+stock-desk/**/*.sqlite3-wal
+stock-desk/**/*.sqlite3-shm
+stock-desk/**/.env
+stock-desk/**/.env.*
+!stock-desk/**/.env.example
+stock-desk/.venv/
+stock-desk/venv/
+stock-desk/**/*.log
+stock-desk/**/.cache/
+stock-desk/data/
+stock-desk/tls/
+stock-desk/network.json
