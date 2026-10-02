@@ -1,0 +1,221 @@
+const nameMixBackground='linear-gradient(135deg,#F08080 0%,#F08080 25%,#87CEFA 25%,#87CEFA 50%,#90EE90 50%,#90EE90 75%,#fff 75%,#fff 100%)';
+function nameIsMix(value){return String(value||'').trim()==='先方から指定'}
+function nameMixNote(value){return nameIsMix(value)?'色は先方指定（赤・青・緑・白）。4色表示は選択肢の見本です。':''}
+
+function nameDimensions(item){
+ if(item.sizeKind==='unknown'||item.sizeKind==='blank'||item.blank||/未指定|無地/.test(item.size||''))return null;
+ const match=String(item.size||'').match(/([0-9.]+)\s*[×x]\s*([0-9.]+)\s*mm/i);
+ const w=Number(item.widthMm||match?.[1]),h=Number(item.heightMm||match?.[2]);
+ return Number.isFinite(w)&&Number.isFinite(h)&&w>0&&h>0?{w,h}:null;
+}
+function nameSizeHeading(item){
+ const d=nameDimensions(item);
+ if(!d)return item.blank?'無地・寸法未表示':'サイズ未指定（要確認）';
+ const kind=item.sizeKind==='small'||String(item.size||'').startsWith('小')?'小ネーム':item.sizeKind==='large'||String(item.size||'').startsWith('大')?'大ネーム':'ネーム';
+ return `${kind}｜横${d.w} × 縦${d.h} mm`;
+}
+function nameScalePicture(item,url,paperColor){
+ const mix=!!url&&nameIsMix(paperColor===undefined?item.fixedColor:paperColor);
+ const d=nameDimensions(item);
+ const img=url?`<img src="${url}" alt="${esc(item.format||'ネーム見本')}" loading="lazy">`:`<span class="namemiss">${item.blank?'印字なし':'見本なし'}</span>`;
+ if(!d)return `<span class="namescale-stage unknown"><span class="nameunknown-image${mix?' namepaper-mix':''}">${img}</span></span>`;
+ return `<span class="namescale-stage"><span class="namescale-box${mix?' namepaper-mix':''}" style="width:${d.w*2}px;height:${d.h*2}px"><span class="namedim-width">${d.w} mm</span><span class="namedim-height">${d.h} mm</span>${img}</span></span>`;
+}
+let nameZoomDialog;
+function openNameZoom(item,sample){
+ if(!nameZoomDialog){
+  nameZoomDialog=document.createElement('dialog');nameZoomDialog.id='namezoom';nameZoomDialog.setAttribute('aria-labelledby','namezoomtitle');
+  nameZoomDialog.innerHTML='<div class="namezoom-head"><h2 id="namezoomtitle"></h2><button type="button" id="namezoomclose">閉じる</button></div><p id="namezoomnote"></p><div class="namezoom-image"><span id="namezoompaper"><img id="namezoomimage" alt=""></span></div>';
+  document.body.appendChild(nameZoomDialog);
+  $('#namezoomclose').onclick=()=>nameZoomDialog.close();
+  nameZoomDialog.addEventListener('click',e=>{if(e.target===nameZoomDialog)nameZoomDialog.close()});
+ }
+ $('#namezoomtitle').textContent=nameSizeHeading(item);
+ $('#namezoomnote').textContent=[item.format,sample.condition,nameMixNote(sample.paperColor||item.fixedColor),'拡大表示です。実物大ではありません。'].filter(Boolean).join(' ／ ');
+ $('#namezoomimage').src=nameSampleUrl(sample.id);$('#namezoomimage').alt=item.format+' '+(sample.condition||'');
+ const mix=nameIsMix(sample.paperColor||item.fixedColor);
+ $('#namezoompaper').classList.toggle('namepaper-mix',mix);
+ const dim=nameDimensions(item);$('#namezoompaper').style.setProperty('--name-ratio',dim?dim.w/dim.h:1.6);
+ nameZoomDialog.showModal();
+}
+let nameBusy=false;
+function nameSampleUrl(id){return '/api/name-labels/samples/'+id}
+function fontLabel(name){
+ const text=String(name||'');
+ if(text.normalize('NFKC').toUpperCase().startsWith('HG丸ゴシック')) return 'HG丸ゴシック';
+ return text;
+}
+function paperSwatch(name){
+ if(nameIsMix(name))return nameMixBackground;
+ const key=String(name||'').replace(/[?？]/g,'').trim();
+ return {青:'#87CEFA',緑:'#90EE90',赤:'#F08080',黄:'#FFFFE0',オレンジ:'#FFDAB9'}[key]||'#fff';
+}
+function nameSwatches(colors,fixed){
+ const rows=(colors||[]).map(row=>`<span class="nameswatch"><i style="background:${esc(nameIsMix(row.color)?nameMixBackground:(row.swatch||paperSwatch(row.color)))}"></i>${esc(row.group)}：${esc(row.color)||'色未設定'}</span>`).join('');
+ if(rows)return rows;
+ if(fixed)return `<span class="nameswatch"><i style="background:${paperSwatch(fixed)}"></i>${esc(fixed)}${nameIsMix(fixed)?'（赤・青・緑・白）':''}</span>`;
+ return '色の指定はありません';
+}
+function paintNameCustomers(data){
+ const box=$('#namecustomers');
+ const items=data.items||[];
+ const fonts=(data.missingFonts||[]).filter(name=>!String(name).normalize('NFKC').toUpperCase().startsWith('HG丸ゴシック'));
+ const fontNote=fonts.length?`このパソコンにない書体：${fonts.join('、')}。その形式は要確認です。`:''
+ $('#namestatus').textContent=items.length?`${items.length}件の顧客です。${fontNote}`:(fontNote||'該当する顧客はありません。');
+ box.innerHTML=items.map(item=>{
+  const people=(item.assignees||[]).filter(Boolean);
+  const who=people.length?people.join('、'):'担当未設定';
+  return `<button type="button" class="namecustomer" data-id="${item.id}"><b>${esc(item.sourceName)}</b><span>担当：${esc(who)}</span><span>了承 ${item.approvedCount||0}　未了承 ${item.unapprovedCount||0}</span><span>${item.formatCount}形式${item.reviewCount?`　要確認 ${item.reviewCount}`:''}</span><span>${item.linkStatus==='対応'?'指示書デスクの顧客名と一致':'未対応'}</span></button>`;
+ }).join('');
+ box.querySelectorAll('.namecustomer').forEach(button=>button.onclick=()=>openNameCustomer(Number(button.dataset.id)));
+}
+function paintNameFormats(data){
+ const box=$('#nameformats');
+ const link=data.linkStatus==='対応'?`指示書デスクの顧客名と一致：${data.linkedName}`:'指示書デスクの顧客とは未対応です。名前だけでは結び付けていません。';
+ const formats=(data.formats||[]).map(item=>`<button type="button" class="namecard" data-id="${item.id}"><span class="namesize-heading">${esc(nameSizeHeading(item))}</span>${nameScalePicture(item,item.hasImage?nameSampleUrl(item.sampleId):null)}<b>${esc(item.format)}</b><span class="namecolors">${nameSwatches(item.colors,item.fixedColor)}</span><span>${esc(item.placement)||'貼付け位置の指定なし'}</span>${item.needsReview?'<em>要確認</em>':''}</button>`).join('');
+ box.innerHTML=`<div class="namehead"><h2>${esc(data.sourceName)}</h2><p>${esc(link)}</p><p>${esc(data.reading)?`読み：${esc(data.reading)}`:''}</p>${currentUser?.role==='owner'?`<button type="button" id="nameaddformat">この顧客に形式を追加</button>`:''}</div><p class="namescale-note">大小を同じ縮尺で表示しています（実物大ではありません）。形式を開くと、見本をクリックして拡大できます。</p><div class="namegrid">${formats||'<p>形式はありません。</p>'}</div>`;
+ box.querySelectorAll('.namecard').forEach(button=>button.onclick=()=>openNameFormat(Number(button.dataset.id)));
+ const add=$('#nameaddformat');
+ if(add)add.onclick=()=>openNameEditor(null,{id:data.id,sourceName:data.sourceName,reading:data.reading||''});
+}
+async function loadNames(reset){
+ if(nameBusy)return;
+ nameBusy=true;
+ if(reset)$('#nameformats').innerHTML='<p class="nameempty">左の顧客を選ぶと、形式がここに出ます。</p>';
+ $('#namestatus').textContent='読み込んでいます。';
+ try{
+  const q=$('#namecustomer').value.trim();
+  const data=await api('/api/name-labels'+(q?'?q='+encodeURIComponent(q):''));
+  paintNameCustomers(data);
+ }catch(e){$('#namestatus').textContent=e.message||'読み込めませんでした。'}
+ finally{nameBusy=false}
+}
+async function openNameCustomer(id){
+ document.querySelectorAll('#namecustomers .namecustomer').forEach(button=>button.classList.toggle('active',Number(button.dataset.id)===id));
+ try{
+  paintNameFormats(await api('/api/name-labels/customers/'+id));
+  $('#nameformats').scrollTop=0;
+ }catch(e){$('#namestatus').textContent=e.message||'読み込めませんでした。'}
+}
+function paintNameDetail(item){
+ const colors=nameSwatches(item.colors,item.fixedColor);
+ const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${nameMixNote(sample.paperColor||item.fixedColor)?`<br>${esc(nameMixNote(sample.paperColor||item.fixedColor))}`:''}</figcaption></figure>`).join('');
+ const reasons=(item.reviewReasons||[]).filter(text=>!/書体|代替表示/.test(text)).map(text=>`<li>${esc(text)}</li>`).join('');
+ const departments=(item.departments||[]).map(esc).join('、');
+ $('#nametitle').textContent=item.format||'ネーム形式';
+ $('#namenumber').textContent=item.number||'';
+ $('#namebody').innerHTML=`<p class="namewarn">画像の背景は用紙の色です。「先方から指定」の4色表示は色の選択肢を示し、実物が多色という意味ではありません。文字とコードはプリンターが印字する内容です。氏名と番号は架空です。</p>
+  <p class="namescale-note">大小を同じ縮尺で表示しています。実物大ではありません。寸法は画像の向きで表記しています。</p><div class="namesamples">${samples||'<p>見本画像はありません。</p>'}</div>
+  <dl class="namedef">
+   <dt>元の顧客名</dt><dd>${esc(item.sourceName)||'—'}</dd>
+   <dt>指示書デスクの顧客</dt><dd>${item.linkStatus==='対応'?esc(item.linkedName):'未対応'}</dd>
+   <dt>形式名</dt><dd>${esc(item.format)||'—'}</dd>
+   <dt>サイズ</dt><dd>${esc(item.size)||'—'}</dd>
+   <dt>用紙の色と条件</dt><dd><div class="namecolors">${colors}</div>${item.colorCaption?`<p>条件の名前：${esc(item.colorCaption)}</p>`:''}${item.fixedColor?`<p>指定色：${esc(item.fixedColor)}</p>`:''}</dd>
+   <dt>印字内容</dt><dd>${esc(item.layout)||'—'}${item.heading?`<br>見出し：${esc(item.heading).replaceAll('\n',' / ')}`:''}${item.reading?`<br>文字種：${esc(item.reading)}`:''}${item.numberLength?`<br>番号桁数：${item.numberLength}`:''}${item.maximumFont?`<br>氏名の最大：${item.maximumFont} pt`:''}${item.headingFont?`<br>見出し：${item.headingFont} pt`:''}</dd>
+   <dt>書体</dt><dd>${esc(fontLabel(item.family))||'—'}${item.headerFamily?`<br>見出しの書体：${esc(fontLabel(item.headerFamily))}`:''}</dd>
+   <dt>衣類・貼付け位置</dt><dd>${esc(item.placement)||'指定なし'}${departments?`<br>部署：${departments}`:''}</dd>
+   <dt>注意・例外</dt><dd>${esc(item.note)||'なし'}${item.pending?`<br>未確定：${esc(item.pending)}`:''}</dd>
+   <dt>照合用</dt><dd>元の形式名を登録番号にはしていません。元資料の行：${item.sourceRow??'—'}（照合用）<br>${esc(item.identity)}</dd>
+  </dl>
+  ${reasons?`<h3>要確認</h3><ul>${reasons}</ul>`:''}`;
+ paintNameReview(item);
+ $('#namebody').querySelectorAll('[data-namezoom]').forEach(button=>button.onclick=()=>{const sample=item.samples.find(x=>String(x.id)===button.dataset.namezoom);if(sample)openNameZoom(item,sample)});
+ const edit=$('#nameeditbtn');
+ if(edit){edit.hidden=currentUser?.role!=='owner';edit.onclick=()=>openNameEditor(item)}
+}
+async function openNameFormat(id){
+ const item=await api('/api/name-labels/formats/'+id);
+ paintNameDetail(item);
+ if(!$('#namedetail').open)$('#namedetail').showModal();
+}
+$('#namesearch').onsubmit=e=>{e.preventDefault();loadNames(true)};
+$('#nameclose').onclick=()=>$('#namedetail').close();
+$('#namedetail').addEventListener('cancel',e=>{e.preventDefault();$('#namedetail').close()});
+let nameEditing=null;
+function syncNameSize(){
+ const kind=$('#nameformsize').value;
+ const locked=kind==='unknown'||kind==='blank';
+ $('#nameformwidth').disabled=locked;
+ $('#nameformheight').disabled=locked;
+ if(kind==='small'&&!$('#nameformwidth').value){$('#nameformwidth').value='50';$('#nameformheight').value='24'}
+ if(kind==='large'&&!$('#nameformwidth').value){$('#nameformwidth').value='80';$('#nameformheight').value='50'}
+}
+function openNameEditor(item,customer){
+ if(currentUser?.role!=='owner')return;
+ nameEditing=item?{id:item.id,customerId:item.customerId}:customer?{id:null,customerId:customer.id}:null;
+ $('#nameformerror').textContent='';
+ $('#nameformtitle').textContent=item?'ネーム情報を修正':'ネーム情報を登録';
+ $('#nameformnumber').textContent=item?(item.number||''):'';
+ $('#nameformcustomer').value=item?item.sourceName||'':customer?customer.sourceName||'':'';
+ $('#nameformreading').value=item?item.customerReading||'':customer?customer.reading||'':'';
+ $('#nameformformat').value=item?item.format||'':'';
+ $('#nameformsize').value=item?item.sizeKind||'small':'small';
+ $('#nameformwidth').value=item&&item.widthMm?item.widthMm:'';
+ $('#nameformheight').value=item&&item.heightMm?item.heightMm:'';
+ $('#nameformplacement').value=item?item.placement||'':'';
+ $('#nameformheading').value=item?item.heading||'':'';
+ $('#nameformcolors').value=item?item.colorText||'':'';
+ $('#nameformcolorcaption').value=item?item.colorCaption||'':'';
+ $('#nameformdepartments').value=item?item.departmentText||'':'';
+ $('#nameformnote').value=item?item.note||'':'';
+ $('#nameformpending').value=item?item.pending||'':'';
+ $('#nameformimage').value='';
+ $('#nameformfont').textContent=item&&item.family?`書体の記載：${fontLabel(item.family)}。HG丸ゴシックは太字です。`:'書体の記載：HG丸ゴシック（太字）';
+ syncNameSize();
+ if($('#namedetail').open)$('#namedetail').close();
+ if(!$('#nameform').open)$('#nameform').showModal();
+ $('#nameformcustomer').focus();
+}
+$('#nameformsize').onchange=syncNameSize;
+$('#namenew').onclick=()=>openNameEditor(null,null);
+$('#nameformclose').onclick=()=>$('#nameform').close();
+$('#nameform').addEventListener('cancel',e=>{e.preventDefault();$('#nameform').close()});
+$('#nameedit').onsubmit=async e=>{
+ e.preventDefault();
+ if(currentUser?.role!=='owner'||$('#nameformsave').disabled)return;
+ $('#nameformerror').textContent='';
+ const file=$('#nameformimage').files[0];
+ if(file&&file.size>8*1024*1024){$('#nameformerror').textContent='見本画像は8MBまでです。';return}
+ $('#nameformsave').disabled=true;
+ try{
+  const body={
+   customerName:$('#nameformcustomer').value,
+   reading:$('#nameformreading').value,
+   formatName:$('#nameformformat').value,
+   sizeKind:$('#nameformsize').value,
+   widthMm:$('#nameformwidth').value,
+   heightMm:$('#nameformheight').value,
+   placement:$('#nameformplacement').value,
+   heading:$('#nameformheading').value,
+   colorText:$('#nameformcolors').value,
+   colorCaption:$('#nameformcolorcaption').value,
+   departmentText:$('#nameformdepartments').value,
+   note:$('#nameformnote').value,
+   pending:$('#nameformpending').value
+  };
+  if(nameEditing?.customerId&&!nameEditing.id)body.customerId=nameEditing.customerId;
+  if(file){body.filename=file.name;body.data=await fileToBase64(file)}
+  const saved=nameEditing?.id?await api('/api/name-labels/save',Object.assign({id:nameEditing.id},body)):await api('/api/name-labels',body);
+  $('#nameform').close();
+  await loadNames(false);
+  if(saved.customerId)await openNameCustomer(saved.customerId);
+  if(saved.id)await openNameFormat(saved.id);
+  toast(nameEditing?.id?'ネーム情報を修正しました。':'ネーム情報を登録しました。');
+ }catch(err){$('#nameformerror').textContent=err.message||'保存できませんでした。'}
+ finally{$('#nameformsave').disabled=false}
+};
+
+function paintNameReview(item){
+ const r=item.review||{};
+ const owner=currentUser?.role==='owner';
+ const showConfirm=!!r.canConfirm||(owner&&r.status!=='了承');
+ if(!showConfirm&&!owner)return;
+ const panel=document.createElement('section');panel.className='name-review-panel';
+ panel.style.cssText='border:1px solid #9dceae;border-radius:8px;padding:16px;margin:12px 0;background:#f4faf4';
+ panel.innerHTML=`${r.canConfirm?'<button type="button" class="primary" id="nameconfirm">内容を確認して了承する</button>':owner&&r.status!=='了承'?'<button type="button" class="primary" id="nameconfirm" disabled title="了承は指定された担当者本人だけが行えます">内容を確認して了承する</button>':''}<p id="namereviewmessage" role="status"></p>${owner?`<label>確認担当者<select id="namereviewassignee"><option value="">未設定</option>${(item.reviewUsers||[]).map(u=>`<option value="${u.id}" ${u.id===r.assigneeId?'selected':''}>${esc(u.name)}</option>`).join('')}</select></label><button type="button" id="nameassign">担当者を保存</button>`:''}`;
+ $('#namebody').prepend(panel);
+ const submit=async(button,payload)=>{button.disabled=true;try{await api('/api/name-labels/review',{id:item.id,...payload});await openNameFormat(item.id);await openNameCustomer(item.customerId);const list=await api('/api/name-labels?q='+encodeURIComponent($('#namecustomer').value.trim()));paintNameCustomers(list)}catch(e){$('#namereviewmessage').textContent=e.message;button.disabled=false}};
+ const confirmButton=$('#nameconfirm');if(confirmButton&&r.canConfirm)confirmButton.onclick=()=>{if(confirm('この形式の内容を確認し、了承として記録しますか？'))submit(confirmButton,{digest:r.digest})};
+ const assignButton=$('#nameassign');if(assignButton)assignButton.onclick=()=>submit(assignButton,{action:'assign',assigneeId:$('#namereviewassignee').value});
+}

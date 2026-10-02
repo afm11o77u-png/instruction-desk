@@ -1,0 +1,46 @@
+__pycache__/
+*.pyc
+data/*.sqlite3
+data/*.sqlite3-wal
+data/*.sqlite3-shm
+data/backups/
+data/startup.log
+data/mail-out/
+
+# Node.js
+node_modules/
+
+# 秘密情報
+.env
+.env.*
+!.env.example
+
+# Python
+
+# ビルド・キャッシュ
+dist/
+build/
+.next/
+.cache/
+
+# ログ
+*.log
+
+# 業務データ画像
+data/images/placement/
+
+# コードの自動バックアップ
+data/code-backups/
+
+# 自動生成される取込レポート
+data/*-import-report.json
+
+data/images/names/
+
+# ユーザー確認用ネーム画像
+data/images/names/
+
+# 秘密鍵・ローカル証明書
+tls/
+
+network.json

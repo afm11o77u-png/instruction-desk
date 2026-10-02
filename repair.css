@@ -1,0 +1,19 @@
+#repairdesk{width:min(1160px,96vw);max-width:96vw;max-height:94vh;padding:0;border:1px solid #bccbc4;border-radius:12px;color:#24352e}
+#repairdesk .dialoghead{padding:20px 24px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #dce5df;background:#f4f8f5}
+#repairdesk h2,#repairdesk h3{margin:0 0 10px}#repairdesk p{line-height:1.6}
+#repairdesk .repairbody{padding:20px 24px;max-height:72vh;overflow:auto}
+#repairdesk .repairtools{display:flex;gap:8px;flex-wrap:wrap}
+#repairdesk .repairgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+#repairdesk label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600;min-width:0}
+#repairdesk input,#repairdesk select,#repairdesk textarea{width:100%;min-width:0;padding:9px;border:1px solid #b9c8c0;border-radius:5px;background:white;color:#24352e;font:inherit;box-sizing:border-box}
+#repairdesk .repairfilters{display:grid;grid-template-columns:1fr 2fr;gap:12px}
+#repairdesk table{width:100%;border-collapse:collapse}#repairdesk th,#repairdesk td{padding:10px;border-bottom:1px solid #dce5df;text-align:left;overflow-wrap:anywhere}
+#repairdesk .repairitem{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:14px;margin:10px 0;border:1px solid #d2ded7;border-radius:8px;background:#f6f9f7}
+#repairdesk .repairreason{margin-top:20px}#repairdesk #repair-message{white-space:pre-wrap;color:#71412b}
+#repairdesk .repairhistory{border-top:1px solid #dce5df;padding:12px 0}#repairdesk .repairhistory p{white-space:pre-wrap}
+@media(max-width:700px){#repairdesk .repairgrid,#repairdesk .repairitem{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media print{#repairdesk{display:none!important}}
+
+#repairdesk .repairmenu{display:grid;gap:14px}#repairdesk .repairmenu button{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:20px;text-align:left;white-space:normal}#repairdesk .repairmenu strong{font-size:17px}#repairdesk .repairmenu span{font-size:14px;line-height:1.6;color:#52655a}
+#repairdesk .testwarn{margin:0 0 14px;padding:12px 14px;background:#fff6e8;border:1px solid #e2c48a;border-radius:8px}
+#repairdesk .testkeep{margin:8px 0 0;padding-left:1.2em}
