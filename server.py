@@ -671,6 +671,7 @@ def floor_progress(handler,d):
         return 200, record(c.execute('SELECT * FROM orders WHERE id=?',(row['id'],)).fetchone())
 
 def due_confirm(handler,d):
+    # Confirm-only: shipEstimateDate / floor progress fields are ignored even if sent.
     if type(d.get('id')) is not int or type(d.get('version')) is not int: return 400, {'error':'指示書を選択してください。'}
     memo=d.get('salesConfirmNote') if isinstance(d.get('salesConfirmNote'), str) else ''
     memo=memo.strip()[:500]
