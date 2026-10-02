@@ -565,10 +565,12 @@ def _next_shortage_id(previous, built):
     return f'S{n}'
 
 def parse_shortages(raw, items, previous_rows):
+    # Shortage-only saves may send just lineId/qty (and optional id); supply/dates default or inherit.
     if raw is None: raw=[]
     if not isinstance(raw, list) or len(raw)>40: raise ValueError('不足商品が多すぎます。')
     previous=[r for r in (previous_rows or []) if isinstance(r, dict)]
     by_id={r.get('id'):r for r in previous if isinstance(r.get('id'), str)}
+    by_line={r.get('lineId'):r for r in previous if isinstance(r.get('lineId'), str)}
     items_by={it.get('lineId'):it for it in items if isinstance(it, dict)}
     seen=set(); out=[]
     for raw_row in raw:
@@ -580,6 +582,7 @@ def parse_shortages(raw, items, previous_rows):
             snap={k:str(prev.get(k) or '') for k in ('name','maker','sku','size')}
         else:
             line_id=raw_row.get('lineId')
+            if not prev and isinstance(line_id, str): prev=by_line.get(line_id)
             item=items_by.get(line_id)
             if not isinstance(item, dict): raise ValueError('不足の対象商品を、商品明細から選び直してください。')
             snap={k:str(item.get(k) or '').strip() for k in ('name','maker','sku','size')}
@@ -589,17 +592,43 @@ def parse_shortages(raw, items, previous_rows):
         qty=raw_row.get('qty')
         if type(qty) is not int or qty<1 or qty>99999: raise ValueError('不足数量は1以上の整数で入力してください。')
         supply=raw_row.get('supply')
-        if supply not in SUPPLY: raise ValueError('手配状況を選択してください。')
-        if not isinstance(raw_row.get('makerShipUnknown'), bool) or not isinstance(raw_row.get('arrivalUnknown'), bool):
-            raise ValueError('予定日の未定を確認してください。')
-        ordered=_due_date(raw_row.get('orderedDate'),'発注日')
-        maker=_due_date(raw_row.get('makerShipDate'),'メーカー出荷予定日')
-        arrival=_due_date(raw_row.get('arrivalDate'),'入荷予定日')
-        if raw_row['makerShipUnknown']: maker=''
-        if raw_row['arrivalUnknown']: arrival=''
-        note=raw_row.get('note') if isinstance(raw_row.get('note'), str) else ''
+        if supply not in SUPPLY:
+            supply=prev.get('supply') if prev and prev.get('supply') in SUPPLY else '未発注'
+        if isinstance(raw_row.get('makerShipUnknown'), bool):
+            maker_unknown=raw_row['makerShipUnknown']
+        elif prev is not None:
+            maker_unknown=bool(prev.get('makerShipUnknown'))
+        else:
+            maker_unknown=False
+        if isinstance(raw_row.get('arrivalUnknown'), bool):
+            arrival_unknown=raw_row['arrivalUnknown']
+        elif prev is not None:
+            arrival_unknown=bool(prev.get('arrivalUnknown'))
+        else:
+            arrival_unknown=False
+        if 'orderedDate' in raw_row:
+            ordered=_due_date(raw_row.get('orderedDate'),'発注日')
+        else:
+            ordered=(prev.get('orderedDate') or '') if prev else ''
+            if ordered: ordered=_due_date(ordered,'発注日')
+        if 'makerShipDate' in raw_row or 'makerShipUnknown' in raw_row:
+            maker=_due_date(raw_row.get('makerShipDate'),'メーカー出荷予定日')
+        else:
+            maker=(prev.get('makerShipDate') or '') if prev else ''
+            if maker: maker=_due_date(maker,'メーカー出荷予定日')
+        if 'arrivalDate' in raw_row or 'arrivalUnknown' in raw_row:
+            arrival=_due_date(raw_row.get('arrivalDate'),'入荷予定日')
+        else:
+            arrival=(prev.get('arrivalDate') or '') if prev else ''
+            if arrival: arrival=_due_date(arrival,'入荷予定日')
+        if maker_unknown: maker=''
+        if arrival_unknown: arrival=''
+        if 'note' in raw_row:
+            note=raw_row.get('note') if isinstance(raw_row.get('note'), str) else ''
+        else:
+            note=prev.get('note') if prev and isinstance(prev.get('note'), str) else ''
         note=note.strip()[:300]
-        row={'id':prev.get('id') if prev else _next_shortage_id(previous, out),'lineId':line_id,**snap,'qty':qty,'supply':supply,'makerShipUnknown':raw_row['makerShipUnknown'],'arrivalUnknown':raw_row['arrivalUnknown']}
+        row={'id':(prev.get('id') if prev and isinstance(prev.get('id'), str) else None) or _next_shortage_id(previous, out),'lineId':line_id,**snap,'qty':qty,'supply':supply,'makerShipUnknown':maker_unknown,'arrivalUnknown':arrival_unknown}
         if ordered: row['orderedDate']=ordered
         if maker: row['makerShipDate']=maker
         if arrival: row['arrivalDate']=arrival
