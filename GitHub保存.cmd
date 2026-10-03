@@ -2,14 +2,29 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 
+rem GitHub Desktop includes Git, but does not add it to PATH.
+git --version >nul 2>&1
+if not errorlevel 1 goto git_ready
+for /d %%G in ("%LOCALAPPDATA%\GitHubDesktop\app-*") do if exist "%%~fG\resources\app\git\cmd\git.exe" set "PATH=%%~fG\resources\app\git\cmd;%PATH%"
+git --version >nul 2>&1
+if not errorlevel 1 goto git_ready
+if exist "%ProgramFiles%\Git\cmd\git.exe" set "PATH=%ProgramFiles%\Git\cmd;%PATH%"
+git --version >nul 2>&1
+if not errorlevel 1 goto git_ready
+echo [エラー] Gitが見つかりません。GitHub DesktopまたはGitをインストールしてください。
+pause
+exit /b 1
+:git_ready
+
+
 echo ========================================
 echo  指示書デスク → GitHub 保存
 echo ========================================
 echo.
 
-git rev-parse --is-inside-work-tree >nul 2>&1
+git rev-parse --is-inside-work-tree >nul
 if errorlevel 1 (
-  echo [エラー] このフォルダは Git リポジトリではありません。
+  echo [エラー] Gitの管理情報を読み取れません。上に表示されたエラーをご確認ください。
   pause
   exit /b 1
 )
