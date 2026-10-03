@@ -36,9 +36,8 @@ echo.
 set "HAS_CHANGES="
 for /f "delims=" %%A in ('git status --porcelain 2^>nul') do set "HAS_CHANGES=1"
 if not defined HAS_CHANGES (
-  echo 変更はありません
-  pause
-  exit /b 0
+  echo 新しい変更はありません。未送信のCommitを含めて送信を確認します。
+  goto push_changes
 )
 
 echo 変更をステージします（git add .）...
@@ -76,13 +75,14 @@ if errorlevel 1 (
 )
 
 echo.
+:push_changes
 echo GitHub へプッシュしています...
 git push -u origin HEAD
 if errorlevel 1 (
   echo.
   echo [エラー] GitHub へのプッシュに失敗しました。
   echo ネットワーク接続や認証（GitHub へのログイン）を確認してください。
-  echo ※ force push は行いません。ローカルのコミットは残っています。
+  echo ローカルのCommitは残っています。接続・認証を確認後、このファイルを再実行してください。
   pause
   exit /b 1
 )
