@@ -17,77 +17,35 @@ exit /b 1
 :git_ready
 
 
-echo ========================================
-echo  指示書デスク → GitHub 保存
-echo ========================================
-echo.
+rem Find Python on this PC before updating the application.
+set "PYTHON_RUN="
+set "PYTHON_CANDIDATE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe"
+if exist "%PYTHON_CANDIDATE%" call :check_python
+if defined PYTHON_RUN goto python_ready
+py -3 -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
+if not errorlevel 1 set "PYTHON_RUN=py -3"
+if defined PYTHON_RUN goto python_ready
+python -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
+if not errorlevel 1 set "PYTHON_RUN=python"
+if defined PYTHON_RUN goto python_ready
+echo [エラー] Python 3.10 以降が見つかりません。
+echo このPCにPythonをインストールしてから、もう一度実行してください。
+pause
+exit /b 1
+:python_ready
 
-git rev-parse --is-inside-work-tree >nul
+
+echo 指示書デスク：変更の確認と統合
+echo.
+%PYTHON_RUN% -X utf8 "%~dp0git_sync.py" save
 if errorlevel 1 (
-  echo [エラー] Gitの管理情報を読み取れません。上に表示されたエラーをご確認ください。
   pause
   exit /b 1
 )
-
-echo 【Git 状態】
-git status
-echo.
-
-set "HAS_CHANGES="
-for /f "delims=" %%A in ('git status --porcelain 2^>nul') do set "HAS_CHANGES=1"
-if not defined HAS_CHANGES (
-  echo 新しい変更はありません。未送信のCommitを含めて送信を確認します。
-  goto push_changes
-)
-
-echo 変更をステージします（git add .）...
-git add .
-if errorlevel 1 (
-  echo.
-  echo [エラー] git add に失敗しました。保存を中止します。
-  pause
-  exit /b 1
-)
-
-echo.
-set /p "MSG=コミットメッセージを入力してください: "
-if not defined MSG (
-  echo.
-  echo [エラー] コミットメッセージが空です。保存を中止します。
-  pause
-  exit /b 1
-)
-if "%MSG%"=="" (
-  echo.
-  echo [エラー] コミットメッセージが空です。保存を中止します。
-  pause
-  exit /b 1
-)
-
-echo.
-echo コミットしています...
-git commit -m "%MSG%"
-if errorlevel 1 (
-  echo.
-  echo [エラー] コミットに失敗しました。保存を中止します。
-  pause
-  exit /b 1
-)
-
-echo.
-:push_changes
-echo GitHub へプッシュしています...
-git push -u origin HEAD
-if errorlevel 1 (
-  echo.
-  echo [エラー] GitHub へのプッシュに失敗しました。
-  echo ネットワーク接続や認証（GitHub へのログイン）を確認してください。
-  echo ローカルのCommitは残っています。接続・認証を確認後、このファイルを再実行してください。
-  pause
-  exit /b 1
-)
-
-echo.
-echo GitHubへの保存が完了しました
 pause
 exit /b 0
+
+:check_python
+"%PYTHON_CANDIDATE%" -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
+if not errorlevel 1 set PYTHON_RUN="%PYTHON_CANDIDATE%"
+exit /b
