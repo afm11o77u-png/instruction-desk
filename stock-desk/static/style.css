@@ -48,6 +48,13 @@ table.directory tr.is-stopped .nameline b{font-weight:600}
 .total strong{font-size:1.4rem}.parts{margin:6px 0 0;padding:0;list-style:none}.parts li{font-size:13px;font-weight:400;color:#24352c}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.chips{display:flex;flex-wrap:wrap;gap:8px}
 .chips button{font-weight:700}.chips button.on{background:#186438;color:#fff;border-color:#186438}
+.size-scheme{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 8px}
+.size-scheme-label{font-size:13px;font-weight:700;color:#3d5146}
+.seg{display:inline-flex;border:1px solid #c5dcc4;border-radius:999px;overflow:hidden;background:#fff}
+.seg button{border:0;border-radius:0;min-height:40px;padding:8px 14px;background:transparent;box-shadow:none}
+.seg button+button{border-left:1px solid #c5dcc4}
+.seg button.on{background:var(--green);color:#fff}
+.seg button:hover:not(.on){background:#eef8ef}
 .links{display:flex;flex-direction:column;gap:10px}.linkrow,.sizerow{display:grid;gap:8px;align-items:end;border:1px solid var(--line);border-radius:8px;padding:10px}
 .linkrow{grid-template-columns:1.3fr 1fr auto auto auto}.sizerow{grid-template-columns:120px 1fr 1fr auto}
 .check{flex-direction:row;align-items:center;font-weight:700;gap:6px}.check input{width:auto;min-height:0}

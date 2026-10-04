@@ -1,6 +1,16 @@
 const $=(s,r=document)=>r.querySelector(s)
 const state={mode:'masters',tab:'customers',q:'',stopped:false,productSupplierId:'',data:null,stock:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{}}
-const SUGGEST=['S','M','L','LL','2L','3L','4L','SS','フリー']
+const SIZE_SCHEMES={
+  letter:{id:'letter',label:'アルファベット',sizes:['S','M','L','LL','2L','3L','4L','SS','フリー']},
+  gou:{id:'gou',label:'号数',sizes:['5号','7号','9号','11号','13号','15号','17号','19号','21号']}
+}
+function isGouSize(label){return /^\d+号$/.test(String(label||''))}
+function detectSizeScheme(sizes){
+  const list=sizes||[]
+  const gou=list.filter(isGouSize).length
+  const letter=list.filter(s=>SIZE_SCHEMES.letter.sizes.includes(s)).length
+  return gou>letter?'gou':'letter'
+}
 const PRODUCT_SUPPLIER_KEY='stock-desk:product-supplier-filter'
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function loadProductSupplierFilter(){
@@ -234,15 +244,38 @@ function locationForm(r){
 function productForm(r){
   r=r||{sizes:[],links:[],active:true}
   const suppliers=['<option value="">未設定</option>'].concat(state.data.suppliers.filter(s=>s.active||s.id===r.supplierId).map(s=>`<option value="${s.id}" ${s.id===r.supplierId?'selected':''}>${esc(s.name)}</option>`)).join('')
+  const scheme=detectSizeScheme(r.sizes)
   return `<div class="grid">${field('code','品番',r.code,true)}${field('name','商品名',r.name,true)}${field('color','色',r.color)}<label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
-    <p>サイズをまとめて選びます。LLと2Lは別のサイズです。</p><div class="chips" id="chips"></div>
+    <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
+      <span class="size-scheme-label">サイズ表記</span>
+      <div class="seg" id="sizeScheme">
+        <button type="button" data-scheme="letter" class="${scheme==='letter'?'on':''}">アルファベット</button>
+        <button type="button" data-scheme="gou" class="${scheme==='gou'?'on':''}">号数</button>
+      </div>
+    </div>
+    <p id="sizeHint">サイズをまとめて選びます。LLと2Lは別のサイズです。表記を切り替えても、すでに選んだサイズはそのまま残ります。</p>
+    <div class="chips" id="chips"></div>
     <div class="bar"><label>特殊サイズ<input id="customSize" placeholder="例：150"></label><button type="button" id="addSize">サイズを追加</button></div>
     <h2>この商品を扱う顧客</h2><div class="links" id="links"></div><button type="button" id="addLink">顧客の取扱を追加</button>`
 }
 function bindProductEditor(row){
-  const editor={sizes:[...row.sizes],links:row.links.map(l=>({...l}))}
+  const editor={sizes:[...row.sizes],links:row.links.map(l=>({...l})),scheme:detectSizeScheme(row.sizes)}
   const draw=()=>{
-    $('#chips').innerHTML=[...new Set([...SUGGEST,...editor.sizes])].map(s=>`<button type="button" class="${editor.sizes.includes(s)?'on':''}" data-size="${esc(s)}">${esc(s)}</button>`).join('')
+    const scheme=SIZE_SCHEMES[editor.scheme]||SIZE_SCHEMES.letter
+    $('#sizeScheme').querySelectorAll('button').forEach(b=>{
+      b.classList.toggle('on',b.dataset.scheme===editor.scheme)
+      b.onclick=()=>{if(editor.scheme===b.dataset.scheme)return;editor.scheme=b.dataset.scheme;draw()}
+    })
+    const hint=$('#sizeHint')
+    if(hint)hint.textContent=editor.scheme==='gou'
+      ?'号数サイズをまとめて選びます。表記を切り替えても、すでに選んだアルファベットサイズはそのまま残ります。'
+      :'アルファベットサイズをまとめて選びます。LLと2Lは別のサイズです。表記を切り替えても、すでに選んだ号数サイズはそのまま残ります。'
+    const custom=$('#customSize')
+    if(custom)custom.placeholder=editor.scheme==='gou'?'例：10号':'例：150'
+    const preset=scheme.sizes
+    const kept=editor.sizes.filter(s=>!preset.includes(s))
+    const shown=[...preset,...kept]
+    $('#chips').innerHTML=shown.map(s=>`<button type="button" class="${editor.sizes.includes(s)?'on':''}" data-size="${esc(s)}">${esc(s)}</button>`).join('')
     $('#chips').querySelectorAll('button').forEach(b=>b.onclick=()=>{
       const s=b.dataset.size
       editor.sizes=editor.sizes.includes(s)?editor.sizes.filter(x=>x!==s):editor.sizes.concat(s)
