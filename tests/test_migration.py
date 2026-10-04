@@ -14,6 +14,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -282,6 +283,56 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaises(migration.MigrationError):
             migration.owner_guard({'role': 'floor', 'manage': 1})
         migration.owner_guard({'role': 'owner'})
+
+    def test_export_closes_zip_before_testzip(self):
+        events = []
+        Real = zipfile.ZipFile
+
+        class TrackingZip(Real):
+            def __init__(self, file, mode='r', *a, **k):
+                super().__init__(file, mode, *a, **k)
+                events.append(('open', mode))
+
+            def close(self):
+                events.append(('close', self.mode))
+                return super().close()
+
+            def testzip(self):
+                events.append(('testzip', self.mode))
+                return super().testzip()
+
+        dest = self.root / 'closed-then-tested.zip'
+        with mock.patch.object(migration.zipfile, 'ZipFile', TrackingZip):
+            zip_path, _ = migration.build_export_zip(self.src, dest)
+        self.assertTrue(zip_path.is_file())
+        self.assertFalse(Path(str(dest) + '.partial').exists())
+        self.assertIn(('open', 'w'), events)
+        self.assertIn(('close', 'w'), events)
+        self.assertIn(('open', 'r'), events)
+        self.assertIn(('testzip', 'r'), events)
+        self.assertLess(events.index(('close', 'w')), events.index(('testzip', 'r')))
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            self.assertIsNone(zf.testzip())
+
+    def test_export_testzip_failure_includes_member_name(self):
+        Real = zipfile.ZipFile
+        bad_member = 'images/placement/sample.png'
+
+        class BadTestZip(Real):
+            def testzip(self):
+                if self.mode == 'r':
+                    return bad_member
+                return super().testzip()
+
+        dest = self.root / 'bad-member.zip'
+        with mock.patch.object(migration.zipfile, 'ZipFile', BadTestZip):
+            with self.assertRaises(migration.MigrationError) as ctx:
+                migration.build_export_zip(self.src, dest)
+        msg = str(ctx.exception)
+        self.assertIn('ZIPの作成に失敗しました', msg)
+        self.assertIn(bad_member, msg)
+        self.assertFalse(dest.exists())
+        self.assertFalse(Path(str(dest) + '.partial').exists())
 
 
 if __name__ == '__main__':

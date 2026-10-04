@@ -1,5 +1,5 @@
 import ssl
-import base64, importlib.util, json, sqlite3, os, re, sys, tempfile, threading, webbrowser
+import base64, importlib.util, json, shutil, sqlite3, os, re, sys, tempfile, threading, webbrowser
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -808,6 +808,20 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff')
         for key, value in (headers or {}).items(): self.send_header(key, value)
         self.end_headers(); self.wfile.write(b)
+    def reply_file(self, status, path, ctype='application/octet-stream', headers=None):
+        """Stream a file to the client without loading the whole body into RAM."""
+        path = Path(path)
+        size = path.stat().st_size
+        self.send_response(status)
+        self.send_header('Content-Type', ctype)
+        self.send_header('Content-Length', str(size))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        with open(path, 'rb') as f:
+            shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
     def serve_inventory(self, method):
         from urllib.parse import urlparse, parse_qs
         parsed=urlparse(self.path)
@@ -852,14 +866,15 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     u = self.session_user(c)
                     migration.owner_guard(u)
                 dest, manifest = migration.build_export_zip(DATA)
-                data = dest.read_bytes()
-                # Prefer download to the browser; keep a copy under data/backups as well.
-                return self.reply(200, data, 'application/zip', {
+                # Stream from disk (copy remains under data/backups); avoid loading whole ZIP into RAM.
+                return self.reply_file(200, dest, 'application/zip', {
                     'Content-Disposition': f'attachment; filename="{dest.name}"',
                     'X-Migration-Created-At': str(manifest.get('createdAt') or ''),
                 })
             except migration.MigrationError as e:
                 return self.reply(403 if '主管理者' in str(e) or 'ログイン' in str(e) else 400, {'error': str(e)})
+            except OSError as e:
+                return self.reply(400, {'error': migration.oserror_message(e, '移行用バックアップの作成')})
             except Exception:
                 return self.reply(500, {'error': '移行用バックアップを作成できませんでした。'})
         if path.startswith('/api/'):
