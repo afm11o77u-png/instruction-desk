@@ -1,7 +1,30 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={mode:'masters',tab:'customers',q:'',stopped:false,data:null,stock:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{}}
+const state={mode:'masters',tab:'customers',q:'',stopped:false,productSupplierId:'',data:null,stock:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{}}
 const SUGGEST=['S','M','L','LL','2L','3L','4L','SS','フリー']
+const PRODUCT_SUPPLIER_KEY='stock-desk:product-supplier-filter'
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function loadProductSupplierFilter(){
+  try{return localStorage.getItem(PRODUCT_SUPPLIER_KEY)||''}catch(_){return ''}
+}
+function saveProductSupplierFilter(value){
+  try{
+    if(value)localStorage.setItem(PRODUCT_SUPPLIER_KEY,value)
+    else localStorage.removeItem(PRODUCT_SUPPLIER_KEY)
+  }catch(_){}
+}
+function productSuppliersWithItems(){
+  const ids=new Set(state.data.products.map(p=>p.supplierId).filter(id=>id!=null))
+  return state.data.suppliers.filter(s=>ids.has(s.id)).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'ja'))
+}
+function resolveProductSupplierFilter(){
+  const stored=state.productSupplierId||loadProductSupplierFilter()
+  if(!stored)return ''
+  const ok=productSuppliersWithItems().some(s=>String(s.id)===String(stored))
+  const next=ok?String(stored):''
+  state.productSupplierId=next
+  if(!ok)saveProductSupplierFilter('')
+  return next
+}
 function yen(n){return Number(n).toLocaleString('ja-JP')+'円'}
 function num(n){return Number(n).toLocaleString('ja-JP')}
 function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;clearTimeout(toast._);toast._=setTimeout(()=>{el.hidden=true},ms)}
@@ -72,11 +95,17 @@ function paint(){
 function excelTools(){
   return `<span class="exceltools"><button type="button" id="exceldown">記入用Excel</button><button type="button" id="excelin">Excelを読み込む</button><input id="excelfile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></span>`
 }
-function bar(placeholder){
-  return `<div class="bar"><label>検索<input id="q" value="${esc(state.q)}" placeholder="${placeholder}"></label>
+function bar(placeholder,extra=''){
+  return `<div class="bar">${extra}<label>検索<input id="q" value="${esc(state.q)}" placeholder="${placeholder}"></label>
     <label class="check"><input id="stopped" type="checkbox" ${state.stopped?'checked':''}>停止も表示</label>
     <button type="button" class="primary" id="add">新しく登録</button>${excelTools()}</div>
     ${listNote('Excel取込の説明','記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。')}`
+}
+function productSupplierControl(current){
+  const options=['<option value="">すべて</option>'].concat(
+    productSuppliersWithItems().map(s=>`<option value="${s.id}" ${String(current)===String(s.id)?'selected':''}>${esc(s.name)}</option>`)
+  ).join('')
+  return `<label class="supplier-filter">仕入先<select id="productSupplier" aria-label="仕入先で絞り込み">${options}</select></label>`
 }
 function bindExcel(){
   const down=$('#exceldown'),pick=$('#excelin'),file=$('#excelfile')
@@ -127,16 +156,24 @@ function suppliers(){
   bindList(rows,'仕入先',supplierForm,body=>api('/api/suppliers',body))
 }
 function products(){
+  const supplierId=resolveProductSupplierFilter()
   const rows=state.data.products.filter(r=>{
+    if(supplierId&&String(r.supplierId)!==String(supplierId))return false
     const text=`${r.code}${r.name}${r.color}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return (state.stopped||r.active)&&text.includes(state.q)
   })
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。')}${bar('品番・商品名・顧客')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>商品ID</th><th>商品</th><th>サイズ</th><th>取扱</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先の商品だけを一覧できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId))}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>商品ID</th><th>商品</th><th>サイズ</th><th>取扱</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}</span></td><td>${r.sizes.map(esc).join('、')}</td><td>${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows,'商品',productForm,body=>api('/api/products',body))
+  const supplierSelect=$('#productSupplier')
+  if(supplierSelect)supplierSelect.onchange=()=>{
+    state.productSupplierId=supplierSelect.value
+    saveProductSupplierFilter(state.productSupplierId)
+    paint()
+  }
 }
 function locations(){
   const rows=state.data.locations.filter(r=>(state.stopped||r.active)&&r.label.includes(state.q))

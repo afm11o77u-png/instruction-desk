@@ -17,6 +17,7 @@ main{padding:12px 22px 24px}.notice,.provisional{background:#fff;border:1px soli
 .exceltools{display:flex;gap:8px;margin-left:auto;align-items:center}.exceltools button{white-space:nowrap}
 .excelhint{margin:0;padding:0 12px 8px;color:#3d5146;font-size:12.5px}.panel>.list-note{margin:8px 12px}
 .bar label{font-size:13px;font-weight:700}.bar input,.bar select{min-width:140px}
+.bar .supplier-filter select{min-width:180px}
 label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:700}
 input,select,textarea{width:100%;border:1px solid #c9dcc4;border-radius:6px;padding:10px;background:#fff;min-height:42px;font-weight:400}
 table{border-collapse:collapse;width:100%}th,td{padding:10px 12px;border-bottom:1px solid #e3efe4;text-align:left;vertical-align:top}
