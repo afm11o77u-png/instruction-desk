@@ -7,6 +7,17 @@
     { id: 'grid', label: 'グリッド' },
   ];
   const DEFAULT = 'standard';
+  const SCREEN_DEFAULTS = {
+    orders: 'grid',
+    floor: 'grid',
+    drafts: 'grid',
+    shipinfo: 'standard',
+    'stock-customers': 'compact',
+    'stock-suppliers': 'compact',
+    'stock-products': 'compact',
+    'stock-locations': 'compact',
+    'stock-list': 'compact',
+  };
   const cache = Object.create(null);
   let loadPromise = null;
 
@@ -20,12 +31,18 @@
     })[c]);
   }
 
-  function normalize(mode) {
-    return MODES.some((m) => m.id === mode) ? mode : DEFAULT;
+  function defaultFor(screenId) {
+    if (screenId && SCREEN_DEFAULTS[screenId]) return SCREEN_DEFAULTS[screenId];
+    if (String(screenId || '').startsWith('stock-')) return 'compact';
+    return DEFAULT;
+  }
+
+  function normalize(mode, screenId) {
+    return MODES.some((m) => m.id === mode) ? mode : defaultFor(screenId);
   }
 
   function get(screenId) {
-    return normalize(cache[screenId]);
+    return normalize(cache[screenId], screenId);
   }
 
   function apply(host, screenId) {
@@ -85,7 +102,7 @@
     const select = bar.querySelector('select[data-display-screen]');
     if (select) {
       select.onchange = () => {
-        const next = normalize(select.value);
+        const next = normalize(select.value, screenId);
         cache[screenId] = next;
         apply(host, screenId);
         if (typeof onChange === 'function') onChange(next, screenId);
@@ -102,7 +119,7 @@
         const data = await fetcher();
         const modes = (data && data.modes) || {};
         for (const [key, value] of Object.entries(modes)) {
-          cache[key] = normalize(value);
+          cache[key] = normalize(value, key);
         }
       } catch (_) {
         /* keep defaults; must not block business ops */
@@ -116,7 +133,7 @@
   }
 
   async function set(screenId, mode, saver) {
-    const next = normalize(mode);
+    const next = normalize(mode, screenId);
     cache[screenId] = next;
     if (typeof saver === 'function') {
       try {
@@ -135,6 +152,8 @@
   global.DisplayMode = {
     MODES,
     DEFAULT,
+    SCREEN_DEFAULTS,
+    defaultFor,
     esc,
     normalize,
     get,

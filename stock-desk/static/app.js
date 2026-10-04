@@ -57,7 +57,7 @@ async function ensureStockDisplayModes(){
 function saveStockDisplay(screenId,mode){return deskDisplayFetch('/api/display-modes',{screenId,mode})}
 function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function mountStockDisplay(stage,tab,repaint){
-  if(!stage||typeof DisplayMode==='undefined')return 'standard'
+  if(!stage||typeof DisplayMode==='undefined')return 'compact'
   const screenId=stockScreenId(tab)
   const toolbar=document.querySelector('#main .bar')
   DisplayMode.mount(stage,screenId,async(mode)=>{
