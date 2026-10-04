@@ -161,7 +161,21 @@
 .list-grid .dm-card .dm-secondary{font-size:.85rem;color:#3d5344;line-height:1.45;word-break:break-word}
 .list-grid .dm-card .dm-meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:.85rem;color:#2f4636}
 .list-grid .dm-card .dm-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;align-items:center}
-.list-grid .dm-card .dm-check{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700}
+.list-grid .dm-card .dm-check,
+.display-mode-bar .dm-check{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700}
+/* Match table-row flag/selection checkboxes (14px); avoid global input min-height/width:100% */
+.list-grid .dm-card .dm-check input,
+.display-mode-bar .dm-check input{
+  width:14px;
+  height:14px;
+  min-width:14px;
+  min-height:14px;
+  max-height:14px;
+  margin:0;
+  padding:0;
+  border:0;
+  flex:0 0 14px;
+}
 .list-grid .dm-empty{
   grid-column:1/-1;
   padding:28px 16px;
