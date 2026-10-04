@@ -50,14 +50,37 @@
     );
   }
 
-  function mount(host, screenId, onChange) {
+  function findBar(host, toolbar) {
+    if (toolbar) {
+      const inToolbar = toolbar.querySelector(':scope > .display-mode-bar');
+      if (inToolbar) return inToolbar;
+    }
+    return host ? host.querySelector(':scope > .display-mode-bar') : null;
+  }
+
+  /**
+   * Mount the display control.
+   * @param {HTMLElement} host list stage that receives dm-* classes
+   * @param {string} screenId
+   * @param {Function} [onChange]
+   * @param {HTMLElement|null} [toolbar] optional filters/toolbar row to keep chrome compact
+   */
+  function mount(host, screenId, onChange, toolbar) {
     if (!host) return null;
-    let bar = host.querySelector(':scope > .display-mode-bar');
+    let bar = findBar(host, toolbar);
+    if (bar && toolbar && bar.parentElement !== toolbar) {
+      bar.remove();
+      bar = null;
+    }
     if (!bar) {
       bar = document.createElement('div');
       bar.className = 'display-mode-bar';
-      host.insertBefore(bar, host.firstChild);
+      if (toolbar) toolbar.appendChild(bar);
+      else host.insertBefore(bar, host.firstChild);
+    } else if (toolbar && bar.parentElement !== toolbar) {
+      toolbar.appendChild(bar);
     }
+    bar.classList.toggle('display-mode-bar-inline', !!toolbar);
     bar.innerHTML = controlHtml(screenId);
     const select = bar.querySelector('select[data-display-screen]');
     if (select) {

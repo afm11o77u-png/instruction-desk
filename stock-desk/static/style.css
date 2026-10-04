@@ -10,12 +10,12 @@ header{display:flex;justify-content:space-between;gap:16px;align-items:end;paddi
 .switch{display:flex;gap:8px;flex-wrap:wrap}.switch button{min-height:44px}html.embed .switch,html.embed #desknote{display:none}
 .switch .active{background:var(--green);border-color:var(--green);color:#fff}
 #desk{color:#66756c;background:#eef1ee}
-.tabs{display:flex;gap:8px;padding:8px 28px 0;flex-wrap:wrap}.tabs button.active{box-shadow:inset 0 -3px 0 var(--green)}
-main{padding:16px 28px 28px}.notice,.provisional{background:#fff;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;padding:12px 14px;margin:0 0 14px}
+.tabs{display:flex;gap:8px;padding:6px 22px 0;flex-wrap:wrap}.tabs button.active{box-shadow:inset 0 -3px 0 var(--green)}
+main{padding:12px 22px 24px}.notice,.provisional{background:#fff;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;padding:10px 12px;margin:0 0 10px}
 .panel{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
-.bar{display:flex;gap:10px;align-items:end;padding:14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bar{display:flex;gap:8px;align-items:end;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .exceltools{display:flex;gap:8px;margin-left:auto;align-items:center}.exceltools button{white-space:nowrap}
-.excelhint{margin:0;padding:0 14px 12px;color:#3d5146;font-size:13px}
+.excelhint{margin:0;padding:0 12px 8px;color:#3d5146;font-size:12.5px}.panel>.list-note{margin:8px 12px}
 .bar label{font-size:13px;font-weight:700}.bar input,.bar select{min-width:140px}
 label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:700}
 input,select,textarea{width:100%;border:1px solid #c9dcc4;border-radius:6px;padding:10px;background:#fff;min-height:42px;font-weight:400}
@@ -43,7 +43,7 @@ table.directory .act{width:76px;text-align:right}
 table.directory .rowedit{padding:6px 12px;border-radius:999px;font-size:13px;color:#186438;background:#fff}
 table.directory tr.is-stopped td{color:#8b9790}
 table.directory tr.is-stopped .nameline b{font-weight:600}
-.money{font-variant-numeric:tabular-nums;font-weight:700}.total{display:flex;gap:18px;padding:14px;background:#f3faf4;border-bottom:1px solid var(--line)}
+.money{font-variant-numeric:tabular-nums;font-weight:700}/* tightened via list header */.total{display:flex;gap:14px;padding:10px 12px;background:#f3faf4;border-bottom:1px solid var(--line)}
 .total strong{font-size:1.4rem}.parts{margin:6px 0 0;padding:0;list-style:none}.parts li{font-size:13px;font-weight:400;color:#24352c}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.chips{display:flex;flex-wrap:wrap;gap:8px}
 .chips button{font-weight:700}.chips button.on{background:#186438;color:#fff;border-color:#186438}
@@ -56,3 +56,5 @@ dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0}dialog::backd
 #error{color:#9a3418;font-weight:700;min-height:1.2em}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#146b28;color:#fff;padding:12px 18px;border-radius:8px}
 @media(max-width:800px){header,main,footer,.tabs{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
+
+#groups{padding:8px 12px;border-bottom:1px solid var(--line)}
