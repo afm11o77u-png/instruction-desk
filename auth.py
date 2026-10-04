@@ -289,4 +289,6 @@ class AuthMixin:
                 return 200,{'ok':True,'name':name}
             return 404,{'error':'操作が見つかりません。'}
         if path=='/api/backup' and u['role']!='owner': return 403,{'error':'バックアップは主管理者だけが作成できます。'}
+        if path.startswith('/api/migration/') and (not u or u['role']!='owner'):
+            return 403,{'error':'移行用バックアップは主管理者だけが使用できます。'}
         return None

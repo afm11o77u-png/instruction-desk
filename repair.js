@@ -77,7 +77,7 @@ async function openRepair(){
  if(currentUser?.role!=='owner')return;
  if(dirty){toast('開いている指示書の変更を保存してから管理・修正を開いてください。');return}
  repairCurrent=null;repairDirty=false;
- repairDialog.innerHTML=`<div class="dialoghead"><div><h2>管理・修正</h2><p>主管理者専用 ／ 行いたい操作を選んでください。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairmenu"><button type="button" id="repair-templates"><strong>ひな形を修正</strong><span>全員の保存済みひな形を確認・修正します。</span></button><button type="button" id="repair-records"><strong>指示書の状態・記録を修正</strong><span>作業状況、印刷済み、バーコード発行、発送記録を修正します。</span></button><button type="button" id="repair-backup"><strong>バックアップを作成</strong><span>指示書のデータ、出荷情報、貼付け位置の画像を保存します。</span></button><button type="button" id="repair-test-reset"><strong>テスト用：ピッキング依頼をリセット</strong><span>テストで作ったリストの取り込み・保存・送信確認をやり直します。通常の削除とは別です。実際の倉庫へ依頼したリストには使わないでください。</span></button></div><p id="repair-message" role="status"></p></div>`;
+ repairDialog.innerHTML=`<div class="dialoghead"><div><h2>管理・修正</h2><p>主管理者専用 ／ 行いたい操作を選んでください。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairmenu"><button type="button" id="repair-templates"><strong>ひな形を修正</strong><span>全員の保存済みひな形を確認・修正します。</span></button><button type="button" id="repair-records"><strong>指示書の状態・記録を修正</strong><span>作業状況、印刷済み、バーコード発行、発送記録を修正します。</span></button><button type="button" id="repair-backup"><strong>バックアップを作成</strong><span>指示書のデータ、出荷情報、貼付け位置の画像をこのパソコン内に保存します。</span></button><button type="button" id="repair-migrate-export"><strong>移行用バックアップを書き出し</strong><span>自宅PCから会社PCへ移すためのZIPをダウンロードします。利用者・指示書・在庫・画像をまとめて含めます。</span></button><button type="button" id="repair-migrate-restore"><strong>バックアップから復元</strong><span>移行用ZIPで、このパソコンの業務データをすべて置き換えます。通信設定などは変わりません。</span></button><button type="button" id="repair-test-reset"><strong>テスト用：ピッキング依頼をリセット</strong><span>テストで作ったリストの取り込み・保存・送信確認をやり直します。通常の削除とは別です。実際の倉庫へ依頼したリストには使わないでください。</span></button></div><p id="repair-message" role="status"></p></div>`;
  repairDialog.querySelector('#repair-close').onclick=closeRepair;
  repairDialog.oncancel=e=>{e.preventDefault();closeRepair()};
  repairDialog.querySelector('#repair-templates').onclick=()=>repairRun(openTemplateRepair);
@@ -90,7 +90,68 @@ async function openRepair(){
   box.onclose=()=>{box.onclose=null;if(currentUser?.id===uid&&currentUser?.role==='owner')openRepair()};
  });
  repairDialog.querySelector('#repair-backup').onclick=()=>repairRun(async()=>{const r=await api('/api/backup',{});repairMessage('バックアップを作成しました：'+r.filename)});
+ repairDialog.querySelector('#repair-migrate-export').onclick=()=>repairRun(exportMigrationBackup);
+ repairDialog.querySelector('#repair-migrate-restore').onclick=()=>openMigrationRestore();
  repairDialog.querySelector('#repair-test-reset').onclick=()=>openTestReset();
+ if(!repairDialog.open)repairDialog.showModal();
+}
+
+function migrationFileToBase64(file){
+ if(typeof fileToBase64==='function')return fileToBase64(file);
+ return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>{const text=String(reader.result||'');resolve(text.slice(text.indexOf(',')+1))};reader.onerror=()=>reject(Error('ZIPを読み込めません。'));reader.readAsDataURL(file)});
+}
+async function exportMigrationBackup(){
+ if(currentUser?.role!=='owner')return;
+ const r=await fetch('/api/migration/export');
+ if(!r.ok){let msg='書き出せませんでした。';try{msg=(await r.json()).error||msg}catch{}throw Error(msg)}
+ const blob=await r.blob();
+ const header=(r.headers.get('Content-Disposition')||'').match(/filename=\"([^\"]+)\"/);
+ const name=header?header[1]:`desk-migration-${new Date().toISOString().slice(0,19).replace(/[-:T]/g,'')}.zip`;
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement('a');a.href=url;a.download=name;a.click();
+ setTimeout(()=>URL.revokeObjectURL(url),15000);
+ repairMessage('移行用バックアップを書き出しました：'+name+'　USBなどへコピーして、会社PCで「バックアップから復元」を使ってください。');
+}
+
+function migrationCountLines(counts){
+ const labels=[['orders','指示書'],['users','利用者'],['templates','ひな形'],['pickingLists','ピッキングリスト'],['placements','貼付け位置'],['shipments','出荷情報'],['nameFormats','ネーム形式'],['labelSets','宛名の記憶'],['stockCustomers','在庫・顧客'],['stockProducts','在庫・商品'],['stockLots','在庫ロット']];
+ return labels.map(([k,label])=>`${label}：${counts?.[k]??0}件`).join('\n');
+}
+
+function openMigrationRestore(){
+ if(currentUser?.role!=='owner')return;
+ let summary=null,file=null,dataB64='';
+ repairDialog.innerHTML=`<div class="dialoghead"><div><h2>バックアップから復元</h2><p>主管理者専用 ／ 移行用ZIPで業務データを置き換えます。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button></div><p id="repair-message" role="status"></p><p class="testwarn">この操作は、このパソコン上の指示書・利用者・在庫・画像などの業務データを<strong>すべて置き換え</strong>ます。通信設定・起動設定・Thunderbirdの場所は変わりません。復元の直前に、いまの内容の自動バックアップも作ります。</p><form id="mig-form" class="repairfilters" style="grid-template-columns:1fr auto"><label>移行用ZIP<input id="mig-file" type="file" accept=".zip,application/zip" required></label><button type="submit">内容を確認</button></form><div id="mig-summary"></div><div id="mig-confirm" hidden><label class="checklabel"><input type="checkbox" id="mig-agree">このパソコンの業務データを置き換えることに同意します</label><button type="button" class="primary" id="mig-run" disabled>復元を実行</button></div></div>`;
+ repairDialog.querySelector('#repair-close').onclick=closeRepair;
+ repairDialog.querySelector('#repair-home').onclick=()=>openRepair();
+ const paintSummary=()=>{
+  const box=repairDialog.querySelector('#mig-summary');
+  if(!summary){box.innerHTML='';repairDialog.querySelector('#mig-confirm').hidden=true;return}
+  box.innerHTML=`<article class="repairhistory"><p><strong>作成日時</strong>　${esc(summary.createdAt||'不明')}</p><p><strong>形式</strong>　v${esc(String(summary.formatVersion||''))}　／　ファイル ${summary.fileCount??0} 件</p><pre class="migcounts">${esc(migrationCountLines(summary.keyCounts))}</pre><p>${esc(summary.warning||'')}</p></article>`;
+  repairDialog.querySelector('#mig-confirm').hidden=false;
+  const agree=repairDialog.querySelector('#mig-agree');const run=repairDialog.querySelector('#mig-run');
+  agree.checked=false;run.disabled=true;
+  agree.onchange=()=>{run.disabled=!agree.checked};
+ };
+ repairDialog.querySelector('#mig-form').onsubmit=e=>repairRun(async()=>{
+  e.preventDefault();
+  const input=repairDialog.querySelector('#mig-file');
+  file=input.files?.[0];
+  if(!file)throw Error('ZIPを選んでください。');
+  dataB64=await migrationFileToBase64(file);
+  summary=await api('/api/migration/inspect',{filename:file.name,data:dataB64});
+  paintSummary();
+  repairMessage('内容を確認し、同意にチェックしてから復元を実行してください。');
+ });
+ repairDialog.querySelector('#mig-run').onclick=()=>repairRun(async()=>{
+  if(!summary||!dataB64)throw Error('先にZIPの内容を確認してください。');
+  if(!repairDialog.querySelector('#mig-agree').checked)throw Error('置き換えへの同意が必要です。');
+  if(!confirm('このパソコンの業務データを、選んだバックアップの内容で置き換えます。よろしいですか？'))return;
+  const result=await api('/api/migration/restore',{filename:file.name,data:dataB64,confirm:true});
+  const steps=(result.restartSteps||[]).map((s,i)=>`${i+1}. ${s}`).join('\n');
+  repairDialog.innerHTML=`<div class="dialoghead"><div><h2>復元が完了しました</h2><p>主管理者専用</p></div></div><div class="repairbody"><p id="repair-message" role="status">作成日時 ${esc(result.createdAt||'')} のバックアップを反映しました。自動バックアップ：${esc(result.autoBackup||'—')}</p><pre class="migcounts">${esc(migrationCountLines(result.keyCounts))}</pre><p class="testwarn">つぎの手順で続けてください。</p><pre class="migcounts">${esc(steps)}</pre><button type="button" class="primary" id="mig-relogin">ログイン画面へ</button></div>`;
+  repairDialog.querySelector('#mig-relogin').onclick=()=>{resetRepair();currentUser=null;dirty=false;authScreen('login')};
+ });
  if(!repairDialog.open)repairDialog.showModal();
 }
 
