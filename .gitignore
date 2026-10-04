@@ -9,6 +9,8 @@ data/*.sqlite3
 data/*.sqlite3-wal
 data/*.sqlite3-shm
 data/backups/
+data/.migration-work/
+data/.migration-rollback-*/
 data/startup.log
 data/mail-out/
 

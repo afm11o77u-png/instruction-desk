@@ -17,3 +17,5 @@
 #repairdesk .repairmenu{display:grid;gap:14px}#repairdesk .repairmenu button{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:20px;text-align:left;white-space:normal}#repairdesk .repairmenu strong{font-size:17px}#repairdesk .repairmenu span{font-size:14px;line-height:1.6;color:#52655a}
 #repairdesk .testwarn{margin:0 0 14px;padding:12px 14px;background:#fff6e8;border:1px solid #e2c48a;border-radius:8px}
 #repairdesk .testkeep{margin:8px 0 0;padding-left:1.2em}
+#repairdesk .migcounts{white-space:pre-wrap;background:#f6f9f7;border:1px solid #d2ded7;border-radius:8px;padding:12px 14px;line-height:1.7}
+#repairdesk .checklabel{display:flex;flex-direction:row;align-items:center;gap:8px;font-weight:600;margin:12px 0}
