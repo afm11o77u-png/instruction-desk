@@ -7,6 +7,32 @@ function num(n){return Number(n).toLocaleString('ja-JP')}
 function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;clearTimeout(toast._);toast._=setTimeout(()=>{el.hidden=true},ms)}
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
+
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',list:'stock-list'}
+async function deskDisplayFetch(path,data){
+  const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
+  const r=await fetch(path,opts)
+  let result={}
+  try{result=await r.json()}catch(_){result={}}
+  if(!r.ok)throw Error(result.error||'表示設定を保存できませんでした。')
+  return result
+}
+async function ensureStockDisplayModes(){
+  if(typeof DisplayMode==='undefined')return
+  await DisplayMode.loadAll(()=>deskDisplayFetch('/api/display-modes'))
+}
+function saveStockDisplay(screenId,mode){return deskDisplayFetch('/api/display-modes',{screenId,mode})}
+function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
+function mountStockDisplay(stage,tab,repaint){
+  if(!stage||typeof DisplayMode==='undefined')return 'standard'
+  const screenId=stockScreenId(tab)
+  DisplayMode.mount(stage,screenId,async(mode)=>{
+    await DisplayMode.set(screenId,mode,saveStockDisplay)
+    if(typeof repaint==='function')repaint()
+  })
+  return DisplayMode.get(screenId)
+}
+function stockOpenBtn(id,label='開く'){return `<button type="button" class="quiet stockopen" data-id="${id}">${label}</button>`}
 async function api(path,data){
   const r=await fetch(BASE+path,data?{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(data)}:{})
   const result=await r.json()
@@ -23,6 +49,7 @@ async function boot(){
   $('#eyebrow').textContent=label[0]
   $('#foot').textContent=label[1]
   if(state.mode==='stock'&&state.tab==='list')await loadStock()
+  await ensureStockDisplayModes().catch(()=>{})
   paint()
 }
 function paint(){
@@ -78,17 +105,21 @@ function bindExcel(){
 function customers(){
   const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者')}<div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b>${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub">${esc(r.kana)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act"><button type="button" class="rowedit" data-id="${r.id}">修正</button></td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
-  </tbody></table></div></section>`
+  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
+  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
   bindList(rows,'顧客',customerForm,body=>api('/api/customers',body))
 }
 function suppliers(){
   const rows=state.data.suppliers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.phone}${r.contact}${r.address}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel supplier-panel"><p class="notice">仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。</p>${bar('仕入先名・電話番号・担当者')}<div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b>${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act"><button type="button" class="rowedit" data-id="${r.id}">修正</button></td></tr>`).join('')||'<tr><td colspan="5">該当する仕入先はありません。</td></tr>'}
-  </tbody></table></div></section>`
+  $('#main').innerHTML=`<section class="panel supplier-panel"><p class="notice">仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。</p>${bar('仕入先名・電話番号・担当者')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する仕入先はありません。</td></tr>'}
+  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する仕入先はありません。</div>'
   bindList(rows,'仕入先',supplierForm,body=>api('/api/suppliers',body))
 }
 function products(){
@@ -96,23 +127,35 @@ function products(){
     const text=`${r.code}${r.name}${r.color}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return (state.stopped||r.active)&&text.includes(state.q)
   })
-  $('#main').innerHTML=`<section class="panel"><p class="notice">品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。</p>${bar('品番・商品名・顧客')}<table><thead><tr><th>商品ID</th><th>商品</th><th>サイズ</th><th>取扱</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${r.id}</td><td>${esc(r.code)} ${esc(r.name)} ${esc(r.color)} ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub">通常の仕入先: ${esc(r.supplierName)||'未設定'}</span></td><td>${r.sizes.map(esc).join('、')}</td><td>${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td><button type="button" data-id="${r.id}">修正</button></td></tr>`).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
-  </tbody></table></section>`
+  $('#main').innerHTML=`<section class="panel"><p class="notice">品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。</p>${bar('品番・商品名・顧客')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>商品ID</th><th>商品</th><th>サイズ</th><th>取扱</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}</span></td><td>${r.sizes.map(esc).join('、')}</td><td>${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
+  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows,'商品',productForm,body=>api('/api/products',body))
 }
 function locations(){
   const rows=state.data.locations.filter(r=>(state.stopped||r.active)&&r.label.includes(state.q))
-  $('#main').innerHTML=`<section class="panel"><p class="notice">まずは「石狩倉庫①」のような拠点だけで登録できます。棚や区画は、あとからその拠点の下に追加できます。償却待ちなどの区分は、保管場所には登録しません。</p>${bar('場所の名前')}<table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${r.id}</td><td>${esc(r.label)} ${r.active?'':'<span class="badge stop">停止</span>'}</td><td>${r.parentId?'棚・区画':'拠点'}</td><td><button type="button" data-id="${r.id}">修正</button></td></tr>`).join('')||'<tr><td colspan="4">保管場所はまだありません。</td></tr>'}
-  </tbody></table></section>`
+  $('#main').innerHTML=`<section class="panel"><p class="notice">まずは「石狩倉庫①」のような拠点だけで登録できます。棚や区画は、あとからその拠点の下に追加できます。償却待ちなどの区分は、保管場所には登録しません。</p>${bar('場所の名前')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.label)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td>${r.parentId?'棚・区画':'拠点'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="4">保管場所はまだありません。</td></tr>'}
+  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.label)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">場所ID ${r.id}　${r.parentId?'棚・区画':'拠点'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">保管場所はまだありません。</div>'
   bindList(rows,'保管場所',locationForm,body=>api('/api/locations',body))
 }
 function bindList(rows,title,form,save){
+  const stage=$('#stockliststage')
+  const mode=mountStockDisplay(stage,state.tab,()=>paint())
+  const grid=$('#stocklistgrid')
+  if(grid)grid.hidden=mode!=='grid'
+  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId(state.tab))
   $('#q').oninput=e=>{const pos=e.target.selectionStart;state.q=e.target.value;paint();const q=$('#q');q.focus();q.setSelectionRange(pos,pos)}
   $('#stopped').onchange=e=>{state.stopped=e.target.checked;paint()}
   $('#add').onclick=()=>edit(null,title,form,save)
-  document.querySelectorAll('#main [data-id]').forEach(b=>b.onclick=()=>edit(rows.find(r=>r.id===Number(b.dataset.id)),title,form,save))
+  document.querySelectorAll('#main .stockopen,[data-id]').forEach(b=>{
+    if(!b.dataset.id)return
+    b.onclick=()=>edit(rows.find(r=>r.id===Number(b.dataset.id)),title,form,save)
+  })
   bindExcel()
 }
 function edit(row,title,form,save){
@@ -357,22 +400,36 @@ function stockList(){
     <div class="tabs" id="groups">${[['product','商品別'],['customer','顧客別'],['location','場所別'],['lot','入荷分']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
     <div class="total"><div>数量<strong>${state.stock?num(state.stock.totalQty):0}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong></div></div>
     <p class="notice">表示中の金額は、各入荷分の「残数量×仕入単価」を足したものです。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。</p>
-    <div id="stockbody"></div></section>`
+    <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;await loadStock();paint()}
   ;['fCustomer','fProduct','fSize','fSpec','fLocation'].forEach(id=>$('#'+id).onchange=apply)
   $('#groups').querySelectorAll('button').forEach(b=>b.onclick=async()=>{f.group=b.dataset.group;await loadStock();paint()})
+  const stage=$('#stockliststage')
+  const mode=mountStockDisplay(stage,'list',()=>paint())
   const body=$('#stockbody')
-  if(!state.stock){body.innerHTML='';return}
+  const grid=$('#stocklistgrid')
+  if(!state.stock){body.innerHTML='';if(grid)grid.innerHTML='';return}
   if(f.group==='lot'){
-    body.innerHTML=`<table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
-      ${state.stock.lots.map(l=>`<tr><td>${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td>${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button></td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
-    </tbody></table>`
-    body.querySelectorAll('[data-correct]').forEach(b=>b.onclick=()=>correctLot(state.stock.lots.find(l=>l.id===Number(b.dataset.correct))))
-    body.querySelectorAll('[data-history]').forEach(b=>b.onclick=()=>showHistory(Number(b.dataset.history)))
+    body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
+      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td>${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
+    </tbody></table></div>`
+    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button><button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    const bindLot=()=>{
+      document.querySelectorAll('[data-correct]').forEach(b=>b.onclick=()=>correctLot(state.stock.lots.find(l=>l.id===Number(b.dataset.correct))))
+      document.querySelectorAll('[data-history]').forEach(b=>b.onclick=()=>showHistory(Number(b.dataset.history)))
+      document.querySelectorAll('.stockopen').forEach(b=>b.onclick=()=>showHistory(Number(b.dataset.id)))
+    }
+    bindLot()
+    if(grid)grid.hidden=mode!=='grid'
+    if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
     return
   }
-  body.innerHTML=state.stock.groups.map(g=>`<article class="dialogbody"><h2>${esc(g.title)}</h2><p>数量 ${num(g.qty)}　仕入原価ベースの在庫金額 ${yen(g.amount)}</p><ul class="parts">${g.parts.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)} ＝ ${yen(p.amount)}（${esc(p.customerName)} / ${esc(p.code)} / 商品ID ${p.productId} / ${esc(p.size)} / ${esc(p.embroideryLabel)} / ${esc(p.locationLabel)}）</li>`).join('')}</ul></article>`).join('')||'<p class="dialogbody">在庫はありません。</p>'
+  body.innerHTML=state.stock.groups.map(g=>`<article class="dialogbody"><h2 class="dm-primary">${esc(g.title)}</h2><p class="dm-secondary">数量 ${num(g.qty)}　仕入原価ベースの在庫金額 ${yen(g.amount)}</p><ul class="parts">${g.parts.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)} ＝ ${yen(p.amount)}（${esc(p.customerName)} / ${esc(p.code)} / 商品ID ${p.productId} / ${esc(p.size)} / ${esc(p.embroideryLabel)} / ${esc(p.locationLabel)}）</li>`).join('')}</ul></article>`).join('')||'<p class="dialogbody">在庫はありません。</p>'
+  if(grid)grid.innerHTML=state.stock.groups.length?state.stock.groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${num(g.qty)} / ${yen(g.amount)}</span></div>`+g.parts.map(p=>`<article class="dm-card"><div class="dm-primary">${esc(p.customerName)} / ${esc(p.code)}</div><div class="dm-secondary">商品ID ${p.productId}　${esc(p.size)} / ${esc(p.embroideryLabel)}</div><div class="dm-meta"><span>${esc(p.locationLabel)}</span><span>${yen(p.unitCost)} × ${num(p.qty)}</span><span>${yen(p.amount)}</span></div></article>`).join('')).join(''):'<div class="dm-empty">在庫はありません。</div>'
+  if(grid)grid.hidden=mode!=='grid'
+  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
 }
+
 function correctLot(lot){
   const dlg=$('#dialog')
   dlg.innerHTML=`<form><div class="dialoghead"><h2>初期在庫の訂正</h2></div><div class="dialogbody">
