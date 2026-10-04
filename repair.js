@@ -102,6 +102,7 @@ function migrationFileToBase64(file){
 }
 async function exportMigrationBackup(){
  if(currentUser?.role!=='owner')return;
+ repairMessage('書き出し中です。データ量によっては数分かかることがあります。');
  const r=await fetch('/api/migration/export');
  if(!r.ok){let msg='書き出せませんでした。';try{msg=(await r.json()).error||msg}catch{}throw Error(msg)}
  const blob=await r.blob();

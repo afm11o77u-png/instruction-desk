@@ -72,6 +72,18 @@ def _iso_now():
     return datetime.now().isoformat(timespec='seconds')
 
 
+def oserror_message(exc, what='書き込み'):
+    """Map common OSError cases to a short Japanese user-facing message."""
+    errno = getattr(exc, 'errno', None)
+    # ENOSPC / Windows ERROR_DISK_FULL
+    if errno in (28, 112) or 'No space' in str(exc) or 'not enough space' in str(exc).lower():
+        return f'{what}に失敗しました。ディスクの空き容量を確認してからやり直してください。'
+    # EACCES / EPERM
+    if errno in (13, 1) or 'Permission' in str(exc) or 'Access is denied' in str(exc):
+        return f'{what}に失敗しました。保存先フォルダの書き込み権限を確認してください。'
+    return f'{what}に失敗しました。ディスク容量・書き込み権限を確認してからやり直してください。'
+
+
 def _sha256_file(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -324,17 +336,38 @@ def _build_export_zip_unlocked(data_dir, dest_zip=None):
         tmp_zip = final.with_name(final.name + '.partial')
         if tmp_zip.exists():
             tmp_zip.unlink()
-        with zipfile.ZipFile(tmp_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
-            for path in stage.rglob('*'):
-                if path.is_file():
-                    arc = path.relative_to(stage).as_posix()
-                    zf.write(path, arc)
-            bad = zf.testzip()
+        try:
+            with zipfile.ZipFile(tmp_zip, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                for path in stage.rglob('*'):
+                    if path.is_file():
+                        arc = path.relative_to(stage).as_posix()
+                        zf.write(path, arc)
+            # Close first so the central directory is finalized, then reopen read-only for testzip.
+            with zipfile.ZipFile(tmp_zip, 'r') as zf:
+                bad = zf.testzip()
             if bad is not None:
-                raise MigrationError('ZIPの作成に失敗しました。')
+                raise MigrationError(f'ZIPの作成に失敗しました（破損メンバー: {bad}）。')
+        except MigrationError:
+            raise
+        except OSError as e:
+            raise MigrationError(oserror_message(e, 'ZIPの作成')) from e
         os.replace(tmp_zip, final)
         tmp_zip = None
         return final, manifest
+    except MigrationError:
+        if tmp_zip and Path(tmp_zip).exists():
+            try:
+                Path(tmp_zip).unlink()
+            except OSError:
+                pass
+        raise
+    except OSError as e:
+        if tmp_zip and Path(tmp_zip).exists():
+            try:
+                Path(tmp_zip).unlink()
+            except OSError:
+                pass
+        raise MigrationError(oserror_message(e, '移行用バックアップの作成')) from e
     except Exception:
         if tmp_zip and Path(tmp_zip).exists():
             try:
