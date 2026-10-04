@@ -3,16 +3,18 @@ import re
 
 MODES = ('standard', 'compact', 'cozy', 'grid')
 DEFAULT = 'standard'
-SCREENS = {
-    'orders',
-    'floor',
-    'shipinfo',
-    'stock-customers',
-    'stock-suppliers',
-    'stock-products',
-    'stock-locations',
-    'stock-list',
+SCREEN_DEFAULTS = {
+    'orders': 'grid',
+    'floor': 'grid',
+    'drafts': 'grid',
+    'shipinfo': 'standard',
+    'stock-customers': 'compact',
+    'stock-suppliers': 'compact',
+    'stock-products': 'compact',
+    'stock-locations': 'compact',
+    'stock-list': 'compact',
 }
+SCREENS = set(SCREEN_DEFAULTS)
 SCREEN_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}$')
 
 def initialize(c):
@@ -25,8 +27,15 @@ def initialize(c):
         ')'
     )
 
-def normalize_mode(mode):
-    return mode if mode in MODES else DEFAULT
+def default_for(screen_id):
+    if screen_id in SCREEN_DEFAULTS:
+        return SCREEN_DEFAULTS[screen_id]
+    if isinstance(screen_id, str) and screen_id.startswith('stock-'):
+        return 'compact'
+    return DEFAULT
+
+def normalize_mode(mode, screen_id=None):
+    return mode if mode in MODES else default_for(screen_id)
 
 def normalize_screen(screen_id):
     if not isinstance(screen_id, str):
@@ -51,8 +60,8 @@ def handle_get(handler, c):
         screen = normalize_screen(row['screen_id'])
         if not screen:
             continue
-        modes[screen] = normalize_mode(row['mode'])
-    return 200, {'modes': modes, 'default': DEFAULT}
+        modes[screen] = normalize_mode(row['mode'], screen)
+    return 200, {'modes': modes, 'default': DEFAULT, 'defaults': dict(SCREEN_DEFAULTS)}
 
 def handle_post(handler, c, data):
     u = handler.session_user(c)
@@ -63,7 +72,7 @@ def handle_post(handler, c, data):
     screen = normalize_screen(data.get('screenId'))
     if not screen:
         return 400, {'error': '画面を確認してください。'}
-    mode = normalize_mode(data.get('mode'))
+    mode = normalize_mode(data.get('mode'), screen)
     c.execute(
         'INSERT INTO user_display_modes(user_id, screen_id, mode) VALUES(?,?,?) '
         'ON CONFLICT(user_id, screen_id) DO UPDATE SET mode=excluded.mode',

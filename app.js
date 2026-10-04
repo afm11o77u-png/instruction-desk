@@ -28,7 +28,7 @@ function compareFloorOrders(a,b){
 function compareOrders(a,b){if(view==='floor')return compareFloorOrders(a,b);const key=listSort.key,dir=listSort.dir;if(key==='status'){const cmp=states.indexOf(a.status)-states.indexOf(b.status);return cmp?cmp*dir:b.id-a.id}const av=String(a[key]??''),bv=String(b[key]??'');if(!av&&bv)return 1;if(av&&!bv)return -1;const cmp=av.localeCompare(bv,'ja',{numeric:true});return cmp?cmp*dir:b.id-a.id}
 function sortHead(label,key){if(view==='floor')return `<th>${label}${key==='markShipDate'?' ▲':''}</th>`;const on=listSort.key===key,mark=on?(listSort.dir>0?' ▲':' ▼'):'';return `<th><button type="button" class="sorthead${on?' on':''}" data-sort="${key}">${label}${mark}</button></th>`}
 const floorOrderNote='マーク出荷日の早い順に表示しています。同じ日は投函順（指示番号の古い順）です。日付未設定は最後に表示します。状況の下のチェックは、印刷とピッキングリストです。作業状況とは別です。番号や日時は、チェックにカーソルを合わせると見えます。';
-function orderListScreenId(){return view==='floor'?'floor':'orders'}
+function orderListScreenId(){return view==='floor'?'floor':view==='draft'?'drafts':'orders'}
 function saveDisplayMode(screenId,mode){return api('/api/display-modes',{screenId,mode})}
 async function ensureDisplayModes(){if(typeof DisplayMode==='undefined')return;await DisplayMode.loadAll(()=>api('/api/display-modes'))}
 function bindOrderListActions(scope){
