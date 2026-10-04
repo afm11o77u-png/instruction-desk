@@ -176,6 +176,52 @@
   border:0;
   flex:0 0 14px;
 }
+/* Grid: status + print/picking in one band (status left larger, checks stacked right) */
+.list-grid .dm-card .dm-status-band{
+  display:flex;
+  flex-direction:row;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+.list-grid .dm-card .dm-status-main{
+  flex:1 1 auto;
+  min-width:0;
+  display:flex;
+  align-items:center;
+}
+.list-grid .dm-card .dm-status-main .badge{
+  font-size:.9rem;
+  padding:7px 12px;
+  line-height:1.25;
+}
+.list-grid .dm-card .dm-status-main select.flagstatus{
+  width:100%;
+  max-width:none;
+  min-width:0;
+  font-size:.9rem;
+  line-height:1.3;
+  padding:7px 10px;
+}
+.list-grid .dm-card .flagchecks{
+  flex:0 0 auto;
+  flex-direction:column;
+  align-items:flex-start;
+  justify-content:center;
+  gap:4px;
+  margin-top:0;
+}
+.list-grid .dm-card .flagcheck input{
+  width:14px;
+  height:14px;
+  min-width:14px;
+  min-height:14px;
+  max-height:14px;
+  margin:0;
+  padding:0;
+  border:0;
+  flex:0 0 14px;
+}
 .list-grid .dm-empty{
   grid-column:1/-1;
   padding:28px 16px;
