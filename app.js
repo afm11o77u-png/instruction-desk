@@ -62,7 +62,7 @@ function orderGridCard(o,flagChecks){
  const made=o.authorId&&o.assigneeId&&o.authorId!==o.assigneeId?`<div class="dm-secondary">作成 ${esc(o.authorName)}</div>`:'';
  const mark=esc(o.markShipDate)||'未定';
  const late=o.markShipDate&&o.markShipDate<today()&&!['下書き','発送済','完了'].includes(o.status)?' late':'';
- return `<article class="dm-card${late}" data-id="${o.id}"><div class="dm-primary">${esc(o.customer)||'顧客未設定'}</div><div class="dm-secondary"><span class="number">${o.number}${o.sample?' ・サンプル':''}</span>　${esc(o.employee)||'—'}${o.owner?`　${esc(o.owner)}`:''}</div>${made}<div class="dm-meta"><span>${esc(o.request)||'—'}</span><span>マーク出荷日 ${mark}</span></div><div class="dm-status">${orderStatusBlock(o,flagChecks)}</div><div class="dm-actions">${orderActionsHtml(o)}</div></article>`;
+ return `<article class="dm-card${late}" data-id="${o.id}"><div class="dm-primary">${esc(o.customer)||'顧客未設定'}</div><div class="dm-secondary"><span class="number">${o.number}${o.sample?' ・サンプル':''}</span>　${esc(o.employee)||'—'}${view==='floor'&&o.owner?`　${esc(o.owner)}`:''}</div>${made}<div class="dm-meta"><span>${esc(o.request)||'—'}</span><span>マーク出荷日 ${mark}</span></div><div class="dm-status">${orderStatusBlock(o,flagChecks)}</div><div class="dm-actions">${orderActionsHtml(o)}</div></article>`;
 }
 function render(){
  const stale=$('#floorordernote');if(stale)stale.remove();
