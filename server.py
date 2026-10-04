@@ -10,6 +10,7 @@ import picking
 import placement
 import shipping
 import names
+import display_modes
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -57,6 +58,7 @@ def initialize():
         names.bind(DATA)
         names.schema(c)
         label_sets.initialize(c)
+        display_modes.initialize(c)
         picking.initialize(c)
         picking.backfill_picking_flags(c)
         if not c.execute("SELECT 1 FROM settings WHERE key='seeded'").fetchone():
@@ -853,6 +855,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/api/label-sets':
             with connect() as c: result=label_sets.handle(self,c,path)
             return self.reply(*result)
+        if path=='/api/display-modes':
+            with connect() as c: result=display_modes.handle_get(self,c)
+            return self.reply(*result)
         if path=='/api/ship-workers':
             if self.user['role'] not in ('owner','floor'): return self.reply(403,{'error':'出荷仕分けは現場と主管理者が使用します。'})
             with connect() as c:
@@ -907,7 +912,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if not order or not can_access(self.user,json.loads(order['payload'])): return self.reply(404,{'error':'指示書が見つかりません。'})
                 rows=[dict(r) for r in c.execute('SELECT at,action,actor,changes FROM history WHERE order_id=? ORDER BY id DESC',(oid,))]
             return self.reply(200,rows)
-        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
@@ -943,6 +948,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     result=label_sets.handle(self,c,self.path,d)
+                return self.reply(*result)
+            if self.path=='/api/display-modes':
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    result=display_modes.handle_post(self,c,d)
                 return self.reply(*result)
             if self.path=='/api/backup':
                 dest=placement.make_backup(connect, DATA)

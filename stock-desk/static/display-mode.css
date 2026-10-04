@@ -1,0 +1,121 @@
+/* Shared list display modes: 標準 / コンパクト / ゆったり / グリッド */
+.display-mode-bar{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:10px;
+  margin:0 0 10px;
+  flex-wrap:wrap;
+}
+.display-mode-control{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  margin:0;
+  font-size:12.5px;
+  font-weight:700;
+  color:#2f4636;
+}
+.display-mode-control select{
+  min-width:9.5em;
+  font-weight:600;
+  font-size:14px;
+  padding:6px 10px;
+  border:1px solid #c5dcc4;
+  border-radius:7px;
+  background:#fff;
+}
+
+.list-stage{min-width:0}
+.list-stage .list-grid[hidden],
+.list-stage.dm-grid .tablewrap,
+.list-stage.dm-grid .directory-scroll,
+.list-stage.dm-grid #stockbody,
+.list-stage.dm-grid #shipinfobody,
+.list-stage:not(.dm-grid) .list-grid{display:none!important}
+.list-stage.dm-grid .list-grid{display:grid!important}
+.list-stage.dm-grid .shipinfowrap{display:none!important}
+
+/* 標準: clearer comparison hierarchy */
+.list-stage.dm-standard table td{padding:10px 12px;vertical-align:top}
+.list-stage.dm-standard table th{padding:10px 12px}
+.list-stage.dm-standard .dm-primary{font-weight:700}
+.list-stage.dm-standard .dm-secondary{display:block;margin-top:2px;font-size:.8rem;color:#4d6355;font-weight:500}
+
+/* コンパクト: tighter rows, more on screen */
+.list-stage.dm-compact table td,
+.list-stage.dm-compact table th{padding:4px 8px;font-size:.875rem;line-height:1.3;vertical-align:middle}
+.list-stage.dm-compact .dm-secondary{display:inline;margin-left:6px;font-size:.75rem;color:#5a6f62}
+.list-stage.dm-compact .flagchecks{margin-top:2px;gap:6px}
+.list-stage.dm-compact .duechip{margin-top:2px;font-size:.7rem}
+.list-stage.dm-compact button.quiet{padding:4px 8px;font-size:.75rem}
+.list-stage.dm-compact tr.authorhead td{padding:6px 8px;font-size:.8rem}
+
+/* ゆったり: important info larger, secondary below */
+.list-stage.dm-cozy table td{padding:14px 12px;vertical-align:top}
+.list-stage.dm-cozy .dm-primary{display:block;font-size:1.12rem;font-weight:700;line-height:1.35}
+.list-stage.dm-cozy .dm-secondary{display:block;margin-top:4px;font-size:.9rem;color:#3d5344;line-height:1.45}
+.list-stage.dm-cozy .number{font-size:1rem}
+.list-stage.dm-cozy .badge,
+.list-stage.dm-cozy select.flagstatus{font-size:.85rem}
+.list-stage.dm-cozy .duechip{font-size:.85rem;margin-top:6px}
+.list-stage.dm-cozy button.quiet{padding:8px 12px}
+
+/* グリッド: responsive cards */
+.list-grid{
+  grid-template-columns:repeat(auto-fill,minmax(260px,1fr));
+  gap:12px;
+  align-items:stretch;
+  width:100%;
+}
+.list-grid .dm-group{
+  grid-column:1/-1;
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:12px;
+  margin:4px 0 0;
+  padding:10px 12px;
+  background:#eef7ef;
+  border:1px solid var(--line,#d5ead4);
+  border-radius:8px;
+  font-weight:700;
+}
+.list-grid .dm-group span{font-weight:600;color:#3d5344}
+.list-grid .dm-card{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  min-width:0;
+  padding:14px;
+  border:1px solid #c5dcc4;
+  border-radius:10px;
+  background:#fff;
+}
+.list-grid .dm-card .dm-primary{font-size:1.05rem;font-weight:700;line-height:1.35;word-break:break-word}
+.list-grid .dm-card .dm-secondary{font-size:.85rem;color:#3d5344;line-height:1.45;word-break:break-word}
+.list-grid .dm-card .dm-meta{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:.85rem;color:#2f4636}
+.list-grid .dm-card .dm-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;align-items:center}
+.list-grid .dm-card .dm-check{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700}
+.list-grid .dm-empty{
+  grid-column:1/-1;
+  padding:28px 16px;
+  text-align:center;
+  color:#4d6355;
+  border:1px dashed #c5dcc4;
+  border-radius:10px;
+  background:#f7fbf7;
+}
+.list-grid .dm-thumb{
+  width:100%;
+  max-height:140px;
+  object-fit:contain;
+  border-radius:8px;
+  background:#f3f7f3;
+}
+@media (max-width:640px){
+  .list-grid{grid-template-columns:1fr}
+  .display-mode-bar{justify-content:stretch}
+  .display-mode-control{width:100%}
+  .display-mode-control select{flex:1;width:100%}
+}

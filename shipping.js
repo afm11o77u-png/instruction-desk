@@ -1,5 +1,7 @@
 let shipShowAll=false;
 let shipOffset=0, shipTotal=0, shipBusy=false, shipQueued=false, shipEditing=null, shipDirty=false, shipNames=[];
+let shipItems=[];
+const SHIPINFO_SCREEN='shipinfo';
 const shipLists={method:['自社便','福山・佐川','地方便(オリコン)','佐川指定','ヤマト指定'],pack:['たたみ包装','ハンガー'],weekday:['月・木','火・金','水・土','月・水・金','火・木・土','月曜日','火曜日','水曜日','木曜日','金曜日','土曜日','毎日','月1回','月2回','TEL'],timeBand:[...'56789'.split(''),10,11,12,13,14,15,16].map(h=>`${h}:00～${Number(h)+1}:00`),car:['1号車','2号車','3号車','4・8号車','5号車','6号車','7号車','9号車(アドバンス)','10号車','11号車(アドバンス)','12号車'],manager:['森末支店長','横内課長','横内次長','山田課長','河口係長','藤浪係長','藤澤代理','田中(本社)','藤本','安藤','田中(発寒支店)','小野寺','大島','大本','菅沼']};
 shipLists.sales=shipLists.manager;shipLists.markPack=shipLists.pack;
 function shipCell(value){return esc(value)||'—'}
@@ -7,8 +9,47 @@ function paintShipClear(){const input=$('#shipinfocustomer');const btn=input.par
 function hideShipChoices(){const box=$('#shipinfosearch .placementpicks');if(box)box.hidden=true}
 function showShipChoices(){const input=$('#shipinfocustomer');const box=input.parentElement.querySelector('.placementpicks');const q=input.value.trim();const rows=q?shipNames.filter(name=>name.includes(q)):shipNames.slice();box.innerHTML=rows.length?rows.map(name=>`<button type="button" class="placementpick">${esc(name)}</button>`).join(''):'<p class="placementpickempty">該当する名前はありません。</p>';box.hidden=false}
 function fillShipSelect(select, names, current){const values=['',...names];if(current&&!values.includes(current))values.push(current);select.innerHTML=values.map(name=>`<option value="${esc(name)}">${name?esc(name):'選択してください'}</option>`).join('');select.value=current||''}
-function paintShipRow(row, item){row.dataset.id=String(item.id);row.innerHTML=`<td>${shipCell(item.customer)}</td><td>${shipCell(item.method)}</td><td>${shipCell(item.pack)}</td><td>${shipCell(item.markPack)}</td><td>${shipCell(item.weekday)}</td><td>${shipCell(item.timeBand)}</td><td>${shipCell(item.car)}</td><td>${shipCell(item.manager)}</td><td>${shipCell(item.sales)}</td><td>${shipCell(item.contractStart)}</td><td>${shipCell(item.contractEnd)}</td><td><button type="button" class="quiet">開く</button></td>`;row.querySelector('button').onclick=()=>openShipment(item)}
-async function loadShipments(reset){if(shipBusy){if(reset)shipQueued=true;return}shipBusy=true;if(reset){shipOffset=0;$('#shipinfobody').innerHTML=''}$('#shipinfostatus').textContent='読み込んでいます。';try{if(reset){const data=await api('/api/shipments/options');shipNames=data.customers||[];if(data.methods)shipLists.method=data.methods;if(data.packs){shipLists.pack=data.packs;shipLists.markPack=data.packs}if(data.weekdays)shipLists.weekday=data.weekdays;if(data.times)shipLists.timeBand=data.times;if(data.cars)shipLists.car=data.cars;if(data.people){shipLists.manager=data.people;shipLists.sales=data.people}paintShipClear()}let data=await api('/api/shipments?'+new URLSearchParams({customer:$('#shipinfocustomer').value.trim(),offset:String(shipOffset)}));if(shipShowAll){const query=new URLSearchParams({customer:$('#shipinfocustomer').value.trim()});const items=[...data.items];while(items.length<data.total){if(shipQueued)return;query.set('offset',String(items.length));const next=await api('/api/shipments?'+query);if(!next.items.length)break;items.push(...next.items);data.total=next.total;$('#shipinfostatus').textContent=`読み込み中 ${items.length} / ${data.total} 件`;}data.items=items;}if(shipQueued)return;shipTotal=data.total;const body=$('#shipinfobody');if(!data.items.length&&shipOffset===0){$('#shipinfostatus').textContent='該当する出荷情報はありません。';$('#shipinfomore').hidden=true;shipBusy=false;return}for(const item of data.items){const row=document.createElement('tr');paintShipRow(row,item);body.append(row)}shipOffset+=data.items.length;$('#shipinfostatus').textContent=`${Math.min(shipOffset,shipTotal)} / ${shipTotal} 件`;$('#shipinfomore').hidden=shipOffset>=shipTotal}catch(e){$('#shipinfostatus').textContent=e.message||'読み込めませんでした。'}finally{shipBusy=false;$('#shipinfoexport').hidden=view!=='shipinfo';$('#shipinfoimport').hidden=view!=='shipinfo'||currentUser?.role!=='owner';$('#shipinfonew').hidden=view!=='shipinfo'||currentUser?.role!=='owner';if(shipQueued){shipQueued=false;loadShipments(true)}}}
+function paintShipRow(row, item){row.dataset.id=String(item.id);row.innerHTML=`<td><span class="dm-primary">${shipCell(item.customer)}</span></td><td>${shipCell(item.method)}</td><td>${shipCell(item.pack)}</td><td>${shipCell(item.markPack)}</td><td>${shipCell(item.weekday)}</td><td>${shipCell(item.timeBand)}</td><td>${shipCell(item.car)}</td><td>${shipCell(item.manager)}</td><td>${shipCell(item.sales)}</td><td>${shipCell(item.contractStart)}</td><td>${shipCell(item.contractEnd)}</td><td><button type="button" class="quiet shipopen" data-id="${item.id}">開く</button></td>`;row.querySelector('button').onclick=()=>openShipment(item)}
+function shipGridCard(item){
+  return `<article class="dm-card" data-id="${item.id}"><div class="dm-primary">${shipCell(item.customer)}</div><div class="dm-meta"><span>${shipCell(item.method)}</span><span>${shipCell(item.pack)}</span><span>${shipCell(item.weekday)}</span><span>${shipCell(item.timeBand)}</span></div><div class="dm-secondary">${shipCell(item.car)}　${shipCell(item.manager)}　${shipCell(item.sales)}</div><div class="dm-secondary">契約 ${shipCell(item.contractStart)} ～ ${shipCell(item.contractEnd)}</div><div class="dm-actions"><button type="button" class="quiet shipopen" data-id="${item.id}">開く</button></div></article>`;
+}
+function ensureShipDisplayBar(){
+  const stage=$('#shipinfoliststage');
+  if(!stage||typeof DisplayMode==='undefined')return;
+  DisplayMode.mount(stage,SHIPINFO_SCREEN,async(mode)=>{
+    await DisplayMode.set(SHIPINFO_SCREEN,mode,(id,m)=>api('/api/display-modes',{screenId:id,mode:m}));
+    paintShipList();
+  });
+}
+function paintShipList(){
+  ensureShipDisplayBar();
+  const mode=typeof DisplayMode!=='undefined'?DisplayMode.get(SHIPINFO_SCREEN):'standard';
+  const stage=$('#shipinfoliststage');
+  const body=$('#shipinfobody');
+  const grid=$('#shipinfolistgrid');
+  if(!body)return;
+  body.innerHTML='';
+  if(!shipItems.length){
+    if(grid){grid.innerHTML='<div class="dm-empty">該当する出荷情報はありません。</div>';grid.hidden=mode!=='grid'}
+    if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,SHIPINFO_SCREEN);
+    return;
+  }
+  for(const item of shipItems){
+    const row=document.createElement('tr');
+    paintShipRow(row,item);
+    body.append(row);
+  }
+  if(grid){
+    grid.innerHTML=shipItems.map(shipGridCard).join('');
+    grid.querySelectorAll('.shipopen').forEach(b=>b.onclick=()=>{
+      const item=shipItems.find(x=>String(x.id)===String(b.dataset.id));
+      if(item)openShipment(item);
+    });
+    grid.hidden=mode!=='grid';
+  }
+  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,SHIPINFO_SCREEN);
+}
+async function loadShipments(reset){if(shipBusy){if(reset)shipQueued=true;return}shipBusy=true;if(reset){shipOffset=0;shipItems=[];$('#shipinfobody').innerHTML='';const g=$('#shipinfolistgrid');if(g)g.innerHTML=''}$('#shipinfostatus').textContent='読み込んでいます。';try{if(typeof ensureDisplayModes==='function')await ensureDisplayModes().catch(()=>{});if(reset){const data=await api('/api/shipments/options');shipNames=data.customers||[];if(data.methods)shipLists.method=data.methods;if(data.packs){shipLists.pack=data.packs;shipLists.markPack=data.packs}if(data.weekdays)shipLists.weekday=data.weekdays;if(data.times)shipLists.timeBand=data.times;if(data.cars)shipLists.car=data.cars;if(data.people){shipLists.manager=data.people;shipLists.sales=data.people}paintShipClear()}let data=await api('/api/shipments?'+new URLSearchParams({customer:$('#shipinfocustomer').value.trim(),offset:String(shipOffset)}));if(shipShowAll){const query=new URLSearchParams({customer:$('#shipinfocustomer').value.trim()});const items=[...data.items];while(items.length<data.total){if(shipQueued)return;query.set('offset',String(items.length));const next=await api('/api/shipments?'+query);if(!next.items.length)break;items.push(...next.items);data.total=next.total;$('#shipinfostatus').textContent=`読み込み中 ${items.length} / ${data.total} 件`;}data.items=items;}if(shipQueued)return;shipTotal=data.total;if(!data.items.length&&shipOffset===0){shipItems=[];paintShipList();$('#shipinfostatus').textContent='該当する出荷情報はありません。';$('#shipinfomore').hidden=true;shipBusy=false;return}if(reset)shipItems=data.items.slice();else shipItems=shipItems.concat(data.items);shipOffset=shipItems.length;paintShipList();$('#shipinfostatus').textContent=`${Math.min(shipOffset,shipTotal)} / ${shipTotal} 件`;$('#shipinfomore').hidden=shipOffset>=shipTotal}catch(e){$('#shipinfostatus').textContent=e.message||'読み込めませんでした。'}finally{shipBusy=false;$('#shipinfoexport').hidden=view!=='shipinfo';$('#shipinfoimport').hidden=view!=='shipinfo'||currentUser?.role!=='owner';$('#shipinfonew').hidden=view!=='shipinfo'||currentUser?.role!=='owner';if(shipQueued){shipQueued=false;loadShipments(true)}}}
 function shipPayload(form){const v=name=>form.elements[name].value;return {customer:v('customer'),method:v('method'),pack:v('pack'),markPack:v('markPack'),weekday:v('weekday'),timeBand:v('timeBand'),car:v('car'),manager:v('manager'),sales:v('sales'),contractStart:v('contractStart'),contractEnd:v('contractEnd')}}
 function openShipment(item){shipEditing=item||null;shipDirty=false;$('#shipinfoerror').textContent='';const form=$('#shipinfoform');const owner=currentUser?.role==='owner';$('#shipinfonumber').textContent=item?'登録番号 '+(item.number??''):'新規';$('#shipinfotitle').textContent=owner?(item?'出荷情報':'出荷情報を登録'):(item?.customer||'出荷情報');form.elements.customer.value=item?.customer||'';for(const name of ['method','pack','markPack','weekday','timeBand','car','manager','sales']){const key=name==='markPack'?'markPack':name==='timeBand'?'timeBand':name;fillShipSelect(form.elements[name], shipLists[name]||[], item?.[key]||'')}form.elements.contractStart.value=item?.contractStart||'';form.elements.contractEnd.value=item?.contractEnd||'';[...form.elements].forEach(el=>{if(el.name)el.disabled=!owner});$('#shipinfosave').hidden=!owner;$('#shipinfosave').disabled=false;if(!$('#shipinfoview').open)$('#shipinfoview').showModal()}
 function closeShipment(){if(shipDirty&&!confirm('保存していない内容を破棄して閉じますか？'))return;shipDirty=false;$('#shipinfoview').close()}
@@ -26,7 +67,7 @@ $('#shipinfofile').onchange=async()=>{const file=$('#shipinfofile').files&&$('#s
 $('#shipinfoclose').onclick=closeShipment;
 $('#shipinfoview').addEventListener('cancel',e=>{e.preventDefault();closeShipment()});
 $('#shipinfoform').addEventListener('input',()=>{shipDirty=true});
-$('#shipinfoform').onsubmit=async e=>{e.preventDefault();if(currentUser?.role!=='owner'||$('#shipinfosave').disabled)return;const form=$('#shipinfoform');const body=shipPayload(form);if(!body.customer.trim()){$('#shipinfoerror').textContent='顧客を入力してください。';return}$('#shipinfosave').disabled=true;$('#shipinfoerror').textContent='';try{let saved;if(shipEditing){body.id=shipEditing.id;body.version=shipEditing.version;saved=await api('/api/shipments/save',body)}else saved=await api('/api/shipments',body);shipDirty=false;if(shipEditing){const row=document.querySelector(`#shipinfobody tr[data-id="${saved.id}"]`);if(row)paintShipRow(row,saved);openShipment(saved);toast('出荷情報を修正しました。')}else{$('#shipinfoview').close();toast('出荷情報を登録しました。');await loadShipments(true)}}catch(err){$('#shipinfoerror').textContent=err.message}finally{$('#shipinfosave').disabled=false}};
+$('#shipinfoform').onsubmit=async e=>{e.preventDefault();if(currentUser?.role!=='owner'||$('#shipinfosave').disabled)return;const form=$('#shipinfoform');const body=shipPayload(form);if(!body.customer.trim()){$('#shipinfoerror').textContent='顧客を入力してください。';return}$('#shipinfosave').disabled=true;$('#shipinfoerror').textContent='';try{let saved;if(shipEditing){body.id=shipEditing.id;body.version=shipEditing.version;saved=await api('/api/shipments/save',body)}else saved=await api('/api/shipments',body);shipDirty=false;if(shipEditing){const idx=shipItems.findIndex(x=>x.id===saved.id);if(idx>=0)shipItems[idx]=saved;paintShipList();openShipment(saved);toast('出荷情報を修正しました。')}else{$('#shipinfoview').close();toast('出荷情報を登録しました。');await loadShipments(true)}}catch(err){$('#shipinfoerror').textContent=err.message}finally{$('#shipinfosave').disabled=false}};
 
 const shipAllButton=document.createElement('button');
 shipAllButton.type='button';
