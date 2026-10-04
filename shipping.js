@@ -16,10 +16,11 @@ function shipGridCard(item){
 function ensureShipDisplayBar(){
   const stage=$('#shipinfoliststage');
   if(!stage||typeof DisplayMode==='undefined')return;
+  const toolbar=$('#shipinfosearch');
   DisplayMode.mount(stage,SHIPINFO_SCREEN,async(mode)=>{
     await DisplayMode.set(SHIPINFO_SCREEN,mode,(id,m)=>api('/api/display-modes',{screenId:id,mode:m}));
     paintShipList();
-  });
+  },toolbar);
 }
 function paintShipList(){
   ensureShipDisplayBar();

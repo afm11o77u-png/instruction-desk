@@ -26,11 +26,15 @@ function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'standard'
   const screenId=stockScreenId(tab)
+  const toolbar=document.querySelector('#main .bar')
   DisplayMode.mount(stage,screenId,async(mode)=>{
     await DisplayMode.set(screenId,mode,saveStockDisplay)
     if(typeof repaint==='function')repaint()
-  })
+  },toolbar)
   return DisplayMode.get(screenId)
+}
+function listNote(summary,body){
+  return `<details class="list-note"><summary>${summary}</summary><p class="list-note-body">${body}</p></details>`
 }
 function stockOpenBtn(id,label='開く'){return `<button type="button" class="quiet stockopen" data-id="${id}">${label}</button>`}
 async function api(path,data){
@@ -72,7 +76,7 @@ function bar(placeholder){
   return `<div class="bar"><label>検索<input id="q" value="${esc(state.q)}" placeholder="${placeholder}"></label>
     <label class="check"><input id="stopped" type="checkbox" ${state.stopped?'checked':''}>停止も表示</label>
     <button type="button" class="primary" id="add">新しく登録</button>${excelTools()}</div>
-    <p class="excelhint">記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。</p>`
+    ${listNote('Excel取込の説明','記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。')}`
 }
 function bindExcel(){
   const down=$('#exceldown'),pick=$('#excelin'),file=$('#excelfile')
@@ -115,7 +119,7 @@ function customers(){
 function suppliers(){
   const rows=state.data.suppliers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.phone}${r.contact}${r.address}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel supplier-panel"><p class="notice">仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。</p>${bar('仕入先名・電話番号・担当者')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel supplier-panel">${listNote('仕入先について','仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。')}${bar('仕入先名・電話番号・担当者')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する仕入先はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -127,7 +131,7 @@ function products(){
     const text=`${r.code}${r.name}${r.color}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return (state.stopped||r.active)&&text.includes(state.q)
   })
-  $('#main').innerHTML=`<section class="panel"><p class="notice">品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。</p>${bar('品番・商品名・顧客')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>商品ID</th><th>商品</th><th>サイズ</th><th>取扱</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。')}${bar('品番・商品名・顧客')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>商品ID</th><th>商品</th><th>サイズ</th><th>取扱</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}</span></td><td>${r.sizes.map(esc).join('、')}</td><td>${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -136,7 +140,7 @@ function products(){
 }
 function locations(){
   const rows=state.data.locations.filter(r=>(state.stopped||r.active)&&r.label.includes(state.q))
-  $('#main').innerHTML=`<section class="panel"><p class="notice">まずは「石狩倉庫①」のような拠点だけで登録できます。棚や区画は、あとからその拠点の下に追加できます。償却待ちなどの区分は、保管場所には登録しません。</p>${bar('場所の名前')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','まずは「石狩倉庫①」のような拠点だけで登録できます。棚や区画は、あとからその拠点の下に追加できます。償却待ちなどの区分は、保管場所には登録しません。')}${bar('場所の名前')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.label)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td>${r.parentId?'棚・区画':'拠点'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="4">保管場所はまだありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -399,7 +403,7 @@ function stockList(){
     </div>
     <div class="tabs" id="groups">${[['product','商品別'],['customer','顧客別'],['location','場所別'],['lot','入荷分']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
     <div class="total"><div>数量<strong>${state.stock?num(state.stock.totalQty):0}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong></div></div>
-    <p class="notice">表示中の金額は、各入荷分の「残数量×仕入単価」を足したものです。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。</p>
+    ${listNote('在庫金額の見方','表示中の金額は、各入荷分の「残数量×仕入単価」を足したものです。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;await loadStock();paint()}
   ;['fCustomer','fProduct','fSize','fSpec','fLocation'].forEach(id=>$('#'+id).onchange=apply)
