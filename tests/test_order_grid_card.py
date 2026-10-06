@@ -115,6 +115,35 @@ class OrderGridCardLayoutTest(unittest.TestCase):
         checks = rule('.list-grid .dm-card .flagchecks')
         self.assertIn('flex-direction:column', checks)
 
+    def test_order_actions_open_print_due_labels(self):
+        body = _fn('orderActionsHtml')
+        self.assertIn('>開く</button>', body)
+        self.assertIn("?'プレビュー':'印刷'", body)
+        self.assertIn('>納期</button>', body)
+        self.assertIn('aria-label="納期を確認"', body)
+        self.assertNotIn('>納期を確認</button>', body)
+        self.assertIn("class=\"quiet rowprint\"", body)
+        self.assertIn("class=\"quiet dueopen\"", body)
+        self.assertIn("data-mode=\"confirm\"", body)
+
+    def test_grid_actions_nowrap_single_row(self):
+        def rule(selector: str) -> str:
+            m = re.search(re.escape(selector) + r'\{([^}]*)\}', CSS, re.S)
+            self.assertIsNotNone(m, f'missing {selector}')
+            return m.group(1)
+
+        actions = rule('.list-grid .dm-card .dm-actions')
+        self.assertIn('flex-wrap:nowrap', actions)
+        self.assertNotIn('flex-wrap:wrap', actions)
+        self.assertIn('min-width:0', actions)
+
+        buttons = rule('.list-grid .dm-card .dm-actions button')
+        self.assertIn('flex:1 1 0', buttons)
+        self.assertIn('min-width:0', buttons)
+        self.assertIn('white-space:nowrap', buttons)
+        self.assertIn('padding:6px 4px', buttons)
+        self.assertIn('font-size:.8rem', buttons)
+
 
 if __name__ == '__main__':
     unittest.main()

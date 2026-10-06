@@ -164,7 +164,23 @@
 .list-grid .dm-card .dm-request{flex:0 1 auto;width:max-content;max-width:calc(100% - 4.5em);min-width:0;word-break:break-word;padding:2px 8px;border:1px solid #c5dcc4;border-radius:6px;background:#f7fbf7}
 .list-grid .dm-card .dm-employee{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list-grid .dm-card .dm-mark{font-weight:700;font-size:.85rem;color:#2f4636;line-height:1.45;margin-top:6px}
-.list-grid .dm-card .dm-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;align-items:center}
+.list-grid .dm-card .dm-actions{
+  display:flex;
+  flex-wrap:nowrap;
+  gap:4px;
+  margin-top:auto;
+  align-items:center;
+  min-width:0;
+}
+.list-grid .dm-card .dm-actions button{
+  flex:1 1 0;
+  min-width:0;
+  max-width:100%;
+  white-space:nowrap;
+  padding:6px 4px;
+  font-size:.8rem;
+  line-height:1.25;
+}
 .list-grid .dm-card .dm-check,
 .display-mode-bar .dm-check{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700}
 /* Match table-row flag/selection checkboxes (14px); avoid global input min-height/width:100% */
