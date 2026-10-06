@@ -21,9 +21,9 @@ def seed(c):
         'sizes': ['M'],
         'links': [{'customerId': aoba['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
     })
-    site1 = stock.save_location(c, {'name': '石狩倉庫①', 'active': True})
-    site2 = stock.save_location(c, {'name': '石狩倉庫②', 'active': True})
-    shelf = stock.save_location(c, {'name': '1-A', 'parentId': site1['id'], 'active': True})
+    site1 = stock.save_location(c, {'siteName': '石狩倉庫①', 'active': True})
+    site2 = stock.save_location(c, {'siteName': '石狩倉庫②', 'active': True})
+    shelf = stock.save_location(c, {'siteId': site1['id'], 'shelfName': '1-A', 'active': True})
     plain = next(x['id'] for x in first['links'] if x['customerId'] == aoba['id'] and x['embroidery'] == '')
     named = next(x['id'] for x in first['links'] if x['embroidery'] == '左胸ネーム')
     other = next(x['id'] for x in first['links'] if x['customerId'] == kashiwa['id'])

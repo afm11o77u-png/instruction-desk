@@ -376,41 +376,84 @@ def save_product(c, body):
     return product_row(c, pid)
 
 
+def _site_id(value):
+    if value in ('', None):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    raise ValueError('拠点を選んでください。')
+
+
+def _insert_shelf(c, site_id, shelf_name, active, t):
+    clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id=?', (shelf_name, site_id)).fetchone()
+    if clash:
+        raise ValueError('同じ棚・区画名がこの拠点に既にあります。新しい場所を増やさず、一覧から選んでください。')
+    c.execute('INSERT INTO locations(name,parent_id,active,created_at,updated_at) VALUES(?,?,?,?,?)',
+              (shelf_name, site_id, active, t, t))
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
 def save_location(c, body):
-    name = need(body.get('name'), '保管場所の名前', 40)
+    """拠点名＋任意の棚・区画名で登録。新規の拠点と棚は1回の保存でまとめて作る。"""
     active = flag(body.get('active', True))
-    parent_id = body.get('parentId')
-    if parent_id in ('', None):
-        parent_id = None
-    elif not isinstance(parent_id, int):
-        raise ValueError('拠点を選んでください。')
     t = stamp()
     lid = body.get('id')
-    if parent_id:
-        parent = c.execute('SELECT id,parent_id,active FROM locations WHERE id=?', (parent_id,)).fetchone()
-        if not parent or parent['parent_id'] is not None:
-            raise ValueError('棚・区画は、登録済みの拠点の下にだけ作れます。')
-        if lid and lid == parent_id:
-            raise ValueError('自分自身の下には置けません。')
     if lid:
         row = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (lid,)).fetchone()
         if not row:
             raise ValueError('保管場所が見つかりません。')
-        if parent_id and c.execute('SELECT 1 FROM locations WHERE parent_id=?', (lid,)).fetchone():
-            raise ValueError('棚がぶら下がっている拠点は、別の場所の下へ移せません。')
-        clash = c.execute('SELECT id FROM locations WHERE name=? AND id<>? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id=?)',
-                          (name, lid, parent_id, parent_id)).fetchone()
-        if clash:
-            raise ValueError('同じ場所の名前が既にあります。一覧から選んで修正してください。')
-        c.execute('UPDATE locations SET name=?,parent_id=?,active=?,updated_at=? WHERE id=?', (name, parent_id, active, t, lid))
-    else:
-        clash = c.execute('SELECT id FROM locations WHERE name=? AND ((parent_id IS NULL AND ? IS NULL) OR parent_id=?)',
-                          (name, parent_id, parent_id)).fetchone()
-        if clash:
-            raise ValueError('同じ場所の名前が既にあります。新しい場所を増やさず、一覧から選んでください。')
-        c.execute('INSERT INTO locations(name,parent_id,active,created_at,updated_at) VALUES(?,?,?,?,?)',
-                  (name, parent_id, active, t, t))
-        lid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        if row['parent_id'] is None:
+            name = need(body.get('siteName', body.get('name')), '拠点名', 40)
+            clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id IS NULL AND id<>?',
+                              (name, lid)).fetchone()
+            if clash:
+                raise ValueError('同じ拠点名が既にあります。一覧から選んで修正してください。')
+            c.execute('UPDATE locations SET name=?,active=?,updated_at=? WHERE id=?', (name, active, t, lid))
+        else:
+            name = need(body.get('shelfName', body.get('name')), '棚・区画名', 40)
+            clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id=? AND id<>?',
+                              (name, row['parent_id'], lid)).fetchone()
+            if clash:
+                raise ValueError('同じ棚・区画名がこの拠点に既にあります。一覧から選んで修正してください。')
+            # 親拠点は変えない（名称変更と在庫の移動を混ぜない）
+            c.execute('UPDATE locations SET name=?,active=?,updated_at=? WHERE id=?', (name, active, t, lid))
+        return location_row(c, lid)
+
+    site_id = _site_id(body.get('siteId'))
+    shelf_name = optional(body.get('shelfName'), '棚・区画名', 40)
+    if site_id is not None:
+        parent = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (site_id,)).fetchone()
+        if not parent or parent['parent_id'] is not None:
+            raise ValueError('棚・区画は、登録済みの拠点の下にだけ作れます。')
+        if not shelf_name:
+            raise ValueError('棚・区画名を入力してください。')
+        lid = _insert_shelf(c, site_id, shelf_name, active, t)
+        return location_row(c, lid)
+
+    site_name = need(body.get('siteName', body.get('name')), '拠点名', 40)
+    # 旧API互換: parentId 付きの name だけ渡された場合は棚として登録
+    parent_id = body.get('parentId')
+    if parent_id not in ('', None) and 'siteId' not in body and 'siteName' not in body and 'shelfName' not in body:
+        parent_id = _site_id(parent_id)
+        parent = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (parent_id,)).fetchone()
+        if not parent or parent['parent_id'] is not None:
+            raise ValueError('棚・区画は、登録済みの拠点の下にだけ作れます。')
+        lid = _insert_shelf(c, parent_id, site_name, active, t)
+        return location_row(c, lid)
+
+    existing = c.execute('SELECT id FROM locations WHERE name=? AND parent_id IS NULL', (site_name,)).fetchone()
+    if existing:
+        if shelf_name:
+            raise ValueError('同じ拠点名が既にあります。一覧からその拠点を選んで、棚・区画を追加してください。')
+        raise ValueError('同じ拠点名が既にあります。新しい場所を増やさず、一覧から選んでください。')
+    c.execute('INSERT INTO locations(name,parent_id,active,created_at,updated_at) VALUES(?,?,?,?,?)',
+              (site_name, None, active, t, t))
+    site_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    if not shelf_name:
+        return location_row(c, site_id)
+    lid = _insert_shelf(c, site_id, shelf_name, active, t)
     return location_row(c, lid)
 
 
@@ -550,7 +593,7 @@ def product_row(c, pid):
 def location_label(c, row):
     if row['parent_id']:
         parent = c.execute('SELECT name FROM locations WHERE id=?', (row['parent_id'],)).fetchone()
-        return f"{parent['name']} / {row['name']}"
+        return f"{parent['name']}／{row['name']}"
     return row['name']
 
 

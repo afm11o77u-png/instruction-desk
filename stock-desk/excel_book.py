@@ -235,10 +235,16 @@ def _locations(c, rows):
             updated += 0
         else:
             try:
-                site_id = stock.save_location(c, {'name': item['site'], 'active': True})['id']
+                if item['shelf']:
+                    created_row = stock.save_location(c, {'siteName': item['site'], 'shelfName': item['shelf'], 'active': True})
+                    created += 2 if created_row['parentId'] else 1
+                    continue
+                site_id = stock.save_location(c, {'siteName': item['site'], 'active': True})['id']
             except ValueError as e:
                 raise ValueError(f'保管場所の{row_no}行目：{e}') from e
             created += 1
+            if not item['shelf']:
+                continue
         if not item['shelf']:
             if site:
                 updated += 1
@@ -248,7 +254,7 @@ def _locations(c, rows):
             updated += 1
             continue
         try:
-            stock.save_location(c, {'name': item['shelf'], 'parentId': site_id, 'active': True})
+            stock.save_location(c, {'siteId': site_id, 'shelfName': item['shelf'], 'active': True})
         except ValueError as e:
             raise ValueError(f'保管場所の{row_no}行目：{e}') from e
         created += 1
