@@ -286,6 +286,98 @@ def test_locations():
         view = stock.stock_query(c, {'locationId': str(renamed_shelf['id'])})
         check('在庫と場所のリンクが残る', opening['totalQty'] == 2 and view['lots'][0]['locationId'] == renamed_shelf['id']
               and view['lots'][0]['locationLabel'] == '石狩倉庫改／2F')
+
+        # 複数棚を1回の保存で登録
+        multi = stock.save_location(c, {
+            'siteName': '多棚倉庫',
+            'shelves': [{'name': '棚A'}, {'name': '棚B'}, {'name': ''}, {'name': '  棚C  '}],
+            'active': True,
+        })
+        c.commit()
+        multi_names = [s['name'] for s in multi['shelves']]
+        check('複数棚を一度に登録', multi['parentId'] is None and multi['name'] == '多棚倉庫'
+              and multi_names == ['棚A', '棚B', '棚C'] and multi['label'] == '多棚倉庫')
+        check('空の棚行は無視する', len(multi['shelves']) == 3)
+
+        # 既存拠点の下へ棚を追加（既存＋新規をまとめて）
+        added = stock.save_location(c, {
+            'siteId': multi['id'],
+            'shelves': [
+                {'id': multi['shelves'][0]['id'], 'name': '棚A'},
+                {'id': multi['shelves'][1]['id'], 'name': '棚B'},
+                {'id': multi['shelves'][2]['id'], 'name': '棚C'},
+                {'name': '棚D'},
+            ],
+            'active': True,
+        })
+        c.commit()
+        check('既存拠点へ棚を追加', [s['name'] for s in added['shelves']] == ['棚A', '棚B', '棚C', '棚D'])
+
+        # 改名はID維持
+        shelf_a_id = added['shelves'][0]['id']
+        renamed_batch = stock.save_location(c, {
+            'id': multi['id'],
+            'siteName': '多棚倉庫',
+            'shelves': [
+                {'id': shelf_a_id, 'name': '棚A改'},
+                {'id': added['shelves'][1]['id'], 'name': '棚B'},
+                {'id': added['shelves'][2]['id'], 'name': '棚C'},
+                {'id': added['shelves'][3]['id'], 'name': '棚D'},
+            ],
+            'active': True,
+        })
+        c.commit()
+        check('複数保存での改名はID維持', renamed_batch['shelves'][0]['id'] == shelf_a_id
+              and renamed_batch['shelves'][0]['name'] == '棚A改'
+              and renamed_batch['shelves'][0]['label'] == '多棚倉庫／棚A改')
+
+        # 空棚は削除できる／在庫がある棚は削除できない
+        empty_id = renamed_batch['shelves'][1]['id']
+        stocked_id = renamed_batch['shelves'][0]['id']
+        cust2 = stock.save_customer(c, {'name': '多棚リンク', 'active': True})
+        prod2 = stock.save_product(c, {'code': 'M-1', 'name': '多棚商品', 'color': '', 'supplierId': None, 'active': True,
+                                      'sizes': ['S'], 'links': [{'customerId': cust2['id'], 'embroidery': '', 'isStandard': True, 'active': True}]})
+        stock.register_opening(c, {
+            'token': 'multi-shelf-stock', 'customerProductId': prod2['links'][0]['id'], 'locationId': stocked_id,
+            'basisDate': '2026-09-01', 'receivedUnknown': True, 'payoutOrder': 1,
+            'lines': [{'size': 'S', 'qty': 1, 'unitCost': 100}],
+        })
+        c.commit()
+        check('在庫あり棚はhasStock', stock.location_row(c, stocked_id)['hasStock'] is True)
+        check('空棚はhasStockなし', stock.location_row(c, empty_id)['hasStock'] is False)
+
+        try:
+            stock.save_location(c, {
+                'id': multi['id'],
+                'siteName': '多棚倉庫',
+                'shelves': [
+                    {'id': stocked_id, 'remove': True},
+                    {'id': empty_id, 'name': '棚B'},
+                    {'id': renamed_batch['shelves'][2]['id'], 'name': '棚C'},
+                    {'id': renamed_batch['shelves'][3]['id'], 'name': '棚D'},
+                ],
+                'active': True,
+            })
+            check('在庫あり棚の削除は拒否', False)
+        except ValueError as e:
+            check('在庫あり棚の削除は拒否', '在庫' in str(e) and '削除できません' in str(e))
+        c.rollback()
+
+        cleared = stock.save_location(c, {
+            'id': multi['id'],
+            'siteName': '多棚倉庫',
+            'shelves': [
+                {'id': stocked_id, 'name': '棚A改'},
+                {'id': empty_id, 'remove': True},
+                {'id': renamed_batch['shelves'][2]['id'], 'name': '棚C'},
+                {'id': renamed_batch['shelves'][3]['id'], 'name': '棚D'},
+            ],
+            'active': True,
+        })
+        c.commit()
+        check('空棚は削除できる', empty_id not in [s['id'] for s in cleared['shelves']]
+              and [s['name'] for s in cleared['shelves']] == ['棚A改', '棚C', '棚D'])
+        check('在庫棚のIDは削除後も残る', stocked_id in [s['id'] for s in cleared['shelves']])
     finally:
         try:
             c.close()
