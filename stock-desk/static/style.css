@@ -59,6 +59,11 @@ table.directory tr.is-stopped .nameline b{font-weight:600}
 .linkrow{grid-template-columns:1.3fr 1fr auto auto auto}.sizerow{grid-template-columns:120px 1fr 1fr auto}
 .linkrow.shelfline{grid-template-columns:minmax(180px,1.6fr) auto auto;align-items:center}
 .linkrow.shelfline .shelf-lock{color:#8a3b2b;font-weight:600}
+table.site-locations th:nth-child(1),table.site-locations td:nth-child(1){width:28%}
+table.site-locations th:nth-child(2),table.site-locations td:nth-child(2){width:52%}
+table.site-locations th:nth-child(3),table.site-locations td:nth-child(3){width:20%}
+table.site-locations .shelf-summary{color:#24352c;font-weight:400}
+table.site-locations tr.is-stopped td{color:#8b9790}
 .check{flex-direction:row;align-items:center;font-weight:700;gap:6px}.check input{width:auto;min-height:0}
 dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0}dialog::backdrop{background:#1e332866}
 .dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}

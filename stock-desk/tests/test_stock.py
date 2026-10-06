@@ -378,6 +378,143 @@ def test_locations():
         check('空棚は削除できる', empty_id not in [s['id'] for s in cleared['shelves']]
               and [s['name'] for s in cleared['shelves']] == ['棚A改', '棚C', '棚D'])
         check('在庫棚のIDは削除後も残る', stocked_id in [s['id'] for s in cleared['shelves']])
+
+        # --- 拠点ごとの一覧表示（UX用ヘルパー、データ構造は維持） ---
+        boot = stock.bootstrap(c)
+        grouped = stock.group_locations_by_site(boot['locations'], include_stopped=False)
+        check('一覧は拠点ごとに1行', all(r['parentId'] is None for r in grouped) and len(grouped) >= 1)
+        multi_row = next(r for r in grouped if r['name'] == '多棚倉庫')
+        check('棚は同じ行にまとめる', multi_row['shelfSummary'].startswith('棚A改') and '棚C' in multi_row['shelfSummary'])
+        check('開く対象は拠点ID', multi_row['id'] == multi['id'])
+
+        wait_site = stock.save_location(c, {'siteName': '償却待ち', 'active': True})
+        c.commit()
+        boot = stock.bootstrap(c)
+        wait_row = next(r for r in stock.group_locations_by_site(boot['locations']) if r['name'] == '償却待ち')
+        check('償却待ちは通常の拠点として棚なし', wait_row['shelfSummary'] == '棚なし' and wait_row['id'] == wait_site['id'])
+
+        # 多数棚は「ほか○件」
+        many = stock.save_location(c, {
+            'siteName': '多数棚倉庫',
+            'shelves': [{'name': f'棚{i}'} for i in range(1, 6)],
+            'active': True,
+        })
+        c.commit()
+        many_row = next(
+            r for r in stock.group_locations_by_site(stock.bootstrap(c)['locations'])
+            if r['id'] == many['id']
+        )
+        check('多数棚はほか○件で省略', many_row['shelfSummary'] == '棚1、棚2、棚3、ほか2件'
+              and many_row['shelfExtraCount'] == 2)
+
+        # 棚名検索は親拠点を返す
+        hit = stock.group_locations_by_site(stock.bootstrap(c)['locations'], q='棚A改')
+        check('棚名検索は親拠点行を返す', len(hit) == 1 and hit[0]['name'] == '多棚倉庫'
+              and any(s['name'] == '棚A改' for s in hit[0]['shelves']))
+        hit_wait = stock.group_locations_by_site(stock.bootstrap(c)['locations'], q='償却待ち')
+        check('償却待ち名の検索も拠点を返す', any(r['name'] == '償却待ち' for r in hit_wait))
+
+        # 停止も識別できる
+        stock.save_location(c, {
+            'id': multi['id'],
+            'siteName': '多棚倉庫',
+            'shelves': [
+                {'id': stocked_id, 'name': '棚A改'},
+                {'id': cleared['shelves'][1]['id'], 'name': '棚C'},
+                {'id': cleared['shelves'][2]['id'], 'name': '棚D', 'remove': False},
+            ],
+            'active': False,
+        })
+        # mark one shelf stopped via direct update (site stop above affects site active)
+        c.execute('UPDATE locations SET active=0 WHERE id=?', (cleared['shelves'][1]['id'],))
+        c.commit()
+        hidden = stock.group_locations_by_site(stock.bootstrap(c)['locations'], include_stopped=False)
+        check('停止拠点は通常一覧から隠す', all(r['name'] != '多棚倉庫' for r in hidden))
+        shown = stock.group_locations_by_site(stock.bootstrap(c)['locations'], include_stopped=True)
+        stopped_row = next(r for r in shown if r['name'] == '多棚倉庫')
+        check('停止も表示で拠点・棚を識別', stopped_row['active'] is False
+              and '棚C（停止）' in stopped_row['shelfSummary'])
+
+        # 再開してピッカー検証へ
+        stock.save_location(c, {'id': multi['id'], 'siteName': '多棚倉庫', 'shelves': [
+            {'id': stocked_id, 'name': '棚A改'},
+            {'id': cleared['shelves'][1]['id'], 'name': '棚C'},
+            {'id': cleared['shelves'][2]['id'], 'name': '棚D'},
+        ], 'active': True})
+        c.execute('UPDATE locations SET active=1 WHERE id=?', (cleared['shelves'][1]['id'],))
+        c.commit()
+
+        # --- 拠点→棚ピッカー ---
+        locs = stock.bootstrap(c)['locations']
+        site_only_opts, need = stock.opening_picker_shelves(locs, wait_site['id'])
+        check('棚なし拠点は棚選択不要', site_only_opts == [] and need is False)
+        check('棚なしは拠点IDが場所', stock.resolve_opening_location(wait_site['id'], None, locs) == wait_site['id'])
+
+        opts, need_shelf = stock.opening_picker_shelves(locs, multi['id'])
+        check('棚あり拠点は棚必須', need_shelf is True and all(not o.get('siteOnly') for o in opts))
+        try:
+            stock.resolve_opening_location(multi['id'], None, locs)
+            check('棚ありで棚未選択は拒否', False)
+        except ValueError as e:
+            check('棚ありで棚未選択は拒否', '棚・区画を選んでください' in str(e))
+        resolved = stock.resolve_opening_location(multi['id'], stocked_id, locs)
+        check('拠点→棚で棚IDを解決', resolved == stocked_id)
+
+        # 拠点直下の既存在庫は「棚指定なし」として残す
+        site_stock = stock.save_location(c, {'siteName': '拠点直下倉庫', 'active': True})
+        c.commit()
+        cust3 = stock.save_customer(c, {'name': '直下確認', 'active': True})
+        prod3 = stock.save_product(c, {
+            'code': 'S-1', 'name': '直下商品', 'color': '', 'supplierId': None, 'active': True,
+            'sizes': ['M'],
+            'links': [{'customerId': cust3['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
+        })
+        opening_site = stock.register_opening(c, {
+            'token': 'site-level-stock', 'customerProductId': prod3['links'][0]['id'],
+            'locationId': site_stock['id'],
+            'basisDate': '2026-09-01', 'receivedUnknown': True, 'payoutOrder': 1,
+            'lines': [{'size': 'M', 'qty': 3, 'unitCost': 200}],
+        })
+        c.commit()
+        # あとから棚を追加しても、既存の拠点直下参照は残る
+        with_shelf = stock.save_location(c, {
+            'id': site_stock['id'],
+            'siteName': '拠点直下倉庫',
+            'shelves': [{'name': '後付け棚'}],
+            'active': True,
+        })
+        c.commit()
+        locs2 = stock.bootstrap(c)['locations']
+        preserve_opts, preserve_need = stock.opening_picker_shelves(
+            locs2, site_stock['id'], current_location_id=site_stock['id']
+        )
+        check('棚追加後も棚指定なしを出せる', preserve_need is True
+              and preserve_opts[0]['name'] == stock.SITE_ONLY_SHELF_LABEL
+              and preserve_opts[0]['id'] == site_stock['id'])
+        kept = stock.resolve_opening_location(site_stock['id'], site_stock['id'], locs2)
+        check('棚指定なしは拠点IDのまま', kept == site_stock['id'])
+        view_site = stock.stock_query(c, {'locationId': str(site_stock['id'])})
+        check('拠点直下在庫のリンクは壊れない', opening_site['totalQty'] == 3
+              and view_site['lots'][0]['locationId'] == site_stock['id']
+              and view_site['lots'][0]['locationLabel'] == '拠点直下倉庫'
+              and with_shelf['shelves'][0]['name'] == '後付け棚')
+
+        # 複数棚の「開く」＝拠点IDで一括編集できること（#28経路）
+        reopened = stock.save_location(c, {
+            'id': multi['id'],
+            'siteName': '多棚倉庫',
+            'shelves': [
+                {'id': stocked_id, 'name': '棚A改'},
+                {'id': cleared['shelves'][1]['id'], 'name': '棚C'},
+                {'id': cleared['shelves'][2]['id'], 'name': '棚D'},
+                {'name': '開く追加'},
+            ],
+            'active': True,
+        })
+        c.commit()
+        check('開く経由の複数棚編集', [s['name'] for s in reopened['shelves']] == ['棚A改', '棚C', '棚D', '開く追加'])
+        check('開く後も在庫リンク維持', stock.location_row(c, stocked_id)['hasStock'] is True
+              and stock.stock_query(c, {'locationId': str(stocked_id)})['lots'][0]['locationId'] == stocked_id)
     finally:
         try:
             c.close()

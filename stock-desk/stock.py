@@ -752,6 +752,129 @@ def location_row(c, lid):
     }
 
 
+SHELF_PREVIEW_LIMIT = 3
+SITE_ONLY_SHELF_LABEL = '棚指定なし'
+
+
+def format_shelf_summary(shelves, *, preview_limit=SHELF_PREVIEW_LIMIT):
+    """一覧用の棚・区画表示。棚が無ければ「棚なし」、多いときは先頭＋ほか○件。"""
+    if not shelves:
+        return '棚なし', 0
+    names = []
+    for shelf in shelves:
+        name = shelf.get('name') or ''
+        if shelf.get('active', True) is False:
+            name = f'{name}（停止）'
+        names.append(name)
+    if len(names) <= preview_limit:
+        return '、'.join(names), 0
+    extra = len(names) - preview_limit
+    return '、'.join(names[:preview_limit]) + f'、ほか{extra}件', extra
+
+
+def group_locations_by_site(locations, *, q='', include_stopped=False, preview_limit=SHELF_PREVIEW_LIMIT):
+    """拠点ごとに1行の一覧へまとめる。棚名検索は親拠点行を返す（データは変更しない）。"""
+    sites = [loc for loc in locations if loc.get('parentId') is None]
+    by_parent = {}
+    for loc in locations:
+        parent_id = loc.get('parentId')
+        if parent_id is not None:
+            by_parent.setdefault(parent_id, []).append(loc)
+
+    query = (q or '').strip()
+    rows = []
+    for site in sites:
+        shelves = list(by_parent.get(site['id'], []))
+        if not include_stopped:
+            if not site.get('active', True):
+                continue
+            shelves = [s for s in shelves if s.get('active', True)]
+        if query:
+            site_hit = query in (site.get('name') or '') or query in (site.get('label') or '')
+            shelf_hit = any(
+                query in (s.get('name') or '') or query in (s.get('label') or '')
+                for s in shelves
+            )
+            if not site_hit and not shelf_hit:
+                continue
+        summary, extra = format_shelf_summary(shelves, preview_limit=preview_limit)
+        rows.append({
+            'id': site['id'],
+            'name': site['name'],
+            'active': bool(site.get('active', True)),
+            'parentId': None,
+            'label': site.get('label') or site['name'],
+            'hasStock': bool(site.get('hasStock')),
+            'shelves': shelves,
+            'shelfSummary': summary,
+            'shelfExtraCount': extra,
+        })
+    return rows
+
+
+def opening_picker_shelves(locations, site_id, *, current_location_id=None, include_stopped=False):
+    """初期在庫などの拠点→棚ピッカー用。戻り値は (options, require_shelf)。
+    棚が無い拠点は require_shelf=False（拠点自体が場所）。
+    拠点直下に在庫がある既存参照は「棚指定なし」として残す。
+    """
+    if site_id in ('', None):
+        return [], False
+    site_id = int(site_id)
+    shelves = [loc for loc in locations if loc.get('parentId') == site_id]
+    if not include_stopped:
+        shelves = [s for s in shelves if s.get('active', True)]
+    if not shelves:
+        return [], False
+    options = [
+        {
+            'id': s['id'],
+            'name': s['name'],
+            'label': s.get('label') or s['name'],
+            'siteOnly': False,
+            'active': bool(s.get('active', True)),
+        }
+        for s in shelves
+    ]
+    if current_location_id not in ('', None) and int(current_location_id) == site_id:
+        options.insert(0, {
+            'id': site_id,
+            'name': SITE_ONLY_SHELF_LABEL,
+            'label': SITE_ONLY_SHELF_LABEL,
+            'siteOnly': True,
+            'active': True,
+        })
+    return options, True
+
+
+def resolve_opening_location(site_id, shelf_id, locations):
+    """拠点＋棚選択から保存用 locationId を決める。既存の拠点直下参照は維持する。"""
+    if site_id in ('', None):
+        raise ValueError('保管場所を、登録済みの場所から選んでください。')
+    site_id = int(site_id)
+    site = next((loc for loc in locations if loc['id'] == site_id and loc.get('parentId') is None), None)
+    if not site:
+        raise ValueError('保管場所を、登録済みの場所から選んでください。')
+    active_shelves = [
+        loc for loc in locations
+        if loc.get('parentId') == site_id and loc.get('active', True)
+    ]
+    if not active_shelves:
+        return site_id
+    if shelf_id in ('', None):
+        raise ValueError('棚・区画を選んでください。')
+    shelf_id = int(shelf_id)
+    if shelf_id == site_id:
+        # 既存の拠点直下在庫（棚指定なし）を壊さない
+        return site_id
+    shelf = next(
+        (loc for loc in locations if loc['id'] == shelf_id and loc.get('parentId') == site_id),
+        None,
+    )
+    if not shelf:
+        raise ValueError('保管場所を、登録済みの場所から選んでください。')
+    return shelf_id
+
+
 def bootstrap(c):
     customers = [customer_row(c, r['id']) for r in c.execute('SELECT id FROM customers ORDER BY id')]
     suppliers = [supplier_row(c, r['id']) for r in c.execute('SELECT id FROM suppliers ORDER BY id')]
