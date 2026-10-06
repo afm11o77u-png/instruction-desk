@@ -386,6 +386,11 @@ def _site_id(value):
     raise ValueError('拠点を選んでください。')
 
 
+def location_has_stock(c, lid):
+    """この場所に紐付く在庫ロットがあれば True（数量0でも行があれば削除不可）。"""
+    return c.execute('SELECT 1 FROM lots WHERE location_id=? LIMIT 1', (lid,)).fetchone() is not None
+
+
 def _insert_shelf(c, site_id, shelf_name, active, t):
     clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id=?', (shelf_name, site_id)).fetchone()
     if clash:
@@ -395,10 +400,152 @@ def _insert_shelf(c, site_id, shelf_name, active, t):
     return c.execute('SELECT last_insert_rowid()').fetchone()[0]
 
 
+def _rename_shelf(c, shelf_id, site_id, shelf_name, active, t):
+    row = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (shelf_id,)).fetchone()
+    if not row or row['parent_id'] != site_id:
+        raise ValueError('棚・区画が見つかりません。')
+    clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id=? AND id<>?',
+                      (shelf_name, site_id, shelf_id)).fetchone()
+    if clash:
+        raise ValueError('同じ棚・区画名がこの拠点に既にあります。一覧から選んで修正してください。')
+    # 親拠点は変えない（名称変更と在庫の移動を混ぜない）
+    c.execute('UPDATE locations SET name=?,active=?,updated_at=? WHERE id=?', (shelf_name, active, t, shelf_id))
+    return shelf_id
+
+
+def _delete_shelf(c, shelf_id, site_id):
+    row = c.execute('SELECT id,parent_id,name FROM locations WHERE id=?', (shelf_id,)).fetchone()
+    if not row or row['parent_id'] != site_id:
+        raise ValueError('棚・区画が見つかりません。')
+    if location_has_stock(c, shelf_id):
+        raise ValueError(
+            f'「{row["name"]}」には在庫が紐付いているため削除できません。'
+            '在庫を別の場所へ移すか、使い切ってから削除してください。'
+        )
+    c.execute('DELETE FROM locations WHERE id=?', (shelf_id,))
+
+
+def _parse_shelves(body):
+    """shelves キーがあれば正規化した一覧を返す。無ければ None（単一棚API）。"""
+    if 'shelves' not in body:
+        return None
+    raw = body.get('shelves')
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError('棚・区画の一覧の形式が正しくありません。')
+    items = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError('棚・区画の一覧の形式が正しくありません。')
+        shelf_id = entry.get('id')
+        if shelf_id in ('', None):
+            shelf_id = None
+        elif isinstance(shelf_id, int):
+            pass
+        elif isinstance(shelf_id, str) and shelf_id.isdigit():
+            shelf_id = int(shelf_id)
+        else:
+            raise ValueError('棚・区画が見つかりません。')
+        remove = entry.get('remove') in (True, 1, '1')
+        name = optional(entry.get('name', entry.get('shelfName')), '棚・区画名', 40)
+        items.append({'id': shelf_id, 'name': name, 'remove': remove})
+    return items
+
+
+def _apply_shelves(c, site_id, shelves, active, t):
+    """拠点下の棚を一括で追加・改名・削除。空欄の新規行は無視する。"""
+    pending = []
+    seen_names = {}
+    for item in shelves:
+        if item['remove']:
+            if item['id'] is None:
+                continue
+            pending.append(item)
+            continue
+        if not item['name']:
+            if item['id'] is not None:
+                raise ValueError('棚・区画名を入力してください。')
+            continue
+        if item['name'] in seen_names:
+            raise ValueError('同じ棚・区画名がこの拠点に既にあります。新しい場所を増やさず、一覧から選んでください。')
+        seen_names[item['name']] = item
+        pending.append(item)
+
+    for item in pending:
+        if item['remove']:
+            _delete_shelf(c, item['id'], site_id)
+            continue
+        if item['id'] is not None:
+            shelf_active = c.execute('SELECT active FROM locations WHERE id=?', (item['id'],)).fetchone()
+            keep_active = active if shelf_active is None else shelf_active['active']
+            _rename_shelf(c, item['id'], site_id, item['name'], keep_active, t)
+        else:
+            _insert_shelf(c, site_id, item['name'], active, t)
+
+
+def _site_result(c, site_id):
+    result = location_row(c, site_id)
+    result['shelves'] = [
+        location_row(c, r['id'])
+        for r in c.execute('SELECT id FROM locations WHERE parent_id=? ORDER BY id', (site_id,))
+    ]
+    return result
+
+
+def _resolve_or_create_site(c, body, active, t):
+    """編集・既存選択・新規作成のいずれかで拠点IDを返す。"""
+    lid = body.get('id')
+    if lid:
+        row = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (lid,)).fetchone()
+        if not row:
+            raise ValueError('保管場所が見つかりません。')
+        if row['parent_id'] is not None:
+            site_id = row['parent_id']
+        else:
+            site_id = lid
+            name = need(body.get('siteName', body.get('name')), '拠点名', 40)
+            clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id IS NULL AND id<>?',
+                              (name, site_id)).fetchone()
+            if clash:
+                raise ValueError('同じ拠点名が既にあります。一覧から選んで修正してください。')
+            c.execute('UPDATE locations SET name=?,active=?,updated_at=? WHERE id=?', (name, active, t, site_id))
+        return site_id
+
+    site_id = _site_id(body.get('siteId'))
+    if site_id is not None:
+        parent = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (site_id,)).fetchone()
+        if not parent or parent['parent_id'] is not None:
+            raise ValueError('棚・区画は、登録済みの拠点の下にだけ作れます。')
+        if body.get('siteName') not in ('', None):
+            name = need(body.get('siteName'), '拠点名', 40)
+            clash = c.execute('SELECT id FROM locations WHERE name=? AND parent_id IS NULL AND id<>?',
+                              (name, site_id)).fetchone()
+            if clash:
+                raise ValueError('同じ拠点名が既にあります。一覧から選んで修正してください。')
+            c.execute('UPDATE locations SET name=?,updated_at=? WHERE id=?', (name, t, site_id))
+        return site_id
+
+    site_name = need(body.get('siteName', body.get('name')), '拠点名', 40)
+    existing = c.execute('SELECT id FROM locations WHERE name=? AND parent_id IS NULL', (site_name,)).fetchone()
+    if existing:
+        raise ValueError('同じ拠点名が既にあります。一覧からその拠点を選んで、棚・区画を追加してください。')
+    c.execute('INSERT INTO locations(name,parent_id,active,created_at,updated_at) VALUES(?,?,?,?,?)',
+              (site_name, None, active, t, t))
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
 def save_location(c, body):
-    """拠点名＋任意の棚・区画名で登録。新規の拠点と棚は1回の保存でまとめて作る。"""
+    """拠点名＋棚・区画。shelves 一覧があれば一括保存。単一 shelfName も互換維持。"""
     active = flag(body.get('active', True))
     t = stamp()
+    shelves = _parse_shelves(body)
+
+    if shelves is not None:
+        site_id = _resolve_or_create_site(c, body, active, t)
+        _apply_shelves(c, site_id, shelves, active, t)
+        return _site_result(c, site_id)
+
     lid = body.get('id')
     if lid:
         row = c.execute('SELECT id,parent_id FROM locations WHERE id=?', (lid,)).fetchone()
@@ -599,7 +746,10 @@ def location_label(c, row):
 
 def location_row(c, lid):
     r = c.execute('SELECT * FROM locations WHERE id=?', (lid,)).fetchone()
-    return {'id': r['id'], 'name': r['name'], 'parentId': r['parent_id'], 'active': bool(r['active']), 'label': location_label(c, r)}
+    return {
+        'id': r['id'], 'name': r['name'], 'parentId': r['parent_id'], 'active': bool(r['active']),
+        'label': location_label(c, r), 'hasStock': location_has_stock(c, lid),
+    }
 
 
 def bootstrap(c):
