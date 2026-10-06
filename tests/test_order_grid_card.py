@@ -71,10 +71,13 @@ class OrderGridCardLayoutTest(unittest.TestCase):
 
         mark = rule('.list-grid .dm-card .dm-mark')
         self.assertIn('font-weight:700', mark)
+        self.assertIn('margin-top:6px', mark)
 
         meta = rule('.list-grid .dm-card .dm-meta')
         self.assertIn('flex-wrap:nowrap', meta)
         self.assertIn('justify-content:flex-start', meta)
+        self.assertIn('align-items:center', meta)
+        self.assertNotIn('align-items:flex-start', meta)
 
         request = rule('.list-grid .dm-card .dm-request')
         self.assertIn('flex:0 1 auto', request)
