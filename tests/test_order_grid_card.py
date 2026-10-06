@@ -74,10 +74,13 @@ class OrderGridCardLayoutTest(unittest.TestCase):
 
         meta = rule('.list-grid .dm-card .dm-meta')
         self.assertIn('flex-wrap:nowrap', meta)
+        self.assertIn('justify-content:flex-start', meta)
 
         request = rule('.list-grid .dm-card .dm-request')
-        self.assertIn('flex:1 1 auto', request)
+        self.assertIn('flex:0 1 auto', request)
+        self.assertIn('width:max-content', request)
         self.assertIn('min-width:0', request)
+        self.assertNotIn('flex:1', request)
 
         employee = rule('.list-grid .dm-card .dm-employee')
         self.assertIn('flex:0 1 auto', employee)
