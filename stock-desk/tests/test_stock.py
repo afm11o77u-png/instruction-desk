@@ -515,6 +515,33 @@ def test_locations():
         check('開く経由の複数棚編集', [s['name'] for s in reopened['shelves']] == ['棚A改', '棚C', '棚D', '開く追加'])
         check('開く後も在庫リンク維持', stock.location_row(c, stocked_id)['hasStock'] is True
               and stock.stock_query(c, {'locationId': str(stocked_id)})['lots'][0]['locationId'] == stocked_id)
+
+        # 新規登録は既存拠点を upsert しない（棚なし含む）
+        bare = stock.save_location(c, {'siteName': '棚なし倉庫', 'shelves': [], 'active': True})
+        c.commit()
+        check('棚なしで拠点だけ登録', bare['parentId'] is None and bare['name'] == '棚なし倉庫'
+              and bare['shelves'] == [])
+        bare_id = bare['id']
+        before_name = c.execute('SELECT name,updated_at FROM locations WHERE id=?', (bare_id,)).fetchone()
+        try:
+            stock.save_location(c, {'siteName': '棚なし倉庫', 'shelves': [{'name': '誤追加'}], 'active': True})
+            check('新規で既存拠点名は拒否（ID不変）', False)
+        except ValueError as e:
+            c.rollback()
+            after = c.execute('SELECT id,name,updated_at FROM locations WHERE id=?', (bare_id,)).fetchone()
+            orphan = c.execute("SELECT id FROM locations WHERE parent_id=? AND name='誤追加'", (bare_id,)).fetchone()
+            check('新規で既存拠点名は拒否（ID不変）', '同じ拠点名' in str(e)
+                  and after['id'] == bare_id
+                  and after['name'] == before_name['name']
+                  and after['updated_at'] == before_name['updated_at']
+                  and orphan is None)
+        # 使用停止・再開はID維持
+        stopped = stock.save_location(c, {'id': bare_id, 'siteName': '棚なし倉庫', 'shelves': [], 'active': False})
+        c.commit()
+        resumed = stock.save_location(c, {'id': bare_id, 'siteName': '棚なし倉庫', 'shelves': [], 'active': True})
+        c.commit()
+        check('使用停止・再開でID維持', stopped['id'] == bare_id and resumed['id'] == bare_id
+              and stopped['active'] is False and resumed['active'] is True)
     finally:
         try:
             c.close()

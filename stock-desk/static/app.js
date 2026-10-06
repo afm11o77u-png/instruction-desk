@@ -105,10 +105,13 @@ function paint(){
 function excelTools(){
   return `<span class="exceltools"><button type="button" id="exceldown">記入用Excel</button><button type="button" id="excelin">Excelを読み込む</button><input id="excelfile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></span>`
 }
-function bar(placeholder,extra=''){
+function inactiveToggle(){
+  return `<label class="check inactive-toggle"><input id="stopped" type="checkbox" ${state.stopped?'checked':''}>停止も表示</label>`
+}
+function bar(placeholder,extra='',addLabel='新しく登録'){
   return `<div class="bar">${extra}<label>検索<input id="q" value="${esc(state.q)}" placeholder="${placeholder}"></label>
-    <label class="check"><input id="stopped" type="checkbox" ${state.stopped?'checked':''}>停止も表示</label>
-    <button type="button" class="primary" id="add">新しく登録</button>${excelTools()}</div>
+    ${inactiveToggle()}
+    <button type="button" class="primary" id="add">${esc(addLabel)}</button>${excelTools()}</div>
     ${listNote('Excel取込の説明','記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。')}`
 }
 function productSupplierControl(current){
@@ -218,7 +221,7 @@ function siteLocationRows(){
 }
 function locations(){
   const rows=siteLocationRows()
-  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','拠点ごとに一覧します。開くと、その拠点の棚・区画をまとめて登録・修正できます。「棚を追加」で行を増やせます。空の棚名は保存時に無視します。')}${bar('拠点名・棚・区画名')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="site-locations"><thead><tr><th>拠点名</th><th>棚・区画</th><th>操作</th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','「拠点を新しく登録」では、空の拠点名から新しい拠点だけを作ります。既存の拠点の棚を増やす・直すときは、一覧の「開く」から行います。空の棚名は保存時に無視します（棚なしでも登録できます）。')}${bar('拠点名・棚・区画名','','拠点を新しく登録')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="site-locations"><thead><tr><th>拠点名</th><th>棚・区画</th><th>操作</th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td><span class="dm-primary">${esc(r.name)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td class="shelf-summary">${esc(r.shelfSummary)}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="3">保管場所はまだありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -242,7 +245,8 @@ function bindList(rows,title,form,save){
 }
 function edit(row,title,form,save){
   const dlg=$('#dialog')
-  dlg.innerHTML=`<form><div class="dialoghead"><h2>${row?'修正':'新しく登録'}：${title}</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody">${form(row)}</div><p id="error"></p><div class="dialogactions"><button type="button" id="stop" class="quiet" ${row?'':'hidden'}>${row&&row.active===false?'使用を再開':'使用停止'}</button><button type="button" class="primary" id="save">保存</button></div></form>`
+  const heading=row?'修正：'+title:(title==='保管場所'?'拠点を新しく登録':'新しく登録：'+title)
+  dlg.innerHTML=`<form><div class="dialoghead"><h2>${heading}</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody">${form(row)}</div><p id="error"></p><div class="dialogactions"><button type="button" id="stop" class="quiet" ${row?'':'hidden'}>${row&&row.active===false?'使用を再開':'使用停止'}</button><button type="button" class="primary" id="save">保存</button></div></form>`
   dlg.showModal()
   dlg.querySelector('form').onsubmit=ev=>ev.preventDefault()
   $('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
@@ -277,19 +281,18 @@ function field(id,label,value,required){return `<label>${label}${required?'（�
 function customerForm(r){r=r||{};return `<div class="grid">${field('name','顧客名',r.name,true)}${field('kana','フリガナ',r.kana)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label><p class="sub">顧客IDは自動です。名前を変えても、同じ顧客のまま在庫がつながります。</p>`}
 function supplierForm(r){r=r||{};return `<div class="grid">${field('name','仕入先名',r.name,true)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label>`}
 function locationSiteContext(r){
-  if(!r||!r.id)return {site:null,shelves:[{id:null,name:'',hasStock:false,active:true}]}
+  if(!r||!r.id)return {site:null,shelves:[]}
   if(r.parentId){
     const site=state.data.locations.find(x=>x.id===r.parentId)||null
     const shelves=state.data.locations.filter(x=>x.parentId===r.parentId).map(x=>({id:x.id,name:x.name,hasStock:!!x.hasStock,active:x.active!==false}))
-    return {site,shelves:shelves.length?shelves:[{id:null,name:'',hasStock:false,active:true}]}
+    return {site,shelves}
   }
   const shelves=state.data.locations.filter(x=>x.parentId===r.id).map(x=>({id:x.id,name:x.name,hasStock:!!x.hasStock,active:x.active!==false}))
-  return {site:r,shelves:shelves.length?shelves:[{id:null,name:'',hasStock:false,active:true}]}
+  return {site:r,shelves}
 }
 function locationForm(r){
   r=r||{}
   const ctx=locationSiteContext(r)
-  const sites=state.data.locations.filter(x=>!x.parentId&&(x.active||(ctx.site&&x.id===ctx.site.id))&&!(r.id&&!r.parentId&&x.id===r.id))
   if(r.id){
     const siteName=ctx.site?ctx.site.name:r.name
     const nameField=r.parentId
@@ -301,19 +304,11 @@ function locationForm(r){
       <button type="button" id="addShelf">棚を追加</button>
       <p class="sub">名前の変更は、場所の呼び方だけを直します。在庫を別の場所へ移す操作ではありません。在庫がある棚は削除できません。空の行は保存時に無視します。</p>`
   }
-  const noSites=!sites.length
-  const options=sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')
-  return `<label>拠点名（必須）
-      <select id="siteId" ${noSites?'hidden':''}>
-        ${options}
-        <option value="__new__" ${noSites?'selected':''}>新しい拠点を追加</option>
-      </select>
-      <input id="siteName" ${noSites?'':'hidden'} placeholder="新しい拠点名" value="" autocomplete="off">
-    </label>
+  return `${field('siteName','拠点名','',true)}
     <h2>棚・区画</h2>
     <div class="links" id="shelfRows"></div>
     <button type="button" id="addShelf">棚を追加</button>
-    <p class="sub">棚・区画名を空のまま保存すると、その行は登録しません。新しい拠点と複数の棚は一度の保存でまとめて登録できます。</p>`
+    <p class="sub">新しい拠点と、必要なら複数の棚を一度の保存で登録できます。棚を追加しなくても拠点だけ登録できます。すでに同じ拠点名がある場合は登録できません（既存の拠点は一覧の「開く」から直してください）。</p>`
 }
 function bindLocationEditor(row){
   const ctx=locationSiteContext(row)
@@ -338,38 +333,12 @@ function bindLocationEditor(row){
         if(item&&item.hasStock){$('#error').textContent='在庫がある棚・区画は削除できません。';return}
         if(item&&item.id)editor.removed.push(item.id)
         editor.shelves.splice(i,1)
-        if(!editor.shelves.length)editor.shelves.push({id:null,name:'',hasStock:false,active:true})
         draw()
       }
     })
   }
   const add=$('#addShelf')
   if(add)add.onclick=()=>{editor.shelves.push({id:null,name:'',hasStock:false,active:true});draw()}
-  if(!row||!row.id){
-    const sel=$('#siteId')
-    const input=$('#siteName')
-    if(sel&&input){
-      const sync=()=>{
-        const isNew=sel.hidden||sel.value==='__new__'
-        input.hidden=!isNew
-        if(isNew)input.focus()
-      }
-      sel.onchange=()=>{
-        sync()
-        editor.removed=[]
-        if(sel.value!=='__new__'&&!sel.hidden){
-          const siteId=Number(sel.value)
-          const existing=state.data.locations.filter(x=>x.parentId===siteId).map(x=>({id:x.id,name:x.name,hasStock:!!x.hasStock,active:x.active!==false}))
-          editor.shelves=existing.length?existing.map(x=>({...x})):[{id:null,name:'',hasStock:false,active:true}]
-          draw()
-        }else{
-          editor.shelves=[{id:null,name:'',hasStock:false,active:true}]
-          draw()
-        }
-      }
-      sync()
-    }
-  }
   draw()
   $('#dialog')._locationEditor=editor
 }
@@ -461,7 +430,7 @@ function readForm(row){
   const active=row?row.active!==false:true
   if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
   if(title.includes('仕入先'))return {id:row&&row.id,name:$('#name').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
-  if(title.includes('保管場所')){
+  if(title.includes('保管場所')||title.includes('拠点を新しく登録')){
     const shelves=collectLocationShelves()
     const active=row?row.active!==false:true
     if(row&&row.id){
@@ -471,9 +440,8 @@ function readForm(row){
       const siteName=siteNameEl?siteNameEl.value:(display?display.value:'')
       return {id:siteId,siteName,shelves,active:row.parentId?(state.data.locations.find(x=>x.id===siteId)||{active:true}).active!==false:active}
     }
-    const sel=$('#siteId')
-    if(!sel||sel.hidden||sel.value==='__new__')return {siteName:$('#siteName').value,shelves,active}
-    return {siteId:Number(sel.value),shelves,active}
+    // 新規は常に create-only（既存IDを付けない）。同名はサーバーが拒否する。
+    return {siteName:($('#siteName')&&$('#siteName').value)||'',shelves,active}
   }
   const editor=$('#dialog')._editor
   const supplier=$('#supplierId').value
