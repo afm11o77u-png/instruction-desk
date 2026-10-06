@@ -50,10 +50,13 @@ function orderActionsHtml(o){
  const floorDue=view==='floor'&&o.status!=='下書き';
  return `<button class="quiet open" data-id="${o.id}">開く</button>${(view==='all'||view==='draft'||view==='done'||view==='shipped'||floorDue)?` <button type="button" class="quiet rowprint" data-id="${o.id}" aria-label="${esc(o.number)}を${o.status==='下書き'?'プレビュー':'印刷'}">${o.status==='下書き'?'プレビュー':'印刷'}</button>`:''}${floorDue?` <button type="button" class="quiet delayopen" data-id="${o.id}">遅延を登録</button>`:''}${(view==='all'&&o.status!=='下書き')?` <button type="button" class="quiet dueopen" data-id="${o.id}" data-mode="confirm">納期を確認</button>`:''}`;
 }
-function orderStatusBlock(o,flagChecks){
+function orderStatusBand(o,flagChecks){
  const ownerFlags=currentUser?.role==='owner';
  const badge=ownerFlags?`<select class="flagstatus" data-flag="status" data-id="${o.id}" aria-label="作業状況　クリックで変更できます。印刷とピッキングとメールの記録は変わりません。">`+states.map(s=>`<option${s===o.status?' selected':''}>${esc(s)}</option>`).join('')+'</select>':'<span class="badge s'+states.indexOf(o.status)+'">'+esc(o.status)+'</span>';
- return `<div class="dm-status-band"><span class="dm-status-main">${badge}</span>${flagChecks(o)}</div>${dueChip(o)}`;
+ return `<div class="dm-status-band"><span class="dm-status-main">${badge}</span>${flagChecks(o)}</div>`;
+}
+function orderStatusBlock(o,flagChecks){
+ return `${orderStatusBand(o,flagChecks)}${dueChip(o)}`;
 }
 function orderGridCard(o,flagChecks){
  if(shipReview){
@@ -62,7 +65,8 @@ function orderGridCard(o,flagChecks){
  const made=o.authorId&&o.assigneeId&&o.authorId!==o.assigneeId?`<div class="dm-secondary">作成 ${esc(o.authorName)}</div>`:'';
  const mark=esc(o.markShipDate)||'未定';
  const late=o.markShipDate&&o.markShipDate<today()&&!['下書き','発送済','完了'].includes(o.status)?' late':'';
- return `<article class="dm-card${late}" data-id="${o.id}"><div class="dm-number"><span class="number">${o.number}${o.sample?' ・サンプル':''}</span></div><div class="dm-primary">${esc(o.customer)||'顧客未設定'}</div><div class="dm-secondary">${esc(o.employee)||'—'}${view==='floor'&&o.owner?`　${esc(o.owner)}`:''}</div>${made}<div class="dm-meta"><span>${esc(o.request)||'—'}</span><span>マーク出荷日 ${mark}</span></div><div class="dm-status">${orderStatusBlock(o,flagChecks)}</div><div class="dm-actions">${orderActionsHtml(o)}</div></article>`;
+ const owner=view==='floor'&&o.owner?`　${esc(o.owner)}`:'';
+ return `<article class="dm-card${late}" data-id="${o.id}"><div class="dm-number"><span class="number">${o.number}${o.sample?' ・サンプル':''}</span></div><div class="dm-primary">${esc(o.customer)||'顧客未設定'}</div><div class="dm-meta"><span class="dm-request">${esc(o.request)||'—'}</span><span class="dm-employee">${esc(o.employee)||'—'}${owner}</span></div>${made}<div class="dm-status">${orderStatusBand(o,flagChecks)}</div><div class="dm-mark">マーク出荷日 ${mark}</div>${dueChip(o)}<div class="dm-actions">${orderActionsHtml(o)}</div></article>`;
 }
 function render(){
  const stale=$('#floorordernote');if(stale)stale.remove();
