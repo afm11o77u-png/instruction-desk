@@ -447,6 +447,99 @@ function readForm(row){
   const supplier=$('#supplierId').value
   return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links:editor.links.map(l=>({customerId:Number(l.customerId),embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false})),active}
 }
+function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,value}){
+  return `<label class="search-picker">${esc(label)}（必須）
+      <div class="search-picker-control">
+        <input id="${inputId}" type="search" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="${listId}" placeholder="${esc(placeholder)}" value="${esc(value||'')}">
+        <button type="button" class="quiet search-picker-clear" id="${clearId}" ${value?'':'hidden'}>クリア</button>
+      </div>
+      <ul id="${listId}" class="search-picker-list" role="listbox" hidden></ul>
+      <p class="search-picker-hint" id="${hintId}"></p>
+    </label>`
+}
+function bindOpeningSearchPicker({input,list,clearBtn,hint,getItems,emptyText,isConfirmed,confirmedLabel,onPick,onClear,onQueryChange}){
+  let active=-1
+  let open=false
+  const setHint=(text,confirmed)=>{
+    if(!hint)return
+    hint.textContent=text||''
+    hint.classList.toggle('is-confirmed',!!confirmed)
+  }
+  const close=()=>{
+    open=false
+    active=-1
+    list.hidden=true
+    list.innerHTML=''
+    input.setAttribute('aria-expanded','false')
+  }
+  const paintList=()=>{
+    const items=getItems()
+    list.innerHTML=''
+    if(!items.length){
+      list.innerHTML=`<li class="search-picker-empty">${esc(emptyText)}</li>`
+    }else{
+      items.forEach((item,i)=>{
+        const li=document.createElement('li')
+        li.setAttribute('role','presentation')
+        const btn=document.createElement('button')
+        btn.type='button'
+        btn.setAttribute('role','option')
+        btn.dataset.index=String(i)
+        btn.id=`${list.id}-opt-${i}`
+        if(i===active)btn.classList.add('is-active')
+        btn.innerHTML=item.html||esc(item.label)
+        btn.onmousedown=e=>e.preventDefault()
+        btn.onclick=()=>{onPick(item);close();syncChrome()}
+        li.appendChild(btn)
+        list.appendChild(li)
+      })
+    }
+    list.hidden=false
+    open=true
+    input.setAttribute('aria-expanded','true')
+    const current=active>=0&&items[active]?`${list.id}-opt-${active}`:null
+    if(current)input.setAttribute('aria-activedescendant',current)
+    else input.removeAttribute('aria-activedescendant')
+  }
+  const syncChrome=()=>{
+    const confirmed=isConfirmed()
+    if(clearBtn)clearBtn.hidden=!confirmed&&!String(input.value||'').trim()
+    if(confirmed)setHint('選択済み: '+confirmedLabel(),true)
+    else if(String(input.value||'').trim())setHint('候補から選んで確定してください（入力だけでは保存できません）',false)
+    else setHint('',false)
+  }
+  const move=(delta)=>{
+    const items=getItems()
+    if(!items.length){paintList();return}
+    if(!open)paintList()
+    active=(active+delta+items.length)%items.length
+    paintList()
+    const el=list.querySelector('.is-active')
+    if(el&&el.scrollIntoView)el.scrollIntoView({block:'nearest'})
+  }
+  input.onfocus=()=>{paintList();syncChrome()}
+  input.oninput=()=>{
+    if(onQueryChange(input.value))return
+    active=-1
+    paintList()
+    syncChrome()
+  }
+  input.onkeydown=e=>{
+    if(e.key==='ArrowDown'){e.preventDefault();move(1);return}
+    if(e.key==='ArrowUp'){e.preventDefault();move(-1);return}
+    if(e.key==='Enter'){
+      const items=getItems()
+      if(open&&active>=0&&items[active]){e.preventDefault();onPick(items[active]);close();syncChrome();return}
+      if(open&&items.length===1){e.preventDefault();onPick(items[0]);close();syncChrome();return}
+      return
+    }
+    if(e.key==='Escape'){if(open){e.preventDefault();close()}}
+  }
+  input.onblur=()=>setTimeout(()=>{if(!list.contains(document.activeElement))close()},120)
+  if(clearBtn)clearBtn.onclick=()=>{onClear();input.value='';close();syncChrome();input.focus()}
+  syncChrome()
+  return {syncChrome,close}
+}
 function openingLocationSelection(){
   const locations=state.data.locations||[]
   const sites=locations.filter(l=>!l.parentId&&l.active)
@@ -494,15 +587,12 @@ function openingLocationFields(sel){
       <input type="hidden" id="locationId" value="${sel.locationId==null?'':sel.locationId}">`
 }
 function opening(){
-  const customers=state.data.customers.filter(c=>c.active)
-  const handles=[]
-  state.data.products.filter(p=>p.active).forEach(p=>p.links.filter(l=>l.active).forEach(l=>{
-    const customer=state.data.customers.find(c=>c.id===l.customerId)
-    if(customer&&customer.active)handles.push({...l,product:p,customer})
-  }))
-  const customerId=Number(state.opening.customerId||customers[0]?.id||0)
-  const mine=handles.filter(h=>h.customerId===customerId)
-  const selected=mine.find(h=>h.id===Number(state.opening.handleId))||mine.find(h=>h.isStandard)||mine[0]
+  const handles=openingHandlesFromData(state.data)
+  const customer=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
+  const selected=customer?resolveConfirmedOpeningOffering(handles,customer.id,state.opening.handleId):null
+  const customerQuery=customer?customer.name:(state.opening.customerQuery||'')
+  const handleQuery=selected?offeringPickerLabel(selected):(state.opening.handleQuery||'')
+  const mine=customer?filterOpeningOfferings(handles,customer.id,''):[]
   const locSel=openingLocationSelection()
   state.opening.siteId=locSel.siteId==null?'':String(locSel.siteId)
   state.opening.shelfId=locSel.shelfId
@@ -512,8 +602,8 @@ function opening(){
     <p class="excelhint">記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。</p>
     <p class="provisional">入荷日が分からない初期在庫は、架空の日付で埋めず「入荷日不明」にします。運用開始後の入荷より先に払い出す想定です。初期在庫同士の順番が不明なときは、払出し順の小さい番号から出します。仕入単価の安さでは順番を決めません。</p>
     <div class="grid">
-      <label>顧客（必須）<select id="customerId">${customers.map(c=>`<option value="${c.id}" ${c.id===customerId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
-      <label>商品と加工仕様（必須）<select id="handleId">${mine.map(h=>`<option value="${h.id}" ${selected&&h.id===selected.id?'selected':''}>${esc(h.product.code)} ${esc(h.product.name)} ${esc(h.product.color)} / ${esc(specLabel(h.embroidery))}${h.isStandard?' / 標準':''} / 商品ID ${h.product.id}</option>`).join('')}</select></label>
+      ${searchPickerMarkup({label:'顧客',inputId:'customerQuery',listId:'customerOptions',clearId:'customerClear',hintId:'customerHint',placeholder:'顧客名またはカナで検索',value:customerQuery})}
+      ${searchPickerMarkup({label:'商品と加工仕様',inputId:'handleQuery',listId:'handleOptions',clearId:'handleClear',hintId:'handleHint',placeholder:customer?'品番・商品名・加工仕様で検索':'先に顧客を選択',value:handleQuery})}
       ${openingLocationFields(locSel)}
       <label>在庫基準日（必須）<input id="basisDate" type="date" value="${esc(state.opening.basis||'')}"></label>
     </div>
@@ -527,7 +617,8 @@ function opening(){
   </div></section>`
   const drawSizes=()=>{
     const product=selected&&selected.product
-    if(!product){$('#sizerows').innerHTML='<p>先に、顧客・商品情報で取扱を登録してください。</p>';return}
+    if(!customer){$('#sizerows').innerHTML='<p>顧客を候補から選んでください。</p>';$('#standardNote').textContent=' ';return}
+    if(!product){$('#sizerows').innerHTML='<p>商品と加工仕様を候補から選んでください。取扱が未登録のときは、先に顧客・商品情報で登録してください。</p>';$('#standardNote').textContent=' ';return}
     const rows=state.opening.lines&&state.opening.lines.productId===product.id?state.opening.lines.rows:product.sizes.map(size=>({size,qty:'',unitCost:''}))
     state.opening.lines={productId:product.id,rows}
     $('#sizerows').innerHTML=rows.map((line,i)=>`<div class="sizerow"><strong>${esc(line.size)}</strong><label>数量<input data-i="${i}" data-k="qty" inputmode="numeric" value="${esc(line.qty)}"></label><label>仕入単価（円）<input data-i="${i}" data-k="unitCost" inputmode="numeric" value="${esc(line.unitCost)}"></label><button type="button" data-addprice="${i}">別の単価</button></div>`).join('')
@@ -545,8 +636,89 @@ function opening(){
     const hidden=$('#locationId')
     if(hidden)hidden.value=state.opening.locationId
   }
-  $('#customerId').onchange=()=>{state.opening.customerId=$('#customerId').value;state.opening.handleId='';state.opening.lines=null;opening()}
-  $('#handleId').onchange=()=>{state.opening.customerId=$('#customerId').value;state.opening.handleId=$('#handleId').value;state.opening.lines=null;opening()}
+  const customerInput=$('#customerQuery')
+  const handleInput=$('#handleQuery')
+  bindOpeningSearchPicker({
+    input:customerInput,
+    list:$('#customerOptions'),
+    clearBtn:$('#customerClear'),
+    hint:$('#customerHint'),
+    emptyText:'該当する顧客がありません',
+    getItems:()=>filterOpeningCustomers(state.data.customers,customerInput.value).map(c=>({
+      id:c.id,
+      label:c.name,
+      html:`<span class="dm-primary">${esc(c.name)}</span>${c.kana?`<span class="sub dm-secondary">${esc(c.kana)}</span>`:''}`,
+      raw:c
+    })),
+    isConfirmed:()=>!!resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId),
+    confirmedLabel:()=>{
+      const c=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
+      return c?c.name:''
+    },
+    onPick:item=>{
+      const prev=state.opening.customerId
+      state.opening.customerId=String(item.id)
+      state.opening.customerQuery=item.label
+      if(String(prev)!==String(item.id))state.opening=clearOpeningProductFields(state.opening)
+      opening()
+    },
+    onClear:()=>{state.opening=clearOpeningCustomerSelection(state.opening);opening()},
+    onQueryChange:value=>{
+      const confirmed=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
+      if(confirmed&&value!==confirmed.name){
+        state.opening=clearOpeningCustomerSelection(state.opening)
+        state.opening.customerQuery=value
+        opening()
+        const el=$('#customerQuery')
+        if(el){el.focus();const n=el.value.length;el.setSelectionRange(n,n)}
+        return true
+      }
+      state.opening.customerQuery=value
+      return false
+    }
+  })
+  bindOpeningSearchPicker({
+    input:handleInput,
+    list:$('#handleOptions'),
+    clearBtn:$('#handleClear'),
+    hint:$('#handleHint'),
+    emptyText:customer?'該当する商品がありません':'先に顧客を候補から選んでください',
+    getItems:()=>{
+      if(!resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId))return []
+      return filterOpeningOfferings(handles,state.opening.customerId,handleInput.value).map(h=>({
+        id:h.id,
+        label:offeringPickerLabel(h),
+        html:`<span class="dm-primary">${esc(h.product.code)} ${esc(h.product.name)}</span><span class="sub dm-secondary">${esc(h.product.color)} / ${esc(specLabel(h.embroidery))}${h.isStandard?' / 標準':''}</span>`,
+        raw:h
+      }))
+    },
+    isConfirmed:()=>!!resolveConfirmedOpeningOffering(handles,state.opening.customerId,state.opening.handleId),
+    confirmedLabel:()=>{
+      const h=resolveConfirmedOpeningOffering(handles,state.opening.customerId,state.opening.handleId)
+      return h?offeringPickerLabel(h):''
+    },
+    onPick:item=>{
+      state.opening.handleId=String(item.id)
+      state.opening.handleQuery=item.label
+      state.opening.lines=null
+      opening()
+    },
+    onClear:()=>{state.opening=clearOpeningProductFields(state.opening);opening()},
+    onQueryChange:value=>{
+      const confirmed=resolveConfirmedOpeningOffering(handles,state.opening.customerId,state.opening.handleId)
+      if(confirmed&&value!==offeringPickerLabel(confirmed)){
+        state.opening=clearOpeningProductFields(state.opening)
+        state.opening.handleQuery=value
+        opening()
+        const el=$('#handleQuery')
+        if(el){el.focus();const n=el.value.length;el.setSelectionRange(n,n)}
+        return true
+      }
+      state.opening.handleQuery=value
+      return false
+    }
+  })
+  if(!customer)handleInput.disabled=true
   $('#unknown').onchange=syncUnknown
   $('#basisDate').onchange=()=>{state.opening.basis=$('#basisDate').value}
   const siteEl=$('#openingSite')
@@ -569,8 +741,6 @@ function opening(){
       const p=selected.product
       const keep=(state.opening.lines?.rows||[]).concat([{size,qty:'',unitCost:''}])
       await api('/api/products',{id:p.id,code:p.code,name:p.name,color:p.color,supplierId:p.supplierId,active:p.active,sizes:p.sizes.concat(size),links:p.links})
-      state.opening.customerId=$('#customerId').value
-      state.opening.handleId=$('#handleId').value
       state.opening.basis=$('#basisDate').value
       syncLocationState()
       state.data=await api('/api/bootstrap')
@@ -579,12 +749,17 @@ function opening(){
       opening()
     }catch(e){$('#error').textContent=e.message}
   }
-  $('#confirmOpen').onclick=()=>confirmOpening(selected)
+  $('#confirmOpen').onclick=()=>confirmOpening()
   syncUnknown();drawSizes();bindExcel()
 }
-function confirmOpening(selected){
+function confirmOpening(){
   try{
-    if(!selected)throw Error('商品と加工仕様を選んでください。')
+    const handles=openingHandlesFromData(state.data)
+    const customer=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
+    if(!customer)throw Error('顧客を候補から選んで確定してください。入力した文字だけでは保存できません。')
+    const selected=resolveConfirmedOpeningOffering(handles,customer.id,state.opening.handleId)
+    if(!selected)throw Error('商品と加工仕様を候補から選んで確定してください。入力した文字だけでは保存できません。')
+    if(!state.opening.lines||!state.opening.lines.rows)throw Error('数量のある行がありません。')
     const lines=[]
     for(const line of state.opening.lines.rows){
       const qty=line.qty.trim()
@@ -637,9 +812,11 @@ function confirmOpening(selected){
         const result=await api('/api/opening',{token:state.token,customerProductId:selected.id,locationId,basisDate:basis,receivedUnknown:unknown,receivedOn:unknown?'':$('#receivedOn').value,payoutOrder:unknown?Number($('#payoutOrder').value):0,lines})
         dlg.close();dlg.innerHTML=''
         toast(result.already?'この登録は保存済みです。二重には加算していません。':'初期在庫を登録しました。')
-        state.opening.lines=null
-        state.mode='stock';state.tab='list'
-        await boot()
+        state.opening=openingStateAfterSuccessfulSave(state.opening)
+        state.tab='opening'
+        if(!embedded)state.mode='stock'
+        state.data=await api('/api/bootstrap')
+        paint()
       }catch(e){dlg.querySelector('#error').textContent=e.message;button.disabled=false}
     }
   }catch(e){$('#error').textContent=e.message}
