@@ -98,11 +98,14 @@ def _seed_files(data_dir):
     place = data_dir / 'images' / 'placement'
     thumbs = place / 'thumbs'
     names = data_dir / 'images' / 'names'
-    for folder in (place, thumbs, names):
+    imported = data_dir / 'name-import'
+    for folder in (place, thumbs, names, imported):
         folder.mkdir(parents=True, exist_ok=True)
     (place / 'sample.png').write_bytes(b'\x89PNG\r\n\x1a\n-fake-')
     (thumbs / 'sample.jpg').write_bytes(b'fake-thumb')
     (names / 'upload-000001.png').write_bytes(b'\x89PNG\r\n\x1a\n-name-')
+    (imported / 'catalog.json').write_text('{"customerCount":1}', encoding='utf-8')
+    (imported / 'skip-me.png').write_bytes(b'\x89PNG\r\n\x1a\n-skip-')
     # Excluded noise
     (data_dir / 'mail-out').mkdir(exist_ok=True)
     (data_dir / 'mail-out' / 'draft.eml').write_text('x', encoding='utf-8')
@@ -147,10 +150,14 @@ class MigrationTests(unittest.TestCase):
             names = set(zf.namelist())
         self.assertIn('instructions.sqlite3', names)
         self.assertIn('stock.sqlite3', names)
-        self.assertIn('images/placement/sample.png', names)
+        self.assertIn('name-import/catalog.json', names)
         self.assertTrue(any(n.startswith('manifest.json') for n in names))
+        self.assertFalse(any(n.startswith('images/') for n in names))
+        self.assertNotIn('name-import/skip-me.png', names)
+        self.assertFalse(any(n.lower().endswith(ext) for n in names for ext in ('.png', '.jpg', '.jpeg', '.webp')))
         self.assertFalse(any('mail-out' in n for n in names))
         self.assertFalse(any(n.startswith('backups/') for n in names))
+        self.assertIn('image files', manifest['excludes'])
 
         before_company_extra = (self.dst / 'images' / 'placement' / 'only-on-company.png').is_file()
         self.assertTrue(before_company_extra)
@@ -172,13 +179,17 @@ class MigrationTests(unittest.TestCase):
         # PC-specific config untouched
         self.assertEqual(self.pc_config.read_text(encoding='utf-8'), pc_before)
 
-        # Destination now matches source business counts
+        # Destination DB/counts match source; destination images are left as-is
         counts = migration.summarize_data_dir(self.dst)['counts']
         self.assertEqual(counts['orders'], 1)
         self.assertEqual(counts['users'], 1)
         self.assertEqual(counts['stockLots'], 1)
-        self.assertFalse((self.dst / 'images' / 'placement' / 'only-on-company.png').exists())
+        self.assertTrue((self.dst / 'images' / 'placement' / 'only-on-company.png').is_file())
         self.assertTrue((self.dst / 'images' / 'placement' / 'sample.png').is_file())
+        self.assertEqual(
+            (self.dst / 'name-import' / 'catalog.json').read_text(encoding='utf-8'),
+            '{"customerCount":1}',
+        )
 
         # Password hash still verifies migrated account
         c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
@@ -206,7 +217,8 @@ class MigrationTests(unittest.TestCase):
             self.assertTrue(rel.startswith('images/'))
             self.assertFalse(rel.startswith('/'))
             self.assertNotIn(':', rel.split('/')[0])
-            self.assertTrue((other / rel).is_file())
+            # Images are omitted from the ZIP; a fresh dest may not have the file.
+            self.assertFalse((other / rel).exists())
         finally:
             c.close()
 
@@ -316,7 +328,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_export_testzip_failure_includes_member_name(self):
         Real = zipfile.ZipFile
-        bad_member = 'images/placement/sample.png'
+        bad_member = 'instructions.sqlite3'
 
         class BadTestZip(Real):
             def testzip(self):
@@ -333,6 +345,31 @@ class MigrationTests(unittest.TestCase):
         self.assertIn(bad_member, msg)
         self.assertFalse(dest.exists())
         self.assertFalse(Path(str(dest) + '.partial').exists())
+
+    def test_restore_preserves_dest_images_and_skips_legacy_zip_images(self):
+        zip_path, _ = migration.build_export_zip(self.src, self.root / 'no-images.zip')
+        with zipfile.ZipFile(zip_path, 'a') as zf:
+            zf.writestr('images/placement/injected.png', b'injected-from-zip')
+            zf.writestr('name-import/photo.jpg', b'jpeg-bytes')
+        (self.dst / 'name-import' / 'catalog.json').write_text('{"old":true}', encoding='utf-8')
+        dest_photo = self.dst / 'name-import' / 'skip-me.png'
+        dest_photo_bytes = dest_photo.read_bytes()
+        marker = self.dst / 'images' / 'placement' / 'only-on-company.png'
+        marker_bytes = marker.read_bytes()
+
+        result = migration.restore_from_zip(self.dst, zip_path, auto_backup_dir=self.root / 'auto5')
+        self.assertTrue(result['ok'])
+        self.assertEqual(marker.read_bytes(), marker_bytes)
+        self.assertEqual(dest_photo.read_bytes(), dest_photo_bytes)
+        self.assertFalse((self.dst / 'images' / 'placement' / 'injected.png').exists())
+        self.assertFalse((self.dst / 'name-import' / 'photo.jpg').exists())
+        self.assertEqual(
+            (self.dst / 'name-import' / 'catalog.json').read_text(encoding='utf-8'),
+            '{"customerCount":1}',
+        )
+        summary, _ = migration.inspect_zip(zip_path)
+        self.assertIn('画像', summary['warning'])
+        self.assertNotIn('画像も含みます', summary['warning'])
 
 
 if __name__ == '__main__':
