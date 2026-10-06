@@ -37,13 +37,13 @@ class OrderGridCardLayoutTest(unittest.TestCase):
         self.assertLess(i_num, i_pri)
         self.assertLess(i_pri, i_meta)
 
-    def test_mark_ship_date_below_status_band(self):
+    def test_mark_ship_date_below_due_chip(self):
         body = _fn('orderGridCard')
         i_status = body.index('orderStatusBand(')
-        i_mark = body.index('class="dm-mark"')
         i_due = body.index('dueChip(')
-        self.assertLess(i_status, i_mark)
-        self.assertLess(i_mark, i_due)
+        i_mark = body.index('class="dm-mark"')
+        self.assertLess(i_status, i_due)
+        self.assertLess(i_due, i_mark)
         self.assertIn('マーク出荷日 ${mark}', body)
         self.assertNotIn('マーク出荷日 ${mark}</span></div><div class="dm-status">', body)
 
@@ -74,6 +74,17 @@ class OrderGridCardLayoutTest(unittest.TestCase):
 
         meta = rule('.list-grid .dm-card .dm-meta')
         self.assertIn('flex-wrap:nowrap', meta)
+
+        request = rule('.list-grid .dm-card .dm-request')
+        self.assertIn('flex:1 1 auto', request)
+        self.assertIn('min-width:0', request)
+
+        employee = rule('.list-grid .dm-card .dm-employee')
+        self.assertIn('flex:0 1 auto', employee)
+        self.assertIn('min-width:0', employee)
+        self.assertIn('text-overflow:ellipsis', employee)
+        self.assertIn('white-space:nowrap', employee)
+        self.assertNotIn('flex:1 1 0', employee)
 
         main = rule('.list-grid .dm-card .dm-status-main')
         self.assertIn('flex:0 0 7.2em', main)

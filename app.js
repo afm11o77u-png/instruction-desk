@@ -66,7 +66,7 @@ function orderGridCard(o,flagChecks){
  const mark=esc(o.markShipDate)||'未定';
  const late=o.markShipDate&&o.markShipDate<today()&&!['下書き','発送済','完了'].includes(o.status)?' late':'';
  const owner=view==='floor'&&o.owner?`　${esc(o.owner)}`:'';
- return `<article class="dm-card${late}" data-id="${o.id}"><div class="dm-number"><span class="number">${o.number}${o.sample?' ・サンプル':''}</span></div><div class="dm-primary">${esc(o.customer)||'顧客未設定'}</div><div class="dm-meta"><span class="dm-request">${esc(o.request)||'—'}</span><span class="dm-employee">${esc(o.employee)||'—'}${owner}</span></div>${made}<div class="dm-status">${orderStatusBand(o,flagChecks)}</div><div class="dm-mark">マーク出荷日 ${mark}</div>${dueChip(o)}<div class="dm-actions">${orderActionsHtml(o)}</div></article>`;
+ return `<article class="dm-card${late}" data-id="${o.id}"><div class="dm-number"><span class="number">${o.number}${o.sample?' ・サンプル':''}</span></div><div class="dm-primary">${esc(o.customer)||'顧客未設定'}</div><div class="dm-meta"><span class="dm-request">${esc(o.request)||'—'}</span><span class="dm-employee">${esc(o.employee)||'—'}${owner}</span></div>${made}<div class="dm-status">${orderStatusBand(o,flagChecks)}</div>${dueChip(o)}<div class="dm-mark">マーク出荷日 ${mark}</div><div class="dm-actions">${orderActionsHtml(o)}</div></article>`;
 }
 function render(){
  const stale=$('#floorordernote');if(stale)stale.remove();
