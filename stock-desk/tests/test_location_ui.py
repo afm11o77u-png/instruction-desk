@@ -73,10 +73,15 @@ class InactiveToggleUiTest(unittest.TestCase):
 
     def test_inactive_toggle_css_tight_nowrap(self):
         self.assertRegex(CSS, r'\.check,\s*\.inactive-toggle\{[^}]*display:\s*inline-flex')
+        self.assertRegex(CSS, r'\.check,\s*\.inactive-toggle\{[^}]*align-items:\s*center')
         self.assertRegex(CSS, r'\.check,\s*\.inactive-toggle\{[^}]*gap:\s*6px')
         self.assertRegex(CSS, r'\.check,\s*\.inactive-toggle\{[^}]*white-space:\s*nowrap')
         self.assertRegex(CSS, r'\.check,\s*\.inactive-toggle\{[^}]*flex-shrink:\s*0')
+        self.assertRegex(CSS, r'\.check,\s*\.inactive-toggle\{[^}]*line-height:\s*1')
+        self.assertRegex(CSS, r'\.check input,\s*\.inactive-toggle input\{[^}]*padding:\s*0')
+        self.assertRegex(CSS, r'\.bar \.check,\s*\.bar \.inactive-toggle\{[^}]*align-self:\s*flex-end')
         self.assertRegex(CSS, r'\.bar \.check input,\s*\.bar \.inactive-toggle input\{[^}]*min-width:\s*0')
+        self.assertNotRegex(CSS, r'\.bar \.check,\s*\.bar \.inactive-toggle\{[^}]*padding-bottom')
         # Filter behavior unchanged: still driven by #stopped + state.stopped
         bind = _fn('bindList')
         self.assertIn("$('#stopped').onchange=e=>{state.stopped=e.target.checked;paint()}", bind)
