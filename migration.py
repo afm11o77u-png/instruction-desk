@@ -1,7 +1,10 @@
 """Owner-only full business-data export / restore for USB migration.
 
 PC-specific config (network.json, tls/, Thunderbird path, launch paths) stays
-outside the ZIP. Business DBs and related files under INSTRUCTION_DATA move together.
+outside the ZIP. Business DBs and non-image files under INSTRUCTION_DATA move
+together. Placement photos, name samples, and other image binaries are omitted
+to keep ZIP size and export time manageable. Restore does not replace or delete
+destination image directories.
 """
 from __future__ import annotations
 
@@ -23,12 +26,20 @@ INSTRUCTIONS_DB = 'instructions.sqlite3'
 STOCK_DB = 'stock.sqlite3'
 ZIP_PREFIX = 'desk-migration'
 
-# Directories under DATA that hold business files (relative paths in ZIP).
-FILE_TREES = (
+# Image-only trees: never packed, never replaced on restore.
+IMAGE_TREES = (
     'images/placement',
     'images/names',
+)
+
+# Non-image business file trees (relative paths in ZIP).
+FILE_TREES = (
     'name-import',
 )
+
+IMAGE_SUFFIXES = {
+    '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tif', '.tiff', '.ico', '.heic', '.heif',
+}
 
 # Never pack these (backup history, generated mail, probes, PC-local noise).
 SKIP_DIR_NAMES = {
@@ -204,6 +215,15 @@ def _online_backup(src_path, dest_path):
     return True
 
 
+def _is_image_rel(rel):
+    text = str(rel or '').replace('\\', '/').lstrip('/')
+    if not text:
+        return False
+    if any(text == tree or text.startswith(tree + '/') for tree in IMAGE_TREES):
+        return True
+    return Path(text).suffix.lower() in IMAGE_SUFFIXES
+
+
 def _iter_business_files(data_dir):
     data_dir = Path(data_dir)
     for rel_root in FILE_TREES:
@@ -215,9 +235,11 @@ def _iter_business_files(data_dir):
                 continue
             if path.name.startswith('.'):
                 continue
-            if any(part in SKIP_DIR_NAMES for part in path.relative_to(data_dir).parts):
-                continue
             rel = path.relative_to(data_dir).as_posix()
+            if any(part in SKIP_DIR_NAMES for part in rel.split('/')):
+                continue
+            if _is_image_rel(rel):
+                continue
             yield path, rel
     # Import reports at DATA root (business metadata; not PC config).
     for path in data_dir.glob('*-import-report.json'):
@@ -316,7 +338,10 @@ def _build_export_zip_unlocked(data_dir, dest_zip=None):
             },
             'files': sorted(file_entries, key=lambda x: x['path']),
             'keyCounts': _key_counts(instr_dst, stock_dst if stock_present else Path(stock_dst)),
-            'excludes': sorted(SKIP_DIR_NAMES) + ['network.json', 'tls/', 'source code', 'mail-out'],
+            'excludes': sorted(SKIP_DIR_NAMES) + [
+                'network.json', 'tls/', 'source code', 'mail-out',
+                'images/placement', 'images/names', 'image files',
+            ],
         }
         body = json.dumps({k: v for k, v in manifest.items()}, ensure_ascii=False, indent=2, sort_keys=True).encode('utf-8')
         manifest['integrity'] = {
@@ -407,6 +432,8 @@ def _extract_zip_safe(zip_path, dest_dir):
                 if info.is_dir():
                     continue
                 name = _safe_zip_name(info.filename)
+                if _is_image_rel(name):
+                    continue
                 target = (dest_dir / name).resolve()
                 if dest_dir.resolve() not in target.parents and target != dest_dir.resolve():
                     raise MigrationError('バックアップ内のパスが不正です。')
@@ -471,23 +498,27 @@ def _validate_extracted(root):
     if expected_stock and stock.is_file() and _sha256_file(stock) != expected_stock:
         raise MigrationError('在庫データベースの改ざん／破損を検出しました。')
     files_meta = manifest.get('files') or []
+    packed_files = []
     for entry in files_meta:
         rel = _safe_zip_name(entry.get('path'))
+        if _is_image_rel(rel):
+            continue
         path = root / rel
         if not path.is_file():
             raise MigrationError(f'必要なファイルがありません：{rel}')
         if entry.get('sha256') and _sha256_file(path) != entry['sha256']:
             raise MigrationError(f'ファイルの改ざん／破損を検出しました：{rel}')
+        packed_files.append(entry)
     # Reject absolute-looking stored paths inside DBs for images (path independence).
     _assert_relative_image_paths(instr)
     summary = {
         'createdAt': manifest.get('createdAt'),
         'formatVersion': manifest.get('formatVersion'),
         'keyCounts': manifest.get('keyCounts') or _key_counts(instr, stock),
-        'fileCount': len(files_meta),
+        'fileCount': len(packed_files),
         'instructionsSchema': schema,
         'stockPresent': stock.is_file(),
-        'warning': 'このパソコン上の業務データはすべて置き換わります。利用者・指示書・在庫・画像も含みます。パソコン固有の設定（通信・起動・Thunderbird）は変わりません。',
+        'warning': 'このパソコン上の業務データ（利用者・指示書・在庫など）は置き換わります。貼付け位置・ネーム見本などの画像はZIPに含まれず、このパソコン上の画像はそのまま残ります。パソコン固有の設定（通信・起動・Thunderbird）は変わりません。',
     }
     return summary, manifest
 
@@ -568,12 +599,12 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None):
                 os.replace(src, dest)
 
         parked = []
+        installed_files = []
         try:
             for rel in (
                 INSTRUCTIONS_DB, STOCK_DB,
                 f'{INSTRUCTIONS_DB}-wal', f'{INSTRUCTIONS_DB}-shm',
                 f'{STOCK_DB}-wal', f'{STOCK_DB}-shm',
-                *FILE_TREES,
             ):
                 src = data_dir / rel
                 if src.exists():
@@ -583,18 +614,18 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None):
                 park(path.name)
                 parked.append(path.name)
 
-            # Install new DBs / files.
+            # Install DBs. Image trees are left on the destination as-is.
             os.replace(incoming / INSTRUCTIONS_DB, live_instr)
             if (incoming / STOCK_DB).is_file():
                 os.replace(incoming / STOCK_DB, live_stock)
-            for rel_root in FILE_TREES:
-                src = incoming / rel_root
-                if src.exists():
-                    dest = data_dir / rel_root
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(src, dest)
-            for path in incoming.glob('*-import-report.json'):
-                shutil.copy2(path, data_dir / path.name)
+            for src, rel in _iter_business_files(incoming):
+                dest = data_dir / rel
+                if dest.exists():
+                    park(rel)
+                    parked.append(rel)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest)
+                installed_files.append(rel)
 
             # Invalidate sessions / gates; append restore audit.
             c = sqlite3.connect(str(live_instr), timeout=30)
@@ -626,22 +657,19 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None):
         except Exception as e:
             _checkpoint_and_close(live_instr)
             _checkpoint_and_close(live_stock)
-            # Remove partially installed business targets, then put parked data back.
+            # Remove partially installed DBs / non-image files only. Image trees stay.
             for rel in (
                 INSTRUCTIONS_DB, STOCK_DB,
                 f'{INSTRUCTIONS_DB}-wal', f'{INSTRUCTIONS_DB}-shm',
                 f'{STOCK_DB}-wal', f'{STOCK_DB}-shm',
-                *FILE_TREES,
+                *installed_files,
             ):
                 cur = data_dir / rel
-                if cur.exists():
-                    if cur.is_dir():
-                        shutil.rmtree(cur, ignore_errors=True)
-                    else:
-                        try:
-                            cur.unlink()
-                        except OSError:
-                            pass
+                if cur.is_file() or cur.is_symlink():
+                    try:
+                        cur.unlink()
+                    except OSError:
+                        pass
             for path in list(data_dir.glob('*-import-report.json')):
                 try:
                     path.unlink()
@@ -665,7 +693,7 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None):
                 '画面をいったん閉じてください（ログアウトされます）。',
                 '会社PCで「停止.cmd」があれば実行し、続けて「起動.cmd」で起動し直してください。',
                 '移行前と同じログインIDとパスワードで、もう一度ログインしてください。',
-                '貼付け位置・ネーム見本・在庫の表示を数件確認してください。',
+                '貼付け位置・ネーム見本の画像はこのZIPに含まれません。在庫や指示書の表示を数件確認してください。',
             ],
         }
     finally:
