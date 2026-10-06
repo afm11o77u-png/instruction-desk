@@ -46,7 +46,7 @@ def test_rules():
         embroidered = stock.stock_query(c, {'customerId': str(aoba), 'productId': str(product), 'spec': '左胸ネーム'})
         check('刺繍ありは別在庫', embroidered['totalQty'] == 2 and embroidered['lots'][0]['embroideryLabel'] == '左胸ネーム')
         shelf = stock.stock_query(c, {'customerId': str(aoba), 'productId': str(product), 'size': 'LL'})
-        check('保管場所とサイズで分かれる', shelf['lots'][0]['locationLabel'] == '石狩倉庫① / 1-A' and shelf['totalQty'] == 1)
+        check('保管場所とサイズで分かれる', shelf['lots'][0]['locationLabel'] == '石狩倉庫①／1-A' and shelf['totalQty'] == 1)
         unknown = c.execute("SELECT received_on,received_unknown FROM lots WHERE received_unknown=1 LIMIT 1").fetchone()
         check('入荷日不明は架空日付にしない', unknown['received_on'] is None and unknown['received_unknown'] == 1)
         batch = c.execute("SELECT COUNT(*) AS n FROM lots WHERE batch_id=(SELECT id FROM opening_batches WHERE client_token='sample-opening-price-split')").fetchone()['n']
@@ -118,7 +118,7 @@ def test_restart_and_http():
     status, supplier = post('/api/suppliers', {'name': 'テスト仕入先', 'active': True})
     status, product = post('/api/products', {'code': 'SCR-100', 'name': '白スクラブ', 'color': '白', 'supplierId': supplier['id'], 'active': True, 'sizes': ['M', 'L', 'LL', '2L'], 'links': [{'customerId': customer['id'], 'embroidery': '', 'isStandard': True, 'active': True}]})
     check('複数サイズをまとめて保存', status == 200 and product['sizes'] == ['M', 'L', 'LL', '2L'])
-    status, place = post('/api/locations', {'name': '石狩倉庫①', 'active': True})
+    status, place = post('/api/locations', {'siteName': '石狩倉庫①', 'active': True})
     handle = product['links'][0]['id']
     body = {'token': 'http-once', 'customerProductId': handle, 'locationId': place['id'], 'basisDate': '2026-09-01', 'receivedUnknown': True, 'payoutOrder': 1, 'lines': [{'size': 'M', 'qty': 10, 'unitCost': 1000}, {'size': 'M', 'qty': 5, 'unitCost': 1200}, {'size': 'L', 'qty': 1, 'unitCost': 1100}]}
     status, first = post('/api/opening', body)
@@ -187,8 +187,115 @@ def test_excel():
         c.close()
         folder.cleanup()
 
+def test_locations():
+    folder, path, c = newdb()
+    try:
+        zero = stock.save_location(c, {'siteName': '石狩倉庫', 'active': True})
+        c.commit()
+        check('拠点ゼロから拠点だけ登録', zero['parentId'] is None and zero['name'] == '石狩倉庫' and zero['label'] == '石狩倉庫')
+
+        both = stock.save_location(c, {'siteName': '本社倉庫', 'shelfName': '棚1', 'active': True})
+        c.commit()
+        sites = list(c.execute('SELECT id,name,parent_id FROM locations WHERE name IN (\'本社倉庫\',\'棚1\') ORDER BY parent_id IS NOT NULL, id'))
+        check('拠点と棚を一度に登録', both['parentId'] == sites[0]['id'] and both['label'] == '本社倉庫／棚1' and len(sites) == 2)
+
+        under = stock.save_location(c, {'siteId': zero['id'], 'shelfName': '1F', 'active': True})
+        c.commit()
+        check('既存拠点の下に棚を追加', under['parentId'] == zero['id'] and under['label'] == '石狩倉庫／1F')
+
+        wait = stock.save_location(c, {'siteId': zero['id'], 'shelfName': '償却待ち', 'active': True})
+        c.commit()
+        check('償却待ちを場所として登録できる', wait['name'] == '償却待ち' and wait['label'] == '石狩倉庫／償却待ち')
+
+        other = stock.save_location(c, {'siteName': '別倉庫', 'shelfName': '棚1', 'active': True})
+        c.commit()
+        check('別拠点なら同じ棚名を許す', other['label'] == '別倉庫／棚1' and other['parentId'] != both['parentId'])
+
+        try:
+            stock.save_location(c, {'siteName': '石狩倉庫', 'active': True})
+            check('同じ拠点名は重複しない', False)
+        except ValueError as e:
+            check('同じ拠点名は重複しない', '同じ拠点名' in str(e))
+        c.rollback()
+
+        try:
+            stock.save_location(c, {'siteId': zero['id'], 'shelfName': '1F', 'active': True})
+            check('同じ拠点の同じ棚名は重複しない', False)
+        except ValueError as e:
+            check('同じ拠点の同じ棚名は重複しない', '同じ棚・区画名' in str(e))
+        c.rollback()
+
+        try:
+            stock.save_location(c, {'siteName': '石狩倉庫', 'shelfName': '新規棚', 'active': True})
+            check('新規拠点入力で既存拠点名は拒否', False)
+        except ValueError as e:
+            check('新規拠点入力で既存拠点名は拒否', '一覧からその拠点を選んで' in str(e))
+        c.rollback()
+
+        before = c.execute('SELECT COUNT(*) AS n FROM locations').fetchone()['n']
+        original_insert = stock._insert_shelf
+        def boom(*args, **kwargs):
+            raise ValueError('棚の保存に失敗しました。')
+        stock._insert_shelf = boom
+        try:
+            c.execute('BEGIN')
+            stock.save_location(c, {'siteName': '失敗倉庫', 'shelfName': '棚1', 'active': True})
+            check('拠点＋棚の途中失敗を検出', False)
+        except ValueError as e:
+            c.rollback()
+            after = c.execute('SELECT COUNT(*) AS n FROM locations').fetchone()['n']
+            orphan = c.execute("SELECT id FROM locations WHERE name='失敗倉庫'").fetchone()
+            check('拠点＋棚の途中失敗を検出', '棚の保存に失敗' in str(e))
+            check('失敗時に拠点だけ残らない', after == before and orphan is None)
+        finally:
+            stock._insert_shelf = original_insert
+
+        # 空白のトリムと、類似名の自動統合はしない
+        padded = stock.save_location(c, {'siteName': '  空白倉庫  ', 'shelfName': '  棚A  ', 'active': True})
+        c.commit()
+        check('前後空白をトリムする', padded['label'] == '空白倉庫／棚A')
+        try:
+            stock.save_location(c, {'siteName': '空白倉庫', 'active': True})
+            check('トリム後の同名は重複', False)
+        except ValueError as e:
+            check('トリム後の同名は重複', '同じ拠点名' in str(e))
+        c.rollback()
+        similar = stock.save_location(c, {'siteName': '空白倉庫本館', 'active': True})
+        c.commit()
+        check('似た名前はマージしない', similar['name'] == '空白倉庫本館')
+
+        # 修正：拠点名と棚名を分けて扱い、親は変えない
+        renamed_site = stock.save_location(c, {'id': zero['id'], 'siteName': '石狩倉庫改', 'active': True})
+        c.commit()
+        shelf_again = stock.location_row(c, under['id'])
+        check('拠点名の修正', renamed_site['name'] == '石狩倉庫改' and shelf_again['label'] == '石狩倉庫改／1F')
+        renamed_shelf = stock.save_location(c, {'id': under['id'], 'shelfName': '2F', 'active': True})
+        c.commit()
+        check('棚名の修正は親を変えない', renamed_shelf['parentId'] == zero['id'] and renamed_shelf['label'] == '石狩倉庫改／2F')
+
+        # 既存在庫リンクが壊れないこと（サンプル相当の紐付け）
+        cust = stock.save_customer(c, {'name': 'リンク確認', 'active': True})
+        prod = stock.save_product(c, {'code': 'L-1', 'name': 'リンク商品', 'color': '', 'supplierId': None, 'active': True,
+                                     'sizes': ['M'], 'links': [{'customerId': cust['id'], 'embroidery': '', 'isStandard': True, 'active': True}]})
+        opening = stock.register_opening(c, {
+            'token': 'loc-link', 'customerProductId': prod['links'][0]['id'], 'locationId': renamed_shelf['id'],
+            'basisDate': '2026-09-01', 'receivedUnknown': True, 'payoutOrder': 1,
+            'lines': [{'size': 'M', 'qty': 2, 'unitCost': 500}],
+        })
+        c.commit()
+        view = stock.stock_query(c, {'locationId': str(renamed_shelf['id'])})
+        check('在庫と場所のリンクが残る', opening['totalQty'] == 2 and view['lots'][0]['locationId'] == renamed_shelf['id']
+              and view['lots'][0]['locationLabel'] == '石狩倉庫改／2F')
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        folder.cleanup()
+
 if __name__ == '__main__':
     test_rules()
+    test_locations()
     test_excel()
     test_restart_and_http()
     print(f'合計 OK {ok} NG {ng}')

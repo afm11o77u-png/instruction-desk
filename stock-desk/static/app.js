@@ -187,7 +187,7 @@ function products(){
 }
 function locations(){
   const rows=state.data.locations.filter(r=>(state.stopped||r.active)&&r.label.includes(state.q))
-  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','まずは「石狩倉庫①」のような拠点だけで登録できます。棚や区画は、あとからその拠点の下に追加できます。償却待ちなどの区分は、保管場所には登録しません。')}${bar('場所の名前')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','拠点名を選ぶか新しく入力し、必要なら棚・区画名も入れて一度に登録できます。棚・区画名を空にすると拠点だけ登録します。')}${bar('拠点名・棚・区画名')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.label)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td>${r.parentId?'棚・区画':'拠点'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="4">保管場所はまだありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -217,6 +217,7 @@ function edit(row,title,form,save){
   $('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
   if(row&&title==='商品')bindProductEditor(row)
   if(!row&&title==='商品')bindProductEditor({sizes:[],links:[],active:true})
+  if(title==='保管場所')bindLocationEditor(row)
   $('#save').onclick=async ev=>{
     ev.preventDefault()
     try{
@@ -236,10 +237,40 @@ function supplierForm(r){r=r||{};return `<div class="grid">${field('name','仕�
 function locationForm(r){
   r=r||{}
   const sites=state.data.locations.filter(x=>!x.parentId&&(x.active||x.id===r.parentId)&&x.id!==r.id)
-  return `<label class="check"><input id="isShelf" type="checkbox" ${r.parentId?'checked':''}>拠点の下に棚・区画を作る</label>
-    <label id="parentbox" ${r.parentId?'':'hidden'}>拠点<select id="parentId">${sites.map(s=>`<option value="${s.id}" ${s.id===r.parentId?'selected':''}>${esc(s.name)}</option>`).join('')}</select></label>
-    ${field('name','場所の名前',r.name,true)}
-    <p class="sub">棚を付けない場合は、チェックを外して拠点名だけ保存します。償却待ちなどの区分は場所にしないでください。</p>`
+  if(r.id){
+    if(r.parentId){
+      const parent=state.data.locations.find(x=>x.id===r.parentId)
+      return `<label>拠点名<input id="siteNameDisplay" value="${esc(parent?parent.name:'')}" readonly></label>
+        ${field('shelfName','棚・区画名',r.name,true)}
+        <p class="sub">名前の変更は、場所の呼び方だけを直します。在庫を別の場所へ移す操作ではありません。</p>`
+    }
+    return `${field('siteName','拠点名',r.name,true)}
+      <p class="sub">拠点名の変更は、場所の呼び方だけを直します。在庫を別の場所へ移す操作ではありません。</p>`
+  }
+  const noSites=!sites.length
+  const options=sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')
+  return `<label>拠点名（必須）
+      <select id="siteId" ${noSites?'hidden':''}>
+        ${options}
+        <option value="__new__" ${noSites?'selected':''}>新しい拠点を追加</option>
+      </select>
+      <input id="siteName" ${noSites?'':'hidden'} placeholder="新しい拠点名" value="" autocomplete="off">
+    </label>
+    <label>棚・区画名<input id="shelfName" value="" placeholder="例：棚1、1F、償却待ち" autocomplete="off"></label>
+    <p class="sub">棚・区画名を空のまま保存すると、拠点だけ登録します。新しい拠点と棚は一度の保存でまとめて登録できます。</p>`
+}
+function bindLocationEditor(row){
+  if(row&&row.id)return
+  const sel=$('#siteId')
+  const input=$('#siteName')
+  if(!sel||!input)return
+  const sync=()=>{
+    const isNew=sel.hidden||sel.value==='__new__'
+    input.hidden=!isNew
+    if(isNew)input.focus()
+  }
+  sel.onchange=sync
+  sync()
 }
 function productForm(r){
   r=r||{sizes:[],links:[],active:true}
@@ -312,8 +343,6 @@ function bindProductEditor(row){
   }
   draw()
   $('#dialog')._editor=editor
-  const shelf=$('#isShelf')
-  if(shelf){}
 }
 function readForm(row){
   const title=$('#dialog h2').textContent
@@ -321,8 +350,14 @@ function readForm(row){
   if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
   if(title.includes('仕入先'))return {id:row&&row.id,name:$('#name').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
   if(title.includes('保管場所')){
-    const isShelf=$('#isShelf').checked
-    return {id:row&&row.id,name:$('#name').value,parentId:isShelf?Number($('#parentId').value):null,active}
+    if(row&&row.id){
+      if(row.parentId)return {id:row.id,shelfName:$('#shelfName').value,active}
+      return {id:row.id,siteName:$('#siteName').value,active}
+    }
+    const sel=$('#siteId')
+    const shelfName=$('#shelfName').value
+    if(!sel||sel.hidden||sel.value==='__new__')return {siteName:$('#siteName').value,shelfName,active}
+    return {siteId:Number(sel.value),shelfName,active}
   }
   const editor=$('#dialog')._editor
   const supplier=$('#supplierId').value
@@ -547,5 +582,4 @@ async function showHistory(lotId){
 document.querySelectorAll('.switch button[data-mode]').forEach(b=>b.onclick=async()=>{state.mode=b.dataset.mode;state.tab=state.mode==='masters'?'customers':'list';$('#desknote').hidden=true;if(state.tab==='list')await loadStock();paint()})
 $('#desk').onclick=()=>{if(embedded){window.parent.postMessage({type:'desk-catalog',mode:'desk'},location.origin);return}$('#desknote').hidden=false}
 $('#backup').onclick=async()=>{try{const r=await api('/api/backup',{});toast('バックアップを作りました。'+r.file)}catch(e){toast(e.message)}}
-document.addEventListener('change',e=>{if(e.target&&e.target.id==='isShelf'){const box=$('#parentbox');if(box)box.hidden=!e.target.checked}})
 boot().catch(e=>{$('#main').textContent=e.message})
