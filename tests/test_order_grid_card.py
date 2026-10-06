@@ -81,6 +81,9 @@ class OrderGridCardLayoutTest(unittest.TestCase):
         self.assertIn('width:max-content', request)
         self.assertIn('min-width:0', request)
         self.assertNotIn('flex:1', request)
+        self.assertIn('border:1px solid #c5dcc4', request)
+        self.assertIn('border-radius:6px', request)
+        self.assertIn('padding:2px 8px', request)
 
         employee = rule('.list-grid .dm-card .dm-employee')
         self.assertIn('flex:0 1 auto', employee)
@@ -88,6 +91,7 @@ class OrderGridCardLayoutTest(unittest.TestCase):
         self.assertIn('text-overflow:ellipsis', employee)
         self.assertIn('white-space:nowrap', employee)
         self.assertNotIn('flex:1 1 0', employee)
+        self.assertNotIn('border:', employee)
 
         main = rule('.list-grid .dm-card .dm-status-main')
         self.assertIn('flex:0 0 7.2em', main)

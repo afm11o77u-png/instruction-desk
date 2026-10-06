@@ -161,7 +161,7 @@
 .list-grid .dm-card .dm-primary{font-size:1.05rem;font-weight:700;line-height:1.35;word-break:break-word}
 .list-grid .dm-card .dm-secondary{font-size:.85rem;color:#3d5344;line-height:1.45;word-break:break-word}
 .list-grid .dm-card .dm-meta{display:flex;flex-wrap:nowrap;align-items:flex-start;justify-content:flex-start;gap:6px 12px;font-size:.85rem;color:#2f4636}
-.list-grid .dm-card .dm-request{flex:0 1 auto;width:max-content;max-width:calc(100% - 4.5em);min-width:0;word-break:break-word}
+.list-grid .dm-card .dm-request{flex:0 1 auto;width:max-content;max-width:calc(100% - 4.5em);min-width:0;word-break:break-word;padding:2px 8px;border:1px solid #c5dcc4;border-radius:6px;background:#f7fbf7}
 .list-grid .dm-card .dm-employee{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list-grid .dm-card .dm-mark{font-weight:700;font-size:.85rem;color:#2f4636;line-height:1.45}
 .list-grid .dm-card .dm-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto;align-items:center}
