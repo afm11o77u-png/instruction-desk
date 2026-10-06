@@ -48,7 +48,7 @@ function bindOrderListActions(scope){
 }
 function orderActionsHtml(o){
  const floorDue=view==='floor'&&o.status!=='下書き';
- return `<button class="quiet open" data-id="${o.id}">開く</button>${(view==='all'||view==='draft'||view==='done'||view==='shipped'||floorDue)?` <button type="button" class="quiet rowprint" data-id="${o.id}" aria-label="${esc(o.number)}を${o.status==='下書き'?'プレビュー':'印刷'}">${o.status==='下書き'?'プレビュー':'印刷'}</button>`:''}${floorDue?` <button type="button" class="quiet delayopen" data-id="${o.id}">遅延を登録</button>`:''}${(view==='all'&&o.status!=='下書き')?` <button type="button" class="quiet dueopen" data-id="${o.id}" data-mode="confirm" aria-label="納期を確認">納期</button>`:''}`;
+ return `<button class="quiet open" data-id="${o.id}">開く</button>${(view==='all'||view==='draft'||view==='done'||view==='shipped'||floorDue)?` <button type="button" class="quiet rowprint" data-id="${o.id}" aria-label="${esc(o.number)}を${o.status==='下書き'?'プレビュー':'印刷'}">${o.status==='下書き'?'プレビュー':'印刷'}</button>`:''}${floorDue?` <button type="button" class="quiet delayopen" data-id="${o.id}" aria-label="遅延を登録">遅延</button>`:''}${(view==='all'&&o.status!=='下書き')?` <button type="button" class="quiet dueopen" data-id="${o.id}" data-mode="confirm" aria-label="納期を確認">納期</button>`:''}`;
 }
 function orderStatusBand(o,flagChecks){
  const ownerFlags=currentUser?.role==='owner';

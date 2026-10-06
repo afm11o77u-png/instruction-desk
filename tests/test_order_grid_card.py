@@ -122,9 +122,15 @@ class OrderGridCardLayoutTest(unittest.TestCase):
         self.assertIn('>納期</button>', body)
         self.assertIn('aria-label="納期を確認"', body)
         self.assertNotIn('>納期を確認</button>', body)
+        self.assertIn('>遅延</button>', body)
+        self.assertIn('aria-label="遅延を登録"', body)
+        self.assertNotIn('>遅延を登録</button>', body)
         self.assertIn("class=\"quiet rowprint\"", body)
         self.assertIn("class=\"quiet dueopen\"", body)
+        self.assertIn("class=\"quiet delayopen\"", body)
         self.assertIn("data-mode=\"confirm\"", body)
+        self.assertIn("view==='all'", body)
+        self.assertIn("view==='floor'", body)
 
     def test_grid_actions_nowrap_single_row(self):
         def rule(selector: str) -> str:
