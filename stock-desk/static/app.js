@@ -185,13 +185,44 @@ function products(){
     paint()
   }
 }
+const SHELF_PREVIEW_LIMIT=3
+function siteLocationRows(){
+  const locations=state.data.locations||[]
+  const sites=locations.filter(r=>!r.parentId)
+  const byParent={}
+  locations.forEach(r=>{
+    if(!r.parentId)return
+    ;(byParent[r.parentId]||(byParent[r.parentId]=[])).push(r)
+  })
+  const q=(state.q||'').trim()
+  return sites.filter(site=>{
+    const shelves=(byParent[site.id]||[]).filter(s=>state.stopped||s.active)
+    if(!state.stopped&&!site.active)return false
+    if(!q)return true
+    if((site.name||'').includes(q)||(site.label||'').includes(q))return true
+    return shelves.some(s=>(s.name||'').includes(q)||(s.label||'').includes(q))
+  }).map(site=>{
+    const shelves=(byParent[site.id]||[]).filter(s=>state.stopped||s.active)
+    const names=shelves.map(s=>s.active?s.name:`${s.name}（停止）`)
+    let shelfSummary='棚なし'
+    let shelfExtraCount=0
+    if(names.length){
+      if(names.length<=SHELF_PREVIEW_LIMIT)shelfSummary=names.join('、')
+      else{
+        shelfExtraCount=names.length-SHELF_PREVIEW_LIMIT
+        shelfSummary=names.slice(0,SHELF_PREVIEW_LIMIT).join('、')+`、ほか${shelfExtraCount}件`
+      }
+    }
+    return {...site,shelves,shelfSummary,shelfExtraCount}
+  })
+}
 function locations(){
-  const rows=state.data.locations.filter(r=>(state.stopped||r.active)&&r.label.includes(state.q))
-  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','拠点名を選ぶか新しく入力し、その下に棚・区画名を並べて一度に登録できます。「棚を追加」で行を増やせます。空の棚名は保存時に無視します。')}${bar('拠点名・棚・区画名')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>場所ID</th><th>保管場所</th><th>種類</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${r.id}</td><td><span class="dm-primary">${esc(r.label)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td>${r.parentId?'棚・区画':'拠点'}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="4">保管場所はまだありません。</td></tr>'}
+  const rows=siteLocationRows()
+  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','拠点ごとに一覧します。開くと、その拠点の棚・区画をまとめて登録・修正できます。「棚を追加」で行を増やせます。空の棚名は保存時に無視します。')}${bar('拠点名・棚・区画名')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="site-locations"><thead><tr><th>拠点名</th><th>棚・区画</th><th>操作</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td><span class="dm-primary">${esc(r.name)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td class="shelf-summary">${esc(r.shelfSummary)}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="3">保管場所はまだありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.label)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">場所ID ${r.id}　${r.parentId?'棚・区画':'拠点'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">保管場所はまだありません。</div>'
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">${esc(r.shelfSummary)}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">保管場所はまだありません。</div>'
   bindList(rows,'保管場所',locationForm,body=>api('/api/locations',body))
 }
 function bindList(rows,title,form,save){
@@ -448,6 +479,52 @@ function readForm(row){
   const supplier=$('#supplierId').value
   return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links:editor.links.map(l=>({customerId:Number(l.customerId),embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false})),active}
 }
+function openingLocationSelection(){
+  const locations=state.data.locations||[]
+  const sites=locations.filter(l=>!l.parentId&&l.active)
+  let siteId=state.opening.siteId!=null&&state.opening.siteId!==''?Number(state.opening.siteId):null
+  let shelfId=state.opening.shelfId!=null&&state.opening.shelfId!==''?String(state.opening.shelfId):''
+  const saved=state.opening.locationId!=null&&state.opening.locationId!==''?Number(state.opening.locationId):null
+  if(saved!=null&&(siteId==null||Number.isNaN(siteId))){
+    const loc=locations.find(l=>l.id===saved)
+    if(loc){
+      if(loc.parentId){siteId=loc.parentId;shelfId=String(loc.id)}
+      else{siteId=loc.id;shelfId=String(loc.id)}
+    }
+  }
+  if(siteId==null||Number.isNaN(siteId)||!sites.some(s=>s.id===siteId)){
+    siteId=sites[0]?sites[0].id:null
+    shelfId=''
+  }
+  const shelves=siteId==null?[]:locations.filter(l=>l.parentId===siteId&&l.active)
+  const requireShelf=shelves.length>0
+  const options=[]
+  if(requireShelf&&saved===siteId){
+    options.push({id:siteId,name:'棚指定なし',siteOnly:true})
+  }
+  shelves.forEach(s=>options.push({id:s.id,name:s.name,siteOnly:false}))
+  if(requireShelf){
+    const ok=options.some(o=>String(o.id)===String(shelfId))
+    if(!ok)shelfId=''
+  }else{
+    shelfId=siteId==null?'':String(siteId)
+  }
+  let locationId=null
+  if(siteId!=null){
+    if(!requireShelf)locationId=siteId
+    else if(shelfId!=='')locationId=Number(shelfId)
+  }
+  return {sites,siteId,shelves:options,requireShelf,shelfId,locationId}
+}
+function openingLocationFields(sel){
+  const siteOpts=sel.sites.map(s=>`<option value="${s.id}" ${s.id===sel.siteId?'selected':''}>${esc(s.name)}</option>`).join('')
+  const shelfOpts=sel.requireShelf
+    ?`<option value="">選んでください</option>`+sel.shelves.map(s=>`<option value="${s.id}" ${String(s.id)===String(sel.shelfId)?'selected':''}>${esc(s.name)}</option>`).join('')
+    :''
+  return `<label>拠点（必須）<select id="openingSite">${siteOpts||'<option value="">拠点がありません</option>'}</select></label>
+      <label id="openingShelfLabel" ${sel.requireShelf?'':'hidden'}>棚・区画（必須）<select id="openingShelf">${shelfOpts}</select></label>
+      <input type="hidden" id="locationId" value="${sel.locationId==null?'':sel.locationId}">`
+}
 function opening(){
   const customers=state.data.customers.filter(c=>c.active)
   const handles=[]
@@ -458,7 +535,10 @@ function opening(){
   const customerId=Number(state.opening.customerId||customers[0]?.id||0)
   const mine=handles.filter(h=>h.customerId===customerId)
   const selected=mine.find(h=>h.id===Number(state.opening.handleId))||mine.find(h=>h.isStandard)||mine[0]
-  const locations=state.data.locations.filter(l=>l.active)
+  const locSel=openingLocationSelection()
+  state.opening.siteId=locSel.siteId==null?'':String(locSel.siteId)
+  state.opening.shelfId=locSel.shelfId
+  state.opening.locationId=locSel.locationId==null?'':String(locSel.locationId)
   $('#main').innerHTML=`<section class="panel"><div class="dialogbody">
     <div class="bar">${excelTools()}</div>
     <p class="excelhint">記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。</p>
@@ -466,7 +546,7 @@ function opening(){
     <div class="grid">
       <label>顧客（必須）<select id="customerId">${customers.map(c=>`<option value="${c.id}" ${c.id===customerId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
       <label>商品と加工仕様（必須）<select id="handleId">${mine.map(h=>`<option value="${h.id}" ${selected&&h.id===selected.id?'selected':''}>${esc(h.product.code)} ${esc(h.product.name)} ${esc(h.product.color)} / ${esc(specLabel(h.embroidery))}${h.isStandard?' / 標準':''} / 商品ID ${h.product.id}</option>`).join('')}</select></label>
-      <label>保管場所（必須）<select id="locationId">${locations.map(l=>`<option value="${l.id}" ${String(l.id)===String(state.opening.locationId)?'selected':''}>${esc(l.label)}</option>`).join('')}</select></label>
+      ${openingLocationFields(locSel)}
       <label>在庫基準日（必須）<input id="basisDate" type="date" value="${esc(state.opening.basis||'')}"></label>
     </div>
     <p id="standardNote"></p>
@@ -489,11 +569,30 @@ function opening(){
     standard.textContent=selected&&selected.isStandard&&mine.filter(h=>h.product.id===selected.product.id).length===1?'この顧客はこの加工仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'刺繍ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
   }
   const syncUnknown=()=>{const on=$('#unknown').checked;$('#receivedOn').disabled=on;$('#payoutOrder').disabled=!on;if(on)$('#receivedOn').value=''}
+  const syncLocationState=()=>{
+    const next=openingLocationSelection()
+    state.opening.siteId=next.siteId==null?'':String(next.siteId)
+    state.opening.shelfId=next.shelfId
+    state.opening.locationId=next.locationId==null?'':String(next.locationId)
+    const hidden=$('#locationId')
+    if(hidden)hidden.value=state.opening.locationId
+  }
   $('#customerId').onchange=()=>{state.opening.customerId=$('#customerId').value;state.opening.handleId='';state.opening.lines=null;opening()}
   $('#handleId').onchange=()=>{state.opening.customerId=$('#customerId').value;state.opening.handleId=$('#handleId').value;state.opening.lines=null;opening()}
   $('#unknown').onchange=syncUnknown
   $('#basisDate').onchange=()=>{state.opening.basis=$('#basisDate').value}
-  $('#locationId').onchange=()=>{state.opening.locationId=$('#locationId').value}
+  const siteEl=$('#openingSite')
+  if(siteEl)siteEl.onchange=()=>{
+    state.opening.siteId=siteEl.value
+    state.opening.shelfId=''
+    state.opening.locationId=''
+    opening()
+  }
+  const shelfEl=$('#openingShelf')
+  if(shelfEl)shelfEl.onchange=()=>{
+    state.opening.shelfId=shelfEl.value
+    syncLocationState()
+  }
   $('#addExtra').onclick=async()=>{
     const size=$('#extraSize').value.trim()
     if(!selected||!size)return
@@ -505,7 +604,7 @@ function opening(){
       state.opening.customerId=$('#customerId').value
       state.opening.handleId=$('#handleId').value
       state.opening.basis=$('#basisDate').value
-      state.opening.locationId=$('#locationId').value
+      syncLocationState()
       state.data=await api('/api/bootstrap')
       state.opening.lines={productId:p.id,rows:keep}
       toast('サイズを追加しました。')
@@ -540,14 +639,24 @@ function confirmOpening(selected){
     const unknown=$('#unknown').checked
     if(!unknown&&!$('#receivedOn').value)throw Error('入荷日を入力するか、入荷日不明にしてください。')
     if(unknown&&!/^\d+$/.test($('#payoutOrder').value))throw Error('払出し順は1以上の整数です。')
+    const siteId=$('#openingSite')?$('#openingSite').value:''
+    if(!siteId)throw Error('拠点を選んでください。')
+    const shelfEl=$('#openingShelf')
+    const shelfLabel=$('#openingShelfLabel')
+    const needShelf=shelfLabel&&!shelfLabel.hidden
+    const shelfId=shelfEl?shelfEl.value:''
+    if(needShelf&&!shelfId)throw Error('棚・区画を選んでください。')
+    const locationId=Number(needShelf?shelfId:siteId)
+    const loc=state.data.locations.find(l=>l.id===locationId)
+    if(!loc)throw Error('保管場所を、登録済みの場所から選んでください。')
+    const locLabel=loc.parentId?loc.label:(needShelf&&Number(shelfId)===Number(siteId)?'棚指定なし（'+loc.name+'）':loc.label)
     state.token=crypto.randomUUID()
     const totalQty=lines.reduce((s,l)=>s+l.qty,0)
     const totalAmount=lines.reduce((s,l)=>s+l.qty*l.unitCost,0)
-    const loc=state.data.locations.find(l=>l.id===Number($('#locationId').value))
     const dlg=$('#dialog')
     dlg.innerHTML=`<div class="dialoghead"><h2>初期在庫の確認</h2></div><div class="dialogbody">
       <p>${esc(selected.customer.name)} / ${esc(selected.product.code)} ${esc(selected.product.name)} ${esc(selected.product.color)} / ${esc(specLabel(selected.embroidery))}</p>
-      <p>${esc(loc.label)}　基準日 ${esc(basis)}　${unknown?'入荷日不明・払出し順 '+esc($('#payoutOrder').value):'入荷日 '+esc($('#receivedOn').value)}</p>
+      <p>${esc(locLabel)}　基準日 ${esc(basis)}　${unknown?'入荷日不明・払出し順 '+esc($('#payoutOrder').value):'入荷日 '+esc($('#receivedOn').value)}</p>
       <ul>${lines.map(l=>`<li>${esc(l.size)}　${num(l.qty)}着 × ${yen(l.unitCost)} ＝ ${yen(l.qty*l.unitCost)}</li>`).join('')}</ul>
       <p class="money">合計 ${num(totalQty)}着　${yen(totalAmount)}</p>
       <p>この金額は、仕入原価ベースの在庫金額です。</p><p id="error"></p></div>
@@ -557,7 +666,7 @@ function confirmOpening(selected){
     $('#commit').onclick=async()=>{
       const button=$('#commit');button.disabled=true
       try{
-        const result=await api('/api/opening',{token:state.token,customerProductId:selected.id,locationId:Number($('#locationId').value),basisDate:basis,receivedUnknown:unknown,receivedOn:unknown?'':$('#receivedOn').value,payoutOrder:unknown?Number($('#payoutOrder').value):0,lines})
+        const result=await api('/api/opening',{token:state.token,customerProductId:selected.id,locationId,basisDate:basis,receivedUnknown:unknown,receivedOn:unknown?'':$('#receivedOn').value,payoutOrder:unknown?Number($('#payoutOrder').value):0,lines})
         dlg.close();dlg.innerHTML=''
         toast(result.already?'この登録は保存済みです。二重には加算していません。':'初期在庫を登録しました。')
         state.opening.lines=null
