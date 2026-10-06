@@ -64,9 +64,9 @@ table.site-locations th:nth-child(2),table.site-locations td:nth-child(2){width:
 table.site-locations th:nth-child(3),table.site-locations td:nth-child(3){width:20%}
 table.site-locations .shelf-summary{color:#24352c;font-weight:400}
 table.site-locations tr.is-stopped td{color:#8b9790}
-.check,.inactive-toggle{display:inline-flex;flex-direction:row;align-items:center;font-weight:700;gap:6px;white-space:nowrap;flex-shrink:0}
-.check input,.inactive-toggle input{width:auto;min-width:0;min-height:0;flex-shrink:0;margin:0}
-.bar .check,.bar .inactive-toggle{align-self:center;padding-bottom:2px}
+.check,.inactive-toggle{display:inline-flex;flex-direction:row;align-items:center;font-weight:700;gap:6px;white-space:nowrap;flex-shrink:0;line-height:1}
+.check input,.inactive-toggle input{width:auto;min-width:0;min-height:0;flex-shrink:0;margin:0;padding:0}
+.bar .check,.bar .inactive-toggle{align-self:flex-end}
 .bar .check input,.bar .inactive-toggle input{min-width:0;width:auto}
 dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0}dialog::backdrop{background:#1e332866}
 .dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
