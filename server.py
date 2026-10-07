@@ -1,5 +1,5 @@
 import ssl
-import json, sqlite3, os, re, sys, threading, webbrowser
+import base64, json, sqlite3, os, re, sys, tempfile, threading, webbrowser
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -7,6 +7,7 @@ from auth import AuthMixin, schema
 import templates
 import label_sets
 import picking
+import migration
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -267,12 +268,33 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             self.send_header('Set-Cookie', cookie + ('; Secure' if CONFIG.get('tls') else ''))
         self.send_header('X-Frame-Options','SAMEORIGIN')
         super().end_headers()
-    def reply(self,status,data,ctype='application/json; charset=utf-8'):
+    def reply(self,status,data,ctype='application/json; charset=utf-8',headers=None):
         b = data if isinstance(data,bytes) else json.dumps(data,ensure_ascii=False).encode()
-        self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff'); self.end_headers(); self.wfile.write(b)
+        self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff')
+        for key, value in (headers or {}).items(): self.send_header(key, value)
+        self.end_headers(); self.wfile.write(b)
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
+        if path.startswith('/api/') and migration.is_busy() and path != '/api/me':
+            return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if path == '/api/migration/export':
+            try:
+                with connect() as c:
+                    u = self.session_user(c)
+                    migration.owner_guard(u)
+                dest, manifest = migration.build_export_zip(DATA)
+                data = dest.read_bytes()
+                return self.reply(200, data, 'application/zip', {
+                    'Content-Disposition': f'attachment; filename="{dest.name}"',
+                    'X-Migration-Created-At': str(manifest.get('createdAt') or ''),
+                })
+            except migration.MigrationError as e:
+                return self.reply(403 if '主管理者' in str(e) or 'ログイン' in str(e) else 400, {'error': str(e)})
+            except OSError as e:
+                return self.reply(400, {'error': migration.oserror_message(e, '移行用バックアップの作成')})
+            except Exception:
+                return self.reply(500, {'error': '移行用バックアップを作成できませんでした。'})
         if path.startswith('/api/'):
             with connect() as c: result=self.auth_get(path,c)
             if result is not None: return self.reply(*result)
@@ -309,50 +331,95 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if not order or not can_access(self.user,json.loads(order['payload'])): return self.reply(404,{'error':'指示書が見つかりません。'})
                 rows=[dict(r) for r in c.execute('SELECT at,action,actor,changes FROM history WHERE order_id=? ORDER BY id DESC',(oid,))]
             return self.reply(200,rows)
-        files={'/picking':'picking.html','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/repair.js':'repair.js','/repair.css':'repair.css','/picking':'picking.html','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
         self.reply(404,{'error':'見つかりません。'})
     def do_POST(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
+        route=self.path.split('?')[0]
         if self.headers.get('X-Desk-Request')!='1': return self.reply(403,{'error':'画面を再読み込みして操作してください。'})
         if self.headers.get('Origin') and self.headers['Origin'] not in ALLOWED_ORIGINS:
             return self.reply(403,{'error':'接続元を確認してください。'})
+        if migration.is_busy() and not route.startswith('/api/migration/'):
+            return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
         try:
             n=int(self.headers.get('Content-Length','0'))
-            limit=9000000 if self.path.split('?')[0]=='/api/templates/import' else 1000000
+            limit=80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 9000000 if route=='/api/templates/import' else 1000000
             if n>limit: raise ValueError('データが大きすぎます。')
             d=json.loads(self.rfile.read(n))
             if not isinstance(d,dict): raise ValueError('入力内容を確認してください。')
+            if route in ('/api/migration/inspect','/api/migration/restore'):
+                try:
+                    with connect() as c:
+                        u = self.session_user(c)
+                        migration.owner_guard(u)
+                        actor = {'id': u['id'], 'name': u['name'], 'login': u['login']}
+                    raw = d.get('data')
+                    if not isinstance(raw, str) or not raw:
+                        raise migration.MigrationError('移行用ZIPを選んでください。')
+                    name = str(d.get('filename') or '')
+                    if name and not name.lower().endswith('.zip'):
+                        raise migration.MigrationError('移行用ZIP（.zip）を選んでください。')
+                    try:
+                        blob = base64.b64decode(raw)
+                    except Exception as e:
+                        raise migration.MigrationError('ZIPを読めませんでした。') from e
+                    with tempfile.NamedTemporaryFile(prefix='mig-upload-', suffix='.zip', delete=False) as tmp:
+                        tmp.write(blob)
+                        upload = Path(tmp.name)
+                    try:
+                        if route == '/api/migration/inspect':
+                            summary, _manifest = migration.inspect_zip(upload, DATA)
+                            return self.reply(200, summary)
+                        if d.get('confirm') is not True:
+                            raise migration.MigrationError('復元するには、業務データを置き換えることに同意してください。')
+                        result = migration.restore_from_zip(
+                            DATA, upload, actor=actor, user_map=d.get('userMap'),
+                        )
+                        self.cookie = [
+                            'desk_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0',
+                            'desk_gate=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0',
+                        ]
+                        return self.reply(200, result)
+                    finally:
+                        try: upload.unlink()
+                        except OSError: pass
+                except migration.MigrationError as e:
+                    msg = str(e)
+                    status = 403 if ('主管理者' in msg or 'ログイン' in msg) else 400
+                    return self.reply(status, {'error': msg})
+                except Exception:
+                    return self.reply(500, {'error': '復元できませんでした。'})
             with connect() as c:
                 c.execute('BEGIN IMMEDIATE')
-                result=self.auth_post(self.path,d,c)
+                result=self.auth_post(route,d,c)
             if result is not None: return self.reply(*result)
-            if self.path.startswith('/api/picking/') or self.path.startswith('/api/carry-input/'):
+            if route.startswith('/api/picking/') or route.startswith('/api/carry-input/'):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    result=picking.handle(self,c,self.path,d,can_access)
+                    result=picking.handle(self,c,route,d,can_access)
                 return self.reply(*result)
-            if self.path.startswith('/api/templates/'):
+            if route.startswith('/api/templates/'):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    result=templates.handle(self,c,self.path,d)
+                    result=templates.handle(self,c,route,d)
                 return self.reply(*result)
-            if self.path.startswith('/api/label-sets/'):
+            if route.startswith('/api/label-sets/'):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
-                    result=label_sets.handle(self,c,self.path,d)
+                    result=label_sets.handle(self,c,route,d)
                 return self.reply(*result)
-            if self.path=='/api/backup':
+            if route=='/api/backup':
                 folder=DATA/'backups'; folder.mkdir(exist_ok=True)
                 dest=folder/f"instructions-{datetime.now():%Y%m%d-%H%M%S-%f}.sqlite3"
                 with connect() as source, sqlite3.connect(dest) as target: source.backup(target)
                 return self.reply(200,{'message':'バックアップを作成しました。','filename':dest.name})
-            if self.path=='/api/ship': return self.reply(*ship_order(self,d))
-            if self.path=='/api/orders/flags': return self.reply(*tune_flags(self,d))
-            if self.path=='/api/orders/printed': return self.reply(*mark_printed(self,d))
-            if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
+            if route=='/api/ship': return self.reply(*ship_order(self,d))
+            if route=='/api/orders/flags': return self.reply(*tune_flags(self,d))
+            if route=='/api/orders/printed': return self.reply(*mark_printed(self,d))
+            if route!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
             payload=validate(d); now=datetime.now().isoformat(timespec='seconds')
             payload.pop('authorId',None); payload.pop('authorName',None)
             with connect() as c:
