@@ -141,14 +141,15 @@ class OrderGridCardLayoutTest(unittest.TestCase):
         actions = rule('.list-grid .dm-card .dm-actions')
         self.assertIn('flex-wrap:nowrap', actions)
         self.assertNotIn('flex-wrap:wrap', actions)
+        self.assertIn('gap:2px', actions)
         self.assertIn('min-width:0', actions)
 
         buttons = rule('.list-grid .dm-card .dm-actions button')
         self.assertIn('flex:1 1 0', buttons)
         self.assertIn('min-width:0', buttons)
         self.assertIn('white-space:nowrap', buttons)
-        self.assertIn('padding:6px 4px', buttons)
-        self.assertIn('font-size:.8rem', buttons)
+        self.assertIn('padding:4px 2px', buttons)
+        self.assertIn('font-size:.75rem', buttons)
 
 
 if __name__ == '__main__':
