@@ -51,6 +51,13 @@ def test_rules():
         check('入荷日不明は架空日付にしない', unknown['received_on'] is None and unknown['received_unknown'] == 1)
         batch = c.execute("SELECT COUNT(*) AS n FROM lots WHERE batch_id=(SELECT id FROM opening_batches WHERE client_token='sample-opening-price-split')").fetchone()['n']
         check('複数サイズを1回で登録', batch == 3)
+        opening_list = stock.opening_entries(c)
+        lot_n = c.execute('SELECT COUNT(*) AS n FROM lots').fetchone()['n']
+        check('初期在庫一覧は既存ロットから作る', len(opening_list['entries']) == lot_n and lot_n > 0)
+        check('初期在庫一覧に登録時項目がある', all(
+            {'qty', 'unitCost', 'customerName', 'code', 'embroideryLabel', 'size', 'locationLabel', 'basisDate'} <= set(e)
+            for e in opening_list['entries']
+        ))
         before = c.execute('SELECT COUNT(*) AS n FROM lots').fetchone()['n']
         again = stock.register_opening(c, {'token': 'sample-opening-price-split'})
         c.commit()

@@ -883,6 +883,46 @@ def bootstrap(c):
     return {'customers': customers, 'suppliers': suppliers, 'products': products, 'locations': locations}
 
 
+def opening_entries(c):
+    """Registered 初期在庫 lots from existing stock rows (no duplicate display records)."""
+    sql = '''SELECT l.*, cp.customer_id, cp.product_id, cp.embroidery,
+                    cu.name AS customer_name,
+                    p.code, p.name AS product_name, p.color,
+                    loc.name AS location_name, loc.parent_id
+             FROM lots l
+             JOIN customer_products cp ON cp.id=l.customer_product_id
+             JOIN customers cu ON cu.id=cp.customer_id
+             JOIN products p ON p.id=cp.product_id
+             JOIN locations loc ON loc.id=l.location_id
+             WHERE l.condition='new'
+               AND EXISTS (SELECT 1 FROM moves m WHERE m.lot_id=l.id AND m.kind='opening')
+             ORDER BY l.basis_date DESC, l.id DESC'''
+    rows = []
+    for r in c.execute(sql):
+        loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
+        rows.append({
+            'id': r['id'],
+            'customerId': r['customer_id'],
+            'customerName': r['customer_name'],
+            'productId': r['product_id'],
+            'code': r['code'],
+            'productName': r['product_name'],
+            'color': r['color'],
+            'embroidery': r['embroidery'],
+            'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'size': r['size_label'],
+            'locationId': r['location_id'],
+            'locationLabel': location_label(c, loc),
+            'unitCost': r['unit_cost'],
+            'qty': r['qty_received'],
+            'basisDate': r['basis_date'],
+            'receivedOn': r['received_on'],
+            'receivedUnknown': bool(r['received_unknown']),
+            'payoutOrder': r['payout_order'],
+        })
+    return {'entries': rows}
+
+
 def stock_query(c, args):
     sql = '''SELECT l.*, cp.customer_id, cp.product_id, cp.embroidery, cp.is_standard, cp.active AS handle_active,
                     cu.name AS customer_name, cu.active AS customer_active,

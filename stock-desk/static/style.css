@@ -5,13 +5,16 @@ button:hover{background:#eef8ef}button:disabled{opacity:.55;cursor:not-allowed}
 button:focus-visible,input:focus,select:focus,textarea:focus{outline:3px solid #5d9a72;outline-offset:2px}
 .primary{background:var(--green);border-color:var(--green);color:#fff}.primary:hover{background:#124f2e}
 .quiet{background:transparent}
-header{display:flex;justify-content:space-between;gap:16px;align-items:end;padding:22px 28px 8px}
+header,.stockhead{display:flex;justify-content:flex-start;gap:10px 14px;align-items:center;flex-wrap:wrap;padding:12px 22px 6px;min-width:0}
+.stockhead-brand{flex:0 1 auto;min-width:0}
 .eyebrow{margin:0;font-size:12px;font-weight:700;letter-spacing:.08em}h1{margin:2px 0 0;font-size:1.6rem}
-.switch{display:flex;gap:8px;flex-wrap:wrap}.switch button{min-height:44px}html.embed .switch,html.embed #desknote{display:none}
+.switch{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}.switch button{min-height:44px}html.embed .switch,html.embed #desknote{display:none}
 .switch .active{background:var(--green);border-color:var(--green);color:#fff}
 #desk{color:#66756c;background:#eef1ee}
-.tabs{display:flex;gap:8px;padding:6px 22px 0;flex-wrap:wrap}.tabs button.active{box-shadow:inset 0 -3px 0 var(--green)}
-main{padding:12px 22px 24px}.notice,.provisional{background:#fff;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;padding:10px 12px;margin:0 0 10px}
+.tabs{display:flex;gap:6px;padding:0;flex:1 1 240px;flex-wrap:wrap;align-items:center;min-width:0;max-width:100%}
+.tabs button{min-height:40px;padding:8px 12px;white-space:nowrap}
+.tabs button.active{box-shadow:inset 0 -3px 0 var(--green);color:var(--green)}
+main{padding:8px 22px 24px}.notice,.provisional{background:#fff;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;padding:10px 12px;margin:0 0 10px}
 .panel{background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .bar{display:flex;gap:8px;align-items:end;padding:10px 12px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .exceltools{display:flex;gap:8px;margin-left:auto;align-items:center}.exceltools button{white-space:nowrap}
@@ -68,12 +71,16 @@ table.site-locations tr.is-stopped td{color:#8b9790}
 .check input,.inactive-toggle input{width:auto;min-width:0;min-height:0;flex-shrink:0;margin:0;padding:0}
 .bar .check,.bar .inactive-toggle{align-self:flex-end}
 .bar .check input,.bar .inactive-toggle input{min-width:0;width:auto}
-dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0}dialog::backdrop{background:#1e332866}
-.dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}
-.dialoghead h2{margin:0;font-size:1.2rem}.dialogactions{display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line)}
+dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0;max-height:min(92vh,920px);flex-direction:column;overflow:hidden}dialog::backdrop{background:#1e332866}
+dialog[open]{display:flex}
+.dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);flex:0 0 auto}
+.dialoghead h2{margin:0;font-size:1.2rem}.dialogactions{display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line);flex:0 0 auto}
+.dialogbody{overflow:auto;flex:1 1 auto;min-height:0}
+dialog.opening-dialog{width:min(1100px,96vw);max-height:min(94vh,980px)}
+dialog.opening-dialog .dialogbody{padding-bottom:8px}
 #error{color:#9a3418;font-weight:700;min-height:1.2em}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#146b28;color:#fff;padding:12px 18px;border-radius:8px}
-@media(max-width:800px){header,main,footer,.tabs{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
+@media(max-width:800px){header,main,footer{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
 
 #groups{padding:8px 12px;border-bottom:1px solid var(--line)}
 

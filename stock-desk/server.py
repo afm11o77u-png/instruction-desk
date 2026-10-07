@@ -24,6 +24,9 @@ def api_get(db_path, mode, path, query):
         except ValueError as e:
             return 400, {'error': str(e)}
         return 200, body
+    if path == '/api/opening/entries':
+        with stock.connect(db_path) as c:
+            return 200, stock.opening_entries(c)
     if path == '/api/lots/history':
         lot_id = query.get('lotId', [''])[0]
         if not str(lot_id).isdigit():
