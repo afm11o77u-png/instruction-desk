@@ -167,7 +167,7 @@
 .list-grid .dm-card .dm-actions{
   display:flex;
   flex-wrap:nowrap;
-  gap:4px;
+  gap:2px;
   margin-top:auto;
   align-items:center;
   min-width:0;
@@ -177,9 +177,9 @@
   min-width:0;
   max-width:100%;
   white-space:nowrap;
-  padding:6px 4px;
-  font-size:.8rem;
-  line-height:1.25;
+  padding:4px 2px;
+  font-size:.75rem;
+  line-height:1.2;
 }
 .list-grid .dm-card .dm-check,
 .display-mode-bar .dm-check{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;font-weight:700}
