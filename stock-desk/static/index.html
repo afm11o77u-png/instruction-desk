@@ -9,11 +9,12 @@
 <link rel="stylesheet" href="display-mode.css">
 </head>
 <body>
-<header>
-  <div>
+<header class="stockhead">
+  <div class="stockhead-brand">
     <p class="eyebrow" id="eyebrow">試用版</p>
     <h1>在庫</h1>
   </div>
+  <nav class="tabs" id="tabs" aria-label="メニュー"></nav>
   <nav class="switch" aria-label="画面の切替">
     <button type="button" data-mode="masters">顧客・商品情報</button>
     <button type="button" data-mode="stock">在庫管理</button>
@@ -21,12 +22,12 @@
   </nav>
 </header>
 <p id="desknote" class="notice" hidden>指示書デスクは、この試用アプリには入っていません。</p>
-<nav class="tabs" id="tabs" aria-label="メニュー"></nav>
 <main id="main"></main>
 <footer>
   <button type="button" id="backup" class="quiet">バックアップを作る</button>
   <span id="foot"></span>
 </footer>
+<dialog id="openingDialog" class="opening-dialog"></dialog>
 <dialog id="dialog"></dialog>
 <p id="toast" hidden></p>
 <script src="display-mode.js"></script>

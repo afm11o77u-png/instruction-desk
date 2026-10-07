@@ -29,7 +29,7 @@ class OpeningPickersUiTest(unittest.TestCase):
         self.assertLess(INDEX.index('opening_pickers.js'), INDEX.index('app.js'))
 
     def test_opening_uses_search_pickers_not_selects(self):
-        body = _fn(APP_JS, 'opening')
+        body = _fn(APP_JS, 'mountOpeningRegisterForm')
         self.assertIn("searchPickerMarkup({label:'顧客'", body)
         self.assertIn("searchPickerMarkup({label:'商品と加工仕様'", body)
         self.assertIn("inputId:'customerQuery'", body)
@@ -42,7 +42,7 @@ class OpeningPickersUiTest(unittest.TestCase):
         self.assertIn("e.key==='Enter'", _fn(APP_JS, 'bindOpeningSearchPicker'))
 
     def test_customer_change_clears_product_fields(self):
-        body = _fn(APP_JS, 'opening')
+        body = _fn(APP_JS, 'mountOpeningRegisterForm')
         self.assertIn('clearOpeningProductFields(state.opening)', body)
         self.assertIn('clearOpeningCustomerSelection(state.opening)', body)
 
@@ -57,6 +57,8 @@ class OpeningPickersUiTest(unittest.TestCase):
         body = _fn(APP_JS, 'confirmOpening')
         self.assertIn('openingStateAfterSuccessfulSave(state.opening)', body)
         self.assertIn("state.tab='opening'", body)
+        self.assertIn('openOpeningRegister()', body)
+        self.assertIn('loadOpeningEntries()', body)
         self.assertNotIn("state.tab='list'", body)
 
     def test_dropdown_capped_scrollable(self):
