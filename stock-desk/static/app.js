@@ -1,7 +1,9 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={mode:'masters',tab:'customers',q:'',stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false}
-const STOCK_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫'],['list','在庫一覧']]
-const MASTER_TABS=new Set(['customers','suppliers','products'])
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]
+const SETUP_TAB_IDS=new Set(SETUP_TABS.map(([id])=>id))
+const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
+const SETUP_TAB_KEY='stock-desk:setup-tab'
 const SIZE_SCHEMES={
   letter:{id:'letter',label:'アルファベット',sizes:['S','M','L','LL','2L','3L','4L','SS','フリー']},
   gou:{id:'gou',label:'号数',sizes:['5号','7号','9号','11号','13号','15号','17号','19号','21号']}
@@ -79,9 +81,64 @@ async function api(path,data){
   return result
 }
 function specLabel(v){return v?v:'刺繍なし'}
+function loadSetupTab(){
+  try{
+    const stored=localStorage.getItem(SETUP_TAB_KEY)
+    if(stored&&SETUP_TAB_IDS.has(stored))return stored
+  }catch(_){}
+  return 'customers'
+}
+function saveSetupTab(tab){
+  try{localStorage.setItem(SETUP_TAB_KEY,tab)}catch(_){}
+}
+function applySectionState(section,setupTab){
+  state.section=section==='setup'?'setup':'list'
+  if(state.section==='list'){
+    state.tab='list'
+    state.mode='stock'
+  }else{
+    const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
+    state.setupTab=next
+    state.tab=next
+    state.mode=next==='customers'||next==='suppliers'||next==='products'?'masters':'stock'
+    saveSetupTab(next)
+  }
+}
+function notifyParentSection(){
+  if(!embedded||!window.parent||window.parent===window)return
+  try{window.parent.postMessage({type:'stock-section-changed',section:state.section},location.origin)}catch(_){}
+}
+async function setStockSection(section,{setupTab,silent}={}){
+  const next=section==='setup'?'setup':'list'
+  if(next===state.section&&!(setupTab&&SETUP_TAB_IDS.has(setupTab)&&setupTab!==state.tab)){
+    if(!silent)notifyParentSection()
+    return true
+  }
+  if(!(await ensureCanNavigate()))return false
+  applySectionState(next,setupTab)
+  if(state.tab==='list')await loadStock()
+  if(state.tab==='opening')await loadOpeningEntries()
+  paint()
+  if(!silent)notifyParentSection()
+  return true
+}
+async function setSetupTab(tab){
+  if(!SETUP_TAB_IDS.has(tab))return false
+  if(state.section==='setup'&&state.tab===tab)return true
+  if(!(await ensureCanNavigate()))return false
+  applySectionState('setup',tab)
+  if(state.tab==='opening')await loadOpeningEntries()
+  paint()
+  notifyParentSection()
+  return true
+}
 async function boot(){
   state.data=await api('/api/bootstrap')
-  if(!state.ready&&state.data.mode==='sample'){state.mode='stock';state.tab='list'}
+  if(!state.ready){
+    const params=new URLSearchParams(location.search)
+    const sectionParam=params.get('section')
+    applySectionState(sectionParam==='setup'?'setup':'list',loadSetupTab())
+  }
   state.ready=true
   const labels={sample:['試用版・架空のサンプル','サンプルのデータは data\\sample に保存されています。'],desk:['在庫管理','指示書デスクと同じ画面から使っています。在庫のデータは指示書とは別のファイルです。'],live:['試用版・このパソコンの台帳','この台帳は data\\live に保存されています。サンプルとは別です。']}
   const label=labels[state.data.mode]||labels.live
@@ -91,21 +148,36 @@ async function boot(){
   if(state.tab==='opening')await loadOpeningEntries()
   await ensureStockDisplayModes().catch(()=>{})
   paint()
+  notifyParentSection()
 }
 function paint(){
-  if(!STOCK_TABS.some(t=>t[0]===state.tab))state.tab=STOCK_TABS[0][0]
-  state.mode=MASTER_TABS.has(state.tab)?'masters':'stock'
-  document.querySelectorAll('.switch button[data-mode]').forEach(b=>b.classList.toggle('active',b.dataset.mode===state.mode))
-  $('#tabs').innerHTML=STOCK_TABS.map(([id,label])=>`<button type="button" data-tab="${id}" class="${id===state.tab?'active':''}">${label}</button>`).join('')
-  $('#tabs').querySelectorAll('button').forEach(b=>b.onclick=async()=>{
-    if(b.dataset.tab===state.tab)return
-    if(!(await ensureLeaveOpeningForm()))return
-    state.tab=b.dataset.tab
-    state.mode=MASTER_TABS.has(state.tab)?'masters':'stock'
-    if(state.tab==='list')await loadStock()
-    if(state.tab==='opening')await loadOpeningEntries()
-    paint()
+  if(state.section==='setup'){
+    if(!SETUP_TAB_IDS.has(state.tab))state.tab=state.setupTab&&SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:'customers'
+    state.setupTab=state.tab
+    saveSetupTab(state.tab)
+    state.mode=state.tab==='customers'||state.tab==='suppliers'||state.tab==='products'?'masters':'stock'
+  }else{
+    state.tab='list'
+    state.mode='stock'
+  }
+  document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
+    const want=b.dataset.mode==='masters'?'setup':'list'
+    b.classList.toggle('active',want===state.section)
   })
+  const title=$('#stocktitle')
+  if(title)title.textContent=state.section==='setup'?(SETUP_TAB_LABEL[state.tab]||'顧客'):'在庫一覧'
+  const tabs=$('#tabs')
+  if(state.section==='setup'){
+    tabs.hidden=false
+    tabs.innerHTML=SETUP_TABS.map(([id,label])=>`<button type="button" data-tab="${id}" class="${id===state.tab?'active':''}">${label}</button>`).join('')
+    tabs.querySelectorAll('button').forEach(b=>b.onclick=async()=>{
+      if(b.dataset.tab===state.tab)return
+      await setSetupTab(b.dataset.tab)
+    })
+  }else{
+    tabs.hidden=true
+    tabs.innerHTML=''
+  }
   const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList}[state.tab]
   view()
 }
@@ -126,6 +198,22 @@ async function ensureLeaveOpeningForm(){
   if(!openingDialogIsOpen())return true
   if(state.openingDirty&&!window.confirm('入力中の内容を破棄しますか？'))return false
   closeOpeningDialog()
+  return true
+}
+function editDialogEl(){return $('#dialog')}
+function editDialogIsOpen(){const dlg=editDialogEl();return !!(dlg&&dlg.open)}
+async function ensureLeaveEditDialog(){
+  if(!editDialogIsOpen())return true
+  if(state.editDirty&&!window.confirm('入力中の内容を破棄しますか？'))return false
+  const dlg=editDialogEl()
+  dlg.close()
+  dlg.innerHTML=''
+  state.editDirty=false
+  return true
+}
+async function ensureCanNavigate(){
+  if(!(await ensureLeaveOpeningForm()))return false
+  if(!(await ensureLeaveEditDialog()))return false
   return true
 }
 function excelTools(){
@@ -272,10 +360,22 @@ function bindList(rows,title,form,save){
 function edit(row,title,form,save){
   const dlg=$('#dialog')
   const heading=row?'修正：'+title:(title==='保管場所'?'拠点を新しく登録':'新しく登録：'+title)
+  state.editDirty=false
   dlg.innerHTML=`<form><div class="dialoghead"><h2>${heading}</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody">${form(row)}</div><p id="error"></p><div class="dialogactions"><button type="button" id="stop" class="quiet" ${row?'':'hidden'}>${row&&row.active===false?'使用を再開':'使用停止'}</button><button type="button" class="primary" id="save">保存</button></div></form>`
   dlg.showModal()
-  dlg.querySelector('form').onsubmit=ev=>ev.preventDefault()
-  $('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+  const formEl=dlg.querySelector('form')
+  formEl.onsubmit=ev=>ev.preventDefault()
+  formEl.addEventListener('input',()=>{state.editDirty=true})
+  formEl.addEventListener('change',()=>{state.editDirty=true})
+  const tryCloseEdit=async()=>{
+    if(!(await ensureLeaveEditDialog()))return
+  }
+  $('#close').onclick=()=>tryCloseEdit()
+  dlg.oncancel=ev=>{
+    if(state.editDirty&&!window.confirm('入力中の内容を破棄しますか？')){ev.preventDefault();return}
+    dlg.innerHTML=''
+    state.editDirty=false
+  }
   if(row&&title==='商品')bindProductEditor(row)
   if(!row&&title==='商品')bindProductEditor({sizes:[],links:[],active:true})
   if(title==='保管場所')bindLocationEditor(row)
@@ -283,6 +383,7 @@ function edit(row,title,form,save){
     ev.preventDefault()
     try{
       await save(readForm(row))
+      state.editDirty=false
       dlg.close();dlg.innerHTML='';toast('保存しました。');await boot()
     }catch(e){$('#error').textContent=e.message}
   }
@@ -299,6 +400,7 @@ function edit(row,title,form,save){
         payload={...readForm(row),active:!row.active}
       }
       await save(payload)
+      state.editDirty=false
       dlg.close();dlg.innerHTML='';toast(row.active?'使用停止にしました。':'使用を再開しました。');await boot()
     }catch(e){$('#error').textContent=e.message}
   }
@@ -336,6 +438,7 @@ function locationForm(r){
     <button type="button" id="addShelf">棚を追加</button>
     <p class="sub">新しい拠点と、必要なら複数の棚を一度の保存で登録できます。棚を追加しなくても拠点だけ登録できます。すでに同じ拠点名がある場合は登録できません（既存の拠点は一覧の「開く」から直してください）。</p>`
 }
+function touchEditDirty(){state.editDirty=true}
 function bindLocationEditor(row){
   const ctx=locationSiteContext(row)
   const editor={shelves:ctx.shelves.map(s=>({...s})),removed:[]}
@@ -350,7 +453,7 @@ function bindLocationEditor(row){
         :`<button type="button" data-remove="${i}">外す</button>`}
     </div>`).join('')||'<p class="sub">棚・区画はまだありません。「棚を追加」で行を増やせます。</p>'
     box.querySelectorAll('[data-k=name]').forEach(el=>{
-      el.oninput=()=>{editor.shelves[Number(el.dataset.i)].name=el.value}
+      el.oninput=()=>{editor.shelves[Number(el.dataset.i)].name=el.value;touchEditDirty()}
     })
     box.querySelectorAll('[data-remove]').forEach(b=>{
       b.onclick=()=>{
@@ -359,12 +462,13 @@ function bindLocationEditor(row){
         if(item&&item.hasStock){$('#error').textContent='在庫がある棚・区画は削除できません。';return}
         if(item&&item.id)editor.removed.push(item.id)
         editor.shelves.splice(i,1)
+        touchEditDirty()
         draw()
       }
     })
   }
   const add=$('#addShelf')
-  if(add)add.onclick=()=>{editor.shelves.push({id:null,name:'',hasStock:false,active:true});draw()}
+  if(add)add.onclick=()=>{editor.shelves.push({id:null,name:'',hasStock:false,active:true});touchEditDirty();draw()}
   draw()
   $('#dialog')._locationEditor=editor
 }
@@ -402,7 +506,7 @@ function bindProductEditor(row){
     const scheme=SIZE_SCHEMES[editor.scheme]||SIZE_SCHEMES.letter
     $('#sizeScheme').querySelectorAll('button').forEach(b=>{
       b.classList.toggle('on',b.dataset.scheme===editor.scheme)
-      b.onclick=()=>{if(editor.scheme===b.dataset.scheme)return;editor.scheme=b.dataset.scheme;draw()}
+      b.onclick=()=>{if(editor.scheme===b.dataset.scheme)return;editor.scheme=b.dataset.scheme;touchEditDirty();draw()}
     })
     const hint=$('#sizeHint')
     if(hint)hint.textContent=editor.scheme==='gou'
@@ -417,6 +521,7 @@ function bindProductEditor(row){
     $('#chips').querySelectorAll('button').forEach(b=>b.onclick=()=>{
       const s=b.dataset.size
       editor.sizes=editor.sizes.includes(s)?editor.sizes.filter(x=>x!==s):editor.sizes.concat(s)
+      touchEditDirty()
       draw()
     })
     const customers=state.data.customers.filter(c=>c.active)
@@ -428,24 +533,27 @@ function bindProductEditor(row){
       <button type="button" data-remove="${i}">外す</button></div>`).join('')||'<p>まだ顧客に結び付いていません。</p>'
     $('#links').querySelectorAll('[data-k]').forEach(el=>el.onchange=()=>{
       const link=editor.links[Number(el.dataset.i)]
+      touchEditDirty()
       if(el.dataset.k==='customerId')link.customerId=Number(el.value)
       if(el.dataset.k==='embroidery')link.embroidery=el.value.trim()
       if(el.dataset.k==='isStandard'){link.isStandard=el.checked;if(el.checked)editor.links.forEach(x=>{if(x!==link&&x.customerId===link.customerId)x.isStandard=false});draw()}
       if(el.dataset.k==='active')link.active=el.checked
     })
-    $('#links').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{editor.links.splice(Number(b.dataset.remove),1);draw()})
+    $('#links').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{editor.links.splice(Number(b.dataset.remove),1);touchEditDirty();draw()})
   }
   $('#addSize').onclick=()=>{
     const s=$('#customSize').value.trim()
     if(!s)return
     if(!editor.sizes.includes(s))editor.sizes.push(s)
     $('#customSize').value=''
+    touchEditDirty()
     draw()
   }
   $('#addLink').onclick=()=>{
     const first=state.data.customers.find(c=>c.active)
     if(!first){$('#error').textContent='先に顧客を登録してください。';return}
     editor.links.push({customerId:first.id,embroidery:'',isStandard:editor.links.filter(l=>l.customerId===first.id).length===0,active:true})
+    touchEditDirty()
     draw()
   }
   draw()
@@ -902,8 +1010,7 @@ function confirmOpening(){
         toast(result.already?'この登録は保存済みです。二重には加算していません。':'初期在庫を登録しました。')
         state.opening=openingStateAfterSuccessfulSave(state.opening)
         state.openingDirty=false
-        state.tab='opening'
-        state.mode='stock'
+        applySectionState('setup','opening')
         state.data=await api('/api/bootstrap')
         await loadOpeningEntries()
         paint()
@@ -1013,17 +1120,17 @@ async function showHistory(lotId){
   dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
 }
 document.querySelectorAll('.switch button[data-mode]').forEach(b=>b.onclick=async()=>{
-  if(!(await ensureLeaveOpeningForm()))return
-  state.mode=b.dataset.mode
-  state.tab=state.mode==='masters'?'customers':'list'
   $('#desknote').hidden=true
-  if(state.tab==='list')await loadStock()
-  paint()
+  await setStockSection(b.dataset.mode==='masters'?'setup':'list')
 })
 $('#desk').onclick=async()=>{
-  if(!(await ensureLeaveOpeningForm()))return
+  if(!(await ensureCanNavigate()))return
   if(embedded){window.parent.postMessage({type:'desk-catalog',mode:'desk'},location.origin);return}
   $('#desknote').hidden=false
 }
+window.addEventListener('message',async e=>{
+  if(e.origin!==location.origin||!e.data||e.data.type!=='stock-section')return
+  await setStockSection(e.data.section,{setupTab:e.data.setupTab})
+})
 $('#backup').onclick=async()=>{try{const r=await api('/api/backup',{});toast('バックアップを作りました。'+r.file)}catch(e){toast(e.message)}}
 boot().catch(e=>{$('#main').textContent=e.message})

@@ -56,7 +56,7 @@ class OpeningPickersUiTest(unittest.TestCase):
     def test_post_save_keeps_customer_and_stays_on_opening(self):
         body = _fn(APP_JS, 'confirmOpening')
         self.assertIn('openingStateAfterSuccessfulSave(state.opening)', body)
-        self.assertIn("state.tab='opening'", body)
+        self.assertIn("applySectionState('setup','opening')", body)
         self.assertIn('openOpeningRegister()', body)
         self.assertIn('loadOpeningEntries()', body)
         self.assertNotIn("state.tab='list'", body)
