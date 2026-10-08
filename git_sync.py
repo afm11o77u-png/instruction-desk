@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
+import local_settings_guard
 
 
 def git(*args, check=True):
@@ -29,10 +30,16 @@ def validate():
 
 
 def sync():
+    with local_settings_guard.preserve(git):
+        return sync_protected()
+
+
+def sync_protected():
     marker = validate()
     print('GitHubの最新情報を確認しています...', flush=True)
     git('fetch', 'origin', 'refs/heads/main')
     target = git('rev-parse', 'FETCH_HEAD').stdout.strip()
+    local_settings_guard.check(git, target)
     if git('merge-base', '--is-ancestor', target, 'HEAD', check=False).returncode == 0:
         return
     saved = None
@@ -62,12 +69,13 @@ def sync():
 def main():
     os.chdir(Path(__file__).resolve().parent)
     validate()
+    local_settings_guard.check(git)
     if len(sys.argv) > 1 and sys.argv[1] == 'save':
         if git('status', '--porcelain').stdout:
             message = input('コミットメッセージを入力してください: ').strip()
             if not message:
                 raise RuntimeError('説明が空のため、保存を中止しました。')
-            git('add', '.')
+            git('add', '.', ':!network.json', ':!tls/**')
             git('commit', '-m', message)
         else:
             print('新しい変更はありません。未送信分を確認します。')
