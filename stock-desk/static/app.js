@@ -63,7 +63,11 @@ function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'compact'
   const screenId=stockScreenId(tab)
-  const toolbar=document.querySelector('#main .bar')
+  // 在庫一覧: mount 表示 outside the filter frame (top-right slot).
+  // Setup screens keep compact chrome inside `.bar`.
+  const toolbar=tab==='list'
+    ? document.querySelector('#stocklistdisplay')
+    : document.querySelector('#main .bar')
   DisplayMode.mount(stage,screenId,async(mode)=>{
     await DisplayMode.set(screenId,mode,saveStockDisplay)
     if(typeof repaint==='function')repaint()
@@ -1038,8 +1042,11 @@ function stockList(){
   const specs=new Map()
   state.data.products.forEach(p=>p.links.forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
-  $('#main').innerHTML=`<section class="panel">
-    <div class="bar">
+  $('#main').innerHTML=`<section class="panel stock-list-panel">
+    <div class="stock-list-chrome">
+      <div class="stock-list-display" id="stocklistdisplay"></div>
+    </div>
+    <div class="bar stock-list-filters">
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${state.data.customers.map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
       <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（ID ${p.id}）`,f.productId)).join('')}</select></label>
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
