@@ -16,6 +16,7 @@
     'stock-suppliers': 'compact',
     'stock-products': 'compact',
     'stock-locations': 'compact',
+    'stock-opening': 'compact',
     'stock-list': 'compact',
   };
   const cache = Object.create(null);
