@@ -146,6 +146,8 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 .product-stock-total{margin:0 0 10px;font-size:14px}
 .product-stock-table th,.product-stock-table td{font-size:13.5px}
 .product-stock-table th{white-space:nowrap}
+.product-stock-table tr.is-product-break td{border-top:2px solid var(--line);padding-top:10px}
+.list-grid .dm-card.is-product-break{margin-top:10px;border-top:2px solid var(--line);padding-top:12px}
 .price-breakdown{margin-top:4px;font-size:12.5px;font-weight:400;color:#3d5146}
 .price-breakdown summary{cursor:pointer;font-weight:700;color:#186438;user-select:none}
 .price-breakdown ul{margin:4px 0 0;padding:0 0 0 1.1em}

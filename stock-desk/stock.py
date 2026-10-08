@@ -973,7 +973,10 @@ def stock_query(c, args):
             'payoutOrder': r['payout_order'], 'condition': r['condition'], 'correctable': correctable,
         })
     group = args.get('group') or 'lot'
-    size_orders = product_size_orders(c, {lot['productId'] for lot in lots}) if group == 'product' else {}
+    size_orders = (
+        product_size_orders(c, {lot['productId'] for lot in lots})
+        if group in ('product', 'customer') else {}
+    )
     groups = group_lots(lots, group, size_orders=size_orders)
     return {'lots': lots, 'groups': groups, 'group': group,
             'totalQty': sum(x['qty'] for x in lots), 'totalAmount': sum(x['amount'] for x in lots),
@@ -997,6 +1000,20 @@ def product_size_orders(c, product_ids):
 def product_heading(lot):
     parts = [lot['code'], lot['productName'], lot['color']]
     return '　'.join(p for p in parts if p)
+
+
+def _add_lot_price(row, lot):
+    row['qty'] += lot['qty']
+    row['amount'] += lot['amount']
+    price = row['prices'].setdefault(lot['unitCost'], {
+        'unitCost': lot['unitCost'], 'qty': 0, 'amount': 0,
+    })
+    price['qty'] += lot['qty']
+    price['amount'] += lot['amount']
+
+
+def _sorted_prices(row):
+    return sorted(row['prices'].values(), key=lambda p: (p['unitCost'], p['qty']))
 
 
 def group_lots_by_product(lots, size_orders=None):
@@ -1030,20 +1047,13 @@ def group_lots_by_product(lots, size_orders=None):
             'amount': 0,
             'prices': {},
         })
-        row['qty'] += lot['qty']
-        row['amount'] += lot['amount']
-        price = row['prices'].setdefault(lot['unitCost'], {
-            'unitCost': lot['unitCost'], 'qty': 0, 'amount': 0,
-        })
-        price['qty'] += lot['qty']
-        price['amount'] += lot['amount']
+        _add_lot_price(row, lot)
 
     result = []
     for pid, bucket in products.items():
         order = size_orders.get(pid, {})
         rows = []
         for row in bucket['rows'].values():
-            prices = sorted(row['prices'].values(), key=lambda p: (p['unitCost'], p['qty']))
             rows.append({
                 'customerId': row['customerId'],
                 'customerName': row['customerName'],
@@ -1053,7 +1063,7 @@ def group_lots_by_product(lots, size_orders=None):
                 'locationLabel': row['locationLabel'],
                 'qty': row['qty'],
                 'amount': row['amount'],
-                'prices': prices,
+                'prices': _sorted_prices(row),
             })
         rows.sort(key=lambda r: (
             r['customerName'],
@@ -1077,17 +1087,87 @@ def group_lots_by_product(lots, size_orders=None):
     return result
 
 
+def group_lots_by_customer(lots, size_orders=None):
+    """One heading per 顧客ID; rows are 商品ID・加工仕様・サイズ・保管場所 with unit-price breakdown."""
+    size_orders = size_orders or {}
+    customers = {}
+    for lot in lots:
+        cid = lot['customerId']
+        bucket = customers.setdefault(cid, {
+            'customerId': cid,
+            'customerName': lot['customerName'],
+            'title': lot['customerName'],
+            'qty': 0,
+            'amount': 0,
+            'rows': {},
+        })
+        bucket['qty'] += lot['qty']
+        bucket['amount'] += lot['amount']
+        row_key = (lot['productId'], lot['embroidery'], lot['size'], lot['locationId'])
+        row = bucket['rows'].setdefault(row_key, {
+            'productId': lot['productId'],
+            'code': lot['code'],
+            'productName': lot['productName'],
+            'color': lot['color'],
+            'embroidery': lot['embroidery'],
+            'embroideryLabel': lot['embroideryLabel'],
+            'size': lot['size'],
+            'locationId': lot['locationId'],
+            'locationLabel': lot['locationLabel'],
+            'qty': 0,
+            'amount': 0,
+            'prices': {},
+        })
+        _add_lot_price(row, lot)
+
+    result = []
+    for cid, bucket in customers.items():
+        rows = []
+        for row in bucket['rows'].values():
+            rows.append({
+                'productId': row['productId'],
+                'code': row['code'],
+                'productName': row['productName'],
+                'color': row['color'],
+                'embroideryLabel': row['embroideryLabel'],
+                'size': row['size'],
+                'locationId': row['locationId'],
+                'locationLabel': row['locationLabel'],
+                'qty': row['qty'],
+                'amount': row['amount'],
+                'prices': _sorted_prices(row),
+            })
+        rows.sort(key=lambda r: (
+            r['code'],
+            r['productId'],
+            r['embroideryLabel'],
+            size_orders.get(r['productId'], {}).get(r['size'], 10_000),
+            r['size'],
+            r['locationLabel'],
+            r['locationId'],
+        ))
+        result.append({
+            'title': bucket['title'],
+            'customerId': bucket['customerId'],
+            'customerName': bucket['customerName'],
+            'qty': bucket['qty'],
+            'amount': bucket['amount'],
+            'rows': rows,
+        })
+    result.sort(key=lambda g: (g['customerName'], g['customerId']))
+    return result
+
+
 def group_lots(lots, group, size_orders=None):
     if group == 'lot':
         return []
     if group == 'product':
         return group_lots_by_product(lots, size_orders=size_orders)
+    if group == 'customer':
+        return group_lots_by_customer(lots, size_orders=size_orders)
     buckets = {}
     for lot in lots:
-        if group == 'customer':
-            key = (lot['customerId'],)
-            title = lot['customerName']
-        elif group == 'location':
+        if group == 'location':
             key = (lot['locationId'],)
             title = lot['locationLabel']
         else:
