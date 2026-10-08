@@ -1100,9 +1100,12 @@ function stockList(){
   }else if(f.group==='customer'){
     body.innerHTML=renderCustomerStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
     if(grid)grid.innerHTML=renderCustomerStockGrid(state.stock.groups)
+  }else if(f.group==='location'){
+    body.innerHTML=renderLocationStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
+    if(grid)grid.innerHTML=renderLocationStockGrid(state.stock.groups)
   }else{
-    body.innerHTML=state.stock.groups.map(g=>`<article class="dialogbody"><h2 class="dm-primary">${esc(g.title)}</h2><p class="dm-secondary">数量 ${num(g.qty)}　仕入原価ベースの在庫金額 ${yen(g.amount)}</p><ul class="parts">${g.parts.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)} ＝ ${yen(p.amount)}（${esc(p.customerName)} / ${esc(p.code)} / 商品ID ${p.productId} / ${esc(p.size)} / ${esc(p.embroideryLabel)} / ${esc(p.locationLabel)}）</li>`).join('')}</ul></article>`).join('')||'<p class="dialogbody">在庫はありません。</p>'
-    if(grid)grid.innerHTML=state.stock.groups.length?state.stock.groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${num(g.qty)} / ${yen(g.amount)}</span></div>`+g.parts.map(p=>`<article class="dm-card"><div class="dm-primary">${esc(p.customerName)} / ${esc(p.code)}</div><div class="dm-secondary">商品ID ${p.productId}　${esc(p.size)} / ${esc(p.embroideryLabel)}</div><div class="dm-meta"><span>${esc(p.locationLabel)}</span><span>${yen(p.unitCost)} × ${num(p.qty)}</span><span>${yen(p.amount)}</span></div></article>`).join('')).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    body.innerHTML='<p class="dialogbody">在庫はありません。</p>'
+    if(grid)grid.innerHTML='<div class="dm-empty">在庫はありません。</div>'
   }
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
@@ -1189,6 +1192,51 @@ function renderCustomerStockGrid(groups){
       <div class="dm-primary">${esc(r.code)} ${productNameColor(r)}</div>
       <div class="dm-secondary">${esc(r.embroideryLabel)} / ${esc(r.size)}</div>
       <div class="dm-meta"><span>${esc(r.locationLabel)}</span><span>${num(r.qty)}</span><span>${yen(r.amount)}</span></div>
+      ${priceBreakdownHtml(r.prices)}
+    </article>`
+      }).join('')
+  }).join('')
+}
+
+function renderLocationStockList(groups){
+  if(!groups.length)return ''
+  return groups.map(g=>{
+    let prevLoc=null
+    const rows=(g.rows||[]).map(r=>{
+      const breakCls=prevLoc!=null&&prevLoc!==r.locationId?' is-shelf-break':''
+      prevLoc=r.locationId
+      return `<tr class="${breakCls.trim()}">
+        <td class="dm-primary">${esc(r.shelfLabel)}</td>
+        <td>${esc(r.customerName)}</td>
+        <td>${esc(r.code)}</td>
+        <td>${productNameColor(r)}</td>
+        <td>${esc(r.embroideryLabel)}</td>
+        <td>${esc(r.size)}</td>
+        <td>${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="money">${yen(r.amount)}</td>
+      </tr>`
+    }).join('')
+    return `<article class="product-stock-group">
+    ${stockGroupHeading(g)}
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>在庫金額</th></tr></thead><tbody>
+      ${rows||'<tr><td colspan="8">在庫はありません。</td></tr>'}
+    </tbody></table></div>
+  </article>`
+  }).join('')
+}
+
+function renderLocationStockGrid(groups){
+  if(!groups.length)return '<div class="dm-empty">在庫はありません。</div>'
+  return groups.map(g=>{
+    let prevLoc=null
+    return `<div class="dm-group">${esc(g.title)}<span>${num(g.qty)}枚 / ${yen(g.amount)}</span></div>`+
+      (g.rows||[]).map(r=>{
+        const breakCls=prevLoc!=null&&prevLoc!==r.locationId?' is-shelf-break':''
+        prevLoc=r.locationId
+        return `<article class="dm-card${breakCls}">
+      <div class="dm-primary">${esc(r.shelfLabel)} / ${esc(r.customerName)}</div>
+      <div class="dm-secondary">${esc(r.code)} ${productNameColor(r)}</div>
+      <div class="dm-meta"><span>${esc(r.embroideryLabel)}</span><span>${esc(r.size)}</span><span>${num(r.qty)}</span><span>${yen(r.amount)}</span></div>
       ${priceBreakdownHtml(r.prices)}
     </article>`
       }).join('')
