@@ -1,8 +1,21 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
-const STOCK_SECTIONS=new Set(['list','move','setup'])
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',group:'detail'},periodResult:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const STOCK_SECTIONS=new Set(['list','move','setup','period'])
 function normalizeSection(section){return STOCK_SECTIONS.has(section)?section:'list'}
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
+function monthStartISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`}
+function todayISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+function prevMonthBounds(d=new Date()){
+  const first=new Date(d.getFullYear(),d.getMonth(),1)
+  const prevEnd=new Date(first.getTime()-86400000)
+  const prevStart=new Date(prevEnd.getFullYear(),prevEnd.getMonth(),1)
+  const iso=x=>`${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}-${String(x.getDate()).padStart(2,'0')}`
+  return {from:iso(prevStart),to:iso(prevEnd)}
+}
+function ensurePeriodDefaults(){
+  if(!state.period.from)state.period.from=monthStartISO()
+  if(!state.period.to)state.period.to=todayISO()
+}
 const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]
 const SETUP_TAB_IDS=new Set(SETUP_TABS.map(([id])=>id))
 const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
@@ -48,7 +61,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',period:'stock-period'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -66,7 +79,7 @@ function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
-  if(section==='list'||section==='move'){
+  if(section==='list'||section==='move'||section==='period'){
     slot.hidden=false
     return
   }
@@ -122,6 +135,10 @@ function applySectionState(section,setupTab){
   }else if(state.section==='move'){
     state.tab='move'
     state.mode='stock'
+  }else if(state.section==='period'){
+    state.tab='period'
+    state.mode='stock'
+    ensurePeriodDefaults()
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
     state.setupTab=next
@@ -145,6 +162,7 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(state.tab==='list')await loadStock()
   if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
+  if(state.tab==='period')ensurePeriodDefaults()
   paint()
   if(!silent)notifyParentSection()
   return true
@@ -173,6 +191,7 @@ async function boot(){
   if(state.tab==='list')await loadStock()
   if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
+  if(state.tab==='period')ensurePeriodDefaults()
   await ensureStockDisplayModes().catch(()=>{})
   paint()
   notifyParentSection()
@@ -186,16 +205,21 @@ function paint(){
   }else if(state.section==='move'){
     state.tab='move'
     state.mode='stock'
+  }else if(state.section==='period'){
+    state.tab='period'
+    state.mode='stock'
+    ensurePeriodDefaults()
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&state.section==='move'))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='move'||state.section==='period')))
   })
   const title=$('#stocktitle')
-  if(title)title.textContent=state.section==='setup'?(SETUP_TAB_LABEL[state.tab]||'顧客'):(state.section==='move'?'入庫・出庫':'在庫一覧')
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',period:'期間入出荷集計',list:'在庫一覧'}
+  if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
     tabs.hidden=false
@@ -209,7 +233,7 @@ function paint(){
     tabs.innerHTML=''
   }
   syncStockListDisplaySlot(state.section)
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,period:periodPage}[state.tab]
   view()
 }
 async function loadOpeningEntries(){
@@ -1359,6 +1383,171 @@ async function loadMoveTargets(){
   if(state.moveQ)q.set('q',state.moveQ)
   state.moveTargets=await api('/api/move/targets?'+q.toString())
 }
+function periodQueryParams(){
+  ensurePeriodDefaults()
+  const p=state.period
+  const q=new URLSearchParams({from:p.from,to:p.to,group:p.group||'detail'})
+  if(p.customerId)q.set('customerId',p.customerId)
+  if(p.productId)q.set('productId',p.productId)
+  if(p.size)q.set('size',p.size)
+  if(p.spec)q.set('spec',p.spec)
+  if(p.locationId)q.set('locationId',p.locationId)
+  return q
+}
+async function runPeriodSummary(){
+  const p=state.period
+  if(!p.from||!p.to){toast('開始日と終了日を入力してください。');return}
+  if(p.from>p.to){toast('開始日が終了日より後になっています。');return}
+  state.periodResult=await api('/api/period-summary?'+periodQueryParams().toString())
+  paint()
+}
+function clearPeriodFilters(){
+  state.period={from:monthStartISO(),to:todayISO(),customerId:'',productId:'',size:'',spec:'',locationId:'',group:state.period.group||'detail'}
+  state.periodResult=null
+  paint()
+}
+function periodPage(){
+  ensurePeriodDefaults()
+  const p=state.period
+  const sizes=[...new Set((state.data.products||[]).flatMap(x=>x.sizes||[]))]
+  const specs=new Map()
+  ;(state.data.products||[]).forEach(prod=>(prod.links||[]).forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
+  const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
+  const result=state.periodResult
+  const totals=result&&result.totals
+  $('#main').innerHTML=`<section class="panel period-panel">
+    <div class="bar period-filters">
+      <label>開始日<input id="pFrom" type="date" value="${esc(p.from)}"></label>
+      <label>終了日<input id="pTo" type="date" value="${esc(p.to)}"></label>
+      <button type="button" id="pThisMonth">今月</button>
+      <button type="button" id="pPrevMonth">先月</button>
+      <label>顧客<select id="pCustomer"><option value="">すべて</option>${(state.data.customers||[]).map(c=>opt(c.id,c.name,p.customerId)).join('')}</select></label>
+      <label>商品<select id="pProduct"><option value="">すべて</option>${(state.data.products||[]).map(prod=>opt(prod.id,`${prod.code} ${prod.name} ${prod.color}（ID ${prod.id}）`,p.productId)).join('')}</select></label>
+      <label>サイズ<select id="pSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,p.size)).join('')}</select></label>
+      <label>加工仕様<select id="pSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,p.spec)).join('')}</select></label>
+      <label>保管場所<select id="pLocation"><option value="">すべて</option>${(state.data.locations||[]).map(l=>opt(l.id,l.label,p.locationId)).join('')}</select></label>
+      <button type="button" class="primary" id="pRun">集計する</button>
+      <button type="button" id="pClear">条件をクリア</button>
+    </div>
+    <div class="tabs" id="periodGroups">${[['detail','明細'],['product','商品別'],['customer','顧客別'],['location','場所別']].map(([id,label])=>`<button type="button" data-group="${id}" class="${(p.group||'detail')===id?'active':''}">${label}</button>`).join('')}</div>
+    <div class="total period-totals">
+      <div>期間内入庫数<strong>${totals?num(totals.inboundQty):'—'}</strong></div>
+      <div>期間内出庫数<strong>${totals?num(totals.outboundQty):'—'}</strong></div>
+      <div>訂正増減数<strong>${totals?num(totals.correctionQty):'—'}</strong></div>
+      <div>入庫金額（仕入原価）<strong>${totals?yen(totals.inboundAmount):'—'}</strong></div>
+      <div>出庫金額（仕入原価）<strong>${totals?yen(totals.outboundAmount):'—'}</strong></div>
+    </div>
+    <div class="bar">
+      <button type="button" id="pCsv" ${result?'':'disabled'}>CSV</button>
+      <button type="button" id="pXlsx" ${result?'':'disabled'}>Excel</button>
+      <span class="count">${result?`${(result.rows||[]).length}行（算出可 ${totals.computableRows} / 算出不可 ${totals.unavailableRows}）`:''}</span>
+    </div>
+    ${listNote('集計の見方','業務日（入荷日・出庫日・在庫基準日）で集計します。登録日時は使いません。金額は仕入原価です。期首＋入庫−出庫＋訂正増減＝期末。業務日がない履歴がある行は算出不可とし、0で埋めません。初期在庫は期間内入庫に数えません。')}
+    <div class="list-stage" id="stockliststage"><div id="periodbody" class="tablewrap period-tablewrap"></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
+  </section>`
+  const stage=$('#stockliststage')
+  mountStockDisplay(stage,'period',()=>paint())
+  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('period'))
+  const syncFields=()=>{
+    p.from=$('#pFrom').value;p.to=$('#pTo').value
+    p.customerId=$('#pCustomer').value;p.productId=$('#pProduct').value
+    p.size=$('#pSize').value;p.spec=$('#pSpec').value;p.locationId=$('#pLocation').value
+  }
+  $('#pThisMonth').onclick=()=>{p.from=monthStartISO();p.to=todayISO();paint()}
+  $('#pPrevMonth').onclick=()=>{const b=prevMonthBounds();p.from=b.from;p.to=b.to;paint()}
+  $('#pRun').onclick=async()=>{syncFields();try{await runPeriodSummary()}catch(e){toast(e.message)}}
+  $('#pClear').onclick=()=>clearPeriodFilters()
+  $('#periodGroups').querySelectorAll('button').forEach(b=>b.onclick=async()=>{
+    syncFields();p.group=b.dataset.group
+    if(state.periodResult){try{await runPeriodSummary()}catch(e){toast(e.message)}}
+    else paint()
+  })
+  const dl=async(path,filename)=>{
+    syncFields()
+    const r=await fetch(BASE+path+'?'+periodQueryParams().toString())
+    if(!r.ok){const j=await r.json().catch(()=>({}));throw Error(j.error||'書き出せませんでした。')}
+    const blob=await r.blob()
+    const a=document.createElement('a')
+    a.href=URL.createObjectURL(blob);a.download=filename;a.click()
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+  }
+  $('#pCsv').onclick=async()=>{try{await dl('/api/period-summary/export.csv','期間入出荷集計.csv')}catch(e){toast(e.message)}}
+  $('#pXlsx').onclick=async()=>{try{await dl('/api/period-summary/export.xlsx','期間入出荷集計.xlsx')}catch(e){toast(e.message)}}
+  const body=$('#periodbody')
+  if(!result){body.innerHTML='<p class="dialogbody">条件を選んで「集計する」を押してください。</p>';return}
+  if(p.group==='detail'){
+    body.innerHTML=`<table class="period-table"><thead><tr>
+      <th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th>
+      <th>期首在庫数</th><th>期間内入庫数</th><th>期間内出庫数</th><th>訂正増減数</th><th>期末在庫数</th>
+      <th>期間内入庫金額（仕入原価）</th><th>期間内出庫金額（仕入原価）</th><th></th>
+    </tr></thead><tbody>
+      ${(result.rows||[]).map((row,i)=>{
+        if(!row.computable){
+          return `<tr class="period-unavailable"><td>${esc(row.customerName)}</td><td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}<span class="sub">商品ID ${row.productId}</span></td><td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.locationLabel)}</td><td colspan="7">算出不可：${esc(row.unavailableReason||'')}</td><td></td></tr>`
+        }
+        const prices=(row.priceBreakdown||[]).length>1?`<details class="price-breakdown"><summary>出庫単価内訳</summary><ul>${row.priceBreakdown.map(x=>`<li>${yen(x.unitCost)} × ${num(x.qty)}枚 ＝ ${yen(x.amount)}</li>`).join('')}</ul></details>`:''
+        return `<tr>
+          <td>${esc(row.customerName)}</td>
+          <td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}<span class="sub">商品ID ${row.productId}</span></td>
+          <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.locationLabel)}</td>
+          <td class="qty">${num(row.openingQty)}</td><td class="qty">${num(row.inboundQty)}</td><td class="qty">${num(row.outboundQty)}</td>
+          <td class="qty">${num(row.correctionQty)}</td><td class="qty">${num(row.closingQty)}</td>
+          <td class="money">${yen(row.inboundAmount)}</td><td class="money">${yen(row.outboundAmount)}${prices}</td>
+          <td><button type="button" class="quiet" data-period-hist="${i}">内訳</button></td>
+        </tr>`
+      }).join('')||'<tr><td colspan="13">該当する行がありません。</td></tr>'}
+    </tbody></table>`
+    body.querySelectorAll('[data-period-hist]').forEach(b=>b.onclick=()=>showPeriodHistory(result.rows[Number(b.dataset.periodHist)]))
+  }else{
+    body.innerHTML=(result.groups||[]).map(g=>`<article class="product-stock-group">
+      <h2 class="dm-primary product-stock-title">${esc(g.title)}</h2>
+      <p class="dm-secondary product-stock-total">入庫${num(g.inboundQty)} / 出庫${num(g.outboundQty)} / 訂正${num(g.correctionQty)}　入庫金額${yen(g.inboundAmount)} / 出庫金額${yen(g.outboundAmount)}</p>
+      <div class="tablewrap"><table class="period-table"><thead><tr>
+        <th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th>
+        <th>期首</th><th>入庫</th><th>出庫</th><th>訂正</th><th>期末</th><th>入庫金額</th><th>出庫金額</th><th></th>
+      </tr></thead><tbody>
+        ${(g.rows||[]).map((row,i)=>{
+          if(!row.computable)return `<tr><td colspan="13">算出不可：${esc(row.customerName)} / ${esc(row.code)} … ${esc(row.unavailableReason||'')}</td></tr>`
+          return `<tr>
+            <td>${esc(row.customerName)}</td><td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}</td>
+            <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.locationLabel)}</td>
+            <td class="qty">${num(row.openingQty)}</td><td class="qty">${num(row.inboundQty)}</td><td class="qty">${num(row.outboundQty)}</td>
+            <td class="qty">${num(row.correctionQty)}</td><td class="qty">${num(row.closingQty)}</td>
+            <td class="money">${yen(row.inboundAmount)}</td><td class="money">${yen(row.outboundAmount)}</td>
+            <td><button type="button" class="quiet" data-cp="${row.customerProductId}" data-size="${esc(row.size)}" data-loc="${row.locationId}">内訳</button></td>
+          </tr>`
+        }).join('')}
+      </tbody></table></div>
+    </article>`).join('')||'<p class="dialogbody">該当する行がありません。</p>'
+    body.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{
+      const row=(result.rows||[]).find(r=>String(r.customerProductId)===b.dataset.cp&&r.size===b.dataset.size&&String(r.locationId)===b.dataset.loc)
+      if(row)showPeriodHistory(row)
+    })
+  }
+}
+function showPeriodHistory(row){
+  const dlg=$('#dialog')
+  if(!row.computable){
+    dlg.innerHTML=`<div class="dialoghead"><h2>内訳</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody"><p>算出不可：${esc(row.unavailableReason||'')}</p></div>`
+    dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+    return
+  }
+  const prices=(row.priceBreakdown||[]).length?`<h3>出庫単価内訳（仕入原価）</h3><ul>${row.priceBreakdown.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)}枚 ＝ ${yen(p.amount)}</li>`).join('')}</ul>`:''
+  dlg.innerHTML=`<div class="dialoghead"><h2>期間内の内訳</h2><button type="button" id="close" class="quiet">閉じる</button></div>
+    <div class="dialogbody">
+      <p>${esc(row.customerName)} / ${esc(row.code)} ${esc(row.productName)} / ${esc(row.size)} / ${esc(row.embroideryLabel)} / ${esc(row.locationLabel)}</p>
+      <p>期首 ${num(row.openingQty)} ＋ 入庫 ${num(row.inboundQty)} − 出庫 ${num(row.outboundQty)} ＋ 訂正 ${num(row.correctionQty)} ＝ 期末 ${num(row.closingQty)}</p>
+      ${prices}
+      <div class="tablewrap"><table><thead><tr><th>業務日</th><th>登録日時</th><th>区分</th><th>数量</th><th>単価</th><th>金額</th><th>担当者</th><th>備考</th></tr></thead><tbody>
+        ${(row.history||[]).map(e=>`<tr>
+          <td>${esc(e.businessOn||'')}</td><td>${esc(e.at||'')}</td><td>${esc(e.kindLabel||e.kind)}</td>
+          <td class="qty">${num(e.qty)}</td><td class="money">${yen(e.unitCost)}</td><td class="money">${yen(e.amount)}</td>
+          <td>${esc(e.actorName||'')}</td><td>${esc(e.note||'')}</td>
+        </tr>`).join('')||'<tr><td colspan="8">期間内の明細はありません。</td></tr>'}
+      </tbody></table></div>
+    </div>`
+  dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+}
 function movePage(){
   const SM=typeof StockMoves!=='undefined'?StockMoves:null
   const writable=stockCanWrite()
@@ -1580,6 +1769,7 @@ function openOutboundDialog(target){
     dlg.innerHTML=`<div class="dialoghead"><h2>出庫する</h2><button type="button" id="closeMove" class="quiet">閉じる</button></div>
       <div class="dialogbody">
         <p>${esc(target.customerName)} / ${esc(target.code)} ${esc(target.productName)} / ${esc(target.size)} / ${esc(target.embroideryLabel)} / ${esc(target.locationLabel)}</p>
+        <label>出庫日（必須）<input id="outBusinessOn" type="date" value="${esc(todayISO())}"></label>
         <label>出庫数量（必須）${SM.qtyStepperHtml('out',1)}</label>
         <p id="outPreview">読み込み中…</p>
         <div id="outAlloc"></div>
@@ -1614,11 +1804,14 @@ function openOutboundDialog(target){
       }catch(e){$('#outPreview').textContent='';$('#outAlloc').innerHTML='';err.textContent=e.message;$('#confirmOutbound').disabled=true}
     }
     const stepper=SM.bindQtyStepper(dlg,'out',{onChange:()=>{state.moveDirty=true;confirmChanged=false;refresh()}})
+    $('#outBusinessOn').oninput=()=>{state.moveDirty=true}
     $('#outNote').oninput=()=>{state.moveDirty=true}
     $('#confirmOutbound').onclick=async()=>{
       const err=$('#moveError');err.textContent=''
       const q=stepper.read()
       if(q==null||q<1){err.textContent='出庫数量を入力してください。';return}
+      const businessOn=$('#outBusinessOn').value
+      if(!businessOn){err.textContent='出庫日を入力してください。';return}
       if(!plan||!plan.ok){err.textContent='在庫が不足しています。';return}
       const button=$('#confirmOutbound');button.disabled=true
       try{
@@ -1628,6 +1821,7 @@ function openOutboundDialog(target){
           size:target.size,
           locationId:Number(target.locationId),
           qty:q,
+          businessOn,
           note:$('#outNote').value,
           fingerprint,
           confirmChanged,

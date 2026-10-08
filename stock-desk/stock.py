@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS moves (
   loan_id INTEGER,
   move_batch_id INTEGER REFERENCES move_batches(id),
   actor_name TEXT NOT NULL DEFAULT '',
+  business_on TEXT,
   note TEXT NOT NULL DEFAULT '',
   at TEXT NOT NULL
 );
@@ -171,7 +172,11 @@ def needs_migration(c):
     if 'move_batches' not in tables:
         return True
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
-    return 'move_batch_id' not in move_cols or 'actor_name' not in move_cols
+    return (
+        'move_batch_id' not in move_cols
+        or 'actor_name' not in move_cols
+        or 'business_on' not in move_cols
+    )
 
 
 def backup_sqlite(db_path):
@@ -204,6 +209,25 @@ def migrate_schema(c):
         c.execute('ALTER TABLE moves ADD COLUMN move_batch_id INTEGER REFERENCES move_batches(id)')
     if 'actor_name' not in move_cols:
         c.execute("ALTER TABLE moves ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''")
+    if 'business_on' not in move_cols:
+        c.execute('ALTER TABLE moves ADD COLUMN business_on TEXT')
+    # Backfill business dates from lot fields only (no invented dates for outbound).
+    c.execute(
+        '''UPDATE moves SET business_on=(
+              SELECT l.basis_date FROM lots l WHERE l.id=moves.lot_id
+            )
+            WHERE kind='opening' AND (business_on IS NULL OR business_on='')'''
+    )
+    c.execute(
+        '''UPDATE moves SET business_on=(
+              SELECT CASE
+                WHEN l.received_unknown=1 THEN NULL
+                ELSE l.received_on
+              END
+              FROM lots l WHERE l.id=moves.lot_id
+            )
+            WHERE kind='inbound' AND (business_on IS NULL OR business_on='')'''
+    )
 
 
 def text(value):
@@ -727,9 +751,9 @@ def register_opening(c, body):
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,'new',?,?)''',
                   (batch_id, cp_id, size, location_id, cost, qty, qty, basis, received, 1 if unknown else 0, payout, t, t))
         lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-        c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,note,at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-                  (lot_id, 'opening', qty, cost, 0, qty, None, cost, location_id, '初期在庫', t))
+        c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,business_on,note,at)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+                  (lot_id, 'opening', qty, cost, 0, qty, None, cost, location_id, basis, '初期在庫', t))
     return batch_result(c, batch_id, False)
 
 
@@ -753,11 +777,12 @@ def correct_opening(c, body):
     t = stamp()
     before_qty = lot['qty_remaining']
     before_cost = lot['unit_cost']
+    business_on = parse_date(body.get('businessOn') or t[:10], '訂正の業務日')
     c.execute('UPDATE lots SET qty_received=?,qty_remaining=?,unit_cost=?,updated_at=? WHERE id=?',
               (qty, qty, cost, t, lot_id))
-    c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,note,at)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-              (lot_id, 'opening_correction', qty - before_qty, cost, before_qty, qty, before_cost, cost, lot['location_id'], reason, t))
+    c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,business_on,note,at)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+              (lot_id, 'opening_correction', qty - before_qty, cost, before_qty, qty, before_cost, cost, lot['location_id'], business_on, reason, t))
     fresh = c.execute('SELECT qty_remaining,unit_cost FROM lots WHERE id=?', (lot_id,)).fetchone()
     if fresh['qty_remaining'] != qty or fresh['unit_cost'] != cost or fresh['qty_remaining'] * fresh['unit_cost'] != qty * cost:
         raise ValueError('訂正後の数量と金額が一致しないため、保存を中止しました。')
@@ -1561,9 +1586,9 @@ def register_inbound(c, body):
     lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
     c.execute(
         '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
-           location_id,move_batch_id,actor_name,note,at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (lot_id, 'inbound', qty, cost, 0, qty, None, cost, loc['id'], batch_id, actor, note or '入庫', t),
+           location_id,move_batch_id,actor_name,business_on,note,at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (lot_id, 'inbound', qty, cost, 0, qty, None, cost, loc['id'], batch_id, actor, received, note or '入庫', t),
     )
     result = _move_token_result(c, batch_id, False)
     result.update({
@@ -1600,6 +1625,7 @@ def register_outbound(c, body):
     note = optional(body.get('note'), '備考', 200)
     actor = _actor_name(body)
     t = stamp()
+    business_on = parse_date(body.get('businessOn') or body.get('issuedOn') or t[:10], '出庫日')
     c.execute(
         'INSERT INTO move_batches(client_token,kind,actor_name,note,created_at) VALUES(?,?,?,?,?)',
         (token, 'outbound', actor, note, t),
@@ -1621,10 +1647,10 @@ def register_outbound(c, body):
             raise ValueError('同時に出庫されたため、保存を中止しました。最新の数量を確認してください。')
         c.execute(
             '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
-               location_id,move_batch_id,actor_name,note,at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+               location_id,move_batch_id,actor_name,business_on,note,at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (lot['id'], 'outbound', -alloc['qty'], lot['unit_cost'], before, after, lot['unit_cost'], lot['unit_cost'],
-             lot['location_id'], batch_id, actor, note or '出庫', t),
+             lot['location_id'], batch_id, actor, business_on, note or '出庫', t),
         )
     result = _move_token_result(c, batch_id, False)
     result.update({
@@ -1662,16 +1688,17 @@ def correct_inbound(c, body):
     actor = _actor_name(body)
     before_qty = lot['qty_remaining']
     before_cost = lot['unit_cost']
+    business_on = parse_date(body.get('businessOn') or t[:10], '訂正の業務日')
     c.execute(
         'UPDATE lots SET qty_received=?,qty_remaining=?,unit_cost=?,updated_at=? WHERE id=?',
         (qty, qty, cost, t, lot_id),
     )
     c.execute(
         '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
-           location_id,actor_name,note,at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+           location_id,actor_name,business_on,note,at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (lot_id, 'inbound_correction', qty - before_qty, cost, before_qty, qty, before_cost, cost,
-         lot['location_id'], actor, reason, t),
+         lot['location_id'], actor, business_on, reason, t),
     )
     return {
         'lotId': lot_id,

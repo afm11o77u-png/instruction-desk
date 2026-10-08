@@ -165,3 +165,35 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 .qty-stepper{display:flex;align-items:center;gap:6px}
 .qty-stepper input{width:5.5rem;text-align:center}
 .move-target-table td .sub{display:block;font-size:12px;color:#5d7268}
+
+/* 期間入出荷集計: compact filter bar + wide scrollable table */
+.period-filters{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:end;
+  gap:8px;
+  padding:8px 12px 10px;
+  border-bottom:1px solid var(--line);
+}
+.period-filters>label{
+  flex:0 1 auto;
+  min-width:7.5rem;
+}
+.period-filters>label input[type="date"],
+.period-filters>label select{min-width:0;width:100%}
+.period-filters>button{flex:0 0 auto;white-space:nowrap}
+.period-totals{flex-wrap:wrap}
+.period-totals strong{font-size:1.25rem}
+.period-tablewrap{overflow:auto;max-width:100%;max-height:min(68vh,860px);background:#fff}
+.period-table{width:max-content;min-width:100%}
+.period-table th,.period-table td{white-space:nowrap;font-size:13.5px}
+.period-table th{position:sticky;top:0;background:#f7fbf7;z-index:1}
+.period-table .sub{display:block;font-size:12px;color:#5d7268;font-weight:400}
+.period-unavailable td{color:#8a4b12;white-space:normal}
+#periodGroups{padding:8px 12px;border-bottom:1px solid var(--line)}
+@media(max-width:900px){
+  .period-filters>label{flex:1 1 calc(33.33% - 8px);min-width:140px}
+}
+@media(max-width:640px){
+  .period-filters>label{flex:1 1 calc(50% - 8px);min-width:120px}
+}
