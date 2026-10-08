@@ -138,3 +138,16 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 .search-picker-list .search-picker-empty{padding:10px 12px;color:#5d7268;font-weight:600;font-size:13px}
 .search-picker-hint{margin:0;font-size:12.5px;font-weight:600;color:#3d5146;min-height:1.2em}
 .search-picker-hint.is-confirmed{color:#145233}
+
+/* 商品別: one heading per 商品ID, breakdown table underneath */
+.product-stock-group{padding:14px 16px 18px;border-bottom:1px solid var(--line)}
+.product-stock-group:last-child{border-bottom:0}
+.product-stock-title{margin:0 0 4px;font-size:1.15rem;font-weight:700}
+.product-stock-total{margin:0 0 10px;font-size:14px}
+.product-stock-table th,.product-stock-table td{font-size:13.5px}
+.product-stock-table th{white-space:nowrap}
+.price-breakdown{margin-top:4px;font-size:12.5px;font-weight:400;color:#3d5146}
+.price-breakdown summary{cursor:pointer;font-weight:700;color:#186438;user-select:none}
+.price-breakdown ul{margin:4px 0 0;padding:0 0 0 1.1em}
+.price-breakdown li{margin:2px 0}
+.list-grid .price-breakdown{margin:6px 0 0}

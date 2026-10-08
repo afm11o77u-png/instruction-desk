@@ -1088,10 +1088,50 @@ function stockList(){
     if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
     return
   }
-  body.innerHTML=state.stock.groups.map(g=>`<article class="dialogbody"><h2 class="dm-primary">${esc(g.title)}</h2><p class="dm-secondary">数量 ${num(g.qty)}　仕入原価ベースの在庫金額 ${yen(g.amount)}</p><ul class="parts">${g.parts.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)} ＝ ${yen(p.amount)}（${esc(p.customerName)} / ${esc(p.code)} / 商品ID ${p.productId} / ${esc(p.size)} / ${esc(p.embroideryLabel)} / ${esc(p.locationLabel)}）</li>`).join('')}</ul></article>`).join('')||'<p class="dialogbody">在庫はありません。</p>'
-  if(grid)grid.innerHTML=state.stock.groups.length?state.stock.groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${num(g.qty)} / ${yen(g.amount)}</span></div>`+g.parts.map(p=>`<article class="dm-card"><div class="dm-primary">${esc(p.customerName)} / ${esc(p.code)}</div><div class="dm-secondary">商品ID ${p.productId}　${esc(p.size)} / ${esc(p.embroideryLabel)}</div><div class="dm-meta"><span>${esc(p.locationLabel)}</span><span>${yen(p.unitCost)} × ${num(p.qty)}</span><span>${yen(p.amount)}</span></div></article>`).join('')).join(''):'<div class="dm-empty">在庫はありません。</div>'
+  if(f.group==='product'){
+    body.innerHTML=renderProductStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
+    if(grid)grid.innerHTML=renderProductStockGrid(state.stock.groups)
+  }else{
+    body.innerHTML=state.stock.groups.map(g=>`<article class="dialogbody"><h2 class="dm-primary">${esc(g.title)}</h2><p class="dm-secondary">数量 ${num(g.qty)}　仕入原価ベースの在庫金額 ${yen(g.amount)}</p><ul class="parts">${g.parts.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)} ＝ ${yen(p.amount)}（${esc(p.customerName)} / ${esc(p.code)} / 商品ID ${p.productId} / ${esc(p.size)} / ${esc(p.embroideryLabel)} / ${esc(p.locationLabel)}）</li>`).join('')}</ul></article>`).join('')||'<p class="dialogbody">在庫はありません。</p>'
+    if(grid)grid.innerHTML=state.stock.groups.length?state.stock.groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${num(g.qty)} / ${yen(g.amount)}</span></div>`+g.parts.map(p=>`<article class="dm-card"><div class="dm-primary">${esc(p.customerName)} / ${esc(p.code)}</div><div class="dm-secondary">商品ID ${p.productId}　${esc(p.size)} / ${esc(p.embroideryLabel)}</div><div class="dm-meta"><span>${esc(p.locationLabel)}</span><span>${yen(p.unitCost)} × ${num(p.qty)}</span><span>${yen(p.amount)}</span></div></article>`).join('')).join(''):'<div class="dm-empty">在庫はありません。</div>'
+  }
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
+}
+
+function priceBreakdownHtml(prices){
+  if(!prices||prices.length<2)return ''
+  return `<details class="price-breakdown"><summary>単価の内訳</summary><ul>${prices.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)}枚</li>`).join('')}</ul></details>`
+}
+
+function renderProductStockList(groups){
+  if(!groups.length)return ''
+  return groups.map(g=>`<article class="product-stock-group">
+    <h2 class="dm-primary product-stock-title">${esc(g.title)}</h2>
+    <p class="dm-secondary product-stock-total">合計${num(g.qty)}枚／在庫金額${yen(g.amount)}</p>
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>顧客</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量</th><th>在庫金額</th></tr></thead><tbody>
+      ${(g.rows||[]).map(r=>`<tr>
+        <td class="dm-primary">${esc(r.customerName)}</td>
+        <td>${esc(r.embroideryLabel)}</td>
+        <td>${esc(r.size)}</td>
+        <td>${esc(r.locationLabel)}</td>
+        <td>${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="money">${yen(r.amount)}</td>
+      </tr>`).join('')||'<tr><td colspan="6">在庫はありません。</td></tr>'}
+    </tbody></table></div>
+  </article>`).join('')
+}
+
+function renderProductStockGrid(groups){
+  if(!groups.length)return '<div class="dm-empty">在庫はありません。</div>'
+  return groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${num(g.qty)}枚 / ${yen(g.amount)}</span></div>`+
+    (g.rows||[]).map(r=>`<article class="dm-card">
+      <div class="dm-primary">${esc(r.customerName)}</div>
+      <div class="dm-secondary">${esc(r.embroideryLabel)} / ${esc(r.size)}</div>
+      <div class="dm-meta"><span>${esc(r.locationLabel)}</span><span>${num(r.qty)}</span><span>${yen(r.amount)}</span></div>
+      ${priceBreakdownHtml(r.prices)}
+    </article>`).join('')
+  ).join('')
 }
 
 function correctLot(lot){

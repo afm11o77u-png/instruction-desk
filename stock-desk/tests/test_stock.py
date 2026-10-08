@@ -38,7 +38,15 @@ def test_rules():
         check('金額は16000円', view['totalAmount'] == 16000)
         product_view = stock.stock_query(c, {'customerId': str(aoba), 'productId': str(product), 'size': 'M', 'spec': 'none', 'group': 'product'})
         check('商品別の合計が15着16000円', product_view['groups'][0]['qty'] == 15 and product_view['groups'][0]['amount'] == 16000)
-        check('単価別内訳がある', sorted(p['unitCost'] for p in product_view['groups'][0]['parts']) == [1000, 1200])
+        check('商品別は商品ID見出し1件', len(product_view['groups']) == 1 and product_view['groups'][0]['productId'] == product)
+        check('商品別見出しに顧客・サイズを混ぜない',
+              product_view['groups'][0]['title'] == 'SCR-100　白スクラブ　白'
+              and 'あおば' not in product_view['groups'][0]['title']
+              and '/ M' not in product_view['groups'][0]['title'])
+        m_row = product_view['groups'][0]['rows'][0]
+        check('同一内訳の複数単価を集約', m_row['qty'] == 15 and m_row['amount'] == 16000 and len(product_view['groups'][0]['rows']) == 1)
+        check('単価別内訳がある', sorted(p['unitCost'] for p in m_row['prices']) == [1000, 1200])
+        check('在庫金額はロット単価×残数の合計', m_row['amount'] == sum(p['unitCost'] * p['qty'] for p in m_row['prices']) == 16000)
         kashiwa = c.execute("SELECT id FROM customers WHERE name='かしわ食品 本店'").fetchone()['id']
         mixed = stock.stock_query(c, {'customerId': str(aoba), 'size': 'M', 'spec': 'none'})
         other_customer = stock.stock_query(c, {'customerId': str(kashiwa)})
@@ -556,8 +564,98 @@ def test_locations():
             pass
         folder.cleanup()
 
+def test_product_grouped_stock():
+    """商品別: 商品ID単位の見出し＋顧客/仕様/サイズ/場所の内訳。顧客別・場所別は変えない。"""
+    folder, path, c = newdb()
+    try:
+        sample_data.seed(c)
+        c.commit()
+        aoba = c.execute("SELECT id FROM customers WHERE name='あおば記念病院'").fetchone()['id']
+        products = list(c.execute("SELECT id,code,supplier_id FROM products WHERE code='SCR-100' ORDER BY id"))
+        check('同じ品番で商品IDが2つ', len(products) == 2 and products[0]['id'] != products[1]['id'])
+
+        # フィルタ前後で totalQty / totalAmount はロット合計と一致（表示集計の変更で壊れないこと）
+        filters = [
+            {},
+            {'customerId': str(aoba)},
+            {'productId': str(products[0]['id'])},
+            {'size': 'M', 'spec': 'none'},
+            {'customerId': str(aoba), 'productId': str(products[0]['id'])},
+        ]
+        for f in filters:
+            base = stock.stock_query(c, dict(f, group='lot'))
+            product_view = stock.stock_query(c, dict(f, group='product'))
+            lot_qty = sum(l['qty'] for l in base['lots'])
+            lot_amount = sum(l['amount'] for l in base['lots'])
+            group_qty = sum(g['qty'] for g in product_view['groups'])
+            group_amount = sum(g['amount'] for g in product_view['groups'])
+            row_qty = sum(r['qty'] for g in product_view['groups'] for r in g['rows'])
+            row_amount = sum(r['amount'] for g in product_view['groups'] for r in g['rows'])
+            price_amount = sum(
+                p['unitCost'] * p['qty']
+                for g in product_view['groups'] for r in g['rows'] for p in r['prices']
+            )
+            label = f"filter={f or 'all'}"
+            check(f'商品別合計がロットと一致 {label}',
+                  product_view['totalQty'] == base['totalQty'] == lot_qty == group_qty == row_qty
+                  and product_view['totalAmount'] == base['totalAmount'] == lot_amount == group_amount == row_amount == price_amount)
+
+        # 商品IDごとに1見出し。同じ品番でもマージしない
+        all_product = stock.stock_query(c, {'group': 'product'})
+        ids = [g['productId'] for g in all_product['groups']]
+        check('商品別は商品IDごとに1見出し', len(ids) == len(set(ids)) and set(ids) == {p['id'] for p in products})
+        check('同じ品番でも商品IDは分けたまま', all(g['code'] == 'SCR-100' for g in all_product['groups']))
+
+        # 北光繊維側: 顧客・サイズ・場所が内訳行。見出しに顧客名やサイズを連結しない
+        hokko = next(g for g in all_product['groups'] if g['productId'] == products[0]['id'])
+        check('見出しは品番・商品名・色のみ', hokko['title'] == 'SCR-100　白スクラブ　白')
+        check('見出しに顧客・加工仕様・サイズを連結しない',
+              all(token not in hokko['title'] for token in ('あおば', 'かしわ', '左胸', '／', ' M', ' LL')))
+        row_keys = [(r['customerName'], r['embroideryLabel'], r['size'], r['locationLabel']) for r in hokko['rows']]
+        check('内訳は顧客・仕様・サイズ・場所の組み合わせ', len(row_keys) == len(set(row_keys)) and len(row_keys) >= 3)
+
+        # 顧客名順、同一顧客内は登録サイズ順（M → L → LL → 2L）
+        aoba_sizes = [r['size'] for r in hokko['rows'] if r['customerName'] == 'あおば記念病院' and r['embroideryLabel'] == '刺繍なし']
+        check('同一顧客のサイズは登録順', aoba_sizes == ['M', 'L', 'LL'])
+        check('内訳は顧客名順', [r['customerName'] for r in hokko['rows']] == sorted(
+            [r['customerName'] for r in hokko['rows']]
+        ))
+
+        # Mサイズ・刺繍なし: 1000×10 + 1200×5 が1行に集約、単価内訳は残す
+        m_plain = next(
+            r for r in hokko['rows']
+            if r['customerName'] == 'あおば記念病院' and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+        )
+        check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
+        check('単価の内訳を保持', [(p['unitCost'], p['qty']) for p in m_plain['prices']] == [(1000, 10), (1200, 5)])
+        check('最新単価だけで金額を置き換えない', m_plain['amount'] != 1200 * 15 and m_plain['amount'] == 1000 * 10 + 1200 * 5)
+
+        # 顧客別・場所別の parts 構造は維持
+        customer_view = stock.stock_query(c, {'group': 'customer', 'customerId': str(aoba)})
+        location_view = stock.stock_query(c, {'group': 'location'})
+        check('顧客別は従来のparts構造', customer_view['groups'] and 'parts' in customer_view['groups'][0] and 'rows' not in customer_view['groups'][0])
+        check('場所別は従来のparts構造', location_view['groups'] and 'parts' in location_view['groups'][0] and 'rows' not in location_view['groups'][0])
+        check('顧客別・場所別の合計もロット一致',
+              customer_view['totalQty'] == sum(g['qty'] for g in customer_view['groups'])
+              and location_view['totalAmount'] == sum(g['amount'] for g in location_view['groups']))
+
+        # UI: 商品別レンダラがあり、旧の長い見出し連結を商品別で使っていない
+        app_js = Path(__file__).resolve().parents[1] / 'static' / 'app.js'
+        text = app_js.read_text(encoding='utf-8')
+        check('商品別リスト描画がある', 'renderProductStockList' in text and 'product-stock-table' in text)
+        check('単価の内訳を展開できる', '単価の内訳' in text and 'price-breakdown' in text)
+        check('商品別はrowsを使う', 'g.rows' in text and "f.group==='product'" in text)
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        folder.cleanup()
+
+
 if __name__ == '__main__':
     test_rules()
+    test_product_grouped_stock()
     test_locations()
     test_excel()
     test_restart_and_http()
