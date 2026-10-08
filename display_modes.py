@@ -12,6 +12,7 @@ SCREEN_DEFAULTS = {
     'stock-suppliers': 'compact',
     'stock-products': 'compact',
     'stock-locations': 'compact',
+    'stock-opening': 'compact',
     'stock-list': 'compact',
 }
 SCREENS = set(SCREEN_DEFAULTS)

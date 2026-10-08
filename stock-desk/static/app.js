@@ -45,7 +45,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',list:'stock-list'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -743,7 +743,7 @@ function opening(){
       ${excelTools()}
     </div>
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}
-    <div class="tablewrap"><table><thead><tr><th>基準日</th><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>基準日</th><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
       ${entries.map(e=>`<tr>
         <td>${esc(e.basisDate)}</td>
         <td class="dm-primary">${esc(e.customerName)}</td>
@@ -754,8 +754,14 @@ function opening(){
         <td class="money">${yen(e.unitCost)}</td>
         <td>${esc(e.locationLabel)}</td>
       </tr>`).join('')||'<tr><td colspan="8">登録された初期在庫はまだありません。</td></tr>'}
-    </tbody></table></div>
+    </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
   </section>`
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=entries.length?entries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.basisDate)}</span><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):'<div class="dm-empty">登録された初期在庫はまだありません。</div>'
+  const stage=$('#stockliststage')
+  const mode=mountStockDisplay(stage,'opening',()=>paint())
+  if(grid)grid.hidden=mode!=='grid'
+  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('opening'))
   $('#openOpeningRegister').onclick=()=>openOpeningRegister()
   bindExcel()
 }
