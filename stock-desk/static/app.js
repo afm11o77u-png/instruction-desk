@@ -1187,5 +1187,4 @@ window.addEventListener('message',async e=>{
   if(e.origin!==location.origin||!e.data||e.data.type!=='stock-section')return
   await setStockSection(e.data.section,{setupTab:e.data.setupTab})
 })
-$('#backup').onclick=async()=>{try{const r=await api('/api/backup',{});toast('バックアップを作りました。'+r.file)}catch(e){toast(e.message)}}
 boot().catch(e=>{$('#main').textContent=e.message})
