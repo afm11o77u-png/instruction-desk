@@ -4,6 +4,7 @@ const path = require('path')
 const {
   filterOpeningCustomers,
   filterOpeningOfferings,
+  filterOpeningListEntries,
   openingHandlesFromData,
   clearOpeningProductFields,
   clearOpeningCustomerSelection,
@@ -12,6 +13,12 @@ const {
   resolveConfirmedOpeningOffering,
   offeringPickerLabel
 } = require(path.join(__dirname, '../static/opening_pickers.js'))
+
+const listEntries = [
+  {id: 1, customerName: 'あおば記念病院', code: 'SCR-100', productName: '白スクラブ', color: '白', basisDate: '2026-09-01'},
+  {id: 2, customerName: 'かしわ食品 本店', code: 'PAN-200', productName: 'パンツ', color: '紺', basisDate: '2026-09-01'},
+  {id: 3, customerName: '青葉商事', code: 'SCR-100', productName: '白スクラブ', color: '白', basisDate: '2026-08-01'}
+]
 
 const customers = [
   {id: 1, name: 'あおば記念病院', kana: 'アオバキネンビョウイン', active: true},
@@ -130,6 +137,18 @@ test('cannot resolve unconfirmed typed text as selection', () => {
   assert.strictEqual(resolveConfirmedOpeningOffering(openingHandlesFromData(data), 1, 'SCR'), null)
   assert.ok(resolveConfirmedOpeningOffering(openingHandlesFromData(data), 1, 100))
   assert.strictEqual(resolveConfirmedOpeningOffering(openingHandlesFromData(data), 2, 100), null)
+})
+
+test('list filter matches customer code productName; empty query returns all', () => {
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, '').map(e => e.id), [1, 2, 3])
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, '  ').map(e => e.id), [1, 2, 3])
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, 'あおば').map(e => e.id), [1])
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, 'SCR').map(e => e.id), [1, 3])
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, 'パンツ').map(e => e.id), [2])
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, '存在しない').map(e => e.id), [])
+  // color / basisDate are not search fields
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, '紺').map(e => e.id), [])
+  assert.deepStrictEqual(filterOpeningListEntries(listEntries, '2026-09').map(e => e.id), [])
 })
 
 if (!process.exitCode) console.log('All opening picker unit tests passed')
