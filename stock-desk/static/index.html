@@ -15,11 +15,14 @@
     <h1 id="stocktitle">在庫一覧</h1>
   </div>
   <nav class="tabs" id="tabs" aria-label="登録・設定" hidden></nav>
-  <nav class="switch" aria-label="画面の切替">
-    <button type="button" data-mode="masters">顧客・商品情報</button>
-    <button type="button" data-mode="stock">在庫管理</button>
-    <button type="button" id="desk">指示書デスク</button>
-  </nav>
+  <div class="stockhead-end">
+    <nav class="switch" aria-label="画面の切替">
+      <button type="button" data-mode="masters">顧客・商品情報</button>
+      <button type="button" data-mode="stock">在庫管理</button>
+      <button type="button" id="desk">指示書デスク</button>
+    </nav>
+    <div class="stock-list-display" id="stocklistdisplay" hidden></div>
+  </div>
 </header>
 <p id="desknote" class="notice" hidden>指示書デスクは、この試用アプリには入っていません。</p>
 <main id="main"></main>

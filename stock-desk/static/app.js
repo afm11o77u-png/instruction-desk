@@ -60,10 +60,20 @@ async function ensureStockDisplayModes(){
 }
 function saveStockDisplay(screenId,mode){return deskDisplayFetch('/api/display-modes',{screenId,mode})}
 function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
+function syncStockListDisplaySlot(section){
+  const slot=$('#stocklistdisplay')
+  if(!slot)return
+  if(section==='list'){
+    slot.hidden=false
+    return
+  }
+  slot.hidden=true
+  slot.innerHTML=''
+}
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'compact'
   const screenId=stockScreenId(tab)
-  // 在庫一覧: mount 表示 outside the filter frame (top-right slot).
+  // 在庫一覧: mount 表示 on the title-row right end (outside the filter frame).
   // Setup screens keep compact chrome inside `.bar`.
   const toolbar=tab==='list'
     ? document.querySelector('#stocklistdisplay')
@@ -182,6 +192,7 @@ function paint(){
     tabs.hidden=true
     tabs.innerHTML=''
   }
+  syncStockListDisplaySlot(state.section)
   const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList}[state.tab]
   view()
 }
@@ -1043,9 +1054,6 @@ function stockList(){
   state.data.products.forEach(p=>p.links.forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
   $('#main').innerHTML=`<section class="panel stock-list-panel">
-    <div class="stock-list-chrome">
-      <div class="stock-list-display" id="stocklistdisplay"></div>
-    </div>
     <div class="bar stock-list-filters">
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${state.data.customers.map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
       <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（ID ${p.id}）`,f.productId)).join('')}</select></label>
