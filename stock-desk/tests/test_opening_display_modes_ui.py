@@ -41,26 +41,47 @@ class OpeningDisplayModesUiTest(unittest.TestCase):
         self.assertIn("document.querySelector('#main .bar')", mount)
         self.assertIn("tab==='list'", mount)
 
-    def test_opening_list_fields_unchanged_in_table(self):
+    def test_opening_list_fields_hide_basis_date(self):
         body = _fn(APP_JS, 'opening')
-        for col in ('基準日', '顧客', '商品', '加工仕様', 'サイズ', '数量', '仕入単価', '保管場所'):
+        for col in ('顧客', '商品', '加工仕様', 'サイズ', '数量', '仕入単価', '保管場所'):
             self.assertIn(col, body)
-        self.assertIn('e.basisDate', body)
+        # Display-only: 基準日 column/card meta removed from list; form/API keep it.
+        self.assertNotIn('<th>基準日</th>', body)
+        self.assertNotIn('${esc(e.basisDate)}', body)
         self.assertIn('e.customerName', body)
         self.assertIn('e.embroideryLabel', body)
         self.assertIn('e.locationLabel', body)
         self.assertIn('e.unitCost', body)
         self.assertIn('初期在庫を登録', body)
         self.assertNotIn('searchPickerMarkup', body)
+        form = _fn(APP_JS, 'mountOpeningRegisterForm')
+        self.assertIn('在庫基準日', form)
+        self.assertIn('id="basisDate"', form)
+
+    def test_opening_list_search_filters_full_entries(self):
+        body = _fn(APP_JS, 'opening')
+        self.assertIn('id="openingListQ"', body)
+        self.assertIn('顧客名・品番・商品名で検索', body)
+        self.assertIn('filterOpeningListEntries(all,q)', body)
+        self.assertIn('state.openingListQ', body)
+        self.assertIn('該当する初期在庫はありません', body)
+        self.assertIn('openingListCount', body)
+        # Independent of register-popup pickers and other setup-tab state.q
+        self.assertNotIn('state.q', body)
+        self.assertNotIn('customerQuery', body)
+        self.assertNotIn('handleQuery', body)
+        self.assertIn('filterOpeningListEntries', APP_JS)
 
     def test_opening_grid_cards_cover_same_entry_fields(self):
         body = _fn(APP_JS, 'opening')
         self.assertIn('class="dm-card"', body)
-        self.assertIn('e.basisDate', body[body.index('list-grid'):])
-        self.assertIn('e.customerName', body[body.index('list-grid'):])
-        self.assertIn('e.embroideryLabel', body[body.index('list-grid'):])
-        self.assertIn('e.locationLabel', body[body.index('list-grid'):])
-        self.assertIn('e.unitCost', body[body.index('list-grid'):])
+        grid = body[body.index('list-grid'):]
+        self.assertNotIn('e.basisDate', grid)
+        self.assertNotIn('${esc(e.basisDate)}', grid)
+        self.assertIn('e.customerName', grid)
+        self.assertIn('e.embroideryLabel', grid)
+        self.assertIn('e.locationLabel', grid)
+        self.assertIn('e.unitCost', grid)
 
     def test_display_mode_apply_uses_dm_classes(self):
         apply = _fn(DM_JS, 'apply')

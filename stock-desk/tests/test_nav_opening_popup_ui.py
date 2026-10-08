@@ -108,8 +108,9 @@ class OpeningPopupUiTest(unittest.TestCase):
         self.assertIn('openOpeningRegister()', body)
         self.assertNotIn('searchPickerMarkup', body)
         self.assertNotIn('id="confirmOpen"', body)
-        for col in ('基準日', '顧客', '商品', '加工仕様', 'サイズ', '数量', '仕入単価', '保管場所'):
+        for col in ('顧客', '商品', '加工仕様', 'サイズ', '数量', '仕入単価', '保管場所'):
             self.assertIn(col, body)
+        self.assertNotIn('<th>基準日</th>', body)
 
     def test_register_form_lives_in_large_opening_dialog(self):
         self.assertIn('id="openingDialog"', INDEX)

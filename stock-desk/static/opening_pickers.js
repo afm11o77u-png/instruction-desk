@@ -93,6 +93,17 @@ function resolveConfirmedOpeningOffering(handles, customerId, handleId){
   return (handles||[]).find(h=>Number(h.id)===hid&&Number(h.customerId)===cid)||null
 }
 
+/** Filter registered 初期在庫 list rows by 顧客名・品番・商品名 (partial, case-insensitive). */
+function filterOpeningListEntries(entries, query){
+  const list=Array.isArray(entries)?entries:[]
+  const needle=normalizeOpeningQuery(query)
+  if(!needle)return list.slice()
+  return list.filter(e=>{
+    const hay=`${e&&e.customerName||''} ${e&&e.code||''} ${e&&e.productName||''}`.toLowerCase()
+    return hay.includes(needle)
+  })
+}
+
 if(typeof module!=='undefined'&&module.exports){
   module.exports={
     normalizeOpeningQuery,
@@ -105,6 +116,7 @@ if(typeof module!=='undefined'&&module.exports){
     clearOpeningCustomerSelection,
     openingStateAfterSuccessfulSave,
     resolveConfirmedOpeningCustomer,
-    resolveConfirmedOpeningOffering
+    resolveConfirmedOpeningOffering,
+    filterOpeningListEntries
   }
 }

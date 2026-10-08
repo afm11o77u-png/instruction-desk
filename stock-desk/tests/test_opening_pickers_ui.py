@@ -69,6 +69,8 @@ class OpeningPickersUiTest(unittest.TestCase):
         self.assertIn('c&&c.active', PICKERS_JS)
         self.assertIn('filterOpeningCustomers', PICKERS_JS)
         self.assertIn('filterOpeningOfferings', PICKERS_JS)
+        self.assertIn('filterOpeningListEntries', PICKERS_JS)
+        self.assertIn('customerName', PICKERS_JS[PICKERS_JS.index('filterOpeningListEntries'):])
         self.assertIn('openingStateAfterSuccessfulSave', PICKERS_JS)
 
     def test_node_unit_suite(self):

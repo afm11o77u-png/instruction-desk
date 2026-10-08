@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
 const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]
 const SETUP_TAB_IDS=new Set(SETUP_TABS.map(([id])=>id))
 const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
@@ -736,16 +736,21 @@ function openingLocationFields(sel){
       <input type="hidden" id="locationId" value="${sel.locationId==null?'':sel.locationId}">`
 }
 function opening(){
-  const entries=(state.openings&&state.openings.entries)||[]
+  const all=(state.openings&&state.openings.entries)||[]
+  const q=state.openingListQ||''
+  const entries=typeof filterOpeningListEntries==='function'?filterOpeningListEntries(all,q):all
+  const emptyMsg=all.length&&!entries.length?'該当する初期在庫はありません':'登録された初期在庫はまだありません。'
+  const countLabel=q.trim()?`${entries.length} / ${all.length}件`:`${all.length}件`
   $('#main').innerHTML=`<section class="panel">
     <div class="bar">
       <button type="button" class="primary" id="openOpeningRegister">初期在庫を登録</button>
+      <label class="opening-list-search">検索<input id="openingListQ" value="${esc(q)}" placeholder="顧客名・品番・商品名で検索" aria-label="顧客名・品番・商品名で検索"></label>
+      <span class="opening-list-count" id="openingListCount">${esc(countLabel)}</span>
       ${excelTools()}
     </div>
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}
-    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>基準日</th><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
       ${entries.map(e=>`<tr>
-        <td>${esc(e.basisDate)}</td>
         <td class="dm-primary">${esc(e.customerName)}</td>
         <td>${esc(e.code)} ${esc(e.productName)} ${esc(e.color)}<span class="sub dm-secondary">商品ID ${e.productId}</span></td>
         <td>${esc(e.embroideryLabel)}</td>
@@ -753,16 +758,18 @@ function opening(){
         <td class="qty">${num(e.qty)}</td>
         <td class="money">${yen(e.unitCost)}</td>
         <td>${esc(e.locationLabel)}</td>
-      </tr>`).join('')||'<tr><td colspan="8">登録された初期在庫はまだありません。</td></tr>'}
+      </tr>`).join('')||`<tr><td colspan="7">${emptyMsg}</td></tr>`}
     </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
   </section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=entries.length?entries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.basisDate)}</span><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):'<div class="dm-empty">登録された初期在庫はまだありません。</div>'
+  if(grid)grid.innerHTML=entries.length?entries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):`<div class="dm-empty">${emptyMsg}</div>`
   const stage=$('#stockliststage')
   const mode=mountStockDisplay(stage,'opening',()=>paint())
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('opening'))
   $('#openOpeningRegister').onclick=()=>openOpeningRegister()
+  const search=$('#openingListQ')
+  if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
   bindExcel()
 }
 function openOpeningRegister(){
