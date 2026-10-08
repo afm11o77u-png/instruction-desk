@@ -60,6 +60,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         css = (REPO / 'style.css').read_text(encoding='utf-8')
         self.assertIn('#stocknav .stocknav-move', css)
         self.assertIn('#stocknav .stocknav-period', css)
+        self.assertRegex(css, r'#stocknav \.stocknav-move,#stocknav \.stocknav-period\{[^}]*text-align:\s*center')
         self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
