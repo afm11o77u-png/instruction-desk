@@ -743,9 +743,9 @@ function opening(){
   const countLabel=q.trim()?`${entries.length} / ${all.length}件`:`${all.length}件`
   $('#main').innerHTML=`<section class="panel">
     <div class="bar">
-      <button type="button" class="primary" id="openOpeningRegister">初期在庫を登録</button>
       <label class="opening-list-search">検索<input id="openingListQ" value="${esc(q)}" placeholder="顧客名・品番・商品名で検索" aria-label="顧客名・品番・商品名で検索"></label>
       <span class="opening-list-count" id="openingListCount">${esc(countLabel)}</span>
+      <button type="button" class="primary" id="openOpeningRegister">初期在庫を登録</button>
       ${excelTools()}
     </div>
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}

@@ -71,6 +71,9 @@ class OpeningDisplayModesUiTest(unittest.TestCase):
         self.assertNotIn('customerQuery', body)
         self.assertNotIn('handleQuery', body)
         self.assertIn('filterOpeningListEntries', APP_JS)
+        # Match other 登録・設定 bars: search before primary action
+        self.assertLess(body.index('id="openingListQ"'), body.index('id="openOpeningRegister"'))
+        self.assertLess(body.index('id="openOpeningRegister"'), body.index('excelTools()'))
 
     def test_opening_grid_cards_cover_same_entry_fields(self):
         body = _fn(APP_JS, 'opening')
