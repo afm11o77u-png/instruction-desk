@@ -26,9 +26,9 @@ def _fn(source: str, name: str) -> str:
 class OpeningDisplayModesUiTest(unittest.TestCase):
     def test_opening_has_own_screen_key(self):
         self.assertIn("opening:'stock-opening'", APP_JS)
-        self.assertIn("'stock-opening': 'compact'", DM_JS)
-        self.assertIn("'stock-opening': 'compact'", ROOT_DM_JS)
-        self.assertIn("'stock-opening': 'compact'", DISPLAY_MODES_PY)
+        self.assertIn("'stock-opening': 'standard'", DM_JS)
+        self.assertIn("'stock-opening': 'standard'", ROOT_DM_JS)
+        self.assertIn("'stock-opening': 'standard'", DISPLAY_MODES_PY)
 
     def test_opening_page_mounts_display_control_on_bar(self):
         body = _fn(APP_JS, 'opening')
@@ -71,14 +71,22 @@ class OpeningDisplayModesUiTest(unittest.TestCase):
         self.assertIn("'dm-grid'", apply)
         control = _fn(DM_JS, 'controlHtml')
         self.assertIn('表示', control)
-        for label in ('標準', 'コンパクト', 'ゆったり', 'グリッド'):
+        for label in ('ゆったり', '標準', 'コンパクト', 'グリッド'):
             self.assertIn(label, DM_JS)
+        # Selector order: ゆったり → 標準 → コンパクト → グリッド
+        cozy = DM_JS.index("id: 'cozy', label: 'ゆったり'")
+        standard = DM_JS.index("id: 'standard', label: '標準'")
+        compact = DM_JS.index("id: 'compact', label: 'コンパクト'")
+        grid = DM_JS.index("id: 'grid', label: 'グリッド'")
+        self.assertLess(cozy, standard)
+        self.assertLess(standard, compact)
+        self.assertLess(compact, grid)
 
     def test_stock_opening_is_persistable_screen(self):
         # SCREENS is derived from SCREEN_DEFAULTS; key must be present for POST.
         self.assertRegex(
             DISPLAY_MODES_PY,
-            r"SCREEN_DEFAULTS\s*=\s*\{[^}]*'stock-opening'\s*:\s*'compact'",
+            r"SCREEN_DEFAULTS\s*=\s*\{[^}]*'stock-opening'\s*:\s*'standard'",
         )
         self.assertIn('SCREENS = set(SCREEN_DEFAULTS)', DISPLAY_MODES_PY)
         self.assertIn('def normalize_screen(screen_id):', DISPLAY_MODES_PY)

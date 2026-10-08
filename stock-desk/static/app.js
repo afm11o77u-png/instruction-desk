@@ -71,7 +71,7 @@ function syncStockListDisplaySlot(section){
   slot.innerHTML=''
 }
 function mountStockDisplay(stage,tab,repaint){
-  if(!stage||typeof DisplayMode==='undefined')return 'compact'
+  if(!stage||typeof DisplayMode==='undefined')return 'standard'
   const screenId=stockScreenId(tab)
   // 在庫一覧: mount 表示 on the title-row right end (outside the filter frame).
   // Setup screens keep compact chrome inside `.bar`.
@@ -750,7 +750,7 @@ function opening(){
         <td>${esc(e.code)} ${esc(e.productName)} ${esc(e.color)}<span class="sub dm-secondary">商品ID ${e.productId}</span></td>
         <td>${esc(e.embroideryLabel)}</td>
         <td>${esc(e.size)}</td>
-        <td>${num(e.qty)}</td>
+        <td class="qty">${num(e.qty)}</td>
         <td class="money">${yen(e.unitCost)}</td>
         <td>${esc(e.locationLabel)}</td>
       </tr>`).join('')||'<tr><td colspan="8">登録された初期在庫はまだありません。</td></tr>'}
@@ -1081,7 +1081,7 @@ function stockList(){
   if(!state.stock){body.innerHTML='';if(grid)grid.innerHTML='';return}
   if(f.group==='lot'){
     body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
-      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td>${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
+      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td class="qty">${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
     </tbody></table></div>`
     if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button><button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
     const bindLot=()=>{
@@ -1135,7 +1135,7 @@ function renderProductStockList(groups){
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
         <td>${esc(r.locationLabel)}</td>
-        <td>${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="qty">${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
         <td class="money">${yen(r.amount)}</td>
       </tr>`).join('')||'<tr><td colspan="6">在庫はありません。</td></tr>'}
     </tbody></table></div>
@@ -1167,7 +1167,7 @@ function renderCustomerStockList(groups){
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
         <td>${esc(r.locationLabel)}</td>
-        <td>${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="qty">${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
         <td class="money">${yen(r.amount)}</td>
       </tr>`
     }).join('')
@@ -1212,7 +1212,7 @@ function renderLocationStockList(groups){
         <td>${productNameColor(r)}</td>
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
-        <td>${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="qty">${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
         <td class="money">${yen(r.amount)}</td>
       </tr>`
     }).join('')
