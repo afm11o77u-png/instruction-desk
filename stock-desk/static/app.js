@@ -1,5 +1,8 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const STOCK_SECTIONS=new Set(['list','move','setup'])
+function normalizeSection(section){return STOCK_SECTIONS.has(section)?section:'list'}
+function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
 const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]
 const SETUP_TAB_IDS=new Set(SETUP_TABS.map(([id])=>id))
 const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
@@ -45,7 +48,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -63,7 +66,7 @@ function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
-  if(section==='list'){
+  if(section==='list'||section==='move'){
     slot.hidden=false
     return
   }
@@ -90,8 +93,14 @@ function listNote(summary,body){
 function stockOpenBtn(id,label='開く'){return `<button type="button" class="quiet stockopen" data-id="${id}">${label}</button>`}
 async function api(path,data){
   const r=await fetch(BASE+path,data?{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(data)}:{})
-  const result=await r.json()
-  if(!r.ok)throw Error(result.error||'処理できませんでした。')
+  let result={}
+  try{result=await r.json()}catch(_){result={}}
+  if(!r.ok){
+    const err=Error(result.error||'処理できませんでした。')
+    err.status=r.status
+    err.payload=result
+    throw err
+  }
   return result
 }
 function specLabel(v){return v?v:'刺繍なし'}
@@ -106,9 +115,12 @@ function saveSetupTab(tab){
   try{localStorage.setItem(SETUP_TAB_KEY,tab)}catch(_){}
 }
 function applySectionState(section,setupTab){
-  state.section=section==='setup'?'setup':'list'
+  state.section=normalizeSection(section)
   if(state.section==='list'){
     state.tab='list'
+    state.mode='stock'
+  }else if(state.section==='move'){
+    state.tab='move'
     state.mode='stock'
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
@@ -123,7 +135,7 @@ function notifyParentSection(){
   try{window.parent.postMessage({type:'stock-section-changed',section:state.section},location.origin)}catch(_){}
 }
 async function setStockSection(section,{setupTab,silent}={}){
-  const next=section==='setup'?'setup':'list'
+  const next=normalizeSection(section)
   if(next===state.section&&!(setupTab&&SETUP_TAB_IDS.has(setupTab)&&setupTab!==state.tab)){
     if(!silent)notifyParentSection()
     return true
@@ -131,6 +143,7 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(!(await ensureCanNavigate()))return false
   applySectionState(next,setupTab)
   if(state.tab==='list')await loadStock()
+  if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
   paint()
   if(!silent)notifyParentSection()
@@ -150,8 +163,7 @@ async function boot(){
   state.data=await api('/api/bootstrap')
   if(!state.ready){
     const params=new URLSearchParams(location.search)
-    const sectionParam=params.get('section')
-    applySectionState(sectionParam==='setup'?'setup':'list',loadSetupTab())
+    applySectionState(normalizeSection(params.get('section')),loadSetupTab())
   }
   state.ready=true
   const labels={sample:['試用版・架空のサンプル','サンプルのデータは data\\sample に保存されています。'],desk:['在庫管理','指示書デスクと同じ画面から使っています。在庫のデータは指示書とは別のファイルです。'],live:['試用版・このパソコンの台帳','この台帳は data\\live に保存されています。サンプルとは別です。']}
@@ -159,6 +171,7 @@ async function boot(){
   $('#eyebrow').textContent=label[0]
   $('#foot').textContent=label[1]
   if(state.tab==='list')await loadStock()
+  if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
   await ensureStockDisplayModes().catch(()=>{})
   paint()
@@ -170,16 +183,19 @@ function paint(){
     state.setupTab=state.tab
     saveSetupTab(state.tab)
     state.mode=state.tab==='customers'||state.tab==='suppliers'||state.tab==='products'?'masters':'stock'
+  }else if(state.section==='move'){
+    state.tab='move'
+    state.mode='stock'
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section)
+    b.classList.toggle('active',want===state.section||(want==='list'&&state.section==='move'))
   })
   const title=$('#stocktitle')
-  if(title)title.textContent=state.section==='setup'?(SETUP_TAB_LABEL[state.tab]||'顧客'):'在庫一覧'
+  if(title)title.textContent=state.section==='setup'?(SETUP_TAB_LABEL[state.tab]||'顧客'):(state.section==='move'?'入庫・出庫':'在庫一覧')
   const tabs=$('#tabs')
   if(state.section==='setup'){
     tabs.hidden=false
@@ -193,7 +209,7 @@ function paint(){
     tabs.innerHTML=''
   }
   syncStockListDisplaySlot(state.section)
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage}[state.tab]
   view()
 }
 async function loadOpeningEntries(){
@@ -1074,9 +1090,9 @@ function stockList(){
       <label>加工仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${state.data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
     </div>
-    <div class="tabs" id="groups">${[['product','商品別'],['customer','顧客別'],['location','場所別'],['lot','入荷分']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
+    <div class="tabs" id="groups">${[['product','商品別'],['customer','顧客別'],['location','場所別'],['lot','在庫明細']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
     <div class="total"><div>数量<strong>${state.stock?num(state.stock.totalQty):0}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong></div></div>
-    ${listNote('在庫金額の見方','表示中の金額は、各入荷分の「残数量×仕入単価」を足したものです。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。')}
+    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;await loadStock();paint()}
   ;['fCustomer','fProduct','fSize','fSpec','fLocation'].forEach(id=>$('#'+id).onchange=apply)
@@ -1088,11 +1104,12 @@ function stockList(){
   if(!state.stock){body.innerHTML='';if(grid)grid.innerHTML='';return}
   if(f.group==='lot'){
     body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
-      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td class="qty">${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
+      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td class="qty">${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
     </tbody></table></div>`
-    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button><button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button><button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
     const bindLot=()=>{
       document.querySelectorAll('[data-correct]').forEach(b=>b.onclick=()=>correctLot(state.stock.lots.find(l=>l.id===Number(b.dataset.correct))))
+      document.querySelectorAll('[data-inbound-correct]').forEach(b=>b.onclick=()=>correctInboundLot(state.stock.lots.find(l=>l.id===Number(b.dataset.inboundCorrect))))
       document.querySelectorAll('[data-history]').forEach(b=>b.onclick=()=>showHistory(Number(b.dataset.history)))
       document.querySelectorAll('.stockopen').forEach(b=>b.onclick=()=>showHistory(Number(b.dataset.id)))
     }
@@ -1119,8 +1136,17 @@ function stockList(){
 }
 
 function priceBreakdownHtml(prices){
-  if(!prices||prices.length<2)return ''
-  return `<details class="price-breakdown"><summary>単価の内訳</summary><ul>${prices.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)}枚</li>`).join('')}</ul></details>`
+  if(!prices||!prices.length)return ''
+  if(prices.length===1&&!(prices[0].receipts&&prices[0].receipts.length>1))return ''
+  return `<details class="price-breakdown"><summary>単価の内訳</summary><ul>${prices.map(p=>{
+    const line=`${yen(p.unitCost)} × ${num(p.qty)}枚 ＝ ${yen(p.amount)}`
+    const receipts=(p.receipts||[])
+    const receiptHtml=receipts.length>1?`<ul class="receipt-breakdown">${receipts.map(r=>{
+      const day=r.receivedUnknown?`入荷日不明・払出し順 ${r.payoutOrder}`:`入荷日 ${esc(r.receivedOn||'')}`
+      return `<li>${day}：${num(r.qty)}枚（ロット ${r.lotId}）</li>`
+    }).join('')}</ul>`:''
+    return `<li>${line}${receiptHtml}</li>`
+  }).join('')}</ul></details>`
 }
 
 function stockGroupHeading(g){
@@ -1283,12 +1309,352 @@ function correctLot(lot){
     }catch(e){$('#error').textContent=e.message;button.disabled=false;armed=false;button.textContent='確認して保存'}
   }
 }
+function correctInboundLot(lot){
+  if(!stockCanWrite()){toast('閲覧専用のため、訂正できません。');return}
+  const dlg=$('#dialog')
+  dlg.innerHTML=`<form><div class="dialoghead"><h2>入庫の訂正</h2></div><div class="dialogbody">
+    <p>日次入庫の訂正です。初期在庫の訂正とは別です。</p>
+    <p>${esc(lot.customerName)} / ${esc(lot.code)} ${esc(lot.productName)} / ${esc(lot.size)} / ${esc(lot.embroideryLabel)} / ${esc(lot.locationLabel)}</p>
+    <p>変更前: ${num(lot.qty)} × ${yen(lot.unitCost)} ＝ ${yen(lot.amount)}</p>
+    <div class="grid"><label>訂正後の数量（必須）<input id="qty" inputmode="numeric" value="${lot.qty}"></label><label>訂正後の仕入単価（必須）<input id="unitCost" inputmode="numeric" value="${lot.unitCost}"></label></div>
+    <p id="preview"></p><label>訂正の理由（必須）<input id="reason"></label><p id="error"></p></div>
+    <div class="dialogactions"><button type="button" id="close">戻る</button><button type="button" class="primary" id="save">確認して保存</button></div></form>`
+  dlg.showModal()
+  dlg.querySelector('form').onsubmit=ev=>ev.preventDefault()
+  const preview=()=>{
+    const q=$('#qty').value.trim(),c=$('#unitCost').value.trim()
+    if(!/^\d+$/.test(q)||!/^\d+$/.test(c)){$('#preview').textContent='数量と仕入単価を入力すると、訂正後の金額を表示します。';return null}
+    const amount=Number(q)*Number(c)
+    $('#preview').textContent=`変更後: ${num(q)} × ${yen(c)} ＝ ${yen(amount)}`
+    return {qty:Number(q),unitCost:Number(c),amount}
+  }
+  let armed=false
+  const arm=()=>{armed=false;$('#save').textContent='確認して保存'}
+  $('#qty').oninput=()=>{arm();preview()};$('#unitCost').oninput=()=>{arm();preview()};preview()
+  $('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+  $('#save').onclick=async()=>{
+    const next=preview()
+    if(!next){$('#error').textContent='数量と仕入単価を入力してください。';return}
+    if(!$('#reason').value.trim()){$('#error').textContent='訂正の理由を入力してください。';return}
+    if(!armed){armed=true;$('#save').textContent='この内容で訂正';$('#error').textContent=`変更前 ${yen(lot.amount)}、変更後 ${yen(next.amount)}。よければもう一度押してください。`;return}
+    const button=$('#save');button.disabled=true
+    try{
+      await api('/api/inbound/correct',{lotId:lot.id,qty:next.qty,unitCost:next.unitCost,reason:$('#reason').value.trim()})
+      dlg.close();dlg.innerHTML='';toast('入庫を訂正しました。');await loadStock();paint()
+    }catch(e){$('#error').textContent=e.message;button.disabled=false;armed=false;button.textContent='確認して保存'}
+  }
+}
 async function showHistory(lotId){
   const data=await api('/api/lots/history?lotId='+lotId)
-  const names={opening:'初期在庫',opening_correction:'初期在庫の訂正'}
+  const names={opening:'初期在庫',opening_correction:'初期在庫の訂正',inbound:'入庫',outbound:'出庫',inbound_correction:'入庫の訂正'}
   const dlg=$('#dialog')
-  dlg.innerHTML=`<div class="dialoghead"><h2>在庫の履歴</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody"><ul>${data.events.map(e=>`<li>${esc(e.at)}　${esc(names[e.kind]||e.kind)}　数量 ${e.qtyBefore??'-'}→${e.qtyAfter??'-'}　単価 ${e.costBefore??'-'}→${e.costAfter??'-'}　金額 ${e.amountBefore??'-'}→${e.amountAfter??'-'}<span class="sub">${esc(e.note)}</span></li>`).join('')}</ul></div>`
+  dlg.innerHTML=`<div class="dialoghead"><h2>在庫の履歴</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody"><ul>${data.events.map(e=>{
+    const who=e.actorName?`　${esc(e.actorName)}` : ''
+    return `<li>${esc(e.at)}${who}　${esc(names[e.kind]||e.kind)}　数量 ${e.qtyBefore??'-'}→${e.qtyAfter??'-'}　単価 ${e.costBefore??'-'}→${e.costAfter??'-'}　金額 ${e.amountBefore??'-'}→${e.amountAfter??'-'}<span class="sub">${esc(e.note)}</span></li>`
+  }).join('')}</ul></div>`
   dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+}
+async function loadMoveTargets(){
+  const q=new URLSearchParams()
+  if(state.moveQ)q.set('q',state.moveQ)
+  state.moveTargets=await api('/api/move/targets?'+q.toString())
+}
+function movePage(){
+  const SM=typeof StockMoves!=='undefined'?StockMoves:null
+  const writable=stockCanWrite()
+  const mode=state.moveMode==='out'?'out':'in'
+  const targets=(state.moveTargets&&state.moveTargets.targets)||[]
+  const filtered=SM?SM.filterTargets(targets,state.moveQ):targets
+  $('#main').innerHTML=`<section class="panel move-panel">
+    <div class="move-mode-toggle" role="group" aria-label="入庫または出庫">
+      <button type="button" data-move-mode="in" class="${mode==='in'?'active primary':''}">入庫する</button>
+      <button type="button" data-move-mode="out" class="${mode==='out'?'active primary':''}">出庫する</button>
+    </div>
+    ${writable?'':`<p class="notice">閲覧専用のため、入庫・出庫はできません。</p>`}
+    <div class="bar">
+      <input id="moveQ" type="search" placeholder="顧客・品番・商品・サイズ・場所で検索" value="${esc(state.moveQ||'')}">
+      <span class="count">${filtered.length}件</span>
+      ${mode==='in'&&writable?`<button type="button" class="primary" id="openInboundNew">取扱を選んで入庫</button>`:''}
+    </div>
+    ${listNote('入庫・出庫の見方',mode==='in'
+      ?'一覧は現在庫がある組み合わせです。在庫0の組み合わせは「取扱を選んで入庫」から登録済みの顧客・商品・サイズ・保管場所を選んで入庫できます。同じ仕入単価でも入荷は別レコードになります。'
+      :'出庫は入荷日の古い順（先入先出）です。入荷日不明の初期在庫は払出し順を使い、架空の日付は作りません。他の顧客・サイズ・加工・場所の在庫は自動では使いません。')}
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
+      ${filtered.map(t=>`<tr>
+        <td class="dm-primary">${esc(t.customerName)}</td>
+        <td>${esc(t.code)} ${esc(t.productName)} ${esc(t.color)}<span class="sub">商品ID ${t.productId}</span></td>
+        <td>${esc(t.embroideryLabel)}</td>
+        <td>${esc(t.size)}</td>
+        <td>${esc(t.locationLabel)}</td>
+        <td class="qty">${num(t.qty)}</td>
+        <td class="money">${yen(t.amount)}</td>
+        <td>${writable?`<button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}">選択</button>`:'—'}</td>
+      </tr>`).join('')||`<tr><td colspan="8">${mode==='in'?'現在庫のある組み合わせはありません。「取扱を選んで入庫」から登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
+    </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
+  </section>`
+  const stage=$('#stockliststage')
+  mountStockDisplay(stage,'move',()=>paint())
+  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('move'))
+  document.querySelectorAll('[data-move-mode]').forEach(b=>b.onclick=async()=>{
+    state.moveMode=b.dataset.moveMode
+    paint()
+  })
+  const qEl=$('#moveQ')
+  let qTimer=null
+  qEl.oninput=()=>{
+    state.moveQ=qEl.value
+    clearTimeout(qTimer)
+    qTimer=setTimeout(async()=>{await loadMoveTargets();paint()},200)
+  }
+  const openNew=$('#openInboundNew')
+  if(openNew)openNew.onclick=()=>openInboundDialog(null)
+  document.querySelectorAll('[data-select-target]').forEach(b=>b.onclick=()=>{
+    const target=targets.find(t=>String(t.customerProductId)===b.dataset.selectTarget&&t.size===b.dataset.size&&String(t.locationId)===b.dataset.location)
+    if(!target)return
+    if(mode==='in')openInboundDialog(target)
+    else openOutboundDialog(target)
+  })
+}
+function moveDialogEl(){return $('#dialog')}
+function openInboundDialog(target){
+  if(!stockCanWrite()){toast('閲覧専用のため、入庫できません。');return}
+  const SM=StockMoves
+  const dlg=moveDialogEl()
+  const draft={
+    customerProductId:target?target.customerProductId:null,
+    customerId:target?target.customerId:null,
+    handleId:target?String(target.customerProductId):'',
+    size:target?target.size:'',
+    locationId:target?target.locationId:null,
+    siteId:'',shelfId:'',
+    qty:1,
+    unitCost:'',
+    receivedOn:new Date().toISOString().slice(0,10),
+    note:'',
+    currentQty:target?target.qty:0,
+    customerQuery:'',handleQuery:'',
+  }
+  state.moveDraft=draft
+  state.moveDirty=false
+  const handles=openingHandlesFromData(state.data)
+  const moveLocationFields=(sel)=>openingLocationFields(sel)
+    .replace(/id="openingSite"/g,'id="moveSite"')
+    .replace(/id="openingShelf"/g,'id="moveShelf"')
+    .replace(/id="openingShelfLabel"/g,'id="moveShelfLabel"')
+  const render=()=>{
+    const offering=draft.handleId
+      ?resolveConfirmedOpeningOffering(handles,draft.customerId,draft.handleId)
+      :(draft.customerProductId?handles.find(h=>Number(h.id)===Number(draft.customerProductId)):null)
+    if(offering){
+      draft.customerProductId=offering.id
+      draft.customerId=offering.customerId
+      draft.handleId=String(offering.id)
+    }
+    const customer=resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId)
+    const sizes=offering?(state.data.products.find(p=>p.id===offering.productId)||{sizes:[]}).sizes:[]
+    const keep=state.opening
+    state.opening={siteId:draft.siteId,shelfId:draft.shelfId,locationId:draft.locationId}
+    const locSel=openingLocationSelection()
+    state.opening=keep
+    draft.siteId=locSel.siteId==null?'':String(locSel.siteId)
+    draft.shelfId=locSel.shelfId
+    if(!target)draft.locationId=locSel.locationId
+    const current=draft.currentQty||0
+    const qty=Number(draft.qty)||0
+    dlg.innerHTML=`<div class="dialoghead"><h2>入庫する</h2><button type="button" id="closeMove" class="quiet">閉じる</button></div>
+      <div class="dialogbody">
+        ${target?`<p>${esc(target.customerName)} / ${esc(target.code)} ${esc(target.productName)} / ${esc(target.size)} / ${esc(target.embroideryLabel)} / ${esc(target.locationLabel)}</p>`:
+          `<div class="grid">
+            ${searchPickerMarkup({label:'顧客',inputId:'moveCustomer',listId:'moveCustomerList',clearId:'moveCustomerClear',hintId:'moveCustomerHint',placeholder:'顧客名またはカナで検索',value:customer?customer.name:(draft.customerQuery||'')})}
+            ${searchPickerMarkup({label:'商品と加工仕様',inputId:'moveHandle',listId:'moveHandleList',clearId:'moveHandleClear',hintId:'moveHandleHint',placeholder:customer?'品番・商品名・加工仕様で検索':'先に顧客を選択',value:offering?offeringPickerLabel(offering):(draft.handleQuery||'')})}
+          </div>
+          <div class="grid">
+            <label>サイズ（必須）<select id="moveSize"><option value="">選んでください</option>${sizes.map(s=>`<option value="${esc(s)}" ${draft.size===s?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
+            ${moveLocationFields(locSel)}
+          </div>`}
+        <div class="grid">
+          <label>入庫数量（必須）${SM.qtyStepperHtml('in',draft.qty||1)}</label>
+          <label>仕入単価（必須）<input id="inUnitCost" inputmode="numeric" value="${esc(draft.unitCost)}"></label>
+          <label>入荷日（必須）<input id="inReceivedOn" type="date" value="${esc(draft.receivedOn||'')}"></label>
+        </div>
+        <label>備考（任意）<input id="inNote" value="${esc(draft.note||'')}"></label>
+        <p id="inPreview">現在庫 ${num(current)}枚 → 入庫後 ${num(current+qty)}枚</p>
+        <p id="moveError"></p>
+      </div>
+      <div class="dialogactions"><button type="button" id="closeMove2">戻る</button><button type="button" class="primary" id="confirmInbound" ${stockCanWrite()?'':'disabled'}>${num(qty)}枚を入庫する</button></div>`
+    let stepper
+    const syncPreview=()=>{
+      const q=stepper.read()
+      draft.qty=q==null?draft.qty:q
+      $('#inPreview').textContent=`現在庫 ${num(current)}枚 → 入庫後 ${num(current+(Number(draft.qty)||0))}枚`
+      $('#confirmInbound').textContent=`${num(draft.qty||0)}枚を入庫する`
+    }
+    stepper=SM.bindQtyStepper(dlg,'in',{onChange:()=>{state.moveDirty=true;syncPreview()}})
+    $('#inUnitCost').oninput=()=>{draft.unitCost=$('#inUnitCost').value;state.moveDirty=true}
+    $('#inReceivedOn').oninput=()=>{draft.receivedOn=$('#inReceivedOn').value;state.moveDirty=true}
+    $('#inNote').oninput=()=>{draft.note=$('#inNote').value;state.moveDirty=true}
+    const close=()=>{if(state.moveDirty&&!window.confirm('入力中の内容を破棄しますか？'))return;dlg.close();dlg.innerHTML='';state.moveDirty=false}
+    $('#closeMove').onclick=close;$('#closeMove2').onclick=close
+    if(!target){
+      const sizeEl=$('#moveSize')
+      if(sizeEl)sizeEl.onchange=()=>{draft.size=sizeEl.value;state.moveDirty=true}
+      const siteEl=$('#moveSite')
+      if(siteEl)siteEl.onchange=()=>{draft.siteId=siteEl.value;draft.shelfId='';draft.locationId=null;state.moveDirty=true;render()}
+      const shelfEl=$('#moveShelf')
+      if(shelfEl)shelfEl.onchange=()=>{draft.shelfId=shelfEl.value;state.moveDirty=true;render()}
+      bindOpeningSearchPicker({
+        input:$('#moveCustomer'),list:$('#moveCustomerList'),clearBtn:$('#moveCustomerClear'),hint:$('#moveCustomerHint'),
+        getItems:()=>filterOpeningCustomers(state.data.customers,$('#moveCustomer').value).map(c=>({id:c.id,label:c.name,html:esc(c.name),raw:c})),
+        emptyText:'該当する顧客がありません',
+        isConfirmed:()=>!!resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId),
+        confirmedLabel:()=>(resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId)||{}).name||'',
+        onPick:item=>{draft.customerId=item.id;draft.customerQuery=item.label;draft.handleId='';draft.customerProductId=null;draft.size='';draft.handleQuery='';state.moveDirty=true;render()},
+        onClear:()=>{Object.assign(draft,clearOpeningCustomerSelection(draft));draft.customerQuery='';state.moveDirty=true;render()},
+        onQueryChange:v=>{draft.customerQuery=v;if(draft.customerId){draft.customerId=null;draft.handleId='';draft.customerProductId=null;draft.size='';render();return true}return false},
+      })
+      bindOpeningSearchPicker({
+        input:$('#moveHandle'),list:$('#moveHandleList'),clearBtn:$('#moveHandleClear'),hint:$('#moveHandleHint'),
+        getItems:()=>filterOpeningOfferings(handles,draft.customerId,$('#moveHandle').value).map(h=>({id:h.id,label:offeringPickerLabel(h),html:esc(offeringPickerLabel(h)),raw:h})),
+        emptyText:'該当する商品・加工仕様がありません',
+        isConfirmed:()=>!!resolveConfirmedOpeningOffering(handles,draft.customerId,draft.handleId),
+        confirmedLabel:()=>{const h=resolveConfirmedOpeningOffering(handles,draft.customerId,draft.handleId);return h?offeringPickerLabel(h):''},
+        onPick:item=>{draft.handleId=String(item.id);draft.customerProductId=item.id;draft.handleQuery=item.label;draft.size='';state.moveDirty=true;render()},
+        onClear:()=>{Object.assign(draft,clearOpeningProductFields(draft));draft.handleQuery='';state.moveDirty=true;render()},
+        onQueryChange:v=>{draft.handleQuery=v;if(draft.handleId){draft.handleId='';draft.customerProductId=null;draft.size='';render();return true}return false},
+      })
+    }
+    $('#confirmInbound').onclick=async()=>{
+      const err=$('#moveError')
+      err.textContent=''
+      const q=stepper.read()
+      if(q==null||q<1){err.textContent='入庫数量を入力してください。';return}
+      draft.qty=q
+      const costRaw=String($('#inUnitCost').value||'').trim().replace(/,/g,'')
+      draft.receivedOn=$('#inReceivedOn').value
+      draft.note=$('#inNote').value
+      if(!target){
+        if(!draft.customerProductId){err.textContent='顧客と商品の取扱を選んでください。';return}
+        draft.size=$('#moveSize').value
+        if(!draft.size){err.textContent='サイズを選んでください。';return}
+        draft.siteId=$('#moveSite')?$('#moveSite').value:draft.siteId
+        draft.shelfId=$('#moveShelf')?$('#moveShelf').value:draft.shelfId
+        const prev=state.opening
+        state.opening={siteId:draft.siteId,shelfId:draft.shelfId,locationId:draft.locationId}
+        const sel=openingLocationSelection()
+        state.opening=prev
+        if(sel.locationId==null){err.textContent='保管場所を選んでください。';return}
+        draft.locationId=sel.locationId
+      }
+      const button=$('#confirmInbound')
+      button.disabled=true
+      try{
+        await api('/api/inbound',{
+          token:SM.newMoveToken(),
+          customerProductId:Number(draft.customerProductId),
+          size:draft.size,
+          locationId:Number(draft.locationId),
+          qty:Number(draft.qty),
+          unitCost:costRaw===''?'':Number(costRaw),
+          receivedOn:draft.receivedOn,
+          note:draft.note,
+        })
+        state.moveDirty=false
+        dlg.close();dlg.innerHTML=''
+        toast('入庫しました。')
+        await loadMoveTargets();paint()
+      }catch(e){err.textContent=e.message;button.disabled=false}
+    }
+  }
+  if(!dlg.open)dlg.showModal()
+  render()
+}
+function openOutboundDialog(target){
+  if(!stockCanWrite()){toast('閲覧専用のため、出庫できません。');return}
+  const SM=StockMoves
+  const dlg=moveDialogEl()
+  let plan=null
+  let fingerprint=''
+  let confirmChanged=false
+  state.moveDirty=false
+  const paintDialog=async()=>{
+    dlg.innerHTML=`<div class="dialoghead"><h2>出庫する</h2><button type="button" id="closeMove" class="quiet">閉じる</button></div>
+      <div class="dialogbody">
+        <p>${esc(target.customerName)} / ${esc(target.code)} ${esc(target.productName)} / ${esc(target.size)} / ${esc(target.embroideryLabel)} / ${esc(target.locationLabel)}</p>
+        <label>出庫数量（必須）${SM.qtyStepperHtml('out',1)}</label>
+        <p id="outPreview">読み込み中…</p>
+        <div id="outAlloc"></div>
+        <label>備考（任意）<input id="outNote"></label>
+        <p id="moveError"></p>
+      </div>
+      <div class="dialogactions"><button type="button" id="closeMove2">戻る</button><button type="button" class="primary" id="confirmOutbound">出庫する</button></div>`
+    const close=()=>{if(state.moveDirty&&!window.confirm('入力中の内容を破棄しますか？'))return;dlg.close();dlg.innerHTML='';state.moveDirty=false}
+    $('#closeMove').onclick=close;$('#closeMove2').onclick=close
+    const refresh=async()=>{
+      const err=$('#moveError');err.textContent=''
+      const q=stepper.read()
+      if(q==null||q<1){$('#outPreview').textContent='出庫数量を入力してください。';$('#outAlloc').innerHTML='';$('#confirmOutbound').disabled=true;return}
+      try{
+        plan=await api('/api/outbound/preview',{
+          customerProductId:Number(target.customerProductId),
+          size:target.size,
+          locationId:Number(target.locationId),
+          qty:q,
+        })
+        fingerprint=plan.fingerprint
+        $('#outPreview').textContent=`現在庫 ${num(plan.currentQty)}枚 → 出庫 ${num(plan.outboundQty)}枚 → 出庫後 ${num(plan.afterQty)}枚`
+        if(!plan.ok){
+          $('#outAlloc').innerHTML=`<p class="notice">在庫が${num(plan.shortfall)}枚不足しています。出庫できるのは${num(plan.currentQty)}枚までです。</p>`
+          $('#confirmOutbound').disabled=true
+          $('#confirmOutbound').textContent='在庫不足のため出庫できません'
+        }else{
+          $('#outAlloc').innerHTML=SM.allocationTableHtml(plan,esc,yen,num)
+          $('#confirmOutbound').disabled=!stockCanWrite()
+          $('#confirmOutbound').textContent=confirmChanged?'この内訳で出庫する':`${num(plan.outboundQty)}枚を出庫する`
+        }
+      }catch(e){$('#outPreview').textContent='';$('#outAlloc').innerHTML='';err.textContent=e.message;$('#confirmOutbound').disabled=true}
+    }
+    const stepper=SM.bindQtyStepper(dlg,'out',{onChange:()=>{state.moveDirty=true;confirmChanged=false;refresh()}})
+    $('#outNote').oninput=()=>{state.moveDirty=true}
+    $('#confirmOutbound').onclick=async()=>{
+      const err=$('#moveError');err.textContent=''
+      const q=stepper.read()
+      if(q==null||q<1){err.textContent='出庫数量を入力してください。';return}
+      if(!plan||!plan.ok){err.textContent='在庫が不足しています。';return}
+      const button=$('#confirmOutbound');button.disabled=true
+      try{
+        await api('/api/outbound',{
+          token:SM.newMoveToken(),
+          customerProductId:Number(target.customerProductId),
+          size:target.size,
+          locationId:Number(target.locationId),
+          qty:q,
+          note:$('#outNote').value,
+          fingerprint,
+          confirmChanged,
+        })
+        state.moveDirty=false
+        dlg.close();dlg.innerHTML=''
+        toast('出庫しました。')
+        await loadMoveTargets();paint()
+      }catch(e){
+        if(e.status===409&&e.payload&&e.payload.needsReconfirm){
+          plan=e.payload.plan
+          fingerprint=plan.fingerprint
+          confirmChanged=true
+          err.textContent=e.message
+          $('#outPreview').textContent=`現在庫 ${num(plan.currentQty)}枚 → 出庫 ${num(plan.outboundQty)}枚 → 出庫後 ${num(plan.afterQty)}枚`
+          $('#outAlloc').innerHTML=SM.allocationTableHtml(plan,esc,yen,num)+(plan.ok?'':'')
+          button.disabled=!plan.ok
+          button.textContent=plan.ok?'この内訳で出庫する':'在庫不足のため出庫できません'
+          return
+        }
+        err.textContent=e.message;button.disabled=false
+      }
+    }
+    await refresh()
+  }
+  if(!dlg.open)dlg.showModal()
+  paintDialog()
 }
 document.querySelectorAll('.switch button[data-mode]').forEach(b=>b.onclick=async()=>{
   $('#desknote').hidden=true

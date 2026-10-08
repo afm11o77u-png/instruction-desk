@@ -832,11 +832,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if not u: return self.reply(401, {'error':'ログインしてください。'})
         if u['must_change']: return self.reply(403, {'error':'最初に仮パスワードを変更してください。'})
         if u['role']!='owner' and not u['manage'] and not u['overview']: return self.reply(403, {'error':'在庫管理は主管理者と管理者が使用します。'})
+        # overview-only (no manage) is read-only for stock quantity changes.
+        can_write = u['role']=='owner' or bool(u['manage'])
+        actor = {'id': u['id'], 'name': u['name']}
         ensure_stock()
         if path.startswith('/inventory/api'):
             api_path=path[len('/inventory'):] or '/'
             if method=='GET':
-                return self.reply(*stockdesk().api_get(STOCK_DB, 'desk', api_path, parse_qs(parsed.query)))
+                return self.reply(*stockdesk().api_get(STOCK_DB, 'desk', api_path, parse_qs(parsed.query), can_write=can_write, actor=actor))
             if self.headers.get('X-Stock-Request')!='1': return self.reply(400, {'error':'画面からの操作だけを受け付けます。'})
             origin=self.headers.get('Origin') or ''
             if origin and origin not in ALLOWED_ORIGINS: return self.reply(403, {'error':'接続元を確認してください。'})
@@ -845,7 +848,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             if n>(12_000_000 if api_path=='/api/import' else 1_000_000): return self.reply(400, {'error':'送信データが大きすぎます。'})
             try: body=json.loads(self.rfile.read(n).decode('utf-8') or '{}')
             except json.JSONDecodeError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
-            status, result=stockdesk().api_post(STOCK_DB, 'desk', api_path, body)
+            status, result=stockdesk().api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
             return self.reply(status, result)
         rel='index.html' if path in ('/inventory','/inventory/') else path[len('/inventory/'):]
         root=(STOCK_ROOT/'static').resolve()

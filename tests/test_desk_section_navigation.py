@@ -35,7 +35,9 @@ class DeskSectionNavigationTest(unittest.TestCase):
         self.assertIn('在庫管理', aside)
         self.assertIn('id="stocknav"', aside)
         self.assertIn('data-stock-section="list"', aside)
+        self.assertIn('data-stock-section="move"', aside)
         self.assertIn('data-stock-section="setup"', aside)
+        self.assertIn('入庫・出庫', aside)
 
     def test_show_catalog_switches_info_and_stock(self):
         show = _fn(PLACEMENT, 'showCatalog')
