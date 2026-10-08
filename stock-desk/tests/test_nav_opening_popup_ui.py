@@ -33,27 +33,33 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('data-stock-section="list"', aside)
         self.assertIn('data-stock-section="move"', aside)
         self.assertIn('data-stock-section="setup"', aside)
+        self.assertIn('data-stock-section="period"', aside)
         self.assertIn('在庫一覧', aside)
         self.assertIn('入庫・出庫', aside)
         self.assertIn('登録・設定', aside)
+        self.assertIn('期間入出荷集計', aside)
         self.assertIn('data-catalog="desk"', aside)
         self.assertIn('data-catalog="info"', aside)
         self.assertIn('data-catalog="stock"', aside)
         start = aside.index('id="stocknav"')
         end = aside.index('<div class="asidebottom"', start)
         stocknav = aside[start:end]
-        # Top row: 在庫一覧 | 登録・設定; 入庫・出庫 wide below
+        # Top row: 在庫一覧 | 登録・設定; 入庫・出庫 then 期間入出荷集計 at bottom (no reorder)
         self.assertIn('class="navrow stocknav-top"', stocknav)
         top_start = stocknav.index('stocknav-top')
         top = stocknav[top_start:stocknav.index('</div>', top_start)]
         self.assertIn('data-stock-section="list"', top)
         self.assertIn('data-stock-section="setup"', top)
         self.assertNotIn('data-stock-section="move"', top)
+        self.assertNotIn('data-stock-section="period"', top)
         self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-move'))
+        self.assertLess(stocknav.index('stocknav-move'), stocknav.index('stocknav-period'))
         self.assertRegex(stocknav, r'stocknav-top[\s\S]*data-stock-section="list"[\s\S]*data-stock-section="setup"')
         self.assertIn('class="nav stocknav-move"', stocknav)
+        self.assertIn('class="nav stocknav-period"', stocknav)
         css = (REPO / 'style.css').read_text(encoding='utf-8')
-        self.assertIn('#stocknav .stocknav-move{width:100%', css)
+        self.assertIn('#stocknav .stocknav-move', css)
+        self.assertIn('#stocknav .stocknav-period', css)
         self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
@@ -65,6 +71,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("e.data.type==='stock-section-changed'", PLACEMENT_JS)
         self.assertIn("normalizeStockSection", PLACEMENT_JS)
         self.assertIn("section==='move'", PLACEMENT_JS)
+        self.assertIn("section==='period'", PLACEMENT_JS)
 
     def test_tabs_sit_in_header_with_brand(self):
         self.assertIn('class="stockhead"', INDEX)
@@ -109,6 +116,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("SETUP_TAB_LABEL[state.tab]", paint)
         self.assertIn("'在庫一覧'", paint)
         self.assertIn("'入庫・出庫'", paint)
+        self.assertIn("'期間入出荷集計'", paint)
         self.assertIn("id=\"stocktitle\"", INDEX)
 
     def test_stock_list_renames_lot_tab_to_detail(self):

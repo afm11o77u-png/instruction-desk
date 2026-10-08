@@ -3,6 +3,7 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import stock
+import stock_period
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / 'static'
@@ -60,6 +61,36 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             }
             with stock.connect(db_path) as c:
                 return 200, stock.plan_outbound(c, body)
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/period-summary':
+        try:
+            args = {k: v[0] for k, v in query.items()}
+            with stock.connect(db_path) as c:
+                return 200, stock_period.summarize_period(c, args)
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/period-summary/history':
+        try:
+            args = {k: v[0] for k, v in query.items()}
+            with stock.connect(db_path) as c:
+                return 200, stock_period.period_history(c, args)
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/period-summary/export.csv':
+        try:
+            args = {k: v[0] for k, v in query.items()}
+            with stock.connect(db_path) as c:
+                data = stock_period.export_csv(c, args)
+            return 200, data, 'text/csv; charset=utf-8'
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/period-summary/export.xlsx':
+        try:
+            args = {k: v[0] for k, v in query.items()}
+            with stock.connect(db_path) as c:
+                data = stock_period.export_xlsx(c, args)
+            return 200, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
     return 404, {'error': '見つかりません。'}
