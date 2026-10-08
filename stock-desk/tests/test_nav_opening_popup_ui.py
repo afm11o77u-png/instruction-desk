@@ -27,12 +27,14 @@ def _fn(source: str, name: str) -> str:
 
 
 class StockListSetupNavUiTest(unittest.TestCase):
-    def test_parent_stocknav_has_list_and_setup(self):
+    def test_parent_stocknav_has_list_move_and_setup(self):
         self.assertIn('id="stocknav"', DESK_INDEX)
         aside = DESK_INDEX[DESK_INDEX.index('<aside>'):DESK_INDEX.index('</aside>')]
         self.assertIn('data-stock-section="list"', aside)
+        self.assertIn('data-stock-section="move"', aside)
         self.assertIn('data-stock-section="setup"', aside)
         self.assertIn('在庫一覧', aside)
+        self.assertIn('入庫・出庫', aside)
         self.assertIn('登録・設定', aside)
         self.assertIn('data-catalog="desk"', aside)
         self.assertIn('data-catalog="info"', aside)
@@ -45,6 +47,8 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('tellStockFrame', PLACEMENT_JS)
         self.assertIn("type:'stock-section'", PLACEMENT_JS)
         self.assertIn("e.data.type==='stock-section-changed'", PLACEMENT_JS)
+        self.assertIn("normalizeStockSection", PLACEMENT_JS)
+        self.assertIn("section==='move'", PLACEMENT_JS)
 
     def test_tabs_sit_in_header_with_brand(self):
         self.assertIn('class="stockhead"', INDEX)
@@ -72,7 +76,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("section:'list'", APP_JS)
         self.assertIn("tab:'list'", APP_JS)
         boot = _fn(APP_JS, 'boot')
-        self.assertIn("applySectionState(sectionParam==='setup'?'setup':'list'", boot)
+        self.assertIn('normalizeSection(params.get(', boot)
         show = _fn(PLACEMENT_JS, 'showCatalog')
         self.assertIn("syncStockNav('list')", show)
 
@@ -88,7 +92,20 @@ class StockListSetupNavUiTest(unittest.TestCase):
         paint = _fn(APP_JS, 'paint')
         self.assertIn("SETUP_TAB_LABEL[state.tab]", paint)
         self.assertIn("'在庫一覧'", paint)
+        self.assertIn("'入庫・出庫'", paint)
         self.assertIn("id=\"stocktitle\"", INDEX)
+
+    def test_stock_list_renames_lot_tab_to_detail(self):
+        self.assertIn("['lot','在庫明細']", APP_JS)
+        self.assertNotIn("['lot','入荷分']", APP_JS)
+
+    def test_move_page_has_mode_toggle_and_select(self):
+        body = _fn(APP_JS, 'movePage')
+        self.assertIn('入庫する', body)
+        self.assertIn('出庫する', body)
+        self.assertIn('data-select-target', body)
+        self.assertIn('取扱を選んで入庫', body)
+        self.assertIn("stock_moves.js", INDEX)
 
     def test_header_tabs_flex_wrap_no_overflow_css(self):
         self.assertRegex(CSS, r'header,\s*\.stockhead\{[^}]*flex-wrap:\s*wrap')

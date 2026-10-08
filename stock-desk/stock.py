@@ -1,6 +1,7 @@
 """在庫モジュール。数量と金額はロット（入荷分）から計算し、画面から現在庫を手入力させない。"""
 import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS customers (
@@ -69,6 +70,14 @@ CREATE TABLE IF NOT EXISTS opening_batches (
   client_token TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS move_batches (
+  id INTEGER PRIMARY KEY,
+  client_token TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS lots (
   id INTEGER PRIMARY KEY,
   batch_id INTEGER REFERENCES opening_batches(id),
@@ -99,6 +108,8 @@ CREATE TABLE IF NOT EXISTS moves (
   location_id INTEGER,
   related_lot_id INTEGER,
   loan_id INTEGER,
+  move_batch_id INTEGER REFERENCES move_batches(id),
+  actor_name TEXT NOT NULL DEFAULT '',
   note TEXT NOT NULL DEFAULT '',
   at TEXT NOT NULL
 );
@@ -141,9 +152,58 @@ def connect(path):
     return c
 
 
+class StockConflict(Exception):
+    """Client must re-confirm because stock breakdown changed."""
+
+    def __init__(self, payload):
+        super().__init__(payload.get('error') or '在庫の内訳が変わったため、確認し直してください。')
+        self.payload = payload
+
+
 def initialize(c):
     c.execute('PRAGMA journal_mode=WAL')
     c.executescript(SCHEMA)
+    migrate_schema(c)
+
+
+def needs_migration(c):
+    tables = {r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'move_batches' not in tables:
+        return True
+    move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
+    return 'move_batch_id' not in move_cols or 'actor_name' not in move_cols
+
+
+def backup_sqlite(db_path):
+    """Copy DB (+ WAL/SHM if present) beside the original before schema migration."""
+    import shutil
+    src = Path(db_path)
+    if not src.is_file():
+        return None
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    dest = src.with_name(f'{src.stem}.pre-inout-{stamp}{src.suffix}')
+    shutil.copy2(src, dest)
+    for suffix in ('-wal', '-shm'):
+        side = Path(str(src) + suffix)
+        if side.is_file():
+            shutil.copy2(side, Path(str(dest) + suffix))
+    return dest
+
+
+def migrate_schema(c):
+    c.execute('''CREATE TABLE IF NOT EXISTS move_batches (
+      id INTEGER PRIMARY KEY,
+      client_token TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      actor_name TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )''')
+    move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
+    if 'move_batch_id' not in move_cols:
+        c.execute('ALTER TABLE moves ADD COLUMN move_batch_id INTEGER REFERENCES move_batches(id)')
+    if 'actor_name' not in move_cols:
+        c.execute("ALTER TABLE moves ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''")
 
 
 def text(value):
@@ -964,7 +1024,9 @@ def stock_query(c, args):
     for r in c.execute(sql, params):
         loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
         kinds = {m['kind'] for m in c.execute('SELECT DISTINCT kind FROM moves WHERE lot_id=?', (r['id'],))}
-        correctable = kinds <= {'opening', 'opening_correction'} and r['qty_remaining'] == r['qty_received']
+        unconsumed = r['qty_remaining'] == r['qty_received']
+        correctable = kinds <= {'opening', 'opening_correction'} and unconsumed
+        inbound_correctable = kinds <= {'inbound', 'inbound_correction'} and unconsumed
         site_only = r['parent_id'] is None
         lots.append({
             'id': r['id'], 'customerId': r['customer_id'], 'customerName': r['customer_name'],
@@ -978,7 +1040,8 @@ def stock_query(c, args):
             'unitCost': r['unit_cost'], 'qty': r['qty_remaining'],
             'amount': r['qty_remaining'] * r['unit_cost'], 'basisDate': r['basis_date'],
             'receivedOn': r['received_on'], 'receivedUnknown': bool(r['received_unknown']),
-            'payoutOrder': r['payout_order'], 'condition': r['condition'], 'correctable': correctable,
+            'payoutOrder': r['payout_order'], 'condition': r['condition'],
+            'correctable': correctable, 'inboundCorrectable': inbound_correctable,
         })
     group = args.get('group') or 'lot'
     size_orders = (
@@ -1014,14 +1077,33 @@ def _add_lot_price(row, lot):
     row['qty'] += lot['qty']
     row['amount'] += lot['amount']
     price = row['prices'].setdefault(lot['unitCost'], {
-        'unitCost': lot['unitCost'], 'qty': 0, 'amount': 0,
+        'unitCost': lot['unitCost'], 'qty': 0, 'amount': 0, 'receipts': [],
     })
     price['qty'] += lot['qty']
     price['amount'] += lot['amount']
+    price['receipts'].append({
+        'lotId': lot['id'],
+        'qty': lot['qty'],
+        'unitCost': lot['unitCost'],
+        'amount': lot['amount'],
+        'receivedOn': lot.get('receivedOn'),
+        'receivedUnknown': bool(lot.get('receivedUnknown')),
+        'payoutOrder': lot.get('payoutOrder') or 0,
+    })
 
 
 def _sorted_prices(row):
-    return sorted(row['prices'].values(), key=lambda p: (p['unitCost'], p['qty']))
+    prices = sorted(row['prices'].values(), key=lambda p: (p['unitCost'], p['qty']))
+    for price in prices:
+        receipts = price.get('receipts') or []
+        receipts.sort(key=lambda r: (
+            0 if r.get('receivedUnknown') else 1,
+            r.get('payoutOrder') or 0,
+            r.get('receivedOn') or '',
+            r.get('lotId') or 0,
+        ))
+        price['receipts'] = receipts
+    return prices
 
 
 def group_lots_by_product(lots, size_orders=None):
@@ -1256,20 +1338,394 @@ def group_lots(lots, group, size_orders=None):
     raise ValueError('集計の種類が不正です。')
 
 
+def _lot_field(r, *names, default=None):
+    if isinstance(r, dict):
+        for name in names:
+            if name in r:
+                return r[name]
+        return default
+    keys = set(r.keys())
+    for name in names:
+        if name in keys:
+            return r[name]
+    return default
+
+
 def issue_sequence(lots):
-    """将来の出荷が使う払出し順。入荷日不明を先にし、単価では並べない。"""
+    """出荷の払出し順。入荷日不明を先にし、同日は登録順(id)。単価では並べない。"""
     def key(r):
-        if r['received_unknown']:
-            return (0, r['payout_order'], r['id'])
-        return (1, r['received_on'], r['id'])
+        unknown = _lot_field(r, 'received_unknown', 'receivedUnknown', default=0)
+        payout = _lot_field(r, 'payout_order', 'payoutOrder', default=0) or 0
+        received = _lot_field(r, 'received_on', 'receivedOn', default='') or ''
+        if unknown:
+            return (0, payout, r['id'])
+        return (1, received, r['id'])
     return sorted(lots, key=key)
 
 
 def lot_history(c, lot_id):
     rows = []
+    move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
+    has_actor = 'actor_name' in move_cols
     for r in c.execute('SELECT * FROM moves WHERE lot_id=? ORDER BY id', (lot_id,)):
-        rows.append({'id': r['id'], 'kind': r['kind'], 'at': r['at'], 'qtyBefore': r['qty_before'], 'qtyAfter': r['qty_after'],
-                     'costBefore': r['cost_before'], 'costAfter': r['cost_after'], 'note': r['note'],
-                     'amountBefore': None if r['qty_before'] is None or r['cost_before'] is None else r['qty_before'] * r['cost_before'],
-                     'amountAfter': None if r['qty_after'] is None or r['cost_after'] is None else r['qty_after'] * r['cost_after']})
+        item = {
+            'id': r['id'], 'kind': r['kind'], 'at': r['at'],
+            'qtyDelta': r['qty_delta'],
+            'qtyBefore': r['qty_before'], 'qtyAfter': r['qty_after'],
+            'costBefore': r['cost_before'], 'costAfter': r['cost_after'],
+            'unitCost': r['unit_cost'],
+            'note': r['note'],
+            'actorName': r['actor_name'] if has_actor else '',
+            'amountBefore': None if r['qty_before'] is None or r['cost_before'] is None else r['qty_before'] * r['cost_before'],
+            'amountAfter': None if r['qty_after'] is None or r['cost_after'] is None else r['qty_after'] * r['cost_after'],
+        }
+        rows.append(item)
     return rows
+
+
+def _actor_name(body):
+    actor = body.get('_actor') if isinstance(body.get('_actor'), dict) else {}
+    name = text(actor.get('name') or body.get('actorName'))
+    return name[:80] if name else ''
+
+
+def _require_write(body):
+    if body.get('_canWrite') is False:
+        raise ValueError('閲覧専用のため、数量の変更はできません。')
+
+
+def _move_token_result(c, batch_id, already):
+    batch = c.execute('SELECT * FROM move_batches WHERE id=?', (batch_id,)).fetchone()
+    lines = []
+    for r in c.execute('''SELECT m.*, l.size_label, l.unit_cost AS lot_cost, l.qty_remaining
+                          FROM moves m JOIN lots l ON l.id=m.lot_id
+                          WHERE m.move_batch_id=? ORDER BY m.id''', (batch_id,)):
+        lines.append({
+            'lotId': r['lot_id'], 'kind': r['kind'], 'qty': abs(r['qty_delta']),
+            'unitCost': r['unit_cost'], 'amount': abs(r['qty_delta']) * r['unit_cost'],
+            'qtyBefore': r['qty_before'], 'qtyAfter': r['qty_after'],
+            'size': r['size_label'],
+        })
+    return {
+        'already': already,
+        'batchId': batch_id,
+        'kind': batch['kind'],
+        'actorName': batch['actor_name'],
+        'note': batch['note'],
+        'at': batch['created_at'],
+        'lines': lines,
+        'totalQty': sum(x['qty'] for x in lines),
+        'totalAmount': sum(x['amount'] for x in lines),
+    }
+
+
+def resolve_customer_product(c, cp_id):
+    if not isinstance(cp_id, int):
+        raise ValueError('顧客と商品の取扱を選んでください。')
+    cp = c.execute('''SELECT cp.*, p.active AS product_active, cu.active AS customer_active,
+                             p.code, p.name AS product_name, p.color, cu.name AS customer_name
+                      FROM customer_products cp
+                      JOIN products p ON p.id=cp.product_id
+                      JOIN customers cu ON cu.id=cp.customer_id
+                      WHERE cp.id=?''', (cp_id,)).fetchone()
+    if not cp or not cp['active'] or not cp['product_active'] or not cp['customer_active']:
+        raise ValueError('使用中の顧客・商品・加工仕様を選んでください。')
+    return cp
+
+
+def resolve_active_location(c, location_id):
+    loc = c.execute('SELECT * FROM locations WHERE id=?', (location_id,)).fetchone() if isinstance(location_id, int) else None
+    if not loc or not loc['active']:
+        raise ValueError('保管場所を、登録済みの場所から選んでください。')
+    return loc
+
+
+def resolve_size_label(c, product_id, size):
+    if not isinstance(size, str) or size != size.strip() or not size.strip():
+        raise ValueError('商品に登録したサイズだけを入力してください。')
+    label = size.strip()
+    row = c.execute('SELECT label FROM product_sizes WHERE product_id=? AND label=?', (product_id, label)).fetchone()
+    if not row:
+        raise ValueError('商品に登録したサイズだけを入力してください。新しいサイズは商品台帳で追加します。')
+    return label
+
+
+def lots_for_target(c, customer_product_id, size_label, location_id):
+    return list(c.execute(
+        '''SELECT * FROM lots
+           WHERE customer_product_id=? AND size_label=? AND location_id=? AND condition='new' AND qty_remaining>0
+           ORDER BY id''',
+        (customer_product_id, size_label, location_id),
+    ))
+
+
+def target_fingerprint(lots):
+    parts = []
+    for lot in sorted(lots, key=lambda r: r['id']):
+        parts.append(f"{lot['id']}:{lot['qty_remaining']}:{lot['unit_cost']}")
+    return '|'.join(parts)
+
+
+def current_qty_for_target(c, customer_product_id, size_label, location_id):
+    row = c.execute(
+        '''SELECT COALESCE(SUM(qty_remaining),0) AS qty
+           FROM lots
+           WHERE customer_product_id=? AND size_label=? AND location_id=? AND condition='new' ''',
+        (customer_product_id, size_label, location_id),
+    ).fetchone()
+    return int(row['qty'])
+
+
+def plan_outbound(c, body):
+    """FIFO preview for the same 顧客・商品仕様・サイズ・保管場所 only."""
+    cp = resolve_customer_product(c, body.get('customerProductId'))
+    size = resolve_size_label(c, cp['product_id'], body.get('size'))
+    loc = resolve_active_location(c, body.get('locationId'))
+    qty = parse_qty(body.get('qty'), '出庫数量')
+    lots = lots_for_target(c, cp['id'], size, loc['id'])
+    ordered = issue_sequence(lots)
+    remaining = qty
+    allocations = []
+    for lot in ordered:
+        if remaining <= 0:
+            break
+        take = min(remaining, lot['qty_remaining'])
+        if take <= 0:
+            continue
+        allocations.append({
+            'lotId': lot['id'],
+            'qty': take,
+            'unitCost': lot['unit_cost'],
+            'amount': take * lot['unit_cost'],
+            'qtyBefore': lot['qty_remaining'],
+            'qtyAfter': lot['qty_remaining'] - take,
+            'receivedOn': lot['received_on'],
+            'receivedUnknown': bool(lot['received_unknown']),
+            'payoutOrder': lot['payout_order'],
+        })
+        remaining -= take
+    current = sum(l['qty_remaining'] for l in lots)
+    shortfall = remaining
+    return {
+        'customerProductId': cp['id'],
+        'customerId': cp['customer_id'],
+        'customerName': cp['customer_name'],
+        'productId': cp['product_id'],
+        'code': cp['code'],
+        'productName': cp['product_name'],
+        'color': cp['color'],
+        'embroidery': cp['embroidery'],
+        'embroideryLabel': cp['embroidery'] or '刺繍なし',
+        'size': size,
+        'locationId': loc['id'],
+        'locationLabel': location_label(c, loc),
+        'currentQty': current,
+        'outboundQty': qty,
+        'afterQty': current - qty + shortfall,
+        'shortfall': shortfall,
+        'ok': shortfall == 0,
+        'fingerprint': target_fingerprint(lots),
+        'allocations': allocations,
+        'totalAmount': sum(a['amount'] for a in allocations),
+    }
+
+
+def register_inbound(c, body):
+    """Daily inbound: always creates a new receipt lot (same unit price → separate record)."""
+    _require_write(body)
+    token = _token(body.get('token'))
+    existing = c.execute('SELECT id FROM move_batches WHERE client_token=?', (token,)).fetchone()
+    if existing:
+        return _move_token_result(c, existing['id'], True)
+    cp = resolve_customer_product(c, body.get('customerProductId'))
+    size = resolve_size_label(c, cp['product_id'], body.get('size'))
+    loc = resolve_active_location(c, body.get('locationId'))
+    qty = parse_qty(body.get('qty'), '入庫数量')
+    cost = parse_money(body.get('unitCost'), '仕入単価')
+    received = parse_date(body.get('receivedOn'), '入荷日')
+    note = optional(body.get('note'), '備考', 200)
+    actor = _actor_name(body)
+    before = current_qty_for_target(c, cp['id'], size, loc['id'])
+    t = stamp()
+    c.execute(
+        'INSERT INTO move_batches(client_token,kind,actor_name,note,created_at) VALUES(?,?,?,?,?)',
+        (token, 'inbound', actor, note, t),
+    )
+    batch_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    c.execute(
+        '''INSERT INTO lots(batch_id,customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
+           basis_date,received_on,received_unknown,payout_order,condition,created_at,updated_at)
+           VALUES(NULL,?,?,?,?,?,?,?,?,0,0,'new',?,?)''',
+        (cp['id'], size, loc['id'], cost, qty, qty, received, received, t, t),
+    )
+    lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    c.execute(
+        '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
+           location_id,move_batch_id,actor_name,note,at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (lot_id, 'inbound', qty, cost, 0, qty, None, cost, loc['id'], batch_id, actor, note or '入庫', t),
+    )
+    result = _move_token_result(c, batch_id, False)
+    result.update({
+        'lotId': lot_id,
+        'currentQtyBefore': before,
+        'currentQtyAfter': before + qty,
+        'unitCost': cost,
+        'receivedOn': received,
+        'size': size,
+        'locationId': loc['id'],
+        'customerProductId': cp['id'],
+    })
+    return result
+
+
+def register_outbound(c, body):
+    """Daily outbound with date FIFO (unknown-date opening uses payout_order). Idempotent by token."""
+    _require_write(body)
+    token = _token(body.get('token'))
+    existing = c.execute('SELECT id FROM move_batches WHERE client_token=?', (token,)).fetchone()
+    if existing:
+        return _move_token_result(c, existing['id'], True)
+    plan = plan_outbound(c, body)
+    if not plan['ok']:
+        raise ValueError(f"在庫が{plan['shortfall']}枚不足しています。出庫できるのは{plan['currentQty']}枚までです。")
+    expected = text(body.get('fingerprint') or body.get('expectedFingerprint'))
+    force = body.get('confirmChanged') in (True, 1, '1')
+    if expected and expected != plan['fingerprint'] and not force:
+        raise StockConflict({
+            'error': '確認中に在庫の内訳が変わりました。内容を確認し直してください。',
+            'needsReconfirm': True,
+            'plan': plan,
+        })
+    note = optional(body.get('note'), '備考', 200)
+    actor = _actor_name(body)
+    t = stamp()
+    c.execute(
+        'INSERT INTO move_batches(client_token,kind,actor_name,note,created_at) VALUES(?,?,?,?,?)',
+        (token, 'outbound', actor, note, t),
+    )
+    batch_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    for alloc in plan['allocations']:
+        lot = c.execute('SELECT * FROM lots WHERE id=?', (alloc['lotId'],)).fetchone()
+        if not lot or lot['qty_remaining'] < alloc['qty']:
+            raise ValueError('確認中に在庫が減ったため、出庫を中止しました。最新の数量を確認してください。')
+        before = lot['qty_remaining']
+        after = before - alloc['qty']
+        if after < 0:
+            raise ValueError('在庫が不足しているため、出庫できません。')
+        c.execute(
+            'UPDATE lots SET qty_remaining=?,updated_at=? WHERE id=? AND qty_remaining=?',
+            (after, t, lot['id'], before),
+        )
+        if c.execute('SELECT changes()').fetchone()[0] != 1:
+            raise ValueError('同時に出庫されたため、保存を中止しました。最新の数量を確認してください。')
+        c.execute(
+            '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
+               location_id,move_batch_id,actor_name,note,at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (lot['id'], 'outbound', -alloc['qty'], lot['unit_cost'], before, after, lot['unit_cost'], lot['unit_cost'],
+             lot['location_id'], batch_id, actor, note or '出庫', t),
+        )
+    result = _move_token_result(c, batch_id, False)
+    result.update({
+        'currentQtyBefore': plan['currentQty'],
+        'currentQtyAfter': plan['currentQty'] - plan['outboundQty'],
+        'allocations': plan['allocations'],
+        'fingerprint': plan['fingerprint'],
+        'customerProductId': plan['customerProductId'],
+        'size': plan['size'],
+        'locationId': plan['locationId'],
+    })
+    return result
+
+
+def correct_inbound(c, body):
+    """Correct an unconsumed daily inbound lot. Not for opening stock or consumed receipts."""
+    _require_write(body)
+    lot_id = body.get('lotId')
+    if not isinstance(lot_id, int):
+        raise ValueError('訂正する在庫を選んでください。')
+    lot = c.execute('SELECT * FROM lots WHERE id=?', (lot_id,)).fetchone()
+    if not lot:
+        raise ValueError('在庫が見つかりません。')
+    kinds = {r['kind'] for r in c.execute('SELECT DISTINCT kind FROM moves WHERE lot_id=?', (lot_id,))}
+    if not kinds or not kinds <= {'inbound', 'inbound_correction'}:
+        raise ValueError('出庫や初期在庫が入った入荷分は、この入庫の訂正では変えられません。初期在庫の訂正とは別です。')
+    if lot['qty_remaining'] != lot['qty_received']:
+        raise ValueError('すでに出庫された入荷分のため、数量・単価の訂正はできません。履歴を壊さないため中止しました。')
+    qty = parse_qty(body.get('qty'), '訂正後の数量', allow_zero=True)
+    cost = parse_money(body.get('unitCost'), '訂正後の仕入単価')
+    reason = need(body.get('reason'), '訂正の理由', 200)
+    if qty == lot['qty_remaining'] and cost == lot['unit_cost']:
+        raise ValueError('数量も単価も変わっていません。')
+    t = stamp()
+    actor = _actor_name(body)
+    before_qty = lot['qty_remaining']
+    before_cost = lot['unit_cost']
+    c.execute(
+        'UPDATE lots SET qty_received=?,qty_remaining=?,unit_cost=?,updated_at=? WHERE id=?',
+        (qty, qty, cost, t, lot_id),
+    )
+    c.execute(
+        '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
+           location_id,actor_name,note,at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (lot_id, 'inbound_correction', qty - before_qty, cost, before_qty, qty, before_cost, cost,
+         lot['location_id'], actor, reason, t),
+    )
+    return {
+        'lotId': lot_id,
+        'beforeQty': before_qty, 'afterQty': qty,
+        'beforeCost': before_cost, 'afterCost': cost,
+        'beforeAmount': before_qty * before_cost, 'afterAmount': qty * cost,
+    }
+
+
+def move_targets(c, args=None):
+    """Aggregated targets for 入庫・出庫 list: 顧客・商品・加工・サイズ・場所 (not split by unit cost)."""
+    args = args or {}
+    view = stock_query(c, {**args, 'group': 'lot'})
+    buckets = {}
+    for lot in view['lots']:
+        if lot['qty'] <= 0:
+            continue
+        key = (lot['customerId'], lot['productId'], lot['embroidery'], lot['size'], lot['locationId'])
+        row = buckets.setdefault(key, {
+            'customerId': lot['customerId'],
+            'customerName': lot['customerName'],
+            'productId': lot['productId'],
+            'code': lot['code'],
+            'productName': lot['productName'],
+            'color': lot['color'],
+            'customerProductId': None,
+            'embroidery': lot['embroidery'],
+            'embroideryLabel': lot['embroideryLabel'],
+            'size': lot['size'],
+            'locationId': lot['locationId'],
+            'locationLabel': lot['locationLabel'],
+            'qty': 0,
+            'amount': 0,
+        })
+        row['qty'] += lot['qty']
+        row['amount'] += lot['amount']
+    # Resolve customer_product_id for each target (needed by register APIs).
+    for key, row in buckets.items():
+        cp = c.execute(
+            '''SELECT id FROM customer_products
+               WHERE customer_id=? AND product_id=? AND embroidery=? AND active=1''',
+            (row['customerId'], row['productId'], row['embroidery']),
+        ).fetchone()
+        if cp:
+            row['customerProductId'] = cp['id']
+    q = text(args.get('q'))
+    rows = list(buckets.values())
+    if q:
+        needle = q.lower()
+        rows = [r for r in rows if needle in ' '.join([
+            r['customerName'], r['code'], r['productName'], r['color'],
+            r['embroideryLabel'], r['size'], r['locationLabel'], str(r['productId']),
+        ]).lower()]
+    rows.sort(key=lambda r: (
+        r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'], r['locationLabel'],
+    ))
+    return {'targets': rows, 'totalQty': sum(r['qty'] for r in rows), 'totalAmount': sum(r['amount'] for r in rows)}
