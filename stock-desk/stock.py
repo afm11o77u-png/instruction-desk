@@ -754,6 +754,7 @@ def location_row(c, lid):
 
 SHELF_PREVIEW_LIMIT = 3
 SITE_ONLY_SHELF_LABEL = '棚指定なし'
+SITE_STOCK_SHELF_LABEL = '棚・区画指定なし'
 
 
 def format_shelf_summary(shelves, *, preview_limit=SHELF_PREVIEW_LIMIT):
@@ -927,13 +928,16 @@ def stock_query(c, args):
     sql = '''SELECT l.*, cp.customer_id, cp.product_id, cp.embroidery, cp.is_standard, cp.active AS handle_active,
                     cu.name AS customer_name, cu.active AS customer_active,
                     p.code, p.name AS product_name, p.color, p.active AS product_active, p.supplier_id,
-                    s.name AS supplier_name, loc.name AS location_name, loc.parent_id
+                    s.name AS supplier_name, loc.name AS location_name, loc.parent_id,
+                    COALESCE(parent.name, loc.name) AS site_name,
+                    COALESCE(loc.parent_id, loc.id) AS site_id
              FROM lots l
              JOIN customer_products cp ON cp.id=l.customer_product_id
              JOIN customers cu ON cu.id=cp.customer_id
              JOIN products p ON p.id=cp.product_id
              LEFT JOIN suppliers s ON s.id=p.supplier_id
              JOIN locations loc ON loc.id=l.location_id
+             LEFT JOIN locations parent ON parent.id=loc.parent_id
              WHERE l.condition='new' '''
     params = []
     if args.get('customerId'):
@@ -961,13 +965,17 @@ def stock_query(c, args):
         loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
         kinds = {m['kind'] for m in c.execute('SELECT DISTINCT kind FROM moves WHERE lot_id=?', (r['id'],))}
         correctable = kinds <= {'opening', 'opening_correction'} and r['qty_remaining'] == r['qty_received']
+        site_only = r['parent_id'] is None
         lots.append({
             'id': r['id'], 'customerId': r['customer_id'], 'customerName': r['customer_name'],
             'customerActive': bool(r['customer_active']), 'productId': r['product_id'], 'code': r['code'],
             'productName': r['product_name'], 'color': r['color'], 'supplierName': r['supplier_name'] or '',
             'embroidery': r['embroidery'], 'embroideryLabel': r['embroidery'] or '刺繍なし',
             'isStandard': bool(r['is_standard']), 'size': r['size_label'], 'locationId': r['location_id'],
-            'locationLabel': location_label(c, loc), 'unitCost': r['unit_cost'], 'qty': r['qty_remaining'],
+            'locationLabel': location_label(c, loc),
+            'siteId': r['site_id'], 'siteName': r['site_name'],
+            'shelfLabel': SITE_STOCK_SHELF_LABEL if site_only else r['location_name'],
+            'unitCost': r['unit_cost'], 'qty': r['qty_remaining'],
             'amount': r['qty_remaining'] * r['unit_cost'], 'basisDate': r['basis_date'],
             'receivedOn': r['received_on'], 'receivedUnknown': bool(r['received_unknown']),
             'payoutOrder': r['payout_order'], 'condition': r['condition'], 'correctable': correctable,
@@ -975,7 +983,7 @@ def stock_query(c, args):
     group = args.get('group') or 'lot'
     size_orders = (
         product_size_orders(c, {lot['productId'] for lot in lots})
-        if group in ('product', 'customer') else {}
+        if group in ('product', 'customer', 'location') else {}
     )
     groups = group_lots(lots, group, size_orders=size_orders)
     return {'lots': lots, 'groups': groups, 'group': group,
@@ -1158,6 +1166,84 @@ def group_lots_by_customer(lots, size_orders=None):
     return result
 
 
+def group_lots_by_location(lots, size_orders=None):
+    """One heading per 拠点ID; rows are 棚・区画・顧客・商品・加工仕様・サイズ with unit-price breakdown."""
+    size_orders = size_orders or {}
+    sites = {}
+    for lot in lots:
+        sid = lot['siteId']
+        bucket = sites.setdefault(sid, {
+            'siteId': sid,
+            'siteName': lot['siteName'],
+            'title': lot['siteName'],
+            'qty': 0,
+            'amount': 0,
+            'rows': {},
+        })
+        bucket['qty'] += lot['qty']
+        bucket['amount'] += lot['amount']
+        row_key = (lot['locationId'], lot['customerId'], lot['productId'], lot['embroidery'], lot['size'])
+        row = bucket['rows'].setdefault(row_key, {
+            'locationId': lot['locationId'],
+            'shelfLabel': lot['shelfLabel'],
+            'customerId': lot['customerId'],
+            'customerName': lot['customerName'],
+            'productId': lot['productId'],
+            'code': lot['code'],
+            'productName': lot['productName'],
+            'color': lot['color'],
+            'embroidery': lot['embroidery'],
+            'embroideryLabel': lot['embroideryLabel'],
+            'size': lot['size'],
+            'qty': 0,
+            'amount': 0,
+            'prices': {},
+        })
+        _add_lot_price(row, lot)
+
+    result = []
+    for sid, bucket in sites.items():
+        rows = []
+        for row in bucket['rows'].values():
+            rows.append({
+                'locationId': row['locationId'],
+                'shelfLabel': row['shelfLabel'],
+                'customerId': row['customerId'],
+                'customerName': row['customerName'],
+                'productId': row['productId'],
+                'code': row['code'],
+                'productName': row['productName'],
+                'color': row['color'],
+                'embroideryLabel': row['embroideryLabel'],
+                'size': row['size'],
+                'qty': row['qty'],
+                'amount': row['amount'],
+                'prices': _sorted_prices(row),
+            })
+        rows.sort(key=lambda r: (
+            0 if r['shelfLabel'] == SITE_STOCK_SHELF_LABEL else 1,
+            r['shelfLabel'],
+            r['locationId'],
+            r['customerName'],
+            r['customerId'],
+            r['code'],
+            r['productId'],
+            r['embroideryLabel'],
+            size_orders.get(r['productId'], {}).get(r['size'], 10_000),
+            r['size'],
+        ))
+        result.append({
+            'title': bucket['title'],
+            'siteId': bucket['siteId'],
+            'siteName': bucket['siteName'],
+            'qty': bucket['qty'],
+            'amount': bucket['amount'],
+            'rows': rows,
+        })
+    result.sort(key=lambda g: (g['siteName'], g['siteId']))
+    return result
+
+
 def group_lots(lots, group, size_orders=None):
     if group == 'lot':
         return []
@@ -1165,31 +1251,9 @@ def group_lots(lots, group, size_orders=None):
         return group_lots_by_product(lots, size_orders=size_orders)
     if group == 'customer':
         return group_lots_by_customer(lots, size_orders=size_orders)
-    buckets = {}
-    for lot in lots:
-        if group == 'location':
-            key = (lot['locationId'],)
-            title = lot['locationLabel']
-        else:
-            raise ValueError('集計の種類が不正です。')
-        bucket = buckets.setdefault(key, {'title': title, 'qty': 0, 'amount': 0, 'parts': []})
-        bucket['qty'] += lot['qty']
-        bucket['amount'] += lot['amount']
-        part_key = (lot['unitCost'], lot['locationLabel'], lot['code'], lot['size'], lot['embroideryLabel'], lot['customerName'])
-        found = next((p for p in bucket['parts'] if p['key'] == part_key), None)
-        if found:
-            found['qty'] += lot['qty']
-            found['amount'] += lot['amount']
-        else:
-            bucket['parts'].append({'key': part_key, 'unitCost': lot['unitCost'], 'qty': lot['qty'], 'amount': lot['amount'],
-                                    'locationLabel': lot['locationLabel'], 'customerName': lot['customerName'],
-                                    'code': lot['code'], 'productId': lot['productId'], 'productName': lot['productName'], 'size': lot['size'],
-                                    'embroideryLabel': lot['embroideryLabel']})
-    result = []
-    for bucket in buckets.values():
-        result.append({'title': bucket['title'], 'qty': bucket['qty'], 'amount': bucket['amount'],
-                       'parts': [{k: v for k, v in p.items() if k != 'key'} for p in bucket['parts']]})
-    return result
+    if group == 'location':
+        return group_lots_by_location(lots, size_orders=size_orders)
+    raise ValueError('集計の種類が不正です。')
 
 
 def issue_sequence(lots):
