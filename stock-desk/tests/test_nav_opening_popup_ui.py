@@ -39,6 +39,22 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('data-catalog="desk"', aside)
         self.assertIn('data-catalog="info"', aside)
         self.assertIn('data-catalog="stock"', aside)
+        start = aside.index('id="stocknav"')
+        end = aside.index('<div class="asidebottom"', start)
+        stocknav = aside[start:end]
+        # Top row: 在庫一覧 | 登録・設定; 入庫・出庫 wide below
+        self.assertIn('class="navrow stocknav-top"', stocknav)
+        top_start = stocknav.index('stocknav-top')
+        top = stocknav[top_start:stocknav.index('</div>', top_start)]
+        self.assertIn('data-stock-section="list"', top)
+        self.assertIn('data-stock-section="setup"', top)
+        self.assertNotIn('data-stock-section="move"', top)
+        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-move'))
+        self.assertRegex(stocknav, r'stocknav-top[\s\S]*data-stock-section="list"[\s\S]*data-stock-section="setup"')
+        self.assertIn('class="nav stocknav-move"', stocknav)
+        css = (REPO / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('#stocknav .stocknav-move{width:100%', css)
+        self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
         show = _fn(PLACEMENT_JS, 'showCatalog')

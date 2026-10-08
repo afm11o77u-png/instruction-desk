@@ -38,6 +38,14 @@ class DeskSectionNavigationTest(unittest.TestCase):
         self.assertIn('data-stock-section="move"', aside)
         self.assertIn('data-stock-section="setup"', aside)
         self.assertIn('入庫・出庫', aside)
+        self.assertIn('class="navrow stocknav-top"', aside)
+        self.assertIn('class="nav stocknav-move"', aside)
+        stocknav = aside[aside.index('id="stocknav"'):]
+        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-move'))
+        self.assertRegex(
+            stocknav,
+            r'stocknav-top[\s\S]*data-stock-section="list"[\s\S]*data-stock-section="setup"',
+        )
 
     def test_show_catalog_switches_info_and_stock(self):
         show = _fn(PLACEMENT, 'showCatalog')
