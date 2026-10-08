@@ -154,6 +154,17 @@ class OpeningPopupUiTest(unittest.TestCase):
         # must not invent a parallel store
         self.assertNotIn('CREATE TABLE IF NOT EXISTS opening_entries', STOCK_PY)
 
+    def test_stock_pages_have_no_backup_create_footer(self):
+        footer = INDEX[INDEX.index('<footer>'):INDEX.index('</footer>')]
+        self.assertNotIn('id="backup"', footer)
+        self.assertNotIn('バックアップを作る', footer)
+        self.assertNotIn('バックアップを作る', INDEX)
+        self.assertNotIn("#backup", APP_JS)
+        self.assertNotIn("/api/backup", APP_JS)
+        self.assertNotIn("'/api/backup'", SERVER_PY)
+        self.assertNotIn('def backup(', SERVER_PY)
+        self.assertIn('id="foot"', footer)
+
 
 if __name__ == '__main__':
     unittest.main()

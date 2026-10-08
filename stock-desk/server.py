@@ -56,11 +56,6 @@ def api_post(db_path, mode, path, body):
         '/api/opening': stock.register_opening,
         '/api/opening/correct': stock.correct_opening,
     }
-    if path == '/api/backup':
-        try:
-            return 200, {'file': backup(db_path, mode)}
-        except OSError:
-            return 400, {'error': 'バックアップを作れませんでした。'}
     fn = routes.get(path)
     if not fn:
         return 404, {'error': '見つかりません。'}
@@ -143,21 +138,6 @@ def make_handler(db_path, mode):
             self.end_headers()
             self.wfile.write(data)
     return Handler
-
-
-def backup(db_path, mode):
-    folder = Path(db_path).parent / 'backups'
-    folder.mkdir(parents=True, exist_ok=True)
-    name = f'{mode}-{stock.now().replace(":", "").replace("-", "")}.sqlite3'
-    dest = folder / name
-    src = sqlite3.connect(db_path)
-    dst = sqlite3.connect(dest)
-    try:
-        src.backup(dst)
-    finally:
-        dst.close()
-        src.close()
-    return name
 
 
 def prepare(db_path, mode):
