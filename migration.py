@@ -69,6 +69,8 @@ OWNERSHIP_COLUMNS = (
     ('picking_lists', 'creator'),
     ('placements', 'created_by_id'),
     ('placements', 'updated_by_id'),
+    ('placement_corrections', 'author_id'),
+    ('placement_corrections', 'status_by_id'),
     ('shipments', 'created_by_id'),
     ('shipments', 'updated_by_id'),
     ('name_reviews', 'assignee_id'),
@@ -382,6 +384,7 @@ def _key_counts(instructions_path, stock_path):
         'templates': ic.get('templates', 0),
         'pickingLists': ic.get('picking_lists', 0),
         'placements': ic.get('placements', 0),
+        'placementCorrections': ic.get('placement_corrections', 0),
         'shipments': ic.get('shipments', 0),
         'nameFormats': ic.get('name_formats', 0),
         'labelSets': ic.get('label_sets', 0),
@@ -872,7 +875,7 @@ def _apply_dest_users_and_remap(live_instr, auth_snapshot, user_map, actor, mani
             for sid, did in user_map.items():
                 c.execute(f'UPDATE "{table}" SET "{column}"=? WHERE "{column}"=?', (did, sid))
             # Clear nullable creator-like fields that still point at unknown source ids.
-            if column in ('created_by_id', 'updated_by_id', 'assignee_id', 'confirmed_by'):
+            if column in ('created_by_id', 'updated_by_id', 'assignee_id', 'confirmed_by', 'author_id', 'status_by_id'):
                 dest_id_list = list(dest_names)
                 if dest_id_list:
                     marks = ','.join('?' for _ in dest_id_list)
@@ -904,6 +907,22 @@ def _apply_dest_users_and_remap(live_instr, auth_snapshot, user_map, actor, mani
                     '利用者の割り当て後も、移行データに未割り当ての担当が残っています。'
                     '割り当てを確認してやり直してください。'
                 )
+
+        # 1b) Denormalized display names on placement correction board
+        if 'placement_corrections' in tables:
+            cols = set(_column_names(c, 'placement_corrections'))
+            if 'author_id' in cols and 'author_name' in cols:
+                for uid, name in dest_names.items():
+                    c.execute(
+                        'UPDATE placement_corrections SET author_name=? WHERE author_id=?',
+                        (name, uid),
+                    )
+            if 'status_by_id' in cols and 'status_by_name' in cols:
+                for uid, name in dest_names.items():
+                    c.execute(
+                        'UPDATE placement_corrections SET status_by_name=? WHERE status_by_id=?',
+                        (name, uid),
+                    )
 
         # 2) Orders JSON assignee/author/worker ids
         if 'orders' in tables:

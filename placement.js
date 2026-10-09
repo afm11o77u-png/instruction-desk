@@ -66,3 +66,150 @@ placementAllButton.textContent='全件表示';
 placementAllButton.setAttribute('aria-pressed','false');
 $('#placementsearch').append(placementAllButton);
 placementAllButton.onclick=()=>{placementShowAll=!placementShowAll;placementAllButton.textContent=placementShowAll?'通常表示に戻す':'全件表示';placementAllButton.setAttribute('aria-pressed',String(placementShowAll));loadPlacements(true);};
+
+let placementBoardOffset=0, placementBoardTotal=0, placementBoardBusy=false, placementBoardQueued=false;
+let placementRequestTarget=null, placementResponding=null;
+function canEditPlacement(){return currentUser?.role==='owner'||currentUser?.role==='floor2'}
+function canViewPlacement(){return ['owner','sales','floor','floor2'].includes(currentUser?.role)}
+function formatPlacementAt(value){return String(value||'').replace('T',' ')}
+function placementTargetLabel(item){
+  if(!item?.hasPlacement) return '貼付け位置一覧への依頼（画像なし）';
+  if(item.placementMissing) return '紐づく貼付け位置が見つかりません';
+  return `${item.customer||'—'} ／ ${item.part||'—'}`;
+}
+async function loadPlacementBoard(reset){
+  if(!canViewPlacement()) return;
+  if(placementBoardBusy){if(reset)placementBoardQueued=true;return}
+  placementBoardBusy=true;
+  if(reset){placementBoardOffset=0;$('#placementboardlist').innerHTML=''}
+  $('#placementboarderror').textContent='';
+  try{
+    const status=$('#placementboardstatus').value;
+    const query=new URLSearchParams({offset:String(placementBoardOffset)});
+    if(status) query.set('status',status);
+    const data=await api('/api/placement-corrections?'+query);
+    if(placementBoardQueued) return;
+    placementBoardTotal=data.total;
+    const counts=data.counts||{};
+    $('#placementboardcounts').textContent=`未対応 ${counts['未対応']||0}　対応中 ${counts['対応中']||0}　対応済み ${counts['対応済み']||0}`;
+    const list=$('#placementboardlist');
+    if(!data.items.length&&placementBoardOffset===0){
+      list.innerHTML='<p class="duehint">該当する修正依頼はありません。</p>';
+      $('#placementboardmore').hidden=true;
+      return;
+    }
+    for(const item of data.items){
+      const card=document.createElement('article');
+      card.className='placementboardcard'+(item.status==='未対応'?' is-open':'');
+      card.dataset.id=String(item.id);
+      paintPlacementBoardCard(card,item);
+      list.append(card);
+    }
+    placementBoardOffset+=data.items.length;
+    $('#placementboardmore').hidden=placementBoardOffset>=placementBoardTotal;
+  }catch(e){
+    $('#placementboarderror').textContent=e.message||'読み込めませんでした。';
+  }finally{
+    placementBoardBusy=false;
+    if(placementBoardQueued){placementBoardQueued=false;loadPlacementBoard(true)}
+  }
+}
+function paintPlacementBoardCard(card,item){
+  const canEdit=canEditPlacement();
+  const link=item.hasPlacement&&!item.placementMissing
+    ?`<button type="button" class="quiet placementboardopenimg" data-placement="${item.placementId}">画像を開く</button>`
+    :'';
+  const respond=canEdit?`<button type="button" class="quiet placementboardrespond" data-id="${item.id}">対応を更新</button>`:'';
+  const statusMeta=item.statusAt?`${esc(item.statusByName||'—')}　${esc(formatPlacementAt(item.statusAt))}`:'—';
+  const statusClass=item.status==='未対応'?'is-open-status':item.status==='対応中'?'is-doing':'is-done';
+  card.innerHTML=`<div class="placementboardtop"><span class="placementboardbadge ${statusClass}">${esc(item.status)}</span><strong>${esc(placementTargetLabel(item))}</strong></div>
+    <p class="placementboardbody">${esc(item.body)}</p>
+    <p class="placementboardmeta">投稿　${esc(item.authorName||'—')}　${esc(formatPlacementAt(item.createdAt))}</p>
+    <p class="placementboardmeta">対応更新　${statusMeta}</p>
+    ${item.response?`<p class="placementboardresponse"><span>対応コメント</span>${esc(item.response)}</p>`:''}
+    <div class="placementboardactions">${link}${respond}</div>`;
+  card.querySelector('.placementboardopenimg')?.addEventListener('click',async ()=>{
+    try{
+      const placement=await api('/api/placements/'+item.placementId);
+      openPlacement(placement);
+    }catch(err){toast(err.message||'画像を開けませんでした。')}
+  });
+  card.querySelector('.placementboardrespond')?.addEventListener('click',()=>openPlacementRespond(item));
+}
+function openPlacementBoard(){
+  if(!canViewPlacement()){toast('貼付け位置は閲覧できません。');return}
+  if(!$('#placementboard').open)$('#placementboard').showModal();
+  loadPlacementBoard(true);
+}
+function closePlacementBoard(){$('#placementboard').close()}
+function openPlacementRequest(placement){
+  if(!canViewPlacement()){toast('貼付け位置は閲覧できません。');return}
+  placementRequestTarget=placement||null;
+  $('#placementrequesterror').textContent='';
+  $('#placementrequestbody').value='';
+  $('#placementrequesttitle').textContent=placement?'画像の修正を依頼':'修正を依頼';
+  $('#placementrequestlink').textContent=placement
+    ?`対象：${placement.customer||'—'} ／ ${placement.part||'—'}`
+    :'対象：貼付け位置一覧（画像に紐づけない依頼）';
+  if(!$('#placementrequest').open)$('#placementrequest').showModal();
+  $('#placementrequestbody').focus();
+}
+function closePlacementRequest(){$('#placementrequest').close();placementRequestTarget=null}
+function openPlacementRespond(item){
+  if(!canEditPlacement()){toast('対応状況の変更は主管理者と現場２が行えます。');return}
+  placementResponding=item;
+  $('#placementresponderror').textContent='';
+  $('#placementrespondstatus').value=item.status||'未対応';
+  $('#placementrespondcomment').value=item.response||'';
+  $('#placementrespondmeta').textContent=`${placementTargetLabel(item)}　／　投稿 ${item.authorName||'—'}　${formatPlacementAt(item.createdAt)}`;
+  if(!$('#placementrespond').open)$('#placementrespond').showModal();
+}
+function closePlacementRespond(){$('#placementrespond').close();placementResponding=null}
+$('#placementboardopen').onclick=()=>openPlacementBoard();
+$('#placementboardclose').onclick=closePlacementBoard;
+$('#placementboard').addEventListener('cancel',e=>{e.preventDefault();closePlacementBoard()});
+$('#placementboardstatus').onchange=()=>loadPlacementBoard(true);
+$('#placementboardmore').onclick=()=>loadPlacementBoard(false);
+$('#placementboardnew').onclick=()=>openPlacementRequest(null);
+$('#placementrequestfromview').onclick=()=>{if(placementEditing)openPlacementRequest(placementEditing)};
+$('#placementrequestclose').onclick=closePlacementRequest;
+$('#placementrequest').addEventListener('cancel',e=>{e.preventDefault();closePlacementRequest()});
+$('#placementrequestform').onsubmit=async e=>{
+  e.preventDefault();
+  const body=$('#placementrequestbody').value.trim();
+  if(!body){$('#placementrequesterror').textContent='依頼内容を入力してください。';return}
+  const submit=$('#placementrequestform').querySelector('[type=submit]');
+  if(submit.disabled)return;
+  submit.disabled=true;$('#placementrequesterror').textContent='';
+  try{
+    const payload={body};
+    if(placementRequestTarget?.id) payload.placementId=placementRequestTarget.id;
+    await api('/api/placement-corrections',payload);
+    closePlacementRequest();
+    toast('修正依頼を投稿しました。');
+    if($('#placementboard').open) loadPlacementBoard(true);
+    else openPlacementBoard();
+  }catch(err){$('#placementrequesterror').textContent=err.message}
+  finally{submit.disabled=false}
+};
+$('#placementrespondclose').onclick=closePlacementRespond;
+$('#placementrespond').addEventListener('cancel',e=>{e.preventDefault();closePlacementRespond()});
+$('#placementrespondform').onsubmit=async e=>{
+  e.preventDefault();
+  if(!placementResponding||!canEditPlacement())return;
+  const submit=$('#placementrespondform').querySelector('[type=submit]');
+  if(submit.disabled)return;
+  submit.disabled=true;$('#placementresponderror').textContent='';
+  try{
+    await api('/api/placement-corrections/status',{
+      id:placementResponding.id,
+      version:placementResponding.version,
+      status:$('#placementrespondstatus').value,
+      response:$('#placementrespondcomment').value,
+    });
+    closePlacementRespond();
+    toast('対応状況を更新しました。');
+    if($('#placementboard').open) loadPlacementBoard(true);
+  }catch(err){$('#placementresponderror').textContent=err.message}
+  finally{submit.disabled=false}
+};
