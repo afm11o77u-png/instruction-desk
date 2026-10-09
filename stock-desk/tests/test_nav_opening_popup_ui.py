@@ -62,14 +62,20 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('class="nav stocknav-move"', stocknav)
         self.assertIn('class="nav stocknav-period"', stocknav)
         self.assertIn('class="nav stocknav-orders"', stocknav)
+        self.assertIn('class="stocknav-secondary"', stocknav)
+        # Secondary items (move/period/orders) sit inside indented wrapper; top row stays flush
+        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-secondary'))
+        self.assertRegex(
+            stocknav,
+            r'stocknav-secondary[\s\S]*stocknav-move[\s\S]*stocknav-period[\s\S]*stocknav-orders',
+        )
         css = (REPO / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('#stocknav .stocknav-secondary', css)
+        self.assertRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*18px')
         self.assertIn('#stocknav .stocknav-move', css)
         self.assertIn('#stocknav .stocknav-period', css)
         self.assertIn('#stocknav .stocknav-orders', css)
-        self.assertRegex(
-            css,
-            r'#stocknav \.stocknav-move,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*center',
-        )
+        self.assertRegex(css, r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-move,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*center')
         self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
