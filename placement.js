@@ -40,7 +40,7 @@ $('#placementform').elements.image.onchange=()=>{const file=$('#placementform').
 $('#placementform').onsubmit=async e=>{e.preventDefault();if(placementBusy)return;const form=$('#placementform');const file=form.elements.image.files[0];if(!placementEditing&&!file){$('#placementerror').textContent='画像を選んでください。';return}if(file&&file.size>10*1024*1024){$('#placementerror').textContent='画像は10MBまでです。';return}placementBusy=true;$('#placementerror').textContent='';try{const body={customer:form.elements.customer.value,part:form.elements.part.value};if(file){body.filename=file.name;body.data=await fileToBase64(file)}let saved;if(placementEditing){body.id=placementEditing.id;body.version=placementEditing.version;saved=await api('/api/placements/save',body)}else saved=await api('/api/placements',body);placementDirty=false;$('#placementedit').close();$('#placementview').close();toast(placementEditing?'貼付け位置を修正しました。':'貼付け位置を登録しました。');await loadPlacements(true);const fresh=[...document.querySelectorAll('.placementcard')];void saved;void fresh}catch(err){$('#placementerror').textContent=err.message}finally{placementBusy=false}};
 let stockSection='list'
 function normalizeStockSection(section){
-  return section==='setup'||section==='move'||section==='period'?section:'list'
+  return section==='setup'||section==='move'||section==='period'||section==='orders'?section:'list'
 }
 function syncStockNav(section){
   stockSection=normalizeStockSection(section)
@@ -56,7 +56,7 @@ function showDeskCatalog(){showCatalog('desk')}
 function showInfoCatalog(){showCatalog('info')}
 document.querySelectorAll('#modes .mode').forEach(b=>b.onclick=()=>showCatalog(b.dataset.catalog));
 document.querySelectorAll('#stocknav .nav').forEach(b=>b.onclick=()=>{if(b.dataset.stockSection===stockSection&&document.body.classList.contains('catalog-stock')){tellStockFrame(stockSection);return}syncStockNav(b.dataset.stockSection);if(!document.body.classList.contains('catalog-stock'))showCatalog('stock');else tellStockFrame(stockSection)});
-window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='period'))syncStockNav(e.data.section)});
+window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='period'||e.data.section==='orders'))syncStockNav(e.data.section)});
 
 const placementAllButton=document.createElement('button');
 placementAllButton.type='button';

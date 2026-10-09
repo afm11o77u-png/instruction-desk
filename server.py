@@ -848,8 +848,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             if n>(12_000_000 if api_path=='/api/import' else 1_000_000): return self.reply(400, {'error':'送信データが大きすぎます。'})
             try: body=json.loads(self.rfile.read(n).decode('utf-8') or '{}')
             except json.JSONDecodeError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
-            status, result=stockdesk().api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
-            return self.reply(status, result)
+            result=stockdesk().api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
+            return self.reply(*result)
         rel='index.html' if path in ('/inventory','/inventory/') else path[len('/inventory/'):]
         root=(STOCK_ROOT/'static').resolve()
         file=(root/rel).resolve()

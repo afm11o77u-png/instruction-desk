@@ -22,6 +22,7 @@
     'stock-list': 'standard',
     'stock-move': 'standard',
     'stock-period': 'standard',
+    'stock-orders': 'standard',
   };
   // Old saved keys → post-remap keys (server also migrates once via density_v).
   const LEGACY_MODE_MAP = {
