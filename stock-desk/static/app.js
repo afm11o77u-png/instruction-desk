@@ -1379,7 +1379,7 @@ async function showHistory(lotId){
   dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
 }
 async function loadMoveTargets(){
-  const q=new URLSearchParams()
+  const q=new URLSearchParams({mode:state.moveMode==='out'?'out':'in'})
   if(state.moveQ)q.set('q',state.moveQ)
   state.moveTargets=await api('/api/move/targets?'+q.toString())
 }
@@ -1563,22 +1563,23 @@ function movePage(){
     <div class="bar">
       <input id="moveQ" type="search" placeholder="顧客・品番・商品・サイズ・場所で検索" value="${esc(state.moveQ||'')}">
       <span class="count">${filtered.length}件</span>
-      ${mode==='in'&&writable?`<button type="button" class="primary" id="openInboundNew">取扱を選んで入庫</button>`:''}
+      ${mode==='in'&&writable?`<button type="button" class="primary" id="openInboundNew">一覧にない商品を入庫</button>`:''}
     </div>
+    ${mode==='in'?`<p class="notice move-new-hint">登録済みの取扱から、初めて在庫を登録する組み合わせを選びます</p>`:''}
     ${listNote('入庫・出庫の見方',mode==='in'
-      ?'一覧は現在庫がある組み合わせです。在庫0の組み合わせは「取扱を選んで入庫」から登録済みの顧客・商品・サイズ・保管場所を選んで入庫できます。同じ仕入単価でも入荷は別レコードになります。'
-      :'出庫は入荷日の古い順（先入先出）です。入荷日不明の初期在庫は払出し順を使い、架空の日付は作りません。他の顧客・サイズ・加工・場所の在庫は自動では使いません。')}
+      ?'一覧は、これまでに在庫登録した組み合わせです。現在庫が0枚でも残ります。補充は行の「選択」から入庫します。初めての組み合わせだけ「一覧にない商品を入庫」を使います。同じ仕入単価でも入荷は別レコードになります。'
+      :'出庫は現在庫がある組み合わせだけです。入荷日の古い順（先入先出）です。入荷日不明の初期在庫は払出し順を使い、架空の日付は作りません。他の顧客・サイズ・加工・場所の在庫は自動では使いません。')}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
-      ${filtered.map(t=>`<tr>
+      ${filtered.map(t=>`<tr class="${Number(t.qty)===0?'is-zero-stock':''}">
         <td class="dm-primary">${esc(t.customerName)}</td>
         <td>${esc(t.code)} ${esc(t.productName)} ${esc(t.color)}<span class="sub">商品ID ${t.productId}</span></td>
         <td>${esc(t.embroideryLabel)}</td>
         <td>${esc(t.size)}</td>
         <td>${esc(t.locationLabel)}</td>
-        <td class="qty">${num(t.qty)}</td>
+        <td class="qty">${num(t.qty)}枚</td>
         <td class="money">${yen(t.amount)}</td>
         <td>${writable?`<button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}">選択</button>`:'—'}</td>
-      </tr>`).join('')||`<tr><td colspan="8">${mode==='in'?'現在庫のある組み合わせはありません。「取扱を選んで入庫」から登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
+      </tr>`).join('')||`<tr><td colspan="8">${mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
     </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
   </section>`
   const stage=$('#stockliststage')
@@ -1586,6 +1587,7 @@ function movePage(){
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('move'))
   document.querySelectorAll('[data-move-mode]').forEach(b=>b.onclick=async()=>{
     state.moveMode=b.dataset.moveMode
+    try{await loadMoveTargets()}catch(e){toast(e.message)}
     paint()
   })
   const qEl=$('#moveQ')
