@@ -1709,43 +1709,58 @@ def correct_inbound(c, body):
 
 
 def move_targets(c, args=None):
-    """Aggregated targets for 入庫・出庫 list: 顧客・商品・加工・サイズ・場所 (not split by unit cost)."""
+    """Aggregated targets for 入庫・出庫: 顧客・商品・加工・サイズ・場所 (not split by unit cost).
+
+    mode=in (入庫): combos that ever had a stock lot stay listed at qty 0 (daily restock).
+    mode=out (出庫): only current qty > 0 (unchanged).
+    Inactive customer / product / handling / location are excluded. Never auto-generates
+    never-stocked combos — those use the separate「一覧にない商品を入庫」entry.
+    """
     args = args or {}
-    view = stock_query(c, {**args, 'group': 'lot'})
-    buckets = {}
-    for lot in view['lots']:
-        if lot['qty'] <= 0:
-            continue
-        key = (lot['customerId'], lot['productId'], lot['embroidery'], lot['size'], lot['locationId'])
-        row = buckets.setdefault(key, {
-            'customerId': lot['customerId'],
-            'customerName': lot['customerName'],
-            'productId': lot['productId'],
-            'code': lot['code'],
-            'productName': lot['productName'],
-            'color': lot['color'],
-            'customerProductId': None,
-            'embroidery': lot['embroidery'],
-            'embroideryLabel': lot['embroideryLabel'],
-            'size': lot['size'],
-            'locationId': lot['locationId'],
-            'locationLabel': lot['locationLabel'],
-            'qty': 0,
-            'amount': 0,
+    mode = (args.get('mode') or 'out').strip()
+    if mode not in ('in', 'out'):
+        raise ValueError('入庫または出庫の一覧を指定してください。')
+    sql = '''SELECT cp.id AS customer_product_id, cp.customer_id, cp.product_id, cp.embroidery,
+                    cu.name AS customer_name,
+                    p.code, p.name AS product_name, p.color,
+                    l.size_label, l.location_id,
+                    loc.name AS location_name, loc.parent_id,
+                    COALESCE(SUM(l.qty_remaining), 0) AS qty,
+                    COALESCE(SUM(l.qty_remaining * l.unit_cost), 0) AS amount
+             FROM lots l
+             JOIN customer_products cp ON cp.id=l.customer_product_id
+             JOIN customers cu ON cu.id=cp.customer_id
+             JOIN products p ON p.id=cp.product_id
+             JOIN locations loc ON loc.id=l.location_id
+             LEFT JOIN locations parent ON parent.id=loc.parent_id
+             WHERE l.condition='new'
+               AND cu.active=1 AND p.active=1 AND cp.active=1 AND loc.active=1
+               AND (parent.id IS NULL OR parent.active=1)
+             GROUP BY cp.id, cp.customer_id, cp.product_id, cp.embroidery, cu.name,
+                      p.code, p.name, p.color, l.size_label, l.location_id,
+                      loc.name, loc.parent_id'''
+    if mode == 'out':
+        sql += ' HAVING COALESCE(SUM(l.qty_remaining), 0) > 0'
+    rows = []
+    for r in c.execute(sql):
+        loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
+        rows.append({
+            'customerId': r['customer_id'],
+            'customerName': r['customer_name'],
+            'productId': r['product_id'],
+            'code': r['code'],
+            'productName': r['product_name'],
+            'color': r['color'],
+            'customerProductId': r['customer_product_id'],
+            'embroidery': r['embroidery'],
+            'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'size': r['size_label'],
+            'locationId': r['location_id'],
+            'locationLabel': location_label(c, loc),
+            'qty': r['qty'],
+            'amount': r['amount'],
         })
-        row['qty'] += lot['qty']
-        row['amount'] += lot['amount']
-    # Resolve customer_product_id for each target (needed by register APIs).
-    for key, row in buckets.items():
-        cp = c.execute(
-            '''SELECT id FROM customer_products
-               WHERE customer_id=? AND product_id=? AND embroidery=? AND active=1''',
-            (row['customerId'], row['productId'], row['embroidery']),
-        ).fetchone()
-        if cp:
-            row['customerProductId'] = cp['id']
     q = text(args.get('q'))
-    rows = list(buckets.values())
     if q:
         needle = q.lower()
         rows = [r for r in rows if needle in ' '.join([
@@ -1755,4 +1770,9 @@ def move_targets(c, args=None):
     rows.sort(key=lambda r: (
         r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'], r['locationLabel'],
     ))
-    return {'targets': rows, 'totalQty': sum(r['qty'] for r in rows), 'totalAmount': sum(r['amount'] for r in rows)}
+    return {
+        'mode': mode,
+        'targets': rows,
+        'totalQty': sum(r['qty'] for r in rows),
+        'totalAmount': sum(r['amount'] for r in rows),
+    }

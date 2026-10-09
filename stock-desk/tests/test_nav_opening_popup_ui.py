@@ -129,7 +129,9 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('入庫する', body)
         self.assertIn('出庫する', body)
         self.assertIn('data-select-target', body)
-        self.assertIn('取扱を選んで入庫', body)
+        self.assertIn('一覧にない商品を入庫', body)
+        self.assertIn('初めて在庫を登録する組み合わせ', body)
+        self.assertNotIn('取扱を選んで入庫', body)
         self.assertIn("stock_moves.js", INDEX)
 
     def test_header_tabs_flex_wrap_no_overflow_css(self):
