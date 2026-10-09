@@ -22,7 +22,8 @@ const PurchaseOrders={
     $('#main').innerHTML=`<section class="panel po-panel">
       <div class="bar">
         ${writable?`<button type="button" class="primary" id="poCreate">発注書を作成</button>`:''}
-        <input id="poQ" type="search" placeholder="発注番号・仕入先・顧客・発注者で検索" value="${esc(state.poQ||'')}">
+        ${writable?`<button type="button" id="poCompany">自社情報</button>`:''}
+        <input id="poQ" type="search" placeholder="発注番号・仕入先・顧客・作成者で検索" value="${esc(state.poQ||'')}">
         <label class="po-status-filter">状態
           <select id="poStatus"><option value="">すべて</option>
             ${statuses.map(s=>`<option value="${esc(s.id)}" ${state.poStatus===s.id?'selected':''}>${esc(s.label)}</option>`).join('')}
@@ -31,16 +32,16 @@ const PurchaseOrders={
         <span class="count">${orders.length}件</span>
       </div>
       ${writable?'':`<p class="notice">閲覧専用のため、発注の作成・入荷はできません。</p>`}
-      ${listNote('発注の見方','保存・プレビュー・印刷だけでは発注済みになりません。FAX/メール後に「発注済みにする」を押します。入荷は発注明細から登録し、通常の入庫と同じ在庫経路です（二重登録は不要）。加工仕様は社内用で、メーカーへの刺繍・プリント依頼は明細備考に書いてください。')}
+      ${listNote('発注の見方','画面では仕入先・対象顧客と明細だけを選びます。発注日・担当・FAX・発注者は印刷用紙に手書きします。保存・プレビュー・印刷だけでは発注済みになりません。FAX/メール後に「発注済みにする」を押します。入荷は発注明細から登録し、通常の入庫と同じ在庫経路です。')}
       <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="po-table-list"><thead><tr>
-        <th>発注番号</th><th>発注日</th><th>仕入先</th><th>対象顧客</th><th>発注者</th><th>状態</th><th></th>
+        <th>発注番号</th><th>作成日時</th><th>仕入先</th><th>対象顧客</th><th>作成者</th><th>状態</th><th></th>
       </tr></thead><tbody>
         ${orders.map(o=>`<tr>
           <td class="dm-primary">${esc(o.number)}${o.needsResend?'<span class="sub">再送が必要</span>':''}</td>
-          <td>${esc(o.orderDate)}</td>
+          <td>${esc(o.createdAt||'')}</td>
           <td>${esc(o.supplierName)}</td>
           <td>${esc(o.customerName)}</td>
-          <td>${esc(o.ordererName)}</td>
+          <td>${esc(o.createdBy||o.ordererName||'')}</td>
           <td>${esc(o.statusLabel)}</td>
           <td><button type="button" class="quiet" data-po-open="${o.id}">開く</button></td>
         </tr>`).join('')||'<tr><td colspan="7">保存した発注書はまだありません。</td></tr>'}
@@ -48,6 +49,8 @@ const PurchaseOrders={
     </section>`
     const create=$('#poCreate')
     if(create)create.onclick=()=>PurchaseOrders.openEditor(null)
+    const coBtn=$('#poCompany')
+    if(coBtn)coBtn.onclick=()=>PurchaseOrders.openCompanySettings()
     const qEl=$('#poQ')
     let t=null
     qEl.oninput=()=>{
@@ -77,8 +80,9 @@ const PurchaseOrders={
     const canCancel=writable&&po.status!=='cancelled'
     dlg.innerHTML=`<div class="dialoghead"><h2>発注書 ${esc(po.number)}</h2><button type="button" id="poClose" class="quiet">閉じる</button></div>
       <div class="dialogbody">
-        <p><strong>${esc(po.statusLabel)}</strong>　発注日 ${esc(po.orderDate)}　仕入先 ${esc(po.supplierName)}　対象顧客 ${esc(po.customerName)}　発注者 ${esc(po.ordererName)}
+        <p><strong>${esc(po.statusLabel)}</strong>　作成日時 ${esc(po.createdAt||'')}　作成者 ${esc(po.createdBy||po.ordererName||'')}　仕入先 ${esc(po.supplierName)}　対象顧客 ${esc(po.customerName)}
           ${po.needsResend?'　<span class="po-resend">紙の再送が必要</span>':''}</p>
+        <p class="notice">印刷用紙の発注日・担当・FAX・発注者は手書き欄です（画面では入力しません）。</p>
         <div class="tablewrap"><table><thead><tr><th>#</th><th>商品</th><th>加工(社内)</th><th>サイズ</th><th>発注</th><th>入荷済</th><th>残</th><th>備考</th></tr></thead><tbody>
           ${(po.lines||[]).map(l=>`<tr>
             <td>${l.lineNo}</td>
@@ -132,6 +136,42 @@ const PurchaseOrders={
     }
     if(!dlg.open)dlg.showModal()
   },
+  openCompanySettings(){
+    if(!stockCanWrite()){toast('閲覧専用のため、変更できません。');return}
+    const dlg=$('#dialog')
+    dlg.classList.add('opening-dialog','po-dialog')
+    const co=Object.assign({},state.data.company||{})
+    dlg.innerHTML=`<div class="dialoghead"><h2>自社情報（発注書印刷）</h2><button type="button" id="coClose" class="quiet">閉じる</button></div>
+      <div class="dialogbody">
+        <p class="notice">発注書に毎回同じ内容を印刷します。注文ごとの入力はありません。参考PDFが無い場合はブランド名を初期値にしています。</p>
+        <div class="grid">
+          <label>会社名<input id="coName" value="${esc(co.companyName||'')}"></label>
+          <label>支店・部署<input id="coBranch" value="${esc(co.companyBranch||'')}"></label>
+          <label>住所<input id="coAddress" value="${esc(co.companyAddress||'')}"></label>
+          <label>電話<input id="coTel" value="${esc(co.companyTel||'')}"></label>
+          <label>FAX<input id="coFax" value="${esc(co.companyFax||'')}"></label>
+        </div>
+        <p id="coErr"></p>
+      </div>
+      <div class="dialogactions">
+        <button type="button" id="coClose2">戻る</button>
+        <button type="button" class="primary" id="coSave">保存する</button>
+      </div>`
+    const close=()=>{dlg.close();dlg.classList.remove('opening-dialog','po-dialog');dlg.innerHTML=''}
+    $('#coClose').onclick=close;$('#coClose2').onclick=close
+    $('#coSave').onclick=async()=>{
+      try{
+        const saved=await api('/api/company-profile',{
+          companyName:$('#coName').value,companyBranch:$('#coBranch').value,
+          companyAddress:$('#coAddress').value,companyTel:$('#coTel').value,companyFax:$('#coFax').value,
+        })
+        state.data.company=saved
+        toast('自社情報を保存しました。')
+        close()
+      }catch(e){$('#coErr').textContent=e.message}
+    }
+    if(!dlg.open)dlg.showModal()
+  },
   openEditor(existing){
     if(!stockCanWrite()){toast('閲覧専用のため、発注できません。');return}
     const dlg=$('#dialog')
@@ -141,14 +181,9 @@ const PurchaseOrders={
       token:newToken(),
       supplierId:existing?existing.supplierId:null,
       customerId:existing?existing.customerId:null,
-      supplierContact:existing?existing.supplierContact:'',
-      supplierFax:existing?existing.supplierFax:'',
-      orderDate:existing?existing.orderDate:todayISO(),
-      ordererName:existing?existing.ordererName:(state.data.actorName||''),
       remarks:existing?existing.remarks:'',
       supplierQuery:'',customerQuery:'',
       products:[],
-      company:Object.assign({},state.data.company||{}),
       candidates:[],
       dirty:false,
     }
@@ -175,28 +210,13 @@ const PurchaseOrders={
     const render=async()=>{
       const supplier=(state.data.suppliers||[]).find(s=>s.id===draft.supplierId)
       const customer=(state.data.customers||[]).find(c=>c.id===draft.customerId)
-      if(supplier&&!draft.supplierContact&&!existing)draft.supplierContact=supplier.contact||''
-      if(supplier&&!draft.supplierFax&&!existing)draft.supplierFax=supplier.fax||''
       dlg.innerHTML=`<div class="dialoghead"><h2>${draft.id?'発注書を修正':'発注書を作成'}</h2><button type="button" id="poEdClose" class="quiet">閉じる</button></div>
         <div class="dialogbody">
           <div class="grid">
             ${searchPickerMarkup({label:'仕入先',inputId:'poSupplier',listId:'poSupplierList',clearId:'poSupplierClear',hintId:'poSupplierHint',placeholder:'仕入先名で検索',value:supplier?supplier.name:(draft.supplierQuery||'')})}
-            <label>仕入先担当者<input id="poSuContact" value="${esc(draft.supplierContact)}"></label>
-            <label>仕入先FAX<input id="poSuFax" value="${esc(draft.supplierFax)}"></label>
             ${searchPickerMarkup({label:'対象顧客',inputId:'poCustomer',listId:'poCustomerList',clearId:'poCustomerClear',hintId:'poCustomerHint',placeholder:'顧客名またはカナで検索',value:customer?customer.name:(draft.customerQuery||'')})}
-            <label>発注日<input id="poDate" type="date" value="${esc(draft.orderDate)}"></label>
-            <label>発注者<input id="poOrderer" value="${esc(draft.ordererName)}"></label>
           </div>
-          <details class="list-note" ${!(draft.company.companyName&&draft.company.companyAddress)?'open':''}><summary>自社情報（PDF用・設定から読込）</summary>
-            <div class="grid">
-              <label>会社名<input id="coName" value="${esc(draft.company.companyName||'')}"></label>
-              <label>支店・部署<input id="coBranch" value="${esc(draft.company.companyBranch||'')}"></label>
-              <label>住所<input id="coAddress" value="${esc(draft.company.companyAddress||'')}"></label>
-              <label>電話<input id="coTel" value="${esc(draft.company.companyTel||'')}"></label>
-              <label>FAX<input id="coFax" value="${esc(draft.company.companyFax||'')}"></label>
-              <div><button type="button" id="coSave">自社情報を保存</button></div>
-            </div>
-          </details>
+          <p class="notice">発注日・仕入先担当・FAX・発注者は印刷用紙に手書きします（ここでは入力しません）。作成日時・作成者・発注番号は保存時に自動記録します。</p>
           <h3>明細（1発注＝1仕入先＋1顧客）</h3>
           <p class="notice">候補は「対象顧客の取扱」かつ「選択した仕入先が通常仕入先の商品」です。発注仕入先を変えても商品マスタの通常仕入先は変わりません。加工仕様は社内用で、メーカー依頼は明細備考へ。</p>
           <div class="bar">
@@ -215,24 +235,7 @@ const PurchaseOrders={
         </div>`
       const close=()=>{if(draft.dirty&&!window.confirm('入力中の内容を破棄しますか？'))return;dlg.close();dlg.classList.remove('opening-dialog','po-dialog');dlg.innerHTML=''}
       $('#poEdClose').onclick=close;$('#poEdClose2').onclick=close
-      $('#poSuContact').oninput=()=>{draft.supplierContact=$('#poSuContact').value;touch()}
-      $('#poSuFax').oninput=()=>{draft.supplierFax=$('#poSuFax').value;touch()}
-      $('#poDate').oninput=()=>{draft.orderDate=$('#poDate').value;touch()}
-      $('#poOrderer').oninput=()=>{draft.ordererName=$('#poOrderer').value;touch()}
       $('#poRemarks').oninput=()=>{draft.remarks=$('#poRemarks').value;touch()}
-      ;['coName','coBranch','coAddress','coTel','coFax'].forEach((id,i)=>{
-        const keys=['companyName','companyBranch','companyAddress','companyTel','companyFax']
-        const el=$('#'+id);if(!el)return
-        el.oninput=()=>{draft.company[keys[i]]=el.value;touch()}
-      })
-      $('#coSave').onclick=async()=>{
-        try{
-          const saved=await api('/api/company-profile',draft.company)
-          state.data.company=saved
-          draft.company=Object.assign({},saved)
-          toast('自社情報を保存しました。')
-        }catch(e){$('#poEdErr').textContent=e.message}
-      }
       bindOpeningSearchPicker({
         input:$('#poSupplier'),list:$('#poSupplierList'),clearBtn:$('#poSupplierClear'),hint:$('#poSupplierHint'),
         getItems:()=>(state.data.suppliers||[]).filter(s=>s.active!==false).filter(s=>{
@@ -242,11 +245,7 @@ const PurchaseOrders={
         emptyText:'該当する仕入先がありません',
         isConfirmed:()=>!!(state.data.suppliers||[]).find(s=>s.id===draft.supplierId),
         confirmedLabel:()=>((state.data.suppliers||[]).find(s=>s.id===draft.supplierId)||{}).name||'',
-        onPick:item=>{
-          draft.supplierId=item.id;draft.supplierQuery=item.label
-          draft.supplierContact=item.raw.contact||'';draft.supplierFax=item.raw.fax||''
-          draft.products=[];touch();render()
-        },
+        onPick:item=>{draft.supplierId=item.id;draft.supplierQuery=item.label;draft.products=[];touch();render()},
         onClear:()=>{draft.supplierId=null;draft.supplierQuery='';draft.products=[];touch();render()},
         onQueryChange:v=>{draft.supplierQuery=v;if(draft.supplierId){draft.supplierId=null;draft.products=[];render();return true}return false},
       })
@@ -320,38 +319,24 @@ const PurchaseOrders={
       let cq=null
       $('#poProdQ').oninput=()=>{clearTimeout(cq);cq=setTimeout(()=>loadCand().catch(()=>{}),200)}
       if(draft.customerId&&draft.supplierId)loadCand().catch(()=>{})
-      const collectBody=()=>{
-        draft.company={
-          companyName:$('#coName').value,companyBranch:$('#coBranch').value,
-          companyAddress:$('#coAddress').value,companyTel:$('#coTel').value,companyFax:$('#coFax').value,
-        }
-        return {
-          id:draft.id||undefined,
-          token:draft.token,
-          supplierId:draft.supplierId,
-          customerId:draft.customerId,
-          supplierContact:$('#poSuContact').value,
-          supplierFax:$('#poSuFax').value,
-          orderDate:$('#poDate').value,
-          ordererName:$('#poOrderer').value,
-          remarks:$('#poRemarks').value,
-          lines:draft.products.map(p=>({
-            customerProductId:p.customerProductId,
-            sizes:p.sizes,
-            note:p.note||'',
-          })),
-          ...draft.company,
-        }
-      }
+      const collectBody=()=>({
+        id:draft.id||undefined,
+        token:draft.token,
+        supplierId:draft.supplierId,
+        customerId:draft.customerId,
+        remarks:$('#poRemarks').value,
+        lines:draft.products.map(p=>({
+          customerProductId:p.customerProductId,
+          sizes:p.sizes,
+          note:p.note||'',
+        })),
+      })
       $('#poPreview').onclick=async()=>{
         try{await PurchaseOrders.showHtmlPreview(collectBody(),null)}catch(e){$('#poEdErr').textContent=e.message}
       }
       $('#poSave').onclick=async()=>{
         const err=$('#poEdErr');err.textContent=''
         try{
-          if(draft.company.companyName||draft.company.companyAddress){
-            try{state.data.company=await api('/api/company-profile',draft.company)}catch(_){}
-          }
           const saved=await api('/api/purchase-orders',collectBody())
           toast(saved.already?'同じ内容は保存済みです。':'発注書を保存しました（まだ未発注です）。')
           draft.dirty=false

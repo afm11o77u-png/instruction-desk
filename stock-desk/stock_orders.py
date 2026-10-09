@@ -28,6 +28,16 @@ COMPANY_KEYS = (
     ('company_fax', 'companyFax', 'FAX'),
 )
 
+# Seeded into settings once when missing. Reference PDF order-20261010.pdf was not in
+# the Project store; defaults use the in-app brand only (editable via company-profile API).
+DEFAULT_COMPANY = {
+    'company_name': 'エンパイアー',
+    'company_branch': '',
+    'company_address': '',
+    'company_tel': '',
+    'company_fax': '',
+}
+
 PO_SCHEMA = """
 CREATE TABLE IF NOT EXISTS purchase_orders (
   id INTEGER PRIMARY KEY,
@@ -118,11 +128,28 @@ def status_label(code):
     return STATUS_LABELS.get(code, code or '')
 
 
-def company_profile(c):
+def company_profile(c, *, ensure=True):
+    """Load company block from settings. Optionally seed defaults once if none set."""
     out = {}
+    any_set = False
     for key, camel, _label in COMPANY_KEYS:
         row = c.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
-        out[camel] = row['value'] if row else ''
+        value = row['value'] if row else ''
+        if value:
+            any_set = True
+        out[camel] = value
+    if ensure and not any_set:
+        for key, camel, _label in COMPANY_KEYS:
+            value = DEFAULT_COMPANY.get(key, '')
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            out[camel] = value
+        c.execute(
+            "INSERT INTO settings(key,value) VALUES('company_profile_seeded','1') "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        )
     return out
 
 
@@ -141,11 +168,14 @@ def save_company_profile(c, body):
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (t,),
     )
-    return company_profile(c)
+    return company_profile(c, ensure=False)
 
 
-def _next_po_number(c, order_date):
-    day = stock.parse_date(order_date, '発注日').replace('-', '')
+def _next_po_number(c, created_day=None):
+    """Auto unique 発注番号 from system 作成日 (not handwritten 発注日)."""
+    day = (created_day or date.today().isoformat()).replace('-', '')
+    if len(day) != 8 or not day.isdigit():
+        day = date.today().isoformat().replace('-', '')
     prefix = f'PO-{day}-'
     row = c.execute(
         "SELECT number FROM purchase_orders WHERE number LIKE ? ORDER BY number DESC LIMIT 1",
@@ -333,7 +363,8 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
         'number': po['number'],
         'status': po['status'],
         'statusLabel': status_label(po['status']),
-        'orderDate': po['order_date'],
+        # orderDate is handwritten on paper (blank in system). createdAt is system 作成日時.
+        'orderDate': po['order_date'] or '',
         'orderedAt': po['ordered_at'],
         'supplierId': po['supplier_id'],
         'customerId': po['customer_id'],
@@ -344,7 +375,8 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
         'supplierPhone': po['supplier_phone'],
         'customerName': po['customer_name'],
         'customerAddress': po['customer_address'],
-        'ordererName': po['orderer_name'],
+        'ordererName': po['orderer_name'],  # internal 作成利用者
+        'createdBy': po['orderer_name'],
         'ordererUserId': po['orderer_user_id'],
         'remarks': po['remarks'],
         'needsResend': bool(po['needs_resend']),
@@ -404,16 +436,18 @@ def list_purchase_orders(c, args=None):
         params.append(status)
     if clauses:
         sql += ' WHERE ' + ' AND '.join(clauses)
-    sql += ' ORDER BY order_date DESC, id DESC'
+    sql += ' ORDER BY created_at DESC, id DESC'
     rows = []
     for r in c.execute(sql, params):
         item = {
             'id': r['id'],
             'number': r['number'],
-            'orderDate': r['order_date'],
+            'orderDate': r['order_date'] or '',
+            'createdAt': r['created_at'],
             'supplierName': r['supplier_name'],
             'customerName': r['customer_name'],
             'ordererName': r['orderer_name'],
+            'createdBy': r['orderer_name'],
             'status': r['status'],
             'statusLabel': status_label(r['status']),
             'needsResend': bool(r['needs_resend']),
@@ -421,7 +455,7 @@ def list_purchase_orders(c, args=None):
         if q:
             hay = ' '.join([
                 item['number'], item['supplierName'], item['customerName'],
-                item['ordererName'], item['statusLabel'], item['orderDate'],
+                item['createdBy'], item['statusLabel'], item['createdAt'],
             ]).lower()
             if q not in hay:
                 continue
@@ -435,20 +469,19 @@ def get_purchase_order(c, po_id):
     return _po_dict(c, po_id, include_events=True, include_receipts=True)
 
 
-def _snapshot_parties(c, supplier_id, customer_id, body):
+def _snapshot_parties(c, supplier_id, customer_id, body=None):
+    """Snapshot supplier/customer names for history. Contact/FAX left blank (handwritten on paper)."""
     su = c.execute('SELECT * FROM suppliers WHERE id=?', (supplier_id,)).fetchone()
     if not su or not su['active']:
         raise ValueError('使用中の仕入先を選んでください。')
     cu = c.execute('SELECT * FROM customers WHERE id=?', (customer_id,)).fetchone()
     if not cu or not cu['active']:
         raise ValueError('使用中の顧客を選んでください。')
-    fax_col = su['fax'] if 'fax' in su.keys() else ''
-    contact = stock.optional(body.get('supplierContact'), '仕入先担当者', 80) or (su['contact'] or '')
-    fax = stock.optional(body.get('supplierFax'), '仕入先FAX', 40) or (fax_col or '')
     return {
         'supplier_name': su['name'],
-        'supplier_contact': contact,
-        'supplier_fax': fax,
+        # Handwritten on the paper form — do not auto-fill from master for print.
+        'supplier_contact': '',
+        'supplier_fax': '',
         'supplier_address': su['address'] or '',
         'supplier_phone': su['phone'] or '',
         'customer_name': cu['name'],
@@ -476,10 +509,10 @@ def save_purchase_order(c, body):
     except (TypeError, ValueError):
         raise ValueError('仕入先と対象顧客を選んでください。')
 
-    order_date = stock.parse_date(body.get('orderDate') or date.today().isoformat(), '発注日')
-    orderer = stock.optional(body.get('ordererName'), '発注者', 80) or actor
-    if not orderer:
-        raise ValueError('発注者を入力してください。')
+    # Handwritten 発注日 on paper — not system-filled. order_date kept empty.
+    # orderer_name stores 作成利用者 for history (printed 発注者 stays blank).
+    order_date = ''
+    creator = actor or stock.optional(body.get('ordererName'), '作成利用者', 80) or '（未設定）'
     remarks = stock.optional(body.get('remarks') or body.get('note'), '備考', 500)
     lines = _normalize_lines(c, body, customer_id, supplier_id)
     snap = _snapshot_parties(c, supplier_id, customer_id, body)
@@ -488,9 +521,10 @@ def save_purchase_order(c, body):
     if isinstance(actor_obj.get('id'), int):
         orderer_user_id = actor_obj['id']
     t = stock.stamp()
+    created_day = t[:10]
 
     if po_id is None:
-        number = _next_po_number(c, order_date)
+        number = _next_po_number(c, created_day)
         c.execute(
             '''INSERT INTO purchase_orders(
                  number,status,order_date,ordered_at,supplier_id,customer_id,
@@ -502,7 +536,7 @@ def save_purchase_order(c, body):
                 number, STATUS_UNORDERED, order_date, None, supplier_id, customer_id,
                 snap['supplier_name'], snap['supplier_contact'], snap['supplier_fax'],
                 snap['supplier_address'], snap['supplier_phone'],
-                snap['customer_name'], snap['customer_address'], orderer, orderer_user_id, remarks,
+                snap['customer_name'], snap['customer_address'], creator, orderer_user_id, remarks,
                 token, t, t,
             ),
         )
@@ -552,22 +586,22 @@ def save_purchase_order(c, body):
         line['qtyReceived'] = got
 
     needs_resend = 1 if po['status'] in (STATUS_ORDERED, STATUS_PARTIAL, STATUS_COMPLETE) else 0
+    # Keep system 作成利用者 / empty handwritten 発注日; refresh party name snapshots.
     c.execute(
         '''UPDATE purchase_orders SET
-             order_date=?, supplier_id=?, customer_id=?,
-             supplier_name=?, supplier_contact=?, supplier_fax=?,
+             supplier_id=?, customer_id=?,
+             supplier_name=?, supplier_contact='', supplier_fax='',
              supplier_address=?, supplier_phone=?,
              customer_name=?, customer_address=?,
-             orderer_name=?, orderer_user_id=?, remarks=?,
+             remarks=?,
              needs_resend=CASE WHEN ?=1 THEN 1 ELSE needs_resend END,
              updated_at=?
            WHERE id=?''',
         (
-            order_date, supplier_id, customer_id,
-            snap['supplier_name'], snap['supplier_contact'], snap['supplier_fax'],
+            supplier_id, customer_id,
+            snap['supplier_name'],
             snap['supplier_address'], snap['supplier_phone'],
             snap['customer_name'], snap['customer_address'],
-            orderer, orderer_user_id if orderer_user_id is not None else po['orderer_user_id'],
             remarks, needs_resend, t, po_id,
         ),
     )
@@ -825,31 +859,32 @@ def _esc(value):
 
 
 def build_po_document(c, source):
-    """Build a print/PDF document dict from saved PO id or draft body (pre-save)."""
+    """Build a print/PDF document dict from saved PO id or draft body (pre-save).
+
+    Handwritten header fields (発注日 / 担当 / FAX / 発注者) are intentionally blank.
+    Company block always comes from settings (seeded defaults if unset).
+    """
+    company = company_profile(c)
     if isinstance(source, int) or (isinstance(source, dict) and isinstance(source.get('id'), int) and not source.get('draft')):
         po_id = source if isinstance(source, int) else source['id']
         po = _po_dict(c, po_id)
-        company = company_profile(c)
-        # Allow override company fields for preview fill-in
-        if isinstance(source, dict):
-            for _k, camel, _l in COMPANY_KEYS:
-                if camel in source and stock.text(source.get(camel)):
-                    company[camel] = stock.text(source.get(camel))
         return {
             'number': po['number'],
-            'orderDate': po['orderDate'],
+            'orderDate': '',  # handwritten blank
             'statusLabel': po['statusLabel'],
             'supplierName': po['supplierName'],
-            'supplierContact': po['supplierContact'],
-            'supplierFax': po['supplierFax'],
+            'supplierContact': '',
+            'supplierFax': '',
             'supplierAddress': po['supplierAddress'],
             'supplierPhone': po['supplierPhone'],
             'customerName': po['customerName'],
-            'ordererName': po['ordererName'],
+            'ordererName': '',  # handwritten blank (createdBy kept in DB only)
             'remarks': po['remarks'],
             'lines': po['lines'],
             'company': company,
             'saved': True,
+            'createdAt': po['createdAt'],
+            'createdBy': po.get('createdBy') or '',
         }
 
     body = source if isinstance(source, dict) else {}
@@ -858,27 +893,20 @@ def build_po_document(c, source):
         customer_id = int(body.get('customerId'))
     except (TypeError, ValueError):
         raise ValueError('仕入先と対象顧客を選んでください。')
-    order_date = stock.parse_date(body.get('orderDate') or date.today().isoformat(), '発注日')
-    actor = stock._actor_name(body)
-    orderer = stock.optional(body.get('ordererName'), '発注者', 80) or actor or '（未設定）'
     remarks = stock.optional(body.get('remarks') or body.get('note'), '備考', 500)
     lines = _normalize_lines(c, body, customer_id, supplier_id)
     snap = _snapshot_parties(c, supplier_id, customer_id, body)
-    company = company_profile(c)
-    for _k, camel, _l in COMPANY_KEYS:
-        if camel in body:
-            company[camel] = stock.optional(body.get(camel), camel, 200)
     return {
         'number': stock.text(body.get('number')) or '（保存前）',
-        'orderDate': order_date,
+        'orderDate': '',
         'statusLabel': '未保存',
         'supplierName': snap['supplier_name'],
-        'supplierContact': snap['supplier_contact'],
-        'supplierFax': snap['supplier_fax'],
+        'supplierContact': '',
+        'supplierFax': '',
         'supplierAddress': snap['supplier_address'],
         'supplierPhone': snap['supplier_phone'],
         'customerName': snap['customer_name'],
-        'ordererName': orderer,
+        'ordererName': '',
         'remarks': remarks,
         'lines': [
             {
@@ -894,6 +922,8 @@ def build_po_document(c, source):
         ],
         'company': company,
         'saved': False,
+        'createdAt': '',
+        'createdBy': '',
     }
 
 
@@ -911,12 +941,18 @@ body {
   border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 10px;
 }
 .po-title { font-size: 22pt; font-weight: 700; letter-spacing: 0.35em; margin: 0 0 6px; }
-.po-meta { font-size: 10pt; }
+.po-meta { font-size: 10pt; margin-top: 4px; }
+.po-blank {
+  display: inline-block; min-width: 8em; border-bottom: 1px solid #000;
+  height: 1.15em; vertical-align: bottom; margin: 0 0.2em;
+}
+.po-blank.wide { min-width: 12em; }
 .po-company { text-align: right; font-size: 9.5pt; }
 .po-company .name { font-size: 12pt; font-weight: 700; }
+.po-company .co-label { color: #000; }
 .po-to { margin: 0 0 10px; font-size: 12pt; }
-.po-to .attn { margin-top: 2px; font-size: 10pt; }
-.po-context { margin: 0 0 8px; display: flex; justify-content: space-between; gap: 12px; font-size: 10.5pt; }
+.po-to .attn { margin-top: 6px; font-size: 10pt; display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.po-context { margin: 0 0 8px; display: flex; justify-content: space-between; gap: 12px; font-size: 10.5pt; align-items: end; }
 .po-table { width: 100%; border-collapse: collapse; }
 .po-table th, .po-table td {
   border: 1px solid #000; padding: 5px 6px; vertical-align: top;
@@ -951,31 +987,14 @@ body {
 
 def render_po_html(doc):
     company = doc.get('company') or {}
-    company_bits = []
-    if company.get('companyName'):
-        company_bits.append(f'<div class="name">{_esc(company["companyName"])}</div>')
-    if company.get('companyBranch'):
-        company_bits.append(f'<div>{_esc(company["companyBranch"])}</div>')
-    if company.get('companyAddress'):
-        company_bits.append(f'<div>{_esc(company["companyAddress"])}</div>')
-    tel_fax = []
-    if company.get('companyTel'):
-        tel_fax.append(f'TEL {_esc(company["companyTel"])}')
-    if company.get('companyFax'):
-        tel_fax.append(f'FAX {_esc(company["companyFax"])}')
-    if tel_fax:
-        company_bits.append(f'<div>{"　".join(tel_fax)}</div>')
-    if not company_bits:
-        company_bits.append('<div class="name">（自社情報未設定）</div>')
-        company_bits.append('<div>登録・設定の会社情報を入力してください</div>')
-
-    attn = []
-    if doc.get('supplierContact'):
-        attn.append(f"担当 {_esc(doc['supplierContact'])}")
-    if doc.get('supplierFax'):
-        attn.append(f"FAX {_esc(doc['supplierFax'])}")
-    elif doc.get('supplierPhone'):
-        attn.append(f"TEL {_esc(doc['supplierPhone'])}")
+    # Always print the same five company fields from settings (may be blank until edited).
+    company_bits = [
+        f'<div class="name">{_esc(company.get("companyName") or "")}</div>',
+        f'<div><span class="co-label">支店</span>　{_esc(company.get("companyBranch") or "")}</div>',
+        f'<div><span class="co-label">住所</span>　{_esc(company.get("companyAddress") or "")}</div>',
+        f'<div>TEL {_esc(company.get("companyTel") or "")}</div>',
+        f'<div>FAX {_esc(company.get("companyFax") or "")}</div>',
+    ]
 
     rows = []
     for ln in doc.get('lines') or []:
@@ -1002,17 +1021,20 @@ def render_po_html(doc):
   <header class="po-head">
     <div>
       <h1 class="po-title">発注書</h1>
-      <div class="po-meta">発注日　{_esc(doc.get('orderDate'))}</div>
+      <div class="po-meta">発注日　<span class="po-blank wide" aria-label="発注日（手書き）"></span></div>
     </div>
     <div class="po-company">{''.join(company_bits)}</div>
   </header>
   <section class="po-to">
     <div><strong>{_esc(doc.get('supplierName'))}</strong>　御中</div>
-    <div class="attn">{'　'.join(attn)}</div>
+    <div class="attn">
+      <span>担当　<span class="po-blank" aria-label="仕入先担当者（手書き）"></span></span>
+      <span>FAX　<span class="po-blank" aria-label="仕入先FAX（手書き）"></span></span>
+    </div>
   </section>
   <section class="po-context">
     <div>対象顧客　{_esc(doc.get('customerName'))}様分</div>
-    <div>発注者　{_esc(doc.get('ordererName'))}</div>
+    <div>発注者　<span class="po-blank" aria-label="発注者（手書き）"></span></div>
   </section>
   <table class="po-table">
     <thead>
