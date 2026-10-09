@@ -17,6 +17,7 @@ SCREEN_DEFAULTS = {
     'stock-list': 'standard',
     'stock-move': 'standard',
     'stock-period': 'standard',
+    'stock-orders': 'standard',
 }
 SCREENS = set(SCREEN_DEFAULTS)
 SCREEN_RE = re.compile(r'^[a-z][a-z0-9-]{0,39}$')

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
   name TEXT NOT NULL UNIQUE,
   address TEXT NOT NULL DEFAULT '',
   phone TEXT NOT NULL DEFAULT '',
+  fax TEXT NOT NULL DEFAULT '',
   contact TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -172,11 +173,14 @@ def needs_migration(c):
     if 'move_batches' not in tables:
         return True
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
-    return (
+    if (
         'move_batch_id' not in move_cols
         or 'actor_name' not in move_cols
         or 'business_on' not in move_cols
-    )
+    ):
+        return True
+    import stock_orders
+    return stock_orders.needs_purchase_order_migration(c)
 
 
 def backup_sqlite(db_path):
@@ -228,6 +232,8 @@ def migrate_schema(c):
             )
             WHERE kind='inbound' AND (business_on IS NULL OR business_on='')'''
     )
+    import stock_orders
+    stock_orders.migrate_purchase_orders(c)
 
 
 def text(value):
@@ -334,22 +340,33 @@ def save_supplier(c, body):
     name = need(body.get('name'), '仕入先名')
     address = optional(body.get('address'), '住所', 200)
     phone = optional(body.get('phone'), '電話番号', 40)
+    fax = optional(body.get('fax'), 'FAX', 40)
     contact = optional(body.get('contact'), '担当者', 80)
     active = flag(body.get('active', True))
     t = stamp()
     sid = body.get('id')
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(suppliers)')}
+    has_fax = 'fax' in cols
     if sid:
         if not c.execute('SELECT id FROM suppliers WHERE id=?', (sid,)).fetchone():
             raise ValueError('仕入先が見つかりません。')
         if c.execute('SELECT id FROM suppliers WHERE name=? AND id<>?', (name, sid)).fetchone():
             raise ValueError('同じ名前の仕入先が既にあります。一覧から修正してください。')
-        c.execute('UPDATE suppliers SET name=?,address=?,phone=?,contact=?,active=?,updated_at=? WHERE id=?',
-                  (name, address, phone, contact, active, t, sid))
+        if has_fax:
+            c.execute('UPDATE suppliers SET name=?,address=?,phone=?,fax=?,contact=?,active=?,updated_at=? WHERE id=?',
+                      (name, address, phone, fax, contact, active, t, sid))
+        else:
+            c.execute('UPDATE suppliers SET name=?,address=?,phone=?,contact=?,active=?,updated_at=? WHERE id=?',
+                      (name, address, phone, contact, active, t, sid))
     else:
         if c.execute('SELECT id FROM suppliers WHERE name=?', (name,)).fetchone():
             raise ValueError('同じ名前の仕入先が既にあります。一覧から修正してください。')
-        c.execute('INSERT INTO suppliers(name,address,phone,contact,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
-                  (name, address, phone, contact, active, t, t))
+        if has_fax:
+            c.execute('INSERT INTO suppliers(name,address,phone,fax,contact,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+                      (name, address, phone, fax, contact, active, t, t))
+        else:
+            c.execute('INSERT INTO suppliers(name,address,phone,contact,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                      (name, address, phone, contact, active, t, t))
         sid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
     return supplier_row(c, sid)
 
@@ -805,8 +822,9 @@ def customer_row(c, cid):
 
 def supplier_row(c, sid):
     r = c.execute('SELECT * FROM suppliers WHERE id=?', (sid,)).fetchone()
+    fax = r['fax'] if 'fax' in r.keys() else ''
     return {'id': r['id'], 'name': r['name'], 'address': r['address'], 'phone': r['phone'],
-            'contact': r['contact'], 'active': bool(r['active'])}
+            'fax': fax or '', 'contact': r['contact'], 'active': bool(r['active'])}
 
 
 def product_row(c, pid):
@@ -966,7 +984,11 @@ def bootstrap(c):
     suppliers = [supplier_row(c, r['id']) for r in c.execute('SELECT id FROM suppliers ORDER BY id')]
     products = [product_row(c, r['id']) for r in c.execute('SELECT id FROM products ORDER BY id')]
     locations = [location_row(c, r['id']) for r in c.execute('SELECT id FROM locations ORDER BY parent_id IS NOT NULL, id')]
-    return {'customers': customers, 'suppliers': suppliers, 'products': products, 'locations': locations}
+    import stock_orders
+    return {
+        'customers': customers, 'suppliers': suppliers, 'products': products, 'locations': locations,
+        'company': stock_orders.company_profile(c),
+    }
 
 
 def opening_entries(c):

@@ -199,3 +199,19 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 @media(max-width:640px){
   .period-filters>label{flex:1 1 calc(50% - 8px);min-width:120px}
 }
+
+/* 発注 */
+.po-panel .po-status-filter{flex:0 0 auto;min-width:9rem}
+.po-resend{color:#9a5418;font-weight:700}
+.po-events{padding-left:1.2em;margin:0}
+.po-product-block{border:1px solid var(--line);border-radius:8px;padding:12px;margin:0 0 12px;background:#fff}
+.po-product-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.po-size-matrix{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.po-size-cell{min-width:4.5rem;font-size:12.5px;font-weight:700}
+.po-size-cell input{min-height:36px;padding:6px 8px}
+.po-candidates{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
+.po-cand{font-size:13px;padding:6px 10px}
+.po-preview-dialog{width:min(920px,96vw);max-height:96vh}
+.po-preview-body{padding:0;background:#e8ebe8;min-height:60vh}
+.po-preview-body iframe{width:100%;height:min(70vh,820px);border:0;background:#fff}
+dialog.po-dialog{width:min(1100px,96vw)}

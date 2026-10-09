@@ -1,9 +1,10 @@
-import json, os, sqlite3
+import json, os, sqlite3, re
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import stock
 import stock_period
+import stock_orders
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / 'static'
@@ -12,7 +13,13 @@ WRITE_PATHS = {
     '/api/customers', '/api/suppliers', '/api/products', '/api/locations',
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
+    '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
+    '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
+    '/api/company-profile',
 }
+
+PO_ID_RE = re.compile(r'^/api/purchase-orders/(\d+)$')
+PO_HTML_RE = re.compile(r'^/api/purchase-orders/(\d+)/html$')
 
 
 def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
@@ -93,6 +100,36 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             return 200, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/company-profile':
+        with stock.connect(db_path) as c:
+            return 200, stock_orders.company_profile(c)
+    if path == '/api/purchase-orders':
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_orders.list_purchase_orders(c, {k: v[0] for k, v in query.items()})
+        except ValueError as e:
+            return 400, {'error': str(e)}
+    if path == '/api/purchase-order-products':
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_orders.product_candidates(c, {k: v[0] for k, v in query.items()})
+        except ValueError as e:
+            return 400, {'error': str(e)}
+    m = PO_ID_RE.match(path)
+    if m:
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_orders.get_purchase_order(c, int(m.group(1)))
+        except ValueError as e:
+            return 400, {'error': str(e)}
+    m = PO_HTML_RE.match(path)
+    if m:
+        try:
+            with stock.connect(db_path) as c:
+                html = stock_orders.purchase_order_html(c, int(m.group(1)))
+            return 200, html.encode('utf-8'), 'text/html; charset=utf-8'
+        except ValueError as e:
+            return 400, {'error': str(e)}
     return 404, {'error': '見つかりません。'}
 
 
@@ -120,6 +157,14 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 return 200, stock.plan_outbound(c, payload)
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/purchase-orders/preview':
+        # Pre-save PDF/print preview (HTML). Does not persist or change status.
+        try:
+            with stock.connect(db_path) as c:
+                html = stock_orders.preview_purchase_order_html(c, payload)
+            return 200, html.encode('utf-8'), 'text/html; charset=utf-8'
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
     routes = {
         '/api/customers': stock.save_customer,
         '/api/suppliers': stock.save_supplier,
@@ -130,6 +175,11 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/inbound': stock.register_inbound,
         '/api/outbound': stock.register_outbound,
         '/api/inbound/correct': stock.correct_inbound,
+        '/api/purchase-orders': stock_orders.save_purchase_order,
+        '/api/purchase-orders/mark-ordered': stock_orders.mark_ordered,
+        '/api/purchase-orders/cancel': stock_orders.cancel_purchase_order,
+        '/api/purchase-orders/receive': stock_orders.receive_purchase_order,
+        '/api/company-profile': stock_orders.save_company_profile,
     }
     fn = routes.get(path)
     if not fn:
@@ -153,6 +203,25 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                     row = c.execute('SELECT id FROM move_batches WHERE client_token=?', (stock.text(payload.get('token')),)).fetchone()
                     if row:
                         return 200, stock._move_token_result(c, row['id'], True)
+        if path in ('/api/purchase-orders', '/api/purchase-orders/receive'):
+            with stock.connect(db_path) as c:
+                if path == '/api/purchase-orders':
+                    row = c.execute(
+                        'SELECT id FROM purchase_orders WHERE client_token=?',
+                        (stock.text(payload.get('token')),),
+                    ).fetchone()
+                    if row:
+                        return 200, {**stock_orders.get_purchase_order(c, row['id']), 'already': True}
+                else:
+                    row = c.execute(
+                        'SELECT purchase_order_id FROM purchase_order_receipts WHERE client_token=?',
+                        (stock.text(payload.get('token')),),
+                    ).fetchone()
+                    if row:
+                        return 200, {
+                            **stock_orders.get_purchase_order(c, row['purchase_order_id']),
+                            'already': True,
+                        }
         return 400, {'error': '同じ内容が既にあるため、保存しませんでした。'}
     return 200, result
 
@@ -206,8 +275,11 @@ def make_handler(db_path, mode):
             except json.JSONDecodeError:
                 self.send(400, {'error': '送信内容を読めませんでした。'})
                 return
-            status, result = api_post(db_path, mode, urlparse(self.path).path, body, can_write=True)
-            self.send(status, result)
+            result = api_post(db_path, mode, urlparse(self.path).path, body, can_write=True)
+            if len(result) == 3:
+                self.send_bytes(result[0], result[1], result[2])
+            else:
+                self.send(result[0], result[1])
 
         def send(self, status, body):
             self.send_bytes(status, json.dumps(body, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8')

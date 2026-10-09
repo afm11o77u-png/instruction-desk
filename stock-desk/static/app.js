@@ -1,6 +1,6 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',group:'detail'},periodResult:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
-const STOCK_SECTIONS=new Set(['list','move','setup','period'])
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',group:'detail'},periodResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'product',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const STOCK_SECTIONS=new Set(['list','move','setup','period','orders'])
 function normalizeSection(section){return STOCK_SECTIONS.has(section)?section:'list'}
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
 function monthStartISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`}
@@ -61,7 +61,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',period:'stock-period'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',period:'stock-period',orders:'stock-orders'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -79,7 +79,7 @@ function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
-  if(section==='list'||section==='move'||section==='period'){
+  if(section==='list'||section==='move'||section==='period'||section==='orders'){
     slot.hidden=false
     return
   }
@@ -139,6 +139,9 @@ function applySectionState(section,setupTab){
     state.tab='period'
     state.mode='stock'
     ensurePeriodDefaults()
+  }else if(state.section==='orders'){
+    state.tab='orders'
+    state.mode='stock'
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
     state.setupTab=next
@@ -163,6 +166,7 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
   if(state.tab==='period')ensurePeriodDefaults()
+  if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
   paint()
   if(!silent)notifyParentSection()
   return true
@@ -192,6 +196,7 @@ async function boot(){
   if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
   if(state.tab==='period')ensurePeriodDefaults()
+  if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
   await ensureStockDisplayModes().catch(()=>{})
   paint()
   notifyParentSection()
@@ -209,16 +214,19 @@ function paint(){
     state.tab='period'
     state.mode='stock'
     ensurePeriodDefaults()
+  }else if(state.section==='orders'){
+    state.tab='orders'
+    state.mode='stock'
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='move'||state.section==='period')))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='move'||state.section==='period'||state.section==='orders')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',period:'期間入出荷集計',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -233,7 +241,7 @@ function paint(){
     tabs.innerHTML=''
   }
   syncStockListDisplaySlot(state.section)
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,period:periodPage}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
   view()
 }
 async function loadOpeningEntries(){
@@ -462,7 +470,7 @@ function edit(row,title,form,save){
 }
 function field(id,label,value,required){return `<label>${label}${required?'（必須）':''}<input id="${id}" value="${esc(value||'')}"></label>`}
 function customerForm(r){r=r||{};return `<div class="grid">${field('name','顧客名',r.name,true)}${field('kana','フリガナ',r.kana)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label><p class="sub">顧客IDは自動です。名前を変えても、同じ顧客のまま在庫がつながります。</p>`}
-function supplierForm(r){r=r||{};return `<div class="grid">${field('name','仕入先名',r.name,true)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label>`}
+function supplierForm(r){r=r||{};return `<div class="grid">${field('name','仕入先名',r.name,true)}${field('phone','電話番号',r.phone)}${field('fax','FAX',r.fax)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label>`}
 function locationSiteContext(r){
   if(!r||!r.id)return {site:null,shelves:[]}
   if(r.parentId){
@@ -618,7 +626,7 @@ function readForm(row){
   const title=$('#dialog h2').textContent
   const active=row?row.active!==false:true
   if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
-  if(title.includes('仕入先'))return {id:row&&row.id,name:$('#name').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
+  if(title.includes('仕入先'))return {id:row&&row.id,name:$('#name').value,phone:$('#phone').value,fax:$('#fax')?$('#fax').value:'',contact:$('#contact').value,address:$('#address').value,active}
   if(title.includes('保管場所')||title.includes('拠点を新しく登録')){
     const shelves=collectLocationShelves()
     const active=row?row.active!==false:true
