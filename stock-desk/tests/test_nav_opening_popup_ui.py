@@ -63,7 +63,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('class="nav stocknav-period"', stocknav)
         self.assertIn('class="nav stocknav-orders"', stocknav)
         self.assertIn('class="stocknav-secondary"', stocknav)
-        # Secondary items (move/period/orders) sit inside indented wrapper; top row stays flush
+        # Secondary items (move/period/orders) share the wrapper; buttons flush with top row
         self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-secondary'))
         self.assertRegex(
             stocknav,
@@ -71,7 +71,9 @@ class StockListSetupNavUiTest(unittest.TestCase):
         )
         css = (REPO / 'style.css').read_text(encoding='utf-8')
         self.assertIn('#stocknav .stocknav-secondary', css)
-        self.assertRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*18px')
+        # No left indent — secondary buttons align with 在庫一覧｜登録・設定
+        self.assertRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*0')
+        self.assertNotRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*(?:18|14)px')
         self.assertIn('#stocknav .stocknav-move', css)
         self.assertIn('#stocknav .stocknav-period', css)
         self.assertIn('#stocknav .stocknav-orders', css)
@@ -79,7 +81,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
             css,
             r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-move,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*left',
         )
-        # Top row stays centered; secondary labels are left-aligned under the indent
+        # Top row stays centered; secondary labels stay left-aligned (flush left edge)
         self.assertRegex(css, r'#stocknav \.stocknav-top \.nav\{[^}]*text-align:\s*center')
         self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
