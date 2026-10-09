@@ -27,16 +27,41 @@ def _fn(source: str, name: str) -> str:
 
 
 class StockListSetupNavUiTest(unittest.TestCase):
-    def test_parent_stocknav_has_list_and_setup(self):
+    def test_parent_stocknav_has_list_move_and_setup(self):
         self.assertIn('id="stocknav"', DESK_INDEX)
         aside = DESK_INDEX[DESK_INDEX.index('<aside>'):DESK_INDEX.index('</aside>')]
         self.assertIn('data-stock-section="list"', aside)
+        self.assertIn('data-stock-section="move"', aside)
         self.assertIn('data-stock-section="setup"', aside)
+        self.assertIn('data-stock-section="period"', aside)
         self.assertIn('在庫一覧', aside)
+        self.assertIn('入庫・出庫', aside)
         self.assertIn('登録・設定', aside)
+        self.assertIn('期間入出荷集計', aside)
         self.assertIn('data-catalog="desk"', aside)
         self.assertIn('data-catalog="info"', aside)
         self.assertIn('data-catalog="stock"', aside)
+        start = aside.index('id="stocknav"')
+        end = aside.index('<div class="asidebottom"', start)
+        stocknav = aside[start:end]
+        # Top row: 在庫一覧 | 登録・設定; 入庫・出庫 then 期間入出荷集計 at bottom (no reorder)
+        self.assertIn('class="navrow stocknav-top"', stocknav)
+        top_start = stocknav.index('stocknav-top')
+        top = stocknav[top_start:stocknav.index('</div>', top_start)]
+        self.assertIn('data-stock-section="list"', top)
+        self.assertIn('data-stock-section="setup"', top)
+        self.assertNotIn('data-stock-section="move"', top)
+        self.assertNotIn('data-stock-section="period"', top)
+        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-move'))
+        self.assertLess(stocknav.index('stocknav-move'), stocknav.index('stocknav-period'))
+        self.assertRegex(stocknav, r'stocknav-top[\s\S]*data-stock-section="list"[\s\S]*data-stock-section="setup"')
+        self.assertIn('class="nav stocknav-move"', stocknav)
+        self.assertIn('class="nav stocknav-period"', stocknav)
+        css = (REPO / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('#stocknav .stocknav-move', css)
+        self.assertIn('#stocknav .stocknav-period', css)
+        self.assertRegex(css, r'#stocknav \.stocknav-move,#stocknav \.stocknav-period\{[^}]*text-align:\s*center')
+        self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
         show = _fn(PLACEMENT_JS, 'showCatalog')
@@ -45,6 +70,9 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('tellStockFrame', PLACEMENT_JS)
         self.assertIn("type:'stock-section'", PLACEMENT_JS)
         self.assertIn("e.data.type==='stock-section-changed'", PLACEMENT_JS)
+        self.assertIn("normalizeStockSection", PLACEMENT_JS)
+        self.assertIn("section==='move'", PLACEMENT_JS)
+        self.assertIn("section==='period'", PLACEMENT_JS)
 
     def test_tabs_sit_in_header_with_brand(self):
         self.assertIn('class="stockhead"', INDEX)
@@ -72,7 +100,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("section:'list'", APP_JS)
         self.assertIn("tab:'list'", APP_JS)
         boot = _fn(APP_JS, 'boot')
-        self.assertIn("applySectionState(sectionParam==='setup'?'setup':'list'", boot)
+        self.assertIn('normalizeSection(params.get(', boot)
         show = _fn(PLACEMENT_JS, 'showCatalog')
         self.assertIn("syncStockNav('list')", show)
 
@@ -88,7 +116,21 @@ class StockListSetupNavUiTest(unittest.TestCase):
         paint = _fn(APP_JS, 'paint')
         self.assertIn("SETUP_TAB_LABEL[state.tab]", paint)
         self.assertIn("'在庫一覧'", paint)
+        self.assertIn("'入庫・出庫'", paint)
+        self.assertIn("'期間入出荷集計'", paint)
         self.assertIn("id=\"stocktitle\"", INDEX)
+
+    def test_stock_list_renames_lot_tab_to_detail(self):
+        self.assertIn("['lot','在庫明細']", APP_JS)
+        self.assertNotIn("['lot','入荷分']", APP_JS)
+
+    def test_move_page_has_mode_toggle_and_select(self):
+        body = _fn(APP_JS, 'movePage')
+        self.assertIn('入庫する', body)
+        self.assertIn('出庫する', body)
+        self.assertIn('data-select-target', body)
+        self.assertIn('取扱を選んで入庫', body)
+        self.assertIn("stock_moves.js", INDEX)
 
     def test_header_tabs_flex_wrap_no_overflow_css(self):
         self.assertRegex(CSS, r'header,\s*\.stockhead\{[^}]*flex-wrap:\s*wrap')
@@ -108,8 +150,9 @@ class OpeningPopupUiTest(unittest.TestCase):
         self.assertIn('openOpeningRegister()', body)
         self.assertNotIn('searchPickerMarkup', body)
         self.assertNotIn('id="confirmOpen"', body)
-        for col in ('基準日', '顧客', '商品', '加工仕様', 'サイズ', '数量', '仕入単価', '保管場所'):
+        for col in ('顧客', '商品', '加工仕様', 'サイズ', '数量', '仕入単価', '保管場所'):
             self.assertIn(col, body)
+        self.assertNotIn('<th>基準日</th>', body)
 
     def test_register_form_lives_in_large_opening_dialog(self):
         self.assertIn('id="openingDialog"', INDEX)
@@ -153,6 +196,17 @@ class OpeningPopupUiTest(unittest.TestCase):
         self.assertIn('stock.opening_entries(c)', SERVER_PY)
         # must not invent a parallel store
         self.assertNotIn('CREATE TABLE IF NOT EXISTS opening_entries', STOCK_PY)
+
+    def test_stock_pages_have_no_backup_create_footer(self):
+        footer = INDEX[INDEX.index('<footer>'):INDEX.index('</footer>')]
+        self.assertNotIn('id="backup"', footer)
+        self.assertNotIn('バックアップを作る', footer)
+        self.assertNotIn('バックアップを作る', INDEX)
+        self.assertNotIn("#backup", APP_JS)
+        self.assertNotIn("/api/backup", APP_JS)
+        self.assertNotIn("'/api/backup'", SERVER_PY)
+        self.assertNotIn('def backup(', SERVER_PY)
+        self.assertIn('id="foot"', footer)
 
 
 if __name__ == '__main__':

@@ -1,4 +1,4 @@
-/* Shared list display modes: 標準 / コンパクト / ゆったり / グリッド */
+/* Shared list display modes: ゆったり / 標準 / コンパクト / グリッド */
 .display-mode-bar{
   display:flex;
   align-items:center;
@@ -101,30 +101,99 @@
 .list-stage.dm-grid .list-grid{display:grid!important}
 .list-stage.dm-grid .shipinfowrap{display:none!important}
 
-/* 標準: clearer comparison hierarchy */
-.list-stage.dm-standard table td{padding:10px 12px;vertical-align:top}
-.list-stage.dm-standard table th{padding:10px 12px}
-.list-stage.dm-standard .dm-primary{font-weight:700}
-.list-stage.dm-standard .dm-secondary{display:block;margin-top:2px;font-size:.8rem;color:#4d6355;font-weight:500}
+/* ゆったり: former 標準 look (abolished former ゆったり oversized look) */
+.list-stage.dm-cozy table td{padding:10px 12px;vertical-align:top}
+.list-stage.dm-cozy table th{padding:10px 12px}
+.list-stage.dm-cozy .dm-primary{font-weight:700}
+.list-stage.dm-cozy .dm-secondary{display:block;margin-top:2px;font-size:.8rem;color:#4d6355;font-weight:500}
 
-/* コンパクト: tighter rows, more on screen */
+/* 標準: former コンパクト look */
+.list-stage.dm-standard table td,
+.list-stage.dm-standard table th{padding:4px 8px;font-size:.875rem;line-height:1.3;vertical-align:middle}
+.list-stage.dm-standard .dm-secondary{display:inline;margin-left:6px;font-size:.75rem;color:#5a6f62}
+.list-stage.dm-standard .flagchecks{margin-top:2px;gap:6px}
+.list-stage.dm-standard .duechip{margin-top:2px;font-size:.7rem}
+.list-stage.dm-standard button.quiet{padding:4px 8px;font-size:.75rem}
+.list-stage.dm-standard tr.authorhead td{padding:6px 8px;font-size:.8rem}
+
+/* コンパクト: new denser list (~12px body, ~32–44px 1–2 line rows) */
+.list-stage.dm-compact{font-size:12px;line-height:1.25}
+.list-stage.dm-compact table{font-size:12px}
 .list-stage.dm-compact table td,
-.list-stage.dm-compact table th{padding:4px 8px;font-size:.875rem;line-height:1.3;vertical-align:middle}
-.list-stage.dm-compact .dm-secondary{display:inline;margin-left:6px;font-size:.75rem;color:#5a6f62}
-.list-stage.dm-compact .flagchecks{margin-top:2px;gap:6px}
-.list-stage.dm-compact .duechip{margin-top:2px;font-size:.7rem}
-.list-stage.dm-compact button.quiet{padding:4px 8px;font-size:.75rem}
-.list-stage.dm-compact tr.authorhead td{padding:6px 8px;font-size:.8rem}
-
-/* ゆったり: important info larger, secondary below */
-.list-stage.dm-cozy table td{padding:14px 12px;vertical-align:top}
-.list-stage.dm-cozy .dm-primary{display:block;font-size:1.12rem;font-weight:700;line-height:1.35}
-.list-stage.dm-cozy .dm-secondary{display:block;margin-top:4px;font-size:.9rem;color:#3d5344;line-height:1.45}
-.list-stage.dm-cozy .number{font-size:1rem}
-.list-stage.dm-cozy .badge,
-.list-stage.dm-cozy select.flagstatus{font-size:.85rem}
-.list-stage.dm-cozy .duechip{font-size:.85rem;margin-top:6px}
-.list-stage.dm-cozy button.quiet{padding:8px 12px}
+.list-stage.dm-compact table th{
+  padding:3px 6px;
+  font-size:12px;
+  line-height:1.25;
+  vertical-align:middle;
+}
+.list-stage.dm-compact .dm-primary{font-size:12px;font-weight:700;line-height:1.25}
+.list-stage.dm-compact .dm-secondary{
+  display:inline;
+  margin-left:4px;
+  font-size:11px;
+  line-height:1.2;
+  color:#5a6f62;
+  font-weight:500;
+}
+.list-stage.dm-compact .number{font-size:11px}
+.list-stage.dm-compact .metaline{line-height:1.2}
+.list-stage.dm-compact .flagchecks{margin-top:1px;gap:4px}
+.list-stage.dm-compact .flagcheck{gap:4px;font-size:11px}
+.list-stage.dm-compact .flagcheck input,
+.list-stage.dm-compact input[type="checkbox"]{
+  width:12px;
+  height:12px;
+  min-width:12px;
+  min-height:12px;
+  max-height:12px;
+  margin:0;
+  padding:0;
+  border:0;
+  flex:0 0 12px;
+}
+.list-stage.dm-compact select.flagstatus{
+  font-size:11px;
+  line-height:1.2;
+  padding:1px 3px;
+  max-width:6em;
+}
+.list-stage.dm-compact .badge{font-size:11px;padding:1px 5px;line-height:1.2}
+.list-stage.dm-compact .duechip{margin-top:1px;font-size:11px;line-height:1.2}
+.list-stage.dm-compact button.quiet{
+  padding:2px 6px;
+  font-size:11px;
+  line-height:1.2;
+  min-height:24px;
+}
+.list-stage.dm-compact button:not(.quiet):not(.primary){
+  padding:3px 8px;
+  font-size:11px;
+  line-height:1.2;
+  min-height:26px;
+}
+.list-stage.dm-compact tr.authorhead td{
+  padding:4px 6px;
+  font-size:11px;
+  line-height:1.25;
+}
+.list-stage.dm-compact .money,
+.list-stage.dm-compact .qty,
+.list-stage.dm-compact td.qty{text-align:right;font-variant-numeric:tabular-nums}
+.list-stage.dm-compact .total{padding:6px 8px;gap:10px}
+.list-stage.dm-compact .total strong{font-size:1.05rem}
+.list-stage.dm-compact .product-stock-group{padding:8px 10px 10px}
+.list-stage.dm-compact .product-stock-title{font-size:13px;margin:0 0 2px}
+.list-stage.dm-compact .product-stock-total{font-size:12px;margin:0 0 6px}
+.list-stage.dm-compact .product-stock-table th,
+.list-stage.dm-compact .product-stock-table td{font-size:12px;padding:3px 6px}
+.list-stage.dm-compact .product-stock-table tr.is-product-break td,
+.list-stage.dm-compact .product-stock-table tr.is-shelf-break td{padding-top:6px}
+.list-stage.dm-compact table.directory th{padding:4px 8px;font-size:10px;letter-spacing:.08em}
+.list-stage.dm-compact table.directory td{padding:3px 8px;font-size:12px}
+.list-stage.dm-compact table.directory .sid{font-size:11px;margin-right:6px}
+.list-stage.dm-compact table.directory .addr{font-size:12px;line-height:1.25}
+.list-stage.dm-compact table.directory .pill{padding:1px 6px;font-size:11px}
+.list-stage.dm-compact table.directory .rowedit{padding:2px 8px;font-size:11px}
 
 /* グリッド: responsive cards */
 .list-grid{

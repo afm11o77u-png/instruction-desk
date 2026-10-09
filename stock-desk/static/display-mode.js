@@ -1,9 +1,11 @@
 /** Shared list display-mode helper (指示書デスク + 在庫デスク). */
 (function (global) {
+  // Labels: ゆったり / 標準 / コンパクト / グリッド
+  // Keys keep stable ids; CSS density was remapped (see display-mode.css).
   const MODES = [
+    { id: 'cozy', label: 'ゆったり' },
     { id: 'standard', label: '標準' },
     { id: 'compact', label: 'コンパクト' },
-    { id: 'cozy', label: 'ゆったり' },
     { id: 'grid', label: 'グリッド' },
   ];
   const DEFAULT = 'standard';
@@ -12,11 +14,21 @@
     floor: 'grid',
     drafts: 'grid',
     shipinfo: 'standard',
-    'stock-customers': 'compact',
-    'stock-suppliers': 'compact',
-    'stock-products': 'compact',
-    'stock-locations': 'compact',
-    'stock-list': 'compact',
+    'stock-customers': 'standard',
+    'stock-suppliers': 'standard',
+    'stock-products': 'standard',
+    'stock-locations': 'standard',
+    'stock-opening': 'standard',
+    'stock-list': 'standard',
+    'stock-move': 'standard',
+    'stock-period': 'standard',
+  };
+  // Old saved keys → post-remap keys (server also migrates once via density_v).
+  const LEGACY_MODE_MAP = {
+    standard: 'cozy',
+    compact: 'standard',
+    cozy: 'cozy',
+    grid: 'grid',
   };
   const cache = Object.create(null);
   let loadPromise = null;
@@ -33,8 +45,14 @@
 
   function defaultFor(screenId) {
     if (screenId && SCREEN_DEFAULTS[screenId]) return SCREEN_DEFAULTS[screenId];
-    if (String(screenId || '').startsWith('stock-')) return 'compact';
+    if (String(screenId || '').startsWith('stock-')) return 'standard';
     return DEFAULT;
+  }
+
+  function remapLegacy(mode) {
+    return Object.prototype.hasOwnProperty.call(LEGACY_MODE_MAP, mode)
+      ? LEGACY_MODE_MAP[mode]
+      : mode;
   }
 
   function normalize(mode, screenId) {
@@ -119,6 +137,7 @@
         const data = await fetcher();
         const modes = (data && data.modes) || {};
         for (const [key, value] of Object.entries(modes)) {
+          // Server migrates once; accept post-remap keys as-is.
           cache[key] = normalize(value, key);
         }
       } catch (_) {
@@ -153,7 +172,9 @@
     MODES,
     DEFAULT,
     SCREEN_DEFAULTS,
+    LEGACY_MODE_MAP,
     defaultFor,
+    remapLegacy,
     esc,
     normalize,
     get,

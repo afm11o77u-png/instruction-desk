@@ -38,7 +38,15 @@ def test_rules():
         check('金額は16000円', view['totalAmount'] == 16000)
         product_view = stock.stock_query(c, {'customerId': str(aoba), 'productId': str(product), 'size': 'M', 'spec': 'none', 'group': 'product'})
         check('商品別の合計が15着16000円', product_view['groups'][0]['qty'] == 15 and product_view['groups'][0]['amount'] == 16000)
-        check('単価別内訳がある', sorted(p['unitCost'] for p in product_view['groups'][0]['parts']) == [1000, 1200])
+        check('商品別は商品ID見出し1件', len(product_view['groups']) == 1 and product_view['groups'][0]['productId'] == product)
+        check('商品別見出しに顧客・サイズを混ぜない',
+              product_view['groups'][0]['title'] == 'SCR-100　白スクラブ　白'
+              and 'あおば' not in product_view['groups'][0]['title']
+              and '/ M' not in product_view['groups'][0]['title'])
+        m_row = product_view['groups'][0]['rows'][0]
+        check('同一内訳の複数単価を集約', m_row['qty'] == 15 and m_row['amount'] == 16000 and len(product_view['groups'][0]['rows']) == 1)
+        check('単価別内訳がある', sorted(p['unitCost'] for p in m_row['prices']) == [1000, 1200])
+        check('在庫金額はロット単価×残数の合計', m_row['amount'] == sum(p['unitCost'] * p['qty'] for p in m_row['prices']) == 16000)
         kashiwa = c.execute("SELECT id FROM customers WHERE name='かしわ食品 本店'").fetchone()['id']
         mixed = stock.stock_query(c, {'customerId': str(aoba), 'size': 'M', 'spec': 'none'})
         other_customer = stock.stock_query(c, {'customerId': str(kashiwa)})
@@ -556,8 +564,336 @@ def test_locations():
             pass
         folder.cleanup()
 
+def test_product_grouped_stock():
+    """商品別: 商品ID単位の見出し＋顧客/仕様/サイズ/場所の内訳。顧客別・場所別は変えない。"""
+    folder, path, c = newdb()
+    try:
+        sample_data.seed(c)
+        c.commit()
+        aoba = c.execute("SELECT id FROM customers WHERE name='あおば記念病院'").fetchone()['id']
+        products = list(c.execute("SELECT id,code,supplier_id FROM products WHERE code='SCR-100' ORDER BY id"))
+        check('同じ品番で商品IDが2つ', len(products) == 2 and products[0]['id'] != products[1]['id'])
+
+        # フィルタ前後で totalQty / totalAmount はロット合計と一致（表示集計の変更で壊れないこと）
+        filters = [
+            {},
+            {'customerId': str(aoba)},
+            {'productId': str(products[0]['id'])},
+            {'size': 'M', 'spec': 'none'},
+            {'customerId': str(aoba), 'productId': str(products[0]['id'])},
+        ]
+        for f in filters:
+            base = stock.stock_query(c, dict(f, group='lot'))
+            product_view = stock.stock_query(c, dict(f, group='product'))
+            lot_qty = sum(l['qty'] for l in base['lots'])
+            lot_amount = sum(l['amount'] for l in base['lots'])
+            group_qty = sum(g['qty'] for g in product_view['groups'])
+            group_amount = sum(g['amount'] for g in product_view['groups'])
+            row_qty = sum(r['qty'] for g in product_view['groups'] for r in g['rows'])
+            row_amount = sum(r['amount'] for g in product_view['groups'] for r in g['rows'])
+            price_amount = sum(
+                p['unitCost'] * p['qty']
+                for g in product_view['groups'] for r in g['rows'] for p in r['prices']
+            )
+            label = f"filter={f or 'all'}"
+            check(f'商品別合計がロットと一致 {label}',
+                  product_view['totalQty'] == base['totalQty'] == lot_qty == group_qty == row_qty
+                  and product_view['totalAmount'] == base['totalAmount'] == lot_amount == group_amount == row_amount == price_amount)
+
+        # 商品IDごとに1見出し。同じ品番でもマージしない
+        all_product = stock.stock_query(c, {'group': 'product'})
+        ids = [g['productId'] for g in all_product['groups']]
+        check('商品別は商品IDごとに1見出し', len(ids) == len(set(ids)) and set(ids) == {p['id'] for p in products})
+        check('同じ品番でも商品IDは分けたまま', all(g['code'] == 'SCR-100' for g in all_product['groups']))
+
+        # 北光繊維側: 顧客・サイズ・場所が内訳行。見出しに顧客名やサイズを連結しない
+        hokko = next(g for g in all_product['groups'] if g['productId'] == products[0]['id'])
+        check('見出しは品番・商品名・色のみ', hokko['title'] == 'SCR-100　白スクラブ　白')
+        check('見出しに顧客・加工仕様・サイズを連結しない',
+              all(token not in hokko['title'] for token in ('あおば', 'かしわ', '左胸', '／', ' M', ' LL')))
+        row_keys = [(r['customerName'], r['embroideryLabel'], r['size'], r['locationLabel']) for r in hokko['rows']]
+        check('内訳は顧客・仕様・サイズ・場所の組み合わせ', len(row_keys) == len(set(row_keys)) and len(row_keys) >= 3)
+
+        # 顧客名順、同一顧客内は登録サイズ順（M → L → LL → 2L）
+        aoba_sizes = [r['size'] for r in hokko['rows'] if r['customerName'] == 'あおば記念病院' and r['embroideryLabel'] == '刺繍なし']
+        check('同一顧客のサイズは登録順', aoba_sizes == ['M', 'L', 'LL'])
+        check('内訳は顧客名順', [r['customerName'] for r in hokko['rows']] == sorted(
+            [r['customerName'] for r in hokko['rows']]
+        ))
+
+        # Mサイズ・刺繍なし: 1000×10 + 1200×5 が1行に集約、単価内訳は残す
+        m_plain = next(
+            r for r in hokko['rows']
+            if r['customerName'] == 'あおば記念病院' and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+        )
+        check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
+        check('単価の内訳を保持', [(p['unitCost'], p['qty']) for p in m_plain['prices']] == [(1000, 10), (1200, 5)])
+        check('最新単価だけで金額を置き換えない', m_plain['amount'] != 1200 * 15 and m_plain['amount'] == 1000 * 10 + 1200 * 5)
+
+        # 場所別も rows 化（詳細は test_location_grouped_stock）
+        location_view = stock.stock_query(c, {'group': 'location'})
+        check('場所別はrows構造', location_view['groups'] and 'rows' in location_view['groups'][0] and 'parts' not in location_view['groups'][0])
+        check('場所別の合計もロット一致',
+              location_view['totalQty'] == sum(g['qty'] for g in location_view['groups'])
+              and location_view['totalAmount'] == sum(g['amount'] for g in location_view['groups']))
+
+        # UI: 商品別レンダラがあり、旧の長い見出し連結を商品別で使っていない
+        app_js = Path(__file__).resolve().parents[1] / 'static' / 'app.js'
+        text = app_js.read_text(encoding='utf-8')
+        check('商品別リスト描画がある', 'renderProductStockList' in text and 'product-stock-table' in text)
+        check('単価の内訳を展開できる', '単価の内訳' in text and 'price-breakdown' in text)
+        check('商品別はrowsを使う', 'g.rows' in text and "f.group==='product'" in text)
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        folder.cleanup()
+
+
+def test_customer_grouped_stock():
+    """顧客別: 顧客ID単位の見出し＋商品/仕様/サイズ/場所の内訳。商品別・場所別集計は変えない。"""
+    folder, path, c = newdb()
+    try:
+        sample_data.seed(c)
+        c.commit()
+        aoba = c.execute("SELECT id FROM customers WHERE name='あおば記念病院'").fetchone()['id']
+        kashiwa = c.execute("SELECT id FROM customers WHERE name='かしわ食品 本店'").fetchone()['id']
+        products = list(c.execute("SELECT id,code FROM products WHERE code='SCR-100' ORDER BY id"))
+        check('同じ品番で商品IDが2つ', len(products) == 2 and products[0]['id'] != products[1]['id'])
+
+        filters = [
+            {},
+            {'customerId': str(aoba)},
+            {'productId': str(products[0]['id'])},
+            {'size': 'M', 'spec': 'none'},
+            {'customerId': str(aoba), 'productId': str(products[0]['id'])},
+        ]
+        for f in filters:
+            base = stock.stock_query(c, dict(f, group='lot'))
+            customer_view = stock.stock_query(c, dict(f, group='customer'))
+            product_view = stock.stock_query(c, dict(f, group='product'))
+            lot_qty = sum(l['qty'] for l in base['lots'])
+            lot_amount = sum(l['amount'] for l in base['lots'])
+            group_qty = sum(g['qty'] for g in customer_view['groups'])
+            group_amount = sum(g['amount'] for g in customer_view['groups'])
+            row_qty = sum(r['qty'] for g in customer_view['groups'] for r in g['rows'])
+            row_amount = sum(r['amount'] for g in customer_view['groups'] for r in g['rows'])
+            price_amount = sum(
+                p['unitCost'] * p['qty']
+                for g in customer_view['groups'] for r in g['rows'] for p in r['prices']
+            )
+            label = f"filter={f or 'all'}"
+            check(f'顧客別合計がロットと一致 {label}',
+                  customer_view['totalQty'] == base['totalQty'] == lot_qty == group_qty == row_qty
+                  and customer_view['totalAmount'] == base['totalAmount'] == lot_amount == group_amount == row_amount == price_amount)
+            check(f'顧客別と商品別の総合計が一致 {label}',
+                  customer_view['totalQty'] == product_view['totalQty']
+                  and customer_view['totalAmount'] == product_view['totalAmount'])
+
+        all_customer = stock.stock_query(c, {'group': 'customer'})
+        ids = [g['customerId'] for g in all_customer['groups']]
+        check('顧客別は顧客IDごとに1見出し', len(ids) == len(set(ids)) and set(ids) == {aoba, kashiwa})
+        check('見出しは顧客名のみ',
+              all(g['title'] == g['customerName'] for g in all_customer['groups'])
+              and all(token not in g['title'] for g in all_customer['groups']
+                      for token in ('SCR-100', '商品ID', '仕入先未設定', '／')))
+
+        aoba_group = next(g for g in all_customer['groups'] if g['customerId'] == aoba)
+        check('顧客別はrows構造', 'rows' in aoba_group and 'parts' not in aoba_group)
+        row_keys = [(r['productId'], r['embroideryLabel'], r['size'], r['locationLabel']) for r in aoba_group['rows']]
+        check('内訳は商品ID・仕様・サイズ・場所の組み合わせ', len(row_keys) == len(set(row_keys)) and len(row_keys) >= 3)
+        check('同じ品番でも商品IDは分けたまま',
+              {r['productId'] for r in aoba_group['rows']} == {products[0]['id'], products[1]['id']})
+        check('行に顧客名を繰り返さない', all('customerName' not in r for r in aoba_group['rows']))
+
+        # 商品が連続し、同一商品内は 加工仕様 → 登録サイズ順 → 保管場所
+        product_ids_order = [r['productId'] for r in aoba_group['rows']]
+        first_idx = {pid: product_ids_order.index(pid) for pid in set(product_ids_order)}
+        last_idx = {pid: len(product_ids_order) - 1 - product_ids_order[::-1].index(pid) for pid in set(product_ids_order)}
+        check('同一商品IDの行が連続', all(last_idx[pid] - first_idx[pid] + 1 == product_ids_order.count(pid) for pid in first_idx))
+
+        hokko_plain_sizes = [
+            r['size'] for r in aoba_group['rows']
+            if r['productId'] == products[0]['id'] and r['embroideryLabel'] == '刺繍なし'
+        ]
+        check('同一商品のサイズは登録順', hokko_plain_sizes == ['M', 'L', 'LL'])
+
+        specs_for_hokko = [r['embroideryLabel'] for r in aoba_group['rows'] if r['productId'] == products[0]['id']]
+        check('同一商品内は加工仕様順', specs_for_hokko == sorted(specs_for_hokko))
+
+        m_plain = next(
+            r for r in aoba_group['rows']
+            if r['productId'] == products[0]['id'] and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+            and r['locationLabel'] == '石狩倉庫①'
+        )
+        check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
+        check('単価の内訳を保持', [(p['unitCost'], p['qty']) for p in m_plain['prices']] == [(1000, 10), (1200, 5)])
+        check('最新単価だけで金額を置き換えない', m_plain['amount'] != 1200 * 15 and m_plain['amount'] == 1000 * 10 + 1200 * 5)
+
+        # 商品別・場所別の構造は維持（場所別も rows）
+        product_view = stock.stock_query(c, {'group': 'product'})
+        location_view = stock.stock_query(c, {'group': 'location'})
+        check('商品別はrows構造のまま', product_view['groups'] and 'rows' in product_view['groups'][0])
+        check('場所別はrows構造', location_view['groups'] and 'rows' in location_view['groups'][0] and 'parts' not in location_view['groups'][0])
+
+        app_js = Path(__file__).resolve().parents[1] / 'static' / 'app.js'
+        text = app_js.read_text(encoding='utf-8')
+        check('顧客別リスト描画がある', 'renderCustomerStockList' in text and "f.group==='customer'" in text)
+        check('顧客別も単価の内訳を使う', 'priceBreakdownHtml' in text and '単価の内訳' in text)
+        check('顧客別は商品切替の区切りがある', 'is-product-break' in text)
+        check('見出しに仕入先未設定を連結しない', '仕入先未設定' not in text.split('renderCustomerStockList')[1][:800]
+              if 'renderCustomerStockList' in text else False)
+        style = (Path(__file__).resolve().parents[1] / 'static' / 'style.css').read_text(encoding='utf-8')
+        check('商品別CSSを顧客別でも共用', 'product-stock-group' in style and 'is-product-break' in style)
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        folder.cleanup()
+
+
+def test_location_grouped_stock():
+    """場所別: 拠点ID単位の見出し＋棚・顧客・商品・仕様・サイズの内訳。商品別・顧客別集計は変えない。"""
+    folder, path, c = newdb()
+    try:
+        sample_data.seed(c)
+        c.commit()
+        aoba = c.execute("SELECT id FROM customers WHERE name='あおば記念病院'").fetchone()['id']
+        kashiwa = c.execute("SELECT id FROM customers WHERE name='かしわ食品 本店'").fetchone()['id']
+        products = list(c.execute("SELECT id,code FROM products WHERE code='SCR-100' ORDER BY id"))
+        site1 = c.execute("SELECT id FROM locations WHERE name='石狩倉庫①' AND parent_id IS NULL").fetchone()['id']
+        site2 = c.execute("SELECT id FROM locations WHERE name='石狩倉庫②' AND parent_id IS NULL").fetchone()['id']
+        shelf_a = c.execute("SELECT id FROM locations WHERE name='1-A' AND parent_id=?", (site1,)).fetchone()['id']
+
+        # 同名棚を別拠点にも作り、拠点直下在庫と混ざらないことを検証
+        site3 = stock.save_location(c, {'siteName': '札幌本店倉庫', 'active': True})
+        shelf_same_name = stock.save_location(c, {'siteId': site3['id'], 'shelfName': '1-A', 'active': True})
+        plain = c.execute(
+            "SELECT id FROM customer_products WHERE customer_id=? AND product_id=? AND embroidery=''",
+            (aoba, products[0]['id']),
+        ).fetchone()['id']
+        stock.register_opening(c, {
+            'token': 'location-group-same-shelf-name', 'customerProductId': plain,
+            'locationId': shelf_same_name['id'], 'basisDate': '2026-09-01',
+            'receivedUnknown': False, 'receivedOn': '2026-05-01',
+            'lines': [{'size': 'L', 'qty': 2, 'unitCost': 1100}],
+        })
+        c.commit()
+
+        filters = [
+            {},
+            {'customerId': str(aoba)},
+            {'productId': str(products[0]['id'])},
+            {'size': 'M', 'spec': 'none'},
+            {'locationId': str(site1)},
+            {'customerId': str(aoba), 'productId': str(products[0]['id'])},
+        ]
+        for f in filters:
+            base = stock.stock_query(c, dict(f, group='lot'))
+            location_view = stock.stock_query(c, dict(f, group='location'))
+            product_view = stock.stock_query(c, dict(f, group='product'))
+            customer_view = stock.stock_query(c, dict(f, group='customer'))
+            lot_qty = sum(l['qty'] for l in base['lots'])
+            lot_amount = sum(l['amount'] for l in base['lots'])
+            group_qty = sum(g['qty'] for g in location_view['groups'])
+            group_amount = sum(g['amount'] for g in location_view['groups'])
+            row_qty = sum(r['qty'] for g in location_view['groups'] for r in g['rows'])
+            row_amount = sum(r['amount'] for g in location_view['groups'] for r in g['rows'])
+            price_amount = sum(
+                p['unitCost'] * p['qty']
+                for g in location_view['groups'] for r in g['rows'] for p in r['prices']
+            )
+            label = f"filter={f or 'all'}"
+            check(f'場所別合計がロットと一致 {label}',
+                  location_view['totalQty'] == base['totalQty'] == lot_qty == group_qty == row_qty
+                  and location_view['totalAmount'] == base['totalAmount'] == lot_amount == group_amount == row_amount == price_amount)
+            check(f'場所別と商品別・顧客別の総合計が一致 {label}',
+                  location_view['totalQty'] == product_view['totalQty'] == customer_view['totalQty']
+                  and location_view['totalAmount'] == product_view['totalAmount'] == customer_view['totalAmount'])
+
+        all_location = stock.stock_query(c, {'group': 'location'})
+        ids = [g['siteId'] for g in all_location['groups']]
+        check('場所別は拠点IDごとに1見出し', len(ids) == len(set(ids)) and set(ids) == {site1, site2, site3['id']})
+        check('見出しは拠点名のみ',
+              all(g['title'] == g['siteName'] for g in all_location['groups'])
+              and all(token not in g['title'] for g in all_location['groups']
+                      for token in ('1-A', '棚・区画指定なし', 'SCR-100', '／')))
+
+        site1_group = next(g for g in all_location['groups'] if g['siteId'] == site1)
+        check('場所別はrows構造', 'rows' in site1_group and 'parts' not in site1_group)
+        row_keys = [(r['locationId'], r['customerId'], r['productId'], r['embroideryLabel'], r['size']) for r in site1_group['rows']]
+        check('内訳は保管場所・顧客・商品・仕様・サイズの組み合わせ', len(row_keys) == len(set(row_keys)) and len(row_keys) >= 4)
+        check('拠点直下は棚・区画指定なし',
+              any(r['locationId'] == site1 and r['shelfLabel'] == stock.SITE_STOCK_SHELF_LABEL for r in site1_group['rows']))
+        check('棚在庫は棚名で表示し拠点直下と分けたまま',
+              any(r['locationId'] == shelf_a and r['shelfLabel'] == '1-A' for r in site1_group['rows'])
+              and not any(r['locationId'] == shelf_a and r['shelfLabel'] == stock.SITE_STOCK_SHELF_LABEL for r in site1_group['rows']))
+        check('同じ品番でも商品IDは分けたまま',
+              {r['productId'] for r in site1_group['rows']} == {products[0]['id'], products[1]['id']})
+
+        # 棚 → 顧客 → 商品 → 加工仕様 → 登録サイズ順
+        shelf_order = [r['locationId'] for r in site1_group['rows']]
+        first_shelf = {lid: shelf_order.index(lid) for lid in set(shelf_order)}
+        last_shelf = {lid: len(shelf_order) - 1 - shelf_order[::-1].index(lid) for lid in set(shelf_order)}
+        check('同一棚の行が連続', all(last_shelf[lid] - first_shelf[lid] + 1 == shelf_order.count(lid) for lid in first_shelf))
+        check('棚指定なしが先', site1_group['rows'][0]['shelfLabel'] == stock.SITE_STOCK_SHELF_LABEL)
+
+        no_shelf_sizes = [
+            r['size'] for r in site1_group['rows']
+            if r['locationId'] == site1 and r['customerId'] == aoba
+            and r['productId'] == products[0]['id'] and r['embroideryLabel'] == '刺繍なし'
+        ]
+        check('同一棚・顧客・商品のサイズは登録順', no_shelf_sizes == ['M', 'L'])
+
+        m_plain = next(
+            r for r in site1_group['rows']
+            if r['locationId'] == site1 and r['customerId'] == aoba
+            and r['productId'] == products[0]['id'] and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+        )
+        check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
+        check('単価の内訳を保持', [(p['unitCost'], p['qty']) for p in m_plain['prices']] == [(1000, 10), (1200, 5)])
+        check('最新単価だけで金額を置き換えない', m_plain['amount'] != 1200 * 15 and m_plain['amount'] == 1000 * 10 + 1200 * 5)
+
+        # 同名棚は拠点IDで分離
+        site3_group = next(g for g in all_location['groups'] if g['siteId'] == site3['id'])
+        check('同名棚でも拠点ごとに別見出し', site3_group['siteName'] == '札幌本店倉庫')
+        check('同名棚の在庫は拠点内の棚IDで保持',
+              any(r['locationId'] == shelf_same_name['id'] and r['shelfLabel'] == '1-A' for r in site3_group['rows'])
+              and all(r['locationId'] != shelf_a for r in site3_group['rows']))
+
+        site2_group = next(g for g in all_location['groups'] if g['siteId'] == site2)
+        check('別拠点の顧客在庫が混ざらない',
+              all(r['customerId'] == kashiwa for r in site2_group['rows']) and site2_group['qty'] == 3)
+
+        # 商品別・顧客別の構造は維持
+        product_view = stock.stock_query(c, {'group': 'product'})
+        customer_view = stock.stock_query(c, {'group': 'customer'})
+        check('商品別はrows構造のまま', product_view['groups'] and 'rows' in product_view['groups'][0])
+        check('顧客別はrows構造のまま', customer_view['groups'] and 'rows' in customer_view['groups'][0])
+
+        app_js = Path(__file__).resolve().parents[1] / 'static' / 'app.js'
+        text = app_js.read_text(encoding='utf-8')
+        check('場所別リスト描画がある', 'renderLocationStockList' in text and "f.group==='location'" in text)
+        check('場所別も単価の内訳を使う', 'priceBreakdownHtml' in text and '単価の内訳' in text)
+        check('場所別は棚切替の区切りがある', 'is-shelf-break' in text)
+        check('棚ラベルはshelfLabelを描画', 'r.shelfLabel' in text and stock.SITE_STOCK_SHELF_LABEL == '棚・区画指定なし')
+        style = (Path(__file__).resolve().parents[1] / 'static' / 'style.css').read_text(encoding='utf-8')
+        check('商品別CSSを場所別でも共用', 'product-stock-group' in style and 'is-shelf-break' in style)
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        folder.cleanup()
+
+
 if __name__ == '__main__':
     test_rules()
+    test_product_grouped_stock()
+    test_customer_grouped_stock()
+    test_location_grouped_stock()
     test_locations()
     test_excel()
     test_restart_and_http()
