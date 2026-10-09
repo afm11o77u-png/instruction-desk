@@ -972,10 +972,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             if not isinstance(d,dict): raise ValueError('入力内容を確認してください。')
             if route in ('/api/migration/inspect','/api/migration/restore'):
                 try:
-                    with connect() as c:
-                        u = self.session_user(c)
-                        migration.owner_guard(u)
-                        actor = {'id': u['id'], 'name': u['name'], 'login': u['login']}
+                    from contextlib import closing
+                    with closing(connect()) as c:
+                        with c:
+                            u = self.session_user(c)
+                            migration.owner_guard(u)
+                            actor = {'id': u['id'], 'name': u['name'], 'login': u['login']}
                     raw = d.get('data')
                     if not isinstance(raw, str) or not raw:
                         raise migration.MigrationError('移行用ZIPを選んでください。')
@@ -1011,7 +1013,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     status = 403 if ('主管理者' in msg or 'ログイン' in msg) else 400
                     return self.reply(status, {'error': msg})
                 except Exception:
-                    return self.reply(500, {'error': '復元できませんでした。'})
+                    import traceback
+                    traceback.print_exc()
+                    return self.reply(500, {'error': '復元処理でエラーが発生しました。詳しい原因をdata/startup.logに記録しました。'})
             with connect() as c:
                 c.execute('BEGIN IMMEDIATE')
                 result=self.auth_post(route,d,c)

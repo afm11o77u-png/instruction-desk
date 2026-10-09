@@ -274,3 +274,13 @@
   .display-mode-bar-inline .display-mode-control{width:100%}
   .display-mode-bar-inline .display-mode-control select{width:100%}
 }
+
+/* Compact instruction / floor cards; keep action labels on one row. */
+#orderlistgrid{grid-template-columns:repeat(auto-fill,min(100%,250px));gap:8px;justify-content:start}
+#orderlistgrid .dm-card{padding:10px;gap:6px}
+#orderlistgrid .dm-card .dm-actions{gap:2px;justify-content:flex-start;width:calc(6ic + 10ch + .5em);max-width:100%;font-size:.85rem;font-weight:700}
+#orderlistgrid .dm-card .dm-actions button{flex:1 1 0;width:auto;min-width:0;min-height:26px;padding:4px 2px;font-size:.75rem;line-height:1.2}
+@media(max-width:720px){#orderlistgrid{grid-template-columns:1fr}}
+#orderlistgrid .dm-card .dm-mark{white-space:nowrap}
+
+#orderlistgrid .dm-card .flagcheck{white-space:nowrap}

@@ -160,7 +160,7 @@ function openMigrationRestore(){
    .concat((summary.destinationUsers||[]).map(u=>`<option value="${u.id}">${esc(migrationUserLabel(u))}${u.active?'':'（停止中）'}</option>`))
    .join('');
   const sourceUsers=summary.sourceUsers||[];
-  const mapping=sourceUsers.length?`<h3>利用者の割り当て</h3><p>移行元の担当・所有者を、このパソコンの利用者へ割り当ててください。${sourceUsers.length===1?'移行元は1人です。':''}</p><div class="repairfilters" style="grid-template-columns:1fr 1fr">${sourceUsers.map(u=>`<label>移行元：${esc(migrationUserLabel(u))}<select data-mig-source="${u.id}" required>${destOpts}</select></label>`).join('')}</div>`:'<p>移行元ZIPに利用者一覧がありません。業務データのみ復元します。</p>';
+  const mapping=sourceUsers.length?`<h3>利用者の割り当て</h3><p>移行元の担当・所有者を、このパソコンの利用者へ割り当ててください。${sourceUsers.length===1?'移行元は1人です。':''}</p><div class="repairtools"><label>全員の割り当て先<select id="mig-bulk-user">${destOpts}</select></label><button type="button" id="mig-bulk-apply" disabled>全員に適用</button></div><p class="duehint">全ての割り当てを選んだ利用者に変更します。適用後も個別に変更できます。</p><div class="repairfilters" style="grid-template-columns:1fr 1fr">${sourceUsers.map(u=>`<label>移行元：${esc(migrationUserLabel(u))}<select data-mig-source="${u.id}" required>${destOpts}</select></label>`).join('')}</div>`:'<p>移行元ZIPに利用者一覧がありません。業務データのみ復元します。</p>';
   const replaces=(summary.replaces||[]).map(x=>`<li>${esc(x)}</li>`).join('')||'<li>業務データ</li>';
   const preserves=(summary.preserves||[]).map(x=>`<li>${esc(x)}</li>`).join('');
   const legacy=summary.legacyFormat||summary.legacyAuthPresent?'<p class="testwarn">旧形式のZIPです。パスワード等の認証情報が含まれていても適用しません。</p>':'';
@@ -170,6 +170,19 @@ function openMigrationRestore(){
   agree.checked=false;
   agree.onchange=refreshConfirm;
   repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{sel.onchange=refreshConfirm});
+  const bulkUser=repairDialog.querySelector('#mig-bulk-user');
+  const bulkApply=repairDialog.querySelector('#mig-bulk-apply');
+  if(bulkUser&&bulkApply){
+   bulkUser.onchange=()=>{bulkApply.disabled=!bulkUser.value};
+   bulkApply.onclick=()=>{
+    if(!bulkUser.value)return;
+    repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{sel.value=bulkUser.value});
+    agree.checked=false;
+    refreshConfirm();
+    repairMessage('全員の割り当てを変更しました。内容を確認し、同意にチェックしてください。');
+   };
+  }
+
   refreshConfirm();
  };
  repairDialog.querySelector('#mig-form').onsubmit=e=>repairRun(async()=>{

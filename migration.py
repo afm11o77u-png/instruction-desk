@@ -231,7 +231,9 @@ def _checkpoint_and_close(db_path):
         return
     c = sqlite3.connect(str(path), timeout=30)
     try:
-        c.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        result = c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+        if result and result[0]:
+            raise MigrationError('データベースが使用中です。ほかの画面の操作を終了してから再実行してください。')
     finally:
         c.close()
     for side in (str(path) + '-wal', str(path) + '-shm'):
@@ -1039,8 +1041,13 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
         # Quiesce live DBs (checkpoint WAL) before swapping files.
         live_instr = data_dir / INSTRUCTIONS_DB
         live_stock = data_dir / STOCK_DB
-        _checkpoint_and_close(live_instr)
-        _checkpoint_and_close(live_stock)
+        import gc
+        gc.collect()  # Release unreachable SQLite connections before Windows file operations.
+        try:
+            _checkpoint_and_close(live_instr)
+            _checkpoint_and_close(live_stock)
+        except OSError as e:
+            raise MigrationError('データベースが使用中のため復元を中止しました。業務データは置き換えていません。ほかの画面の操作を終了し、再起動後に再実行してください。') from e
 
         stamp = _now_stamp()
         rollback = data_dir / f'.migration-rollback-{stamp}'
@@ -1055,6 +1062,7 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
 
         parked = []
         installed_files = []
+        installed_dbs = []
         try:
             for rel in (
                 INSTRUCTIONS_DB, STOCK_DB,
@@ -1071,8 +1079,10 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
 
             # Install DBs. Image trees are left on the destination as-is.
             os.replace(incoming / INSTRUCTIONS_DB, live_instr)
+            installed_dbs.append(INSTRUCTIONS_DB)
             if (incoming / STOCK_DB).is_file():
                 os.replace(incoming / STOCK_DB, live_stock)
+                installed_dbs.append(STOCK_DB)
             for src, rel in _iter_business_files(incoming):
                 dest = data_dir / rel
                 if dest.exists():
@@ -1089,26 +1099,14 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
             shutil.rmtree(rollback, ignore_errors=True)
             rollback = None
         except Exception as e:
-            _checkpoint_and_close(live_instr)
-            _checkpoint_and_close(live_stock)
-            # Remove partially installed DBs / non-image files only. Image trees stay.
-            for rel in (
-                INSTRUCTIONS_DB, STOCK_DB,
-                f'{INSTRUCTIONS_DB}-wal', f'{INSTRUCTIONS_DB}-shm',
-                f'{STOCK_DB}-wal', f'{STOCK_DB}-shm',
-                *installed_files,
-            ):
+            # Only remove files actually installed by this attempt, never originals
+            # whose initial move failed (for example a Windows file lock).
+            for db_name in installed_dbs:
+                _checkpoint_and_close(data_dir / db_name)
+            for rel in [*installed_dbs, *installed_files]:
                 cur = data_dir / rel
-                if cur.is_file() or cur.is_symlink():
-                    try:
-                        cur.unlink()
-                    except OSError:
-                        pass
-            for path in list(data_dir.glob('*-import-report.json')):
-                try:
-                    path.unlink()
-                except OSError:
-                    pass
+                if cur.is_file():
+                    cur.unlink()
             if rollback and rollback.exists():
                 for rel in parked:
                     parked_path = rollback / rel
