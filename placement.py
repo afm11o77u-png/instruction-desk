@@ -26,6 +26,9 @@ MAX_BYTES=10*1024*1024
 PAGE=24
 KINDS={'JPEG':'image/jpeg','PNG':'image/png'}
 
+CORRECTION_STATUSES = ('未対応', '対応中', '対応済み')
+CORRECTION_PAGE = 40
+
 def schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS placements (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +53,23 @@ def schema(c):
         actor TEXT NOT NULL,
         changes TEXT NOT NULL
     )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS placement_corrections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        placement_id INTEGER,
+        body TEXT NOT NULL,
+        author_id INTEGER,
+        author_name TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT '未対応',
+        status_by_id INTEGER,
+        status_by_name TEXT NOT NULL DEFAULT '',
+        status_at TEXT NOT NULL DEFAULT '',
+        response TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_placement_corrections_status ON placement_corrections(status, id DESC)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_placement_corrections_placement ON placement_corrections(placement_id)')
 
 def image_root(data):
     root=data/'images'/'placement'
@@ -294,6 +314,115 @@ def import_sources(connect, data_dir):
         c.execute("INSERT OR REPLACE INTO settings VALUES('placement_import',?)",(json.dumps({'sourceRows':report['sourceRows'],'imported':report['imported'],'already':report['already'],'missing':len(report['missingImage']),'unreadable':len(report['unreadable'])},ensure_ascii=False),))
     (data_dir/'placement-import-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     return report
+
+def get(handler, c, pid):
+    blocked=_require_view(handler.user)
+    if blocked: return blocked
+    row=c.execute('SELECT * FROM placements WHERE id=?',(pid,)).fetchone()
+    if not row: return 404, {'error':'貼付け位置が見つかりません。'}
+    return 200, _row_public(row)
+
+def _correction_public(row):
+    return {
+        'id':row['id'],
+        'placementId':row['placement_id'],
+        'customer':row['customer'] or '',
+        'part':row['part'] or '',
+        'hasPlacement':row['placement_id'] is not None,
+        'placementMissing':row['placement_id'] is not None and not row['placement_exists'],
+        'body':row['body'],
+        'authorId':row['author_id'],
+        'authorName':row['author_name'],
+        'createdAt':row['created_at'],
+        'status':row['status'],
+        'statusById':row['status_by_id'],
+        'statusByName':row['status_by_name'],
+        'statusAt':row['status_at'],
+        'response':row['response'],
+        'updatedAt':row['updated_at'],
+        'version':row['version'],
+    }
+
+def _correction_select(where='', args=None, limit=None, offset=0):
+    sql='''SELECT c.*,
+        p.customer AS customer,
+        p.part AS part,
+        CASE WHEN c.placement_id IS NULL THEN 0 WHEN p.id IS NULL THEN 0 ELSE 1 END AS placement_exists
+        FROM placement_corrections c
+        LEFT JOIN placements p ON p.id=c.placement_id'''
+    if where: sql+=' WHERE '+where
+    sql+=' ORDER BY CASE c.status WHEN \'未対応\' THEN 0 WHEN \'対応中\' THEN 1 ELSE 2 END, c.id DESC'
+    if limit is not None:
+        sql+=' LIMIT ? OFFSET ?'
+        return sql, list(args or [])+[limit, offset]
+    return sql, list(args or [])
+
+def list_corrections(handler, c):
+    from urllib.parse import parse_qs, urlparse
+    blocked=_require_view(handler.user)
+    if blocked: return blocked
+    q=parse_qs(urlparse(handler.path).query)
+    status=(q.get('status') or [''])[0].strip()
+    try: offset=max(0, int((q.get('offset') or ['0'])[0]))
+    except ValueError: offset=0
+    where=[]; args=[]
+    if status:
+        if status not in CORRECTION_STATUSES: return 400, {'error':'対応状況を確認してください。'}
+        where.append('c.status=?'); args.append(status)
+    where_sql=' AND '.join(where)
+    count_sql='SELECT COUNT(*) FROM placement_corrections c'+(' WHERE '+where_sql if where_sql else '')
+    total=c.execute(count_sql, args).fetchone()[0]
+    sql, sql_args=_correction_select(where_sql, args, CORRECTION_PAGE, offset)
+    rows=c.execute(sql, sql_args).fetchall()
+    counts={s:c.execute('SELECT COUNT(*) FROM placement_corrections WHERE status=?',(s,)).fetchone()[0] for s in CORRECTION_STATUSES}
+    return 200, {'total':total,'offset':offset,'limit':CORRECTION_PAGE,'counts':counts,'items':[_correction_public(r) for r in rows]}
+
+def create_correction(handler, c, d):
+    blocked=_require_view(handler.user)
+    if blocked: return blocked
+    body=_text(d.get('body'),'依頼内容',2000)
+    placement_id=d.get('placementId')
+    if placement_id is None or placement_id=='':
+        placement_id=None
+    elif type(placement_id) is not int or placement_id<=0:
+        return 400, {'error':'貼付け位置を確認してください。'}
+    else:
+        if not c.execute('SELECT id FROM placements WHERE id=?',(placement_id,)).fetchone():
+            return 404, {'error':'貼付け位置が見つかりません。'}
+    now=datetime.now().isoformat(timespec='seconds')
+    user=handler.user
+    cur=c.execute('''INSERT INTO placement_corrections(
+        placement_id,body,author_id,author_name,created_at,status,status_by_id,status_by_name,status_at,response,updated_at,version)
+        VALUES(?,?,?,?,?,'未対応',NULL,'','','',?,1)''',
+        (placement_id, body, user['id'], user['name'], now, now))
+    sql, args=_correction_select('c.id=?', [cur.lastrowid])
+    return 200, _correction_public(c.execute(sql, args).fetchone())
+
+def update_correction(handler, c, d):
+    blocked=_require_edit(handler.user)
+    if blocked: return blocked
+    if type(d.get('id')) is not int or type(d.get('version')) is not int:
+        return 400, {'error':'修正依頼を選択してください。'}
+    row=c.execute('SELECT * FROM placement_corrections WHERE id=?',(d['id'],)).fetchone()
+    if not row: return 404, {'error':'修正依頼が見つかりません。'}
+    if row['version']!=d['version']:
+        return 409, {'error':'別の画面で更新されました。開き直してから保存してください。'}
+    status=d.get('status')
+    if status not in CORRECTION_STATUSES: return 400, {'error':'対応状況を確認してください。'}
+    raw=d.get('response')
+    if raw is None: raw=row['response']
+    if not isinstance(raw, str): return 400, {'error':'対応コメントを確認してください。'}
+    response=raw.strip()
+    if len(response)>2000: return 400, {'error':'対応コメントは2000文字以内で入力してください。'}
+    if status==row['status'] and response==row['response']:
+        sql, args=_correction_select('c.id=?', [row['id']])
+        return 200, _correction_public(c.execute(sql, args).fetchone())
+    now=datetime.now().isoformat(timespec='seconds')
+    user=handler.user
+    c.execute('''UPDATE placement_corrections SET status=?,status_by_id=?,status_by_name=?,status_at=?,response=?,updated_at=?,version=version+1 WHERE id=?''',
+        (status, user['id'], user['name'], now, response, now, row['id']))
+    sql, args=_correction_select('c.id=?', [row['id']])
+    return 200, _correction_public(c.execute(sql, args).fetchone())
 
 def make_backup(connect, data_dir):
     import zipfile

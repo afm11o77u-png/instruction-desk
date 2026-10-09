@@ -925,14 +925,19 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             with connect() as c:
                 result=shipping.search(self, c) if path=='/api/shipments' else shipping.customers(self, c)
             return self.reply(*result)
-        if path=='/api/placements' or path=='/api/placements/options' or re.fullmatch(r'/api/placements/\d+/(thumb|image)', path) or re.fullmatch(r'/api/placements/\d+/history', path):
+        if path=='/api/placements' or path=='/api/placements/options' or re.fullmatch(r'/api/placements/\d+', path) or re.fullmatch(r'/api/placements/\d+/(thumb|image)', path) or re.fullmatch(r'/api/placements/\d+/history', path):
             with connect() as c:
                 if path=='/api/placements': result=placement.search(self, c)
                 elif path=='/api/placements/options': result=placement.customers(self, c)
                 elif path.endswith('/history'): result=placement.history(self, c, int(path.split('/')[3]))
+                elif re.fullmatch(r'/api/placements/\d+', path): result=placement.get(self, c, int(path.rsplit('/',1)[1]))
                 else:
                     result=placement.send_file(self, c, int(path.split('/')[3]), path.endswith('/thumb'))
             if len(result)==3: return self.reply(result[0], result[1], result[2])
+            return self.reply(*result)
+        if path=='/api/placement-corrections':
+            with connect() as c:
+                result=placement.list_corrections(self, c)
             return self.reply(*result)
         if path=='/api/name-labels' or path.startswith('/api/name-labels/'):
             with connect() as c:
@@ -1042,7 +1047,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(*result)
             if self.path=='/api/backup':
                 dest=placement.make_backup(connect, DATA)
-                return self.reply(200,{'message':'バックアップを作成しました。指示書のデータ、出荷情報、貼付け位置の画像を含みます。','filename':dest.name})
+                return self.reply(200,{'message':'バックアップを作成しました。指示書のデータ、出荷情報、貼付け位置の画像、修正依頼掲示板を含みます。','filename':dest.name})
             if self.path=='/api/ship': return self.reply(*ship_order(self,d))
             if self.path=='/api/orders/flags': return self.reply(*tune_flags(self,d))
             if self.path=='/api/orders/debug': return self.reply(*debug_flags(self,d))
@@ -1073,6 +1078,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     result=placement.create(self, c, d) if self.path=='/api/placements' else placement.update(self, c, d)
+                return self.reply(*result)
+            if self.path in ('/api/placement-corrections','/api/placement-corrections/status'):
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    try:
+                        result=placement.create_correction(self, c, d) if self.path=='/api/placement-corrections' else placement.update_correction(self, c, d)
+                    except ValueError as e:
+                        return self.reply(400, {'error':str(e)})
                 return self.reply(*result)
             if self.path=='/api/name-labels/review':
                 with connect() as c:
