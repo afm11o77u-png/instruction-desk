@@ -100,8 +100,8 @@ def _check_image(path):
 def _write_thumb(src, dest):
     with Image.open(src) as im:
         im=im.convert('RGB')
-        im.thumbnail((360,360))
-        im.save(dest, 'JPEG', quality=80)
+        im.thumbnail((960,960), Image.Resampling.LANCZOS)
+        im.save(dest, 'JPEG', quality=95, subsampling=0, optimize=True)
 
 def _store_image(data, raw, original_name):
     if len(raw)>MAX_BYTES: raise ValueError('画像は10MBまでです。')
