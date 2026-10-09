@@ -62,14 +62,12 @@ def seed(c):
 
 
 def po_body(fx, **extra):
+    # Header fields like orderDate / ordererName / supplierContact / supplierFax are
+    # ignored for create (handwritten on paper). Actor becomes internal 作成利用者.
     body = {
         'token': extra.pop('token', 'po-create-token-01'),
         'supplierId': fx['supplier']['id'],
         'customerId': fx['customer']['id'],
-        'orderDate': '2026-10-09',
-        'ordererName': '担当太郎',
-        'supplierContact': '山田',
-        'supplierFax': '011-000-0001',
         'remarks': '全体備考',
         'lines': [
             {
@@ -107,7 +105,13 @@ class PurchaseOrdersTest(unittest.TestCase):
             c.commit()
             self.assertEqual(po['status'], 'unordered')
             self.assertEqual(po['statusLabel'], '未発注')
-            self.assertTrue(po['number'].startswith('PO-20261009-'))
+            from datetime import date
+            self.assertTrue(po['number'].startswith(f'PO-{date.today().isoformat().replace("-", "")}-'))
+            self.assertTrue(po['createdAt'])
+            self.assertEqual(po['createdBy'], '担当太郎')
+            self.assertEqual(po['orderDate'], '')  # handwritten blank, not system-filled
+            self.assertEqual(po['supplierContact'], '')
+            self.assertEqual(po['supplierFax'], '')
             # blank/0 excluded; S/M/L/LL from p1 + M/L from p2 = 6 lines
             self.assertEqual(len(po['lines']), 6)
             self.assertEqual(po['totalOrdered'], 6 + 3 + 3 + 6 + 10 + 5)
@@ -142,22 +146,62 @@ class PurchaseOrdersTest(unittest.TestCase):
         folder, path, c = newdb()
         try:
             fx = seed(c)
-            html = stock_orders.preview_purchase_order_html(c, po_body(fx, token='po-prev-token'))
+            # Client may still send legacy header fields — print must ignore them.
+            html = stock_orders.preview_purchase_order_html(c, po_body(
+                fx, token='po-prev-token',
+                orderDate='2026-10-09', ordererName='担当太郎',
+                supplierContact='山田', supplierFax='011-000-0001',
+            ))
             self.assertIn('発注書', html)
             self.assertIn('テスト商事', html)
             self.assertIn('発注テスト病院様分', html)
-            self.assertIn('担当太郎', html)
+            self.assertIn('発注テスト仕入先', html)
             self.assertIn('左胸プリント依頼', html)
             self.assertIn('サイズ', html)
             self.assertNotIn('単価', html)
             self.assertNotIn('金額', html)
-            # company from settings, not hardcoded sample empire address from PDF
+            # Handwritten blanks only — do not auto-fill 担当/FAX/発注者/発注日
+            self.assertIn('po-blank', html)
+            self.assertNotIn('担当太郎', html)
+            self.assertNotIn('山田', html)
+            self.assertNotIn('011-000-0001', html)
+            self.assertNotIn('2026-10-09', html)
+            # company from settings store (always print same five fields)
             self.assertIn('北海道石狩市1-1', html)
+            self.assertIn('支店', html)
+            self.assertIn('石狩支店', html)
+            self.assertIn('TEL', html)
+            self.assertIn('0123-45-6789', html)
             po = stock_orders.save_purchase_order(c, po_body(fx, token='po-save-for-html'))
             c.commit()
             saved_html = stock_orders.purchase_order_html(c, po['id'])
             self.assertIn(po['number'], saved_html)
             self.assertIn('発注番号', saved_html)
+            self.assertNotIn('担当太郎', saved_html)
+            self.assertEqual(po['createdBy'], '担当太郎')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_company_profile_seeds_defaults_when_empty(self):
+        folder, path, c = newdb()
+        try:
+            # Fresh DB has no company keys — first read seeds brand default into settings.
+            co = stock_orders.company_profile(c)
+            c.commit()
+            self.assertEqual(co['companyName'], 'エンパイアー')
+            again = stock_orders.company_profile(c, ensure=False)
+            self.assertEqual(again['companyName'], 'エンパイアー')
+            row = c.execute("SELECT value FROM settings WHERE key='company_name'").fetchone()
+            self.assertEqual(row['value'], 'エンパイアー')
+            html = stock_orders.render_po_html({
+                'number': 'PO-TEST', 'orderDate': '', 'supplierName': '仕入',
+                'customerName': '顧客', 'ordererName': '', 'remarks': '',
+                'lines': [], 'company': again,
+            })
+            self.assertIn('エンパイアー', html)
+            self.assertIn('支店', html)
+            self.assertIn('住所', html)
         finally:
             c.close()
             folder.cleanup()
@@ -534,6 +578,21 @@ class PurchaseOrderNavUiTest(unittest.TestCase):
         self.assertIn('purchase_orders.js', (repo / 'stock-desk' / 'static' / 'index.html').read_text(encoding='utf-8'))
         placement = (repo / 'placement.js').read_text(encoding='utf-8')
         self.assertIn("section==='orders'", placement)
+
+    def test_create_ui_only_supplier_customer_and_company_settings(self):
+        js = (Path(__file__).resolve().parents[1] / 'static' / 'purchase_orders.js').read_text(encoding='utf-8')
+        # Create screen: pickers only — no typed header fields for paper blanks
+        self.assertIn("label:'仕入先'", js)
+        self.assertIn("label:'対象顧客'", js)
+        self.assertNotIn('id="poSuContact"', js)
+        self.assertNotIn('id="poSuFax"', js)
+        self.assertNotIn('id="poDate"', js)
+        self.assertNotIn('id="poOrderer"', js)
+        self.assertIn('作成日時', js)
+        self.assertIn('作成者', js)
+        self.assertIn('openCompanySettings', js)
+        self.assertIn('自社情報', js)
+        self.assertIn("api('/api/company-profile'", js)
 
 
 if __name__ == '__main__':
