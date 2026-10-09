@@ -75,7 +75,12 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('#stocknav .stocknav-move', css)
         self.assertIn('#stocknav .stocknav-period', css)
         self.assertIn('#stocknav .stocknav-orders', css)
-        self.assertRegex(css, r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-move,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*center')
+        self.assertRegex(
+            css,
+            r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-move,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*left',
+        )
+        # Top row stays centered; secondary labels are left-aligned under the indent
+        self.assertRegex(css, r'#stocknav \.stocknav-top \.nav\{[^}]*text-align:\s*center')
         self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
