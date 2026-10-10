@@ -62,6 +62,16 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .namescale-box.namepaper-mix,.nameunknown-image.namepaper-mix{background:linear-gradient(135deg,#F08080 0%,#F08080 25%,#87CEFA 25%,#87CEFA 50%,#90EE90 50%,#90EE90 75%,#fff 75%,#fff 100%)}
 
 /* Address entry rows follow the four print positions in order. */
+#labeldesk .labelmodes{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+#labeldesk .labelmode{padding:8px 14px;font-weight:700;border:1px solid #9dceae;background:#fff;color:#1e4a36;border-radius:8px}
+#labeldesk .labelmode.on,#labeldesk .labelmode[aria-pressed="true"]{background:#1e4a36;color:#fff;border-color:#1e4a36}
+#labeldesk .labelpattern{margin:0 12px 0 0;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+#labeldesk .labelpattern legend{padding:0 4px;font-size:.85rem;font-weight:700}
+#labeldesk .labelpattern label{display:inline-flex;gap:6px;align-items:center;font-size:.9rem;font-weight:600;white-space:nowrap}
+#labeldesk .labelnoticeform{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;max-width:980px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
+#labeldesk .labelnoticeform label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:180px}
+#labeldesk .labelnoticeform input{font-weight:400;min-width:200px;padding:8px 10px}
+#labelnoticeerror:empty{display:none}#labelnoticeerror{margin:0 0 12px;color:#a23928}
 #labeldesk .labeltablewrap{overflow-x:auto;max-width:100%}
 #labeldesk .labelinputtable{width:100%;min-width:1000px;table-layout:fixed;white-space:normal}
 #labelcards{display:table-row-group;max-width:none}
