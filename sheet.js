@@ -9,7 +9,9 @@ function labelPx(mm){return mm*96/25.4}
 function fitLabelText(text,widthMm,heightMm,maxPt){const value=String(text||'').trim();if(!value)return 0;const probe=document.createElement('span');probe.style.cssText='position:fixed;left:-9999px;top:0;visibility:hidden;font-weight:700;line-height:1.05;white-space:nowrap;display:inline-block;font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;';probe.textContent=value;document.body.append(probe);const maxW=Math.max(8,labelPx(widthMm)-2),maxH=labelPx(heightMm);const cap=Math.max(4,maxPt||32);let lo=4,hi=Math.min(cap,Math.max(4,heightMm/0.3528/1.05));for(let i=0;i<18;i++){const mid=(lo+hi)/2;probe.style.fontSize=mid+'pt';if(probe.offsetWidth<=maxW&&probe.offsetHeight<=maxH)lo=mid;else hi=mid}probe.remove();return Math.round(lo*10)/10}
 function fitWhoSize(name,widthMm,heightMm,maxPt){const row=document.createElement('div');row.style.cssText='position:fixed;left:-9999px;top:0;visibility:hidden;display:flex;justify-content:center;align-items:center;gap:.5em;width:'+labelPx(widthMm)+'px;font-weight:700;line-height:1.05;white-space:nowrap;font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;';const a=document.createElement('span');a.textContent=name;const b=document.createElement('span');b.textContent='様';a.style.whiteSpace=b.style.whiteSpace='nowrap';row.append(a,b);document.body.append(row);const maxW=labelPx(widthMm),maxH=labelPx(heightMm);const cap=Math.max(4,maxPt||54);let lo=4,hi=Math.min(cap,Math.max(4,heightMm/0.3528/1.05));for(let i=0;i<18;i++){const mid=(lo+hi)/2;row.style.fontSize=mid+'pt';if(a.offsetWidth+b.offsetWidth+(parseFloat(getComputedStyle(row).columnGap)||0)<=maxW&&Math.max(a.offsetHeight,b.offsetHeight)<=maxH)lo=mid;else hi=mid}row.remove();return Math.round(lo*10)/10}
 function clampLabel(el){if(!el||!String(el.textContent||'').trim())return;let size=parseFloat(el.style.fontSize);if(!size)return;for(let i=0;i<80;i++){if(el.scrollWidth<=el.clientWidth+0.5&&el.scrollHeight<=el.clientHeight+0.5)return;size=Math.max(4,Math.round((size-.4)*10)/10);el.style.fontSize=size+'pt';if(size<=4)return}}
-function addressTags(list){const pages=[];for(let i=0;i<list.length;i+=4){const page=document.createElement('section');page.className='labelpage';for(let n=0;n<4;n++){const order=list[i+n];const tag=document.createElement('div');tag.className=order?'tag':'tag tagempty';if(order){const body=document.createElement('div');body.className='tagbody';const customer=document.createElement('p');customer.className='tagcustomer';customer.textContent=order.customer||'';const mid=document.createElement('div');mid.className='tagmid';const management=String(order.management||'').trim();const dept=document.createElement('p');dept.className='tagdept';dept.textContent=order.department||'';if(management){mid.classList.add('hassplit');const code=document.createElement('p');code.className='tagcode';code.textContent=management;mid.append(code,dept)}else mid.append(dept);const who=document.createElement('p');who.className='tagwho';const raw=String(order.employee||'').trim().replace(/様$/,'');if(raw){const name=document.createElement('span');name.className='tagname';name.textContent=raw;const sama=document.createElement('span');sama.className='tagsama';sama.textContent='様';who.append(name,sama)}const job=document.createElement('p');job.className='tagjob';job.textContent=order.request||'';for(const [node,extra] of [[customer,''],[mid,''],[who,'nameband']]){const band=document.createElement('div');band.className='tagband'+(extra?' '+extra:'');band.append(node);body.append(band)}tag.append(body,job)}page.append(tag)}pages.push(page)}fitAddressTags(pages);return pages}
+function currentLabelPattern(){const picked=document.querySelector('input[name="labelpattern"]:checked');return picked&&picked.value==='3'?'3':'4'}
+function setLabelPattern(pattern){const want=String(pattern)==='3'?'3':'4';document.querySelectorAll('input[name="labelpattern"]').forEach(el=>{el.checked=el.value===want})}
+function addressTags(list,pattern='4'){const lines=String(pattern)==='3'?'3':'4';const pages=[];for(let i=0;i<list.length;i+=4){const page=document.createElement('section');page.className='labelpage'+(lines==='3'?' labelpage3':'');for(let n=0;n<4;n++){const order=list[i+n];const tag=document.createElement('div');tag.className=order?'tag':'tag tagempty';if(lines==='3')tag.classList.add('taglines3');if(order){const body=document.createElement('div');body.className='tagbody';const customer=document.createElement('p');customer.className='tagcustomer';customer.textContent=order.customer||'';const who=document.createElement('p');who.className='tagwho';const raw=String(order.employee||'').trim().replace(/様$/,'');if(raw){const name=document.createElement('span');name.className='tagname';name.textContent=raw;const sama=document.createElement('span');sama.className='tagsama';sama.textContent='様';who.append(name,sama)}const job=document.createElement('p');job.className='tagjob';job.textContent=order.request||'';if(lines==='3'){for(const [node,extra] of [[customer,''],[who,'nameband']]){const band=document.createElement('div');band.className='tagband'+(extra?' '+extra:'');band.append(node);body.append(band)}tag.append(body,job)}else{const mid=document.createElement('div');mid.className='tagmid';const management=String(order.management||'').trim();const dept=document.createElement('p');dept.className='tagdept';dept.textContent=order.department||'';if(management){mid.classList.add('hassplit');const code=document.createElement('p');code.className='tagcode';code.textContent=management;mid.append(code,dept)}else mid.append(dept);for(const [node,extra] of [[customer,''],[mid,''],[who,'nameband']]){const band=document.createElement('div');band.className='tagband'+(extra?' '+extra:'');band.append(node);body.append(band)}tag.append(body,job)}}page.append(tag)}pages.push(page)}fitAddressTags(pages);return pages}
 function fitAddressTags(pages){
  if(!pages?.length)return;
  let host=$('#labelfit');
@@ -24,27 +26,32 @@ function fitAddressTags(pages){
  const mm=px=>px*25.4/96;
  for(const tag of body.querySelectorAll('.tag:not(.tagempty)')){
   const bands=[...tag.querySelectorAll('.tagband')];
-  if(bands.length<3)continue;
+  const lines3=tag.classList.contains('taglines3');
+  if(lines3?bands.length<2:bands.length<3)continue;
   const customer=tag.querySelector('.tagcustomer'),dept=tag.querySelector('.tagdept'),code=tag.querySelector('.tagcode'),who=tag.querySelector('.tagwho'),job=tag.querySelector('.tagjob');
   const boxW=el=>{const s=doc.defaultView.getComputedStyle(el);return Math.max(8,mm(el.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight))-2.5)};
   const boxH=el=>{const s=doc.defaultView.getComputedStyle(el);return Math.max(3,mm(el.clientHeight-parseFloat(s.paddingTop)-parseFloat(s.paddingBottom))-1)};
   const raw=who.querySelector('.tagname')?.textContent||'';
   const customerText=customer.textContent||'';
   const customerLen=[...customerText.replace(/\s/g,'')].length;
-  const customerCap=customerLen<=4?48:customerLen<=6?42:customerLen<=8?36:32;
+  const customerCap=lines3?(customerLen<=4?56:customerLen<=6?48:customerLen<=8?42:36):(customerLen<=4?48:customerLen<=6?42:customerLen<=8?36:32);
   const customerSize=fitLabelText(customerText,boxW(bands[0]),boxH(bands[0])*.92,customerCap);
-  const deptSize=fitLabelText(dept.textContent,boxW(code?dept:bands[1]),boxH(bands[1])*.92,30);
-  const codeSize=code?fitLabelText(code.textContent,boxW(code),boxH(bands[1])*.92,30):0;
+  const nameBand=bands[lines3?1:2];
   const nameLen=[...raw.replace(/\s/g,'')].length;
-  const nameCap=nameLen<=2?68:nameLen<=4?60:50;
-  const whoSize=raw?fitWhoSize(raw,boxW(bands[2]),boxH(bands[2])*.92,nameCap):0;
-  const jobSize=fitLabelText(job.textContent,boxW(job),boxH(job)*.95,28);
+  const nameCap=lines3?(nameLen<=2?78:nameLen<=4?70:58):(nameLen<=2?68:nameLen<=4?60:50);
+  const whoSize=raw?fitWhoSize(raw,boxW(nameBand),boxH(nameBand)*.92,nameCap):0;
+  const jobSize=fitLabelText(job.textContent,boxW(job),boxH(job)*.95,lines3?36:28);
   if(customerSize)customer.style.fontSize=customerSize+'pt';
-  if(deptSize)dept.style.fontSize=deptSize+'pt';
-  if(codeSize)code.style.fontSize=codeSize+'pt';
   if(whoSize)who.style.fontSize=whoSize+'pt';
   if(jobSize)job.style.fontSize=jobSize+'pt';
-  clampLabel(customer);clampLabel(dept);if(code)clampLabel(code);clampLabel(who);clampLabel(job);
+  clampLabel(customer);clampLabel(who);clampLabel(job);
+  if(!lines3){
+   const deptSize=fitLabelText(dept.textContent,boxW(code?dept:bands[1]),boxH(bands[1])*.92,30);
+   const codeSize=code?fitLabelText(code.textContent,boxW(code),boxH(bands[1])*.92,30):0;
+   if(deptSize)dept.style.fontSize=deptSize+'pt';
+   if(codeSize)code.style.fontSize=codeSize+'pt';
+   clampLabel(dept);if(code)clampLabel(code);
+  }
  }
  body.replaceChildren();
 }
@@ -104,7 +111,7 @@ function showPreviewKind(kind){
  });
 }
 function openFloorSheetPreview(order){if(!order)return;previewChoice=true;previewOrder=order;previewShow='sheet';queuePrint([order],false,true,true)}
-function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirmationOnly=false){
+function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirmationOnly=false,labelPattern='4'){
  if(!list.length)return;
  if(guardPrinting())return;
  // labelOrders() keeps null slots for blank print positions; skip those here.
@@ -113,7 +120,7 @@ function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirm
  document.body.classList.toggle('draftpreview',draftPreview);
  printing=true;pendingPrintIds=labelsOnly||draftPreview?[]:list.filter(Boolean).map(o=>o.id);
  try{
-  $('#printarea').replaceChildren(...(labelsOnly?addressTags(list):[...list.map(printedSheet),...(includeLabels?addressTags(list):[])]));
+  $('#printarea').replaceChildren(...(labelsOnly?addressTags(list,labelPattern):[...list.map(printedSheet),...(includeLabels?addressTags(list,'4'):[])]));
   if(previewOnly){openPrintPreview();return}
   // Close the modal before printing so its backdrop cannot cover the paper.
   reopenEditor=!!$('#editor')?.open;
@@ -131,7 +138,7 @@ $('#previewprint').onclick=()=>{if(draftPreview||!document.body.classList.contai
 $('#previewseesheet').onclick=()=>{showPreviewKind('sheet');previewFit=true;applyPreviewZoom();$('#printarea').scrollTop=0;$('#printarea').scrollLeft=0};
 $('#previewseelabel').onclick=()=>{if(!$('#printarea .labelpage')){toast('宛名に入れる内容がありません。');return}showPreviewKind('label');previewFit=true;applyPreviewZoom();$('#printarea').scrollTop=0;$('#printarea').scrollLeft=0};
 $('#previewchoiceprint').onclick=()=>{if(draftPreview||!document.body.classList.contains('previewing'))return;if(previewShow==='label'){if(!previewOrder)return;const pages=addressTags([previewOrder]);if(!pages.length){toast('宛名に入れる内容がありません。');return}printLabelFrame(pages,true);return}armPrintWatch();window.print()};
-const labelPrintCss=`@page{size:A4 landscape;margin:18mm 12mm 6mm 12mm}html,body{margin:0;padding:0;background:#fff}*{box-sizing:border-box}.labelpage{width:273mm;height:186mm;margin:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;position:relative;overflow:hidden;break-after:page;page-break-after:always;background:#fff}.labelpage:last-child{break-after:auto;page-break-after:auto}.labelpage::before,.labelpage::after{content:"";position:absolute;z-index:3}.labelpage::before{left:0;right:0;top:50%;border-top:1px dashed #000}.labelpage::after{top:0;bottom:0;left:50%;border-left:1px dashed #000}.tag{min-width:0;min-height:0;height:100%;display:flex;flex-direction:column;overflow:hidden;text-align:center;color:#000;padding:2.5mm 4mm;box-sizing:border-box}.tagbody{flex:1 1 auto;min-height:0;width:100%;display:grid;grid-template-rows:31fr 18fr 47fr}.tagband{min-width:0;min-height:0;height:auto;max-height:none;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:1.5mm 2mm;box-sizing:border-box}.tagband:nth-child(1){justify-content:flex-start;padding-left:8mm}.tagband:nth-child(2){align-items:flex-start;padding-top:1.5mm}.nameband{align-items:center;padding:1.5mm 2mm 2mm}.tagmid{width:100%;height:100%;min-width:0;display:flex;align-items:center;justify-content:center}.tagmid.hassplit{display:grid;grid-template-columns:24% minmax(0,1fr);align-items:center;column-gap:2mm;padding-left:14mm}.tagcustomer,.tagdept,.tagcode,.tagjob,.tagwho{margin:0;width:100%;max-width:100%;max-height:100%;font-weight:700;line-height:1.05;overflow:hidden;text-align:center}.tagcustomer{text-align:left}.tagwho{display:flex;justify-content:center;align-items:center;gap:.5em}.tagname,.tagsama{min-width:0;white-space:nowrap}.tagcustomer,.tagdept,.tagcode,.tagjob{white-space:nowrap}.tagjob{flex:0 0 18%;height:auto;max-height:none;display:flex;align-items:center;justify-content:center;padding:1mm 2mm 1.6mm;letter-spacing:.04em;box-sizing:border-box}body{font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}`;
+const labelPrintCss=`@page{size:A4 landscape;margin:18mm 12mm 6mm 12mm}html,body{margin:0;padding:0;background:#fff}*{box-sizing:border-box}.labelpage{width:273mm;height:186mm;margin:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;position:relative;overflow:hidden;break-after:page;page-break-after:always;background:#fff}.labelpage:last-child{break-after:auto;page-break-after:auto}.labelpage::before,.labelpage::after{content:"";position:absolute;z-index:3}.labelpage::before{left:0;right:0;top:50%;border-top:1px dashed #000}.labelpage::after{top:0;bottom:0;left:50%;border-left:1px dashed #000}.tag{min-width:0;min-height:0;height:100%;display:flex;flex-direction:column;overflow:hidden;text-align:center;color:#000;padding:2.5mm 4mm;box-sizing:border-box}.tagbody{flex:1 1 auto;min-height:0;width:100%;display:grid;grid-template-rows:31fr 18fr 47fr}.tagband{min-width:0;min-height:0;height:auto;max-height:none;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:1.5mm 2mm;box-sizing:border-box}.tagband:nth-child(1){justify-content:flex-start;padding-left:8mm}.tagband:nth-child(2){align-items:flex-start;padding-top:1.5mm}.nameband{align-items:center;padding:1.5mm 2mm 2mm}.tagmid{width:100%;height:100%;min-width:0;display:flex;align-items:center;justify-content:center}.tagmid.hassplit{display:grid;grid-template-columns:24% minmax(0,1fr);align-items:center;column-gap:2mm;padding-left:14mm}.tagcustomer,.tagdept,.tagcode,.tagjob,.tagwho{margin:0;width:100%;max-width:100%;max-height:100%;font-weight:700;line-height:1.05;overflow:hidden;text-align:center}.tagcustomer{text-align:left}.tagwho{display:flex;justify-content:center;align-items:center;gap:.5em}.tagname,.tagsama{min-width:0;white-space:nowrap}.tagcustomer,.tagdept,.tagcode,.tagjob{white-space:nowrap}.tagjob{flex:0 0 18%;height:auto;max-height:none;display:flex;align-items:center;justify-content:center;padding:1mm 2mm 1.6mm;letter-spacing:.04em;box-sizing:border-box}.tag.taglines3 .tagbody{grid-template-rows:40fr 42fr}.tag.taglines3 .tagjob{flex:0 0 28%}.tag.taglines3 .tagband:nth-child(1){justify-content:flex-start;padding-left:8mm}.tag.taglines3 .nameband{align-items:center}.noticepage{display:flex!important;grid-template-columns:none!important;grid-template-rows:none!important;flex-direction:column;align-items:center;justify-content:center;gap:10mm;padding:12mm 16mm;box-sizing:border-box;text-align:center;overflow:hidden}.noticepage::before,.noticepage::after{display:none!important;content:none!important}.noticebody{width:100%;height:100%;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12mm;overflow:hidden}.noticeto,.noticeline,.noticeask{margin:0;width:100%;max-width:100%;font-weight:700;line-height:1.15;overflow:hidden;white-space:nowrap;text-align:center}.noticeto{letter-spacing:.04em}.noticeline{letter-spacing:.02em}.noticeask{letter-spacing:.08em}body{font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}`;
 function printLabelFrame(pages,keep){const list=pages||[...$('#printarea').querySelectorAll('.labelpage')];if(!list.length){toast('宛名に入れる内容がありません。');return}let frame=$('#labelframe');if(!frame){frame=document.createElement('iframe');frame.id='labelframe';frame.setAttribute('aria-hidden','true');frame.style.cssText='position:fixed;left:-12000px;top:0;width:297mm;height:210mm;border:0';document.body.append(frame)}const doc=frame.contentDocument;doc.open();doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>宛名</title><style>${labelPrintCss}</style></head><body>${list.map(page=>page.outerHTML).join('')}</body></html>`);doc.close();const win=frame.contentWindow;const finish=()=>{win.removeEventListener('afterprint',finish);if(!keep)window.dispatchEvent(new Event('afterprint'))};win.addEventListener('afterprint',finish);if(!keep)armPrintWatch();win.focus();try{win.print()}catch(e){win.removeEventListener('afterprint',finish);if(!keep){unlockPrinting();closePrintPreview();$('#printarea').replaceChildren()}toast('印刷画面を開けませんでした。もう一度お試しください。')}}
 $('#previewclose').onclick=()=>{unlockPrinting();closePrintPreview();$('#printarea').replaceChildren()};
 $('#previewlarger').onclick=()=>{previewFit=false;previewZoom=previewSteps.find(z=>z>previewZoom+.001)??previewSteps.at(-1);applyPreviewZoom()};
@@ -164,20 +171,104 @@ function labelOrders(){const list=[...$('#labelcards').querySelectorAll('.labelc
 resetLabelCards();
 $('#labeladd').onclick=()=>{const box=$('#labelcards');if(box.children.length>=40){toast('一度に印刷できるのは40件までです。');return}for(let i=0;i<4;i++)box.append(labelCard());renumberLabelCards();box.lastElementChild.querySelector('input').focus()};
 $('#labelreset').onclick=()=>{if(labelOrders().length&&!confirm('入力した宛名をすべて消しますか？'))return;resetLabelCards()};
-$('#labelprint').onclick=()=>{const list=labelOrders();if(!list.length){toast('宛名に入れる内容がありません。');return}if(list.length>40){toast('一度に印刷できるのは40件までです。');return}queuePrint(list,true,true)};
+$('#labelprint').onclick=()=>{const list=labelOrders();if(!list.length){toast('宛名に入れる内容がありません。');return}if(list.length>40){toast('一度に印刷できるのは40件までです。');return}queuePrint(list,true,true,true,false,currentLabelPattern())};
 const labelKeys=['customer','management','department','employee','request'];
 let labelSets=[];
 function labelSlots(){return [...$('#labelcards').querySelectorAll('.labelcard')].map(card=>{const slot={};card.querySelectorAll('[data-key]').forEach(el=>slot[el.dataset.key]=el.value.trim());return slot})}
-function fillLabelCards(slots){const box=$('#labelcards');const list=Array.isArray(slots)&&slots.length?slots.slice(0,40):[null,null,null,null];while(list.length%4)list.push(null);box.replaceChildren();for(const slot of list){const card=labelCard();if(slot)for(const key of labelKeys){const el=card.querySelector(`[data-key="${key}"]`);if(el)el.value=slot[key]||(key==='request'?'消耗・破損交換':'')}box.append(card)}renumberLabelCards()}
+function normalizeLabelPayload(payload){if(Array.isArray(payload))return{pattern:'4',slots:payload};if(payload&&typeof payload==='object')return{pattern:payload.pattern==='3'?'3':'4',slots:Array.isArray(payload.slots)?payload.slots:[]};return{pattern:'4',slots:[]}}function fillLabelCards(slots){const box=$('#labelcards');const list=Array.isArray(slots)&&slots.length?slots.slice(0,40):[null,null,null,null];while(list.length%4)list.push(null);box.replaceChildren();for(const slot of list){const card=labelCard();if(slot)for(const key of labelKeys){const el=card.querySelector(`[data-key="${key}"]`);if(el)el.value=slot[key]||(key==='request'?'消耗・破損交換':'')}box.append(card)}renumberLabelCards()}
 function renderLabelSets(selectId){const list=$('#labellist');if(!list)return;const current=selectId??list.value;list.replaceChildren(new Option('選んでください',''));for(const set of labelSets)list.append(new Option(set.name,set.id));if([...list.options].some(option=>option.value===String(current)))list.value=String(current);const chosen=labelSets.find(set=>set.id===+list.value);if(chosen)$('#labelname').value=chosen.name}
 async function loadLabelSets(selectId){if(!currentUser||(currentUser.role!=='owner'&&currentUser.role!=='floor'&&currentUser.role!=='floor2'))return;try{labelSets=await api('/api/label-sets');renderLabelSets(selectId);$('#labelmemoryerror').textContent=''}catch(e){$('#labelmemoryerror').textContent=e.message}}
 function chosenLabelSet(){const set=labelSets.find(set=>set.id===+$('#labellist').value);if(!set)throw Error('呼び出す宛名を選んでください。');return set}
 $('#labellist').onchange=()=>{const set=labelSets.find(item=>item.id===+$('#labellist').value);if(set)$('#labelname').value=set.name};
-$('#labelload').onclick=async()=>{try{const selectedId=+$('#labellist').value;if(!selectedId)throw Error('呼び出す宛名を選んでください。');await loadLabelSets(selectedId);const set=chosenLabelSet();if(labelOrders().length&&!confirm(`「${set.name}」の内容に置き換えますか？`))return;fillLabelCards(set.payload);$('#labelmemoryerror').textContent='';toast('記憶した宛名を呼び出しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}};
-async function saveLabelSet(update){try{$('#labelmemoryerror').textContent='';const chosen=update?chosenLabelSet():null;if(update&&!confirm(`「${chosen.name}」を今の入力で上書きしますか？`))return;const saved=await api('/api/label-sets/save',Object.assign({name:$('#labelname').value,slots:labelSlots()},update?{id:chosen.id,version:chosen.version}:{}));await loadLabelSets(saved.id);toast('宛名を記憶しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}}
+$('#labelload').onclick=async()=>{try{const selectedId=+$('#labellist').value;if(!selectedId)throw Error('呼び出す宛名を選んでください。');await loadLabelSets(selectedId);const set=chosenLabelSet();if(labelOrders().length&&!confirm(`「${set.name}」の内容に置き換えますか？`))return;const remembered=normalizeLabelPayload(set.payload);setLabelPattern(remembered.pattern);fillLabelCards(remembered.slots);$('#labelmemoryerror').textContent='';toast('記憶した宛名を呼び出しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}};
+async function saveLabelSet(update){try{$('#labelmemoryerror').textContent='';const chosen=update?chosenLabelSet():null;if(update&&!confirm(`「${chosen.name}」を今の入力で上書きしますか？`))return;const saved=await api('/api/label-sets/save',Object.assign({name:$('#labelname').value,slots:labelSlots(),pattern:currentLabelPattern()},update?{id:chosen.id,version:chosen.version}:{}));await loadLabelSets(saved.id);toast('宛名を記憶しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}}
 $('#labelsave').onclick=()=>saveLabelSet(false);
 $('#labelupdate').onclick=()=>saveLabelSet(true);
 $('#labeldelete').onclick=async()=>{try{const set=chosenLabelSet();if(!confirm(`「${set.name}」を削除しますか？今の入力欄はそのまま残ります。`))return;await api('/api/label-sets/delete',{id:set.id,version:set.version});$('#labelname').value='';await loadLabelSets();toast('記憶した宛名を削除しました。')}catch(e){$('#labelmemoryerror').textContent=e.message}};
+function setLabelDeskMode(mode){
+ const notice=mode==='notice';
+ $('#labelmodeaddress').classList.toggle('on',!notice);
+ $('#labelmodenotice').classList.toggle('on',notice);
+ $('#labelmodeaddress').setAttribute('aria-pressed',String(!notice));
+ $('#labelmodenotice').setAttribute('aria-pressed',String(notice));
+ $('#labeladdresspanel').hidden=notice;
+ $('#labelnoticepanel').hidden=!notice;
+ if(notice&&!$('#noticedate').value)$('#noticedate').value=today();
+}
+$('#labelmodeaddress').onclick=()=>setLabelDeskMode('address');
+$('#labelmodenotice').onclick=()=>setLabelDeskMode('notice');
+const noticeWeekdays=['日','月','火','水','木','金','土'];
+function formatNoticeDate(iso){
+ const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+ if(!m)return '';
+ const d=new Date(+m[1],+m[2]-1,+m[3],12,0,0);
+ if(Number.isNaN(d.getTime()))return '';
+ return `${d.getMonth()+1}月${d.getDate()}日（${noticeWeekdays[d.getDay()]}）`;
+}
+function fitNoticePage(page){
+ let host=$('#labelfit');
+ if(!host){host=document.createElement('iframe');host.id='labelfit';host.setAttribute('aria-hidden','true');host.style.cssText='position:fixed;left:-12000px;top:0;width:297mm;height:210mm;border:0;visibility:hidden';document.body.append(host)}
+ const doc=host.contentDocument;
+ doc.open();
+ doc.write(`<!doctype html><html><head><meta charset="utf-8"><style>${labelPrintCss}</style></head><body></body></html>`);
+ doc.close();
+ const body=doc.body;
+ body.replaceChildren(page);
+ void body.offsetHeight;
+ const mm=px=>px*25.4/96;
+ const box=page.querySelector('.noticebody')||page;
+ const boxW=()=>{const s=doc.defaultView.getComputedStyle(box);return Math.max(20,mm(box.clientWidth-parseFloat(s.paddingLeft)-parseFloat(s.paddingRight))-4)};
+ const rowH=()=>Math.max(12,mm(box.clientHeight)/3.6);
+ const to=page.querySelector('.noticeto'),line=page.querySelector('.noticeline'),ask=page.querySelector('.noticeask');
+ const w=boxW(),h=rowH();
+ const toSize=fitLabelText(to.textContent,w,h*.95,72);
+ const lineSize=fitLabelText(line.textContent,w,h*.95,60);
+ const askSize=fitLabelText(ask.textContent,w,h*.7,48);
+ if(toSize)to.style.fontSize=toSize+'pt';
+ if(lineSize)line.style.fontSize=lineSize+'pt';
+ if(askSize)ask.style.fontSize=askSize+'pt';
+ clampLabel(to);clampLabel(line);clampLabel(ask);
+ body.replaceChildren();
+}
+function deliveryNoticePage({to,date,place}){
+ const page=document.createElement('section');
+ page.className='labelpage noticepage';
+ const body=document.createElement('div');
+ body.className='noticebody';
+ const dest=document.createElement('p');
+ dest.className='noticeto';
+ dest.textContent=`${to} 様`;
+ const line=document.createElement('p');
+ line.className='noticeline';
+ line.textContent=`${formatNoticeDate(date)}${place}へ`;
+ const ask=document.createElement('p');
+ ask.className='noticeask';
+ ask.textContent='納品をお願いします。';
+ body.append(dest,line,ask);
+ page.append(body);
+ fitNoticePage(page);
+ return page;
+}
+function queueNoticePrint(){
+ $('#labelnoticeerror').textContent='';
+ const to=String($('#noticeto').value||'').trim();
+ const date=$('#noticedate').value;
+ const place=String($('#noticeplace').value||'').trim();
+ if(!to){$('#labelnoticeerror').textContent='宛先を入力してください。';return}
+ if(!date||!formatNoticeDate(date)){$('#labelnoticeerror').textContent='納品日を選んでください。';return}
+ if(!place){$('#labelnoticeerror').textContent='納品先を入力してください。';return}
+ if(guardPrinting())return;
+ printing=true;pendingPrintIds=[];
+ try{
+  $('#printarea').replaceChildren(deliveryNoticePage({to,date,place}));
+  openPrintPreview();
+ }catch(e){
+  unlockPrinting();closePrintPreview();$('#printarea').replaceChildren();
+  toast('印刷画面を開けませんでした。もう一度お試しください。');
+ }
+}
+$('#noticeprint').onclick=queueNoticePrint;
+
 
 // Personal input presets are fetched for the authenticated account on each open.
 const presetBox=document.createElement('details');presetBox.className='presetbox';presetBox.open=true;
