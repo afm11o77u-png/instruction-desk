@@ -127,8 +127,21 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'id="noticedate"',
             'id="noticeplace"',
             'id="noticeprint"',
+            'class="labelcol-mid"',
+            'value="サザエ食品"',
+            'value="宮の森事務所"',
         ):
             self.assertIn(needle, html)
+
+    def test_three_line_hides_mid_columns_and_notice_defaults(self):
+        js = (ROOT / 'sheet.js').read_text(encoding='utf-8')
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('applyLabelPatternUi', js)
+        self.assertIn("classList.toggle('labelpattern3'", js)
+        self.assertIn('data-key="management"', js)
+        self.assertIn("NOTICE_DEFAULT_TO='サザエ食品'", js)
+        self.assertIn("NOTICE_DEFAULT_PLACE='宮の森事務所'", js)
+        self.assertIn('#labeldesk #labeladdresspanel.labelpattern3 .labelcol-mid{display:none}', css)
 
     def test_weekday_samples_match_expected_japanese(self):
         # Mirror sheet.js formatNoticeDate (JS getDay: Sun=0) without a browser.

@@ -86,6 +86,14 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelinputtable th:nth-child(5){width:15%}
 #labeldesk .labelinputtable th:nth-child(6){width:17%}
 #labeldesk .labelinputtable th:nth-child(7){width:7%}
+#labeldesk #labeladdresspanel.labelpattern3 .labelcol-mid{display:none}
+#labeldesk #labeladdresspanel.labelpattern3 .labelinputtable{min-width:720px}
+#labeldesk #labeladdresspanel.labelpattern3 .labelinputtable th:nth-child(1){width:14%}
+#labeldesk #labeladdresspanel.labelpattern3 .labelinputtable th:nth-child(2){width:34%}
+#labeldesk #labeladdresspanel.labelpattern3 .labelinputtable th:nth-child(5){width:22%}
+#labeldesk #labeladdresspanel.labelpattern3 .labelinputtable th:nth-child(6){width:22%}
+#labeldesk #labeladdresspanel.labelpattern3 .labelinputtable th:nth-child(7){width:8%}
+
 #labelcards .labelposition{font-size:13px;white-space:nowrap;font-weight:700}
 #labelcards .labelcard:nth-child(4n+1) td{border-top:2px solid #9dceae}
 #labelcards .labelclear{padding:8px 4px;font-size:13px;white-space:nowrap}
