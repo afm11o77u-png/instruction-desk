@@ -420,10 +420,132 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertRegex(css, r'\.history-filter-row\{[^}]*align-items:\s*flex-start')
         self.assertIn('.history-filters .search-picker-hint:empty{display:none}', css)
 
+    def test_compact_list_columns_and_detail_popup(self):
+        page = APP_JS[APP_JS.index('function historyPage()'):APP_JS.index('async function loadMoveTargets()')]
+        # Compact columns only (業務日・保管場所・担当者などは詳細へ)
+        self.assertIn('<th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>詳細</th>', page)
+        self.assertNotIn('<th>業務日</th>', page)
+        self.assertNotIn('<th>加工仕様</th>', page)
+        self.assertNotIn('<th>保管場所</th>', page)
+        self.assertNotIn('<th>担当者</th>', page)
+        self.assertNotIn('<th>備考</th>', page)
+        self.assertNotIn('<th>ロット数量（前→後）</th>', page)
+        self.assertIn('historyShortAt(e.at)', page)
+        self.assertIn('historySpecText(e)', page)
+        self.assertIn('historyDeltaText(e)', page)
+        self.assertIn('>開く</button>', page)
+        self.assertIn('history-detail-dialog', page)
+        self.assertIn('historyDetailHtml(e)', page)
+        # Product code / name stacked
+        self.assertIn('hist-product', page)
+        self.assertIn('esc(e.code)', page)
+        self.assertIn('esc(e.productName)', page)
+
+    def test_history_display_formatters(self):
+        self.assertIn('function historyShortAt(at)', APP_JS)
+        self.assertIn('function historyFullAt(at)', APP_JS)
+        self.assertIn('function historyDeltaText(e)', APP_JS)
+        self.assertIn('function historySpecText(e)', APP_JS)
+        delta = APP_JS[APP_JS.index('function historyDeltaText(e)'):APP_JS.index('function historySpecText(e)')]
+        self.assertIn("return '0枚'", delta)
+        self.assertIn("return '未記録'", delta)
+        self.assertIn("'＋'+num(d)", delta)
+        self.assertIn("'−'+num(Math.abs(d))", delta)
+        short = APP_JS[APP_JS.index('function historyShortAt(at)'):APP_JS.index('function historyFullAt(at)')]
+        self.assertIn('Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}', short)
+        detail = APP_JS[APP_JS.index('function historyDetailHtml(e)'):APP_JS.index('function historyPage()')]
+        for label in (
+            '記録日時', '業務日', '加工仕様', '保管場所',
+            '対象ロットの数量（変更前→変更後）',
+            '単価（変更前→変更後）', '金額（変更前→変更後）',
+            '担当者', '備考', '対象ロットID', '同一出庫のロット内訳',
+        ):
+            self.assertIn(label, detail)
+        self.assertIn('historyFullAt(e.at)', detail)
+
+    def test_history_table_css_allows_wrap_not_shrink(self):
+        css = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('.history-table{', css)
+        self.assertIn('word-break:break-word', css)
+        self.assertIn('dialog.history-detail-dialog', css)
+        self.assertIn('overflow:auto', css[css.index('dialog.history-detail-dialog'):])
+
     def test_server_exposes_stock_history_route(self):
         server_py = (ROOT / 'server.py').read_text(encoding='utf-8')
         self.assertIn("/api/stock-history", server_py)
         self.assertIn('stock_history.list_history', server_py)
+
+
+class StockHistoryDisplayLogicTest(unittest.TestCase):
+    """Mirror key UI formatting rules so 0枚 vs 未記録 cannot silently drift."""
+
+    @staticmethod
+    def short_at(at):
+        import re
+        m = re.match(r'^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})', str(at or ''))
+        if not m:
+            return str(at) if at else '未記録'
+        return f'{int(m.group(2))}/{int(m.group(3))} {m.group(4)}:{m.group(5)}'
+
+    @staticmethod
+    def delta_text(qty_delta):
+        if qty_delta is None or qty_delta == '':
+            return '未記録'
+        try:
+            d = float(qty_delta)
+        except (TypeError, ValueError):
+            return '未記録'
+        if d != d:  # NaN
+            return '未記録'
+        if d == 0:
+            return '0枚'
+        if d > 0:
+            return '＋' + f'{d:g}'
+        return '−' + f'{abs(d):g}'
+
+    def test_short_datetime_omits_year(self):
+        self.assertEqual(self.short_at('2026-10-13T14:30:00'), '10/13 14:30')
+        self.assertEqual(self.short_at('2026-01-05 09:05:11'), '1/5 09:05')
+        self.assertEqual(self.short_at(''), '未記録')
+
+    def test_delta_zero_vs_unrecorded(self):
+        self.assertEqual(self.delta_text(0), '0枚')
+        self.assertEqual(self.delta_text(10), '＋10')
+        self.assertEqual(self.delta_text(-5), '−5')
+        self.assertEqual(self.delta_text(None), '未記録')
+        self.assertEqual(self.delta_text(''), '未記録')
+
+    def test_api_cost_only_correction_has_zero_delta_for_ui(self):
+        folder, path, c = newdb()
+        try:
+            _, _, loc, handle = seed_masters(c)
+            stock.register_inbound(c, {
+                'token': 'hist-ui-cost', 'customerProductId': handle, 'size': 'M',
+                'locationId': loc['id'], 'qty': 8, 'unitCost': 1000, 'receivedOn': '2026-10-05',
+            })
+            lot = c.execute("SELECT id FROM lots WHERE size_label='M'").fetchone()['id']
+            stock.correct_inbound(c, {
+                'lotId': lot, 'qty': 8, 'unitCost': 900, 'reason': '単価のみ',
+                'businessOn': '2026-10-07',
+            })
+            for r in c.execute('SELECT id FROM moves'):
+                _set_move_at(c, r['id'], '2026-10-10T14:30:00')
+            c.commit()
+            data = stock_history.list_history(c, {
+                'from': '2026-10-01', 'to': '2026-10-31', 'kind': 'correction',
+            })
+            cost_only = [e for e in data['events'] if e['qtyDelta'] == 0]
+            self.assertTrue(cost_only)
+            e = cost_only[0]
+            self.assertEqual(self.delta_text(e['qtyDelta']), '0枚')
+            self.assertEqual(self.short_at(e['at']), '10/10 14:30')
+            self.assertIn(e['at'][:4], e['at'])  # full year still on API payload for detail
+            self.assertIsNotNone(e['businessOn'])
+            self.assertTrue(e['actorNameLabel'])
+            self.assertIn('対象ロット', data['qtyScopeNote'])
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 if __name__ == '__main__':
