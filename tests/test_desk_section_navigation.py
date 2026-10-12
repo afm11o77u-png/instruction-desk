@@ -41,17 +41,20 @@ class DeskSectionNavigationTest(unittest.TestCase):
         self.assertIn('data-stock-section="period"', aside)
         self.assertIn('data-stock-section="orders"', aside)
         self.assertIn('入庫・出庫', aside)
-        self.assertIn('在庫履歴', aside)
+        self.assertIn('>履歴<', aside)
+        self.assertNotIn('在庫履歴', aside)
         self.assertIn('期間入出荷集計', aside)
         self.assertIn('発注', aside)
         self.assertIn('class="navrow stocknav-top"', aside)
+        self.assertIn('class="navrow stocknav-pair"', aside)
         self.assertIn('class="stocknav-secondary"', aside)
         self.assertIn('class="nav stocknav-move"', aside)
         self.assertIn('class="nav stocknav-history"', aside)
         self.assertIn('class="nav stocknav-period"', aside)
         self.assertIn('class="nav stocknav-orders"', aside)
         stocknav = aside[aside.index('id="stocknav"'):]
-        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-secondary'))
+        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-pair'))
+        self.assertLess(stocknav.index('stocknav-pair'), stocknav.index('stocknav-secondary'))
         self.assertLess(stocknav.index('stocknav-move'), stocknav.index('stocknav-history'))
         self.assertLess(stocknav.index('stocknav-history'), stocknav.index('stocknav-period'))
         self.assertLess(stocknav.index('stocknav-period'), stocknav.index('stocknav-orders'))
@@ -61,7 +64,11 @@ class DeskSectionNavigationTest(unittest.TestCase):
         )
         self.assertRegex(
             stocknav,
-            r'stocknav-secondary[\s\S]*stocknav-move[\s\S]*stocknav-history[\s\S]*stocknav-period[\s\S]*stocknav-orders',
+            r'stocknav-pair[\s\S]*stocknav-move[\s\S]*stocknav-history',
+        )
+        self.assertRegex(
+            stocknav,
+            r'stocknav-secondary[\s\S]*stocknav-period[\s\S]*stocknav-orders',
         )
 
     def test_show_catalog_switches_info_and_stock(self):
