@@ -1628,6 +1628,11 @@ function historyDeltaText(e){
   if(d>0)return '＋'+num(d)
   return '−'+num(Math.abs(d))
 }
+function historyListSpecText(e){
+  const size=String(e.size||'').trim()||'サイズ未記録'
+  const cond=e.conditionLabel||conditionLabel(e.condition)||'状態未記録'
+  return `${size} / ${cond}`
+}
 function historySpecText(e){
   const color=String(e.color||'').trim()||'色未記録'
   const size=String(e.size||'').trim()||'サイズ未記録'
@@ -1780,7 +1785,7 @@ function historyPage(){
         <td class="hist-kind">${esc(e.kindLabel)}${batchMark}</td>
         <td class="hist-customer dm-primary">${esc(e.customerName)}${stopCust}</td>
         <td class="hist-product"><span class="dm-primary">${esc(e.code)}</span><span class="sub dm-secondary">${esc(e.productName)}${stopProd}</span></td>
-        <td class="hist-spec">${esc(historySpecText(e))}</td>
+        <td class="hist-spec">${esc(historyListSpecText(e))}</td>
         <td class="hist-delta qty">${esc(historyDeltaText(e))}</td>
         <td class="hist-detail"><button type="button" class="quiet" data-hist-detail="${i}">開く</button></td>
       </tr>`

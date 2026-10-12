@@ -432,7 +432,8 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertNotIn('<th>備考</th>', page)
         self.assertNotIn('<th>ロット数量（前→後）</th>', page)
         self.assertIn('historyShortAt(e.at)', page)
-        self.assertIn('historySpecText(e)', page)
+        self.assertIn('historyListSpecText(e)', page)
+        self.assertNotIn('historySpecText(e)', page)
         self.assertIn('historyDeltaText(e)', page)
         self.assertIn('>開く</button>', page)
         self.assertIn('history-detail-dialog', page)
@@ -446,14 +447,23 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn('function historyShortAt(at)', APP_JS)
         self.assertIn('function historyFullAt(at)', APP_JS)
         self.assertIn('function historyDeltaText(e)', APP_JS)
+        self.assertIn('function historyListSpecText(e)', APP_JS)
         self.assertIn('function historySpecText(e)', APP_JS)
-        delta = APP_JS[APP_JS.index('function historyDeltaText(e)'):APP_JS.index('function historySpecText(e)')]
+        delta = APP_JS[APP_JS.index('function historyDeltaText(e)'):APP_JS.index('function historyListSpecText(e)')]
         self.assertIn("return '0枚'", delta)
         self.assertIn("return '未記録'", delta)
         self.assertIn("'＋'+num(d)", delta)
         self.assertIn("'−'+num(Math.abs(d))", delta)
         short = APP_JS[APP_JS.index('function historyShortAt(at)'):APP_JS.index('function historyFullAt(at)')]
         self.assertIn('Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}', short)
+        list_spec = APP_JS[APP_JS.index('function historyListSpecText(e)'):APP_JS.index('function historySpecText(e)')]
+        self.assertIn('サイズ未記録', list_spec)
+        self.assertIn('状態未記録', list_spec)
+        self.assertNotIn('色未記録', list_spec)
+        self.assertNotIn('e.color', list_spec)
+        detail_spec = APP_JS[APP_JS.index('function historySpecText(e)'):APP_JS.index('function historyLotQtyText(e)')]
+        self.assertIn('色未記録', detail_spec)
+        self.assertIn('e.color', detail_spec)
         detail = APP_JS[APP_JS.index('function historyDetailHtml(e)'):APP_JS.index('function historyPage()')]
         for label in (
             '記録日時', '業務日', '加工仕様', '保管場所',
@@ -466,6 +476,8 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertNotIn('<dt>担当者</dt>', detail)
         self.assertIn("actorNameLabel||'未記録'", detail)
         self.assertIn('historyFullAt(e.at)', detail)
+        self.assertIn('historySpecText(e)', detail)
+        self.assertNotIn('historyListSpecText(e)', detail)
         # 期間内訳も同じ操作者表示は「記録者」。顧客・仕入先の連絡担当者ラベルは触らない。
         period = APP_JS[APP_JS.index('function showPeriodHistory('):APP_JS.index('function movePage()')]
         self.assertIn('<th>記録者</th>', period)
@@ -524,6 +536,25 @@ class StockHistoryDisplayLogicTest(unittest.TestCase):
         self.assertEqual(self.delta_text(-5), '−5')
         self.assertEqual(self.delta_text(None), '未記録')
         self.assertEqual(self.delta_text(''), '未記録')
+
+    @staticmethod
+    def list_spec_text(color, size, condition_label):
+        size_t = (size or '').strip() or 'サイズ未記録'
+        cond = condition_label or '状態未記録'
+        return f'{size_t} / {cond}'
+
+    @staticmethod
+    def detail_spec_text(color, size, condition_label):
+        color_t = (color or '').strip() or '色未記録'
+        size_t = (size or '').strip() or 'サイズ未記録'
+        cond = condition_label or '状態未記録'
+        return f'{color_t} / {size_t} / {cond}'
+
+    def test_list_spec_omits_color_detail_keeps_it(self):
+        self.assertEqual(self.list_spec_text('白', 'M', '新品'), 'M / 新品')
+        self.assertEqual(self.detail_spec_text('白', 'M', '新品'), '白 / M / 新品')
+        self.assertEqual(self.list_spec_text('', '', ''), 'サイズ未記録 / 状態未記録')
+        self.assertEqual(self.detail_spec_text('', '', ''), '色未記録 / サイズ未記録 / 状態未記録')
 
     def test_api_cost_only_correction_has_zero_delta_for_ui(self):
         folder, path, c = newdb()
