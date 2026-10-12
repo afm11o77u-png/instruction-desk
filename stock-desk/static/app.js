@@ -1672,7 +1672,7 @@ function historyDetailHtml(e){
       <div><dt>単価（変更前→変更後）</dt><dd>${esc(historyMoneyRange(e.costBefore,e.costAfter))}</dd></div>
       <div><dt>金額（変更前→変更後）</dt><dd>${esc(historyMoneyRange(e.amountBefore,e.amountAfter))}</dd></div>
       <div><dt>対象ロットID</dt><dd>${esc(e.lotId)}${e.lotQtyRemaining!=null?`（現在残 ${num(e.lotQtyRemaining)}）`:''}</dd></div>
-      <div><dt>担当者</dt><dd>${esc(e.actorNameLabel||'未記録')}</dd></div>
+      <div><dt>記録者</dt><dd>${esc(e.actorNameLabel||'未記録')}</dd></div>
       <div><dt>備考</dt><dd>${esc(e.note||'—')}</dd></div>
     </dl>
     ${batch}
@@ -1964,11 +1964,11 @@ function showPeriodHistory(row){
       <p>${esc(row.customerName)} / ${esc(row.code)} ${esc(row.productName)} / ${esc(row.size)} / ${esc(row.embroideryLabel)} / ${esc(row.conditionLabel||conditionLabel(row.condition))} / ${esc(row.locationLabel)}</p>
       <p>期首 ${num(row.openingQty)} ＋ 入庫 ${num(row.inboundQty)} − 出庫 ${num(row.outboundQty)} ＋ 訂正 ${num(row.correctionQty)} ＝ 期末 ${num(row.closingQty)}</p>
       ${prices}
-      <div class="tablewrap"><table><thead><tr><th>業務日</th><th>登録日時</th><th>区分</th><th>数量</th><th>単価</th><th>金額</th><th>担当者</th><th>備考</th></tr></thead><tbody>
+      <div class="tablewrap"><table><thead><tr><th>業務日</th><th>登録日時</th><th>区分</th><th>数量</th><th>単価</th><th>金額</th><th>記録者</th><th>備考</th></tr></thead><tbody>
         ${(row.history||[]).map(e=>`<tr>
           <td>${esc(e.businessOn||'')}</td><td>${esc(e.at||'')}</td><td>${esc(e.kindLabel||e.kind)}</td>
           <td class="qty">${num(e.qty)}</td><td class="money">${yen(e.unitCost)}</td><td class="money">${yen(e.amount)}</td>
-          <td>${esc(e.actorName||'')}</td><td>${esc(e.note||'')}</td>
+          <td>${esc(e.actorName||'未記録')}</td><td>${esc(e.note||'')}</td>
         </tr>`).join('')||'<tr><td colspan="8">期間内の明細はありません。</td></tr>'}
       </tbody></table></div>
     </div>`

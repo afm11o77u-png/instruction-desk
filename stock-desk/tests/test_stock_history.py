@@ -422,11 +422,12 @@ class StockHistoryUiSourceTest(unittest.TestCase):
 
     def test_compact_list_columns_and_detail_popup(self):
         page = APP_JS[APP_JS.index('function historyPage()'):APP_JS.index('async function loadMoveTargets()')]
-        # Compact columns only (業務日・保管場所・担当者などは詳細へ)
+        # Compact columns only (業務日・保管場所・記録者などは詳細へ)
         self.assertIn('<th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>詳細</th>', page)
         self.assertNotIn('<th>業務日</th>', page)
         self.assertNotIn('<th>加工仕様</th>', page)
         self.assertNotIn('<th>保管場所</th>', page)
+        self.assertNotIn('<th>記録者</th>', page)
         self.assertNotIn('<th>担当者</th>', page)
         self.assertNotIn('<th>備考</th>', page)
         self.assertNotIn('<th>ロット数量（前→後）</th>', page)
@@ -458,10 +459,19 @@ class StockHistoryUiSourceTest(unittest.TestCase):
             '記録日時', '業務日', '加工仕様', '保管場所',
             '対象ロットの数量（変更前→変更後）',
             '単価（変更前→変更後）', '金額（変更前→変更後）',
-            '担当者', '備考', '対象ロットID', '同一出庫のロット内訳',
+            '記録者', '備考', '対象ロットID', '同一出庫のロット内訳',
         ):
             self.assertIn(label, detail)
+        self.assertIn('<dt>記録者</dt>', detail)
+        self.assertNotIn('<dt>担当者</dt>', detail)
+        self.assertIn("actorNameLabel||'未記録'", detail)
         self.assertIn('historyFullAt(e.at)', detail)
+        # 期間内訳も同じ操作者表示は「記録者」。顧客・仕入先の連絡担当者ラベルは触らない。
+        period = APP_JS[APP_JS.index('function showPeriodHistory('):APP_JS.index('function movePage()')]
+        self.assertIn('<th>記録者</th>', period)
+        self.assertNotIn('<th>担当者</th>', period)
+        self.assertIn("actorName||'未記録'", period)
+        self.assertIn("field('contact','担当者'", APP_JS)
 
     def test_history_table_css_allows_wrap_not_shrink(self):
         css = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
