@@ -477,6 +477,110 @@ def save_product(c, body):
     return product_row(c, pid)
 
 
+def _as_positive_id(value, label):
+    if isinstance(value, bool) or value in ('', None):
+        raise ValueError(f'{label}を候補から選んでください。')
+    if isinstance(value, int):
+        vid = value
+    elif isinstance(value, str) and value.isdigit():
+        vid = int(value)
+    else:
+        raise ValueError(f'{label}を候補から選んでください。')
+    if vid <= 0:
+        raise ValueError(f'{label}を候補から選んでください。')
+    return vid
+
+
+def customer_product_payload(c, cp_id, *, already=False):
+    row = c.execute('''SELECT cp.*, cu.name AS customer_name, p.code, p.name AS product_name, p.color,
+                              p.supplier_id, COALESCE(s.name, '') AS supplier_name
+                       FROM customer_products cp
+                       JOIN customers cu ON cu.id=cp.customer_id
+                       JOIN products p ON p.id=cp.product_id
+                       LEFT JOIN suppliers s ON s.id=p.supplier_id
+                       WHERE cp.id=?''', (cp_id,)).fetchone()
+    if not row:
+        raise ValueError('取扱が見つかりません。')
+    return {
+        'id': row['id'],
+        'customerId': row['customer_id'],
+        'productId': row['product_id'],
+        'embroidery': row['embroidery'] or '',
+        'embroideryLabel': row['embroidery'] or '刺繍なし',
+        'isStandard': bool(row['is_standard']),
+        'active': bool(row['active']),
+        'already': bool(already),
+        'customerName': row['customer_name'],
+        'code': row['code'],
+        'productName': row['product_name'],
+        'color': row['color'] or '',
+        'supplierId': row['supplier_id'],
+        'supplierName': row['supplier_name'] or '',
+    }
+
+
+def ensure_customer_product(c, body):
+    """Idempotent 取扱 create: customer_id + product_id + embroidery.
+
+    Does not create customers/products by name, does not reactivate stopped links,
+    and does not rewrite existing is_standard flags on other rows.
+    Saving a 取扱 alone never creates or adjusts inventory lots.
+    """
+    customer_id = _as_positive_id(body.get('customerId'), '顧客')
+    product_id = _as_positive_id(body.get('productId'), '商品')
+    embroidery = optional(body.get('embroidery'), '加工情報', 80)
+    customer = c.execute('SELECT id,active FROM customers WHERE id=?', (customer_id,)).fetchone()
+    if not customer:
+        raise ValueError('顧客が未登録です。顧客台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
+    if not customer['active']:
+        raise ValueError('この顧客は使用停止です。顧客台帳で使用中に戻してから取扱を作成してください。')
+    product = c.execute('SELECT id,active FROM products WHERE id=?', (product_id,)).fetchone()
+    if not product:
+        raise ValueError('商品が未登録です。商品台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
+    if not product['active']:
+        raise ValueError('この商品は使用停止です。商品台帳で使用中に戻してから取扱を作成してください。')
+
+    def existing_row():
+        return c.execute(
+            'SELECT * FROM customer_products WHERE customer_id=? AND product_id=? AND embroidery=?',
+            (customer_id, product_id, embroidery),
+        ).fetchone()
+
+    row = existing_row()
+    if row:
+        if not row['active']:
+            raise ValueError(
+                '同じ顧客・商品・加工情報の取扱は既にありますが、使用停止です。'
+                '商品台帳で取扱を使用中に戻してから初期在庫に選んでください。自動では再開しません。'
+            )
+        return customer_product_payload(c, row['id'], already=True)
+
+    peers = c.execute(
+        'SELECT id FROM customer_products WHERE customer_id=? AND product_id=?',
+        (customer_id, product_id),
+    ).fetchall()
+    is_standard = 0 if peers else 1
+    t = stamp()
+    try:
+        c.execute(
+            '''INSERT INTO customer_products(customer_id,product_id,embroidery,is_standard,active,created_at,updated_at)
+               VALUES(?,?,?,?,1,?,?)''',
+            (customer_id, product_id, embroidery, is_standard, t, t),
+        )
+    except sqlite3.IntegrityError:
+        row = existing_row()
+        if not row:
+            raise
+        if not row['active']:
+            raise ValueError(
+                '同じ顧客・商品・加工情報の取扱は既にありますが、使用停止です。'
+                '商品台帳で取扱を使用中に戻してから初期在庫に選んでください。自動では再開しません。'
+            )
+        return customer_product_payload(c, row['id'], already=True)
+    cp_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return customer_product_payload(c, cp_id, already=False)
+
+
 def _site_id(value):
     if value in ('', None):
         return None
