@@ -1644,18 +1644,22 @@ function historyPage(){
   const pages=result?result.totalPages:0
   $('#main').innerHTML=`<section class="panel history-panel">
     <p class="notice">期間は<strong>記録日時（日本時間）</strong>を基準にします。終了日の一日分も含みます。変更前・変更後の数量は<strong>対象ロットの残数</strong>です（商品全体の残数ではありません）。顧客名・商品名は現在の台帳名称です。</p>
-    <div class="bar period-filters history-filters">
-      <label>開始日（記録日時）<input id="hFrom" type="date" value="${esc(h.from)}"></label>
-      <label>終了日（記録日時）<input id="hTo" type="date" value="${esc(h.to)}"></label>
-      <button type="button" id="hThisMonth">今月</button>
-      <button type="button" id="hPrevMonth">先月</button>
-      ${searchPickerMarkup({label:'顧客',inputId:'hCustomerQ',listId:'hCustomerList',clearId:'hCustomerClear',hintId:'hCustomerHint',placeholder:'顧客名で絞り込み',value:cust?cust.name:'',required:false})}
-      ${searchPickerMarkup({label:'商品',inputId:'hProductQ',listId:'hProductList',clearId:'hProductClear',hintId:'hProductHint',placeholder:'品番・商品名で絞り込み',value:prod?historyProductLabel(prod):'',required:false})}
-      <label>操作内容<select id="hKind">${kindOpts.map(([v,l])=>opt(v,l,h.kind||'')).join('')}</select></label>
-      <label>状態${conditionSelectHtml('hCondition',h.condition||'',{allowAll:true})}</label>
-      <label>保管場所<select id="hLocation"><option value="">すべて</option>${(state.data.locations||[]).map(l=>opt(l.id,l.label,h.locationId)).join('')}</select></label>
-      <button type="button" class="primary" id="hRun">表示する</button>
-      <button type="button" id="hClear">条件を解除</button>
+    <div class="bar history-filters">
+      <div class="history-filter-row history-filter-dates">
+        <label>開始日（記録日時）<input id="hFrom" type="date" value="${esc(h.from)}"></label>
+        <label>終了日（記録日時）<input id="hTo" type="date" value="${esc(h.to)}"></label>
+        <button type="button" id="hThisMonth">今月</button>
+        <button type="button" id="hPrevMonth">先月</button>
+      </div>
+      <div class="history-filter-row history-filter-criteria">
+        ${searchPickerMarkup({label:'顧客',inputId:'hCustomerQ',listId:'hCustomerList',clearId:'hCustomerClear',hintId:'hCustomerHint',placeholder:'顧客名で絞り込み',value:cust?cust.name:'',required:false})}
+        ${searchPickerMarkup({label:'商品',inputId:'hProductQ',listId:'hProductList',clearId:'hProductClear',hintId:'hProductHint',placeholder:'品番・商品名で絞り込み',value:prod?historyProductLabel(prod):'',required:false})}
+        <label>操作内容<select id="hKind">${kindOpts.map(([v,l])=>opt(v,l,h.kind||'')).join('')}</select></label>
+        <label>状態${conditionSelectHtml('hCondition',h.condition||'',{allowAll:true})}</label>
+        <label>保管場所<select id="hLocation"><option value="">すべて</option>${(state.data.locations||[]).map(l=>opt(l.id,l.label,h.locationId)).join('')}</select></label>
+        <button type="button" class="primary" id="hRun">表示する</button>
+        <button type="button" id="hClear">条件を解除</button>
+      </div>
     </div>
     <div class="bar">
       <span class="count">${result?`${num(total)}件中 ${total?num((page-1)*result.pageSize+1):0}–${num(Math.min(page*result.pageSize,total))}件を表示（${esc(result.sortLabel||'記録日時の新しい順')}・1ページ ${result.pageSize}件）`:'条件を選んで「表示する」を押してください。'}</span>

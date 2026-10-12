@@ -206,6 +206,60 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
   .period-filters>label{flex:1 1 calc(50% - 8px);min-width:120px}
 }
 
+/* 履歴: two top-packed rows (dates / criteria) so search pickers don't jagged-align the bar */
+.history-filters{
+  display:flex;
+  flex-direction:column;
+  flex-wrap:nowrap;
+  align-items:stretch;
+  gap:8px;
+  padding:8px 12px 10px;
+  border-bottom:1px solid var(--line);
+}
+.history-filter-row{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-start;
+  justify-content:flex-start;
+  gap:8px;
+}
+.history-filter-row input,
+.history-filter-row select{min-width:0;width:100%}
+.history-filter-row>button{
+  flex:0 0 auto;
+  white-space:nowrap;
+  /* Sit beside inputs: label line (~1.2em) + label gap (6px) */
+  margin-top:calc(1.2em + 6px);
+}
+/* Dates stay compact and left-packed (like 期間入出荷集計), not stretched full-width */
+.history-filter-dates>label{
+  flex:0 1 11rem;
+  min-width:9rem;
+  max-width:14rem;
+}
+.history-filter-criteria>label{
+  flex:1 1 0;
+  min-width:0;
+}
+.history-filter-criteria>.search-picker{
+  flex:1.2 1 0;
+  min-width:0;
+}
+.history-filters .search-picker-hint{
+  min-height:0;
+}
+.history-filters .search-picker-hint:empty{display:none}
+@media(max-width:900px){
+  .history-filter-dates>label{flex:1 1 calc(50% - 8px);min-width:140px;max-width:none}
+  .history-filter-criteria>label,
+  .history-filter-criteria>.search-picker{flex:1 1 calc(33.33% - 8px);min-width:140px}
+}
+@media(max-width:640px){
+  .history-filter-dates>label,
+  .history-filter-criteria>label,
+  .history-filter-criteria>.search-picker{flex:1 1 calc(50% - 8px);min-width:120px;max-width:none}
+}
+
 /* 発注 */
 .po-panel .po-status-filter{flex:0 0 auto;min-width:9rem}
 .po-resend{color:#9a5418;font-weight:700}
