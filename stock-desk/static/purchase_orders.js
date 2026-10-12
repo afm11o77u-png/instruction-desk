@@ -62,6 +62,14 @@ const PurchaseOrders={
       state.poStatus=$('#poStatus').value
       try{await PurchaseOrders.loadList();paint()}catch(e){toast(e.message)}
     }
+    const stage=$('#stockliststage')
+    const displayMode=typeof mountStockDisplay==='function'?mountStockDisplay(stage,'orders',()=>paint()):'standard'
+    const grid=$('#stocklistgrid')
+    if(grid){
+      grid.innerHTML=orders.length?orders.map(o=>`<article class="dm-card"><div class="dm-primary">${esc(o.number)}${o.needsResend?' <span class="sub">再送が必要</span>':''}</div><div class="dm-secondary">${esc(o.createdAt||'')}</div><div class="dm-meta"><span>${esc(o.supplierName)}</span><span>${esc(o.customerName)}</span></div><div class="dm-meta"><span>${esc(o.createdBy||o.ordererName||'')}</span><span>${esc(o.statusLabel)}</span></div><div class="dm-actions"><button type="button" class="quiet" data-po-open="${o.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">保存した発注書はまだありません。</div>'
+      grid.hidden=displayMode!=='grid'
+    }
+    if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,typeof stockScreenId==='function'?stockScreenId('orders'):'stock-orders')
     document.querySelectorAll('[data-po-open]').forEach(b=>b.onclick=()=>PurchaseOrders.openDetail(Number(b.dataset.poOpen)))
   },
   async openDetail(id){

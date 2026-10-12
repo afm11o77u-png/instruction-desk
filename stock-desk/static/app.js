@@ -90,8 +90,9 @@ function syncStockListDisplaySlot(section){
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'standard'
   const screenId=stockScreenId(tab)
-  // 在庫一覧 + 登録・設定: mount 表示 on the title-row right end (outside the content frame).
-  const useTitleSlot=tab==='list'||SETUP_TAB_IDS.has(tab)
+  // Title-row 表示 slot (syncStockListDisplaySlot): 在庫一覧・入庫出庫・期間・発注・登録設定.
+  // Must remount here so the visible control matches this page's screenId (not a leftover).
+  const useTitleSlot=tab==='list'||tab==='move'||tab==='period'||tab==='orders'||SETUP_TAB_IDS.has(tab)
   const toolbar=useTitleSlot
     ? document.querySelector('#stocklistdisplay')
     : document.querySelector('#main .bar')
@@ -1581,7 +1582,7 @@ function movePage(){
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
       ${filtered.map(t=>`<tr class="${Number(t.qty)===0?'is-zero-stock':''}">
         <td class="dm-primary">${esc(t.customerName)}</td>
-        <td>${esc(t.code)} ${esc(t.productName)} ${esc(t.color)}<span class="sub">商品ID ${t.productId}</span></td>
+        <td>${esc(t.code)} ${esc(t.productName)} ${esc(t.color)}<span class="sub dm-secondary">商品ID ${t.productId}</span></td>
         <td>${esc(t.embroideryLabel)}</td>
         <td>${esc(t.size)}</td>
         <td>${esc(t.locationLabel)}</td>
@@ -1591,8 +1592,12 @@ function movePage(){
       </tr>`).join('')||`<tr><td colspan="8">${mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
     </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
   </section>`
+  const emptyMove=mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=filtered.length?filtered.map(t=>`<article class="dm-card${Number(t.qty)===0?' is-zero-stock':''}"><div class="dm-primary">${esc(t.customerName)}</div><div class="dm-secondary">${esc(t.code)} ${esc(t.productName)} ${esc(t.color)} · 商品ID ${t.productId}</div><div class="dm-meta"><span>${esc(t.embroideryLabel)}</span><span>${esc(t.size)}</span><span>${esc(t.locationLabel)}</span></div><div class="dm-meta"><span class="qty">${num(t.qty)}枚</span><span class="money">${yen(t.amount)}</span></div>${writable?`<div class="dm-actions"><button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}">選択</button></div>`:''}</article>`).join(''):`<div class="dm-empty">${emptyMove}</div>`
   const stage=$('#stockliststage')
-  mountStockDisplay(stage,'move',()=>paint())
+  const displayMode=mountStockDisplay(stage,'move',()=>paint())
+  if(grid)grid.hidden=displayMode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('move'))
   document.querySelectorAll('[data-move-mode]').forEach(b=>b.onclick=async()=>{
     state.moveMode=b.dataset.moveMode
