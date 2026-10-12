@@ -3,6 +3,7 @@ from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import stock
+import stock_history
 import stock_period
 import stock_orders
 
@@ -57,6 +58,13 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             return 400, {'error': '在庫を選んでください。'}
         with stock.connect(db_path) as c:
             return 200, {'events': stock.lot_history(c, int(lot_id))}
+    if path == '/api/stock-history':
+        try:
+            args = {k: v[0] for k, v in query.items()}
+            with stock.connect(db_path) as c:
+                return 200, stock_history.list_history(c, args)
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
     if path == '/api/outbound/preview':
         # Allow GET-style preview via query for simple clients; prefer POST.
         try:
