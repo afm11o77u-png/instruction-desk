@@ -11,6 +11,7 @@ STATIC = ROOT / 'static'
 
 WRITE_PATHS = {
     '/api/customers', '/api/suppliers', '/api/products', '/api/locations',
+    '/api/customer-products',
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
@@ -169,6 +170,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/customers': stock.save_customer,
         '/api/suppliers': stock.save_supplier,
         '/api/products': stock.save_product,
+        '/api/customer-products': stock.ensure_customer_product,
         '/api/locations': stock.save_location,
         '/api/opening': stock.register_opening,
         '/api/opening/correct': stock.correct_opening,

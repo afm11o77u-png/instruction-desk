@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',group:'detail'},periodResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',group:'detail'},periodResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,openingHandleForm:null,editDirty:false}
 const STOCK_SECTIONS=new Set(['list','move','setup','period','orders'])
 function normalizeSection(section){return STOCK_SECTIONS.has(section)?section:'list'}
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
@@ -253,6 +253,7 @@ function openingDialogEl(){return $('#openingDialog')}
 function openingDialogIsOpen(){const dlg=openingDialogEl();return !!(dlg&&dlg.open)}
 function touchOpeningDirty(){state.openingDirty=true}
 function closeOpeningDialog(){
+  state.openingHandleForm=null
   const dlg=openingDialogEl()
   if(!dlg)return
   dlg.close()
@@ -826,39 +827,201 @@ function openOpeningRegister(){
   const dlg=openingDialogEl()
   if(!dlg)return
   state.openingDirty=false
+  state.openingHandleForm=null
   mountOpeningRegisterForm()
   if(!dlg.open)dlg.showModal()
   dlg.oncancel=ev=>{
+    if(state.openingHandleForm){
+      ev.preventDefault()
+      cancelOpeningHandleCreate()
+      return
+    }
     if(state.openingDirty&&!window.confirm('入力中の内容を破棄しますか？')){ev.preventDefault();return}
     dlg.innerHTML=''
     state.openingDirty=false
+    state.openingHandleForm=null
+  }
+}
+function cancelOpeningHandleCreate(){
+  state.openingHandleForm=null
+  mountOpeningRegisterForm()
+}
+function openOpeningHandleCreate(){
+  state.openingHandleForm={
+    customerId:null,
+    customerQuery:'',
+    productId:null,
+    productQuery:'',
+    embroidery:'',
+    saving:false
+  }
+  mountOpeningRegisterForm()
+}
+function mountOpeningHandleCreateForm(dlg){
+  const draft=state.openingHandleForm||{}
+  const customer=resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId)
+  const product=resolveConfirmedOpeningProduct(state.data.products,draft.productId)
+  const customerQuery=customer?customer.name:(draft.customerQuery||'')
+  const productQuery=product?productPickerLabel(product):(draft.productQuery||'')
+  dlg.innerHTML=`<div class="dialoghead"><h2>取扱を新しく登録</h2><button type="button" id="closeHandleCreate" class="quiet">キャンセル</button></div>
+    <div class="dialogbody">
+      <p class="provisional">顧客と商品は台帳から選びます。未登録の名前では自動作成しません。保存するのは顧客・商品・加工情報の紐づけだけで、在庫の枚数は増えません。</p>
+      <div class="grid">
+        ${searchPickerMarkup({label:'顧客',inputId:'handleCustomerQuery',listId:'handleCustomerOptions',clearId:'handleCustomerClear',hintId:'handleCustomerHint',placeholder:'顧客名またはカナで検索',value:customerQuery})}
+        ${searchPickerMarkup({label:'商品',inputId:'handleProductQuery',listId:'handleProductOptions',clearId:'handleProductClear',hintId:'handleProductHint',placeholder:'品番・商品名・色・仕入先で検索',value:productQuery})}
+        <label>加工情報<input id="handleEmbroidery" maxlength="80" placeholder="空欄は刺繍なし" value="${esc(draft.embroidery||'')}"></label>
+      </div>
+      <p class="sub">顧客・商品が一覧に無いときは、先にそれぞれの台帳で登録してください。</p>
+      <p id="error"></p>
+    </div>
+    <div class="dialogactions"><button type="button" id="cancelHandleCreate">キャンセル</button><button type="button" class="primary" id="saveHandleCreate">取扱を保存</button></div>`
+  const root=dlg
+  const customerInput=$('#handleCustomerQuery',root)
+  const productInput=$('#handleProductQuery',root)
+  bindOpeningSearchPicker({
+    input:customerInput,
+    list:$('#handleCustomerOptions',root),
+    clearBtn:$('#handleCustomerClear',root),
+    hint:$('#handleCustomerHint',root),
+    emptyText:'該当する顧客がありません。先に顧客台帳で登録してください',
+    getItems:()=>filterOpeningCustomers(state.data.customers,customerInput.value).map(c=>({
+      id:c.id,
+      label:c.name,
+      html:`<span class="dm-primary">${esc(c.name)}</span>${c.kana?`<span class="sub dm-secondary">${esc(c.kana)}</span>`:''}`,
+      raw:c
+    })),
+    isConfirmed:()=>!!resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId),
+    confirmedLabel:()=>{
+      const c=resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId)
+      return c?c.name:''
+    },
+    onPick:item=>{
+      draft.customerId=String(item.id)
+      draft.customerQuery=item.label
+      mountOpeningRegisterForm()
+    },
+    onClear:()=>{draft.customerId=null;draft.customerQuery='';mountOpeningRegisterForm()},
+    onQueryChange:value=>{
+      const confirmed=resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId)
+      if(confirmed&&value!==confirmed.name){
+        draft.customerId=null
+        draft.customerQuery=value
+        mountOpeningRegisterForm()
+        const el=$('#handleCustomerQuery',openingDialogEl())
+        if(el){el.focus();const n=el.value.length;el.setSelectionRange(n,n)}
+        return true
+      }
+      draft.customerQuery=value
+      return false
+    }
+  })
+  bindOpeningSearchPicker({
+    input:productInput,
+    list:$('#handleProductOptions',root),
+    clearBtn:$('#handleProductClear',root),
+    hint:$('#handleProductHint',root),
+    emptyText:'該当する商品がありません。先に商品台帳で登録してください',
+    getItems:()=>filterOpeningProducts(state.data.products,productInput.value).map(p=>({
+      id:p.id,
+      label:productPickerLabel(p),
+      html:`<span class="dm-primary">${esc(p.code)} ${esc(p.name)}</span><span class="sub dm-secondary">${esc(p.color||'')} / ${esc(p.supplierName||'仕入先未設定')} · 商品ID ${p.id}</span>`,
+      raw:p
+    })),
+    isConfirmed:()=>!!resolveConfirmedOpeningProduct(state.data.products,draft.productId),
+    confirmedLabel:()=>{
+      const p=resolveConfirmedOpeningProduct(state.data.products,draft.productId)
+      return p?productPickerLabel(p):''
+    },
+    onPick:item=>{
+      draft.productId=String(item.id)
+      draft.productQuery=item.label
+      mountOpeningRegisterForm()
+    },
+    onClear:()=>{draft.productId=null;draft.productQuery='';mountOpeningRegisterForm()},
+    onQueryChange:value=>{
+      const confirmed=resolveConfirmedOpeningProduct(state.data.products,draft.productId)
+      if(confirmed&&value!==productPickerLabel(confirmed)){
+        draft.productId=null
+        draft.productQuery=value
+        mountOpeningRegisterForm()
+        const el=$('#handleProductQuery',openingDialogEl())
+        if(el){el.focus();const n=el.value.length;el.setSelectionRange(n,n)}
+        return true
+      }
+      draft.productQuery=value
+      return false
+    }
+  })
+  $('#handleEmbroidery',root).oninput=e=>{draft.embroidery=e.target.value}
+  const cancel=()=>cancelOpeningHandleCreate()
+  $('#closeHandleCreate',root).onclick=cancel
+  $('#cancelHandleCreate',root).onclick=cancel
+  $('#saveHandleCreate',root).onclick=async()=>{
+    const err=$('#error',root)
+    const button=$('#saveHandleCreate',root)
+    if(draft.saving)return
+    try{
+      const c=resolveConfirmedOpeningCustomer(state.data.customers,draft.customerId)
+      if(!c)throw Error('顧客を候補から選んで確定してください。未登録の名前では作成できません。')
+      const p=resolveConfirmedOpeningProduct(state.data.products,draft.productId)
+      if(!p)throw Error('商品を候補から選んで確定してください。未登録の名前では作成できません。')
+      draft.saving=true
+      button.disabled=true
+      const result=await api('/api/customer-products',{
+        customerId:Number(c.id),
+        productId:Number(p.id),
+        embroidery:String(draft.embroidery||'').trim()
+      })
+      state.data=await api('/api/bootstrap')
+      const handles=openingHandlesFromData(state.data)
+      const selected=resolveConfirmedOpeningHandle(handles,result.id)
+      if(!selected)throw Error('取扱は保存されましたが、初期在庫の候補に反映できませんでした。画面を開き直してください。')
+      state.opening=selectOpeningHandle(state.opening,selected)
+      state.openingHandleForm=null
+      touchOpeningDirty()
+      toast(result.already?'同じ取扱が既にあったため、それを選びました。在庫はまだ増やしていません。':'取扱を登録し、初期在庫の入力に戻しました。在庫はまだ増やしていません。')
+      mountOpeningRegisterForm()
+    }catch(e){
+      draft.saving=false
+      button.disabled=false
+      if(err)err.textContent=e.message
+    }
   }
 }
 function mountOpeningRegisterForm(){
   const dlg=openingDialogEl()
   if(!dlg)return
+  if(state.openingHandleForm){
+    mountOpeningHandleCreateForm(dlg)
+    return
+  }
   const handles=openingHandlesFromData(state.data)
-  const customer=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
-  const selected=customer?resolveConfirmedOpeningOffering(handles,customer.id,state.opening.handleId):null
-  const customerQuery=customer?customer.name:(state.opening.customerQuery||'')
-  const handleQuery=selected?offeringPickerLabel(selected):(state.opening.handleQuery||'')
-  const mine=customer?filterOpeningOfferings(handles,customer.id,''):[]
+  const selected=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
+  const handleQuery=selected?handlePickerLabel(selected):(state.opening.handleQuery||'')
+  const peers=selected?handles.filter(h=>Number(h.customerId)===Number(selected.customerId)&&Number(h.product.id)===Number(selected.product.id)):[]
   const locSel=openingLocationSelection()
   state.opening.siteId=locSel.siteId==null?'':String(locSel.siteId)
   state.opening.shelfId=locSel.shelfId
   state.opening.locationId=locSel.locationId==null?'':String(locSel.locationId)
   const unknownChecked=state.opening.unknown===false?false:true
+  const sizeNotice=state.opening.sizeNotice||''
   dlg.innerHTML=`<div class="dialoghead"><h2>初期在庫を登録</h2><button type="button" id="closeOpeningForm" class="quiet">閉じる</button></div>
     <div class="dialogbody">
     <p class="excelhint">記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。</p>
     <p class="provisional">入荷日が分からない初期在庫は、架空の日付で埋めず「入荷日不明」にします。運用開始後の入荷より先に払い出す想定です。初期在庫同士の順番が不明なときは、払出し順の小さい番号から出します。仕入単価の安さでは順番を決めません。</p>
+    <div class="opening-handle-block">
+      ${searchPickerMarkup({label:'取扱',inputId:'handleQuery',listId:'handleOptions',clearId:'handleClear',hintId:'handleHint',placeholder:'顧客名・品番・商品名・加工情報で検索',value:handleQuery})}
+      <div class="opening-handle-tools">
+        <button type="button" class="quiet" id="openHandleCreate">取扱を新しく登録</button>
+        <p class="opening-handle-empty-guide" id="handleEmptyGuide">候補が無いときは「取扱を新しく登録」から、登録済みの顧客と商品を選んで追加できます。顧客・商品そのものは各台帳で先に登録してください。</p>
+      </div>
+    </div>
     <div class="grid">
-      ${searchPickerMarkup({label:'顧客',inputId:'customerQuery',listId:'customerOptions',clearId:'customerClear',hintId:'customerHint',placeholder:'顧客名またはカナで検索',value:customerQuery})}
-      ${searchPickerMarkup({label:'商品と加工仕様',inputId:'handleQuery',listId:'handleOptions',clearId:'handleClear',hintId:'handleHint',placeholder:customer?'品番・商品名・加工仕様で検索':'先に顧客を選択',value:handleQuery})}
       ${openingLocationFields(locSel)}
       <label>在庫基準日（必須）<input id="basisDate" type="date" value="${esc(state.opening.basis||'')}"></label>
     </div>
     <p id="standardNote"></p>
+    <p id="sizeNotice" class="notice" ${sizeNotice?'':'hidden'}>${esc(sizeNotice)}</p>
     <label class="check"><input id="unknown" type="checkbox" ${unknownChecked?'checked':''}>入荷日不明</label>
     <div class="grid"><label>入荷日<input id="receivedOn" type="date" value="${esc(state.opening.receivedOn||'')}"></label><label>入荷日不明のときの払出し順<input id="payoutOrder" inputmode="numeric" value="${esc(state.opening.payoutOrder||'1')}"></label></div>
     <h2>サイズごとの数量と仕入単価</h2>
@@ -870,15 +1033,14 @@ function mountOpeningRegisterForm(){
   const root=dlg
   const drawSizes=()=>{
     const product=selected&&selected.product
-    if(!customer){$('#sizerows',root).innerHTML='<p>顧客を候補から選んでください。</p>';$('#standardNote',root).textContent=' ';return}
-    if(!product){$('#sizerows',root).innerHTML='<p>商品と加工仕様を候補から選んでください。取扱が未登録のときは、先に顧客・商品情報で登録してください。</p>';$('#standardNote',root).textContent=' ';return}
+    if(!product){$('#sizerows',root).innerHTML='<p>取扱を候補から選んでください。未登録なら「取扱を新しく登録」から追加できます。</p>';$('#standardNote',root).textContent=' ';return}
     const rows=state.opening.lines&&state.opening.lines.productId===product.id?state.opening.lines.rows:product.sizes.map(size=>({size,qty:'',unitCost:''}))
     state.opening.lines={productId:product.id,rows}
     $('#sizerows',root).innerHTML=rows.map((line,i)=>`<div class="sizerow"><strong>${esc(line.size)}</strong><label>数量<input data-i="${i}" data-k="qty" inputmode="numeric" value="${esc(line.qty)}"></label><label>仕入単価（円）<input data-i="${i}" data-k="unitCost" inputmode="numeric" value="${esc(line.unitCost)}"></label><button type="button" data-addprice="${i}">別の単価</button></div>`).join('')
     $('#sizerows',root).querySelectorAll('input').forEach(el=>el.oninput=()=>{rows[Number(el.dataset.i)][el.dataset.k]=el.value;touchOpeningDirty()})
     $('#sizerows',root).querySelectorAll('[data-addprice]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.addprice);rows.splice(i+1,0,{size:rows[i].size,qty:'',unitCost:''});state.opening.lines.rows=rows;touchOpeningDirty();drawSizes()})
     const standard=$('#standardNote',root)
-    standard.textContent=selected&&selected.isStandard&&mine.filter(h=>h.product.id===selected.product.id).length===1?'この顧客はこの加工仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'刺繍ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
+    standard.textContent=selected&&selected.isStandard&&peers.length===1?'この顧客はこの加工仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'刺繍ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
   }
   const syncUnknown=()=>{
     const on=$('#unknown',root).checked
@@ -900,82 +1062,44 @@ function mountOpeningRegisterForm(){
   }
   $('#closeOpeningForm',root).onclick=requestClose
   $('#cancelOpeningForm',root).onclick=requestClose
-  const customerInput=$('#customerQuery',root)
+  $('#openHandleCreate',root).onclick=()=>openOpeningHandleCreate()
   const handleInput=$('#handleQuery',root)
-  bindOpeningSearchPicker({
-    input:customerInput,
-    list:$('#customerOptions',root),
-    clearBtn:$('#customerClear',root),
-    hint:$('#customerHint',root),
-    emptyText:'該当する顧客がありません',
-    getItems:()=>filterOpeningCustomers(state.data.customers,customerInput.value).map(c=>({
-      id:c.id,
-      label:c.name,
-      html:`<span class="dm-primary">${esc(c.name)}</span>${c.kana?`<span class="sub dm-secondary">${esc(c.kana)}</span>`:''}`,
-      raw:c
-    })),
-    isConfirmed:()=>!!resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId),
-    confirmedLabel:()=>{
-      const c=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
-      return c?c.name:''
-    },
-    onPick:item=>{
-      const prev=state.opening.customerId
-      state.opening.customerId=String(item.id)
-      state.opening.customerQuery=item.label
-      if(String(prev)!==String(item.id))state.opening=clearOpeningProductFields(state.opening)
-      touchOpeningDirty()
-      mountOpeningRegisterForm()
-    },
-    onClear:()=>{state.opening=clearOpeningCustomerSelection(state.opening);touchOpeningDirty();mountOpeningRegisterForm()},
-    onQueryChange:value=>{
-      touchOpeningDirty()
-      const confirmed=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
-      if(confirmed&&value!==confirmed.name){
-        state.opening=clearOpeningCustomerSelection(state.opening)
-        state.opening.customerQuery=value
-        mountOpeningRegisterForm()
-        const el=$('#customerQuery',openingDialogEl())
-        if(el){el.focus();const n=el.value.length;el.setSelectionRange(n,n)}
-        return true
-      }
-      state.opening.customerQuery=value
-      return false
-    }
-  })
+  const emptyGuide=$('#handleEmptyGuide',root)
+  const refreshEmptyGuide=()=>{
+    if(!emptyGuide)return
+    const q=String(handleInput.value||'').trim()
+    const hits=filterOpeningHandles(handles,handleInput.value)
+    const show=!selected&&(q?hits.length===0:handles.length===0)
+    emptyGuide.hidden=!show
+  }
   bindOpeningSearchPicker({
     input:handleInput,
     list:$('#handleOptions',root),
     clearBtn:$('#handleClear',root),
     hint:$('#handleHint',root),
-    emptyText:customer?'該当する商品がありません':'先に顧客を候補から選んでください',
-    getItems:()=>{
-      if(!resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId))return []
-      return filterOpeningOfferings(handles,state.opening.customerId,handleInput.value).map(h=>({
-        id:h.id,
-        label:offeringPickerLabel(h),
-        html:`<span class="dm-primary">${esc(h.product.code)} ${esc(h.product.name)}</span><span class="sub dm-secondary">${esc(h.product.color)} / ${esc(specLabel(h.embroidery))}${h.isStandard?' / 標準':''}</span>`,
-        raw:h
-      }))
-    },
-    isConfirmed:()=>!!resolveConfirmedOpeningOffering(handles,state.opening.customerId,state.opening.handleId),
+    emptyText:'該当する取扱がありません。「取扱を新しく登録」から追加できます',
+    getItems:()=>filterOpeningHandles(handles,handleInput.value).map(h=>({
+      id:h.id,
+      label:handlePickerLabel(h),
+      html:`<span class="dm-primary">${esc(h.customer.name)}／${esc(h.product.code)}／${esc(h.product.name)}</span><span class="sub dm-secondary">${esc(h.product.color||'')}／${esc(specLabel(h.embroidery))}${h.isStandard?'／標準':''}</span>`,
+      raw:h
+    })),
+    isConfirmed:()=>!!resolveConfirmedOpeningHandle(handles,state.opening.handleId),
     confirmedLabel:()=>{
-      const h=resolveConfirmedOpeningOffering(handles,state.opening.customerId,state.opening.handleId)
-      return h?offeringPickerLabel(h):''
+      const h=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
+      return h?handlePickerLabel(h):''
     },
     onPick:item=>{
-      state.opening.handleId=String(item.id)
-      state.opening.handleQuery=item.label
-      state.opening.lines=null
+      state.opening=selectOpeningHandle(state.opening,item.raw||resolveConfirmedOpeningHandle(handles,item.id))
       touchOpeningDirty()
       mountOpeningRegisterForm()
     },
-    onClear:()=>{state.opening=clearOpeningProductFields(state.opening);touchOpeningDirty();mountOpeningRegisterForm()},
+    onClear:()=>{state.opening=clearOpeningHandleSelection(state.opening);touchOpeningDirty();mountOpeningRegisterForm()},
     onQueryChange:value=>{
       touchOpeningDirty()
-      const confirmed=resolveConfirmedOpeningOffering(handles,state.opening.customerId,state.opening.handleId)
-      if(confirmed&&value!==offeringPickerLabel(confirmed)){
-        state.opening=clearOpeningProductFields(state.opening)
+      const confirmed=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
+      if(confirmed&&value!==handlePickerLabel(confirmed)){
+        state.opening=clearOpeningHandleSelection(state.opening)
         state.opening.handleQuery=value
         mountOpeningRegisterForm()
         const el=$('#handleQuery',openingDialogEl())
@@ -983,10 +1107,13 @@ function mountOpeningRegisterForm(){
         return true
       }
       state.opening.handleQuery=value
+      refreshEmptyGuide()
       return false
     }
   })
-  if(!customer)handleInput.disabled=true
+  const origFocus=handleInput.onfocus
+  handleInput.onfocus=e=>{if(typeof origFocus==='function')origFocus(e);refreshEmptyGuide()}
+  refreshEmptyGuide()
   $('#unknown',root).onchange=()=>{touchOpeningDirty();syncUnknown()}
   $('#basisDate',root).onchange=()=>{state.opening.basis=$('#basisDate',root).value;touchOpeningDirty()}
   $('#receivedOn',root).oninput=()=>{state.opening.receivedOn=$('#receivedOn',root).value;touchOpeningDirty()}
@@ -1024,15 +1151,16 @@ function mountOpeningRegisterForm(){
   }
   $('#confirmOpen',root).onclick=()=>confirmOpening()
   syncUnknown();drawSizes()
+  if(sizeNotice){
+    delete state.opening.sizeNotice
+  }
 }
 function confirmOpening(){
   const formRoot=openingDialogEl()||document
   try{
     const handles=openingHandlesFromData(state.data)
-    const customer=resolveConfirmedOpeningCustomer(state.data.customers,state.opening.customerId)
-    if(!customer)throw Error('顧客を候補から選んで確定してください。入力した文字だけでは保存できません。')
-    const selected=resolveConfirmedOpeningOffering(handles,customer.id,state.opening.handleId)
-    if(!selected)throw Error('商品と加工仕様を候補から選んで確定してください。入力した文字だけでは保存できません。')
+    const selected=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
+    if(!selected)throw Error('取扱を候補から選んで確定してください。入力した文字だけでは保存できません。')
     if(!state.opening.lines||!state.opening.lines.rows)throw Error('数量のある行がありません。')
     const lines=[]
     for(const line of state.opening.lines.rows){
@@ -1088,6 +1216,7 @@ function confirmOpening(){
         toast(result.already?'この登録は保存済みです。二重には加算していません。':'初期在庫を登録しました。')
         state.opening=openingStateAfterSuccessfulSave(state.opening)
         state.openingDirty=false
+        state.openingHandleForm=null
         applySectionState('setup','opening')
         state.data=await api('/api/bootstrap')
         await loadOpeningEntries()

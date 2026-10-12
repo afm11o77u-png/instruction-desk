@@ -143,6 +143,10 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 .search-picker-list .search-picker-empty{padding:10px 12px;color:#5d7268;font-weight:600;font-size:13px}
 .search-picker-hint{margin:0;font-size:12.5px;font-weight:600;color:#3d5146;min-height:1.2em}
 .search-picker-hint.is-confirmed{color:#145233}
+.opening-handle-block{display:flex;flex-direction:column;gap:8px;margin-bottom:4px}
+.opening-handle-tools{display:flex;flex-wrap:wrap;align-items:flex-start;gap:10px 14px}
+.opening-handle-empty-guide{margin:0;flex:1 1 220px;font-size:12.5px;font-weight:600;color:#3d5146}
+.opening-handle-empty-guide[hidden]{display:none!important}
 
 /* 商品別: one heading per 商品ID, breakdown table underneath */
 .product-stock-group{padding:14px 16px 18px;border-bottom:1px solid var(--line)}

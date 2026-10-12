@@ -4,14 +4,23 @@ const path = require('path')
 const {
   filterOpeningCustomers,
   filterOpeningOfferings,
+  filterOpeningHandles,
+  filterOpeningProducts,
   filterOpeningListEntries,
   openingHandlesFromData,
   clearOpeningProductFields,
   clearOpeningCustomerSelection,
+  clearOpeningHandleSelection,
+  reconcileOpeningLinesForProduct,
+  selectOpeningHandle,
   openingStateAfterSuccessfulSave,
   resolveConfirmedOpeningCustomer,
+  resolveConfirmedOpeningProduct,
   resolveConfirmedOpeningOffering,
-  offeringPickerLabel
+  resolveConfirmedOpeningHandle,
+  offeringPickerLabel,
+  handlePickerLabel,
+  productPickerLabel
 } = require(path.join(__dirname, '../static/opening_pickers.js'))
 
 const listEntries = [
@@ -31,7 +40,8 @@ const data = {
   customers,
   products: [
     {
-      id: 10, code: 'SCR-100', name: '白スクラブ', color: '白', active: true,
+      id: 10, code: 'SCR-100', name: '白スクラブ', color: '白', active: true, supplierName: '北光繊維',
+      sizes: ['M', 'L', 'LL'],
       links: [
         {id: 100, customerId: 1, embroidery: '', isStandard: true, active: true},
         {id: 101, customerId: 1, embroidery: '左胸ネーム', isStandard: false, active: true},
@@ -40,8 +50,14 @@ const data = {
       ]
     },
     {
-      id: 11, code: 'PAN-200', name: 'パンツ', color: '紺', active: false,
+      id: 11, code: 'PAN-200', name: 'パンツ', color: '紺', active: false, supplierName: '北光繊維',
+      sizes: ['S', 'M'],
       links: [{id: 110, customerId: 1, embroidery: '', isStandard: true, active: true}]
+    },
+    {
+      id: 12, code: 'JKT-1', name: 'ジャケット', color: '紺', active: true, supplierName: '札幌商会',
+      sizes: ['M', '2L'],
+      links: [{id: 120, customerId: 4, embroidery: '背中ネーム', isStandard: true, active: true}]
     }
   ]
 }
@@ -98,6 +114,32 @@ test('offerings searchable by code name and spec text', () => {
   assert.ok(offeringPickerLabel(filterOpeningOfferings(handles, 1, '左胸')[0]).includes('左胸ネーム'))
 })
 
+test('handles searchable across customers by name code product color processing', () => {
+  const handles = openingHandlesFromData(data)
+  assert.deepStrictEqual(filterOpeningHandles(handles, '').map(h => h.id).sort(), [100, 101, 102, 120])
+  assert.deepStrictEqual(filterOpeningHandles(handles, 'あおば').map(h => h.id).sort(), [100, 101])
+  assert.deepStrictEqual(filterOpeningHandles(handles, 'SCR-100').map(h => h.id).sort(), [100, 101, 102])
+  assert.strictEqual(filterOpeningHandles(handles, '左胸').length, 1)
+  assert.strictEqual(filterOpeningHandles(handles, '背中').length, 1)
+  assert.strictEqual(filterOpeningHandles(handles, 'ジャケット').length, 1)
+  assert.strictEqual(filterOpeningHandles(handles, '紺').map(h => h.id).includes(120), true)
+  const label = handlePickerLabel(handles.find(h => h.id === 101))
+  assert.ok(label.includes('あおば記念病院'))
+  assert.ok(label.includes('SCR-100'))
+  assert.ok(label.includes('左胸ネーム'))
+  assert.ok(label.includes('／'))
+})
+
+test('product picker shows code name color supplier; active only', () => {
+  const hits = filterOpeningProducts(data.products, '札幌')
+  assert.strictEqual(hits.length, 1)
+  assert.strictEqual(hits[0].id, 12)
+  assert.ok(!filterOpeningProducts(data.products, '').some(p => p.id === 11))
+  assert.ok(productPickerLabel(hits[0]).includes('仕入先') || productPickerLabel(hits[0]).includes('札幌商会'))
+  assert.ok(resolveConfirmedOpeningProduct(data.products, 12))
+  assert.strictEqual(resolveConfirmedOpeningProduct(data.products, 11), null)
+})
+
 test('customer change clears product fields', () => {
   const cleared = clearOpeningProductFields({
     customerId: '1', handleId: '100', handleQuery: 'x', lines: {productId: 10, rows: [{size: 'M', qty: '5', unitCost: '1000'}]}, basis: '2026-01-01'
@@ -111,7 +153,41 @@ test('customer change clears product fields', () => {
   assert.strictEqual(full.handleId, undefined)
 })
 
-test('post-save keeps customer and clears qty/product', () => {
+test('select handle reconciles invalid sizes and keeps valid qty', () => {
+  const handles = openingHandlesFromData(data)
+  const opening = {
+    basis: '2026-09-01',
+    locationId: '8',
+    lines: {
+      productId: 10,
+      rows: [
+        {size: 'M', qty: '3', unitCost: '1000'},
+        {size: 'LL', qty: '2', unitCost: '1100'},
+        {size: '3L', qty: '1', unitCost: '1200'}
+      ]
+    }
+  }
+  const next = selectOpeningHandle(opening, handles.find(h => h.id === 120))
+  assert.strictEqual(next.handleId, '120')
+  assert.strictEqual(next.customerId, '4')
+  assert.ok(next.sizeNotice.includes('3L') || next.sizeNotice.includes('LL'))
+  assert.ok(next.lines.rows.some(r => r.size === 'M' && r.qty === '3'))
+  assert.ok(!next.lines.rows.some(r => r.size === 'LL' && r.qty === '2'))
+  assert.ok(!next.lines.rows.some(r => r.size === '3L'))
+  const cleared = clearOpeningHandleSelection(next)
+  assert.strictEqual(cleared.handleId, undefined)
+  assert.strictEqual(cleared.lines, undefined)
+})
+
+test('reconcile same product keeps lines unchanged', () => {
+  const product = data.products[0]
+  const opening = {lines: {productId: 10, rows: [{size: 'M', qty: '1', unitCost: '900'}]}}
+  const {opening: next, clearedSizes} = reconcileOpeningLinesForProduct(opening, product)
+  assert.deepStrictEqual(clearedSizes, [])
+  assert.strictEqual(next.lines.rows[0].qty, '1')
+})
+
+test('post-save clears handle and qty; keeps location/basis', () => {
   const next = openingStateAfterSuccessfulSave({
     customerId: '1',
     handleId: '100',
@@ -123,7 +199,7 @@ test('post-save keeps customer and clears qty/product', () => {
     shelfId: '8',
     locationId: '8'
   })
-  assert.strictEqual(next.customerId, '1')
+  assert.strictEqual(next.customerId, undefined)
   assert.strictEqual(next.handleId, undefined)
   assert.strictEqual(next.lines, undefined)
   assert.strictEqual(next.basis, '2026-09-01')
@@ -137,6 +213,8 @@ test('cannot resolve unconfirmed typed text as selection', () => {
   assert.strictEqual(resolveConfirmedOpeningOffering(openingHandlesFromData(data), 1, 'SCR'), null)
   assert.ok(resolveConfirmedOpeningOffering(openingHandlesFromData(data), 1, 100))
   assert.strictEqual(resolveConfirmedOpeningOffering(openingHandlesFromData(data), 2, 100), null)
+  assert.ok(resolveConfirmedOpeningHandle(openingHandlesFromData(data), 100))
+  assert.strictEqual(resolveConfirmedOpeningHandle(openingHandlesFromData(data), 'あおば'), null)
 })
 
 test('list filter matches customer code productName; empty query returns all', () => {
