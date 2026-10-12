@@ -1,5 +1,19 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',group:'detail'},periodResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:''},token:'',opening:{},openingDirty:false,openingHandleForm:null,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:''},token:'',opening:{condition:'new'},openingDirty:false,openingHandleForm:null,editDirty:false}
+const CONDITION_OPTS=[['new','新品'],['used','中古']]
+function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
+function conditionQtyText(r){
+  const n=r.qtyNew!=null?r.qtyNew:(r.condition==='new'?r.qty:0)
+  const u=r.qtyUsed!=null?r.qtyUsed:(r.condition==='used'?r.qty:0)
+  const t=r.qty!=null?r.qty:(Number(n)||0)+(Number(u)||0)
+  return `新品${num(n)}枚／中古${num(u)}枚／合計${num(t)}枚`
+}
+function conditionSelectHtml(id,value,opts){
+  const cur=value||'new'
+  const allowAll=opts&&opts.allowAll
+  const all=allowAll?`<option value="" ${cur===''?'selected':''}>すべて</option>`:''
+  return `<select id="${id}" aria-label="状態">${all}${CONDITION_OPTS.map(([v,l])=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('')}</select>`
+}
 const STOCK_SECTIONS=new Set(['list','move','setup','period','orders'])
 function normalizeSection(section){return STOCK_SECTIONS.has(section)?section:'list'}
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
@@ -800,20 +814,21 @@ function opening(){
       ${excelTools()}
     </div>
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}
-    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
       ${entries.map(e=>`<tr>
         <td class="dm-primary">${esc(e.customerName)}</td>
         <td>${esc(e.code)} ${esc(e.productName)} ${esc(e.color)}<span class="sub dm-secondary">商品ID ${e.productId}</span></td>
         <td>${esc(e.embroideryLabel)}</td>
         <td>${esc(e.size)}</td>
+        <td>${esc(e.conditionLabel||conditionLabel(e.condition))}</td>
         <td class="qty">${num(e.qty)}</td>
         <td class="money">${yen(e.unitCost)}</td>
         <td>${esc(e.locationLabel)}</td>
-      </tr>`).join('')||`<tr><td colspan="7">${emptyMsg}</td></tr>`}
+      </tr>`).join('')||`<tr><td colspan="8">${emptyMsg}</td></tr>`}
     </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
   </section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=entries.length?entries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):`<div class="dm-empty">${emptyMsg}</div>`
+  if(grid)grid.innerHTML=entries.length?entries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${esc(e.conditionLabel||conditionLabel(e.condition))}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):`<div class="dm-empty">${emptyMsg}</div>`
   const stage=$('#stockliststage')
   const mode=mountStockDisplay(stage,'opening',()=>paint())
   if(grid)grid.hidden=mode!=='grid'
@@ -1019,7 +1034,9 @@ function mountOpeningRegisterForm(){
     <div class="grid">
       ${openingLocationFields(locSel)}
       <label>在庫基準日（必須）<input id="basisDate" type="date" value="${esc(state.opening.basis||'')}"></label>
+      <label>状態（必須）${conditionSelectHtml('openingCondition',state.opening.condition||'new')}</label>
     </div>
+    <p class="notice" id="conditionHint">状態は新品を初期選択しています。同じ取扱・サイズ・場所でも、新品と中古は別々に登録できます。</p>
     <p id="standardNote"></p>
     <p id="sizeNotice" class="notice" ${sizeNotice?'':'hidden'}>${esc(sizeNotice)}</p>
     <label class="check"><input id="unknown" type="checkbox" ${unknownChecked?'checked':''}>入荷日不明</label>
@@ -1116,6 +1133,12 @@ function mountOpeningRegisterForm(){
   refreshEmptyGuide()
   $('#unknown',root).onchange=()=>{touchOpeningDirty();syncUnknown()}
   $('#basisDate',root).onchange=()=>{state.opening.basis=$('#basisDate',root).value;touchOpeningDirty()}
+  const condEl=$('#openingCondition',root)
+  if(condEl){
+    if(!state.opening.condition)state.opening.condition='new'
+    condEl.value=state.opening.condition==='used'?'used':'new'
+    condEl.onchange=()=>{state.opening.condition=condEl.value;touchOpeningDirty()}
+  }
   $('#receivedOn',root).oninput=()=>{state.opening.receivedOn=$('#receivedOn',root).value;touchOpeningDirty()}
   $('#payoutOrder',root).oninput=()=>{state.opening.payoutOrder=$('#payoutOrder',root).value;touchOpeningDirty()}
   const siteEl=$('#openingSite',root)
@@ -1195,13 +1218,15 @@ function confirmOpening(){
     const loc=state.data.locations.find(l=>l.id===locationId)
     if(!loc)throw Error('保管場所を、登録済みの場所から選んでください。')
     const locLabel=loc.parentId?loc.label:(needShelf&&Number(shelfId)===Number(siteId)?'棚指定なし（'+loc.name+'）':loc.label)
+    const condition=($('#openingCondition',formRoot)&&$('#openingCondition',formRoot).value)==='used'?'used':'new'
+    state.opening.condition=condition
     state.token=crypto.randomUUID()
     const totalQty=lines.reduce((s,l)=>s+l.qty,0)
     const totalAmount=lines.reduce((s,l)=>s+l.qty*l.unitCost,0)
     const dlg=$('#dialog')
     dlg.innerHTML=`<div class="dialoghead"><h2>初期在庫の確認</h2></div><div class="dialogbody">
       <p>${esc(selected.customer.name)} / ${esc(selected.product.code)} ${esc(selected.product.name)} ${esc(selected.product.color)} / ${esc(specLabel(selected.embroidery))}</p>
-      <p>${esc(locLabel)}　基準日 ${esc(basis)}　${unknown?'入荷日不明・払出し順 '+esc($('#payoutOrder',formRoot).value):'入荷日 '+esc($('#receivedOn',formRoot).value)}</p>
+      <p>${esc(locLabel)}　状態 <strong>${esc(conditionLabel(condition))}</strong>　基準日 ${esc(basis)}　${unknown?'入荷日不明・払出し順 '+esc($('#payoutOrder',formRoot).value):'入荷日 '+esc($('#receivedOn',formRoot).value)}</p>
       <ul>${lines.map(l=>`<li>${esc(l.size)}　${num(l.qty)}着 × ${yen(l.unitCost)} ＝ ${yen(l.qty*l.unitCost)}</li>`).join('')}</ul>
       <p class="money">合計 ${num(totalQty)}着　${yen(totalAmount)}</p>
       <p>この金額は、仕入原価ベースの在庫金額です。</p><p id="error"></p></div>
@@ -1211,7 +1236,7 @@ function confirmOpening(){
     $('#commit',dlg).onclick=async()=>{
       const button=$('#commit',dlg);button.disabled=true
       try{
-        const result=await api('/api/opening',{token:state.token,customerProductId:selected.id,locationId,basisDate:basis,receivedUnknown:unknown,receivedOn:unknown?'':$('#receivedOn',formRoot).value,payoutOrder:unknown?Number($('#payoutOrder',formRoot).value):0,lines})
+        const result=await api('/api/opening',{token:state.token,customerProductId:selected.id,locationId,basisDate:basis,receivedUnknown:unknown,receivedOn:unknown?'':$('#receivedOn',formRoot).value,payoutOrder:unknown?Number($('#payoutOrder',formRoot).value):0,condition,lines})
         dlg.close();dlg.innerHTML=''
         toast(result.already?'この登録は保存済みです。二重には加算していません。':'初期在庫を登録しました。')
         state.opening=openingStateAfterSuccessfulSave(state.opening)
@@ -1237,6 +1262,7 @@ async function loadStock(){
   if(f.size)q.set('size',f.size)
   if(f.spec)q.set('spec',f.spec)
   if(f.locationId)q.set('locationId',f.locationId)
+  if(f.condition)q.set('condition',f.condition)
   state.stock=await api('/api/stock?'+q.toString())
 }
 function stockList(){
@@ -1245,6 +1271,8 @@ function stockList(){
   const specs=new Map()
   state.data.products.forEach(p=>p.links.forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
+  const totalNew=state.stock?state.stock.totalQtyNew:0
+  const totalUsed=state.stock?state.stock.totalQtyUsed:0
   $('#main').innerHTML=`<section class="panel stock-list-panel">
     <div class="bar stock-list-filters">
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${state.data.customers.map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
@@ -1252,13 +1280,14 @@ function stockList(){
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
       <label>加工仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${state.data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
+      <label>状態${conditionSelectHtml('fCondition',f.condition||'',{allowAll:true})}</label>
     </div>
     <div class="tabs" id="groups">${[['customer','顧客別'],['product','商品別'],['location','場所別'],['lot','在庫明細']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
-    <div class="total"><div>数量<strong>${state.stock?num(state.stock.totalQty):0}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong></div></div>
-    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。')}
+    <div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong></div></div>
+    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。中古を新品の単価では評価しません。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。中古レコードが無い場合も画面上は中古0枚と表示します。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
-  const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;await loadStock();paint()}
-  ;['fCustomer','fProduct','fSize','fSpec','fLocation'].forEach(id=>$('#'+id).onchange=apply)
+  const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;await loadStock();paint()}
+  ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition'].forEach(id=>$('#'+id).onchange=apply)
   $('#groups').querySelectorAll('button').forEach(b=>b.onclick=async()=>{f.group=b.dataset.group;await loadStock();paint()})
   const stage=$('#stockliststage')
   const mode=mountStockDisplay(stage,'list',()=>paint())
@@ -1266,10 +1295,10 @@ function stockList(){
   const grid=$('#stocklistgrid')
   if(!state.stock){body.innerHTML='';if(grid)grid.innerHTML='';return}
   if(f.group==='lot'){
-    body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
-      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td class="qty">${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="8">在庫はありません。</td></tr>'}
+    body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>状態</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
+      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td class="qty">${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button> ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>`
-    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button><button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" data-history="${l.id}">履歴</button><button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
     const bindLot=()=>{
       document.querySelectorAll('[data-correct]').forEach(b=>b.onclick=()=>correctLot(state.stock.lots.find(l=>l.id===Number(b.dataset.correct))))
       document.querySelectorAll('[data-inbound-correct]').forEach(b=>b.onclick=()=>correctInboundLot(state.stock.lots.find(l=>l.id===Number(b.dataset.inboundCorrect))))
@@ -1306,7 +1335,8 @@ function priceBreakdownHtml(prices){
     const receipts=(p.receipts||[])
     const receiptHtml=receipts.length>1?`<ul class="receipt-breakdown">${receipts.map(r=>{
       const day=r.receivedUnknown?`入荷日不明・払出し順 ${r.payoutOrder}`:`入荷日 ${esc(r.receivedOn||'')}`
-      return `<li>${day}：${num(r.qty)}枚（ロット ${r.lotId}）</li>`
+      const cond=r.conditionLabel||conditionLabel(r.condition)
+      return `<li>${esc(cond)}／${day}：${num(r.qty)}枚（ロット ${r.lotId}）</li>`
     }).join('')}</ul>`:''
     return `<li>${line}${receiptHtml}</li>`
   }).join('')}</ul></details>`
@@ -1314,7 +1344,7 @@ function priceBreakdownHtml(prices){
 
 function stockGroupHeading(g){
   return `<h2 class="dm-primary product-stock-title">${esc(g.title)}</h2>
-    <p class="dm-secondary product-stock-total">合計${num(g.qty)}枚／在庫金額${yen(g.amount)}</p>`
+    <p class="dm-secondary product-stock-total">${conditionQtyText(g)}／在庫金額${yen(g.amount)}</p>`
 }
 
 function productNameColor(r){
@@ -1325,13 +1355,13 @@ function renderProductStockList(groups){
   if(!groups.length)return ''
   return groups.map(g=>`<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>顧客</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量</th><th>在庫金額</th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>顧客</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th></tr></thead><tbody>
       ${(g.rows||[]).map(r=>`<tr>
         <td class="dm-primary">${esc(r.customerName)}</td>
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
         <td>${esc(r.locationLabel)}</td>
-        <td class="qty">${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="qty">${conditionQtyText(r)}${priceBreakdownHtml(r.prices)}</td>
         <td class="money">${yen(r.amount)}</td>
       </tr>`).join('')||'<tr><td colspan="6">在庫はありません。</td></tr>'}
     </tbody></table></div>
@@ -1340,11 +1370,11 @@ function renderProductStockList(groups){
 
 function renderProductStockGrid(groups){
   if(!groups.length)return '<div class="dm-empty">在庫はありません。</div>'
-  return groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${num(g.qty)}枚 / ${yen(g.amount)}</span></div>`+
+  return groups.map(g=>`<div class="dm-group">${esc(g.title)}<span>${conditionQtyText(g)} / ${yen(g.amount)}</span></div>`+
     (g.rows||[]).map(r=>`<article class="dm-card">
       <div class="dm-primary">${esc(r.customerName)}</div>
       <div class="dm-secondary">${esc(r.embroideryLabel)} / ${esc(r.size)}</div>
-      <div class="dm-meta"><span>${esc(r.locationLabel)}</span><span>${num(r.qty)}</span><span>${yen(r.amount)}</span></div>
+      <div class="dm-meta"><span>${esc(r.locationLabel)}</span><span>${conditionQtyText(r)}</span><span>${yen(r.amount)}</span></div>
       ${priceBreakdownHtml(r.prices)}
     </article>`).join('')
   ).join('')
@@ -1363,13 +1393,13 @@ function renderCustomerStockList(groups){
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
         <td>${esc(r.locationLabel)}</td>
-        <td class="qty">${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="qty">${conditionQtyText(r)}${priceBreakdownHtml(r.prices)}</td>
         <td class="money">${yen(r.amount)}</td>
       </tr>`
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量</th><th>在庫金額</th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th></tr></thead><tbody>
       ${rows||'<tr><td colspan="7">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
@@ -1380,14 +1410,14 @@ function renderCustomerStockGrid(groups){
   if(!groups.length)return '<div class="dm-empty">在庫はありません。</div>'
   return groups.map(g=>{
     let prevPid=null
-    return `<div class="dm-group">${esc(g.title)}<span>${num(g.qty)}枚 / ${yen(g.amount)}</span></div>`+
+    return `<div class="dm-group">${esc(g.title)}<span>${conditionQtyText(g)} / ${yen(g.amount)}</span></div>`+
       (g.rows||[]).map(r=>{
         const breakCls=prevPid!=null&&prevPid!==r.productId?' is-product-break':''
         prevPid=r.productId
         return `<article class="dm-card${breakCls}">
       <div class="dm-primary">${esc(r.code)} ${productNameColor(r)}</div>
       <div class="dm-secondary">${esc(r.embroideryLabel)} / ${esc(r.size)}</div>
-      <div class="dm-meta"><span>${esc(r.locationLabel)}</span><span>${num(r.qty)}</span><span>${yen(r.amount)}</span></div>
+      <div class="dm-meta"><span>${esc(r.locationLabel)}</span><span>${conditionQtyText(r)}</span><span>${yen(r.amount)}</span></div>
       ${priceBreakdownHtml(r.prices)}
     </article>`
       }).join('')
@@ -1408,13 +1438,13 @@ function renderLocationStockList(groups){
         <td>${productNameColor(r)}</td>
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
-        <td class="qty">${num(r.qty)}${priceBreakdownHtml(r.prices)}</td>
+        <td class="qty">${conditionQtyText(r)}${priceBreakdownHtml(r.prices)}</td>
         <td class="money">${yen(r.amount)}</td>
       </tr>`
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>数量</th><th>在庫金額</th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>数量（新品／中古／合計）</th><th>在庫金額</th></tr></thead><tbody>
       ${rows||'<tr><td colspan="8">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
@@ -1425,14 +1455,14 @@ function renderLocationStockGrid(groups){
   if(!groups.length)return '<div class="dm-empty">在庫はありません。</div>'
   return groups.map(g=>{
     let prevLoc=null
-    return `<div class="dm-group">${esc(g.title)}<span>${num(g.qty)}枚 / ${yen(g.amount)}</span></div>`+
+    return `<div class="dm-group">${esc(g.title)}<span>${conditionQtyText(g)} / ${yen(g.amount)}</span></div>`+
       (g.rows||[]).map(r=>{
         const breakCls=prevLoc!=null&&prevLoc!==r.locationId?' is-shelf-break':''
         prevLoc=r.locationId
         return `<article class="dm-card${breakCls}">
       <div class="dm-primary">${esc(r.shelfLabel)} / ${esc(r.customerName)}</div>
       <div class="dm-secondary">${esc(r.code)} ${productNameColor(r)}</div>
-      <div class="dm-meta"><span>${esc(r.embroideryLabel)}</span><span>${esc(r.size)}</span><span>${num(r.qty)}</span><span>${yen(r.amount)}</span></div>
+      <div class="dm-meta"><span>${esc(r.embroideryLabel)}</span><span>${esc(r.size)}</span><span>${conditionQtyText(r)}</span><span>${yen(r.amount)}</span></div>
       ${priceBreakdownHtml(r.prices)}
     </article>`
       }).join('')
@@ -1531,6 +1561,7 @@ function periodQueryParams(){
   if(p.size)q.set('size',p.size)
   if(p.spec)q.set('spec',p.spec)
   if(p.locationId)q.set('locationId',p.locationId)
+  if(p.condition)q.set('condition',p.condition)
   return q
 }
 async function runPeriodSummary(){
@@ -1541,7 +1572,7 @@ async function runPeriodSummary(){
   paint()
 }
 function clearPeriodFilters(){
-  state.period={from:monthStartISO(),to:todayISO(),customerId:'',productId:'',size:'',spec:'',locationId:'',group:state.period.group||'detail'}
+  state.period={from:monthStartISO(),to:todayISO(),customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:state.period.group||'detail'}
   state.periodResult=null
   paint()
 }
@@ -1565,6 +1596,7 @@ function periodPage(){
       <label>サイズ<select id="pSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,p.size)).join('')}</select></label>
       <label>加工仕様<select id="pSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,p.spec)).join('')}</select></label>
       <label>保管場所<select id="pLocation"><option value="">すべて</option>${(state.data.locations||[]).map(l=>opt(l.id,l.label,p.locationId)).join('')}</select></label>
+      <label>状態${conditionSelectHtml('pCondition',p.condition||'',{allowAll:true})}</label>
       <button type="button" class="primary" id="pRun">集計する</button>
       <button type="button" id="pClear">条件をクリア</button>
     </div>
@@ -1591,6 +1623,7 @@ function periodPage(){
     p.from=$('#pFrom').value;p.to=$('#pTo').value
     p.customerId=$('#pCustomer').value;p.productId=$('#pProduct').value
     p.size=$('#pSize').value;p.spec=$('#pSpec').value;p.locationId=$('#pLocation').value
+    p.condition=$('#pCondition')?$('#pCondition').value:''
   }
   $('#pThisMonth').onclick=()=>{p.from=monthStartISO();p.to=todayISO();paint()}
   $('#pPrevMonth').onclick=()=>{const b=prevMonthBounds();p.from=b.from;p.to=b.to;paint()}
@@ -1616,25 +1649,25 @@ function periodPage(){
   if(!result){body.innerHTML='<p class="dialogbody">条件を選んで「集計する」を押してください。</p>';return}
   if(p.group==='detail'){
     body.innerHTML=`<table class="period-table"><thead><tr>
-      <th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th>
+      <th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th>
       <th>期首在庫数</th><th>期間内入庫数</th><th>期間内出庫数</th><th>訂正増減数</th><th>期末在庫数</th>
       <th>期間内入庫金額（仕入原価）</th><th>期間内出庫金額（仕入原価）</th><th></th>
     </tr></thead><tbody>
       ${(result.rows||[]).map((row,i)=>{
         if(!row.computable){
-          return `<tr class="period-unavailable"><td>${esc(row.customerName)}</td><td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}<span class="sub">商品ID ${row.productId}</span></td><td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.locationLabel)}</td><td colspan="7">算出不可：${esc(row.unavailableReason||'')}</td><td></td></tr>`
+          return `<tr class="period-unavailable"><td>${esc(row.customerName)}</td><td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}<span class="sub">商品ID ${row.productId}</span></td><td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.conditionLabel||conditionLabel(row.condition))}</td><td>${esc(row.locationLabel)}</td><td colspan="7">算出不可：${esc(row.unavailableReason||'')}</td><td></td></tr>`
         }
         const prices=(row.priceBreakdown||[]).length>1?`<details class="price-breakdown"><summary>出庫単価内訳</summary><ul>${row.priceBreakdown.map(x=>`<li>${yen(x.unitCost)} × ${num(x.qty)}枚 ＝ ${yen(x.amount)}</li>`).join('')}</ul></details>`:''
         return `<tr>
           <td>${esc(row.customerName)}</td>
           <td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}<span class="sub">商品ID ${row.productId}</span></td>
-          <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.locationLabel)}</td>
+          <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.conditionLabel||conditionLabel(row.condition))}</td><td>${esc(row.locationLabel)}</td>
           <td class="qty">${num(row.openingQty)}</td><td class="qty">${num(row.inboundQty)}</td><td class="qty">${num(row.outboundQty)}</td>
           <td class="qty">${num(row.correctionQty)}</td><td class="qty">${num(row.closingQty)}</td>
           <td class="money">${yen(row.inboundAmount)}</td><td class="money">${yen(row.outboundAmount)}${prices}</td>
           <td><button type="button" class="quiet" data-period-hist="${i}">内訳</button></td>
         </tr>`
-      }).join('')||'<tr><td colspan="13">該当する行がありません。</td></tr>'}
+      }).join('')||'<tr><td colspan="14">該当する行がありません。</td></tr>'}
     </tbody></table>`
     body.querySelectorAll('[data-period-hist]').forEach(b=>b.onclick=()=>showPeriodHistory(result.rows[Number(b.dataset.periodHist)]))
   }else{
@@ -1642,24 +1675,24 @@ function periodPage(){
       <h2 class="dm-primary product-stock-title">${esc(g.title)}</h2>
       <p class="dm-secondary product-stock-total">入庫${num(g.inboundQty)} / 出庫${num(g.outboundQty)} / 訂正${num(g.correctionQty)}　入庫金額${yen(g.inboundAmount)} / 出庫金額${yen(g.outboundAmount)}</p>
       <div class="tablewrap"><table class="period-table"><thead><tr>
-        <th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th>
+        <th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th>
         <th>期首</th><th>入庫</th><th>出庫</th><th>訂正</th><th>期末</th><th>入庫金額</th><th>出庫金額</th><th></th>
       </tr></thead><tbody>
         ${(g.rows||[]).map((row,i)=>{
-          if(!row.computable)return `<tr><td colspan="13">算出不可：${esc(row.customerName)} / ${esc(row.code)} … ${esc(row.unavailableReason||'')}</td></tr>`
+          if(!row.computable)return `<tr><td colspan="14">算出不可：${esc(row.customerName)} / ${esc(row.code)} … ${esc(row.unavailableReason||'')}</td></tr>`
           return `<tr>
             <td>${esc(row.customerName)}</td><td>${esc(row.code)} ${esc(row.productName)} ${esc(row.color)}</td>
-            <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.locationLabel)}</td>
+            <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.conditionLabel||conditionLabel(row.condition))}</td><td>${esc(row.locationLabel)}</td>
             <td class="qty">${num(row.openingQty)}</td><td class="qty">${num(row.inboundQty)}</td><td class="qty">${num(row.outboundQty)}</td>
             <td class="qty">${num(row.correctionQty)}</td><td class="qty">${num(row.closingQty)}</td>
             <td class="money">${yen(row.inboundAmount)}</td><td class="money">${yen(row.outboundAmount)}</td>
-            <td><button type="button" class="quiet" data-cp="${row.customerProductId}" data-size="${esc(row.size)}" data-loc="${row.locationId}">内訳</button></td>
+            <td><button type="button" class="quiet" data-cp="${row.customerProductId}" data-size="${esc(row.size)}" data-loc="${row.locationId}" data-condition="${esc(row.condition||'new')}">内訳</button></td>
           </tr>`
         }).join('')}
       </tbody></table></div>
     </article>`).join('')||'<p class="dialogbody">該当する行がありません。</p>'
     body.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{
-      const row=(result.rows||[]).find(r=>String(r.customerProductId)===b.dataset.cp&&r.size===b.dataset.size&&String(r.locationId)===b.dataset.loc)
+      const row=(result.rows||[]).find(r=>String(r.customerProductId)===b.dataset.cp&&r.size===b.dataset.size&&String(r.locationId)===b.dataset.loc&&String(r.condition||'new')===String(b.dataset.condition||'new'))
       if(row)showPeriodHistory(row)
     })
   }
@@ -1674,7 +1707,7 @@ function showPeriodHistory(row){
   const prices=(row.priceBreakdown||[]).length?`<h3>出庫単価内訳（仕入原価）</h3><ul>${row.priceBreakdown.map(p=>`<li>${yen(p.unitCost)} × ${num(p.qty)}枚 ＝ ${yen(p.amount)}</li>`).join('')}</ul>`:''
   dlg.innerHTML=`<div class="dialoghead"><h2>期間内の内訳</h2><button type="button" id="close" class="quiet">閉じる</button></div>
     <div class="dialogbody">
-      <p>${esc(row.customerName)} / ${esc(row.code)} ${esc(row.productName)} / ${esc(row.size)} / ${esc(row.embroideryLabel)} / ${esc(row.locationLabel)}</p>
+      <p>${esc(row.customerName)} / ${esc(row.code)} ${esc(row.productName)} / ${esc(row.size)} / ${esc(row.embroideryLabel)} / ${esc(row.conditionLabel||conditionLabel(row.condition))} / ${esc(row.locationLabel)}</p>
       <p>期首 ${num(row.openingQty)} ＋ 入庫 ${num(row.inboundQty)} − 出庫 ${num(row.outboundQty)} ＋ 訂正 ${num(row.correctionQty)} ＝ 期末 ${num(row.closingQty)}</p>
       ${prices}
       <div class="tablewrap"><table><thead><tr><th>業務日</th><th>登録日時</th><th>区分</th><th>数量</th><th>単価</th><th>金額</th><th>担当者</th><th>備考</th></tr></thead><tbody>
@@ -1706,24 +1739,25 @@ function movePage(){
     </div>
     ${mode==='in'?`<p class="notice move-new-hint">登録済みの取扱から、初めて在庫を登録する組み合わせを選びます</p>`:''}
     ${listNote('入庫・出庫の見方',mode==='in'
-      ?'一覧は、これまでに在庫登録した組み合わせです。現在庫が0枚でも残ります。補充は行の「選択」から入庫します。初めての組み合わせだけ「一覧にない商品を入庫」を使います。同じ仕入単価でも入荷は別レコードになります。'
-      :'出庫は現在庫がある組み合わせだけです。入荷日の古い順（先入先出）です。入荷日不明の初期在庫は払出し順を使い、架空の日付は作りません。他の顧客・サイズ・加工・場所の在庫は自動では使いません。')}
-    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
+      ?'一覧は、これまでに在庫登録した組み合わせ（状態ごと）です。現在庫が0枚でも残ります。補充は行の「選択」から入庫します。新品しか無い取扱でも、入庫画面で中古を選んで初回入庫できます。初めての組み合わせだけ「一覧にない商品を入庫」を使います。'
+      :'出庫は現在庫がある組み合わせだけです。新品／中古を行で選び、選んだ状態の在庫だけを減らします。状態をまたぐ自動振替はしません。入荷日の古い順（先入先出）です。')}
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
       ${filtered.map(t=>`<tr class="${Number(t.qty)===0?'is-zero-stock':''}">
         <td class="dm-primary">${esc(t.customerName)}</td>
         <td>${esc(t.code)} ${esc(t.productName)} ${esc(t.color)}<span class="sub dm-secondary">商品ID ${t.productId}</span></td>
         <td>${esc(t.embroideryLabel)}</td>
         <td>${esc(t.size)}</td>
+        <td>${esc(t.conditionLabel||conditionLabel(t.condition))}</td>
         <td>${esc(t.locationLabel)}</td>
         <td class="qty">${num(t.qty)}枚</td>
         <td class="money">${yen(t.amount)}</td>
-        <td>${writable?`<button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}">選択</button>`:'—'}</td>
-      </tr>`).join('')||`<tr><td colspan="8">${mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
+        <td>${writable?`<button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}" data-condition="${esc(t.condition||'new')}">選択</button>`:'—'}</td>
+      </tr>`).join('')||`<tr><td colspan="9">${mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
     </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
   </section>`
   const emptyMove=mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=filtered.length?filtered.map(t=>`<article class="dm-card${Number(t.qty)===0?' is-zero-stock':''}"><div class="dm-primary">${esc(t.customerName)}</div><div class="dm-secondary">${esc(t.code)} ${esc(t.productName)} ${esc(t.color)} · 商品ID ${t.productId}</div><div class="dm-meta"><span>${esc(t.embroideryLabel)}</span><span>${esc(t.size)}</span><span>${esc(t.locationLabel)}</span></div><div class="dm-meta"><span class="qty">${num(t.qty)}枚</span><span class="money">${yen(t.amount)}</span></div>${writable?`<div class="dm-actions"><button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}">選択</button></div>`:''}</article>`).join(''):`<div class="dm-empty">${emptyMove}</div>`
+  if(grid)grid.innerHTML=filtered.length?filtered.map(t=>`<article class="dm-card${Number(t.qty)===0?' is-zero-stock':''}"><div class="dm-primary">${esc(t.customerName)}</div><div class="dm-secondary">${esc(t.code)} ${esc(t.productName)} ${esc(t.color)} · 商品ID ${t.productId}</div><div class="dm-meta"><span>${esc(t.embroideryLabel)}</span><span>${esc(t.size)}</span><span>${esc(t.conditionLabel||conditionLabel(t.condition))}</span><span>${esc(t.locationLabel)}</span></div><div class="dm-meta"><span class="qty">${num(t.qty)}枚</span><span class="money">${yen(t.amount)}</span></div>${writable?`<div class="dm-actions"><button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}" data-condition="${esc(t.condition||'new')}">選択</button></div>`:''}</article>`).join(''):`<div class="dm-empty">${emptyMove}</div>`
   const stage=$('#stockliststage')
   const displayMode=mountStockDisplay(stage,'move',()=>paint())
   if(grid)grid.hidden=displayMode!=='grid'
@@ -1743,7 +1777,7 @@ function movePage(){
   const openNew=$('#openInboundNew')
   if(openNew)openNew.onclick=()=>openInboundDialog(null)
   document.querySelectorAll('[data-select-target]').forEach(b=>b.onclick=()=>{
-    const target=targets.find(t=>String(t.customerProductId)===b.dataset.selectTarget&&t.size===b.dataset.size&&String(t.locationId)===b.dataset.location)
+    const target=targets.find(t=>String(t.customerProductId)===b.dataset.selectTarget&&t.size===b.dataset.size&&String(t.locationId)===b.dataset.location&&String(t.condition||'new')===String(b.dataset.condition||'new'))
     if(!target)return
     if(mode==='in')openInboundDialog(target)
     else openOutboundDialog(target)
@@ -1754,12 +1788,14 @@ function openInboundDialog(target){
   if(!stockCanWrite()){toast('閲覧専用のため、入庫できません。');return}
   const SM=StockMoves
   const dlg=moveDialogEl()
+  const allTargets=(state.moveTargets&&state.moveTargets.targets)||[]
   const draft={
     customerProductId:target?target.customerProductId:null,
     customerId:target?target.customerId:null,
     handleId:target?String(target.customerProductId):'',
     size:target?target.size:'',
     locationId:target?target.locationId:null,
+    condition:target?(target.condition||'new'):'new',
     siteId:'',shelfId:'',
     qty:1,
     unitCost:'',
@@ -1793,6 +1829,11 @@ function openInboundDialog(target){
     draft.siteId=locSel.siteId==null?'':String(locSel.siteId)
     draft.shelfId=locSel.shelfId
     if(!target)draft.locationId=locSel.locationId
+    const syncCurrentFromTargets=()=>{
+      const hit=allTargets.find(t=>Number(t.customerProductId)===Number(draft.customerProductId)&&t.size===draft.size&&Number(t.locationId)===Number(draft.locationId)&&String(t.condition||'new')===String(draft.condition||'new'))
+      draft.currentQty=hit?hit.qty:0
+    }
+    if(target||(draft.customerProductId&&draft.size&&draft.locationId))syncCurrentFromTargets()
     const current=draft.currentQty||0
     const qty=Number(draft.qty)||0
     dlg.innerHTML=`<div class="dialoghead"><h2>入庫する</h2><button type="button" id="closeMove" class="quiet">閉じる</button></div>
@@ -1807,12 +1848,14 @@ function openInboundDialog(target){
             ${moveLocationFields(locSel)}
           </div>`}
         <div class="grid">
+          <label>状態（必須）${conditionSelectHtml('inCondition',draft.condition||'new')}</label>
           <label>入庫数量（必須）${SM.qtyStepperHtml('in',draft.qty||1)}</label>
           <label>仕入単価（必須）<input id="inUnitCost" inputmode="numeric" value="${esc(draft.unitCost)}"></label>
           <label>入荷日（必須）<input id="inReceivedOn" type="date" value="${esc(draft.receivedOn||'')}"></label>
         </div>
+        <p class="notice">状態は新品を初期選択しています。同じ取扱から中古を初めて入庫する場合も、ここで中古を選んでください（中古0枚のレコードは自動作成しません）。</p>
         <label>備考（任意）<input id="inNote" value="${esc(draft.note||'')}"></label>
-        <p id="inPreview">現在庫 ${num(current)}枚 → 入庫後 ${num(current+qty)}枚</p>
+        <p id="inPreview">${esc(conditionLabel(draft.condition))}の現在庫 ${num(current)}枚 → 入庫後 ${num(current+qty)}枚</p>
         <p id="moveError"></p>
       </div>
       <div class="dialogactions"><button type="button" id="closeMove2">戻る</button><button type="button" class="primary" id="confirmInbound" ${stockCanWrite()?'':'disabled'}>${num(qty)}枚を入庫する</button></div>`
@@ -1820,10 +1863,12 @@ function openInboundDialog(target){
     const syncPreview=()=>{
       const q=stepper.read()
       draft.qty=q==null?draft.qty:q
-      $('#inPreview').textContent=`現在庫 ${num(current)}枚 → 入庫後 ${num(current+(Number(draft.qty)||0))}枚`
+      $('#inPreview').textContent=`${conditionLabel(draft.condition)}の現在庫 ${num(draft.currentQty||0)}枚 → 入庫後 ${num((draft.currentQty||0)+(Number(draft.qty)||0))}枚`
       $('#confirmInbound').textContent=`${num(draft.qty||0)}枚を入庫する`
     }
     stepper=SM.bindQtyStepper(dlg,'in',{onChange:()=>{state.moveDirty=true;syncPreview()}})
+    const inCond=$('#inCondition')
+    if(inCond)inCond.onchange=()=>{draft.condition=inCond.value==='used'?'used':'new';syncCurrentFromTargets();state.moveDirty=true;syncPreview()}
     $('#inUnitCost').oninput=()=>{draft.unitCost=$('#inUnitCost').value;state.moveDirty=true}
     $('#inReceivedOn').oninput=()=>{draft.receivedOn=$('#inReceivedOn').value;state.moveDirty=true}
     $('#inNote').oninput=()=>{draft.note=$('#inNote').value;state.moveDirty=true}
@@ -1887,6 +1932,7 @@ function openInboundDialog(target){
           customerProductId:Number(draft.customerProductId),
           size:draft.size,
           locationId:Number(draft.locationId),
+          condition:draft.condition==='used'?'used':'new',
           qty:Number(draft.qty),
           unitCost:costRaw===''?'':Number(costRaw),
           receivedOn:draft.receivedOn,
@@ -1910,10 +1956,12 @@ function openOutboundDialog(target){
   let fingerprint=''
   let confirmChanged=false
   state.moveDirty=false
+  const outCondition=target.condition||'new'
   const paintDialog=async()=>{
     dlg.innerHTML=`<div class="dialoghead"><h2>出庫する</h2><button type="button" id="closeMove" class="quiet">閉じる</button></div>
       <div class="dialogbody">
         <p>${esc(target.customerName)} / ${esc(target.code)} ${esc(target.productName)} / ${esc(target.size)} / ${esc(target.embroideryLabel)} / ${esc(target.locationLabel)}</p>
+        <p><strong>状態：${esc(target.conditionLabel||conditionLabel(outCondition))}</strong>（この状態の在庫だけを減らします。状態をまたぐ自動振替はしません）</p>
         <label>出庫日（必須）<input id="outBusinessOn" type="date" value="${esc(todayISO())}"></label>
         <label>出庫数量（必須）${SM.qtyStepperHtml('out',1)}</label>
         <p id="outPreview">読み込み中…</p>
@@ -1933,10 +1981,11 @@ function openOutboundDialog(target){
           customerProductId:Number(target.customerProductId),
           size:target.size,
           locationId:Number(target.locationId),
+          condition:outCondition,
           qty:q,
         })
         fingerprint=plan.fingerprint
-        $('#outPreview').textContent=`現在庫 ${num(plan.currentQty)}枚 → 出庫 ${num(plan.outboundQty)}枚 → 出庫後 ${num(plan.afterQty)}枚`
+        $('#outPreview').textContent=`${conditionLabel(outCondition)}の現在庫 ${num(plan.currentQty)}枚 → 出庫 ${num(plan.outboundQty)}枚 → 出庫後 ${num(plan.afterQty)}枚`
         if(!plan.ok){
           $('#outAlloc').innerHTML=`<p class="notice">在庫が${num(plan.shortfall)}枚不足しています。出庫できるのは${num(plan.currentQty)}枚までです。</p>`
           $('#confirmOutbound').disabled=true
@@ -1965,6 +2014,7 @@ function openOutboundDialog(target){
           customerProductId:Number(target.customerProductId),
           size:target.size,
           locationId:Number(target.locationId),
+          condition:outCondition,
           qty:q,
           businessOn,
           note:$('#outNote').value,

@@ -17,6 +17,7 @@
       t.color,
       t.embroideryLabel,
       t.size,
+      t.conditionLabel || (t.condition === 'used' ? '中古' : t.condition === 'new' ? '新品' : ''),
       t.locationLabel,
     ]
       .filter(Boolean)

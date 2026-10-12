@@ -215,6 +215,14 @@ def migrate_schema(c):
         c.execute("ALTER TABLE moves ADD COLUMN actor_name TEXT NOT NULL DEFAULT ''")
     if 'business_on' not in move_cols:
         c.execute('ALTER TABLE moves ADD COLUMN business_on TEXT')
+    # Ensure lots.condition exists. Do not rewrite existing values (including empty /
+    # unexpected codes): legacy 「＊」product names are not used to infer 中古, and
+    # ambiguous stock must not be force-converted to 新品.
+    tables = {r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'lots' in tables:
+        lot_cols = {r['name'] for r in c.execute('PRAGMA table_info(lots)')}
+        if 'condition' not in lot_cols:
+            c.execute("ALTER TABLE lots ADD COLUMN condition TEXT NOT NULL DEFAULT 'new'")
     # Backfill business dates from lot fields only (no invented dates for outbound).
     c.execute(
         '''UPDATE moves SET business_on=(
@@ -234,6 +242,49 @@ def migrate_schema(c):
     )
     import stock_orders
     stock_orders.migrate_purchase_orders(c)
+
+
+CONDITION_NEW = 'new'
+CONDITION_USED = 'used'
+CONDITION_LABELS = {CONDITION_NEW: '新品', CONDITION_USED: '中古'}
+CONDITION_PARSE = {
+    'new': CONDITION_NEW,
+    '新品': CONDITION_NEW,
+    'used': CONDITION_USED,
+    '中古': CONDITION_USED,
+}
+
+
+def condition_label(code):
+    """Human label for a stored condition code. Unknown/empty → 未設定 (not rewritten)."""
+    if code in CONDITION_LABELS:
+        return CONDITION_LABELS[code]
+    return '未設定'
+
+
+def parse_condition(value, *, default=CONDITION_NEW):
+    """Parse 新品/中古 (or new/used). Blank/omitted → default. Invalid → error."""
+    if value is None:
+        return default
+    if isinstance(value, str) and text(value) == '':
+        return default
+    raw = text(value) if not isinstance(value, str) else value.strip()
+    mapped = CONDITION_PARSE.get(raw) or CONDITION_PARSE.get(raw.lower())
+    if not mapped:
+        raise ValueError('状態は「新品」または「中古」を指定してください。')
+    return mapped
+
+
+def condition_filter_sql(args, alias='l'):
+    """Return (sql_fragment, params) for stock/period filters. all/blank → no filter."""
+    raw = args.get('condition') if args else None
+    if raw in (None, '', 'all', 'すべて'):
+        return '', []
+    try:
+        code = parse_condition(raw)
+    except ValueError as e:
+        raise ValueError('状態の絞り込みが不正です。') from e
+    return f' AND {alias}.condition=?', [code]
 
 
 def text(value):
@@ -835,6 +886,7 @@ def register_opening(c, body):
     loc = c.execute('SELECT * FROM locations WHERE id=?', (location_id,)).fetchone() if isinstance(location_id, int) else None
     if not loc or not loc['active']:
         raise ValueError('保管場所を、登録済みの場所から選んでください。')
+    condition = parse_condition(body.get('condition'), default=CONDITION_NEW)
     basis = parse_date(body.get('basisDate'), '在庫基準日')
     unknown = body.get('receivedUnknown') in (True, 1, '1')
     if unknown:
@@ -869,8 +921,8 @@ def register_opening(c, body):
     for size, qty, cost in cleaned:
         c.execute('''INSERT INTO lots(batch_id,customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
                      basis_date,received_on,received_unknown,payout_order,condition,created_at,updated_at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,'new',?,?)''',
-                  (batch_id, cp_id, size, location_id, cost, qty, qty, basis, received, 1 if unknown else 0, payout, t, t))
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                  (batch_id, cp_id, size, location_id, cost, qty, qty, basis, received, 1 if unknown else 0, payout, condition, t, t))
         lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,business_on,note,at)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
@@ -912,9 +964,18 @@ def correct_opening(c, body):
 
 
 def batch_result(c, batch_id, already):
-    rows = c.execute('SELECT size_label,unit_cost,qty_remaining FROM lots WHERE batch_id=? ORDER BY id', (batch_id,)).fetchall()
-    lines = [{'size': r['size_label'], 'unitCost': r['unit_cost'], 'qty': r['qty_remaining'], 'amount': r['qty_remaining'] * r['unit_cost']} for r in rows]
+    rows = c.execute(
+        'SELECT size_label,unit_cost,qty_remaining,condition FROM lots WHERE batch_id=? ORDER BY id',
+        (batch_id,),
+    ).fetchall()
+    lines = [{
+        'size': r['size_label'], 'unitCost': r['unit_cost'], 'qty': r['qty_remaining'],
+        'amount': r['qty_remaining'] * r['unit_cost'],
+        'condition': r['condition'], 'conditionLabel': condition_label(r['condition']),
+    } for r in rows]
+    condition = rows[0]['condition'] if rows else CONDITION_NEW
     return {'already': already, 'batchId': batch_id, 'lines': lines,
+            'condition': condition, 'conditionLabel': condition_label(condition),
             'totalQty': sum(x['qty'] for x in lines), 'totalAmount': sum(x['amount'] for x in lines)}
 
 
@@ -1106,8 +1167,7 @@ def opening_entries(c):
              JOIN customers cu ON cu.id=cp.customer_id
              JOIN products p ON p.id=cp.product_id
              JOIN locations loc ON loc.id=l.location_id
-             WHERE l.condition='new'
-               AND EXISTS (SELECT 1 FROM moves m WHERE m.lot_id=l.id AND m.kind='opening')
+             WHERE EXISTS (SELECT 1 FROM moves m WHERE m.lot_id=l.id AND m.kind='opening')
              ORDER BY l.basis_date DESC, l.id DESC'''
     rows = []
     for r in c.execute(sql):
@@ -1131,6 +1191,8 @@ def opening_entries(c):
             'receivedOn': r['received_on'],
             'receivedUnknown': bool(r['received_unknown']),
             'payoutOrder': r['payout_order'],
+            'condition': r['condition'],
+            'conditionLabel': condition_label(r['condition']),
         })
     return {'entries': rows}
 
@@ -1149,8 +1211,11 @@ def stock_query(c, args):
              LEFT JOIN suppliers s ON s.id=p.supplier_id
              JOIN locations loc ON loc.id=l.location_id
              LEFT JOIN locations parent ON parent.id=loc.parent_id
-             WHERE l.condition='new' '''
+             WHERE 1=1'''
     params = []
+    cond_sql, cond_params = condition_filter_sql(args)
+    sql += cond_sql
+    params.extend(cond_params)
     if args.get('customerId'):
         sql += ' AND cp.customer_id=?'
         params.append(int(args['customerId']))
@@ -1170,7 +1235,7 @@ def stock_query(c, args):
         sql += ' AND (l.location_id=? OR loc.parent_id=?)'
         params.append(int(args['locationId']))
         params.append(int(args['locationId']))
-    sql += ' ORDER BY cu.name, p.code, p.id, cp.embroidery, l.size_label, l.id'
+    sql += ' ORDER BY cu.name, p.code, p.id, cp.embroidery, l.size_label, l.condition, l.id'
     lots = []
     for r in c.execute(sql, params):
         loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
@@ -1192,6 +1257,7 @@ def stock_query(c, args):
             'amount': r['qty_remaining'] * r['unit_cost'], 'basisDate': r['basis_date'],
             'receivedOn': r['received_on'], 'receivedUnknown': bool(r['received_unknown']),
             'payoutOrder': r['payout_order'], 'condition': r['condition'],
+            'conditionLabel': condition_label(r['condition']),
             'correctable': correctable, 'inboundCorrectable': inbound_correctable,
         })
     group = args.get('group') or 'lot'
@@ -1200,8 +1266,12 @@ def stock_query(c, args):
         if group in ('product', 'customer', 'location') else {}
     )
     groups = group_lots(lots, group, size_orders=size_orders)
+    qty_new = sum(x['qty'] for x in lots if x['condition'] == CONDITION_NEW)
+    qty_used = sum(x['qty'] for x in lots if x['condition'] == CONDITION_USED)
     return {'lots': lots, 'groups': groups, 'group': group,
-            'totalQty': sum(x['qty'] for x in lots), 'totalAmount': sum(x['amount'] for x in lots),
+            'totalQty': sum(x['qty'] for x in lots),
+            'totalQtyNew': qty_new, 'totalQtyUsed': qty_used,
+            'totalAmount': sum(x['amount'] for x in lots),
             'amountLabel': '仕入原価ベースの在庫金額'}
 
 
@@ -1224,9 +1294,17 @@ def product_heading(lot):
     return '　'.join(p for p in parts if p)
 
 
-def _add_lot_price(row, lot):
+def _bump_condition_qty(row, lot):
     row['qty'] += lot['qty']
     row['amount'] += lot['amount']
+    if lot.get('condition') == CONDITION_NEW:
+        row['qtyNew'] = row.get('qtyNew', 0) + lot['qty']
+    elif lot.get('condition') == CONDITION_USED:
+        row['qtyUsed'] = row.get('qtyUsed', 0) + lot['qty']
+
+
+def _add_lot_price(row, lot):
+    _bump_condition_qty(row, lot)
     price = row['prices'].setdefault(lot['unitCost'], {
         'unitCost': lot['unitCost'], 'qty': 0, 'amount': 0, 'receipts': [],
     })
@@ -1240,6 +1318,8 @@ def _add_lot_price(row, lot):
         'receivedOn': lot.get('receivedOn'),
         'receivedUnknown': bool(lot.get('receivedUnknown')),
         'payoutOrder': lot.get('payoutOrder') or 0,
+        'condition': lot.get('condition'),
+        'conditionLabel': lot.get('conditionLabel') or condition_label(lot.get('condition')),
     })
 
 
@@ -1251,10 +1331,20 @@ def _sorted_prices(row):
             0 if r.get('receivedUnknown') else 1,
             r.get('payoutOrder') or 0,
             r.get('receivedOn') or '',
+            0 if r.get('condition') == CONDITION_NEW else 1 if r.get('condition') == CONDITION_USED else 2,
             r.get('lotId') or 0,
         ))
         price['receipts'] = receipts
     return prices
+
+
+def _qty_fields(row):
+    return {
+        'qty': row['qty'],
+        'qtyNew': row.get('qtyNew', 0),
+        'qtyUsed': row.get('qtyUsed', 0),
+        'amount': row['amount'],
+    }
 
 
 def group_lots_by_product(lots, size_orders=None):
@@ -1269,12 +1359,11 @@ def group_lots_by_product(lots, size_orders=None):
             'productName': lot['productName'],
             'color': lot['color'],
             'title': product_heading(lot),
-            'qty': 0,
+            'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0,
             'rows': {},
         })
-        bucket['qty'] += lot['qty']
-        bucket['amount'] += lot['amount']
+        _bump_condition_qty(bucket, lot)
         row_key = (lot['customerId'], lot['embroidery'], lot['size'], lot['locationId'])
         row = bucket['rows'].setdefault(row_key, {
             'customerId': lot['customerId'],
@@ -1284,7 +1373,7 @@ def group_lots_by_product(lots, size_orders=None):
             'size': lot['size'],
             'locationId': lot['locationId'],
             'locationLabel': lot['locationLabel'],
-            'qty': 0,
+            'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0,
             'prices': {},
         })
@@ -1302,8 +1391,7 @@ def group_lots_by_product(lots, size_orders=None):
                 'size': row['size'],
                 'locationId': row['locationId'],
                 'locationLabel': row['locationLabel'],
-                'qty': row['qty'],
-                'amount': row['amount'],
+                **_qty_fields(row),
                 'prices': _sorted_prices(row),
             })
         rows.sort(key=lambda r: (
@@ -1320,8 +1408,7 @@ def group_lots_by_product(lots, size_orders=None):
             'code': bucket['code'],
             'productName': bucket['productName'],
             'color': bucket['color'],
-            'qty': bucket['qty'],
-            'amount': bucket['amount'],
+            **_qty_fields(bucket),
             'rows': rows,
         })
     result.sort(key=lambda g: (g['code'], g['productId']))
@@ -1338,12 +1425,11 @@ def group_lots_by_customer(lots, size_orders=None):
             'customerId': cid,
             'customerName': lot['customerName'],
             'title': lot['customerName'],
-            'qty': 0,
+            'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0,
             'rows': {},
         })
-        bucket['qty'] += lot['qty']
-        bucket['amount'] += lot['amount']
+        _bump_condition_qty(bucket, lot)
         row_key = (lot['productId'], lot['embroidery'], lot['size'], lot['locationId'])
         row = bucket['rows'].setdefault(row_key, {
             'productId': lot['productId'],
@@ -1355,7 +1441,7 @@ def group_lots_by_customer(lots, size_orders=None):
             'size': lot['size'],
             'locationId': lot['locationId'],
             'locationLabel': lot['locationLabel'],
-            'qty': 0,
+            'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0,
             'prices': {},
         })
@@ -1374,8 +1460,7 @@ def group_lots_by_customer(lots, size_orders=None):
                 'size': row['size'],
                 'locationId': row['locationId'],
                 'locationLabel': row['locationLabel'],
-                'qty': row['qty'],
-                'amount': row['amount'],
+                **_qty_fields(row),
                 'prices': _sorted_prices(row),
             })
         rows.sort(key=lambda r: (
@@ -1391,8 +1476,7 @@ def group_lots_by_customer(lots, size_orders=None):
             'title': bucket['title'],
             'customerId': bucket['customerId'],
             'customerName': bucket['customerName'],
-            'qty': bucket['qty'],
-            'amount': bucket['amount'],
+            **_qty_fields(bucket),
             'rows': rows,
         })
     result.sort(key=lambda g: (g['customerName'], g['customerId']))
@@ -1409,12 +1493,11 @@ def group_lots_by_location(lots, size_orders=None):
             'siteId': sid,
             'siteName': lot['siteName'],
             'title': lot['siteName'],
-            'qty': 0,
+            'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0,
             'rows': {},
         })
-        bucket['qty'] += lot['qty']
-        bucket['amount'] += lot['amount']
+        _bump_condition_qty(bucket, lot)
         row_key = (lot['locationId'], lot['customerId'], lot['productId'], lot['embroidery'], lot['size'])
         row = bucket['rows'].setdefault(row_key, {
             'locationId': lot['locationId'],
@@ -1428,7 +1511,7 @@ def group_lots_by_location(lots, size_orders=None):
             'embroidery': lot['embroidery'],
             'embroideryLabel': lot['embroideryLabel'],
             'size': lot['size'],
-            'qty': 0,
+            'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0,
             'prices': {},
         })
@@ -1449,8 +1532,7 @@ def group_lots_by_location(lots, size_orders=None):
                 'color': row['color'],
                 'embroideryLabel': row['embroideryLabel'],
                 'size': row['size'],
-                'qty': row['qty'],
-                'amount': row['amount'],
+                **_qty_fields(row),
                 'prices': _sorted_prices(row),
             })
         rows.sort(key=lambda r: (
@@ -1469,8 +1551,7 @@ def group_lots_by_location(lots, size_orders=None):
             'title': bucket['title'],
             'siteId': bucket['siteId'],
             'siteName': bucket['siteName'],
-            'qty': bucket['qty'],
-            'amount': bucket['amount'],
+            **_qty_fields(bucket),
             'rows': rows,
         })
     result.sort(key=lambda g: (g['siteName'], g['siteId']))
@@ -1548,7 +1629,7 @@ def _require_write(body):
 def _move_token_result(c, batch_id, already):
     batch = c.execute('SELECT * FROM move_batches WHERE id=?', (batch_id,)).fetchone()
     lines = []
-    for r in c.execute('''SELECT m.*, l.size_label, l.unit_cost AS lot_cost, l.qty_remaining
+    for r in c.execute('''SELECT m.*, l.size_label, l.unit_cost AS lot_cost, l.qty_remaining, l.condition
                           FROM moves m JOIN lots l ON l.id=m.lot_id
                           WHERE m.move_batch_id=? ORDER BY m.id''', (batch_id,)):
         lines.append({
@@ -1556,6 +1637,8 @@ def _move_token_result(c, batch_id, already):
             'unitCost': r['unit_cost'], 'amount': abs(r['qty_delta']) * r['unit_cost'],
             'qtyBefore': r['qty_before'], 'qtyAfter': r['qty_after'],
             'size': r['size_label'],
+            'condition': r['condition'],
+            'conditionLabel': condition_label(r['condition']),
         })
     return {
         'already': already,
@@ -1601,39 +1684,42 @@ def resolve_size_label(c, product_id, size):
     return label
 
 
-def lots_for_target(c, customer_product_id, size_label, location_id):
+def lots_for_target(c, customer_product_id, size_label, location_id, condition=CONDITION_NEW):
+    condition = parse_condition(condition, default=CONDITION_NEW)
     return list(c.execute(
         '''SELECT * FROM lots
-           WHERE customer_product_id=? AND size_label=? AND location_id=? AND condition='new' AND qty_remaining>0
+           WHERE customer_product_id=? AND size_label=? AND location_id=? AND condition=? AND qty_remaining>0
            ORDER BY id''',
-        (customer_product_id, size_label, location_id),
+        (customer_product_id, size_label, location_id, condition),
     ))
 
 
 def target_fingerprint(lots):
     parts = []
     for lot in sorted(lots, key=lambda r: r['id']):
-        parts.append(f"{lot['id']}:{lot['qty_remaining']}:{lot['unit_cost']}")
+        parts.append(f"{lot['id']}:{lot['qty_remaining']}:{lot['unit_cost']}:{lot['condition']}")
     return '|'.join(parts)
 
 
-def current_qty_for_target(c, customer_product_id, size_label, location_id):
+def current_qty_for_target(c, customer_product_id, size_label, location_id, condition=CONDITION_NEW):
+    condition = parse_condition(condition, default=CONDITION_NEW)
     row = c.execute(
         '''SELECT COALESCE(SUM(qty_remaining),0) AS qty
            FROM lots
-           WHERE customer_product_id=? AND size_label=? AND location_id=? AND condition='new' ''',
-        (customer_product_id, size_label, location_id),
+           WHERE customer_product_id=? AND size_label=? AND location_id=? AND condition=?''',
+        (customer_product_id, size_label, location_id, condition),
     ).fetchone()
     return int(row['qty'])
 
 
 def plan_outbound(c, body):
-    """FIFO preview for the same 顧客・商品仕様・サイズ・保管場所 only."""
+    """FIFO preview for the same 顧客・商品仕様・サイズ・保管場所・状態 only."""
     cp = resolve_customer_product(c, body.get('customerProductId'))
     size = resolve_size_label(c, cp['product_id'], body.get('size'))
     loc = resolve_active_location(c, body.get('locationId'))
+    condition = parse_condition(body.get('condition'), default=CONDITION_NEW)
     qty = parse_qty(body.get('qty'), '出庫数量')
-    lots = lots_for_target(c, cp['id'], size, loc['id'])
+    lots = lots_for_target(c, cp['id'], size, loc['id'], condition)
     ordered = issue_sequence(lots)
     remaining = qty
     allocations = []
@@ -1653,6 +1739,8 @@ def plan_outbound(c, body):
             'receivedOn': lot['received_on'],
             'receivedUnknown': bool(lot['received_unknown']),
             'payoutOrder': lot['payout_order'],
+            'condition': lot['condition'],
+            'conditionLabel': condition_label(lot['condition']),
         })
         remaining -= take
     current = sum(l['qty_remaining'] for l in lots)
@@ -1670,6 +1758,8 @@ def plan_outbound(c, body):
         'size': size,
         'locationId': loc['id'],
         'locationLabel': location_label(c, loc),
+        'condition': condition,
+        'conditionLabel': condition_label(condition),
         'currentQty': current,
         'outboundQty': qty,
         'afterQty': current - qty + shortfall,
@@ -1691,12 +1781,13 @@ def register_inbound(c, body):
     cp = resolve_customer_product(c, body.get('customerProductId'))
     size = resolve_size_label(c, cp['product_id'], body.get('size'))
     loc = resolve_active_location(c, body.get('locationId'))
+    condition = parse_condition(body.get('condition'), default=CONDITION_NEW)
     qty = parse_qty(body.get('qty'), '入庫数量')
     cost = parse_money(body.get('unitCost'), '仕入単価')
     received = parse_date(body.get('receivedOn'), '入荷日')
     note = optional(body.get('note'), '備考', 200)
     actor = _actor_name(body)
-    before = current_qty_for_target(c, cp['id'], size, loc['id'])
+    before = current_qty_for_target(c, cp['id'], size, loc['id'], condition)
     t = stamp()
     c.execute(
         'INSERT INTO move_batches(client_token,kind,actor_name,note,created_at) VALUES(?,?,?,?,?)',
@@ -1706,8 +1797,8 @@ def register_inbound(c, body):
     c.execute(
         '''INSERT INTO lots(batch_id,customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
            basis_date,received_on,received_unknown,payout_order,condition,created_at,updated_at)
-           VALUES(NULL,?,?,?,?,?,?,?,?,0,0,'new',?,?)''',
-        (cp['id'], size, loc['id'], cost, qty, qty, received, received, t, t),
+           VALUES(NULL,?,?,?,?,?,?,?,?,0,0,?,?,?)''',
+        (cp['id'], size, loc['id'], cost, qty, qty, received, received, condition, t, t),
     )
     lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
     c.execute(
@@ -1726,6 +1817,8 @@ def register_inbound(c, body):
         'size': size,
         'locationId': loc['id'],
         'customerProductId': cp['id'],
+        'condition': condition,
+        'conditionLabel': condition_label(condition),
     })
     return result
 
@@ -1787,6 +1880,8 @@ def register_outbound(c, body):
         'customerProductId': plan['customerProductId'],
         'size': plan['size'],
         'locationId': plan['locationId'],
+        'condition': plan['condition'],
+        'conditionLabel': plan['conditionLabel'],
     })
     return result
 
@@ -1835,12 +1930,14 @@ def correct_inbound(c, body):
 
 
 def move_targets(c, args=None):
-    """Aggregated targets for 入庫・出庫: 顧客・商品・加工・サイズ・場所 (not split by unit cost).
+    """Aggregated targets for 入庫・出庫: 顧客・商品・加工・サイズ・場所・状態 (not split by unit cost).
 
     mode=in (入庫): combos that ever had a stock lot stay listed at qty 0 (daily restock).
     mode=out (出庫): only current qty > 0 (unchanged).
     Inactive customer / product / handling / location are excluded. Never auto-generates
     never-stocked combos — those use the separate「一覧にない商品を入庫」entry.
+    First 中古 inbound for a handling that only has 新品 uses the inbound dialog's
+    condition selector (no auto-created zero-qty used lot).
     """
     args = args or {}
     mode = (args.get('mode') or 'out').strip()
@@ -1849,7 +1946,7 @@ def move_targets(c, args=None):
     sql = '''SELECT cp.id AS customer_product_id, cp.customer_id, cp.product_id, cp.embroidery,
                     cu.name AS customer_name,
                     p.code, p.name AS product_name, p.color,
-                    l.size_label, l.location_id,
+                    l.size_label, l.location_id, l.condition,
                     loc.name AS location_name, loc.parent_id,
                     COALESCE(SUM(l.qty_remaining), 0) AS qty,
                     COALESCE(SUM(l.qty_remaining * l.unit_cost), 0) AS amount
@@ -1859,11 +1956,10 @@ def move_targets(c, args=None):
              JOIN products p ON p.id=cp.product_id
              JOIN locations loc ON loc.id=l.location_id
              LEFT JOIN locations parent ON parent.id=loc.parent_id
-             WHERE l.condition='new'
-               AND cu.active=1 AND p.active=1 AND cp.active=1 AND loc.active=1
+             WHERE cu.active=1 AND p.active=1 AND cp.active=1 AND loc.active=1
                AND (parent.id IS NULL OR parent.active=1)
              GROUP BY cp.id, cp.customer_id, cp.product_id, cp.embroidery, cu.name,
-                      p.code, p.name, p.color, l.size_label, l.location_id,
+                      p.code, p.name, p.color, l.size_label, l.location_id, l.condition,
                       loc.name, loc.parent_id'''
     if mode == 'out':
         sql += ' HAVING COALESCE(SUM(l.qty_remaining), 0) > 0'
@@ -1883,6 +1979,8 @@ def move_targets(c, args=None):
             'size': r['size_label'],
             'locationId': r['location_id'],
             'locationLabel': location_label(c, loc),
+            'condition': r['condition'],
+            'conditionLabel': condition_label(r['condition']),
             'qty': r['qty'],
             'amount': r['amount'],
         })
@@ -1891,10 +1989,12 @@ def move_targets(c, args=None):
         needle = q.lower()
         rows = [r for r in rows if needle in ' '.join([
             r['customerName'], r['code'], r['productName'], r['color'],
-            r['embroideryLabel'], r['size'], r['locationLabel'], str(r['productId']),
+            r['embroideryLabel'], r['size'], r['locationLabel'], r['conditionLabel'],
+            str(r['productId']),
         ]).lower()]
     rows.sort(key=lambda r: (
-        r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'], r['locationLabel'],
+        r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'],
+        r['locationLabel'], 0 if r['condition'] == CONDITION_NEW else 1, r['condition'],
     ))
     return {
         'mode': mode,

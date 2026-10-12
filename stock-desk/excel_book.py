@@ -23,11 +23,13 @@ SHEETS = [
         ('顧客名', 'customer', True), ('品番', 'code', True), ('商品名', 'name', True), ('色', 'color', False),
         ('加工仕様', 'embroidery', False), ('拠点名', 'site', True), ('棚名', 'shelf', False),
         ('在庫基準日', 'basis', True), ('入荷日', 'received', False), ('入荷日不明', 'unknown', False),
-        ('払出し順', 'payout', False), ('サイズ', 'size', True), ('数量', 'qty', True), ('仕入単価', 'cost', False),
+        ('払出し順', 'payout', False), ('状態', 'condition', False),
+        ('サイズ', 'size', True), ('数量', 'qty', True), ('仕入単価', 'cost', False),
     ]),
 ]
-ALIASES = {'フリガナ': 'カナ', 'ふりがな': 'カナ'}
+ALIASES = {'フリガナ': 'カナ', 'ふりがな': 'カナ', '新古': '状態', '新品／中古': '状態'}
 YES = {'する', '1', 'はい', '標準', '○', '不明', 'true', 'True'}
+LEGACY_CONDITION_NOTE = '状態列のない旧形式の初期在庫は新品として取り込みました。'
 
 
 def template():
@@ -70,12 +72,22 @@ def apply(c, body):
         raise ValueError('Excelファイル（.xlsx）を選んでください。')
     sheets = read_sheets(blob)
     counts = {}
+    notes = []
     for name, columns in SHEETS:
-        rows = _table(sheets.get(name), name, columns)
-        counts[name] = _import_sheet(c, name, rows)
+        rows, meta = _table(sheets.get(name), name, columns)
+        counts[name] = _import_sheet(c, name, rows, meta)
+        notes.extend(meta.get('notes') or [])
     if not any(item['created'] or item['updated'] or item['already'] for item in counts.values()):
         raise ValueError('読み込む行がありません。記入用Excelの見出しに沿って入力してください。')
-    return {'counts': {name: counts[name] for name, _ in SHEETS}, 'summary': _summary(counts)}
+    summary = _summary(counts)
+    if notes:
+        # Keep a stable, user-visible note for legacy opening sheets without 状態.
+        unique = []
+        for note in notes:
+            if note not in unique:
+                unique.append(note)
+        summary = summary + '　' + '　'.join(unique)
+    return {'counts': {name: counts[name] for name, _ in SHEETS}, 'summary': summary, 'notes': notes}
 
 
 def read_sheets(blob):
@@ -109,7 +121,7 @@ def read_sheets(blob):
     return found
 
 
-def _import_sheet(c, name, rows):
+def _import_sheet(c, name, rows, meta=None):
     if name == '顧客':
         return _people(c, rows, 'customers', stock.save_customer, stock.customer_row, '顧客')
     if name == '仕入先':
@@ -121,7 +133,7 @@ def _import_sheet(c, name, rows):
     if name == '保管場所':
         return _locations(c, rows)
     if name == '初期在庫':
-        return _opening(c, rows)
+        return _opening(c, rows, meta or {})
     return {'created': 0, 'updated': 0, 'already': 0}
 
 
@@ -261,7 +273,8 @@ def _locations(c, rows):
     return {'created': created, 'updated': updated, 'already': 0}
 
 
-def _opening(c, rows):
+def _opening(c, rows, meta=None):
+    meta = meta or {}
     groups = []
     index = {}
     for row_no, item in rows:
@@ -270,14 +283,21 @@ def _opening(c, rows):
         if unknown and stock.text(item['received']):
             raise ValueError(f'初期在庫の{row_no}行目：入荷日が不明な場合は、入荷日を空にしてください。')
         basis = _day(item['basis'], '初期在庫', row_no, '在庫基準日')
-        key = (item['customer'], item['code'], item['name'], item['color'], item['embroidery'], item['site'], item['shelf'], basis, received, unknown, item['payout'])
+        try:
+            condition = stock.parse_condition(item.get('condition'), default=stock.CONDITION_NEW)
+        except ValueError as e:
+            raise ValueError(f'初期在庫の{row_no}行目：{e}') from e
+        key = (
+            item['customer'], item['code'], item['name'], item['color'], item['embroidery'],
+            item['site'], item['shelf'], basis, received, unknown, item['payout'], condition,
+        )
         if key not in index:
             index[key] = len(groups)
             groups.append({'key': key, 'rows': []})
         groups[index[key]]['rows'].append((row_no, item))
     created = already = 0
     for group in groups:
-        customer, code, name, color, embroidery, site, shelf, basis, received, unknown, payout = group['key']
+        customer, code, name, color, embroidery, site, shelf, basis, received, unknown, payout, condition = group['key']
         row_no = group['rows'][0][0]
         person = c.execute('SELECT id FROM customers WHERE name=?', (customer,)).fetchone()
         if not person:
@@ -298,10 +318,19 @@ def _opening(c, rows):
             except ValueError as e:
                 raise ValueError(f'初期在庫の{line_no}行目：{e}') from e
             lines.append({'size': item['size'], 'qty': qty, 'unitCost': cost})
-        token_source = json.dumps({'key': group['key'], 'lines': lines}, ensure_ascii=False, sort_keys=True)
+        # Keep legacy tokens for 新品 (pre-状態-column Excel). 中古 appends condition.
+        token_key = [
+            customer, code, name, color, embroidery, site, shelf, basis, received, unknown, payout,
+        ]
+        if condition != stock.CONDITION_NEW:
+            token_key.append(condition)
+        token_source = json.dumps({'key': token_key, 'lines': lines}, ensure_ascii=False, sort_keys=True)
         token = 'xlsx-' + hashlib.sha256(token_source.encode()).hexdigest()[:40]
-        body = {'token': token, 'customerProductId': handle['id'], 'locationId': place, 'basisDate': basis,
-                'receivedUnknown': unknown, 'receivedOn': received, 'payoutOrder': int(payout) if unknown else 0, 'lines': lines}
+        body = {
+            'token': token, 'customerProductId': handle['id'], 'locationId': place, 'basisDate': basis,
+            'receivedUnknown': unknown, 'receivedOn': received,
+            'payoutOrder': int(payout) if unknown else 0, 'condition': condition, 'lines': lines,
+        }
         if unknown and not str(payout).strip():
             raise ValueError(f'初期在庫の{row_no}行目：入荷日不明のときは払出し順を入れてください。')
         try:
@@ -373,14 +402,18 @@ def _day(value, sheet, row_no, label):
 
 
 def _table(grid_rows, name, columns):
+    meta = {'notes': [], 'headers': {}}
     if not grid_rows:
-        return []
+        return [], meta
     headers = {ALIASES.get(cell, cell): index for index, cell in enumerate(grid_rows[0])}
+    meta['headers'] = headers
     missing = [label for label, _, required in columns if required and label not in headers]
     if missing:
         if any(any(cell for cell in row) for row in grid_rows):
             raise ValueError(f'「{name}」シートの見出しが違います。記入用Excelの見出しを使ってください。')
-        return []
+        return [], meta
+    if name == '初期在庫' and '状態' not in headers:
+        meta['notes'].append(LEGACY_CONDITION_NOTE)
     parsed = []
     for offset, row in enumerate(grid_rows[1:], 2):
         if offset > 3001:
@@ -399,7 +432,7 @@ def _table(grid_rows, name, columns):
             if required and not item[key]:
                 raise ValueError(f'{name}の{offset}行目：{label}を入力してください。')
         parsed.append((offset, item))
-    return parsed
+    return parsed, meta
 
 
 def _summary(counts):
