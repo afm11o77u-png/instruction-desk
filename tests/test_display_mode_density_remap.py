@@ -48,7 +48,8 @@ class DensityRemapMapTest(unittest.TestCase):
         self.assertEqual(display_modes.default_for('orders'), 'grid')
         self.assertEqual(display_modes.default_for('shipinfo'), 'standard')
         self.assertEqual(display_modes.default_for('stock-list'), 'standard')
-        self.assertEqual(display_modes.default_for('stock-opening'), 'standard')
+        self.assertEqual(display_modes.default_for('stock-opening'), 'compact')
+        self.assertEqual(display_modes.default_for('stock-customers'), 'compact')
         self.assertEqual(display_modes.default_for('stock-other'), 'standard')
 
     def test_js_mode_labels_and_order(self):
@@ -67,7 +68,8 @@ class DensityRemapMapTest(unittest.TestCase):
             self.assertIn("standard: 'cozy'", src)
             self.assertIn("compact: 'standard'", src)
             self.assertIn("'stock-list': 'standard'", src)
-            self.assertIn("'stock-opening': 'standard'", src)
+            self.assertIn("'stock-opening': 'compact'", src)
+            self.assertIn("'stock-customers': 'compact'", src)
 
     def test_css_density_roles(self):
         for css in (DM_CSS, STOCK_DM_CSS):

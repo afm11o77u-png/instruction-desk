@@ -79,7 +79,8 @@ function stockScreenId(tab){return STOCK_SCREENS[tab]||('stock-'+tab)}
 function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
-  if(section==='list'||section==='move'||section==='period'||section==='orders'){
+  // Title-row 表示 slot: 在庫一覧系 + 登録・設定（枠外・右上）
+  if(section==='list'||section==='move'||section==='period'||section==='orders'||section==='setup'){
     slot.hidden=false
     return
   }
@@ -89,9 +90,9 @@ function syncStockListDisplaySlot(section){
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'standard'
   const screenId=stockScreenId(tab)
-  // 在庫一覧: mount 表示 on the title-row right end (outside the filter frame).
-  // Setup screens keep compact chrome inside `.bar`.
-  const toolbar=tab==='list'
+  // 在庫一覧 + 登録・設定: mount 表示 on the title-row right end (outside the content frame).
+  const useTitleSlot=tab==='list'||SETUP_TAB_IDS.has(tab)
+  const toolbar=useTitleSlot
     ? document.querySelector('#stocklistdisplay')
     : document.querySelector('#main .bar')
   DisplayMode.mount(stage,screenId,async(mode)=>{
