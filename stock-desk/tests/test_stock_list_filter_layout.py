@@ -55,13 +55,14 @@ class StockListFilterLayoutTest(unittest.TestCase):
     def test_list_display_mounts_outside_filter_frame(self):
         body = _fn('mountStockDisplay')
         self.assertIn("tab==='list'", body)
+        self.assertIn('SETUP_TAB_IDS.has(tab)', body)
         self.assertIn("#stocklistdisplay", body)
         self.assertIn("#main .bar", body)
-        # list path must prefer the title-row slot before the shared .bar
-        list_branch = body[body.index("tab==='list'"):]
+        # list + 登録・設定 prefer the title-row slot before the shared .bar
+        slot_branch = body[body.index('useTitleSlot'):]
         self.assertLess(
-            list_branch.index('#stocklistdisplay'),
-            list_branch.index('#main .bar'),
+            slot_branch.index('#stocklistdisplay'),
+            slot_branch.index('#main .bar'),
         )
 
     def test_paint_toggles_title_row_display_slot(self):
@@ -69,6 +70,7 @@ class StockListFilterLayoutTest(unittest.TestCase):
         self.assertIn('syncStockListDisplaySlot(state.section)', body)
         sync = _fn('syncStockListDisplaySlot')
         self.assertIn("section==='list'", sync)
+        self.assertIn("section==='setup'", sync)
         self.assertIn('slot.hidden=false', sync)
         self.assertIn('slot.hidden=true', sync)
         self.assertIn("slot.innerHTML=''", sync)

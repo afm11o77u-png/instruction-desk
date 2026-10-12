@@ -26,11 +26,11 @@ def _fn(source: str, name: str) -> str:
 class OpeningDisplayModesUiTest(unittest.TestCase):
     def test_opening_has_own_screen_key(self):
         self.assertIn("opening:'stock-opening'", APP_JS)
-        self.assertIn("'stock-opening': 'standard'", DM_JS)
-        self.assertIn("'stock-opening': 'standard'", ROOT_DM_JS)
-        self.assertIn("'stock-opening': 'standard'", DISPLAY_MODES_PY)
+        self.assertIn("'stock-opening': 'compact'", DM_JS)
+        self.assertIn("'stock-opening': 'compact'", ROOT_DM_JS)
+        self.assertIn("'stock-opening': 'compact'", DISPLAY_MODES_PY)
 
-    def test_opening_page_mounts_display_control_on_bar(self):
+    def test_opening_page_mounts_display_control_on_title_slot(self):
         body = _fn(APP_JS, 'opening')
         self.assertIn('id="stockliststage"', body)
         self.assertIn('id="stocklistgrid"', body)
@@ -38,8 +38,13 @@ class OpeningDisplayModesUiTest(unittest.TestCase):
         self.assertIn("stockScreenId('opening')", body)
         self.assertIn("grid.hidden=mode!=='grid'", body)
         mount = _fn(APP_JS, 'mountStockDisplay')
-        self.assertIn("document.querySelector('#main .bar')", mount)
-        self.assertIn("tab==='list'", mount)
+        self.assertIn("SETUP_TAB_IDS.has(tab)", mount)
+        self.assertIn("#stocklistdisplay", mount)
+        # Setup tabs (incl. opening) use title-row slot, not the panel `.bar`
+        self.assertLess(
+            mount.index('SETUP_TAB_IDS.has(tab)'),
+            mount.index("document.querySelector('#main .bar')"),
+        )
 
     def test_opening_list_fields_hide_basis_date(self):
         body = _fn(APP_JS, 'opening')
@@ -110,7 +115,7 @@ class OpeningDisplayModesUiTest(unittest.TestCase):
         # SCREENS is derived from SCREEN_DEFAULTS; key must be present for POST.
         self.assertRegex(
             DISPLAY_MODES_PY,
-            r"SCREEN_DEFAULTS\s*=\s*\{[^}]*'stock-opening'\s*:\s*'standard'",
+            r"SCREEN_DEFAULTS\s*=\s*\{[^}]*'stock-opening'\s*:\s*'compact'",
         )
         self.assertIn('SCREENS = set(SCREEN_DEFAULTS)', DISPLAY_MODES_PY)
         self.assertIn('def normalize_screen(screen_id):', DISPLAY_MODES_PY)
