@@ -258,7 +258,7 @@ function paint(){
     b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='move'||state.section==='history'||state.section==='period'||state.section==='orders')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',history:'履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
