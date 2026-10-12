@@ -67,7 +67,7 @@ def _event_bucket(kind):
 def _load_events(c, args):
     sql = '''SELECT m.*, l.customer_product_id, l.size_label, l.location_id, l.unit_cost AS lot_unit_cost,
                     l.basis_date, l.received_on AS lot_received_on, l.received_unknown,
-                    l.qty_received AS lot_qty_received,
+                    l.qty_received AS lot_qty_received, l.condition,
                     cp.customer_id, cp.product_id, cp.embroidery,
                     cu.name AS customer_name,
                     p.code, p.name AS product_name, p.color,
@@ -78,8 +78,11 @@ def _load_events(c, args):
              JOIN customers cu ON cu.id=cp.customer_id
              JOIN products p ON p.id=cp.product_id
              JOIN locations loc ON loc.id=l.location_id
-             WHERE l.condition='new' '''
+             WHERE 1=1'''
     params = []
+    cond_sql, cond_params = stock.condition_filter_sql(args)
+    sql += cond_sql
+    params.extend(cond_params)
     cid = _int_arg(args, 'customerId')
     if cid is not None:
         sql += ' AND cp.customer_id=?'
@@ -136,12 +139,14 @@ def _load_events(c, args):
             'locationId': r['location_id'],
             'siteId': site_id,
             'locationLabel': stock.location_label(c, loc),
+            'condition': r['condition'],
+            'conditionLabel': stock.condition_label(r['condition']),
         })
     return events
 
 
 def _key_of(ev):
-    return (ev['customerProductId'], ev['size'], ev['locationId'])
+    return (ev['customerProductId'], ev['size'], ev['locationId'], ev.get('condition') or stock.CONDITION_NEW)
 
 
 def summarize_period(c, args):
@@ -168,6 +173,8 @@ def summarize_period(c, args):
             'locationId': ev['locationId'],
             'siteId': ev['siteId'],
             'locationLabel': ev['locationLabel'],
+            'condition': ev['condition'],
+            'conditionLabel': ev['conditionLabel'],
             'events': [],
             'missingBusinessDate': False,
             'missingReasons': set(),
@@ -194,6 +201,7 @@ def summarize_period(c, args):
     # Also include keys that have current lots but no moves? Not needed for period moves view.
     rows.sort(key=lambda r: (
         r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'], r['locationLabel'],
+        0 if r.get('condition') == stock.CONDITION_NEW else 1, r.get('condition') or '',
     ))
     # Drop empty rows with all zeros and computable (no activity ever intersecting period or balance)
     rows = [r for r in rows if r['include']]
@@ -271,6 +279,8 @@ def _summarize_bucket(bucket, start, end):
         'locationId': bucket['locationId'],
         'siteId': bucket.get('siteId') or bucket['locationId'],
         'locationLabel': bucket['locationLabel'],
+        'condition': bucket.get('condition') or stock.CONDITION_NEW,
+        'conditionLabel': bucket.get('conditionLabel') or stock.condition_label(bucket.get('condition')),
         'include': True,
     }
     if bucket['missingBusinessDate']:
@@ -429,8 +439,14 @@ def period_history(c, args):
     loc = _int_arg(args, 'locationId')
     if cp is None or not size or loc is None:
         raise ValueError('内訳の対象を選んでください。')
+    condition = stock.parse_condition(args.get('condition'), default=stock.CONDITION_NEW)
     for row in summary['rows']:
-        if row['customerProductId'] == cp and row['size'] == size and row['locationId'] == loc:
+        if (
+            row['customerProductId'] == cp
+            and row['size'] == size
+            and row['locationId'] == loc
+            and (row.get('condition') or stock.CONDITION_NEW) == condition
+        ):
             return {
                 'from': summary['from'],
                 'to': summary['to'],
@@ -442,7 +458,7 @@ def period_history(c, args):
 
 
 DETAIL_HEADERS = [
-    '顧客', '商品ID', '品番', '商品名', '色', '加工仕様', 'サイズ', '保管場所',
+    '顧客', '商品ID', '品番', '商品名', '色', '加工仕様', 'サイズ', '保管場所', '状態',
     '期首在庫数', '期間内入庫数', '期間内出庫数', '訂正増減数', '期末在庫数',
     '期間内入庫金額（仕入原価）', '期間内出庫金額（仕入原価）', '算出', '算出不可の理由',
 ]
@@ -453,12 +469,14 @@ def _row_export_values(row):
         return [
             row['customerName'], row['productId'], row['code'], row['productName'], row['color'],
             row['embroideryLabel'], row['size'], row['locationLabel'],
+            row.get('conditionLabel') or stock.condition_label(row.get('condition')),
             '', '', '', '', '', '', '',
             '算出不可', row.get('unavailableReason') or '',
         ]
     return [
         row['customerName'], row['productId'], row['code'], row['productName'], row['color'],
         row['embroideryLabel'], row['size'], row['locationLabel'],
+        row.get('conditionLabel') or stock.condition_label(row.get('condition')),
         row['openingQty'], row['inboundQty'], row['outboundQty'], row['correctionQty'], row['closingQty'],
         row['inboundAmount'], row['outboundAmount'],
         '算出可', '',
@@ -512,9 +530,9 @@ def _filter_label(args):
     parts = []
     for key, label in (
         ('customerId', '顧客ID'), ('productId', '商品ID'), ('size', 'サイズ'),
-        ('spec', '加工仕様'), ('locationId', '保管場所ID'),
+        ('spec', '加工仕様'), ('locationId', '保管場所ID'), ('condition', '状態'),
     ):
-        if args.get(key) not in (None, ''):
+        if args.get(key) not in (None, '', 'all', 'すべて'):
             parts.append(f'{label}={args.get(key)}')
     return '、'.join(parts) if parts else 'なし'
 

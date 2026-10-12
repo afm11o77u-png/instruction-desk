@@ -176,9 +176,9 @@ function selectOpeningHandle(opening, handle){
   return out
 }
 
-/** After successful save: drop 取扱/数量; keep location/basis for continuous register. */
+/** After successful save: drop 取扱/数量; keep location/basis/condition for continuous register. */
 function openingStateAfterSuccessfulSave(opening){
-  const keep={}
+  const keep={condition:(opening&&opening.condition)==='used'?'used':'new'}
   if(opening&&opening.basis)keep.basis=opening.basis
   if(opening&&opening.siteId!=null&&opening.siteId!=='')keep.siteId=String(opening.siteId)
   if(opening&&opening.shelfId!=null&&opening.shelfId!=='')keep.shelfId=String(opening.shelfId)
