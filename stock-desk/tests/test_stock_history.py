@@ -398,6 +398,28 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn("stockOpenBtn(l.id,'開く')", lot_table)
         self.assertIn('stockopen', lot_table)
 
+    def test_history_filters_are_two_top_packed_rows(self):
+        """Dates + month shortcuts on row 1; criteria + actions on row 2 (no lonely wrap)."""
+        import re
+        m = re.search(r'function historyPage\([^)]*\)\{', APP_JS)
+        self.assertIsNotNone(m)
+        nxt = re.search(r'\nfunction ', APP_JS[m.end():])
+        body = APP_JS[m.start():m.end() + nxt.start() if nxt else len(APP_JS)]
+        self.assertIn('class="bar history-filters"', body)
+        self.assertNotIn('period-filters history-filters', body)
+        self.assertIn('history-filter-dates', body)
+        self.assertIn('history-filter-criteria', body)
+        self.assertEqual(body.count('history-filter-row'), 2)
+        for fid in ('hFrom', 'hTo', 'hThisMonth', 'hPrevMonth', 'hKind', 'hLocation', 'hRun', 'hClear'):
+            self.assertIn(f'id="{fid}"', body)
+        self.assertIn("inputId:'hCustomerQ'", body)
+        self.assertIn("inputId:'hProductQ'", body)
+        self.assertIn("conditionSelectHtml('hCondition'", body)
+        css = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
+        self.assertRegex(css, r'\.history-filters\{[^}]*flex-direction:\s*column')
+        self.assertRegex(css, r'\.history-filter-row\{[^}]*align-items:\s*flex-start')
+        self.assertIn('.history-filters .search-picker-hint:empty{display:none}', css)
+
     def test_server_exposes_stock_history_route(self):
         server_py = (ROOT / 'server.py').read_text(encoding='utf-8')
         self.assertIn("/api/stock-history", server_py)
