@@ -91,12 +91,14 @@ table.site-locations tr.is-stopped td{color:#8b9790}
 .bar .check input,.bar .inactive-toggle input{min-width:0;width:auto}
 dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0;max-height:min(92vh,920px);flex-direction:column;overflow:hidden}dialog::backdrop{background:#1e332866}
 dialog[open]{display:flex}
+/* form wrappers (登録・修正) must pass max-height into head/body/actions or the save button clips */
+dialog>form{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;max-height:100%;width:100%;overflow:hidden;margin:0}
 .dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);flex:0 0 auto}
 .dialoghead h2{margin:0;font-size:1.2rem}.dialogactions{display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line);flex:0 0 auto}
 .dialogbody{overflow:auto;flex:1 1 auto;min-height:0}
 dialog.opening-dialog{width:min(1100px,96vw);max-height:min(94vh,980px)}
 dialog.opening-dialog .dialogbody{padding-bottom:8px}
-#error{color:#9a3418;font-weight:700;min-height:1.2em}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
+#error{color:#9a3418;font-weight:700;min-height:1.2em;flex:0 0 auto;margin:0;padding:0 18px}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
 #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#146b28;color:#fff;padding:12px 18px;border-radius:8px}
 @media(max-width:800px){header,main,footer{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
 
