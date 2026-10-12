@@ -33,10 +33,12 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('data-stock-section="list"', aside)
         self.assertIn('data-stock-section="move"', aside)
         self.assertIn('data-stock-section="setup"', aside)
+        self.assertIn('data-stock-section="history"', aside)
         self.assertIn('data-stock-section="period"', aside)
         self.assertIn('data-stock-section="orders"', aside)
         self.assertIn('在庫一覧', aside)
         self.assertIn('入庫・出庫', aside)
+        self.assertIn('在庫履歴', aside)
         self.assertIn('登録・設定', aside)
         self.assertIn('期間入出荷集計', aside)
         self.assertIn('発注', aside)
@@ -46,28 +48,31 @@ class StockListSetupNavUiTest(unittest.TestCase):
         start = aside.index('id="stocknav"')
         end = aside.index('<div class="asidebottom"', start)
         stocknav = aside[start:end]
-        # Top row: 在庫一覧 | 登録・設定; then 入庫・出庫, 期間, 発注 at bottom (no reorder of existing)
+        # Top row: 在庫一覧 | 登録・設定; then 入庫・出庫, 在庫履歴, 期間, 発注 (no reorder of existing)
         self.assertIn('class="navrow stocknav-top"', stocknav)
         top_start = stocknav.index('stocknav-top')
         top = stocknav[top_start:stocknav.index('</div>', top_start)]
         self.assertIn('data-stock-section="list"', top)
         self.assertIn('data-stock-section="setup"', top)
         self.assertNotIn('data-stock-section="move"', top)
+        self.assertNotIn('data-stock-section="history"', top)
         self.assertNotIn('data-stock-section="period"', top)
         self.assertNotIn('data-stock-section="orders"', top)
         self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-move'))
-        self.assertLess(stocknav.index('stocknav-move'), stocknav.index('stocknav-period'))
+        self.assertLess(stocknav.index('stocknav-move'), stocknav.index('stocknav-history'))
+        self.assertLess(stocknav.index('stocknav-history'), stocknav.index('stocknav-period'))
         self.assertLess(stocknav.index('stocknav-period'), stocknav.index('stocknav-orders'))
         self.assertRegex(stocknav, r'stocknav-top[\s\S]*data-stock-section="list"[\s\S]*data-stock-section="setup"')
         self.assertIn('class="nav stocknav-move"', stocknav)
+        self.assertIn('class="nav stocknav-history"', stocknav)
         self.assertIn('class="nav stocknav-period"', stocknav)
         self.assertIn('class="nav stocknav-orders"', stocknav)
         self.assertIn('class="stocknav-secondary"', stocknav)
-        # Secondary items (move/period/orders) share the wrapper; buttons flush with top row
+        # Secondary items share the wrapper; buttons flush with top row
         self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-secondary'))
         self.assertRegex(
             stocknav,
-            r'stocknav-secondary[\s\S]*stocknav-move[\s\S]*stocknav-period[\s\S]*stocknav-orders',
+            r'stocknav-secondary[\s\S]*stocknav-move[\s\S]*stocknav-history[\s\S]*stocknav-period[\s\S]*stocknav-orders',
         )
         css = (REPO / 'style.css').read_text(encoding='utf-8')
         self.assertIn('#stocknav .stocknav-secondary', css)
@@ -75,11 +80,12 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*0')
         self.assertNotRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*(?:18|14)px')
         self.assertIn('#stocknav .stocknav-move', css)
+        self.assertIn('#stocknav .stocknav-history', css)
         self.assertIn('#stocknav .stocknav-period', css)
         self.assertIn('#stocknav .stocknav-orders', css)
         self.assertRegex(
             css,
-            r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-move,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*left',
+            r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-move,#stocknav \.stocknav-history,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*left',
         )
         # Top row stays centered; secondary labels stay left-aligned (flush left edge)
         self.assertRegex(css, r'#stocknav \.stocknav-top \.nav\{[^}]*text-align:\s*center')
@@ -94,6 +100,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("e.data.type==='stock-section-changed'", PLACEMENT_JS)
         self.assertIn("normalizeStockSection", PLACEMENT_JS)
         self.assertIn("section==='move'", PLACEMENT_JS)
+        self.assertIn("section==='history'", PLACEMENT_JS)
         self.assertIn("section==='period'", PLACEMENT_JS)
         self.assertIn("section==='orders'", PLACEMENT_JS)
 
