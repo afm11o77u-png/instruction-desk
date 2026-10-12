@@ -1609,25 +1609,72 @@ function historyProductLabel(p){
   if(!p)return ''
   return `${p.code} ${p.name} ${p.color||''}（ID ${p.id}）`.replace(/\s+/g,' ').trim()
 }
+function historyShortAt(at){
+  const m=String(at||'').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
+  if(!m)return at?String(at):'未記録'
+  return `${Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}`
+}
+function historyFullAt(at){
+  const m=String(at||'').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/)
+  if(!m)return at?String(at):'未記録'
+  const sec=m[6]!=null?`:${m[6]}`:''
+  return `${m[1]}/${m[2]}/${m[3]} ${m[4]}:${m[5]}${sec}`
+}
 function historyDeltaText(e){
+  if(e==null||e.qtyDelta==null||e.qtyDelta==='')return '未記録'
   const d=Number(e.qtyDelta)
-  if(!Number.isFinite(d))return '—'
-  if(d>0)return '+'+num(d)
-  return num(d)
+  if(!Number.isFinite(d))return '未記録'
+  if(d===0)return '0枚'
+  if(d>0)return '＋'+num(d)
+  return '−'+num(Math.abs(d))
+}
+function historySpecText(e){
+  const color=String(e.color||'').trim()||'色未記録'
+  const size=String(e.size||'').trim()||'サイズ未記録'
+  const cond=e.conditionLabel||conditionLabel(e.condition)||'状態未記録'
+  return `${color} / ${size} / ${cond}`
 }
 function historyLotQtyText(e){
-  const before=e.qtyBefore==null?'—':num(e.qtyBefore)
-  const after=e.qtyAfter==null?'—':num(e.qtyAfter)
+  const before=e.qtyBefore==null?'未記録':num(e.qtyBefore)
+  const after=e.qtyAfter==null?'未記録':num(e.qtyAfter)
   return `${before}→${after}`
 }
+function historyMoneyRange(before,after){
+  const b=before==null?'未記録':yen(before)
+  const a=after==null?'未記録':yen(after)
+  return `${b}→${a}`
+}
 function historyDetailHtml(e){
-  const batch=e.batchLineCount>1
-    ?`<p>同一出庫操作（先入先出）のロット内訳 ${e.batchLineIndex||'?'}／${e.batchLineCount}（バッチ ${e.moveBatchId}）</p>
-      <ul>${(e.batchPeers||[]).map(p=>`<li${p.isSelf?' class="is-self"':''}>ロット${p.lotId} ${esc(p.size)}／${esc(p.conditionLabel)}　増減 ${num(p.qtyDelta)}　ロット残 ${p.qtyBefore??'—'}→${p.qtyAfter??'—'}　単価 ${yen(p.unitCost)}${p.isSelf?'（この行）':''}</li>`).join('')}</ul>`
+  const batchMark=e.batchLineCount>1
+    ?`同一出庫操作（先入先出） ${e.batchLineIndex||'?'}／${e.batchLineCount}`
     :''
+  const batch=e.batchLineCount>1
+    ?`<section class="history-batch">
+      <h3>同一出庫のロット内訳</h3>
+      <p>${esc(batchMark)}（バッチ ${esc(e.moveBatchId)}）</p>
+      <ul>${(e.batchPeers||[]).map(p=>`<li${p.isSelf?' class="is-self"':''}>ロット${p.lotId} ${esc(p.size)}／${esc(p.conditionLabel)}　増減 ${esc(historyDeltaText(p))}　対象ロットの数量 ${esc(historyLotQtyText(p))}　単価 ${yen(p.unitCost)}${p.isSelf?'（この行）':''}</li>`).join('')}</ul>
+    </section>`
+    :''
+  const stopCust=e.customerActive===false?'（停止）':''
+  const stopProd=e.productActive===false?'（停止）':''
   return `<div class="history-detail">
-    <p>単価 ${e.costBefore==null?'—':yen(e.costBefore)}→${e.costAfter==null?'—':yen(e.costAfter)}　金額 ${e.amountBefore==null?'—':yen(e.amountBefore)}→${e.amountAfter==null?'—':yen(e.amountAfter)}</p>
-    <p>対象ロットID ${e.lotId}${e.lotQtyRemaining!=null?`（現在残 ${num(e.lotQtyRemaining)}）`:''}</p>
+    <dl class="history-detail-list">
+      <div><dt>記録日時</dt><dd>${esc(historyFullAt(e.at))}</dd></div>
+      <div><dt>業務日</dt><dd>${esc(e.businessOnLabel||'未記録')}</dd></div>
+      <div><dt>操作</dt><dd>${esc(e.kindLabel)}${e.id!=null?`<span class="sub">記録ID ${e.id}</span>`:''}${batchMark?`<span class="sub">${esc(batchMark)}</span>`:''}${e.moveBatchId&&e.batchLineCount<=1?`<span class="sub">バッチ ${esc(e.moveBatchId)}</span>`:''}</dd></div>
+      <div><dt>顧客</dt><dd>${esc(e.customerName)}${stopCust}${e.customerId!=null?`<span class="sub">顧客ID ${e.customerId}</span>`:''}</dd></div>
+      <div><dt>商品</dt><dd>${esc(e.code)} ${esc(e.productName)}${stopProd}<span class="sub">商品ID ${e.productId}</span></dd></div>
+      <div><dt>仕様</dt><dd>${esc(historySpecText(e))}</dd></div>
+      <div><dt>加工仕様</dt><dd>${esc(e.embroideryLabel||'未記録')}</dd></div>
+      <div><dt>保管場所</dt><dd>${esc(e.locationLabel||'未記録')}</dd></div>
+      <div><dt>増減数</dt><dd>${esc(historyDeltaText(e))}</dd></div>
+      <div><dt>対象ロットの数量（変更前→変更後）</dt><dd>${esc(historyLotQtyText(e))}</dd></div>
+      <div><dt>単価（変更前→変更後）</dt><dd>${esc(historyMoneyRange(e.costBefore,e.costAfter))}</dd></div>
+      <div><dt>金額（変更前→変更後）</dt><dd>${esc(historyMoneyRange(e.amountBefore,e.amountAfter))}</dd></div>
+      <div><dt>対象ロットID</dt><dd>${esc(e.lotId)}${e.lotQtyRemaining!=null?`（現在残 ${num(e.lotQtyRemaining)}）`:''}</dd></div>
+      <div><dt>担当者</dt><dd>${esc(e.actorNameLabel||'未記録')}</dd></div>
+      <div><dt>備考</dt><dd>${esc(e.note||'—')}</dd></div>
+    </dl>
     ${batch}
   </div>`
 }
@@ -1722,40 +1769,36 @@ function historyPage(){
   if(!result){body.innerHTML='<p class="dialogbody">条件を選んで「表示する」を押してください。</p>';return}
   const events=result.events||[]
   body.innerHTML=`<table class="period-table history-table"><thead><tr>
-    <th>記録日時</th><th>業務日</th><th>操作内容</th><th>顧客</th><th>品番・商品名・色</th><th>加工仕様</th><th>状態</th><th>サイズ・保管場所</th><th>増減数量</th><th>ロット数量（前→後）</th><th>担当者</th><th>備考</th><th></th>
+    <th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>詳細</th>
   </tr></thead><tbody>
     ${events.map((e,i)=>{
       const batchMark=e.batchLineCount>1?`<span class="sub">同一操作 ${e.batchLineIndex}/${e.batchLineCount}</span>`:''
       const stopCust=e.customerActive===false?'<span class="badge stop">停止</span>':''
       const stopProd=e.productActive===false?'<span class="badge stop">停止</span>':''
       return `<tr>
-        <td>${esc(e.at)}</td>
-        <td>${esc(e.businessOnLabel||'未記録')}</td>
-        <td>${esc(e.kindLabel)}${batchMark}</td>
-        <td class="dm-primary">${esc(e.customerName)}${stopCust}</td>
-        <td>${esc(e.code)} ${esc(e.productName)} ${esc(e.color)}${stopProd}<span class="sub dm-secondary">商品ID ${e.productId}</span></td>
-        <td>${esc(e.embroideryLabel)}</td>
-        <td>${esc(e.conditionLabel||conditionLabel(e.condition))}</td>
-        <td>${esc(e.size)} / ${esc(e.locationLabel)}</td>
-        <td class="qty">${historyDeltaText(e)}</td>
-        <td class="qty">${historyLotQtyText(e)}<span class="sub">対象ロット</span></td>
-        <td>${esc(e.actorNameLabel||'未記録')}</td>
-        <td>${esc(e.note||'')}</td>
-        <td><button type="button" class="quiet" data-hist-detail="${i}">詳細</button></td>
+        <td class="hist-at">${esc(historyShortAt(e.at))}</td>
+        <td class="hist-kind">${esc(e.kindLabel)}${batchMark}</td>
+        <td class="hist-customer dm-primary">${esc(e.customerName)}${stopCust}</td>
+        <td class="hist-product"><span class="dm-primary">${esc(e.code)}</span><span class="sub dm-secondary">${esc(e.productName)}${stopProd}</span></td>
+        <td class="hist-spec">${esc(historySpecText(e))}</td>
+        <td class="hist-delta qty">${esc(historyDeltaText(e))}</td>
+        <td class="hist-detail"><button type="button" class="quiet" data-hist-detail="${i}">開く</button></td>
       </tr>`
-    }).join('')||'<tr><td colspan="13">該当する履歴はありません。</td></tr>'}
+    }).join('')||'<tr><td colspan="7">該当する履歴はありません。</td></tr>'}
   </tbody></table>`
   body.querySelectorAll('[data-hist-detail]').forEach(b=>b.onclick=()=>{
     const e=events[Number(b.dataset.histDetail)]
     if(!e)return
     const dlg=$('#dialog')
-    dlg.innerHTML=`<div class="dialoghead"><h2>履歴の詳細</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody">
-      <p>${esc(e.at)}　${esc(e.kindLabel)}　${esc(e.customerName)} / ${esc(e.code)} ${esc(e.productName)}</p>
+    dlg.classList.add('history-detail-dialog')
+    dlg.innerHTML=`<div class="dialoghead"><h2>履歴の詳細</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody history-detail-body">
       ${historyDetailHtml(e)}
       <p class="sub">${esc(result.qtyScopeNote||'')}</p>
       <p class="sub">${esc(result.namesNote||'')}</p>
     </div>`
-    dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+    const cleanup=()=>{dlg.classList.remove('history-detail-dialog');dlg.innerHTML=''}
+    dlg.addEventListener('close',cleanup,{once:true})
+    dlg.showModal();$('#close').onclick=()=>dlg.close()
   })
 }
 async function loadMoveTargets(){
