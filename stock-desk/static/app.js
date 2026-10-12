@@ -1935,8 +1935,8 @@ function movePage(){
   const filtered=SM?SM.filterTargets(targets,state.moveQ):targets
   $('#main').innerHTML=`<section class="panel move-panel">
     <div class="move-mode-toggle" role="group" aria-label="入庫または出庫">
-      <button type="button" data-move-mode="in" class="${mode==='in'?'active primary':''}">入庫する</button>
       <button type="button" data-move-mode="out" class="${mode==='out'?'active primary':''}">出庫する</button>
+      <button type="button" data-move-mode="in" class="${mode==='in'?'active primary':''}">入庫する</button>
     </div>
     ${writable?'':`<p class="notice">閲覧専用のため、入庫・出庫はできません。</p>`}
     <div class="bar">
