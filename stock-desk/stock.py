@@ -1771,55 +1771,97 @@ def plan_outbound(c, body):
     }
 
 
+def _inbound_cleaned_lines(c, product_id, body):
+    """Validate multi-size inbound lines (or legacy single size/qty/unitCost). All-or-nothing."""
+    raw_lines = body.get('lines')
+    if isinstance(raw_lines, list):
+        sizes = {r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (product_id,))}
+        cleaned = []
+        seen = set()
+        for raw in raw_lines:
+            if not isinstance(raw, dict):
+                raise ValueError('数量の表が不正です。')
+            size = raw.get('size')
+            if not isinstance(size, str) or size.strip() not in sizes or size != size.strip():
+                raise ValueError('商品に登録したサイズだけを入力してください。新しいサイズは商品台帳で追加します。')
+            qty = parse_qty(raw.get('qty'), f'{size}の数量')
+            cost = parse_money(raw.get('unitCost'), f'{size}の仕入単価')
+            key = (size, cost)
+            if key in seen:
+                raise ValueError('同じサイズで同じ仕入単価の行が重複しています。数量を1行にまとめてください。単価が違う場合は行を分けたままにしてください。')
+            seen.add(key)
+            cleaned.append((size, qty, cost))
+        if not cleaned:
+            raise ValueError('数量のある行がありません。')
+        return cleaned
+    # Legacy single-size body (一覧から入庫 / 発注入荷)
+    size = resolve_size_label(c, product_id, body.get('size'))
+    qty = parse_qty(body.get('qty'), '入庫数量')
+    cost = parse_money(body.get('unitCost'), '仕入単価')
+    return [(size, qty, cost)]
+
+
 def register_inbound(c, body):
-    """Daily inbound: always creates a new receipt lot (same unit price → separate record)."""
+    """Daily inbound: always creates new receipt lot(s). kind='inbound' (never opening).
+
+    Accepts either legacy single size/qty/unitCost, or lines:[{size,qty,unitCost},...]
+    like 初期在庫. All lines share one move_batch (one transaction + one client_token).
+    """
     _require_write(body)
     token = _token(body.get('token'))
     existing = c.execute('SELECT id FROM move_batches WHERE client_token=?', (token,)).fetchone()
     if existing:
         return _move_token_result(c, existing['id'], True)
     cp = resolve_customer_product(c, body.get('customerProductId'))
-    size = resolve_size_label(c, cp['product_id'], body.get('size'))
     loc = resolve_active_location(c, body.get('locationId'))
     condition = parse_condition(body.get('condition'), default=CONDITION_NEW)
-    qty = parse_qty(body.get('qty'), '入庫数量')
-    cost = parse_money(body.get('unitCost'), '仕入単価')
+    cleaned = _inbound_cleaned_lines(c, cp['product_id'], body)
     received = parse_date(body.get('receivedOn'), '入荷日')
     note = optional(body.get('note'), '備考', 200)
     actor = _actor_name(body)
-    before = current_qty_for_target(c, cp['id'], size, loc['id'], condition)
+    single = len(cleaned) == 1
+    before = None
+    if single:
+        before = current_qty_for_target(c, cp['id'], cleaned[0][0], loc['id'], condition)
     t = stamp()
     c.execute(
         'INSERT INTO move_batches(client_token,kind,actor_name,note,created_at) VALUES(?,?,?,?,?)',
         (token, 'inbound', actor, note, t),
     )
     batch_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-    c.execute(
-        '''INSERT INTO lots(batch_id,customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
-           basis_date,received_on,received_unknown,payout_order,condition,created_at,updated_at)
-           VALUES(NULL,?,?,?,?,?,?,?,?,0,0,?,?,?)''',
-        (cp['id'], size, loc['id'], cost, qty, qty, received, received, condition, t, t),
-    )
-    lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-    c.execute(
-        '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
-           location_id,move_batch_id,actor_name,business_on,note,at)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (lot_id, 'inbound', qty, cost, 0, qty, None, cost, loc['id'], batch_id, actor, received, note or '入庫', t),
-    )
+    lot_id = None
+    for size, qty, cost in cleaned:
+        c.execute(
+            '''INSERT INTO lots(batch_id,customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
+               basis_date,received_on,received_unknown,payout_order,condition,created_at,updated_at)
+               VALUES(NULL,?,?,?,?,?,?,?,?,0,0,?,?,?)''',
+            (cp['id'], size, loc['id'], cost, qty, qty, received, received, condition, t, t),
+        )
+        lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        c.execute(
+            '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
+               location_id,move_batch_id,actor_name,business_on,note,at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (lot_id, 'inbound', qty, cost, 0, qty, None, cost, loc['id'], batch_id, actor, received, note or '入庫', t),
+        )
     result = _move_token_result(c, batch_id, False)
     result.update({
-        'lotId': lot_id,
-        'currentQtyBefore': before,
-        'currentQtyAfter': before + qty,
-        'unitCost': cost,
         'receivedOn': received,
-        'size': size,
         'locationId': loc['id'],
         'customerProductId': cp['id'],
         'condition': condition,
         'conditionLabel': condition_label(condition),
     })
+    # Single-line callers (一覧入庫 / 発注入荷) keep flat fields.
+    if single:
+        size, qty, cost = cleaned[0]
+        result.update({
+            'lotId': lot_id,
+            'currentQtyBefore': before,
+            'currentQtyAfter': before + qty,
+            'unitCost': cost,
+            'size': size,
+        })
     return result
 
 

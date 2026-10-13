@@ -176,6 +176,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('一覧にない商品を入庫', body)
         self.assertIn('初めて在庫を登録する組み合わせ', body)
         self.assertNotIn('取扱を選んで入庫', body)
+        self.assertIn('openNormalInboundRegister()', body)
         self.assertIn("stock_moves.js", INDEX)
 
     def test_header_tabs_flex_wrap_no_overflow_css(self):
@@ -206,9 +207,12 @@ class OpeningPopupUiTest(unittest.TestCase):
         form = _fn(APP_JS, 'mountOpeningRegisterForm')
         self.assertIn('openingDialogEl()', _fn(APP_JS, 'openOpeningRegister'))
         self.assertIn('showModal()', _fn(APP_JS, 'openOpeningRegister'))
+        self.assertIn('openingDialogEl()', _fn(APP_JS, 'openNormalInboundRegister'))
         self.assertIn('id="confirmOpen"', form)
         self.assertIn("searchPickerMarkup({label:'取扱'", form)
         self.assertIn('取扱を新しく登録', form)
+        self.assertIn("'通常入庫'", form)
+        self.assertIn("'初期在庫'", form)
         self.assertRegex(CSS, r'dialog\.opening-dialog\{[^}]*width:\s*min\(1100px,\s*96vw\)')
         self.assertRegex(CSS, r'dialog\[open\]\{[^}]*display:\s*flex')
         self.assertRegex(CSS, r'\.dialogbody\{[^}]*overflow:\s*auto')
