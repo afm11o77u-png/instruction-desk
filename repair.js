@@ -140,35 +140,17 @@ function migrationMappingReady(summary){
   return sel&&sel.value;
  });
 }
-function migrationNameApprovalLines(plan){
+function migrationNameProtectionLines(plan){
  if(!plan)return '';
- const labels=plan.labels||{};
- const counts=plan.counts||{};
- const order=['keep','content','assignee','new','ambiguous','deleted'];
- const countLines=order.map(key=>`${labels[key]||key}：${counts[key]??0}件`).join('\n');
- const sections=order.map(key=>{
-  const items=plan.categories?.[key]||[];
-  if(!items.length)return '';
-  const rows=items.slice(0,40).map(item=>{
-   const note=item.note?` — ${item.note}`:'';
-   const hist=item.historyCount?`（履歴${item.historyCount}件）`:'';
-   return `・${item.label||item.identity||'（名称不明）'}${hist}${note}`;
-  }).join('\n');
-  const more=items.length>40?`\n・…ほか ${items.length-40} 件`:'';
-  return `${labels[key]||key}\n${rows}${more}`;
- }).filter(Boolean).join('\n\n');
- return `${plan.summaryText||countLines}\n\n${sections}`.trim();
-}
-function migrationCollectNameAssigneeOverrides(){
- const map={};
- repairDialog.querySelectorAll('[data-mig-name-identity]').forEach(sel=>{
-  const identity=sel.getAttribute('data-mig-name-identity');
-  if(!identity)return;
-  const keep=sel.dataset.keepAssignee;
-  if(sel.value===''||(keep!==undefined&&sel.value===keep))return;
-  map[identity]=sel.value===''?null:Number(sel.value);
- });
- return map;
+ const dest=plan.destinationCounts||{};
+ const src=plan.sourceCounts||{};
+ const lines=[
+  plan.summaryText||'',
+  '',
+  `このパソコンのネーム：形式 ${dest.name_formats??0}／顧客 ${dest.name_customers??0}／見本 ${dest.name_samples??0}／承認 ${dest.name_reviews??0}／履歴 ${dest.name_review_history??0}`,
+  `ZIP内のネーム（参考・適用しない場合あり）：形式 ${src.name_formats??0}／顧客 ${src.name_customers??0}／見本 ${src.name_samples??0}／承認 ${src.name_reviews??0}／履歴 ${src.name_review_history??0}`,
+ ];
+ return lines.filter((x,i)=>!(x===''&&lines[i-1]==='')).join('\n').trim();
 }
 
 function openMigrationRestore(){
@@ -180,39 +162,23 @@ function openMigrationRestore(){
   if(!agree||!run)return;
   run.disabled=!(agree.checked&&migrationMappingReady(summary));
  };
- const refreshNamePlan=()=>repairRun(async()=>{
-  if(!summary||!dataB64||!migrationMappingReady(summary))return;
-  const userMap=migrationCollectUserMap();
-  const nameAssigneeOverrides=migrationCollectNameAssigneeOverrides();
-  summary=await api('/api/migration/inspect',{filename:file?.name||'backup.zip',data:dataB64,userMap,nameAssigneeOverrides});
-  paintSummary({preserveSelections:true});
-  repairMessage('利用者割り当てとネーム承認の扱いを確認し、同意にチェックしてから復元を実行してください。');
- });
- repairDialog.innerHTML=`<div class="dialoghead"><div><h2>業務データを復元（利用者情報は変更しません）</h2><p>主管理者専用 ／ 移行用ZIPで業務データを置き換えます。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button></div><p id="repair-message" role="status"></p><p class="testwarn">指示書・在庫・ひな形などの<strong>業務データは置き換わります</strong>。このパソコンの<strong>利用者アカウント（ログインID・パスワード・権限）は変更しません</strong>。ネーム情報の<strong>承認は、内容と担当者が同じならこのパソコンの状態を維持</strong>します（ZIPの承認済みは採用しません）。移行元の担当は下の割り当てで結び直します。画像はZIPに含まれず既存のままです。復元直前に承認・履歴・利用者を含む自動バックアップを作ります。</p><form id="mig-form" class="repairfilters" style="grid-template-columns:1fr auto"><label>移行用ZIP<input id="mig-file" type="file" accept=".zip,application/zip" required></label><button type="submit">内容を確認</button></form><div id="mig-summary"></div><div id="mig-confirm" hidden><label class="checklabel"><input type="checkbox" id="mig-agree">業務データの置き換えと、上記の利用者割り当て・ネーム承認の扱いに同意します</label><button type="button" class="primary" id="mig-run" disabled>復元を実行</button></div></div>`;
+ repairDialog.innerHTML=`<div class="dialoghead"><div><h2>業務データを復元（利用者・ネーム情報は変更しません）</h2><p>主管理者専用 ／ 移行用ZIPで業務データを置き換えます。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button></div><p id="repair-message" role="status"></p><p class="testwarn">指示書・在庫・ひな形などの<strong>業務データは置き換わります</strong>。このパソコンの<strong>利用者アカウント（ログインID・パスワード・権限）は変更しません</strong>。このパソコンに<strong>ネーム情報がある場合はすべて保護</strong>し、ZIPのネーム情報（形式・顧客・見本・担当・承認・履歴）は適用しません。ネーム情報が空のときだけZIPから取り込みます。移行元の担当は下の割り当てで結び直します。画像はZIPに含まれず既存のままです。復元直前に自動バックアップを作ります。</p><form id="mig-form" class="repairfilters" style="grid-template-columns:1fr auto"><label>移行用ZIP<input id="mig-file" type="file" accept=".zip,application/zip" required></label><button type="submit">内容を確認</button></form><div id="mig-summary"></div><div id="mig-confirm" hidden><label class="checklabel"><input type="checkbox" id="mig-agree">業務データの置き換えと、上記の利用者割り当て・ネーム情報の扱いに同意します</label><button type="button" class="primary" id="mig-run" disabled>復元を実行</button></div></div>`;
  repairDialog.querySelector('#repair-close').onclick=closeRepair;
  repairDialog.querySelector('#repair-home').onclick=()=>openRepair();
  const paintSummary=(opts={})=>{
   const box=repairDialog.querySelector('#mig-summary');
   if(!summary){box.innerHTML='';repairDialog.querySelector('#mig-confirm').hidden=true;return}
   const prevMap=opts.preserveSelections?migrationCollectUserMap():{};
-  const prevName=opts.preserveSelections?migrationCollectNameAssigneeOverrides():{};
   const destOpts=['<option value="">選択してください</option>']
    .concat((summary.destinationUsers||[]).map(u=>`<option value="${u.id}">${esc(migrationUserLabel(u))}${u.active?'':'（停止中）'}</option>`))
    .join('');
   const sourceUsers=summary.sourceUsers||[];
-  const mapping=sourceUsers.length?`<h3>利用者の割り当て</h3><p>移行元の担当・所有者を、このパソコンの利用者へ割り当ててください。数値の利用者IDが同じでも同一人物とはみなしません。${sourceUsers.length===1?'移行元は1人です。':''}</p><div class="repairtools"><label>全員の割り当て先<select id="mig-bulk-user">${destOpts}</select></label><button type="button" id="mig-bulk-apply" disabled>全員に適用</button></div><p class="duehint">全ての割り当てを選んだ利用者に変更します。適用後も個別に変更できます。割り当て後にネーム承認の件数が更新されます。</p><div class="repairfilters" style="grid-template-columns:1fr 1fr">${sourceUsers.map(u=>`<label>移行元：${esc(migrationUserLabel(u))}<select data-mig-source="${u.id}" required>${destOpts}</select></label>`).join('')}</div>`:'<p>移行元ZIPに利用者一覧がありません。業務データのみ復元します。</p>';
-  const namePlan=summary.nameApprovals;
-  const assigneeItems=(namePlan?.categories?.keep||[]).concat(namePlan?.categories?.content||[]).concat(namePlan?.categories?.assignee||[]);
-  const nameAssigneeEditors=assigneeItems.filter(item=>item.identity).length?`<h3>ネーム情報の担当者（原則は復元先を維持）</h3><p>同じネーム情報は復元先の担当者を維持します。変更する場合は再確認待ちになります。</p><div class="repairfilters" style="grid-template-columns:1fr 1fr">${assigneeItems.filter(item=>item.identity).map(item=>{
-   const keep=item.destAssigneeId==null?'':String(item.destAssigneeId);
-   const selected=prevName[item.identity]!=null?String(prevName[item.identity]):keep;
-   const opts=['<option value="">担当なし</option>'].concat((summary.destinationUsers||[]).map(u=>`<option value="${u.id}" ${String(u.id)===selected?'selected':''}>${esc(migrationUserLabel(u))}</option>`)).join('');
-   return `<label>${esc(item.label||item.identity)}<select data-mig-name-identity="${esc(item.identity)}" data-keep-assignee="${esc(keep)}">${opts}</select></label>`;
-  }).join('')}</div>`:'';
-  const nameBlock=namePlan?`<h3>ネーム承認の扱い</h3><p>ZIP内の承認情報は次のように扱います。照合は形式の照合キー（identity）で行い、数値IDだけでは対応づけません。</p><pre class="migcounts">${esc(migrationNameApprovalLines(namePlan))}</pre>${nameAssigneeEditors}`:'';
+  const mapping=sourceUsers.length?`<h3>利用者の割り当て</h3><p>移行元の担当・所有者を、このパソコンの利用者へ割り当ててください。数値の利用者IDが同じでも同一人物とはみなしません。${sourceUsers.length===1?'移行元は1人です。':''}</p><div class="repairtools"><label>全員の割り当て先<select id="mig-bulk-user">${destOpts}</select></label><button type="button" id="mig-bulk-apply" disabled>全員に適用</button></div><p class="duehint">全ての割り当てを選んだ利用者に変更します。適用後も個別に変更できます。</p><div class="repairfilters" style="grid-template-columns:1fr 1fr">${sourceUsers.map(u=>`<label>移行元：${esc(migrationUserLabel(u))}<select data-mig-source="${u.id}" required>${destOpts}</select></label>`).join('')}</div>`:'<p>移行元ZIPに利用者一覧がありません。業務データのみ復元します。</p>';
+  const namePlan=summary.nameProtection;
+  const nameBlock=namePlan?`<h3>ネーム情報の扱い</h3><p>会社PCにネーム情報がある場合は<strong>すべて保護</strong>し、ZIP側は適用しません。空の場合のみZIPから取り込みます。</p><pre class="migcounts">${esc(migrationNameProtectionLines(namePlan))}</pre>`:'';
   const replaces=(summary.replaces||[]).map(x=>`<li>${esc(x)}</li>`).join('')||'<li>業務データ</li>';
   const preserves=(summary.preserves||[]).map(x=>`<li>${esc(x)}</li>`).join('');
-  const legacy=summary.legacyFormat||summary.legacyAuthPresent?'<p class="testwarn">旧形式のZIPです。パスワード等の認証情報は適用せず、ネーム承認も無条件には上書きしません。</p>':'';
+  const legacy=summary.legacyFormat||summary.legacyAuthPresent?'<p class="testwarn">旧形式のZIPです。パスワード等の認証情報は適用せず、ネーム情報もこのパソコンに既にある場合は上書きしません。</p>':'';
   box.innerHTML=`<article class="repairhistory"><p><strong>作成日時</strong>　${esc(summary.createdAt||'不明')}</p><p><strong>形式</strong>　v${esc(String(summary.formatVersion||''))}　／　ファイル ${summary.fileCount??0} 件</p><h3>取り込む業務データ（件数）</h3><pre class="migcounts">${esc(migrationCountLines(summary.keyCounts))}</pre><h3>置き換わるもの</h3><ul class="testkeep">${replaces}</ul><h3>変更しないもの</h3><ul class="testkeep">${preserves}</ul>${legacy}<p>${esc(summary.warning||'')}</p>${mapping}${nameBlock}</article>`;
   repairDialog.querySelector('#mig-confirm').hidden=false;
   const agree=repairDialog.querySelector('#mig-agree');
@@ -220,10 +186,7 @@ function openMigrationRestore(){
   agree.onchange=refreshConfirm;
   repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{
    if(prevMap[sel.getAttribute('data-mig-source')])sel.value=String(prevMap[sel.getAttribute('data-mig-source')]);
-   sel.onchange=()=>{refreshConfirm();refreshNamePlan()};
-  });
-  repairDialog.querySelectorAll('[data-mig-name-identity]').forEach(sel=>{
-   sel.onchange=()=>{refreshConfirm();refreshNamePlan()};
+   sel.onchange=refreshConfirm;
   });
   const bulkUser=repairDialog.querySelector('#mig-bulk-user');
   const bulkApply=repairDialog.querySelector('#mig-bulk-apply');
@@ -234,8 +197,7 @@ function openMigrationRestore(){
     repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{sel.value=bulkUser.value});
     agree.checked=false;
     refreshConfirm();
-    refreshNamePlan();
-    repairMessage('全員の割り当てを変更しました。ネーム承認の扱いを確認し、同意にチェックしてください。');
+    repairMessage('全員の割り当てを変更しました。ネーム情報の扱いを確認し、同意にチェックしてください。');
    };
   }
 
@@ -249,19 +211,18 @@ function openMigrationRestore(){
   dataB64=await migrationFileToBase64(file);
   summary=await api('/api/migration/inspect',{filename:file.name,data:dataB64});
   paintSummary();
-  repairMessage('内容と利用者の割り当て・ネーム承認の扱いを確認し、同意にチェックしてから復元を実行してください。');
+  repairMessage('内容と利用者の割り当て・ネーム情報の扱いを確認し、同意にチェックしてから復元を実行してください。');
  });
  repairDialog.querySelector('#mig-run').onclick=()=>repairRun(async()=>{
   if(!summary||!dataB64)throw Error('先にZIPの内容を確認してください。');
   if(!repairDialog.querySelector('#mig-agree').checked)throw Error('置き換えへの同意が必要です。');
   if(!migrationMappingReady(summary))throw Error('移行元の利用者の割り当てをすべて選んでください。');
   const userMap=migrationCollectUserMap();
-  const nameAssigneeOverrides=migrationCollectNameAssigneeOverrides();
-  if(!confirm('業務データを選んだバックアップの内容で置き換えます。利用者アカウントは変更しません。ネーム承認は内容・担当者が同じものだけ維持します。よろしいですか？'))return;
-  const result=await api('/api/migration/restore',{filename:file.name,data:dataB64,confirm:true,userMap,nameAssigneeOverrides});
+  if(!confirm('業務データを選んだバックアップの内容で置き換えます。利用者アカウントは変更しません。ネーム情報はこのパソコンにある場合すべて保護します。よろしいですか？'))return;
+  const result=await api('/api/migration/restore',{filename:file.name,data:dataB64,confirm:true,userMap});
   const steps=(result.restartSteps||[]).map((s,i)=>`${i+1}. ${s}`).join('\n');
-  const nameReport=migrationNameApprovalLines(result.nameApprovals);
-  repairDialog.innerHTML=`<div class="dialoghead"><div><h2>復元が完了しました</h2><p>主管理者専用 ／ 利用者情報は変更していません</p></div></div><div class="repairbody"><p id="repair-message" role="status">作成日時 ${esc(result.createdAt||'')} の業務データを反映しました。自動バックアップ：${esc(result.autoBackup||'—')}</p><pre class="migcounts">${esc(migrationCountLines(result.keyCounts))}</pre><h3>ネーム承認の結果</h3><pre class="migcounts">${esc(nameReport||'対象なし')}</pre><p class="testwarn">つぎの手順で続けてください。</p><pre class="migcounts">${esc(steps)}</pre><button type="button" class="primary" id="mig-relogin">ログイン画面へ</button></div>`;
+  const nameReport=migrationNameProtectionLines(result.nameProtection);
+  repairDialog.innerHTML=`<div class="dialoghead"><div><h2>復元が完了しました</h2><p>主管理者専用 ／ 利用者・ネーム情報は変更していません</p></div></div><div class="repairbody"><p id="repair-message" role="status">作成日時 ${esc(result.createdAt||'')} の業務データを反映しました。自動バックアップ：${esc(result.autoBackup||'—')}</p><pre class="migcounts">${esc(migrationCountLines(result.keyCounts))}</pre><h3>ネーム情報の結果</h3><pre class="migcounts">${esc(nameReport||'対象なし')}</pre><p class="testwarn">つぎの手順で続けてください。</p><pre class="migcounts">${esc(steps)}</pre><button type="button" class="primary" id="mig-relogin">ログイン画面へ</button></div>`;
   repairDialog.querySelector('#mig-relogin').onclick=()=>{resetRepair();currentUser=null;dirty=false;authScreen('login')};
  });
  if(!repairDialog.open)repairDialog.showModal();

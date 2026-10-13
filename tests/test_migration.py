@@ -466,7 +466,8 @@ class MigrationTests(unittest.TestCase):
             self.assertIsNone(hist[0])
             self.assertTrue(str(hist[1]).startswith('移行元の記録'))
             audit = c.execute("SELECT action FROM audit ORDER BY id DESC LIMIT 1").fetchone()[0]
-            self.assertIn('利用者・ネーム承認は保持', audit)
+            self.assertIn('利用者保持', audit)
+            self.assertIn('ネーム情報', audit)
         finally:
             c.close()
 
@@ -760,30 +761,32 @@ class MigrationTests(unittest.TestCase):
         self.assertIn('形式', str(ctx.exception))
         self.assertEqual(hashlib.sha256((self.dst / 'instructions.sqlite3').read_bytes()).hexdigest(), before)
 
-    def test_name_approval_keep_same_content_ignores_zip_approved(self):
-        """Same identity+content: keep dest 了承 even if ZIP is also approved by another person."""
+    def test_name_data_protected_when_destination_has_names(self):
+        """Destination with any name rows keeps full name domain; ZIP names are ignored."""
         import name_review
 
-        identity = 'fmt:keep-same'
-        # Different numeric format ids on purpose.
+        src_identity = 'fmt:only-src'
+        dst_identity = 'fmt:company-only'
         _add_name_format(
             self.src / 'instructions.sqlite3',
-            identity=identity,
-            format_name='共通形式',
-            note='同じ内容',
-            sample_path='images/names/same.png',
+            identity=src_identity,
+            customer_name='開発顧客',
+            format_name='開発形式',
+            note='ZIP側',
+            sample_path='images/names/src.png',
             assignee_id=self.uid,
             confirmed=True,
-            confirmed_at='2026-01-01T09:00:00',
             force_format_id=10,
-            history=[{'actor_id': self.uid, 'actor_name': '主管理者', 'action': '内容を確認', 'at': '2026-01-01T09:00:00'}],
+            history=[{'actor_id': self.uid, 'actor_name': '主管理者', 'at': '2026-01-01T09:00:00'}],
         )
         _add_name_format(
             self.dst / 'instructions.sqlite3',
-            identity=identity,
-            format_name='共通形式',
-            note='同じ内容',
-            sample_path='images/names/same.png',
+            identity=dst_identity,
+            customer_name='会社顧客',
+            format_name='会社形式',
+            note='会社側の原文',
+            sample_path='images/names/dst.png',
+            sample_caption='会社見本',
             assignee_id=self.dst_uid,
             confirmed=True,
             confirmed_at='2026-02-15T12:00:00',
@@ -792,27 +795,61 @@ class MigrationTests(unittest.TestCase):
                 {'actor_id': self.dst_uid, 'actor_name': '旧管理者', 'action': '内容を確認', 'at': '2026-02-15T12:00:00'},
             ],
         )
-        zip_path, _ = migration.build_export_zip(self.src, self.root / 'keep.zip')
+        # Destination-only name_import setting should also survive.
+        c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
+        try:
+            c.execute(
+                "INSERT OR REPLACE INTO settings(key,value) VALUES('name_import',?)",
+                (json.dumps({'customerCount': 1, 'source': 'company'}, ensure_ascii=False),),
+            )
+            c.commit()
+        finally:
+            c.close()
+
+        zip_path, _ = migration.build_export_zip(self.src, self.root / 'protect.zip')
         summary, _ = migration.inspect_zip(zip_path, self.dst, user_map=self._map_src_to_dst())
-        self.assertEqual(summary['nameApprovals']['counts']['keep'], 1)
-        self.assertIn('ネーム情報の承認', summary['warning'])
+        self.assertTrue(summary['preservesDestinationNames'])
+        self.assertTrue(summary['nameProtection']['protected'])
+        self.assertIn('ネーム情報', summary['warning'])
+        self.assertIn('そのまま残し', summary['warning'])
+        self.assertTrue(any('ネーム情報' in x for x in summary['preserves']))
+        self.assertFalse(any(x.startswith('ネーム情報（このパソコンに未登録') for x in summary['replaces']))
 
         result = migration.restore_from_zip(
             self.dst, zip_path,
-            auto_backup_dir=self.root / 'auto-keep',
+            auto_backup_dir=self.root / 'auto-protect',
             user_map=self._map_src_to_dst(),
         )
-        self.assertTrue(result['preservesDestinationNameApprovals'])
-        self.assertEqual(result['nameApprovals']['counts']['keep'], 1)
+        self.assertTrue(result['preservesDestinationNames'])
+        self.assertTrue(result['nameProtection']['protected'])
+        self.assertTrue(any(p.name.startswith('pre-restore-') for p in (self.root / 'auto-protect').glob('*.zip')))
 
         c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
         try:
             c.row_factory = sqlite3.Row
+            identities = [r[0] for r in c.execute('SELECT identity FROM name_formats ORDER BY id')]
+            self.assertEqual(identities, [dst_identity])
+            self.assertIsNone(
+                c.execute("SELECT id FROM name_formats WHERE identity=?", (src_identity,)).fetchone()
+            )
             fid = c.execute(
-                "SELECT id FROM name_formats WHERE identity=?", (identity,)
+                "SELECT id FROM name_formats WHERE identity=?", (dst_identity,)
             ).fetchone()['id']
-            # Live id comes from ZIP (10), not dest's old 99.
-            self.assertEqual(fid, 10)
+            self.assertEqual(fid, 99)
+            fmt = c.execute('SELECT format_name, note FROM name_formats WHERE id=?', (fid,)).fetchone()
+            self.assertEqual(fmt['format_name'], '会社形式')
+            self.assertEqual(fmt['note'], '会社側の原文')
+            cust = c.execute(
+                'SELECT source_name FROM name_customers WHERE id=('
+                'SELECT customer_id FROM name_formats WHERE id=?)',
+                (fid,),
+            ).fetchone()['source_name']
+            self.assertEqual(cust, '会社顧客')
+            sample = c.execute(
+                'SELECT relative_path, caption FROM name_samples WHERE format_id=?', (fid,)
+            ).fetchone()
+            self.assertEqual(sample['relative_path'], 'images/names/dst.png')
+            self.assertEqual(sample['caption'], '会社見本')
             review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
             self.assertEqual(review['assignee_id'], self.dst_uid)
             self.assertEqual(review['confirmed_at'], '2026-02-15T12:00:00')
@@ -828,18 +865,87 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(len(hist), 1)
             self.assertEqual(hist[0]['actor_id'], self.dst_uid)
             self.assertEqual(hist[0]['at'], '2026-02-15T12:00:00')
+            name_import = json.loads(
+                c.execute("SELECT value FROM settings WHERE key='name_import'").fetchone()[0]
+            )
+            self.assertEqual(name_import['source'], 'company')
+            # Orders/business data still came from ZIP.
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM orders').fetchone()[0], 1)
+            login, pw = c.execute("SELECT login, password FROM users WHERE role='owner'").fetchone()
+            self.assertEqual(login, 'old@example.co.jp')
+            self.assertTrue(verify(self.dst_password, pw))
         finally:
             c.close()
 
-    def test_name_approval_content_and_sample_change_reconfirm(self):
-        identity = 'fmt:content-change'
+    def test_name_data_from_zip_when_destination_empty(self):
+        """Empty destination receives ZIP name tables; assignees remapped; approvals kept if digest valid."""
+        import name_review
+
+        identity = 'fmt:from-zip'
         _add_name_format(
             self.src / 'instructions.sqlite3',
             identity=identity,
-            format_name='変更後',
-            note='開発側で文言変更',
+            customer_name='ZIP顧客',
+            format_name='ZIP形式',
+            note='空先への取り込み',
+            sample_path='images/names/zip.png',
+            assignee_id=self.uid,
+            confirmed=True,
+            confirmed_at='2026-01-10T10:00:00',
+            force_format_id=22,
+            history=[{'actor_id': self.uid, 'actor_name': '主管理者', 'at': '2026-01-10T10:00:00'}],
+        )
+        # Destination name tables remain empty (setUp default).
+        self.assertFalse(migration.destination_has_name_data(self.dst / 'instructions.sqlite3'))
+
+        zip_path, _ = migration.build_export_zip(self.src, self.root / 'empty-dest.zip')
+        summary, _ = migration.inspect_zip(zip_path, self.dst, user_map=self._map_src_to_dst())
+        self.assertFalse(summary['nameProtection']['protected'])
+        self.assertIn('ネーム情報がない', summary['warning'])
+        self.assertTrue(any('ネーム情報（このパソコンに未登録' in x for x in summary['replaces']))
+
+        result = migration.restore_from_zip(
+            self.dst, zip_path,
+            auto_backup_dir=self.root / 'auto-empty',
+            user_map=self._map_src_to_dst(),
+        )
+        self.assertFalse(result['nameProtection']['protected'])
+        self.assertEqual(result['nameProtection']['mode'], 'applyZip')
+
+        c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
+        try:
+            c.row_factory = sqlite3.Row
+            fid = c.execute(
+                "SELECT id FROM name_formats WHERE identity=?", (identity,)
+            ).fetchone()['id']
+            self.assertEqual(fid, 22)
+            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
+            self.assertEqual(review['assignee_id'], self.dst_uid)
+            self.assertEqual(review['confirmed_by'], self.dst_uid)
+            self.assertEqual(review['confirmed_at'], '2026-01-10T10:00:00')
+            token = name_review.digest(c, fid)
+            self.assertEqual(review['confirmed_digest'], token)
+            status = name_review.state(c, fid, {'id': self.dst_uid, 'active': 1, 'must_change': 0})
+            self.assertEqual(status['status'], '了承')
+            hist = c.execute(
+                'SELECT actor_id, actor_name FROM name_review_history WHERE format_id=?',
+                (fid,),
+            ).fetchone()
+            # ZIP history actors are unbound and annotated as 移行元の記録.
+            self.assertIsNone(hist['actor_id'])
+            self.assertIn('移行元の記録', hist['actor_name'])
+        finally:
+            c.close()
+
+    def test_name_protection_ignores_conflicting_zip_content(self):
+        """Same identity in ZIP with different content must not overwrite destination."""
+        identity = 'fmt:same-id'
+        _add_name_format(
+            self.src / 'instructions.sqlite3',
+            identity=identity,
+            format_name='開発の改訂版',
+            note='ZIPの新しい文面',
             sample_path='images/names/new.png',
-            sample_caption='新しい見本',
             assignee_id=self.uid,
             confirmed=True,
             force_format_id=11,
@@ -847,205 +953,45 @@ class MigrationTests(unittest.TestCase):
         _add_name_format(
             self.dst / 'instructions.sqlite3',
             identity=identity,
-            format_name='変更前',
-            note='会社側の原文',
+            format_name='会社の原文',
+            note='会社側の文面',
             sample_path='images/names/old.png',
-            sample_caption='会社の見本',
             assignee_id=self.dst_uid,
             confirmed=True,
             confirmed_at='2026-02-20T08:00:00',
             force_format_id=55,
             history=[{'actor_id': self.dst_uid, 'actor_name': '旧管理者', 'at': '2026-02-20T08:00:00'}],
         )
-        zip_path, _ = migration.build_export_zip(self.src, self.root / 'content.zip')
-        result = migration.restore_from_zip(
+        zip_path, _ = migration.build_export_zip(self.src, self.root / 'conflict.zip')
+        migration.restore_from_zip(
             self.dst, zip_path,
-            auto_backup_dir=self.root / 'auto-content',
-            user_map=self._map_src_to_dst(),
-        )
-        self.assertEqual(result['nameApprovals']['counts']['content'], 1)
-        import name_review
-        c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
-        try:
-            c.row_factory = sqlite3.Row
-            fid = c.execute("SELECT id FROM name_formats WHERE identity=?", (identity,)).fetchone()['id']
-            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
-            self.assertEqual(review['assignee_id'], self.dst_uid)
-            self.assertEqual(review['confirmed_at'], '2026-02-20T08:00:00')
-            self.assertIsNone(review['confirmed_digest'])
-            status = name_review.state(c, fid, {'id': self.dst_uid, 'active': 1, 'must_change': 0})
-            self.assertEqual(status['status'], '再確認待ち')
-            self.assertEqual(
-                c.execute('SELECT COUNT(*) FROM name_review_history WHERE format_id=?', (fid,)).fetchone()[0],
-                1,
-            )
-        finally:
-            c.close()
-
-    def test_name_approval_assignee_override_reconfirm(self):
-        sales = {'login': 'sales@example.co.jp', 'name': '会社営業', 'role': 'sales'}
-        shutil.rmtree(self.dst)
-        self.dst.mkdir()
-        self.dst_uid, self.dst_hash = _init_instructions(
-            self.dst / 'instructions.sqlite3',
-            login='old@example.co.jp',
-            password=self.dst_password,
-            name='旧管理者',
-            extra_users=[sales],
-        )
-        _init_stock(self.dst / 'stock.sqlite3')
-        _seed_files(self.dst)
-        sales_id = sales['id']
-
-        identity = 'fmt:assignee-change'
-        _add_name_format(
-            self.src / 'instructions.sqlite3',
-            identity=identity,
-            format_name='担当変更',
-            note='同内容',
-            assignee_id=self.uid,
-            confirmed=True,
-            force_format_id=12,
-        )
-        _add_name_format(
-            self.dst / 'instructions.sqlite3',
-            identity=identity,
-            format_name='担当変更',
-            note='同内容',
-            assignee_id=self.dst_uid,
-            confirmed=True,
-            confirmed_at='2026-02-21T08:00:00',
-            force_format_id=56,
-            history=[{'actor_id': self.dst_uid, 'actor_name': '旧管理者', 'at': '2026-02-21T08:00:00'}],
-        )
-        zip_path, _ = migration.build_export_zip(self.src, self.root / 'assignee.zip')
-        result = migration.restore_from_zip(
-            self.dst, zip_path,
-            auto_backup_dir=self.root / 'auto-assignee',
-            user_map={self.uid: self.dst_uid},
-            name_assignee_overrides={identity: sales_id},
-        )
-        self.assertEqual(result['nameApprovals']['counts']['assignee'], 1)
-        import name_review
-        c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
-        try:
-            c.row_factory = sqlite3.Row
-            fid = c.execute("SELECT id FROM name_formats WHERE identity=?", (identity,)).fetchone()['id']
-            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
-            self.assertEqual(review['assignee_id'], sales_id)
-            self.assertIsNone(review['confirmed_digest'])
-            self.assertEqual(review['confirmed_at'], '2026-02-21T08:00:00')
-            status = name_review.state(c, fid, {'id': sales_id, 'active': 1, 'must_change': 0})
-            self.assertEqual(status['status'], '再確認待ち')
-        finally:
-            c.close()
-
-    def test_name_approval_new_unapproved_and_deleted_preview(self):
-        _add_name_format(
-            self.src / 'instructions.sqlite3',
-            identity='fmt:only-src',
-            format_name='新規形式',
-            assignee_id=self.uid,
-            confirmed=True,
-            force_format_id=20,
-        )
-        _add_name_format(
-            self.dst / 'instructions.sqlite3',
-            identity='fmt:only-dst',
-            format_name='会社だけ',
-            assignee_id=self.dst_uid,
-            confirmed=True,
-            confirmed_at='2026-02-22T08:00:00',
-            force_format_id=70,
-            history=[{'actor_id': self.dst_uid, 'actor_name': '旧管理者', 'at': '2026-02-22T08:00:00'}],
-        )
-        zip_path, _ = migration.build_export_zip(self.src, self.root / 'newdel.zip')
-        summary, _ = migration.inspect_zip(zip_path, self.dst, user_map=self._map_src_to_dst())
-        self.assertEqual(summary['nameApprovals']['counts']['new'], 1)
-        self.assertEqual(summary['nameApprovals']['counts']['deleted'], 1)
-        self.assertIn('履歴', summary['nameApprovals']['categories']['deleted'][0]['note'])
-
-        result = migration.restore_from_zip(
-            self.dst, zip_path,
-            auto_backup_dir=self.root / 'auto-newdel',
-            user_map=self._map_src_to_dst(),
-        )
-        import name_review
-        c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
-        try:
-            c.row_factory = sqlite3.Row
-            self.assertIsNone(
-                c.execute("SELECT id FROM name_formats WHERE identity='fmt:only-dst'").fetchone()
-            )
-            fid = c.execute("SELECT id FROM name_formats WHERE identity='fmt:only-src'").fetchone()['id']
-            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
-            self.assertEqual(review['assignee_id'], self.dst_uid)
-            self.assertIsNone(review['confirmed_at'])
-            self.assertIsNone(review['confirmed_digest'])
-            status = name_review.state(c, fid, {'id': self.dst_uid, 'active': 1, 'must_change': 0})
-            self.assertEqual(status['status'], '未了承')
-            self.assertEqual(result['nameApprovals']['counts']['new'], 1)
-            self.assertEqual(result['nameApprovals']['counts']['deleted'], 1)
-        finally:
-            c.close()
-
-    def test_name_approval_ambiguous_identity_not_guessed(self):
-        # Two destination rows should not happen with UNIQUE identity; simulate source
-        # without identity column match by using empty identity on source via raw SQL.
-        c = sqlite3.connect(str(self.src / 'instructions.sqlite3'))
-        try:
-            c.execute(
-                '''INSERT INTO name_customers(source_key, source_index, source_name, retired)
-                   VALUES('cust:amb',1,'曖昧',0)'''
-            )
-            cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-            # Bypass NOT NULL UNIQUE by using a placeholder then clearing — SQLite UNIQUE allows one ''
-            c.execute(
-                '''INSERT INTO name_formats(identity, customer_id, source_kind, format_name, retired)
-                   VALUES('tmp-amb',?,?,?,0)''',
-                (cid, 1, '曖昧形式'),
-            )
-            fid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-            # Replace with empty identity: delete unique constraint conflict by updating
-            # only if we use a space-only identity treated as missing.
-            c.execute("UPDATE name_formats SET identity='' WHERE id=?", (fid,))
-            c.execute(
-                '''INSERT INTO name_reviews(format_id, assignee_id, confirmed_by, confirmed_name, confirmed_at, confirmed_digest)
-                   VALUES(?,?,?,?,?,?)''',
-                (fid, self.uid, self.uid, '主管理者', '2026-01-02T00:00:00', 'fake'),
-            )
-            c.commit()
-        finally:
-            c.close()
-        zip_path, _ = migration.build_export_zip(self.src, self.root / 'amb.zip')
-        summary, _ = migration.inspect_zip(zip_path, self.dst, user_map=self._map_src_to_dst())
-        self.assertGreaterEqual(summary['nameApprovals']['counts']['ambiguous'], 1)
-        result = migration.restore_from_zip(
-            self.dst, zip_path,
-            auto_backup_dir=self.root / 'auto-amb',
+            auto_backup_dir=self.root / 'auto-conflict',
             user_map=self._map_src_to_dst(),
         )
         c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
         try:
+            c.row_factory = sqlite3.Row
             row = c.execute(
-                "SELECT confirmed_at, confirmed_digest FROM name_reviews r "
-                "JOIN name_formats f ON f.id=r.format_id WHERE f.format_name='曖昧形式'"
+                "SELECT id, format_name, note FROM name_formats WHERE identity=?",
+                (identity,),
             ).fetchone()
-            # Blank-identity source row → unapproved (no ZIP approval adopted).
-            if row:
-                self.assertIsNone(row[0])
-                self.assertIsNone(row[1])
-            self.assertGreaterEqual(result['nameApprovals']['counts']['ambiguous'], 1)
+            self.assertEqual(row['id'], 55)
+            self.assertEqual(row['format_name'], '会社の原文')
+            self.assertEqual(row['note'], '会社側の文面')
+            sample = c.execute(
+                'SELECT relative_path FROM name_samples WHERE format_id=?', (row['id'],)
+            ).fetchone()['relative_path']
+            self.assertEqual(sample, 'images/names/old.png')
         finally:
             c.close()
 
-    def test_name_approval_legacy_zip_does_not_blind_overwrite(self):
+    def test_name_protection_legacy_zip_same_rule(self):
         identity = 'fmt:legacy-keep'
         _add_name_format(
             self.src / 'instructions.sqlite3',
             identity=identity,
             format_name='旧ZIP形式',
-            note='同内容',
+            note='ZIP文面',
             assignee_id=self.uid,
             confirmed=True,
             force_format_id=30,
@@ -1053,8 +999,8 @@ class MigrationTests(unittest.TestCase):
         _add_name_format(
             self.dst / 'instructions.sqlite3',
             identity=identity,
-            format_name='旧ZIP形式',
-            note='同内容',
+            format_name='会社原文',
+            note='会社文面',
             assignee_id=self.dst_uid,
             confirmed=True,
             confirmed_at='2026-02-25T08:00:00',
@@ -1086,8 +1032,8 @@ class MigrationTests(unittest.TestCase):
                     zf.write(path, path.relative_to(work).as_posix())
 
         summary, _ = migration.inspect_zip(legacy, self.dst, user_map=self._map_src_to_dst())
-        self.assertIn('ネーム承認', summary['warning'])
-        self.assertEqual(summary['nameApprovals']['counts']['keep'], 1)
+        self.assertIn('ネーム情報', summary['warning'])
+        self.assertTrue(summary['nameProtection']['protected'])
 
         migration.restore_from_zip(
             self.dst, legacy,
@@ -1098,23 +1044,28 @@ class MigrationTests(unittest.TestCase):
         c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
         try:
             c.row_factory = sqlite3.Row
-            fid = c.execute("SELECT id FROM name_formats WHERE identity=?", (identity,)).fetchone()['id']
-            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
+            row = c.execute(
+                "SELECT id, format_name, note FROM name_formats WHERE identity=?",
+                (identity,),
+            ).fetchone()
+            self.assertEqual(row['id'], 80)
+            self.assertEqual(row['format_name'], '会社原文')
+            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (row['id'],)).fetchone()
             self.assertEqual(review['assignee_id'], self.dst_uid)
             self.assertEqual(review['confirmed_at'], '2026-02-25T08:00:00')
-            status = name_review.state(c, fid, {'id': self.dst_uid, 'active': 1, 'must_change': 0})
+            status = name_review.state(c, row['id'], {'id': self.dst_uid, 'active': 1, 'must_change': 0})
             self.assertEqual(status['status'], '了承')
         finally:
             c.close()
 
-    def test_name_approval_revalidate_uses_latest_dest_at_apply(self):
-        """Approvals done after inspect preview must still be preserved at restore."""
+    def test_name_protection_uses_latest_dest_snapshot_at_apply(self):
+        """Name edits after inspect preview must still be preserved at restore."""
         identity = 'fmt:revalidate'
         _add_name_format(
             self.src / 'instructions.sqlite3',
             identity=identity,
-            format_name='再検証',
-            note='同内容',
+            format_name='ZIP版',
+            note='ZIP',
             assignee_id=self.uid,
             confirmed=True,
             force_format_id=31,
@@ -1122,32 +1073,32 @@ class MigrationTests(unittest.TestCase):
         _add_name_format(
             self.dst / 'instructions.sqlite3',
             identity=identity,
-            format_name='再検証',
-            note='同内容',
+            format_name='会社版',
+            note='プレビュー時点',
             assignee_id=self.dst_uid,
             confirmed=False,
             force_format_id=81,
         )
         zip_path, _ = migration.build_export_zip(self.src, self.root / 'reval.zip')
         summary, _ = migration.inspect_zip(zip_path, self.dst, user_map=self._map_src_to_dst())
-        # Before company confirmation: keep category without 了承
-        self.assertEqual(summary['nameApprovals']['counts']['keep'], 1)
+        self.assertTrue(summary['nameProtection']['protected'])
 
-        # Company confirms after preview.
+        # Company edits / confirms after preview.
         import name_review
         c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
         try:
             c.row_factory = sqlite3.Row
             fid = 81
+            c.execute("UPDATE name_formats SET note=? WHERE id=?", ('プレビュー後の修正', fid))
             token = name_review.digest(c, fid)
             c.execute(
-                '''UPDATE name_reviews SET confirmed_by=?, confirmed_name=?, confirmed_at=?, confirmed_digest=?
-                   WHERE format_id=?''',
+                'UPDATE name_reviews SET confirmed_by=?, confirmed_name=?, confirmed_at=?, confirmed_digest=? '
+                'WHERE format_id=?',
                 (self.dst_uid, '旧管理者', '2026-03-01T18:00:00', token, fid),
             )
             c.execute(
-                '''INSERT INTO name_review_history(format_id, actor_id, actor_name, action, at, digest)
-                   VALUES(?,?,?,?,?,?)''',
+                'INSERT INTO name_review_history(format_id, actor_id, actor_name, action, at, digest) '
+                'VALUES(?,?,?,?,?,?)',
                 (fid, self.dst_uid, '旧管理者', '内容を確認', '2026-03-01T18:00:00', token),
             )
             c.commit()
@@ -1159,15 +1110,19 @@ class MigrationTests(unittest.TestCase):
             auto_backup_dir=self.root / 'auto-reval',
             user_map=self._map_src_to_dst(),
         )
+        self.assertTrue(result['nameProtection']['protected'])
         c = sqlite3.connect(str(self.dst / 'instructions.sqlite3'))
         try:
             c.row_factory = sqlite3.Row
-            fid = c.execute("SELECT id FROM name_formats WHERE identity=?", (identity,)).fetchone()['id']
-            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (fid,)).fetchone()
+            row = c.execute(
+                "SELECT id, note FROM name_formats WHERE identity=?", (identity,)
+            ).fetchone()
+            self.assertEqual(row['id'], 81)
+            self.assertEqual(row['note'], 'プレビュー後の修正')
+            review = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (row['id'],)).fetchone()
             self.assertEqual(review['confirmed_at'], '2026-03-01T18:00:00')
-            status = name_review.state(c, fid, {'id': self.dst_uid, 'active': 1, 'must_change': 0})
+            status = name_review.state(c, row['id'], {'id': self.dst_uid, 'active': 1, 'must_change': 0})
             self.assertEqual(status['status'], '了承')
-            self.assertEqual(result['nameApprovals']['counts']['keep'], 1)
         finally:
             c.close()
 
