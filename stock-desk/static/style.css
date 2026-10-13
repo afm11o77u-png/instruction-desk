@@ -208,6 +208,7 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 .history-table .hist-product{width:14rem}
 .history-table .hist-spec{width:11rem}
 .history-table .hist-delta{width:5.5rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+.history-table .hist-actor{width:7rem}
 .history-table .hist-detail{width:4.5rem;white-space:nowrap}
 .history-table .hist-product .dm-primary{display:block;font-weight:700}
 .history-table .hist-product .sub{display:block;margin-top:2px}

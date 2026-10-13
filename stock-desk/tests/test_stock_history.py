@@ -422,12 +422,11 @@ class StockHistoryUiSourceTest(unittest.TestCase):
 
     def test_compact_list_columns_and_detail_popup(self):
         page = APP_JS[APP_JS.index('function historyPage()'):APP_JS.index('async function loadMoveTargets()')]
-        # Compact columns only (業務日・保管場所・記録者などは詳細へ)
-        self.assertIn('<th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>詳細</th>', page)
+        # Compact columns: 記録者 is on the list; 業務日・保管場所などは詳細へ
+        self.assertIn('<th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>記録者</th><th>詳細</th>', page)
         self.assertNotIn('<th>業務日</th>', page)
         self.assertNotIn('<th>加工仕様</th>', page)
         self.assertNotIn('<th>保管場所</th>', page)
-        self.assertNotIn('<th>記録者</th>', page)
         self.assertNotIn('<th>担当者</th>', page)
         self.assertNotIn('<th>備考</th>', page)
         self.assertNotIn('<th>ロット数量（前→後）</th>', page)
@@ -435,6 +434,8 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn('historyListSpecText(e)', page)
         self.assertNotIn('historySpecText(e)', page)
         self.assertIn('historyDeltaText(e)', page)
+        self.assertIn('hist-actor', page)
+        self.assertIn("actorNameLabel||'未記録'", page)
         self.assertIn('>開く</button>', page)
         self.assertIn('history-detail-dialog', page)
         self.assertIn('historyDetailHtml(e)', page)
