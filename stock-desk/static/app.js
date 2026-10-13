@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:''},token:'',opening:{condition:'new'},openingDirty:false,openingHandleForm:null,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false}
 const CONDITION_OPTS=[['new','新品'],['used','中古']]
 function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
 function conditionQtyText(r){
@@ -855,13 +855,8 @@ function opening(){
   if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
   bindExcel()
 }
-function openOpeningRegister(){
-  const dlg=openingDialogEl()
-  if(!dlg)return
-  state.openingDirty=false
-  state.openingHandleForm=null
-  mountOpeningRegisterForm()
-  if(!dlg.open)dlg.showModal()
+function isInboundRegister(){return state.stockRegisterKind==='inbound'}
+function bindOpeningDialogCancel(dlg){
   dlg.oncancel=ev=>{
     if(state.openingHandleForm){
       ev.preventDefault()
@@ -873,6 +868,36 @@ function openOpeningRegister(){
     state.openingDirty=false
     state.openingHandleForm=null
   }
+}
+function openOpeningRegister(){
+  const dlg=openingDialogEl()
+  if(!dlg)return
+  state.stockRegisterKind='opening'
+  state.openingDirty=false
+  state.openingHandleForm=null
+  mountOpeningRegisterForm()
+  if(!dlg.open)dlg.showModal()
+  bindOpeningDialogCancel(dlg)
+}
+/** 「一覧にない商品を入庫」→ 初期在庫と同型の通常入庫フォーム（kind=inbound）。 */
+function openNormalInboundRegister(){
+  if(!stockCanWrite()){toast('閲覧専用のため、入庫できません。');return}
+  const dlg=openingDialogEl()
+  if(!dlg)return
+  state.stockRegisterKind='inbound'
+  state.openingDirty=false
+  state.openingHandleForm=null
+  const keepLoc={
+    condition:(state.opening&&state.opening.condition)==='used'?'used':'new',
+    siteId:state.opening&&state.opening.siteId!=null?state.opening.siteId:'',
+    shelfId:state.opening&&state.opening.shelfId!=null?state.opening.shelfId:'',
+    locationId:state.opening&&state.opening.locationId!=null?state.opening.locationId:'',
+    receivedOn:(state.opening&&state.opening.receivedOn)||todayISO(),
+  }
+  state.opening=keepLoc
+  mountOpeningRegisterForm()
+  if(!dlg.open)dlg.showModal()
+  bindOpeningDialogCancel(dlg)
 }
 function cancelOpeningHandleCreate(){
   state.openingHandleForm=null
@@ -1007,11 +1032,12 @@ function mountOpeningHandleCreateForm(dlg){
       state.data=await api('/api/bootstrap')
       const handles=openingHandlesFromData(state.data)
       const selected=resolveConfirmedOpeningHandle(handles,result.id)
-      if(!selected)throw Error('取扱は保存されましたが、初期在庫の候補に反映できませんでした。画面を開き直してください。')
+      if(!selected)throw Error('取扱は保存されましたが、候補に反映できませんでした。画面を開き直してください。')
       state.opening=selectOpeningHandle(state.opening,selected)
       state.openingHandleForm=null
       touchOpeningDirty()
-      toast(result.already?'同じ取扱が既にあったため、それを選びました。在庫はまだ増やしていません。':'取扱を登録し、初期在庫の入力に戻しました。在庫はまだ増やしていません。')
+      const backLabel=isInboundRegister()?'通常入庫':'初期在庫'
+      toast(result.already?`同じ取扱が既にあったため、それを選びました。在庫はまだ増やしていません。`:`取扱を登録し、${backLabel}の入力に戻しました。在庫はまだ増やしていません。`)
       mountOpeningRegisterForm()
     }catch(e){
       draft.saving=false
@@ -1027,6 +1053,7 @@ function mountOpeningRegisterForm(){
     mountOpeningHandleCreateForm(dlg)
     return
   }
+  const inbound=isInboundRegister()
   const handles=openingHandlesFromData(state.data)
   const selected=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
   const handleQuery=selected?handlePickerLabel(selected):(state.opening.handleQuery||'')
@@ -1037,10 +1064,27 @@ function mountOpeningRegisterForm(){
   state.opening.locationId=locSel.locationId==null?'':String(locSel.locationId)
   const unknownChecked=state.opening.unknown===false?false:true
   const sizeNotice=state.opening.sizeNotice||''
-  dlg.innerHTML=`<div class="dialoghead"><h2>初期在庫を登録</h2><button type="button" id="closeOpeningForm" class="quiet">閉じる</button></div>
+  const title=inbound?'通常入庫':'初期在庫'
+  const openingHints=inbound?'':`<p class="excelhint">記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。</p>
+    <p class="provisional">入荷日が分からない初期在庫は、架空の日付で埋めず「入荷日不明」にします。運用開始後の入荷より先に払い出す想定です。初期在庫同士の順番が不明なときは、払出し順の小さい番号から出します。仕入単価の安さでは順番を決めません。</p>`
+  const inboundHints=inbound?`<p class="notice">通常入庫として記録します。在庫基準日・入荷日不明・払出し順は使いません。入荷日は必須です。履歴・期間集計では「入庫」として初期在庫と区別されます。</p>`:''
+  const dateFields=inbound
+    ?`<div class="grid">
+      ${openingLocationFields(locSel)}
+      <label>入荷日（必須）<input id="receivedOn" type="date" value="${esc(state.opening.receivedOn||todayISO())}"></label>
+      <label>状態（必須）${conditionSelectHtml('openingCondition',state.opening.condition||'new')}</label>
+    </div>
+    <label>備考（任意）<input id="inboundNote" value="${esc(state.opening.note||'')}"></label>`
+    :`<div class="grid">
+      ${openingLocationFields(locSel)}
+      <label>在庫基準日（必須）<input id="basisDate" type="date" value="${esc(state.opening.basis||'')}"></label>
+      <label>状態（必須）${conditionSelectHtml('openingCondition',state.opening.condition||'new')}</label>
+    </div>
+    <label class="check"><input id="unknown" type="checkbox" ${unknownChecked?'checked':''}>入荷日不明</label>
+    <div class="grid"><label>入荷日<input id="receivedOn" type="date" value="${esc(state.opening.receivedOn||'')}"></label><label>入荷日不明のときの払出し順<input id="payoutOrder" inputmode="numeric" value="${esc(state.opening.payoutOrder||'1')}"></label></div>`
+  dlg.innerHTML=`<div class="dialoghead"><h2>${title}</h2><button type="button" id="closeOpeningForm" class="quiet">閉じる</button></div>
     <div class="dialogbody">
-    <p class="excelhint">記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。</p>
-    <p class="provisional">入荷日が分からない初期在庫は、架空の日付で埋めず「入荷日不明」にします。運用開始後の入荷より先に払い出す想定です。初期在庫同士の順番が不明なときは、払出し順の小さい番号から出します。仕入単価の安さでは順番を決めません。</p>
+    ${openingHints}${inboundHints}
     <div class="opening-handle-block">
       ${searchPickerMarkup({label:'取扱',inputId:'handleQuery',listId:'handleOptions',clearId:'handleClear',hintId:'handleHint',placeholder:'顧客名・品番・商品名・加工情報で検索',value:handleQuery})}
       <div class="opening-handle-tools">
@@ -1048,16 +1092,10 @@ function mountOpeningRegisterForm(){
         <p class="opening-handle-empty-guide" id="handleEmptyGuide">候補が無いときは「取扱を新しく登録」から、登録済みの顧客と商品を選んで追加できます。顧客・商品そのものは各台帳で先に登録してください。</p>
       </div>
     </div>
-    <div class="grid">
-      ${openingLocationFields(locSel)}
-      <label>在庫基準日（必須）<input id="basisDate" type="date" value="${esc(state.opening.basis||'')}"></label>
-      <label>状態（必須）${conditionSelectHtml('openingCondition',state.opening.condition||'new')}</label>
-    </div>
+    ${dateFields}
     <p class="notice" id="conditionHint">状態は新品を初期選択しています。同じ取扱・サイズ・場所でも、新品と中古は別々に登録できます。</p>
     <p id="standardNote"></p>
     <p id="sizeNotice" class="notice" ${sizeNotice?'':'hidden'}>${esc(sizeNotice)}</p>
-    <label class="check"><input id="unknown" type="checkbox" ${unknownChecked?'checked':''}>入荷日不明</label>
-    <div class="grid"><label>入荷日<input id="receivedOn" type="date" value="${esc(state.opening.receivedOn||'')}"></label><label>入荷日不明のときの払出し順<input id="payoutOrder" inputmode="numeric" value="${esc(state.opening.payoutOrder||'1')}"></label></div>
     <h2>サイズごとの数量と仕入単価</h2>
     <div id="sizerows"></div>
     <div class="bar"><label>この商品にサイズを追加<input id="extraSize"></label><button type="button" id="addExtra">追加</button></div>
@@ -1077,6 +1115,7 @@ function mountOpeningRegisterForm(){
     standard.textContent=selected&&selected.isStandard&&peers.length===1?'この顧客はこの加工仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'刺繍ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
   }
   const syncUnknown=()=>{
+    if(inbound)return
     const on=$('#unknown',root).checked
     state.opening.unknown=on
     $('#receivedOn',root).disabled=on
@@ -1148,16 +1187,22 @@ function mountOpeningRegisterForm(){
   const origFocus=handleInput.onfocus
   handleInput.onfocus=e=>{if(typeof origFocus==='function')origFocus(e);refreshEmptyGuide()}
   refreshEmptyGuide()
-  $('#unknown',root).onchange=()=>{touchOpeningDirty();syncUnknown()}
-  $('#basisDate',root).onchange=()=>{state.opening.basis=$('#basisDate',root).value;touchOpeningDirty()}
+  const unknownEl=$('#unknown',root)
+  if(unknownEl)unknownEl.onchange=()=>{touchOpeningDirty();syncUnknown()}
+  const basisEl=$('#basisDate',root)
+  if(basisEl)basisEl.onchange=()=>{state.opening.basis=$('#basisDate',root).value;touchOpeningDirty()}
   const condEl=$('#openingCondition',root)
   if(condEl){
     if(!state.opening.condition)state.opening.condition='new'
     condEl.value=state.opening.condition==='used'?'used':'new'
     condEl.onchange=()=>{state.opening.condition=condEl.value;touchOpeningDirty()}
   }
-  $('#receivedOn',root).oninput=()=>{state.opening.receivedOn=$('#receivedOn',root).value;touchOpeningDirty()}
-  $('#payoutOrder',root).oninput=()=>{state.opening.payoutOrder=$('#payoutOrder',root).value;touchOpeningDirty()}
+  const receivedEl=$('#receivedOn',root)
+  if(receivedEl)receivedEl.oninput=()=>{state.opening.receivedOn=$('#receivedOn',root).value;touchOpeningDirty()}
+  const payoutEl=$('#payoutOrder',root)
+  if(payoutEl)payoutEl.oninput=()=>{state.opening.payoutOrder=$('#payoutOrder',root).value;touchOpeningDirty()}
+  const noteEl=$('#inboundNote',root)
+  if(noteEl)noteEl.oninput=()=>{state.opening.note=$('#inboundNote',root).value;touchOpeningDirty()}
   const siteEl=$('#openingSite',root)
   if(siteEl)siteEl.onchange=()=>{
     state.opening.siteId=siteEl.value
@@ -1180,7 +1225,9 @@ function mountOpeningRegisterForm(){
       const p=selected.product
       const keep=(state.opening.lines?.rows||[]).concat([{size,qty:'',unitCost:''}])
       await api('/api/products',{id:p.id,code:p.code,name:p.name,color:p.color,supplierId:p.supplierId,active:p.active,sizes:p.sizes.concat(size),links:p.links})
-      state.opening.basis=$('#basisDate',root).value
+      if(!inbound)state.opening.basis=$('#basisDate',root)?$('#basisDate',root).value:state.opening.basis
+      if($('#receivedOn',root))state.opening.receivedOn=$('#receivedOn',root).value
+      if($('#inboundNote',root))state.opening.note=$('#inboundNote',root).value
       syncLocationState()
       state.data=await api('/api/bootstrap')
       state.opening.lines={productId:p.id,rows:keep}
@@ -1189,11 +1236,46 @@ function mountOpeningRegisterForm(){
       mountOpeningRegisterForm()
     }catch(e){$('#error',root).textContent=e.message}
   }
-  $('#confirmOpen',root).onclick=()=>confirmOpening()
+  $('#confirmOpen',root).onclick=()=>inbound?confirmNormalInbound():confirmOpening()
   syncUnknown();drawSizes()
   if(sizeNotice){
     delete state.opening.sizeNotice
   }
+}
+function collectRegisterSizeLines(formRoot){
+  if(!state.opening.lines||!state.opening.lines.rows)throw Error('数量のある行がありません。')
+  const lines=[]
+  for(const line of state.opening.lines.rows){
+    const qty=String(line.qty||'').trim()
+    const cost=String(line.unitCost||'').trim()
+    if(!qty&&!cost)continue
+    if(!qty||!cost)throw Error(`${line.size}は、数量と仕入単価を両方入力してください。空欄を0円にはしません。`)
+    if(!/^\d+$/.test(qty)||Number(qty)<1)throw Error(`${line.size}の数量は1以上の整数です。`)
+    if(!/^\d+$/.test(cost))throw Error(`${line.size}の仕入単価を入力してください。空欄を0円にはしません。`)
+    lines.push({size:line.size,qty:Number(qty),unitCost:Number(cost)})
+  }
+  if(!lines.length)throw Error('数量のある行がありません。')
+  const seen=new Set()
+  for(const line of lines){
+    const key=line.size+'\0'+line.unitCost
+    if(seen.has(key))throw Error('同じサイズ・同じ単価の行があります。数量を1行にまとめてください。')
+    seen.add(key)
+  }
+  return lines
+}
+function resolveRegisterLocation(formRoot){
+  const siteId=$('#openingSite',formRoot)?$('#openingSite',formRoot).value:''
+  if(!siteId)throw Error('拠点を選んでください。')
+  const shelfEl=$('#openingShelf',formRoot)
+  const shelfLabel=$('#openingShelfLabel',formRoot)
+  const needShelf=shelfLabel&&!shelfLabel.hidden
+  const shelfId=shelfEl?shelfEl.value:''
+  if(needShelf&&!shelfId)throw Error('棚・区画を選んでください。')
+  const locationId=Number(needShelf?shelfId:siteId)
+  const loc=state.data.locations.find(l=>l.id===locationId)
+  if(!loc)throw Error('保管場所を、登録済みの場所から選んでください。')
+  const locLabel=loc.parentId?loc.label:(needShelf&&Number(shelfId)===Number(siteId)?'棚指定なし（'+loc.name+'）':loc.label)
+  return {locationId,locLabel}
 }
 function confirmOpening(){
   const formRoot=openingDialogEl()||document
@@ -1201,40 +1283,13 @@ function confirmOpening(){
     const handles=openingHandlesFromData(state.data)
     const selected=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
     if(!selected)throw Error('取扱を候補から選んで確定してください。入力した文字だけでは保存できません。')
-    if(!state.opening.lines||!state.opening.lines.rows)throw Error('数量のある行がありません。')
-    const lines=[]
-    for(const line of state.opening.lines.rows){
-      const qty=line.qty.trim()
-      const cost=line.unitCost.trim()
-      if(!qty&&!cost)continue
-      if(!qty||!cost)throw Error(`${line.size}は、数量と仕入単価を両方入力してください。空欄を0円にはしません。`)
-      if(!/^\d+$/.test(qty)||Number(qty)<1)throw Error(`${line.size}の数量は1以上の整数です。`)
-      if(!/^\d+$/.test(cost))throw Error(`${line.size}の仕入単価を入力してください。空欄を0円にはしません。`)
-      lines.push({size:line.size,qty:Number(qty),unitCost:Number(cost)})
-    }
-    if(!lines.length)throw Error('数量のある行がありません。')
-    const seen=new Set()
-    for(const line of lines){
-      const key=line.size+'\0'+line.unitCost
-      if(seen.has(key))throw Error('同じサイズ・同じ単価の行があります。数量を1行にまとめてください。')
-      seen.add(key)
-    }
+    const lines=collectRegisterSizeLines(formRoot)
     const basis=$('#basisDate',formRoot).value
     if(!basis)throw Error('在庫基準日を入力してください。')
     const unknown=$('#unknown',formRoot).checked
     if(!unknown&&!$('#receivedOn',formRoot).value)throw Error('入荷日を入力するか、入荷日不明にしてください。')
     if(unknown&&!/^\d+$/.test($('#payoutOrder',formRoot).value))throw Error('払出し順は1以上の整数です。')
-    const siteId=$('#openingSite',formRoot)?$('#openingSite',formRoot).value:''
-    if(!siteId)throw Error('拠点を選んでください。')
-    const shelfEl=$('#openingShelf',formRoot)
-    const shelfLabel=$('#openingShelfLabel',formRoot)
-    const needShelf=shelfLabel&&!shelfLabel.hidden
-    const shelfId=shelfEl?shelfEl.value:''
-    if(needShelf&&!shelfId)throw Error('棚・区画を選んでください。')
-    const locationId=Number(needShelf?shelfId:siteId)
-    const loc=state.data.locations.find(l=>l.id===locationId)
-    if(!loc)throw Error('保管場所を、登録済みの場所から選んでください。')
-    const locLabel=loc.parentId?loc.label:(needShelf&&Number(shelfId)===Number(siteId)?'棚指定なし（'+loc.name+'）':loc.label)
+    const {locationId,locLabel}=resolveRegisterLocation(formRoot)
     const condition=($('#openingCondition',formRoot)&&$('#openingCondition',formRoot).value)==='used'?'used':'new'
     state.opening.condition=condition
     state.token=crypto.randomUUID()
@@ -1264,6 +1319,54 @@ function confirmOpening(){
         await loadOpeningEntries()
         paint()
         openOpeningRegister()
+      }catch(e){dlg.querySelector('#error').textContent=e.message;button.disabled=false}
+    }
+  }catch(e){
+    const err=$('#error',formRoot)
+    if(err)err.textContent=e.message
+  }
+}
+function confirmNormalInbound(){
+  const formRoot=openingDialogEl()||document
+  try{
+    const handles=openingHandlesFromData(state.data)
+    const selected=resolveConfirmedOpeningHandle(handles,state.opening.handleId)
+    if(!selected)throw Error('取扱を候補から選んで確定してください。入力した文字だけでは保存できません。')
+    const lines=collectRegisterSizeLines(formRoot)
+    const receivedOn=$('#receivedOn',formRoot)?$('#receivedOn',formRoot).value:''
+    if(!receivedOn)throw Error('入荷日を入力してください。')
+    const {locationId,locLabel}=resolveRegisterLocation(formRoot)
+    const condition=($('#openingCondition',formRoot)&&$('#openingCondition',formRoot).value)==='used'?'used':'new'
+    const note=$('#inboundNote',formRoot)?$('#inboundNote',formRoot).value:''
+    state.opening.condition=condition
+    state.opening.receivedOn=receivedOn
+    state.opening.note=note
+    state.token=crypto.randomUUID()
+    const totalQty=lines.reduce((s,l)=>s+l.qty,0)
+    const totalAmount=lines.reduce((s,l)=>s+l.qty*l.unitCost,0)
+    const dlg=$('#dialog')
+    dlg.innerHTML=`<div class="dialoghead"><h2>通常入庫の確認</h2></div><div class="dialogbody">
+      <p>${esc(selected.customer.name)} / ${esc(selected.product.code)} ${esc(selected.product.name)} ${esc(selected.product.color)} / ${esc(specLabel(selected.embroidery))}</p>
+      <p>${esc(locLabel)}　状態 <strong>${esc(conditionLabel(condition))}</strong>　入荷日 ${esc(receivedOn)}</p>
+      <ul>${lines.map(l=>`<li>${esc(l.size)}　${num(l.qty)}着 × ${yen(l.unitCost)} ＝ ${yen(l.qty*l.unitCost)}</li>`).join('')}</ul>
+      <p class="money">合計 ${num(totalQty)}着　${yen(totalAmount)}</p>
+      <p>通常入庫として記録します（初期在庫ではありません）。</p><p id="error"></p></div>
+      <div class="dialogactions"><button type="button" id="back">戻る</button><button type="button" class="primary" id="commit">この内容で登録</button></div>`
+    dlg.showModal()
+    $('#back',dlg).onclick=()=>{dlg.close();dlg.innerHTML=''}
+    $('#commit',dlg).onclick=async()=>{
+      const button=$('#commit',dlg);if(button.disabled)return;button.disabled=true
+      try{
+        const result=await api('/api/inbound',{token:state.token,customerProductId:selected.id,locationId,condition,receivedOn,note,lines})
+        dlg.close();dlg.innerHTML=''
+        toast(result.already?'この登録は保存済みです。二重には加算していません。':'通常入庫を登録しました。')
+        state.opening=inboundStateAfterSuccessfulSave(state.opening)
+        state.openingDirty=false
+        state.openingHandleForm=null
+        state.data=await api('/api/bootstrap')
+        await loadMoveTargets()
+        paint()
+        openNormalInboundRegister()
       }catch(e){dlg.querySelector('#error').textContent=e.message;button.disabled=false}
     }
   }catch(e){
@@ -2034,7 +2137,7 @@ function movePage(){
     qTimer=setTimeout(async()=>{await loadMoveTargets();paint()},200)
   }
   const openNew=$('#openInboundNew')
-  if(openNew)openNew.onclick=()=>openInboundDialog(null)
+  if(openNew)openNew.onclick=()=>openNormalInboundRegister()
   document.querySelectorAll('[data-select-target]').forEach(b=>b.onclick=()=>{
     const target=targets.find(t=>String(t.customerProductId)===b.dataset.selectTarget&&t.size===b.dataset.size&&String(t.locationId)===b.dataset.location&&String(t.condition||'new')===String(b.dataset.condition||'new'))
     if(!target)return

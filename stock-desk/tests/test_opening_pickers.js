@@ -14,6 +14,7 @@ const {
   reconcileOpeningLinesForProduct,
   selectOpeningHandle,
   openingStateAfterSuccessfulSave,
+  inboundStateAfterSuccessfulSave,
   resolveConfirmedOpeningCustomer,
   resolveConfirmedOpeningProduct,
   resolveConfirmedOpeningOffering,
@@ -203,6 +204,28 @@ test('post-save clears handle and qty; keeps location/basis', () => {
   assert.strictEqual(next.handleId, undefined)
   assert.strictEqual(next.lines, undefined)
   assert.strictEqual(next.basis, '2026-09-01')
+  assert.strictEqual(next.locationId, '8')
+})
+
+test('inbound post-save keeps location/receivedOn; drops handle and basis', () => {
+  const next = inboundStateAfterSuccessfulSave({
+    customerId: '1',
+    handleId: '100',
+    lines: {productId: 10, rows: [{size: 'M', qty: '5', unitCost: '1000'}]},
+    basis: '2026-09-01',
+    receivedOn: '2026-10-10',
+    note: 'メモ',
+    condition: 'used',
+    siteId: '7',
+    shelfId: '8',
+    locationId: '8'
+  })
+  assert.strictEqual(next.handleId, undefined)
+  assert.strictEqual(next.lines, undefined)
+  assert.strictEqual(next.basis, undefined)
+  assert.strictEqual(next.receivedOn, '2026-10-10')
+  assert.strictEqual(next.note, 'メモ')
+  assert.strictEqual(next.condition, 'used')
   assert.strictEqual(next.locationId, '8')
 })
 

@@ -186,6 +186,17 @@ function openingStateAfterSuccessfulSave(opening){
   return keep
 }
 
+/** After 通常入庫 save: drop 取扱/数量; keep location/condition/receivedOn (no opening-only fields). */
+function inboundStateAfterSuccessfulSave(opening){
+  const keep={condition:(opening&&opening.condition)==='used'?'used':'new'}
+  if(opening&&opening.receivedOn)keep.receivedOn=opening.receivedOn
+  if(opening&&opening.note)keep.note=opening.note
+  if(opening&&opening.siteId!=null&&opening.siteId!=='')keep.siteId=String(opening.siteId)
+  if(opening&&opening.shelfId!=null&&opening.shelfId!=='')keep.shelfId=String(opening.shelfId)
+  if(opening&&opening.locationId!=null&&opening.locationId!=='')keep.locationId=String(opening.locationId)
+  return keep
+}
+
 function resolveConfirmedOpeningCustomer(customers, customerId){
   if(customerId==null||customerId==='')return null
   const id=Number(customerId)
@@ -245,6 +256,7 @@ if(typeof module!=='undefined'&&module.exports){
     reconcileOpeningLinesForProduct,
     selectOpeningHandle,
     openingStateAfterSuccessfulSave,
+    inboundStateAfterSuccessfulSave,
     resolveConfirmedOpeningCustomer,
     resolveConfirmedOpeningProduct,
     resolveConfirmedOpeningOffering,
