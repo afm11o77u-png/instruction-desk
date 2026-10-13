@@ -1001,12 +1001,17 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         upload = Path(tmp.name)
                     try:
                         if route == '/api/migration/inspect':
-                            summary, _manifest = migration.inspect_zip(upload, DATA)
+                            summary, _manifest = migration.inspect_zip(
+                                upload, DATA,
+                                user_map=d.get('userMap'),
+                                name_assignee_overrides=d.get('nameAssigneeOverrides'),
+                            )
                             return self.reply(200, summary)
                         if d.get('confirm') is not True:
                             raise migration.MigrationError('復元するには、業務データを置き換えることに同意してください。')
                         result = migration.restore_from_zip(
                             DATA, upload, actor=actor, user_map=d.get('userMap'),
+                            name_assignee_overrides=d.get('nameAssigneeOverrides'),
                         )
                         # Force client re-login.
                         self.cookie = [

@@ -9,6 +9,10 @@ destination image directories.
 Destination users / auth are never overwritten: company accounts keep their
 IDs, logins, passwords, permissions, and settings. Imported business rows that
 reference source user IDs are remapped via an explicit operator choice.
+
+Name-label approvals on the destination are protected: formats are matched by
+stable identity (not numeric ids). Unchanged content+assignee keeps destination
+approval; content or assignee changes become 再確認待ち; new formats stay 未了承.
 """
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ import zipfile
 import zlib
 from datetime import datetime
 from pathlib import Path
+
+import name_review
 
 FORMAT_VERSION = 2
 SUPPORTED_FORMAT_VERSIONS = frozenset({1, 2})
@@ -63,6 +69,7 @@ SKIP_DIR_NAMES = {
 AUTH_SETTINGS_KEYS = frozenset({'recovery'})
 
 # Ownership / assignee columns remapped to destination users.
+# name_reviews are merged separately so destination approvals are not overwritten.
 OWNERSHIP_COLUMNS = (
     ('templates', 'user_id'),
     ('label_sets', 'user_id'),
@@ -73,9 +80,24 @@ OWNERSHIP_COLUMNS = (
     ('placement_corrections', 'status_by_id'),
     ('shipments', 'created_by_id'),
     ('shipments', 'updated_by_id'),
-    ('name_reviews', 'assignee_id'),
-    ('name_reviews', 'confirmed_by'),
 )
+
+# Name-approval plan categories (mutually exclusive outcomes).
+NAME_APPROVAL_KEEP = 'keep'  # 承認維持
+NAME_APPROVAL_CONTENT = 'content'  # 内容変更により再確認
+NAME_APPROVAL_ASSIGNEE = 'assignee'  # 担当者変更
+NAME_APPROVAL_NEW = 'new'  # 新規・未承認
+NAME_APPROVAL_AMBIGUOUS = 'ambiguous'  # 対応要確認
+NAME_APPROVAL_DELETED = 'deleted'  # 削除対象
+
+NAME_APPROVAL_LABELS = {
+    NAME_APPROVAL_KEEP: '承認維持',
+    NAME_APPROVAL_CONTENT: '内容変更により再確認',
+    NAME_APPROVAL_ASSIGNEE: '担当者変更',
+    NAME_APPROVAL_NEW: '新規・未承認',
+    NAME_APPROVAL_AMBIGUOUS: '対応要確認',
+    NAME_APPROVAL_DELETED: '削除対象',
+}
 
 # Past actions: keep display text as 移行元の記録; do not bind actor_id to dest users.
 HISTORY_ACTOR_COLUMNS = (
@@ -584,7 +606,7 @@ def _extract_zip_safe(zip_path, dest_dir):
         raise MigrationError('ZIPが破損しています。') from e
 
 
-def inspect_zip(zip_path, data_dir=None):
+def inspect_zip(zip_path, data_dir=None, user_map=None, name_assignee_overrides=None):
     """Validate ZIP and return confirmation summary (does not modify DATA)."""
     zip_path = Path(zip_path)
     if not zip_path.is_file():
@@ -592,7 +614,12 @@ def inspect_zip(zip_path, data_dir=None):
     work = Path(tempfile.mkdtemp(prefix='inspect-'))
     try:
         _extract_zip_safe(zip_path, work)
-        return _validate_extracted(work, data_dir=data_dir)
+        return _validate_extracted(
+            work,
+            data_dir=data_dir,
+            user_map=user_map,
+            name_assignee_overrides=name_assignee_overrides,
+        )
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -601,11 +628,16 @@ def _warning_for_format(format_version, legacy_auth_present):
     parts = [
         'このパソコン上の業務データ（指示書・在庫・ひな形など）は置き換わります。',
         '利用者アカウント（ログインID・パスワード・権限）は変更しません。',
+        'ネーム情報の承認は、内容と担当者が変わらない場合このパソコンの状態を維持します。'
+        '内容や担当者が変わったものは再確認待ち、新規は未了承とします（ZIPの承認済みは採用しません）。',
         '貼付け位置・ネーム見本などの画像はZIPに含まれず、このパソコン上の画像はそのまま残ります。',
         'パソコン固有の設定（通信・起動・Thunderbird）は変わりません。',
     ]
     if int(format_version or 0) == 1 or legacy_auth_present:
-        parts.append('このZIPは旧形式です。含まれていてもパスワード等の認証情報は適用しません。')
+        parts.append(
+            'このZIPは旧形式です。含まれていてもパスワード等の認証情報は適用しません。'
+            'ネーム承認も無条件には上書きしません。'
+        )
     return ''.join(parts)
 
 
@@ -627,7 +659,7 @@ def _zip_has_usable_password_hashes(instr_db):
         c.close()
 
 
-def _validate_extracted(root, data_dir=None):
+def _validate_extracted(root, data_dir=None, user_map=None, name_assignee_overrides=None):
     root = Path(root)
     manifest_path = root / MANIFEST_NAME
     if not manifest_path.is_file():
@@ -682,6 +714,7 @@ def _validate_extracted(root, data_dir=None):
     legacy_auth = format_version == 1 or _zip_has_usable_password_hashes(instr)
     destination_users = []
     destination_counts = None
+    name_approvals = _empty_name_approval_plan()
     if data_dir is not None:
         data_dir = Path(data_dir)
         destination_users = _list_public_users(data_dir / INSTRUCTIONS_DB)
@@ -691,6 +724,31 @@ def _validate_extracted(root, data_dir=None):
                 'このパソコンに利用者が登録されていません。'
                 '先に利用者を用意してから、割り当てを選んで復元してください。何も変更していません。'
             )
+        preview_map = {}
+        if user_map and source_users and destination_users:
+            preview_map = normalize_user_map(user_map, source_users, destination_users)
+        overrides = normalize_name_assignee_overrides(
+            name_assignee_overrides, destination_users,
+        ) if destination_users else {}
+        name_approvals = plan_name_approval_merge(
+            instr, data_dir / INSTRUCTIONS_DB,
+            user_map=preview_map,
+            assignee_overrides=overrides,
+        )
+        # Drop heavy decision payloads from API preview (keep categories + counts).
+        name_approvals = {
+            'counts': name_approvals['counts'],
+            'labels': name_approvals['labels'],
+            'categories': {
+                key: [
+                    {k: v for k, v in item.items() if k not in ('destReview', 'destHistory')}
+                    for item in items
+                ]
+                for key, items in name_approvals['categories'].items()
+            },
+            'preservesDestinationApprovals': True,
+            'summaryText': name_approvals['summaryText'],
+        }
     summary = {
         'createdAt': manifest.get('createdAt'),
         'formatVersion': format_version,
@@ -699,19 +757,23 @@ def _validate_extracted(root, data_dir=None):
         'instructionsSchema': schema,
         'stockPresent': stock.is_file(),
         'preservesDestinationUsers': True,
+        'preservesDestinationNameApprovals': True,
         'legacyFormat': format_version == 1,
         'legacyAuthPresent': legacy_auth,
         'sourceUsers': source_users,
         'destinationUsers': destination_users,
         'destinationCounts': destination_counts,
+        'nameApprovals': name_approvals,
         'replaces': [
             '指示書', 'ひな形', 'ピッキングリスト', '出荷情報', '貼付け位置（DB）',
-            'ネーム形式', '宛名の記憶', '在庫データ', '業務用ファイル（name-import など）',
+            'ネーム形式（承認は下記の扱い）', '宛名の記憶', '在庫データ',
+            '業務用ファイル（name-import など）',
         ],
         'preserves': [
             '利用者アカウント（ID・ログイン・パスワード・権限・停止状態）',
             '確認用パスワード・復旧コード',
             '表示モードなど利用者ごとの設定',
+            'ネーム情報の承認（内容・担当者が同じもの）と承認履歴',
             '貼付け位置・ネーム見本の画像ファイル',
             '通信・起動・Thunderbird などパソコン固有の設定',
         ],
@@ -779,6 +841,633 @@ def _snapshot_dest_auth(data_dir):
             'displayModes': display_modes,
             'recovery': recovery,
         }
+    finally:
+        c.close()
+
+
+def _row_to_dict(row):
+    if row is None:
+        return None
+    return {k: row[k] for k in row.keys()}
+
+
+def _name_content_fingerprint(c, format_id):
+    """Stable content fingerprint across PCs (excludes volatile numeric ids).
+
+    Aligns with name_review invalidation: format fields, customer display
+    name/reading, and sample metadata (including relative_path for 見本).
+    """
+    tables = _table_names(c)
+    if 'name_formats' not in tables:
+        return None
+    row = c.execute(
+        'SELECT * FROM name_formats WHERE id=? AND retired=0', (format_id,)
+    ).fetchone()
+    if not row:
+        return None
+    payload = _row_to_dict(row)
+    for key in ('id', 'customer_id'):
+        payload.pop(key, None)
+    customer = None
+    if 'name_customers' in tables:
+        cust = c.execute(
+            'SELECT source_name, reading FROM name_customers WHERE id=?',
+            (row['customer_id'],),
+        ).fetchone()
+        if cust:
+            customer = {'source_name': cust['source_name'], 'reading': cust['reading'] or ''}
+    samples = []
+    if 'name_samples' in tables:
+        for sample in c.execute(
+            'SELECT variant_key, condition_label, paper_color, relative_path, caption '
+            'FROM name_samples WHERE format_id=? '
+            'ORDER BY variant_key, condition_label, paper_color, relative_path, caption',
+            (format_id,),
+        ):
+            samples.append(_row_to_dict(sample))
+    return hashlib.sha256(
+        json.dumps([payload, customer, samples], ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _format_label(c, format_id):
+    row = c.execute(
+        'SELECT f.id, f.identity, f.format_name, f.retired, '
+        'c.source_name AS customer_name '
+        'FROM name_formats f '
+        'LEFT JOIN name_customers c ON c.id=f.customer_id '
+        'WHERE f.id=?',
+        (format_id,),
+    ).fetchone()
+    if not row:
+        return {'formatId': format_id, 'identity': '', 'label': f'形式#{format_id}'}
+    customer = row['customer_name'] or '（顧客不明）'
+    name = row['format_name'] or '（形式名なし）'
+    return {
+        'formatId': row['id'],
+        'identity': row['identity'] or '',
+        'label': f'{customer} / {name}',
+        'retired': bool(row['retired']),
+    }
+
+
+def _load_name_review_bundle(c, format_id):
+    tables = _table_names(c)
+    review = None
+    if 'name_reviews' in tables:
+        row = c.execute('SELECT * FROM name_reviews WHERE format_id=?', (format_id,)).fetchone()
+        review = _row_to_dict(row) if row else None
+    history = []
+    if 'name_review_history' in tables:
+        history = [
+            _row_to_dict(r)
+            for r in c.execute(
+                'SELECT * FROM name_review_history WHERE format_id=? ORDER BY id',
+                (format_id,),
+            )
+        ]
+    return review, history
+
+
+def _snapshot_name_formats(db_path):
+    """Index active name formats by identity for approval merge / preview."""
+    db_path = Path(db_path)
+    if not db_path.is_file():
+        return {'byIdentity': {}, 'noIdentity': [], 'duplicateIdentities': [], 'userNames': {}}
+    c = sqlite3.connect(str(db_path))
+    try:
+        c.row_factory = sqlite3.Row
+        tables = _table_names(c)
+        user_names = {}
+        if 'users' in tables:
+            for u in c.execute('SELECT id, name, login, active FROM users'):
+                user_names[int(u['id'])] = {
+                    'id': int(u['id']),
+                    'name': u['name'] or '',
+                    'login': u['login'] or '',
+                    'active': bool(u['active']),
+                }
+        if 'name_formats' not in tables:
+            return {
+                'byIdentity': {},
+                'noIdentity': [],
+                'duplicateIdentities': [],
+                'userNames': user_names,
+            }
+        cols = set(_column_names(c, 'name_formats'))
+        if 'identity' not in cols:
+            # Legacy DB without identity: every format needs manual confirmation.
+            items = []
+            for row in c.execute('SELECT id FROM name_formats WHERE retired=0 ORDER BY id'):
+                meta = _format_label(c, row['id'])
+                fp = _name_content_fingerprint(c, row['id'])
+                review, history = _load_name_review_bundle(c, row['id'])
+                was_confirmed = False
+                if review and review.get('confirmed_digest') and review.get('assignee_id'):
+                    # Live digest uses volatile ids; still record confirmation intent.
+                    was_confirmed = (
+                        review.get('confirmed_by') == review.get('assignee_id')
+                        and bool(review.get('confirmed_at'))
+                    )
+                if review is not None:
+                    review = dict(review)
+                    review['contentFingerprint'] = fp
+                    review['wasConfirmed'] = was_confirmed
+                items.append({
+                    'formatId': row['id'],
+                    'identity': '',
+                    'label': meta['label'],
+                    'fingerprint': fp,
+                    'review': review,
+                    'history': history,
+                })
+            return {
+                'byIdentity': {},
+                'noIdentity': items,
+                'duplicateIdentities': [],
+                'userNames': user_names,
+            }
+
+        by_identity = {}
+        duplicates = set()
+        no_identity = []
+        for row in c.execute(
+            'SELECT id, identity FROM name_formats WHERE retired=0 ORDER BY id'
+        ):
+            identity = str(row['identity'] or '').strip()
+            meta = _format_label(c, row['id'])
+            fp = _name_content_fingerprint(c, row['id'])
+            review, history = _load_name_review_bundle(c, row['id'])
+            was_confirmed = False
+            if review and review.get('confirmed_at') and review.get('assignee_id'):
+                was_confirmed = (
+                    review.get('confirmed_by') == review.get('assignee_id')
+                    and bool(review.get('confirmed_digest'))
+                )
+            if review is not None:
+                review = dict(review)
+                review['contentFingerprint'] = fp
+                review['wasConfirmed'] = was_confirmed
+            item = {
+                'formatId': row['id'],
+                'identity': identity,
+                'label': meta['label'],
+                'fingerprint': fp,
+                'review': review,
+                'history': history,
+            }
+            if not identity:
+                no_identity.append(item)
+                continue
+            if identity in by_identity:
+                duplicates.add(identity)
+                prev = by_identity[identity]
+                if not isinstance(prev, list):
+                    by_identity[identity] = [prev]
+                by_identity[identity].append(item)
+            else:
+                by_identity[identity] = item
+        # Flatten duplicates list for callers
+        dup_list = []
+        for identity in sorted(duplicates):
+            entries = by_identity.get(identity) or []
+            if not isinstance(entries, list):
+                entries = [entries]
+            dup_list.append({'identity': identity, 'items': entries})
+            # Leave list in byIdentity so planners treat as ambiguous
+        return {
+            'byIdentity': by_identity,
+            'noIdentity': no_identity,
+            'duplicateIdentities': dup_list,
+            'userNames': user_names,
+        }
+    finally:
+        c.close()
+
+
+def _user_label_from_map(user_names, user_id):
+    if user_id is None:
+        return ''
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return ''
+    info = user_names.get(uid) or {}
+    name = info.get('name') or ''
+    login = info.get('login') or ''
+    if name and login and not str(login).startswith('*name:'):
+        return f'{name}（{login}）'
+    return name or login or f'#{uid}'
+
+
+def normalize_name_assignee_overrides(overrides, destination_users):
+    """Optional identity → destination user id map for assignee changes."""
+    if not overrides:
+        return {}
+    if not isinstance(overrides, dict):
+        raise MigrationError('ネーム担当の指定が正しくありません。何も変更していません。')
+    dest_ids = {int(u['id']) for u in destination_users}
+    normalized = {}
+    try:
+        for raw_identity, raw_uid in overrides.items():
+            identity = str(raw_identity or '').strip()
+            if not identity:
+                raise MigrationError('ネーム担当の指定が正しくありません。何も変更していません。')
+            if raw_uid in (None, ''):
+                normalized[identity] = None
+                continue
+            uid = int(raw_uid)
+            if uid not in dest_ids:
+                raise MigrationError(f'このパソコンにない利用者へのネーム担当指定です：{uid}')
+            normalized[identity] = uid
+    except (TypeError, ValueError) as e:
+        raise MigrationError('ネーム担当の指定が正しくありません。何も変更していません。') from e
+    return normalized
+
+
+def plan_name_approval_merge(source_db, dest_db, user_map=None, assignee_overrides=None):
+    """Build preview / apply plan for destination name approvals.
+
+    Matching uses name_formats.identity only (never numeric format id alone).
+    """
+    user_map = {int(k): int(v) for k, v in (user_map or {}).items()}
+    source = _snapshot_name_formats(source_db)
+    dest = _snapshot_name_formats(dest_db)
+    overrides = assignee_overrides or {}
+
+    categories = {key: [] for key in NAME_APPROVAL_LABELS}
+    decisions = {}  # identity -> decision dict for apply
+
+    def add(category, item):
+        categories[category].append(item)
+
+    # Destination duplicates / missing identity → 対応要確認 (do not guess)
+    for entry in dest.get('duplicateIdentities') or []:
+        for item in entry['items']:
+            add(NAME_APPROVAL_AMBIGUOUS, {
+                'identity': entry['identity'],
+                'label': item['label'],
+                'side': 'destination',
+                'reason': '同じ照合キーが復元先に複数あります',
+            })
+    for item in dest.get('noIdentity') or []:
+        add(NAME_APPROVAL_AMBIGUOUS, {
+            'identity': '',
+            'label': item['label'],
+            'side': 'destination',
+            'reason': '照合キーがないため対応できません',
+            'destFormatId': item['formatId'],
+        })
+
+    # Source duplicates / missing identity
+    for entry in source.get('duplicateIdentities') or []:
+        for item in entry['items']:
+            add(NAME_APPROVAL_AMBIGUOUS, {
+                'identity': entry['identity'],
+                'label': item['label'],
+                'side': 'source',
+                'reason': '同じ照合キーが移行元に複数あります',
+            })
+    for item in source.get('noIdentity') or []:
+        add(NAME_APPROVAL_AMBIGUOUS, {
+            'identity': '',
+            'label': item['label'],
+            'side': 'source',
+            'reason': '照合キーがないため承認を引き継ぎません',
+            'sourceFormatId': item['formatId'],
+        })
+        decisions[f'__noid:{item["formatId"]}'] = {
+            'category': NAME_APPROVAL_AMBIGUOUS,
+            'identity': '',
+            'sourceFormatId': item['formatId'],
+            'action': 'unapproved',
+        }
+
+    dest_by = dest.get('byIdentity') or {}
+    source_by = source.get('byIdentity') or {}
+    dest_names = dest.get('userNames') or {}
+    source_names = source.get('userNames') or {}
+
+    matched_identities = set()
+
+    for identity, src_item in source_by.items():
+        if isinstance(src_item, list):
+            # Already listed as ambiguous
+            continue
+        dest_item = dest_by.get(identity)
+        if isinstance(dest_item, list):
+            # Dest duplicate — ambiguous; imported row becomes unapproved
+            decisions[identity] = {
+                'category': NAME_APPROVAL_AMBIGUOUS,
+                'identity': identity,
+                'sourceFormatId': src_item['formatId'],
+                'action': 'unapproved',
+            }
+            continue
+        if dest_item is None:
+            # New on destination after restore
+            zip_assignee = None
+            if src_item.get('review') and src_item['review'].get('assignee_id') is not None:
+                zip_assignee = _map_optional_id(src_item['review']['assignee_id'], user_map)
+            add(NAME_APPROVAL_NEW, {
+                'identity': identity,
+                'label': src_item['label'],
+                'sourceFormatId': src_item['formatId'],
+                'assigneeId': zip_assignee,
+                'assigneeLabel': _user_label_from_map(dest_names, zip_assignee) if zip_assignee else '',
+                'note': 'ZIP側の承認済みは採用しません',
+            })
+            decisions[identity] = {
+                'category': NAME_APPROVAL_NEW,
+                'identity': identity,
+                'sourceFormatId': src_item['formatId'],
+                'action': 'new_unapproved',
+                'assigneeId': zip_assignee,
+                'sourceLabel': (src_item.get('review') or {}).get('source_label') or '',
+            }
+            matched_identities.add(identity)
+            continue
+
+        matched_identities.add(identity)
+        dest_review = dest_item.get('review')
+        dest_assignee = dest_review.get('assignee_id') if dest_review else None
+        zip_assignee_raw = (src_item.get('review') or {}).get('assignee_id')
+        zip_assignee = _map_optional_id(zip_assignee_raw, user_map) if zip_assignee_raw is not None else None
+
+        # Default: keep destination assignee. Optional override may change it.
+        final_assignee = dest_assignee
+        assignee_changed = False
+        if identity in overrides:
+            final_assignee = overrides[identity]
+            assignee_changed = final_assignee != dest_assignee
+        elif dest_assignee is None and zip_assignee is not None:
+            # No dest assignee yet — attach remapped ZIP assignee without inheriting approval.
+            final_assignee = zip_assignee
+            assignee_changed = False
+
+        content_same = (
+            dest_item.get('fingerprint')
+            and src_item.get('fingerprint')
+            and dest_item['fingerprint'] == src_item['fingerprint']
+        )
+
+        base = {
+            'identity': identity,
+            'label': dest_item['label'] or src_item['label'],
+            'sourceFormatId': src_item['formatId'],
+            'destFormatId': dest_item['formatId'],
+            'destAssigneeId': dest_assignee,
+            'destAssigneeLabel': _user_label_from_map(dest_names, dest_assignee),
+            'zipAssigneeId': zip_assignee,
+            'zipAssigneeLabel': _user_label_from_map(dest_names, zip_assignee) if zip_assignee else _user_label_from_map(source_names, zip_assignee_raw),
+            'finalAssigneeId': final_assignee,
+            'historyCount': len(dest_item.get('history') or []),
+            'destStatus': (
+                '了承' if dest_review and dest_review.get('wasConfirmed')
+                else ('再確認待ち' if dest_review and dest_review.get('confirmed_at') else '未了承')
+            ),
+        }
+
+        if not content_same:
+            add(NAME_APPROVAL_CONTENT, {
+                **base,
+                'note': '文字・書式・見本など承認対象の内容が異なります',
+            })
+            decisions[identity] = {
+                'category': NAME_APPROVAL_CONTENT,
+                'identity': identity,
+                'action': 'reconfirm',
+                'assigneeId': final_assignee,
+                'keepHistory': True,
+                'destReview': dest_review,
+                'destHistory': dest_item.get('history') or [],
+                'clearDigest': True,
+            }
+        elif assignee_changed:
+            add(NAME_APPROVAL_ASSIGNEE, {
+                **base,
+                'note': '担当者を変更するため再確認待ちにします',
+            })
+            decisions[identity] = {
+                'category': NAME_APPROVAL_ASSIGNEE,
+                'identity': identity,
+                'action': 'reconfirm',
+                'assigneeId': final_assignee,
+                'keepHistory': True,
+                'destReview': dest_review,
+                'destHistory': dest_item.get('history') or [],
+                'clearDigest': True,
+            }
+        else:
+            # Content+assignee unchanged: keep destination approval state.
+            # Even if ZIP was approved, ignore ZIP confirmation fields.
+            keep_confirmed = bool(dest_review and dest_review.get('wasConfirmed'))
+            add(NAME_APPROVAL_KEEP, {
+                **base,
+                'note': '内容と担当者が同じため、復元先の承認を維持します' if keep_confirmed
+                else '内容と担当者は同じです（復元先は未了承／再確認待ちのまま）',
+                'willKeepApproval': keep_confirmed,
+            })
+            decisions[identity] = {
+                'category': NAME_APPROVAL_KEEP,
+                'identity': identity,
+                'action': 'keep',
+                'assigneeId': final_assignee,
+                'keepHistory': True,
+                'destReview': dest_review,
+                'destHistory': dest_item.get('history') or [],
+                'clearDigest': not keep_confirmed and bool(dest_review and dest_review.get('confirmed_at')),
+                'restoreConfirmation': keep_confirmed,
+            }
+
+    # Destination-only formats → deleted by restore (warn with history impact)
+    for identity, dest_item in dest_by.items():
+        if isinstance(dest_item, list):
+            continue
+        if identity in matched_identities:
+            continue
+        if identity in source_by:
+            continue
+        hist = dest_item.get('history') or []
+        review = dest_item.get('review')
+        add(NAME_APPROVAL_DELETED, {
+            'identity': identity,
+            'label': dest_item['label'],
+            'destFormatId': dest_item['formatId'],
+            'historyCount': len(hist),
+            'destStatus': (
+                '了承' if review and review.get('wasConfirmed')
+                else ('再確認待ち' if review and review.get('confirmed_at') else '未了承')
+            ),
+            'note': (
+                f'復元で削除されます。承認履歴 {len(hist)} 件が消えます'
+                if hist else '復元で削除されます'
+            ),
+        })
+
+    counts = {key: len(items) for key, items in categories.items()}
+    return {
+        'counts': counts,
+        'labels': dict(NAME_APPROVAL_LABELS),
+        'categories': categories,
+        'decisions': decisions,
+        'preservesDestinationApprovals': True,
+        'summaryText': (
+            f"承認維持 {counts[NAME_APPROVAL_KEEP]} / "
+            f"内容変更により再確認 {counts[NAME_APPROVAL_CONTENT]} / "
+            f"担当者変更 {counts[NAME_APPROVAL_ASSIGNEE]} / "
+            f"新規・未承認 {counts[NAME_APPROVAL_NEW]} / "
+            f"対応要確認 {counts[NAME_APPROVAL_AMBIGUOUS]} / "
+            f"削除対象 {counts[NAME_APPROVAL_DELETED]}"
+        ),
+    }
+
+
+def _empty_name_approval_plan():
+    categories = {key: [] for key in NAME_APPROVAL_LABELS}
+    counts = {key: 0 for key in NAME_APPROVAL_LABELS}
+    return {
+        'counts': counts,
+        'labels': dict(NAME_APPROVAL_LABELS),
+        'categories': categories,
+        'decisions': {},
+        'preservesDestinationApprovals': True,
+        'summaryText': (
+            f"承認維持 0 / 内容変更により再確認 0 / 担当者変更 0 / "
+            f"新規・未承認 0 / 対応要確認 0 / 削除対象 0"
+        ),
+    }
+
+
+def _apply_name_approval_merge(live_instr, decisions, dest_user_names=None):
+    """Rewrite name_reviews / history on the installed DB per plan decisions."""
+    c = sqlite3.connect(str(live_instr), timeout=30)
+    try:
+        c.row_factory = sqlite3.Row
+        tables = _table_names(c)
+        if 'name_formats' not in tables:
+            return {'applied': 0}
+        # Ensure review tables exist
+        name_review.schema(c)
+
+        # Map identity → live format id
+        live_by_identity = {}
+        cols = set(_column_names(c, 'name_formats'))
+        if 'identity' not in cols:
+            # Cannot match — strip all ZIP approvals
+            if 'name_reviews' in _table_names(c):
+                c.execute(
+                    'UPDATE name_reviews SET confirmed_by=NULL, confirmed_name=NULL, '
+                    'confirmed_at=NULL, confirmed_digest=NULL'
+                )
+            c.commit()
+            return {'applied': 0, 'legacyNoIdentity': True}
+
+        for row in c.execute('SELECT id, identity FROM name_formats WHERE retired=0'):
+            identity = str(row['identity'] or '').strip()
+            if identity:
+                live_by_identity[identity] = row['id']
+
+        # Drop imported reviews/history; rebuild from decisions + dest snapshots.
+        if 'name_reviews' in _table_names(c):
+            c.execute('DELETE FROM name_reviews')
+        if 'name_review_history' in _table_names(c):
+            c.execute('DELETE FROM name_review_history')
+
+        applied = 0
+        for identity, decision in (decisions or {}).items():
+            if identity.startswith('__noid:'):
+                # Ambiguous source row without identity: leave unapproved (no row).
+                continue
+            live_id = live_by_identity.get(identity)
+            if live_id is None:
+                continue
+            action = decision.get('action')
+            assignee = decision.get('assigneeId')
+            dest_review = decision.get('destReview')
+            source_label = ''
+            if dest_review:
+                source_label = dest_review.get('source_label') or ''
+            elif decision.get('sourceLabel'):
+                source_label = decision.get('sourceLabel') or ''
+
+            if action == 'new_unapproved':
+                if assignee is not None or source_label:
+                    c.execute(
+                        'INSERT INTO name_reviews(format_id, assignee_id, source_label) VALUES(?,?,?)',
+                        (live_id, assignee, source_label),
+                    )
+                applied += 1
+                continue
+
+            if action == 'unapproved':
+                applied += 1
+                continue
+
+            # keep / reconfirm from destination review
+            confirmed_by = None
+            confirmed_name = None
+            confirmed_at = None
+            confirmed_digest = None
+            if dest_review:
+                assignee = decision.get('assigneeId', dest_review.get('assignee_id'))
+                source_label = dest_review.get('source_label') or source_label
+                confirmed_by = dest_review.get('confirmed_by')
+                confirmed_name = dest_review.get('confirmed_name')
+                confirmed_at = dest_review.get('confirmed_at')
+                if decision.get('restoreConfirmation') and not decision.get('clearDigest'):
+                    # Recompute live digest so 了承 stays valid after id renumbering.
+                    token = name_review.digest(c, live_id)
+                    confirmed_digest = token
+                    # confirmed_by must remain the destination assignee for 了承
+                    if assignee is not None:
+                        confirmed_by = assignee
+                else:
+                    # 再確認待ち or 未了承 with prior confirmed_at: keep audit trail fields
+                    # but clear digest so status is not 了承.
+                    confirmed_digest = None
+                    if not confirmed_at:
+                        confirmed_by = None
+                        confirmed_name = None
+
+            if assignee is not None or source_label or confirmed_at:
+                c.execute(
+                    'INSERT INTO name_reviews('
+                    'format_id, assignee_id, source_label, confirmed_by, confirmed_name, '
+                    'confirmed_at, confirmed_digest) VALUES(?,?,?,?,?,?,?)',
+                    (
+                        live_id, assignee, source_label,
+                        confirmed_by, confirmed_name, confirmed_at, confirmed_digest,
+                    ),
+                )
+
+            if decision.get('keepHistory'):
+                for hist in decision.get('destHistory') or []:
+                    # Keep destination actor ids (same PC users). Clear only if unknown.
+                    actor_id = hist.get('actor_id')
+                    if actor_id is not None and dest_user_names is not None:
+                        try:
+                            if int(actor_id) not in dest_user_names:
+                                actor_id = None
+                        except (TypeError, ValueError):
+                            actor_id = None
+                    c.execute(
+                        'INSERT INTO name_review_history('
+                        'format_id, actor_id, actor_name, action, at, digest) '
+                        'VALUES(?,?,?,?,?,?)',
+                        (
+                            live_id,
+                            actor_id,
+                            hist.get('actor_name') or '',
+                            hist.get('action') or '',
+                            hist.get('at') or '',
+                            hist.get('digest'),
+                        ),
+                    )
+            applied += 1
+
+        c.commit()
+        return {'applied': applied}
     finally:
         c.close()
 
@@ -857,15 +1546,19 @@ def _remap_order_payload(payload, user_map, dest_names):
     return payload
 
 
-def _apply_dest_users_and_remap(live_instr, auth_snapshot, user_map, actor, manifest, auto_zip):
+def _apply_dest_users_and_remap(
+    live_instr, auth_snapshot, user_map, actor, manifest, auto_zip,
+    name_approval_decisions=None,
+):
     """Replace imported users with destination auth and remap ownership IDs."""
     c = sqlite3.connect(str(live_instr), timeout=30)
     try:
         c.row_factory = sqlite3.Row
         tables = _table_names(c)
         dest_names = {int(u['id']): u.get('name') or '' for u in auth_snapshot['users']}
+        dest_user_ids = {int(u['id']) for u in auth_snapshot['users']}
 
-        # 1) Ownership columns → destination IDs
+        # 1) Ownership columns → destination IDs (name_reviews handled after users restore)
         for table, column in OWNERSHIP_COLUMNS:
             if table not in tables:
                 continue
@@ -875,7 +1568,7 @@ def _apply_dest_users_and_remap(live_instr, auth_snapshot, user_map, actor, mani
             for sid, did in user_map.items():
                 c.execute(f'UPDATE "{table}" SET "{column}"=? WHERE "{column}"=?', (did, sid))
             # Clear nullable creator-like fields that still point at unknown source ids.
-            if column in ('created_by_id', 'updated_by_id', 'assignee_id', 'confirmed_by', 'author_id', 'status_by_id'):
+            if column in ('created_by_id', 'updated_by_id', 'author_id', 'status_by_id'):
                 dest_id_list = list(dest_names)
                 if dest_id_list:
                     marks = ','.join('?' for _ in dest_id_list)
@@ -1009,28 +1702,43 @@ def _apply_dest_users_and_remap(live_instr, auth_snapshot, user_map, actor, mani
         if actor:
             actor_id = actor.get('id')
             actor_label = f"{actor.get('name')} ({actor.get('login')})"
+        approval_note = ''
+        if name_approval_decisions:
+            approval_note = f'; nameDecisions={len(name_approval_decisions)}'
         if 'audit' in tables:
             c.execute(
                 "INSERT INTO audit(at,actor_id,actor,action,target) VALUES(datetime('now','localtime'),?,?,?,?)",
                 (
                     actor_id,
                     actor_label,
-                    '移行バックアップから復元（利用者は保持）',
-                    f"createdAt={manifest.get('createdAt')}; auto={auto_zip.name if auto_zip else ''}; map={len(user_map)}",
+                    '移行バックアップから復元（利用者・ネーム承認は保持）',
+                    f"createdAt={manifest.get('createdAt')}; auto={auto_zip.name if auto_zip else ''}; "
+                    f"map={len(user_map)}{approval_note}",
                 ),
             )
         c.commit()
     finally:
         c.close()
 
+    # 7) Merge destination name approvals (re-validated plan decisions).
+    if name_approval_decisions is not None:
+        _apply_name_approval_merge(
+            live_instr, name_approval_decisions, dest_user_names=dest_user_ids,
+        )
 
-def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_map=None):
+
+def restore_from_zip(
+    data_dir, zip_path, actor=None, auto_backup_dir=None, user_map=None,
+    name_assignee_overrides=None,
+):
     """Replace business data from a validated migration ZIP.
 
     Destination users/auth are preserved. Ownership fields are remapped using
-    user_map (source user id → destination user id). Creates an automatic
-    backup of the destination first. On failure, rolls back to the pre-restore
-    snapshot. Invalidates sessions after success.
+    user_map (source user id → destination user id). Name-label approvals on
+    the destination are merged by format identity (not numeric ids). Creates an
+    automatic backup of the destination first (includes approvals/history/users).
+    On failure, rolls back to the pre-restore snapshot. Invalidates sessions
+    after success.
     """
     data_dir = Path(data_dir)
     zip_path = Path(zip_path)
@@ -1046,9 +1754,21 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
         source_users = summary['sourceUsers']
         destination_users = summary['destinationUsers']
         normalized_map = normalize_user_map(user_map, source_users, destination_users)
+        overrides = normalize_name_assignee_overrides(
+            name_assignee_overrides, destination_users,
+        )
         auth_snapshot = _snapshot_dest_auth(data_dir)
 
-        # Auto-backup current destination (keep auth secrets for local recovery).
+        # Re-validate name approvals against the live destination at apply time
+        # (company PC may have confirmed or edited after the inspect preview).
+        name_plan = plan_name_approval_merge(
+            incoming / INSTRUCTIONS_DB,
+            data_dir / INSTRUCTIONS_DB,
+            user_map=normalized_map,
+            assignee_overrides=overrides,
+        )
+
+        # Auto-backup current destination (keep auth + approvals for local recovery).
         backup_root = Path(auto_backup_dir) if auto_backup_dir else (data_dir / 'backups')
         backup_root.mkdir(parents=True, exist_ok=True)
         auto_zip, _ = _build_export_zip_unlocked(
@@ -1113,6 +1833,7 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
 
             _apply_dest_users_and_remap(
                 live_instr, auth_snapshot, normalized_map, actor, manifest, auto_zip,
+                name_approval_decisions=name_plan.get('decisions') or {},
             )
 
             shutil.rmtree(rollback, ignore_errors=True)
@@ -1138,18 +1859,33 @@ def restore_from_zip(data_dir, zip_path, actor=None, auto_backup_dir=None, user_
             raise MigrationError(f'復元に失敗したため、復元前の状態に戻しました。{e}') from e
 
         post_counts = summarize_data_dir(data_dir)['counts']
+        report_categories = {
+            key: [
+                {k: v for k, v in item.items() if k not in ('destReview', 'destHistory')}
+                for item in items
+            ]
+            for key, items in name_plan['categories'].items()
+        }
         return {
             'ok': True,
             'createdAt': summary['createdAt'],
             'keyCounts': post_counts,
             'autoBackup': auto_zip.name if auto_zip else None,
             'preservesDestinationUsers': True,
+            'preservesDestinationNameApprovals': True,
             'userMapCount': len(normalized_map),
+            'nameApprovals': {
+                'counts': name_plan['counts'],
+                'labels': name_plan['labels'],
+                'categories': report_categories,
+                'summaryText': name_plan['summaryText'],
+            },
             'restartSteps': [
                 '画面をいったん閉じてください（ログアウトされます）。',
                 '会社PCで「停止.cmd」があれば実行し、続けて「起動.cmd」で起動し直してください。',
                 'このパソコンにもともとあったログインIDとパスワードで、もう一度ログインしてください（移行元の利用者は追加されません）。',
                 '割り当てた担当で指示書・ひな形が開けるか、数件確認してください。',
+                'ネーム情報は、内容・担当者が同じものは承認を維持し、変わったものは再確認待ち、新規は未了承です。',
                 '貼付け位置・ネーム見本の画像はこのZIPに含まれません。',
             ],
         }
