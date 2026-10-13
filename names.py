@@ -105,11 +105,27 @@ def schema(c):
     _column(c, 'name_customers', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
     _column(c, 'name_formats', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
     name_review.schema(c)
+    correct_customer_names(c)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
     if name not in have:
         c.execute(f'ALTER TABLE {table} ADD COLUMN {ddl}')
+
+# ネーム情報の顧客名の既知の表記ゆれ（取込元・既存行の表示名を直す）
+CUSTOMER_NAME_CORRECTIONS = {
+    '日綜中垣': '日総',
+}
+
+def _correct_customer_name(name):
+    text = str(name or '').strip()
+    return CUSTOMER_NAME_CORRECTIONS.get(text, text)
+
+def correct_customer_names(c):
+    """ネーム情報の顧客表示名だけを直す（指示書・在庫の履歴は触らない）。"""
+    for wrong, right in CUSTOMER_NAME_CORRECTIONS.items():
+        c.execute('UPDATE name_customers SET source_name=? WHERE source_name=?', (right, wrong))
+        c.execute('UPDATE name_customers SET linked_name=? WHERE linked_name=?', (right, wrong))
 
 def _app_customers(c):
     names = set()
@@ -150,16 +166,17 @@ def import_catalog(connect, data_dir):
         for item in data.get('customers') or []:
             key = item['sourceKey']
             keys.add(key)
-            linked, status = _link(item.get('name') or '', known)
+            name = _correct_customer_name(item.get('name') or '')
+            linked, status = _link(name, known)
             current = c.execute('SELECT id, manual FROM name_customers WHERE source_key=?', (key,)).fetchone()
             if current and current['manual']:
                 c.execute('UPDATE name_customers SET linked_name=?, link_status=?, retired=0 WHERE id=?', (linked, status, current['id']))
             elif current:
                 c.execute('''UPDATE name_customers SET source_index=?, source_name=?, reading=?, linked_name=?, link_status=?, retired=0 WHERE id=?''',
-                    (item.get('sourceIndex'), item.get('name') or '', item.get('reading') or '', linked, status, current['id']))
+                    (item.get('sourceIndex'), name, item.get('reading') or '', linked, status, current['id']))
             else:
                 c.execute('''INSERT INTO name_customers(source_key, source_index, source_name, reading, linked_name, link_status, retired)
-                    VALUES(?,?,?,?,?,?,0)''', (key, item.get('sourceIndex'), item.get('name') or '', item.get('reading') or '', linked, status))
+                    VALUES(?,?,?,?,?,?,0)''', (key, item.get('sourceIndex'), name, item.get('reading') or '', linked, status))
         identities = set()
         by_key = {row['source_key']: row['id'] for row in c.execute('SELECT id, source_key FROM name_customers')}
         for item in data.get('formats') or []:
