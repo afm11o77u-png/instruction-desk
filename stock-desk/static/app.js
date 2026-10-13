@@ -1877,7 +1877,7 @@ function historyPage(){
   if(!result){body.innerHTML='<p class="dialogbody">条件を選んで「表示する」を押してください。</p>';return}
   const events=result.events||[]
   body.innerHTML=`<table class="period-table history-table"><thead><tr>
-    <th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>詳細</th>
+    <th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>記録者</th><th>詳細</th>
   </tr></thead><tbody>
     ${events.map((e,i)=>{
       const batchMark=e.batchLineCount>1?`<span class="sub">同一操作 ${e.batchLineIndex}/${e.batchLineCount}</span>`:''
@@ -1890,9 +1890,10 @@ function historyPage(){
         <td class="hist-product"><span class="dm-primary">${esc(e.code)}</span><span class="sub dm-secondary">${esc(e.productName)}${stopProd}</span></td>
         <td class="hist-spec">${esc(historyListSpecText(e))}</td>
         <td class="hist-delta qty">${esc(historyDeltaText(e))}</td>
+        <td class="hist-actor">${esc(e.actorNameLabel||'未記録')}</td>
         <td class="hist-detail"><button type="button" class="quiet" data-hist-detail="${i}">開く</button></td>
       </tr>`
-    }).join('')||'<tr><td colspan="7">該当する履歴はありません。</td></tr>'}
+    }).join('')||'<tr><td colspan="8">該当する履歴はありません。</td></tr>'}
   </tbody></table>`
   body.querySelectorAll('[data-hist-detail]').forEach(b=>b.onclick=()=>{
     const e=events[Number(b.dataset.histDetail)]
