@@ -4,7 +4,8 @@ import name_review
 統合ネームラベルの登録を、形式ごとの見本つきで参照する。
 元ソフトと元資料は変更しない。Excelの行番号は登録番号にしない。
 """
-import hashlib, json, re, uuid, base64
+import hashlib, json, re, uuid, base64, shutil
+from datetime import datetime
 from pathlib import Path
 
 DATA_DIR = None
@@ -106,6 +107,8 @@ def schema(c):
     _column(c, 'name_formats', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
     name_review.schema(c)
     correct_customer_names(c)
+    if DATA_DIR is not None:
+        correct_female_sample_names(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -148,6 +151,468 @@ def correct_customer_names(c):
         else:
             c.execute('UPDATE name_customers SET source_name=? WHERE source_name=?', (right, wrong))
         c.execute('UPDATE name_customers SET linked_name=? WHERE linked_name=?', (right, wrong))
+
+# 女性用見本の架空氏名（山田太郎 → 山田花子）。色名だけでは判定しない。
+FEMALE_MARK = re.compile(r'女性用|女性専用')
+MALE_OR_SHARED_MARK = re.compile(r'男性用|男性専用|男女共用|男女共通|男女兼用')
+# 間隔つきを先に置換（半角・全角スペースを維持）
+YAMADA_TARO_TO_HANAKO = (
+    ('山田　太郎', '山田　花子'),
+    ('山田 太郎', '山田 花子'),
+    ('山田太郎', '山田花子'),
+)
+FEMALE_HANAKO_REPORT = 'female-sample-hanako-report.json'
+FEMALE_IMAGE_SUFFIX = '-female-hanako'
+
+def _has_female_mark(text):
+    return bool(FEMALE_MARK.search(str(text or '')))
+
+def _has_male_or_shared_mark(text):
+    return bool(MALE_OR_SHARED_MARK.search(str(text or '')))
+
+def replace_yamada_taro(text):
+    """山田太郎系だけを花子へ。苗字のみの「山田」や他の氏名は変えない。"""
+    value = str(text or '')
+    if '山田太郎' not in value and '山田 太郎' not in value and '山田　太郎' not in value:
+        return value
+    out = value
+    for old, new in YAMADA_TARO_TO_HANAKO:
+        out = out.replace(old, new)
+    return out
+
+def _row_get(row, *keys):
+    if isinstance(row, dict):
+        for key in keys:
+            if key in row and row[key] is not None:
+                return row[key]
+        return ''
+    for key in keys:
+        try:
+            return row[key]
+        except (KeyError, IndexError, TypeError):
+            continue
+    return ''
+
+def _sample_is_explicit_female(sample, fmt):
+    """見本または形式に明示の「女性用／女性専用」があるときだけ対象。
+
+    赤など色名だけでは女性用とみなさない。サンプル側に男性用・共通用があるときは除外。
+    形式に男女が混在し、見本側に女性用の明示が無い場合は判別不能として除外。
+    """
+    sample_bits = [
+        _row_get(sample, 'condition_label', 'condition'),
+        _row_get(sample, 'paper_color', 'paperColor'),
+        _row_get(sample, 'variant_key', 'key'),
+    ]
+    if any(_has_female_mark(bit) for bit in sample_bits):
+        return True
+    if any(_has_male_or_shared_mark(bit) for bit in sample_bits):
+        return False
+
+    groups = []
+    raw_groups = _row_get(fmt, 'groups_json')
+    if raw_groups:
+        try:
+            groups = json.loads(raw_groups) or []
+        except (TypeError, json.JSONDecodeError):
+            groups = []
+    elif isinstance(fmt, dict) and fmt.get('groups'):
+        groups = fmt.get('groups') or []
+
+    format_bits = [
+        _row_get(fmt, 'color_caption', 'colorCaption'),
+        _row_get(fmt, 'format_name', 'format'),
+        _row_get(fmt, 'note'),
+        _row_get(fmt, 'fixed_color', 'fixedColor'),
+        *groups,
+    ]
+    female = any(_has_female_mark(bit) for bit in format_bits)
+    male_or_shared = any(_has_male_or_shared_mark(bit) for bit in format_bits)
+    return bool(female and not male_or_shared)
+
+def _female_image_rel(rel):
+    path = Path(str(rel))
+    if path.stem.endswith(FEMALE_IMAGE_SUFFIX):
+        return str(path).replace('\\', '/')
+    return str(path.with_name(path.stem + FEMALE_IMAGE_SUFFIX + path.suffix)).replace('\\', '/')
+
+def _label_font_paths(family_hint=''):
+    hint = str(family_hint or '')
+    windir = Path(r'C:\Windows\Fonts')
+    candidates = []
+    if '丸' in hint or 'HG' in hint.upper() or 'ｺﾞｼｯｸ' in hint or 'ゴシック' in hint:
+        candidates.extend([
+            windir / 'HGRSMP.TTF', windir / 'HGRGM.TTC', windir / 'HGRMB.TTC',
+            windir / 'HGRGE.TTC', windir / 'HGRME.TTC', windir / 'HGRPP1.TTC',
+        ])
+    candidates.extend([
+        windir / 'msgothic.ttc', windir / 'meiryo.ttc', windir / 'YuGothM.ttc',
+        windir / 'YuGothB.ttc', windir / 'BIZ-UDGothicM.ttc', windir / 'BIZ-UDGothicB.ttc',
+        Path('/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf'),
+        Path('/usr/share/fonts/truetype/wqy/wqy-microhei.ttc'),
+        Path('/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc'),
+        Path('/System/Library/Fonts/Hiragino Sans GB.ttc'),
+    ])
+    return [path for path in candidates if path.is_file()]
+
+def _load_font(size, family_hint=''):
+    try:
+        from PIL import ImageFont
+    except ImportError:
+        return None
+    for path in _label_font_paths(family_hint):
+        try:
+            return ImageFont.truetype(str(path), size=size)
+        except OSError:
+            continue
+    return None
+
+def _gray_bytes(im):
+    return im.convert('L').tobytes(), im.size
+
+def _match_template(haystack, needle, step=2):
+    """Return (x, y, score) for best SAD match; lower score is better."""
+    hw, hh = haystack.size
+    nw, nh = needle.size
+    if nw >= hw or nh >= hh or nw < 2 or nh < 2:
+        return None
+    h_bytes, _ = _gray_bytes(haystack)
+    n_bytes, _ = _gray_bytes(needle)
+    best = None
+    for y in range(0, hh - nh + 1, step):
+        for x in range(0, hw - nw + 1, step):
+            total = 0
+            for row in range(nh):
+                h_off = (y + row) * hw + x
+                n_off = row * nw
+                for col in range(nw):
+                    diff = h_bytes[h_off + col] - n_bytes[n_off + col]
+                    total += diff if diff >= 0 else -diff
+            if best is None or total < best[2]:
+                best = (x, y, total)
+    if best is None:
+        return None
+    # refine around best with step=1
+    bx, by, _ = best
+    refined = best
+    for y in range(max(0, by - step), min(hh - nh + 1, by + step + 1)):
+        for x in range(max(0, bx - step), min(hw - nw + 1, bx + step + 1)):
+            total = 0
+            for row in range(nh):
+                h_off = (y + row) * hw + x
+                n_off = row * nw
+                for col in range(nw):
+                    diff = h_bytes[h_off + col] - n_bytes[n_off + col]
+                    total += diff if diff >= 0 else -diff
+            if total < refined[2]:
+                refined = (x, y, total)
+    return refined
+
+def _rewrite_name_pixels(src_path, dst_path, family_hint=''):
+    """見本画像内の山田太郎系を山田花子系に描き換える。見つからなければ False。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return False, 'Pillowがありません'
+    try:
+        image = Image.open(src_path).convert('RGB')
+    except OSError as exc:
+        return False, str(exc)
+    # 背景色は四隅の最頻に近い色を使う
+    corners = [image.getpixel((0, 0)), image.getpixel((image.width - 1, 0)),
+               image.getpixel((0, image.height - 1)), image.getpixel((image.width - 1, image.height - 1))]
+    bg = max(set(corners), key=corners.count)
+    sizes = sorted({max(10, image.height // k) for k in (3, 4, 5, 6, 8, 10, 12)})
+    replaced = 0
+    work = image.copy()
+    for old, new in YAMADA_TARO_TO_HANAKO:
+        for size in sizes:
+            font = _load_font(size, family_hint)
+            if font is None:
+                continue
+            # measure
+            probe = Image.new('L', (1, 1))
+            draw = ImageDraw.Draw(probe)
+            box = draw.textbbox((0, 0), old, font=font)
+            tw, th = max(1, box[2] - box[0] + 4), max(1, box[3] - box[1] + 4)
+            needle = Image.new('RGB', (tw, th), bg)
+            ImageDraw.Draw(needle).text((2, 2), old, font=font, fill=(0, 0, 0))
+            # skip nearly blank needles
+            if min(needle.convert('L').getextrema()) > 250:
+                continue
+            match = _match_template(work, needle, step=2)
+            if not match:
+                continue
+            x, y, score = match
+            # accept loose threshold relative to needle area
+            if score > tw * th * 45:
+                continue
+            # cover old text with background, draw new
+            ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
+            ImageDraw.Draw(work).text((x + 2, y + 2), new, font=font, fill=(0, 0, 0))
+            replaced += 1
+            break
+    if not replaced:
+        # 太郎 → 花子（氏名の名側だけ）
+        for size in sizes:
+            font = _load_font(size, family_hint)
+            if font is None:
+                continue
+            probe = Image.new('L', (1, 1))
+            box = ImageDraw.Draw(probe).textbbox((0, 0), '太郎', font=font)
+            tw, th = max(1, box[2] - box[0] + 4), max(1, box[3] - box[1] + 4)
+            needle = Image.new('RGB', (tw, th), bg)
+            ImageDraw.Draw(needle).text((2, 2), '太郎', font=font, fill=(0, 0, 0))
+            match = _match_template(work, needle, step=2)
+            if not match or match[2] > tw * th * 45:
+                continue
+            x, y, _ = match
+            ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
+            ImageDraw.Draw(work).text((x + 2, y + 2), '花子', font=font, fill=(0, 0, 0))
+            replaced += 1
+            break
+    if not replaced:
+        return False, '画像内に山田太郎系の文字を検出できませんでした'
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = 'PNG' if dst_path.suffix.lower() == '.png' else 'JPEG' if dst_path.suffix.lower() in ('.jpg', '.jpeg') else 'WEBP'
+    save_kw = {}
+    if fmt == 'JPEG':
+        save_kw['quality'] = 95
+    work.save(dst_path, format=fmt, **save_kw)
+    return True, ''
+
+def _patch_female_catalog(data_dir, backup_dir, report_items):
+    """catalog.json の女性用見本の caption / relativePath を画像・DBと揃える。"""
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return None
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, backup_dir / 'catalog.json')
+    data = json.loads(path.read_text(encoding='utf-8'))
+    changed = 0
+    for fmt in data.get('formats') or []:
+        for sample in fmt.get('samples') or []:
+            if not _sample_is_explicit_female(sample, fmt):
+                continue
+            before_cap = sample.get('caption') or ''
+            after_cap = replace_yamada_taro(before_cap)
+            rel = str(sample.get('relativePath') or '')
+            new_rel = rel
+            if rel.startswith('images/names/'):
+                # 他見本と共有なら fork 名へ
+                shared = False
+                for other_fmt in data.get('formats') or []:
+                    for other in other_fmt.get('samples') or []:
+                        if other is sample:
+                            continue
+                        if str(other.get('relativePath') or '') == rel and not _sample_is_explicit_female(other, other_fmt):
+                            shared = True
+                            break
+                    if shared:
+                        break
+                if shared or FEMALE_IMAGE_SUFFIX not in Path(rel).stem:
+                    # fork when shared; also when we rewrote image to female path
+                    forked = _female_image_rel(rel)
+                    if any(item.get('newRelativePath') == forked for item in report_items):
+                        new_rel = forked
+                    elif shared:
+                        new_rel = forked
+            if after_cap != before_cap or new_rel != rel:
+                sample['caption'] = after_cap
+                if new_rel:
+                    sample['relativePath'] = new_rel
+                changed += 1
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+def correct_female_sample_names(c, data_dir=None):
+    """明示的に女性用の見本だけ、架空氏名を山田花子へ（画像・caption・catalog）。
+
+    - 色名だけでは対象にしない
+    - 男性用・共通用・判別不能は変更しない
+    - 共有画像は上書きせず -female-hanako を新規作成して参照だけ切替
+    - 了承 digest は name_samples 更新トリガに任せ、勝手に了承しない
+    """
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have_samples = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_samples'"
+    ).fetchone()
+    if not have_samples:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_samples未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'female-sample-hanako-{stamp}'
+    items = []
+    unchanged_checks = []
+
+    # path → list of sample ids using it
+    path_users = {}
+    for row in c.execute('SELECT id, relative_path FROM name_samples WHERE relative_path<>""'):
+        path_users.setdefault(row['relative_path'], []).append(row['id'])
+
+    rows = c.execute('''
+        SELECT s.id AS sample_id, s.format_id, s.variant_key, s.condition_label, s.paper_color,
+               s.relative_path, s.caption,
+               f.format_name, f.color_caption, f.note, f.fixed_color, f.groups_json, f.family,
+               cu.source_name
+        FROM name_samples s
+        JOIN name_formats f ON f.id=s.format_id
+        JOIN name_customers cu ON cu.id=f.customer_id
+        WHERE f.retired=0
+        ORDER BY s.id
+    ''').fetchall()
+
+    prior = c.execute("SELECT value FROM settings WHERE key='female_sample_hanako'").fetchone()
+    pending = False
+    for row in rows:
+        sample = {
+            'condition_label': row['condition_label'],
+            'paper_color': row['paper_color'],
+            'variant_key': row['variant_key'],
+        }
+        fmt = {
+            'format_name': row['format_name'],
+            'color_caption': row['color_caption'],
+            'note': row['note'],
+            'fixed_color': row['fixed_color'],
+            'groups_json': row['groups_json'],
+        }
+        if not _sample_is_explicit_female(sample, fmt):
+            continue
+        caption = row['caption'] or ''
+        if replace_yamada_taro(caption) != caption:
+            pending = True
+            break
+        rel = row['relative_path'] or ''
+        if rel and FEMALE_IMAGE_SUFFIX not in Path(rel).stem and not prior:
+            pending = True
+            break
+    if not pending:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': '適用済み' if prior else '対象なし'}
+
+    for row in rows:
+        sample = {
+            'condition_label': row['condition_label'],
+            'paper_color': row['paper_color'],
+            'variant_key': row['variant_key'],
+            'caption': row['caption'],
+            'relative_path': row['relative_path'],
+        }
+        fmt = {
+            'format_name': row['format_name'],
+            'color_caption': row['color_caption'],
+            'note': row['note'],
+            'fixed_color': row['fixed_color'],
+            'groups_json': row['groups_json'],
+        }
+        female = _sample_is_explicit_female(sample, fmt)
+        new_caption = replace_yamada_taro(row['caption'] or '')
+        needs_caption = new_caption != (row['caption'] or '')
+        if not female:
+            if needs_caption:
+                unchanged_checks.append({
+                    'sampleId': row['sample_id'], 'reason': '女性用ではないためcaptionも維持',
+                    'customer': row['source_name'], 'format': row['format_name'],
+                })
+            continue
+        already_forked = FEMALE_IMAGE_SUFFIX in Path(row['relative_path'] or '').stem
+        # caption に山田太郎系がある、または未フォーク画像の初回検査
+        if not needs_caption and (already_forked or not row['relative_path'] or prior):
+            continue
+
+        entry = {
+            'sampleId': row['sample_id'],
+            'formatId': row['format_id'],
+            'customer': row['source_name'],
+            'format': row['format_name'],
+            'condition': row['condition_label'],
+            'paperColor': row['paper_color'],
+            'variantKey': row['variant_key'],
+            'oldCaption': row['caption'],
+            'newCaption': new_caption if needs_caption else row['caption'],
+            'oldRelativePath': row['relative_path'],
+            'newRelativePath': row['relative_path'],
+            'imageAction': 'none',
+            'imageNote': '',
+        }
+
+        new_rel = row['relative_path'] or ''
+        image_ok = False
+        if row['relative_path']:
+            users = path_users.get(row['relative_path']) or [row['sample_id']]
+            shared = any(sid != row['sample_id'] for sid in users)
+
+            src = (root / row['relative_path']).resolve()
+            names_root = (root / 'images' / 'names').resolve()
+            if names_root in src.parents and src.is_file():
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                dest_backup = backup_dir / 'images' / Path(row['relative_path']).name
+                dest_backup.parent.mkdir(parents=True, exist_ok=True)
+                if not dest_backup.exists():
+                    shutil.copy2(src, dest_backup)
+                candidate_rel = _female_image_rel(row['relative_path']) if (shared or not already_forked) else row['relative_path']
+                dst = root / candidate_rel
+                ok, note = _rewrite_name_pixels(src, dst, row['family'] or '')
+                if ok:
+                    image_ok = True
+                    new_rel = candidate_rel
+                    entry['imageAction'] = 'forked' if new_rel != row['relative_path'] else 'rewritten'
+                    entry['imageNote'] = note
+                elif needs_caption:
+                    # caption は直すが、文字検出失敗時は共有なら fork コピー、専有なら元パス維持
+                    if shared:
+                        new_rel = candidate_rel
+                        if not dst.is_file():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(src, dst)
+                        entry['imageAction'] = 'copy-only'
+                    else:
+                        entry['imageAction'] = 'unchanged'
+                    entry['imageNote'] = note
+                else:
+                    # caption に太郎が無く、画像からも検出できない → 触らない
+                    entry['imageAction'] = 'skipped'
+                    entry['imageNote'] = note
+                entry['newRelativePath'] = new_rel
+            else:
+                entry['imageAction'] = 'missing'
+                entry['imageNote'] = '見本画像ファイルがありません'
+
+        if needs_caption or (image_ok and entry['newRelativePath'] != (row['relative_path'] or '')):
+            c.execute(
+                'UPDATE name_samples SET caption=?, relative_path=? WHERE id=?',
+                (entry['newCaption'], entry['newRelativePath'] or '', row['sample_id']),
+            )
+            items.append(entry)
+
+    catalog_changed = _patch_female_catalog(root, backup_dir, items)
+    report = {
+        'at': stamp,
+        'changed': len(items),
+        'catalogSamplesPatched': catalog_changed,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'rule': {
+            'include': ['女性用', '女性専用'],
+            'exclude': ['男性用', '男性専用', '男女共用', '男女共通', '男女兼用', '色名のみ（例: 赤）', '判別不能'],
+            'nameReplace': list(YAMADA_TARO_TO_HANAKO),
+            'keepSurnameOnly': True,
+        },
+        'items': items,
+        'nonFemaleCaptionLeftAlone': unchanged_checks[:50],
+    }
+    report_path = root / FEMALE_HANAKO_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    c.execute(
+        "INSERT OR REPLACE INTO settings VALUES('female_sample_hanako',?)",
+        (json.dumps({'at': stamp, 'changed': len(items), 'report': FEMALE_HANAKO_REPORT}, ensure_ascii=False),),
+    )
+    return report
 
 def _app_customers(c):
     names = set()
@@ -266,6 +731,7 @@ def import_catalog(connect, data_dir):
             'resolvedFonts': data.get('resolvedFonts') or {},
         }
         c.execute("INSERT OR REPLACE INTO settings VALUES('name_import',?)", (json.dumps(summary, ensure_ascii=False),))
+        correct_female_sample_names(c, data_dir)
     return summary
 
 def _require(user):
