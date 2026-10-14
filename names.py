@@ -4,7 +4,7 @@ import name_review
 統合ネームラベルの登録を、形式ごとの見本つきで参照する。
 元ソフトと元資料は変更しない。Excelの行番号は登録番号にしない。
 """
-import hashlib, json, re, uuid, base64, shutil
+import hashlib, json, os, re, uuid, base64, shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -107,8 +107,9 @@ def schema(c):
     _column(c, 'name_formats', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
     name_review.schema(c)
     correct_customer_names(c)
+    # 女性見本の画像変換は起動・schema では行わない（DBロック／起動失敗の再発防止）。
+    # 明示の保守 CLI（DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1）だけが実行する。
     if DATA_DIR is not None:
-        correct_female_sample_names(c, DATA_DIR)
         correct_rinko_yellow(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
@@ -156,7 +157,10 @@ def correct_customer_names(c):
 # 女性区分の見本の架空氏名（山田太郎 → 山田花子）。色名だけでは判定しない。
 # v1(#97)=女性用|女性専用 のみ → 条件「女性」だけの見本（例: NM-000115）を取りこぼした。
 # v2=明示の性別区分「女性」も対象（女性用／女性専用を含む）。「男性」も除外側に追加。
-FEMALE_HANAKO_RULE_VERSION = 2
+# v3=起動時変換を廃止。DESK_RUN_FEMALE_IMAGE_MAINTENANCE の保守 CLI のみ。
+#     画像生成中は DB 書き込みトランザクションを保持しない。完了見本は再変換しない。
+FEMALE_HANAKO_RULE_VERSION = 3
+FEMALE_MAINTENANCE_ENV = 'DESK_RUN_FEMALE_IMAGE_MAINTENANCE'
 FEMALE_MARK = re.compile(r'女性')
 MALE_OR_SHARED_MARK = re.compile(r'男性|男女共用|男女共通|男女兼用')
 # 間隔つきを先に置換（半角・全角スペースを維持）
@@ -166,8 +170,14 @@ YAMADA_TARO_TO_HANAKO = (
     ('山田太郎', '山田花子'),
 )
 FEMALE_HANAKO_REPORT = 'female-sample-hanako-report.json'
+FEMALE_HANAKO_PROGRESS = 'female-sample-hanako-progress.json'
 FEMALE_HANAKO_SETTINGS_KEY = 'female_sample_hanako'
 FEMALE_IMAGE_SUFFIX = '-female-hanako'
+
+def female_image_maintenance_allowed():
+    """保守 CLI 用。通常起動では必ず False（単純解除しない）。"""
+    value = str(os.environ.get(FEMALE_MAINTENANCE_ENV, '') or '').strip().lower()
+    return value in ('1', 'true', 'yes', 'on')
 
 def _has_female_mark(text):
     return bool(FEMALE_MARK.search(str(text or '')))
@@ -334,10 +344,34 @@ def _match_template(haystack, needle, step=2):
                 refined = (x, y, total)
     return refined
 
+def _ink_mass(needle_rgb, bg):
+    """針画像のうち背景より明らかに暗い画素のインク量。"""
+    bg_l = (bg[0] + bg[1] + bg[2]) // 3 if isinstance(bg, tuple) else int(bg)
+    gray = needle_rgb.convert('L')
+    pixels = gray.get_flattened_data() if hasattr(gray, 'get_flattened_data') else gray.getdata()
+    total = 0
+    for pixel in pixels:
+        if pixel < bg_l - 25:
+            total += bg_l - pixel
+    return total
+
+def _font_sizes_for_image(height):
+    """見本高さに対し実フォントサイズを細かく試す（保守処理専用・起動では呼ばない）。"""
+    hi = max(12, int(height))
+    ratios = (0.12, 0.15, 0.18, 0.2, 0.22, 0.25, 0.28, 0.3, 0.33, 0.35, 0.38, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8)
+    sizes = {max(10, int(height * ratio)) for ratio in ratios}
+    # 絶対サイズも少し足す（小さい見本用）
+    sizes.update(range(10, min(hi, 48) + 1, 2))
+    return sorted(sizes)
+
 def _rewrite_name_pixels(src_path, dst_path, family_hint=''):
-    """見本画像内の山田太郎系を山田花子系に描き換える。見つからなければ False。"""
+    """見本画像内の山田太郎系を山田花子系に描き換える。見つからなければ False。
+
+    「太郎」単独の置換はしない（山田太郎／山田 太郎／山田　太郎のみ）。
+    空白画像への誤検出を避けるため、インク量に対する SAD 比で合否を判定する。
+    """
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw
     except ImportError:
         return False, 'Pillowがありません'
     try:
@@ -348,57 +382,43 @@ def _rewrite_name_pixels(src_path, dst_path, family_hint=''):
     corners = [image.getpixel((0, 0)), image.getpixel((image.width - 1, 0)),
                image.getpixel((0, image.height - 1)), image.getpixel((image.width - 1, image.height - 1))]
     bg = max(set(corners), key=corners.count)
-    sizes = sorted({max(10, image.height // k) for k in (3, 4, 5, 6, 8, 10, 12)})
+    sizes = _font_sizes_for_image(image.height)
     replaced = 0
     work = image.copy()
+    last_note = '画像内に山田太郎系の文字を検出できませんでした'
     for old, new in YAMADA_TARO_TO_HANAKO:
         for size in sizes:
             font = _load_font(size, family_hint)
             if font is None:
+                last_note = '利用可能なフォントがありません（Windows のゴシック系を優先）'
                 continue
-            # measure
             probe = Image.new('L', (1, 1))
-            draw = ImageDraw.Draw(probe)
-            box = draw.textbbox((0, 0), old, font=font)
+            box = ImageDraw.Draw(probe).textbbox((0, 0), old, font=font)
             tw, th = max(1, box[2] - box[0] + 4), max(1, box[3] - box[1] + 4)
+            if tw >= work.width or th >= work.height:
+                continue
             needle = Image.new('RGB', (tw, th), bg)
             ImageDraw.Draw(needle).text((2, 2), old, font=font, fill=(0, 0, 0))
-            # skip nearly blank needles
-            if min(needle.convert('L').getextrema()) > 250:
+            ink = _ink_mass(needle, bg)
+            if ink < 400:
                 continue
             match = _match_template(work, needle, step=2)
             if not match:
                 continue
             x, y, score = match
-            # accept loose threshold relative to needle area
-            if score > tw * th * 45:
+            # 空白への誤検出: 不一致インク比がほぼ 1.0。真の一致は十分小さい。
+            if score >= ink * 0.55:
                 continue
-            # cover old text with background, draw new
             ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
             ImageDraw.Draw(work).text((x + 2, y + 2), new, font=font, fill=(0, 0, 0))
             replaced += 1
             break
-    if not replaced:
-        # 太郎 → 花子（氏名の名側だけ）
-        for size in sizes:
-            font = _load_font(size, family_hint)
-            if font is None:
-                continue
-            probe = Image.new('L', (1, 1))
-            box = ImageDraw.Draw(probe).textbbox((0, 0), '太郎', font=font)
-            tw, th = max(1, box[2] - box[0] + 4), max(1, box[3] - box[1] + 4)
-            needle = Image.new('RGB', (tw, th), bg)
-            ImageDraw.Draw(needle).text((2, 2), '太郎', font=font, fill=(0, 0, 0))
-            match = _match_template(work, needle, step=2)
-            if not match or match[2] > tw * th * 45:
-                continue
-            x, y, _ = match
-            ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
-            ImageDraw.Draw(work).text((x + 2, y + 2), '花子', font=font, fill=(0, 0, 0))
-            replaced += 1
+        if replaced:
             break
     if not replaced:
-        return False, '画像内に山田太郎系の文字を検出できませんでした'
+        return False, last_note
+    if work.tobytes() == image.tobytes():
+        return False, '描き換え結果が元画像と同じでした'
     dst_path.parent.mkdir(parents=True, exist_ok=True)
     fmt = 'PNG' if dst_path.suffix.lower() == '.png' else 'JPEG' if dst_path.suffix.lower() in ('.jpg', '.jpeg') else 'WEBP'
     save_kw = {}
@@ -452,206 +472,455 @@ def _patch_female_catalog(data_dir, backup_dir, report_items):
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
     return changed
 
-def correct_female_sample_names(c, data_dir=None):
-    """明示的に女性区分の見本だけ、架空氏名を山田花子へ（画像・caption・catalog）。
+def _row_as_dict(row):
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return dict(row)
+    return {key: row[key] for key in row.keys()}
 
-    - 対象: 条件などに「女性」「女性用」「女性専用」
-    - 色名だけでは対象にしない
-    - 男性／男性用・共通用・判別不能は変更しない
-    - 共有画像は上書きせず -female-hanako を新規作成して参照だけ切替
-    - 了承 digest は name_samples 更新トリガに任せ、勝手に了承しない
-    """
-    root = Path(data_dir) if data_dir is not None else DATA_DIR
-    if root is None:
-        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+def _female_completed_ids(prior):
+    if not isinstance(prior, dict):
+        return set()
+    raw = prior.get('completedSampleIds') or []
+    out = set()
+    for value in raw:
+        try:
+            out.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return out
 
+def _load_female_hanako_rows(c):
     have_samples = c.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_samples'"
     ).fetchone()
     if not have_samples:
-        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_samples未作成'}
-
-    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    backup_dir = root / 'backups' / f'female-sample-hanako-{stamp}'
-    items = []
-    unchanged_checks = []
-
-    # path → list of sample ids using it
+        return None, {}, None, 0
     path_users = {}
     for row in c.execute('SELECT id, relative_path FROM name_samples WHERE relative_path<>""'):
-        path_users.setdefault(row['relative_path'], []).append(row['id'])
-
-    rows = c.execute('''
-        SELECT s.id AS sample_id, s.format_id, s.variant_key, s.condition_label, s.paper_color,
-               s.relative_path, s.caption,
-               f.format_name, f.color_caption, f.note, f.fixed_color, f.groups_json, f.family,
-               cu.source_name
-        FROM name_samples s
-        JOIN name_formats f ON f.id=s.format_id
-        JOIN name_customers cu ON cu.id=f.customer_id
-        WHERE f.retired=0
-        ORDER BY s.id
-    ''').fetchall()
-
+        path_users.setdefault(row['relative_path'], []).append(int(row['id']))
+    rows = [
+        _row_as_dict(row)
+        for row in c.execute('''
+            SELECT s.id AS sample_id, s.format_id, s.variant_key, s.condition_label, s.paper_color,
+                   s.relative_path, s.caption,
+                   f.format_name, f.color_caption, f.note, f.fixed_color, f.groups_json, f.family,
+                   cu.source_name, f.identity AS format_identity
+            FROM name_samples s
+            JOIN name_formats f ON f.id=s.format_id
+            JOIN name_customers cu ON cu.id=f.customer_id
+            WHERE f.retired=0
+            ORDER BY s.id
+        ''')
+    ]
     prior, prior_version = _female_hanako_prior(c)
-    # ルール版が上がったときは未フォーク画像も再検査（#97 後の「女性」取りこぼし用）
-    rescan_images = prior_version < FEMALE_HANAKO_RULE_VERSION
-    pending = False
-    for row in rows:
-        sample = {
-            'condition_label': row['condition_label'],
-            'paper_color': row['paper_color'],
-            'variant_key': row['variant_key'],
-        }
-        fmt = {
-            'format_name': row['format_name'],
-            'color_caption': row['color_caption'],
-            'note': row['note'],
-            'fixed_color': row['fixed_color'],
-            'groups_json': row['groups_json'],
-        }
-        if not _sample_is_explicit_female(sample, fmt):
-            continue
-        caption = row['caption'] or ''
-        if replace_yamada_taro(caption) != caption:
-            pending = True
-            break
-        rel = row['relative_path'] or ''
-        if rel and FEMALE_IMAGE_SUFFIX not in Path(rel).stem and (not prior or rescan_images):
-            pending = True
-            break
-    if not pending:
-        return {'changed': 0, 'items': [], 'skipped': True, 'reason': '適用済み' if prior else '対象なし'}
+    return rows, path_users, prior, prior_version
 
-    for row in rows:
-        sample = {
-            'condition_label': row['condition_label'],
-            'paper_color': row['paper_color'],
-            'variant_key': row['variant_key'],
-            'caption': row['caption'],
-            'relative_path': row['relative_path'],
-        }
-        fmt = {
-            'format_name': row['format_name'],
-            'color_caption': row['color_caption'],
-            'note': row['note'],
-            'fixed_color': row['fixed_color'],
-            'groups_json': row['groups_json'],
-        }
-        female = _sample_is_explicit_female(sample, fmt)
-        new_caption = replace_yamada_taro(row['caption'] or '')
-        needs_caption = new_caption != (row['caption'] or '')
-        if not female:
-            if needs_caption:
-                unchanged_checks.append({
-                    'sampleId': row['sample_id'], 'reason': '女性区分ではないためcaptionも維持',
-                    'customer': row['source_name'], 'format': row['format_name'],
-                })
-            continue
-        already_forked = FEMALE_IMAGE_SUFFIX in Path(row['relative_path'] or '').stem
-        # caption に山田太郎系がある、または未フォーク画像の初回／ルール版上げ検査
-        skip_image_rescan = prior and not rescan_images
-        if not needs_caption and (already_forked or not row['relative_path'] or skip_image_rescan):
-            continue
+def _caption_has_yamada_hanako(caption):
+    text = str(caption or '')
+    return ('山田花子' in text) or ('山田 花子' in text) or ('山田　花子' in text)
 
-        entry = {
-            'sampleId': row['sample_id'],
-            'formatId': row['format_id'],
-            'customer': row['source_name'],
-            'format': row['format_name'],
-            'condition': row['condition_label'],
-            'paperColor': row['paper_color'],
-            'variantKey': row['variant_key'],
-            'oldCaption': row['caption'],
-            'newCaption': new_caption if needs_caption else row['caption'],
-            'oldRelativePath': row['relative_path'],
-            'newRelativePath': row['relative_path'],
-            'imageAction': 'none',
-            'imageNote': '',
-        }
+def _female_candidate_from_row(row, path_users, completed_ids):
+    sample = {
+        'condition_label': row['condition_label'],
+        'paper_color': row['paper_color'],
+        'variant_key': row['variant_key'],
+        'caption': row['caption'],
+        'relative_path': row['relative_path'],
+    }
+    fmt = {
+        'format_name': row['format_name'],
+        'color_caption': row['color_caption'],
+        'note': row['note'],
+        'fixed_color': row['fixed_color'],
+        'groups_json': row['groups_json'],
+    }
+    female = _sample_is_explicit_female(sample, fmt)
+    caption = row['caption'] or ''
+    new_caption = replace_yamada_taro(caption)
+    needs_caption = new_caption != caption
+    has_hanako = _caption_has_yamada_hanako(caption)
+    rel = row['relative_path'] or ''
+    already_forked = FEMALE_IMAGE_SUFFIX in Path(rel).stem if rel else False
+    sample_id = int(row['sample_id'])
+    base = {
+        'sampleId': sample_id,
+        'formatId': row['format_id'],
+        'formatIdentity': row.get('format_identity') or '',
+        'customer': row['source_name'],
+        'format': row['format_name'],
+        'condition': row['condition_label'],
+        'paperColor': row['paper_color'],
+        'variantKey': row['variant_key'],
+        'family': row.get('family') or '',
+        'oldCaption': caption,
+        'newCaption': new_caption if needs_caption else caption,
+        'oldRelativePath': rel,
+        'newRelativePath': rel,
+        'needsCaption': needs_caption,
+        'alreadyForked': already_forked,
+        'shared': False,
+        'hasImagePath': bool(rel),
+    }
+    if not female:
+        if needs_caption:
+            base['status'] = 'excluded'
+            base['reason'] = '女性区分ではないためcaptionも維持'
+            return base
+        return None
+    if sample_id in completed_ids and already_forked and not needs_caption:
+        base['status'] = 'already-complete'
+        base['reason'] = '完了済みのため再変換しない'
+        return base
+    if sample_id in completed_ids and not rel and not needs_caption:
+        base['status'] = 'already-complete'
+        base['reason'] = '完了済みのため再変換しない'
+        return base
+    if not needs_caption and already_forked:
+        base['status'] = 'already-complete'
+        base['reason'] = '既に花子用画像を参照済み'
+        return base
+    if not needs_caption and not rel:
+        base['status'] = 'noop'
+        base['reason'] = '画像なし・caption変更なし'
+        return base
+    # caption に太郎も花子も無い → 利用者が別文言へ編集した可能性。触らない。
+    if not needs_caption and not has_hanako:
+        base['status'] = 'noop'
+        base['reason'] = '山田太郎／山田花子系のcaptionではないため対象外'
+        return base
+    # 花子captionだが未フォーク画像 → 過去の不完全適用の再検査
+    users = path_users.get(rel) or [sample_id]
+    base['shared'] = any(int(sid) != sample_id for sid in users)
+    base['status'] = 'pending'
+    return base
 
-        new_rel = row['relative_path'] or ''
-        image_ok = False
-        if row['relative_path']:
-            users = path_users.get(row['relative_path']) or [row['sample_id']]
-            shared = any(sid != row['sample_id'] for sid in users)
+def _prepare_female_image(candidate, root, backup_dir):
+    """DB 非接続で画像を用意する。成功時だけ newRelativePath を返す。"""
+    rel = candidate['oldRelativePath'] or ''
+    entry = dict(candidate)
+    entry['imageAction'] = 'none'
+    entry['imageNote'] = ''
+    if not rel:
+        entry['status'] = 'ready-caption-only'
+        return entry
+    src = (root / rel).resolve()
+    names_root = (root / 'images' / 'names').resolve()
+    if names_root not in src.parents or not src.is_file():
+        entry['status'] = 'failed'
+        entry['imageAction'] = 'missing'
+        entry['imageNote'] = '見本画像ファイルがありません'
+        entry['reason'] = entry['imageNote']
+        return entry
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    dest_backup = backup_dir / 'images' / Path(rel).name
+    dest_backup.parent.mkdir(parents=True, exist_ok=True)
+    if not dest_backup.exists():
+        shutil.copy2(src, dest_backup)
+    already_forked = candidate.get('alreadyForked')
+    shared = candidate.get('shared')
+    candidate_rel = _female_image_rel(rel) if (shared or not already_forked) else rel
+    dst = root / candidate_rel
+    ok, note = _rewrite_name_pixels(src, dst, candidate.get('family') or '')
+    if ok:
+        entry['newRelativePath'] = candidate_rel
+        entry['imageAction'] = 'forked' if candidate_rel != rel else 'rewritten'
+        entry['imageNote'] = note or '画像内の山田太郎系を山田花子系へ描き換え'
+        entry['status'] = 'ready'
+        return entry
+    # 画像があるのに検出失敗 → caption だけの「完了」にしない。元のまま・再実行可。
+    entry['status'] = 'failed'
+    entry['imageAction'] = 'detect-failed'
+    entry['imageNote'] = note or '画像内に山田太郎系の文字を検出できませんでした'
+    entry['reason'] = entry['imageNote']
+    entry['newRelativePath'] = rel
+    return entry
 
-            src = (root / row['relative_path']).resolve()
-            names_root = (root / 'images' / 'names').resolve()
-            if names_root in src.parents and src.is_file():
-                backup_dir.mkdir(parents=True, exist_ok=True)
-                dest_backup = backup_dir / 'images' / Path(row['relative_path']).name
-                dest_backup.parent.mkdir(parents=True, exist_ok=True)
-                if not dest_backup.exists():
-                    shutil.copy2(src, dest_backup)
-                candidate_rel = _female_image_rel(row['relative_path']) if (shared or not already_forked) else row['relative_path']
-                dst = root / candidate_rel
-                ok, note = _rewrite_name_pixels(src, dst, row['family'] or '')
-                if ok:
-                    image_ok = True
-                    new_rel = candidate_rel
-                    entry['imageAction'] = 'forked' if new_rel != row['relative_path'] else 'rewritten'
-                    entry['imageNote'] = note
-                elif needs_caption:
-                    # caption は直すが、文字検出失敗時は共有なら fork コピー、専有なら元パス維持
-                    if shared:
-                        new_rel = candidate_rel
-                        if not dst.is_file():
-                            dst.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(src, dst)
-                        entry['imageAction'] = 'copy-only'
-                    else:
-                        entry['imageAction'] = 'unchanged'
-                    entry['imageNote'] = note
-                else:
-                    # caption に太郎が無く、画像からも検出できない → 触らない
-                    entry['imageAction'] = 'skipped'
-                    entry['imageNote'] = note
-                entry['newRelativePath'] = new_rel
-            else:
-                entry['imageAction'] = 'missing'
-                entry['imageNote'] = '見本画像ファイルがありません'
+def _commit_female_sample(c, prepared):
+    """短いトランザクション前提。更新直前に元登録が変わっていないか確認する。"""
+    sample_id = int(prepared['sampleId'])
+    row = c.execute(
+        'SELECT caption, relative_path FROM name_samples WHERE id=?',
+        (sample_id,),
+    ).fetchone()
+    if not row:
+        prepared = dict(prepared)
+        prepared['status'] = 'failed'
+        prepared['reason'] = '見本が削除されています'
+        return prepared
+    current_caption = row['caption'] or ''
+    current_rel = row['relative_path'] or ''
+    if current_caption != (prepared.get('oldCaption') or '') or current_rel != (prepared.get('oldRelativePath') or ''):
+        prepared = dict(prepared)
+        prepared['status'] = 'conflict'
+        prepared['reason'] = '利用者が編集したため上書きしません'
+        return prepared
+    new_caption = prepared.get('newCaption') if prepared.get('needsCaption') else current_caption
+    new_rel = prepared.get('newRelativePath') or current_rel
+    if new_caption == current_caption and new_rel == current_rel:
+        prepared = dict(prepared)
+        prepared['status'] = 'noop'
+        prepared['reason'] = '変更なし'
+        return prepared
+    c.execute(
+        'UPDATE name_samples SET caption=?, relative_path=? WHERE id=?',
+        (new_caption, new_rel, sample_id),
+    )
+    prepared = dict(prepared)
+    prepared['newCaption'] = new_caption
+    prepared['newRelativePath'] = new_rel
+    prepared['status'] = 'changed'
+    return prepared
 
-        if needs_caption or (image_ok and entry['newRelativePath'] != (row['relative_path'] or '')):
-            c.execute(
-                'UPDATE name_samples SET caption=?, relative_path=? WHERE id=?',
-                (entry['newCaption'], entry['newRelativePath'] or '', row['sample_id']),
-            )
-            items.append(entry)
-
-    catalog_changed = _patch_female_catalog(root, backup_dir, items)
+def _write_female_hanako_report(root, backup_dir, stamp, items, excluded, failed, conflicts, skipped):
+    changed_items = [item for item in items if item.get('status') == 'changed']
+    catalog_changed = _patch_female_catalog(root, backup_dir, changed_items)
     report = {
         'at': stamp,
-        'changed': len(items),
+        'changed': len(changed_items),
+        'failed': len(failed),
+        'conflicts': len(conflicts),
+        'skippedComplete': len(skipped),
         'catalogSamplesPatched': catalog_changed,
         'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
         'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
+        'maintenanceEnv': FEMALE_MAINTENANCE_ENV,
         'rule': {
             'include': ['女性', '女性用', '女性専用'],
             'exclude': ['男性', '男性用', '男性専用', '男女共用', '男女共通', '男女兼用', '色名のみ（例: 赤）', '判別不能'],
             'nameReplace': list(YAMADA_TARO_TO_HANAKO),
             'keepSurnameOnly': True,
             'colorAloneNotFemale': True,
+            'imageRequiredWhenPresent': True,
+            'noStartupConversion': True,
         },
-        'items': items,
-        'nonFemaleCaptionLeftAlone': unchanged_checks[:50],
+        'items': changed_items,
+        'failedItems': failed,
+        'conflictItems': conflicts,
+        'skippedCompleteItems': skipped[:100],
+        'nonFemaleCaptionLeftAlone': excluded[:50],
     }
     report_path = root / FEMALE_HANAKO_REPORT
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     if backup_dir.exists():
         (backup_dir / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    return report
+
+def _save_female_hanako_settings(c, stamp, report, completed_ids):
     c.execute(
         "INSERT OR REPLACE INTO settings VALUES(?,?)",
         (
             FEMALE_HANAKO_SETTINGS_KEY,
             json.dumps({
                 'at': stamp,
-                'changed': len(items),
+                'changed': report.get('changed', 0),
+                'failed': report.get('failed', 0),
                 'report': FEMALE_HANAKO_REPORT,
                 'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
+                'completedSampleIds': sorted(completed_ids),
             }, ensure_ascii=False),
         ),
     )
+
+def _write_female_progress(root, payload):
+    path = root / FEMALE_HANAKO_PROGRESS
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
+
+def run_female_sample_hanako_maintenance(connect, data_dir=None, *, require_env=True, progress_callback=None):
+    """起動と独立した女性見本の花子保守。
+
+    - DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1 が必要（require_env=True のとき）
+    - 画像生成中は DB 書き込みトランザクションを保持しない
+    - 画像完成・検証後に短いトランザクションで参照先だけ更新
+    - 更新直前に caption/relative_path が計画時と一致するか確認（利用者編集を上書きしない）
+    - 画像があるのに描き換え失敗した見本は caption だけの変更で完了にしない
+    - 完了見本は再変換しない。失敗は元のまま・再実行可
+    """
+    if require_env and not female_image_maintenance_allowed():
+        return {
+            'changed': 0, 'items': [], 'skipped': True,
+            'reason': f'{FEMALE_MAINTENANCE_ENV}=1 のときだけ実行します（通常起動では変換しません）',
+        }
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    with connect() as c:
+        rows, path_users, prior, prior_version = _load_female_hanako_rows(c)
+    if rows is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_samples未作成'}
+
+    completed_ids = _female_completed_ids(prior)
+    # ルール版上げ（v1/v2→v3）では完了IDをリセットして未フォークを再検査
+    if prior_version < FEMALE_HANAKO_RULE_VERSION:
+        completed_ids = set()
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'female-sample-hanako-{stamp}'
+    candidates = []
+    excluded = []
+    skipped = []
+    for row in rows:
+        item = _female_candidate_from_row(row, path_users, completed_ids)
+        if item is None:
+            continue
+        status = item.get('status')
+        if status == 'excluded':
+            excluded.append(item)
+        elif status == 'already-complete':
+            skipped.append(item)
+            completed_ids.add(int(item['sampleId']))
+        elif status == 'noop':
+            skipped.append(item)
+        elif status == 'pending':
+            candidates.append(item)
+
+    if not candidates and prior_version >= FEMALE_HANAKO_RULE_VERSION and not excluded:
+        report = {
+            'at': stamp, 'changed': 0, 'items': [], 'skipped': True,
+            'reason': '適用済み' if prior else '対象なし',
+            'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
+            'skippedComplete': len(skipped),
+        }
+        _write_female_progress(root, {'phase': 'idle', 'report': report})
+        return report
+
+    prepared_list = []
+    failed = []
+    total = len(candidates)
+    for index, candidate in enumerate(candidates, start=1):
+        if progress_callback:
+            progress_callback({
+                'phase': 'image', 'index': index, 'total': total,
+                'sampleId': candidate['sampleId'],
+                'customer': candidate.get('customer'),
+                'format': candidate.get('format'),
+            })
+        _write_female_progress(root, {
+            'phase': 'image', 'index': index, 'total': total,
+            'sampleId': candidate['sampleId'],
+            'customer': candidate.get('customer'),
+            'format': candidate.get('format'),
+            'condition': candidate.get('condition'),
+            'at': stamp,
+        })
+        prepared = _prepare_female_image(candidate, root, backup_dir)
+        if prepared.get('status') == 'failed':
+            failed.append(prepared)
+        else:
+            prepared_list.append(prepared)
+
+    changed = []
+    conflicts = []
+    for index, prepared in enumerate(prepared_list, start=1):
+        if progress_callback:
+            progress_callback({
+                'phase': 'commit', 'index': index, 'total': len(prepared_list),
+                'sampleId': prepared['sampleId'],
+            })
+        _write_female_progress(root, {
+            'phase': 'commit', 'index': index, 'total': len(prepared_list),
+            'sampleId': prepared['sampleId'], 'at': stamp,
+        })
+        with connect() as c:
+            outcome = _commit_female_sample(c, prepared)
+        if outcome.get('status') == 'changed':
+            changed.append(outcome)
+            completed_ids.add(int(outcome['sampleId']))
+        elif outcome.get('status') == 'conflict':
+            conflicts.append(outcome)
+        elif outcome.get('status') == 'failed':
+            failed.append(outcome)
+        else:
+            skipped.append(outcome)
+            if outcome.get('status') in ('noop', 'already-complete'):
+                completed_ids.add(int(outcome['sampleId']))
+
+    report = _write_female_hanako_report(
+        root, backup_dir, stamp, changed, excluded, failed, conflicts, skipped,
+    )
+    with connect() as c:
+        _save_female_hanako_settings(c, stamp, report, completed_ids)
+    _write_female_progress(root, {
+        'phase': 'done', 'at': stamp,
+        'changed': report['changed'], 'failed': report['failed'],
+        'conflicts': report['conflicts'], 'skippedComplete': report['skippedComplete'],
+    })
+    return report
+
+def correct_female_sample_names(c, data_dir=None, *, force=False):
+    """女性見本の花子化（ゲート付き）。
+
+    通常起動・schema・import_catalog からは呼ばない。
+    DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1 または force=True（テスト／明示保守）のときだけ実行。
+    本番の画像変換は run_female_sample_hanako_maintenance(connect, ...) を使うこと
+    （画像生成中に DB トランザクションを保持しないため）。
+    """
+    if not force and not female_image_maintenance_allowed():
+        return {
+            'changed': 0, 'items': [], 'skipped': True,
+            'reason': f'{FEMALE_MAINTENANCE_ENV} 未設定のためスキップ（起動時変換は行いません）',
+        }
+
+    # 単一接続向け（テスト用）。画像処理はこの接続のトランザクション内になる点に注意。
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    rows, path_users, prior, prior_version = _load_female_hanako_rows(c)
+    if rows is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_samples未作成'}
+
+    completed_ids = _female_completed_ids(prior)
+    if prior_version < FEMALE_HANAKO_RULE_VERSION:
+        completed_ids = set()
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'female-sample-hanako-{stamp}'
+    changed, failed, conflicts, skipped, excluded = [], [], [], [], []
+    pending = []
+    for row in rows:
+        item = _female_candidate_from_row(row, path_users, completed_ids)
+        if item is None:
+            continue
+        status = item.get('status')
+        if status == 'excluded':
+            excluded.append(item)
+        elif status in ('already-complete', 'noop'):
+            skipped.append(item)
+            if status == 'already-complete':
+                completed_ids.add(int(item['sampleId']))
+        else:
+            pending.append(item)
+
+    if not pending and prior_version >= FEMALE_HANAKO_RULE_VERSION:
+        return {
+            'changed': 0, 'items': [], 'skipped': True,
+            'reason': '適用済み' if prior else '対象なし',
+            'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
+        }
+
+    for candidate in pending:
+        prepared = _prepare_female_image(candidate, root, backup_dir)
+        if prepared.get('status') == 'failed':
+            failed.append(prepared)
+            continue
+        outcome = _commit_female_sample(c, prepared)
+        if outcome.get('status') == 'changed':
+            changed.append(outcome)
+            completed_ids.add(int(outcome['sampleId']))
+        elif outcome.get('status') == 'conflict':
+            conflicts.append(outcome)
+        elif outcome.get('status') == 'failed':
+            failed.append(outcome)
+        else:
+            skipped.append(outcome)
+
+    report = _write_female_hanako_report(
+        root, backup_dir, stamp, changed, excluded, failed, conflicts, skipped,
+    )
+    _save_female_hanako_settings(c, stamp, report, completed_ids)
     return report
 
 # 鱗幸食品：先方から指定の色一覧へ「黄色」を追加（他顧客・他形式は触らない）
@@ -1165,7 +1434,8 @@ def import_catalog(connect, data_dir):
             'resolvedFonts': data.get('resolvedFonts') or {},
         }
         c.execute("INSERT OR REPLACE INTO settings VALUES('name_import',?)", (json.dumps(summary, ensure_ascii=False),))
-        correct_female_sample_names(c, data_dir)
+        # 女性見本の画像変換は import_catalog では行わない（起動・取込を軽く保つ）。
+        # 必要なときは maintain_female_sample_hanako.py を明示実行する。
         correct_rinko_yellow(c, data_dir)
     return summary
 

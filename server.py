@@ -101,8 +101,9 @@ def initialize():
     placement.import_sources(connect, DATA)
     shipping.import_sources(connect, DATA)
     names.import_catalog(connect, DATA)
+    # 女性見本の花子画像変換は起動時に走らせない（DBロック／起動失敗の再発防止）。
+    # E:\ では DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1 で maintain_female_sample_hanako.py を実行。
     with connect() as c:
-        names.correct_female_sample_names(c, DATA)
         names.correct_rinko_yellow(c, DATA)
 
 def order_number(row, payload=None):
