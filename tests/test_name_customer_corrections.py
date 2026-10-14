@@ -1,4 +1,4 @@
-"""ネーム情報の顧客名表記ゆれ（日綜中垣→日総）。"""
+"""ネーム情報の顧客名表記ゆれ（日綜中垣→日総、明日香→明日佳 など）。"""
 import json
 import sqlite3
 import sys
@@ -11,6 +11,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import names
+
+ASHUKA_WRONG = '札幌、白石、岩見沢、宮の森明日香'
+ASHUKA_RIGHT = '札幌/桜台/白石/岩見沢/宮の沢明日佳'
 
 
 def _connect(path):
@@ -27,6 +30,10 @@ class NameCustomerCorrectionsTest(unittest.TestCase):
         self.assertEqual(names._correct_customer_name('日総'), '日総')
         self.assertEqual(names._correct_customer_name('他社'), '他社')
 
+    def test_correct_maps_ashuka_name(self):
+        self.assertEqual(names._correct_customer_name(ASHUKA_WRONG), ASHUKA_RIGHT)
+        self.assertEqual(names._correct_customer_name(ASHUKA_RIGHT), ASHUKA_RIGHT)
+
     def test_schema_rewrites_existing_name_customer(self):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / 'desk.sqlite3'
@@ -42,6 +49,25 @@ class NameCustomerCorrectionsTest(unittest.TestCase):
                 row = c.execute('SELECT source_name, linked_name FROM name_customers WHERE source_key=?', ('key-1',)).fetchone()
                 self.assertEqual(row['source_name'], '日総')
                 self.assertEqual(row['linked_name'], '日総')
+
+    def test_schema_rewrites_existing_ashuka_customer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / 'desk.sqlite3'
+            with _connect(db) as c:
+                names.bind(tmp)
+                names.schema(c)
+                c.execute(
+                    '''INSERT INTO name_customers(source_key, source_index, source_name, reading, linked_name, link_status, retired)
+                       VALUES(?,?,?,?,?,?,0)''',
+                    ('key-ashuka', 2, ASHUKA_WRONG, 'あすか', ASHUKA_WRONG, '対応'),
+                )
+                names.schema(c)
+                row = c.execute(
+                    'SELECT source_name, linked_name FROM name_customers WHERE source_key=?',
+                    ('key-ashuka',),
+                ).fetchone()
+                self.assertEqual(row['source_name'], ASHUKA_RIGHT)
+                self.assertEqual(row['linked_name'], ASHUKA_RIGHT)
 
     def test_import_catalog_applies_correction(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -73,6 +99,40 @@ class NameCustomerCorrectionsTest(unittest.TestCase):
             with connect() as c:
                 row = c.execute('SELECT source_name FROM name_customers WHERE source_key=?', ('cust-a',)).fetchone()
                 self.assertEqual(row['source_name'], '日総')
+
+    def test_import_catalog_applies_ashuka_correction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            import_dir = data_dir / 'name-import'
+            import_dir.mkdir()
+            catalog = {
+                'customerCount': 1,
+                'formatCount': 0,
+                'imageCount': 0,
+                'reviewCount': 0,
+                'pendingCount': 0,
+                'blankCount': 0,
+                'customers': [{
+                    'sourceKey': 'cust-ashuka',
+                    'sourceIndex': 2,
+                    'name': ASHUKA_WRONG,
+                    'reading': 'あすか',
+                }],
+                'formats': [],
+            }
+            (import_dir / 'catalog.json').write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
+            db = data_dir / 'desk.sqlite3'
+
+            def connect():
+                return _connect(db)
+
+            names.import_catalog(connect, data_dir)
+            with connect() as c:
+                row = c.execute(
+                    'SELECT source_name FROM name_customers WHERE source_key=?',
+                    ('cust-ashuka',),
+                ).fetchone()
+                self.assertEqual(row['source_name'], ASHUKA_RIGHT)
 
 
 if __name__ == '__main__':
