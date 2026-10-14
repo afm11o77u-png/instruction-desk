@@ -116,16 +116,37 @@ def _column(c, table, name, ddl):
 CUSTOMER_NAME_CORRECTIONS = {
     '日綜中垣': '日総',
     '札幌、白石、岩見沢、宮の森明日香': '札幌/桜台/白石/岩見沢/宮の沢明日佳',
+    '札幌/白石/岩見沢/宮の森明日佳': '札幌/桜台/白石/岩見沢/宮の沢明日佳',
+}
+
+# 表示名補正に合わせる読み（wrong source_name → reading）。未定義なら reading は触らない。
+ASHUKA_READING_RIGHT = 'さっぽろさくらだいしろいいわみざわみやのさわあすか'
+CUSTOMER_READING_CORRECTIONS = {
+    '札幌、白石、岩見沢、宮の森明日香': ASHUKA_READING_RIGHT,
+    '札幌/白石/岩見沢/宮の森明日佳': ASHUKA_READING_RIGHT,
 }
 
 def _correct_customer_name(name):
     text = str(name or '').strip()
     return CUSTOMER_NAME_CORRECTIONS.get(text, text)
 
+def _correct_customer_reading(name, reading):
+    text = str(name or '').strip()
+    if text in CUSTOMER_READING_CORRECTIONS:
+        return CUSTOMER_READING_CORRECTIONS[text]
+    return str(reading or '')
+
 def correct_customer_names(c):
-    """ネーム情報の顧客表示名だけを直す（指示書・在庫の履歴は触らない）。"""
+    """ネーム情報の顧客表示名・読みを直す（指示書・在庫の履歴は触らない）。"""
     for wrong, right in CUSTOMER_NAME_CORRECTIONS.items():
-        c.execute('UPDATE name_customers SET source_name=? WHERE source_name=?', (right, wrong))
+        reading = CUSTOMER_READING_CORRECTIONS.get(wrong)
+        if reading is not None:
+            c.execute(
+                'UPDATE name_customers SET source_name=?, reading=? WHERE source_name=?',
+                (right, reading, wrong),
+            )
+        else:
+            c.execute('UPDATE name_customers SET source_name=? WHERE source_name=?', (right, wrong))
         c.execute('UPDATE name_customers SET linked_name=? WHERE linked_name=?', (right, wrong))
 
 def _app_customers(c):
@@ -167,17 +188,19 @@ def import_catalog(connect, data_dir):
         for item in data.get('customers') or []:
             key = item['sourceKey']
             keys.add(key)
-            name = _correct_customer_name(item.get('name') or '')
+            raw_name = item.get('name') or ''
+            name = _correct_customer_name(raw_name)
+            reading = _correct_customer_reading(raw_name, item.get('reading') or '')
             linked, status = _link(name, known)
             current = c.execute('SELECT id, manual FROM name_customers WHERE source_key=?', (key,)).fetchone()
             if current and current['manual']:
                 c.execute('UPDATE name_customers SET linked_name=?, link_status=?, retired=0 WHERE id=?', (linked, status, current['id']))
             elif current:
                 c.execute('''UPDATE name_customers SET source_index=?, source_name=?, reading=?, linked_name=?, link_status=?, retired=0 WHERE id=?''',
-                    (item.get('sourceIndex'), name, item.get('reading') or '', linked, status, current['id']))
+                    (item.get('sourceIndex'), name, reading, linked, status, current['id']))
             else:
                 c.execute('''INSERT INTO name_customers(source_key, source_index, source_name, reading, linked_name, link_status, retired)
-                    VALUES(?,?,?,?,?,?,0)''', (key, item.get('sourceIndex'), name, item.get('reading') or '', linked, status))
+                    VALUES(?,?,?,?,?,?,0)''', (key, item.get('sourceIndex'), name, reading, linked, status))
         identities = set()
         by_key = {row['source_key']: row['id'] for row in c.execute('SELECT id, source_key FROM name_customers')}
         for item in data.get('formats') or []:

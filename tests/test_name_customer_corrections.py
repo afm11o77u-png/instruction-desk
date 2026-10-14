@@ -13,7 +13,10 @@ if str(ROOT) not in sys.path:
 import names
 
 ASHUKA_WRONG = '札幌、白石、岩見沢、宮の森明日香'
+ASHUKA_SLASH_WRONG = '札幌/白石/岩見沢/宮の森明日佳'
 ASHUKA_RIGHT = '札幌/桜台/白石/岩見沢/宮の沢明日佳'
+ASHUKA_READING_WRONG = 'さっぽろしろいいわみざわみやのもりあすか'
+ASHUKA_READING_RIGHT = 'さっぽろさくらだいしろいいわみざわみやのさわあすか'
 
 
 def _connect(path):
@@ -32,7 +35,19 @@ class NameCustomerCorrectionsTest(unittest.TestCase):
 
     def test_correct_maps_ashuka_name(self):
         self.assertEqual(names._correct_customer_name(ASHUKA_WRONG), ASHUKA_RIGHT)
+        self.assertEqual(names._correct_customer_name(ASHUKA_SLASH_WRONG), ASHUKA_RIGHT)
         self.assertEqual(names._correct_customer_name(ASHUKA_RIGHT), ASHUKA_RIGHT)
+
+    def test_correct_maps_ashuka_reading(self):
+        self.assertEqual(
+            names._correct_customer_reading(ASHUKA_SLASH_WRONG, ASHUKA_READING_WRONG),
+            ASHUKA_READING_RIGHT,
+        )
+        self.assertEqual(
+            names._correct_customer_reading(ASHUKA_WRONG, 'あすか'),
+            ASHUKA_READING_RIGHT,
+        )
+        self.assertEqual(names._correct_customer_reading('他社', 'たしゃ'), 'たしゃ')
 
     def test_schema_rewrites_existing_name_customer(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -63,11 +78,32 @@ class NameCustomerCorrectionsTest(unittest.TestCase):
                 )
                 names.schema(c)
                 row = c.execute(
-                    'SELECT source_name, linked_name FROM name_customers WHERE source_key=?',
+                    'SELECT source_name, linked_name, reading FROM name_customers WHERE source_key=?',
                     ('key-ashuka',),
                 ).fetchone()
                 self.assertEqual(row['source_name'], ASHUKA_RIGHT)
                 self.assertEqual(row['linked_name'], ASHUKA_RIGHT)
+                self.assertEqual(row['reading'], ASHUKA_READING_RIGHT)
+
+    def test_schema_rewrites_slash_ashuka_customer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / 'desk.sqlite3'
+            with _connect(db) as c:
+                names.bind(tmp)
+                names.schema(c)
+                c.execute(
+                    '''INSERT INTO name_customers(source_key, source_index, source_name, reading, linked_name, link_status, retired)
+                       VALUES(?,?,?,?,?,?,0)''',
+                    ('key-ashuka-slash', 3, ASHUKA_SLASH_WRONG, ASHUKA_READING_WRONG, ASHUKA_SLASH_WRONG, '対応'),
+                )
+                names.schema(c)
+                row = c.execute(
+                    'SELECT source_name, linked_name, reading FROM name_customers WHERE source_key=?',
+                    ('key-ashuka-slash',),
+                ).fetchone()
+                self.assertEqual(row['source_name'], ASHUKA_RIGHT)
+                self.assertEqual(row['linked_name'], ASHUKA_RIGHT)
+                self.assertEqual(row['reading'], ASHUKA_READING_RIGHT)
 
     def test_import_catalog_applies_correction(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,10 +165,46 @@ class NameCustomerCorrectionsTest(unittest.TestCase):
             names.import_catalog(connect, data_dir)
             with connect() as c:
                 row = c.execute(
-                    'SELECT source_name FROM name_customers WHERE source_key=?',
+                    'SELECT source_name, reading FROM name_customers WHERE source_key=?',
                     ('cust-ashuka',),
                 ).fetchone()
                 self.assertEqual(row['source_name'], ASHUKA_RIGHT)
+                self.assertEqual(row['reading'], ASHUKA_READING_RIGHT)
+
+    def test_import_catalog_applies_slash_ashuka_correction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            import_dir = data_dir / 'name-import'
+            import_dir.mkdir()
+            catalog = {
+                'customerCount': 1,
+                'formatCount': 0,
+                'imageCount': 0,
+                'reviewCount': 0,
+                'pendingCount': 0,
+                'blankCount': 0,
+                'customers': [{
+                    'sourceKey': 'cust-ashuka-slash',
+                    'sourceIndex': 3,
+                    'name': ASHUKA_SLASH_WRONG,
+                    'reading': ASHUKA_READING_WRONG,
+                }],
+                'formats': [],
+            }
+            (import_dir / 'catalog.json').write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
+            db = data_dir / 'desk.sqlite3'
+
+            def connect():
+                return _connect(db)
+
+            names.import_catalog(connect, data_dir)
+            with connect() as c:
+                row = c.execute(
+                    'SELECT source_name, reading FROM name_customers WHERE source_key=?',
+                    ('cust-ashuka-slash',),
+                ).fetchone()
+                self.assertEqual(row['source_name'], ASHUKA_RIGHT)
+                self.assertEqual(row['reading'], ASHUKA_READING_RIGHT)
 
 
 if __name__ == '__main__':
