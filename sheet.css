@@ -2,9 +2,9 @@
 #editor{width:min(1440px,98vw);overflow:hidden}#editor form{min-width:0}#editor .dialogbody{padding:4px 28px 32px;background:#fff;overflow:auto}.dialoghead,.dialogactions{flex-shrink:0}.dialogactions{flex-wrap:wrap}
 .sheettools{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:0}.sheettools label{min-width:210px;font-size:13px}.sheettools p{display:none}
 #editor .dialoghead{align-items:flex-start;gap:10px;padding:8px 16px 8px 18px;flex-wrap:wrap}
-#editor .editoridentity{flex:0 0 auto;min-width:2.75rem;padding-top:2px}
-#editor #edittitle{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-#editor .dialoghead #close{flex:0 0 auto;align-self:flex-start;margin-left:0;padding:6px 10px;font-size:13px;min-height:30px}
+/* 「新規」と「指示書を作成」は視覚的に隠し、ひな形を上枠左端へ寄せる（DOM・SR用テキストは残す） */
+#editor .editoridentity{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#editor .dialoghead #close{flex:0 0 auto;align-self:flex-start;margin-left:auto;padding:6px 10px;font-size:13px;min-height:30px}
 #editor .editorzoombar{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:4px 28px 0;flex-shrink:0}
 #editor .zoomlabel{display:flex;flex-direction:row;align-items:center;gap:8px;margin:0;font-size:12px;font-weight:700;white-space:nowrap}
 #editor .zoomlabel select{width:auto;min-width:10.5rem;min-height:30px;padding:4px 8px;font-size:12.5px}
