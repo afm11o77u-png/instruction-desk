@@ -162,6 +162,29 @@ class LabelDeskAssetsTest(unittest.TestCase):
         self.assertEqual(format_js_style('2026-10-10'), '10月10日（土）')
         self.assertEqual(format_js_style('2026-01-01'), '1月1日（木）')
 
+    def test_label_print_css_is_centered_a4_landscape(self):
+        import re
+
+        js = (ROOT / 'sheet.js').read_text(encoding='utf-8')
+        sheet_css = (ROOT / 'sheet.css').read_text(encoding='utf-8')
+        html = (ROOT / 'index.html').read_text(encoding='utf-8')
+        m = re.search(r'const labelPrintCss=`([^`]*)`', js)
+        self.assertIsNotNone(m)
+        label_css = m.group(1)
+        self.assertIn('@page{size:A4 landscape;margin:0}', label_css)
+        self.assertIn('.labelpage{width:297mm;height:210mm;', label_css)
+        self.assertIn('padding:8mm', label_css)
+        self.assertIn('grid-template-columns:minmax(0,1fr) minmax(0,1fr)', label_css)
+        self.assertIn('grid-template-rows:minmax(0,1fr) minmax(0,1fr)', label_css)
+        self.assertNotIn('margin:18mm 12mm 6mm 12mm', label_css)
+        self.assertNotIn('width:273mm', label_css)
+        self.assertIn('<title></title>', js)
+        self.assertIn('@page labels{size:A4 landscape;margin:0}', sheet_css)
+        self.assertIn('@page{size:A4 portrait;margin:12mm}', sheet_css)
+        self.assertIn('id="labelprinttip"', html)
+        self.assertIn('ヘッダーとフッター', html)
+        self.assertIn('ヘッダーとフッター', js)
+
 
 if __name__ == '__main__':
     unittest.main()
