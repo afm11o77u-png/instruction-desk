@@ -291,63 +291,155 @@ def _label_font_paths(family_hint=''):
     ])
     return [path for path in candidates if path.is_file()]
 
+_FONT_CACHE = {}
+
 def _load_font(size, family_hint=''):
+    key = (int(size), str(family_hint or ''))
+    if key in _FONT_CACHE:
+        return _FONT_CACHE[key]
     try:
         from PIL import ImageFont
     except ImportError:
+        _FONT_CACHE[key] = None
         return None
+    font = None
     for path in _label_font_paths(family_hint):
         try:
-            return ImageFont.truetype(str(path), size=size)
+            font = ImageFont.truetype(str(path), size=size)
+            break
         except OSError:
             continue
-    return None
+    _FONT_CACHE[key] = font
+    return font
+
+try:
+    import numpy as _np
+    _HAS_NUMPY = True
+except ImportError:
+    _np = None
+    _HAS_NUMPY = False
 
 def _gray_bytes(im):
     return im.convert('L').tobytes(), im.size
 
-def _match_template(haystack, needle, step=2):
-    """Return (x, y, score) for best SAD match; lower score is better."""
+def _sad_at_bytes(h_bytes, n_bytes, hw, nw, nh, x, y, limit=None):
+    """純Pythonの1位置 SAD。limit 以上になったら打ち切って limit を返す。"""
+    total = 0
+    for row in range(nh):
+        h_off = (y + row) * hw + x
+        n_off = row * nw
+        for col in range(nw):
+            diff = h_bytes[h_off + col] - n_bytes[n_off + col]
+            total += diff if diff >= 0 else -diff
+        if limit is not None and total >= limit:
+            return total
+    return total
+
+def _match_template_numpy(h_arr, n_arr, step=2, max_score=None):
+    """numpy 配列での粗探索＋近傍 refine。戻り値 (x, y, score)。"""
+    hh, hw = h_arr.shape
+    nh, nw = n_arr.shape
+    ys = range(0, hh - nh + 1, step)
+    xs = range(0, hw - nw + 1, step)
+    best = None
+    best_score = None
+    for y in ys:
+        row_slice = h_arr[y:y + nh]
+        for x in xs:
+            patch = row_slice[:, x:x + nw]
+            total = int(_np.abs(patch - n_arr).sum())
+            if best_score is None or total < best_score:
+                best_score = total
+                best = (x, y, total)
+                if total == 0:
+                    return best
+    if best is None:
+        return None
+    # 粗探索の最良でも閾値超えなら refine 不要（誤サイズ試行の高速化）
+    if max_score is not None and best[2] >= max_score:
+        return best
+    bx, by, _ = best
+    refined = best
+    y0 = max(0, by - step)
+    y1 = min(hh - nh + 1, by + step + 1)
+    x0 = max(0, bx - step)
+    x1 = min(hw - nw + 1, bx + step + 1)
+    for y in range(y0, y1):
+        row_slice = h_arr[y:y + nh]
+        for x in range(x0, x1):
+            patch = row_slice[:, x:x + nw]
+            total = int(_np.abs(patch - n_arr).sum())
+            if total < refined[2]:
+                refined = (x, y, total)
+                if total == 0:
+                    return refined
+    return refined
+
+def _match_template_bytes(h_bytes, n_bytes, hw, hh, nw, nh, step=2, max_score=None):
+    """バイト列での粗探索（早期打ち切り）＋近傍 refine。"""
+    # 大きい針は粗ステップを広げ、その後 step 近傍〜1px へ絞る
+    coarse = max(step, min(8, max(2, nw // 16), max(2, nh // 12)))
+    best = None
+    for y in range(0, hh - nh + 1, coarse):
+        for x in range(0, hw - nw + 1, coarse):
+            limit = None if best is None else best[2]
+            if max_score is not None and (limit is None or max_score < limit):
+                limit = int(max_score) if best is None else min(limit, int(max_score))
+            total = _sad_at_bytes(h_bytes, n_bytes, hw, nw, nh, x, y, limit=limit)
+            if best is None or total < best[2]:
+                best = (x, y, total)
+                if total == 0:
+                    return best
+    if best is None:
+        return None
+    if max_score is not None and best[2] >= max_score:
+        return best
+    # coarse → step、さらに step → 1 へ段階 refine
+    for radius, refine_step in ((coarse, step), (max(step, 1), 1)):
+        bx, by, _ = best
+        refined = best
+        for y in range(max(0, by - radius), min(hh - nh + 1, by + radius + 1), refine_step):
+            for x in range(max(0, bx - radius), min(hw - nw + 1, bx + radius + 1), refine_step):
+                total = _sad_at_bytes(
+                    h_bytes, n_bytes, hw, nw, nh, x, y, limit=refined[2],
+                )
+                if total < refined[2]:
+                    refined = (x, y, total)
+                    if total == 0:
+                        return refined
+        best = refined
+    return best
+
+def _match_template(haystack, needle, step=2, max_score=None):
+    """Return (x, y, score) for best SAD match; lower score is better.
+
+    numpy があれば配列演算、無ければバイト操作＋早期打ち切り＋粗ステップ。
+    max_score を渡すと粗探索の最良がそれ以上なら refine を省略する。
+    """
     hw, hh = haystack.size
     nw, nh = needle.size
     if nw >= hw or nh >= hh or nw < 2 or nh < 2:
         return None
+    if _HAS_NUMPY:
+        h_arr = _np.asarray(haystack.convert('L'), dtype=_np.int16)
+        n_arr = _np.asarray(needle.convert('L'), dtype=_np.int16)
+        return _match_template_numpy(h_arr, n_arr, step=step, max_score=max_score)
     h_bytes, _ = _gray_bytes(haystack)
     n_bytes, _ = _gray_bytes(needle)
-    best = None
-    for y in range(0, hh - nh + 1, step):
-        for x in range(0, hw - nw + 1, step):
-            total = 0
-            for row in range(nh):
-                h_off = (y + row) * hw + x
-                n_off = row * nw
-                for col in range(nw):
-                    diff = h_bytes[h_off + col] - n_bytes[n_off + col]
-                    total += diff if diff >= 0 else -diff
-            if best is None or total < best[2]:
-                best = (x, y, total)
-    if best is None:
-        return None
-    # refine around best with step=1
-    bx, by, _ = best
-    refined = best
-    for y in range(max(0, by - step), min(hh - nh + 1, by + step + 1)):
-        for x in range(max(0, bx - step), min(hw - nw + 1, bx + step + 1)):
-            total = 0
-            for row in range(nh):
-                h_off = (y + row) * hw + x
-                n_off = row * nw
-                for col in range(nw):
-                    diff = h_bytes[h_off + col] - n_bytes[n_off + col]
-                    total += diff if diff >= 0 else -diff
-            if total < refined[2]:
-                refined = (x, y, total)
-    return refined
+    return _match_template_bytes(
+        h_bytes, n_bytes, hw, hh, nw, nh, step=step, max_score=max_score,
+    )
 
 def _ink_mass(needle_rgb, bg):
     """針画像のうち背景より明らかに暗い画素のインク量。"""
     bg_l = (bg[0] + bg[1] + bg[2]) // 3 if isinstance(bg, tuple) else int(bg)
     gray = needle_rgb.convert('L')
+    if _HAS_NUMPY:
+        arr = _np.asarray(gray, dtype=_np.int32)
+        mask = arr < (bg_l - 25)
+        if not mask.any():
+            return 0
+        return int((bg_l - arr[mask]).sum())
     pixels = gray.get_flattened_data() if hasattr(gray, 'get_flattened_data') else gray.getdata()
     total = 0
     for pixel in pixels:
@@ -356,15 +448,19 @@ def _ink_mass(needle_rgb, bg):
     return total
 
 def _font_sizes_for_image(height):
-    """見本高さに対し実フォントサイズを細かく試す（保守処理専用・起動では呼ばない）。"""
+    """見本高さに対し実フォントサイズを細かく試す（保守処理専用・起動では呼ばない）。
+
+    実見本は高さの 25–35% 付近が多いため、その近傍を先に試して早期ヒットさせる。
+    """
     hi = max(12, int(height))
     ratios = (0.12, 0.15, 0.18, 0.2, 0.22, 0.25, 0.28, 0.3, 0.33, 0.35, 0.38, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8)
     sizes = {max(10, int(height * ratio)) for ratio in ratios}
     # 絶対サイズも少し足す（小さい見本用）
     sizes.update(range(10, min(hi, 48) + 1, 2))
-    return sorted(sizes)
+    prefer = max(10, int(height * 0.28))
+    return sorted(sizes, key=lambda size: (abs(size - prefer), size))
 
-def _rewrite_name_pixels(src_path, dst_path, family_hint=''):
+def _rewrite_name_pixels(src_path, dst_path, family_hint='', progress_callback=None):
     """見本画像内の山田太郎系を山田花子系に描き換える。見つからなければ False。
 
     「太郎」単独の置換はしない（山田太郎／山田 太郎／山田　太郎のみ）。
@@ -386,8 +482,28 @@ def _rewrite_name_pixels(src_path, dst_path, family_hint=''):
     replaced = 0
     work = image.copy()
     last_note = '画像内に山田太郎系の文字を検出できませんでした'
-    for old, new in YAMADA_TARO_TO_HANAKO:
-        for size in sizes:
+    # 画像検索は半角スペース・無間隔を先に（全角スペースは caption 置換順と別）
+    image_variants = (
+        ('山田 太郎', '山田 花子'),
+        ('山田太郎', '山田花子'),
+        ('山田　太郎', '山田　花子'),
+    )
+    variant_total = len(image_variants)
+    for variant_index, (old, new) in enumerate(image_variants, start=1):
+        size_total = len(sizes)
+        for size_index, size in enumerate(sizes, start=1):
+            if progress_callback:
+                progress_callback({
+                    'phase': 'image-try',
+                    'variant': old,
+                    'variantIndex': variant_index,
+                    'variantTotal': variant_total,
+                    'size': size,
+                    'sizeIndex': size_index,
+                    'sizeTotal': size_total,
+                    'width': work.width,
+                    'height': work.height,
+                })
             font = _load_font(size, family_hint)
             if font is None:
                 last_note = '利用可能なフォントがありません（Windows のゴシック系を優先）'
@@ -402,12 +518,13 @@ def _rewrite_name_pixels(src_path, dst_path, family_hint=''):
             ink = _ink_mass(needle, bg)
             if ink < 400:
                 continue
-            match = _match_template(work, needle, step=2)
+            threshold = ink * 0.55
+            match = _match_template(work, needle, step=2, max_score=threshold)
             if not match:
                 continue
             x, y, score = match
             # 空白への誤検出: 不一致インク比がほぼ 1.0。真の一致は十分小さい。
-            if score >= ink * 0.55:
+            if score >= threshold:
                 continue
             ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
             ImageDraw.Draw(work).text((x + 2, y + 2), new, font=font, fill=(0, 0, 0))
@@ -596,7 +713,7 @@ def _female_candidate_from_row(row, path_users, completed_ids):
     base['status'] = 'pending'
     return base
 
-def _prepare_female_image(candidate, root, backup_dir):
+def _prepare_female_image(candidate, root, backup_dir, progress_callback=None):
     """DB 非接続で画像を用意する。成功時だけ newRelativePath を返す。"""
     rel = candidate['oldRelativePath'] or ''
     entry = dict(candidate)
@@ -622,7 +739,10 @@ def _prepare_female_image(candidate, root, backup_dir):
     shared = candidate.get('shared')
     candidate_rel = _female_image_rel(rel) if (shared or not already_forked) else rel
     dst = root / candidate_rel
-    ok, note = _rewrite_name_pixels(src, dst, candidate.get('family') or '')
+    ok, note = _rewrite_name_pixels(
+        src, dst, candidate.get('family') or '',
+        progress_callback=progress_callback,
+    )
     if ok:
         entry['newRelativePath'] = candidate_rel
         entry['imageAction'] = 'forked' if candidate_rel != rel else 'rewritten'
@@ -791,22 +911,35 @@ def run_female_sample_hanako_maintenance(connect, data_dir=None, *, require_env=
     failed = []
     total = len(candidates)
     for index, candidate in enumerate(candidates, start=1):
-        if progress_callback:
-            progress_callback({
-                'phase': 'image', 'index': index, 'total': total,
-                'sampleId': candidate['sampleId'],
-                'customer': candidate.get('customer'),
-                'format': candidate.get('format'),
-            })
-        _write_female_progress(root, {
+        base_progress = {
             'phase': 'image', 'index': index, 'total': total,
             'sampleId': candidate['sampleId'],
             'customer': candidate.get('customer'),
             'format': candidate.get('format'),
             'condition': candidate.get('condition'),
             'at': stamp,
-        })
-        prepared = _prepare_female_image(candidate, root, backup_dir)
+        }
+        if progress_callback:
+            progress_callback(dict(base_progress))
+        _write_female_progress(root, dict(base_progress))
+
+        def on_try(info, _base=base_progress, _index=index, _total=total):
+            payload = dict(_base)
+            payload.update(info)
+            payload['phase'] = 'image-try'
+            payload['index'] = _index
+            payload['total'] = _total
+            if progress_callback:
+                progress_callback(payload)
+            # フォント試行は回数が多いので進捗ファイルは間引き（5件ごと＋最後）
+            size_index = int(info.get('sizeIndex') or 0)
+            size_total = int(info.get('sizeTotal') or 0)
+            if size_index == 1 or size_index == size_total or size_index % 5 == 0:
+                _write_female_progress(root, payload)
+
+        prepared = _prepare_female_image(
+            candidate, root, backup_dir, progress_callback=on_try,
+        )
         if prepared.get('status') == 'failed':
             failed.append(prepared)
         else:

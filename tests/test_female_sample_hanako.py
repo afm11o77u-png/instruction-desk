@@ -436,6 +436,65 @@ class FemaleSampleHanakoTest(unittest.TestCase):
             self.assertTrue(report.get('skipped'))
             self.assertIn(names.FEMALE_MAINTENANCE_ENV, report.get('reason', ''))
 
+    @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
+    def test_match_template_finds_yamada_and_rejects_blank(self):
+        """山田太郎検出を維持し、空画像は ink 比で誤検出しない。"""
+        import time
+
+        font = ImageFont.truetype(str(FONT), 28)
+        bg = (255, 220, 220)
+        hay = Image.new('RGB', (400, 160), bg)
+        ImageDraw.Draw(hay).text((40, 50), '山田 太郎', font=font, fill=(0, 0, 0))
+        needle = Image.new('RGB', (1, 1), bg)
+        box = ImageDraw.Draw(Image.new('L', (1, 1))).textbbox((0, 0), '山田 太郎', font=font)
+        tw, th = max(1, box[2] - box[0] + 4), max(1, box[3] - box[1] + 4)
+        needle = Image.new('RGB', (tw, th), bg)
+        ImageDraw.Draw(needle).text((2, 2), '山田 太郎', font=font, fill=(0, 0, 0))
+        ink = names._ink_mass(needle, bg)
+        self.assertGreaterEqual(ink, 400)
+
+        t0 = time.perf_counter()
+        match = names._match_template(hay, needle, step=2)
+        elapsed = time.perf_counter() - t0
+        self.assertIsNotNone(match)
+        x, y, score = match
+        self.assertLess(score, ink * 0.55)
+        self.assertLess(abs(x - 38), 8)
+        self.assertLess(abs(y - 48), 8)
+        self.assertLess(elapsed, 2.0, f'match too slow: {elapsed:.3f}s')
+
+        blank = Image.new('RGB', (400, 160), bg)
+        blank_match = names._match_template(blank, needle, step=2)
+        self.assertIsNotNone(blank_match)
+        self.assertGreaterEqual(blank_match[2], ink * 0.55)
+
+        # 純Python経路でも検出できること（numpy 無しフォールバック）
+        prev = names._HAS_NUMPY
+        try:
+            names._HAS_NUMPY = False
+            py_match = names._match_template(hay, needle, step=2)
+            self.assertIsNotNone(py_match)
+            self.assertLess(py_match[2], ink * 0.55)
+        finally:
+            names._HAS_NUMPY = prev
+
+    @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
+    def test_rewrite_emits_size_progress(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / 'src.png'
+            dst = Path(tmp) / 'dst.png'
+            _draw_name(src, '山田 太郎')
+            events = []
+            ok, note = names._rewrite_name_pixels(
+                src, dst, progress_callback=events.append,
+            )
+            self.assertTrue(ok, note)
+            self.assertTrue(dst.is_file())
+            tries = [e for e in events if e.get('phase') == 'image-try']
+            self.assertGreaterEqual(len(tries), 1)
+            self.assertIn('size', tries[0])
+            self.assertIn('sizeIndex', tries[0])
+
 
 if __name__ == '__main__':
     unittest.main()
