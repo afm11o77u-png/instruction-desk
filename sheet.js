@@ -216,6 +216,20 @@ $('#labelcards').addEventListener('paste',e=>{
  applyLabelPasteUpdates(planned.updates);
  toast(`${planned.rowCount}行を宛名に反映しました。`);
 });
+$('#labelrequestapply').onclick=()=>{
+ if(typeof planLabelRequestBatch!=='function')return;
+ const bulk=$('#labelrequestbulk');
+ const cards=[...$('#labelcards').querySelectorAll('.labelcard')];
+ const slots=cards.map(card=>{const slot={};card.querySelectorAll('[data-key]').forEach(el=>slot[el.dataset.key]=el.value);return slot});
+ const planned=planLabelRequestBatch({request:bulk?bulk.value:'',slots});
+ if(!planned.ok){toast(planned.message);return}
+ if(!confirm(planned.confirmMessage))return;
+ for(const row of planned.targets){
+  const el=cards[row]&&cards[row].querySelector('[data-key="request"]');
+  if(el)el.value=planned.value;
+ }
+ toast(`${planned.targets.length}件の受付内容を「${planned.value}」に変更しました。`);
+};
 let labelSets=[];
 function labelSlots(){return [...$('#labelcards').querySelectorAll('.labelcard')].map(card=>{const slot={};card.querySelectorAll('[data-key]').forEach(el=>slot[el.dataset.key]=el.value.trim());return slot})}
 function normalizeLabelPayload(payload){if(Array.isArray(payload))return{pattern:'4',slots:payload};if(payload&&typeof payload==='object')return{pattern:payload.pattern==='3'?'3':'4',slots:Array.isArray(payload.slots)?payload.slots:[]};return{pattern:'4',slots:[]}}function fillLabelCards(slots){const box=$('#labelcards');const list=Array.isArray(slots)&&slots.length?slots.slice(0,40):[null,null,null,null];while(list.length%4)list.push(null);box.replaceChildren();for(const slot of list){const card=labelCard();if(slot)for(const key of labelKeys){const el=card.querySelector(`[data-key="${key}"]`);if(el)el.value=slot[key]||(key==='request'?'消耗・破損交換':'')}box.append(card)}renumberLabelCards()}
