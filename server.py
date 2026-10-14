@@ -101,6 +101,8 @@ def initialize():
     placement.import_sources(connect, DATA)
     shipping.import_sources(connect, DATA)
     names.import_catalog(connect, DATA)
+    with connect() as c:
+        names.correct_female_sample_names(c, DATA)
 
 def order_number(row, payload=None):
     payload=json.loads(row['payload']) if payload is None else payload
