@@ -78,6 +78,14 @@ def main(argv=None):
                 f"sample={info.get('sampleId')} {info.get('customer')} / {info.get('format')}",
                 flush=True,
             )
+        elif phase == 'image-try':
+            print(
+                f"[試行] {info.get('index')}/{info.get('total')} "
+                f"variant={info.get('variantIndex')}/{info.get('variantTotal')} "
+                f"size={info.get('size')} ({info.get('sizeIndex')}/{info.get('sizeTotal')}) "
+                f"{info.get('variant')}",
+                flush=True,
+            )
         elif phase == 'commit':
             print(
                 f"[DB] {info.get('index')}/{info.get('total')} sample={info.get('sampleId')}",
