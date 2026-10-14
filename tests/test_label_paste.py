@@ -32,6 +32,9 @@ class LabelPasteAssetsTest(unittest.TestCase):
     def test_hint_mentions_excel_column_order(self):
         self.assertIn('顧客名／管理番号／部署名／氏名／受付内容', INDEX)
         self.assertIn('Excelの表', INDEX)
+        self.assertIn('id="labelpastenote"', INDEX)
+        self.assertIn('受付内容の一括変更ができます。', INDEX)
+        self.assertIn('Excelのように、複数行をコピーして入力欄へ貼り付けできます。', INDEX)
 
     def test_print_mapping_still_four_corners(self):
         # 既存：labelOrders → queuePrint → addressTags が 4面（左上・右上・左下・右下）
