@@ -730,12 +730,13 @@ def _write_female_progress(root, payload):
 def run_female_sample_hanako_maintenance(connect, data_dir=None, *, require_env=True, progress_callback=None):
     """起動と独立した女性見本の花子保守。
 
-    - DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1 が必要（require_env=True のとき）
-    - 画像生成中は DB 書き込みトランザクションを保持しない
-    - 画像完成・検証後に短いトランザクションで参照先だけ更新
-    - 更新直前に caption/relative_path が計画時と一致するか確認（利用者編集を上書きしない）
-    - 画像があるのに描き換え失敗した見本は caption だけの変更で完了にしない
-    - 完了見本は再変換しない。失敗は元のまま・再実行可
+    require_env=True のときは DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1 が必要。
+    対象は条件などに女性 / 女性用 / 女性専用がある見本のみ（色名だけでは対象外）。
+    画像生成中は DB 書き込みトランザクションを保持せず、完成・検証後に短い
+    トランザクションで参照先だけ更新する。更新直前に caption / relative_path が
+    計画時と一致するか確認し、利用者編集は上書きしない。
+    画像があるのに描き換え失敗した見本は caption だけの変更で完了にしない。
+    完了見本は再変換しない。失敗は元のまま再実行可。
     """
     if require_env and not female_image_maintenance_allowed():
         return {

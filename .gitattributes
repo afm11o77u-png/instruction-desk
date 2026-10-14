@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# cmd.exe misparses UTF-8 / LF-only batch files on Japanese Windows.
+*.cmd text eol=crlf
