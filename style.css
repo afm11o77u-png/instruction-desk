@@ -72,7 +72,7 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelnoticeform label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:180px}
 #labeldesk .labelnoticeform input{font-weight:400;min-width:200px;padding:8px 10px}
 #labelnoticeerror:empty{display:none}#labelnoticeerror{margin:0 0 12px;color:#a23928}
-#labeldesk .labeltablehint,#labeldesk #labelpastenote{margin:0 0 10px;max-width:46em;font-size:.85rem;color:#3d5344}#labeldesk .labeltablewrap{overflow-x:auto;max-width:100%}
+#labeldesk .labeltablehint,#labeldesk #labelpastenote{margin:0 0 10px;max-width:46em;font-size:.85rem;color:#3d5344}#labeldesk .labelrequestbatch{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin:0 0 12px;padding:10px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;max-width:980px}#labeldesk .labelrequestbatch label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:200px}#labeldesk .labelrequestbatch select{font-weight:400;min-width:220px;min-height:36px;padding:6px 10px}#labeldesk .labeltablewrap{overflow-x:auto;max-width:100%}
 #labeldesk .labelinputtable{width:100%;min-width:1000px;table-layout:fixed;white-space:normal}
 #labelcards{display:table-row-group;max-width:none}
 #labelcards .labelcard{display:table-row;border:0;border-radius:0;padding:0;background:white}

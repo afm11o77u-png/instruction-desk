@@ -108,6 +108,54 @@
     });
   }
 
+  /** 顧客名・管理番号・部署名・氏名のいずれかに入力がある行だけ対象。受付内容だけは対象外。 */
+  function labelCardHasAddress(slot) {
+    if (!slot || typeof slot !== 'object') return false;
+    return ['customer', 'management', 'department', 'employee'].some(
+      key => String(slot[key] ?? '').trim() !== ''
+    );
+  }
+
+  /**
+   * 受付内容の一括設定。完全空行は除外し、request だけ変える計画を返す。
+   * @param {{ request: string, slots: Array<Record<string,string>> }} args
+   */
+  function planLabelRequestBatch({ request, slots }) {
+    const value = String(request ?? '').trim();
+    if (!value) {
+      return {
+        ok: false,
+        reason: 'empty',
+        message: '受付内容を選んでから「全行に適用」を押してください。',
+      };
+    }
+    if (!LABEL_REQUEST_OPTIONS.includes(value)) {
+      return {
+        ok: false,
+        reason: 'invalid',
+        message: `受付内容「${value}」は選べません。新規／サイズ交換／消耗・破損交換／追加・補充／復職／異動・移動／その他のいずれかを選んでください。`,
+      };
+    }
+    const list = Array.isArray(slots) ? slots : [];
+    const targets = [];
+    for (let i = 0; i < list.length; i++) {
+      if (labelCardHasAddress(list[i])) targets.push(i);
+    }
+    if (!targets.length) {
+      return {
+        ok: false,
+        reason: 'none',
+        message: '適用できる宛名がありません。顧客名・管理番号・部署名・氏名のいずれかを入力してからお試しください。',
+      };
+    }
+    return {
+      ok: true,
+      value,
+      targets,
+      confirmMessage: `${targets.length}件の受付内容を『${value}』に変更します。よろしいですか？`,
+    };
+  }
+
   return {
     LABEL_PASTE_KEYS,
     LABEL_PASTE_MAX_ROWS,
@@ -116,5 +164,7 @@
     parseLabelClipboard,
     planLabelPaste,
     labelPasteNeedsConfirm,
+    labelCardHasAddress,
+    planLabelRequestBatch,
   };
 });

@@ -153,4 +153,52 @@ assert.deepStrictEqual(crlf, [
   ['C', 'D'],
 ])
 
+const {
+  labelCardHasAddress,
+  planLabelRequestBatch,
+  LABEL_REQUEST_OPTIONS,
+} = require(path.join(__dirname, '../label_paste.js'))
+
+assert.strictEqual(labelCardHasAddress({ customer: 'A' }), true)
+assert.strictEqual(labelCardHasAddress({ management: '01' }), true)
+assert.strictEqual(labelCardHasAddress({ department: '部' }), true)
+assert.strictEqual(labelCardHasAddress({ employee: '山田' }), true)
+assert.strictEqual(labelCardHasAddress({ request: '新規', customer: '', management: '', department: '', employee: '' }), false)
+assert.strictEqual(labelCardHasAddress({}), false)
+
+const batchEmpty = planLabelRequestBatch({ request: '', slots: [{ customer: 'A' }] })
+assert.strictEqual(batchEmpty.ok, false)
+assert.strictEqual(batchEmpty.reason, 'empty')
+assert.match(batchEmpty.message, /受付内容を選んで/)
+
+const batchNone = planLabelRequestBatch({
+  request: '新規',
+  slots: [
+    { customer: '', management: '', department: '', employee: '', request: '消耗・破損交換' },
+    { customer: '  ', request: '新規' },
+  ],
+})
+assert.strictEqual(batchNone.ok, false)
+assert.strictEqual(batchNone.reason, 'none')
+assert.match(batchNone.message, /適用できる宛名がありません/)
+
+const batchOk = planLabelRequestBatch({
+  request: '追加・補充',
+  slots: [
+    { customer: '顧客A', management: '01', department: '部', employee: '山田', request: '新規' },
+    { customer: '', management: '', department: '', employee: '', request: '消耗・破損交換' },
+    { customer: '顧客C', management: '', department: '', employee: '佐藤', request: '復職' },
+    { customer: '', management: '99', department: '', employee: '', request: 'その他' },
+  ],
+})
+assert.strictEqual(batchOk.ok, true)
+assert.strictEqual(batchOk.value, '追加・補充')
+assert.deepStrictEqual(batchOk.targets, [0, 2, 3])
+assert.strictEqual(batchOk.confirmMessage, "3件の受付内容を『追加・補充』に変更します。よろしいですか？")
+assert.ok(LABEL_REQUEST_OPTIONS.includes('追加・補充'))
+
+const batchBad = planLabelRequestBatch({ request: '存在しない', slots: [{ customer: 'A' }] })
+assert.strictEqual(batchBad.ok, false)
+assert.strictEqual(batchBad.reason, 'invalid')
+
 console.log('All label paste unit tests passed')
