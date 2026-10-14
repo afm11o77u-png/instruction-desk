@@ -173,7 +173,49 @@ resetLabelCards();
 $('#labeladd').onclick=()=>{const box=$('#labelcards');if(box.children.length>=40){toast('一度に印刷できるのは40件までです。');return}for(let i=0;i<4;i++)box.append(labelCard());renumberLabelCards();box.lastElementChild.querySelector('input').focus()};
 $('#labelreset').onclick=()=>{if(labelOrders().length&&!confirm('入力した宛名をすべて消しますか？'))return;resetLabelCards()};
 $('#labelprint').onclick=()=>{const list=labelOrders();if(!list.length){toast('宛名に入れる内容がありません。');return}if(list.length>40){toast('一度に印刷できるのは40件までです。');return}queuePrint(list,true,true,true,false,currentLabelPattern())};
-const labelKeys=['customer','management','department','employee','request'];
+const labelKeys=typeof LABEL_PASTE_KEYS!=='undefined'?LABEL_PASTE_KEYS:['customer','management','department','employee','request'];
+const labelRequestDefault=typeof LABEL_REQUEST_DEFAULT!=='undefined'?LABEL_REQUEST_DEFAULT:'消耗・破損交換';
+function ensureLabelCardCount(need){
+ const box=$('#labelcards');
+ const want=Math.min(typeof LABEL_PASTE_MAX_ROWS!=='undefined'?LABEL_PASTE_MAX_ROWS:40,Math.max(4,need|0));
+ let target=want;while(target%4)target+=1;target=Math.min(typeof LABEL_PASTE_MAX_ROWS!=='undefined'?LABEL_PASTE_MAX_ROWS:40,target);
+ while(box.children.length<target)box.append(labelCard());
+ renumberLabelCards();
+}
+function applyLabelPasteUpdates(updates){
+ const box=$('#labelcards');
+ for(const item of updates){
+  const card=box.children[item.row];if(!card)continue;
+  const el=card.querySelector(`[data-key="${item.key}"]`);if(!el)continue;
+  if(item.key==='request')el.value=item.value===''?labelRequestDefault:item.value;
+  else el.value=item.value;
+ }
+}
+$('#labelcards').addEventListener('paste',e=>{
+ const field=e.target&&e.target.closest&&e.target.closest('[data-key]');
+ if(!field||!field.closest('.labelcard'))return;
+ if(typeof parseLabelClipboard!=='function'||typeof planLabelPaste!=='function')return;
+ const text=e.clipboardData?e.clipboardData.getData('text/plain'):'';
+ const grid=parseLabelClipboard(text);
+ if(!grid)return;
+ e.preventDefault();
+ const card=field.closest('.labelcard');
+ const cards=[...$('#labelcards').querySelectorAll('.labelcard')];
+ const originRow=Math.max(0,cards.indexOf(card));
+ const originCol=Math.max(0,labelKeys.indexOf(field.dataset.key));
+ const planned=planLabelPaste({rows:grid,originRow,originCol,cardCount:cards.length});
+ if(!planned.ok){toast(planned.message);return}
+ const readCurrent=(row,key)=>{
+  const el=cards[row]&&cards[row].querySelector(`[data-key="${key}"]`);
+  return el?el.value:'';
+ };
+ if(typeof labelPasteNeedsConfirm==='function'&&labelPasteNeedsConfirm(planned.updates,readCurrent)){
+  if(!confirm('貼り付け先に既存の入力があります。置き換えますか？'))return;
+ }
+ ensureLabelCardCount(planned.needCards);
+ applyLabelPasteUpdates(planned.updates);
+ toast(`${planned.rowCount}行を宛名に反映しました。`);
+});
 let labelSets=[];
 function labelSlots(){return [...$('#labelcards').querySelectorAll('.labelcard')].map(card=>{const slot={};card.querySelectorAll('[data-key]').forEach(el=>slot[el.dataset.key]=el.value.trim());return slot})}
 function normalizeLabelPayload(payload){if(Array.isArray(payload))return{pattern:'4',slots:payload};if(payload&&typeof payload==='object')return{pattern:payload.pattern==='3'?'3':'4',slots:Array.isArray(payload.slots)?payload.slots:[]};return{pattern:'4',slots:[]}}function fillLabelCards(slots){const box=$('#labelcards');const list=Array.isArray(slots)&&slots.length?slots.slice(0,40):[null,null,null,null];while(list.length%4)list.push(null);box.replaceChildren();for(const slot of list){const card=labelCard();if(slot)for(const key of labelKeys){const el=card.querySelector(`[data-key="${key}"]`);if(el)el.value=slot[key]||(key==='request'?'消耗・破損交換':'')}box.append(card)}renumberLabelCards()}
