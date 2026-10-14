@@ -81,6 +81,15 @@ class FemaleSampleHanakoTest(unittest.TestCase):
             {'condition_label': '女性用', 'paper_color': '赤', 'variant_key': 'f'},
             {'format_name': '大', 'groups_json': '[]'},
         ))
+        # NM-000115 系: 条件が単なる「女性」「男性」（用／専用なし）
+        self.assertTrue(names._sample_is_explicit_female(
+            {'condition_label': '女性', 'paper_color': '赤', 'variant_key': 'f'},
+            {'format_name': '大ネーム(フルネーム)', 'groups_json': '["男性","女性"]'},
+        ))
+        self.assertFalse(names._sample_is_explicit_female(
+            {'condition_label': '男性', 'paper_color': '青', 'variant_key': 'm'},
+            {'format_name': '大ネーム(フルネーム)', 'groups_json': '["男性","女性"]'},
+        ))
         self.assertFalse(names._sample_is_explicit_female(
             {'condition_label': '', 'paper_color': '赤', 'variant_key': 'red'},
             {'format_name': '大', 'groups_json': '[]', 'fixed_color': '赤'},
@@ -96,6 +105,10 @@ class FemaleSampleHanakoTest(unittest.TestCase):
         self.assertTrue(names._sample_is_explicit_female(
             {'condition_label': '', 'paper_color': '', 'variant_key': 'x'},
             {'format_name': '女性用ネーム', 'groups_json': '[]', 'note': ''},
+        ))
+        self.assertTrue(names._sample_is_explicit_female(
+            {'condition_label': '女性専用', 'paper_color': '', 'variant_key': 'f'},
+            {'format_name': '大', 'groups_json': '[]'},
         ))
 
     @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
@@ -135,6 +148,7 @@ class FemaleSampleHanakoTest(unittest.TestCase):
                 report = names.correct_female_sample_names(c, data_dir)
                 self.assertEqual(report['changed'], 1)
                 self.assertEqual(report['items'][0]['sampleId'], female_id)
+                self.assertEqual(report.get('ruleVersion'), names.FEMALE_HANAKO_RULE_VERSION)
 
                 female = c.execute('SELECT * FROM name_samples WHERE id=?', (female_id,)).fetchone()
                 male = c.execute('SELECT * FROM name_samples WHERE id=?', (male_id,)).fetchone()
@@ -162,6 +176,67 @@ class FemaleSampleHanakoTest(unittest.TestCase):
                 self.assertIsNone(c.execute('SELECT confirmed_digest FROM name_reviews WHERE format_id=?', (fid,)).fetchone())
 
                 # 再実行は idempotent
+                again = names.correct_female_sample_names(c, data_dir)
+                self.assertEqual(again['changed'], 0)
+
+    @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
+    def test_bare_josei_after_v1_prior_rescans(self):
+        """#97(v1) 適用済みでも条件「女性」だけの見本は caption・共有画像を直す。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            db = data_dir / 'desk.sqlite3'
+            img_dir = data_dir / 'images' / 'names'
+            shared = img_dir / 'nm000115.png'
+            _draw_name(shared, '山田 太郎', bg=(240, 160, 160))
+
+            with _connect(db) as c:
+                names.bind(data_dir)
+                names.schema(c)
+                cust = _add_customer(c, 'c-nm', '試験NM')
+                fid = _add_format(
+                    c, cust, 'NM-000115', '大ネーム(フルネーム)',
+                    groups=['男性', '女性'],
+                )
+                male_id = _add_sample(
+                    c, fid, key='male', condition='男性', paper='青',
+                    path='images/names/nm000115.png', caption='山田 太郎',
+                )
+                female_id = _add_sample(
+                    c, fid, key='female', condition='女性', paper='赤',
+                    path='images/names/nm000115.png', caption='山田 太郎',
+                )
+                # #97 相当: v1 適用済み（女性用のみ対象だった想定）
+                c.execute(
+                    "INSERT OR REPLACE INTO settings VALUES(?,?)",
+                    (
+                        names.FEMALE_HANAKO_SETTINGS_KEY,
+                        json.dumps({
+                            'at': '20260101-000000',
+                            'changed': 0,
+                            'report': names.FEMALE_HANAKO_REPORT,
+                            'ruleVersion': 1,
+                        }, ensure_ascii=False),
+                    ),
+                )
+
+                report = names.correct_female_sample_names(c, data_dir)
+                self.assertEqual(report['changed'], 1)
+                self.assertEqual(report['items'][0]['sampleId'], female_id)
+                self.assertEqual(report['ruleVersion'], 2)
+
+                female = c.execute('SELECT * FROM name_samples WHERE id=?', (female_id,)).fetchone()
+                male = c.execute('SELECT * FROM name_samples WHERE id=?', (male_id,)).fetchone()
+                self.assertEqual(female['caption'], '山田 花子')
+                self.assertIn(names.FEMALE_IMAGE_SUFFIX, female['relative_path'])
+                self.assertEqual(male['caption'], '山田 太郎')
+                self.assertEqual(male['relative_path'], 'images/names/nm000115.png')
+                self.assertTrue(shared.is_file())
+                self.assertTrue((data_dir / female['relative_path']).is_file())
+
+                prior, ver = names._female_hanako_prior(c)
+                self.assertEqual(ver, names.FEMALE_HANAKO_RULE_VERSION)
+                self.assertEqual(prior.get('changed'), 1)
+
                 again = names.correct_female_sample_names(c, data_dir)
                 self.assertEqual(again['changed'], 0)
 

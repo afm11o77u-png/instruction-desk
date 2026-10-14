@@ -152,9 +152,12 @@ def correct_customer_names(c):
             c.execute('UPDATE name_customers SET source_name=? WHERE source_name=?', (right, wrong))
         c.execute('UPDATE name_customers SET linked_name=? WHERE linked_name=?', (right, wrong))
 
-# 女性用見本の架空氏名（山田太郎 → 山田花子）。色名だけでは判定しない。
-FEMALE_MARK = re.compile(r'女性用|女性専用')
-MALE_OR_SHARED_MARK = re.compile(r'男性用|男性専用|男女共用|男女共通|男女兼用')
+# 女性区分の見本の架空氏名（山田太郎 → 山田花子）。色名だけでは判定しない。
+# v1(#97)=女性用|女性専用 のみ → 条件「女性」だけの見本（例: NM-000115）を取りこぼした。
+# v2=明示の性別区分「女性」も対象（女性用／女性専用を含む）。「男性」も除外側に追加。
+FEMALE_HANAKO_RULE_VERSION = 2
+FEMALE_MARK = re.compile(r'女性')
+MALE_OR_SHARED_MARK = re.compile(r'男性|男女共用|男女共通|男女兼用')
 # 間隔つきを先に置換（半角・全角スペースを維持）
 YAMADA_TARO_TO_HANAKO = (
     ('山田　太郎', '山田　花子'),
@@ -162,6 +165,7 @@ YAMADA_TARO_TO_HANAKO = (
     ('山田太郎', '山田花子'),
 )
 FEMALE_HANAKO_REPORT = 'female-sample-hanako-report.json'
+FEMALE_HANAKO_SETTINGS_KEY = 'female_sample_hanako'
 FEMALE_IMAGE_SUFFIX = '-female-hanako'
 
 def _has_female_mark(text):
@@ -193,11 +197,32 @@ def _row_get(row, *keys):
             continue
     return ''
 
-def _sample_is_explicit_female(sample, fmt):
-    """見本または形式に明示の「女性用／女性専用」があるときだけ対象。
+def _female_hanako_prior(c):
+    """settings の前回適用情報と ruleVersion を返す。(data_or_None, version)。"""
+    row = c.execute(
+        "SELECT value FROM settings WHERE key=?",
+        (FEMALE_HANAKO_SETTINGS_KEY,),
+    ).fetchone()
+    if not row:
+        return None, 0
+    raw = row['value'] if hasattr(row, 'keys') else row[0]
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except (TypeError, json.JSONDecodeError):
+        return {'raw': raw}, 1
+    if not isinstance(data, dict):
+        return {'raw': raw}, 1
+    try:
+        version = int(data.get('ruleVersion') or 1)
+    except (TypeError, ValueError):
+        version = 1
+    return data, version
 
-    赤など色名だけでは女性用とみなさない。サンプル側に男性用・共通用があるときは除外。
-    形式に男女が混在し、見本側に女性用の明示が無い場合は判別不能として除外。
+def _sample_is_explicit_female(sample, fmt):
+    """見本または形式に明示の性別区分「女性」（女性用／女性専用を含む）があるときだけ対象。
+
+    赤など色名だけでは女性とみなさない。サンプル側に男性・共通用があるときは除外。
+    形式に男女が混在し、見本側に女性の明示が無い場合は判別不能として除外。
     """
     sample_bits = [
         _row_get(sample, 'condition_label', 'condition'),
@@ -427,10 +452,11 @@ def _patch_female_catalog(data_dir, backup_dir, report_items):
     return changed
 
 def correct_female_sample_names(c, data_dir=None):
-    """明示的に女性用の見本だけ、架空氏名を山田花子へ（画像・caption・catalog）。
+    """明示的に女性区分の見本だけ、架空氏名を山田花子へ（画像・caption・catalog）。
 
+    - 対象: 条件などに「女性」「女性用」「女性専用」
     - 色名だけでは対象にしない
-    - 男性用・共通用・判別不能は変更しない
+    - 男性／男性用・共通用・判別不能は変更しない
     - 共有画像は上書きせず -female-hanako を新規作成して参照だけ切替
     - 了承 digest は name_samples 更新トリガに任せ、勝手に了承しない
     """
@@ -466,7 +492,9 @@ def correct_female_sample_names(c, data_dir=None):
         ORDER BY s.id
     ''').fetchall()
 
-    prior = c.execute("SELECT value FROM settings WHERE key='female_sample_hanako'").fetchone()
+    prior, prior_version = _female_hanako_prior(c)
+    # ルール版が上がったときは未フォーク画像も再検査（#97 後の「女性」取りこぼし用）
+    rescan_images = prior_version < FEMALE_HANAKO_RULE_VERSION
     pending = False
     for row in rows:
         sample = {
@@ -488,7 +516,7 @@ def correct_female_sample_names(c, data_dir=None):
             pending = True
             break
         rel = row['relative_path'] or ''
-        if rel and FEMALE_IMAGE_SUFFIX not in Path(rel).stem and not prior:
+        if rel and FEMALE_IMAGE_SUFFIX not in Path(rel).stem and (not prior or rescan_images):
             pending = True
             break
     if not pending:
@@ -515,13 +543,14 @@ def correct_female_sample_names(c, data_dir=None):
         if not female:
             if needs_caption:
                 unchanged_checks.append({
-                    'sampleId': row['sample_id'], 'reason': '女性用ではないためcaptionも維持',
+                    'sampleId': row['sample_id'], 'reason': '女性区分ではないためcaptionも維持',
                     'customer': row['source_name'], 'format': row['format_name'],
                 })
             continue
         already_forked = FEMALE_IMAGE_SUFFIX in Path(row['relative_path'] or '').stem
-        # caption に山田太郎系がある、または未フォーク画像の初回検査
-        if not needs_caption and (already_forked or not row['relative_path'] or prior):
+        # caption に山田太郎系がある、または未フォーク画像の初回／ルール版上げ検査
+        skip_image_rescan = prior and not rescan_images
+        if not needs_caption and (already_forked or not row['relative_path'] or skip_image_rescan):
             continue
 
         entry = {
@@ -595,11 +624,13 @@ def correct_female_sample_names(c, data_dir=None):
         'changed': len(items),
         'catalogSamplesPatched': catalog_changed,
         'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
         'rule': {
-            'include': ['女性用', '女性専用'],
-            'exclude': ['男性用', '男性専用', '男女共用', '男女共通', '男女兼用', '色名のみ（例: 赤）', '判別不能'],
+            'include': ['女性', '女性用', '女性専用'],
+            'exclude': ['男性', '男性用', '男性専用', '男女共用', '男女共通', '男女兼用', '色名のみ（例: 赤）', '判別不能'],
             'nameReplace': list(YAMADA_TARO_TO_HANAKO),
             'keepSurnameOnly': True,
+            'colorAloneNotFemale': True,
         },
         'items': items,
         'nonFemaleCaptionLeftAlone': unchanged_checks[:50],
@@ -609,8 +640,16 @@ def correct_female_sample_names(c, data_dir=None):
     if backup_dir.exists():
         (backup_dir / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     c.execute(
-        "INSERT OR REPLACE INTO settings VALUES('female_sample_hanako',?)",
-        (json.dumps({'at': stamp, 'changed': len(items), 'report': FEMALE_HANAKO_REPORT}, ensure_ascii=False),),
+        "INSERT OR REPLACE INTO settings VALUES(?,?)",
+        (
+            FEMALE_HANAKO_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': len(items),
+                'report': FEMALE_HANAKO_REPORT,
+                'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
+            }, ensure_ascii=False),
+        ),
     )
     return report
 
