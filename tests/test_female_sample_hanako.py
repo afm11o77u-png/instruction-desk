@@ -71,6 +71,39 @@ def _draw_name(path, text, fill=(0, 0, 0), bg=(255, 220, 220)):
 
 
 class FemaleSampleHanakoTest(unittest.TestCase):
+    def test_names_py_compiles_without_stray_markdown(self):
+        """Markdown 箇条書きが docstring/コメント外に混入すると SyntaxError になる。"""
+        import py_compile
+        import tokenize
+        import io
+
+        path = ROOT / 'names.py'
+        py_compile.compile(str(path), doraise=True)
+        src = path.read_bytes()
+        covered = set()
+        for tok in tokenize.tokenize(io.BytesIO(src).readline):
+            if tok.type in (tokenize.STRING, tokenize.COMMENT):
+                for line_no in range(tok.start[0], tok.end[0] + 1):
+                    covered.add(line_no)
+        stray = []
+        for line_no, line in enumerate(src.decode('utf-8').splitlines(), 1):
+            stripped = line.lstrip()
+            if line_no in covered:
+                continue
+            if stripped.startswith(('- ', '* ')) or '「' in stripped:
+                stray.append(f'{line_no}:{stripped[:80]}')
+        self.assertEqual(stray, [], 'stray markdown/code outside strings:\n' + '\n'.join(stray))
+
+    def test_maintenance_cmd_is_ascii_crlf(self):
+        """cmd.exe は UTF-8 日本語行を CP932 誤読し、行が割れることがある。"""
+        path = ROOT / '女性見本花子保守.cmd'
+        raw = path.read_bytes()
+        self.assertFalse(raw.startswith(b'\xef\xbb\xbf'), 'BOM 無し')
+        self.assertNotIn(b'\n', raw.replace(b'\r\n', b''), 'CRLF only')
+        self.assertTrue(all(b < 0x80 for b in raw), 'ASCII only')
+        self.assertIn(b'set "DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1"', raw)
+        self.assertIn(b'maintain_female_sample_hanako.py', raw)
+
     def test_replace_preserves_spacing(self):
         self.assertEqual(names.replace_yamada_taro('山田太郎'), '山田花子')
         self.assertEqual(names.replace_yamada_taro('見本：山田 太郎'), '見本：山田 花子')
