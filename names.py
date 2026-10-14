@@ -109,6 +109,7 @@ def schema(c):
     correct_customer_names(c)
     if DATA_DIR is not None:
         correct_female_sample_names(c, DATA_DIR)
+        correct_rinko_yellow(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -653,6 +654,398 @@ def correct_female_sample_names(c, data_dir=None):
     )
     return report
 
+# 鱗幸食品：先方から指定の色一覧へ「黄色」を追加（他顧客・他形式は触らない）
+RINKO_CUSTOMER_NAME = '鱗幸食品'
+MIX_FIXED_COLOR = '先方から指定'
+DEFAULT_MIX_COLORS = ['赤', '青', '緑', '白']
+RINKO_MIX_COLORS = ['赤', '青', '緑', '白', '黄色']
+YELLOW_COLOR_NAMES = frozenset({'黄色', '黄'})
+RINKO_YELLOW_REPORT = 'rinko-yellow-report.json'
+RINKO_YELLOW_SETTINGS_KEY = 'rinko_yellow'
+RINKO_YELLOW_IMAGE_SUFFIX = '-yellow'
+RINKO_YELLOW_VARIANT = 'yellow'
+YELLOW_PAPER_RGB = (255, 255, 224)  # #FFFFE0
+
+def _is_yellow_color(name):
+    key = str(name or '').replace('?', '').replace('？', '').strip()
+    return key in YELLOW_COLOR_NAMES
+
+def _is_mix_color(name):
+    return str(name or '').strip() == MIX_FIXED_COLOR
+
+def _load_spec(row):
+    raw = _row_get(row, 'spec_json', 'spec')
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+def mix_colors_for(row):
+    """形式の先方指定色一覧。未設定なら標準4色。"""
+    spec = _load_spec(row)
+    colors = spec.get('mixColors')
+    if isinstance(colors, list) and colors:
+        out = []
+        for item in colors:
+            text = str(item or '').strip()
+            if text and text not in out:
+                out.append(text)
+        if out:
+            return out
+    return list(DEFAULT_MIX_COLORS)
+
+def _format_has_mix(fmt, samples=None):
+    if _is_mix_color(_row_get(fmt, 'fixed_color', 'fixedColor')):
+        return True
+    raw_colors = _row_get(fmt, 'colors_json')
+    colors = []
+    if raw_colors:
+        try:
+            colors = json.loads(raw_colors) or []
+        except (TypeError, json.JSONDecodeError):
+            colors = []
+    elif isinstance(fmt, dict) and fmt.get('colors'):
+        colors = fmt.get('colors') or []
+    if any(_is_mix_color(color) for color in colors):
+        return True
+    for sample in samples or []:
+        if _is_mix_color(_row_get(sample, 'paper_color', 'paperColor')):
+            return True
+    return False
+
+def _append_yellow_to_text(text):
+    """括弧内などの赤・青・緑・白一覧へ黄色を足す。既にあればそのまま。"""
+    value = str(text or '')
+    if not value:
+        return value
+    if '黄色' in value or re.search(r'(?<![男女])黄(?!色)', value):
+        return value
+    replacements = (
+        ('赤・青・緑・白', '赤・青・緑・白・黄色'),
+        ('赤、青、緑、白', '赤、青、緑、白、黄色'),
+        ('赤/青/緑/白', '赤/青/緑/白/黄色'),
+        ('赤･青･緑･白', '赤･青･緑･白･黄色'),
+    )
+    out = value
+    for old, new in replacements:
+        if old in out:
+            out = out.replace(old, new)
+    if out != value:
+        out = out.replace('4色', '5色')
+    return out
+
+def _yellow_image_rel(rel):
+    path = Path(str(rel))
+    if path.stem.endswith(RINKO_YELLOW_IMAGE_SUFFIX):
+        return str(path).replace('\\', '/')
+    return str(path.with_name(path.stem + RINKO_YELLOW_IMAGE_SUFFIX + path.suffix)).replace('\\', '/')
+
+def _make_yellow_paper_image(src_path, dst_path):
+    """既存見本の用紙色を黄色にした複製を作る（元画像は上書きしない）。"""
+    try:
+        from PIL import Image
+    except ImportError:
+        return False, 'Pillowがありません'
+    try:
+        image = Image.open(src_path).convert('RGB')
+    except OSError as exc:
+        return False, str(exc)
+    corners = [
+        image.getpixel((0, 0)),
+        image.getpixel((image.width - 1, 0)),
+        image.getpixel((0, image.height - 1)),
+        image.getpixel((image.width - 1, image.height - 1)),
+    ]
+    bg = max(set(corners), key=corners.count)
+    pixels = image.load()
+    for y in range(image.height):
+        for x in range(image.width):
+            r, g, b = pixels[x, y]
+            near_bg = abs(r - bg[0]) + abs(g - bg[1]) + abs(b - bg[2]) < 120
+            near_white = r >= 200 and g >= 200 and b >= 200
+            if near_bg or near_white:
+                pixels[x, y] = YELLOW_PAPER_RGB
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    if dst_path.resolve() == Path(src_path).resolve():
+        return False, '元画像と同じパスには保存しません'
+    fmt = 'PNG' if dst_path.suffix.lower() == '.png' else 'JPEG' if dst_path.suffix.lower() in ('.jpg', '.jpeg') else 'WEBP'
+    save_kw = {}
+    if fmt == 'JPEG':
+        save_kw['quality'] = 95
+    image.save(dst_path, format=fmt, **save_kw)
+    return True, ''
+
+def _patch_rinko_catalog(data_dir, backup_dir, report_items):
+    """catalog.json の鱗幸食品・先方指定形式へ黄色見本と mixColors を反映。"""
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return None
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, backup_dir / 'catalog.json')
+    data = json.loads(path.read_text(encoding='utf-8'))
+    customers = {
+        item.get('sourceKey'): item
+        for item in (data.get('customers') or [])
+        if str(item.get('name') or '').strip() == RINKO_CUSTOMER_NAME
+    }
+    if not customers:
+        return 0
+    changed = 0
+    for fmt in data.get('formats') or []:
+        if fmt.get('customerKey') not in customers:
+            continue
+        samples = list(fmt.get('samples') or [])
+        if not _format_has_mix(fmt, samples):
+            continue
+        dirty = False
+        if list(fmt.get('mixColors') or []) != RINKO_MIX_COLORS:
+            fmt['mixColors'] = list(RINKO_MIX_COLORS)
+            dirty = True
+        for field in ('note', 'colorCaption'):
+            before = fmt.get(field) or ''
+            after = _append_yellow_to_text(before)
+            if after != before:
+                fmt[field] = after
+                dirty = True
+        if not any(_is_yellow_color(s.get('paperColor')) for s in samples):
+            template = None
+            for sample in samples:
+                if sample.get('relativePath') or sample.get('caption') or sample.get('paperColor'):
+                    template = sample
+                    if _is_mix_color(sample.get('paperColor')) or str(sample.get('paperColor') or '').strip() in ('白', ''):
+                        break
+            template = template or {}
+            rel = str(template.get('relativePath') or '')
+            new_rel = _yellow_image_rel(rel) if rel.startswith('images/names/') else ''
+            matched = next((item for item in report_items if item.get('identity') == fmt.get('identity')), None)
+            if matched and matched.get('yellowRelativePath'):
+                new_rel = matched['yellowRelativePath']
+            samples.append({
+                'key': RINKO_YELLOW_VARIANT,
+                'condition': '',  # 女性用などの区分は付けない
+                'paperColor': '黄色',
+                'relativePath': new_rel,
+                'caption': template.get('caption') or '',
+            })
+            fmt['samples'] = samples
+            dirty = True
+        if dirty:
+            changed += 1
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+def correct_rinko_yellow(c, data_dir=None):
+    """鱗幸食品の「先方から指定」形式だけへ黄色を追加（説明・見本・catalog）。
+
+    - 他顧客・担当者・利用者・他業務データは変更しない
+    - 既存色・書体・寸法・氏名・配置は維持。黄色を女性用区分にしない
+    - 既存画像は上書きせず -yellow を追加
+    - 了承は name_samples / name_formats 更新トリガに任せ、勝手に了承しない
+    """
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    customers = c.execute(
+        'SELECT id, source_name FROM name_customers WHERE retired=0 AND source_name=?',
+        (RINKO_CUSTOMER_NAME,),
+    ).fetchall()
+    if not customers:
+        report = {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': '鱗幸食品なし',
+            'customer': RINKO_CUSTOMER_NAME,
+            'mixColors': list(RINKO_MIX_COLORS),
+        }
+        return report
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'rinko-yellow-{stamp}'
+    items = []
+    pending = False
+
+    for customer in customers:
+        formats = c.execute(
+            'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+            (customer['id'],),
+        ).fetchall()
+        for fmt in formats:
+            samples = c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (fmt['id'],),
+            ).fetchall()
+            if not _format_has_mix(fmt, samples):
+                continue
+            spec = _load_spec(fmt)
+            current_mix = mix_colors_for(fmt)
+            has_yellow_sample = any(_is_yellow_color(s['paper_color']) for s in samples)
+            note_needs = _append_yellow_to_text(fmt['note'] or '') != (fmt['note'] or '')
+            caption_needs = _append_yellow_to_text(fmt['color_caption'] or '') != (fmt['color_caption'] or '')
+            mix_needs = current_mix != RINKO_MIX_COLORS or '黄色' not in current_mix
+            if mix_needs or not has_yellow_sample or note_needs or caption_needs:
+                pending = True
+                break
+        if pending:
+            break
+
+    if not pending:
+        prior = c.execute(
+            "SELECT value FROM settings WHERE key=?",
+            (RINKO_YELLOW_SETTINGS_KEY,),
+        ).fetchone()
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': '適用済み' if prior else '対象形式なし',
+            'customer': RINKO_CUSTOMER_NAME,
+        }
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+
+    for customer in customers:
+        formats = c.execute(
+            'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+            (customer['id'],),
+        ).fetchall()
+        for fmt in formats:
+            samples = list(c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (fmt['id'],),
+            ).fetchall())
+            if not _format_has_mix(fmt, samples):
+                continue
+
+            spec = _load_spec(fmt)
+            before_mix = mix_colors_for(fmt)
+            spec['mixColors'] = list(RINKO_MIX_COLORS)
+            new_note = _append_yellow_to_text(fmt['note'] or '')
+            new_color_caption = _append_yellow_to_text(fmt['color_caption'] or '')
+            c.execute(
+                'UPDATE name_formats SET spec_json=?, note=?, color_caption=? WHERE id=?',
+                (json.dumps(spec, ensure_ascii=False), new_note, new_color_caption, fmt['id']),
+            )
+
+            yellow_rel = ''
+            yellow_sample_id = None
+            existing_yellow = next((s for s in samples if _is_yellow_color(s['paper_color'])), None)
+            image_action = 'unchanged'
+            if existing_yellow:
+                yellow_sample_id = existing_yellow['id']
+                yellow_rel = existing_yellow['relative_path'] or ''
+            else:
+                template = None
+                for sample in samples:
+                    if sample['relative_path']:
+                        template = sample
+                        if _is_mix_color(sample['paper_color']) or (sample['paper_color'] or '').strip() in ('白', ''):
+                            break
+                if template is None and samples:
+                    template = samples[0]
+                caption = (template['caption'] if template else '') or ''
+                condition = ''  # 女性用などの区分は付けない
+                src_rel = (template['relative_path'] if template else '') or ''
+                new_rel = ''
+                if src_rel.startswith('images/names/'):
+                    src_path = root / src_rel
+                    if src_path.is_file():
+                        # バックアップ（元画像のコピー。上書きはしない）
+                        dest_backup = images_backup / Path(src_rel).name
+                        if not dest_backup.exists():
+                            shutil.copy2(src_path, dest_backup)
+                        new_rel = _yellow_image_rel(src_rel)
+                        dst_path = root / new_rel
+                        if not dst_path.exists():
+                            ok, err = _make_yellow_paper_image(src_path, dst_path)
+                            image_action = 'created' if ok else f'failed:{err}'
+                            if not ok:
+                                new_rel = ''
+                        else:
+                            image_action = 'reused'
+                # variant_key 衝突回避
+                variant = RINKO_YELLOW_VARIANT
+                used = {s['variant_key'] for s in samples}
+                if variant in used:
+                    variant = 'paper-yellow'
+                if variant in used:
+                    variant = f'yellow-{fmt["id"]}'
+                c.execute(
+                    '''INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)
+                       VALUES(?,?,?,?,?,?)''',
+                    (fmt['id'], variant, condition, '黄色', new_rel, caption),
+                )
+                yellow_sample_id = c.execute('SELECT last_insert_rowid() AS id').fetchone()['id']
+                yellow_rel = new_rel
+
+            items.append({
+                'customer': customer['source_name'],
+                'formatId': fmt['id'],
+                'number': _number(fmt['id']),
+                'format': fmt['format_name'],
+                'identity': fmt['identity'],
+                'fixedColor': fmt['fixed_color'],
+                'mixColorsBefore': before_mix,
+                'mixColorsAfter': list(RINKO_MIX_COLORS),
+                'yellowSampleId': yellow_sample_id,
+                'yellowRelativePath': yellow_rel,
+                'imageAction': image_action,
+                'noteUpdated': new_note != (fmt['note'] or ''),
+                'colorCaptionUpdated': new_color_caption != (fmt['color_caption'] or ''),
+            })
+
+    catalog_changed = _patch_rinko_catalog(root, backup_dir, items)
+    report = {
+        'at': stamp,
+        'changed': len(items),
+        'customer': RINKO_CUSTOMER_NAME,
+        'mixColors': list(RINKO_MIX_COLORS),
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'rules': {
+            'onlyCustomer': RINKO_CUSTOMER_NAME,
+            'onlyMixFormats': True,
+            'addColor': '黄色',
+            'keepExistingColors': True,
+            'noGenderForYellow': True,
+            'noOverwriteImages': True,
+            'noAutoApprove': True,
+        },
+        'items': items,
+    }
+    report_path = root / RINKO_YELLOW_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    c.execute(
+        "INSERT OR REPLACE INTO settings VALUES(?,?)",
+        (
+            RINKO_YELLOW_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': len(items),
+                'report': RINKO_YELLOW_REPORT,
+                'mixColors': list(RINKO_MIX_COLORS),
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -714,6 +1107,8 @@ def import_catalog(connect, data_dir):
             if not customer_id: continue
             spec = {k: item.get(k) for k in (
                 'surnameOnly', 'spaceSurname', 'strictFont', 'colorFromDepartment', 'inputCaption', 'numberPrefix', 'white', 'sourceFiles')}
+            if item.get('mixColors') is not None:
+                spec['mixColors'] = item.get('mixColors')
             values = (
                 customer_id, item.get('sourceKind'), item.get('format') or '', item.get('placement') or '',
                 item.get('family') or '', item.get('headerFamily') or '', item.get('heading') or '', item.get('note') or '',
@@ -771,6 +1166,7 @@ def import_catalog(connect, data_dir):
         }
         c.execute("INSERT OR REPLACE INTO settings VALUES('name_import',?)", (json.dumps(summary, ensure_ascii=False),))
         correct_female_sample_names(c, data_dir)
+        correct_rinko_yellow(c, data_dir)
     return summary
 
 def _require(user):
@@ -843,6 +1239,7 @@ def customer(handler, c, customer_id):
             'placement': item['placement'], 'size': _size_text(item), 'needsReview': bool(item['needs_review']),
             'blank': bool(item['blank']), 'hasImage': bool(sample), 'sampleId': sample['id'] if sample else None,
             'colors': _colors(item), 'fixedColor': item['fixed_color'],
+            'mixColors': mix_colors_for(item),
             'review': name_review.state(c,item['id'],handler.user),
         })
     return 200, {
@@ -877,6 +1274,7 @@ def detail(handler, c, format_id):
         'family': row['family'], 'headerFamily': row['header_family'], 'heading': row['heading'],
         'note': row['note'], 'reading': row['reading'], 'pending': row['pending'],
         'fixedColor': row['fixed_color'], 'colorCaption': row['color_caption'], 'colors': _colors(row),
+        'mixColors': mix_colors_for(row),
         'colorText': _color_text(row),
         'departments': json.loads(row['departments_json'] or 'null'),
         'departmentText': '\n'.join(json.loads(row['departments_json'] or 'null') or []),
@@ -925,7 +1323,10 @@ def _color_text(row):
 
 def _swatch(name):
     key = str(name or '').replace('?', '').replace('？', '').strip()
-    return {'青': '#87CEFA', '緑': '#90EE90', '赤': '#F08080', '黄': '#FFFFE0', 'オレンジ': '#FFDAB9', '白': '#FFFFFF'}.get(key, '#FFFFFF')
+    return {
+        '青': '#87CEFA', '緑': '#90EE90', '赤': '#F08080',
+        '黄': '#FFFFE0', '黄色': '#FFFFE0', 'オレンジ': '#FFDAB9', '白': '#FFFFFF',
+    }.get(key, '#FFFFFF')
 
 def _parse_colors(text):
     groups, colors = [], []

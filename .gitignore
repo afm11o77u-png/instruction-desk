@@ -48,6 +48,7 @@ data/code-backups/
 # 自動生成される取込レポート
 data/*-import-report.json
 data/female-sample-hanako-report.json
+data/rinko-yellow-report.json
 
 # 秘密鍵・ローカル証明書
 tls/
