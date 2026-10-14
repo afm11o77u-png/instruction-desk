@@ -39,17 +39,23 @@ def _add_customer(c, key, name):
     ).lastrowid
 
 
-def _add_format(c, customer_id, identity, format_name, *, groups=None, color_caption='', note='', fixed_color=''):
+def _add_format(
+    c, customer_id, identity, format_name, *, groups=None, color_caption='', note='', fixed_color='',
+    layout='Name', family='HG丸ゴシックM-PRO', width_mm=80, height_mm=50, maximum_font=28, blank=0,
+):
     return c.execute(
         '''INSERT INTO name_formats(
-            identity, customer_id, source_kind, format_name, placement, note, fixed_color, color_caption,
-            groups_json, colors_json, swatches_json, retired
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,0)''',
+            identity, customer_id, source_kind, format_name, placement, family, note, layout,
+            fixed_color, color_caption, groups_json, colors_json, swatches_json,
+            width_mm, height_mm, maximum_font, blank, retired
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)''',
         (
-            identity, customer_id, 1, format_name, '胸', note, fixed_color, color_caption,
+            identity, customer_id, 1, format_name, '胸', family, note, layout,
+            fixed_color, color_caption,
             json.dumps(groups or [], ensure_ascii=False),
             json.dumps(['赤'] * len(groups or []), ensure_ascii=False),
             json.dumps(['#F08080'] * len(groups or []), ensure_ascii=False),
+            width_mm, height_mm, maximum_font, blank,
         ),
     ).lastrowid
 
@@ -265,7 +271,7 @@ class FemaleSampleHanakoTest(unittest.TestCase):
                 report = names.correct_female_sample_names(c, data_dir, force=True)
                 self.assertEqual(report['changed'], 1)
                 self.assertEqual(report['items'][0]['sampleId'], female_id)
-                self.assertEqual(report['ruleVersion'], 3)
+                self.assertEqual(report['ruleVersion'], names.FEMALE_HANAKO_RULE_VERSION)
 
                 female = c.execute('SELECT * FROM name_samples WHERE id=?', (female_id,)).fetchone()
                 male = c.execute('SELECT * FROM name_samples WHERE id=?', (male_id,)).fetchone()
@@ -363,9 +369,41 @@ class FemaleSampleHanakoTest(unittest.TestCase):
                 report = names.correct_female_sample_names(c, data_dir, force=True)
                 self.assertEqual(report['changed'], 0)
                 self.assertGreaterEqual(report.get('failed', 0), 1)
+                failed = report.get('failedItems') or []
+                self.assertTrue(any('再生成' in (item.get('reason') or '') or '印字' in (item.get('reason') or '') for item in failed))
                 row = c.execute('SELECT caption, relative_path FROM name_samples WHERE id=?', (sid,)).fetchone()
                 self.assertEqual(row['caption'], '山田 太郎')
                 self.assertEqual(row['relative_path'], 'images/names/blank.png')
+
+    @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
+    def test_complex_layout_held_without_pixel_fallback(self):
+        """部署・番号付き layout は推測再生成せず保留。画素マッチへ落とさない。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            db = data_dir / 'desk.sqlite3'
+            img = data_dir / 'images' / 'names' / 'dept.png'
+            _draw_name(img, '山田 太郎', bg=(240, 160, 160))
+            with _connect(db) as c:
+                names.bind(data_dir)
+                names.schema(c)
+                cust = _add_customer(c, 'c1', '試験')
+                fid = _add_format(
+                    c, cust, 'id-dept', '部署付き', groups=['女性'],
+                    layout='DeptName',
+                )
+                sid = _add_sample(
+                    c, fid, key='f', condition='女性', paper='赤',
+                    path='images/names/dept.png', caption='山田 太郎',
+                )
+                report = names.correct_female_sample_names(c, data_dir, force=True)
+                self.assertEqual(report['changed'], 0)
+                self.assertGreaterEqual(report.get('failed', 0), 1)
+                reason = (report.get('failedItems') or [{}])[0].get('reason') or ''
+                self.assertIn('DeptName', reason)
+                row = c.execute('SELECT caption, relative_path FROM name_samples WHERE id=?', (sid,)).fetchone()
+                self.assertEqual(row['caption'], '山田 太郎')
+                self.assertEqual(row['relative_path'], 'images/names/dept.png')
+                self.assertFalse((data_dir / 'images' / 'names' / f'dept{names.FEMALE_IMAGE_SUFFIX}.png').is_file())
 
     @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
     def test_catalog_json_caption_updated_via_maintenance(self):
@@ -385,6 +423,11 @@ class FemaleSampleHanakoTest(unittest.TestCase):
                     'customerKey': 'c',
                     'sourceKind': 1,
                     'format': '女性用ラベル',
+                    'layout': 'Name',
+                    'family': 'HG丸ゴシックM-PRO',
+                    'widthMm': 80,
+                    'heightMm': 50,
+                    'maximumFont': 28,
                     'groups': ['女性用'],
                     'colors': ['赤'],
                     'colorSwatches': ['#F08080'],
@@ -479,21 +522,99 @@ class FemaleSampleHanakoTest(unittest.TestCase):
             names._HAS_NUMPY = prev
 
     @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
-    def test_rewrite_emits_size_progress(self):
+    def test_regenerate_emits_progress_and_changes_pixels(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / 'src.png'
             dst = Path(tmp) / 'dst.png'
-            _draw_name(src, '山田 太郎')
+            _draw_name(src, '山田 太郎', bg=(240, 128, 128))
             events = []
-            ok, note = names._rewrite_name_pixels(
-                src, dst, progress_callback=events.append,
+            ok, note = names._regenerate_name_sample(
+                src, dst,
+                name_text='山田 花子',
+                family_hint='HG丸ゴシックM-PRO',
+                maximum_font=28,
+                width_mm=80,
+                height_mm=50,
+                progress_callback=events.append,
             )
             self.assertTrue(ok, note)
             self.assertTrue(dst.is_file())
+            self.assertNotEqual(src.read_bytes(), dst.read_bytes())
             tries = [e for e in events if e.get('phase') == 'image-try']
             self.assertGreaterEqual(len(tries), 1)
+            self.assertEqual(tries[0].get('method'), 'regenerate')
             self.assertIn('size', tries[0])
-            self.assertIn('sizeIndex', tries[0])
+
+    @unittest.skipUnless(HAS_PIL and FONT.is_file(), 'PillowとCJKフォントが必要')
+    def test_nm000115_kobayashi_female_red_regenerates(self):
+        """小林製麺相当: NM-000115 大ネーム(フルネーム) 女性/赤を山田花子へ再生成。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            db = data_dir / 'desk.sqlite3'
+            img_dir = data_dir / 'images' / 'names'
+            shared = img_dir / 'nm000115.png'
+            # 80×50 mm 相当キャンバス・赤用紙・氏名のみ
+            font = ImageFont.truetype(str(FONT), 42)
+            im = Image.new('RGB', (480, 300), (240, 128, 128))
+            draw = ImageDraw.Draw(im)
+            box = draw.textbbox((0, 0), '山田 太郎', font=font)
+            tw, th = box[2] - box[0], box[3] - box[1]
+            draw.text(((480 - tw) / 2 - box[0], (300 - th) / 2 - box[1]), '山田 太郎', font=font, fill=(0, 0, 0))
+            shared.parent.mkdir(parents=True, exist_ok=True)
+            im.save(shared)
+            before = shared.read_bytes()
+
+            with _connect(db) as c:
+                names.bind(data_dir)
+                names.schema(c)
+                cust = _add_customer(c, 'kobayashi', '小林製麺')
+                fid = _add_format(
+                    c, cust, 'nm-000115', '大ネーム(フルネーム)',
+                    groups=['男性', '女性'],
+                    layout='Name',
+                    family='HG丸ゴシックM-PRO',
+                    width_mm=80,
+                    height_mm=50,
+                    maximum_font=28,
+                )
+                male_id = _add_sample(
+                    c, fid, key='male', condition='男性', paper='青',
+                    path='images/names/nm000115.png', caption='山田 太郎',
+                )
+                female_id = _add_sample(
+                    c, fid, key='female', condition='女性', paper='赤',
+                    path='images/names/nm000115.png', caption='山田 太郎',
+                )
+                # 了承済みでも更新トリガで digest クリアされること（勝手に了承維持しない）
+                c.execute(
+                    'INSERT INTO name_reviews(format_id, assignee_id, confirmed_by, confirmed_name, confirmed_at, confirmed_digest)'
+                    ' VALUES(?,?,?,?,?,?)',
+                    (fid, 1, 1, '田中', '2026-01-01T00:00:00', 'old-digest'),
+                )
+
+                report = names.correct_female_sample_names(c, data_dir, force=True)
+                self.assertEqual(report['changed'], 1, report)
+                self.assertEqual(report['items'][0]['sampleId'], female_id)
+                self.assertIn('regenerat', report['items'][0].get('imageAction', ''))
+
+                female = c.execute('SELECT * FROM name_samples WHERE id=?', (female_id,)).fetchone()
+                male = c.execute('SELECT * FROM name_samples WHERE id=?', (male_id,)).fetchone()
+                self.assertEqual(female['caption'], '山田 花子')
+                self.assertIn(names.FEMALE_IMAGE_SUFFIX, female['relative_path'])
+                self.assertEqual(male['caption'], '山田 太郎')
+                self.assertEqual(male['relative_path'], 'images/names/nm000115.png')
+                self.assertEqual(shared.read_bytes(), before)
+                forked = data_dir / female['relative_path']
+                self.assertTrue(forked.is_file())
+                self.assertNotEqual(forked.read_bytes(), before)
+
+                review = c.execute(
+                    'SELECT confirmed_digest FROM name_reviews WHERE format_id=?', (fid,),
+                ).fetchone()
+                self.assertIsNone(review['confirmed_digest'])
+
+                again = names.correct_female_sample_names(c, data_dir, force=True)
+                self.assertEqual(again['changed'], 0)
 
 
 if __name__ == '__main__':
