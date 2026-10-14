@@ -115,6 +115,7 @@ def _column(c, table, name, ddl):
 # ネーム情報の顧客名の既知の表記ゆれ（取込元・既存行の表示名を直す）
 CUSTOMER_NAME_CORRECTIONS = {
     '日綜中垣': '日総',
+    '札幌、白石、岩見沢、宮の森明日香': '札幌/桜台/白石/岩見沢/宮の沢明日佳',
 }
 
 def _correct_customer_name(name):
