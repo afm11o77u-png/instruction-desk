@@ -1127,5 +1127,98 @@ class MigrationTests(unittest.TestCase):
             c.close()
 
 
+class MatchUsersByLoginTests(unittest.TestCase):
+    """Unit tests for restore-screen bulk login matching (no ZIP restore)."""
+
+    def test_login_match_case_insensitive_unique(self):
+        source = [
+            {'id': 1, 'login': 'Alice@Example.co.jp', 'name': '源アリス', 'active': 1},
+            {'id': 2, 'login': 'bob@example.co.jp', 'name': '源ボブ', 'active': 1},
+        ]
+        dest = [
+            {'id': 101, 'login': 'alice@example.co.jp', 'name': '先アリス', 'active': 1},
+            {'id': 102, 'login': 'bob@example.co.jp', 'name': '先ボブ', 'active': 1},
+            {'id': 1, 'login': 'other@example.co.jp', 'name': '同番号別人', 'active': 1},
+        ]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matches'], {1: 101, 2: 102})
+        self.assertEqual(report['matchedCount'], 2)
+        self.assertEqual(report['unmatchedCount'], 0)
+
+    def test_name_only_or_blank_login_requires_manual(self):
+        source = [
+            {'id': 10, 'login': '', 'name': '現場太郎', 'nameOnly': True, 'active': 1},
+            {'id': 11, 'login': '', 'name': '空白花子', 'active': 1},
+        ]
+        dest = [
+            {'id': 201, 'login': '', 'name': '現場太郎', 'nameOnly': True, 'active': 1},
+            {'id': 202, 'login': 'hana@example.co.jp', 'name': '空白花子', 'active': 1},
+        ]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matches'], {})
+        self.assertEqual(report['unmatchedCount'], 2)
+        reasons = {item['sourceId']: item['reason'] for item in report['unmatched']}
+        self.assertEqual(reasons[10], 'ログインIDが空欄です')
+        self.assertEqual(reasons[11], 'ログインIDが空欄です')
+
+    def test_name_same_but_login_different_does_not_match(self):
+        source = [{'id': 3, 'login': 'old@example.co.jp', 'name': '同一氏名', 'active': 1}]
+        dest = [{'id': 303, 'login': 'new@example.co.jp', 'name': '同一氏名', 'active': 1}]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matches'], {})
+        self.assertEqual(report['unmatched'][0]['reason'], 'ログインIDが一致する利用者がいません')
+
+    def test_same_numeric_id_alone_does_not_match(self):
+        source = [{'id': 7, 'login': 'zip@example.co.jp', 'name': 'ZIP側', 'active': 1}]
+        dest = [{'id': 7, 'login': 'pc@example.co.jp', 'name': 'PC側', 'active': 1}]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matches'], {})
+        self.assertEqual(report['unmatched'][0]['reason'], 'ログインIDが一致する利用者がいません')
+
+    def test_inactive_destination_not_auto_selected(self):
+        source = [{'id': 4, 'login': 'stop@example.co.jp', 'name': '停止元', 'active': 1}]
+        dest = [{'id': 404, 'login': 'stop@example.co.jp', 'name': '停止先', 'active': 0}]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matches'], {})
+        self.assertIn('停止中', report['unmatched'][0]['reason'])
+
+    def test_no_login_match_requires_manual(self):
+        source = [{'id': 5, 'login': 'missing@example.co.jp', 'name': '欠席', 'active': 1}]
+        dest = [{'id': 505, 'login': 'present@example.co.jp', 'name': '出席', 'active': 1}]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matchedCount'], 0)
+        self.assertEqual(report['unmatched'][0]['reason'], 'ログインIDが一致する利用者がいません')
+
+    def test_mixed_match_and_unmatched_counts(self):
+        source = [
+            {'id': 1, 'login': 'ok@example.co.jp', 'name': '一致', 'active': 1},
+            {'id': 2, 'login': '', 'name': '氏名のみ', 'nameOnly': True, 'active': 1},
+            {'id': 3, 'login': 'gone@example.co.jp', 'name': '不一致', 'active': 1},
+        ]
+        dest = [
+            {'id': 100, 'login': 'OK@example.co.jp', 'name': 'PC一致', 'active': 1},
+            {'id': 101, 'login': 'other@example.co.jp', 'name': '氏名のみ', 'active': 1},
+        ]
+        report = migration.match_users_by_login(source, dest)
+        self.assertEqual(report['matches'], {1: 100})
+        self.assertEqual(report['matchedCount'], 1)
+        self.assertEqual(report['unmatchedCount'], 2)
+        by_id = {item['sourceId']: item['reason'] for item in report['unmatched']}
+        self.assertEqual(by_id[2], 'ログインIDが空欄です')
+        self.assertEqual(by_id[3], 'ログインIDが一致する利用者がいません')
+
+    def test_repair_ui_exposes_bulk_same_user_controls(self):
+        repair_js = (ROOT / 'repair.js').read_text(encoding='utf-8')
+        repair_css = (ROOT / 'repair.css').read_text(encoding='utf-8')
+        self.assertIn('同じ利用者に一括で割り当てる', repair_js)
+        self.assertIn('mig-match-login', repair_js)
+        self.assertIn('migrationApplyLoginMatch', repair_js)
+        self.assertIn('ZIP内の利用者', repair_js)
+        self.assertIn('このPCの利用者', repair_js)
+        self.assertIn('選んだ1人に全員の割り当て先を変更', repair_js)
+        self.assertIn('loginMatch', (ROOT / 'migration.py').read_text(encoding='utf-8'))
+        self.assertIn('mig-map-unmatched', repair_css)
+
+
 if __name__ == '__main__':
     unittest.main()
