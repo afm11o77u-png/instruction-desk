@@ -159,7 +159,10 @@ def correct_customer_names(c):
 # v2=明示の性別区分「女性」も対象（女性用／女性専用を含む）。「男性」も除外側に追加。
 # v3=起動時変換を廃止。DESK_RUN_FEMALE_IMAGE_MAINTENANCE の保守 CLI のみ。
 #     画像生成中は DB 書き込みトランザクションを保持しない。完了見本は再変換しない。
-FEMALE_HANAKO_RULE_VERSION = 3
+# v4=画素テンプレ照合の主経路を廃止。登録 layout / 書体 / 寸法 / 最大フォントと
+#     元画像の用紙色・キャンバスを再利用し、氏名のみレイアウトを「山田花子」で再生成。
+#     再生成できない見本は推測上書きせず保留（画素マッチへフォールバックしない）。
+FEMALE_HANAKO_RULE_VERSION = 4
 FEMALE_MAINTENANCE_ENV = 'DESK_RUN_FEMALE_IMAGE_MAINTENANCE'
 FEMALE_MARK = re.compile(r'女性')
 MALE_OR_SHARED_MARK = re.compile(r'男性|男女共用|男女共通|男女兼用')
@@ -169,6 +172,8 @@ YAMADA_TARO_TO_HANAKO = (
     ('山田 太郎', '山田 花子'),
     ('山田太郎', '山田花子'),
 )
+# 元ソフトのレイアウトコード。氏名だけの形式だけ再生成する（部署・番号・QR等は保留）。
+REGENERABLE_NAME_LAYOUTS = frozenset({'Name'})
 FEMALE_HANAKO_REPORT = 'female-sample-hanako-report.json'
 FEMALE_HANAKO_PROGRESS = 'female-sample-hanako-progress.json'
 FEMALE_HANAKO_SETTINGS_KEY = 'female_sample_hanako'
@@ -448,23 +453,140 @@ def _ink_mass(needle_rgb, bg):
     return total
 
 def _font_sizes_for_image(height):
-    """見本高さに対し実フォントサイズを細かく試す（保守処理専用・起動では呼ばない）。
-
-    実見本は高さの 25–35% 付近が多いため、その近傍を先に試して早期ヒットさせる。
-    """
+    """見本高さに対し実フォントサイズを細かく試す（レガシー画素照合用・主経路では使わない）。"""
     hi = max(12, int(height))
     ratios = (0.12, 0.15, 0.18, 0.2, 0.22, 0.25, 0.28, 0.3, 0.33, 0.35, 0.38, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8)
     sizes = {max(10, int(height * ratio)) for ratio in ratios}
-    # 絶対サイズも少し足す（小さい見本用）
     sizes.update(range(10, min(hi, 48) + 1, 2))
     prefer = max(10, int(height * 0.28))
     return sorted(sizes, key=lambda size: (abs(size - prefer), size))
 
-def _rewrite_name_pixels(src_path, dst_path, family_hint='', progress_callback=None):
-    """見本画像内の山田太郎系を山田花子系に描き換える。見つからなければ False。
+def _yamada_hanako_label(caption=''):
+    """画像に描く氏名。caption の間隔（半角／全角／無し）を優先する。"""
+    text = str(caption or '')
+    for old, new in YAMADA_TARO_TO_HANAKO:
+        if old in text:
+            return new
+    return '山田 花子'
 
-    「太郎」単独の置換はしない（山田太郎／山田 太郎／山田　太郎のみ）。
-    空白画像への誤検出を避けるため、インク量に対する SAD 比で合否を判定する。
+def _corner_background(image):
+    corners = [
+        image.getpixel((0, 0)),
+        image.getpixel((image.width - 1, 0)),
+        image.getpixel((0, image.height - 1)),
+        image.getpixel((image.width - 1, image.height - 1)),
+    ]
+    return max(set(corners), key=corners.count)
+
+def _ink_bbox(image, bg, margin=2):
+    """背景より暗い印字領域の外接矩形。無ければ None。"""
+    bg_l = (bg[0] + bg[1] + bg[2]) // 3 if isinstance(bg, tuple) else int(bg)
+    gray = image.convert('L')
+    if _HAS_NUMPY:
+        arr = _np.asarray(gray, dtype=_np.int16)
+        mask = arr < (bg_l - 25)
+        if not mask.any():
+            return None
+        ys, xs = _np.where(mask)
+        x0 = max(0, int(xs.min()) - margin)
+        y0 = max(0, int(ys.min()) - margin)
+        x1 = min(image.width - 1, int(xs.max()) + margin)
+        y1 = min(image.height - 1, int(ys.max()) + margin)
+        return (x0, y0, x1, y1)
+    pixels = gray.load()
+    x0 = y0 = None
+    x1 = y1 = 0
+    for y in range(image.height):
+        for x in range(image.width):
+            if pixels[x, y] < bg_l - 25:
+                if x0 is None:
+                    x0, y0 = x, y
+                    x1, y1 = x, y
+                else:
+                    if x < x0:
+                        x0 = x
+                    if y < y0:
+                        y0 = y
+                    if x > x1:
+                        x1 = x
+                    if y > y1:
+                        y1 = y
+    if x0 is None:
+        return None
+    return (
+        max(0, x0 - margin),
+        max(0, y0 - margin),
+        min(image.width - 1, x1 + margin),
+        min(image.height - 1, y1 + margin),
+    )
+
+def _font_px_from_meta(image, width_mm, height_mm, maximum_font_pt, ink_box):
+    """登録の最大 pt または既存印字高さから描画サイズを決める。"""
+    try:
+        pt = float(maximum_font_pt or 0)
+    except (TypeError, ValueError):
+        pt = 0
+    w_mm = float(width_mm or 0)
+    h_mm = float(height_mm or 0)
+    if pt > 0 and w_mm > 0 and h_mm > 0 and image.width > 0 and image.height > 0:
+        dpi = image.height / (h_mm / 25.4)
+        size = int(round(pt * dpi / 72.0))
+        if size >= 8:
+            return max(8, size)
+    if ink_box:
+        return max(8, int((ink_box[3] - ink_box[1]) * 0.92))
+    return max(10, int(image.height * 0.28))
+
+def _fit_font_to_box(text, family_hint, target_w, target_h, prefer_size):
+    """指定矩形に収まる最大フォントを探す。"""
+    if target_w < 4 or target_h < 4:
+        return None, None
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return None, None
+    lo, hi = 8, max(8, int(max(prefer_size * 1.35, target_h)))
+    best = None
+    best_font = None
+    probe = Image.new('L', (1, 1))
+    draw = ImageDraw.Draw(probe)
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        font = _load_font(mid, family_hint)
+        if font is None:
+            return None, None
+        box = draw.textbbox((0, 0), text, font=font)
+        tw, th = box[2] - box[0], box[3] - box[1]
+        if tw <= target_w and th <= target_h:
+            best, best_font = mid, font
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return best_font, best
+
+def _regeneration_hold_reason(candidate):
+    """再生成できないときの保留理由。画素マッチへは落とさない。"""
+    layout = str(candidate.get('layout') or '').strip()
+    if candidate.get('blank'):
+        return '無地見本のため氏名再生成の対象外'
+    if not layout:
+        return 'layout未設定のため再生成に必要な配置情報が不足（推測上書きしない）'
+    if layout not in REGENERABLE_NAME_LAYOUTS:
+        label = LAYOUTS.get(layout, layout)
+        return (
+            f'layout={layout}（{label}）は氏名以外の要素を含む可能性があるため保留'
+            '（部署・番号・バーコード等を推測再生成しない）'
+        )
+    return ''
+
+def _regenerate_name_sample(
+    src_path, dst_path, *, name_text, family_hint='', maximum_font=0,
+    width_mm=0, height_mm=0, progress_callback=None,
+):
+    """氏名のみ見本を登録メタ＋元キャンバス／用紙色で再生成する。
+
+    元ソフトの生成器はリポジトリに無いため、catalog 由来の layout=Name・書体・
+    寸法・最大フォントと、元画像の画素寸法・四隅用紙色・既存印字位置を再利用する。
     """
     try:
         from PIL import Image, ImageDraw
@@ -474,15 +596,89 @@ def _rewrite_name_pixels(src_path, dst_path, family_hint='', progress_callback=N
         image = Image.open(src_path).convert('RGB')
     except OSError as exc:
         return False, str(exc)
-    # 背景色は四隅の最頻に近い色を使う
-    corners = [image.getpixel((0, 0)), image.getpixel((image.width - 1, 0)),
-               image.getpixel((0, image.height - 1)), image.getpixel((image.width - 1, image.height - 1))]
-    bg = max(set(corners), key=corners.count)
+    if progress_callback:
+        progress_callback({
+            'phase': 'image-try',
+            'method': 'regenerate',
+            'variant': name_text,
+            'variantIndex': 1,
+            'variantTotal': 1,
+            'size': 0,
+            'sizeIndex': 1,
+            'sizeTotal': 1,
+            'width': image.width,
+            'height': image.height,
+        })
+    bg = _corner_background(image)
+    ink_box = _ink_bbox(image, bg)
+    if not ink_box:
+        return False, '印字領域を特定できないため再生成保留（空画像または検出失敗）'
+    ink_w = ink_box[2] - ink_box[0] + 1
+    ink_h = ink_box[3] - ink_box[1] + 1
+    if ink_w < 8 or ink_h < 8:
+        return False, '印字領域が小さすぎるため再生成保留'
+    # 氏名レイアウト想定: 極端に縦長な印字塊（バーコード帯など）は保留
+    if ink_h > ink_w * 1.35 and ink_h > image.height * 0.55:
+        return False, '印字領域の形状が氏名のみ想定と異なるため再生成保留'
+    prefer = _font_px_from_meta(image, width_mm, height_mm, maximum_font, ink_box)
+    # 既存印字枠に収まるようフィット（配置・文字サイズを維持）
+    pad_w = max(ink_w, int(image.width * 0.7))
+    pad_h = max(ink_h, int(image.height * 0.35))
+    font, used_size = _fit_font_to_box(
+        name_text, family_hint, pad_w, pad_h, prefer,
+    )
+    if font is None:
+        return False, '利用可能なフォントがありません（Windows のゴシック系／HG丸ゴシックを優先）'
+    if progress_callback:
+        progress_callback({
+            'phase': 'image-try',
+            'method': 'regenerate',
+            'variant': name_text,
+            'variantIndex': 1,
+            'variantTotal': 1,
+            'size': used_size or prefer,
+            'sizeIndex': 1,
+            'sizeTotal': 1,
+            'width': image.width,
+            'height': image.height,
+        })
+    work = Image.new('RGB', image.size, bg)
+    draw = ImageDraw.Draw(work)
+    box = draw.textbbox((0, 0), name_text, font=font)
+    tw, th = box[2] - box[0], box[3] - box[1]
+    cx = (ink_box[0] + ink_box[2]) / 2
+    cy = (ink_box[1] + ink_box[3]) / 2
+    x = int(round(cx - tw / 2 - box[0]))
+    y = int(round(cy - th / 2 - box[1]))
+    draw.text((x, y), name_text, font=font, fill=(0, 0, 0))
+    if work.tobytes() == image.tobytes():
+        return False, '再生成結果が元画像と同じでした'
+    new_ink = _ink_bbox(work, bg)
+    if not new_ink:
+        return False, '再生成後に印字がありません'
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = 'PNG' if dst_path.suffix.lower() == '.png' else 'JPEG' if dst_path.suffix.lower() in ('.jpg', '.jpeg') else 'WEBP'
+    save_kw = {}
+    if fmt == 'JPEG':
+        save_kw['quality'] = 95
+    work.save(dst_path, format=fmt, **save_kw)
+    return True, f'layout=Name を氏名 {name_text} で再生成 (fontPx={used_size or prefer})'
+
+def _rewrite_name_pixels(src_path, dst_path, family_hint='', progress_callback=None):
+    """レガシー: 画素テンプレ照合による描き換え（主経路では呼ばない）。"""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return False, 'Pillowがありません'
+    try:
+        image = Image.open(src_path).convert('RGB')
+    except OSError as exc:
+        return False, str(exc)
+    bg = _corner_background(image)
     sizes = _font_sizes_for_image(image.height)
     replaced = 0
     work = image.copy()
     last_note = '画像内に山田太郎系の文字を検出できませんでした'
-    # 画像検索は半角スペース・無間隔を先に（全角スペースは caption 置換順と別）
     image_variants = (
         ('山田 太郎', '山田 花子'),
         ('山田太郎', '山田花子'),
@@ -523,7 +719,6 @@ def _rewrite_name_pixels(src_path, dst_path, family_hint='', progress_callback=N
             if not match:
                 continue
             x, y, score = match
-            # 空白への誤検出: 不一致インク比がほぼ 1.0。真の一致は十分小さい。
             if score >= threshold:
                 continue
             ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
@@ -623,6 +818,7 @@ def _load_female_hanako_rows(c):
             SELECT s.id AS sample_id, s.format_id, s.variant_key, s.condition_label, s.paper_color,
                    s.relative_path, s.caption,
                    f.format_name, f.color_caption, f.note, f.fixed_color, f.groups_json, f.family,
+                   f.layout, f.width_mm, f.height_mm, f.maximum_font, f.blank,
                    cu.source_name, f.identity AS format_identity
             FROM name_samples s
             JOIN name_formats f ON f.id=s.format_id
@@ -671,6 +867,11 @@ def _female_candidate_from_row(row, path_users, completed_ids):
         'paperColor': row['paper_color'],
         'variantKey': row['variant_key'],
         'family': row.get('family') or '',
+        'layout': row.get('layout') or '',
+        'widthMm': row.get('width_mm') or 0,
+        'heightMm': row.get('height_mm') or 0,
+        'maximumFont': row.get('maximum_font') or 0,
+        'blank': bool(row.get('blank') or 0),
         'oldCaption': caption,
         'newCaption': new_caption if needs_caption else caption,
         'oldRelativePath': rel,
@@ -679,6 +880,7 @@ def _female_candidate_from_row(row, path_users, completed_ids):
         'alreadyForked': already_forked,
         'shared': False,
         'hasImagePath': bool(rel),
+        'imageName': _yamada_hanako_label(caption),
     }
     if not female:
         if needs_caption:
@@ -714,7 +916,10 @@ def _female_candidate_from_row(row, path_users, completed_ids):
     return base
 
 def _prepare_female_image(candidate, root, backup_dir, progress_callback=None):
-    """DB 非接続で画像を用意する。成功時だけ newRelativePath を返す。"""
+    """DB 非接続で画像を用意する。成功時だけ newRelativePath を返す。
+
+    主経路は layout=Name の再生成。再生成不可は保留（画素マッチへ落とさない）。
+    """
     rel = candidate['oldRelativePath'] or ''
     entry = dict(candidate)
     entry['imageAction'] = 'none'
@@ -730,6 +935,14 @@ def _prepare_female_image(candidate, root, backup_dir, progress_callback=None):
         entry['imageNote'] = '見本画像ファイルがありません'
         entry['reason'] = entry['imageNote']
         return entry
+    hold = _regeneration_hold_reason(candidate)
+    if hold:
+        entry['status'] = 'failed'
+        entry['imageAction'] = 'held'
+        entry['imageNote'] = hold
+        entry['reason'] = hold
+        entry['newRelativePath'] = rel
+        return entry
     backup_dir.mkdir(parents=True, exist_ok=True)
     dest_backup = backup_dir / 'images' / Path(rel).name
     dest_backup.parent.mkdir(parents=True, exist_ok=True)
@@ -739,20 +952,26 @@ def _prepare_female_image(candidate, root, backup_dir, progress_callback=None):
     shared = candidate.get('shared')
     candidate_rel = _female_image_rel(rel) if (shared or not already_forked) else rel
     dst = root / candidate_rel
-    ok, note = _rewrite_name_pixels(
-        src, dst, candidate.get('family') or '',
+    ok, note = _regenerate_name_sample(
+        src,
+        dst,
+        name_text=candidate.get('imageName') or _yamada_hanako_label(candidate.get('oldCaption') or ''),
+        family_hint=candidate.get('family') or '',
+        maximum_font=candidate.get('maximumFont') or 0,
+        width_mm=candidate.get('widthMm') or 0,
+        height_mm=candidate.get('heightMm') or 0,
         progress_callback=progress_callback,
     )
     if ok:
         entry['newRelativePath'] = candidate_rel
-        entry['imageAction'] = 'forked' if candidate_rel != rel else 'rewritten'
-        entry['imageNote'] = note or '画像内の山田太郎系を山田花子系へ描き換え'
+        entry['imageAction'] = 'forked-regenerated' if candidate_rel != rel else 'regenerated'
+        entry['imageNote'] = note or '氏名のみ見本を山田花子で再生成'
         entry['status'] = 'ready'
         return entry
-    # 画像があるのに検出失敗 → caption だけの「完了」にしない。元のまま・再実行可。
+    # 再生成失敗 → caption だけの「完了」にしない。元のまま・再実行可。画素マッチしない。
     entry['status'] = 'failed'
-    entry['imageAction'] = 'detect-failed'
-    entry['imageNote'] = note or '画像内に山田太郎系の文字を検出できませんでした'
+    entry['imageAction'] = 'regenerate-failed'
+    entry['imageNote'] = note or '再生成に失敗したため保留'
     entry['reason'] = entry['imageNote']
     entry['newRelativePath'] = rel
     return entry
@@ -814,6 +1033,9 @@ def _write_female_hanako_report(root, backup_dir, stamp, items, excluded, failed
             'colorAloneNotFemale': True,
             'imageRequiredWhenPresent': True,
             'noStartupConversion': True,
+            'imageStrategy': 'regenerate-name-layout',
+            'regenerableLayouts': sorted(REGENERABLE_NAME_LAYOUTS),
+            'noPixelMatchFallback': True,
         },
         'items': changed_items,
         'failedItems': failed,
