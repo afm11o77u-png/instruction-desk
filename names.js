@@ -1,6 +1,25 @@
-const nameMixBackground='linear-gradient(135deg,#F08080 0%,#F08080 25%,#87CEFA 25%,#87CEFA 50%,#90EE90 50%,#90EE90 75%,#fff 75%,#fff 100%)';
+const DEFAULT_MIX_COLORS=['赤','青','緑','白'];
+function nameMixColors(list){
+ const rows=(list&&list.length?list:DEFAULT_MIX_COLORS).map(v=>String(v||'').trim()).filter(Boolean);
+ return rows.length?rows:DEFAULT_MIX_COLORS.slice();
+}
+function solidPaperSwatch(name){
+ const key=String(name||'').replace(/[?？]/g,'').trim();
+ return {青:'#87CEFA',緑:'#90EE90',赤:'#F08080',黄:'#FFFFE0',黄色:'#FFFFE0',オレンジ:'#FFDAB9',白:'#FFFFFF'}[key]||'#fff';
+}
+function nameMixGradient(list){
+ const colors=nameMixColors(list);
+ const n=colors.length||1;
+ return `linear-gradient(135deg,${colors.map((c,i)=>{const hex=solidPaperSwatch(c);const a=((i/n)*100).toFixed(4);const b=(((i+1)/n)*100).toFixed(4);return `${hex} ${a}%,${hex} ${b}%`}).join(',')})`;
+}
+const nameMixBackground=nameMixGradient(DEFAULT_MIX_COLORS);
 function nameIsMix(value){return String(value||'').trim()==='先方から指定'}
-function nameMixNote(value){return nameIsMix(value)?'色は先方指定（赤・青・緑・白）。4色表示は選択肢の見本です。':''}
+function nameMixNote(value,mixColors){
+ if(!nameIsMix(value))return '';
+ const colors=nameMixColors(mixColors);
+ return `色は先方指定（${colors.join('・')}）。${colors.length}色表示は選択肢の見本です。`;
+}
+function nameMixParen(mixColors){return `（${nameMixColors(mixColors).join('・')}）`}
 
 function nameDimensions(item){
  if(item.sizeKind==='unknown'||item.sizeKind==='blank'||item.blank||/未指定|無地/.test(item.size||''))return null;
@@ -14,12 +33,18 @@ function nameSizeHeading(item){
  const kind=item.sizeKind==='small'||String(item.size||'').startsWith('小')?'小ネーム':item.sizeKind==='large'||String(item.size||'').startsWith('大')?'大ネーム':'ネーム';
  return `${kind}｜横${d.w} × 縦${d.h} mm`;
 }
+function nameMixStyle(item,paperColor){
+ const color=paperColor===undefined?item.fixedColor:paperColor;
+ if(!nameIsMix(color))return '';
+ return `background:${nameMixGradient(item.mixColors)}`;
+}
 function nameScalePicture(item,url,paperColor){
  const mix=!!url&&nameIsMix(paperColor===undefined?item.fixedColor:paperColor);
+ const mixStyle=mix?nameMixStyle(item,paperColor):'';
  const d=nameDimensions(item);
  const img=url?`<img src="${url}" alt="${esc(item.format||'ネーム見本')}" loading="lazy">`:`<span class="namemiss">${item.blank?'印字なし':'見本なし'}</span>`;
- if(!d)return `<span class="namescale-stage unknown"><span class="nameunknown-image${mix?' namepaper-mix':''}">${img}</span></span>`;
- return `<span class="namescale-stage"><span class="namescale-box${mix?' namepaper-mix':''}" style="width:${d.w*2}px;height:${d.h*2}px"><span class="namedim-width">${d.w} mm</span><span class="namedim-height">${d.h} mm</span>${img}</span></span>`;
+ if(!d)return `<span class="namescale-stage unknown"><span class="nameunknown-image${mix?' namepaper-mix':''}"${mixStyle?` style="${mixStyle}"`:''}>${img}</span></span>`;
+ return `<span class="namescale-stage"><span class="namescale-box${mix?' namepaper-mix':''}" style="width:${d.w*2}px;height:${d.h*2}px${mixStyle?`;${mixStyle}`:''}"><span class="namedim-width">${d.w} mm</span><span class="namedim-height">${d.h} mm</span>${img}</span></span>`;
 }
 let nameZoomDialog;
 function openNameZoom(item,sample){
@@ -31,10 +56,11 @@ function openNameZoom(item,sample){
   nameZoomDialog.addEventListener('click',e=>{if(e.target===nameZoomDialog)nameZoomDialog.close()});
  }
  $('#namezoomtitle').textContent=nameSizeHeading(item);
- $('#namezoomnote').textContent=[item.format,sample.condition,nameMixNote(sample.paperColor||item.fixedColor),'拡大表示です。実物大ではありません。'].filter(Boolean).join(' ／ ');
+ $('#namezoomnote').textContent=[item.format,sample.condition,nameMixNote(sample.paperColor||item.fixedColor,item.mixColors),'拡大表示です。実物大ではありません。'].filter(Boolean).join(' ／ ');
  $('#namezoomimage').src=nameSampleUrl(sample.id);$('#namezoomimage').alt=item.format+' '+(sample.condition||'');
  const mix=nameIsMix(sample.paperColor||item.fixedColor);
  $('#namezoompaper').classList.toggle('namepaper-mix',mix);
+ $('#namezoompaper').style.background=mix?nameMixGradient(item.mixColors):'';
  const dim=nameDimensions(item);$('#namezoompaper').style.setProperty('--name-ratio',dim?dim.w/dim.h:1.6);
  nameZoomDialog.showModal();
 }
@@ -45,15 +71,14 @@ function fontLabel(name){
  if(text.normalize('NFKC').toUpperCase().startsWith('HG丸ゴシック')) return 'HG丸ゴシック';
  return text;
 }
-function paperSwatch(name){
- if(nameIsMix(name))return nameMixBackground;
- const key=String(name||'').replace(/[?？]/g,'').trim();
- return {青:'#87CEFA',緑:'#90EE90',赤:'#F08080',黄:'#FFFFE0',オレンジ:'#FFDAB9'}[key]||'#fff';
+function paperSwatch(name,mixColors){
+ if(nameIsMix(name))return nameMixGradient(mixColors);
+ return solidPaperSwatch(name);
 }
-function nameSwatches(colors,fixed){
- const rows=(colors||[]).map(row=>`<span class="nameswatch"><i style="background:${esc(nameIsMix(row.color)?nameMixBackground:(row.swatch||paperSwatch(row.color)))}"></i>${esc(row.group)}：${esc(row.color)||'色未設定'}</span>`).join('');
+function nameSwatches(colors,fixed,mixColors){
+ const rows=(colors||[]).map(row=>`<span class="nameswatch"><i style="background:${esc(nameIsMix(row.color)?nameMixGradient(mixColors):(row.swatch||solidPaperSwatch(row.color)))}"></i>${esc(row.group)}：${esc(row.color)||'色未設定'}</span>`).join('');
  if(rows)return rows;
- if(fixed)return `<span class="nameswatch"><i style="background:${paperSwatch(fixed)}"></i>${esc(fixed)}${nameIsMix(fixed)?'（赤・青・緑・白）':''}</span>`;
+ if(fixed)return `<span class="nameswatch"><i style="background:${paperSwatch(fixed,mixColors)}"></i>${esc(fixed)}${nameIsMix(fixed)?nameMixParen(mixColors):''}</span>`;
  return '色の指定はありません';
 }
 function paintNameCustomers(data){
@@ -72,7 +97,7 @@ function paintNameCustomers(data){
 function paintNameFormats(data){
  const box=$('#nameformats');
  const link=data.linkStatus==='対応'?`指示書デスクの顧客名と一致：${data.linkedName}`:'指示書デスクの顧客とは未対応です。名前だけでは結び付けていません。';
- const formats=(data.formats||[]).map(item=>`<button type="button" class="namecard" data-id="${item.id}"><span class="namesize-heading">${esc(nameSizeHeading(item))}</span>${nameScalePicture(item,item.hasImage?nameSampleUrl(item.sampleId):null)}<b>${esc(item.format)}</b><span class="namecolors">${nameSwatches(item.colors,item.fixedColor)}</span><span>${esc(item.placement)||'貼付け位置の指定なし'}</span>${item.needsReview?'<em>要確認</em>':''}</button>`).join('');
+ const formats=(data.formats||[]).map(item=>`<button type="button" class="namecard" data-id="${item.id}"><span class="namesize-heading">${esc(nameSizeHeading(item))}</span>${nameScalePicture(item,item.hasImage?nameSampleUrl(item.sampleId):null)}<b>${esc(item.format)}</b><span class="namecolors">${nameSwatches(item.colors,item.fixedColor,item.mixColors)}</span><span>${esc(item.placement)||'貼付け位置の指定なし'}</span>${item.needsReview?'<em>要確認</em>':''}</button>`).join('');
  box.innerHTML=`<div class="namehead"><h2>${esc(data.sourceName)}</h2><p>${esc(link)}</p><p>${esc(data.reading)?`読み：${esc(data.reading)}`:''}</p>${currentUser?.role==='owner'?`<button type="button" id="nameaddformat">この顧客に形式を追加</button>`:''}</div><p class="namescale-note">大小を同じ縮尺で表示しています（実物大ではありません）。形式を開くと、見本をクリックして拡大できます。</p><div class="namegrid">${formats||'<p>形式はありません。</p>'}</div>`;
  box.querySelectorAll('.namecard').forEach(button=>button.onclick=()=>openNameFormat(Number(button.dataset.id)));
  const add=$('#nameaddformat');
@@ -98,13 +123,15 @@ async function openNameCustomer(id){
  }catch(e){$('#namestatus').textContent=e.message||'読み込めませんでした。'}
 }
 function paintNameDetail(item){
- const colors=nameSwatches(item.colors,item.fixedColor);
- const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${nameMixNote(sample.paperColor||item.fixedColor)?`<br>${esc(nameMixNote(sample.paperColor||item.fixedColor))}`:''}</figcaption></figure>`).join('');
+ const colors=nameSwatches(item.colors,item.fixedColor,item.mixColors);
+ const mixNoteFor=value=>nameMixNote(value,item.mixColors);
+ const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${mixNoteFor(sample.paperColor||item.fixedColor)?`<br>${esc(mixNoteFor(sample.paperColor||item.fixedColor))}`:''}</figcaption></figure>`).join('');
  const reasons=(item.reviewReasons||[]).filter(text=>!/書体|代替表示/.test(text)).map(text=>`<li>${esc(text)}</li>`).join('');
  const departments=(item.departments||[]).map(esc).join('、');
+ const mixCount=nameMixColors(item.mixColors).length;
  $('#nametitle').textContent=item.format||'ネーム形式';
  $('#namenumber').textContent=item.number||'';
- $('#namebody').innerHTML=`<p class="namewarn">画像の背景は用紙の色です。「先方から指定」の4色表示は色の選択肢を示し、実物が多色という意味ではありません。文字とコードはプリンターが印字する内容です。氏名と番号は架空です。</p>
+ $('#namebody').innerHTML=`<p class="namewarn">画像の背景は用紙の色です。「先方から指定」の${mixCount}色表示は色の選択肢を示し、実物が多色という意味ではありません。文字とコードはプリンターが印字する内容です。氏名と番号は架空です。</p>
   <p class="namescale-note">大小を同じ縮尺で表示しています。実物大ではありません。寸法は画像の向きで表記しています。</p><div class="namesamples">${samples||'<p>見本画像はありません。</p>'}</div>
   <dl class="namedef">
    <dt>元の顧客名</dt><dd>${esc(item.sourceName)||'—'}</dd>
