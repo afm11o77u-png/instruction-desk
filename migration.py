@@ -771,6 +771,12 @@ def _validate_extracted(root, data_dir=None, user_map=None):
         )
     else:
         replaces.insert(5, 'ネーム情報（このパソコンに未登録のためZIPから取り込み）')
+    login_match = match_users_by_login(source_users, destination_users) if source_users else {
+        'matches': {},
+        'unmatched': [],
+        'matchedCount': 0,
+        'unmatchedCount': 0,
+    }
     summary = {
         'createdAt': manifest.get('createdAt'),
         'formatVersion': format_version,
@@ -784,6 +790,7 @@ def _validate_extracted(root, data_dir=None, user_map=None):
         'legacyAuthPresent': legacy_auth,
         'sourceUsers': source_users,
         'destinationUsers': destination_users,
+        'loginMatch': login_match,
         'destinationCounts': destination_counts,
         'nameProtection': name_protection,
         'replaces': replaces,
@@ -1058,6 +1065,87 @@ def _remap_name_review_users(c, user_map, dest_names):
             'UPDATE name_reviews SET assignee_id=?, confirmed_by=?, confirmed_name=? WHERE format_id=?',
             (assignee, confirmed_by, confirmed_name, row['format_id']),
         )
+
+
+def _login_match_key(user):
+    """Login key for identity matching (same casefold rule as auth login checks).
+
+    Empty when login is blank or name-only — never match by numeric id or name alone.
+    """
+    if not user:
+        return ''
+    if user.get('nameOnly'):
+        return ''
+    login = str(user.get('login') or '').strip()
+    if not login or login.startswith('*name:'):
+        return ''
+    return login.casefold()
+
+
+def _destination_assignable(user):
+    """True when the destination user may be auto-selected for restore mapping."""
+    if not user or not _login_match_key(user):
+        return False
+    active = user.get('active', 1)
+    try:
+        return int(active) == 1
+    except (TypeError, ValueError):
+        return bool(active)
+
+
+def match_users_by_login(source_users, destination_users):
+    """Match ZIP source users to destination users by unique assignable login.
+
+    Auto-match only when login ids match (case-insensitive / casefold) and exactly
+    one assignable destination is found. Does not match by numeric user id or name.
+    Inactive / name-only destinations are never auto-selected.
+    """
+    by_login = {}
+    for dest in destination_users or []:
+        key = _login_match_key(dest)
+        if not key:
+            continue
+        by_login.setdefault(key, []).append(dest)
+
+    matches = {}
+    unmatched = []
+    for src in source_users or []:
+        try:
+            sid = int(src['id'])
+        except (TypeError, ValueError, KeyError):
+            continue
+        label_login = '' if src.get('nameOnly') else str(src.get('login') or '').strip()
+        entry = {
+            'sourceId': sid,
+            'sourceName': str(src.get('name') or ''),
+            'sourceLogin': label_login,
+        }
+        key = _login_match_key(src)
+        if not key:
+            unmatched.append({**entry, 'reason': 'ログインIDが空欄です'})
+            continue
+        candidates = by_login.get(key) or []
+        assignable = [u for u in candidates if _destination_assignable(u)]
+        if len(assignable) == 1:
+            matches[sid] = int(assignable[0]['id'])
+            continue
+        if len(assignable) > 1:
+            unmatched.append({**entry, 'reason': 'ログインIDが一致する利用者が複数います'})
+            continue
+        if candidates:
+            unmatched.append({
+                **entry,
+                'reason': 'ログインIDは一致しますが、割り当て可能な利用者がいません（停止中など）',
+            })
+            continue
+        unmatched.append({**entry, 'reason': 'ログインIDが一致する利用者がいません'})
+
+    return {
+        'matches': matches,
+        'unmatched': unmatched,
+        'matchedCount': len(matches),
+        'unmatchedCount': len(unmatched),
+    }
 
 
 def normalize_user_map(user_map, source_users, destination_users):

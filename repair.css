@@ -19,3 +19,12 @@
 #repairdesk .testkeep{margin:8px 0 0;padding-left:1.2em}
 #repairdesk .migcounts{white-space:pre-wrap;background:#f6f9f7;border:1px solid #d2ded7;border-radius:8px;padding:12px 14px;line-height:1.7}
 #repairdesk .checklabel{display:flex;flex-direction:row;align-items:center;gap:8px;font-weight:600;margin:12px 0}
+#repairdesk .mig-map-source{font-weight:600;color:#24352e}
+#repairdesk .mig-map-dest-caption{font-size:12px;font-weight:600;color:#52655a}
+#repairdesk .mig-map-row.mig-map-unmatched{padding:10px;border:1px solid #e2a090;border-radius:8px;background:#fff5f2}
+#repairdesk .mig-map-row.mig-map-unmatched .mig-map-source{color:#8a2f1a}
+#repairdesk .mig-map-row.mig-map-unmatched select{border-color:#c45c3e;background:#fff8f6}
+#repairdesk .mig-match-result{margin:10px 0 14px;padding:12px 14px;border:1px solid #d2ded7;border-radius:8px;background:#f6f9f7}
+#repairdesk .mig-match-summary{margin:0;font-weight:700;color:#24352e}
+#repairdesk .mig-match-details{margin-top:8px}
+#repairdesk .mig-match-details summary{cursor:pointer;font-weight:700;color:#8a2f1a}

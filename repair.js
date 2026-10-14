@@ -140,6 +140,55 @@ function migrationMappingReady(summary){
   return sel&&sel.value;
  });
 }
+function migrationHasAnyAssignment(){
+ return [...repairDialog.querySelectorAll('[data-mig-source]')].some(sel=>sel.value);
+}
+function migrationUnmatchedLabel(item){
+ const name=item?.sourceName||'利用者不明';
+ const login=item?.sourceLogin?`（${item.sourceLogin}）`:'（ログインなし）';
+ return `${name}${login}`;
+}
+function migrationPaintMatchResult(report){
+ const box=repairDialog.querySelector('#mig-match-result');
+ if(!box)return;
+ if(!report){box.innerHTML='';box.hidden=true;return}
+ const matched=report.matchedCount||0;
+ const left=report.unmatchedCount||0;
+ const summaryText=left
+  ?`${matched}人を自動設定しました。残り${left}人を選択してください。`
+  :`${matched}人を自動設定しました。全員の割り当てが完了しています。`;
+ const unmet=(report.unmatched||[]).map(item=>`<li><strong>${esc(migrationUnmatchedLabel(item))}</strong>：${esc(item.reason||'手動で確認してください')}</li>`).join('');
+ box.hidden=false;
+ box.innerHTML=`<p class="mig-match-summary">${esc(summaryText)}</p>${unmet?`<details class="mig-match-details" open><summary>照合できなかった利用者（${left}人）</summary><ul class="testkeep">${unmet}</ul></details>`:''}`;
+}
+function migrationApplyLoginMatch(summary,agree,refreshConfirm){
+ const report=summary?.loginMatch;
+ if(!report){repairMessage('ログインIDの照合結果がありません。ZIPの内容を確認し直してください。');return}
+ if(migrationHasAnyAssignment()){
+  if(!confirm('既に割り当てが選ばれています。ログインIDの一括照合の結果で置き換えますか？\n照合できなかった行は「選択してください」に戻ります。'))return;
+ }
+ const matches=report.matches||{};
+ const unmatchedIds=new Set((report.unmatched||[]).map(item=>String(item.sourceId)));
+ repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{
+  const src=sel.getAttribute('data-mig-source');
+  const row=sel.closest('.mig-map-row');
+  const dest=matches[src]??matches[Number(src)];
+  if(dest!=null){
+   sel.value=String(dest);
+   if(row)row.classList.remove('mig-map-unmatched');
+  }else{
+   sel.value='';
+   if(row)row.classList.toggle('mig-map-unmatched',unmatchedIds.has(String(src)));
+  }
+ });
+ if(agree)agree.checked=false;
+ migrationPaintMatchResult(report);
+ refreshConfirm();
+ const left=report.unmatchedCount||0;
+ repairMessage(left
+  ?`${report.matchedCount||0}人を自動設定しました。残り${left}人を選択してください。照合できなかった利用者は下の一覧で確認できます。`
+  :`${report.matchedCount||0}人を自動設定しました。必要なら個別に変更し、ネーム情報の扱いを確認して同意にチェックしてください。`);
+}
 function migrationNameProtectionLines(plan){
  if(!plan)return '';
  const dest=plan.destinationCounts||{};
@@ -173,7 +222,7 @@ function openMigrationRestore(){
    .concat((summary.destinationUsers||[]).map(u=>`<option value="${u.id}">${esc(migrationUserLabel(u))}${u.active?'':'（停止中）'}</option>`))
    .join('');
   const sourceUsers=summary.sourceUsers||[];
-  const mapping=sourceUsers.length?`<h3>利用者の割り当て</h3><p>移行元の担当・所有者を、このパソコンの利用者へ割り当ててください。数値の利用者IDが同じでも同一人物とはみなしません。${sourceUsers.length===1?'移行元は1人です。':''}</p><div class="repairtools"><label>全員の割り当て先<select id="mig-bulk-user">${destOpts}</select></label><button type="button" id="mig-bulk-apply" disabled>全員に適用</button></div><p class="duehint">全ての割り当てを選んだ利用者に変更します。適用後も個別に変更できます。</p><div class="repairfilters" style="grid-template-columns:1fr 1fr">${sourceUsers.map(u=>`<label>移行元：${esc(migrationUserLabel(u))}<select data-mig-source="${u.id}" required>${destOpts}</select></label>`).join('')}</div>`:'<p>移行元ZIPに利用者一覧がありません。業務データのみ復元します。</p>';
+  const mapping=sourceUsers.length?`<h3>利用者の割り当て</h3><p>ZIP内の利用者（移行元の担当・所有者）を、このPCの利用者へ割り当ててください。数値の利用者IDが同じでも同一人物とはみなしません。氏名だけでは自動確定しません。${sourceUsers.length===1?'ZIP内の利用者は1人です。':''}</p><div class="repairtools"><label>全員をこのPCの利用者に変更<select id="mig-bulk-user">${destOpts}</select></label><button type="button" id="mig-bulk-apply" disabled>全員に適用</button><button type="button" id="mig-match-login">同じ利用者に一括で割り当てる</button></div><p class="duehint">「全員に適用」は、上で選んだ1人に全員の割り当て先を変更します。適用後も個別に変更できます。</p><p class="duehint">「同じ利用者に一括で割り当てる」は、ログインIDが一致し一意に特定できた利用者だけを自動設定します。割り当て欄を設定するだけで、復元は開始しません。</p><div id="mig-match-result" class="mig-match-result" hidden></div><div class="repairfilters mig-map-grid" style="grid-template-columns:1fr 1fr">${sourceUsers.map(u=>`<label class="mig-map-row" data-mig-row="${u.id}"><span class="mig-map-source">ZIP内の利用者：${esc(migrationUserLabel(u))}</span><span class="mig-map-dest-caption">このPCの利用者</span><select data-mig-source="${u.id}" aria-label="このPCの利用者" required>${destOpts}</select></label>`).join('')}</div>`:'<p>移行元ZIPに利用者一覧がありません。業務データのみ復元します。</p>';
   const namePlan=summary.nameProtection;
   const nameBlock=namePlan?`<h3>ネーム情報の扱い</h3><p>会社PCにネーム情報がある場合は<strong>すべて保護</strong>し、ZIP側は適用しません。空の場合のみZIPから取り込みます。</p><pre class="migcounts">${esc(migrationNameProtectionLines(namePlan))}</pre>`:'';
   const replaces=(summary.replaces||[]).map(x=>`<li>${esc(x)}</li>`).join('')||'<li>業務データ</li>';
@@ -186,7 +235,10 @@ function openMigrationRestore(){
   agree.onchange=refreshConfirm;
   repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{
    if(prevMap[sel.getAttribute('data-mig-source')])sel.value=String(prevMap[sel.getAttribute('data-mig-source')]);
-   sel.onchange=refreshConfirm;
+   sel.onchange=()=>{
+    sel.closest('.mig-map-row')?.classList.remove('mig-map-unmatched');
+    refreshConfirm();
+   };
   });
   const bulkUser=repairDialog.querySelector('#mig-bulk-user');
   const bulkApply=repairDialog.querySelector('#mig-bulk-apply');
@@ -194,12 +246,18 @@ function openMigrationRestore(){
    bulkUser.onchange=()=>{bulkApply.disabled=!bulkUser.value};
    bulkApply.onclick=()=>{
     if(!bulkUser.value)return;
-    repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{sel.value=bulkUser.value});
+    repairDialog.querySelectorAll('[data-mig-source]').forEach(sel=>{
+     sel.value=bulkUser.value;
+     sel.closest('.mig-map-row')?.classList.remove('mig-map-unmatched');
+    });
+    migrationPaintMatchResult(null);
     agree.checked=false;
     refreshConfirm();
-    repairMessage('全員の割り当てを変更しました。ネーム情報の扱いを確認し、同意にチェックしてください。');
+    repairMessage('全員の割り当てを、選んだ1人に変更しました。必要なら個別に変更し、ネーム情報の扱いを確認して同意にチェックしてください。');
    };
   }
+  const matchLogin=repairDialog.querySelector('#mig-match-login');
+  if(matchLogin)matchLogin.onclick=()=>migrationApplyLoginMatch(summary,agree,refreshConfirm);
 
   refreshConfirm();
  };
