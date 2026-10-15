@@ -105,6 +105,7 @@ def initialize():
     # E:\ では DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1 で maintain_female_sample_hanako.py を実行。
     with connect() as c:
         names.correct_rinko_yellow(c, DATA)
+        names.correct_ashuka_name_formats(c, DATA)
 
 def order_number(row, payload=None):
     payload=json.loads(row['payload']) if payload is None else payload

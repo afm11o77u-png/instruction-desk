@@ -111,6 +111,7 @@ def schema(c):
     # 明示の保守 CLI（DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1）だけが実行する。
     if DATA_DIR is not None:
         correct_rinko_yellow(c, DATA_DIR)
+        correct_ashuka_name_formats(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -1935,6 +1936,844 @@ def correct_rinko_yellow(c, data_dir=None):
     )
     return report
 
+# 明日佳（札幌/桜台/白石/岩見沢/宮の沢明日佳）：訂正版 Excel Sheet1 78–80 行に合わせる。
+# - NM-000150（id=150）の3段ネームを更新
+# - 外国人（実習生）用2段ネームを追加（空の NM-000229 があれば再利用、内容ありは触らない）
+# - 担当者・了承は勝手に変更しない（形式更新トリガで了承消化のみ）
+# - 他顧客は変更しない
+ASHUKA_CUSTOMER_NAME = '札幌/桜台/白石/岩見沢/宮の沢明日佳'
+ASHUKA_THREE_FORMAT_ID = 150
+ASHUKA_EMPTY_FORMAT_ID = 229
+ASHUKA_THREE_FORMAT_NAME = '大ネーム（部署・ふりがな・苗字）'
+ASHUKA_TRAINEE_FORMAT_NAME = '大ネーム（部署・カタカナ名／実習生用）'
+ASHUKA_TRAINEE_IDENTITY = 'ashuka:trainee-dept-katakana'
+ASHUKA_PLACEMENT = 'スクラブ：左胸　ケーシー：左胸'
+ASHUKA_FAMILY = 'HG丸ゴシック'
+ASHUKA_DEPARTMENTS = [
+    '看護部', 'ﾘﾊﾋﾞﾘﾃｰｼｮﾝ科', '歯科', '薬剤科', '栄養科', '検査科',
+    '放射線科', '臨床検査科', 'デイケア科', '医師', '歯科医師', '院長',
+]
+ASHUKA_THREE_HEADING = '上段：部署名　中段：ふりがな　下段：苗字'
+ASHUKA_THREE_NOTE = (
+    'ふりがなはひらがなで\n'
+    'ふりがなは文字の間に半角スペースを入れる 例「や ま だ」\n'
+    '上段のみ左にインデント\n'
+    '上段帯：12.8mm／24pt／横左揃え・縦中央／中段帯：12.5mm／28pt／横中央・縦中央／'
+    '下段帯：24.7mm／50pt／横中央・縦中央（合計50mm）'
+)
+ASHUKA_TRAINEE_HEADING = '上段：部署名　下段：ファーストネーム 例「ターシャー」'
+ASHUKA_TRAINEE_NOTE = (
+    '外国人（実習生）の場合はカタカナ表記のためふりがななし\n'
+    '上段帯：12.8mm／24pt／横左揃え・縦中央／下段帯：37.2mm／50pt／横中央・縦中央（合計50mm）'
+)
+ASHUKA_THREE_SAMPLE_CAPTION = (
+    '見本：部署「看護部」・ふりがな「や ま だ」・苗字「山田」。'
+    '上段12.8mm（24pt・左インデント）／中段12.5mm（28pt・中央）／下段24.7mm（50pt・中央）。'
+    '書体はHG丸ゴシック（太字）。用紙色は白。'
+)
+ASHUKA_TRAINEE_SAMPLE_CAPTION = (
+    '見本：部署「看護部」・ファーストネーム「ターシャー」。'
+    '上段12.8mm（24pt・左インデント）／下段37.2mm（50pt・中央）。ふりがななし。'
+    '書体はHG丸ゴシック（太字）。用紙色は白。'
+)
+ASHUKA_THREE_BANDS = (
+    {'role': 'dept', 'text': '看護部', 'heightMm': 12.8, 'fontPt': 24, 'alignH': 'left', 'alignV': 'middle', 'indentMm': 4.0},
+    {'role': 'furigana', 'text': 'や ま だ', 'heightMm': 12.5, 'fontPt': 28, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+    {'role': 'surname', 'text': '山田', 'heightMm': 24.7, 'fontPt': 50, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+)
+ASHUKA_TRAINEE_BANDS = (
+    {'role': 'dept', 'text': '看護部', 'heightMm': 12.8, 'fontPt': 24, 'alignH': 'left', 'alignV': 'middle', 'indentMm': 4.0},
+    {'role': 'given', 'text': 'ターシャー', 'heightMm': 37.2, 'fontPt': 50, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+)
+ASHUKA_NAMES_REPORT = 'ashuka-name-formats-report.json'
+ASHUKA_NAMES_SETTINGS_KEY = 'ashuka_name_formats'
+ASHUKA_NAMES_POLICY = 'excel-gojuon2-r78-80-v1'
+ASHUKA_SAMPLE_PX_PER_MM = 10
+
+def _ashuka_spec(kind):
+    """kind: 'three' | 'trainee'。帯仕様を spec_json に残し再生成と照合に使う。"""
+    if kind == 'trainee':
+        bands = ASHUKA_TRAINEE_BANDS
+        return {
+            'surnameOnly': True,
+            'ashukaKind': 'trainee',
+            'ashukaPolicy': ASHUKA_NAMES_POLICY,
+            'bandFontsPt': [b['fontPt'] for b in bands],
+            'bandHeightsMm': [b['heightMm'] for b in bands],
+            'sampleName': 'ターシャー',
+        }
+    bands = ASHUKA_THREE_BANDS
+    return {
+        'surnameOnly': True,
+        'spaceSurname': True,
+        'ashukaKind': 'three',
+        'ashukaPolicy': ASHUKA_NAMES_POLICY,
+        'bandFontsPt': [b['fontPt'] for b in bands],
+        'bandHeightsMm': [b['heightMm'] for b in bands],
+        'sampleFurigana': 'や ま だ',
+        'sampleSurname': '山田',
+    }
+
+def _ashuka_format_matches_target(fmt, *, kind):
+    """登録済み形式が明日佳の3段／実習生用として扱えるか。"""
+    name = str(fmt['format_name'] or '')
+    layout = str(fmt['layout'] or '')
+    heading = str(fmt['heading'] or '')
+    note = str(fmt['note'] or '')
+    try:
+        spec = json.loads(fmt['spec_json'] or '{}')
+    except (TypeError, json.JSONDecodeError):
+        spec = {}
+    if kind == 'trainee':
+        if spec.get('ashukaKind') == 'trainee':
+            return True
+        if '実習生' in name or 'カタカナ' in name:
+            return True
+        if 'ターシャー' in heading or 'ふりがななし' in note:
+            return True
+        return False
+    if spec.get('ashukaKind') == 'three':
+        return True
+    if fmt['id'] == ASHUKA_THREE_FORMAT_ID:
+        return True
+    if 'ふりがな' in name or 'ふりがな' in heading:
+        return True
+    if layout == 'DeptFurigana':
+        return True
+    return False
+
+def _ashuka_is_empty_shell(fmt, samples):
+    """内容未設定の「大ネーム」シェルか（NM-000229 再利用判定）。"""
+    name = str(fmt['format_name'] or '').strip()
+    if name not in ('', '大ネーム', '大ネーム（内容未設定）'):
+        return False
+    if _ashuka_format_matches_target(fmt, kind='three') or _ashuka_format_matches_target(fmt, kind='trainee'):
+        return False
+    heading = str(fmt['heading'] or '').strip()
+    note = str(fmt['note'] or '').strip()
+    try:
+        departments = json.loads(fmt['departments_json'] or 'null') or []
+    except (TypeError, json.JSONDecodeError):
+        departments = []
+    has_image = any(str(s['relative_path'] or '').strip() for s in samples)
+    return not heading and not note and not departments and not has_image
+
+def _ashuka_three_is_current(fmt, samples):
+    try:
+        departments = json.loads(fmt['departments_json'] or 'null') or []
+    except (TypeError, json.JSONDecodeError):
+        departments = []
+    try:
+        spec = json.loads(fmt['spec_json'] or '{}')
+    except (TypeError, json.JSONDecodeError):
+        spec = {}
+    if str(fmt['format_name'] or '') != ASHUKA_THREE_FORMAT_NAME:
+        return False
+    if str(fmt['placement'] or '') != ASHUKA_PLACEMENT:
+        return False
+    if str(fmt['heading'] or '') != ASHUKA_THREE_HEADING:
+        return False
+    if str(fmt['note'] or '') != ASHUKA_THREE_NOTE:
+        return False
+    if str(fmt['family'] or '') != ASHUKA_FAMILY:
+        return False
+    if str(fmt['layout'] or '') != 'DeptFurigana':
+        return False
+    if str(fmt['reading'] or '') != '苗字のみ':
+        return False
+    if int(fmt['width_mm'] or 0) != 80 or int(fmt['height_mm'] or 0) != 50:
+        return False
+    if int(fmt['small'] or 0) != 0 or int(fmt['blank'] or 0) != 0 or int(fmt['unknown_size'] or 0) != 0:
+        return False
+    if str(fmt['fixed_color'] or '') != '白':
+        return False
+    if float(fmt['maximum_font'] or 0) != 50 or float(fmt['heading_font'] or 0) != 24:
+        return False
+    if departments != ASHUKA_DEPARTMENTS:
+        return False
+    if spec.get('ashukaPolicy') != ASHUKA_NAMES_POLICY or spec.get('ashukaKind') != 'three':
+        return False
+    if not samples:
+        return False
+    sample = samples[0]
+    rel = str(sample['relative_path'] or '')
+    if not rel.startswith('images/names/') or 'ashuka-three' not in Path(rel).name:
+        return False
+    if str(sample['caption'] or '') != ASHUKA_THREE_SAMPLE_CAPTION:
+        return False
+    if str(sample['paper_color'] or '') != '白':
+        return False
+    return True
+
+def _ashuka_trainee_is_current(fmt, samples):
+    try:
+        departments = json.loads(fmt['departments_json'] or 'null') or []
+    except (TypeError, json.JSONDecodeError):
+        departments = []
+    try:
+        spec = json.loads(fmt['spec_json'] or '{}')
+    except (TypeError, json.JSONDecodeError):
+        spec = {}
+    if str(fmt['format_name'] or '') != ASHUKA_TRAINEE_FORMAT_NAME:
+        return False
+    if str(fmt['placement'] or '') != ASHUKA_PLACEMENT:
+        return False
+    if str(fmt['heading'] or '') != ASHUKA_TRAINEE_HEADING:
+        return False
+    if str(fmt['note'] or '') != ASHUKA_TRAINEE_NOTE:
+        return False
+    if str(fmt['family'] or '') != ASHUKA_FAMILY:
+        return False
+    if str(fmt['layout'] or '') != 'DeptName':
+        return False
+    if str(fmt['reading'] or '') != 'カタカナのファーストネーム（ふりがななし）':
+        return False
+    if int(fmt['width_mm'] or 0) != 80 or int(fmt['height_mm'] or 0) != 50:
+        return False
+    if str(fmt['fixed_color'] or '') != '白':
+        return False
+    if float(fmt['maximum_font'] or 0) != 50 or float(fmt['heading_font'] or 0) != 24:
+        return False
+    if departments != ASHUKA_DEPARTMENTS:
+        return False
+    if spec.get('ashukaPolicy') != ASHUKA_NAMES_POLICY or spec.get('ashukaKind') != 'trainee':
+        return False
+    if not samples:
+        return False
+    sample = samples[0]
+    rel = str(sample['relative_path'] or '')
+    if not rel.startswith('images/names/') or 'ashuka-trainee' not in Path(rel).name:
+        return False
+    if str(sample['caption'] or '') != ASHUKA_TRAINEE_SAMPLE_CAPTION:
+        return False
+    return True
+
+def _render_ashuka_banded_sample(dst_path, bands, *, width_mm=80, height_mm=50, family_hint=ASHUKA_FAMILY):
+    """80×50mm 白地の帯付き見本を描画。帯高合計は呼び出し側で 50mm にする。"""
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return False, 'Pillow未導入'
+    total = sum(float(b['heightMm']) for b in bands)
+    if abs(total - float(height_mm)) > 0.05:
+        return False, f'帯高合計が{height_mm}mmでない（{total}）'
+    font = _load_font(24, family_hint)
+    if font is None:
+        return False, '利用可能なフォントがありません（Windows のゴシック系／HG丸ゴシックを優先）'
+    px = ASHUKA_SAMPLE_PX_PER_MM
+    width = max(1, int(round(width_mm * px)))
+    height = max(1, int(round(height_mm * px)))
+    image = Image.new('RGB', (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    y = 0.0
+    for band in bands:
+        band_h = float(band['heightMm']) * px
+        top = int(round(y))
+        bottom = int(round(y + band_h))
+        if band is bands[-1]:
+            bottom = height
+        box_h = max(1, bottom - top)
+        font_pt = float(band['fontPt'])
+        font_px = max(8, int(round(font_pt * px * 25.4 / 72.0)))
+        text = str(band.get('text') or '')
+        fitted_font, used = _fit_font_to_box(
+            text, family_hint,
+            max(8, width - int(round((float(band.get('indentMm') or 0) + 2.0) * px)) - 4),
+            max(8, box_h - 4),
+            font_px,
+        )
+        font = fitted_font or _load_font(used or font_px, family_hint) or _load_font(font_px, family_hint)
+        if font is None:
+            return False, '利用可能なフォントがありません'
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        indent = float(band.get('indentMm') or 0) * px
+        align_h = str(band.get('alignH') or 'center')
+        if align_h == 'left':
+            x = int(round(indent if indent > 0 else 2 * px))
+        else:
+            x = int(round((width - tw) / 2))
+        x = max(0, min(x, width - max(1, tw)))
+        align_v = str(band.get('alignV') or 'middle')
+        if align_v == 'top':
+            ty = top + 2
+        elif align_v == 'bottom':
+            ty = bottom - th - 2
+        else:
+            ty = top + int(round((box_h - th) / 2))
+        ty = max(top, min(ty, bottom - max(1, th)))
+        draw.text((x - bbox[0], ty - bbox[1]), text, font=font, fill=(0, 0, 0))
+        y += band_h
+    dst_path = Path(dst_path)
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(dst_path, format='PNG')
+    return True, f'banded sample {width_mm}x{height_mm}mm bands={len(bands)}'
+
+def _backup_ashuka_format(c, root, backup_dir, fmt, samples):
+    """変更前の形式・見本画像を backups/ashuka-names-<stamp>/ へ退避。"""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+def _write_ashuka_sample(c, root, format_id, *, kind, caption):
+    """見本画像を生成し name_samples を1件に揃える。"""
+    bands = ASHUKA_TRAINEE_BANDS if kind == 'trainee' else ASHUKA_THREE_BANDS
+    stem = 'ashuka-trainee' if kind == 'trainee' else 'ashuka-three'
+    rel = f'images/names/{stem}-{format_id:06}.png'
+    dst = root / rel
+    ok, note = _render_ashuka_banded_sample(dst, bands)
+    if not ok:
+        return False, note, ''
+    c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
+    c.execute(
+        '''INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)
+           VALUES(?,?,?,?,?,?)''',
+        (format_id, 'standard', '', '白', rel, caption),
+    )
+    return True, note, rel
+
+def _update_ashuka_format_row(c, format_id, *, kind, source_row, identity=None):
+    """明日佳の形式行を Excel 仕様へ更新（担当・了承レコードは触らない）。"""
+    if kind == 'trainee':
+        values = (
+            ASHUKA_TRAINEE_FORMAT_NAME, ASHUKA_PLACEMENT, ASHUKA_FAMILY, '',
+            ASHUKA_TRAINEE_HEADING, ASHUKA_TRAINEE_NOTE, 'DeptName',
+            'カタカナのファーストネーム（ふりがななし）',
+            0, 80, 50, 0, '白', '',
+            json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False),
+            json.dumps([], ensure_ascii=False), json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False),
+            '', 50, 24, 0, source_row,
+            json.dumps(_ashuka_spec('trainee'), ensure_ascii=False),
+            0, json.dumps([], ensure_ascii=False), 0, format_id,
+        )
+    else:
+        values = (
+            ASHUKA_THREE_FORMAT_NAME, ASHUKA_PLACEMENT, ASHUKA_FAMILY, '',
+            ASHUKA_THREE_HEADING, ASHUKA_THREE_NOTE, 'DeptFurigana', '苗字のみ',
+            0, 80, 50, 0, '白', '',
+            json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False),
+            json.dumps([], ensure_ascii=False), json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False),
+            '', 50, 24, 0, source_row,
+            json.dumps(_ashuka_spec('three'), ensure_ascii=False),
+            0, json.dumps([], ensure_ascii=False), 0, format_id,
+        )
+    c.execute(
+        '''UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,
+            layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,
+            groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,
+            heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,
+            retired=0 WHERE id=?''',
+        values,
+    )
+    if identity:
+        c.execute('UPDATE name_formats SET identity=? WHERE id=?', (identity, format_id))
+
+def _insert_ashuka_trainee_format(c, customer_id):
+    """実習生用2段ネームを新規追加。identity は再追加防止用に固定。"""
+    c.execute(
+        '''INSERT INTO name_formats(
+            identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,
+            layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,
+            groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,
+            number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)''',
+        (
+            ASHUKA_TRAINEE_IDENTITY, customer_id, -1, ASHUKA_TRAINEE_FORMAT_NAME, ASHUKA_PLACEMENT,
+            ASHUKA_FAMILY, '', ASHUKA_TRAINEE_HEADING, ASHUKA_TRAINEE_NOTE, 'DeptName',
+            'カタカナのファーストネーム（ふりがななし）', 0, 80, 50, 0, '白', '',
+            json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False),
+            json.dumps([], ensure_ascii=False), json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False),
+            '', 50, 24, 0, 79, None,
+            json.dumps(_ashuka_spec('trainee'), ensure_ascii=False),
+            0, json.dumps([], ensure_ascii=False), 0,
+        ),
+    )
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+def _patch_ashuka_catalog(data_dir, backup_dir, items):
+    """catalog.json があれば明日佳の形式・見本を同じ内容へ揃える。"""
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return False
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(path, backup_dir / 'catalog.json')
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    customers = {
+        item.get('sourceKey'): item
+        for item in (data.get('customers') or [])
+        if str(item.get('name') or '').strip() == ASHUKA_CUSTOMER_NAME
+        or _correct_customer_name(item.get('name') or '') == ASHUKA_CUSTOMER_NAME
+    }
+    if not customers:
+        return False
+    changed = False
+    for fmt in data.get('formats') or []:
+        if fmt.get('customerKey') not in customers:
+            continue
+        for item in items:
+            if item.get('action') in ('update-three', 'update-trainee', 'reuse-empty-trainee', 'create-trainee'):
+                match_id = item.get('formatId')
+                match_identity = item.get('identity')
+                if match_id and fmt.get('dbId') == match_id:
+                    pass
+                elif match_identity and fmt.get('identity') == match_identity:
+                    pass
+                elif item.get('action') == 'update-three' and (
+                    fmt.get('identity') and any(
+                        x.get('identity') == fmt.get('identity') for x in items if x.get('action') == 'update-three'
+                    )
+                ):
+                    pass
+                else:
+                    # format 名で緩く合わせる
+                    name = str(fmt.get('format') or '')
+                    if item.get('action') == 'update-three' and ('ふりがな' in name or name == '大ネーム'):
+                        if any(
+                            str(f.get('format') or '') == ASHUKA_THREE_FORMAT_NAME
+                            for f in (data.get('formats') or [])
+                            if f.get('customerKey') in customers and f is not fmt
+                        ):
+                            continue
+                    elif item.get('action') != 'update-three' and ('実習生' in name or 'カタカナ' in name):
+                        pass
+                    else:
+                        continue
+                kind = 'trainee' if 'trainee' in item.get('action', '') else 'three'
+                fmt['format'] = ASHUKA_TRAINEE_FORMAT_NAME if kind == 'trainee' else ASHUKA_THREE_FORMAT_NAME
+                fmt['placement'] = ASHUKA_PLACEMENT
+                fmt['family'] = ASHUKA_FAMILY
+                fmt['heading'] = ASHUKA_TRAINEE_HEADING if kind == 'trainee' else ASHUKA_THREE_HEADING
+                fmt['note'] = ASHUKA_TRAINEE_NOTE if kind == 'trainee' else ASHUKA_THREE_NOTE
+                fmt['layout'] = 'DeptName' if kind == 'trainee' else 'DeptFurigana'
+                fmt['reading'] = (
+                    'カタカナのファーストネーム（ふりがななし）' if kind == 'trainee' else '苗字のみ'
+                )
+                fmt['small'] = False
+                fmt['widthMm'] = 80
+                fmt['heightMm'] = 50
+                fmt['fixedColor'] = '白'
+                fmt['departments'] = list(ASHUKA_DEPARTMENTS)
+                fmt['maximumFont'] = 50
+                fmt['headingFont'] = 24
+                fmt['sourceRow'] = 79 if kind == 'trainee' else 78
+                for key, value in _ashuka_spec(kind).items():
+                    fmt[key] = value
+                rel = item.get('samplePath') or ''
+                caption = ASHUKA_TRAINEE_SAMPLE_CAPTION if kind == 'trainee' else ASHUKA_THREE_SAMPLE_CAPTION
+                fmt['samples'] = [{
+                    'key': 'standard',
+                    'condition': '',
+                    'paperColor': '白',
+                    'relativePath': rel,
+                    'caption': caption,
+                }]
+                changed = True
+                break
+    # カタログに実習生用が無く、DB で新規作成した場合は追記
+    has_trainee_cat = any(
+        ('実習生' in str(fmt.get('format') or '') or 'カタカナ' in str(fmt.get('format') or '')
+         or fmt.get('ashukaKind') == 'trainee')
+        and fmt.get('customerKey') in customers
+        for fmt in (data.get('formats') or [])
+    )
+    created = next((i for i in items if i.get('action') == 'create-trainee'), None)
+    if created and not has_trainee_cat:
+        customer_key = next(iter(customers))
+        data.setdefault('formats', []).append({
+            'identity': ASHUKA_TRAINEE_IDENTITY,
+            'customerKey': customer_key,
+            'format': ASHUKA_TRAINEE_FORMAT_NAME,
+            'placement': ASHUKA_PLACEMENT,
+            'family': ASHUKA_FAMILY,
+            'heading': ASHUKA_TRAINEE_HEADING,
+            'note': ASHUKA_TRAINEE_NOTE,
+            'layout': 'DeptName',
+            'reading': 'カタカナのファーストネーム（ふりがななし）',
+            'small': False,
+            'widthMm': 80,
+            'heightMm': 50,
+            'fixedColor': '白',
+            'departments': list(ASHUKA_DEPARTMENTS),
+            'maximumFont': 50,
+            'headingFont': 24,
+            'sourceRow': 79,
+            **_ashuka_spec('trainee'),
+            'samples': [{
+                'key': 'standard',
+                'condition': '',
+                'paperColor': '白',
+                'relativePath': created.get('samplePath') or '',
+                'caption': ASHUKA_TRAINEE_SAMPLE_CAPTION,
+            }],
+        })
+        changed = True
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+def correct_ashuka_name_formats(c, data_dir=None):
+    """明日佳の3段ネーム更新と実習生用2段追加。他顧客・担当者は変更しない。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    customers = c.execute(
+        'SELECT id, source_name FROM name_customers WHERE retired=0 AND source_name=?',
+        (ASHUKA_CUSTOMER_NAME,),
+    ).fetchall()
+    if not customers:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': '明日佳顧客なし',
+            'customer': ASHUKA_CUSTOMER_NAME,
+            'policy': ASHUKA_NAMES_POLICY,
+        }
+
+    prior = c.execute(
+        'SELECT value FROM settings WHERE key=?',
+        (ASHUKA_NAMES_SETTINGS_KEY,),
+    ).fetchone()
+    prior_policy = ''
+    if prior:
+        try:
+            prior_policy = json.loads(prior['value'] or '{}').get('policy') or ''
+        except (TypeError, json.JSONDecodeError):
+            prior_policy = ''
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'ashuka-names-{stamp}'
+    items = []
+    customer = customers[0]
+    formats = list(c.execute(
+        'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+        (customer['id'],),
+    ).fetchall())
+    samples_by_fid = {}
+    for fmt in formats:
+        samples_by_fid[fmt['id']] = list(c.execute(
+            'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+            (fmt['id'],),
+        ).fetchall())
+
+    three = None
+    for fmt in formats:
+        if fmt['id'] == ASHUKA_THREE_FORMAT_ID:
+            three = fmt
+            break
+    if three is None:
+        for fmt in formats:
+            if _ashuka_format_matches_target(fmt, kind='three'):
+                three = fmt
+                break
+    if three is None:
+        # 顧客に大ネーム白地80×50が1つだけならそれを3段候補にする（空シェル229は除外）
+        candidates = []
+        for fmt in formats:
+            if _ashuka_is_empty_shell(fmt, samples_by_fid.get(fmt['id'], [])):
+                continue
+            if _ashuka_format_matches_target(fmt, kind='trainee'):
+                continue
+            if str(fmt['format_name'] or '').startswith('大ネーム') and int(fmt['width_mm'] or 0) in (0, 80):
+                candidates.append(fmt)
+        if len(candidates) == 1:
+            three = candidates[0]
+
+    trainee = None
+    for fmt in formats:
+        if str(fmt['identity'] or '') == ASHUKA_TRAINEE_IDENTITY:
+            trainee = fmt
+            break
+    if trainee is None:
+        for fmt in formats:
+            if three and fmt['id'] == three['id']:
+                continue
+            if _ashuka_format_matches_target(fmt, kind='trainee'):
+                trainee = fmt
+                break
+
+    empty229 = None
+    for fmt in formats:
+        if fmt['id'] == ASHUKA_EMPTY_FORMAT_ID:
+            if _ashuka_is_empty_shell(fmt, samples_by_fid.get(fmt['id'], [])):
+                empty229 = fmt
+            break
+
+    needs = False
+    if three is None or not _ashuka_three_is_current(three, samples_by_fid.get(three['id'], [])):
+        needs = True
+    if trainee is None:
+        needs = True
+    elif not _ashuka_trainee_is_current(trainee, samples_by_fid.get(trainee['id'], [])):
+        needs = True
+
+    catalog_path = root / 'name-import' / 'catalog.json'
+    catalog_needs = False
+    if catalog_path.is_file():
+        try:
+            catalog_data = json.loads(catalog_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            catalog_data = None
+        if catalog_data:
+            cat_keys = {
+                item.get('sourceKey')
+                for item in (catalog_data.get('customers') or [])
+                if str(item.get('name') or '').strip() == ASHUKA_CUSTOMER_NAME
+                or _correct_customer_name(item.get('name') or '') == ASHUKA_CUSTOMER_NAME
+            }
+            has_three = False
+            has_trainee = False
+            for fmt in catalog_data.get('formats') or []:
+                if fmt.get('customerKey') not in cat_keys:
+                    continue
+                name = str(fmt.get('format') or '')
+                if fmt.get('ashukaKind') == 'three' or 'ふりがな' in name:
+                    has_three = True
+                    if fmt.get('ashukaPolicy') != ASHUKA_NAMES_POLICY:
+                        catalog_needs = True
+                if fmt.get('ashukaKind') == 'trainee' or '実習生' in name or 'カタカナ' in name:
+                    has_trainee = True
+                    if fmt.get('ashukaPolicy') != ASHUKA_NAMES_POLICY:
+                        catalog_needs = True
+            if not has_three or not has_trainee:
+                catalog_needs = True
+
+    policy_needs = prior_policy != ASHUKA_NAMES_POLICY
+    if not needs and not catalog_needs and not policy_needs:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': '適用済み' if prior else '対象形式なし',
+            'customer': ASHUKA_CUSTOMER_NAME,
+            'policy': ASHUKA_NAMES_POLICY,
+            'nm150': ASHUKA_THREE_FORMAT_ID,
+            'nm229': ASHUKA_EMPTY_FORMAT_ID,
+        }
+
+    if not needs and not catalog_needs and policy_needs:
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                ASHUKA_NAMES_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': ASHUKA_NAMES_REPORT,
+                    'policy': ASHUKA_NAMES_POLICY,
+                }, ensure_ascii=False),
+            ),
+        )
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'policy更新のみ',
+            'customer': ASHUKA_CUSTOMER_NAME,
+            'policy': ASHUKA_NAMES_POLICY,
+        }
+
+    # --- 3段ネーム ---
+    if three is not None:
+        samples = samples_by_fid.get(three['id'], [])
+        if not _ashuka_three_is_current(three, samples):
+            _backup_ashuka_format(c, root, backup_dir, three, samples)
+            _update_ashuka_format_row(c, three['id'], kind='three', source_row=78)
+            ok, note, rel = _write_ashuka_sample(
+                c, root, three['id'], kind='three', caption=ASHUKA_THREE_SAMPLE_CAPTION,
+            )
+            items.append({
+                'action': 'update-three',
+                'customer': customer['source_name'],
+                'formatId': three['id'],
+                'number': _number(three['id']),
+                'format': ASHUKA_THREE_FORMAT_NAME,
+                'identity': three['identity'],
+                'samplePath': rel,
+                'sampleOk': ok,
+                'sampleNote': note,
+                'empty229Reused': False,
+            })
+    else:
+        items.append({
+            'action': 'skip-three',
+            'customer': customer['source_name'],
+            'reason': f'NM-{ASHUKA_THREE_FORMAT_ID:06}相当の3段形式が見つからない',
+            'formatId': None,
+        })
+
+    # --- 実習生用2段 ---
+    if trainee is not None:
+        samples = samples_by_fid.get(trainee['id'], [])
+        if not _ashuka_trainee_is_current(trainee, samples):
+            _backup_ashuka_format(c, root, backup_dir, trainee, samples)
+            _update_ashuka_format_row(c, trainee['id'], kind='trainee', source_row=79)
+            ok, note, rel = _write_ashuka_sample(
+                c, root, trainee['id'], kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
+            )
+            items.append({
+                'action': 'update-trainee',
+                'customer': customer['source_name'],
+                'formatId': trainee['id'],
+                'number': _number(trainee['id']),
+                'format': ASHUKA_TRAINEE_FORMAT_NAME,
+                'identity': trainee['identity'],
+                'samplePath': rel,
+                'sampleOk': ok,
+                'sampleNote': note,
+                'empty229Reused': trainee['id'] == ASHUKA_EMPTY_FORMAT_ID,
+            })
+    elif empty229 is not None:
+        samples = samples_by_fid.get(empty229['id'], [])
+        _backup_ashuka_format(c, root, backup_dir, empty229, samples)
+        _update_ashuka_format_row(
+            c, empty229['id'], kind='trainee', source_row=79, identity=ASHUKA_TRAINEE_IDENTITY,
+        )
+        ok, note, rel = _write_ashuka_sample(
+            c, root, empty229['id'], kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
+        )
+        items.append({
+            'action': 'reuse-empty-trainee',
+            'customer': customer['source_name'],
+            'formatId': empty229['id'],
+            'number': _number(empty229['id']),
+            'format': ASHUKA_TRAINEE_FORMAT_NAME,
+            'identity': ASHUKA_TRAINEE_IDENTITY,
+            'samplePath': rel,
+            'sampleOk': ok,
+            'sampleNote': note,
+            'empty229Reused': True,
+            'reason': 'NM-000229が内容未設定のため実習生用として再利用（重複追加回避）',
+        })
+    else:
+        # 229に中身がある／他顧客／不在 → 新規（identity固定で再追加防止）
+        existing_identity = c.execute(
+            'SELECT id, customer_id, retired FROM name_formats WHERE identity=?',
+            (ASHUKA_TRAINEE_IDENTITY,),
+        ).fetchone()
+        if existing_identity and existing_identity['customer_id'] == customer['id']:
+            fid = existing_identity['id']
+            c.execute('UPDATE name_formats SET retired=0 WHERE id=?', (fid,))
+            fmt = c.execute('SELECT * FROM name_formats WHERE id=?', (fid,)).fetchone()
+            samples = list(c.execute('SELECT * FROM name_samples WHERE format_id=? ORDER BY id', (fid,)))
+            _backup_ashuka_format(c, root, backup_dir, fmt, samples)
+            _update_ashuka_format_row(c, fid, kind='trainee', source_row=79)
+            ok, note, rel = _write_ashuka_sample(
+                c, root, fid, kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
+            )
+            items.append({
+                'action': 'update-trainee',
+                'customer': customer['source_name'],
+                'formatId': fid,
+                'number': _number(fid),
+                'format': ASHUKA_TRAINEE_FORMAT_NAME,
+                'identity': ASHUKA_TRAINEE_IDENTITY,
+                'samplePath': rel,
+                'sampleOk': ok,
+                'sampleNote': note,
+                'empty229Reused': False,
+                'reason': 'identity固定の既存実習生用を更新',
+            })
+        else:
+            # 229が他用途なら触らず新規
+            nm229 = c.execute(
+                'SELECT id, customer_id, format_name FROM name_formats WHERE id=?',
+                (ASHUKA_EMPTY_FORMAT_ID,),
+            ).fetchone()
+            skip_reason = ''
+            if nm229 is not None:
+                if nm229['customer_id'] != customer['id']:
+                    skip_reason = 'NM-000229は他顧客のため未使用'
+                else:
+                    skip_reason = 'NM-000229に既存内容があるため未上書き・新規追加'
+            else:
+                skip_reason = 'NM-000229不在のため新規追加'
+            fid = _insert_ashuka_trainee_format(c, customer['id'])
+            ok, note, rel = _write_ashuka_sample(
+                c, root, fid, kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
+            )
+            items.append({
+                'action': 'create-trainee',
+                'customer': customer['source_name'],
+                'formatId': fid,
+                'number': _number(fid),
+                'format': ASHUKA_TRAINEE_FORMAT_NAME,
+                'identity': ASHUKA_TRAINEE_IDENTITY,
+                'samplePath': rel,
+                'sampleOk': ok,
+                'sampleNote': note,
+                'empty229Reused': False,
+                'reason': skip_reason,
+            })
+
+    catalog_changed = _patch_ashuka_catalog(root, backup_dir, items) if items or catalog_needs else False
+    changed_items = [i for i in items if i.get('action') not in ('skip-three',)]
+    report = {
+        'at': stamp,
+        'changed': len(changed_items),
+        'customer': ASHUKA_CUSTOMER_NAME,
+        'policy': ASHUKA_NAMES_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'departments': list(ASHUKA_DEPARTMENTS),
+        'rules': {
+            'onlyCustomer': ASHUKA_CUSTOMER_NAME,
+            'updateThree': True,
+            'preferFormatId': ASHUKA_THREE_FORMAT_ID,
+            'reuseEmpty229': True,
+            'traineeIdentity': ASHUKA_TRAINEE_IDENTITY,
+            'noAssigneeChange': True,
+            'noAutoApprove': True,
+            'noDeleteOtherFormats': True,
+        },
+        'items': items,
+    }
+    report_path = root / ASHUKA_NAMES_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            ASHUKA_NAMES_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': len(changed_items),
+                'report': ASHUKA_NAMES_REPORT,
+                'policy': ASHUKA_NAMES_POLICY,
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -2057,6 +2896,7 @@ def import_catalog(connect, data_dir):
         # 女性見本の画像変換は import_catalog では行わない（起動・取込を軽く保つ）。
         # 必要なときは maintain_female_sample_hanako.py を明示実行する。
         correct_rinko_yellow(c, data_dir)
+        correct_ashuka_name_formats(c, data_dir)
     return summary
 
 def _require(user):
