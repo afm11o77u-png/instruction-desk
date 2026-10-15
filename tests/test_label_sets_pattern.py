@@ -111,7 +111,7 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'normalizeLabelPayload',
             'formatNoticeDate',
             'queueNoticePrint',
-            "queuePrint(list,true,true,true,false,currentLabelPattern())",
+            "queuePrint(list,true,true,true,false,currentLabelPattern(),currentLabelShowRequest())",
             'pattern:currentLabelPattern()',
         ):
             self.assertIn(needle, src)
@@ -122,6 +122,8 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'labelmodeaddress',
             'labelmodenotice',
             'name="labelpattern"',
+            'name="labelrequestshow"',
+            'labelrequestshowbox',
             'labelnoticepanel',
             'id="noticeto"',
             'id="noticedate"',
@@ -132,6 +134,20 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'value="宮の森事務所"',
         ):
             self.assertIn(needle, html)
+
+    def test_sheet_js_hides_request_row_on_print_only(self):
+        src = (ROOT / 'sheet.js').read_text(encoding='utf-8')
+        self.assertIn('currentLabelShowRequest', src)
+        self.assertIn("tag.classList.add('taghidejob')", src)
+        self.assertIn('if(withJob)tag.append(body,job);else tag.append(body)', src)
+        self.assertIn(
+            'queuePrint(list,true,true,true,false,currentLabelPattern(),currentLabelShowRequest())',
+            src,
+        )
+        # 段数切替で消すのは管理番号・部署のみ。受付内容の入力値は消さない。
+        self.assertIn('data-key="management"],[data-key="department"]', src)
+        clear_request = "[data-key=\"request\"]').forEach(el=>{el.value=''})"
+        self.assertNotIn(clear_request, src)
 
     def test_three_line_hides_mid_columns_and_notice_defaults(self):
         js = (ROOT / 'sheet.js').read_text(encoding='utf-8')
