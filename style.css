@@ -65,9 +65,9 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelmodes{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
 #labeldesk .labelmode{padding:8px 14px;font-weight:700;border:1px solid #9dceae;background:#fff;color:#1e4a36;border-radius:8px}
 #labeldesk .labelmode.on,#labeldesk .labelmode[aria-pressed="true"]{background:#1e4a36;color:#fff;border-color:#1e4a36}
-#labeldesk .labelpattern,#labeldesk .labelrequestshow{margin:0 12px 0 0;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
-#labeldesk .labelpattern legend,#labeldesk .labelrequestshow legend{padding:0 4px;font-size:.85rem;font-weight:700}
-#labeldesk .labelpattern label,#labeldesk .labelrequestshow label{display:inline-flex;gap:6px;align-items:center;font-size:.9rem;font-weight:600;white-space:nowrap}
+#labeldesk .labelpattern{margin:0 12px 0 0;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+#labeldesk .labelpattern legend{padding:0 4px;font-size:.85rem;font-weight:700}
+#labeldesk .labelpattern label{display:inline-flex;gap:6px;align-items:center;font-size:.9rem;font-weight:600;white-space:nowrap}
 #labeldesk .labelnoticeform{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;max-width:980px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
 #labeldesk .labelnoticeform label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:180px}
 #labeldesk .labelnoticeform input{font-weight:400;min-width:200px;padding:8px 10px}

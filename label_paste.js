@@ -6,12 +6,18 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   const LABEL_PASTE_KEYS = ['customer', 'management', 'department', 'employee', 'request'];
   const LABEL_PASTE_MAX_ROWS = 40;
-  const LABEL_REQUEST_OPTIONS = ['新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他'];
+  /** 「表示なし」は印刷非表示用の専用値（業務の受付内容と区別する）。 */
+  const LABEL_REQUEST_HIDE = '表示なし';
+  const LABEL_REQUEST_OPTIONS = ['新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他', LABEL_REQUEST_HIDE];
   const LABEL_REQUEST_DEFAULT = '消耗・破損交換';
 
-  /** 印刷プレビュー／印刷で受付内容行を出すか。入力・保存の request は変えない。 */
-  function labelPrintShowsRequest(value) {
-    return value !== false && value !== 0 && value !== '0';
+  /** 宛名の受付内容行を印刷するか。request が「表示なし」のときだけ非表示。 */
+  function labelPrintShowsRequest(request) {
+    return String(request ?? '').trim() !== LABEL_REQUEST_HIDE;
+  }
+
+  function labelRequestOptionsMessage() {
+    return '新規／サイズ交換／消耗・破損交換／追加・補充／復職／異動・移動／その他／表示なし';
   }
 
   function parseLabelClipboard(text) {
@@ -78,7 +84,7 @@
         if (key === 'request' && value !== '' && !requestOptions.includes(value)) {
           return {
             ok: false,
-            message: `受付内容「${value}」は選べません。新規／サイズ交換／消耗・破損交換／追加・補充／復職／異動・移動／その他のいずれかを入れてください。`,
+            message: `受付内容「${value}」は選べません。${labelRequestOptionsMessage()}のいずれかを入れてください。`,
           };
         }
         updates.push({
@@ -138,7 +144,7 @@
       return {
         ok: false,
         reason: 'invalid',
-        message: `受付内容「${value}」は選べません。新規／サイズ交換／消耗・破損交換／追加・補充／復職／異動・移動／その他のいずれかを選んでください。`,
+        message: `受付内容「${value}」は選べません。${labelRequestOptionsMessage()}のいずれかを選んでください。`,
       };
     }
     const list = Array.isArray(slots) ? slots : [];
@@ -164,6 +170,7 @@
   return {
     LABEL_PASTE_KEYS,
     LABEL_PASTE_MAX_ROWS,
+    LABEL_REQUEST_HIDE,
     LABEL_REQUEST_OPTIONS,
     LABEL_REQUEST_DEFAULT,
     parseLabelClipboard,

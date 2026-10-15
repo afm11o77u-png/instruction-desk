@@ -2,7 +2,8 @@
 import json
 from auth import log
 
-REQUESTS = {'新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他'}
+# 「表示なし」は印刷時に受付内容行を出さない専用値（業務の受付内容と区別する）。
+REQUESTS = {'新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他', '表示なし'}
 FIELDS = {'customer': 40, 'management': 20, 'department': 40, 'employee': 20, 'request': 20}
 PATTERNS = {'3', '4'}
 
