@@ -206,7 +206,7 @@ async function openDebugDesk(){if(currentUser?.role!=='owner')return;try{paintDe
 if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'list_visible_instructions',title:'表示中の指示書を確認',description:'現在の一覧の検索条件に一致する指示書を読み取ります。変更はしません。',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true},execute:async(input)=>{if(!input||Object.keys(input).length)throw Error('入力項目はありません。');return selected().map(({number,customer,status,markShipDate,delivery})=>({number,customer,status,markShipDate,delivery}))}})).catch(()=>{})}catch{}}
 
 
-// Box tickets use the current progress form without changing saved order data.
+// Box tickets use shared layout (box_ticket.js). Progress forms and manual reprint share the same print path; neither writes order data here.
 function boxTicketOrder(kind){
  const o={...dueOrder};
  if(kind==='delay'){
@@ -221,16 +221,13 @@ function boxTicketOrder(kind){
  }
  return o;
 }
-function boxTicketPages(o){
- const rows=(o.shortages||[]).filter(s=>Number(s.qty)>0&&s.supply!=='入荷済み');
- const chunks=[];for(let i=0;i<rows.length;i+=3)chunks.push(rows.slice(i,i+3));
- if(!chunks.length)chunks.push([]);
- return chunks.map((chunk,i)=>`<section class="ticket"><div class="customer">${esc(o.customer||'—')}</div><div class="person"><b>${esc(o.employee||'—')}</b><span>${esc(o.number||'—')}${chunks.length>1?`　${i+1}/${chunks.length}`:''}</span></div><div class="missing"><b>不足商品</b>${chunk.length?chunk.map(s=>`<div>${esc(supplyLabel(s))}<strong>不足 ${esc(String(s.qty))} 枚</strong></div>`).join(''):'<div>不足なし（修理待ち）</div>'}</div><div class="request"><b>依頼内容</b> ${esc(o.request||'—')}</div><div class="date"><b>マーク出荷日</b> ${esc(o.markShipDate||'未設定')}</div></section>`);
+function deskBoxTicketPages(o){
+ return boxTicketPages(o,esc,supplyLabel);
 }
-const boxTicketCss=`@page{size:A4 landscape;margin:18mm 12mm 6mm}*{box-sizing:border-box}html,body{margin:0;background:white;color:black;font-family:"Yu Gothic",Meiryo,sans-serif}.page{width:273mm;height:186mm;display:grid;grid-template-columns:repeat(2,136.5mm);grid-template-rows:repeat(4,46.5mm);break-after:page}.page:last-child{break-after:auto}.ticket{width:136.5mm;height:46.5mm;border:1px solid black;padding:2mm 3mm;display:flex;flex-direction:column;gap:.6mm;overflow:hidden;font-size:10pt;line-height:1.2}.customer{font-weight:bold;font-size:13pt;overflow-wrap:anywhere}.person{display:flex;justify-content:space-between;gap:3mm;border-bottom:1px solid black;padding-bottom:.7mm}.person b{font-size:12pt}.person span{white-space:nowrap}.missing{flex:1;min-height:0;font-size:9pt}.missing>div{display:flex;justify-content:space-between;gap:2mm}.missing strong{white-space:nowrap}.request,.date{font-size:10pt}.date{border-top:1px solid black;padding-top:.6mm}`;
+const boxTicketCss=typeof BOX_TICKET_CSS==='string'?BOX_TICKET_CSS:'';
 function openBoxTicket(kind){
  if(!dueOrder)return;
- openBoxTicketPreview(boxTicketPages(boxTicketOrder(kind)),'入力中の内容を表示しています。');
+ openBoxTicketPreview(deskBoxTicketPages(boxTicketOrder(kind)),'入力中の内容を表示しています。');
 }
 function openBoxTicketPreview(tickets,notice){
  let dialog=document.querySelector('#boxticketpreview');
@@ -238,11 +235,13 @@ function openBoxTicketPreview(tickets,notice){
  dialog.innerHTML='<h2>ボックス貼付用 管理票</h2><p><span id="boxticketnotice"></span>A4横・倍率100％で印刷し、枠に沿って切り取ってください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="boxticketprint">印刷</button><button type="button" id="boxticketclose">閉じる</button></div><iframe title="管理票の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>';
  dialog.querySelector('#boxticketnotice').textContent=notice;
  const frame=dialog.querySelector('iframe');
- frame.srcdoc='<!doctype html><html><head><meta charset="utf-8"><title>ボックス管理票</title><style>'+boxTicketCss+'@media screen{body{background:#eee;padding:12px}.page{background:white;margin-bottom:12px}}'+'</style></head><body>'+Array.from({length:Math.ceil(tickets.length/8)},(_,i)=>'<div class="page">'+tickets.slice(i*8,i*8+8).join('')+'</div>').join('')+'</body></html>';
+ frame.srcdoc=boxTicketPreviewHtml(tickets,boxTicketCss);
  dialog.querySelector('#boxticketprint').disabled=true;frame.onload=()=>{dialog.querySelector('#boxticketprint').disabled=false};
  dialog.querySelector('#boxticketprint').onclick=()=>{frame.contentWindow.focus();frame.contentWindow.print()};
  dialog.querySelector('#boxticketclose').onclick=()=>dialog.close();dialog.showModal();
 }
+window.openBoxTicketPreview=openBoxTicketPreview;
+window.deskBoxTicketPages=deskBoxTicketPages;
 for(const [kind,id] of [['delay','delaysave'],['due','duesave']]){
  const anchor=document.getElementById(id);if(!anchor)continue;
  const button=document.createElement('button');button.type='button';button.textContent='ボックス管理票を印刷';button.onclick=()=>openBoxTicket(kind);anchor.insertAdjacentElement('afterend',button);
@@ -267,12 +266,12 @@ async function openBoxWaitingList(){
  dialog.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2>修理・在庫待ち一覧</h2><button type="button" id="boxwaitingclose">閉じる</button></div><p>保存済みの指示書から、修理待ち・修理中・在庫待ちを表示しています。印刷したいものを選んでください。</p><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button type="button" id="boxwaitingall">全選択</button><button type="button" id="boxwaitingnone">選択解除</button><span id="boxwaitingcount" aria-live="polite"></span><button type="button" class="primary" id="boxwaitingprint" disabled>選択した管理票を印刷</button></div><div style="overflow:auto;max-height:60vh"><table style="width:100%"><thead><tr><th>選択</th><th>顧客名 / 従業員名</th><th>指示書番号</th><th>待ち状況</th><th>不足商品・数量</th><th>マーク出荷日</th><th>出荷見込日</th></tr></thead><tbody>${list.map(o=>`<tr><td><input type="checkbox" class="boxwaitingpick" data-id="${o.id}" aria-label="${esc(o.number+'を選択')}" style="width:18px;height:18px;margin:0;padding:0"></td><td><b>${esc(o.customer)}</b><br>${esc(o.employee||'—')}</td><td>${esc(o.number)}</td><td>${esc(boxWaitingKind(o))}</td><td>${(o.shortages||[]).filter(s=>Number(s.qty)>0&&s.supply!=='入荷済み').map(s=>`${esc(supplyLabel(s))}：不足 ${esc(s.qty)}枚`).join('<br>')||'不足なし'}</td><td>${esc(o.markShipDate||'未設定')}</td><td>${esc(o.shipEstimateUnknown?'未定':o.shipEstimateDate||'未設定')}</td></tr>`).join('')||'<tr><td colspan="7">修理・在庫待ちの指示書はありません。</td></tr>'}</tbody></table></div>`;
  const checks=[...dialog.querySelectorAll('.boxwaitingpick')];
  const chosen=()=>list.filter(o=>checks.some(c=>c.checked&&Number(c.dataset.id)===o.id));
- const update=()=>{const selected=chosen(),n=selected.flatMap(boxTicketPages).length;dialog.querySelector('#boxwaitingcount').textContent=`${list.length}件中 ${selected.length}件選択 ／ 管理票 ${n}枚（A4 ${Math.ceil(n/8)}ページ）`;dialog.querySelector('#boxwaitingprint').disabled=!selected.length};
+ const update=()=>{const selected=chosen(),n=selected.flatMap(deskBoxTicketPages).length;dialog.querySelector('#boxwaitingcount').textContent=`${list.length}件中 ${selected.length}件選択 ／ 管理票 ${n}枚（A4 ${Math.ceil(n/8)}ページ）`;dialog.querySelector('#boxwaitingprint').disabled=!selected.length};
  checks.forEach(c=>c.onchange=update);
  dialog.querySelector('#boxwaitingall').onclick=()=>{checks.forEach(c=>c.checked=true);update()};
  dialog.querySelector('#boxwaitingnone').onclick=()=>{checks.forEach(c=>c.checked=false);update()};
  dialog.querySelector('#boxwaitingclose').onclick=()=>dialog.close();
- dialog.querySelector('#boxwaitingprint').onclick=()=>{const selected=chosen();if(selected.length)openBoxTicketPreview(selected.flatMap(boxTicketPages),`${selected.length}件の保存済み内容を表示しています。`)};
+ dialog.querySelector('#boxwaitingprint').onclick=()=>{const selected=chosen();if(selected.length)openBoxTicketPreview(selected.flatMap(deskBoxTicketPages),`${selected.length}件の保存済み内容を表示しています。`)};
  update();dialog.showModal();
 }
 const boxWaitingOpen=document.createElement('button');boxWaitingOpen.type='button';boxWaitingOpen.id='boxwaitingopen';boxWaitingOpen.textContent='修理・在庫待ち一覧';boxWaitingOpen.hidden=true;boxWaitingOpen.onclick=openBoxWaitingList;
