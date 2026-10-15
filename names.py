@@ -111,6 +111,7 @@ def schema(c):
     # 明示の保守 CLI（DESK_RUN_FEMALE_IMAGE_MAINTENANCE=1）だけが実行する。
     if DATA_DIR is not None:
         correct_rinko_yellow(c, DATA_DIR)
+        correct_rinko_name_formats(c, DATA_DIR)
         correct_ashuka_name_formats(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
@@ -1496,7 +1497,16 @@ def _is_yellow_color(name):
     return key in YELLOW_COLOR_NAMES
 
 def _is_mix_color(name):
-    return str(name or '').strip() == MIX_FIXED_COLOR
+    """先方から指定（末尾の？付き原文も含む）。疑問符は照合時だけ外す。"""
+    key = str(name or '').replace('?', '').replace('？', '').strip()
+    return key == MIX_FIXED_COLOR
+
+def _mix_color_label(existing):
+    """既存が「先方から指定？」なら疑問符付き原文を維持。無ければ確定表記。"""
+    raw = str(existing or '').strip()
+    if _is_mix_color(raw) and ('?' in raw or '？' in raw):
+        return raw
+    return MIX_FIXED_COLOR
 
 def _load_spec(row):
     raw = _row_get(row, 'spec_json', 'spec')
@@ -1931,6 +1941,699 @@ def correct_rinko_yellow(c, data_dir=None):
                 'report': RINKO_YELLOW_REPORT,
                 'mixColors': list(RINKO_MIX_COLORS),
                 'policy': RINKO_YELLOW_POLICY,
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+# 鱗幸食品：訂正版 Excel Sheet1 230–231 行（大・小ネーム）に合わせる。
+# - 大ネーム：上下2段（上段自由入力 26pt／下段フルネーム・大汎用）、80×50、白衣左袖25cm
+# - 小ネーム：1段フルネーム・小汎用、50×24、白下ベルト後左／白帽子右耳上
+# - 色：先方から指定（赤・青・緑・白・黄色）＋役職対応。黄色専用見本は作らない（#105）
+# - 担当者・了承は勝手に変更しない。他顧客は変更しない。重複形式は追加しない。
+RINKO_LARGE_FORMAT_NAME = '大ネーム（上段自由入力・氏名）'
+RINKO_SMALL_FORMAT_NAME = '小ネーム（フルネーム）'
+RINKO_LARGE_PLACEMENT = '白衣：左袖25cm'
+RINKO_SMALL_PLACEMENT = '白下：ベルト後左　白帽子：右耳上'
+RINKO_FAMILY = 'HG丸ゴシック'
+# B2 汎用文字サイズ（小／大）
+RINKO_SMALL_GENERIC_PT = {4: 26, 5: 24, 6: 20}
+RINKO_LARGE_GENERIC_PT = {4: 48, 5: 38, 6: 30}
+RINKO_LARGE_UPPER_PT = 26
+RINKO_LARGE_WIDTH_MM = 80
+RINKO_LARGE_HEIGHT_MM = 50
+RINKO_SMALL_WIDTH_MM = 50
+RINKO_SMALL_HEIGHT_MM = 24
+RINKO_BAND_HEIGHT_MM = 25.0
+RINKO_SAMPLE_NAME = '山田 太郎'
+RINKO_SAMPLE_UPPER = '○○'  # 上段は自由入力。役職名などに置き換えない
+RINKO_COLOR_GROUPS = ['工場長・次長・課長', '主任・係長', '社員', 'パート', '特殊色']
+RINKO_COLOR_VALUES = ['赤', '緑', '青', '白', '黄']
+RINKO_COLOR_SWATCHES = ['#F08080', '#90EE90', '#87CEFA', '#FFFFFF', '#FFFFE0']
+RINKO_COLOR_CAPTION = (
+    '工場長・次長・課長：赤　主任・係長：緑　社員：青　パート：白　特殊色：黄'
+)
+RINKO_COLOR_NOTE = (
+    '用紙色は先方から指定（赤・青・緑・白・黄色）。'
+    '工場長・次長・課長：赤／主任・係長：緑／社員：青／パート：白／特殊色：黄。'
+    '黄色は5色見本の選択肢に含め、黄色専用の見本は持たない。'
+)
+RINKO_LARGE_HEADING = '上段：自由入力　下段：フルネーム（大汎用）'
+RINKO_LARGE_NOTE = (
+    f'{RINKO_COLOR_NOTE}\n'
+    '上段のみ左にインデント\n'
+    '上段帯：25mm／26pt／横左揃え・縦中央／'
+    '下段帯：25mm／大汎用（4文字48・5文字38・6文字30）／横中央・縦上揃え'
+    '（上下2段・合計50mm。段数欄の1より配置指定を優先）'
+)
+RINKO_SMALL_HEADING = 'フルネーム（小汎用）'
+RINKO_SMALL_NOTE = (
+    f'{RINKO_COLOR_NOTE}\n'
+    '1段・フルネーム／小汎用（4文字26・5文字24・6文字20）。'
+    '大ネームの上下帯指定は適用しない。'
+)
+RINKO_LARGE_SAMPLE_CAPTION = (
+    f'見本：上段自由入力「{RINKO_SAMPLE_UPPER}」・下段フルネーム「{RINKO_SAMPLE_NAME}」。'
+    '上段25mm（26pt・左インデント・縦中央）／下段25mm（大汎用・横中央・縦上揃え）。'
+    f'書体は{RINKO_FAMILY}（太字）。用紙色は先方から指定（赤・青・緑・白・黄色）。'
+)
+RINKO_SMALL_SAMPLE_CAPTION = (
+    f'見本：フルネーム「{RINKO_SAMPLE_NAME}」（小汎用・1段）。'
+    f'書体は{RINKO_FAMILY}（太字）。用紙色は先方から指定（赤・青・緑・白・黄色）。'
+)
+RINKO_NAMES_REPORT = 'rinko-name-formats-report.json'
+RINKO_NAMES_SETTINGS_KEY = 'rinko_name_formats'
+RINKO_NAMES_POLICY = 'excel-gojuon2-r230-231-v1'
+RINKO_SAMPLE_PX_PER_MM = 10
+
+def _rinko_char_count(text):
+    return len(re.sub(r'\s+', '', str(text or '')))
+
+def _rinko_generic_font_pt(kind, text):
+    n = _rinko_char_count(text)
+    table = RINKO_LARGE_GENERIC_PT if kind == 'large' else RINKO_SMALL_GENERIC_PT
+    if n <= 4:
+        return table[4]
+    if n == 5:
+        return table[5]
+    return table[6]
+
+def _rinko_large_bands():
+    lower_pt = _rinko_generic_font_pt('large', RINKO_SAMPLE_NAME)
+    return (
+        {
+            'role': 'upper', 'text': RINKO_SAMPLE_UPPER,
+            'heightMm': RINKO_BAND_HEIGHT_MM, 'fontPt': RINKO_LARGE_UPPER_PT,
+            'alignH': 'left', 'alignV': 'middle', 'indentMm': 4.0,
+        },
+        {
+            'role': 'name', 'text': RINKO_SAMPLE_NAME,
+            'heightMm': RINKO_BAND_HEIGHT_MM, 'fontPt': lower_pt,
+            'alignH': 'center', 'alignV': 'top', 'indentMm': 0.0,
+        },
+    )
+
+def _rinko_small_bands():
+    pt = _rinko_generic_font_pt('small', RINKO_SAMPLE_NAME)
+    return (
+        {
+            'role': 'name', 'text': RINKO_SAMPLE_NAME,
+            'heightMm': float(RINKO_SMALL_HEIGHT_MM), 'fontPt': pt,
+            'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0,
+        },
+    )
+
+def _rinko_spec(kind):
+    if kind == 'small':
+        bands = _rinko_small_bands()
+        return {
+            'mixColors': list(RINKO_MIX_COLORS),
+            'rinkoKind': 'small',
+            'rinkoPolicy': RINKO_NAMES_POLICY,
+            'bandFontsPt': [b['fontPt'] for b in bands],
+            'bandHeightsMm': [b['heightMm'] for b in bands],
+            'genericFontsPt': dict(RINKO_SMALL_GENERIC_PT),
+            'sampleName': RINKO_SAMPLE_NAME,
+            'colorRoles': dict(zip(RINKO_COLOR_GROUPS, RINKO_COLOR_VALUES)),
+        }
+    bands = _rinko_large_bands()
+    return {
+        'mixColors': list(RINKO_MIX_COLORS),
+        'rinkoKind': 'large',
+        'rinkoPolicy': RINKO_NAMES_POLICY,
+        'bandFontsPt': [b['fontPt'] for b in bands],
+        'bandHeightsMm': [b['heightMm'] for b in bands],
+        'genericFontsPt': dict(RINKO_LARGE_GENERIC_PT),
+        'upperFontPt': RINKO_LARGE_UPPER_PT,
+        'sampleUpper': RINKO_SAMPLE_UPPER,
+        'sampleName': RINKO_SAMPLE_NAME,
+        'colorRoles': dict(zip(RINKO_COLOR_GROUPS, RINKO_COLOR_VALUES)),
+    }
+
+def _rinko_format_kind(fmt):
+    """大／小の判定。該当しなければ None。"""
+    name = str(fmt['format_name'] or '')
+    try:
+        spec = json.loads(fmt['spec_json'] or '{}')
+    except (TypeError, json.JSONDecodeError):
+        spec = {}
+    kind = spec.get('rinkoKind')
+    if kind in ('large', 'small'):
+        return kind
+    if int(fmt['small'] or 0) == 1 or name.startswith('小ネーム'):
+        return 'small'
+    if name.startswith('大ネーム') or '上段自由' in name:
+        return 'large'
+    width = int(fmt['width_mm'] or 0)
+    height = int(fmt['height_mm'] or 0)
+    if width == RINKO_SMALL_WIDTH_MM and height == RINKO_SMALL_HEIGHT_MM:
+        return 'small'
+    if width == RINKO_LARGE_WIDTH_MM and height == RINKO_LARGE_HEIGHT_MM:
+        return 'large'
+    return None
+
+def _rinko_is_target_format(fmt, samples):
+    if not _format_has_mix(fmt, samples):
+        return False
+    return _rinko_format_kind(fmt) in ('large', 'small')
+
+def _rinko_groups_match(fmt):
+    try:
+        groups = json.loads(fmt['groups_json'] or '[]')
+        colors = json.loads(fmt['colors_json'] or '[]')
+        swatches = json.loads(fmt['swatches_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return groups == RINKO_COLOR_GROUPS and colors == RINKO_COLOR_VALUES and swatches == RINKO_COLOR_SWATCHES
+
+def _rinko_large_is_current(fmt, samples):
+    try:
+        spec = json.loads(fmt['spec_json'] or '{}')
+    except (TypeError, json.JSONDecodeError):
+        spec = {}
+    if str(fmt['format_name'] or '') != RINKO_LARGE_FORMAT_NAME:
+        return False
+    if str(fmt['placement'] or '') != RINKO_LARGE_PLACEMENT:
+        return False
+    if str(fmt['family'] or '') != RINKO_FAMILY:
+        return False
+    if str(fmt['heading'] or '') != RINKO_LARGE_HEADING:
+        return False
+    if str(fmt['note'] or '') != RINKO_LARGE_NOTE:
+        return False
+    if str(fmt['layout'] or '') != 'HeadingName':
+        return False
+    if str(fmt['reading'] or '') != 'フルネーム':
+        return False
+    if int(fmt['small'] or 0) != 0:
+        return False
+    if int(fmt['width_mm'] or 0) != RINKO_LARGE_WIDTH_MM or int(fmt['height_mm'] or 0) != RINKO_LARGE_HEIGHT_MM:
+        return False
+    if not _is_mix_color(fmt['fixed_color']):
+        return False
+    if str(fmt['color_caption'] or '') != RINKO_COLOR_CAPTION:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(RINKO_LARGE_GENERIC_PT[4]):
+        return False
+    if float(fmt['heading_font'] or 0) != float(RINKO_LARGE_UPPER_PT):
+        return False
+    if int(fmt['source_row'] or 0) != 230:
+        return False
+    if not _rinko_groups_match(fmt):
+        return False
+    if mix_colors_for(fmt) != RINKO_MIX_COLORS:
+        return False
+    if spec.get('rinkoPolicy') != RINKO_NAMES_POLICY or spec.get('rinkoKind') != 'large':
+        return False
+    kept = [s for s in samples if not _is_yellow_color(s['paper_color'])]
+    if len(kept) != 1 or any(_is_yellow_color(s['paper_color']) for s in samples):
+        return False
+    sample = kept[0]
+    if not _is_mix_color(sample['paper_color']):
+        return False
+    rel = str(sample['relative_path'] or '')
+    if not rel.startswith('images/names/') or 'rinko-large' not in Path(rel).name:
+        return False
+    if str(sample['caption'] or '') != RINKO_LARGE_SAMPLE_CAPTION:
+        return False
+    return True
+
+def _rinko_small_is_current(fmt, samples):
+    try:
+        spec = json.loads(fmt['spec_json'] or '{}')
+    except (TypeError, json.JSONDecodeError):
+        spec = {}
+    if str(fmt['format_name'] or '') != RINKO_SMALL_FORMAT_NAME:
+        return False
+    if str(fmt['placement'] or '') != RINKO_SMALL_PLACEMENT:
+        return False
+    if str(fmt['family'] or '') != RINKO_FAMILY:
+        return False
+    if str(fmt['heading'] or '') != RINKO_SMALL_HEADING:
+        return False
+    if str(fmt['note'] or '') != RINKO_SMALL_NOTE:
+        return False
+    if str(fmt['layout'] or '') != 'Name':
+        return False
+    if str(fmt['reading'] or '') != 'フルネーム':
+        return False
+    if int(fmt['small'] or 0) != 1:
+        return False
+    if int(fmt['width_mm'] or 0) != RINKO_SMALL_WIDTH_MM or int(fmt['height_mm'] or 0) != RINKO_SMALL_HEIGHT_MM:
+        return False
+    if not _is_mix_color(fmt['fixed_color']):
+        return False
+    if str(fmt['color_caption'] or '') != RINKO_COLOR_CAPTION:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(RINKO_SMALL_GENERIC_PT[4]):
+        return False
+    if float(fmt['heading_font'] or 0) != 0:
+        return False
+    if int(fmt['source_row'] or 0) != 231:
+        return False
+    if not _rinko_groups_match(fmt):
+        return False
+    if mix_colors_for(fmt) != RINKO_MIX_COLORS:
+        return False
+    if spec.get('rinkoPolicy') != RINKO_NAMES_POLICY or spec.get('rinkoKind') != 'small':
+        return False
+    kept = [s for s in samples if not _is_yellow_color(s['paper_color'])]
+    if len(kept) != 1 or any(_is_yellow_color(s['paper_color']) for s in samples):
+        return False
+    sample = kept[0]
+    if not _is_mix_color(sample['paper_color']):
+        return False
+    rel = str(sample['relative_path'] or '')
+    if not rel.startswith('images/names/') or 'rinko-small' not in Path(rel).name:
+        return False
+    if str(sample['caption'] or '') != RINKO_SMALL_SAMPLE_CAPTION:
+        return False
+    return True
+
+def _backup_rinko_format(c, root, backup_dir, fmt, samples):
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+def _write_rinko_sample(c, root, format_id, *, kind, paper_color):
+    """通常見本を1件に揃える。黄色専用見本は作らない。"""
+    if kind == 'small':
+        bands = _rinko_small_bands()
+        stem = 'rinko-small'
+        caption = RINKO_SMALL_SAMPLE_CAPTION
+        width_mm, height_mm = RINKO_SMALL_WIDTH_MM, RINKO_SMALL_HEIGHT_MM
+    else:
+        bands = _rinko_large_bands()
+        stem = 'rinko-large'
+        caption = RINKO_LARGE_SAMPLE_CAPTION
+        width_mm, height_mm = RINKO_LARGE_WIDTH_MM, RINKO_LARGE_HEIGHT_MM
+    rel = f'images/names/{stem}-{format_id:06}.png'
+    dst = root / rel
+    ok, note = _render_ashuka_banded_sample(
+        dst, bands, width_mm=width_mm, height_mm=height_mm, family_hint=RINKO_FAMILY,
+    )
+    if not ok:
+        return False, note, ''
+    # 黄色専用を含む既存見本を除き、先方指定の通常見本だけ残す
+    c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
+    c.execute(
+        '''INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)
+           VALUES(?,?,?,?,?,?)''',
+        (format_id, 'standard', '', paper_color, rel, caption),
+    )
+    return True, note, rel
+
+def _update_rinko_format_row(c, format_id, *, kind, existing_fixed_color):
+    fixed = _mix_color_label(existing_fixed_color)
+    groups = json.dumps(RINKO_COLOR_GROUPS, ensure_ascii=False)
+    colors = json.dumps(RINKO_COLOR_VALUES, ensure_ascii=False)
+    swatches = json.dumps(RINKO_COLOR_SWATCHES, ensure_ascii=False)
+    if kind == 'small':
+        values = (
+            RINKO_SMALL_FORMAT_NAME, RINKO_SMALL_PLACEMENT, RINKO_FAMILY, '',
+            RINKO_SMALL_HEADING, RINKO_SMALL_NOTE, 'Name', 'フルネーム',
+            1, RINKO_SMALL_WIDTH_MM, RINKO_SMALL_HEIGHT_MM, 0, fixed, RINKO_COLOR_CAPTION,
+            groups, colors, swatches, 'null',
+            '', RINKO_SMALL_GENERIC_PT[4], 0, 0, 231,
+            json.dumps(_rinko_spec('small'), ensure_ascii=False),
+            0, json.dumps([], ensure_ascii=False), 0, format_id,
+        )
+    else:
+        values = (
+            RINKO_LARGE_FORMAT_NAME, RINKO_LARGE_PLACEMENT, RINKO_FAMILY, '',
+            RINKO_LARGE_HEADING, RINKO_LARGE_NOTE, 'HeadingName', 'フルネーム',
+            0, RINKO_LARGE_WIDTH_MM, RINKO_LARGE_HEIGHT_MM, 0, fixed, RINKO_COLOR_CAPTION,
+            groups, colors, swatches, 'null',
+            '', RINKO_LARGE_GENERIC_PT[4], RINKO_LARGE_UPPER_PT, 0, 230,
+            json.dumps(_rinko_spec('large'), ensure_ascii=False),
+            0, json.dumps([], ensure_ascii=False), 0, format_id,
+        )
+    c.execute(
+        '''UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,
+            layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,
+            groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,
+            heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,
+            retired=0 WHERE id=?''',
+        values,
+    )
+
+def _patch_rinko_name_catalog(data_dir, backup_dir, items):
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return False
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    catalog_backup = backup_dir / 'catalog.json'
+    if not catalog_backup.exists():
+        shutil.copy2(path, catalog_backup)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    customers = {
+        item.get('sourceKey'): item
+        for item in (data.get('customers') or [])
+        if str(item.get('name') or '').strip() == RINKO_CUSTOMER_NAME
+    }
+    if not customers:
+        return False
+    by_id = {item.get('formatId'): item for item in items if item.get('formatId')}
+    changed = False
+    for fmt in data.get('formats') or []:
+        if fmt.get('customerKey') not in customers:
+            continue
+        item = by_id.get(fmt.get('dbId'))
+        if item is None:
+            name = str(fmt.get('format') or '')
+            for candidate in items:
+                if candidate.get('kind') == 'large' and (
+                    '上段自由' in name or name.startswith('大ネーム')
+                ):
+                    item = candidate
+                    break
+                if candidate.get('kind') == 'small' and name.startswith('小ネーム'):
+                    item = candidate
+                    break
+        if item is None:
+            continue
+        kind = item.get('kind')
+        if kind == 'small':
+            fmt['format'] = RINKO_SMALL_FORMAT_NAME
+            fmt['placement'] = RINKO_SMALL_PLACEMENT
+            fmt['heading'] = RINKO_SMALL_HEADING
+            fmt['note'] = RINKO_SMALL_NOTE
+            fmt['layout'] = 'Name'
+            fmt['reading'] = 'フルネーム'
+            fmt['small'] = True
+            fmt['widthMm'] = RINKO_SMALL_WIDTH_MM
+            fmt['heightMm'] = RINKO_SMALL_HEIGHT_MM
+            fmt['maximumFont'] = RINKO_SMALL_GENERIC_PT[4]
+            fmt['headingFont'] = 0
+            fmt['sourceRow'] = 231
+            caption = RINKO_SMALL_SAMPLE_CAPTION
+        else:
+            fmt['format'] = RINKO_LARGE_FORMAT_NAME
+            fmt['placement'] = RINKO_LARGE_PLACEMENT
+            fmt['heading'] = RINKO_LARGE_HEADING
+            fmt['note'] = RINKO_LARGE_NOTE
+            fmt['layout'] = 'HeadingName'
+            fmt['reading'] = 'フルネーム'
+            fmt['small'] = False
+            fmt['widthMm'] = RINKO_LARGE_WIDTH_MM
+            fmt['heightMm'] = RINKO_LARGE_HEIGHT_MM
+            fmt['maximumFont'] = RINKO_LARGE_GENERIC_PT[4]
+            fmt['headingFont'] = RINKO_LARGE_UPPER_PT
+            fmt['sourceRow'] = 230
+            caption = RINKO_LARGE_SAMPLE_CAPTION
+        fmt['family'] = RINKO_FAMILY
+        existing_fixed = fmt.get('fixedColor') or MIX_FIXED_COLOR
+        fmt['fixedColor'] = _mix_color_label(existing_fixed)
+        fmt['colorCaption'] = RINKO_COLOR_CAPTION
+        fmt['groups'] = list(RINKO_COLOR_GROUPS)
+        fmt['colors'] = list(RINKO_COLOR_VALUES)
+        fmt['swatches'] = list(RINKO_COLOR_SWATCHES)
+        for key, value in _rinko_spec(kind).items():
+            fmt[key] = value
+        # 黄色専用見本は載せない
+        fmt['samples'] = [{
+            'key': 'standard',
+            'condition': '',
+            'paperColor': fmt['fixedColor'],
+            'relativePath': item.get('samplePath') or '',
+            'caption': caption,
+        }]
+        changed = True
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+def correct_rinko_name_formats(c, data_dir=None):
+    """鱗幸食品の大・小ネームを Excel 230–231 行仕様へ更新する。
+
+    - 既存形式を更新し、同じ形式を重複追加しない
+    - 黄色は mixColors／説明に残し、黄色専用見本は削除・再追加しない
+    - 担当者は触らない。了承 digest は既存トリガのみ
+    """
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    customers = c.execute(
+        'SELECT id, source_name FROM name_customers WHERE retired=0 AND source_name=?',
+        (RINKO_CUSTOMER_NAME,),
+    ).fetchall()
+    if not customers:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': '鱗幸食品なし',
+            'customer': RINKO_CUSTOMER_NAME,
+            'policy': RINKO_NAMES_POLICY,
+        }
+
+    prior = c.execute(
+        'SELECT value FROM settings WHERE key=?',
+        (RINKO_NAMES_SETTINGS_KEY,),
+    ).fetchone()
+    prior_policy = ''
+    if prior:
+        try:
+            prior_policy = json.loads(prior['value'] or '{}').get('policy') or ''
+        except (TypeError, json.JSONDecodeError):
+            prior_policy = ''
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'rinko-names-{stamp}'
+    items = []
+    customer = customers[0]
+    formats = list(c.execute(
+        'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+        (customer['id'],),
+    ).fetchall())
+    samples_by_fid = {}
+    for fmt in formats:
+        samples_by_fid[fmt['id']] = list(c.execute(
+            'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+            (fmt['id'],),
+        ).fetchall())
+
+    large = None
+    small = None
+    for fmt in formats:
+        samples = samples_by_fid.get(fmt['id'], [])
+        if not _rinko_is_target_format(fmt, samples):
+            continue
+        kind = _rinko_format_kind(fmt)
+        if kind == 'large' and large is None:
+            large = fmt
+        elif kind == 'small' and small is None:
+            small = fmt
+
+    needs = False
+    if large is None or not _rinko_large_is_current(large, samples_by_fid.get(large['id'], [])):
+        needs = True
+    if small is None or not _rinko_small_is_current(small, samples_by_fid.get(small['id'], [])):
+        needs = True
+
+    catalog_path = root / 'name-import' / 'catalog.json'
+    catalog_needs = False
+    if catalog_path.is_file():
+        try:
+            catalog_data = json.loads(catalog_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            catalog_data = None
+        if catalog_data:
+            cat_customers = {
+                item.get('sourceKey')
+                for item in (catalog_data.get('customers') or [])
+                if str(item.get('name') or '').strip() == RINKO_CUSTOMER_NAME
+            }
+            for fmt in catalog_data.get('formats') or []:
+                if fmt.get('customerKey') not in cat_customers:
+                    continue
+                name = str(fmt.get('format') or '')
+                is_large = '上段自由' in name or (name.startswith('大ネーム') and not name.startswith('小'))
+                is_small = name.startswith('小ネーム')
+                if not (is_large or is_small):
+                    continue
+                if fmt.get('rinkoPolicy') != RINKO_NAMES_POLICY:
+                    catalog_needs = True
+                    break
+                samples = list(fmt.get('samples') or [])
+                if any(_is_yellow_color(s.get('paperColor')) for s in samples):
+                    catalog_needs = True
+                    break
+
+    policy_needs = prior_policy != RINKO_NAMES_POLICY
+    if not needs and not catalog_needs and not policy_needs:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': '適用済み' if prior else '対象形式なし',
+            'customer': RINKO_CUSTOMER_NAME,
+            'policy': RINKO_NAMES_POLICY,
+        }
+
+    if not needs and not catalog_needs and policy_needs:
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                RINKO_NAMES_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': RINKO_NAMES_REPORT,
+                    'policy': RINKO_NAMES_POLICY,
+                    'mixColors': list(RINKO_MIX_COLORS),
+                }, ensure_ascii=False),
+            ),
+        )
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'policy更新のみ',
+            'customer': RINKO_CUSTOMER_NAME,
+            'policy': RINKO_NAMES_POLICY,
+        }
+
+    for kind, fmt in (('large', large), ('small', small)):
+        if fmt is None:
+            items.append({
+                'kind': kind,
+                'action': 'missing',
+                'reason': f'鱗幸食品に{"大" if kind == "large" else "小"}ネーム（先方指定）が無いためスキップ（新規追加しない）',
+            })
+            continue
+        samples = samples_by_fid.get(fmt['id'], [])
+        is_current = (
+            _rinko_large_is_current(fmt, samples) if kind == 'large'
+            else _rinko_small_is_current(fmt, samples)
+        )
+        if is_current:
+            continue
+        _backup_rinko_format(c, root, backup_dir, fmt, samples)
+        _update_rinko_format_row(c, fmt['id'], kind=kind, existing_fixed_color=fmt['fixed_color'])
+        paper = _mix_color_label(fmt['fixed_color'])
+        ok, note, rel = _write_rinko_sample(c, root, fmt['id'], kind=kind, paper_color=paper)
+        removed_yellow = []
+        for sample in samples:
+            if not _is_yellow_color(sample['paper_color']):
+                continue
+            yellow_rel = str(sample['relative_path'] or '')
+            image_action = 'none'
+            if yellow_rel and _is_generated_yellow_image(yellow_rel):
+                src_path = root / yellow_rel
+                if src_path.is_file():
+                    still_used = c.execute(
+                        'SELECT 1 FROM name_samples WHERE relative_path=? LIMIT 1',
+                        (yellow_rel,),
+                    ).fetchone()
+                    if not still_used:
+                        src_path.unlink(missing_ok=True)
+                        image_action = 'deleted'
+                    else:
+                        image_action = 'kept-shared'
+                else:
+                    image_action = 'missing'
+            elif yellow_rel:
+                # 生成サフィックス以外でも、もう参照されない黄色専用画像は削除
+                src_path = root / yellow_rel
+                if src_path.is_file():
+                    still_used = c.execute(
+                        'SELECT 1 FROM name_samples WHERE relative_path=? LIMIT 1',
+                        (yellow_rel,),
+                    ).fetchone()
+                    if not still_used:
+                        src_path.unlink(missing_ok=True)
+                        image_action = 'deleted'
+                    else:
+                        image_action = 'kept-shared'
+            removed_yellow.append({
+                'sampleId': sample['id'],
+                'relativePath': yellow_rel,
+                'imageAction': image_action,
+            })
+        items.append({
+            'kind': kind,
+            'action': 'update',
+            'formatId': fmt['id'],
+            'number': _number(fmt['id']),
+            'identity': fmt['identity'],
+            'formatBefore': fmt['format_name'],
+            'formatAfter': RINKO_LARGE_FORMAT_NAME if kind == 'large' else RINKO_SMALL_FORMAT_NAME,
+            'samplePath': rel,
+            'sampleOk': ok,
+            'sampleNote': note,
+            'removedYellowSamples': removed_yellow,
+        })
+
+    catalog_changed = _patch_rinko_name_catalog(root, backup_dir, items) if items or catalog_needs else False
+    changed = sum(1 for i in items if i.get('action') == 'update')
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'customer': RINKO_CUSTOMER_NAME,
+        'policy': RINKO_NAMES_POLICY,
+        'mixColors': list(RINKO_MIX_COLORS),
+        'colorRoles': dict(zip(RINKO_COLOR_GROUPS, RINKO_COLOR_VALUES)),
+        'b2': {
+            'smallGenericPt': dict(RINKO_SMALL_GENERIC_PT),
+            'largeGenericPt': dict(RINKO_LARGE_GENERIC_PT),
+            'raw': '小汎用（4文字26　5文字24　6文字20)　大汎用 (4文字48　5文字38　6文字30)',
+        },
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'rules': {
+            'onlyCustomer': RINKO_CUSTOMER_NAME,
+            'onlyLargeSmallMix': True,
+            'preferTwoBandOverExcelCount': True,
+            'keepFreeUpperInput': True,
+            'noSoloYellowSamples': True,
+            'noDuplicateFormats': True,
+            'noAutoApprove': True,
+            'preserveAssignee': True,
+            'preserveMixQuestionMark': True,
+        },
+        'items': items,
+    }
+    report_path = root / RINKO_NAMES_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            RINKO_NAMES_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': RINKO_NAMES_REPORT,
+                'policy': RINKO_NAMES_POLICY,
+                'mixColors': list(RINKO_MIX_COLORS),
             }, ensure_ascii=False),
         ),
     )
@@ -2896,6 +3599,7 @@ def import_catalog(connect, data_dir):
         # 女性見本の画像変換は import_catalog では行わない（起動・取込を軽く保つ）。
         # 必要なときは maintain_female_sample_hanako.py を明示実行する。
         correct_rinko_yellow(c, data_dir)
+        correct_rinko_name_formats(c, data_dir)
         correct_ashuka_name_formats(c, data_dir)
     return summary
 
