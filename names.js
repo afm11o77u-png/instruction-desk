@@ -13,7 +13,7 @@ function nameMixGradient(list){
  return `linear-gradient(135deg,${colors.map((c,i)=>{const hex=solidPaperSwatch(c);const a=((i/n)*100).toFixed(4);const b=(((i+1)/n)*100).toFixed(4);return `${hex} ${a}%,${hex} ${b}%`}).join(',')})`;
 }
 const nameMixBackground=nameMixGradient(DEFAULT_MIX_COLORS);
-function nameIsMix(value){return String(value||'').trim()==='先方から指定'}
+function nameIsMix(value){return String(value||'').replace(/[?？]/g,'').trim()==='先方から指定'}
 function nameMixNote(value,mixColors){
  if(!nameIsMix(value))return '';
  const colors=nameMixColors(mixColors);
