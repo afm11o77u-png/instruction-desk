@@ -54,28 +54,24 @@ class LabelPasteAssetsTest(unittest.TestCase):
     def test_print_mapping_still_four_corners(self):
         # 既存：labelOrders → queuePrint → addressTags が 4面（左上・右上・左下・右下）
         self.assertIn("const labelPlaces=['左上','右上','左下','右下']", SHEET)
-        self.assertIn(
-            'queuePrint(list,true,true,true,false,currentLabelPattern(),currentLabelShowRequest())',
-            SHEET,
-        )
+        self.assertIn('queuePrint(list,true,true,true,false,currentLabelPattern())', SHEET)
         self.assertIn('function addressTags(', SHEET)
 
-    def test_hide_request_print_option_wires_without_touching_slots(self):
-        self.assertIn('id="labelrequestshowbox"', INDEX)
-        self.assertIn('name="labelrequestshow"', INDEX)
-        self.assertIn('value="1" checked', INDEX)
-        self.assertIn('表示しない', INDEX)
-        self.assertIn('function currentLabelShowRequest()', SHEET)
+    def test_request_hide_option_on_row_and_bulk(self):
+        # グローバル印刷切替は撤去。表示なしは受付内容の選択肢。
+        self.assertNotIn('labelrequestshowbox', INDEX)
+        self.assertNotIn('name="labelrequestshow"', INDEX)
+        self.assertNotIn('受付内容の印刷', INDEX)
+        self.assertIn('id="labelrequestbulk"', INDEX)
+        self.assertIn('<option>表示なし</option>', INDEX)
+        self.assertIn('<option>表示なし</option>', SHEET)
         self.assertIn('taghidejob', SHEET)
         self.assertIn('labelPrintShowsRequest', SHEET)
         paste = (ROOT / 'label_paste.js').read_text(encoding='utf-8')
+        self.assertIn("LABEL_REQUEST_HIDE = '表示なし'", paste)
         self.assertIn('function labelPrintShowsRequest', paste)
-        # 保存は pattern + slots のみ（表示設定を payload に混ぜない）
-        self.assertIn('slots:labelSlots(),pattern:currentLabelPattern()', SHEET)
-        self.assertNotIn('showRequest:currentLabelShowRequest()', SHEET)
-        # 一括設定 UI は維持（衝突しない）
-        self.assertIn('id="labelrequestbulk"', INDEX)
         self.assertIn('planLabelRequestBatch', SHEET)
+        self.assertIn('slots:labelSlots(),pattern:currentLabelPattern()', SHEET)
 
     def test_node_unit_suite(self):
         script = ROOT / 'tests' / 'test_label_paste.js'

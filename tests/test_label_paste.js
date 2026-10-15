@@ -158,6 +158,7 @@ const {
   planLabelRequestBatch,
   labelPrintShowsRequest,
   LABEL_REQUEST_OPTIONS,
+  LABEL_REQUEST_HIDE,
 } = require(path.join(__dirname, '../label_paste.js'))
 
 assert.strictEqual(labelCardHasAddress({ customer: 'A' }), true)
@@ -202,12 +203,26 @@ const batchBad = planLabelRequestBatch({ request: '存在しない', slots: [{ c
 assert.strictEqual(batchBad.ok, false)
 assert.strictEqual(batchBad.reason, 'invalid')
 
-// 受付内容の印刷表示切替（データは変えない／デフォルトは表示）
-assert.strictEqual(labelPrintShowsRequest(true), true)
-assert.strictEqual(labelPrintShowsRequest(undefined), true)
-assert.strictEqual(labelPrintShowsRequest('1'), true)
-assert.strictEqual(labelPrintShowsRequest(false), false)
-assert.strictEqual(labelPrintShowsRequest(0), false)
-assert.strictEqual(labelPrintShowsRequest('0'), false)
+// 「表示なし」は印刷非表示用の専用値（業務の受付内容と区別）
+assert.strictEqual(LABEL_REQUEST_HIDE, '表示なし')
+assert.ok(LABEL_REQUEST_OPTIONS.includes('表示なし'))
+assert.strictEqual(labelPrintShowsRequest('新規'), true)
+assert.strictEqual(labelPrintShowsRequest('消耗・破損交換'), true)
+assert.strictEqual(labelPrintShowsRequest(''), true)
+assert.strictEqual(labelPrintShowsRequest('表示なし'), false)
+assert.strictEqual(labelPrintShowsRequest(' 表示なし '), false)
+
+const batchHide = planLabelRequestBatch({
+  request: '表示なし',
+  slots: [
+    { customer: '顧客A', request: '新規' },
+    { customer: '', management: '', department: '', employee: '', request: '消耗・破損交換' },
+    { customer: '顧客C', employee: '佐藤', request: '復職' },
+  ],
+})
+assert.strictEqual(batchHide.ok, true)
+assert.strictEqual(batchHide.value, '表示なし')
+assert.deepStrictEqual(batchHide.targets, [0, 2])
+assert.strictEqual(batchHide.confirmMessage, "2件の受付内容を『表示なし』に変更します。よろしいですか？")
 
 console.log('All label paste unit tests passed')

@@ -100,6 +100,27 @@ class LabelSetsPatternTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(saved['payload']['pattern'], '4')
 
+    def test_save_keeps_request_hide_sentinel(self):
+        status, saved = label_sets.handle(
+            _handler(),
+            self.c,
+            '/api/label-sets/save',
+            {
+                'name': '非表示混在',
+                'pattern': '4',
+                'slots': [
+                    self._slot(request='表示なし'),
+                    self._slot(customer='他社', employee='花子', request='新規'),
+                    {},
+                    {},
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(saved['payload']['slots'][0]['request'], '表示なし')
+        self.assertEqual(saved['payload']['slots'][0]['customer'], 'サザエ食品')
+        self.assertEqual(saved['payload']['slots'][1]['request'], '新規')
+
 
 class LabelDeskAssetsTest(unittest.TestCase):
     def test_sheet_js_has_three_line_and_notice_hooks(self):
@@ -111,7 +132,7 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'normalizeLabelPayload',
             'formatNoticeDate',
             'queueNoticePrint',
-            "queuePrint(list,true,true,true,false,currentLabelPattern(),currentLabelShowRequest())",
+            "queuePrint(list,true,true,true,false,currentLabelPattern())",
             'pattern:currentLabelPattern()',
         ):
             self.assertIn(needle, src)
@@ -122,8 +143,6 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'labelmodeaddress',
             'labelmodenotice',
             'name="labelpattern"',
-            'name="labelrequestshow"',
-            'labelrequestshowbox',
             'labelnoticepanel',
             'id="noticeto"',
             'id="noticedate"',
@@ -132,19 +151,21 @@ class LabelDeskAssetsTest(unittest.TestCase):
             'class="labelcol-mid"',
             'value="サザエ食品"',
             'value="宮の森事務所"',
+            '表示なし',
         ):
             self.assertIn(needle, html)
+        self.assertNotIn('labelrequestshowbox', html)
+        self.assertNotIn('name="labelrequestshow"', html)
 
-    def test_sheet_js_hides_request_row_on_print_only(self):
+    def test_sheet_js_hides_request_row_per_slot(self):
         src = (ROOT / 'sheet.js').read_text(encoding='utf-8')
-        self.assertIn('currentLabelShowRequest', src)
+        self.assertNotIn('currentLabelShowRequest', src)
         self.assertIn("tag.classList.add('taghidejob')", src)
         self.assertIn('if(withJob)tag.append(body,job);else tag.append(body)', src)
-        self.assertIn(
-            'queuePrint(list,true,true,true,false,currentLabelPattern(),currentLabelShowRequest())',
-            src,
-        )
-        # 段数切替で消すのは管理番号・部署のみ。受付内容の入力値は消さない。
+        self.assertIn('labelPrintShowsRequest(order.request)', src)
+        self.assertIn('queuePrint(list,true,true,true,false,currentLabelPattern())', src)
+        self.assertIn('<option>表示なし</option>', src)
+        # 段数切替で消すのは管理番号・部署のみ。
         self.assertIn('data-key="management"],[data-key="department"]', src)
         clear_request = "[data-key=\"request\"]').forEach(el=>{el.value=''})"
         self.assertNotIn(clear_request, src)
