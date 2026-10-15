@@ -162,7 +162,9 @@ def correct_customer_names(c):
 # v4=画素テンプレ照合の主経路を廃止。登録 layout / 書体 / 寸法 / 最大フォントと
 #     元画像の用紙色・キャンバスを再利用し、氏名のみレイアウトを「山田花子」で再生成。
 #     再生成できない見本は推測上書きせず保留（画素マッチへフォールバックしない）。
-FEMALE_HANAKO_RULE_VERSION = 4
+# v5=DeptName / HeadingName / SplitNumber も氏名領域だけ差し替えて再生成。
+#     部署・見出し・番号などは元キャンバスを保持。Surname（苗字のみ）は対象外（失敗に含めない）。
+FEMALE_HANAKO_RULE_VERSION = 5
 FEMALE_MAINTENANCE_ENV = 'DESK_RUN_FEMALE_IMAGE_MAINTENANCE'
 FEMALE_MARK = re.compile(r'女性')
 MALE_OR_SHARED_MARK = re.compile(r'男性|男女共用|男女共通|男女兼用')
@@ -172,8 +174,13 @@ YAMADA_TARO_TO_HANAKO = (
     ('山田 太郎', '山田 花子'),
     ('山田太郎', '山田花子'),
 )
-# 元ソフトのレイアウトコード。氏名だけの形式だけ再生成する（部署・番号・QR等は保留）。
-REGENERABLE_NAME_LAYOUTS = frozenset({'Name'})
+# 氏名のみ: キャンバスを用紙色で塗り直し氏名を再描画
+REGENERABLE_NAME_ONLY_LAYOUTS = frozenset({'Name'})
+# 複合: 元画像を保持し氏名印字だけ差し替え（部署・見出し・番号等を残す）
+REGENERABLE_COMPOSITE_LAYOUTS = frozenset({'DeptName', 'HeadingName', 'SplitNumber'})
+REGENERABLE_NAME_LAYOUTS = REGENERABLE_NAME_ONLY_LAYOUTS | REGENERABLE_COMPOSITE_LAYOUTS
+# 苗字のみは氏名置換の対象外（失敗件数に入れない）
+SURNAME_EXCLUDED_LAYOUTS = frozenset({'Surname'})
 FEMALE_HANAKO_REPORT = 'female-sample-hanako-report.json'
 FEMALE_HANAKO_PROGRESS = 'female-sample-hanako-progress.json'
 FEMALE_HANAKO_SETTINGS_KEY = 'female_sample_hanako'
@@ -565,19 +572,33 @@ def _fit_font_to_box(text, family_hint, target_w, target_h, prefer_size):
     return best_font, best
 
 def _regeneration_hold_reason(candidate):
-    """再生成できないときの保留理由。画素マッチへは落とさない。"""
+    """再生成できないときの保留理由。閾値緩和や推測描き直しへは落とさない。"""
     layout = str(candidate.get('layout') or '').strip()
     if candidate.get('blank'):
         return '無地見本のため氏名再生成の対象外'
+    if layout in SURNAME_EXCLUDED_LAYOUTS:
+        return '苗字のみ（layout=Surname）は対象外'
     if not layout:
         return 'layout未設定のため再生成に必要な配置情報が不足（推測上書きしない）'
     if layout not in REGENERABLE_NAME_LAYOUTS:
         label = LAYOUTS.get(layout, layout)
         return (
-            f'layout={layout}（{label}）は氏名以外の要素を含む可能性があるため保留'
-            '（部署・番号・バーコード等を推測再生成しない）'
+            f'layout={layout}（{label}）は対応する再生成手順が未実装のため保留'
+            '（QR・役職・複数行氏名等を推測再生成しない）'
         )
     return ''
+
+def _composite_font_sizes(image, width_mm, height_mm, maximum_font, ink_box):
+    """複合レイアウト用。メタ由来サイズを優先し、近傍と画像高さ比率を試す。"""
+    prefer = _font_px_from_meta(image, width_mm, height_mm, maximum_font, ink_box)
+    sizes = {max(8, prefer)}
+    for delta in range(1, 12):
+        sizes.add(max(8, prefer - delta))
+        sizes.add(prefer + delta)
+    # 画像高さ比率（氏名行の一般的なサイズ帯）。閾値は緩めない。
+    for ratio in (0.12, 0.15, 0.18, 0.2, 0.22, 0.25, 0.28, 0.3, 0.33, 0.35, 0.4):
+        sizes.add(max(8, int(image.height * ratio)))
+    return sorted(sizes, key=lambda size: (abs(size - prefer), size))
 
 def _regenerate_name_sample(
     src_path, dst_path, *, name_text, family_hint='', maximum_font=0,
@@ -663,6 +684,128 @@ def _regenerate_name_sample(
         save_kw['quality'] = 95
     work.save(dst_path, format=fmt, **save_kw)
     return True, f'layout=Name を氏名 {name_text} で再生成 (fontPx={used_size or prefer})'
+
+def _regenerate_composite_name_sample(
+    src_path, dst_path, *, name_text, family_hint='', maximum_font=0,
+    width_mm=0, height_mm=0, layout='', progress_callback=None,
+):
+    """部署・見出し・番号付き見本で、氏名印字だけを山田花子に差し替える。
+
+    元キャンバスを複製し、山田太郎系の印字位置を登録フォント情報＋テンプレ照合で
+    特定して同位置へ花子を描く。部署名・見出し・番号・バーコード・罫線は元のまま。
+    照合閾値は緩和しない。検出できない場合は氏名のみ画像への作り直しをせず失敗。
+    """
+    try:
+        from PIL import Image, ImageDraw
+    except ImportError:
+        return False, 'Pillowがありません'
+    try:
+        image = Image.open(src_path).convert('RGB')
+    except OSError as exc:
+        return False, str(exc)
+    bg = _corner_background(image)
+    ink_box = _ink_bbox(image, bg)
+    if not ink_box:
+        return False, '印字領域を特定できないため複合レイアウト再生成を保留'
+    sizes = _composite_font_sizes(image, width_mm, height_mm, maximum_font, ink_box)
+    work = image.copy()
+    layout_code = str(layout or '').strip() or 'composite'
+    last_note = '画像内に山田太郎系の氏名印字を検出できないため保留（推測描き直ししない）'
+    # name_text に対応する太郎形を先に試し、続けて全バリエーション
+    preferred = []
+    for old, new in YAMADA_TARO_TO_HANAKO:
+        if str(name_text or '') == new:
+            preferred.append((old, new))
+    image_variants = preferred + [pair for pair in YAMADA_TARO_TO_HANAKO if pair not in preferred]
+    variant_total = len(image_variants)
+    replaced = 0
+    used_size = 0
+    used_old = ''
+    for variant_index, (old, new) in enumerate(image_variants, start=1):
+        size_total = len(sizes)
+        for size_index, size in enumerate(sizes, start=1):
+            if progress_callback:
+                progress_callback({
+                    'phase': 'image-try',
+                    'method': 'regenerate-composite',
+                    'variant': old,
+                    'variantIndex': variant_index,
+                    'variantTotal': variant_total,
+                    'size': size,
+                    'sizeIndex': size_index,
+                    'sizeTotal': size_total,
+                    'width': work.width,
+                    'height': work.height,
+                    'layout': layout_code,
+                })
+            font = _load_font(size, family_hint)
+            if font is None:
+                last_note = '利用可能なフォントがありません（Windows のゴシック系／HG丸ゴシックを優先）'
+                continue
+            probe = Image.new('L', (1, 1))
+            box = ImageDraw.Draw(probe).textbbox((0, 0), old, font=font)
+            tw, th = max(1, box[2] - box[0] + 4), max(1, box[3] - box[1] + 4)
+            if tw >= work.width or th >= work.height:
+                continue
+            needle = Image.new('RGB', (tw, th), bg)
+            ImageDraw.Draw(needle).text((2, 2), old, font=font, fill=(0, 0, 0))
+            ink = _ink_mass(needle, bg)
+            if ink < 400:
+                continue
+            # 閾値は従来どおり（緩和禁止）
+            threshold = ink * 0.55
+            match = _match_template(work, needle, step=2, max_score=threshold)
+            if not match:
+                continue
+            x, y, score = match
+            if score >= threshold:
+                continue
+            ImageDraw.Draw(work).rectangle([x, y, x + tw, y + th], fill=bg)
+            ImageDraw.Draw(work).text((x + 2, y + 2), new, font=font, fill=(0, 0, 0))
+            replaced += 1
+            used_size = size
+            used_old = old
+            break
+        if replaced:
+            break
+    if not replaced:
+        return False, last_note
+    if work.tobytes() == image.tobytes():
+        return False, '再生成結果が元画像と同じでした'
+    # 氏名以外が大きく消えていないか（元画像の大半が残っていること）
+    if _HAS_NUMPY:
+        diff = _np.abs(
+            _np.asarray(work, dtype=_np.int16) - _np.asarray(image, dtype=_np.int16)
+        ).sum(axis=2)
+        changed_px = int((diff > 12).sum())
+    else:
+        changed_px = 0
+        a = image.load()
+        b = work.load()
+        for yy in range(image.height):
+            for xx in range(image.width):
+                pa, pb = a[xx, yy], b[xx, yy]
+                if abs(pa[0] - pb[0]) + abs(pa[1] - pb[1]) + abs(pa[2] - pb[2]) > 36:
+                    changed_px += 1
+    max_changed = max(800, int(image.width * image.height * 0.22))
+    if changed_px > max_changed:
+        return False, (
+            f'氏名以外の領域まで変化したため保留（changedPx={changed_px}）。'
+            '複合見本を氏名のみ画像に作り直さない'
+        )
+    new_ink = _ink_bbox(work, bg)
+    if not new_ink:
+        return False, '再生成後に印字がありません'
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = 'PNG' if dst_path.suffix.lower() == '.png' else 'JPEG' if dst_path.suffix.lower() in ('.jpg', '.jpeg') else 'WEBP'
+    save_kw = {}
+    if fmt == 'JPEG':
+        save_kw['quality'] = 95
+    work.save(dst_path, format=fmt, **save_kw)
+    return True, (
+        f'layout={layout_code} の氏名領域を {used_old}→{name_text} で再生成 '
+        f'(fontPx={used_size}, changedPx={changed_px})'
+    )
 
 def _rewrite_name_pixels(src_path, dst_path, family_hint='', progress_callback=None):
     """レガシー: 画素テンプレ照合による描き換え（主経路では呼ばない）。"""
@@ -857,6 +1000,7 @@ def _female_candidate_from_row(row, path_users, completed_ids):
     rel = row['relative_path'] or ''
     already_forked = FEMALE_IMAGE_SUFFIX in Path(rel).stem if rel else False
     sample_id = int(row['sample_id'])
+    layout = str(row.get('layout') or '').strip()
     base = {
         'sampleId': sample_id,
         'formatId': row['format_id'],
@@ -867,7 +1011,7 @@ def _female_candidate_from_row(row, path_users, completed_ids):
         'paperColor': row['paper_color'],
         'variantKey': row['variant_key'],
         'family': row.get('family') or '',
-        'layout': row.get('layout') or '',
+        'layout': layout,
         'widthMm': row.get('width_mm') or 0,
         'heightMm': row.get('height_mm') or 0,
         'maximumFont': row.get('maximum_font') or 0,
@@ -886,8 +1030,17 @@ def _female_candidate_from_row(row, path_users, completed_ids):
         if needs_caption:
             base['status'] = 'excluded'
             base['reason'] = '女性区分ではないためcaptionも維持'
+            base['excludedKind'] = 'non-female'
             return base
         return None
+    # 苗字のみ layout は氏名置換の対象外（失敗件数に含めない）
+    if layout in SURNAME_EXCLUDED_LAYOUTS:
+        base['status'] = 'excluded'
+        base['reason'] = '苗字のみ（layout=Surname / 「山田」のみ）は対象外（山田のまま）'
+        base['excludedKind'] = 'surname'
+        base['needsCaption'] = False
+        base['newCaption'] = caption
+        return base
     if sample_id in completed_ids and already_forked and not needs_caption:
         base['status'] = 'already-complete'
         base['reason'] = '完了済みのため再変換しない'
@@ -918,12 +1071,20 @@ def _female_candidate_from_row(row, path_users, completed_ids):
 def _prepare_female_image(candidate, root, backup_dir, progress_callback=None):
     """DB 非接続で画像を用意する。成功時だけ newRelativePath を返す。
 
-    主経路は layout=Name の再生成。再生成不可は保留（画素マッチへ落とさない）。
+    Name は氏名のみ再描画。DeptName / HeadingName / SplitNumber は元画像を保持して
+    氏名領域だけ差し替え。再生成不可は保留（閾値緩和や氏名のみ画像への作り直しはしない）。
     """
     rel = candidate['oldRelativePath'] or ''
     entry = dict(candidate)
     entry['imageAction'] = 'none'
     entry['imageNote'] = ''
+    layout = str(candidate.get('layout') or '').strip()
+    if layout in SURNAME_EXCLUDED_LAYOUTS:
+        entry['status'] = 'excluded'
+        entry['reason'] = '苗字のみ（layout=Surname）は対象外（山田のまま）'
+        entry['excludedKind'] = 'surname'
+        entry['imageAction'] = 'excluded-surname'
+        return entry
     if not rel:
         entry['status'] = 'ready-caption-only'
         return entry
@@ -952,23 +1113,30 @@ def _prepare_female_image(candidate, root, backup_dir, progress_callback=None):
     shared = candidate.get('shared')
     candidate_rel = _female_image_rel(rel) if (shared or not already_forked) else rel
     dst = root / candidate_rel
-    ok, note = _regenerate_name_sample(
-        src,
-        dst,
-        name_text=candidate.get('imageName') or _yamada_hanako_label(candidate.get('oldCaption') or ''),
+    name_text = candidate.get('imageName') or _yamada_hanako_label(candidate.get('oldCaption') or '')
+    common = dict(
+        name_text=name_text,
         family_hint=candidate.get('family') or '',
         maximum_font=candidate.get('maximumFont') or 0,
         width_mm=candidate.get('widthMm') or 0,
         height_mm=candidate.get('heightMm') or 0,
         progress_callback=progress_callback,
     )
+    if layout in REGENERABLE_COMPOSITE_LAYOUTS:
+        ok, note = _regenerate_composite_name_sample(
+            src, dst, layout=layout, **common,
+        )
+        success_note = note or f'layout={layout} の氏名領域を山田花子で再生成'
+    else:
+        ok, note = _regenerate_name_sample(src, dst, **common)
+        success_note = note or '氏名のみ見本を山田花子で再生成'
     if ok:
         entry['newRelativePath'] = candidate_rel
         entry['imageAction'] = 'forked-regenerated' if candidate_rel != rel else 'regenerated'
-        entry['imageNote'] = note or '氏名のみ見本を山田花子で再生成'
+        entry['imageNote'] = success_note
         entry['status'] = 'ready'
         return entry
-    # 再生成失敗 → caption だけの「完了」にしない。元のまま・再実行可。画素マッチしない。
+    # 再生成失敗 → caption だけの「完了」にしない。元のまま・再実行可。閾値緩和しない。
     entry['status'] = 'failed'
     entry['imageAction'] = 'regenerate-failed'
     entry['imageNote'] = note or '再生成に失敗したため保留'
@@ -1015,10 +1183,18 @@ def _commit_female_sample(c, prepared):
 def _write_female_hanako_report(root, backup_dir, stamp, items, excluded, failed, conflicts, skipped):
     changed_items = [item for item in items if item.get('status') == 'changed']
     catalog_changed = _patch_female_catalog(root, backup_dir, changed_items)
+    surname_excluded = [item for item in excluded if item.get('excludedKind') == 'surname']
+    other_excluded = [item for item in excluded if item.get('excludedKind') != 'surname']
+    failed_by_layout = {}
+    for item in failed:
+        key = str(item.get('layout') or '(none)')
+        failed_by_layout[key] = failed_by_layout.get(key, 0) + 1
     report = {
         'at': stamp,
         'changed': len(changed_items),
         'failed': len(failed),
+        'excluded': len(excluded),
+        'excludedSurname': len(surname_excluded),
         'conflicts': len(conflicts),
         'skippedComplete': len(skipped),
         'catalogSamplesPatched': catalog_changed,
@@ -1026,22 +1202,31 @@ def _write_female_hanako_report(root, backup_dir, stamp, items, excluded, failed
         'ruleVersion': FEMALE_HANAKO_RULE_VERSION,
         'maintenanceEnv': FEMALE_MAINTENANCE_ENV,
         'rule': {
-            'include': ['女性', '女性用', '女性専用'],
-            'exclude': ['男性', '男性用', '男性専用', '男女共用', '男女共通', '男女兼用', '色名のみ（例: 赤）', '判別不能'],
+            'include': ['女性', '女性用', '女性専用', '女性／…（複合条件）'],
+            'exclude': [
+                '男性', '男性用', '男性専用', '男女共用', '男女共通', '男女兼用',
+                '色名のみ（例: 赤）', '判別不能', '苗字のみ（Surname / 「山田」のみ）',
+            ],
             'nameReplace': list(YAMADA_TARO_TO_HANAKO),
             'keepSurnameOnly': True,
             'colorAloneNotFemale': True,
             'imageRequiredWhenPresent': True,
             'noStartupConversion': True,
-            'imageStrategy': 'regenerate-name-layout',
+            'imageStrategy': 'regenerate-name-or-composite',
             'regenerableLayouts': sorted(REGENERABLE_NAME_LAYOUTS),
-            'noPixelMatchFallback': True,
+            'nameOnlyLayouts': sorted(REGENERABLE_NAME_ONLY_LAYOUTS),
+            'compositeLayouts': sorted(REGENERABLE_COMPOSITE_LAYOUTS),
+            'surnameExcludedLayouts': sorted(SURNAME_EXCLUDED_LAYOUTS),
+            'noPixelMatchThresholdRelaxation': True,
         },
+        'failedByLayout': failed_by_layout,
         'items': changed_items,
         'failedItems': failed,
         'conflictItems': conflicts,
         'skippedCompleteItems': skipped[:100],
-        'nonFemaleCaptionLeftAlone': excluded[:50],
+        'excludedItems': excluded[:100],
+        'surnameExcludedItems': surname_excluded[:50],
+        'nonFemaleCaptionLeftAlone': other_excluded[:50],
     }
     report_path = root / FEMALE_HANAKO_REPORT
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -1162,8 +1347,11 @@ def run_female_sample_hanako_maintenance(connect, data_dir=None, *, require_env=
         prepared = _prepare_female_image(
             candidate, root, backup_dir, progress_callback=on_try,
         )
-        if prepared.get('status') == 'failed':
+        status = prepared.get('status')
+        if status == 'failed':
             failed.append(prepared)
+        elif status == 'excluded':
+            excluded.append(prepared)
         else:
             prepared_list.append(prepared)
 
@@ -1188,6 +1376,8 @@ def run_female_sample_hanako_maintenance(connect, data_dir=None, *, require_env=
             conflicts.append(outcome)
         elif outcome.get('status') == 'failed':
             failed.append(outcome)
+        elif outcome.get('status') == 'excluded':
+            excluded.append(outcome)
         else:
             skipped.append(outcome)
             if outcome.get('status') in ('noop', 'already-complete'):
@@ -1259,8 +1449,12 @@ def correct_female_sample_names(c, data_dir=None, *, force=False):
 
     for candidate in pending:
         prepared = _prepare_female_image(candidate, root, backup_dir)
-        if prepared.get('status') == 'failed':
+        status = prepared.get('status')
+        if status == 'failed':
             failed.append(prepared)
+            continue
+        if status == 'excluded':
+            excluded.append(prepared)
             continue
         outcome = _commit_female_sample(c, prepared)
         if outcome.get('status') == 'changed':
@@ -1270,6 +1464,8 @@ def correct_female_sample_names(c, data_dir=None, *, force=False):
             conflicts.append(outcome)
         elif outcome.get('status') == 'failed':
             failed.append(outcome)
+        elif outcome.get('status') == 'excluded':
+            excluded.append(outcome)
         else:
             skipped.append(outcome)
 

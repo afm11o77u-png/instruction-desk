@@ -11,8 +11,11 @@
 
   または: 女性見本花子保守.cmd
 
-画像は layout=Name（氏名のみ）を登録メタ＋元キャンバスで再生成する。
-再生成できない見本は推測上書きせず保留（画素マッチへフォールバックしない）。
+画像は layout に応じて再生成する。
+  Name: 登録メタ＋元キャンバスで氏名のみ再描画
+  DeptName / HeadingName / SplitNumber: 元画像を保持し氏名領域だけ差し替え
+  Surname（苗字のみ）: 対象外（失敗に含めない）
+再生成できない見本は推測上書きせず保留（画素マッチ閾値の緩和はしない）。
 画像生成中は DB 書き込みトランザクションを保持しない。
 完了後に短いトランザクションで参照先だけ更新する。
 """
@@ -104,6 +107,9 @@ def main(argv=None):
     print(json.dumps({
         'changed': report.get('changed'),
         'failed': report.get('failed'),
+        'excluded': report.get('excluded'),
+        'excludedSurname': report.get('excludedSurname'),
+        'failedByLayout': report.get('failedByLayout'),
         'conflicts': report.get('conflicts'),
         'skippedComplete': report.get('skippedComplete'),
         'skipped': report.get('skipped'),
@@ -113,7 +119,11 @@ def main(argv=None):
         'report': str(out) if out.is_file() else '',
     }, ensure_ascii=False, indent=2))
     if report.get('failed'):
-        print(f"失敗 {report['failed']} 件（元のまま・再実行可）。詳細は {out}", file=sys.stderr)
+        print(
+            f"未対応 {report['failed']} 件（元のまま・再実行可）。"
+            f"対象外(Surname等) {report.get('excludedSurname') or 0} 件は失敗に含めていません。詳細は {out}",
+            file=sys.stderr,
+        )
         return 1
     return 0
 
