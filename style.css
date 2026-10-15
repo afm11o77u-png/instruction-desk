@@ -71,6 +71,20 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelnoticeform{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;max-width:980px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
 #labeldesk .labelnoticeform label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:180px}
 #labeldesk .labelnoticeform input{font-weight:400;min-width:200px;padding:8px 10px}
+#labeldesk .labelticketform{display:grid;gap:14px;max-width:980px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
+#labeldesk .labelticketkind{margin:0;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#f7fbf6;display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center}
+#labeldesk .labelticketkind legend{padding:0 4px;font-size:.85rem;font-weight:700}
+#labeldesk .labelticketkind label{display:inline-flex;gap:6px;align-items:center;font-size:.95rem;font-weight:600}
+#labeldesk .labelticketfields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px}
+#labeldesk .labelticketfields label{display:grid;gap:4px;font-size:.85rem;font-weight:700}
+#labeldesk .labelticketfields input,#labeldesk .labelticketfields select{font-weight:400;min-height:36px;padding:8px 10px}
+#labeldesk .tickshortagerows{display:grid;gap:10px;margin:0 0 10px}
+#labeldesk .tickshortagerow{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.9fr) minmax(0,.7fr) minmax(0,.55fr) auto;gap:8px;align-items:end}
+#labeldesk .tickshortagerow label{display:grid;gap:4px;font-size:.8rem;font-weight:700}
+#labeldesk .tickshortagerow input{font-weight:400;min-height:34px;padding:6px 8px}
+#labeldesk .labelticketactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+#labeldesk #labelticketerror:empty{display:none}#labeldesk #labelticketerror{margin:0;color:#a23928}
+@media(max-width:720px){#labeldesk .labelticketfields,#labeldesk .tickshortagerow{grid-template-columns:1fr}}
 #labelnoticeerror:empty{display:none}#labelnoticeerror{margin:0 0 12px;color:#a23928}
 #labeldesk .labeltablehint,#labeldesk #labelpastenote{margin:0 0 10px;max-width:46em;font-size:.85rem;color:#3d5344}#labeldesk .labelrequestbatch{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin:0 0 12px;padding:10px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;max-width:980px}#labeldesk .labelrequestbatch label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:200px}#labeldesk .labelrequestbatch select{font-weight:400;min-width:220px;min-height:36px;padding:6px 10px}#labeldesk .labeltablewrap{overflow-x:auto;max-width:100%}
 #labeldesk .labelinputtable{width:100%;min-width:1000px;table-layout:fixed;white-space:normal}

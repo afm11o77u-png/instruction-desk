@@ -248,17 +248,91 @@ document.querySelectorAll('input[name="labelpattern"]').forEach(el=>{el.addEvent
 applyLabelPatternUi(currentLabelPattern());
 ensureNoticeDefaults();
 function setLabelDeskMode(mode){
- const notice=mode==='notice';
- $('#labelmodeaddress').classList.toggle('on',!notice);
+ const address=mode==='address',notice=mode==='notice',ticket=mode==='ticket';
+ $('#labelmodeaddress').classList.toggle('on',address);
  $('#labelmodenotice').classList.toggle('on',notice);
- $('#labelmodeaddress').setAttribute('aria-pressed',String(!notice));
+ $('#labelmodeticket')?.classList.toggle('on',ticket);
+ $('#labelmodeaddress').setAttribute('aria-pressed',String(address));
  $('#labelmodenotice').setAttribute('aria-pressed',String(notice));
- $('#labeladdresspanel').hidden=notice;
+ $('#labelmodeticket')?.setAttribute('aria-pressed',String(ticket));
+ $('#labeladdresspanel').hidden=!address;
  $('#labelnoticepanel').hidden=!notice;
+ const ticketPanel=$('#labelticketpanel');if(ticketPanel)ticketPanel.hidden=!ticket;
  if(notice){ensureNoticeDefaults();if(!$('#noticedate').value)$('#noticedate').value=today()}
+ if(ticket){syncLabelTicketKind();ensureLabelTicketShortageRows()}
 }
 $('#labelmodeaddress').onclick=()=>setLabelDeskMode('address');
 $('#labelmodenotice').onclick=()=>setLabelDeskMode('notice');
+$('#labelmodeticket')?.addEventListener('click',()=>setLabelDeskMode('ticket'));
+
+function selectedLabelTicketKind(){return document.querySelector('input[name="labelticketkind"]:checked')?.value||'repair'}
+function syncLabelTicketKind(){
+ const shortage=selectedLabelTicketKind()==='shortage';
+ const box=$('#labelticketshortage');if(box)box.hidden=!shortage;
+}
+function ensureLabelTicketShortageRows(){
+ const box=$('#tickshortagerows');if(!box)return;
+ if(!box.children.length)addLabelTicketShortageRow();
+}
+function addLabelTicketShortageRow(data){
+ const box=$('#tickshortagerows');if(!box)return;
+ const row=document.createElement('div');
+ row.className='tickshortagerow';
+ row.innerHTML=`<label>商品名<input data-k="name" maxlength="80" value="${esc((data&&data.name)||'')}"></label><label>品番<input data-k="sku" maxlength="40" value="${esc((data&&data.sku)||'')}"></label><label>サイズ<input data-k="size" maxlength="20" value="${esc((data&&data.size)||'')}"></label><label>不足枚数<input data-k="qty" type="number" min="1" step="1" value="${esc((data&&data.qty)!=null?String(data.qty):'')}"></label><button type="button" class="quiet tickshortageremove" aria-label="この行を削除">×</button>`;
+ row.querySelector('.tickshortageremove').onclick=()=>{if(box.children.length<=1){row.querySelectorAll('input').forEach(el=>el.value='');return}row.remove()};
+ box.append(row);
+}
+function readLabelTicketShortages(){
+ return [...$('#tickshortagerows')?.querySelectorAll('.tickshortagerow')||[]].map(row=>({
+  name:row.querySelector('[data-k="name"]')?.value||'',
+  sku:row.querySelector('[data-k="sku"]')?.value||'',
+  size:row.querySelector('[data-k="size"]')?.value||'',
+  qty:row.querySelector('[data-k="qty"]')?.value||'',
+ }));
+}
+function readLabelTicketInput(){
+ return {
+  kind:selectedLabelTicketKind(),
+  customer:$('#tickcustomer')?.value||'',
+  employee:$('#tickemployee')?.value||'',
+  number:$('#ticknumber')?.value||'',
+  request:$('#tickrequest')?.value||'',
+  markShipDate:$('#tickmark')?.value||'',
+  shortages:readLabelTicketShortages(),
+ };
+}
+function resetLabelTicketForm(){
+ ['tickcustomer','tickemployee','ticknumber','tickmark'].forEach(id=>{const el=$('#'+id);if(el)el.value=''});
+ const req=$('#tickrequest');if(req)req.value='';
+ const repair=document.querySelector('input[name="labelticketkind"][value="repair"]');
+ if(repair)repair.checked=true;
+ const box=$('#tickshortagerows');if(box)box.replaceChildren();
+ $('#labelticketerror').textContent='';
+ syncLabelTicketKind();
+ ensureLabelTicketShortageRows();
+}
+function printManualBoxTicket(){
+ $('#labelticketerror').textContent='';
+ if(typeof buildManualBoxTicketOrder!=='function'||typeof validateManualBoxTicketOrder!=='function'||typeof boxTicketPages!=='function'){
+  $('#labelticketerror').textContent='管理票の印刷部品を読み込めませんでした。再起動してからやり直してください。';
+  return;
+ }
+ if(typeof openBoxTicketPreview!=='function'){
+  $('#labelticketerror').textContent='印刷プレビューを開けません。ページを読み直してください。';
+  return;
+ }
+ const built=buildManualBoxTicketOrder(readLabelTicketInput());
+ const checked=validateManualBoxTicketOrder(built);
+ if(!checked.ok){$('#labelticketerror').textContent=checked.error;return}
+ // 印刷専用：api()/orders への保存・登録は呼ばない
+ const tickets=boxTicketPages(checked.order,esc,typeof supplyLabel==='function'?supplyLabel:boxTicketSupplyLabel);
+ const kindLabel=checked.order.kind==='shortage'?'在庫待ち':'修理';
+ openBoxTicketPreview(tickets,`手入力の${kindLabel}管理票です。案件は登録していません。`);
+}
+document.querySelectorAll('input[name="labelticketkind"]').forEach(el=>el.addEventListener('change',()=>{syncLabelTicketKind();if(selectedLabelTicketKind()==='shortage')ensureLabelTicketShortageRows()}));
+$('#tickaddshortage')?.addEventListener('click',()=>addLabelTicketShortageRow());
+$('#ticketreset')?.addEventListener('click',()=>{if(($('#tickcustomer')?.value||$('#tickemployee')?.value||$('#ticknumber')?.value||readLabelTicketShortages().some(s=>s.name||s.sku||s.size||s.qty))&&!confirm('管理票の入力をすべて消しますか？'))return;resetLabelTicketForm()});
+$('#ticketprint')?.addEventListener('click',printManualBoxTicket);
 const noticeWeekdays=['日','月','火','水','木','金','土'];
 function formatNoticeDate(iso){
  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
