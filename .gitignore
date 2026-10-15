@@ -35,6 +35,9 @@ build/
 # ログ
 *.log
 
+# ローカル検証用の印刷PDFなど
+artifacts/
+
 # 業務データ画像
 data/images/placement/
 data/images/names/

@@ -14,10 +14,95 @@ const {
 } = require(path.join(__dirname, '../box_ticket.js'))
 
 assert.ok(BOX_TICKET_CSS.includes('A4 landscape'))
-assert.ok(BOX_TICKET_CSS.includes('136.5mm'))
+assert.ok(BOX_TICKET_CSS.includes('@page{size:A4 landscape;margin:0}'))
+assert.ok(BOX_TICKET_CSS.includes('width:297mm'))
+assert.ok(BOX_TICKET_CSS.includes('height:210mm'))
+assert.ok(BOX_TICKET_CSS.includes('148.5mm'))
+assert.ok(BOX_TICKET_CSS.includes('52.5mm'))
+assert.ok(!BOX_TICKET_CSS.includes('136.5mm'))
+assert.ok(!BOX_TICKET_CSS.includes('46.5mm'))
+assert.ok(!BOX_TICKET_CSS.includes('273mm'))
+assert.ok(!BOX_TICKET_CSS.includes('186mm'))
+assert.ok(!BOX_TICKET_CSS.includes('margin:18mm'))
 assert.deepStrictEqual(BOX_TICKET_KINDS, ['repair', 'shortage'])
 assert.strictEqual(manualBoxTicketIsPrintOnly(), true)
 assert.strictEqual(manualBoxTicketMutatesOrders(), false)
+
+// Font sizes ~10–13% larger than previous 10/13/12/9/10 pt
+assert.ok(BOX_TICKET_CSS.includes('font-size:11.2pt'))
+assert.ok(BOX_TICKET_CSS.includes('font-size:14.5pt'))
+assert.ok(BOX_TICKET_CSS.includes('font-size:13.5pt'))
+assert.ok(BOX_TICKET_CSS.includes('font-size:10pt'))
+
+function cssBlock(selector) {
+  const start = BOX_TICKET_CSS.indexOf(selector + '{')
+  assert.ok(start >= 0, `missing block ${selector}`)
+  const end = BOX_TICKET_CSS.indexOf('}', start)
+  return BOX_TICKET_CSS.slice(start, end + 1)
+}
+function cssProp(selector, prop) {
+  const m = cssBlock(selector).match(new RegExp(prop + ':([^;}]+)'))
+  assert.ok(m, `missing ${prop} in ${selector}`)
+  return m[1].trim()
+}
+
+assert.strictEqual(cssProp('.page', 'width'), '297mm')
+assert.strictEqual(cssProp('.page', 'height'), '210mm')
+assert.strictEqual(cssProp('.ticket', 'width'), '148.5mm')
+assert.strictEqual(cssProp('.ticket', 'height'), '52.5mm')
+assert.ok(BOX_TICKET_CSS.includes('grid-template-columns:repeat(2,148.5mm)'))
+assert.ok(BOX_TICKET_CSS.includes('grid-template-rows:repeat(4,52.5mm)'))
+// 2×4× cell = full sheet
+assert.strictEqual(148.5 * 2, 297)
+assert.strictEqual(52.5 * 4, 210)
+
+function sampleTicket(i) {
+  return boxTicketPages({
+    customer: `顧客${i}`,
+    employee: `従業員${i}`,
+    number: `SI-${String(i).padStart(6, '0')}`,
+    request: '消耗・破損交換',
+    markShipDate: '2026-10-20',
+    shortages: [],
+  })[0]
+}
+
+// 1 / 8 / 9 tickets → 1 / 1 / 2 pages; ticket size CSS unchanged
+const one = [sampleTicket(1)]
+const eight = Array.from({ length: 8 }, (_, i) => sampleTicket(i + 1))
+const nine = Array.from({ length: 9 }, (_, i) => sampleTicket(i + 1))
+assert.strictEqual((boxTicketPreviewHtml(one).match(/class="page"/g) || []).length, 1)
+assert.strictEqual((boxTicketPreviewHtml(eight).match(/class="page"/g) || []).length, 1)
+assert.strictEqual((boxTicketPreviewHtml(nine).match(/class="page"/g) || []).length, 2)
+assert.strictEqual((boxTicketPreviewHtml(one).match(/class="ticket"/g) || []).length, 1)
+assert.strictEqual((boxTicketPreviewHtml(eight).match(/class="ticket"/g) || []).length, 8)
+assert.strictEqual((boxTicketPreviewHtml(nine).match(/class="ticket"/g) || []).length, 9)
+// Partial page still uses full cell size in CSS (no shrink rules)
+assert.ok(!BOX_TICKET_CSS.includes('scale'))
+assert.ok(!BOX_TICKET_CSS.includes('transform'))
+assert.ok(!/zoom\s*:/.test(BOX_TICKET_CSS))
+
+// Long names / 3 shortage lines still rendered (no content dropped)
+const longNames = boxTicketPages({
+  customer: 'とても長い顧客名株式会社あいうえお病院センター東口クリニック第二分院',
+  employee: 'とても長い従業員名のサンプル太郎次郎',
+  number: 'SI-000999',
+  request: '追加・補充',
+  markShipDate: '2026-11-01',
+  shortages: [
+    { name: '超長い商品名シャツホワイトストライプ', sku: 'SKU-AAAA-1111', size: 'LL', qty: 2 },
+    { name: '超長い商品名ズボンネイビー', sku: 'SKU-BBBB-2222', size: '88', qty: 1 },
+    { name: '超長い商品名帽子フリー', sku: 'SKU-CCCC-3333', size: 'F', qty: 3 },
+  ],
+})
+assert.strictEqual(longNames.length, 1)
+assert.ok(longNames[0].includes('とても長い顧客名'))
+assert.ok(longNames[0].includes('とても長い従業員名'))
+assert.ok(longNames[0].includes('超長い商品名シャツ'))
+assert.ok(longNames[0].includes('超長い商品名ズボン'))
+assert.ok(longNames[0].includes('超長い商品名帽子'))
+assert.ok(longNames[0].includes('不足 2 枚'))
+assert.ok(longNames[0].includes('不足 3 枚'))
 
 // Repair ticket: empty shortages → 不足なし（修理待ち）
 const repair = buildManualBoxTicketOrder({
@@ -92,6 +177,8 @@ assert.ok(html.includes('A4 landscape'))
 assert.ok(html.includes('class="page"'))
 assert.ok(html.includes('ボックス管理票'))
 assert.strictEqual((html.match(/class="page"/g) || []).length, 1)
+assert.ok(html.includes('148.5mm'))
+assert.ok(html.includes('297mm'))
 
 // Escaping
 const escaped = boxTicketPages({
