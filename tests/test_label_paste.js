@@ -156,6 +156,7 @@ assert.deepStrictEqual(crlf, [
 const {
   labelCardHasAddress,
   planLabelRequestBatch,
+  labelPrintShowsRequest,
   LABEL_REQUEST_OPTIONS,
 } = require(path.join(__dirname, '../label_paste.js'))
 
@@ -200,5 +201,13 @@ assert.ok(LABEL_REQUEST_OPTIONS.includes('追加・補充'))
 const batchBad = planLabelRequestBatch({ request: '存在しない', slots: [{ customer: 'A' }] })
 assert.strictEqual(batchBad.ok, false)
 assert.strictEqual(batchBad.reason, 'invalid')
+
+// 受付内容の印刷表示切替（データは変えない／デフォルトは表示）
+assert.strictEqual(labelPrintShowsRequest(true), true)
+assert.strictEqual(labelPrintShowsRequest(undefined), true)
+assert.strictEqual(labelPrintShowsRequest('1'), true)
+assert.strictEqual(labelPrintShowsRequest(false), false)
+assert.strictEqual(labelPrintShowsRequest(0), false)
+assert.strictEqual(labelPrintShowsRequest('0'), false)
 
 console.log('All label paste unit tests passed')

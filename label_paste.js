@@ -9,6 +9,11 @@
   const LABEL_REQUEST_OPTIONS = ['新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他'];
   const LABEL_REQUEST_DEFAULT = '消耗・破損交換';
 
+  /** 印刷プレビュー／印刷で受付内容行を出すか。入力・保存の request は変えない。 */
+  function labelPrintShowsRequest(value) {
+    return value !== false && value !== 0 && value !== '0';
+  }
+
   function parseLabelClipboard(text) {
     const raw = String(text ?? '');
     if (!raw) return null;
@@ -166,5 +171,6 @@
     labelPasteNeedsConfirm,
     labelCardHasAddress,
     planLabelRequestBatch,
+    labelPrintShowsRequest,
   };
 });
