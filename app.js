@@ -232,7 +232,7 @@ function openBoxTicket(kind){
 function openBoxTicketPreview(tickets,notice){
  let dialog=document.querySelector('#boxticketpreview');
  if(!dialog){dialog=document.createElement('dialog');dialog.id='boxticketpreview';dialog.style.cssText='width:min(1100px,95vw);padding:18px;border:0;border-radius:12px';document.body.append(dialog)}
- dialog.innerHTML='<h2>ボックス貼付用 管理票</h2><p><span id="boxticketnotice"></span>A4横・倍率100％で印刷し、枠に沿って切り取ってください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="boxticketprint">印刷</button><button type="button" id="boxticketclose">閉じる</button></div><iframe title="管理票の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>';
+ dialog.innerHTML='<h2>ボックス貼付用 管理票</h2><p><span id="boxticketnotice"></span>A4横・余白なし（上下左右0mm）・倍率100％で印刷し、枠に沿って切り取ってください。Chrome／Edgeでは印刷画面の「その他の設定」→「ヘッダーとフッター」をオフにしてください（アプリから強制解除はできません）。プリンターの印刷不可領域がある場合は実機で余白を調整してください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="boxticketprint">印刷</button><button type="button" id="boxticketclose">閉じる</button></div><iframe title="管理票の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>';
  dialog.querySelector('#boxticketnotice').textContent=notice;
  const frame=dialog.querySelector('iframe');
  frame.srcdoc=boxTicketPreviewHtml(tickets,boxTicketCss);

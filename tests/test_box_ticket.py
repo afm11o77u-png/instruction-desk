@@ -42,6 +42,26 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
         self.assertNotIn('不足なし（修理待ち）', APP)
         self.assertIn('不足なし（修理待ち）', BOX)
 
+    def test_full_a4_landscape_eight_split_css(self):
+        self.assertIn('@page{size:A4 landscape;margin:0}', BOX)
+        self.assertIn('width:297mm', BOX)
+        self.assertIn('height:210mm', BOX)
+        self.assertIn('148.5mm', BOX)
+        self.assertIn('52.5mm', BOX)
+        self.assertIn('grid-template-columns:repeat(2,148.5mm)', BOX)
+        self.assertIn('grid-template-rows:repeat(4,52.5mm)', BOX)
+        self.assertNotIn('136.5mm', BOX)
+        self.assertNotIn('46.5mm', BOX)
+        self.assertNotIn('273mm', BOX)
+        self.assertNotIn('186mm', BOX)
+        self.assertNotIn('margin:18mm', BOX)
+
+    def test_preview_guides_browser_header_footer_off(self):
+        self.assertIn('ヘッダーとフッター', APP)
+        self.assertIn('アプリから強制解除はできません', APP)
+        self.assertIn('余白なし', APP)
+        self.assertIn('倍率100％', APP)
+
     def test_manual_print_path_does_not_call_order_apis(self):
         self.assertIn('printManualBoxTicket', SHEET)
         start = SHEET.index('function printManualBoxTicket')
@@ -78,6 +98,44 @@ class BoxTicketUnitTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         self.assertIn('ok', completed.stdout)
+
+
+class BoxTicketPrintMeasureTest(unittest.TestCase):
+    """Headless Chrome がある環境では PDF MediaBox と改ページを証明する。"""
+
+    def test_pdf_page_size_and_breaks(self):
+        chrome = None
+        for candidate in (
+            'google-chrome-stable',
+            'google-chrome',
+            'chromium-browser',
+            'chromium',
+        ):
+            found = subprocess.run(['which', candidate], capture_output=True, text=True)
+            if found.returncode == 0:
+                chrome = found.stdout.strip()
+                break
+        if not chrome:
+            self.skipTest('Chrome/Chromium not available for PDF measure')
+        import os
+
+        script = ROOT / 'tests' / 'measure_box_ticket_pdf.js'
+        env = os.environ.copy()
+        env['CHROME_PATH'] = chrome
+        completed = subprocess.run(
+            ['node', str(script)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertIn('"ok": true', completed.stdout)
+        self.assertIn('"pageCount": 1', completed.stdout)
+        self.assertIn('"pageCount": 2', completed.stdout)
+        self.assertIn('"widthMm": 297', completed.stdout)
+        self.assertIn('"heightMm": 209', completed.stdout)
 
 
 if __name__ == '__main__':
