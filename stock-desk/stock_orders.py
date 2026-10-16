@@ -308,12 +308,12 @@ def product_candidates(c, args=None):
             'name': r['name'],
             'color': r['color'] or '',
             'embroidery': r['embroidery'] or '',
-            'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'embroideryLabel': stock.embroidery_label(r['embroidery']),
             'isStandard': bool(r['is_standard']),
             'supplierId': r['supplier_id'],
             'supplierName': r['supplier_name'] or '',
             'sizes': sizes,
-            'label': f"{r['code']} {r['name']} {r['color'] or ''} / {r['embroidery'] or '刺繍なし'}".strip(),
+            'label': f"{r['code']} {r['name']} {r['color'] or ''} / {stock.embroidery_label(r['embroidery'])}".strip(),
         }
         if q:
             hay = ' '.join([
@@ -338,7 +338,7 @@ def _line_dict(r):
         'productName': r['product_name'],
         'color': r['product_color'],
         'embroidery': r['embroidery'],
-        'embroideryLabel': r['embroidery'] or '刺繍なし',
+        'embroideryLabel': stock.embroidery_label(r['embroidery']),
         'size': r['size_label'],
         'qtyOrdered': ordered,
         'qtyReceived': received,

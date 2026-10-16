@@ -177,7 +177,11 @@ async function api(path,data){
   }
   return result
 }
-function specLabel(v){return v?v:'刺繍なし'}
+function specLabel(v){
+  const t=String(v||'').trim()
+  if(!t||t==='加工なし'||t==='刺繍なし')return '加工なし'
+  return t
+}
 function loadSetupTab(){
   try{
     const stored=localStorage.getItem(SETUP_TAB_KEY)
@@ -670,7 +674,7 @@ function bindProductEditor(row){
       const display=cust?cust.name:(l.customerQuery||'')
       return `<div class="linkrow" data-link-i="${i}">
       ${searchPickerMarkup({label:'顧客',inputId:`linkCustomerQ${i}`,listId:`linkCustomerList${i}`,clearId:`linkCustomerClear${i}`,hintId:`linkCustomerHint${i}`,placeholder:'顧客名またはカナで検索',value:display})}
-      <label>刺繍・加工<input data-i="${i}" data-k="embroidery" value="${esc(l.embroidery)}" placeholder="空欄は刺繍なし"></label>
+      <label>刺繍・加工<input data-i="${i}" data-k="embroidery" value="${esc(l.embroidery)}" placeholder="空欄は加工なし"></label>
       <label class="check"><input data-i="${i}" data-k="isStandard" type="checkbox" ${l.isStandard?'checked':''}>標準仕様</label>
       <label class="check"><input data-i="${i}" data-k="active" type="checkbox" ${l.active!==false?'checked':''}>使用中</label>
       <button type="button" data-remove="${i}">外す</button></div>`
@@ -1035,7 +1039,7 @@ function mountOpeningHandleCreateForm(dlg){
       <div class="grid">
         ${searchPickerMarkup({label:'顧客',inputId:'handleCustomerQuery',listId:'handleCustomerOptions',clearId:'handleCustomerClear',hintId:'handleCustomerHint',placeholder:'顧客名またはカナで検索',value:customerQuery})}
         ${searchPickerMarkup({label:'商品',inputId:'handleProductQuery',listId:'handleProductOptions',clearId:'handleProductClear',hintId:'handleProductHint',placeholder:'品番・商品名・色・仕入先で検索',value:productQuery})}
-        <label>加工情報<input id="handleEmbroidery" maxlength="80" placeholder="空欄は刺繍なし" value="${esc(draft.embroidery||'')}"></label>
+        <label>加工情報<input id="handleEmbroidery" maxlength="80" placeholder="空欄は加工なし" value="${esc(draft.embroidery||'')}"></label>
       </div>
       <p class="sub">顧客・商品が一覧に無いときは、先にそれぞれの台帳で登録してください。</p>
       <p id="error"></p>
@@ -1221,7 +1225,7 @@ function mountOpeningRegisterForm(){
     $('#sizerows',root).querySelectorAll('input').forEach(el=>el.oninput=()=>{rows[Number(el.dataset.i)][el.dataset.k]=el.value;touchOpeningDirty()})
     $('#sizerows',root).querySelectorAll('[data-addprice]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.addprice);rows.splice(i+1,0,{size:rows[i].size,qty:'',unitCost:''});state.opening.lines.rows=rows;touchOpeningDirty();drawSizes()})
     const standard=$('#standardNote',root)
-    standard.textContent=selected&&selected.isStandard&&peers.length===1?'この顧客はこの加工仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'刺繍ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
+    standard.textContent=selected&&selected.isStandard&&peers.length===1?'この顧客はこの加工仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'加工ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
   }
   const syncUnknown=()=>{
     if(inbound)return

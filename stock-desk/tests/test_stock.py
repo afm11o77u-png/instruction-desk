@@ -615,16 +615,16 @@ def test_product_grouped_stock():
         check('内訳は顧客・仕様・サイズ・場所の組み合わせ', len(row_keys) == len(set(row_keys)) and len(row_keys) >= 3)
 
         # 顧客名順、同一顧客内は登録サイズ順（M → L → LL → 2L）
-        aoba_sizes = [r['size'] for r in hokko['rows'] if r['customerName'] == 'あおば記念病院' and r['embroideryLabel'] == '刺繍なし']
+        aoba_sizes = [r['size'] for r in hokko['rows'] if r['customerName'] == 'あおば記念病院' and r['embroideryLabel'] == '加工なし']
         check('同一顧客のサイズは登録順', aoba_sizes == ['M', 'L', 'LL'])
         check('内訳は顧客名順', [r['customerName'] for r in hokko['rows']] == sorted(
             [r['customerName'] for r in hokko['rows']]
         ))
 
-        # Mサイズ・刺繍なし: 1000×10 + 1200×5 が1行に集約、単価内訳は残す
+        # Mサイズ・加工なし: 1000×10 + 1200×5 が1行に集約、単価内訳は残す
         m_plain = next(
             r for r in hokko['rows']
-            if r['customerName'] == 'あおば記念病院' and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+            if r['customerName'] == 'あおば記念病院' and r['size'] == 'M' and r['embroideryLabel'] == '加工なし'
         )
         check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
         check('単価の内訳を保持', [(p['unitCost'], p['qty']) for p in m_plain['prices']] == [(1000, 10), (1200, 5)])
@@ -715,7 +715,7 @@ def test_customer_grouped_stock():
 
         hokko_plain_sizes = [
             r['size'] for r in aoba_group['rows']
-            if r['productId'] == products[0]['id'] and r['embroideryLabel'] == '刺繍なし'
+            if r['productId'] == products[0]['id'] and r['embroideryLabel'] == '加工なし'
         ]
         check('同一商品のサイズは登録順', hokko_plain_sizes == ['M', 'L', 'LL'])
 
@@ -724,7 +724,7 @@ def test_customer_grouped_stock():
 
         m_plain = next(
             r for r in aoba_group['rows']
-            if r['productId'] == products[0]['id'] and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+            if r['productId'] == products[0]['id'] and r['size'] == 'M' and r['embroideryLabel'] == '加工なし'
             and r['locationLabel'] == '石狩倉庫①'
         )
         check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
@@ -843,14 +843,14 @@ def test_location_grouped_stock():
         no_shelf_sizes = [
             r['size'] for r in site1_group['rows']
             if r['locationId'] == site1 and r['customerId'] == aoba
-            and r['productId'] == products[0]['id'] and r['embroideryLabel'] == '刺繍なし'
+            and r['productId'] == products[0]['id'] and r['embroideryLabel'] == '加工なし'
         ]
         check('同一棚・顧客・商品のサイズは登録順', no_shelf_sizes == ['M', 'L'])
 
         m_plain = next(
             r for r in site1_group['rows']
             if r['locationId'] == site1 and r['customerId'] == aoba
-            and r['productId'] == products[0]['id'] and r['size'] == 'M' and r['embroideryLabel'] == '刺繍なし'
+            and r['productId'] == products[0]['id'] and r['size'] == 'M' and r['embroideryLabel'] == '加工なし'
         )
         check('複数単価ロットを数量・金額集約', m_plain['qty'] == 15 and m_plain['amount'] == 16000)
         check('単価の内訳を保持', [(p['unitCost'], p['qty']) for p in m_plain['prices']] == [(1000, 10), (1200, 5)])

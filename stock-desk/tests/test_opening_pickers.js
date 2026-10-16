@@ -113,6 +113,10 @@ test('offerings searchable by code name and spec text', () => {
   assert.strictEqual(filterOpeningOfferings(handles, 1, '左胸').length, 1)
   assert.strictEqual(filterOpeningOfferings(handles, 1, '白スクラブ').length, 2)
   assert.ok(offeringPickerLabel(filterOpeningOfferings(handles, 1, '左胸')[0]).includes('左胸ネーム'))
+  const plain = handles.find(h => h.id === 100)
+  assert.ok(offeringPickerLabel(plain).includes('加工なし'))
+  assert.ok(!offeringPickerLabel(plain).includes('刺繍なし'))
+  assert.strictEqual(filterOpeningOfferings(handles, 1, '加工なし').some(h => h.id === 100), true)
 })
 
 test('handles searchable across customers by name code product color processing', () => {

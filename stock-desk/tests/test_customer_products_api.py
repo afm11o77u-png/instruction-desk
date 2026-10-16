@@ -62,7 +62,7 @@ class EnsureCustomerProductTest(unittest.TestCase):
             self.assertEqual(n, 1)
             lots = c.execute('SELECT COUNT(*) AS n FROM lots').fetchone()['n']
             self.assertEqual(lots, 0)
-            # empty embroidery = 刺繍なし; second style does not rewrite first standard
+            # empty embroidery = 加工なし; second style does not rewrite first standard
             other = stock.ensure_customer_product(c, {
                 'customerId': cu['id'], 'productId': pr['id'], 'embroidery': '',
             })

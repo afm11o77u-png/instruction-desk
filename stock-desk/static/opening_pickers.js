@@ -3,6 +3,12 @@ function normalizeOpeningQuery(q){
   return String(q||'').trim().toLowerCase()
 }
 
+function openingSpecLabel(embroidery){
+  const t=String(embroidery||'').trim()
+  if(!t||t==='加工なし'||t==='刺繍なし')return '加工なし'
+  return t
+}
+
 function activeOpeningCustomers(customers){
   return (customers||[]).filter(c=>c&&c.active)
 }
@@ -61,7 +67,7 @@ function filterOpeningOfferings(handles, customerId, query){
   if(!needle)return mine.slice()
   return mine.filter(h=>{
     const p=h.product||{}
-    const spec=h.embroidery?String(h.embroidery):'刺繍なし'
+    const spec=openingSpecLabel(h.embroidery)
     const hay=`${p.code||''} ${p.name||''} ${p.color||''} ${spec} ${h.embroidery||''}`.toLowerCase()
     return hay.includes(needle)
   })
@@ -75,7 +81,7 @@ function filterOpeningHandles(handles, query){
   return list.filter(h=>{
     const p=h.product||{}
     const c=h.customer||{}
-    const spec=h.embroidery?String(h.embroidery):'刺繍なし'
+    const spec=openingSpecLabel(h.embroidery)
     const hay=`${c.name||''} ${p.code||''} ${p.name||''} ${p.color||''} ${spec} ${h.embroidery||''}`.toLowerCase()
     return hay.includes(needle)
   })
@@ -84,14 +90,14 @@ function filterOpeningHandles(handles, query){
 function offeringPickerLabel(h){
   if(!h||!h.product)return ''
   const p=h.product
-  const spec=h.embroidery?String(h.embroidery):'刺繍なし'
+  const spec=openingSpecLabel(h.embroidery)
   return `${p.code} ${p.name} ${p.color} / ${spec}`
 }
 
 function handlePickerLabel(h){
   if(!h||!h.product||!h.customer)return ''
   const p=h.product
-  const spec=h.embroidery?String(h.embroidery):'刺繍なし'
+  const spec=openingSpecLabel(h.embroidery)
   return `${h.customer.name}／${p.code}／${p.name}／${p.color||''}／${spec}`
 }
 

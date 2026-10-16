@@ -276,7 +276,7 @@ const PurchaseOrders={
           return `<article class="po-product-block">
             <div class="po-product-head">
               <strong>${esc(p.code)} ${esc(p.name)} ${esc(p.color)}</strong>
-              <span class="sub">${esc(p.embroideryLabel||'刺繍なし')}（社内）</span>
+              <span class="sub">${esc(p.embroideryLabel||'加工なし')}（社内）</span>
               <button type="button" data-rm-prod="${i}">外す</button>
             </div>
             <div class="po-size-matrix">${sizes.map(sz=>`<label class="po-size-cell">${esc(sz)}

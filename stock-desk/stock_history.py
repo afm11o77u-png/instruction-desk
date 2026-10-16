@@ -128,7 +128,7 @@ def _serialize_event(c, r, batch_counts):
         'color': r['color'],
         'productActive': bool(r['product_active']),
         'embroidery': r['embroidery'],
-        'embroideryLabel': r['embroidery'] or '刺繍なし',
+        'embroideryLabel': stock.embroidery_label(r['embroidery']),
         'size': r['size_label'],
         'locationId': r['location_id'],
         'locationLabel': stock.location_label(c, loc),
