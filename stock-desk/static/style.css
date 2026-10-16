@@ -71,6 +71,8 @@ table.directory tr.is-stopped .nameline b{font-weight:600}
 .chips button{font-weight:700}.chips button.on{background:#186438;color:#fff;border-color:#186438}
 .size-scheme{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 8px}
 .size-scheme-label{font-size:13px;font-weight:700;color:#3d5146}
+.size-unit{margin:0 0 8px;font-size:13px;font-weight:700;color:#3d5146}
+.size-unit[hidden]{display:none}
 .seg{display:inline-flex;border:1px solid #c5dcc4;border-radius:999px;overflow:hidden;background:#fff}
 .seg button{border:0;border-radius:0;min-height:40px;padding:8px 14px;background:transparent;box-shadow:none}
 .seg button+button{border-left:1px solid #c5dcc4}

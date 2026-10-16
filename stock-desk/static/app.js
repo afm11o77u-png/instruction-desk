@@ -42,14 +42,53 @@ const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
 const SETUP_TAB_KEY='stock-desk:setup-tab'
 const SIZE_SCHEMES={
   letter:{id:'letter',label:'アルファベット',sizes:['S','M','L','LL','2L','3L','4L','SS','フリー']},
-  gou:{id:'gou',label:'号数',sizes:['5号','7号','9号','11号','13号','15号','17号','19号','21号']}
+  gou:{id:'gou',label:'号数',sizes:['5号','7号','9号','11号','13号','15号','17号','19号','21号']},
+  waist:{id:'waist',label:'ウエスト',sizes:['70','73','76','79','82','85','88','91','95','100','105','110','115','120','125']}
 }
 function isGouSize(label){return /^\d+号$/.test(String(label||''))}
+function isWaistPresetSize(label){return SIZE_SCHEMES.waist.sizes.includes(String(label||''))}
+function isPureDigitSize(label){return /^\d+$/.test(String(label||''))}
+/** Exact-label duplicate only. 「70」と「W70」は別サイズのまま（一括変換しない）。 */
+function sizeLabelAlreadySelected(sizes,label){
+  return (sizes||[]).includes(String(label||'').trim())
+}
+function compareDigitSizeLabels(a,b){
+  const na=isPureDigitSize(a)?Number(a):NaN
+  const nb=isPureDigitSize(b)?Number(b):NaN
+  const da=!Number.isNaN(na),db=!Number.isNaN(nb)
+  if(da&&db)return na-nb
+  if(da)return -1
+  if(db)return 1
+  return String(a).localeCompare(String(b),'ja')
+}
+function shownSizeChips(schemeId,selected){
+  const scheme=SIZE_SCHEMES[schemeId]||SIZE_SCHEMES.letter
+  const preset=scheme.sizes
+  const kept=(selected||[]).filter(s=>!preset.includes(s))
+  if(schemeId==='waist'){
+    // プリセット＋カスタムを数値順。W70 など非数字は数字の後ろ。
+    return [...new Set([...preset,...kept])].sort(compareDigitSizeLabels)
+  }
+  return [...preset,...kept]
+}
 function detectSizeScheme(sizes){
   const list=sizes||[]
   const gou=list.filter(isGouSize).length
+  const waist=list.filter(isWaistPresetSize).length
   const letter=list.filter(s=>SIZE_SCHEMES.letter.sizes.includes(s)).length
-  return gou>letter?'gou':'letter'
+  if(waist>0&&waist>=gou&&waist>=letter)return 'waist'
+  if(gou>letter)return 'gou'
+  return 'letter'
+}
+function sizeSchemeHint(schemeId){
+  if(schemeId==='gou')return '号数サイズをまとめて選びます。表記を切り替えても、すでに選んだサイズはそのまま残ります。'
+  if(schemeId==='waist')return 'ウエストサイズをまとめて選びます。表記を切り替えても、すでに選んだサイズはそのまま残ります。'
+  return 'アルファベットサイズをまとめて選びます。LLと2Lは別のサイズです。表記を切り替えても、すでに選んだサイズはそのまま残ります。'
+}
+function sizeSchemePlaceholder(schemeId){
+  if(schemeId==='gou')return '例：10号'
+  if(schemeId==='waist')return '例：72'
+  return '例：150'
 }
 const PRODUCT_SUPPLIER_KEY='stock-desk:product-supplier-filter'
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -589,11 +628,13 @@ function productForm(r){
       <div class="seg" id="sizeScheme">
         <button type="button" data-scheme="letter" class="${scheme==='letter'?'on':''}">アルファベット</button>
         <button type="button" data-scheme="gou" class="${scheme==='gou'?'on':''}">号数</button>
+        <button type="button" data-scheme="waist" class="${scheme==='waist'?'on':''}">ウエスト</button>
       </div>
     </div>
-    <p id="sizeHint">サイズをまとめて選びます。LLと2Lは別のサイズです。表記を切り替えても、すでに選んだサイズはそのまま残ります。</p>
+    <p id="sizeHint">${esc(sizeSchemeHint(scheme))}</p>
+    <p id="sizeUnit" class="size-unit" ${scheme==='waist'?'':'hidden'}>単位：cm</p>
     <div class="chips" id="chips"></div>
-    <div class="bar"><label>特殊サイズ<input id="customSize" placeholder="例：150"></label><button type="button" id="addSize">サイズを追加</button></div>
+    <div class="bar"><label>特殊サイズ<input id="customSize" placeholder="${esc(sizeSchemePlaceholder(scheme))}"></label><button type="button" id="addSize">サイズを追加</button></div>
     <h2>この商品を扱う顧客</h2><div class="links" id="links"></div><button type="button" id="addLink">顧客の取扱を追加</button>`
 }
 function resolveProductLinkCustomer(customers, customerId){
@@ -605,24 +646,21 @@ function resolveProductLinkCustomer(customers, customerId){
 function bindProductEditor(row){
   const editor={sizes:[...row.sizes],links:row.links.map(l=>({...l})),scheme:detectSizeScheme(row.sizes)}
   const draw=()=>{
-    const scheme=SIZE_SCHEMES[editor.scheme]||SIZE_SCHEMES.letter
     $('#sizeScheme').querySelectorAll('button').forEach(b=>{
       b.classList.toggle('on',b.dataset.scheme===editor.scheme)
       b.onclick=()=>{if(editor.scheme===b.dataset.scheme)return;editor.scheme=b.dataset.scheme;touchEditDirty();draw()}
     })
     const hint=$('#sizeHint')
-    if(hint)hint.textContent=editor.scheme==='gou'
-      ?'号数サイズをまとめて選びます。表記を切り替えても、すでに選んだアルファベットサイズはそのまま残ります。'
-      :'アルファベットサイズをまとめて選びます。LLと2Lは別のサイズです。表記を切り替えても、すでに選んだ号数サイズはそのまま残ります。'
+    if(hint)hint.textContent=sizeSchemeHint(editor.scheme)
+    const unit=$('#sizeUnit')
+    if(unit)unit.hidden=editor.scheme!=='waist'
     const custom=$('#customSize')
-    if(custom)custom.placeholder=editor.scheme==='gou'?'例：10号':'例：150'
-    const preset=scheme.sizes
-    const kept=editor.sizes.filter(s=>!preset.includes(s))
-    const shown=[...preset,...kept]
+    if(custom)custom.placeholder=sizeSchemePlaceholder(editor.scheme)
+    const shown=shownSizeChips(editor.scheme,editor.sizes)
     $('#chips').innerHTML=shown.map(s=>`<button type="button" class="${editor.sizes.includes(s)?'on':''}" data-size="${esc(s)}">${esc(s)}</button>`).join('')
     $('#chips').querySelectorAll('button').forEach(b=>b.onclick=()=>{
       const s=b.dataset.size
-      editor.sizes=editor.sizes.includes(s)?editor.sizes.filter(x=>x!==s):editor.sizes.concat(s)
+      editor.sizes=sizeLabelAlreadySelected(editor.sizes,s)?editor.sizes.filter(x=>x!==s):editor.sizes.concat(s)
       touchEditDirty()
       draw()
     })
@@ -694,7 +732,8 @@ function bindProductEditor(row){
   $('#addSize').onclick=()=>{
     const s=$('#customSize').value.trim()
     if(!s)return
-    if(!editor.sizes.includes(s))editor.sizes.push(s)
+    // 完全一致のみ重複扱い。「70」があるとき「W70」は別サイズとして追加可（一括変換なし）。
+    if(!sizeLabelAlreadySelected(editor.sizes,s))editor.sizes.push(s)
     $('#customSize').value=''
     touchEditDirty()
     draw()
