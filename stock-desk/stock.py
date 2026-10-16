@@ -162,10 +162,15 @@ class StockConflict(Exception):
         self.payload = payload
 
 
+# 旧システム由来の拠点空欄在庫をいったん置く仮拠点。棚は作らない。
+UNCONFIRMED_SITE_NAME = '未確認'
+
+
 def initialize(c):
     c.execute('PRAGMA journal_mode=WAL')
     c.executescript(SCHEMA)
     migrate_schema(c)
+    ensure_unconfirmed_site(c)
 
 
 def needs_migration(c):
@@ -242,6 +247,37 @@ def migrate_schema(c):
     )
     import stock_orders
     stock_orders.migrate_purchase_orders(c)
+
+
+def ensure_unconfirmed_site(c):
+    """起動時補正: 仮拠点「未確認」を idempotent に確保する（棚は作らない）。
+
+    同名の拠点（parent_id IS NULL）が既にあればそのまま返す。新規作成しない。
+    空の拠点名を「未確認」へ変換する処理は行わない（拠点必須の仕様は維持）。
+    """
+    existing = c.execute(
+        'SELECT id FROM locations WHERE name=? AND parent_id IS NULL',
+        (UNCONFIRMED_SITE_NAME,),
+    ).fetchone()
+    if existing:
+        return location_row(c, existing['id'])
+    t = stamp()
+    try:
+        c.execute(
+            'INSERT INTO locations(name,parent_id,active,created_at,updated_at) VALUES(?,?,?,?,?)',
+            (UNCONFIRMED_SITE_NAME, None, 1, t, t),
+        )
+    except sqlite3.IntegrityError:
+        # UNIQUE(locations_root_name) との競合時は既存行を返す
+        existing = c.execute(
+            'SELECT id FROM locations WHERE name=? AND parent_id IS NULL',
+            (UNCONFIRMED_SITE_NAME,),
+        ).fetchone()
+        if not existing:
+            raise
+        return location_row(c, existing['id'])
+    site_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return location_row(c, site_id)
 
 
 CONDITION_NEW = 'new'
