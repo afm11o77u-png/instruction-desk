@@ -90,16 +90,20 @@ table.site-locations th:nth-child(3),table.site-locations td:nth-child(3){width:
 table.site-locations .shelf-summary{color:#24352c;font-weight:400}
 table.site-locations tr.is-stopped td{color:#8b9790}
 
-/* 商品一覧: 取扱（顧客・加工）を先に読み、サイズ／開くが潰れない幅。商品IDは修正前どおり内容ぎりぎり */
+/* 商品一覧: 取扱を先に読む。商品IDは見出し＋4桁が重ならない幅（#112の5.5remより狭く、#113の1%より広く） */
 table.products-list{width:100%;table-layout:fixed}
 table.products-list th,table.products-list td{word-break:break-word;overflow-wrap:anywhere}
 table.products-list .prod-id,
 table.products-list th:nth-child(1){
-  width:1%;
+  width:5.25rem;
+  min-width:5.25rem;
+  max-width:5.25rem;
+  box-sizing:border-box;
   white-space:nowrap;
   font-variant-numeric:tabular-nums;
   word-break:normal;
   overflow-wrap:normal;
+  overflow:hidden;
 }
 table.products-list .prod-name{width:26%}
 table.products-list .prod-handles{width:38%}
