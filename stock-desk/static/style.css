@@ -86,15 +86,21 @@ table.site-locations th:nth-child(3),table.site-locations td:nth-child(3){width:
 table.site-locations .shelf-summary{color:#24352c;font-weight:400}
 table.site-locations tr.is-stopped td{color:#8b9790}
 
-/* 商品一覧: 取扱（顧客・加工）を先に読み、サイズ／開くが潰れない幅 */
+/* 商品一覧: 取扱（顧客・加工）を先に読み、サイズ／開くが潰れない幅。商品IDは修正前どおり内容ぎりぎり */
 table.products-list{width:100%;table-layout:fixed}
 table.products-list th,table.products-list td{word-break:break-word;overflow-wrap:anywhere}
-table.products-list .prod-id{width:5.5rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+table.products-list .prod-id,
+table.products-list th:nth-child(1){
+  width:1%;
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+  word-break:normal;
+  overflow-wrap:normal;
+}
 table.products-list .prod-name{width:26%}
 table.products-list .prod-handles{width:38%}
 table.products-list .prod-sizes{width:18%;min-width:6.5rem}
 table.products-list .prod-act{width:4.75rem;min-width:4.75rem;white-space:nowrap;text-align:right}
-table.products-list th:nth-child(1),table.products-list td.prod-id{width:5.5rem}
 table.products-list th:nth-child(2),table.products-list td.prod-name{width:26%}
 table.products-list th:nth-child(3),table.products-list td.prod-handles{width:38%}
 table.products-list th:nth-child(4),table.products-list td.prod-sizes{width:18%}
