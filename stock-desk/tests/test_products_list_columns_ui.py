@@ -58,16 +58,20 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         self.assertIn('.prod-sizes', STYLE_CSS)
         self.assertIn('.prod-act', STYLE_CSS)
         self.assertIn('table-layout:fixed', STYLE_CSS)
-        # 商品ID: #112 の 5.5rem 固定をやめ、内容ぎりぎり（width:1% + nowrap）
+        # 商品ID: #113 の width:1%（重なり）と #112 の 5.5rem（広すぎ）の中間
         start = STYLE_CSS.index('/* 商品一覧:')
         end = STYLE_CSS.index('.check,.inactive-toggle', start)
         products_css = STYLE_CSS[start:end]
-        self.assertNotIn('5.5rem', products_css)
-        self.assertIn('width:1%', products_css)
+        self.assertNotIn('width:5.5rem', products_css)
+        self.assertNotIn('width:1%', products_css)
+        self.assertIn('width:5.25rem', products_css)
+        self.assertIn('min-width:5.25rem', products_css)
         self.assertIn('.prod-id', products_css)
         self.assertIn('white-space:nowrap', products_css)
+        self.assertIn('overflow:hidden', products_css)
         self.assertIn('.prod-handles{width:38%}', products_css)
         self.assertIn('.prod-act{width:4.75rem', products_css)
+        self.assertIn('.prod-sizes{width:18%', products_css)
 
 
 if __name__ == '__main__':
