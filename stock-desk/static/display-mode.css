@@ -194,6 +194,9 @@
 .list-stage.dm-compact table.directory .addr{font-size:12px;line-height:1.25}
 .list-stage.dm-compact table.directory .pill{padding:1px 6px;font-size:11px}
 .list-stage.dm-compact table.directory .rowedit{padding:2px 8px;font-size:11px}
+/* 商品一覧 ID列: 仕入先 .sid のコンパクト時フォントに合わせる（幅は style.css の 3.75rem） */
+.list-stage.dm-compact table.products-list td.prod-id{font-size:11px}
+.list-stage.dm-compact table.products-list th:nth-child(1){font-size:10px;letter-spacing:.08em}
 
 /* グリッド: responsive cards */
 .list-grid{
