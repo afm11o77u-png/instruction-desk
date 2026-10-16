@@ -37,17 +37,28 @@ def template():
 
 
 def workbook(sheets):
+    """Build .xlsx bytes.
+
+    Each sheet is ``(name, headers, rows)`` or ``(name, headers, rows, widths)``.
+    Cell values: ``int`` (not bool) → number; ``None`` → blank; otherwise text
+    (preserves leading zeros / hyphens for codes, phones, sizes).
+    """
     out = BytesIO()
     with ZipFile(out, 'w', ZIP_DEFLATED) as book:
         overrides = ['<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
                      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>']
         rels = []
         sheet_tags = []
-        for i, (name, headers, rows) in enumerate(sheets, 1):
+        for i, sheet in enumerate(sheets, 1):
+            if len(sheet) == 4:
+                name, headers, rows, widths = sheet
+            else:
+                name, headers, rows = sheet
+                widths = None
             overrides.append(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
             rels.append(f'<Relationship Id="rId{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i}.xml"/>')
             sheet_tags.append(f'<sheet name="{_xml(name)}" sheetId="{i}" r:id="rId{i}"/>')
-            book.writestr(f'xl/worksheets/sheet{i}.xml', _sheet_xml(headers, rows))
+            book.writestr(f'xl/worksheets/sheet{i}.xml', _sheet_xml(headers, rows, widths))
         rels.append('<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>')
         book.writestr('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?>'
                       '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -500,21 +511,44 @@ def _col(ref):
     return number - 1
 
 
-def _sheet_xml(headers, rows):
+def _sheet_xml(headers, rows, widths=None):
     body = [_row_xml(1, headers)]
     for index, row in enumerate(rows, 2):
         body.append(_row_xml(index, row))
     last = max(1, len(rows) + 1)
     end = _letter(len(headers) - 1) if headers else 'A'
+    cols_xml = ''
+    if widths:
+        parts = []
+        for i, width in enumerate(widths, 1):
+            if width is None:
+                continue
+            parts.append(f'<col min="{i}" max="{i}" width="{width}" customWidth="1"/>')
+        if parts:
+            cols_xml = f'<cols>{"".join(parts)}</cols>'
     return (f'<worksheet xmlns="{SHEET_NS}"><sheetViews><sheetView workbookViewId="0">'
             f'<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
-            f'<sheetData>{"".join(body)}</sheetData><autoFilter ref="A1:{end}{last}"/></worksheet>')
+            f'{cols_xml}<sheetData>{"".join(body)}</sheetData><autoFilter ref="A1:{end}{last}"/></worksheet>')
 
 
 def _row_xml(index, values):
     cells = []
     for col, value in enumerate(values):
-        cells.append(f'<c r="{_letter(col)}{index}" t="inlineStr"><is><t xml:space="preserve">{_xml(value)}</t></is></c>')
+        ref = f'{_letter(col)}{index}'
+        if value is None or value == '':
+            cells.append(f'<c r="{ref}"/>')
+            continue
+        if isinstance(value, bool):
+            text = 'TRUE' if value else 'FALSE'
+            cells.append(f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{_xml(text)}</t></is></c>')
+            continue
+        if isinstance(value, int) and not isinstance(value, bool):
+            cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+            continue
+        if isinstance(value, float):
+            cells.append(f'<c r="{ref}"><v>{value}</v></c>')
+            continue
+        cells.append(f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{_xml(value)}</t></is></c>')
     return f'<row r="{index}">{"".join(cells)}</row>'
 
 

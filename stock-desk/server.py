@@ -6,6 +6,7 @@ import stock
 import stock_history
 import stock_period
 import stock_orders
+import excel_export
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / 'static'
@@ -107,6 +108,21 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             with stock.connect(db_path) as c:
                 data = stock_period.export_xlsx(c, args)
             return 200, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/registry-export/preview':
+        try:
+            with stock.connect(db_path) as c:
+                return 200, excel_export.preview(c, query)
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/registry-export.xlsx':
+        try:
+            with stock.connect(db_path) as c:
+                data, filename = excel_export.export_xlsx(c, query)
+            return 200, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {
+                'Content-Disposition': excel_export.content_disposition(filename),
+            }
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
     if path == '/api/company-profile':
@@ -245,8 +261,9 @@ def make_handler(db_path, mode):
             parsed = urlparse(self.path)
             if parsed.path.startswith('/api/'):
                 result = api_get(db_path, mode, parsed.path, parse_qs(parsed.query), can_write=True)
-                if len(result) == 3:
-                    self.send_bytes(result[0], result[1], result[2])
+                if len(result) >= 3:
+                    headers = result[3] if len(result) > 3 else None
+                    self.send_bytes(result[0], result[1], result[2], headers)
                 else:
                     self.send(result[0], result[1])
                 return
@@ -286,19 +303,22 @@ def make_handler(db_path, mode):
                 self.send(400, {'error': '送信内容を読めませんでした。'})
                 return
             result = api_post(db_path, mode, urlparse(self.path).path, body, can_write=True)
-            if len(result) == 3:
-                self.send_bytes(result[0], result[1], result[2])
+            if len(result) >= 3:
+                headers = result[3] if len(result) > 3 else None
+                self.send_bytes(result[0], result[1], result[2], headers)
             else:
                 self.send(result[0], result[1])
 
         def send(self, status, body):
             self.send_bytes(status, json.dumps(body, ensure_ascii=False).encode('utf-8'), 'application/json; charset=utf-8')
 
-        def send_bytes(self, status, data, kind):
+        def send_bytes(self, status, data, kind, headers=None):
             self.send_response(status)
             self.send_header('Content-Type', kind)
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Cache-Control', 'no-store')
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
             self.end_headers()
             self.wfile.write(data)
     return Handler
