@@ -366,15 +366,80 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 }
 .list-grid .dm-actions .stock-row-btn{margin:0 2px 0 0}
 
-/* 旧システムCSV一括取込 */
-.legacy-csv-table-wrap{overflow:auto;max-height:min(60vh,640px);border-top:1px solid var(--line)}
-.legacy-csv-table{width:100%;border-collapse:collapse;font-size:13px}
-.legacy-csv-table th,.legacy-csv-table td{border-bottom:1px solid #e2ebe2;padding:6px 8px;vertical-align:top;text-align:left}
-.legacy-csv-table th{position:sticky;top:0;background:#f7faf7;z-index:1;white-space:nowrap}
+/* 旧システムCSV一括取込プレビュー（他一覧の table/grid ルールに干渉させない） */
+.legacy-csv-table-wrap{
+  overflow:auto;
+  max-width:100%;
+  max-height:min(60vh,640px);
+  border-top:1px solid var(--line);
+  background:#fff;
+}
+/* 注意: フォーム用 .grid { display:grid } を付けない。table 表示を保つ */
+.legacy-csv-table{
+  display:table;
+  width:max-content;
+  min-width:100%;
+  border-collapse:collapse;
+  table-layout:auto;
+  font-size:13px;
+  line-height:1.35;
+}
+.legacy-csv-table thead{display:table-header-group}
+.legacy-csv-table tbody{display:table-row-group}
+.legacy-csv-table tr{display:table-row}
+.legacy-csv-table th,
+.legacy-csv-table td{
+  display:table-cell;
+  border-bottom:1px solid #e2ebe2;
+  padding:6px 8px;
+  vertical-align:top;
+  text-align:left;
+  box-sizing:border-box;
+}
+.legacy-csv-table th{
+  position:sticky;
+  top:0;
+  background:#f7faf7;
+  z-index:1;
+  white-space:nowrap;
+  font-size:12.5px;
+}
 .legacy-csv-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+/* 短い列は折り返さない */
+.legacy-csv-table .lc-row,
+.legacy-csv-table .lc-status,
+.legacy-csv-table .lc-size,
+.legacy-csv-table .lc-cond,
+.legacy-csv-table .lc-cost,
+.legacy-csv-table .lc-qty,
+.legacy-csv-table .lc-csvqty,
+.legacy-csv-table .lc-actions{
+  white-space:nowrap;
+  word-break:normal;
+  overflow-wrap:normal;
+}
+.legacy-csv-table .lc-row{min-width:3rem;width:3rem}
+.legacy-csv-table .lc-status{min-width:5.5rem}
+.legacy-csv-table .lc-size{min-width:3.5rem}
+.legacy-csv-table .lc-cond{min-width:3.5rem}
+.legacy-csv-table .lc-cost{min-width:5rem}
+.legacy-csv-table .lc-qty,
+.legacy-csv-table .lc-csvqty{min-width:4rem}
+.legacy-csv-table .lc-code{min-width:6rem;white-space:nowrap}
+.legacy-csv-table .lc-actions{min-width:8rem}
+/* 読みやすい幅を確保しつつ長文は折り返し */
+.legacy-csv-table .lc-customer{min-width:10rem;max-width:16rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.legacy-csv-table .lc-product{min-width:12rem;max-width:20rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.legacy-csv-table .lc-handle{min-width:7rem;max-width:12rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.legacy-csv-table .lc-place{min-width:9rem;max-width:14rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.legacy-csv-table .lc-detail{min-width:12rem;max-width:22rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.legacy-csv-table .lc-clip{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.legacy-csv-table .lc-detail-btn{margin-top:4px;padding:2px 8px;font-size:12px;min-height:26px;white-space:nowrap}
 .legacy-csv-table tr.legacy-status-needs_review{background:rgba(180,120,40,.08)}
 .legacy-csv-table tr.legacy-status-hold{background:rgba(80,80,140,.07)}
 .legacy-csv-table tr.legacy-status-qty_diff{background:rgba(40,100,160,.06)}
 .legacy-csv-history{margin:6px 0 0;padding-left:1.2em}
 .legacy-csv-pager{justify-content:flex-start}
 .legacy-csv-result{margin:10px 12px}
+dialog.legacy-csv-detail-dialog{width:min(720px,94vw);max-height:min(92vh,920px)}
+dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780px);overflow:auto;white-space:pre-wrap;word-break:break-word}

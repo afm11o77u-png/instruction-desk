@@ -336,6 +336,18 @@ class LegacyCsvUiSourceTest(unittest.TestCase):
         self.assertIn('legacy_csv.js', html)
         self.assertIn('legacyCsvPage', (ROOT / 'static' / 'legacy_csv.js').read_text(encoding='utf-8'))
 
+    def test_preview_table_avoids_form_grid_class(self):
+        """フォーム用 .grid { display:grid } を表に付けると見出しとデータが左右分離する。"""
+        js = (ROOT / 'static' / 'legacy_csv.js').read_text(encoding='utf-8')
+        css = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
+        self.assertNotIn('class="grid legacy-csv-table"', js)
+        self.assertIn('class="legacy-csv-table"', js)
+        self.assertIn('.legacy-csv-table{', css)
+        self.assertIn('display:table', css)
+        self.assertIn('.legacy-csv-table-wrap', css)
+        self.assertIn('data-lc-detail', js)
+        self.assertIn('PAGE_SIZE=80', js)
+
 
 class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
     def test_sample_preview_counts_on_empty_db(self):

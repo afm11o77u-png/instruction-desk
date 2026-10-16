@@ -94,6 +94,58 @@
     return ''
   }
 
+  // 顧客名・商品名など: ある程度長い／複数行なら折返し＋詳細。内容欄は確認理由をいつでも全文確認できるよう詳細を出す。
+  const DETAIL_CLIP_LEN=28
+  function clipCell(text,rowNo,field){
+    const raw=String(text||'')
+    if(!raw)return ''
+    const shown=esc(raw)
+    const needs=field==='detail'||raw.length>DETAIL_CLIP_LEN||raw.includes('\n')
+    if(!needs)return shown
+    return `<div class="lc-clip">${shown}</div><button type="button" class="quiet lc-detail-btn" data-lc-detail="${rowNo}" data-lc-field="${esc(field)}">詳細</button>`
+  }
+
+  function rowDetailText(lc,r){
+    const csv=r.csv||{}
+    const stock=r.stock||{}
+    const lines=[]
+    lines.push(`行: ${r.rowNo}`)
+    lines.push(`判定: ${r.statusLabel||''}`)
+    lines.push(`顧客: ${csv.customer||''}`)
+    lines.push(`品番: ${csv.code||''}`)
+    lines.push(`商品名: ${csv.productName||''}`)
+    lines.push(`加工: ${(r.handle&&r.handle.embroideryLabel)||'加工未整理'}`)
+    lines.push(`サイズ: ${csv.size||''}`)
+    lines.push(`新古: ${r.conditionLabel||''}`)
+    lines.push(`場所: ${[csv.site||'（空→'+lc.defaultSiteName+'）',csv.shelf||'（棚空可）'].join(' / ')}`)
+    if(r.unitCost!=null)lines.push(`単価: ${yen(r.unitCost)}`)
+    lines.push(`現在庫: ${stock.exists?num(stock.currentQty):'—'}`)
+    if(r.qty!=null)lines.push(`CSV数量: ${num(r.qty)}`)
+    if(r.status==='qty_diff'){
+      lines.push(`数量差異: ${num(stock.currentQty)} → ${num(r.qty)}（差 ${num((r.qty||0)-(stock.currentQty||0))}）`)
+    }
+    if((r.reasons||[]).length){
+      lines.push('確認理由:')
+      ;(r.reasons||[]).forEach(x=>lines.push('・'+x))
+    }
+    return lines.join('\n')
+  }
+
+  function openLegacyCsvDetail(lc,rowNo){
+    const rows=(lc.preview&&lc.preview.rows)||[]
+    const r=rows.find(x=>Number(x.rowNo)===Number(rowNo))
+    if(!r)return
+    const dlg=$('#dialog')
+    if(!dlg){window.alert(rowDetailText(lc,r));return}
+    dlg.classList.add('legacy-csv-detail-dialog')
+    dlg.innerHTML=`<div class="dialoghead"><h2>取込行の詳細（${esc(String(r.rowNo))}行）</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody legacy-csv-detail-body">${esc(rowDetailText(lc,r))}</div>`
+    const cleanup=()=>{dlg.classList.remove('legacy-csv-detail-dialog');dlg.innerHTML=''}
+    dlg.addEventListener('close',cleanup,{once:true})
+    dlg.showModal()
+    const close=$('#close')
+    if(close)close.onclick=()=>dlg.close()
+  }
+
   function renderTable(lc){
     const all=filteredRows(lc)
     const pages=Math.max(1,Math.ceil(all.length/PAGE_SIZE))
@@ -104,29 +156,31 @@
       const csv=r.csv||{}
       const stock=r.stock||{}
       const diff=r.status==='qty_diff'?`${num(stock.currentQty)} → ${num(r.qty)}（差 ${num((r.qty||0)-(stock.currentQty||0))}）`:''
-      const place=[csv.site||'（空→'+esc(lc.defaultSiteName)+'）',csv.shelf||'（棚空可）'].join(' / ')
-      const reason=(r.reasons||[]).map(x=>esc(x)).join('<br>')
-      const detail=[diff,reason].filter(Boolean).join('<br>')
+      const placePlain=[csv.site||'（空→'+lc.defaultSiteName+'）',csv.shelf||'（棚空可）'].join(' / ')
+      const reasonPlain=(r.reasons||[]).join('\n')
+      const detailPlain=[diff,reasonPlain].filter(Boolean).join('\n')
+      const handleLabel=(r.handle&&r.handle.embroideryLabel)||'加工未整理'
       return `<tr class="legacy-status-${esc(r.status)}">
-        <td>${r.rowNo}</td>
-        <td>${esc(r.statusLabel)}</td>
-        <td>${esc(csv.customer)}</td>
-        <td>${esc(csv.code)}</td>
-        <td>${esc(csv.productName)}</td>
-        <td>${esc((r.handle&&r.handle.embroideryLabel)||'加工未整理')}</td>
-        <td>${esc(csv.size)}</td>
-        <td>${esc(r.conditionLabel)}</td>
-        <td>${place}</td>
-        <td class="num">${r.unitCost!=null?esc(yen(r.unitCost)):''}</td>
-        <td class="num">${stock.exists?num(stock.currentQty):'—'}</td>
-        <td class="num">${r.qty!=null?num(r.qty):''}</td>
-        <td>${detail}</td>
-        <td>${rowChecks(lc,r)}</td>
+        <td class="lc-row">${r.rowNo}</td>
+        <td class="lc-status">${esc(r.statusLabel)}</td>
+        <td class="lc-customer">${clipCell(csv.customer,r.rowNo,'customer')}</td>
+        <td class="lc-code">${esc(csv.code)}</td>
+        <td class="lc-product">${clipCell(csv.productName,r.rowNo,'product')}</td>
+        <td class="lc-handle">${clipCell(handleLabel,r.rowNo,'handle')}</td>
+        <td class="lc-size">${esc(csv.size)}</td>
+        <td class="lc-cond">${esc(r.conditionLabel)}</td>
+        <td class="lc-place">${clipCell(placePlain,r.rowNo,'place')}</td>
+        <td class="num lc-cost">${r.unitCost!=null?esc(yen(r.unitCost)):''}</td>
+        <td class="num lc-qty">${stock.exists?num(stock.currentQty):'—'}</td>
+        <td class="num lc-csvqty">${r.qty!=null?num(r.qty):''}</td>
+        <td class="lc-detail">${clipCell(detailPlain,r.rowNo,'detail')}</td>
+        <td class="lc-actions">${rowChecks(lc,r)}</td>
       </tr>`
     }).join('')
-    return `<div class="legacy-csv-table-wrap"><table class="grid legacy-csv-table">
+    // class にフォーム用 .grid を付けない（display:grid で見出しとデータが左右に分かれる）
+    return `<div class="legacy-csv-table-wrap"><table class="legacy-csv-table">
       <thead><tr>
-        <th>行</th><th>判定</th><th>顧客</th><th>品番</th><th>商品名</th><th>加工</th><th>サイズ</th><th>新古</th><th>場所</th><th>単価</th><th>現在</th><th>CSV</th><th>内容</th><th>操作</th>
+        <th class="lc-row">行</th><th class="lc-status">判定</th><th class="lc-customer">顧客</th><th class="lc-code">品番</th><th class="lc-product">商品名</th><th class="lc-handle">加工</th><th class="lc-size">サイズ</th><th class="lc-cond">新古</th><th class="lc-place">場所</th><th class="lc-cost">単価</th><th class="lc-qty">現在</th><th class="lc-csvqty">CSV</th><th class="lc-detail">内容</th><th class="lc-actions">操作</th>
       </tr></thead>
       <tbody>${body||'<tr><td colspan="14">該当行がありません。</td></tr>'}</tbody>
     </table></div>
@@ -235,6 +289,9 @@
         const v=el.value?Number(el.value):null
         lc.selections[key]=Object.assign({},lc.selections[key],{handleId:v})
       }
+    })
+    document.querySelectorAll('[data-lc-detail]').forEach(el=>{
+      el.onclick=()=>openLegacyCsvDetail(lc,el.dataset.lcDetail)
     })
 
     const previewBtn=$('#legacyCsvPreview')
