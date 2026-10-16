@@ -215,7 +215,8 @@ def _links(c, rows):
             if not customer:
                 raise ValueError(f'取扱の{row_no}行目：顧客「{item["customer"]}」がありません。顧客シートに先に入れてください。')
             standard = item['standard'] in YES
-            link_key = (customer['id'], item['embroidery'])
+            embroidery = stock.normalize_embroidery(item['embroidery'])
+            link_key = (customer['id'], embroidery)
             previous = links.get(link_key)
             if standard:
                 for other in links.values():
@@ -225,7 +226,7 @@ def _links(c, rows):
                 previous['isStandard'] = standard
                 updated += 1
             else:
-                links[link_key] = {'customerId': customer['id'], 'embroidery': item['embroidery'], 'isStandard': standard, 'active': True}
+                links[link_key] = {'customerId': customer['id'], 'embroidery': embroidery, 'isStandard': standard, 'active': True}
                 created += 1
             changed = True
         if changed:
@@ -287,8 +288,9 @@ def _opening(c, rows, meta=None):
             condition = stock.parse_condition(item.get('condition'), default=stock.CONDITION_NEW)
         except ValueError as e:
             raise ValueError(f'初期在庫の{row_no}行目：{e}') from e
+        embroidery = stock.normalize_embroidery(item['embroidery'])
         key = (
-            item['customer'], item['code'], item['name'], item['color'], item['embroidery'],
+            item['customer'], item['code'], item['name'], item['color'], embroidery,
             item['site'], item['shelf'], basis, received, unknown, item['payout'], condition,
         )
         if key not in index:

@@ -327,6 +327,25 @@ def text(value):
     return (value or '').strip()
 
 
+# 未加工の取扱は DB に空文字で保存し、画面・API の表示だけこの名称を使う。
+EMPTY_EMBROIDERY_LABEL = '加工なし'
+# 表示名をそのまま入力・Excel記入された場合の互換（完全一致のみ。説明文の部分置換はしない）。
+EMPTY_EMBROIDERY_ALIASES = frozenset({EMPTY_EMBROIDERY_LABEL, '刺繍なし'})
+
+
+def normalize_embroidery(value):
+    """未加工の別名を空文字にそろえる。既存の取扱キーとExcel取込の一致を保つ。"""
+    t = text(value)
+    if t in EMPTY_EMBROIDERY_ALIASES:
+        return ''
+    return t
+
+
+def embroidery_label(value):
+    """空（および未加工の別名）の加工仕様を表示名にする。保存キーそのものは変えない。"""
+    return EMPTY_EMBROIDERY_LABEL if not normalize_embroidery(value) else text(value)
+
+
 def need(value, label, limit=80):
     t = text(value)
     if not t:
@@ -485,10 +504,10 @@ def _links(c, body):
         customer_id = raw.get('customerId')
         if not isinstance(customer_id, int) or not c.execute('SELECT id FROM customers WHERE id=?', (customer_id,)).fetchone():
             raise ValueError('取扱の顧客を、顧客台帳から選んでください。')
-        embroidery = optional(raw.get('embroidery'), '加工仕様', 80)
+        embroidery = normalize_embroidery(optional(raw.get('embroidery'), '加工仕様', 80))
         key = (customer_id, embroidery)
         if key in seen:
-            raise ValueError('同じ顧客で、同じ加工仕様が重複しています。刺繍ありとなしは別の行にしてください。')
+            raise ValueError('同じ顧客で、同じ加工仕様が重複しています。加工ありとなしは別の行にしてください。')
         seen.add(key)
         standard = flag(raw.get('isStandard'))
         if standard:
@@ -593,7 +612,7 @@ def customer_product_payload(c, cp_id, *, already=False):
         'customerId': row['customer_id'],
         'productId': row['product_id'],
         'embroidery': row['embroidery'] or '',
-        'embroideryLabel': row['embroidery'] or '刺繍なし',
+        'embroideryLabel': embroidery_label(row['embroidery']),
         'isStandard': bool(row['is_standard']),
         'active': bool(row['active']),
         'already': bool(already),
@@ -615,7 +634,7 @@ def ensure_customer_product(c, body):
     """
     customer_id = _as_positive_id(body.get('customerId'), '顧客')
     product_id = _as_positive_id(body.get('productId'), '商品')
-    embroidery = optional(body.get('embroidery'), '加工情報', 80)
+    embroidery = normalize_embroidery(optional(body.get('embroidery'), '加工情報', 80))
     customer = c.execute('SELECT id,active FROM customers WHERE id=?', (customer_id,)).fetchone()
     if not customer:
         raise ValueError('顧客が未登録です。顧客台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
@@ -1217,7 +1236,7 @@ def opening_entries(c):
             'productName': r['product_name'],
             'color': r['color'],
             'embroidery': r['embroidery'],
-            'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'embroideryLabel': embroidery_label(r['embroidery']),
             'size': r['size_label'],
             'locationId': r['location_id'],
             'locationLabel': location_label(c, loc),
@@ -1284,7 +1303,7 @@ def stock_query(c, args):
             'id': r['id'], 'customerId': r['customer_id'], 'customerName': r['customer_name'],
             'customerActive': bool(r['customer_active']), 'productId': r['product_id'], 'code': r['code'],
             'productName': r['product_name'], 'color': r['color'], 'supplierName': r['supplier_name'] or '',
-            'embroidery': r['embroidery'], 'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'embroidery': r['embroidery'], 'embroideryLabel': embroidery_label(r['embroidery']),
             'isStandard': bool(r['is_standard']), 'size': r['size_label'], 'locationId': r['location_id'],
             'locationLabel': location_label(c, loc),
             'siteId': r['site_id'], 'siteName': r['site_name'],
@@ -1790,7 +1809,7 @@ def plan_outbound(c, body):
         'productName': cp['product_name'],
         'color': cp['color'],
         'embroidery': cp['embroidery'],
-        'embroideryLabel': cp['embroidery'] or '刺繍なし',
+        'embroideryLabel': embroidery_label(cp['embroidery']),
         'size': size,
         'locationId': loc['id'],
         'locationLabel': location_label(c, loc),
@@ -2053,7 +2072,7 @@ def move_targets(c, args=None):
             'color': r['color'],
             'customerProductId': r['customer_product_id'],
             'embroidery': r['embroidery'],
-            'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'embroideryLabel': embroidery_label(r['embroidery']),
             'size': r['size_label'],
             'locationId': r['location_id'],
             'locationLabel': location_label(c, loc),

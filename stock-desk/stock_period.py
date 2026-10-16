@@ -134,7 +134,7 @@ def _load_events(c, args):
             'productName': r['product_name'],
             'color': r['color'],
             'embroidery': r['embroidery'],
-            'embroideryLabel': r['embroidery'] or '刺繍なし',
+            'embroideryLabel': stock.embroidery_label(r['embroidery']),
             'size': r['size_label'],
             'locationId': r['location_id'],
             'siteId': site_id,
