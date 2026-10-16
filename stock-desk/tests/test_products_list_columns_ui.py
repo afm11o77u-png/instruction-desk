@@ -58,20 +58,27 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         self.assertIn('.prod-sizes', STYLE_CSS)
         self.assertIn('.prod-act', STYLE_CSS)
         self.assertIn('table-layout:fixed', STYLE_CSS)
-        # 商品ID: #113 の width:1%（重なり）と #112 の 5.5rem（広すぎ）の中間
+        # 商品ID: 仕入先 .sid 見た目＋見出し/4桁の最小（3.75rem）。5.25/5.5 は広すぎ、1% は重なり
         start = STYLE_CSS.index('/* 商品一覧:')
         end = STYLE_CSS.index('.check,.inactive-toggle', start)
         products_css = STYLE_CSS[start:end]
         self.assertNotIn('width:5.5rem', products_css)
+        self.assertNotIn('width:5.25rem', products_css)
         self.assertNotIn('width:1%', products_css)
-        self.assertIn('width:5.25rem', products_css)
-        self.assertIn('min-width:5.25rem', products_css)
+        self.assertIn('width:3.75rem', products_css)
+        self.assertIn('min-width:3.75rem', products_css)
+        self.assertIn('padding-left:6px!important', products_css)
+        self.assertIn('#8aa094', products_css)  # same muted ID color as table.directory .sid
         self.assertIn('.prod-id', products_css)
         self.assertIn('white-space:nowrap', products_css)
         self.assertIn('overflow:hidden', products_css)
         self.assertIn('.prod-handles{width:38%}', products_css)
         self.assertIn('.prod-act{width:4.75rem', products_css)
         self.assertIn('.prod-sizes{width:18%', products_css)
+        # directory reference still documents the 2em sid slot for in-cell IDs
+        self.assertIn('table.directory .sid{display:inline-block;width:2em', STYLE_CSS)
+        dm = (ROOT / 'static' / 'display-mode.css').read_text(encoding='utf-8')
+        self.assertIn('table.products-list td.prod-id{font-size:11px}', dm)
 
 
 if __name__ == '__main__':

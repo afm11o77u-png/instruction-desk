@@ -90,20 +90,34 @@ table.site-locations th:nth-child(3),table.site-locations td:nth-child(3){width:
 table.site-locations .shelf-summary{color:#24352c;font-weight:400}
 table.site-locations tr.is-stopped td{color:#8b9790}
 
-/* 商品一覧: 取扱を先に読む。商品IDは見出し＋4桁が重ならない幅（#112の5.5remより狭く、#113の1%より広く） */
+/* 商品一覧: 取扱を先に読む。商品ID列は仕入先・顧客の .sid 見た目に寄せ、見出し「商品ID」＋4桁の最小幅 */
 table.products-list{width:100%;table-layout:fixed}
 table.products-list th,table.products-list td{word-break:break-word;overflow-wrap:anywhere}
+/* .sid は width:2em（2桁向け）。商品は別列で4桁＋見出しが要るため 3.75rem（左右 pad 6px 固定） */
 table.products-list .prod-id,
 table.products-list th:nth-child(1){
-  width:5.25rem;
-  min-width:5.25rem;
-  max-width:5.25rem;
+  width:3.75rem;
+  min-width:3.75rem;
+  max-width:3.75rem;
   box-sizing:border-box;
+  padding-left:6px!important;
+  padding-right:6px!important;
   white-space:nowrap;
   font-variant-numeric:tabular-nums;
   word-break:normal;
   overflow-wrap:normal;
   overflow:hidden;
+}
+table.products-list th:nth-child(1){
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:.04em;
+  color:#5d7268;
+}
+table.products-list td.prod-id{
+  color:#8aa094;
+  font-size:12px;
+  font-weight:700;
 }
 table.products-list .prod-name{width:26%}
 table.products-list .prod-handles{width:38%}
