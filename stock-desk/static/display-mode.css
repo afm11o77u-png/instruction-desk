@@ -114,7 +114,21 @@
 .list-stage.dm-standard .flagchecks{margin-top:2px;gap:6px}
 .list-stage.dm-standard .duechip{margin-top:2px;font-size:.7rem}
 .list-stage.dm-standard button.quiet{padding:4px 8px;font-size:.75rem}
+.list-stage.dm-standard .stock-row-btn,
+.list-stage.dm-standard button.stock-row-btn.primary{
+  padding:4px 8px;
+  font-size:.75rem;
+  line-height:1.2;
+  min-height:26px;
+}
 .list-stage.dm-standard tr.authorhead td{padding:6px 8px;font-size:.8rem}
+.list-stage.dm-cozy .stock-row-btn,
+.list-stage.dm-cozy button.stock-row-btn.primary{
+  padding:6px 10px;
+  font-size:.875rem;
+  line-height:1.25;
+  min-height:32px;
+}
 
 /* コンパクト: new denser list (~12px body, ~32–44px 1–2 line rows) */
 .list-stage.dm-compact{font-size:12px;line-height:1.25}
@@ -166,6 +180,14 @@
   min-height:24px;
 }
 .list-stage.dm-compact button:not(.quiet):not(.primary){
+  padding:3px 8px;
+  font-size:11px;
+  line-height:1.2;
+  min-height:26px;
+}
+/* 入庫(.primary)も出庫と同じ縮小サイズに揃える */
+.list-stage.dm-compact .stock-row-btn,
+.list-stage.dm-compact button.stock-row-btn.primary{
   padding:3px 8px;
   font-size:11px;
   line-height:1.2;

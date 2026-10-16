@@ -55,7 +55,7 @@ class StockListFilterLayoutTest(unittest.TestCase):
     def test_list_display_mounts_outside_filter_frame(self):
         body = _fn('mountStockDisplay')
         self.assertIn("tab==='list'", body)
-        self.assertIn("tab==='move'", body)
+        self.assertNotIn("tab==='move'", body)
         self.assertIn('SETUP_TAB_IDS.has(tab)', body)
         self.assertIn("#stocklistdisplay", body)
         self.assertIn("#main .bar", body)
