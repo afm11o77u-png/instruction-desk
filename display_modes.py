@@ -16,6 +16,7 @@ SCREEN_DEFAULTS = {
     'stock-products': 'compact',
     'stock-locations': 'compact',
     'stock-opening': 'compact',
+    'stock-legacy-csv': 'compact',
     'stock-list': 'standard',
     'stock-move': 'standard',
     'stock-period': 'standard',

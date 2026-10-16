@@ -126,9 +126,9 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('id="tabs"', header)
         self.assertNotIn('<nav class="tabs"', INDEX[INDEX.index('</header>'):])
 
-    def test_setup_renders_five_register_tabs_not_list(self):
+    def test_setup_renders_register_tabs_not_list(self):
         self.assertIn(
-            "SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]",
+            "SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫'],['legacyCsv','旧CSV取込']]",
             APP_JS,
         )
         self.assertNotIn("['list','在庫一覧']", APP_JS[APP_JS.index('SETUP_TABS='):APP_JS.index('SETUP_TAB_IDS=')])
@@ -136,7 +136,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn('SETUP_TABS.map', paint)
         self.assertIn("state.section==='setup'", paint)
         self.assertIn('tabs.hidden=true', paint)
-        for label in ('顧客', '仕入先', '商品', '保管場所', '初期在庫'):
+        for label in ('顧客', '仕入先', '商品', '保管場所', '初期在庫', '旧CSV取込'):
             self.assertIn(label, APP_JS[APP_JS.index('SETUP_TABS='):APP_JS.index('SETUP_TAB_IDS=')])
 
     def test_default_entry_is_stock_list(self):

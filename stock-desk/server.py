@@ -15,11 +15,19 @@ WRITE_PATHS = {
     '/api/customers', '/api/suppliers', '/api/products', '/api/locations',
     '/api/customer-products',
     '/api/opening', '/api/opening/correct', '/api/import',
+    '/api/legacy-csv/commit',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/company-profile',
+}
+
+LARGE_BODY_PATHS = {
+    '/api/import',
+    '/api/legacy-csv/preview',
+    '/api/legacy-csv/commit',
+    '/api/legacy-csv/history',
 }
 
 PO_ID_RE = re.compile(r'^/api/purchase-orders/(\d+)$')
@@ -177,6 +185,36 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         except sqlite3.IntegrityError:
             return 400, {'error': '同じ内容が既にあるため、読み込みを中止しました。'}
         return 200, result
+    if path == '/api/legacy-csv/preview':
+        import legacy_csv_import
+        try:
+            with stock.connect(db_path) as c:
+                # プレビューは台帳・在庫を変更しない（読み取りのみ）
+                result = legacy_csv_import.build_preview(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or 'CSVを確認してください。'}
+        return 200, result
+    if path == '/api/legacy-csv/history':
+        import legacy_csv_import
+        try:
+            with stock.connect(db_path) as c:
+                result = legacy_csv_import.file_history(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or 'CSVを確認してください。'}
+        return 200, result
+    if path == '/api/legacy-csv/commit':
+        import legacy_csv_import
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = legacy_csv_import.commit_preview(c, payload, db_path=db_path)
+        except stock.StockConflict as e:
+            return 409, e.payload
+        except ValueError as e:
+            return 400, {'error': str(e) or '取込を確認してください。'}
+        except sqlite3.IntegrityError:
+            return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
+        return 200, result
     if path == '/api/outbound/preview':
         try:
             with stock.connect(db_path) as c:
@@ -296,7 +334,8 @@ def make_handler(db_path, mode):
                 self.send(400, {'error': 'このパソコンからの操作だけを受け付けます。'})
                 return
             length = int(self.headers.get('Content-Length') or 0)
-            limit = 12_000_000 if urlparse(self.path).path == '/api/import' else 1_000_000
+            path = urlparse(self.path).path
+            limit = 12_000_000 if path in LARGE_BODY_PATHS else 1_000_000
             if length > limit:
                 self.send(400, {'error': '送信データが大きすぎます。'})
                 return

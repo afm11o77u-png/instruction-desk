@@ -142,6 +142,23 @@ CREATE TABLE IF NOT EXISTS loan_events (
   at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS legacy_csv_import_runs (
+  id INTEGER PRIMARY KEY,
+  file_sha256 TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  row_count INTEGER NOT NULL,
+  basis_date TEXT NOT NULL,
+  default_site_name TEXT NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  preview_at TEXT NOT NULL,
+  preview_fingerprint TEXT NOT NULL DEFAULT '',
+  commit_token TEXT UNIQUE,
+  committed_at TEXT,
+  result_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS legacy_csv_import_runs_sha ON legacy_csv_import_runs(file_sha256, created_at DESC);
 """
 
 
@@ -220,6 +237,23 @@ def migrate_schema(c):
       note TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL
     )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS legacy_csv_import_runs (
+      id INTEGER PRIMARY KEY,
+      file_sha256 TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      row_count INTEGER NOT NULL,
+      basis_date TEXT NOT NULL,
+      default_site_name TEXT NOT NULL,
+      actor_name TEXT NOT NULL DEFAULT '',
+      preview_at TEXT NOT NULL,
+      preview_fingerprint TEXT NOT NULL DEFAULT '',
+      commit_token TEXT UNIQUE,
+      committed_at TEXT,
+      result_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS legacy_csv_import_runs_sha ON legacy_csv_import_runs(file_sha256, created_at DESC)')
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
     if 'move_batch_id' not in move_cols:
         c.execute('ALTER TABLE moves ADD COLUMN move_batch_id INTEGER REFERENCES move_batches(id)')
@@ -406,18 +440,28 @@ def parse_money(value, label='仕入単価'):
     return value
 
 
-def parse_qty(value, label='数量', allow_zero=False):
+def parse_qty(value, label='数量', allow_zero=False, allow_negative=False):
     if value is None or (isinstance(value, str) and text(value) == ''):
         raise ValueError(f'{label}を入力してください。')
     if isinstance(value, bool) or isinstance(value, float):
         raise ValueError(f'{label}は整数で入力してください。')
     if isinstance(value, str):
         t = text(value).replace(',', '')
-        if not t.isdigit():
+        if allow_negative and t.startswith('-'):
+            if not t[1:].isdigit():
+                raise ValueError(f'{label}は整数で入力してください。')
+            value = -int(t[1:])
+        elif not t.isdigit():
             raise ValueError(f'{label}は整数で入力してください。')
-        value = int(t)
+        else:
+            value = int(t)
     if not isinstance(value, int):
         raise ValueError(f'{label}は整数で入力してください。')
+    if allow_negative:
+        if value < -99999 or value > 99999 or (value == 0 and not allow_zero):
+            lo = 0 if allow_zero else (1 if value >= 0 else -99999)
+            raise ValueError(f'{label}は{lo}から99999までです（マイナス可）。')
+        return value
     if value < 0 or value > 99999 or (value == 0 and not allow_zero):
         raise ValueError(f'{label}は1から99999までです。' if not allow_zero else f'{label}は0から99999までです。')
     return value
@@ -964,6 +1008,8 @@ def register_opening(c, body):
     else:
         received = parse_date(body.get('receivedOn'), '入荷日')
         payout = 0
+    allow_zero = body.get('allowZero') in (True, 1, '1')
+    allow_negative = body.get('allowNegative') in (True, 1, '1')
     sizes = {r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (cp['product_id'],))}
     cleaned = []
     seen = set()
@@ -973,7 +1019,7 @@ def register_opening(c, body):
         size = raw.get('size')
         if not isinstance(size, str) or size.strip() not in sizes or size != size.strip():
             raise ValueError('商品に登録したサイズだけを入力してください。新しいサイズは商品台帳で追加します。')
-        qty = parse_qty(raw.get('qty'), f'{size}の数量')
+        qty = parse_qty(raw.get('qty'), f'{size}の数量', allow_zero=allow_zero, allow_negative=allow_negative)
         cost = parse_money(raw.get('unitCost'), f'{size}の仕入単価')
         key = (size, cost)
         if key in seen:
@@ -982,6 +1028,8 @@ def register_opening(c, body):
         cleaned.append((size, qty, cost))
     if not cleaned:
         raise ValueError('数量のある行がありません。')
+    actor = _actor_name(body)
+    note = optional(body.get('note'), '備考', 200) or '初期在庫'
     t = stamp()
     c.execute('INSERT INTO opening_batches(client_token,created_at) VALUES(?,?)', (token, t))
     batch_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
@@ -991,10 +1039,87 @@ def register_opening(c, body):
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (batch_id, cp_id, size, location_id, cost, qty, qty, basis, received, 1 if unknown else 0, payout, condition, t, t))
         lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-        c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,business_on,note,at)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
-                  (lot_id, 'opening', qty, cost, 0, qty, None, cost, location_id, basis, '初期在庫', t))
+        c.execute('''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,location_id,actor_name,business_on,note,at)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                  (lot_id, 'opening', qty, cost, 0, qty, None, cost, location_id, actor, basis, note, t))
     return batch_result(c, batch_id, False)
+
+
+def adjust_opening_qty_diff(c, body):
+    """差分調整: 既存ロットの残数を CSV 数量へ合わせる（履歴は残す・FIFO ロットを消さない）。"""
+    _require_write(body)
+    lot_ids = body.get('lotIds') or []
+    if not isinstance(lot_ids, list) or not lot_ids or not all(isinstance(x, int) for x in lot_ids):
+        raise ValueError('数量差異の対象在庫を選んでください。')
+    target_qty = parse_qty(body.get('targetQty'), 'CSV数量', allow_zero=True, allow_negative=True)
+    reason = need(body.get('reason'), '更新の理由', 200)
+    actor = _actor_name(body)
+    fingerprint = text(body.get('fingerprint'))
+    lots = []
+    for lid in lot_ids:
+        row = c.execute('SELECT * FROM lots WHERE id=?', (lid,)).fetchone()
+        if not row:
+            raise ValueError('在庫が見つかりません。')
+        lots.append(row)
+    # Same match key for all lots in the comparison scope
+    key0 = (lots[0]['customer_product_id'], lots[0]['size_label'], lots[0]['location_id'],
+            lots[0]['condition'], lots[0]['unit_cost'])
+    for lot in lots[1:]:
+        if (lot['customer_product_id'], lot['size_label'], lot['location_id'],
+                lot['condition'], lot['unit_cost']) != key0:
+            raise ValueError('比較範囲の在庫キーが一致しません。')
+    current = sum(int(l['qty_remaining']) for l in lots)
+    expected_fp = '|'.join(f"{l['id']}:{l['qty_remaining']}" for l in sorted(lots, key=lambda r: r['id']))
+    if fingerprint and fingerprint != expected_fp:
+        raise StockConflict({
+            'error': 'プレビュー後に在庫が変わったため、確認し直してください。',
+            'code': 'stale_preview',
+            'fingerprint': expected_fp,
+        })
+    if current == target_qty:
+        raise ValueError('数量が変わっていません。')
+    delta = target_qty - current
+    # Apply delta to the newest lot (highest id) so older FIFO lots stay intact.
+    target = max(lots, key=lambda r: r['id'])
+    before = int(target['qty_remaining'])
+    after = before + delta
+    t = stamp()
+    business_on = parse_date(body.get('businessOn') or t[:10], '更新の業務日')
+    unconsumed = before == int(target['qty_received'])
+    if unconsumed:
+        c.execute(
+            'UPDATE lots SET qty_remaining=?, qty_received=?, updated_at=? WHERE id=? AND qty_remaining=?',
+            (after, after, t, target['id'], before),
+        )
+    else:
+        c.execute(
+            'UPDATE lots SET qty_remaining=?, updated_at=? WHERE id=? AND qty_remaining=?',
+            (after, t, target['id'], before),
+        )
+    if c.execute('SELECT changes()').fetchone()[0] != 1:
+        raise ValueError('同時に入出庫されたため、保存を中止しました。最新の数量を確認してください。')
+    c.execute(
+        '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
+           location_id,actor_name,business_on,note,at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (target['id'], 'legacy_csv_adjust', delta, target['unit_cost'], before, after,
+         target['unit_cost'], target['unit_cost'], target['location_id'], actor, business_on, reason, t),
+    )
+    fresh = list(c.execute(
+        f"SELECT id,qty_remaining FROM lots WHERE id IN ({','.join('?' * len(lot_ids))}) ORDER BY id",
+        lot_ids,
+    ))
+    return {
+        'lotId': target['id'],
+        'lotIds': lot_ids,
+        'beforeQty': current,
+        'afterQty': target_qty,
+        'delta': delta,
+        'fingerprint': '|'.join(f"{r['id']}:{r['qty_remaining']}" for r in fresh),
+        'actorName': actor,
+        'note': reason,
+        'at': t,
+    }
 
 
 def correct_opening(c, body):

@@ -353,3 +353,16 @@ tr.is-shortage td.qty, .qty.is-shortage, article.dm-card.is-shortage .qty{color:
 tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .shortage-tag{color:#a33;font-size:.85em;margin-left:.35em}
 .shortage-confirm{border-left:3px solid #a33;padding-left:.6em}
+
+/* 旧システムCSV一括取込 */
+.legacy-csv-table-wrap{overflow:auto;max-height:min(60vh,640px);border-top:1px solid var(--line)}
+.legacy-csv-table{width:100%;border-collapse:collapse;font-size:13px}
+.legacy-csv-table th,.legacy-csv-table td{border-bottom:1px solid #e2ebe2;padding:6px 8px;vertical-align:top;text-align:left}
+.legacy-csv-table th{position:sticky;top:0;background:#f7faf7;z-index:1;white-space:nowrap}
+.legacy-csv-table td.num{text-align:right;font-variant-numeric:tabular-nums}
+.legacy-csv-table tr.legacy-status-needs_review{background:rgba(180,120,40,.08)}
+.legacy-csv-table tr.legacy-status-hold{background:rgba(80,80,140,.07)}
+.legacy-csv-table tr.legacy-status-qty_diff{background:rgba(40,100,160,.06)}
+.legacy-csv-history{margin:6px 0 0;padding-left:1.2em}
+.legacy-csv-pager{justify-content:flex-start}
+.legacy-csv-result{margin:10px 12px}
