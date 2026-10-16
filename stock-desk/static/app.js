@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false}
 const CONDITION_OPTS=[['new','新品'],['used','中古']]
 function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
 function conditionQtyText(r){
@@ -114,8 +114,107 @@ function resolveProductSupplierFilter(){
   if(!ok)saveProductSupplierFilter('')
   return next
 }
-function yen(n){return Number(n).toLocaleString('ja-JP')+'円'}
+function yen(n){if(n==null||n==='')return '原価未確定';return Number(n).toLocaleString('ja-JP')+'円'}
 function num(n){return Number(n).toLocaleString('ja-JP')}
+function stockAmountText(row){
+  if(row&&(row.costPending||row.amount==null)&&Number(row.qty)<0)return '原価未確定'
+  if(row&&row.costPending&&row.amount==null)return '原価未確定'
+  if(row&&row.amount==null)return '原価未確定'
+  return yen(row&&row.amount!=null?row.amount:0)
+}
+function stockQtyClass(row){
+  const q=Number(row&&row.qty)
+  if(q<0||row&&row.isShortage)return 'qty is-shortage'
+  if(q===0)return 'qty is-zero-stock'
+  return 'qty'
+}
+function stockRowClass(row){
+  const q=Number(row&&row.qty)
+  if(q<0||row&&row.isShortage)return 'is-shortage'
+  if(q===0)return 'is-zero-stock'
+  return ''
+}
+/** 在庫一覧行 → 入出庫ダイアログ用ターゲット（検索し直させない） */
+function targetFromStockRow(row,conditionOverride){
+  if(!row)return null
+  const condition=conditionOverride||row.condition||(row.conditionMixed?null:'new')
+  return {
+    customerProductId:row.customerProductId,
+    customerId:row.customerId,
+    customerName:row.customerName,
+    productId:row.productId,
+    code:row.code,
+    productName:row.productName,
+    color:row.color,
+    embroidery:row.embroidery,
+    embroideryLabel:row.embroideryLabel,
+    size:row.size,
+    locationId:row.locationId,
+    locationLabel:row.locationLabel||row.shelfLabel,
+    condition:condition,
+    conditionLabel:condition?conditionLabel(condition):(row.conditionLabel||''),
+    conditionMixed:!!row.conditionMixed,
+    conditions:row.conditions||[],
+    qty:row.qty,
+    amount:row.amount,
+  }
+}
+function stockActionButtonsHtml(row,{lotId}={}){
+  if(!stockCanWrite())return '—'
+  const cp=row.customerProductId!=null?row.customerProductId:''
+  const size=esc(row.size||'')
+  const loc=row.locationId!=null?row.locationId:''
+  const cond=row.conditionMixed?'':esc(row.condition||'new')
+  const mixed=row.conditionMixed?'1':'0'
+  const lot=lotId!=null?` data-lot="${lotId}"`:''
+  return `<button type="button" class="primary" data-stock-in="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>入庫</button> <button type="button" data-stock-out="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>出庫</button> <button type="button" class="quiet" data-stock-take="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>棚卸</button>`
+}
+async function pickConditionIfNeeded(target,actionLabel){
+  if(!target)return null
+  if(target.condition&&!target.conditionMixed)return target
+  const options=(target.conditions&&target.conditions.length)?target.conditions:['new','used']
+  const dlg=$('#dialog')
+  return await new Promise(resolve=>{
+    dlg.innerHTML=`<div class="dialoghead"><h2>${esc(actionLabel)}する状態</h2><button type="button" id="closeCond" class="quiet">閉じる</button></div>
+      <div class="dialogbody"><p>この行は新品と中古が混在しています。操作する状態を選んでください。</p>
+      <div class="grid">${options.map(c=>`<button type="button" class="primary" data-pick-cond="${esc(c)}">${esc(conditionLabel(c))}</button>`).join('')}</div></div>
+      <div class="dialogactions"><button type="button" id="cancelCond">やめる</button></div>`
+    if(!dlg.open)dlg.showModal()
+    const done=v=>{dlg.close();dlg.innerHTML='';resolve(v)}
+    $('#closeCond').onclick=()=>done(null)
+    $('#cancelCond').onclick=()=>done(null)
+    dlg.querySelectorAll('[data-pick-cond]').forEach(b=>b.onclick=()=>{
+      done({...target,condition:b.dataset.pickCond,conditionLabel:conditionLabel(b.dataset.pickCond),conditionMixed:false})
+    })
+  })
+}
+function bindStockRowActions(root,rows){
+  const find=btn=>{
+    const cp=btn.dataset.stockIn||btn.dataset.stockOut||btn.dataset.stockTake
+    const size=btn.dataset.size
+    const loc=btn.dataset.location
+    const cond=btn.dataset.condition||''
+    return (rows||[]).find(r=>String(r.customerProductId)===String(cp)&&String(r.size)===String(size)&&String(r.locationId)===String(loc)&&(cond===''||String(r.condition||'new')===String(cond)||r.conditionMixed))
+  }
+  root.querySelectorAll('[data-stock-in]').forEach(b=>b.onclick=async()=>{
+    const row=find(b);if(!row)return
+    let target=targetFromStockRow(row,b.dataset.condition||null)
+    target=await pickConditionIfNeeded(target,'入庫');if(!target)return
+    openInboundDialog(target)
+  })
+  root.querySelectorAll('[data-stock-out]').forEach(b=>b.onclick=async()=>{
+    const row=find(b);if(!row)return
+    let target=targetFromStockRow(row,b.dataset.condition||null)
+    target=await pickConditionIfNeeded(target,'出庫');if(!target)return
+    openOutboundDialog(target)
+  })
+  root.querySelectorAll('[data-stock-take]').forEach(b=>b.onclick=async()=>{
+    const row=find(b);if(!row)return
+    let target=targetFromStockRow(row,b.dataset.condition||null)
+    target=await pickConditionIfNeeded(target,'棚卸');if(!target)return
+    openStocktakeDialog(target)
+  })
+}
 function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;clearTimeout(toast._);toast._=setTimeout(()=>{el.hidden=true},ms)}
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
@@ -301,7 +400,7 @@ function paint(){
     b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='move'||state.section==='history'||state.section==='period'||state.section==='orders')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',history:'履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -1579,6 +1678,7 @@ async function loadStock(){
   if(f.spec)q.set('spec',f.spec)
   if(f.locationId)q.set('locationId',f.locationId)
   if(f.condition)q.set('condition',f.condition)
+  if(f.stockFilter)q.set('stockFilter',f.stockFilter)
   state.stock=await api('/api/stock?'+q.toString())
 }
 function stockList(){
@@ -1589,6 +1689,8 @@ function stockList(){
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
   const totalNew=state.stock?state.stock.totalQtyNew:0
   const totalUsed=state.stock?state.stock.totalQtyUsed:0
+  const pending=state.stock?state.stock.costPendingQty:0
+  const writable=stockCanWrite()
   $('#main').innerHTML=`<section class="panel stock-list-panel">
     <div class="bar stock-list-filters">
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${state.data.customers.map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
@@ -1597,14 +1699,18 @@ function stockList(){
       <label>加工仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${state.data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
       <label>状態${conditionSelectHtml('fCondition',f.condition||'',{allowAll:true})}</label>
+      <label>在庫<select id="fStockFilter"><option value="" ${!f.stockFilter?'selected':''}>すべて</option><option value="shortage" ${f.stockFilter==='shortage'?'selected':''}>在庫不足（マイナス）のみ</option></select></label>
+      ${writable?`<button type="button" class="primary" id="listInboundNew">一覧にない商品を入庫</button>`:''}
     </div>
     <div class="tabs" id="groups">${[['customer','顧客別'],['product','商品別'],['location','場所別'],['lot','在庫明細']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
-    <div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong></div></div>
-    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。中古を新品の単価では評価しません。会社全体の資産額や、会計上の評価額と同じものではありません。数量と金額は計算結果なので、手入力できません。中古レコードが無い場合も画面上は中古0枚と表示します。')}
+    <div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong>${pending?`<span class="sub shortage-tag">原価未確定の不足 ${num(pending)}枚</span>`:''}</div></div>
+    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。原価未確定の不足分は金額に含めません。中古を新品の単価では評価しません。数量と金額は計算結果なので、手入力できません。在庫0・マイナスの行も表示します（未登録の組み合わせは自動では作りません）。訂正は「在庫履歴」から行います。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
-  const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;await loadStock();paint()}
-  ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition'].forEach(id=>$('#'+id).onchange=apply)
+  const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;f.stockFilter=$('#fStockFilter').value;await loadStock();paint()}
+  ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
   $('#groups').querySelectorAll('button').forEach(b=>b.onclick=async()=>{f.group=b.dataset.group;await loadStock();paint()})
+  const openNew=$('#listInboundNew')
+  if(openNew)openNew.onclick=()=>openNormalInboundRegister()
   const stage=$('#stockliststage')
   const mode=mountStockDisplay(stage,'list',()=>paint())
   const body=$('#stockbody')
@@ -1612,19 +1718,15 @@ function stockList(){
   if(!state.stock){body.innerHTML='';if(grid)grid.innerHTML='';return}
   if(f.group==='lot'){
     body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>状態</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
-      ${state.stock.lots.map(l=>`<tr><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td>${esc(l.locationLabel)}<span class="sub">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</span></td><td class="money">${yen(l.unitCost)}</td><td class="qty">${num(l.qty)}</td><td class="money">${yen(l.amount)}</td><td>${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''} ${stockOpenBtn(l.id,'開く')}</td></tr>`).join('')||'<tr><td colspan="9">在庫はありません。</td></tr>'}
+      ${state.stock.lots.map(l=>`<tr class="${stockRowClass(l)}"><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td>${esc(l.locationLabel)}<span class="sub">${l.costPending?'原価未確定':(l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn))}</span></td><td class="money">${l.costPending?'原価未確定':yen(l.unitCost)}</td><td class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}</td><td class="money">${stockAmountText(l)}</td><td>${stockActionButtonsHtml(l,{lotId:l.id})}</td></tr>`).join('')||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>`
-    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-secondary">${l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn)}</div><div class="dm-meta"><span>${yen(l.unitCost)}</span><span>${num(l.qty)}</span><span>${yen(l.amount)}</span></div><div class="dm-actions">${l.correctable?`<button type="button" data-correct="${l.id}">訂正</button>`:''}${l.inboundCorrectable&&stockCanWrite()?`<button type="button" data-inbound-correct="${l.id}">入庫を訂正</button>`:''}<button type="button" class="quiet stockopen" data-id="${l.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
-    const bindLot=()=>{
-      document.querySelectorAll('[data-correct]').forEach(b=>b.onclick=()=>correctLot(state.stock.lots.find(l=>l.id===Number(b.dataset.correct))))
-      document.querySelectorAll('[data-inbound-correct]').forEach(b=>b.onclick=()=>correctInboundLot(state.stock.lots.find(l=>l.id===Number(b.dataset.inboundCorrect))))
-      document.querySelectorAll('.stockopen').forEach(b=>b.onclick=()=>showHistory(Number(b.dataset.id)))
-    }
-    bindLot()
+    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    bindStockRowActions(document,state.stock.lots)
     if(grid)grid.hidden=mode!=='grid'
     if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
     return
   }
+  const allRows=(state.stock.groups||[]).flatMap(g=>(g.rows||[]).map(r=>({...r,customerName:r.customerName||g.customerName,code:r.code||g.code,productName:r.productName||g.productName,color:r.color||g.color})))
   if(f.group==='product'){
     body.innerHTML=renderProductStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
     if(grid)grid.innerHTML=renderProductStockGrid(state.stock.groups)
@@ -1638,10 +1740,10 @@ function stockList(){
     body.innerHTML='<p class="dialogbody">在庫はありません。</p>'
     if(grid)grid.innerHTML='<div class="dm-empty">在庫はありません。</div>'
   }
+  bindStockRowActions(document,allRows)
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
 }
-
 function priceBreakdownHtml(prices){
   if(!prices||!prices.length)return ''
   if(prices.length===1&&!(prices[0].receipts&&prices[0].receipts.length>1))return ''
@@ -1670,15 +1772,16 @@ function renderProductStockList(groups){
   if(!groups.length)return ''
   return groups.map(g=>`<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>顧客</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th></tr></thead><tbody>
-      ${(g.rows||[]).map(r=>`<tr>
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>顧客</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th><th></th></tr></thead><tbody>
+      ${(g.rows||[]).map(r=>`<tr class="${stockRowClass(r)}">
         <td class="dm-primary">${esc(r.customerName)}</td>
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
         <td>${esc(r.locationLabel)}</td>
-        <td class="qty">${conditionQtyText(r)}${priceBreakdownHtml(r.prices)}</td>
-        <td class="money">${yen(r.amount)}</td>
-      </tr>`).join('')||'<tr><td colspan="6">在庫はありません。</td></tr>'}
+        <td class="${stockQtyClass(r)}">${conditionQtyText(r)}${Number(r.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}${priceBreakdownHtml(r.prices)}</td>
+        <td class="money">${stockAmountText(r)}</td>
+        <td>${stockActionButtonsHtml(r)}</td>
+      </tr>`).join('')||'<tr><td colspan="7">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`).join('')
 }
@@ -1702,20 +1805,21 @@ function renderCustomerStockList(groups){
     const rows=(g.rows||[]).map(r=>{
       const breakCls=prevPid!=null&&prevPid!==r.productId?' is-product-break':''
       prevPid=r.productId
-      return `<tr class="${breakCls.trim()}">
+      return `<tr class="${(breakCls+' '+stockRowClass(r)).trim()}">
         <td class="dm-primary">${esc(r.code)}</td>
         <td>${productNameColor(r)}</td>
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
         <td>${esc(r.locationLabel)}</td>
-        <td class="qty">${conditionQtyText(r)}${priceBreakdownHtml(r.prices)}</td>
-        <td class="money">${yen(r.amount)}</td>
+        <td class="${stockQtyClass(r)}">${conditionQtyText(r)}${Number(r.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}${priceBreakdownHtml(r.prices)}</td>
+        <td class="money">${stockAmountText(r)}</td>
+        <td>${stockActionButtonsHtml(r)}</td>
       </tr>`
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th></tr></thead><tbody>
-      ${rows||'<tr><td colspan="7">在庫はありません。</td></tr>'}
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th><th></th></tr></thead><tbody>
+      ${rows||'<tr><td colspan="8">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
   }).join('')
@@ -1746,21 +1850,22 @@ function renderLocationStockList(groups){
     const rows=(g.rows||[]).map(r=>{
       const breakCls=prevLoc!=null&&prevLoc!==r.locationId?' is-shelf-break':''
       prevLoc=r.locationId
-      return `<tr class="${breakCls.trim()}">
+      return `<tr class="${(breakCls+' '+stockRowClass(r)).trim()}">
         <td class="dm-primary">${esc(r.shelfLabel)}</td>
         <td>${esc(r.customerName)}</td>
         <td>${esc(r.code)}</td>
         <td>${productNameColor(r)}</td>
         <td>${esc(r.embroideryLabel)}</td>
         <td>${esc(r.size)}</td>
-        <td class="qty">${conditionQtyText(r)}${priceBreakdownHtml(r.prices)}</td>
-        <td class="money">${yen(r.amount)}</td>
+        <td class="${stockQtyClass(r)}">${conditionQtyText(r)}${Number(r.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}${priceBreakdownHtml(r.prices)}</td>
+        <td class="money">${stockAmountText(r)}</td>
+        <td>${stockActionButtonsHtml(r)}</td>
       </tr>`
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>数量（新品／中古／合計）</th><th>在庫金額</th></tr></thead><tbody>
-      ${rows||'<tr><td colspan="8">在庫はありません。</td></tr>'}
+    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>加工仕様</th><th>サイズ</th><th>数量（新品／中古／合計）</th><th>在庫金額</th><th></th></tr></thead><tbody>
+      ${rows||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
   }).join('')
@@ -1987,7 +2092,7 @@ function historyPage(){
   const h=state.history
   const result=state.historyResult
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
-  const kindOpts=[['','すべて'],['opening','初期在庫'],['inbound','入庫'],['outbound','出庫'],['correction','訂正'],['opening_correction','初期在庫の訂正'],['inbound_correction','入庫の訂正']]
+  const kindOpts=[['','すべて'],['opening','初期在庫'],['inbound','入庫'],['outbound','出庫'],['outbound_shortage','不足出庫'],['stocktake','棚卸調整'],['correction','訂正'],['opening_correction','初期在庫の訂正'],['inbound_correction','入庫の訂正']]
   const cust=h.customerId?(state.data.customers||[]).find(c=>String(c.id)===String(h.customerId)):null
   const prod=h.productId?(state.data.products||[]).find(p=>String(p.id)===String(h.productId)):null
   const total=result?result.total:null
@@ -2096,15 +2201,51 @@ function historyPage(){
     if(!e)return
     const dlg=$('#dialog')
     dlg.classList.add('history-detail-dialog')
+    const canCorrect=stockCanWrite()&&!['opening_correction','inbound_correction','outbound_correction','move_void'].includes(e.kind)
     dlg.innerHTML=`<div class="dialoghead"><h2>履歴の詳細</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody history-detail-body">
       ${historyDetailHtml(e)}
       <p class="sub">${esc(result.qtyScopeNote||'')}</p>
       <p class="sub">${esc(result.namesNote||'')}</p>
+      ${canCorrect?`<div class="dialogactions" style="position:static;margin-top:1rem"><button type="button" id="histCorrect">この記録を訂正</button></div>`:''}
     </div>`
     const cleanup=()=>{dlg.classList.remove('history-detail-dialog');dlg.innerHTML=''}
     dlg.addEventListener('close',cleanup,{once:true})
     dlg.showModal();$('#close').onclick=()=>dlg.close()
+    const corr=$('#histCorrect')
+    if(corr)corr.onclick=()=>openHistoryCorrectDialog(e)
   })
+}
+function openHistoryCorrectDialog(e){
+  if(!stockCanWrite()){toast('閲覧専用のため、訂正できません。');return}
+  const dlg=$('#dialog')
+  const isRewrite=e.kind==='inbound'||e.kind==='opening'
+  dlg.innerHTML=`<form><div class="dialoghead"><h2>履歴の訂正</h2></div><div class="dialogbody">
+    <p>${esc(e.kindLabel)}（記録ID ${e.id}）を訂正します。元の記録は残し、訂正前後・訂正者・訂正日時を追記します。</p>
+    ${isRewrite?`<div class="grid"><label>訂正後の数量<input id="hcQty" inputmode="numeric" value="${esc(e.qtyAfter??'')}"></label><label>訂正後の仕入単価<input id="hcCost" inputmode="numeric" value="${esc(e.unitCost??e.costAfter??'')}"></label></div>
+      <p class="notice">未消費の入荷・初期在庫のみ数量・単価を直せます。後続がある場合は取消になります。</p>`:
+      `<p class="notice">後続の入出庫がある、または出庫・棚卸の記録は、数量直書きせず取消（逆仕訳）で整合を取ります。</p>`}
+    <label>訂正の理由（必須）<input id="hcReason"></label><p id="error"></p>
+  </div><div class="dialogactions"><button type="button" id="close">戻る</button><button type="button" class="primary" id="save">${isRewrite?'確認して訂正':'取消として訂正'}</button></div></form>`
+  if(!dlg.open)dlg.showModal()
+  dlg.querySelector('form').onsubmit=ev=>ev.preventDefault()
+  $('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+  $('#save').onclick=async()=>{
+    const err=$('#error');err.textContent=''
+    if(!$('#hcReason').value.trim()){err.textContent='訂正の理由を入力してください。';return}
+    const button=$('#save');button.disabled=true
+    const body={moveId:Number(e.id),reason:$('#hcReason').value.trim()}
+    if(isRewrite){
+      const q=$('#hcQty').value.trim(),c=$('#hcCost').value.trim()
+      if(!/^\d+$/.test(q)||!/^\d+$/.test(c)){err.textContent='数量と仕入単価を入力してください。';button.disabled=false;return}
+      body.qty=Number(q);body.unitCost=Number(c)
+    }
+    try{
+      const result=await api('/api/history/correct',body)
+      dlg.close();dlg.innerHTML=''
+      toast(result.message||(result.mode==='void'?'取消（訂正）を記録しました。':'訂正しました。'))
+      await loadStockHistory();paint()
+    }catch(ex){err.textContent=ex.message;button.disabled=false}
+  }
 }
 async function loadMoveTargets(){
   const q=new URLSearchParams({mode:state.moveMode==='out'?'out':'in'})
@@ -2299,7 +2440,7 @@ function movePage(){
     ${mode==='in'?`<p class="notice move-new-hint">登録済みの取扱から、初めて在庫を登録する組み合わせを選びます</p>`:''}
     ${listNote('入庫・出庫の見方',mode==='in'
       ?'一覧は、これまでに在庫登録した組み合わせ（状態ごと）です。現在庫が0枚でも残ります。補充は行の「選択」から入庫します。新品しか無い取扱でも、入庫画面で中古を選んで初回入庫できます。初めての組み合わせだけ「一覧にない商品を入庫」を使います。'
-      :'出庫は現在庫がある組み合わせだけです。新品／中古を行で選び、選んだ状態の在庫だけを減らします。状態をまたぐ自動振替はしません。入荷日の古い順（先入先出）です。')}
+      :'出庫は登録済みの組み合わせ（0・マイナス含む）から選びます。選んだ状態の在庫だけを減らします。状態をまたぐ自動振替はしません。在庫がある分は先入先出。不足時は確認のうえマイナス在庫（原価未確定）になります。')}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
       ${filtered.map(t=>`<tr class="${Number(t.qty)===0?'is-zero-stock':''}">
         <td class="dm-primary">${esc(t.customerName)}</td>
@@ -2514,6 +2655,7 @@ function openOutboundDialog(target){
   let plan=null
   let fingerprint=''
   let confirmChanged=false
+  let confirmShortageArmed=false
   state.moveDirty=false
   const outCondition=target.condition||'new'
   const paintDialog=async()=>{
@@ -2545,18 +2687,19 @@ function openOutboundDialog(target){
         })
         fingerprint=plan.fingerprint
         $('#outPreview').textContent=`${conditionLabel(outCondition)}の現在庫 ${num(plan.currentQty)}枚 → 出庫 ${num(plan.outboundQty)}枚 → 出庫後 ${num(plan.afterQty)}枚`
-        if(!plan.ok){
-          $('#outAlloc').innerHTML=`<p class="notice">在庫が${num(plan.shortfall)}枚不足しています。出庫できるのは${num(plan.currentQty)}枚までです。</p>`
-          $('#confirmOutbound').disabled=true
-          $('#confirmOutbound').textContent='在庫不足のため出庫できません'
+        const allocHtml=SM.allocationTableHtml(plan,esc,yen,num)
+        if(plan.needsShortageConfirm||plan.shortfall>0){
+          $('#outAlloc').innerHTML=allocHtml+`<p class="notice shortage-confirm">${esc(plan.shortageMessage||(`登録上${num(plan.shortfall)}枚不足。このまま出庫しますか？（出庫後 ${num(plan.afterQty)}枚）`))}</p>`
+          $('#confirmOutbound').disabled=!stockCanWrite()
+          $('#confirmOutbound').textContent=confirmShortageArmed?'不足のまま出庫する':`${num(plan.outboundQty)}枚を出庫（不足確認）`
         }else{
-          $('#outAlloc').innerHTML=SM.allocationTableHtml(plan,esc,yen,num)
+          $('#outAlloc').innerHTML=allocHtml
           $('#confirmOutbound').disabled=!stockCanWrite()
           $('#confirmOutbound').textContent=confirmChanged?'この内訳で出庫する':`${num(plan.outboundQty)}枚を出庫する`
         }
       }catch(e){$('#outPreview').textContent='';$('#outAlloc').innerHTML='';err.textContent=e.message;$('#confirmOutbound').disabled=true}
     }
-    const stepper=SM.bindQtyStepper(dlg,'out',{onChange:()=>{state.moveDirty=true;confirmChanged=false;refresh()}})
+    const stepper=SM.bindQtyStepper(dlg,'out',{onChange:()=>{state.moveDirty=true;confirmChanged=false;confirmShortageArmed=false;refresh()}})
     $('#outBusinessOn').oninput=()=>{state.moveDirty=true}
     $('#outNote').oninput=()=>{state.moveDirty=true}
     $('#confirmOutbound').onclick=async()=>{
@@ -2565,7 +2708,13 @@ function openOutboundDialog(target){
       if(q==null||q<1){err.textContent='出庫数量を入力してください。';return}
       const businessOn=$('#outBusinessOn').value
       if(!businessOn){err.textContent='出庫日を入力してください。';return}
-      if(!plan||!plan.ok){err.textContent='在庫が不足しています。';return}
+      if(!plan){err.textContent='出庫内容を確認してください。';return}
+      if((plan.needsShortageConfirm||plan.shortfall>0)&&!confirmShortageArmed){
+        confirmShortageArmed=true
+        err.textContent=plan.shortageMessage||`登録上${num(plan.shortfall)}枚不足。このまま出庫しますか？`
+        $('#confirmOutbound').textContent='不足のまま出庫する'
+        return
+      }
       const button=$('#confirmOutbound');button.disabled=true
       try{
         await api('/api/outbound',{
@@ -2579,30 +2728,95 @@ function openOutboundDialog(target){
           note:$('#outNote').value,
           fingerprint,
           confirmChanged,
+          confirmShortage:!!(plan.shortfall>0),
         })
         state.moveDirty=false
         dlg.close();dlg.innerHTML=''
-        toast('出庫しました。')
-        await loadMoveTargets();paint()
+        toast(plan.shortfall>0?'不足出庫を登録しました。':'出庫しました。')
+        try{await loadMoveTargets()}catch(_){}
+        try{if(state.tab==='list')await loadStock()}catch(_){}
+        paint()
       }catch(e){
         if(e.status===409&&e.payload&&e.payload.needsReconfirm){
           plan=e.payload.plan
           fingerprint=plan.fingerprint
           confirmChanged=true
+          confirmShortageArmed=false
           err.textContent=e.message
           $('#outPreview').textContent=`現在庫 ${num(plan.currentQty)}枚 → 出庫 ${num(plan.outboundQty)}枚 → 出庫後 ${num(plan.afterQty)}枚`
-          $('#outAlloc').innerHTML=SM.allocationTableHtml(plan,esc,yen,num)+(plan.ok?'':'')
-          button.disabled=!plan.ok
-          button.textContent=plan.ok?'この内訳で出庫する':'在庫不足のため出庫できません'
+          $('#outAlloc').innerHTML=SM.allocationTableHtml(plan,esc,yen,num)+(plan.shortfall>0?`<p class="notice">${esc(plan.shortageMessage||'')}</p>`:'')
+          button.disabled=false
+          button.textContent=plan.shortfall>0?'不足のまま出庫する':'この内訳で出庫する'
           return
         }
-        err.textContent=e.message;button.disabled=false
+        err.textContent=e.message;button.disabled=false;confirmShortageArmed=false
       }
     }
     await refresh()
   }
   if(!dlg.open)dlg.showModal()
   paintDialog()
+}
+
+function openStocktakeDialog(target){
+  if(!stockCanWrite()){toast('閲覧専用のため、棚卸できません。');return}
+  const SM=StockMoves
+  const dlg=moveDialogEl()
+  const current=Number(target.qty)||0
+  const cond=target.condition||'new'
+  dlg.innerHTML=`<div class="dialoghead"><h2>棚卸調整</h2><button type="button" id="closeMove" class="quiet">閉じる</button></div>
+    <div class="dialogbody">
+      <p>${esc(target.customerName)} / ${esc(target.code)} ${esc(target.productName)} / ${esc(target.size)} / ${esc(target.embroideryLabel)} / ${esc(target.locationLabel)}</p>
+      <p><strong>状態：${esc(target.conditionLabel||conditionLabel(cond))}</strong></p>
+      <p>現在庫 <strong>${num(current)}枚</strong></p>
+      <label>棚卸日（必須）<input id="stBusinessOn" type="date" value="${esc(todayISO())}"></label>
+      <label>実数量（必須）<input id="stActual" inputmode="numeric" value="${esc(current)}"></label>
+      <p id="stDelta">差分：0枚</p>
+      <label>仕入単価（増分のみ・任意。空欄は原価未確定）<input id="stUnitCost" inputmode="numeric" placeholder="空欄可"></label>
+      <label>備考（任意）<input id="stNote"></label>
+      <p id="moveError"></p>
+    </div>
+    <div class="dialogactions"><button type="button" id="closeMove2">戻る</button><button type="button" class="primary" id="confirmStocktake">棚卸を確定</button></div>`
+  if(!dlg.open)dlg.showModal()
+  const sync=()=>{
+    const raw=String($('#stActual').value||'').trim()
+    if(!/^\d+$/.test(raw)){$('#stDelta').textContent='実数量を入力してください。';return null}
+    const actual=Number(raw)
+    const delta=actual-current
+    $('#stDelta').textContent=`差分：${delta>0?'+':''}${num(delta)}枚（${num(current)} → ${num(actual)}）`
+    return {actual,delta}
+  }
+  $('#stActual').oninput=sync;sync()
+  const close=()=>{dlg.close();dlg.innerHTML=''}
+  $('#closeMove').onclick=close;$('#closeMove2').onclick=close
+  $('#confirmStocktake').onclick=async()=>{
+    const err=$('#moveError');err.textContent=''
+    const next=sync()
+    if(!next){err.textContent='実数量を入力してください。';return}
+    if(next.delta===0){err.textContent='実数量が現在庫と同じです。';return}
+    const businessOn=$('#stBusinessOn').value
+    if(!businessOn){err.textContent='棚卸日を入力してください。';return}
+    const button=$('#confirmStocktake');button.disabled=true
+    const costRaw=String($('#stUnitCost').value||'').trim().replace(/,/g,'')
+    try{
+      await api('/api/stocktake',{
+        token:SM.newMoveToken(),
+        customerProductId:Number(target.customerProductId),
+        size:target.size,
+        locationId:Number(target.locationId),
+        condition:cond,
+        actualQty:next.actual,
+        businessOn,
+        note:$('#stNote').value,
+        unitCost:costRaw===''?undefined:Number(costRaw),
+      })
+      dlg.close();dlg.innerHTML=''
+      toast('棚卸調整を登録しました。')
+      try{await loadStock()}catch(_){}
+      try{await loadMoveTargets()}catch(_){}
+      paint()
+    }catch(e){err.textContent=e.message;button.disabled=false}
+  }
 }
 document.querySelectorAll('.switch button[data-mode]').forEach(b=>b.onclick=async()=>{
   $('#desknote').hidden=true

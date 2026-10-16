@@ -13,9 +13,14 @@ KIND_FILTERS = {
     '': None,
     'all': None,
     'opening': ('opening',),
-    'inbound': ('inbound',),
-    'outbound': ('outbound',),
-    'correction': ('opening_correction', 'inbound_correction'),
+    'inbound': ('inbound', 'shortage_cover'),
+    'outbound': ('outbound', 'outbound_shortage'),
+    'outbound_shortage': ('outbound_shortage',),
+    'stocktake': ('stocktake', 'stocktake_shortage'),
+    'correction': (
+        'opening_correction', 'inbound_correction', 'outbound_correction',
+        'move_void',
+    ),
     'opening_correction': ('opening_correction',),
     'inbound_correction': ('inbound_correction',),
 }

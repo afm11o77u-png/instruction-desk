@@ -533,7 +533,7 @@ class PurchaseOrdersTest(unittest.TestCase):
                 self.assertIn('purchase_order_receipts', tables)
                 cols = {r['name'] for r in c2.execute('PRAGMA table_info(suppliers)')}
                 self.assertIn('fax', cols)
-            backups = list(Path(folder.name).glob('stock.pre-inout-*.sqlite3'))
+            backups = list(Path(folder.name).glob('stock.pre-*.sqlite3'))
             self.assertTrue(backups)
         finally:
             folder.cleanup()
