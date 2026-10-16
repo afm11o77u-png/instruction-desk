@@ -596,6 +596,12 @@ function productForm(r){
     <div class="bar"><label>特殊サイズ<input id="customSize" placeholder="例：150"></label><button type="button" id="addSize">サイズを追加</button></div>
     <h2>この商品を扱う顧客</h2><div class="links" id="links"></div><button type="button" id="addLink">顧客の取扱を追加</button>`
 }
+function resolveProductLinkCustomer(customers, customerId){
+  if(customerId==null||customerId==='')return null
+  const id=Number(customerId)
+  if(!Number.isFinite(id)||id<=0)return null
+  return (customers||[]).find(c=>Number(c.id)===id)||null
+}
 function bindProductEditor(row){
   const editor={sizes:[...row.sizes],links:row.links.map(l=>({...l})),scheme:detectSizeScheme(row.sizes)}
   const draw=()=>{
@@ -620,22 +626,70 @@ function bindProductEditor(row){
       touchEditDirty()
       draw()
     })
-    const customers=state.data.customers.filter(c=>c.active)
-    $('#links').innerHTML=editor.links.map((l,i)=>`<div class="linkrow">
-      <label>顧客<select data-i="${i}" data-k="customerId">${customers.map(c=>`<option value="${c.id}" ${c.id===l.customerId?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
+    const allCustomers=state.data.customers||[]
+    $('#links').innerHTML=editor.links.map((l,i)=>{
+      const cust=resolveProductLinkCustomer(allCustomers,l.customerId)
+      const display=cust?cust.name:(l.customerQuery||'')
+      return `<div class="linkrow" data-link-i="${i}">
+      ${searchPickerMarkup({label:'顧客',inputId:`linkCustomerQ${i}`,listId:`linkCustomerList${i}`,clearId:`linkCustomerClear${i}`,hintId:`linkCustomerHint${i}`,placeholder:'顧客名またはカナで検索',value:display})}
       <label>刺繍・加工<input data-i="${i}" data-k="embroidery" value="${esc(l.embroidery)}" placeholder="空欄は刺繍なし"></label>
       <label class="check"><input data-i="${i}" data-k="isStandard" type="checkbox" ${l.isStandard?'checked':''}>標準仕様</label>
       <label class="check"><input data-i="${i}" data-k="active" type="checkbox" ${l.active!==false?'checked':''}>使用中</label>
-      <button type="button" data-remove="${i}">外す</button></div>`).join('')||'<p>まだ顧客に結び付いていません。</p>'
+      <button type="button" data-remove="${i}">外す</button></div>`
+    }).join('')||'<p>まだ顧客に結び付いていません。</p>'
     $('#links').querySelectorAll('[data-k]').forEach(el=>el.onchange=()=>{
       const link=editor.links[Number(el.dataset.i)]
       touchEditDirty()
-      if(el.dataset.k==='customerId')link.customerId=Number(el.value)
       if(el.dataset.k==='embroidery')link.embroidery=el.value.trim()
       if(el.dataset.k==='isStandard'){link.isStandard=el.checked;if(el.checked)editor.links.forEach(x=>{if(x!==link&&x.customerId===link.customerId)x.isStandard=false});draw()}
       if(el.dataset.k==='active')link.active=el.checked
     })
     $('#links').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{editor.links.splice(Number(b.dataset.remove),1);touchEditDirty();draw()})
+    editor.links.forEach((l,i)=>{
+      const input=$(`#linkCustomerQ${i}`)
+      const list=$(`#linkCustomerList${i}`)
+      if(!input||!list)return
+      bindOpeningSearchPicker({
+        input,
+        list,
+        clearBtn:$(`#linkCustomerClear${i}`),
+        hint:$(`#linkCustomerHint${i}`),
+        emptyText:'該当する顧客がありません',
+        getItems:()=>filterOpeningCustomers(allCustomers,input.value).map(c=>({
+          id:c.id,
+          label:c.name,
+          html:`<span class="dm-primary">${esc(c.name)}</span>${c.kana?`<span class="sub dm-secondary">${esc(c.kana)}</span>`:''}`,
+          raw:c
+        })),
+        isConfirmed:()=>!!resolveProductLinkCustomer(allCustomers,l.customerId),
+        confirmedLabel:()=>{
+          const c=resolveProductLinkCustomer(allCustomers,l.customerId)
+          return c?c.name:''
+        },
+        onPick:item=>{
+          l.customerId=Number(item.id)
+          delete l.customerQuery
+          touchEditDirty()
+          input.value=item.label
+        },
+        onClear:()=>{
+          l.customerId=null
+          l.customerQuery=''
+          touchEditDirty()
+        },
+        onQueryChange:value=>{
+          const confirmed=resolveProductLinkCustomer(allCustomers,l.customerId)
+          if(confirmed&&value!==confirmed.name){
+            l.customerId=null
+            l.customerQuery=value
+            touchEditDirty()
+            return false
+          }
+          if(!confirmed)l.customerQuery=value
+          return false
+        }
+      })
+    })
   }
   $('#addSize').onclick=()=>{
     const s=$('#customSize').value.trim()
@@ -675,7 +729,14 @@ function readForm(row){
   }
   const editor=$('#dialog')._editor
   const supplier=$('#supplierId').value
-  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links:editor.links.map(l=>({customerId:Number(l.customerId),embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false})),active}
+  const links=(editor.links||[]).map(l=>{
+    const cid=Number(l.customerId)
+    if(!Number.isFinite(cid)||cid<=0||!resolveProductLinkCustomer(state.data.customers,cid)){
+      throw new Error('取扱の顧客を候補から選んでください。入力した文字だけでは保存できません。')
+    }
+    return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false}
+  })
+  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links,active}
 }
 function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,value,required=true}){
   const req=required?'（必須）':''
@@ -731,6 +792,15 @@ function bindOpeningSearchPicker({input,list,clearBtn,hint,getItems,emptyText,is
     const current=active>=0&&items[active]?`${list.id}-opt-${active}`:null
     if(current)input.setAttribute('aria-activedescendant',current)
     else input.removeAttribute('aria-activedescendant')
+    const picker=input.closest('.search-picker')
+    const body=picker&&picker.closest('.dialogbody')
+    if(picker&&body){
+      const listH=Math.min(220,(list.scrollHeight||220)+8)
+      const prect=picker.getBoundingClientRect()
+      const brect=body.getBoundingClientRect()
+      if(prect.bottom+listH>brect.bottom)body.scrollTop+=(prect.bottom+listH-brect.bottom)+12
+      else if(prect.top<brect.top)body.scrollTop-=(brect.top-prect.top)+8
+    }
   }
   const syncChrome=()=>{
     const confirmed=isConfirmed()

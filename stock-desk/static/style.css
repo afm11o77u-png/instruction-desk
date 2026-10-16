@@ -76,8 +76,12 @@ table.directory tr.is-stopped .nameline b{font-weight:600}
 .seg button+button{border-left:1px solid #c5dcc4}
 .seg button.on{background:var(--green);color:#fff}
 .seg button:hover:not(.on){background:#eef8ef}
-.links{display:flex;flex-direction:column;gap:10px}.linkrow,.sizerow{display:grid;gap:8px;align-items:end;border:1px solid var(--line);border-radius:8px;padding:10px}
-.linkrow{grid-template-columns:1.3fr 1fr auto auto auto}.sizerow{grid-template-columns:120px 1fr 1fr auto}
+.links{display:flex;flex-direction:column;gap:10px;overflow:visible;padding-bottom:12px}.linkrow,.sizerow{display:grid;gap:8px;align-items:end;border:1px solid var(--line);border-radius:8px;padding:10px}
+.linkrow{grid-template-columns:minmax(180px,1.6fr) 1fr auto auto auto;align-items:start;overflow:visible;position:relative}
+.linkrow:focus-within{z-index:8}
+.linkrow .search-picker{min-width:0}
+.linkrow .search-picker-list{z-index:9}
+.sizerow{grid-template-columns:120px 1fr 1fr auto}
 .linkrow.shelfline{grid-template-columns:minmax(180px,1.6fr) auto auto;align-items:center}
 .linkrow.shelfline .shelf-lock{color:#8a3b2b;font-weight:600}
 table.site-locations th:nth-child(1),table.site-locations td:nth-child(1){width:28%}
