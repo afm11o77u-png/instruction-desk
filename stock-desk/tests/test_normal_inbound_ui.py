@@ -25,13 +25,13 @@ def _fn(source: str, name: str) -> str:
 class NormalInboundUiTest(unittest.TestCase):
     def test_separate_entry_buttons_kept(self):
         opening = _fn(APP_JS, 'opening')
-        move = _fn(APP_JS, 'movePage')
+        stock_list = _fn(APP_JS, 'stockList')
         self.assertIn('初期在庫を登録', opening)
         self.assertIn('id="openOpeningRegister"', opening)
-        self.assertIn('一覧にない商品を入庫', move)
-        self.assertIn('id="openInboundNew"', move)
-        self.assertIn('openNormalInboundRegister()', move)
-        self.assertNotIn('openInboundDialog(null)', move)
+        self.assertIn('一覧にない商品を入庫', stock_list)
+        self.assertIn('id="listInboundNew"', stock_list)
+        self.assertIn('openNormalInboundRegister()', stock_list)
+        self.assertNotIn('openInboundDialog(null)', stock_list)
 
     def test_titles_distinguish_normal_vs_opening(self):
         form = _fn(APP_JS, 'mountOpeningRegisterForm')

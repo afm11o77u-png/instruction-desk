@@ -27,17 +27,17 @@ def _fn(source: str, name: str) -> str:
 
 
 class StockListSetupNavUiTest(unittest.TestCase):
-    def test_parent_stocknav_has_list_move_and_setup(self):
+    def test_parent_stocknav_has_list_and_setup(self):
         self.assertIn('id="stocknav"', DESK_INDEX)
         aside = DESK_INDEX[DESK_INDEX.index('<aside>'):DESK_INDEX.index('</aside>')]
         self.assertIn('data-stock-section="list"', aside)
-        self.assertIn('data-stock-section="move"', aside)
+        self.assertNotIn('data-stock-section="move"', aside)
+        self.assertNotIn('入庫・出庫', aside)
         self.assertIn('data-stock-section="setup"', aside)
         self.assertIn('data-stock-section="history"', aside)
         self.assertIn('data-stock-section="period"', aside)
         self.assertIn('data-stock-section="orders"', aside)
         self.assertIn('在庫一覧', aside)
-        self.assertIn('入庫・出庫', aside)
         self.assertIn('>在庫履歴<', aside)
         self.assertIn('登録・設定', aside)
         self.assertIn('期間入出荷集計', aside)
@@ -48,49 +48,31 @@ class StockListSetupNavUiTest(unittest.TestCase):
         start = aside.index('id="stocknav"')
         end = aside.index('<div class="asidebottom"', start)
         stocknav = aside[start:end]
-        # Top row: 在庫一覧 | 登録・設定; pair row: 入庫・出庫 | 履歴; then 期間, 発注
+        # Top row: 在庫一覧 | 登録・設定; secondary: 履歴 | 期間 | 発注（入庫・出庫メニュー廃止）
         self.assertIn('class="navrow stocknav-top"', stocknav)
-        self.assertIn('class="navrow stocknav-pair"', stocknav)
+        self.assertNotIn('stocknav-pair', stocknav)
+        self.assertNotIn('stocknav-move', stocknav)
         top_start = stocknav.index('stocknav-top')
         top = stocknav[top_start:stocknav.index('</div>', top_start)]
         self.assertIn('data-stock-section="list"', top)
         self.assertIn('data-stock-section="setup"', top)
-        self.assertNotIn('data-stock-section="move"', top)
         self.assertNotIn('data-stock-section="history"', top)
         self.assertNotIn('data-stock-section="period"', top)
         self.assertNotIn('data-stock-section="orders"', top)
-        pair_start = stocknav.index('stocknav-pair')
-        pair = stocknav[pair_start:stocknav.index('</div>', pair_start)]
-        self.assertIn('data-stock-section="move"', pair)
-        self.assertIn('data-stock-section="history"', pair)
-        self.assertNotIn('data-stock-section="list"', pair)
-        self.assertNotIn('data-stock-section="setup"', pair)
-        self.assertNotIn('data-stock-section="period"', pair)
-        self.assertNotIn('data-stock-section="orders"', pair)
-        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-pair'))
-        self.assertLess(stocknav.index('stocknav-pair'), stocknav.index('stocknav-secondary'))
-        self.assertLess(stocknav.index('stocknav-move'), stocknav.index('stocknav-history'))
+        self.assertLess(stocknav.index('stocknav-top'), stocknav.index('stocknav-secondary'))
         self.assertLess(stocknav.index('stocknav-history'), stocknav.index('stocknav-period'))
         self.assertLess(stocknav.index('stocknav-period'), stocknav.index('stocknav-orders'))
         self.assertRegex(stocknav, r'stocknav-top[\s\S]*data-stock-section="list"[\s\S]*data-stock-section="setup"')
-        self.assertRegex(stocknav, r'stocknav-pair[\s\S]*stocknav-move[\s\S]*stocknav-history')
-        self.assertIn('class="nav stocknav-move"', stocknav)
+        self.assertRegex(
+            stocknav,
+            r'stocknav-secondary[\s\S]*stocknav-history[\s\S]*stocknav-period[\s\S]*stocknav-orders',
+        )
         self.assertIn('class="nav stocknav-history"', stocknav)
         self.assertIn('class="nav stocknav-period"', stocknav)
         self.assertIn('class="nav stocknav-orders"', stocknav)
         self.assertIn('class="stocknav-secondary"', stocknav)
-        # Secondary (期間・発注) flush with top row; move/history live in pair row above
-        self.assertRegex(
-            stocknav,
-            r'stocknav-secondary[\s\S]*stocknav-period[\s\S]*stocknav-orders',
-        )
-        self.assertNotRegex(
-            stocknav,
-            r'stocknav-secondary[\s\S]*stocknav-move',
-        )
         css = (REPO / 'style.css').read_text(encoding='utf-8')
         self.assertIn('#stocknav .stocknav-secondary', css)
-        self.assertIn('#stocknav .stocknav-pair', css)
         # No left indent — secondary buttons align with 在庫一覧｜登録・設定
         self.assertRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*0')
         self.assertNotRegex(css, r'#stocknav \.stocknav-secondary\{[^}]*padding-left:\s*(?:18|14)px')
@@ -100,8 +82,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
             css,
             r'#stocknav \.stocknav-secondary \.nav,#stocknav \.stocknav-period,#stocknav \.stocknav-orders\{[^}]*text-align:\s*left',
         )
-        # Pair rows stay centered; secondary labels stay left-aligned (flush left edge)
-        self.assertRegex(css, r'#stocknav \.stocknav-top \.nav,#stocknav \.stocknav-pair \.nav\{[^}]*text-align:\s*center')
+        self.assertRegex(css, r'#stocknav \.stocknav-top \.nav\{[^}]*text-align:\s*center')
         self.assertIn('#stocknav{display:flex;flex-direction:column', css)
 
     def test_parent_show_catalog_wires_stocknav(self):
@@ -112,7 +93,8 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("type:'stock-section'", PLACEMENT_JS)
         self.assertIn("e.data.type==='stock-section-changed'", PLACEMENT_JS)
         self.assertIn("normalizeStockSection", PLACEMENT_JS)
-        self.assertIn("section==='move'", PLACEMENT_JS)
+        self.assertIn("section==='move'", PLACEMENT_JS)  # legacy redirect still recognized
+        self.assertIn("if(section==='move')return 'list'", PLACEMENT_JS)
         self.assertIn("section==='history'", PLACEMENT_JS)
         self.assertIn("section==='period'", PLACEMENT_JS)
         self.assertIn("section==='orders'", PLACEMENT_JS)
@@ -159,7 +141,7 @@ class StockListSetupNavUiTest(unittest.TestCase):
         paint = _fn(APP_JS, 'paint')
         self.assertIn("SETUP_TAB_LABEL[state.tab]", paint)
         self.assertIn("'在庫一覧'", paint)
-        self.assertIn("'入庫・出庫'", paint)
+        self.assertNotIn("'入庫・出庫'", paint)
         self.assertIn("'期間入出荷集計'", paint)
         self.assertIn("id=\"stocktitle\"", INDEX)
 
@@ -167,15 +149,19 @@ class StockListSetupNavUiTest(unittest.TestCase):
         self.assertIn("['lot','在庫明細']", APP_JS)
         self.assertNotIn("['lot','入荷分']", APP_JS)
 
-    def test_move_page_has_mode_toggle_and_select(self):
+    def test_move_page_redirects_to_stock_list(self):
         body = _fn(APP_JS, 'movePage')
-        self.assertIn('入庫する', body)
-        self.assertIn('出庫する', body)
-        self.assertIn('data-select-target', body)
-        self.assertIn('一覧にない商品を入庫', body)
-        self.assertIn('初めて在庫を登録する組み合わせ', body)
-        self.assertNotIn('取扱を選んで入庫', body)
-        self.assertIn('openNormalInboundRegister()', body)
+        self.assertIn('stockList()', body)
+        self.assertIn('在庫一覧の各行から', body)
+        self.assertIn("section==='move'", _fn(APP_JS, 'normalizeSection'))
+        self.assertIn("return 'list'", _fn(APP_JS, 'normalizeSection'))
+        list_page = _fn(APP_JS, 'stockList')
+        self.assertIn('一覧にない商品を入庫', list_page)
+        self.assertIn('id="listInboundNew"', list_page)
+        self.assertIn('openNormalInboundRegister()', list_page)
+        self.assertIn('stockActionButtonsHtml', APP_JS)
+        self.assertIn('class="primary stock-row-btn"', APP_JS)
+        self.assertIn('class="stock-row-btn"', APP_JS)
         self.assertIn("stock_moves.js", INDEX)
 
     def test_header_tabs_flex_wrap_no_overflow_css(self):

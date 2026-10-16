@@ -21,30 +21,28 @@ def _fn(source: str, name: str) -> str:
 
 
 class MoveDisplayModesUiTest(unittest.TestCase):
-    def test_title_slot_covers_move_period_orders(self):
+    def test_title_slot_covers_list_period_orders(self):
         mount = _fn(APP_JS, 'mountStockDisplay')
         sync = _fn(APP_JS, 'syncStockListDisplaySlot')
-        for section in ('list', 'move', 'period', 'orders', 'setup'):
+        for section in ('list', 'period', 'orders', 'setup'):
             self.assertIn(f"section==='{section}'", sync)
-        for tab in ('list', 'move', 'period', 'orders'):
+        self.assertNotIn("section==='move'", sync)
+        for tab in ('list', 'period', 'orders'):
             self.assertIn(f"tab==='{tab}'", mount)
+        self.assertNotIn("tab==='move'", mount)
         self.assertIn('SETUP_TAB_IDS.has(tab)', mount)
         self.assertLess(
             mount.index("#stocklistdisplay"),
             mount.index("#main .bar"),
         )
 
-    def test_move_page_mounts_display_and_fills_grid(self):
+    def test_move_page_redirects_without_own_display(self):
         body = _fn(APP_JS, 'movePage')
-        self.assertIn("mountStockDisplay(stage,'move'", body)
-        self.assertIn("stockScreenId('move')", body)
-        self.assertIn("grid.hidden=displayMode!=='grid'", body)
-        self.assertIn('class="dm-card', body)
-        self.assertIn('data-select-target', body)
-        # 表示 lives on title-row slot; not hard-coded in the search bar markup
-        bar = body[body.index('class="bar"'):body.index('id="stockliststage"')]
-        self.assertNotIn('display-mode', bar)
-        self.assertNotIn('>表示<', bar)
+        self.assertIn('stockList()', body)
+        self.assertNotIn("mountStockDisplay(stage,'move'", body)
+        list_page = _fn(APP_JS, 'stockList')
+        self.assertIn("mountStockDisplay(stage,'list'", list_page)
+        self.assertIn('stock-list-filters', list_page)
 
     def test_orders_page_mounts_display_on_title_slot(self):
         self.assertIn("mountStockDisplay(stage,'orders'", PO_JS)

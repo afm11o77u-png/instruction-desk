@@ -14,8 +14,13 @@ function conditionSelectHtml(id,value,opts){
   const all=allowAll?`<option value="" ${cur===''?'selected':''}>すべて</option>`:''
   return `<select id="${id}" aria-label="状態">${all}${CONDITION_OPTS.map(([v,l])=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('')}</select>`
 }
-const STOCK_SECTIONS=new Set(['list','move','history','setup','period','orders'])
-function normalizeSection(section){return STOCK_SECTIONS.has(section)?section:'list'}
+const STOCK_SECTIONS=new Set(['list','history','setup','period','orders'])
+/** Legacy ?section=move / 保存済みURL → 在庫一覧へ案内 */
+let moveRedirectNotice=false
+function normalizeSection(section){
+  if(section==='move'){moveRedirectNotice=true;return 'list'}
+  return STOCK_SECTIONS.has(section)?section:'list'
+}
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
 function monthStartISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`}
 function todayISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
@@ -167,7 +172,7 @@ function stockActionButtonsHtml(row,{lotId}={}){
   const cond=row.conditionMixed?'':esc(row.condition||'new')
   const mixed=row.conditionMixed?'1':'0'
   const lot=lotId!=null?` data-lot="${lotId}"`:''
-  return `<button type="button" class="primary" data-stock-in="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>入庫</button> <button type="button" data-stock-out="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>出庫</button> <button type="button" class="quiet" data-stock-take="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>棚卸</button>`
+  return `<button type="button" class="primary stock-row-btn" data-stock-in="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>入庫</button> <button type="button" class="stock-row-btn" data-stock-out="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>出庫</button> <button type="button" class="quiet" data-stock-take="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>棚卸</button>`
 }
 async function pickConditionIfNeeded(target,actionLabel){
   if(!target)return null
@@ -238,7 +243,7 @@ function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
   // Title-row 表示 slot: 在庫一覧系 + 登録・設定（枠外・右上）
-  if(section==='list'||section==='move'||section==='history'||section==='period'||section==='orders'||section==='setup'){
+  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='setup'){
     slot.hidden=false
     return
   }
@@ -248,9 +253,9 @@ function syncStockListDisplaySlot(section){
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'standard'
   const screenId=stockScreenId(tab)
-  // Title-row 表示 slot (syncStockListDisplaySlot): 在庫一覧・入庫出庫・期間・発注・登録設定.
+  // Title-row 表示 slot (syncStockListDisplaySlot): 在庫一覧・期間・発注・登録設定.
   // Must remount here so the visible control matches this page's screenId (not a leftover).
-  const useTitleSlot=tab==='list'||tab==='move'||tab==='history'||tab==='period'||tab==='orders'||SETUP_TAB_IDS.has(tab)
+  const useTitleSlot=tab==='list'||tab==='history'||tab==='period'||tab==='orders'||SETUP_TAB_IDS.has(tab)
   const toolbar=useTitleSlot
     ? document.querySelector('#stocklistdisplay')
     : document.querySelector('#main .bar')
@@ -296,9 +301,6 @@ function applySectionState(section,setupTab){
   if(state.section==='list'){
     state.tab='list'
     state.mode='stock'
-  }else if(state.section==='move'){
-    state.tab='move'
-    state.mode='stock'
   }else if(state.section==='history'){
     state.tab='history'
     state.mode='stock'
@@ -331,7 +333,6 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(!(await ensureCanNavigate()))return false
   applySectionState(next,setupTab)
   if(state.tab==='list')await loadStock()
-  if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
   if(state.tab==='history'){ensureHistoryDefaults();await loadStockHistory()}
   if(state.tab==='period')ensurePeriodDefaults()
@@ -354,6 +355,12 @@ async function boot(){
   state.data=await api('/api/bootstrap')
   if(!state.ready){
     const params=new URLSearchParams(location.search)
+    if(params.get('section')==='move'){
+      moveRedirectNotice=true
+      params.set('section','list')
+      const qs=params.toString()
+      try{history.replaceState(null,'',location.pathname+(qs?'?'+qs:'')+location.hash)}catch(_){}
+    }
     applySectionState(normalizeSection(params.get('section')),loadSetupTab())
   }
   state.ready=true
@@ -362,7 +369,6 @@ async function boot(){
   $('#eyebrow').textContent=label[0]
   $('#foot').textContent=label[1]
   if(state.tab==='list')await loadStock()
-  if(state.tab==='move')await loadMoveTargets()
   if(state.tab==='opening')await loadOpeningEntries()
   if(state.tab==='history'){ensureHistoryDefaults();await loadStockHistory()}
   if(state.tab==='period')ensurePeriodDefaults()
@@ -377,9 +383,6 @@ function paint(){
     state.setupTab=state.tab
     saveSetupTab(state.tab)
     state.mode=state.tab==='customers'||state.tab==='suppliers'||state.tab==='products'?'masters':'stock'
-  }else if(state.section==='move'){
-    state.tab='move'
-    state.mode='stock'
   }else if(state.section==='history'){
     state.tab='history'
     state.mode='stock'
@@ -397,10 +400,10 @@ function paint(){
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='move'||state.section==='history'||state.section==='period'||state.section==='orders')))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',move:'入庫・出庫',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -417,6 +420,7 @@ function paint(){
   syncStockListDisplaySlot(state.section)
   const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,legacyCsv:()=>typeof legacyCsvPage==='function'?legacyCsvPage():($('#main').innerHTML='<p>旧CSV取込画面を読み込めませんでした。</p>'),list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
   view()
+  if(moveRedirectNotice){moveRedirectNotice=false;toast('入庫・出庫は在庫一覧の各行から行います。')}
 }
 async function loadOpeningEntries(){
   state.openings=await api('/api/opening/entries')
@@ -2420,68 +2424,14 @@ function showPeriodHistory(row){
     </div>`
   dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
 }
+/** Legacy standalone 入庫・出庫 page — redirect to 在庫一覧 (dialogs remain). */
 function movePage(){
-  const SM=typeof StockMoves!=='undefined'?StockMoves:null
-  const writable=stockCanWrite()
-  const mode=state.moveMode==='out'?'out':'in'
-  const targets=(state.moveTargets&&state.moveTargets.targets)||[]
-  const filtered=SM?SM.filterTargets(targets,state.moveQ):targets
-  $('#main').innerHTML=`<section class="panel move-panel">
-    <div class="move-mode-toggle" role="group" aria-label="入庫または出庫">
-      <button type="button" data-move-mode="out" class="${mode==='out'?'active primary':''}">出庫する</button>
-      <button type="button" data-move-mode="in" class="${mode==='in'?'active primary':''}">入庫する</button>
-    </div>
-    ${writable?'':`<p class="notice">閲覧専用のため、入庫・出庫はできません。</p>`}
-    <div class="bar">
-      <input id="moveQ" type="search" placeholder="顧客・品番・商品・サイズ・場所で検索" value="${esc(state.moveQ||'')}">
-      <span class="count">${filtered.length}件</span>
-      ${mode==='in'&&writable?`<button type="button" class="primary" id="openInboundNew">一覧にない商品を入庫</button>`:''}
-    </div>
-    ${mode==='in'?`<p class="notice move-new-hint">登録済みの取扱から、初めて在庫を登録する組み合わせを選びます</p>`:''}
-    ${listNote('入庫・出庫の見方',mode==='in'
-      ?'一覧は、これまでに在庫登録した組み合わせ（状態ごと）です。現在庫が0枚でも残ります。補充は行の「選択」から入庫します。新品しか無い取扱でも、入庫画面で中古を選んで初回入庫できます。初めての組み合わせだけ「一覧にない商品を入庫」を使います。'
-      :'出庫は登録済みの組み合わせ（0・マイナス含む）から選びます。選んだ状態の在庫だけを減らします。状態をまたぐ自動振替はしません。在庫がある分は先入先出。不足時は確認のうえマイナス在庫（原価未確定）になります。')}
-    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="move-target-table"><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th><th>現在庫</th><th>金額</th><th></th></tr></thead><tbody>
-      ${filtered.map(t=>`<tr class="${Number(t.qty)===0?'is-zero-stock':''}">
-        <td class="dm-primary">${esc(t.customerName)}</td>
-        <td>${esc(t.code)} ${esc(t.productName)} ${esc(t.color)}<span class="sub dm-secondary">商品ID ${t.productId}</span></td>
-        <td>${esc(t.embroideryLabel)}</td>
-        <td>${esc(t.size)}</td>
-        <td>${esc(t.conditionLabel||conditionLabel(t.condition))}</td>
-        <td>${esc(t.locationLabel)}</td>
-        <td class="qty">${num(t.qty)}枚</td>
-        <td class="money">${yen(t.amount)}</td>
-        <td>${writable?`<button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}" data-condition="${esc(t.condition||'new')}">選択</button>`:'—'}</td>
-      </tr>`).join('')||`<tr><td colspan="9">${mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'}</td></tr>`}
-    </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
-  </section>`
-  const emptyMove=mode==='in'?'在庫登録済みの組み合わせはありません。「一覧にない商品を入庫」から初めての組み合わせを登録できます。':'出庫できる在庫はありません。'
-  const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=filtered.length?filtered.map(t=>`<article class="dm-card${Number(t.qty)===0?' is-zero-stock':''}"><div class="dm-primary">${esc(t.customerName)}</div><div class="dm-secondary">${esc(t.code)} ${esc(t.productName)} ${esc(t.color)} · 商品ID ${t.productId}</div><div class="dm-meta"><span>${esc(t.embroideryLabel)}</span><span>${esc(t.size)}</span><span>${esc(t.conditionLabel||conditionLabel(t.condition))}</span><span>${esc(t.locationLabel)}</span></div><div class="dm-meta"><span class="qty">${num(t.qty)}枚</span><span class="money">${yen(t.amount)}</span></div>${writable?`<div class="dm-actions"><button type="button" class="primary" data-select-target="${t.customerProductId}" data-size="${esc(t.size)}" data-location="${t.locationId}" data-condition="${esc(t.condition||'new')}">選択</button></div>`:''}</article>`).join(''):`<div class="dm-empty">${emptyMove}</div>`
-  const stage=$('#stockliststage')
-  const displayMode=mountStockDisplay(stage,'move',()=>paint())
-  if(grid)grid.hidden=displayMode!=='grid'
-  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('move'))
-  document.querySelectorAll('[data-move-mode]').forEach(b=>b.onclick=async()=>{
-    state.moveMode=b.dataset.moveMode
-    try{await loadMoveTargets()}catch(e){toast(e.message)}
-    paint()
-  })
-  const qEl=$('#moveQ')
-  let qTimer=null
-  qEl.oninput=()=>{
-    state.moveQ=qEl.value
-    clearTimeout(qTimer)
-    qTimer=setTimeout(async()=>{await loadMoveTargets();paint()},200)
-  }
-  const openNew=$('#openInboundNew')
-  if(openNew)openNew.onclick=()=>openNormalInboundRegister()
-  document.querySelectorAll('[data-select-target]').forEach(b=>b.onclick=()=>{
-    const target=targets.find(t=>String(t.customerProductId)===b.dataset.selectTarget&&t.size===b.dataset.size&&String(t.locationId)===b.dataset.location&&String(t.condition||'new')===String(b.dataset.condition||'new'))
-    if(!target)return
-    if(mode==='in')openInboundDialog(target)
-    else openOutboundDialog(target)
-  })
+  moveRedirectNotice=true
+  state.section='list'
+  state.tab='list'
+  state.mode='stock'
+  stockList()
+  if(moveRedirectNotice){moveRedirectNotice=false;toast('入庫・出庫は在庫一覧の各行から行います。')}
 }
 function moveDialogEl(){return $('#dialog')}
 function openInboundDialog(target){
