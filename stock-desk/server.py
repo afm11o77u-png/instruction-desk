@@ -16,6 +16,7 @@ WRITE_PATHS = {
     '/api/customer-products',
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
+    '/api/stocktake', '/api/history/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/company-profile',
@@ -201,6 +202,8 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/inbound': stock.register_inbound,
         '/api/outbound': stock.register_outbound,
         '/api/inbound/correct': stock.correct_inbound,
+        '/api/stocktake': stock.register_stocktake,
+        '/api/history/correct': stock.correct_history_move,
         '/api/purchase-orders': stock_orders.save_purchase_order,
         '/api/purchase-orders/mark-ordered': stock_orders.mark_ordered,
         '/api/purchase-orders/cancel': stock_orders.cancel_purchase_order,
@@ -219,7 +222,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
     except (ValueError, TypeError, KeyError) as e:
         return 400, {'error': str(e) or '入力を確認してください。'}
     except sqlite3.IntegrityError:
-        if path in ('/api/opening', '/api/inbound', '/api/outbound'):
+        if path in ('/api/opening', '/api/inbound', '/api/outbound', '/api/stocktake'):
             with stock.connect(db_path) as c:
                 if path == '/api/opening':
                     row = c.execute('SELECT id FROM opening_batches WHERE client_token=?', (stock.text(payload.get('token')),)).fetchone()

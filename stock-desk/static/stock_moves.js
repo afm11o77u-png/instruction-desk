@@ -79,11 +79,13 @@
           const day = a.receivedUnknown
             ? '入荷日不明・払出し順 ' + a.payoutOrder
             : '入荷日 ' + esc(a.receivedOn || '');
-          return `<tr><td>${day}<span class="sub">ロット ${a.lotId}</span></td><td class="qty">${num(a.qty)}</td><td class="money">${yen(a.unitCost)}</td><td class="money">${yen(a.amount)}</td></tr>`;
+          const costLabel = a.costPending || a.unitCost == null || a.amount == null ? '原価未確定' : yen(a.unitCost);
+          const amtLabel = a.costPending || a.amount == null ? '原価未確定' : yen(a.amount);
+          return `<tr><td>${day}<span class="sub">ロット ${a.lotId}</span></td><td class="qty">${num(a.qty)}</td><td class="money">${costLabel}</td><td class="money">${amtLabel}</td></tr>`;
         })
         .join('')}
     </tbody></table></div>
-    <p>出庫金額合計 <strong>${yen(plan.totalAmount)}</strong></p>`;
+    <p>出庫金額合計（確定原価） <strong>${yen(plan.totalAmount||plan.confirmedAmount||0)}</strong>${plan.costPendingQty?`　／ 原価未確定 ${num(plan.costPendingQty)}枚`:''}</p>`;
   }
 
   global.StockMoves = {

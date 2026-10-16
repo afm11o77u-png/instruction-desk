@@ -235,11 +235,11 @@ class StockPeriodTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_insufficient_history_unavailable(self):
+    def test_negative_running_balance_still_computable(self):
         folder, path, c = newdb()
         try:
             _, _, loc, handle = seed_masters(c)
-            # Orphan outbound before any inbound/opening → running balance negative
+            # 不足出庫相当のマイナス区間があっても期間集計は算出する
             stock.register_inbound(c, {
                 'token': 'seed-for-lot', 'customerProductId': handle, 'size': 'M',
                 'locationId': loc['id'], 'qty': 1, 'unitCost': 1000, 'receivedOn': '2026-10-20',
@@ -249,13 +249,15 @@ class StockPeriodTest(unittest.TestCase):
                 '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
                    location_id,actor_name,business_on,note,at)
                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                (lot_id, 'outbound', -5, 1000, 0, 0, 1000, 1000, loc['id'], 'tester', '2026-10-01', '欠損履歴', '2026-10-01T09:00:00'),
+                (lot_id, 'outbound', -5, 1000, 0, 0, 1000, 1000, loc['id'], 'tester', '2026-10-01', '不足出庫相当', '2026-10-01T09:00:00'),
             )
             c.commit()
             data = stock_period.summarize_period(c, {'from': '2026-10-01', 'to': '2026-10-31'})
             row = data['rows'][0]
-            self.assertFalse(row['computable'])
-            self.assertIn('履歴が足りない', row['unavailableReason'])
+            self.assertTrue(row['computable'])
+            self.assertEqual(row['outboundQty'], 5)
+            self.assertEqual(row['inboundQty'], 1)
+            self.assertEqual(row['closingQty'], -4)
         finally:
             c.close()
             folder.cleanup()

@@ -23,7 +23,7 @@ def _fn(name: str) -> str:
 class LocationCreateEditUiTest(unittest.TestCase):
     def test_locations_button_is_new_site_register(self):
         body = _fn('locations')
-        self.assertIn("bar('拠点名・棚・区画名','','拠点を新しく登録')", body)
+        self.assertIn("bar('拠点名・棚・区画名','','拠点を新しく登録','locations')", body)
         self.assertNotIn("id=\"add\">新しく登録<", body)
 
     def test_new_site_form_is_blank_text_input_without_site_select(self):

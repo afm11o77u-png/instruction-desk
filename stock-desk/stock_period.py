@@ -13,6 +13,12 @@ KIND_LABELS = {
     'inbound': '入庫',
     'inbound_correction': '入庫の訂正',
     'outbound': '出庫',
+    'outbound_shortage': '不足出庫',
+    'shortage_cover': '不足の補充（原価対応）',
+    'stocktake': '棚卸調整',
+    'stocktake_shortage': '棚卸調整（不足）',
+    'move_void': '取消（訂正）',
+    'outbound_correction': '出庫の訂正',
 }
 
 
@@ -45,7 +51,7 @@ def resolve_business_on(move, lot):
     kind = move['kind']
     if kind == 'opening':
         return lot['basis_date']
-    if kind == 'inbound':
+    if kind in ('inbound', 'shortage_cover'):
         if lot['received_unknown']:
             return None
         return lot['received_on']
@@ -53,11 +59,13 @@ def resolve_business_on(move, lot):
 
 
 def _event_bucket(kind):
-    if kind == 'inbound':
+    if kind in ('inbound', 'shortage_cover'):
         return 'inbound'
-    if kind == 'outbound':
+    if kind in ('outbound', 'outbound_shortage'):
         return 'outbound'
-    if kind in ('opening_correction', 'inbound_correction'):
+    if kind in ('stocktake', 'stocktake_shortage'):
+        return 'stocktake'
+    if kind in ('opening_correction', 'inbound_correction', 'outbound_correction', 'move_void'):
         return 'correction'
     if kind == 'opening':
         return 'opening'
@@ -115,13 +123,18 @@ def _load_events(c, args):
         business_on = resolve_business_on(r, lot)
         loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
         site_id = r['parent_id'] if r['parent_id'] is not None else r['location_id']
+        pending_cost = r['kind'] in ('outbound_shortage', 'stocktake_shortage') or (
+            r['kind'] in ('stocktake', 'outbound') and r['cost_after'] is None and r['cost_before'] is None
+        )
+        amount = None if pending_cost else abs(r['qty_delta']) * r['unit_cost']
         events.append({
             'id': r['id'],
             'lotId': r['lot_id'],
             'kind': r['kind'],
             'qtyDelta': r['qty_delta'],
-            'unitCost': r['unit_cost'],
-            'amount': abs(r['qty_delta']) * r['unit_cost'],
+            'unitCost': None if pending_cost else r['unit_cost'],
+            'amount': amount,
+            'costPending': pending_cost,
             'businessOn': business_on,
             'at': r['at'],
             'actorName': r['actor_name'] if 'actor_name' in r.keys() else '',
@@ -239,7 +252,8 @@ def summarize_period(c, args):
             'businessDate': '入庫は入荷日、出庫は出庫日、初期在庫は在庫基準日。登録日時は使いません。',
             'opening': '初期在庫は期間内入庫に数えず、基準日前なら期首、期間内なら訂正増減（＋）に入れます。',
             'missingDate': '業務日がない履歴がある行は算出不可とし、0で埋めません。',
-            'outboundAmount': '出庫金額は出庫時点のロット仕入単価×数量（FIFO結果）です。',
+            'outboundAmount': '出庫金額は出庫時点のロット仕入単価×数量（FIFO結果）です。不足出庫の原価未確定分は出庫金額に含めません。',
+            'stocktake': '棚卸調整は通常入出庫と分け、期末式では「＋棚卸増減」として扱います。',
         },
     }
 
@@ -290,30 +304,16 @@ def _summarize_bucket(bucket, start, end):
         )
 
     dated = sorted(events, key=lambda e: (e['businessOn'], e['id']))
-    # Walk full history once: detect insufficient history (running qty < 0) without inventing stock.
-    running = 0
-    for ev in dated:
-        kind = _event_bucket(ev['kind'])
-        qty = ev['qtyDelta']
-        abs_qty = abs(qty)
-        if kind == 'opening' or kind == 'inbound':
-            running += abs_qty
-        elif kind == 'outbound':
-            running -= abs_qty
-        elif kind == 'correction':
-            running += qty
-        if running < 0:
-            return _unavailable_row(
-                base,
-                '履歴が足りないため期首・期末を正確に算出できません（業務日順の在庫がマイナスになる区間があります）。',
-            )
+    # 不足出庫によるマイナス在庫は許容する（期首・期末の算出を止めない）
 
     opening_qty = 0
     inbound_qty = 0
     outbound_qty = 0
     correction_qty = 0
+    stocktake_qty = 0
     inbound_amount = 0
     outbound_amount = 0
+    cost_pending_outbound_qty = 0
     history = []
     price_map = {}
 
@@ -322,7 +322,9 @@ def _summarize_bucket(bucket, start, end):
         bucket_kind = _event_bucket(ev['kind'])
         qty = ev['qtyDelta']
         abs_qty = abs(qty)
-        amount = abs_qty * ev['unitCost']
+        amount = ev.get('amount')
+        if amount is None and not ev.get('costPending') and ev.get('unitCost') is not None:
+            amount = abs_qty * ev['unitCost']
 
         if d < start:
             if bucket_kind == 'opening':
@@ -331,6 +333,8 @@ def _summarize_bucket(bucket, start, end):
                 opening_qty += abs_qty
             elif bucket_kind == 'outbound':
                 opening_qty -= abs_qty
+            elif bucket_kind == 'stocktake':
+                opening_qty += qty
             elif bucket_kind == 'correction':
                 opening_qty += qty
             continue
@@ -348,6 +352,7 @@ def _summarize_bucket(bucket, start, end):
             'qty': abs_qty,
             'unitCost': ev['unitCost'],
             'amount': amount,
+            'costPending': bool(ev.get('costPending')),
             'actorName': ev['actorName'] or '',
             'note': ev['note'],
             'lotId': ev['lotId'],
@@ -355,25 +360,32 @@ def _summarize_bucket(bucket, start, end):
         if bucket_kind == 'outbound':
             hist['qty'] = -abs_qty
             outbound_qty += abs_qty
-            outbound_amount += amount
-            price = price_map.setdefault(ev['unitCost'], {'unitCost': ev['unitCost'], 'qty': 0, 'amount': 0})
-            price['qty'] += abs_qty
-            price['amount'] += amount
+            if ev.get('costPending') or amount is None:
+                cost_pending_outbound_qty += abs_qty
+            else:
+                outbound_amount += amount
+                price = price_map.setdefault(ev['unitCost'], {'unitCost': ev['unitCost'], 'qty': 0, 'amount': 0})
+                price['qty'] += abs_qty
+                price['amount'] += amount
         elif bucket_kind == 'inbound':
             inbound_qty += abs_qty
-            inbound_amount += amount
+            if amount is not None:
+                inbound_amount += amount
+        elif bucket_kind == 'stocktake':
+            hist['qty'] = qty
+            stocktake_qty += qty
         elif bucket_kind == 'opening':
             # 期間内の初期在庫は入庫に数えず訂正増減へ（不変式を保つ・二重計上しない）
             hist['kindLabel'] = '初期在庫（期間内・訂正増減扱い）'
             correction_qty += abs_qty
         elif bucket_kind == 'correction':
             hist['qty'] = qty
-            hist['amount'] = qty * ev['unitCost']
+            hist['amount'] = None if ev.get('unitCost') is None else qty * ev['unitCost']
             correction_qty += qty
         history.append(hist)
 
-    closing_qty = opening_qty + inbound_qty - outbound_qty + correction_qty
-    identity_ok = (opening_qty + inbound_qty - outbound_qty + correction_qty) == closing_qty
+    closing_qty = opening_qty + inbound_qty - outbound_qty + correction_qty + stocktake_qty
+    identity_ok = (opening_qty + inbound_qty - outbound_qty + correction_qty + stocktake_qty) == closing_qty
 
     include = bool(history) or opening_qty != 0 or closing_qty != 0
     if not include and any(ev['businessOn'] and ev['businessOn'] < start for ev in dated):
@@ -387,12 +399,17 @@ def _summarize_bucket(bucket, start, end):
         'inboundQty': inbound_qty,
         'outboundQty': outbound_qty,
         'correctionQty': correction_qty,
+        'stocktakeQty': stocktake_qty,
         'closingQty': closing_qty,
         'inboundAmount': inbound_amount,
         'outboundAmount': outbound_amount,
+        'costPendingOutboundQty': cost_pending_outbound_qty,
         'identityOk': identity_ok,
         'history': history,
-        'priceBreakdown': sorted(price_map.values(), key=lambda p: p['unitCost']),
+        'priceBreakdown': sorted(
+            [p for p in price_map.values() if p['unitCost'] is not None],
+            key=lambda p: p['unitCost'],
+        ),
         'include': include,
     }
 

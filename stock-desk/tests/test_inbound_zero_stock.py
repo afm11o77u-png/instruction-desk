@@ -63,10 +63,11 @@ class InboundZeroStockTest(unittest.TestCase):
             # No「在庫0も表示」flag required — default inbound list includes zeros
             self.assertEqual(inbound['mode'], 'in')
 
+            # 出庫一覧も在庫0・マイナスを残す（不足出庫対応）。未登録組合せは作らない。
             outbound = stock.move_targets(c, {'mode': 'out'})
-            self.assertEqual(outbound['targets'], [])
-            # Default / missing mode stays outbound-safe (no zero rows)
-            self.assertEqual(stock.move_targets(c, {})['targets'], [])
+            self.assertEqual(len(outbound['targets']), 1)
+            self.assertEqual(outbound['targets'][0]['qty'], 0)
+            self.assertEqual(len(stock.move_targets(c, {})['targets']), 1)
         finally:
             c.close()
             folder.cleanup()
@@ -222,7 +223,9 @@ class InboundZeroStockTest(unittest.TestCase):
             self.assertEqual(inbound['targets'][0]['size'], 'L')
             self.assertEqual(inbound['targets'][0]['qty'], 0)
             outbound = stock.move_targets(c, {'mode': 'out'})
-            self.assertEqual(outbound['targets'], [])
+            self.assertEqual(len(outbound['targets']), 1)
+            self.assertEqual(outbound['targets'][0]['qty'], 0)
+            self.assertEqual(outbound['targets'][0]['size'], 'L')
         finally:
             c.close()
             folder.cleanup()

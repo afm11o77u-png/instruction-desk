@@ -347,3 +347,9 @@ dialog.history-detail-dialog .history-detail-body{max-height:min(75vh,780px);ove
 .po-preview-body{padding:0;background:#e8ebe8;min-height:60vh}
 .po-preview-body iframe{width:100%;height:min(70vh,820px);border:0;background:#fff}
 dialog.po-dialog{width:min(1100px,96vw)}
+
+/* 在庫不足（マイナス） */
+tr.is-shortage td.qty, .qty.is-shortage, article.dm-card.is-shortage .qty{color:#a33;font-weight:600}
+tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
+.shortage-tag{color:#a33;font-size:.85em;margin-left:.35em}
+.shortage-confirm{border-left:3px solid #a33;padding-left:.6em}

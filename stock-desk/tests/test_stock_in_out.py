@@ -468,7 +468,7 @@ class StockInOutTest(unittest.TestCase):
         c.commit()
         c.close()
         server.prepare(path, 'live')
-        backups = list(Path(folder.name).glob('stock.pre-inout-*.sqlite3'))
+        backups = list(Path(folder.name).glob('stock.pre-*.sqlite3'))
         self.assertTrue(backups)
         c2 = stock.connect(path)
         self.assertEqual(c2.execute('SELECT qty_remaining FROM lots WHERE id=1').fetchone()['qty_remaining'], 5)

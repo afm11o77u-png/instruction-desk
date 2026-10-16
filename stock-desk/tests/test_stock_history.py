@@ -390,13 +390,17 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn('記録日時（日本時間）', APP_JS)
         self.assertIn('条件を解除', APP_JS)
         self.assertIn('対象ロット', APP_JS)
-        # Per-row 履歴 button removed from stock list; 開く / 訂正 remain
-        lot_table = APP_JS[APP_JS.index("f.group==='lot'"):APP_JS.index("if(f.group==='product')")]
+        # 在庫一覧は入庫・出庫・棚卸。訂正は在庫履歴から。行の「開く／訂正」は置かない
+        lot_table = APP_JS[APP_JS.index("f.group==='lot'"):APP_JS.index("const allRows=")]
         self.assertNotIn('data-history', lot_table)
         self.assertNotIn('>履歴</button>', lot_table)
-        self.assertIn('data-correct', lot_table)
-        self.assertIn("stockOpenBtn(l.id,'開く')", lot_table)
-        self.assertIn('stockopen', lot_table)
+        self.assertNotIn('data-correct', lot_table)
+        self.assertNotIn("stockOpenBtn(l.id,'開く')", lot_table)
+        self.assertIn('stockActionButtonsHtml', lot_table)
+        self.assertIn('data-stock-in', APP_JS)
+        self.assertIn('data-stock-out', APP_JS)
+        self.assertIn('data-stock-take', APP_JS)
+        self.assertIn("history:'在庫履歴'", APP_JS)
 
     def test_history_filters_are_two_top_packed_rows(self):
         """Dates + month shortcuts on row 1; criteria + actions on row 2 (no lonely wrap)."""

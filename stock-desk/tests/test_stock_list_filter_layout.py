@@ -79,11 +79,12 @@ class StockListFilterLayoutTest(unittest.TestCase):
     def test_filter_change_behavior_unchanged(self):
         body = _fn('stockList')
         self.assertIn(
-            "['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition'].forEach(id=>$('#'+id).onchange=apply)",
+            "['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)",
             body,
         )
         self.assertIn('f.customerId=$(\'#fCustomer\').value', body)
         self.assertIn('f.condition=$(\'#fCondition\').value', body)
+        self.assertIn('f.stockFilter=$(\'#fStockFilter\').value', body)
         self.assertIn('await loadStock()', body)
 
     def test_stock_list_filter_css_one_row_and_display_on_title_row(self):
