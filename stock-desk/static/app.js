@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
 const CONDITION_OPTS=[['new','新品'],['used','中古']]
 function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
 function conditionQtyText(r){
@@ -36,7 +36,7 @@ function ensureHistoryDefaults(){
   if(!state.history.page)state.history.page=1
   if(!state.history.pageSize)state.history.pageSize=50
 }
-const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]
+const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫'],['legacyCsv','旧CSV取込']]
 const SETUP_TAB_IDS=new Set(SETUP_TABS.map(([id])=>id))
 const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
 const SETUP_TAB_KEY='stock-desk:setup-tab'
@@ -219,7 +219,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',legacyCsv:'stock-legacy-csv',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -415,7 +415,7 @@ function paint(){
     tabs.innerHTML=''
   }
   syncStockListDisplaySlot(state.section)
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,legacyCsv:()=>typeof legacyCsvPage==='function'?legacyCsvPage():($('#main').innerHTML='<p>旧CSV取込画面を読み込めませんでした。</p>'),list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
   view()
 }
 async function loadOpeningEntries(){

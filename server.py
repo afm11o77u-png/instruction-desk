@@ -850,7 +850,13 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             if origin and origin not in ALLOWED_ORIGINS: return self.reply(403, {'error':'接続元を確認してください。'})
             try: n=int(self.headers.get('Content-Length') or 0)
             except ValueError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
-            if n>(12_000_000 if api_path=='/api/import' else 1_000_000): return self.reply(400, {'error':'送信データが大きすぎます。'})
+            large_body = api_path in (
+                '/api/import',
+                '/api/legacy-csv/preview',
+                '/api/legacy-csv/commit',
+                '/api/legacy-csv/history',
+            )
+            if n>(12_000_000 if large_body else 1_000_000): return self.reply(400, {'error':'送信データが大きすぎます。'})
             try: body=json.loads(self.rfile.read(n).decode('utf-8') or '{}')
             except json.JSONDecodeError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
             result=stockdesk().api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
