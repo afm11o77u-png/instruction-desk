@@ -355,16 +355,20 @@ async function ensureCanNavigate(){
   if(!(await ensureLeaveEditDialog()))return false
   return true
 }
-function excelTools(){
-  return `<span class="exceltools"><button type="button" id="exceldown">記入用Excel</button><button type="button" id="excelin">Excelを読み込む</button><input id="excelfile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></span>`
+function excelTools(kind){
+  return `<span class="exceltools"><button type="button" id="exceldown">記入用Excel</button><button type="button" id="excelexport" data-kind="${esc(kind||'')}">Excel出力</button><button type="button" id="excelin">Excelを読み込む</button><input id="excelfile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></span>`
+}
+function excelExportNotice(){
+  return `<p class="excelhint export-hint">確認用Excelです。登録用の記入用Excelとは形式が異なります。</p>`
 }
 function inactiveToggle(){
   return `<label class="check inactive-toggle"><input id="stopped" type="checkbox" ${state.stopped?'checked':''}>停止も表示</label>`
 }
-function bar(placeholder,extra='',addLabel='新しく登録'){
+function bar(placeholder,extra='',addLabel='新しく登録',exportKind=''){
   return `<div class="bar">${extra}<label>検索<input id="q" value="${esc(state.q)}" placeholder="${placeholder}"></label>
     ${inactiveToggle()}
-    <button type="button" class="primary" id="add">${esc(addLabel)}</button>${excelTools()}</div>
+    <button type="button" class="primary" id="add">${esc(addLabel)}</button>${excelTools(exportKind)}</div>
+    ${excelExportNotice()}
     ${listNote('Excel取込の説明','記入用Excelの各シートに、顧客・仕入先・商品・取扱・保管場所・初期在庫を書けます。同じファイルをもう一度読むと台帳は空欄以外を更新し、同じ初期在庫は増やしません。数量を変えた初期在庫は、別の初期在庫として追加されます。')}`
 }
 function productSupplierControl(current){
@@ -373,53 +377,131 @@ function productSupplierControl(current){
   ).join('')
   return `<label class="supplier-filter">仕入先<select id="productSupplier" aria-label="仕入先で絞り込み">${options}</select></label>`
 }
-function bindExcel(){
-  const down=$('#exceldown'),pick=$('#excelin'),file=$('#excelfile')
-  if(!down||!pick||!file)return
-  down.onclick=async()=>{
-    const r=await fetch(BASE+'/api/import/template')
-    if(!r.ok){let message='記入用Excelをダウンロードできませんでした。';try{message=(await r.json()).error||message}catch(e){}toast(message);return}
-    const blob=await r.blob()
-    const a=document.createElement('a')
-    a.href=URL.createObjectURL(blob)
-    a.download='在庫登録.xlsx'
-    a.click()
-    URL.revokeObjectURL(a.href)
+function registryExportQuery(kind){
+  const q=new URLSearchParams({kind})
+  if(kind==='opening'){
+    q.set('q',state.openingListQ||'')
+  }else{
+    q.set('q',state.q||'')
+    q.set('includeStopped',state.stopped?'1':'0')
   }
-  pick.onclick=()=>file.click()
-  file.onchange=async()=>{
-    const chosen=file.files&&file.files[0]
-    file.value=''
-    if(!chosen)return
+  if(kind==='products'){
+    const supplierId=resolveProductSupplierFilter()
+    if(supplierId)q.set('supplierId',String(supplierId))
+  }
+  return q
+}
+function openRegistryExportDialog(kind){
+  const dlg=$('#dialog')
+  if(!dlg)return
+  const run=async()=>{
+    let preview
     try{
-      const bytes=new Uint8Array(await chosen.arrayBuffer())
-      let text=''
-      for(let i=0;i<bytes.length;i+=0x8000)text+=String.fromCharCode(...bytes.subarray(i,i+0x8000))
-      const result=await api('/api/import',{name:chosen.name,file:btoa(text)})
-      toast(result.summary,8000)
-      await boot()
-    }catch(e){toast(e.message)}
+      preview=await api('/api/registry-export/preview?'+registryExportQuery(kind).toString())
+    }catch(e){toast(e.message);return}
+    const filteredLabel=(preview.filtered&&preview.filtered.label)||'0件'
+    const allLabel=(preview.all&&preview.all.label)||'0件'
+    state.editDirty=false
+    dlg.innerHTML=`<form><div class="dialoghead"><h2>Excel出力</h2><button type="button" id="close" class="quiet">閉じる</button></div>
+      <div class="dialogbody">
+        <p class="notice">${esc(preview.notice||'確認用Excelです。登録用の記入用Excelとは形式が異なります。')}</p>
+        <fieldset class="export-scope">
+          <legend>出力範囲</legend>
+          <label class="check"><input type="radio" name="exportScope" value="filtered" checked>表示条件に一致するデータ（${esc(filteredLabel)}）</label>
+          <label class="check"><input type="radio" name="exportScope" value="all">全登録データ（${esc(allLabel)}）</label>
+        </fieldset>
+        <p class="sub">出力前の対象件数です。ページ分割があっても、条件に一致する全件を書き出します。</p>
+        <p id="error"></p>
+      </div>
+      <div class="dialogactions"><button type="button" id="close2">キャンセル</button><button type="button" class="primary" id="doExport">出力する</button></div></form>`
+    dlg.showModal()
+    const close=()=>{dlg.close();dlg.innerHTML=''}
+    $('#close').onclick=close
+    $('#close2').onclick=close
+    dlg.oncancel=ev=>{ev.preventDefault();close()}
+    $('#doExport').onclick=async()=>{
+      const scope=(dlg.querySelector('input[name="exportScope"]:checked')||{}).value||'filtered'
+      const countLabel=scope==='all'?(preview.all&&preview.all.label):(preview.filtered&&preview.filtered.label)
+      const err=$('#error')
+      try{
+        const params=registryExportQuery(kind)
+        params.set('scope',scope)
+        const r=await fetch(BASE+'/api/registry-export.xlsx?'+params.toString())
+        if(!r.ok){let message='Excelを出力できませんでした。';try{message=(await r.json()).error||message}catch(e){}throw Error(message)}
+        const blob=await r.blob()
+        let filename=`${preview.label||'台帳'}_${scope==='all'?'全登録':'表示条件'}.xlsx`
+        const disp=r.headers.get('Content-Disposition')||''
+        const star=disp.match(/filename\*=UTF-8''([^;]+)/i)
+        if(star){try{filename=decodeURIComponent(star[1])}catch(e){}}
+        const a=document.createElement('a')
+        a.href=URL.createObjectURL(blob)
+        a.download=filename
+        a.click()
+        setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+        close()
+        toast(`${countLabel||''}をExcel出力しました。`.replace(/^を/,''),5000)
+      }catch(e){if(err)err.textContent=e.message;else toast(e.message)}
+    }
+  }
+  run()
+}
+function bindExcel(kind){
+  const down=$('#exceldown'),pick=$('#excelin'),file=$('#excelfile'),exp=$('#excelexport')
+  if(down){
+    down.onclick=async()=>{
+      const r=await fetch(BASE+'/api/import/template')
+      if(!r.ok){let message='記入用Excelをダウンロードできませんでした。';try{message=(await r.json()).error||message}catch(e){}toast(message);return}
+      const blob=await r.blob()
+      const a=document.createElement('a')
+      a.href=URL.createObjectURL(blob)
+      a.download='在庫登録.xlsx'
+      a.click()
+      URL.revokeObjectURL(a.href)
+    }
+  }
+  if(exp){
+    const exportKind=kind||exp.dataset.kind||''
+    exp.onclick=()=>{
+      if(!exportKind){toast('出力対象を特定できませんでした。');return}
+      openRegistryExportDialog(exportKind)
+    }
+  }
+  if(pick&&file){
+    pick.onclick=()=>file.click()
+    file.onchange=async()=>{
+      const chosen=file.files&&file.files[0]
+      file.value=''
+      if(!chosen)return
+      try{
+        const bytes=new Uint8Array(await chosen.arrayBuffer())
+        let text=''
+        for(let i=0;i<bytes.length;i+=0x8000)text+=String.fromCharCode(...bytes.subarray(i,i+0x8000))
+        const result=await api('/api/import',{name:chosen.name,file:btoa(text)})
+        toast(result.summary,8000)
+        await boot()
+      }catch(e){toast(e.message)}
+    }
   }
 }
 function customers(){
   const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者','','新しく登録','customers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
-  bindList(rows,'顧客',customerForm,body=>api('/api/customers',body))
+  bindList(rows,'顧客',customerForm,body=>api('/api/customers',body),'customers')
 }
 function suppliers(){
   const rows=state.data.suppliers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.phone}${r.contact}${r.address}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel supplier-panel">${listNote('仕入先について','仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。')}${bar('仕入先名・電話番号・担当者')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel supplier-panel">${listNote('仕入先について','仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。')}${bar('仕入先名・電話番号・担当者','','新しく登録','suppliers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する仕入先はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する仕入先はありません。</div>'
-  bindList(rows,'仕入先',supplierForm,body=>api('/api/suppliers',body))
+  bindList(rows,'仕入先',supplierForm,body=>api('/api/suppliers',body),'suppliers')
 }
 function products(){
   const supplierId=resolveProductSupplierFilter()
@@ -428,12 +510,12 @@ function products(){
     const text=`${r.code}${r.name}${r.color}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return (state.stopped||r.active)&&text.includes(state.q)
   })
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先の商品だけを一覧できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId))}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先の商品だけを一覧できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>`<tr><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
-  bindList(rows,'商品',productForm,body=>api('/api/products',body))
+  bindList(rows,'商品',productForm,body=>api('/api/products',body),'products')
   const supplierSelect=$('#productSupplier')
   if(supplierSelect)supplierSelect.onchange=()=>{
     state.productSupplierId=supplierSelect.value
@@ -474,14 +556,14 @@ function siteLocationRows(){
 }
 function locations(){
   const rows=siteLocationRows()
-  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','「拠点を新しく登録」では、空の拠点名から新しい拠点だけを作ります。既存の拠点の棚を増やす・直すときは、一覧の「開く」から行います。空の棚名は保存時に無視します（棚なしでも登録できます）。')}${bar('拠点名・棚・区画名','','拠点を新しく登録')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="site-locations"><thead><tr><th>拠点名</th><th>棚・区画</th><th>操作</th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('保管場所の注意','「拠点を新しく登録」では、空の拠点名から新しい拠点だけを作ります。既存の拠点の棚を増やす・直すときは、一覧の「開く」から行います。空の棚名は保存時に無視します（棚なしでも登録できます）。')}${bar('拠点名・棚・区画名','','拠点を新しく登録','locations')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="site-locations"><thead><tr><th>拠点名</th><th>棚・区画</th><th>操作</th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td><span class="dm-primary">${esc(r.name)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}</td><td class="shelf-summary">${esc(r.shelfSummary)}</td><td>${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="3">保管場所はまだありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">${esc(r.shelfSummary)}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">保管場所はまだありません。</div>'
-  bindList(rows,'保管場所',locationForm,body=>api('/api/locations',body))
+  bindList(rows,'保管場所',locationForm,body=>api('/api/locations',body),'locations')
 }
-function bindList(rows,title,form,save){
+function bindList(rows,title,form,save,exportKind){
   const stage=$('#stockliststage')
   const mode=mountStockDisplay(stage,state.tab,()=>paint())
   const grid=$('#stocklistgrid')
@@ -494,7 +576,7 @@ function bindList(rows,title,form,save){
     if(!b.dataset.id)return
     b.onclick=()=>edit(rows.find(r=>r.id===Number(b.dataset.id)),title,form,save)
   })
-  bindExcel()
+  bindExcel(exportKind)
 }
 function edit(row,title,form,save){
   const dlg=$('#dialog')
@@ -941,8 +1023,9 @@ function opening(){
       <label class="opening-list-search">検索<input id="openingListQ" value="${esc(q)}" placeholder="顧客名・品番・商品名で検索" aria-label="顧客名・品番・商品名で検索"></label>
       <span class="opening-list-count" id="openingListCount">${esc(countLabel)}</span>
       <button type="button" class="primary" id="openOpeningRegister">初期在庫を登録</button>
-      ${excelTools()}
+      ${excelTools('opening')}
     </div>
+    ${excelExportNotice()}
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>加工仕様</th><th>サイズ</th><th>状態</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
       ${entries.map(e=>`<tr>
@@ -966,7 +1049,7 @@ function opening(){
   $('#openOpeningRegister').onclick=()=>openOpeningRegister()
   const search=$('#openingListQ')
   if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
-  bindExcel()
+  bindExcel('opening')
 }
 function isInboundRegister(){return state.stockRegisterKind==='inbound'}
 function bindOpeningDialogCancel(dlg){
