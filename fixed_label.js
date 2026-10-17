@@ -4,7 +4,9 @@
   if (typeof module === 'object' && module.exports) module.exports = api;
   else Object.assign(root, api);
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
-  /* A4横 297×210mm・余白0・2×2の4分割。1枠 148.5×105mm。枚数はA4用紙枚数（全ページ4枠印字）。 */
+  /* A4横 297×210mm・余白0。
+   * cells: 2×2の4分割（1枠 148.5×105mm）。枚数はA4用紙枚数（全ページ4枠印字）。
+   * page-image: 元PDFの1ページ（既に4面）をそのまま1枚の書式として全面配置。分割・複製しない。 */
   const FIXED_LABEL_CSS =
     '@page{size:A4 landscape;margin:0}' +
     '*{box-sizing:border-box}' +
@@ -14,7 +16,7 @@
     'grid-template-columns:148.5mm 148.5mm;grid-template-rows:105mm 105mm;' +
     'break-after:page;page-break-after:always;overflow:hidden}' +
     '.page:last-child{break-after:auto;page-break-after:auto}' +
-    /* 中央の破線切り取り線（縦・横） */
+    /* 中央の破線切り取り線（縦・横）— cells 書式のみ */
     '.page::before,.page::after{content:"";position:absolute;z-index:2;pointer-events:none;' +
     'border:0 solid #888}' +
     '.page::before{left:148.5mm;top:0;bottom:0;width:0;' +
@@ -41,12 +43,19 @@
     '.no .line{flex:1 1 auto;border-bottom:1.6px solid #000;height:0;min-width:28mm;margin-bottom:1px}' +
     '.sama{font-size:42pt;font-weight:700;line-height:1;flex:0 0 auto;padding:0 1mm 0 0}' +
     '.footer{margin-top:auto;text-align:center;font-size:18pt;font-weight:700;' +
-    'letter-spacing:.08em;line-height:1.2;padding-top:2mm;white-space:pre}';
+    'letter-spacing:.08em;line-height:1.2;padding-top:2mm;white-space:pre}' +
+    /* page-image: 元スキャン1ページをA4横全面に。追加枠・内側余白・CSS回転なし */
+    '.page.page-image{display:block;padding:0;margin:0;' +
+    'grid-template-columns:none;grid-template-rows:none}' +
+    '.page.page-image::before,.page.page-image::after{content:none;display:none}' +
+    '.page.page-image .sheetimg{display:block;width:297mm;height:210mm;margin:0;padding:0;' +
+    'border:0;object-fit:contain;object-position:center;background:white}';
 
   const FIXED_LABEL_FORMATS = [
     {
       id: 'daruma-zenibako',
       name: 'だるま食品銭函工場',
+      kind: 'cells',
       buildCellHtml: function buildDarumaZenibakoCell() {
         const row = (cls, items) =>
           `<div class="checkrow ${cls}">${items
@@ -69,10 +78,40 @@
         );
       },
     },
+    {
+      id: 'nittetuft-2239',
+      name: '日鉄FT',
+      kind: 'page-image',
+      imageUrl: '/fixed-label/2239-nittetuft.jpg',
+      imageFile: 'fixed-label/2239-nittetuft.jpg',
+    },
+    {
+      id: 'rose-delica-2-2240',
+      name: 'ローズデリカ２課',
+      kind: 'page-image',
+      imageUrl: '/fixed-label/2240-rose-delica-2.jpg',
+      imageFile: 'fixed-label/2240-rose-delica-2.jpg',
+    },
+    {
+      id: 'rose-delica-1-2241',
+      name: 'ローズデリカ１課',
+      kind: 'page-image',
+      imageUrl: '/fixed-label/2241-rose-delica-1.jpg',
+      imageFile: 'fixed-label/2241-rose-delica-1.jpg',
+    },
+    {
+      /* 元PDFは /Rotate 180。同梱 JPEG は抽出時に回転を反映済み（CSS では再回転しない）。 */
+      id: 'ishiya-2242',
+      name: '石屋商事',
+      kind: 'page-image',
+      imageUrl: '/fixed-label/2242-ishiya.jpg',
+      imageFile: 'fixed-label/2242-ishiya.jpg',
+      sourcePageRotate: 180,
+    },
   ];
 
   function listFixedLabelFormats() {
-    return FIXED_LABEL_FORMATS.map((f) => ({ id: f.id, name: f.name }));
+    return FIXED_LABEL_FORMATS.map((f) => ({ id: f.id, name: f.name, kind: f.kind || 'cells' }));
   }
 
   function getFixedLabelFormat(id) {
@@ -97,17 +136,48 @@
     return { ok: true, formatId: format.id, sheetCount: sheets, format };
   }
 
-  function fixedLabelPagesHtml(formatId, sheetCount) {
+  function escapeHtmlAttr(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function resolveFixedLabelImageSrc(format, assetBase) {
+    if (!format || format.kind !== 'page-image') return '';
+    if (assetBase) {
+      const base = String(assetBase).replace(/\/?$/, '/');
+      const file = format.imageFile || String(format.imageUrl || '').replace(/^\//, '');
+      return base + file.replace(/^\.\//, '');
+    }
+    return format.imageUrl || '';
+  }
+
+  function fixedLabelPageHtml(format, assetBase) {
+    if (format.kind === 'page-image') {
+      const src = resolveFixedLabelImageSrc(format, assetBase);
+      const alt = escapeHtmlAttr(format.name);
+      return (
+        `<div class="page page-image">` +
+        `<img class="sheetimg" src="${escapeHtmlAttr(src)}" alt="${alt}">` +
+        `</div>`
+      );
+    }
+    const cell = format.buildCellHtml();
+    return `<div class="page">${cell}${cell}${cell}${cell}</div>`;
+  }
+
+  function fixedLabelPagesHtml(formatId, sheetCount, assetBase) {
     const checked = validateFixedLabelPrintInput({ formatId, sheetCount });
     if (!checked.ok) throw new Error(checked.error);
-    const cell = checked.format.buildCellHtml();
-    const page = `<div class="page">${cell}${cell}${cell}${cell}</div>`;
+    const page = fixedLabelPageHtml(checked.format, assetBase);
     return Array.from({ length: checked.sheetCount }, () => page).join('');
   }
 
-  function fixedLabelPreviewHtml(formatId, sheetCount, css) {
+  function fixedLabelPreviewHtml(formatId, sheetCount, css, assetBase) {
     const style = css || FIXED_LABEL_CSS;
-    const pages = fixedLabelPagesHtml(formatId, sheetCount);
+    const pages = fixedLabelPagesHtml(formatId, sheetCount, assetBase);
     return (
       '<!doctype html><html><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
       style +
@@ -134,6 +204,7 @@
     getFixedLabelFormat,
     normalizeFixedLabelSheetCount,
     validateFixedLabelPrintInput,
+    resolveFixedLabelImageSrc,
     fixedLabelPagesHtml,
     fixedLabelPreviewHtml,
     fixedLabelIsPrintOnly,

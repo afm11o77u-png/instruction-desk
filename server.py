@@ -971,6 +971,18 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
+        if path.startswith('/fixed-label/'):
+            rel=path[len('/fixed-label/'):]
+            if not rel or '/' in rel or rel in ('.','..') or '..' in rel:
+                return self.reply(404,{'error':'見つかりません。'})
+            f=(ROOT/'fixed-label'/rel).resolve()
+            root=(ROOT/'fixed-label').resolve()
+            if root not in f.parents and f!=root: return self.reply(404,{'error':'見つかりません。'})
+            if not f.is_file(): return self.reply(404,{'error':'見つかりません。'})
+            kinds={'jpg':'image/jpeg','jpeg':'image/jpeg','png':'image/png','pdf':'application/pdf'}
+            kind=kinds.get(f.suffix[1:].lower())
+            if not kind: return self.reply(404,{'error':'見つかりません。'})
+            return self.reply(200,f.read_bytes(),kind)
         self.reply(404,{'error':'見つかりません。'})
     def do_POST(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})

@@ -70,6 +70,29 @@ class FixedLabelWiringTest(unittest.TestCase):
         self.assertIn('fixedLabelIsPrintOnly', FIXED)
         self.assertIn('fixedLabelMutatesOrders', FIXED)
         self.assertIn('.labelfixedform', STYLE)
+        self.assertIn('page-image', FIXED)
+        self.assertIn('日鉄FT', FIXED)
+        self.assertIn('ローズデリカ２課', FIXED)
+        self.assertIn('ローズデリカ１課', FIXED)
+        self.assertIn('石屋商事', FIXED)
+        self.assertIn('sourcePageRotate: 180', FIXED)
+        self.assertIn("path.startswith('/fixed-label/')", SERVER)
+
+    def test_bundled_page_image_assets(self):
+        assets = [
+            'fixed-label/2239-nittetuft.jpg',
+            'fixed-label/2239-nittetuft.pdf',
+            'fixed-label/2240-rose-delica-2.jpg',
+            'fixed-label/2240-rose-delica-2.pdf',
+            'fixed-label/2241-rose-delica-1.jpg',
+            'fixed-label/2241-rose-delica-1.pdf',
+            'fixed-label/2242-ishiya.jpg',
+            'fixed-label/2242-ishiya.pdf',
+        ]
+        for rel in assets:
+            path = ROOT / rel
+            self.assertTrue(path.is_file(), rel)
+            self.assertGreater(path.stat().st_size, 1000, rel)
 
     def test_preview_guides(self):
         self.assertIn('ヘッダーとフッター', INDEX)

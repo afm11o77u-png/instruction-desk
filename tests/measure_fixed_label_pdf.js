@@ -1,6 +1,6 @@
 'use strict'
 /**
- * Headless Chrome で定型書式 HTML を PDF 化し、1/3/10 枚のページ数と MediaBox を検証する。
+ * Headless Chrome で定型書式 HTML を PDF 化し、ページ数・MediaBox・画像書式を検証する。
  * 使い方: node tests/measure_fixed_label_pdf.js
  */
 const assert = require('assert')
@@ -8,13 +8,13 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const { spawnSync } = require('child_process')
-const { fixedLabelPreviewHtml } = require(path.join(__dirname, '../fixed_label.js'))
+const { fixedLabelPreviewHtml, FIXED_LABEL_FORMATS } = require(path.join(__dirname, '../fixed_label.js'))
 
 const PT_PER_MM = 72 / 25.4
 const A4_LANDSCAPE_W_PT = 297 * PT_PER_MM
 const A4_LANDSCAPE_H_PT = 210 * PT_PER_MM
 const TOL_PT = 1.5
-const FORMAT_ID = 'daruma-zenibako'
+const ROOT = path.resolve(__dirname, '..')
 
 function findChrome() {
   const candidates = [
@@ -29,10 +29,25 @@ function findChrome() {
   throw new Error('Chrome not found')
 }
 
-function printHtmlToPdf(html, pdfPath) {
+/** 一時ディレクトリに HTML（と page-image なら画像）を展開し、file:// で確実に読めるようにする。 */
+function materializePreview(formatId, sheets) {
+  const format = FIXED_LABEL_FORMATS.find((f) => f.id === formatId)
+  assert.ok(format, formatId)
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-label-'))
+  let html
+  if (format.kind === 'page-image') {
+    const destName = path.basename(format.imageFile)
+    fs.copyFileSync(path.join(ROOT, format.imageFile), path.join(dir, destName))
+    html = fixedLabelPreviewHtml(formatId, sheets).replace(format.imageUrl, destName)
+  } else {
+    html = fixedLabelPreviewHtml(formatId, sheets)
+  }
   const htmlPath = path.join(dir, 'fixed.html')
   fs.writeFileSync(htmlPath, html, 'utf8')
+  return { dir, htmlPath, html, format }
+}
+
+function printHtmlToPdf(htmlPath, pdfPath) {
   const chrome = findChrome()
   const r = spawnSync(
     chrome,
@@ -41,11 +56,12 @@ function printHtmlToPdf(html, pdfPath) {
       '--disable-gpu',
       '--no-sandbox',
       '--allow-file-access-from-files',
+      '--window-size=1400,1000',
       '--no-pdf-header-footer',
       `--print-to-pdf=${pdfPath}`,
       `file://${htmlPath}`,
     ],
-    { encoding: 'utf8', timeout: 90000 }
+    { encoding: 'utf8', timeout: 120000 }
   )
   if (r.status !== 0 || !fs.existsSync(pdfPath)) {
     throw new Error(`Chrome print failed: ${r.stderr || r.stdout || r.status}`)
@@ -81,30 +97,55 @@ function assertA4Landscape(box, label) {
   )
 }
 
-function dumpDomMetrics(html) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-label-dom-'))
-  const htmlPath = path.join(dir, 'fixed.html')
-  const outPath = path.join(dir, 'metrics.json')
-  const probe = html.replace(
+function dumpDomMetrics(htmlPath, kind) {
+  const chrome = findChrome()
+  const probePath = htmlPath.replace(/\.html$/, '.probe.html')
+  const original = fs.readFileSync(htmlPath, 'utf8')
+  const probe = original.replace(
     '</body>',
     `<pre id="metrics"></pre><script>
-      const page=document.querySelector('.page');
-      const cells=[...document.querySelectorAll('.cell')];
       const mm=v=>+(v*25.4/96).toFixed(2);
-      const r=page.getBoundingClientRect();
-      const out={
-        pagePx:{w:r.width,h:r.height},
-        pageMm:{w:mm(r.width),h:mm(r.height)},
-        cellCount:cells.length,
-        cellsMm:cells.map(c=>{const b=c.getBoundingClientRect();return {w:mm(b.width),h:mm(b.height)}}),
-        titles:[...document.querySelectorAll('.title')].map(el=>el.textContent),
-        checksOnFirst:[...cells[0].querySelectorAll('.check')].map(el=>el.textContent.trim()),
-      };
-      document.getElementById('metrics').textContent=JSON.stringify(out);
+      function collect(){
+        const page=document.querySelector('.page');
+        const cells=[...document.querySelectorAll('.cell')];
+        const imgs=[...document.querySelectorAll('img.sheetimg')];
+        const r=page.getBoundingClientRect();
+        return {
+          kind:${JSON.stringify(kind)},
+          pagePx:{w:r.width,h:r.height},
+          pageMm:{w:mm(r.width),h:mm(r.height)},
+          cellCount:cells.length,
+          cellsMm:cells.map(c=>{const b=c.getBoundingClientRect();return {w:mm(b.width),h:mm(b.height)}}),
+          titles:[...document.querySelectorAll('.title')].map(el=>el.textContent),
+          checksOnFirst:cells[0]?[...cells[0].querySelectorAll('.check')].map(el=>el.textContent.trim()):[],
+          imageCount:imgs.length,
+          images:imgs.map(img=>{
+            const b=img.getBoundingClientRect();
+            return {
+              naturalW:img.naturalWidth,
+              naturalH:img.naturalHeight,
+              complete:img.complete,
+              mm:{w:mm(b.width),h:mm(b.height)},
+              src:(img.getAttribute('src')||'').slice(-48),
+            };
+          }),
+        };
+      }
+      function done(out){document.getElementById('metrics').textContent=JSON.stringify(out)}
+      const imgs=[...document.querySelectorAll('img.sheetimg')];
+      if(!imgs.length) done(collect());
+      else {
+        let finished=false;
+        const finish=()=>{if(finished)return;finished=true;done(collect())};
+        Promise.all(imgs.map(img=>img.complete&&img.naturalWidth?Promise.resolve():new Promise(res=>{
+          img.addEventListener('load',()=>res(),{once:true});
+          img.addEventListener('error',()=>res(),{once:true});
+        }))).then(finish);
+        setTimeout(finish,3000);
+      }
     </script></body>`
   )
-  fs.writeFileSync(htmlPath, probe, 'utf8')
-  const chrome = findChrome()
+  fs.writeFileSync(probePath, probe, 'utf8')
   const r = spawnSync(
     chrome,
     [
@@ -112,11 +153,12 @@ function dumpDomMetrics(html) {
       '--disable-gpu',
       '--no-sandbox',
       '--allow-file-access-from-files',
-      '--virtual-time-budget=3000',
+      '--window-size=1400,1000',
+      '--virtual-time-budget=10000',
       '--dump-dom',
-      `file://${htmlPath}`,
+      `file://${probePath}`,
     ],
-    { encoding: 'utf8', timeout: 60000, maxBuffer: 20 * 1024 * 1024 }
+    { encoding: 'utf8', timeout: 90000, maxBuffer: 40 * 1024 * 1024 }
   )
   if (r.status !== 0) throw new Error(`dump-dom failed: ${r.stderr || r.status}`)
   const m = r.stdout.match(/<pre id="metrics">([\s\S]*?)<\/pre>/)
@@ -127,62 +169,101 @@ function dumpDomMetrics(html) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
-  const json = JSON.parse(raw)
-  fs.writeFileSync(outPath, JSON.stringify(json, null, 2))
-  return json
+  return JSON.parse(raw)
 }
 
-function measure(sheets) {
-  const html = fixedLabelPreviewHtml(FORMAT_ID, sheets)
-  assert.strictEqual((html.match(/class="page"/g) || []).length, sheets)
-  assert.strictEqual((html.match(/class="cell"/g) || []).length, sheets * 4)
+function measure(formatId, sheets) {
+  const { htmlPath, html, format } = materializePreview(formatId, sheets)
+  assert.strictEqual((html.match(/class="page/g) || []).length, sheets)
+  if (format.kind === 'page-image') {
+    assert.strictEqual((html.match(/class="cell"/g) || []).length, 0)
+    assert.strictEqual((html.match(/class="sheetimg"/g) || []).length, sheets)
+  } else {
+    assert.strictEqual((html.match(/class="cell"/g) || []).length, sheets * 4)
+  }
   const outDir = path.join(__dirname, '../artifacts')
   fs.mkdirSync(outDir, { recursive: true })
-  const pdfPath = path.join(outDir, `fixed-label-${sheets}.pdf`)
-  printHtmlToPdf(html, pdfPath)
+  const pdfPath = path.join(outDir, `fixed-label-${formatId}-${sheets}.pdf`)
+  printHtmlToPdf(htmlPath, pdfPath)
   const info = inspectPdf(pdfPath)
   assert.strictEqual(
     info.pageCount,
     sheets,
-    `${sheets} sheets: expected ${sheets} PDF pages, got ${info.pageCount}`
+    `${formatId} ${sheets} sheets: expected ${sheets} PDF pages, got ${info.pageCount}`
   )
-  assert.ok(info.boxes.length >= 1, `${sheets} sheets: no MediaBox`)
-  assertA4Landscape(info.boxes[0], `${sheets} sheets`)
+  assert.ok(info.boxes.length >= 1, `${formatId} ${sheets} sheets: no MediaBox`)
+  assertA4Landscape(info.boxes[0], `${formatId} ${sheets} sheets`)
+  if (format.kind === 'page-image') {
+    assert.ok(info.bytes > 8000 * sheets, `${formatId}: PDF too small (${info.bytes} bytes)`)
+  }
   const widthMm = +(info.boxes[0].w / PT_PER_MM).toFixed(2)
   const heightMm = +(info.boxes[0].h / PT_PER_MM).toFixed(2)
   return {
+    formatId,
+    kind: format.kind || 'cells',
     sheets,
     pageCount: info.pageCount,
-    cellsPerPage: 4,
+    cellsPerPage: format.kind === 'page-image' ? 0 : 4,
+    imagesPerPage: format.kind === 'page-image' ? 1 : 0,
     widthMm: Math.round(widthMm),
     heightMm: Math.round(heightMm),
+    pdfBytes: info.bytes,
     pdf: pdfPath,
   }
 }
 
-const results = [1, 3, 10].map(measure)
-const dom = dumpDomMetrics(fixedLabelPreviewHtml(FORMAT_ID, 1))
-assert.strictEqual(dom.cellCount, 4)
-assert.ok(Math.abs(dom.pageMm.w - 297) < 2, `page width mm ${dom.pageMm.w}`)
-assert.ok(Math.abs(dom.pageMm.h - 210) < 2, `page height mm ${dom.pageMm.h}`)
-for (const c of dom.cellsMm) {
+const darumaResults = [1, 3, 10].map((n) => measure('daruma-zenibako', n))
+const imageFormats = FIXED_LABEL_FORMATS.filter((f) => f.kind === 'page-image')
+const imageResults = []
+for (const f of imageFormats) {
+  imageResults.push(measure(f.id, 1))
+  imageResults.push(measure(f.id, 3))
+}
+
+const darumaMat = materializePreview('daruma-zenibako', 1)
+const darumaDom = dumpDomMetrics(darumaMat.htmlPath, 'cells')
+assert.strictEqual(darumaDom.cellCount, 4)
+assert.ok(Math.abs(darumaDom.pageMm.w - 297) < 2, `page width mm ${darumaDom.pageMm.w}`)
+assert.ok(Math.abs(darumaDom.pageMm.h - 210) < 2, `page height mm ${darumaDom.pageMm.h}`)
+for (const c of darumaDom.cellsMm) {
   assert.ok(Math.abs(c.w - 148.5) < 2, `cell w ${c.w}`)
   assert.ok(Math.abs(c.h - 105) < 2, `cell h ${c.h}`)
 }
-assert.ok(dom.checksOnFirst.length === 13)
-assert.ok(dom.titles.every((t) => t === 'だるま食品銭函工場'))
+assert.ok(darumaDom.checksOnFirst.length === 13)
+assert.ok(darumaDom.titles.every((t) => t === 'だるま食品銭函工場'))
+
+const imageDom = {}
+for (const f of imageFormats) {
+  const mat = materializePreview(f.id, 1)
+  const dom = dumpDomMetrics(mat.htmlPath, 'page-image')
+  assert.strictEqual(dom.cellCount, 0, `${f.id}: cells must be 0`)
+  assert.strictEqual(dom.imageCount, 1, `${f.id}: one full-page image`)
+  assert.ok(dom.images[0].naturalW > 1000, `${f.id}: naturalW ${dom.images[0].naturalW}`)
+  assert.ok(dom.images[0].naturalH > 700, `${f.id}: naturalH ${dom.images[0].naturalH}`)
+  assert.ok(Math.abs(dom.pageMm.w - 297) < 2, `${f.id}: page width ${dom.pageMm.w}`)
+  assert.ok(Math.abs(dom.pageMm.h - 210) < 2, `${f.id}: page height ${dom.pageMm.h}`)
+  assert.ok(Math.abs(dom.images[0].mm.w - dom.pageMm.w) < 3, `${f.id}: image fills page width`)
+  assert.ok(Math.abs(dom.images[0].mm.h - dom.pageMm.h) < 3, `${f.id}: image fills page height`)
+  imageDom[f.id] = {
+    pageMm: dom.pageMm,
+    imageMm: dom.images[0].mm,
+    natural: { w: dom.images[0].naturalW, h: dom.images[0].naturalH },
+    sourcePageRotate: f.sourcePageRotate || 0,
+  }
+}
 
 console.log(
   JSON.stringify(
     {
       ok: true,
-      results,
-      dom: {
-        pageMm: dom.pageMm,
-        cellsMm: dom.cellsMm,
-        checkCount: dom.checksOnFirst.length,
-        checksOnFirst: dom.checksOnFirst,
+      results: [...darumaResults, ...imageResults],
+      darumaDom: {
+        pageMm: darumaDom.pageMm,
+        cellsMm: darumaDom.cellsMm,
+        checkCount: darumaDom.checksOnFirst.length,
+        checksOnFirst: darumaDom.checksOnFirst,
       },
+      imageDom,
     },
     null,
     2
