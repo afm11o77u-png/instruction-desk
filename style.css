@@ -89,6 +89,11 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelfixedform select,#labeldesk .labelfixedform input{font-weight:400;min-height:36px;padding:8px 10px}
 #labeldesk .labelfixedactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 #labeldesk #labelfixederror:empty{display:none}#labeldesk #labelfixederror{margin:0;color:#a23928}
+#labeldesk .labelhandwriteform{display:grid;gap:14px;max-width:720px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
+#labeldesk .labelhandwriteform>label{display:grid;gap:4px;font-size:.85rem;font-weight:700;max-width:420px}
+#labeldesk .labelhandwriteform input{font-weight:400;min-height:36px;padding:8px 10px}
+#labeldesk .labelhandwriteactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+#labeldesk #labelhandwriteerror:empty{display:none}#labeldesk #labelhandwriteerror{margin:0;color:#a23928}
 @media(max-width:720px){#labeldesk .labelticketfields,#labeldesk .tickshortagerow{grid-template-columns:1fr}}
 #labelnoticeerror:empty{display:none}#labelnoticeerror{margin:0 0 12px;color:#a23928}
 #labeldesk .labeltablehint,#labeldesk #labelpastenote{margin:0 0 10px;max-width:46em;font-size:.85rem;color:#3d5344}#labeldesk .labelrequestbatch{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin:0 0 12px;padding:10px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;max-width:980px}#labeldesk .labelrequestbatch label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:200px}#labeldesk .labelrequestbatch select{font-weight:400;min-width:220px;min-height:36px;padding:6px 10px}#labeldesk .labeltablewrap{overflow-x:auto;max-width:100%}

@@ -248,19 +248,22 @@ document.querySelectorAll('input[name="labelpattern"]').forEach(el=>{el.addEvent
 applyLabelPatternUi(currentLabelPattern());
 ensureNoticeDefaults();
 function setLabelDeskMode(mode){
- const address=mode==='address',notice=mode==='notice',ticket=mode==='ticket',fixed=mode==='fixed';
+ const address=mode==='address',notice=mode==='notice',ticket=mode==='ticket',fixed=mode==='fixed',handwrite=mode==='handwrite';
  $('#labelmodeaddress').classList.toggle('on',address);
  $('#labelmodenotice').classList.toggle('on',notice);
  $('#labelmodeticket')?.classList.toggle('on',ticket);
  $('#labelmodefixed')?.classList.toggle('on',fixed);
+ $('#labelmodehandwrite')?.classList.toggle('on',handwrite);
  $('#labelmodeaddress').setAttribute('aria-pressed',String(address));
  $('#labelmodenotice').setAttribute('aria-pressed',String(notice));
  $('#labelmodeticket')?.setAttribute('aria-pressed',String(ticket));
  $('#labelmodefixed')?.setAttribute('aria-pressed',String(fixed));
+ $('#labelmodehandwrite')?.setAttribute('aria-pressed',String(handwrite));
  $('#labeladdresspanel').hidden=!address;
  $('#labelnoticepanel').hidden=!notice;
  const ticketPanel=$('#labelticketpanel');if(ticketPanel)ticketPanel.hidden=!ticket;
  const fixedPanel=$('#labelfixedpanel');if(fixedPanel)fixedPanel.hidden=!fixed;
+ const handwritePanel=$('#labelhandwritepanel');if(handwritePanel)handwritePanel.hidden=!handwrite;
  if(notice){ensureNoticeDefaults();if(!$('#noticedate').value)$('#noticedate').value=today()}
  if(ticket){syncLabelTicketKind();ensureLabelTicketShortageRows()}
  if(fixed)fillFixedLabelFormatSelect();
@@ -269,6 +272,7 @@ $('#labelmodeaddress').onclick=()=>setLabelDeskMode('address');
 $('#labelmodenotice').onclick=()=>setLabelDeskMode('notice');
 $('#labelmodeticket')?.addEventListener('click',()=>setLabelDeskMode('ticket'));
 $('#labelmodefixed')?.addEventListener('click',()=>setLabelDeskMode('fixed'));
+$('#labelmodehandwrite')?.addEventListener('click',()=>setLabelDeskMode('handwrite'));
 
 function selectedLabelTicketKind(){return document.querySelector('input[name="labelticketkind"]:checked')?.value||'repair'}
 function syncLabelTicketKind(){
@@ -375,6 +379,30 @@ function printFixedLabel(){
 }
 fillFixedLabelFormatSelect();
 $('#fixedprint')?.addEventListener('click',printFixedLabel);
+
+function openHandwriteLabelPreview(customerName,sheetCount){
+ let dialog=document.querySelector('#handwritelabelpreview');
+ if(!dialog){dialog=document.createElement('dialog');dialog.id='handwritelabelpreview';dialog.style.cssText='width:min(1100px,95vw);padding:18px;border:0;border-radius:12px';document.body.append(dialog)}
+ dialog.innerHTML=`<h2>顧客名＋手書き</h2><p><span id="handwritelabelnotice"></span>上段に顧客名、下段は個人名空欄で「様」のみ　A4横・余白なし（上下左右0mm）・倍率100％・${sheetCount}枚。Chrome／Edgeでは印刷画面の「その他の設定」→「ヘッダーとフッター」をオフにしてください（アプリから強制解除はできません）。印刷画面の部数は1部にしてください。実線に沿って切り取ってください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="handwritelabelprintbtn">印刷</button><button type="button" id="handwritelabelclose">閉じる</button></div><iframe title="顧客名＋手書きの印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>`;
+ dialog.querySelector('#handwritelabelnotice').textContent='印刷専用です。案件は登録していません。';
+ const frame=dialog.querySelector('iframe');
+ frame.srcdoc=handwriteLabelPreviewHtml(customerName,sheetCount);
+ dialog.querySelector('#handwritelabelprintbtn').disabled=true;frame.onload=()=>{dialog.querySelector('#handwritelabelprintbtn').disabled=false};
+ dialog.querySelector('#handwritelabelprintbtn').onclick=()=>{frame.contentWindow.focus();frame.contentWindow.print()};
+ dialog.querySelector('#handwritelabelclose').onclick=()=>dialog.close();dialog.showModal();
+}
+function printHandwriteLabel(){
+ $('#labelhandwriteerror').textContent='';
+ if(typeof validateHandwriteLabelPrintInput!=='function'||typeof handwriteLabelPreviewHtml!=='function'){
+  $('#labelhandwriteerror').textContent='手書き宛名の印刷部品を読み込めませんでした。再起動してからやり直してください。';
+  return;
+ }
+ const checked=validateHandwriteLabelPrintInput({customerName:$('#handwritecustomer')?.value||'',sheetCount:$('#handwritesheets')?.value});
+ if(!checked.ok){$('#labelhandwriteerror').textContent=checked.error;return}
+ // 印刷専用：api()/orders への保存・登録は呼ばない。入力内容は印刷後も保持する。
+ openHandwriteLabelPreview(checked.customerName,checked.sheetCount);
+}
+$('#handwriteprint')?.addEventListener('click',printHandwriteLabel);
 
 const noticeWeekdays=['日','月','火','水','木','金','土'];
 function formatNoticeDate(iso){
