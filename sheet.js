@@ -248,22 +248,27 @@ document.querySelectorAll('input[name="labelpattern"]').forEach(el=>{el.addEvent
 applyLabelPatternUi(currentLabelPattern());
 ensureNoticeDefaults();
 function setLabelDeskMode(mode){
- const address=mode==='address',notice=mode==='notice',ticket=mode==='ticket';
+ const address=mode==='address',notice=mode==='notice',ticket=mode==='ticket',fixed=mode==='fixed';
  $('#labelmodeaddress').classList.toggle('on',address);
  $('#labelmodenotice').classList.toggle('on',notice);
  $('#labelmodeticket')?.classList.toggle('on',ticket);
+ $('#labelmodefixed')?.classList.toggle('on',fixed);
  $('#labelmodeaddress').setAttribute('aria-pressed',String(address));
  $('#labelmodenotice').setAttribute('aria-pressed',String(notice));
  $('#labelmodeticket')?.setAttribute('aria-pressed',String(ticket));
+ $('#labelmodefixed')?.setAttribute('aria-pressed',String(fixed));
  $('#labeladdresspanel').hidden=!address;
  $('#labelnoticepanel').hidden=!notice;
  const ticketPanel=$('#labelticketpanel');if(ticketPanel)ticketPanel.hidden=!ticket;
+ const fixedPanel=$('#labelfixedpanel');if(fixedPanel)fixedPanel.hidden=!fixed;
  if(notice){ensureNoticeDefaults();if(!$('#noticedate').value)$('#noticedate').value=today()}
  if(ticket){syncLabelTicketKind();ensureLabelTicketShortageRows()}
+ if(fixed)fillFixedLabelFormatSelect();
 }
 $('#labelmodeaddress').onclick=()=>setLabelDeskMode('address');
 $('#labelmodenotice').onclick=()=>setLabelDeskMode('notice');
 $('#labelmodeticket')?.addEventListener('click',()=>setLabelDeskMode('ticket'));
+$('#labelmodefixed')?.addEventListener('click',()=>setLabelDeskMode('fixed'));
 
 function selectedLabelTicketKind(){return document.querySelector('input[name="labelticketkind"]:checked')?.value||'repair'}
 function syncLabelTicketKind(){
@@ -333,6 +338,44 @@ document.querySelectorAll('input[name="labelticketkind"]').forEach(el=>el.addEve
 $('#tickaddshortage')?.addEventListener('click',()=>addLabelTicketShortageRow());
 $('#ticketreset')?.addEventListener('click',()=>{if(($('#tickcustomer')?.value||$('#tickemployee')?.value||$('#ticknumber')?.value||readLabelTicketShortages().some(s=>s.name||s.sku||s.size||s.qty))&&!confirm('管理票の入力をすべて消しますか？'))return;resetLabelTicketForm()});
 $('#ticketprint')?.addEventListener('click',printManualBoxTicket);
+
+function fillFixedLabelFormatSelect(){
+ const sel=$('#fixedformat');if(!sel)return;
+ const formats=typeof listFixedLabelFormats==='function'?listFixedLabelFormats():[];
+ const previous=sel.value;
+ sel.replaceChildren();
+ if(!formats.length){
+  const opt=document.createElement('option');opt.value='';opt.textContent='書式がありません';sel.append(opt);return;
+ }
+ formats.forEach(f=>{const opt=document.createElement('option');opt.value=f.id;opt.textContent=f.name;sel.append(opt)});
+ if(previous&&formats.some(f=>f.id===previous))sel.value=previous;
+}
+function openFixedLabelPreview(formatId,sheetCount){
+ let dialog=document.querySelector('#fixedlabelpreview');
+ if(!dialog){dialog=document.createElement('dialog');dialog.id='fixedlabelpreview';dialog.style.cssText='width:min(1100px,95vw);padding:18px;border:0;border-radius:12px';document.body.append(dialog)}
+ const formatName=(typeof getFixedLabelFormat==='function'&&getFixedLabelFormat(formatId)?.name)||'定型書式';
+ dialog.innerHTML=`<h2>定型書式印刷</h2><p><span id="fixedlabelnotice"></span>${esc(formatName)}　A4横・余白なし（上下左右0mm）・倍率100％・${sheetCount}枚。Chrome／Edgeでは印刷画面の「その他の設定」→「ヘッダーとフッター」をオフにしてください（アプリから強制解除はできません）。印刷画面の部数は1部にしてください。破線に沿って切り取ってください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="fixedlabelprintbtn">印刷</button><button type="button" id="fixedlabelclose">閉じる</button></div><iframe title="定型書式の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>`;
+ dialog.querySelector('#fixedlabelnotice').textContent='印刷専用です。案件は登録していません。';
+ const frame=dialog.querySelector('iframe');
+ frame.srcdoc=fixedLabelPreviewHtml(formatId,sheetCount);
+ dialog.querySelector('#fixedlabelprintbtn').disabled=true;frame.onload=()=>{dialog.querySelector('#fixedlabelprintbtn').disabled=false};
+ dialog.querySelector('#fixedlabelprintbtn').onclick=()=>{frame.contentWindow.focus();frame.contentWindow.print()};
+ dialog.querySelector('#fixedlabelclose').onclick=()=>dialog.close();dialog.showModal();
+}
+function printFixedLabel(){
+ $('#labelfixederror').textContent='';
+ if(typeof validateFixedLabelPrintInput!=='function'||typeof fixedLabelPreviewHtml!=='function'){
+  $('#labelfixederror').textContent='定型書式の印刷部品を読み込めませんでした。再起動してからやり直してください。';
+  return;
+ }
+ const checked=validateFixedLabelPrintInput({formatId:$('#fixedformat')?.value||'',sheetCount:$('#fixedsheets')?.value});
+ if(!checked.ok){$('#labelfixederror').textContent=checked.error;return}
+ // 印刷専用：api()/orders への保存・登録は呼ばない
+ openFixedLabelPreview(checked.formatId,checked.sheetCount);
+}
+fillFixedLabelFormatSelect();
+$('#fixedprint')?.addEventListener('click',printFixedLabel);
+
 const noticeWeekdays=['日','月','火','水','木','金','土'];
 function formatNoticeDate(iso){
  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
