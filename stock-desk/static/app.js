@@ -634,6 +634,7 @@ function products(){
   })
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。品番なしも商品IDで区別します。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
+    <div class="bar merge-entry"><button type="button" id="productLedgerCsvOpen">旧商品台帳CSVを取り込む</button><span class="excelhint">旧システムの商品台帳CSVから商品と顧客取扱だけを登録します。在庫数量・単価・履歴は変更しません（初期在庫用の「旧CSV取込」とは別）。</span></div>
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
       const codeShow=esc(r.codeDisplay||r.code||'品番なし')
@@ -657,6 +658,17 @@ function products(){
   if(mergeBtn)mergeBtn.onclick=()=>{
     if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
     ProductMerge.open({
+      api,
+      toast,
+      boot,
+      stockCanWrite,
+      actorName:(state.data&&state.data.actorName)||'',
+    })
+  }
+  const ledgerBtn=$('#productLedgerCsvOpen')
+  if(ledgerBtn)ledgerBtn.onclick=()=>{
+    if(typeof ProductLedgerCsv==='undefined'||!ProductLedgerCsv.open){toast('商品台帳CSV取込画面を読み込めませんでした。');return}
+    ProductLedgerCsv.open({
       api,
       toast,
       boot,
