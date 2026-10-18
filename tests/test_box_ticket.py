@@ -63,19 +63,42 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
         self.assertNotIn('不足なし（修理待ち）', APP)
         self.assertIn('不足なし（修理待ち）', BOX)
 
-    def test_full_a4_landscape_eight_split_css(self):
+    def test_full_a4_landscape_six_split_css(self):
         self.assertIn('@page{size:A4 landscape;margin:0}', BOX)
         self.assertIn('width:297mm', BOX)
         self.assertIn('height:210mm', BOX)
         self.assertIn('148.5mm', BOX)
-        self.assertIn('52.5mm', BOX)
+        self.assertIn('70mm', BOX)
+        self.assertIn('BOX_TICKET_PER_PAGE = 6', BOX)
         self.assertIn('grid-template-columns:repeat(2,148.5mm)', BOX)
-        self.assertIn('grid-template-rows:repeat(4,52.5mm)', BOX)
+        self.assertIn('grid-template-rows:repeat(3,70mm)', BOX)
+        self.assertNotIn('52.5mm', BOX)
+        self.assertNotIn('repeat(4,', BOX)
         self.assertNotIn('136.5mm', BOX)
         self.assertNotIn('46.5mm', BOX)
         self.assertNotIn('273mm', BOX)
         self.assertNotIn('186mm', BOX)
         self.assertNotIn('margin:18mm', BOX)
+        self.assertIn('class="instr"', BOX)
+        self.assertIn('orderDateLabel', BOX)
+        self.assertIn('instructionNumber', BOX)
+        self.assertIn('ticket-empty', BOX)
+
+    def test_manual_multi_person_ui(self):
+        self.assertIn('id="labelticketpeople"', INDEX)
+        self.assertIn('id="ticketaddperson"', INDEX)
+        self.assertIn('1人分を追加', INDEX)
+        self.assertIn('1ページ6枚', INDEX)
+        self.assertIn('addLabelTicketPerson', SHEET)
+        self.assertIn('buildManualBoxTicketOrders', SHEET)
+        self.assertIn('BOX_TICKET_MANUAL_MAX_PEOPLE', SHEET)
+        self.assertIn('instructionNumber', SHEET)
+        self.assertIn('入力済みの人を削除しますか', SHEET)
+        # 現場一覧のページ計算は6枠単位（旧8割は残さない）
+        self.assertNotIn('Math.ceil(n/8)', APP)
+        self.assertIn('BOX_TICKET_PER_PAGE', APP)
+        self.assertIn('boxTicketPageCount', APP)
+        self.assertIn('1ページ${perPage}枠', APP)
 
     def test_preview_guides_browser_header_footer_off(self):
         self.assertIn('ヘッダーとフッター', APP)
@@ -97,8 +120,7 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, body)
         self.assertIn('openBoxTicketPreview', body)
-        self.assertIn('buildManualBoxTicketOrder', body)
-        self.assertIn('validateManualBoxTicketOrder', body)
+        self.assertIn('buildManualBoxTicketOrders', body)
         self.assertIn('案件は登録していません', body)
 
     def test_shared_module_declares_print_only(self):

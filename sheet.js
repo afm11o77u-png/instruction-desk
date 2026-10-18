@@ -275,53 +275,104 @@ $('#labelmodefixed')?.addEventListener('click',()=>setLabelDeskMode('fixed'));
 $('#labelmodehandwrite')?.addEventListener('click',()=>setLabelDeskMode('handwrite'));
 
 function selectedLabelTicketKind(){return document.querySelector('input[name="labelticketkind"]:checked')?.value||'repair'}
+function labelTicketPeopleBox(){return $('#labelticketpeople')}
+function labelTicketPersonCards(){return [...labelTicketPeopleBox()?.querySelectorAll('.labelticketperson')||[]]}
+function labelTicketMaxPeople(){return typeof BOX_TICKET_MANUAL_MAX_PEOPLE==='number'?BOX_TICKET_MANUAL_MAX_PEOPLE:6}
 function syncLabelTicketKind(){
  const shortage=selectedLabelTicketKind()==='shortage';
- const box=$('#labelticketshortage');if(box)box.hidden=!shortage;
+ labelTicketPersonCards().forEach(card=>{
+  const box=card.querySelector('.labelticketshortage');
+  if(box)box.hidden=!shortage;
+  if(shortage)ensureLabelTicketShortageRows(card);
+ });
 }
-function ensureLabelTicketShortageRows(){
- const box=$('#tickshortagerows');if(!box)return;
- if(!box.children.length)addLabelTicketShortageRow();
+function syncLabelTicketPeopleUi(){
+ const cards=labelTicketPersonCards();
+ const max=labelTicketMaxPeople();
+ cards.forEach((card,i)=>{
+  const title=card.querySelector('.labelticketperson-title');
+  if(title)title.textContent=`${i+1}人目`;
+  const remove=card.querySelector('.labelticketperson-remove');
+  if(remove)remove.hidden=cards.length<=1;
+ });
+ const add=$('#ticketaddperson');
+ if(add){
+  add.disabled=cards.length>=max;
+  add.title=cards.length>=max?`最大${max}人までです。`:'';
+ }
+ const hint=$('#ticketpeoplehint');
+ if(hint)hint.textContent=cards.length>=max?`最大${max}人です。これ以上は追加できません。`:`${cards.length} / ${max} 人`;
 }
-function addLabelTicketShortageRow(data){
- const box=$('#tickshortagerows');if(!box)return;
+function ensureLabelTicketShortageRows(card){
+ const box=card?.querySelector('.tickshortagerows');if(!box)return;
+ if(!box.children.length)addLabelTicketShortageRow(card);
+}
+function addLabelTicketShortageRow(card,data){
+ const box=card?.querySelector('.tickshortagerows');if(!box)return;
  const row=document.createElement('div');
  row.className='tickshortagerow';
  row.innerHTML=`<label>商品名<input data-k="name" maxlength="80" value="${esc((data&&data.name)||'')}"></label><label>品番<input data-k="sku" maxlength="40" value="${esc((data&&data.sku)||'')}"></label><label>サイズ<input data-k="size" maxlength="20" value="${esc((data&&data.size)||'')}"></label><label>不足枚数<input data-k="qty" type="number" min="1" step="1" value="${esc((data&&data.qty)!=null?String(data.qty):'')}"></label><button type="button" class="quiet tickshortageremove" aria-label="この行を削除">×</button>`;
  row.querySelector('.tickshortageremove').onclick=()=>{if(box.children.length<=1){row.querySelectorAll('input').forEach(el=>el.value='');return}row.remove()};
  box.append(row);
 }
-function readLabelTicketShortages(){
- return [...$('#tickshortagerows')?.querySelectorAll('.tickshortagerow')||[]].map(row=>({
+function readLabelTicketShortages(card){
+ return [...card?.querySelectorAll('.tickshortagerow')||[]].map(row=>({
   name:row.querySelector('[data-k="name"]')?.value||'',
   sku:row.querySelector('[data-k="sku"]')?.value||'',
   size:row.querySelector('[data-k="size"]')?.value||'',
   qty:row.querySelector('[data-k="qty"]')?.value||'',
  }));
 }
-function readLabelTicketInput(){
- return {
-  kind:selectedLabelTicketKind(),
-  customer:$('#tickcustomer')?.value||'',
-  employee:$('#tickemployee')?.value||'',
-  request:$('#tickrequest')?.value||'',
-  markShipDate:$('#tickmark')?.value||'',
-  shortages:readLabelTicketShortages(),
+function labelTicketPersonHasInput(card){
+ const v=(sel)=>String(card.querySelector(sel)?.value||'').trim();
+ if(v('[data-k="customer"]')||v('[data-k="employee"]')||v('[data-k="instructionNumber"]')||v('[data-k="request"]')||v('[data-k="markShipDate"]'))return true;
+ return readLabelTicketShortages(card).some(s=>s.name||s.sku||s.size||s.qty);
+}
+function readLabelTicketPeople(){
+ return labelTicketPersonCards().map(card=>({
+  customer:card.querySelector('[data-k="customer"]')?.value||'',
+  employee:card.querySelector('[data-k="employee"]')?.value||'',
+  instructionNumber:card.querySelector('[data-k="instructionNumber"]')?.value||'',
+  request:card.querySelector('[data-k="request"]')?.value||'',
+  markShipDate:card.querySelector('[data-k="markShipDate"]')?.value||'',
+  shortages:readLabelTicketShortages(card),
+ }));
+}
+function addLabelTicketPerson(data){
+ const box=labelTicketPeopleBox();if(!box)return null;
+ if(labelTicketPersonCards().length>=labelTicketMaxPeople())return null;
+ const opts=(typeof BOX_TICKET_REQUEST_OPTIONS!=='undefined'?BOX_TICKET_REQUEST_OPTIONS:['新規','サイズ交換','消耗・破損交換','追加・補充','復職','異動・移動','その他'])
+  .map(o=>`<option${(data&&data.request)===o?' selected':''}>${esc(o)}</option>`).join('');
+ const card=document.createElement('article');
+ card.className='labelticketperson';
+ card.innerHTML=`<div class="labelticketperson-head"><strong class="labelticketperson-title">1人目</strong><button type="button" class="quiet labelticketperson-remove">この人を削除</button></div><div class="labelticketfields"><label>顧客名<input data-k="customer" maxlength="80" autocomplete="off" value="${esc((data&&data.customer)||'')}"></label><label>個人名<input data-k="employee" maxlength="80" autocomplete="off" value="${esc((data&&data.employee)||'')}"></label><label>指示書番号（任意）<input data-k="instructionNumber" maxlength="40" autocomplete="off" value="${esc((data&&data.instructionNumber)||'')}" placeholder="空欄可"></label><label>依頼内容<select data-k="request"><option value="">選択してください</option>${opts}</select></label><label>マーク出荷日<input data-k="markShipDate" type="date" value="${esc((data&&data.markShipDate)||'')}"></label></div><div class="labelticketshortage" hidden><p class="duehint">不足商品は3件を超えると複数枚になります。</p><div class="tickshortagerows"></div><button type="button" class="quiet tickaddshortage">＋ 不足商品を追加</button></div>`;
+ if(data&&data.request)card.querySelector('[data-k="request"]').value=data.request;
+ card.querySelector('.tickaddshortage').onclick=()=>addLabelTicketShortageRow(card);
+ card.querySelector('.labelticketperson-remove').onclick=()=>{
+  if(labelTicketPersonCards().length<=1)return;
+  if(labelTicketPersonHasInput(card)&&!confirm('入力済みの人を削除しますか？'))return;
+  card.remove();
+  syncLabelTicketPeopleUi();
+  syncLabelTicketKind();
  };
+ box.append(card);
+ if(Array.isArray(data&&data.shortages)&&data.shortages.length)data.shortages.forEach(s=>addLabelTicketShortageRow(card,s));
+ else ensureLabelTicketShortageRows(card);
+ syncLabelTicketPeopleUi();
+ syncLabelTicketKind();
+ return card;
 }
 function resetLabelTicketForm(){
- ['tickcustomer','tickemployee','tickmark'].forEach(id=>{const el=$('#'+id);if(el)el.value=''});
- const req=$('#tickrequest');if(req)req.value='';
  const repair=document.querySelector('input[name="labelticketkind"][value="repair"]');
  if(repair)repair.checked=true;
- const box=$('#tickshortagerows');if(box)box.replaceChildren();
+ const box=labelTicketPeopleBox();if(box)box.replaceChildren();
  $('#labelticketerror').textContent='';
+ addLabelTicketPerson();
  syncLabelTicketKind();
- ensureLabelTicketShortageRows();
 }
 function printManualBoxTicket(){
  $('#labelticketerror').textContent='';
- if(typeof buildManualBoxTicketOrder!=='function'||typeof validateManualBoxTicketOrder!=='function'||typeof boxTicketPages!=='function'){
+ if(typeof buildManualBoxTicketOrders!=='function'||typeof boxTicketPages!=='function'){
   $('#labelticketerror').textContent='管理票の印刷部品を読み込めませんでした。再起動してからやり直してください。';
   return;
  }
@@ -329,18 +380,26 @@ function printManualBoxTicket(){
   $('#labelticketerror').textContent='印刷プレビューを開けません。ページを読み直してください。';
   return;
  }
- const built=buildManualBoxTicketOrder(readLabelTicketInput());
- const checked=validateManualBoxTicketOrder(built);
- if(!checked.ok){$('#labelticketerror').textContent=checked.error;return}
  // 印刷専用：api()/orders への保存・登録は呼ばない
- const tickets=boxTicketPages(checked.order,esc,typeof supplyLabel==='function'?supplyLabel:boxTicketSupplyLabel);
- const kindLabel=checked.order.kind==='shortage'?'在庫待ち':'修理';
- openBoxTicketPreview(tickets,`手入力の${kindLabel}管理票です。案件は登録していません。`);
+ const built=buildManualBoxTicketOrders(readLabelTicketPeople(),{kind:selectedLabelTicketKind()});
+ if(!built.ok){$('#labelticketerror').textContent=built.error;return}
+ const labelFn=typeof supplyLabel==='function'?supplyLabel:boxTicketSupplyLabel;
+ const tickets=built.orders.flatMap(o=>boxTicketPages(o,esc,labelFn));
+ const kindLabel=selectedLabelTicketKind()==='shortage'?'在庫待ち':'修理';
+ const pages=typeof boxTicketPageCount==='function'?boxTicketPageCount(tickets.length):Math.ceil(tickets.length/6);
+ openBoxTicketPreview(tickets,`手入力の${kindLabel}管理票です。案件は登録していません。${built.orders.length}人分 ／ 管理票 ${tickets.length}枚 ／ 用紙 ${pages}ページ。`);
 }
-document.querySelectorAll('input[name="labelticketkind"]').forEach(el=>el.addEventListener('change',()=>{syncLabelTicketKind();if(selectedLabelTicketKind()==='shortage')ensureLabelTicketShortageRows()}));
-$('#tickaddshortage')?.addEventListener('click',()=>addLabelTicketShortageRow());
-$('#ticketreset')?.addEventListener('click',()=>{if(($('#tickcustomer')?.value||$('#tickemployee')?.value||readLabelTicketShortages().some(s=>s.name||s.sku||s.size||s.qty))&&!confirm('管理票の入力をすべて消しますか？'))return;resetLabelTicketForm()});
+document.querySelectorAll('input[name="labelticketkind"]').forEach(el=>el.addEventListener('change',()=>syncLabelTicketKind()));
+$('#ticketaddperson')?.addEventListener('click',()=>{
+ if(labelTicketPersonCards().length>=labelTicketMaxPeople())return;
+ addLabelTicketPerson();
+});
+$('#ticketreset')?.addEventListener('click',()=>{
+ if(labelTicketPersonCards().some(labelTicketPersonHasInput)&&!confirm('管理票の入力をすべて消しますか？'))return;
+ resetLabelTicketForm();
+});
 $('#ticketprint')?.addEventListener('click',printManualBoxTicket);
+if($('#labelticketpeople'))resetLabelTicketForm();
 
 function fillFixedLabelFormatSelect(){
  const sel=$('#fixedformat');if(!sel)return;

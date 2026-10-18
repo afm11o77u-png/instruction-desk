@@ -232,8 +232,12 @@ function openBoxTicket(kind){
 function openBoxTicketPreview(tickets,notice){
  let dialog=document.querySelector('#boxticketpreview');
  if(!dialog){dialog=document.createElement('dialog');dialog.id='boxticketpreview';dialog.style.cssText='width:min(1100px,95vw);padding:18px;border:0;border-radius:12px';document.body.append(dialog)}
- dialog.innerHTML='<h2>ボックス貼付用 管理票</h2><p><span id="boxticketnotice"></span>A4横・余白なし（上下左右0mm）・倍率100％で印刷し、枠に沿って切り取ってください。Chrome／Edgeでは印刷画面の「その他の設定」→「ヘッダーとフッター」をオフにしてください（アプリから強制解除はできません）。プリンターの印刷不可領域がある場合は実機で余白を調整してください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="boxticketprint">印刷</button><button type="button" id="boxticketclose">閉じる</button></div><iframe title="管理票の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>';
- dialog.querySelector('#boxticketnotice').textContent=notice;
+ const n=Array.isArray(tickets)?tickets.length:0;
+ const perPage=typeof BOX_TICKET_PER_PAGE==='number'?BOX_TICKET_PER_PAGE:6;
+ const pages=typeof boxTicketPageCount==='function'?boxTicketPageCount(n):Math.ceil(n/perPage)||0;
+ dialog.innerHTML='<h2>ボックス貼付用 管理票</h2><p><span id="boxticketnotice"></span></p><p id="boxticketcounts"></p><p>A4横・余白なし（上下左右0mm）・倍率100％で印刷し、枠に沿って切り取ってください。Chrome／Edgeでは印刷画面の「その他の設定」→「ヘッダーとフッター」をオフにしてください（アプリから強制解除はできません）。プリンターの印刷不可領域がある場合は実機で余白を調整してください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="boxticketprint">印刷</button><button type="button" id="boxticketclose">閉じる</button></div><iframe title="管理票の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>';
+ dialog.querySelector('#boxticketnotice').textContent=notice||'';
+ dialog.querySelector('#boxticketcounts').textContent=`管理票 ${n}枚 ／ 用紙 ${pages}ページ（1ページ${perPage}枠）。`;
  const frame=dialog.querySelector('iframe');
  frame.srcdoc=boxTicketPreviewHtml(tickets,boxTicketCss);
  dialog.querySelector('#boxticketprint').disabled=true;frame.onload=()=>{dialog.querySelector('#boxticketprint').disabled=false};
@@ -266,7 +270,7 @@ async function openBoxWaitingList(){
  dialog.innerHTML=`<div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2>修理・在庫待ち一覧</h2><button type="button" id="boxwaitingclose">閉じる</button></div><p>保存済みの指示書から、修理待ち・修理中・在庫待ちを表示しています。印刷したいものを選んでください。</p><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px"><button type="button" id="boxwaitingall">全選択</button><button type="button" id="boxwaitingnone">選択解除</button><span id="boxwaitingcount" aria-live="polite"></span><button type="button" class="primary" id="boxwaitingprint" disabled>選択した管理票を印刷</button></div><div style="overflow:auto;max-height:60vh"><table style="width:100%"><thead><tr><th>選択</th><th>顧客名 / 従業員名</th><th>指示書番号</th><th>待ち状況</th><th>不足商品・数量</th><th>マーク出荷日</th><th>出荷見込日</th></tr></thead><tbody>${list.map(o=>`<tr><td><input type="checkbox" class="boxwaitingpick" data-id="${o.id}" aria-label="${esc(o.number+'を選択')}" style="width:18px;height:18px;margin:0;padding:0"></td><td><b>${esc(o.customer)}</b><br>${esc(o.employee||'—')}</td><td>${esc(o.number)}</td><td>${esc(boxWaitingKind(o))}</td><td>${(o.shortages||[]).filter(s=>Number(s.qty)>0&&s.supply!=='入荷済み').map(s=>`${esc(supplyLabel(s))}：不足 ${esc(s.qty)}枚`).join('<br>')||'不足なし'}</td><td>${esc(o.markShipDate||'未設定')}</td><td>${esc(o.shipEstimateUnknown?'未定':o.shipEstimateDate||'未設定')}</td></tr>`).join('')||'<tr><td colspan="7">修理・在庫待ちの指示書はありません。</td></tr>'}</tbody></table></div>`;
  const checks=[...dialog.querySelectorAll('.boxwaitingpick')];
  const chosen=()=>list.filter(o=>checks.some(c=>c.checked&&Number(c.dataset.id)===o.id));
- const update=()=>{const selected=chosen(),n=selected.flatMap(deskBoxTicketPages).length;dialog.querySelector('#boxwaitingcount').textContent=`${list.length}件中 ${selected.length}件選択 ／ 管理票 ${n}枚（A4 ${Math.ceil(n/8)}ページ）`;dialog.querySelector('#boxwaitingprint').disabled=!selected.length};
+ const update=()=>{const selected=chosen(),n=selected.flatMap(deskBoxTicketPages).length,perPage=typeof BOX_TICKET_PER_PAGE==='number'?BOX_TICKET_PER_PAGE:6,pages=typeof boxTicketPageCount==='function'?boxTicketPageCount(n):Math.ceil(n/perPage)||0;dialog.querySelector('#boxwaitingcount').textContent=`${list.length}件中 ${selected.length}件選択 ／ 管理票 ${n}枚（A4 ${pages}ページ・1ページ${perPage}枠）`;dialog.querySelector('#boxwaitingprint').disabled=!selected.length};
  checks.forEach(c=>c.onchange=update);
  dialog.querySelector('#boxwaitingall').onclick=()=>{checks.forEach(c=>c.checked=true);update()};
  dialog.querySelector('#boxwaitingnone').onclick=()=>{checks.forEach(c=>c.checked=false);update()};

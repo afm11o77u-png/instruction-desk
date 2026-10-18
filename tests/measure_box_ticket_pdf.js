@@ -105,7 +105,7 @@ function assertA4Landscape(box, label) {
 function measure(count) {
   const tickets = Array.from({ length: count }, (_, i) => sampleTicket(i + 1))
   const html = boxTicketPreviewHtml(tickets)
-  const expectedPages = Math.ceil(count / 8) || 0
+  const expectedPages = Math.ceil(count / 6) || 0
   assert.strictEqual((html.match(/class="page"/g) || []).length, expectedPages || 0)
   const outDir = path.join(__dirname, '../artifacts')
   fs.mkdirSync(outDir, { recursive: true })
@@ -131,5 +131,5 @@ function measure(count) {
   }
 }
 
-const results = [1, 8, 9].map(measure)
-console.log(JSON.stringify({ ok: true, a4LandscapeMm: [297, 210], cellMm: [148.5, 52.5], results }, null, 2))
+const results = [1, 6, 7].map(measure)
+console.log(JSON.stringify({ ok: true, a4LandscapeMm: [297, 210], cellMm: [148.5, 70], results }, null, 2))

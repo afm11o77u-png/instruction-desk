@@ -77,6 +77,11 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelticketkind legend{padding:0 2px;font-size:.75rem;font-weight:700;line-height:1.2}
 #labeldesk .labelticketkind label{display:inline-flex;flex-direction:row;gap:4px;align-items:center;font-size:16px;font-weight:600;cursor:pointer;margin:0;line-height:1.25;width:auto}
 
+#labeldesk .labelticketpeople{display:grid;gap:12px}
+#labeldesk .labelticketperson{display:grid;gap:10px;padding:12px;border:1px solid #d5ead4;border-radius:8px;background:#fbfefb}
+#labeldesk .labelticketperson-head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between}
+#labeldesk .labelticketperson-title{font-size:.95rem}
+#labeldesk .labelticketpeopleactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 #labeldesk .labelticketfields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px}
 #labeldesk .labelticketfields label{display:grid;gap:4px;font-size:.85rem;font-weight:700}
 #labeldesk .labelticketfields input,#labeldesk .labelticketfields select{font-weight:400;min-height:36px;padding:8px 10px}
@@ -86,6 +91,7 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .tickshortagerow input{font-weight:400;min-height:34px;padding:6px 8px}
 #labeldesk .labelticketactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 #labeldesk #labelticketerror:empty{display:none}#labeldesk #labelticketerror{margin:0;color:#a23928}
+#labeldesk #ticketaddperson:disabled{opacity:.55;cursor:not-allowed}
 #labeldesk .labelfixedform{display:grid;gap:14px;max-width:720px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
 #labeldesk .labelfixedform>label{display:grid;gap:4px;font-size:.85rem;font-weight:700;max-width:360px}
 #labeldesk .labelfixedform select,#labeldesk .labelfixedform input{font-weight:400;min-height:36px;padding:8px 10px}
@@ -97,6 +103,7 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelhandwriteactions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 #labeldesk #labelhandwriteerror:empty{display:none}#labeldesk #labelhandwriteerror{margin:0;color:#a23928}
 @media(max-width:720px){#labeldesk .labelticketfields,#labeldesk .tickshortagerow{grid-template-columns:1fr}}
+
 #labelnoticeerror:empty{display:none}#labelnoticeerror{margin:0 0 12px;color:#a23928}
 #labeldesk .labeltablehint{margin:0 0 10px;max-width:46em;font-size:.85rem;color:#3d5344}
 #labeldesk .labeltoolbar{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center;margin:0 0 8px}
