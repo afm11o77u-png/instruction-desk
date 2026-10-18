@@ -16,6 +16,7 @@ WRITE_PATHS = {
     '/api/customer-products',
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/legacy-csv/commit',
+    '/api/products/merge',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
@@ -45,6 +46,10 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         body['canWrite'] = bool(can_write)
         body['actorName'] = (actor or {}).get('name') or ''
         return 200, body
+    if path == '/api/products/duplicates':
+        import stock_product_merge
+        with stock.connect(db_path) as c:
+            return 200, stock_product_merge.list_duplicate_groups(c)
     if path == '/api/stock':
         try:
             with stock.connect(db_path) as c:
@@ -214,6 +219,28 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             return 400, {'error': str(e) or '取込を確認してください。'}
         except sqlite3.IntegrityError:
             return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
+        return 200, result
+    if path == '/api/products/merge/preview':
+        import stock_product_merge
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_product_merge.preview_merge(c, payload)
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '統合内容を確認してください。'}
+    if path == '/api/products/merge':
+        import stock_product_merge
+        if not can_write:
+            return 403, {'error': '閲覧専用のため、商品の統合はできません。'}
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = stock_product_merge.execute_merge(c, payload, db_path=db_path)
+        except stock.StockConflict as e:
+            return 409, e.payload
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '統合を確認してください。'}
+        except sqlite3.IntegrityError:
+            return 400, {'error': '同じ統合操作が既にあるため、中止しました。'}
         return 200, result
     if path == '/api/outbound/preview':
         try:

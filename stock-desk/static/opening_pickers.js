@@ -25,7 +25,7 @@ function filterOpeningCustomers(customers, query){
 }
 
 function activeOpeningProducts(products){
-  return (products||[]).filter(p=>p&&p.active)
+  return (products||[]).filter(p=>p&&p.active&&!p.mergedIntoId)
 }
 
 function filterOpeningProducts(products, query){

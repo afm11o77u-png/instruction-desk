@@ -18,7 +18,8 @@ SHEETS = [
     ('仕入先', [('仕入先名', 'name', True), ('住所', 'address', False), ('電話番号', 'phone', False), ('担当者', 'contact', False)]),
     ('商品', [
         ('品番', 'code', False), ('商品名', 'name', True), ('色', 'color', False),
-        ('カテゴリ', 'category', False), ('仕入先名', 'supplier', False), ('サイズ', 'sizes', True),
+        ('カテゴリ', 'category', False), ('仕入先名', 'supplier', False),
+        ('サブ仕入先名', 'sub_suppliers', False), ('サイズ', 'sizes', True),
     ]),
     ('取扱', [('品番', 'code', False), ('商品名', 'name', True), ('色', 'color', False), ('顧客名', 'customer', True), ('加工仕様', 'embroidery', False), ('標準', 'standard', False)]),
     ('保管場所', [('拠点名', 'site', True), ('棚名', 'shelf', False)]),
@@ -141,7 +142,7 @@ def _import_sheet(c, name, rows, meta=None):
     if name == '仕入先':
         return _people(c, rows, 'suppliers', stock.save_supplier, stock.supplier_row, '仕入先')
     if name == '商品':
-        return _products(c, rows)
+        return _products(c, rows, meta or {})
     if name == '取扱':
         return _links(c, rows)
     if name == '保管場所':
@@ -179,10 +180,42 @@ def _people(c, rows, table, save, fetch, label):
     return {'created': created, 'updated': updated, 'already': 0}
 
 
-def _products(c, rows):
+def _split_supplier_names(raw):
+    """サブ仕入先名を読点・カンマ区切りで分割。空は無視。"""
+    text = stock.text(raw)
+    if not text:
+        return []
+    parts = []
+    for chunk in text.replace('，', ',').replace('、', ',').split(','):
+        name = stock.text(chunk)
+        if name and name not in parts:
+            parts.append(name)
+    return parts
+
+
+def _sub_supplier_ids(c, raw, sheet, row_no, primary_id):
+    ids = []
+    for name in _split_supplier_names(raw):
+        row = c.execute('SELECT id FROM suppliers WHERE name=?', (name,)).fetchone()
+        if not row:
+            raise ValueError(f'{sheet}の{row_no}行目：サブ仕入先「{name}」がありません。仕入先シートに先に入れてください。')
+        if primary_id is not None and row['id'] == primary_id:
+            raise ValueError(f'{sheet}の{row_no}行目：通常の仕入先と同じ名前をサブ仕入先にできません。')
+        if row['id'] not in ids:
+            ids.append(row['id'])
+    return ids
+
+
+def _products(c, rows, meta=None):
     created = updated = 0
+    headers = (meta or {}).get('headers') or {}
+    # 旧Excel（サブ仕入先名列なし）では既存サブ仕入先を消さない
+    has_sub_col = 'サブ仕入先名' in headers
     for row_no, item in rows:
         supplier_id = _supplier_id(c, item['supplier'], '商品', row_no)
+        sub_ids = _sub_supplier_ids(
+            c, item.get('sub_suppliers'), '商品', row_no, supplier_id,
+        ) if has_sub_col else None
         sizes = _split_sizes(item['sizes'])
         if not sizes:
             raise ValueError(f'商品の{row_no}行目：サイズを1つ以上入れてください。LLと2Lは別のサイズです。')
@@ -201,20 +234,30 @@ def _products(c, rows):
         try:
             if matches:
                 current = stock.product_row(c, matches[0])
+                if current.get('mergedIntoId'):
+                    raise ValueError(
+                        f'商品ID {current["id"]} は統合済み（統合先 {current["mergedIntoId"]}）のため更新できません。'
+                    )
                 # カテゴリ空欄の更新では既存を消さない（明示値があるときだけ上書き）
                 cat_value = category if category else (current.get('category') or '')
-                stock.save_product(c, {
+                payload = {
                     'id': current['id'], 'code': code, 'name': item['name'], 'color': item['color'],
                     'category': cat_value,
                     'supplierId': supplier_id, 'sizes': sizes, 'active': current['active'],
                     'links': [{'customerId': link['customerId'], 'embroidery': link['embroidery'], 'isStandard': link['isStandard'], 'active': link['active']} for link in current['links']],
-                })
+                }
+                if sub_ids is not None:
+                    payload['subSupplierIds'] = sub_ids
+                stock.save_product(c, payload)
                 updated += 1
             else:
-                stock.save_product(c, {
+                payload = {
                     'code': code, 'name': item['name'], 'color': item['color'], 'category': category,
                     'supplierId': supplier_id, 'sizes': sizes, 'links': [], 'active': True,
-                })
+                }
+                if sub_ids is not None:
+                    payload['subSupplierIds'] = sub_ids
+                stock.save_product(c, payload)
                 created += 1
         except ValueError as e:
             raise ValueError(f'商品の{row_no}行目：{e}') from e
@@ -232,7 +275,10 @@ def _links(c, rows):
             order.append(key)
         grouped[key].append((row_no, item))
     for key in order:
-        matches = c.execute('SELECT id FROM products WHERE code=? AND name=? AND color=?', key).fetchall()
+        matches = c.execute(
+            'SELECT id FROM products WHERE code=? AND name=? AND color=? AND merged_into_id IS NULL',
+            key,
+        ).fetchall()
         if not matches:
             raise ValueError(f'取扱の{grouped[key][0][0]}行目：先に商品シートへ、この品番・商品名・色を入れてください。')
         if len(matches) > 1:
@@ -402,9 +448,17 @@ def _supplier_id(c, name, sheet, row_no):
 
 def _match_products(c, code, name, color, supplier_id):
     if supplier_id is None:
-        rows = c.execute('SELECT id FROM products WHERE code=? AND name=? AND color=? AND supplier_id IS NULL', (code, name, color)).fetchall()
+        rows = c.execute(
+            'SELECT id FROM products WHERE code=? AND name=? AND color=? AND supplier_id IS NULL '
+            'AND merged_into_id IS NULL',
+            (code, name, color),
+        ).fetchall()
     else:
-        rows = c.execute('SELECT id FROM products WHERE code=? AND name=? AND color=? AND supplier_id=?', (code, name, color, supplier_id)).fetchall()
+        rows = c.execute(
+            'SELECT id FROM products WHERE code=? AND name=? AND color=? AND supplier_id=? '
+            'AND merged_into_id IS NULL',
+            (code, name, color, supplier_id),
+        ).fetchall()
     return [r['id'] for r in rows]
 
 

@@ -34,9 +34,21 @@ CREATE TABLE IF NOT EXISTS products (
   category TEXT NOT NULL DEFAULT '',
   supplier_id INTEGER REFERENCES suppliers(id),
   active INTEGER NOT NULL DEFAULT 1,
+  merged_into_id INTEGER REFERENCES products(id),
+  merged_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS product_suppliers (
+  id INTEGER PRIMARY KEY,
+  product_id INTEGER NOT NULL REFERENCES products(id),
+  supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(product_id, supplier_id)
+);
+CREATE INDEX IF NOT EXISTS product_suppliers_product
+  ON product_suppliers(product_id, sort_order, id);
 CREATE TABLE IF NOT EXISTS product_sizes (
   id INTEGER PRIMARY KEY,
   product_id INTEGER NOT NULL REFERENCES products(id),
@@ -44,6 +56,29 @@ CREATE TABLE IF NOT EXISTS product_sizes (
   sort_order INTEGER NOT NULL,
   UNIQUE(product_id, label)
 );
+CREATE TABLE IF NOT EXISTS product_merges (
+  id INTEGER PRIMARY KEY,
+  keep_product_id INTEGER NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  client_token TEXT NOT NULL UNIQUE,
+  before_qty INTEGER NOT NULL,
+  after_qty INTEGER NOT NULL,
+  before_amount INTEGER NOT NULL,
+  after_amount INTEGER NOT NULL,
+  fingerprint TEXT NOT NULL DEFAULT '',
+  request_json TEXT NOT NULL DEFAULT '{}',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  backup_path TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS product_merge_sources (
+  id INTEGER PRIMARY KEY,
+  merge_id INTEGER NOT NULL REFERENCES product_merges(id),
+  source_product_id INTEGER NOT NULL,
+  source_snapshot_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS product_merge_sources_merge ON product_merge_sources(merge_id);
+CREATE INDEX IF NOT EXISTS product_merge_sources_product ON product_merge_sources(source_product_id);
 CREATE TABLE IF NOT EXISTS customer_products (
   id INTEGER PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
@@ -270,10 +305,18 @@ def needs_migration(c):
         product_cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
         if 'category' not in product_cols:
             return True
+        if 'merged_into_id' not in product_cols:
+            return True
+    if 'product_suppliers' not in tables or 'product_merges' not in tables:
+        return True
     if 'legacy_csv_row_maps' not in tables:
         return True
     import stock_orders
-    return stock_orders.needs_purchase_order_migration(c)
+    import stock_product_merge
+    return (
+        stock_orders.needs_purchase_order_migration(c)
+        or stock_product_merge.needs_merge_migration(c)
+    )
 
 
 def backup_sqlite(db_path, *, tag='pre-shortage'):
@@ -379,6 +422,8 @@ def migrate_schema(c):
         product_cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
         if 'category' not in product_cols:
             c.execute("ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+    import stock_product_merge
+    stock_product_merge.migrate_product_merge(c)
     # Backfill business dates from lot fields only (no invented dates for outbound).
     c.execute(
         '''UPDATE moves SET business_on=(
@@ -679,6 +724,39 @@ def _links(c, body):
     return links
 
 
+def _sub_supplier_ids(c, body, primary_id):
+    """サブ仕入先ID一覧。通常仕入先と重複不可。未指定なら既存を維持しない（呼び出し側で明示）。"""
+    raw = body.get('subSupplierIds')
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError('サブ仕入先の指定が不正です。')
+    out = []
+    seen = set()
+    for item in raw:
+        if item in ('', None):
+            continue
+        if isinstance(item, str) and item.isdigit():
+            item = int(item)
+        if not isinstance(item, int) or not c.execute('SELECT id FROM suppliers WHERE id=?', (item,)).fetchone():
+            raise ValueError('サブ仕入先を、仕入先台帳から選んでください。')
+        if primary_id is not None and item == primary_id:
+            raise ValueError('通常の仕入先と同じ仕入先をサブにできません。')
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def _replace_sub_suppliers(c, product_id, sub_ids, when):
+    c.execute('DELETE FROM product_suppliers WHERE product_id=?', (product_id,))
+    for i, sid in enumerate(sub_ids or []):
+        c.execute(
+            'INSERT INTO product_suppliers(product_id,supplier_id,sort_order,created_at) VALUES(?,?,?,?)',
+            (product_id, sid, i, when),
+        )
+
+
 def save_product(c, body):
     # 品番は空欄可（品番なし商品）。「品番なし」「品番なし（要確認）」は表示用で、実品番としては保存しない。
     code = optional(body.get('code'), '品番', 40)
@@ -693,13 +771,19 @@ def save_product(c, body):
         supplier_id = None
     elif not isinstance(supplier_id, int) or not c.execute('SELECT id FROM suppliers WHERE id=?', (supplier_id,)).fetchone():
         raise ValueError('通常の仕入先を、仕入先台帳から選んでください。未定なら空のままにできます。')
+    sub_ids = _sub_supplier_ids(c, body, supplier_id)
     labels = _sizes(body)
     links = _links(c, body)
     t = stamp()
     pid = body.get('id')
     if pid:
-        if not c.execute('SELECT id FROM products WHERE id=?', (pid,)).fetchone():
+        existing_prod = c.execute('SELECT id, merged_into_id FROM products WHERE id=?', (pid,)).fetchone()
+        if not existing_prod:
             raise ValueError('商品が見つかりません。')
+        if existing_prod['merged_into_id'] not in (None, ''):
+            raise ValueError(
+                f'この商品は商品ID {existing_prod["merged_into_id"]} へ統合済みのため編集できません。'
+            )
         c.execute(
             'UPDATE products SET code=?,name=?,color=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
             (code, name, color, category, supplier_id, active, t, pid),
@@ -737,6 +821,8 @@ def save_product(c, body):
                 c.execute('''INSERT INTO customer_products(customer_id,product_id,embroidery,is_standard,active,created_at,updated_at)
                              VALUES(?,?,?,?,?,?,?)''',
                           (link['customerId'], pid, link['embroidery'], link['isStandard'], link['active'], t, t))
+        if sub_ids is not None:
+            _replace_sub_suppliers(c, pid, sub_ids, t)
     else:
         c.execute(
             'INSERT INTO products(code,name,color,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
@@ -749,6 +835,7 @@ def save_product(c, body):
             c.execute('''INSERT INTO customer_products(customer_id,product_id,embroidery,is_standard,active,created_at,updated_at)
                          VALUES(?,?,?,?,?,?,?)''',
                       (link['customerId'], pid, link['embroidery'], link['isStandard'], link['active'], t, t))
+        _replace_sub_suppliers(c, pid, sub_ids or [], t)
     return product_row(c, pid)
 
 
@@ -809,9 +896,15 @@ def ensure_customer_product(c, body):
         raise ValueError('顧客が未登録です。顧客台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
     if not customer['active']:
         raise ValueError('この顧客は使用停止です。顧客台帳で使用中に戻してから取扱を作成してください。')
-    product = c.execute('SELECT id,active FROM products WHERE id=?', (product_id,)).fetchone()
+    product = c.execute(
+        'SELECT id,active,merged_into_id FROM products WHERE id=?', (product_id,)
+    ).fetchone()
     if not product:
         raise ValueError('商品が未登録です。商品台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
+    if product['merged_into_id'] not in (None, ''):
+        raise ValueError(
+            f'この商品は商品ID {product["merged_into_id"]} へ統合済みです。統合先を選んでください。'
+        )
     if not product['active']:
         raise ValueError('この商品は使用停止です。商品台帳で使用中に戻してから取扱を作成してください。')
 
@@ -1297,6 +1390,43 @@ def supplier_row(c, sid):
             'fax': fax or '', 'contact': r['contact'], 'active': bool(r['active'])}
 
 
+def product_sub_suppliers(c, pid):
+    """サブ仕入先（通常仕入先以外）。テーブル未作成の旧DBでも空配列。"""
+    tables = {x['name'] for x in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if 'product_suppliers' not in tables:
+        return []
+    rows = []
+    for x in c.execute(
+        '''SELECT ps.supplier_id, s.name AS supplier_name, s.active
+           FROM product_suppliers ps
+           JOIN suppliers s ON s.id=ps.supplier_id
+           WHERE ps.product_id=?
+           ORDER BY ps.sort_order, ps.id''',
+        (pid,),
+    ):
+        rows.append({
+            'id': x['supplier_id'],
+            'name': x['supplier_name'] or '',
+            'active': bool(x['active']),
+        })
+    return rows
+
+
+def product_has_supplier(c, product_id, supplier_id):
+    """通常仕入先またはサブ仕入先に含まれるか。"""
+    if supplier_id is None:
+        return False
+    row = c.execute('SELECT supplier_id FROM products WHERE id=?', (product_id,)).fetchone()
+    if not row:
+        return False
+    if row['supplier_id'] == supplier_id:
+        return True
+    return bool(c.execute(
+        'SELECT 1 FROM product_suppliers WHERE product_id=? AND supplier_id=?',
+        (product_id, supplier_id),
+    ).fetchone())
+
+
 def product_row(c, pid):
     r = c.execute('''SELECT p.*, s.name AS supplier_name FROM products p
                      LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.id=?''', (pid,)).fetchone()
@@ -1308,11 +1438,19 @@ def product_row(c, pid):
                       'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active'])})
     category = r['category'] if 'category' in r.keys() else ''
     code = r['code'] or ''
+    merged_into = r['merged_into_id'] if 'merged_into_id' in r.keys() else None
+    sub_suppliers = product_sub_suppliers(c, pid)
     return {
         'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
         'name': r['name'], 'color': r['color'], 'category': category or '',
         'supplierId': r['supplier_id'],
-        'supplierName': r['supplier_name'] or '', 'active': bool(r['active']), 'sizes': sizes, 'links': links,
+        'supplierName': r['supplier_name'] or '',
+        'subSupplierIds': [s['id'] for s in sub_suppliers],
+        'subSuppliers': sub_suppliers,
+        'active': bool(r['active']),
+        'mergedIntoId': merged_into,
+        'mergedAt': r['merged_at'] if 'merged_at' in r.keys() else None,
+        'sizes': sizes, 'links': links,
     }
 
 
