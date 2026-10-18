@@ -27,11 +27,22 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
         self.assertIn('管理票印刷', INDEX)
         self.assertIn('id="labelticketpanel"', INDEX)
         self.assertIn('name="labelticketkind"', INDEX)
+        self.assertIn('type="radio"', INDEX[INDEX.index('labelticketkind'):INDEX.index('labelticketkind') + 200])
+        self.assertNotIn('type="checkbox"', INDEX[INDEX.index('class="labelticketkind"'):INDEX.index('class="labelticketkind"') + 280])
         self.assertIn('value="repair"', INDEX)
         self.assertIn('value="shortage"', INDEX)
         self.assertIn('id="ticketprint"', INDEX)
         self.assertIn('id="labeladdresspanel"', INDEX)
         self.assertIn('id="labelprint"', INDEX)
+
+    def test_ticket_kind_radio_css_resets_global_input(self):
+        # グローバル input{width:100%;min-height:43px;border…} を打ち消し、通常の小さいラジオにする。
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('#labeldesk .labelpattern input[type=radio],#labeldesk .labelticketkind input[type=radio]', css)
+        rule_start = css.index('#labeldesk .labelpattern input[type=radio],#labeldesk .labelticketkind input[type=radio]')
+        rule = css[rule_start:css.index('}', rule_start) + 1]
+        for needle in ('all:unset', 'min-height:0', 'border:0', 'padding:0', 'background:transparent', '-webkit-appearance:radio', 'width:11px', 'height:11px'):
+            self.assertIn(needle, rule)
 
     def test_app_reuses_shared_pages_and_preview(self):
         self.assertIn('deskBoxTicketPages', APP)

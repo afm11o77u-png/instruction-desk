@@ -67,16 +67,16 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #labeldesk .labelmode.on,#labeldesk .labelmode[aria-pressed="true"]{background:#1e4a36;color:#fff;border-color:#1e4a36}
 #labeldesk .labelpattern{margin:0;padding:2px 6px;border:1px solid #d5ead4;border-radius:6px;background:#fff;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center;width:fit-content;max-width:100%}
 #labeldesk .labelpattern legend{padding:0 2px;font-size:.75rem;font-weight:700;line-height:1.2}
-#labeldesk .labelpattern label{display:inline-flex;flex-direction:row;gap:3px;align-items:center;font-size:.8rem;font-weight:600;white-space:nowrap;cursor:pointer;margin:0;line-height:1.2}
-#labeldesk .labelpattern input[type=radio]{width:13px;height:13px;min-width:13px;min-height:13px;max-height:13px;margin:0;padding:0;flex:0 0 13px;accent-color:#186438;cursor:pointer}
+#labeldesk .labelpattern label{display:inline-flex;flex-direction:row;gap:4px;align-items:center;font-size:12.5px;font-weight:600;white-space:nowrap;cursor:pointer;margin:0;line-height:1.2;width:auto}
+#labeldesk .labelpattern input[type=radio],#labeldesk .labelticketkind input[type=radio]{all:unset;-webkit-appearance:radio;appearance:auto;display:inline-block;box-sizing:border-box;width:11px;height:11px;min-width:0;min-height:0;max-width:11px;max-height:11px;margin:0;padding:0;border:0;border-radius:0;background:transparent;flex:0 0 11px;font-size:11px;line-height:1;vertical-align:middle;accent-color:#186438;cursor:pointer}#labeldesk .labelpattern input[type=radio]:focus,#labeldesk .labelticketkind input[type=radio]:focus,#labeldesk .labelpattern input[type=radio]:focus-visible,#labeldesk .labelticketkind input[type=radio]:focus-visible{outline:2px solid #5d9a72;outline-offset:1px}
 #labeldesk .labelnoticeform{display:flex;flex-wrap:wrap;gap:12px 14px;align-items:flex-end;max-width:980px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
 #labeldesk .labelnoticeform label{display:grid;gap:4px;font-size:.85rem;font-weight:700;min-width:180px}
 #labeldesk .labelnoticeform input{font-weight:400;min-width:200px;padding:8px 10px}
 #labeldesk .labelticketform{display:grid;gap:14px;max-width:980px;margin:0 0 12px;padding:12px 14px;border:1px solid #d5ead4;border-radius:10px;background:#fff}
 #labeldesk .labelticketkind{margin:0;padding:2px 6px;border:1px solid #d5ead4;border-radius:6px;background:#f7fbf6;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:center;width:fit-content;max-width:100%}
 #labeldesk .labelticketkind legend{padding:0 2px;font-size:.75rem;font-weight:700;line-height:1.2}
-#labeldesk .labelticketkind label{display:inline-flex;flex-direction:row;gap:3px;align-items:center;font-size:.8rem;font-weight:600;cursor:pointer;margin:0;line-height:1.2}
-#labeldesk .labelticketkind input[type=radio]{width:13px;height:13px;min-width:13px;min-height:13px;max-height:13px;margin:0;padding:0;flex:0 0 13px;accent-color:#186438;cursor:pointer}
+#labeldesk .labelticketkind label{display:inline-flex;flex-direction:row;gap:4px;align-items:center;font-size:12.5px;font-weight:600;cursor:pointer;margin:0;line-height:1.2;width:auto}
+
 #labeldesk .labelticketfields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px}
 #labeldesk .labelticketfields label{display:grid;gap:4px;font-size:.85rem;font-weight:700}
 #labeldesk .labelticketfields input,#labeldesk .labelticketfields select{font-weight:400;min-height:36px;padding:8px 10px}
