@@ -34,6 +34,14 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
         self.assertIn('id="ticketprint"', INDEX)
         self.assertIn('id="labeladdresspanel"', INDEX)
         self.assertIn('id="labelprint"', INDEX)
+        # 指示書番号入力は廃止。印刷位置には当日日付＋「発注」を出す。
+        ticket_panel = INDEX[INDEX.index('id="labelticketpanel"'):INDEX.index('id="labelfixedpanel"')]
+        self.assertNotIn('ticknumber', ticket_panel)
+        self.assertNotIn('指示書番号', ticket_panel)
+        self.assertIn('boxTicketOrderDateLabel', BOX)
+        self.assertIn(' 発注', BOX)
+        self.assertNotIn('指示書番号を入力してください', BOX)
+        self.assertNotIn("number:$('#ticknumber')", SHEET)
 
     def test_ticket_kind_radio_css_resets_global_input(self):
         # グローバル input{width:100%;min-height:43px;border…} を打ち消し、通常の小さいラジオにする。

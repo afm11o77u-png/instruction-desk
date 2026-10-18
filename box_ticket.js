@@ -23,6 +23,20 @@
     return [it && it.name, it && it.sku, it && it.size].filter(Boolean).join(' / ') || '商品名なし';
   }
 
+  /** 管理票のマーク出荷日と同じ YYYY-MM-DD（ローカル日付）。 */
+  function boxTicketToday(now) {
+    const d = now instanceof Date ? now : new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  /** 手入力管理票：指示書番号の代わりに「当日日付 発注」を同じ位置へ出す。 */
+  function boxTicketOrderDateLabel(now) {
+    return `${boxTicketToday(now)} 発注`;
+  }
+
   function activeBoxTicketShortages(o) {
     return (o && Array.isArray(o.shortages) ? o.shortages : []).filter(
       (s) => Number(s.qty) > 0 && s.supply !== '入荷済み'
@@ -92,7 +106,6 @@
     const kind = input && input.kind === 'shortage' ? 'shortage' : 'repair';
     const customer = String((input && input.customer) || '').trim();
     const employee = String((input && input.employee) || '').trim();
-    const number = String((input && input.number) || '').trim();
     const request = String((input && input.request) || '').trim();
     const markShipDate = String((input && input.markShipDate) || '').trim();
     const shortages = kind === 'shortage' ? normalizeManualShortages(input && input.shortages) : [];
@@ -100,7 +113,7 @@
       kind,
       customer,
       employee,
-      number,
+      number: boxTicketOrderDateLabel(input && input.now),
       request,
       markShipDate,
       shortages,
@@ -111,7 +124,6 @@
   function validateManualBoxTicketOrder(order) {
     if (!order || !order.customer) return { ok: false, error: '顧客名を入力してください。' };
     if (!order.employee) return { ok: false, error: '従業員名を入力してください。' };
-    if (!order.number) return { ok: false, error: '指示書番号を入力してください。' };
     if (order.kind === 'shortage' && !activeBoxTicketShortages(order).length) {
       return { ok: false, error: '在庫待ちでは不足商品と枚数を1件以上入力してください。' };
     }
@@ -133,6 +145,8 @@
     BOX_TICKET_REQUEST_OPTIONS,
     boxTicketEsc,
     boxTicketSupplyLabel,
+    boxTicketToday,
+    boxTicketOrderDateLabel,
     activeBoxTicketShortages,
     boxTicketPages,
     boxTicketPreviewHtml,
