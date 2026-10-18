@@ -384,10 +384,44 @@ def _product_preview(c, item, supplier_info, row_no):
     return info
 
 
-def _handle_preview(c, customer_id, product_id, row_no):
+def _handle_candidate(row):
+    return {
+        'id': row['id'],
+        'embroidery': row['embroidery'],
+        'embroideryLabel': stock.embroidery_label(row['embroidery']),
+        'active': bool(row['active']),
+    }
+
+
+def _reuse_handle(info, row, *, pending_sort=True):
+    """既存取扱を再利用。加工仕様キーは変更しない。"""
+    emb = stock.normalize_embroidery(row['embroidery'])
+    info['action'] = 'reuse'
+    info['id'] = row['id']
+    info['embroidery'] = emb
+    info['embroideryLabel'] = stock.embroidery_label(row['embroidery'])
+    info['pendingEmbroiderySort'] = pending_sort
+    info['candidates'] = []
+    info['reasons'] = []
+    return info
+
+
+def _handle_preview(c, customer_id, product_id, row_no, *, csv_source=None):
+    """CSVに加工欄が無い前提の取扱照合。
+
+    自動付与の「加工未整理」だけを理由に取込を止めない。
+    顧客・商品が確定し有効取扱が「加工なし」1件だけならそれを再利用する。
+    既存の加工仕様は書き換えない。整理待ちは pendingEmbroiderySort / csvSource で保持し照合を妨げない。
+    """
+    source = dict(csv_source or {})
     info = {
-        'action': 'missing', 'id': None, 'embroidery': PENDING_EMBROIDERY,
-        'embroideryLabel': PENDING_EMBROIDERY, 'candidates': [], 'reasons': [],
+        'action': 'missing', 'id': None,
+        'embroidery': PENDING_EMBROIDERY,
+        'embroideryLabel': PENDING_EMBROIDERY,
+        'candidates': [], 'reasons': [],
+        # 実加工仕様キーとは別に、CSV由来の整理待ちを保持する
+        'pendingEmbroiderySort': True,
+        'csvSource': source,
     }
     if not customer_id or not product_id:
         info['action'] = 'defer'
@@ -398,47 +432,39 @@ def _handle_preview(c, customer_id, product_id, row_no):
         (customer_id, product_id),
     ))
     if not rows:
+        # 取扱なし → 加工未整理を追加（後から品名・品番で整理）
         info['action'] = 'create'
         return info
-    pending = [r for r in rows if stock.normalize_embroidery(r['embroidery']) == PENDING_EMBROIDERY and r['active']]
-    if len(pending) == 1:
-        info['action'] = 'reuse'
-        info['id'] = pending[0]['id']
-        return info
+
     active = [r for r in rows if r['active']]
+    if not active:
+        info['action'] = 'review'
+        info['candidates'] = [_handle_candidate(r) for r in rows]
+        info['reasons'].append(f'{row_no}行目：取扱が停止中のみです。無断再開しません。')
+        return info
+
     if len(active) == 1:
-        # 加工仕様が1件だけなら再利用候補だが、空＝加工なしへ勝手に確定しない
         emb = stock.normalize_embroidery(active[0]['embroidery'])
-        if emb == '':
-            info['action'] = 'create'
-            info['reasons'].append(
-                f'{row_no}行目：既存取扱は「加工なし」です。CSV側は加工未整理として別に扱います（自動統合しません）。'
-            )
-            return info
-        if emb == PENDING_EMBROIDERY:
-            info['action'] = 'reuse'
-            info['id'] = active[0]['id']
-            return info
+        if emb == '' or emb == PENDING_EMBROIDERY:
+            # 加工なし / 過去取込の加工未整理 → 再利用（重複作成しない・仕様は変えない）
+            return _reuse_handle(info, active[0], pending_sort=True)
+        # 具体的な加工仕様が1件だけ → CSVに加工欄が無いため自動確定しない
         info['action'] = 'review'
-        info['candidates'] = [
-            {'id': r['id'], 'embroidery': r['embroidery'], 'embroideryLabel': stock.embroidery_label(r['embroidery']),
-             'active': bool(r['active'])}
-            for r in active
-        ]
-        info['reasons'].append(f'{row_no}行目：加工仕様の異なる既存取扱があります。勝手に選びません。')
+        info['candidates'] = [_handle_candidate(r) for r in active]
+        info['reasons'].append(
+            f'{row_no}行目：既存取扱の加工仕様は「{stock.embroidery_label(active[0]["embroidery"])}」です。'
+            f'CSVに加工欄が無いため自動では選べません（候補から選んでください）。'
+        )
         return info
-    if len(active) > 1:
-        info['action'] = 'review'
-        info['candidates'] = [
-            {'id': r['id'], 'embroidery': r['embroidery'], 'embroideryLabel': stock.embroidery_label(r['embroidery']),
-             'active': bool(r['active'])}
-            for r in active
-        ]
-        info['reasons'].append(f'{row_no}行目：同一顧客×商品の取扱が複数あります。')
-        return info
-    # only stopped
+
+    # 複数の有効取扱 → 特定不可。候補を具体表示（無断統合・削除しない）
+    labels = [stock.embroidery_label(r['embroidery']) for r in active]
     info['action'] = 'review'
-    info['reasons'].append(f'{row_no}行目：取扱が停止中のみです。無断再開しません。')
+    info['candidates'] = [_handle_candidate(r) for r in active]
+    info['reasons'].append(
+        f'{row_no}行目：同一顧客×商品の取扱が複数あります'
+        f'（{", ".join(labels)}）。CSVに加工欄が無いため特定できません。候補から選んでください。'
+    )
     return info
 
 
@@ -512,17 +538,29 @@ def classify_row(c, row_no, item, *, default_site_name, selected_product_id=None
             reasons.append(f'{row_no}行目：棚「{place["shelfName"]}」は停止中です。')
             place['action'] = 'review'
 
-    handle = _handle_preview(c, customer.get('id'), product.get('id'), row_no)
+    csv_source = {
+        'sourceRowNo': row_no,
+        'productCode': stock.text(item.get('商品コード')),
+        'productName': stock.text(item.get('商品名')),
+        # ＊は中古標記。加工としては扱わない（条件判定側で処理済み）
+        'usedMarker': strip_used_marker(stock.text(item.get('商品名')))[1],
+    }
+    handle = _handle_preview(
+        c, customer.get('id'), product.get('id'), row_no, csv_source=csv_source,
+    )
     if selected_handle_id and isinstance(selected_handle_id, int):
         h = c.execute('SELECT id,embroidery,active,customer_id,product_id FROM customer_products WHERE id=?',
                       (selected_handle_id,)).fetchone()
         if h and h['active'] and h['customer_id'] == customer.get('id') and h['product_id'] == product.get('id'):
-            handle = {
-                'action': 'reuse', 'id': h['id'],
-                'embroidery': h['embroidery'],
-                'embroideryLabel': stock.embroidery_label(h['embroidery']),
-                'candidates': [], 'reasons': [],
-            }
+            handle = _reuse_handle(
+                {
+                    'action': 'reuse', 'id': None, 'embroidery': PENDING_EMBROIDERY,
+                    'embroideryLabel': PENDING_EMBROIDERY, 'candidates': [], 'reasons': [],
+                    'pendingEmbroiderySort': True, 'csvSource': csv_source,
+                },
+                h,
+                pending_sort=True,
+            )
     reasons.extend(handle['reasons'])
 
     stock_info = _stock_match(
@@ -649,7 +687,10 @@ def build_preview(c, body):
         '数量は「在庫」列のみ使用します（補正在庫数・購入・出荷は使いません）。',
         '入荷日はCSVに無いため入荷日不明で登録します。架空の日付は作りません。',
         '払出し順はCSV行番号を仮に使います。CSVの並び＝入荷順とは断定しません。',
-        '加工が未整理の取扱は「加工未整理」として区別し、「加工なし」へ自動確定しません。',
+        'CSVに加工欄がありません。既存取扱が「加工なし」1件だけのときはそれを再利用し、'
+        '加工仕様は変更しません。取扱が無いときだけ「加工未整理」を追加します。',
+        '品番・商品名の加工記載（例: 刺繍あり）はそのまま残し、後から整理できます。'
+        '同じ品番でも商品名が違う行は無条件に合算しません。',
         '「＊」は中古標記です（加工と混同しません）。',
         '数量差異は初期状態で非選択です。明示選択したものだけCSV数量へ更新します。',
         '要確認・保留は黙って除外しません。確定時は対象件数と保留件数を明示します。',
@@ -761,13 +802,13 @@ def _ensure_product(c, product_info, supplier_id, csv_name):
 
 
 def _ensure_handle(c, customer_id, product_id, handle_info):
+    """既存取扱IDがあればそのまま返す（加工仕様は変更しない）。なければ加工未整理を追加。"""
     if handle_info.get('id'):
         return handle_info['id'], False
-    emb = PENDING_EMBROIDERY
     saved = stock.ensure_customer_product(c, {
         'customerId': customer_id,
         'productId': product_id,
-        'embroidery': emb,
+        'embroidery': PENDING_EMBROIDERY,
     })
     return saved['id'], not saved.get('already')
 
@@ -921,7 +962,13 @@ def commit_preview(c, body, *, db_path=None):
             if created_shelf:
                 result_counts['shelvesCreated'] += 1
 
-            handle_info = _handle_preview(c, cust_id, pid, row_no)
+            csv_source = {
+                'sourceRowNo': row_no,
+                'productCode': row['csv']['code'],
+                'productName': row['csv']['productName'],
+                'usedMarker': bool(row['csv'].get('usedMarker')),
+            }
+            handle_info = _handle_preview(c, cust_id, pid, row_no, csv_source=csv_source)
             sel = selections.get(str(row_no)) or selections.get(row_no) or {}
             if sel.get('handleId'):
                 handle_info['id'] = sel['handleId']
@@ -946,6 +993,13 @@ def commit_preview(c, body, *, db_path=None):
                 'basis': basis,
             }, ensure_ascii=False, sort_keys=True)
             open_token = 'legacy-csv-' + hashlib.sha256(token_src.encode()).hexdigest()[:40]
+            # 品番・商品名・元行番号を履歴に残し、後から加工整理できるようにする（商品名の加工記載は消さない）
+            note = (
+                f'{LEGACY_IMPORT_NOTE}（CSV {row_no}行目 / 元品番 {row["csv"]["code"]} '
+                f'/ {row["csv"]["productName"]}）'
+            )
+            if handle_info.get('pendingEmbroiderySort'):
+                note += '／加工仕様は後整理（既存取扱の加工は未変更）'
             stock.register_opening(c, {
                 'token': open_token,
                 'customerProductId': cp_id,
@@ -957,7 +1011,7 @@ def commit_preview(c, body, *, db_path=None):
                 'condition': row['condition'],
                 'allowZero': True,
                 'allowNegative': True,
-                'note': f'{LEGACY_IMPORT_NOTE}（CSV {row_no}行目 / 元品番 {row["csv"]["code"]} / {row["csv"]["productName"]}）',
+                'note': note,
                 '_actor': body.get('_actor'),
                 'actorName': actor,
                 'lines': [{'size': row['product']['size'], 'qty': row['qty'], 'unitCost': row['unitCost']}],

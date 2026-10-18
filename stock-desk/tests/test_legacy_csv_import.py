@@ -349,6 +349,239 @@ class LegacyCsvUiSourceTest(unittest.TestCase):
         self.assertIn('PAGE_SIZE=80', js)
 
 
+class LegacyCsvEmbroideryMatchTest(unittest.TestCase):
+    """加工未整理 vs 加工なし不一致の修正: 5ケース＋商品名差の追跡。"""
+
+    def _seed_pair(self, c, *, customer, supplier, code, name, embroidery):
+        cu = stock.save_customer(c, {'name': customer, 'active': True})
+        su = stock.save_supplier(c, {'name': supplier, 'active': True})
+        pr = stock.save_product(c, {
+            'code': code, 'name': name, 'color': '', 'supplierId': su['id'],
+            'active': True, 'sizes': ['M'],
+            'links': [{
+                'customerId': cu['id'], 'embroidery': embroidery,
+                'isStandard': False, 'active': True,
+            }],
+        })
+        stock.ensure_unconfirmed_site(c)
+        c.commit()
+        return cu, su, pr
+
+    def test_1_reuse_existing_no_embroidery(self):
+        """既存が加工なし1件 → 再利用。加工未整理を重複作成せず要確認にしない。"""
+        folder, path, c = newdb()
+        try:
+            cu, su, pr = self._seed_pair(
+                c, customer='病院A', supplier='仕入A', code='A-1', name='白衣',
+                embroidery='',  # 加工なし
+            )
+            cp_before = list(c.execute(
+                'SELECT id,embroidery FROM customer_products WHERE customer_id=? AND product_id=?',
+                (cu['id'], pr['id']),
+            ))
+            self.assertEqual(len(cp_before), 1)
+            self.assertEqual(cp_before[0]['embroidery'], '')
+            text = tiny_csv_rows([
+                '新品,仕入A,病院A,白衣,A-1,M,1000,0,0,0,0,4,0,1,,,0',
+            ])
+            preview = legacy_csv_import.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case1.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認', '_canWrite': True,
+            })
+            row = preview['rows'][0]
+            self.assertEqual(row['status'], 'reuse')
+            self.assertEqual(row['handle']['action'], 'reuse')
+            self.assertEqual(row['handle']['id'], cp_before[0]['id'])
+            self.assertEqual(row['handle']['embroideryLabel'], '加工なし')
+            self.assertTrue(row['handle']['pendingEmbroiderySort'])
+            self.assertFalse(any('加工なし' in x and '別に' in x for x in row['reasons']))
+            # 確定しても取扱は増えない・加工キーは空のまま
+            result = legacy_csv_import.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case1.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '検証'},
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'], 'token': 'emb-case1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['counts']['handlesCreated'], 0)
+            cps = list(c.execute(
+                'SELECT id,embroidery FROM customer_products WHERE customer_id=? AND product_id=?',
+                (cu['id'], pr['id']),
+            ))
+            self.assertEqual(len(cps), 1)
+            self.assertEqual(cps[0]['embroidery'], '')
+            note = c.execute("SELECT note FROM moves WHERE kind='opening'").fetchone()['note']
+            self.assertIn('A-1', note)
+            self.assertIn('白衣', note)
+            self.assertIn(str(row['rowNo']), note)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_2_create_when_no_handle(self):
+        """取扱なし → 加工未整理を追加。商品名・品番は残す。"""
+        folder, path, c = newdb()
+        try:
+            stock.save_customer(c, {'name': '病院B', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入B', 'active': True})
+            stock.save_product(c, {
+                'code': 'B-1', 'name': '白衣（DHC刺繍あり）', 'color': '',
+                'supplierId': su['id'], 'active': True, 'sizes': ['M'], 'links': [],
+            })
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入B,病院B,白衣（DHC刺繍あり）,B-1,M,1200,0,0,0,0,2,0,1,,,0',
+            ])
+            preview = legacy_csv_import.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case2.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認', '_canWrite': True,
+            })
+            row = preview['rows'][0]
+            self.assertEqual(row['status'], 'create')
+            self.assertEqual(row['handle']['action'], 'create')
+            self.assertEqual(row['handle']['embroidery'], '加工未整理')
+            self.assertEqual(row['csv']['productName'], '白衣（DHC刺繍あり）')
+            legacy_csv_import.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case2.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '検証'},
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'], 'token': 'emb-case2',
+            }, db_path=str(path))
+            c.commit()
+            emb = c.execute('SELECT embroidery FROM customer_products').fetchone()['embroidery']
+            self.assertEqual(emb, '加工未整理')
+            prod = c.execute('SELECT name FROM products WHERE code=?', ('B-1',)).fetchone()
+            self.assertEqual(prod['name'], '白衣（DHC刺繍あり）')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_3_reuse_existing_pending_embroidery(self):
+        """既存が加工未整理 → 再取込で重複追加しない。"""
+        folder, path, c = newdb()
+        try:
+            cu, su, pr = self._seed_pair(
+                c, customer='病院C', supplier='仕入C', code='C-1', name='スクラブ',
+                embroidery='加工未整理',
+            )
+            cp_id = pr['links'][0]['id']
+            text = tiny_csv_rows([
+                '新品,仕入C,病院C,スクラブ,C-1,M,900,0,0,0,0,1,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'case3.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            self.assertEqual(preview['rows'][0]['handle']['id'], cp_id)
+            self.assertEqual(preview['rows'][0]['status'], 'reuse')
+            legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'], 'token': 'emb-case3',
+            }, db_path=str(path))
+            c.commit()
+            n = c.execute(
+                'SELECT COUNT(*) AS n FROM customer_products WHERE customer_id=? AND product_id=?',
+                (cu['id'], pr['id']),
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_4_multiple_embroidery_needs_review(self):
+        """加工仕様が複数 → 候補選択を残し理由を具体表示。"""
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '病院D', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入D', 'active': True})
+            pr = stock.save_product(c, {
+                'code': 'D-1', 'name': 'パンツ', 'color': '', 'supplierId': su['id'],
+                'active': True, 'sizes': ['L'],
+                'links': [
+                    {'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True},
+                    {'customerId': cu['id'], 'embroidery': '左胸ネーム', 'isStandard': False, 'active': True},
+                ],
+            })
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入D,病院D,パンツ,D-1,L,1100,0,0,0,0,3,0,1,,,0',
+            ])
+            preview = legacy_csv_import.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case4.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認', '_canWrite': True,
+            })
+            row = preview['rows'][0]
+            self.assertEqual(row['status'], 'needs_review')
+            self.assertEqual(row['handle']['action'], 'review')
+            self.assertEqual(len(row['handle']['candidates']), 2)
+            reason = ' '.join(row['reasons'])
+            self.assertIn('加工なし', reason)
+            self.assertIn('左胸ネーム', reason)
+            self.assertIn('複数', reason)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_5_same_code_different_embroidery_in_name_not_merged(self):
+        """同じ品番で加工記載が異なる商品名は無条件合算しない。"""
+        folder, path, c = newdb()
+        try:
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入E,病院E,白衣,E-1,M,1000,0,0,0,0,1,0,1,,,0',
+                '新品,仕入E,病院E,白衣（DHC刺繍あり）,E-1,M,1000,0,0,0,0,2,0,1,,,0',
+            ])
+            preview = legacy_csv_import.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case5.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認', '_canWrite': True,
+            })
+            # 商品名が違うので CSV 重複キーにはならない
+            self.assertEqual(preview['countsRaw'].get('hold', 0), 0)
+            names = {r['csv']['productName'] for r in preview['rows']}
+            self.assertEqual(names, {'白衣', '白衣（DHC刺繍あり）'})
+            for r in preview['rows']:
+                self.assertEqual(r['csv']['productName'], r['handle']['csvSource']['productName'])
+                self.assertEqual(r['rowNo'], r['handle']['csvSource']['sourceRowNo'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_single_specific_embroidery_still_review(self):
+        """具体加工が1件だけのときもCSV加工欄なしでは自動確定しない。"""
+        folder, path, c = newdb()
+        try:
+            self._seed_pair(
+                c, customer='病院F', supplier='仕入F', code='F-1', name='帽',
+                embroidery='左胸ネーム',
+            )
+            text = tiny_csv_rows([
+                '新品,仕入F,病院F,帽,F-1,M,500,0,0,0,0,1,0,1,,,0',
+            ])
+            preview = legacy_csv_import.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'case-spec.csv',
+                'basisDate': '2026-10-17', 'defaultSiteName': '未確認', '_canWrite': True,
+            })
+            row = preview['rows'][0]
+            self.assertEqual(row['status'], 'needs_review')
+            self.assertIn('左胸ネーム', ' '.join(row['reasons']))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_star_not_treated_as_embroidery(self):
+        name, star = legacy_csv_import.strip_used_marker('＊白衣（刺繍あり）')
+        self.assertTrue(star)
+        self.assertEqual(name, '白衣（刺繍あり）')
+
+
 class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
     def test_sample_preview_counts_on_empty_db(self):
         if not SAMPLE_CSV.is_file():

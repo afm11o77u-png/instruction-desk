@@ -114,7 +114,14 @@
     lines.push(`顧客: ${csv.customer||''}`)
     lines.push(`品番: ${csv.code||''}`)
     lines.push(`商品名: ${csv.productName||''}`)
-    lines.push(`加工: ${(r.handle&&r.handle.embroideryLabel)||'加工未整理'}`)
+    const h=r.handle||{}
+    let embLine=`加工: ${h.embroideryLabel||'加工未整理'}`
+    if(h.pendingEmbroiderySort){
+      embLine+=h.action==='reuse'
+        ? '（CSV加工欄なし・整理待ち。既存取扱を再利用・加工仕様は未変更）'
+        : '（CSV加工欄なし・整理待ち）'
+    }
+    lines.push(embLine)
     lines.push(`サイズ: ${csv.size||''}`)
     lines.push(`新古: ${r.conditionLabel||''}`)
     lines.push(`場所: ${[csv.site||'（空→'+lc.defaultSiteName+'）',csv.shelf||'（棚空可）'].join(' / ')}`)
@@ -159,7 +166,11 @@
       const placePlain=[csv.site||'（空→'+lc.defaultSiteName+'）',csv.shelf||'（棚空可）'].join(' / ')
       const reasonPlain=(r.reasons||[]).join('\n')
       const detailPlain=[diff,reasonPlain].filter(Boolean).join('\n')
-      const handleLabel=(r.handle&&r.handle.embroideryLabel)||'加工未整理'
+      const h=r.handle||{}
+      let handleLabel=h.embroideryLabel||'加工未整理'
+      if(h.pendingEmbroiderySort&&h.action==='reuse'&&handleLabel==='加工なし'){
+        handleLabel='加工なし（整理待ち・既存再利用）'
+      }
       return `<tr class="legacy-status-${esc(r.status)}">
         <td class="lc-row">${r.rowNo}</td>
         <td class="lc-status">${esc(r.statusLabel)}</td>
