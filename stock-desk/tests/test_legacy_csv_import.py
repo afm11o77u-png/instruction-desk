@@ -721,6 +721,275 @@ class LegacyCsvBlankSkuTest(unittest.TestCase):
         ))
 
 
+class LegacyCsvCustomOrderTest(unittest.TestCase):
+    """品番「別注」の重複許可・顧客×商品名照合・対応記録。"""
+
+    def test_is_custom_order_code_exact_only(self):
+        self.assertTrue(legacy_csv_import.is_custom_order_code('別注'))
+        self.assertTrue(legacy_csv_import.is_custom_order_code(' 別注 '))
+        self.assertFalse(legacy_csv_import.is_custom_order_code('別注(SD5000AM-5U)'))
+        self.assertFalse(legacy_csv_import.is_custom_order_code('BE-EMPCAP-GR 別注'))
+        self.assertFalse(legacy_csv_import.is_custom_order_code(''))
+
+    def test_separate_by_customer_and_full_name(self):
+        folder, path, c = newdb()
+        try:
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入A,顧客A,白衣（青・胸に社名刺繍）,別注,M,1000,0,0,0,0,2,0,1,,,0',
+                '新品,仕入A,顧客B,白衣（青・胸に社名刺繍）,別注,M,1000,0,0,0,0,3,0,1,,,0',
+                '新品,仕入A,顧客A,白衣（赤・袖ロゴ）,別注,M,1000,0,0,0,0,1,0,1,,,0',
+                '新品,仕入A,顧客A,白衣（青・胸に社名刺繍）,別注,L,1000,0,0,0,0,4,0,1,,,0',
+                '新品,仕入B,顧客A,白衣（青・胸に社名刺繍）,別注,M,1500,0,0,0,0,1,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'bechu.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '別注検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            for r in preview['rows']:
+                self.assertEqual(r['status'], 'create')
+                self.assertTrue(r['product']['customOrder'])
+                self.assertEqual(r['product']['category'], '制服')
+                self.assertEqual(r['csv']['productName'], r['product']['name'])
+            result = legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'bechu-sep-01',
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['committedRowCount'], 5)
+            products = list(c.execute(
+                "SELECT id,name,category,supplier_id FROM products WHERE code='別注' ORDER BY id"
+            ))
+            # 顧客違い・括弧内差で分離。サイズ違いは同一商品。仕入先差だけでは増やさない。
+            self.assertEqual(len(products), 3)
+            self.assertTrue(all(p['category'] == '制服' for p in products))
+            cust_a = c.execute("SELECT id FROM customers WHERE name='顧客A'").fetchone()['id']
+            blue_a = c.execute(
+                '''SELECT p.id,p.supplier_id FROM products p
+                   JOIN customer_products cp ON cp.product_id=p.id
+                   WHERE p.code='別注' AND p.name=? AND cp.customer_id=?''',
+                ('白衣（青・胸に社名刺繍）', cust_a),
+            ).fetchone()
+            self.assertIsNotNone(blue_a)
+            sizes = {
+                r['label'] for r in c.execute(
+                    'SELECT label FROM product_sizes WHERE product_id=?', (blue_a['id'],)
+                )
+            }
+            self.assertEqual(sizes, {'M', 'L'})
+            # 単価違いも商品を増やさずロットで区別
+            lots = list(c.execute(
+                '''SELECT l.unit_cost,l.qty_remaining,l.size_label FROM lots l
+                   JOIN customer_products cp ON cp.id=l.customer_product_id
+                   WHERE cp.product_id=? ORDER BY l.unit_cost,l.size_label''',
+                (blue_a['id'],),
+            ))
+            costs = {(l['size_label'], l['unit_cost'], l['qty_remaining']) for l in lots}
+            self.assertIn(('M', 1000, 2), costs)
+            self.assertIn(('M', 1500, 1), costs)
+            self.assertIn(('L', 1000, 4), costs)
+            # 既存通常仕入先を仕入先差で上書きしない（先に作った仕入Aのまま）
+            su_a = c.execute("SELECT id FROM suppliers WHERE name='仕入A'").fetchone()['id']
+            self.assertEqual(blue_a['supplier_id'], su_a)
+            # 対応記録
+            maps = c.execute('SELECT COUNT(*) AS n FROM legacy_csv_row_maps').fetchone()['n']
+            self.assertEqual(maps, 5)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_reuse_existing_and_not_assign_other_customer(self):
+        folder, path, c = newdb()
+        try:
+            cu_a = stock.save_customer(c, {'name': '病院X', 'active': True})
+            cu_b = stock.save_customer(c, {'name': '病院Y', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入X', 'active': True})
+            pr = stock.save_product(c, {
+                'code': '別注', 'name': 'エプロン（緑）', 'color': '',
+                'category': '制服', 'supplierId': su['id'], 'active': True, 'sizes': ['M'],
+                'links': [{
+                    'customerId': cu_a['id'], 'embroidery': '加工未整理',
+                    'isStandard': False, 'active': True,
+                }],
+            })
+            # 顧客対応のない同名別注（勝手に割り当てない）
+            stock.save_product(c, {
+                'code': '別注', 'name': 'エプロン（緑）', 'color': '緑',
+                'category': '制服', 'supplierId': su['id'], 'active': True, 'sizes': ['M'],
+                'links': [],
+            })
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入X,病院X,エプロン（緑）,別注,M,900,0,0,0,0,5,0,1,,,0',
+                '新品,仕入X,病院Y,エプロン（緑）,別注,M,900,0,0,0,0,2,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'reuse.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '別注検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            row_x = next(r for r in preview['rows'] if r['csv']['customer'] == '病院X')
+            row_y = next(r for r in preview['rows'] if r['csv']['customer'] == '病院Y')
+            self.assertEqual(row_x['product']['action'], 'reuse')
+            self.assertEqual(row_x['product']['id'], pr['id'])
+            self.assertEqual(row_y['product']['action'], 'create')
+            legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'bechu-reuse',
+            }, db_path=str(path))
+            c.commit()
+            # 病院Y用に新規別注が追加（孤児の同名は使わない）
+            y_products = list(c.execute(
+                '''SELECT p.id FROM products p
+                   JOIN customer_products cp ON cp.product_id=p.id
+                   WHERE p.code='別注' AND p.name=? AND cp.customer_id=?''',
+                ('エプロン（緑）', cu_b['id']),
+            ))
+            self.assertEqual(len(y_products), 1)
+            self.assertNotEqual(y_products[0]['id'], pr['id'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_multiple_candidates_need_review(self):
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '病院Z', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入Z', 'active': True})
+            for color in ('', '青'):
+                stock.save_product(c, {
+                    'code': '別注', 'name': '帽子（紺）', 'color': color,
+                    'category': '制服', 'supplierId': su['id'], 'active': True, 'sizes': ['F'],
+                    'links': [{
+                        'customerId': cu['id'], 'embroidery': '加工未整理',
+                        'isStandard': False, 'active': True,
+                    }],
+                })
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入Z,病院Z,帽子（紺）,別注,F,700,0,0,0,0,1,0,1,,,0',
+            ])
+            preview = legacy_csv_import.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'cand.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認', '_canWrite': True,
+            })
+            row = preview['rows'][0]
+            self.assertEqual(row['status'], 'needs_review')
+            self.assertEqual(len(row['product']['candidates']), 2)
+            self.assertTrue(any(c.get('customerNames') for c in row['product']['candidates']))
+            reason = ' '.join(row['reasons'])
+            self.assertIn('別注', reason)
+            self.assertIn('複数', reason)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_reimport_uses_map_after_name_change(self):
+        folder, path, c = newdb()
+        try:
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入M,顧客M,白衣（青・胸に社名刺繍）,別注,M,1000,0,0,0,0,2,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'map.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '別注検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'bechu-map-1',
+            }, db_path=str(path))
+            c.commit()
+            prod = c.execute("SELECT id,name FROM products WHERE code='別注'").fetchone()
+            self.assertEqual(prod['name'], '白衣（青・胸に社名刺繍）')
+            # WEB側で商品名を整理しても対応記録から参照
+            c.execute(
+                "UPDATE products SET name=?, color=?, updated_at=? WHERE id=?",
+                ('白衣', '青', stock.stamp(), prod['id']),
+            )
+            c.commit()
+            preview2 = legacy_csv_import.build_preview(c, body)
+            row = preview2['rows'][0]
+            self.assertTrue(row['product'].get('fromImportMap'))
+            self.assertEqual(row['product']['id'], prod['id'])
+            self.assertIn(row['status'], ('unchanged', 'reuse', 'qty_diff'))
+            n = c.execute("SELECT COUNT(*) AS n FROM products WHERE code='別注'").fetchone()['n']
+            self.assertEqual(n, 1)
+            # 再取込で在庫を増やさない
+            lots_before = c.execute('SELECT COUNT(*) AS n FROM lots').fetchone()['n']
+            with self.assertRaises(ValueError):
+                # 変更なし／既存在庫のため空確定は不可（本登録しない）
+                legacy_csv_import.commit_preview(c, {
+                    **body,
+                    'previewFingerprint': preview2['previewFingerprint'],
+                    'previewAt': preview2['previewAt'],
+                    'token': 'bechu-map-2',
+                }, db_path=str(path))
+            self.assertEqual(
+                c.execute('SELECT COUNT(*) AS n FROM lots').fetchone()['n'], lots_before,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_normal_code_and_blank_sku_unchanged(self):
+        folder, path, c = newdb()
+        try:
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入N,顧客N,通常スクラブ,N-100,M,800,0,0,0,0,1,0,1,,,0',
+                '新品,仕入N,顧客N,部品A,,-,100,0,0,0,0,1,0,1,,,0',
+                '新品,仕入N,グローヴ㈱,衣装係ストレートパンツ,,L,2000,0,0,0,0,1,0,1,,,0',
+                '新品,仕入N,顧客N,別注っぽい名前,別注(48-880),M,500,0,0,0,0,1,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'normal.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '別注検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            normal = next(r for r in preview['rows'] if r['csv']['code'] == 'N-100')
+            parts = next(r for r in preview['rows'] if r['csv']['productName'] == '部品A')
+            uniform = next(r for r in preview['rows'] if 'ストレートパンツ' in r['csv']['productName'])
+            other = next(r for r in preview['rows'] if r['csv']['code'] == '別注(48-880)')
+            self.assertFalse(normal['product'].get('customOrder'))
+            self.assertEqual(parts['product']['category'], '部品・資材')
+            self.assertEqual(uniform['product']['category'], '制服')
+            self.assertFalse(other['product'].get('customOrder'))
+            legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'bechu-normal',
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(
+                c.execute("SELECT COUNT(*) AS n FROM products WHERE code='別注'").fetchone()['n'], 0,
+            )
+            self.assertEqual(
+                c.execute("SELECT COUNT(*) AS n FROM products WHERE code='別注(48-880)'").fetchone()['n'], 1,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
     def test_sample_preview_counts_on_empty_db(self):
         if not SAMPLE_CSV.is_file():
@@ -755,6 +1024,12 @@ class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
                 and r['status'] == 'create'
             ]
             self.assertGreaterEqual(len(uniforms), 5)
+            custom = [
+                r for r in preview['rows']
+                if r.get('product', {}).get('customOrder')
+            ]
+            self.assertGreater(len(custom), 0)
+            self.assertTrue(all(r['product'].get('category') == '制服' for r in custom if r['status'] == 'create'))
             # 補正在庫は使っていないことの確認用メタ
             self.assertIn('補正在庫数', preview['ignoredColumns'])
             # 結果をファイルに残す用のサマリ
@@ -764,6 +1039,7 @@ class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
                 'counts': preview['counts'],
                 'encoding': preview['encoding'],
                 'excludedCount': preview.get('excludedCount'),
+                'customOrderRows': len(custom),
             }
             print('SAMPLE_PREVIEW', self._preview_summary)
         finally:
