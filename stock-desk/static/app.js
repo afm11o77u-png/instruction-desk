@@ -610,14 +610,18 @@ function products(){
   const supplierId=resolveProductSupplierFilter()
   const rows=state.data.products.filter(r=>{
     if(supplierId&&String(r.supplierId)!==String(supplierId))return false
-    const text=`${r.code}${r.name}${r.color}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
+    const text=`${r.code}${r.codeDisplay||''}${r.name}${r.color}${r.category||''}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return (state.stopped||r.active)&&text.includes(state.q)
   })
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先の商品だけを一覧できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。品番なしも商品IDで区別します。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先の商品だけを一覧できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
+    ${rows.map(r=>{
+      const codeShow=esc(r.codeDisplay||r.code||'品番なし')
+      const cat=r.category?` / ${esc(r.category)}`:''
+      return `<tr><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${cat}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${stockOpenBtn(r.id)}</td></tr>`
+    }).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.code)} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.codeDisplay||r.code||'品番なし')} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${r.category?`　${esc(r.category)}`:''}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows,'商品',productForm,body=>api('/api/products',body),'products')
   const supplierSelect=$('#productSupplier')
   if(supplierSelect)supplierSelect.onchange=()=>{
@@ -808,10 +812,13 @@ function collectLocationShelves(){
   return shelves
 }
 function productForm(r){
-  r=r||{sizes:[],links:[],active:true}
+  r=r||{sizes:[],links:[],active:true,category:''}
   const suppliers=['<option value="">未設定</option>'].concat(state.data.suppliers.filter(s=>s.active||s.id===r.supplierId).map(s=>`<option value="${s.id}" ${s.id===r.supplierId?'selected':''}>${esc(s.name)}</option>`)).join('')
   const scheme=detectSizeScheme(r.sizes)
-  return `<div class="grid">${field('code','品番',r.code,true)}${field('name','商品名',r.name,true)}${field('color','色',r.color)}<label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
+  const cat=r.category||''
+  const catOpts=[['','（なし）'],['制服','制服'],['部品・資材','部品・資材']].map(([v,l])=>`<option value="${esc(v)}" ${cat===v?'selected':''}>${esc(l)}</option>`).join('')
+  return `<div class="grid">${field('code','品番（空欄可）',r.code,false)}${field('name','商品名',r.name,true)}${field('color','色',r.color)}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
+    <p class="excelhint">品番を空にすると品番なし商品です。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
       <span class="size-scheme-label">サイズ表記</span>
       <div class="seg" id="sizeScheme">
@@ -964,7 +971,8 @@ function readForm(row){
     }
     return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false}
   })
-  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links,active}
+  const categoryEl=$('#category')
+  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links,active}
 }
 function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,value,required=true}){
   const req=required?'（必須）':''
@@ -1523,7 +1531,7 @@ function mountOpeningRegisterForm(){
     try{
       const p=selected.product
       const keep=(state.opening.lines?.rows||[]).concat([{size,qty:'',unitCost:''}])
-      await api('/api/products',{id:p.id,code:p.code,name:p.name,color:p.color,supplierId:p.supplierId,active:p.active,sizes:p.sizes.concat(size),links:p.links})
+      await api('/api/products',{id:p.id,code:p.code,name:p.name,color:p.color,category:p.category||'',supplierId:p.supplierId,active:p.active,sizes:p.sizes.concat(size),links:p.links})
       if(!inbound)state.opening.basis=$('#basisDate',root)?$('#basisDate',root).value:state.opening.basis
       if($('#receivedOn',root))state.opening.receivedOn=$('#receivedOn',root).value
       if($('#inboundNote',root))state.opening.note=$('#inboundNote',root).value

@@ -1,6 +1,7 @@
 /* 旧システムCSV一括取込（登録・設定） */
 (function(){
-  const STATUS_ORDER=['create','reuse','qty_diff','unchanged','needs_review','hold']
+  const STATUS_ORDER=['create','reuse','qty_diff','unchanged','needs_review','hold','excluded']
+  const STATUS_LABELS={create:'新規追加',reuse:'既存使用',qty_diff:'数量差異',unchanged:'変更なし',needs_review:'要確認',hold:'保留',excluded:'対象外'}
   const PAGE_SIZE=80
 
   function ensureState(){
@@ -9,7 +10,7 @@
         file:null,fileB64:'',fileName:'',history:null,preview:null,result:null,
         basisDate:'',defaultSiteName:'未確認',
         q:'',statusFilter:'',page:1,
-        selections:{}, // rowNo -> {updateQty, productId, handleId}
+        selections:{}, // rowNo -> {updateQty, productId, handleId, category}
         commitToken:'',busy:false
       }
     }
@@ -52,7 +53,7 @@
       if(st&&r.status!==st)return false
       if(!q)return true
       const csv=r.csv||{}
-      const hay=[csv.customer,csv.code,csv.productName,r.statusLabel,(r.reasons||[]).join(' ')].join(' ').toLowerCase()
+      const hay=[csv.customer,csv.code,csv.codeDisplay,csv.category,csv.productName,r.statusLabel,(r.reasons||[]).join(' ')].join(' ').toLowerCase()
       return hay.includes(q)
     })
   }
@@ -60,7 +61,7 @@
   function countLine(counts){
     if(!counts)return ''
     return STATUS_ORDER.map(k=>{
-      const label={create:'新規追加',reuse:'既存使用',qty_diff:'数量差異',unchanged:'変更なし',needs_review:'要確認',hold:'保留'}[k]
+      const label=STATUS_LABELS[k]
       const n=counts[k]||0
       return `${label} ${n}件`
     }).join('　')
@@ -78,13 +79,23 @@
     return `<div class="list-note"><strong>前回取込情報（参考・自動再反映なし）</strong><ul class="legacy-csv-history">${items}</ul></div>`
   }
 
+  function categorySelect(lc,r){
+    const sel=lc.selections[String(r.rowNo)]||{}
+    const current=sel.category!=null?sel.category:(r.product&&r.product.category)||(r.csv&&r.csv.category)||''
+    const opts=(lc.preview&&lc.preview.categoryOptions)||['','制服','部品・資材']
+    const labels={'':'（なし）','制服':'制服','部品・資材':'部品・資材'}
+    const need=!!(r.product&&r.product.categoryConflict)||r.status==='needs_review'
+    if(!(r.product&&r.product.blankSku)&&!need)return esc(current||'')
+    return `<select data-cat-row="${r.rowNo}" ${lc.busy?'disabled':''}>${opts.map(v=>`<option value="${esc(v)}" ${current===v?'selected':''}>${esc(labels[v]!=null?labels[v]:v||'（なし）')}</option>`).join('')}</select>`
+  }
+
   function rowChecks(lc,r){
     const sel=lc.selections[String(r.rowNo)]||{}
     if(r.status==='qty_diff'){
       return `<label class="check"><input type="checkbox" data-qty-row="${r.rowNo}" ${sel.updateQty?'checked':''}>CSV数量へ更新</label>`
     }
     if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length){
-      const opts=r.product.candidates.map(c=>`<option value="${c.id}" ${Number(sel.productId)===Number(c.id)?'selected':''}>${esc(c.code)} / ${esc(c.name)} / ${esc(c.supplierName||'')}</option>`).join('')
+      const opts=r.product.candidates.map(c=>`<option value="${c.id}" ${Number(sel.productId)===Number(c.id)?'selected':''}>${esc(c.codeDisplay||c.code||'品番なし')} / ${esc(c.name)} / ${esc(c.supplierName||'')} / ${esc(c.category||'')}</option>`).join('')
       return `<label>商品候補<select data-prod-row="${r.rowNo}"><option value="">選択…</option>${opts}</select></label>`
     }
     if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
@@ -112,7 +123,11 @@
     lines.push(`行: ${r.rowNo}`)
     lines.push(`判定: ${r.statusLabel||''}`)
     lines.push(`顧客: ${csv.customer||''}`)
-    lines.push(`品番: ${csv.code||''}`)
+    lines.push(`品番: ${csv.code||''}（表示: ${csv.codeDisplay||csv.code||''}）`)
+    lines.push(`カテゴリ: ${csv.category||(r.product&&r.product.category)||''}`)
+    if(r.product&&r.product.proposedCategory&&r.product.proposedCategory!==(r.product.category||'')){
+      lines.push(`カテゴリ提案: ${r.product.proposedCategory}`)
+    }
     lines.push(`商品名: ${csv.productName||''}`)
     const h=r.handle||{}
     let embLine=`加工: ${h.embroideryLabel||'加工未整理'}`
@@ -131,8 +146,11 @@
     if(r.status==='qty_diff'){
       lines.push(`数量差異: ${num(stock.currentQty)} → ${num(r.qty)}（差 ${num((r.qty||0)-(stock.currentQty||0))}）`)
     }
+    if(r.status==='excluded'){
+      lines.push('対象外（登録しません・エラーではありません）')
+    }
     if((r.reasons||[]).length){
-      lines.push('確認理由:')
+      lines.push(r.status==='excluded'?'対象外の理由:':'確認理由:')
       ;(r.reasons||[]).forEach(x=>lines.push('・'+x))
     }
     return lines.join('\n')
@@ -153,6 +171,13 @@
     if(close)close.onclick=()=>dlg.close()
   }
 
+  function excludedSummary(lc){
+    const p=lc.preview
+    if(!p||!(p.excludedCount>0))return ''
+    const rows=(p.excludedRows||[]).slice(0,20).map(r=>`<li>${esc(String(r.rowNo))}行: ${esc(r.reason||'')}</li>`).join('')
+    return `<div class="notice"><p><strong>対象外 ${num(p.excludedCount)} 件</strong>（エラーではありません。登録しません）</p><ul>${rows}</ul>${p.excludedRowsTruncated?'<p>…ほか省略</p>':''}</div>`
+  }
+
   function renderTable(lc){
     const all=filteredRows(lc)
     const pages=Math.max(1,Math.ceil(all.length/PAGE_SIZE))
@@ -171,11 +196,13 @@
       if(h.pendingEmbroiderySort&&h.action==='reuse'&&handleLabel==='加工なし'){
         handleLabel='加工なし（整理待ち・既存再利用）'
       }
+      const codeShow=csv.codeDisplay||csv.code||''
       return `<tr class="legacy-status-${esc(r.status)}">
         <td class="lc-row">${r.rowNo}</td>
         <td class="lc-status">${esc(r.statusLabel)}</td>
         <td class="lc-customer">${clipCell(csv.customer,r.rowNo,'customer')}</td>
-        <td class="lc-code">${esc(csv.code)}</td>
+        <td class="lc-code">${esc(codeShow)}</td>
+        <td class="lc-category">${categorySelect(lc,r)}</td>
         <td class="lc-product">${clipCell(csv.productName,r.rowNo,'product')}</td>
         <td class="lc-handle">${clipCell(handleLabel,r.rowNo,'handle')}</td>
         <td class="lc-size">${esc(csv.size)}</td>
@@ -191,9 +218,9 @@
     // class にフォーム用 .grid を付けない（display:grid で見出しとデータが左右に分かれる）
     return `<div class="legacy-csv-table-wrap"><table class="legacy-csv-table">
       <thead><tr>
-        <th class="lc-row">行</th><th class="lc-status">判定</th><th class="lc-customer">顧客</th><th class="lc-code">品番</th><th class="lc-product">商品名</th><th class="lc-handle">加工</th><th class="lc-size">サイズ</th><th class="lc-cond">新古</th><th class="lc-place">場所</th><th class="lc-cost">単価</th><th class="lc-qty">現在</th><th class="lc-csvqty">CSV</th><th class="lc-detail">内容</th><th class="lc-actions">操作</th>
+        <th class="lc-row">行</th><th class="lc-status">判定</th><th class="lc-customer">顧客</th><th class="lc-code">品番</th><th class="lc-category">カテゴリ</th><th class="lc-product">商品名</th><th class="lc-handle">加工</th><th class="lc-size">サイズ</th><th class="lc-cond">新古</th><th class="lc-place">場所</th><th class="lc-cost">単価</th><th class="lc-qty">現在</th><th class="lc-csvqty">CSV</th><th class="lc-detail">内容</th><th class="lc-actions">操作</th>
       </tr></thead>
-      <tbody>${body||'<tr><td colspan="14">該当行がありません。</td></tr>'}</tbody>
+      <tbody>${body||'<tr><td colspan="15">該当行がありません。</td></tr>'}</tbody>
     </table></div>
     <div class="bar legacy-csv-pager">
       <span>${num(all.length)}件中 ${num(Math.min(all.length,start+1))}–${num(Math.min(all.length,start+slice.length))} を表示</span>
@@ -207,10 +234,12 @@
     if(!lc.result)return ''
     const r=lc.result
     const c=r.counts||{}
+    const excl=(r.excludedRows||[]).slice(0,15).map(x=>`<li>${esc(String(x.rowNo))}行: ${esc(x.reason||'')}</li>`).join('')
     return `<div class="notice legacy-csv-result">
       <p><strong>登録・更新結果</strong>${r.already?'（再送信のため追加変更なし）':''}</p>
-      <p>確定 ${num(r.committedRowCount||0)} 件　／　保留・要確認 ${num(r.heldRowCount||0)} 件　／　記録者 ${esc(r.actorName||'未記録')}</p>
+      <p>確定 ${num(r.committedRowCount||0)} 件　／　保留・要確認 ${num(r.heldRowCount||0)} 件　／　対象外 ${num(r.excludedRowCount||0)} 件　／　記録者 ${esc(r.actorName||'未記録')}</p>
       <p>在庫新規 ${num(c.openingCreated||0)}　数量更新 ${num(c.qtyUpdated||0)}　顧客追加 ${num(c.customersCreated||0)}　仕入先追加 ${num(c.suppliersCreated||0)}　商品追加 ${num(c.productsCreated||0)}　取扱追加 ${num(c.handlesCreated||0)}</p>
+      ${excl?`<p><strong>対象外の例</strong></p><ul>${excl}</ul>`:''}
       ${(r.notices||[]).map(n=>`<p>${esc(n)}</p>`).join('')}
       ${(r.failures||[]).length?`<p>失敗: ${(r.failures||[]).map(f=>esc(f.rowNo+'行: '+f.reason)).join(' / ')}</p>`:''}
     </div>`
@@ -220,8 +249,8 @@
     const lc=ensureState()
     const canWrite=stockCanWrite()
     const preview=lc.preview
-    const statusOpts=['','create','reuse','qty_diff','unchanged','needs_review','hold'].map(v=>{
-      const label=v?({create:'新規追加',reuse:'既存使用',qty_diff:'数量差異',unchanged:'変更なし',needs_review:'要確認',hold:'保留'}[v]):'すべて'
+    const statusOpts=['',...STATUS_ORDER].map(v=>{
+      const label=v?(STATUS_LABELS[v]):'すべて'
       return `<option value="${v}" ${lc.statusFilter===v?'selected':''}>${label}</option>`
     }).join('')
 
@@ -233,17 +262,18 @@
         <button type="button" class="primary" id="legacyCsvPreview" ${(!lc.fileB64||lc.busy||!canWrite)?'disabled':''}>取込内容を確認</button>
         <button type="button" class="primary" id="legacyCsvCommit" ${(!preview||lc.busy||!canWrite)?'disabled':''}>登録・更新</button>
       </div>
-      <p class="excelhint">旧システムの在庫CSVを選びます。商品台帳.xlsxの同時取込はありません。確認の段階ではデータベースを変えません。数量は「在庫」列のみ使い、補正・購入・出荷からは再計算しません。入荷日は不明のまま（架空日付なし）。払出し順はCSV行番号を仮に使います（並び＝入荷順とは断定しません）。</p>
+      <p class="excelhint">旧システムの在庫CSVを選びます。商品台帳.xlsxの同時取込はありません。確認の段階ではデータベースを変えません。数量は「在庫」列のみ使い、補正・購入・出荷からは再計算しません。生地の数量・単価は再換算しません。品番空欄は制服例外以外を部品・資材として取り込み、内部品番は空のままです。入荷日は不明のまま（架空日付なし）。払出し順はCSV行番号を仮に使います（並び＝入荷順とは断定しません）。</p>
       ${!canWrite?'<p class="notice">閲覧専用のため、確認・登録はできません。</p>':''}
       ${lc.fileName?`<p class="excelhint">選択中: ${esc(lc.fileName)}（${num(lc.file?lc.file.size:lc.preview&&lc.preview.fileSize||0)} バイト）</p>`:''}
       ${historyBlock(lc)}
       ${preview?`<div class="notice"><p><strong>プレビュー件数</strong>　全 ${num(preview.rowCount)} 行　／　${esc(countLine(preview.countsRaw))}</p>
         <p>文字コード ${esc(preview.encoding)}　／　指紋 ${esc(preview.previewFingerprint)}</p>
-        ${(preview.notices||[]).slice(0,4).map(n=>`<p>${esc(n)}</p>`).join('')}</div>
+        ${(preview.notices||[]).slice(0,5).map(n=>`<p>${esc(n)}</p>`).join('')}</div>
+        ${excludedSummary(lc)}
         <div class="bar">
-          <label>検索<input id="legacyCsvQ" value="${esc(lc.q)}" placeholder="顧客・品番・商品名"></label>
+          <label>検索<input id="legacyCsvQ" value="${esc(lc.q)}" placeholder="顧客・品番・商品名・カテゴリ"></label>
           <label>判定<select id="legacyCsvStatus">${statusOpts}</select></label>
-          <span class="opening-list-count">要確認・保留は一覧に残します（黙って除外しません）</span>
+          <span class="opening-list-count">要確認・保留は一覧に残します（黙って除外しません）。対象外はエラーではありません。</span>
         </div>
         ${renderTable(lc)}`:''}
       ${resultBlock(lc)}
@@ -301,6 +331,12 @@
         lc.selections[key]=Object.assign({},lc.selections[key],{handleId:v})
       }
     })
+    document.querySelectorAll('[data-cat-row]').forEach(el=>{
+      el.onchange=()=>{
+        const key=String(el.dataset.catRow)
+        lc.selections[key]=Object.assign({},lc.selections[key],{category:el.value})
+      }
+    })
     document.querySelectorAll('[data-lc-detail]').forEach(el=>{
       el.onclick=()=>openLegacyCsvDetail(lc,el.dataset.lcDetail)
     })
@@ -319,7 +355,7 @@
         lc.preview=await api('/api/legacy-csv/preview',body)
         lc.page=1
         const c=lc.preview.countsRaw||{}
-        toast(`確認しました。新規${c.create||0}／既存使用${c.reuse||0}／数量差異${c.qty_diff||0}／変更なし${c.unchanged||0}／要確認${c.needs_review||0}／保留${c.hold||0}`)
+        toast(`確認しました。新規${c.create||0}／既存使用${c.reuse||0}／数量差異${c.qty_diff||0}／変更なし${c.unchanged||0}／要確認${c.needs_review||0}／保留${c.hold||0}／対象外${c.excluded||0}`)
       }catch(e){toast(e.message||String(e))}
       finally{lc.busy=false;paint()}
     }
@@ -330,8 +366,9 @@
       const c=lc.preview.countsRaw||{}
       const qtySelected=Object.values(lc.selections).filter(s=>s&&s.updateQty).length
       const hold=(c.needs_review||0)+(c.hold||0)
+      const excluded=c.excluded||0
       const targetApprox=(c.create||0)+(c.reuse||0)+qtySelected
-      const msg=`確定見込み 約 ${targetApprox} 件、保留・要確認 ${hold} 件を残します。実行しますか？\n（実行前にバックアップを取ります。エラー時は途中結果を残しません）`
+      const msg=`確定見込み 約 ${targetApprox} 件、保留・要確認 ${hold} 件、対象外 ${excluded} 件を残します。実行しますか？\n（実行前にバックアップを取ります。エラー時は途中結果を残しません。実運用DBへの本登録は別判断です）`
       if(!window.confirm(msg))return
       try{
         lc.busy=true;paint()
@@ -351,7 +388,7 @@
         lc.preview=null
         // 台帳再読込
         state.data=await api('/api/bootstrap')
-        toast(lc.result.already?'再送信のため追加の登録はありませんでした。':`登録・更新しました（確定 ${lc.result.committedRowCount||0} / 保留 ${lc.result.heldRowCount||0}）`)
+        toast(lc.result.already?'再送信のため追加の登録はありませんでした。':`登録・更新しました（確定 ${lc.result.committedRowCount||0} / 保留 ${lc.result.heldRowCount||0} / 対象外 ${lc.result.excludedRowCount||0}）`)
       }catch(e){
         if(e&&e.payload&&e.payload.code==='stale_preview')toast('プレビュー後にデータが変わったため、確認し直してください。')
         else toast(e.message||String(e))

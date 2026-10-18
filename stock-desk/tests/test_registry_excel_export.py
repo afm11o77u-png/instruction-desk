@@ -202,14 +202,16 @@ class RegistryExcelExportTests(unittest.TestCase):
             self.assertNotIn(str(stopped_product['id']), product_ids)
             zero_row = next(r for r in products[1:] if r[0] == str(with_handle['id']))
             self.assertEqual(zero_row[1], '00-ABC')
-            self.assertEqual(zero_row[6], 'S、08')
+            self.assertEqual(zero_row[2], '00-ABC')  # 品番表示
+            self.assertEqual(zero_row[8], 'S、08')  # 登録サイズ
             handle_rows = handles[1:]
             self.assertEqual(len(handle_rows), 2)
-            stopped_handle = next(r for r in handle_rows if r[7] == '旧仕様')
-            self.assertEqual(stopped_handle[9], '停止')
-            self.assertEqual(stopped_handle[8], '')
-            standard = next(r for r in handle_rows if r[7] == '加工なし')
-            self.assertEqual(standard[8], '標準')
+            # 取扱: … 顧客名, 加工仕様, 標準設定, 使用状態
+            stopped_handle = next(r for r in handle_rows if r[9] == '旧仕様')
+            self.assertEqual(stopped_handle[11], '停止')
+            self.assertEqual(stopped_handle[10], '')
+            standard = next(r for r in handle_rows if r[9] == '加工なし')
+            self.assertEqual(standard[10], '標準')
             all_blob, _ = excel_export.export_xlsx(c, {'kind': ['products'], 'scope': ['all']})
             all_products = read_sheet_rows(all_blob, '商品一覧')
             all_ids = {r[0] for r in all_products[1:]}

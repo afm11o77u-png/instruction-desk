@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS products (
   code TEXT NOT NULL,
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '',
   supplier_id INTEGER REFERENCES suppliers(id),
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -192,6 +193,32 @@ def initialize(c):
     ensure_unconfirmed_site(c)
 
 
+# 商品カテゴリ（空欄可。旧CSVの品番なし行で「制服」「部品・資材」を使う）
+CATEGORY_UNIFORM = '制服'
+CATEGORY_PARTS = '部品・資材'
+PRODUCT_CATEGORIES = frozenset({'', CATEGORY_UNIFORM, CATEGORY_PARTS})
+BLANK_SKU_DISPLAY = '品番なし'
+BLANK_SKU_UNIFORM_DISPLAY = '品番なし（要確認）'
+
+
+def normalize_category(value):
+    t = text(value)
+    if t not in PRODUCT_CATEGORIES:
+        raise ValueError('カテゴリは空欄・制服・部品・資材のいずれかです。')
+    return t
+
+
+def product_code_display(code, category=''):
+    """品番の画面表示。空品番は保存せず、表示だけ「品番なし」系にする。"""
+    t = text(code)
+    if t:
+        return t
+    cat = text(category)
+    if cat == CATEGORY_UNIFORM:
+        return BLANK_SKU_UNIFORM_DISPLAY
+    return BLANK_SKU_DISPLAY
+
+
 def needs_migration(c):
     tables = {r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'move_batches' not in tables:
@@ -207,6 +234,10 @@ def needs_migration(c):
     if 'lots' in tables:
         lot_cols = {r['name'] for r in c.execute('PRAGMA table_info(lots)')}
         if 'cost_pending' not in lot_cols:
+            return True
+    if 'products' in tables:
+        product_cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
+        if 'category' not in product_cols:
             return True
     import stock_orders
     return stock_orders.needs_purchase_order_migration(c)
@@ -274,6 +305,10 @@ def migrate_schema(c):
         if 'cost_pending' not in lot_cols:
             # cost_pending=1: 原価未確定（unit_cost の数値を確定原価として使わない）
             c.execute('ALTER TABLE lots ADD COLUMN cost_pending INTEGER NOT NULL DEFAULT 0')
+    if 'products' in tables:
+        product_cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
+        if 'category' not in product_cols:
+            c.execute("ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT ''")
     # Backfill business dates from lot fields only (no invented dates for outbound).
     c.execute(
         '''UPDATE moves SET business_on=(
@@ -575,9 +610,13 @@ def _links(c, body):
 
 
 def save_product(c, body):
-    code = need(body.get('code'), '品番', 40)
+    # 品番は空欄可（品番なし商品）。「品番なし」「品番なし（要確認）」は表示用で、実品番としては保存しない。
+    code = optional(body.get('code'), '品番', 40)
+    if code in (BLANK_SKU_DISPLAY, BLANK_SKU_UNIFORM_DISPLAY):
+        code = ''
     name = need(body.get('name'), '商品名', 80)
     color = optional(body.get('color'), '色', 40)
+    category = normalize_category(body.get('category', ''))
     active = flag(body.get('active', True))
     supplier_id = body.get('supplierId')
     if supplier_id in ('', None):
@@ -591,8 +630,10 @@ def save_product(c, body):
     if pid:
         if not c.execute('SELECT id FROM products WHERE id=?', (pid,)).fetchone():
             raise ValueError('商品が見つかりません。')
-        c.execute('UPDATE products SET code=?,name=?,color=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
-                  (code, name, color, supplier_id, active, t, pid))
+        c.execute(
+            'UPDATE products SET code=?,name=?,color=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
+            (code, name, color, category, supplier_id, active, t, pid),
+        )
         existing = {r['label']: r['id'] for r in c.execute('SELECT id,label FROM product_sizes WHERE product_id=?', (pid,))}
         for label in existing:
             if label not in labels and c.execute(
@@ -627,8 +668,10 @@ def save_product(c, body):
                              VALUES(?,?,?,?,?,?,?)''',
                           (link['customerId'], pid, link['embroidery'], link['isStandard'], link['active'], t, t))
     else:
-        c.execute('INSERT INTO products(code,name,color,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
-                  (code, name, color, supplier_id, active, t, t))
+        c.execute(
+            'INSERT INTO products(code,name,color,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+            (code, name, color, category, supplier_id, active, t, t),
+        )
         pid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         for i, label in enumerate(labels):
             c.execute('INSERT INTO product_sizes(product_id,label,sort_order) VALUES(?,?,?)', (pid, label, i))
@@ -1193,8 +1236,14 @@ def product_row(c, pid):
                           JOIN customers cu ON cu.id=cp.customer_id WHERE cp.product_id=? ORDER BY cp.id''', (pid,)):
         links.append({'id': x['id'], 'customerId': x['customer_id'], 'customerName': x['customer_name'],
                       'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active'])})
-    return {'id': r['id'], 'code': r['code'], 'name': r['name'], 'color': r['color'], 'supplierId': r['supplier_id'],
-            'supplierName': r['supplier_name'] or '', 'active': bool(r['active']), 'sizes': sizes, 'links': links}
+    category = r['category'] if 'category' in r.keys() else ''
+    code = r['code'] or ''
+    return {
+        'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
+        'name': r['name'], 'color': r['color'], 'category': category or '',
+        'supplierId': r['supplier_id'],
+        'supplierName': r['supplier_name'] or '', 'active': bool(r['active']), 'sizes': sizes, 'links': links,
+    }
 
 
 def location_label(c, row):

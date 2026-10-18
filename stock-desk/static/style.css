@@ -426,6 +426,7 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .legacy-csv-table .lc-qty,
 .legacy-csv-table .lc-csvqty{min-width:4rem}
 .legacy-csv-table .lc-code{min-width:6rem;white-space:nowrap}
+.legacy-csv-table .lc-category{min-width:7rem;white-space:nowrap}
 .legacy-csv-table .lc-actions{min-width:8rem}
 /* 読みやすい幅を確保しつつ長文は折り返し */
 .legacy-csv-table .lc-customer{min-width:10rem;max-width:16rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
@@ -438,6 +439,7 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .legacy-csv-table tr.legacy-status-needs_review{background:rgba(180,120,40,.08)}
 .legacy-csv-table tr.legacy-status-hold{background:rgba(80,80,140,.07)}
 .legacy-csv-table tr.legacy-status-qty_diff{background:rgba(40,100,160,.06)}
+.legacy-csv-table tr.legacy-status-excluded{background:rgba(100,100,100,.06);color:#555}
 .legacy-csv-history{margin:6px 0 0;padding-left:1.2em}
 .legacy-csv-pager{justify-content:flex-start}
 .legacy-csv-result{margin:10px 12px}
