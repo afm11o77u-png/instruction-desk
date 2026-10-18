@@ -823,6 +823,11 @@ def _remap_handle_refs(c, *, from_handle_id, to_handle_id):
             'UPDATE legacy_csv_row_maps SET customer_product_id=?, updated_at=? WHERE customer_product_id=?',
             (to_handle_id, stock.stamp(), from_handle_id),
         )
+    if 'product_ledger_row_maps' in tables:
+        c.execute(
+            'UPDATE product_ledger_row_maps SET customer_product_id=?, updated_at=? WHERE customer_product_id=?',
+            (to_handle_id, stock.stamp(), from_handle_id),
+        )
 
 
 def _remap_product_refs(c, *, from_product_id, to_product_id):
@@ -835,6 +840,11 @@ def _remap_product_refs(c, *, from_product_id, to_product_id):
     if 'legacy_csv_row_maps' in tables:
         c.execute(
             'UPDATE legacy_csv_row_maps SET product_id=?, updated_at=? WHERE product_id=?',
+            (to_product_id, stock.stamp(), from_product_id),
+        )
+    if 'product_ledger_row_maps' in tables:
+        c.execute(
+            'UPDATE product_ledger_row_maps SET product_id=?, updated_at=? WHERE product_id=?',
             (to_product_id, stock.stamp(), from_product_id),
         )
     # 連鎖統合: 既にこの商品を指す統合元があれば、最終先を更新

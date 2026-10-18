@@ -16,6 +16,7 @@ WRITE_PATHS = {
     '/api/customer-products',
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/legacy-csv/commit',
+    '/api/product-ledger-csv/commit',
     '/api/products/merge',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
@@ -29,6 +30,9 @@ LARGE_BODY_PATHS = {
     '/api/legacy-csv/preview',
     '/api/legacy-csv/commit',
     '/api/legacy-csv/history',
+    '/api/product-ledger-csv/preview',
+    '/api/product-ledger-csv/commit',
+    '/api/product-ledger-csv/history',
 }
 
 PO_ID_RE = re.compile(r'^/api/purchase-orders/(\d+)$')
@@ -217,6 +221,37 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             return 409, e.payload
         except ValueError as e:
             return 400, {'error': str(e) or '取込を確認してください。'}
+        except sqlite3.IntegrityError:
+            return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
+        return 200, result
+    if path == '/api/product-ledger-csv/preview':
+        import product_ledger_import
+        try:
+            with stock.connect(db_path) as c:
+                result = product_ledger_import.build_preview(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or 'CSVを確認してください。'}
+        return 200, result
+    if path == '/api/product-ledger-csv/history':
+        import product_ledger_import
+        try:
+            with stock.connect(db_path) as c:
+                result = product_ledger_import.file_history(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or 'CSVを確認してください。'}
+        return 200, result
+    if path == '/api/product-ledger-csv/commit':
+        import product_ledger_import
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = product_ledger_import.commit_preview(c, payload, db_path=db_path)
+        except stock.StockConflict as e:
+            return 409, e.payload
+        except ValueError as e:
+            return 400, {'error': str(e) or '取込を確認してください。'}
+        except RuntimeError as e:
+            return 400, {'error': str(e) or '取込を中止しました。'}
         except sqlite3.IntegrityError:
             return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
         return 200, result

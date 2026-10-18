@@ -226,6 +226,49 @@ CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_stock_key
   ON legacy_csv_row_maps(stock_map_key, id DESC);
 CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_file
   ON legacy_csv_row_maps(file_sha256, source_row_no);
+CREATE TABLE IF NOT EXISTS product_ledger_import_runs (
+  id INTEGER PRIMARY KEY,
+  file_sha256 TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_size INTEGER NOT NULL,
+  row_count INTEGER NOT NULL,
+  actor_name TEXT NOT NULL DEFAULT '',
+  preview_at TEXT NOT NULL,
+  preview_fingerprint TEXT NOT NULL DEFAULT '',
+  commit_token TEXT UNIQUE,
+  committed_at TEXT,
+  result_json TEXT NOT NULL DEFAULT '{}',
+  backup_path TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS product_ledger_import_runs_sha
+  ON product_ledger_import_runs(file_sha256, created_at DESC);
+CREATE TABLE IF NOT EXISTS product_ledger_row_maps (
+  id INTEGER PRIMARY KEY,
+  product_map_key TEXT NOT NULL,
+  row_map_key TEXT NOT NULL,
+  match_group_key TEXT NOT NULL DEFAULT '',
+  file_sha256 TEXT NOT NULL DEFAULT '',
+  file_name TEXT NOT NULL DEFAULT '',
+  source_row_no INTEGER,
+  csv_customer TEXT NOT NULL DEFAULT '',
+  csv_supplier TEXT NOT NULL DEFAULT '',
+  csv_product_code TEXT NOT NULL DEFAULT '',
+  csv_product_name TEXT NOT NULL DEFAULT '',
+  csv_size TEXT NOT NULL DEFAULT '',
+  customer_id INTEGER,
+  product_id INTEGER,
+  customer_product_id INTEGER,
+  run_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS product_ledger_row_maps_product_key
+  ON product_ledger_row_maps(product_map_key, id DESC);
+CREATE INDEX IF NOT EXISTS product_ledger_row_maps_row_key
+  ON product_ledger_row_maps(row_map_key, id DESC);
+CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file
+  ON product_ledger_row_maps(file_sha256, source_row_no);
 """
 
 
@@ -310,6 +353,8 @@ def needs_migration(c):
     if 'product_suppliers' not in tables or 'product_merges' not in tables:
         return True
     if 'legacy_csv_row_maps' not in tables:
+        return True
+    if 'product_ledger_row_maps' not in tables or 'product_ledger_import_runs' not in tables:
         return True
     import stock_orders
     import stock_product_merge
@@ -397,6 +442,57 @@ def migrate_schema(c):
     c.execute(
         'CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_file '
         'ON legacy_csv_row_maps(file_sha256, source_row_no)'
+    )
+    c.execute('''CREATE TABLE IF NOT EXISTS product_ledger_import_runs (
+      id INTEGER PRIMARY KEY,
+      file_sha256 TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_size INTEGER NOT NULL,
+      row_count INTEGER NOT NULL,
+      actor_name TEXT NOT NULL DEFAULT '',
+      preview_at TEXT NOT NULL,
+      preview_fingerprint TEXT NOT NULL DEFAULT '',
+      commit_token TEXT UNIQUE,
+      committed_at TEXT,
+      result_json TEXT NOT NULL DEFAULT '{}',
+      backup_path TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )''')
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_ledger_import_runs_sha '
+        'ON product_ledger_import_runs(file_sha256, created_at DESC)'
+    )
+    c.execute('''CREATE TABLE IF NOT EXISTS product_ledger_row_maps (
+      id INTEGER PRIMARY KEY,
+      product_map_key TEXT NOT NULL,
+      row_map_key TEXT NOT NULL,
+      match_group_key TEXT NOT NULL DEFAULT '',
+      file_sha256 TEXT NOT NULL DEFAULT '',
+      file_name TEXT NOT NULL DEFAULT '',
+      source_row_no INTEGER,
+      csv_customer TEXT NOT NULL DEFAULT '',
+      csv_supplier TEXT NOT NULL DEFAULT '',
+      csv_product_code TEXT NOT NULL DEFAULT '',
+      csv_product_name TEXT NOT NULL DEFAULT '',
+      csv_size TEXT NOT NULL DEFAULT '',
+      customer_id INTEGER,
+      product_id INTEGER,
+      customer_product_id INTEGER,
+      run_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )''')
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_product_key '
+        'ON product_ledger_row_maps(product_map_key, id DESC)'
+    )
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_row_key '
+        'ON product_ledger_row_maps(row_map_key, id DESC)'
+    )
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file '
+        'ON product_ledger_row_maps(file_sha256, source_row_no)'
     )
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
     if 'move_batch_id' not in move_cols:
