@@ -43,6 +43,8 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
         rule = css[rule_start:css.index('}', rule_start) + 1]
         for needle in ('all:unset', 'min-height:0', 'border:0', 'padding:0', 'background:transparent', '-webkit-appearance:radio', 'width:11px', 'height:11px'):
             self.assertIn(needle, rule)
+        # ラベル文字だけ大きく、部品サイズは据え置き。
+        self.assertIn('#labeldesk .labelticketkind label{display:inline-flex;flex-direction:row;gap:4px;align-items:center;font-size:16px;', css)
 
     def test_app_reuses_shared_pages_and_preview(self):
         self.assertIn('deskBoxTicketPages', APP)
