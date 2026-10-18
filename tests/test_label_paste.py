@@ -29,14 +29,22 @@ class LabelPasteAssetsTest(unittest.TestCase):
         ):
             self.assertIn(needle, SHEET)
 
-    def test_hint_mentions_excel_column_order(self):
-        self.assertIn('顧客名／管理番号／部署名／氏名／受付内容', INDEX)
-        self.assertIn('Excelの表', INDEX)
-        self.assertIn('id="labelpastenote"', INDEX)
+    def test_batch_toolbar_and_add_row_layout(self):
+        # 説明文は撤去。一括設定・印刷・クリアは表の直前、用紙追加は表の下。
+        self.assertNotIn('id="labelpastenote"', INDEX)
+        self.assertNotIn('Excelの表', INDEX)
+        self.assertNotIn('上から順に、左上・右上・左下・右下へ印刷されます', INDEX)
+        self.assertIn('id="labeltoolbar"', INDEX)
         self.assertIn('受付内容を一括設定', INDEX)
         self.assertIn('id="labelrequestbulk"', INDEX)
         self.assertIn('id="labelrequestapply"', INDEX)
         self.assertIn('全行に適用', INDEX)
+        self.assertIn('id="labelprint"', INDEX)
+        self.assertIn('id="labelreset"', INDEX)
+        self.assertIn('class="labeladdrow"', INDEX)
+        self.assertIn('id="labeladd"', INDEX)
+        self.assertLess(INDEX.index('id="labeltoolbar"'), INDEX.index('class="labeltablewrap"'))
+        self.assertLess(INDEX.index('class="labeltablewrap"'), INDEX.index('class="labeladdrow"'))
         self.assertNotIn('受付内容の一括変更ができます。', INDEX)
         self.assertNotIn('Excelのように、複数行をコピーして入力欄へ貼り付けできます。', INDEX)
 
