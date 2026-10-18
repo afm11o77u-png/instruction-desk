@@ -30,7 +30,7 @@ class LabelPasteAssetsTest(unittest.TestCase):
             self.assertIn(needle, SHEET)
 
     def test_batch_toolbar_and_add_row_layout(self):
-        # 説明文は撤去。表直前: 一括設定 → 段数（縦） → 印刷／クリア。用紙追加は表の下。
+        # 説明文は撤去。表直前: 段数（縦） → 一括設定 → 印刷／クリア。用紙追加は表の下。
         self.assertNotIn('id="labelpastenote"', INDEX)
         self.assertNotIn('Excelの表', INDEX)
         self.assertNotIn('上から順に、左上・右上・左下・右下へ印刷されます', INDEX)
@@ -49,8 +49,8 @@ class LabelPasteAssetsTest(unittest.TestCase):
         self.assertIn('class="labeladdrow"', INDEX)
         self.assertIn('id="labeladd"', INDEX)
         toolbar = INDEX[INDEX.index('id="labeltoolbar"'):INDEX.index('class="labeltablewrap"')]
-        self.assertLess(toolbar.index('id="labelrequestbatch"'), toolbar.index('id="labelpatternbox"'))
-        self.assertLess(toolbar.index('id="labelpatternbox"'), toolbar.index('labeltoolbar-actions'))
+        self.assertLess(toolbar.index('id="labelpatternbox"'), toolbar.index('id="labelrequestbatch"'))
+        self.assertLess(toolbar.index('id="labelrequestbatch"'), toolbar.index('labeltoolbar-actions'))
         self.assertLess(INDEX.index('id="labeltoolbar"'), INDEX.index('class="labeltablewrap"'))
         self.assertLess(INDEX.index('class="labeltablewrap"'), INDEX.index('class="labeladdrow"'))
         self.assertNotIn('受付内容の一括変更ができます。', INDEX)
