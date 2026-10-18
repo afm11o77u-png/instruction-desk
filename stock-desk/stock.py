@@ -160,6 +160,37 @@ CREATE TABLE IF NOT EXISTS legacy_csv_import_runs (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS legacy_csv_import_runs_sha ON legacy_csv_import_runs(file_sha256, created_at DESC);
+CREATE TABLE IF NOT EXISTS legacy_csv_row_maps (
+  id INTEGER PRIMARY KEY,
+  product_map_key TEXT NOT NULL,
+  stock_map_key TEXT NOT NULL,
+  file_sha256 TEXT NOT NULL DEFAULT '',
+  file_name TEXT NOT NULL DEFAULT '',
+  source_row_no INTEGER,
+  csv_customer TEXT NOT NULL DEFAULT '',
+  csv_supplier TEXT NOT NULL DEFAULT '',
+  csv_product_code TEXT NOT NULL DEFAULT '',
+  csv_product_name TEXT NOT NULL DEFAULT '',
+  csv_size TEXT NOT NULL DEFAULT '',
+  csv_condition TEXT NOT NULL DEFAULT '',
+  csv_unit_cost TEXT NOT NULL DEFAULT '',
+  csv_site TEXT NOT NULL DEFAULT '',
+  csv_shelf TEXT NOT NULL DEFAULT '',
+  customer_id INTEGER,
+  product_id INTEGER,
+  customer_product_id INTEGER,
+  opening_token TEXT NOT NULL DEFAULT '',
+  lot_ids_json TEXT NOT NULL DEFAULT '[]',
+  run_id INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_product_key
+  ON legacy_csv_row_maps(product_map_key, id DESC);
+CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_stock_key
+  ON legacy_csv_row_maps(stock_map_key, id DESC);
+CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_file
+  ON legacy_csv_row_maps(file_sha256, source_row_no);
 """
 
 
@@ -239,6 +270,8 @@ def needs_migration(c):
         product_cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
         if 'category' not in product_cols:
             return True
+    if 'legacy_csv_row_maps' not in tables:
+        return True
     import stock_orders
     return stock_orders.needs_purchase_order_migration(c)
 
@@ -285,6 +318,43 @@ def migrate_schema(c):
       created_at TEXT NOT NULL
     )''')
     c.execute('CREATE INDEX IF NOT EXISTS legacy_csv_import_runs_sha ON legacy_csv_import_runs(file_sha256, created_at DESC)')
+    c.execute('''CREATE TABLE IF NOT EXISTS legacy_csv_row_maps (
+      id INTEGER PRIMARY KEY,
+      product_map_key TEXT NOT NULL,
+      stock_map_key TEXT NOT NULL,
+      file_sha256 TEXT NOT NULL DEFAULT '',
+      file_name TEXT NOT NULL DEFAULT '',
+      source_row_no INTEGER,
+      csv_customer TEXT NOT NULL DEFAULT '',
+      csv_supplier TEXT NOT NULL DEFAULT '',
+      csv_product_code TEXT NOT NULL DEFAULT '',
+      csv_product_name TEXT NOT NULL DEFAULT '',
+      csv_size TEXT NOT NULL DEFAULT '',
+      csv_condition TEXT NOT NULL DEFAULT '',
+      csv_unit_cost TEXT NOT NULL DEFAULT '',
+      csv_site TEXT NOT NULL DEFAULT '',
+      csv_shelf TEXT NOT NULL DEFAULT '',
+      customer_id INTEGER,
+      product_id INTEGER,
+      customer_product_id INTEGER,
+      opening_token TEXT NOT NULL DEFAULT '',
+      lot_ids_json TEXT NOT NULL DEFAULT '[]',
+      run_id INTEGER,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )''')
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_product_key '
+        'ON legacy_csv_row_maps(product_map_key, id DESC)'
+    )
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_stock_key '
+        'ON legacy_csv_row_maps(stock_map_key, id DESC)'
+    )
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS legacy_csv_row_maps_file '
+        'ON legacy_csv_row_maps(file_sha256, source_row_no)'
+    )
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
     if 'move_batch_id' not in move_cols:
         c.execute('ALTER TABLE moves ADD COLUMN move_batch_id INTEGER REFERENCES move_batches(id)')

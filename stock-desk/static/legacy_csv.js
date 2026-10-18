@@ -95,7 +95,21 @@
       return `<label class="check"><input type="checkbox" data-qty-row="${r.rowNo}" ${sel.updateQty?'checked':''}>CSV数量へ更新</label>`
     }
     if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length){
-      const opts=r.product.candidates.map(c=>`<option value="${c.id}" ${Number(sel.productId)===Number(c.id)?'selected':''}>${esc(c.codeDisplay||c.code||'品番なし')} / ${esc(c.name)} / ${esc(c.supplierName||'')} / ${esc(c.category||'')}</option>`).join('')
+      const opts=r.product.candidates.map(c=>{
+        const cust=(c.customerNames&&c.customerNames.length)?c.customerNames.join('、'):''
+        const emb=(c.embroideries&&c.embroideries.length)?c.embroideries.join('、'):''
+        const bits=[
+          `ID ${c.id}`,
+          c.codeDisplay||c.code||'品番なし',
+          cust?`顧客 ${cust}`:'',
+          c.name||'',
+          c.color?`色 ${c.color}`:'色（空）',
+          emb?`加工 ${emb}`:'',
+          c.supplierName||'',
+          c.category||'',
+        ].filter(Boolean)
+        return `<option value="${c.id}" ${Number(sel.productId)===Number(c.id)?'selected':''}>${esc(bits.join(' / '))}</option>`
+      }).join('')
       return `<label>商品候補<select data-prod-row="${r.rowNo}"><option value="">選択…</option>${opts}</select></label>`
     }
     if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
@@ -262,7 +276,7 @@
         <button type="button" class="primary" id="legacyCsvPreview" ${(!lc.fileB64||lc.busy||!canWrite)?'disabled':''}>取込内容を確認</button>
         <button type="button" class="primary" id="legacyCsvCommit" ${(!preview||lc.busy||!canWrite)?'disabled':''}>登録・更新</button>
       </div>
-      <p class="excelhint">旧システムの在庫CSVを選びます。商品台帳.xlsxの同時取込はありません。確認の段階ではデータベースを変えません。数量は「在庫」列のみ使い、補正・購入・出荷からは再計算しません。生地の数量・単価は再換算しません。品番空欄は制服例外以外を部品・資材として取り込み、内部品番は空のままです。入荷日は不明のまま（架空日付なし）。払出し順はCSV行番号を仮に使います（並び＝入荷順とは断定しません）。</p>
+      <p class="excelhint">旧システムの在庫CSVを選びます。商品台帳.xlsxの同時取込はありません。確認の段階ではデータベースを変えません。数量は「在庫」列のみ使い、補正・購入・出荷からは再計算しません。生地の数量・単価は再換算しません。品番空欄は制服例外以外を部品・資材として取り込み、内部品番は空のままです。品番「別注」は制服として複数登録でき、照合は顧客×商品名全文です（色・加工の自動分解はしません）。入荷日は不明のまま（架空日付なし）。払出し順はCSV行番号を仮に使います（並び＝入荷順とは断定しません）。</p>
       ${!canWrite?'<p class="notice">閲覧専用のため、確認・登録はできません。</p>':''}
       ${lc.fileName?`<p class="excelhint">選択中: ${esc(lc.fileName)}（${num(lc.file?lc.file.size:lc.preview&&lc.preview.fileSize||0)} バイト）</p>`:''}
       ${historyBlock(lc)}
