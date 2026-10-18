@@ -192,13 +192,14 @@ def _products(c, args):
     for r in c.execute('SELECT id FROM products ORDER BY id'):
         item = stock.product_row(c, r['id'])
         if scope == SCOPE_FILTERED:
-            if supplier_id is not None and item['supplierId'] != supplier_id:
+            if supplier_id is not None and not stock.product_has_supplier(c, item['id'], supplier_id):
                 continue
             if not include_stopped and not item['active']:
                 continue
+            sub_names = ''.join(s.get('name') or '' for s in (item.get('subSuppliers') or []))
             hay = (
                 f"{item['code']}{item.get('codeDisplay') or ''}{item['name']}"
-                f"{item['color']}{item.get('category') or ''}{item['supplierName']}"
+                f"{item['color']}{item.get('category') or ''}{item['supplierName']}{sub_names}"
             )
             hay += ''.join(f"{l['customerName']}{l['embroidery']}" for l in item['links'])
             if not _match_text(hay, q):
@@ -384,15 +385,25 @@ def _sheets_for(kind, scope, payload, when, args):
         ] for r in payload['rows']]
         return [meta, ('仕入先', headers, rows, [10, 22, 28, 16, 12, 10])]
     if kind == 'products':
-        product_headers = ['商品ID', '品番', '品番表示', '商品名', '色', 'カテゴリ', '仕入先ID', '仕入先名', '登録サイズ', '使用状態']
-        product_rows = [[
-            p['id'], p['code'], p.get('codeDisplay') or p['code'] or '品番なし',
-            p['name'], p.get('color') or '', p.get('category') or '',
-            p['supplierId'] if p['supplierId'] is not None else '',
-            p.get('supplierName') or '',
-            '、'.join(p.get('sizes') or []),
-            _active_label(p['active']),
-        ] for p in payload['products']]
+        product_headers = [
+            '商品ID', '品番', '品番表示', '商品名', '色', 'カテゴリ',
+            '通常仕入先ID', '通常仕入先名', 'サブ仕入先ID', 'サブ仕入先名',
+            '登録サイズ', '使用状態', '統合先商品ID',
+        ]
+        product_rows = []
+        for p in payload['products']:
+            subs = p.get('subSuppliers') or []
+            product_rows.append([
+                p['id'], p['code'], p.get('codeDisplay') or p['code'] or '品番なし',
+                p['name'], p.get('color') or '', p.get('category') or '',
+                p['supplierId'] if p['supplierId'] is not None else '',
+                p.get('supplierName') or '',
+                '、'.join(str(s['id']) for s in subs),
+                '、'.join(s.get('name') or '' for s in subs),
+                '、'.join(p.get('sizes') or []),
+                _active_label(p['active']),
+                p.get('mergedIntoId') if p.get('mergedIntoId') is not None else '',
+            ])
         handle_headers = [
             '取扱ID', '商品ID', '品番', '品番表示', '商品名', '色', 'カテゴリ', '顧客ID', '顧客名',
             '加工仕様', '標準設定', '使用状態',
@@ -406,7 +417,7 @@ def _sheets_for(kind, scope, payload, when, args):
         ] for h in payload['handles']]
         return [
             meta,
-            ('商品一覧', product_headers, product_rows, [10, 14, 16, 22, 10, 12, 10, 18, 18, 10]),
+            ('商品一覧', product_headers, product_rows, [10, 14, 16, 22, 10, 12, 10, 18, 12, 18, 18, 10, 12]),
             ('取扱一覧', handle_headers, handle_rows, [10, 10, 14, 16, 22, 10, 12, 10, 18, 16, 10, 10]),
         ]
     if kind == 'locations':

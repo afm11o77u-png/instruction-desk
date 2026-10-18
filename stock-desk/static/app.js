@@ -107,8 +107,21 @@ function saveProductSupplierFilter(value){
   }catch(_){}
 }
 function productSuppliersWithItems(){
-  const ids=new Set(state.data.products.map(p=>p.supplierId).filter(id=>id!=null))
+  const ids=new Set()
+  ;(state.data.products||[]).forEach(p=>{
+    if(p.mergedIntoId)return
+    if(p.supplierId!=null)ids.add(p.supplierId)
+    ;(p.subSupplierIds||[]).forEach(id=>ids.add(id))
+  })
   return state.data.suppliers.filter(s=>ids.has(s.id)).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),'ja'))
+}
+function productMatchesSupplierFilter(p,supplierId){
+  if(!supplierId)return true
+  if(String(p.supplierId)===String(supplierId))return true
+  return (p.subSupplierIds||[]).some(id=>String(id)===String(supplierId))
+}
+function isLiveProduct(p){
+  return p&&!p.mergedIntoId
 }
 function resolveProductSupplierFilter(){
   const stored=state.productSupplierId||loadProductSupplierFilter()
@@ -609,25 +622,47 @@ function suppliers(){
 function products(){
   const supplierId=resolveProductSupplierFilter()
   const rows=state.data.products.filter(r=>{
-    if(supplierId&&String(r.supplierId)!==String(supplierId))return false
-    const text=`${r.code}${r.codeDisplay||''}${r.name}${r.color}${r.category||''}${r.supplierName}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
-    return (state.stopped||r.active)&&text.includes(state.q)
+    if(r.mergedIntoId){
+      if(!state.stopped)return false
+    }else if(!state.stopped&&!r.active){
+      return false
+    }
+    if(supplierId&&!productMatchesSupplierFilter(r,supplierId))return false
+    const subNames=(r.subSuppliers||[]).map(s=>s.name||'').join('')
+    const text=`${r.code}${r.codeDisplay||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
+    return text.includes(state.q)
   })
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。品番なしも商品IDで区別します。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先の商品だけを一覧できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}<div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。品番なしも商品IDで区別します。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}
+    <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
       const codeShow=esc(r.codeDisplay||r.code||'品番なし')
       const cat=r.category?` / ${esc(r.category)}`:''
-      return `<tr><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${cat}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${stockOpenBtn(r.id)}</td></tr>`
+      const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
+      const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
+      const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
+      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}${merged}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}${cat}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
     }).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.codeDisplay||r.code||'品番なし')} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${r.category?`　${esc(r.category)}`:''}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
-  bindList(rows,'商品',productForm,body=>api('/api/products',body),'products')
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.codeDisplay||r.code||'品番なし')} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
+  bindList(rows.filter(r=>!r.mergedIntoId),'商品',productForm,body=>api('/api/products',body),'products')
   const supplierSelect=$('#productSupplier')
   if(supplierSelect)supplierSelect.onchange=()=>{
     state.productSupplierId=supplierSelect.value
     saveProductSupplierFilter(state.productSupplierId)
     paint()
+  }
+  const mergeBtn=$('#productMergeOpen')
+  if(mergeBtn)mergeBtn.onclick=()=>{
+    if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
+    ProductMerge.open({
+      api,
+      toast,
+      boot,
+      stockCanWrite,
+      actorName:(state.data&&state.data.actorName)||'',
+    })
   }
 }
 const SHELF_PREVIEW_LIMIT=3
@@ -812,12 +847,19 @@ function collectLocationShelves(){
   return shelves
 }
 function productForm(r){
-  r=r||{sizes:[],links:[],active:true,category:''}
-  const suppliers=['<option value="">未設定</option>'].concat(state.data.suppliers.filter(s=>s.active||s.id===r.supplierId).map(s=>`<option value="${s.id}" ${s.id===r.supplierId?'selected':''}>${esc(s.name)}</option>`)).join('')
+  r=r||{sizes:[],links:[],active:true,category:'',subSupplierIds:[]}
+  const subIds=new Set((r.subSupplierIds||[]).map(Number))
+  const suppliers=['<option value="">未設定</option>'].concat(state.data.suppliers.filter(s=>s.active||s.id===r.supplierId||subIds.has(s.id)).map(s=>`<option value="${s.id}" ${s.id===r.supplierId?'selected':''}>${esc(s.name)}</option>`)).join('')
+  const subChecks=state.data.suppliers.filter(s=>s.active||subIds.has(s.id)).map(s=>{
+    const disabled=r.supplierId!=null&&Number(s.id)===Number(r.supplierId)
+    const checked=!disabled&&subIds.has(Number(s.id))
+    return `<label class="check"><input type="checkbox" data-sub-supplier="${s.id}" ${checked?'checked':''} ${disabled?'disabled':''}>${esc(s.name)}</label>`
+  }).join('')||'<span class="sub">仕入先台帳が空です</span>'
   const scheme=detectSizeScheme(r.sizes)
   const cat=r.category||''
   const catOpts=[['','（なし）'],['制服','制服'],['部品・資材','部品・資材']].map(([v,l])=>`<option value="${esc(v)}" ${cat===v?'selected':''}>${esc(l)}</option>`).join('')
   return `<div class="grid">${field('code','品番（空欄可）',r.code,false)}${field('name','商品名',r.name,true)}${field('color','色',r.color)}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
+    <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierChecks">${subChecks}</div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
     <p class="excelhint">品番を空にすると品番なし商品です。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
       <span class="size-scheme-label">サイズ表記</span>
@@ -941,6 +983,18 @@ function bindProductEditor(row){
     touchEditDirty()
     draw()
   }
+  const syncSubDisabled=()=>{
+    const primary=$('#supplierId')?Number($('#supplierId').value):null
+    document.querySelectorAll('#subSupplierChecks [data-sub-supplier]').forEach(el=>{
+      const sid=Number(el.dataset.subSupplier)
+      const isPrimary=primary&&sid===primary
+      el.disabled=!!isPrimary
+      if(isPrimary)el.checked=false
+    })
+  }
+  const supplierEl=$('#supplierId')
+  if(supplierEl)supplierEl.onchange=()=>{touchEditDirty();syncSubDisabled()}
+  syncSubDisabled()
   draw()
   $('#dialog')._editor=editor
 }
@@ -964,6 +1018,7 @@ function readForm(row){
   }
   const editor=$('#dialog')._editor
   const supplier=$('#supplierId').value
+  const subSupplierIds=[...document.querySelectorAll('#subSupplierChecks [data-sub-supplier]:checked')].map(el=>Number(el.dataset.subSupplier))
   const links=(editor.links||[]).map(l=>{
     const cid=Number(l.customerId)
     if(!Number.isFinite(cid)||cid<=0||!resolveProductLinkCustomer(state.data.customers,cid)){
@@ -972,7 +1027,7 @@ function readForm(row){
     return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false}
   })
   const categoryEl=$('#category')
-  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,sizes:editor.sizes,links,active}
+  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,subSupplierIds,sizes:editor.sizes,links,active}
 }
 function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,value,required=true}){
   const req=required?'（必須）':''

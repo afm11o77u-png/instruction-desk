@@ -272,7 +272,7 @@ def find_products_by_code(c, code):
     return list(c.execute(
         '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-           WHERE p.code=? ORDER BY p.id''',
+           WHERE p.code=? AND p.merged_into_id IS NULL ORDER BY p.id''',
         (code,),
     ))
 
@@ -291,7 +291,7 @@ def find_custom_order_products_for_customer(c, product_name, *, customer_id=None
            FROM products p
            LEFT JOIN suppliers s ON s.id=p.supplier_id
            JOIN customer_products cp ON cp.product_id=p.id AND cp.active=1
-           WHERE p.code=? AND p.name=? AND cp.customer_id=?
+           WHERE p.code=? AND p.name=? AND cp.customer_id=? AND p.merged_into_id IS NULL
            ORDER BY p.id''',
         (CUSTOM_ORDER_CODE, name, customer_id),
     ))
@@ -305,7 +305,7 @@ def find_custom_order_products_by_name(c, product_name):
     return list(c.execute(
         '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-           WHERE p.code=? AND p.name=? ORDER BY p.id''',
+           WHERE p.code=? AND p.name=? AND p.merged_into_id IS NULL ORDER BY p.id''',
         (CUSTOM_ORDER_CODE, name),
     ))
 
@@ -399,14 +399,16 @@ def find_blank_sku_products(c, name, supplier_id):
         rows = c.execute(
             '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
                FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-               WHERE p.code='' AND p.name=? AND p.supplier_id IS NULL ORDER BY p.id''',
+               WHERE p.code='' AND p.name=? AND p.supplier_id IS NULL
+                 AND p.merged_into_id IS NULL ORDER BY p.id''',
             (name,),
         )
     else:
         rows = c.execute(
             '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
                FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-               WHERE p.code='' AND p.name=? AND p.supplier_id=? ORDER BY p.id''',
+               WHERE p.code='' AND p.name=? AND p.supplier_id=?
+                 AND p.merged_into_id IS NULL ORDER BY p.id''',
             (name, supplier_id),
         )
     return list(rows)
@@ -1012,6 +1014,20 @@ def classify_row(
             # 対応記録の顧客と現在照合顧客が食い違う場合は対応を使わない
             mapped_product_id = None
             mapped_handle_id = None
+        elif mapped_product_id:
+            # 統合済みなら統合先へ辿る（旧仕入先・旧商品名差で統合元を再作成しない）
+            import stock_product_merge
+            live_id = stock_product_merge.resolve_live_product_id(c, mapped_product_id)
+            if live_id and live_id != mapped_product_id:
+                mapped_product_id = live_id
+                # 取扱も統合先側へ移っている想定。旧IDが無効なら後段で再判定。
+                if mapped_handle_id:
+                    h = c.execute(
+                        'SELECT id, product_id, active FROM customer_products WHERE id=?',
+                        (mapped_handle_id,),
+                    ).fetchone()
+                    if not h or h['product_id'] != live_id or not h['active']:
+                        mapped_handle_id = None
 
     product = _product_preview(
         c, item, supplier, row_no,
@@ -1021,6 +1037,8 @@ def classify_row(
         mapped_product_id=mapped_product_id,
     )
     if selected_product_id and isinstance(selected_product_id, int):
+        import stock_product_merge
+        selected_product_id = stock_product_merge.resolve_live_product_id(c, selected_product_id)
         prod = c.execute(
             '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
                FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.id=?''',

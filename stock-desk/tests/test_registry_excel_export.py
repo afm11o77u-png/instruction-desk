@@ -203,7 +203,9 @@ class RegistryExcelExportTests(unittest.TestCase):
             zero_row = next(r for r in products[1:] if r[0] == str(with_handle['id']))
             self.assertEqual(zero_row[1], '00-ABC')
             self.assertEqual(zero_row[2], '00-ABC')  # 品番表示
-            self.assertEqual(zero_row[8], 'S、08')  # 登録サイズ
+            self.assertEqual(zero_row[10], 'S、08')  # 登録サイズ（通常/サブ仕入先列の後）
+            self.assertEqual(products[0][8], 'サブ仕入先ID')
+            self.assertEqual(products[0][12], '統合先商品ID')
             handle_rows = handles[1:]
             self.assertEqual(len(handle_rows), 2)
             # 取扱: … 顧客名, 加工仕様, 標準設定, 使用状態

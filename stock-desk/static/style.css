@@ -445,3 +445,44 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .legacy-csv-result{margin:10px 12px}
 dialog.legacy-csv-detail-dialog{width:min(720px,94vw);max-height:min(92vh,920px)}
 dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780px);overflow:auto;white-space:pre-wrap;word-break:break-word}
+
+/* 重複商品の整理 */
+.merge-entry{align-items:center;gap:12px;flex-wrap:wrap}
+.merge-entry .excelhint{margin:0}
+.badge.merge{background:#e8eef2;color:#345;margin-left:6px;font-size:11px}
+tr.is-merged{opacity:.72}
+fieldset.sub-suppliers,fieldset.merge-subs,fieldset.merge-sizes{
+  border:1px solid #d5ddd8;padding:8px 12px;margin:10px 0;border-radius:4px
+}
+fieldset.sub-suppliers legend,fieldset.merge-subs legend,fieldset.merge-sizes legend{
+  padding:0 6px;font-size:13px
+}
+#subSupplierChecks,.merge-subs,.merge-sizes{display:flex;flex-wrap:wrap;gap:8px 14px}
+dialog .merge-dialog{width:min(1100px,96vw);max-height:min(94vh,980px)}
+dialog .merge-dialog .dialogbody{max-height:min(72vh,820px);overflow:auto}
+.merge-toolbar{display:flex;align-items:center;gap:12px;margin:8px 0 14px;flex-wrap:wrap}
+.merge-group{margin:0 0 18px}
+.merge-group h3{margin:0 0 6px;font-size:16px}
+.merge-cards{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:10px;
+}
+.merge-card{
+  border:1px solid #cfd8d2;
+  border-radius:4px;
+  padding:10px;
+  background:#fafbfa;
+}
+.merge-card.is-selected{border-color:#3a6b55;box-shadow:inset 0 0 0 1px #3a6b55}
+.merge-card.is-keep{background:#f0f6f2}
+.merge-pick,.merge-keep{display:inline-flex;align-items:center;gap:4px;margin:0 10px 8px 0;font-size:13px}
+.merge-dl{margin:0}
+.merge-dl>div{display:grid;grid-template-columns:7em 1fr;gap:4px 8px;margin:0 0 4px;font-size:13px}
+.merge-dl dt{margin:0;color:#5a6a62;font-weight:600}
+.merge-dl dd{margin:0}
+.merge-summary{margin-bottom:12px}
+.merge-moves{padding-left:1.2em}
+.merge-conflict{margin:4px 0 8px;padding:6px 8px;background:#fff8e8;border:1px solid #e6d7a8;border-radius:3px}
+.merge-special-note{color:#5a4a20}
+.merge-edit{display:block;margin-top:4px}

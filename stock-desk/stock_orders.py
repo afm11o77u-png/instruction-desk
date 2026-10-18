@@ -228,7 +228,7 @@ def _normalize_lines(c, body, customer_id, supplier_id):
             raise ValueError('使用中の顧客・商品・取扱を選んでください。')
         if cp['customer_id'] != customer_id:
             raise ValueError('発注の対象顧客と、明細の取扱顧客が一致しません。')
-        if cp['supplier_id'] != supplier_id:
+        if not stock.product_has_supplier(c, cp['product_id'], supplier_id):
             raise ValueError('選択した仕入先の商品だけを発注できます（商品マスタの通常仕入先は変更しません）。')
         sizes = item.get('sizes') or item.get('qtyBySize') or {}
         size_rows = []
@@ -290,9 +290,16 @@ def product_candidates(c, args=None):
            JOIN customers cu ON cu.id=cp.customer_id
            LEFT JOIN suppliers s ON s.id=p.supplier_id
            WHERE cp.customer_id=? AND cp.active=1 AND p.active=1 AND cu.active=1
-             AND p.supplier_id=?
+             AND p.merged_into_id IS NULL
+             AND (
+               p.supplier_id=?
+               OR EXISTS (
+                 SELECT 1 FROM product_suppliers ps
+                 WHERE ps.product_id=p.id AND ps.supplier_id=?
+               )
+             )
            ORDER BY p.code, p.id, cp.id''',
-        (customer_id, supplier_id),
+        (customer_id, supplier_id, supplier_id),
     ):
         sizes = [
             x['label']
