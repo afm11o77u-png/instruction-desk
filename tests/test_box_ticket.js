@@ -11,6 +11,8 @@ const {
   manualBoxTicketIsPrintOnly,
   manualBoxTicketMutatesOrders,
   activeBoxTicketShortages,
+  boxTicketOrderDateLabel,
+  boxTicketToday,
 } = require(path.join(__dirname, '../box_ticket.js'))
 
 assert.ok(BOX_TICKET_CSS.includes('A4 landscape'))
@@ -104,23 +106,30 @@ assert.ok(longNames[0].includes('超長い商品名帽子'))
 assert.ok(longNames[0].includes('不足 2 枚'))
 assert.ok(longNames[0].includes('不足 3 枚'))
 
-// Repair ticket: empty shortages → 不足なし（修理待ち）
+const fixedNow = new Date(2026, 9, 18, 12, 0, 0)
+assert.strictEqual(boxTicketToday(fixedNow), '2026-10-18')
+assert.strictEqual(boxTicketOrderDateLabel(fixedNow), '2026-10-18 発注')
+
+// Repair ticket: empty shortages → 不足なし（修理待ち）; number slot is 日付＋発注
 const repair = buildManualBoxTicketOrder({
   kind: 'repair',
   customer: 'あおば病院',
   employee: '山田太郎',
   number: 'SI-000100',
+  now: fixedNow,
   request: '消耗・破損交換',
   markShipDate: '2026-10-20',
   shortages: [{ name: '無視される', qty: 2 }],
 })
 assert.strictEqual(repair.printOnly, true)
+assert.strictEqual(repair.number, '2026-10-18 発注')
 assert.deepStrictEqual(repair.shortages, [])
 const repairPages = boxTicketPages(repair)
 assert.strictEqual(repairPages.length, 1)
 assert.ok(repairPages[0].includes('あおば病院'))
 assert.ok(repairPages[0].includes('山田太郎'))
-assert.ok(repairPages[0].includes('SI-000100'))
+assert.ok(repairPages[0].includes('2026-10-18 発注'))
+assert.ok(!repairPages[0].includes('SI-000100'))
 assert.ok(repairPages[0].includes('消耗・破損交換'))
 assert.ok(repairPages[0].includes('2026-10-20'))
 assert.ok(repairPages[0].includes('不足なし（修理待ち）'))
@@ -131,7 +140,7 @@ const shortage = buildManualBoxTicketOrder({
   kind: 'shortage',
   customer: 'かしわ食品',
   employee: '佐藤花子',
-  number: 'SI-000200',
+  now: fixedNow,
   request: '追加・補充',
   markShipDate: '2026-11-01',
   shortages: [
@@ -143,11 +152,13 @@ const shortage = buildManualBoxTicketOrder({
     { name: '入荷済み扱い', qty: 5, supply: '入荷済み' },
   ],
 })
+assert.strictEqual(shortage.number, '2026-10-18 発注')
 assert.strictEqual(activeBoxTicketShortages(shortage).length, 4)
 const shortagePages = boxTicketPages(shortage)
 assert.strictEqual(shortagePages.length, 2)
 assert.ok(shortagePages[0].includes('シャツ / A1 / M'))
 assert.ok(shortagePages[0].includes('不足 2 枚'))
+assert.ok(shortagePages[0].includes('2026-10-18 発注'))
 assert.ok(shortagePages[0].includes('1/2'))
 assert.ok(shortagePages[1].includes('靴 / C3 / 26'))
 assert.ok(shortagePages[1].includes('2/2'))
@@ -157,15 +168,25 @@ assert.ok(!shortagePages.join('').includes('入荷済み扱い'))
 const ok = validateManualBoxTicketOrder(shortage)
 assert.strictEqual(ok.ok, true)
 
-const badRepair = validateManualBoxTicketOrder(buildManualBoxTicketOrder({ kind: 'repair', customer: '', employee: 'a', number: '1' }))
+const badRepair = validateManualBoxTicketOrder(buildManualBoxTicketOrder({ kind: 'repair', customer: '', employee: 'a' }))
 assert.strictEqual(badRepair.ok, false)
+
+const noNumberNeeded = validateManualBoxTicketOrder(
+  buildManualBoxTicketOrder({
+    kind: 'repair',
+    customer: '客',
+    employee: '名',
+    now: fixedNow,
+  })
+)
+assert.strictEqual(noNumberNeeded.ok, true)
+assert.strictEqual(noNumberNeeded.order.number, '2026-10-18 発注')
 
 const badShortage = validateManualBoxTicketOrder(
   buildManualBoxTicketOrder({
     kind: 'shortage',
     customer: '客',
     employee: '名',
-    number: 'SI-1',
     shortages: [],
   })
 )
