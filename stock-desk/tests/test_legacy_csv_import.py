@@ -74,7 +74,7 @@ class LegacyCsvPreviewCommitTest(unittest.TestCase):
             text = tiny_csv_rows([
                 '新品,仕入A,顧客A,スクラブ,SC-1,M,1000,0,0,0,0,3,0,1,,,0',
                 '中古,仕入A,顧客A,＊スクラブ,SC-1,M,0,0,0,0,0,1,0,1,,,0',
-                '新品,仕入A,顧客A,スクラブ,,M,1000,0,0,0,0,2,0,1,,,0',  # 品番空→要確認
+                '新品,仕入A,顧客A,スクラブ,,M,1000,0,0,0,0,2,0,1,,,0',  # 品番空→部品・資材として新規
             ])
             body = {
                 'file': csv_b64_from_text(text),
@@ -89,9 +89,12 @@ class LegacyCsvPreviewCommitTest(unittest.TestCase):
             after = list(c.execute('SELECT name FROM customers'))
             self.assertEqual(before, after)
             self.assertEqual(c.execute('SELECT COUNT(*) AS n FROM lots').fetchone()['n'], 0)
-            self.assertEqual(preview['countsRaw']['create'], 2)
-            self.assertEqual(preview['countsRaw']['needs_review'], 1)
+            self.assertEqual(preview['countsRaw']['create'], 3)
+            self.assertEqual(preview['countsRaw'].get('needs_review', 0), 0)
             self.assertEqual(preview['rowCount'], 3)
+            blank = next(r for r in preview['rows'] if r['csv']['code'] == '')
+            self.assertEqual(blank['product']['category'], '部品・資材')
+            self.assertEqual(blank['csv']['codeDisplay'], '品番なし')
             # 0・マイナスも対象（別ケース）
             text2 = tiny_csv_rows([
                 '新品,仕入B,顧客B,パンツ,P-1,L,2000,0,0,0,0,0,0,1,,,0',
@@ -582,6 +585,142 @@ class LegacyCsvEmbroideryMatchTest(unittest.TestCase):
         self.assertEqual(name, '白衣（刺繍あり）')
 
 
+class LegacyCsvBlankSkuTest(unittest.TestCase):
+    def test_uniform_exception_and_parts_and_excluded(self):
+        folder, path, c = newdb()
+        try:
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入U,グローヴ㈱,チェック柄ベスト(ムーリベッキ),,S,8500,0,0,0,0,13,0,1,,,0',
+                '新品,仕入U,グローヴ㈱,チェック柄ベスト(ムーリベッキ),,M,8500,0,0,0,0,5,0,1,,,0',
+                '新品,仕入P,顧客P,丈直し,,-,1000,0,0,0,0,1,0,1,,,0',
+                '新品,住商モンブラン㈱,コープフーズ【釧路】,,,M,1750,0,0,0,0,0,0,1,,,0',
+                '新品,仕入F,㈱ホクショク,NPC白生地,,5M,2900,0,0,0,0,1,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'blank.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            self.assertEqual(preview['countsRaw'].get('excluded', 0), 1)
+            self.assertEqual(preview['excludedCount'], 1)
+            self.assertEqual(preview['excludedRows'][0]['rowNo'], 5)
+            uniforms = [r for r in preview['rows'] if r['csv']['productName'] == 'チェック柄ベスト(ムーリベッキ)']
+            self.assertEqual(len(uniforms), 2)
+            for r in uniforms:
+                self.assertEqual(r['status'], 'create')
+                self.assertEqual(r['product']['category'], '制服')
+                self.assertEqual(r['csv']['codeDisplay'], '品番なし（要確認）')
+                self.assertEqual(r['product']['code'], '')
+            parts = next(r for r in preview['rows'] if r['csv']['productName'] == '丈直し')
+            self.assertEqual(parts['product']['category'], '部品・資材')
+            self.assertEqual(parts['csv']['codeDisplay'], '品番なし')
+            fabric = next(r for r in preview['rows'] if r['csv']['productName'] == 'NPC白生地')
+            self.assertEqual(fabric['qty'], 1)
+            self.assertEqual(fabric['unitCost'], 2900)
+            self.assertEqual(fabric['csv']['size'], '5M')
+
+            result = legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'blank-sku-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['excludedRowCount'], 1)
+            # サイズ違いは同一商品
+            vest = c.execute(
+                "SELECT id,code,category FROM products WHERE name=? AND code=''",
+                ('チェック柄ベスト(ムーリベッキ)',),
+            ).fetchall()
+            self.assertEqual(len(vest), 1)
+            self.assertEqual(vest[0]['category'], '制服')
+            sizes = {r['label'] for r in c.execute(
+                'SELECT label FROM product_sizes WHERE product_id=?', (vest[0]['id'],)
+            )}
+            self.assertEqual(sizes, {'S', 'M'})
+            # 対象外行だけで顧客を作らない
+            coop = c.execute(
+                "SELECT id FROM customers WHERE name=?", ('コープフーズ【釧路】',)
+            ).fetchone()
+            self.assertIsNone(coop)
+            # 生地数量・単価そのまま
+            lot = c.execute(
+                '''SELECT l.qty_remaining,l.unit_cost,l.size_label FROM lots l
+                   JOIN customer_products cp ON cp.id=l.customer_product_id
+                   JOIN products p ON p.id=cp.product_id
+                   WHERE p.name=?''',
+                ('NPC白生地',),
+            ).fetchone()
+            self.assertEqual(lot['qty_remaining'], 1)
+            self.assertEqual(lot['unit_cost'], 2900)
+            self.assertEqual(lot['size_label'], '5M')
+
+            # 再取込プレビュー: 同一商品を増やさない（変更なし／既存使用）
+            preview2 = legacy_csv_import.build_preview(c, body)
+            vest_rows = [
+                r for r in preview2['rows']
+                if r['csv']['productName'] == 'チェック柄ベスト(ムーリベッキ)'
+            ]
+            self.assertTrue(all(r['status'] in ('unchanged', 'reuse', 'qty_diff') for r in vest_rows))
+            self.assertEqual(
+                c.execute(
+                    "SELECT COUNT(*) AS n FROM products WHERE name=? AND code=''",
+                    ('チェック柄ベスト(ムーリベッキ)',),
+                ).fetchone()['n'],
+                1,
+            )
+            # 同一 token 連打は already（二重登録しない）
+            again = legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'blank-sku-1',
+            }, db_path=str(path))
+            self.assertTrue(again.get('already'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_blank_sku_not_merged_by_empty_code_alone(self):
+        folder, path, c = newdb()
+        try:
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            text = tiny_csv_rows([
+                '新品,仕入1,顧客1,システム代,,-,500,0,0,0,0,1,0,1,,,0',
+                '新品,仕入2,顧客2,ポケット取付,,-,800,0,0,0,0,1,0,1,,,0',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'sep.csv',
+                'basisDate': '2026-10-18', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': '検証'},
+            }
+            preview = legacy_csv_import.build_preview(c, body)
+            legacy_csv_import.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'blank-sep',
+            }, db_path=str(path))
+            c.commit()
+            n = c.execute("SELECT COUNT(*) AS n FROM products WHERE code=''").fetchone()['n']
+            self.assertEqual(n, 2)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_similar_uniform_name_not_auto_extended(self):
+        self.assertFalse(legacy_csv_import.is_uniform_blank_sku_exception(
+            'グローヴ㈱', '衣装係ベスト',
+        ))
+        self.assertTrue(legacy_csv_import.is_uniform_blank_sku_exception(
+            '石屋商事　パーク共通', '黒ロングコート',
+        ))
+
+
 class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
     def test_sample_preview_counts_on_empty_db(self):
         if not SAMPLE_CSV.is_file():
@@ -608,6 +747,14 @@ class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
             self.assertGreater(raw['create'], 0)
             self.assertGreater(raw['needs_review'], 0)
             self.assertGreater(raw['hold'], 0)
+            self.assertEqual(raw.get('excluded', 0), 1)
+            uniforms = [
+                r for r in preview['rows']
+                if r.get('product', {}).get('blankSku')
+                and r['product'].get('category') == '制服'
+                and r['status'] == 'create'
+            ]
+            self.assertGreaterEqual(len(uniforms), 5)
             # 補正在庫は使っていないことの確認用メタ
             self.assertIn('補正在庫数', preview['ignoredColumns'])
             # 結果をファイルに残す用のサマリ
@@ -616,6 +763,7 @@ class LegacyCsvSamplePreviewStatsTest(unittest.TestCase):
                 'countsRaw': raw,
                 'counts': preview['counts'],
                 'encoding': preview['encoding'],
+                'excludedCount': preview.get('excludedCount'),
             }
             print('SAMPLE_PREVIEW', self._preview_summary)
         finally:

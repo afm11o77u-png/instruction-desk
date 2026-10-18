@@ -35,12 +35,22 @@ COMPANY_FORMS = (
     ('（有）', '有限会社'),
 )
 
+# 品番空欄でも制服として取り込む例外（顧客名×商品名。空白種類だけ正規化して完全一致）
+UNIFORM_BLANK_SKU_PAIRS = frozenset((
+    ('グローヴ㈱', 'チェック柄ベスト(ムーリベッキ)'),
+    ('グローヴ㈱', '衣装係ストレートパンツ'),
+    ('石屋商事 パーク共通', '黒ロングコート'),
+    ('日鉄ファーストテック㈱', '耐切創夏ＪＰ'),
+    ('明日佳病院（事務', '事務マタニティドレス'),
+))
+
 STATUS_CREATE = 'create'          # 新規追加（在庫なし→登録）
 STATUS_REUSE = 'reuse'            # 既存マスター使用（在庫新規）
 STATUS_QTY_DIFF = 'qty_diff'      # 数量差異
 STATUS_UNCHANGED = 'unchanged'    # 変更なし
 STATUS_REVIEW = 'needs_review'    # 要確認
 STATUS_HOLD = 'hold'              # 保留（CSV内重複など）
+STATUS_EXCLUDED = 'excluded'      # 対象外（エラーではない。登録しない）
 
 STATUS_LABELS = {
     STATUS_CREATE: '新規追加',
@@ -49,11 +59,35 @@ STATUS_LABELS = {
     STATUS_UNCHANGED: '変更なし',
     STATUS_REVIEW: '要確認',
     STATUS_HOLD: '保留',
+    STATUS_EXCLUDED: '対象外',
 }
 
 
 def _collapse_space(value):
     return re.sub(r'[\s\u3000]+', '', stock.text(value))
+
+
+def identity_match_key(value):
+    """顧客名・商品名の完全一致用キー。半角/全角空白の差だけ畳む（類似拡張はしない）。"""
+    return _collapse_space(value)
+
+
+UNIFORM_BLANK_SKU_KEYS = frozenset(
+    (identity_match_key(c), identity_match_key(n)) for c, n in UNIFORM_BLANK_SKU_PAIRS
+)
+
+
+def is_uniform_blank_sku_exception(customer_name, product_name):
+    return (
+        identity_match_key(customer_name),
+        identity_match_key(product_name),
+    ) in UNIFORM_BLANK_SKU_KEYS
+
+
+def proposed_blank_sku_category(customer_name, product_name):
+    if is_uniform_blank_sku_exception(customer_name, product_name):
+        return stock.CATEGORY_UNIFORM
+    return stock.CATEGORY_PARTS
 
 
 def company_norm_key(name):
@@ -195,11 +229,43 @@ def find_person_matches(c, table, name):
 
 def find_products_by_code(c, code):
     return list(c.execute(
-        '''SELECT p.id,p.code,p.name,p.color,p.supplier_id,p.active,s.name AS supplier_name
+        '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
            WHERE p.code=? ORDER BY p.id''',
         (code,),
     ))
+
+
+def find_blank_sku_products(c, name, supplier_id):
+    """空品番商品を商品名・仕入先で照合。空品番だけで同一視しない。"""
+    name = stock.text(name)
+    if not name:
+        return []
+    if supplier_id is None:
+        rows = c.execute(
+            '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
+               FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
+               WHERE p.code='' AND p.name=? AND p.supplier_id IS NULL ORDER BY p.id''',
+            (name,),
+        )
+    else:
+        rows = c.execute(
+            '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
+               FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
+               WHERE p.code='' AND p.name=? AND p.supplier_id=? ORDER BY p.id''',
+            (name, supplier_id),
+        )
+    return list(rows)
+
+
+def _product_candidate(m):
+    cat = m['category'] if 'category' in m.keys() else ''
+    return {
+        'id': m['id'], 'code': m['code'], 'name': m['name'], 'color': m['color'],
+        'category': cat or '',
+        'supplierName': m['supplier_name'] or '', 'active': bool(m['active']),
+        'codeDisplay': stock.product_code_display(m['code'], cat),
+    }
 
 
 def location_resolve(c, site_name, shelf_name, default_site_name):
@@ -305,69 +371,75 @@ def _person_preview(c, table, label, name, row_no):
     return info
 
 
-def _product_preview(c, item, supplier_info, row_no):
-    code = stock.text(item.get('商品コード'))
-    name = stock.text(item.get('商品名'))
-    size = item.get('サイズ')
-    size = size if isinstance(size, str) else ('' if size is None else str(size))
-    # サイズは前後空白のみ整理。先頭ゼロ・ハイフン・数字はそのまま。
-    size_label = size.strip()
-    info = {
-        'code': code, 'name': name, 'size': size_label,
-        'action': 'missing', 'id': None, 'candidates': [], 'reasons': [],
-        'sizeAction': 'ok', 'nameDiff': False, 'supplierConflict': False,
-    }
-    if not code:
-        info['action'] = 'review'
-        info['reasons'].append(f'{row_no}行目：品番（商品コード）が空です。')
-        return info
-    if not name:
-        info['action'] = 'review'
-        info['reasons'].append(f'{row_no}行目：商品名が空です。')
-        return info
-    if not size_label:
-        info['action'] = 'review'
-        info['reasons'].append(f'{row_no}行目：サイズが空です。')
-        return info
-    matches = find_products_by_code(c, code)
-    if not matches:
-        info['action'] = 'create'
-        info['sizeAction'] = 'add'
-        return info
-    supplier_id = supplier_info.get('id')
-    narrowed = matches
-    if supplier_id and len(matches) > 1:
-        by_sup = [m for m in matches if m['supplier_id'] == supplier_id]
-        if by_sup:
-            narrowed = by_sup
-    if len(narrowed) > 1:
-        # Prefer exact name match among duplicates
-        by_name = [m for m in narrowed if stock.text(m['name']) == name]
-        if len(by_name) == 1:
-            narrowed = by_name
-        else:
+def _apply_category_decision(info, existing_category, proposed_category, selected_category):
+    """既存カテゴリは無断変更しない。プレビューで選んだカテゴリだけ反映候補にする。"""
+    existing = stock.text(existing_category)
+    proposed = stock.text(proposed_category)
+    selected = None
+    if selected_category is not None and selected_category != '':
+        try:
+            selected = stock.normalize_category(selected_category)
+        except ValueError:
             info['action'] = 'review'
-            info['candidates'] = [
-                {
-                    'id': m['id'], 'code': m['code'], 'name': m['name'], 'color': m['color'],
-                    'supplierName': m['supplier_name'] or '', 'active': bool(m['active']),
-                }
-                for m in narrowed
-            ]
-            info['reasons'].append(f'{row_no}行目：同じ品番の商品が複数あります。候補から選んでください。')
+            info['reasons'].append(f'カテゴリ「{selected_category}」は使えません。')
+            info['category'] = existing or proposed
+            info['proposedCategory'] = proposed
+            info['categoryConflict'] = True
             return info
-    prod = narrowed[0]
+    elif selected_category == '':
+        selected = ''
+
+    if selected is not None:
+        info['category'] = selected
+        info['proposedCategory'] = proposed
+        info['categoryAction'] = 'set' if selected != existing else 'keep'
+        info['categoryConflict'] = False
+        return info
+
+    if existing == proposed:
+        info['category'] = existing
+        info['proposedCategory'] = proposed
+        info['categoryAction'] = 'keep'
+        info['categoryConflict'] = False
+        return info
+
+    # 既存ありで提案と違う／既存空で提案あり → 確認（無断変更しない）
+    info['category'] = existing
+    info['proposedCategory'] = proposed
+    info['categoryAction'] = 'confirm'
+    info['categoryConflict'] = True
+    info['action'] = 'review'
+    if existing:
+        info['reasons'].append(
+            f'既存カテゴリ「{existing}」と取込提案「{proposed}」が異なります。'
+            f'カテゴリを選んでから取り込んでください（無断変更しません）。'
+        )
+    else:
+        info['reasons'].append(
+            f'既存商品のカテゴリが空です。提案は「{proposed}」です。'
+            f'カテゴリを選んでから取り込んでください（無断変更しません）。'
+        )
+    return info
+
+
+def _finalize_matched_product(
+    c, info, prod, name, size_label, supplier_id, *,
+    proposed_category, selected_category, apply_category=False,
+):
+    code = info['code']
     if not prod['active']:
         info['action'] = 'review'
         info['id'] = prod['id']
-        info['reasons'].append(f'{row_no}行目：商品「{code}」は停止中です。重複追加・無断再開しません。')
+        label = code or name or prod['id']
+        info['reasons'].append(f'{info.get("_rowNo")}行目：商品「{label}」は停止中です。重複追加・無断再開しません。')
         return info
     if supplier_id and prod['supplier_id'] not in (None, supplier_id):
         info['supplierConflict'] = True
         info['action'] = 'review'
         info['id'] = prod['id']
         info['reasons'].append(
-            f'{row_no}行目：品番「{code}」の仕入先が既存と異なります（既存: {prod["supplier_name"] or "未設定"}）。'
+            f'{info.get("_rowNo")}行目：品番「{code or "（空）"}」の仕入先が既存と異なります'
+            f'（既存: {prod["supplier_name"] or "未設定"}）。'
         )
         return info
     info['action'] = 'reuse'
@@ -381,7 +453,117 @@ def _product_preview(c, item, supplier_info, row_no):
         info['sizeAction'] = 'add'
     else:
         info['sizeAction'] = 'reuse'
+    existing_cat = prod['category'] if 'category' in prod.keys() else ''
+    if apply_category:
+        _apply_category_decision(info, existing_cat, proposed_category, selected_category)
+    else:
+        info['category'] = existing_cat or ''
+        info['proposedCategory'] = existing_cat or ''
+        info['categoryAction'] = 'keep'
+        info['categoryConflict'] = False
+    info['codeDisplay'] = stock.product_code_display(code, info.get('category') or proposed_category)
     return info
+
+
+def _product_preview(c, item, supplier_info, row_no, *, customer_name='', selected_category=None):
+    code = stock.text(item.get('商品コード'))
+    name = stock.text(item.get('商品名'))
+    size = item.get('サイズ')
+    size = size if isinstance(size, str) else ('' if size is None else str(size))
+    # サイズは前後空白のみ整理。先頭ゼロ・ハイフン・数字・メートル表記はそのまま（再換算しない）。
+    size_label = size.strip()
+    blank_sku = not code
+    proposed_category = (
+        proposed_blank_sku_category(customer_name, name) if blank_sku else ''
+    )
+    if selected_category is not None and selected_category != '':
+        try:
+            # プレビューでカテゴリ変更可
+            proposed_category = stock.normalize_category(selected_category) or proposed_category
+        except ValueError:
+            pass
+    info = {
+        'code': code, 'name': name, 'size': size_label,
+        'action': 'missing', 'id': None, 'candidates': [], 'reasons': [],
+        'sizeAction': 'ok', 'nameDiff': False, 'supplierConflict': False,
+        'category': proposed_category if blank_sku else '',
+        'proposedCategory': proposed_category if blank_sku else '',
+        'categoryAction': 'set' if blank_sku else 'keep',
+        'categoryConflict': False,
+        'blankSku': blank_sku,
+        'codeDisplay': stock.product_code_display(code, proposed_category if blank_sku else ''),
+        '_rowNo': row_no,
+    }
+    if not name:
+        info['action'] = 'review'
+        info['reasons'].append(f'{row_no}行目：商品名が空です。')
+        return info
+    if not size_label:
+        info['action'] = 'review'
+        info['reasons'].append(f'{row_no}行目：サイズが空です。')
+        return info
+
+    supplier_id = supplier_info.get('id')
+    if blank_sku:
+        matches = find_blank_sku_products(c, name, supplier_id)
+        if not matches and supplier_id is not None:
+            # 仕入先未設定の同名空品番も候補に残す（無断統合はしない）
+            loose = find_blank_sku_products(c, name, None)
+            if loose:
+                info['action'] = 'review'
+                info['candidates'] = [_product_candidate(m) for m in loose]
+                info['reasons'].append(
+                    f'{row_no}行目：品番なしの同名商品が仕入先未設定であります。候補から選んでください。'
+                )
+                return info
+        if not matches:
+            info['action'] = 'create'
+            info['sizeAction'] = 'add'
+            if selected_category is not None:
+                try:
+                    info['category'] = stock.normalize_category(selected_category)
+                except ValueError:
+                    info['action'] = 'review'
+                    info['reasons'].append(f'{row_no}行目：カテゴリ「{selected_category}」は使えません。')
+            info['codeDisplay'] = stock.product_code_display('', info['category'])
+            return info
+        if len(matches) > 1:
+            info['action'] = 'review'
+            info['candidates'] = [_product_candidate(m) for m in matches]
+            info['reasons'].append(
+                f'{row_no}行目：品番なしで商品名・仕入先が同じ商品が複数あります。候補から選んでください。'
+            )
+            return info
+        return _finalize_matched_product(
+            c, info, matches[0], name, size_label, supplier_id,
+            proposed_category=proposed_category, selected_category=selected_category,
+            apply_category=True,
+        )
+
+    matches = find_products_by_code(c, code)
+    if not matches:
+        info['action'] = 'create'
+        info['sizeAction'] = 'add'
+        return info
+    narrowed = matches
+    if supplier_id and len(matches) > 1:
+        by_sup = [m for m in matches if m['supplier_id'] == supplier_id]
+        if by_sup:
+            narrowed = by_sup
+    if len(narrowed) > 1:
+        by_name = [m for m in narrowed if stock.text(m['name']) == name]
+        if len(by_name) == 1:
+            narrowed = by_name
+        else:
+            info['action'] = 'review'
+            info['candidates'] = [_product_candidate(m) for m in narrowed]
+            info['reasons'].append(f'{row_no}行目：同じ品番の商品が複数あります。候補から選んでください。')
+            return info
+    return _finalize_matched_product(
+        c, info, narrowed[0], name, size_label, supplier_id,
+        proposed_category='', selected_category=None,
+        apply_category=False,
+    )
 
 
 def _handle_candidate(row):
@@ -490,8 +672,73 @@ def _stock_match(c, cp_id, size, location_id, condition, unit_cost):
     }
 
 
-def classify_row(c, row_no, item, *, default_site_name, selected_product_id=None, selected_handle_id=None):
+def _excluded_row(row_no, item, *, qty, cost, reason):
+    """商品名空×在庫0などの対象外行。顧客・仕入先は作らない。"""
+    display_name, star = strip_used_marker(stock.text(item.get('商品名')))
+    size = item.get('サイズ')
+    size = size if isinstance(size, str) else ('' if size is None else str(size))
+    return {
+        'rowNo': row_no,
+        'status': STATUS_EXCLUDED,
+        'statusLabel': STATUS_LABELS[STATUS_EXCLUDED],
+        'selected': False,
+        'condition': None,
+        'conditionLabel': '',
+        'qty': qty,
+        'unitCost': cost,
+        'customer': {'label': '顧客', 'name': stock.text(item.get('顧客')), 'action': 'skip', 'id': None,
+                     'candidates': [], 'reasons': []},
+        'supplier': {'label': '仕入先', 'name': stock.text(item.get('仕入先')), 'action': 'skip', 'id': None,
+                     'candidates': [], 'reasons': []},
+        'product': {
+            'code': stock.text(item.get('商品コード')), 'name': stock.text(item.get('商品名')),
+            'size': size.strip(), 'action': 'skip', 'id': None, 'candidates': [], 'reasons': [],
+            'category': '', 'proposedCategory': '', 'blankSku': not stock.text(item.get('商品コード')),
+            'codeDisplay': stock.product_code_display(stock.text(item.get('商品コード')), ''),
+        },
+        'handle': {'action': 'skip', 'id': None, 'embroidery': '', 'embroideryLabel': '',
+                   'candidates': [], 'reasons': [], 'pendingEmbroiderySort': False, 'csvSource': {}},
+        'place': {'action': 'skip', 'siteName': '', 'shelfName': '', 'locationId': None},
+        'stock': None,
+        'csv': {
+            'conditionRaw': stock.text(item.get('新古')),
+            'supplier': stock.text(item.get('仕入先')),
+            'customer': stock.text(item.get('顧客')),
+            'productName': stock.text(item.get('商品名')),
+            'productNameBase': display_name,
+            'usedMarker': star,
+            'code': stock.text(item.get('商品コード')),
+            'codeDisplay': stock.product_code_display(stock.text(item.get('商品コード')), ''),
+            'size': size.strip(),
+            'site': stock.text(item.get('拠点')),
+            'shelf': stock.text(item.get('棚')),
+            'unitCostRaw': stock.text(item.get('仕入単価')),
+            'qtyRaw': stock.text(item.get('在庫')),
+            'category': '',
+        },
+        'reasons': [reason],
+        'excludeReason': reason,
+        'sourceRowNo': row_no,
+    }
+
+
+def classify_row(
+    c, row_no, item, *, default_site_name,
+    selected_product_id=None, selected_handle_id=None, selected_category=None,
+):
     reasons = []
+    product_name = stock.text(item.get('商品名'))
+    qty, cost, qreasons = parse_row_qty_cost(item, row_no)
+
+    # 商品名空欄かつ在庫=数値0 → 対象外（エラーでない）。空欄/不正値を0扱いしない。
+    if not product_name:
+        if qty == 0 and not qreasons:
+            return _excluded_row(
+                row_no, item, qty=qty, cost=cost,
+                reason=f'{row_no}行目：商品名が空欄で在庫が0のため対象外です（登録しません）。',
+            )
+        # 在庫≠0 または数量不正 → 要確認（下で通常判定へ。顧客新規は作れるが商品は止まる）
+
     customer = _person_preview(c, 'customers', '顧客', item.get('顧客'), row_no)
     supplier = _person_preview(c, 'suppliers', '仕入先', item.get('仕入先'), row_no)
     reasons.extend(customer['reasons'])
@@ -499,25 +746,27 @@ def classify_row(c, row_no, item, *, default_site_name, selected_product_id=None
 
     condition, creasons = parse_row_condition(item, row_no)
     reasons.extend(creasons)
-    qty, cost, qreasons = parse_row_qty_cost(item, row_no)
     reasons.extend(qreasons)
 
-    product = _product_preview(c, item, supplier, row_no)
+    product = _product_preview(
+        c, item, supplier, row_no,
+        customer_name=stock.text(item.get('顧客')),
+        selected_category=selected_category,
+    )
     if selected_product_id and isinstance(selected_product_id, int):
         prod = c.execute(
-            '''SELECT p.id,p.code,p.name,p.color,p.supplier_id,p.active,s.name AS supplier_name
+            '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
                FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id WHERE p.id=?''',
             (selected_product_id,),
         ).fetchone()
-        if prod and prod['active'] and prod['code'] == product['code']:
-            product = {
-                **product, 'action': 'reuse', 'id': prod['id'], 'reasons': [],
-                'candidates': [],
-            }
-            existing_sizes = {
-                r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (prod['id'],))
-            }
-            product['sizeAction'] = 'reuse' if product['size'] in existing_sizes else 'add'
+        if prod and prod['active'] and stock.text(prod['code']) == stock.text(product['code']):
+            product = _finalize_matched_product(
+                c, {**product, 'reasons': [], 'candidates': [], 'action': 'reuse', '_rowNo': row_no},
+                prod, product['name'], product['size'], supplier.get('id'),
+                proposed_category=product.get('proposedCategory') or product.get('category') or '',
+                selected_category=selected_category,
+                apply_category=bool(product.get('blankSku')),
+            )
     reasons.extend(product['reasons'])
 
     place = location_resolve(c, item.get('拠点'), item.get('棚'), default_site_name)
@@ -585,6 +834,9 @@ def classify_row(c, row_no, item, *, default_site_name, selected_product_id=None
         status = STATUS_CREATE if master_new else STATUS_REUSE
 
     display_name, star = strip_used_marker(stock.text(item.get('商品名')))
+    category = product.get('category') or ''
+    # 内部作業用キーを落とす
+    product = {k: v for k, v in product.items() if not str(k).startswith('_')}
     return {
         'rowNo': row_no,
         'status': status,
@@ -608,11 +860,15 @@ def classify_row(c, row_no, item, *, default_site_name, selected_product_id=None
             'productNameBase': display_name,
             'usedMarker': star,
             'code': stock.text(item.get('商品コード')),
+            'codeDisplay': stock.product_code_display(
+                stock.text(item.get('商品コード')), category,
+            ),
             'size': product.get('size') or '',
             'site': stock.text(item.get('拠点')),
             'shelf': stock.text(item.get('棚')),
             'unitCostRaw': stock.text(item.get('仕入単価')),
             'qtyRaw': stock.text(item.get('在庫')),
+            'category': category,
         },
         'reasons': reasons,
         'sourceRowNo': row_no,
@@ -660,23 +916,32 @@ def build_preview(c, body):
             default_site_name=default_site,
             selected_product_id=sel.get('productId'),
             selected_handle_id=sel.get('handleId'),
+            selected_category=sel.get('category') if 'category' in sel else None,
         ))
 
     dup_map = find_csv_duplicates(classified)
     for row in classified:
+        if row['status'] == STATUS_EXCLUDED:
+            continue
         dups = dup_map.get(row['rowNo'])
         if dups:
-            row['csvDuplicateRowNos'] = dups
-            row['status'] = STATUS_HOLD
-            row['statusLabel'] = STATUS_LABELS[STATUS_HOLD]
-            row['reasons'] = list(row['reasons']) + [
-                f'CSV内で重複候補です（行 {", ".join(str(n) for n in dups)}）。自動合算・削除しません。解決まで保留します。'
-            ]
+            # 対象外行は重複判定の相手にしない
+            live = [n for n in dups if not any(
+                r['rowNo'] == n and r['status'] == STATUS_EXCLUDED for r in classified
+            )]
+            if len(live) > 1 and row['rowNo'] in live:
+                row['csvDuplicateRowNos'] = live
+                row['status'] = STATUS_HOLD
+                row['statusLabel'] = STATUS_LABELS[STATUS_HOLD]
+                row['reasons'] = list(row['reasons']) + [
+                    f'CSV内で重複候補です（行 {", ".join(str(n) for n in live)}）。自動合算・削除しません。解決まで保留します。'
+                ]
 
     counts = {k: 0 for k in STATUS_LABELS}
     for row in classified:
         counts[row['status']] = counts.get(row['status'], 0) + 1
 
+    excluded_rows = [r for r in classified if r['status'] == STATUS_EXCLUDED]
     fp = db_fingerprint(c)
     t = stock.stamp()
     actor = stock._actor_name(body)
@@ -685,12 +950,16 @@ def build_preview(c, body):
     notices = [
         'この段階ではデータベースを変更していません。',
         '数量は「在庫」列のみ使用します（補正在庫数・購入・出荷は使いません）。',
+        '生地の数量・サイズ・仕入単価はCSVのまま保持します（5倍換算・単価割り返しはしません）。',
+        '品番が空の行は、制服例外のみ「制服」、それ以外は「部品・資材」として取り込みます。'
+        '内部品番は空欄のままです（画面表示は「品番なし」系）。',
+        '商品名空欄かつ在庫0の行は対象外です（エラーではありません）。',
         '入荷日はCSVに無いため入荷日不明で登録します。架空の日付は作りません。',
         '払出し順はCSV行番号を仮に使います。CSVの並び＝入荷順とは断定しません。',
         'CSVに加工欄がありません。既存取扱が「加工なし」1件だけのときはそれを再利用し、'
         '加工仕様は変更しません。取扱が無いときだけ「加工未整理」を追加します。',
         '品番・商品名の加工記載（例: 刺繍あり）はそのまま残し、後から整理できます。'
-        '同じ品番でも商品名が違う行は無条件に合算しません。',
+        '同じ品番でも商品名が違う行は無条件に合算しません。空品番だけで同一視しません。',
         '「＊」は中古標記です（加工と混同しません）。',
         '数量差異は初期状態で非選択です。明示選択したものだけCSV数量へ更新します。',
         '要確認・保留は黙って除外しません。確定時は対象件数と保留件数を明示します。',
@@ -710,10 +979,22 @@ def build_preview(c, body):
         'actorName': actor,
         'counts': {STATUS_LABELS[k]: counts.get(k, 0) for k in STATUS_LABELS},
         'countsRaw': counts,
+        'excludedCount': len(excluded_rows),
+        'excludedRows': [
+            {
+                'rowNo': r['rowNo'],
+                'reason': r.get('excludeReason') or (r['reasons'][0] if r['reasons'] else ''),
+                'customer': r['csv'].get('customer', ''),
+                'supplier': r['csv'].get('supplier', ''),
+            }
+            for r in excluded_rows[:200]
+        ],
+        'excludedRowsTruncated': len(excluded_rows) > 200,
         'notices': notices,
         'previousImports': previous_imports_for_file(c, uploaded['fileSha256']),
         'rows': classified,
         'ignoredColumns': list(IGNORED_QTY_COLUMNS),
+        'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
     }
 
 
@@ -758,47 +1039,82 @@ def _ensure_location(c, place):
     return saved['id'], created_site, True
 
 
+def _save_product_sizes_and_category(c, pid, product_info):
+    """サイズ追加と、確認済みカテゴリ変更のみ反映。名・色・仕入先は無断上書きしない。"""
+    current = stock.product_row(c, pid)
+    labels = list(current['sizes'])
+    size = product_info.get('size')
+    size_added = False
+    if product_info.get('sizeAction') == 'add' and size and size not in labels:
+        labels.append(size)
+        size_added = True
+    category = current.get('category') or ''
+    if product_info.get('categoryAction') == 'set' and 'category' in product_info:
+        category = stock.normalize_category(product_info.get('category'))
+    if not size_added and category == (current.get('category') or ''):
+        return False
+    stock.save_product(c, {
+        'id': pid,
+        'code': current['code'],
+        'name': current['name'],
+        'color': current['color'],
+        'category': category,
+        'supplierId': current['supplierId'],
+        'sizes': labels,
+        'active': current['active'],
+        'links': [
+            {
+                'customerId': link['customerId'],
+                'embroidery': link['embroidery'],
+                'isStandard': link['isStandard'],
+                'active': link['active'],
+            }
+            for link in current['links']
+        ],
+    })
+    return size_added
+
+
 def _ensure_product(c, product_info, supplier_id, csv_name):
     if product_info.get('id'):
-        pid = product_info['id']
-        # サイズだけ追加。名・色・仕入先は無断上書きしない。
-        if product_info.get('sizeAction') == 'add':
-            labels = [r['label'] for r in c.execute(
-                'SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order,id', (pid,)
-            )]
-            size = product_info['size']
-            if size not in labels:
-                labels.append(size)
-                current = stock.product_row(c, pid)
-                stock.save_product(c, {
-                    'id': pid,
-                    'code': current['code'],
-                    'name': current['name'],
-                    'color': current['color'],
-                    'supplierId': current['supplierId'],
-                    'sizes': labels,
-                    'active': current['active'],
-                    'links': [
-                        {
-                            'customerId': link['customerId'],
-                            'embroidery': link['embroidery'],
-                            'isStandard': link['isStandard'],
-                            'active': link['active'],
-                        }
-                        for link in current['links']
-                    ],
-                })
-        return pid, False
+        size_added = _save_product_sizes_and_category(c, product_info['id'], product_info)
+        return product_info['id'], False, size_added
+
+    code = stock.text(product_info.get('code'))
+    name = stock.text(csv_name)
+    # 同一コミット内のサイズ違い行で重複商品を作らない
+    if code:
+        matches = find_products_by_code(c, code)
+        narrowed = matches
+        if supplier_id is not None and len(matches) > 1:
+            by_sup = [m for m in matches if m['supplier_id'] == supplier_id]
+            if by_sup:
+                narrowed = by_sup
+        by_name = [m for m in narrowed if stock.text(m['name']) == name]
+        if len(by_name) == 1:
+            narrowed = by_name
+        if len(narrowed) == 1:
+            product_info = {**product_info, 'id': narrowed[0]['id'], 'sizeAction': 'add'}
+            size_added = _save_product_sizes_and_category(c, narrowed[0]['id'], product_info)
+            return narrowed[0]['id'], False, size_added
+    else:
+        matches = find_blank_sku_products(c, name, supplier_id)
+        if len(matches) == 1:
+            product_info = {**product_info, 'id': matches[0]['id'], 'sizeAction': 'add'}
+            size_added = _save_product_sizes_and_category(c, matches[0]['id'], product_info)
+            return matches[0]['id'], False, size_added
+
     saved = stock.save_product(c, {
-        'code': product_info['code'],
+        'code': code,
         'name': csv_name,  # 加工記載を含む商品名をそのまま
         'color': '',  # 色必須にしない・無理抽出しない
+        'category': stock.normalize_category(product_info.get('category') or ''),
         'supplierId': supplier_id,
         'sizes': [product_info['size']],
         'links': [],
         'active': True,
     })
-    return saved['id'], True
+    return saved['id'], True, False
 
 
 def _ensure_handle(c, customer_id, product_id, handle_info):
@@ -864,20 +1180,31 @@ def commit_preview(c, body, *, db_path=None):
             default_site_name=default_site,
             selected_product_id=sel.get('productId'),
             selected_handle_id=sel.get('handleId'),
+            selected_category=sel.get('category') if 'category' in sel else None,
         ))
     dup_map = find_csv_duplicates(classified)
     for row in classified:
-        if dup_map.get(row['rowNo']):
-            row['status'] = STATUS_HOLD
-            row['csvDuplicateRowNos'] = dup_map[row['rowNo']]
+        if row['status'] == STATUS_EXCLUDED:
+            continue
+        dups = dup_map.get(row['rowNo'])
+        if dups:
+            live = [n for n in dups if not any(
+                r['rowNo'] == n and r['status'] == STATUS_EXCLUDED for r in classified
+            )]
+            if len(live) > 1 and row['rowNo'] in live:
+                row['status'] = STATUS_HOLD
+                row['csvDuplicateRowNos'] = live
 
     hold_rows = [r for r in classified if r['status'] in (STATUS_REVIEW, STATUS_HOLD)]
+    excluded_rows = [r for r in classified if r['status'] == STATUS_EXCLUDED]
     commit_rows = []
     for row in classified:
+        if row['status'] == STATUS_EXCLUDED:
+            continue
         if explicit_include is not None:
             if row['rowNo'] in explicit_include or str(row['rowNo']) in explicit_include:
-                if row['status'] in (STATUS_REVIEW, STATUS_HOLD, STATUS_UNCHANGED):
-                    raise ValueError(f'{row["rowNo"]}行目は要確認・保留・変更なしのため登録対象にできません。')
+                if row['status'] in (STATUS_REVIEW, STATUS_HOLD, STATUS_UNCHANGED, STATUS_EXCLUDED):
+                    raise ValueError(f'{row["rowNo"]}行目は要確認・保留・変更なし・対象外のため登録対象にできません。')
                 commit_rows.append(row)
             continue
         if row['status'] in (STATUS_CREATE, STATUS_REUSE):
@@ -913,7 +1240,7 @@ def commit_preview(c, body, *, db_path=None):
         'customersCreated': 0, 'suppliersCreated': 0, 'productsCreated': 0,
         'sizesAdded': 0, 'handlesCreated': 0, 'sitesCreated': 0, 'shelvesCreated': 0,
         'openingCreated': 0, 'qtyUpdated': 0, 'unchanged': 0,
-        'held': len(hold_rows), 'failed': 0,
+        'held': len(hold_rows), 'excluded': len(excluded_rows), 'failed': 0,
     }
     failures = []
 
@@ -950,10 +1277,12 @@ def commit_preview(c, body, *, db_path=None):
                 if created:
                     result_counts['suppliersCreated'] += 1
 
-            pid, created = _ensure_product(c, row['product'], sup_id, row['csv']['productName'])
+            pid, created, size_added = _ensure_product(
+                c, row['product'], sup_id, row['csv']['productName'],
+            )
             if created:
                 result_counts['productsCreated'] += 1
-            elif row['product'].get('sizeAction') == 'add':
+            elif size_added:
                 result_counts['sizesAdded'] += 1
 
             loc_id, created_site, created_shelf = _ensure_location(c, row['place'])
@@ -1039,12 +1368,23 @@ def commit_preview(c, body, *, db_path=None):
         'heldRowCount': len(hold_rows),
         'heldRowNos': [r['rowNo'] for r in hold_rows][:200],
         'heldRowNosTruncated': len(hold_rows) > 200,
+        'excludedRowCount': len(excluded_rows),
+        'excludedRows': [
+            {
+                'rowNo': r['rowNo'],
+                'reason': r.get('excludeReason') or (r['reasons'][0] if r['reasons'] else ''),
+            }
+            for r in excluded_rows[:200]
+        ],
+        'excludedRowsTruncated': len(excluded_rows) > 200,
         'failures': failures,
         'fileSha256': uploaded['fileSha256'],
         'fileName': uploaded['fileName'],
         'notices': [
-            f'確定 {len(commit_rows)} 件、保留・要確認 {len(hold_rows)} 件を残しました。',
+            f'確定 {len(commit_rows)} 件、保留・要確認 {len(hold_rows)} 件、'
+            f'対象外 {len(excluded_rows)} 件を残しました。',
             '保留・要確認は登録していません（黙って除外していません）。',
+            '対象外はエラーではなく登録しません。',
         ],
     }
     c.execute(

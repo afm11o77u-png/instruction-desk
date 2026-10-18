@@ -16,11 +16,14 @@ SHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 SHEETS = [
     ('顧客', [('顧客名', 'name', True), ('カナ', 'kana', False), ('住所', 'address', False), ('電話番号', 'phone', False), ('担当者', 'contact', False)]),
     ('仕入先', [('仕入先名', 'name', True), ('住所', 'address', False), ('電話番号', 'phone', False), ('担当者', 'contact', False)]),
-    ('商品', [('品番', 'code', True), ('商品名', 'name', True), ('色', 'color', False), ('仕入先名', 'supplier', False), ('サイズ', 'sizes', True)]),
-    ('取扱', [('品番', 'code', True), ('商品名', 'name', True), ('色', 'color', False), ('顧客名', 'customer', True), ('加工仕様', 'embroidery', False), ('標準', 'standard', False)]),
+    ('商品', [
+        ('品番', 'code', False), ('商品名', 'name', True), ('色', 'color', False),
+        ('カテゴリ', 'category', False), ('仕入先名', 'supplier', False), ('サイズ', 'sizes', True),
+    ]),
+    ('取扱', [('品番', 'code', False), ('商品名', 'name', True), ('色', 'color', False), ('顧客名', 'customer', True), ('加工仕様', 'embroidery', False), ('標準', 'standard', False)]),
     ('保管場所', [('拠点名', 'site', True), ('棚名', 'shelf', False)]),
     ('初期在庫', [
-        ('顧客名', 'customer', True), ('品番', 'code', True), ('商品名', 'name', True), ('色', 'color', False),
+        ('顧客名', 'customer', True), ('品番', 'code', False), ('商品名', 'name', True), ('色', 'color', False),
         ('加工仕様', 'embroidery', False), ('拠点名', 'site', True), ('棚名', 'shelf', False),
         ('在庫基準日', 'basis', True), ('入荷日', 'received', False), ('入荷日不明', 'unknown', False),
         ('払出し順', 'payout', False), ('状態', 'condition', False),
@@ -183,19 +186,35 @@ def _products(c, rows):
         sizes = _split_sizes(item['sizes'])
         if not sizes:
             raise ValueError(f'商品の{row_no}行目：サイズを1つ以上入れてください。LLと2Lは別のサイズです。')
-        matches = _match_products(c, item['code'], item['name'], item['color'], supplier_id)
+        code = stock.text(item.get('code'))
+        if code in (stock.BLANK_SKU_DISPLAY, stock.BLANK_SKU_UNIFORM_DISPLAY):
+            code = ''
+        category = stock.text(item.get('category') or '')
+        if category:
+            try:
+                category = stock.normalize_category(category)
+            except ValueError as e:
+                raise ValueError(f'商品の{row_no}行目：{e}') from e
+        matches = _match_products(c, code, item['name'], item['color'], supplier_id)
         if len(matches) > 1:
             raise ValueError(f'商品の{row_no}行目：同じ品番・商品名・色・仕入先の商品が複数あります。')
         try:
             if matches:
                 current = stock.product_row(c, matches[0])
-                stock.save_product(c, {'id': current['id'], 'code': item['code'], 'name': item['name'], 'color': item['color'],
-                                       'supplierId': supplier_id, 'sizes': sizes, 'active': current['active'],
-                                       'links': [{'customerId': link['customerId'], 'embroidery': link['embroidery'], 'isStandard': link['isStandard'], 'active': link['active']} for link in current['links']]})
+                # カテゴリ空欄の更新では既存を消さない（明示値があるときだけ上書き）
+                cat_value = category if category else (current.get('category') or '')
+                stock.save_product(c, {
+                    'id': current['id'], 'code': code, 'name': item['name'], 'color': item['color'],
+                    'category': cat_value,
+                    'supplierId': supplier_id, 'sizes': sizes, 'active': current['active'],
+                    'links': [{'customerId': link['customerId'], 'embroidery': link['embroidery'], 'isStandard': link['isStandard'], 'active': link['active']} for link in current['links']],
+                })
                 updated += 1
             else:
-                stock.save_product(c, {'code': item['code'], 'name': item['name'], 'color': item['color'], 'supplierId': supplier_id,
-                                       'sizes': sizes, 'links': [], 'active': True})
+                stock.save_product(c, {
+                    'code': code, 'name': item['name'], 'color': item['color'], 'category': category,
+                    'supplierId': supplier_id, 'sizes': sizes, 'links': [], 'active': True,
+                })
                 created += 1
         except ValueError as e:
             raise ValueError(f'商品の{row_no}行目：{e}') from e
@@ -242,9 +261,12 @@ def _links(c, rows):
             changed = True
         if changed:
             try:
-                stock.save_product(c, {'id': current['id'], 'code': current['code'], 'name': current['name'], 'color': current['color'],
-                                       'supplierId': current['supplierId'], 'sizes': current['sizes'], 'active': current['active'],
-                                       'links': list(links.values())})
+                stock.save_product(c, {
+                    'id': current['id'], 'code': current['code'], 'name': current['name'], 'color': current['color'],
+                    'category': current.get('category') or '',
+                    'supplierId': current['supplierId'], 'sizes': current['sizes'], 'active': current['active'],
+                    'links': list(links.values()),
+                })
             except ValueError as e:
                 raise ValueError(f'取扱の{grouped[key][0][0]}行目：{e}') from e
     return {'created': created, 'updated': updated, 'already': 0}

@@ -196,7 +196,10 @@ def _products(c, args):
                 continue
             if not include_stopped and not item['active']:
                 continue
-            hay = f"{item['code']}{item['name']}{item['color']}{item['supplierName']}"
+            hay = (
+                f"{item['code']}{item.get('codeDisplay') or ''}{item['name']}"
+                f"{item['color']}{item.get('category') or ''}{item['supplierName']}"
+            )
             hay += ''.join(f"{l['customerName']}{l['embroidery']}" for l in item['links'])
             if not _match_text(hay, q):
                 continue
@@ -206,8 +209,12 @@ def _products(c, args):
                 'id': link['id'],
                 'productId': item['id'],
                 'code': item['code'],
+                'codeDisplay': item.get('codeDisplay') or stock.product_code_display(
+                    item['code'], item.get('category') or '',
+                ),
                 'productName': item['name'],
                 'color': item['color'],
+                'category': item.get('category') or '',
                 'customerId': link['customerId'],
                 'customerName': link['customerName'],
                 'embroidery': link['embroidery'],
@@ -377,28 +384,30 @@ def _sheets_for(kind, scope, payload, when, args):
         ] for r in payload['rows']]
         return [meta, ('仕入先', headers, rows, [10, 22, 28, 16, 12, 10])]
     if kind == 'products':
-        product_headers = ['商品ID', '品番', '商品名', '色', '仕入先ID', '仕入先名', '登録サイズ', '使用状態']
+        product_headers = ['商品ID', '品番', '品番表示', '商品名', '色', 'カテゴリ', '仕入先ID', '仕入先名', '登録サイズ', '使用状態']
         product_rows = [[
-            p['id'], p['code'], p['name'], p.get('color') or '',
+            p['id'], p['code'], p.get('codeDisplay') or p['code'] or '品番なし',
+            p['name'], p.get('color') or '', p.get('category') or '',
             p['supplierId'] if p['supplierId'] is not None else '',
             p.get('supplierName') or '',
             '、'.join(p.get('sizes') or []),
             _active_label(p['active']),
         ] for p in payload['products']]
         handle_headers = [
-            '取扱ID', '商品ID', '品番', '商品名', '色', '顧客ID', '顧客名',
+            '取扱ID', '商品ID', '品番', '品番表示', '商品名', '色', 'カテゴリ', '顧客ID', '顧客名',
             '加工仕様', '標準設定', '使用状態',
         ]
         handle_rows = [[
-            h['id'], h['productId'], h['code'], h['productName'], h.get('color') or '',
+            h['id'], h['productId'], h['code'], h.get('codeDisplay') or h['code'] or '品番なし',
+            h['productName'], h.get('color') or '', h.get('category') or '',
             h['customerId'], h['customerName'], h['embroideryLabel'],
             '標準' if h['isStandard'] else '',
             _active_label(h['active']),
         ] for h in payload['handles']]
         return [
             meta,
-            ('商品一覧', product_headers, product_rows, [10, 14, 22, 10, 10, 18, 18, 10]),
-            ('取扱一覧', handle_headers, handle_rows, [10, 10, 14, 22, 10, 10, 18, 16, 10, 10]),
+            ('商品一覧', product_headers, product_rows, [10, 14, 16, 22, 10, 12, 10, 18, 18, 10]),
+            ('取扱一覧', handle_headers, handle_rows, [10, 10, 14, 16, 22, 10, 12, 10, 18, 16, 10, 10]),
         ]
     if kind == 'locations':
         headers = ['場所ID', '親拠点ID', '拠点名', '棚名', '使用状態']
