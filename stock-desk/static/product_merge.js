@@ -20,48 +20,65 @@ function specLabel(v){
   return t
 }
 
-function productCardHtml(p, opts){
-  opts=opts||{}
-  const selected=opts.selected
-  const keepId=opts.keepId
+function productCompareFields(p){
   const subNames=(p.subSuppliers||[]).map(s=>s.name).filter(Boolean).join('、')||'なし'
   const handles=(p.handles||p.links||[]).map(l=>{
     const qty=l.lotCount!=null?`（在庫${num(l.stockQty||0)}）`:''
     return `${esc(l.customerName)} / ${esc(specLabel(l.embroideryLabel||l.embroidery))}${l.isStandard?'（標準）':''}${l.active===false?' 停止':''}${qty}`
   }).join('<br>')||'未設定'
-  const isKeep=Number(keepId)===Number(p.id)
-  return `<article class="merge-card ${selected?'is-selected':''} ${isKeep?'is-keep':''}" data-pid="${p.id}">
-    <label class="merge-pick"><input type="checkbox" data-merge-pick="${p.id}" ${selected?'checked':''}> 統合対象</label>
-    <label class="merge-keep"><input type="radio" name="mergeKeep" value="${p.id}" ${isKeep?'checked':''}> 残す</label>
-    <dl class="merge-dl">
-      <div><dt>商品ID</dt><dd>${p.id}</dd></div>
-      <div><dt>品番</dt><dd>${esc(p.codeDisplay||p.code||'品番なし')}</dd></div>
-      <div><dt>商品名</dt><dd>${esc(p.name)}</dd></div>
-      <div><dt>色</dt><dd>${esc(p.color)||'—'}</dd></div>
-      <div><dt>カテゴリ</dt><dd>${esc(p.category)||'—'}</dd></div>
-      <div><dt>通常仕入先</dt><dd>${esc(p.supplierName)||'未設定'}</dd></div>
-      <div><dt>サブ仕入先</dt><dd>${esc(subNames)}</dd></div>
-      <div><dt>サイズ</dt><dd>${esc((p.sizes||[]).join('、'))||'未設定'}</dd></div>
-      <div><dt>使用状態</dt><dd>${p.active?'使用中':'停止'}${p.mergedIntoId?` → 統合先 ${p.mergedIntoId}`:''}</dd></div>
-      <div><dt>取扱</dt><dd>${handles}</dd></div>
-      <div><dt>在庫</dt><dd>${p.hasStock||p.lotCount?`${num(p.stockQty)}着 / ${yen(p.stockAmount)}（ロット${num(p.lotCount)}）`:'なし'}</dd></div>
-    </dl>
-  </article>`
+  const stock=p.hasStock||p.lotCount
+    ?`${num(p.stockQty)}着 / ${yen(p.stockAmount)}（ロット${num(p.lotCount)}）`
+    :'なし'
+  return [
+    ['商品ID', String(p.id)],
+    ['品番', esc(p.codeDisplay||p.code||'品番なし')],
+    ['商品名', esc(p.name)],
+    ['色', esc(p.color)||'—'],
+    ['カテゴリ', esc(p.category)||'—'],
+    ['通常仕入先', esc(p.supplierName)||'未設定'],
+    ['サブ仕入先', esc(subNames)],
+    ['サイズ', esc((p.sizes||[]).join('、'))||'未設定'],
+    ['使用状態', `${p.active?'使用中':'停止'}${p.mergedIntoId?` → 統合先 ${p.mergedIntoId}`:''}`],
+    ['取扱', handles],
+    ['在庫', stock],
+  ]
 }
 
 function groupBlock(group, state){
+  const products=group.products||[]
+  if(!products.length)return ''
   const note=group.autoSame
-    ? `<p class="excelhint">${esc(group.note)}</p>`
-    : `<p class="excelhint merge-special-note">${esc(group.note)}</p>`
-  const cards=(group.products||[]).map(p=>{
-    const selected=!!state.selected[p.id]
-    const keepId=state.keepId
-    return productCardHtml(p,{selected,keepId})
+    ? `<p class="merge-note">${esc(group.note)}</p>`
+    : `<p class="merge-note merge-special-note">${esc(group.note)}</p>`
+  const fieldsByProduct=products.map(p=>({
+    product:p,
+    selected:!!state.selected[p.id],
+    isKeep:Number(state.keepId)===Number(p.id),
+    fields:productCompareFields(p),
+  }))
+  const labels=fieldsByProduct[0].fields.map(f=>f[0])
+  const headCells=fieldsByProduct.map(({product:p,selected,isKeep})=>`<th scope="col" class="merge-col ${selected?'is-selected':''} ${isKeep?'is-keep':''}">
+      <div class="merge-col-actions">
+        <label class="merge-pick"><input type="checkbox" data-merge-pick="${p.id}" ${selected?'checked':''}> 統合対象</label>
+        <label class="merge-keep"><input type="radio" name="mergeKeep" value="${p.id}" ${isKeep?'checked':''}> 残す</label>
+      </div>
+      <div class="merge-col-title">ID ${p.id}</div>
+    </th>`).join('')
+  const fieldRows=labels.map((label,i)=>{
+    const cells=fieldsByProduct.map(({selected,isKeep,fields})=>
+      `<td class="${selected?'is-selected':''} ${isKeep?'is-keep':''}">${fields[i][1]}</td>`
+    ).join('')
+    return `<tr><th scope="row" class="merge-row-label">${esc(label)}</th>${cells}</tr>`
   }).join('')
   return `<section class="merge-group" data-kind="${esc(group.kind)}" data-code="${esc(group.code)}">
-    <h3>${esc(group.codeDisplay||group.code)} <span class="sub">商品 ${num((group.products||[]).length)}件</span></h3>
+    <h3>${esc(group.codeDisplay||group.code)} <span class="sub">商品 ${num(products.length)}件</span></h3>
     ${note}
-    <div class="merge-cards">${cards}</div>
+    <div class="merge-compare-scroll" tabindex="0">
+      <table class="merge-compare">
+        <thead><tr><th scope="col" class="merge-row-label">項目</th>${headCells}</tr></thead>
+        <tbody>${fieldRows}</tbody>
+      </table>
+    </div>
   </section>`
 }
 
@@ -94,6 +111,17 @@ async function openProductMerge(deps){
     conflictResolutions:{},
   }
 
+  const cleanupDialog=()=>{
+    dlg.classList.remove('merge-dialog')
+    dlg.innerHTML=''
+  }
+  const closeDialog=()=>{
+    if(dlg.open)dlg.close()
+    cleanupDialog()
+  }
+  dlg.classList.add('merge-dialog')
+  dlg.addEventListener('close',cleanupDialog,{once:true})
+
   const paint=async()=>{
     if(state.phase==='confirm'&&state.preview){
       paintConfirm()
@@ -101,24 +129,23 @@ async function openProductMerge(deps){
     }
     const normals=(data.normalGroups||[]).map(g=>groupBlock(g,state)).join('')||'<p>同じ品番の重複グループはありません。</p>'
     const specials=(data.specialSections||[]).map(g=>groupBlock(g,state)).join('')||''
-    dlg.innerHTML=`<form class="merge-dialog"><div class="dialoghead"><h2>重複商品の整理</h2><button type="button" id="close" class="quiet">閉じる</button></div>
+    const selectedCount=Object.keys(state.selected).length
+    dlg.innerHTML=`<form><div class="dialoghead"><h2>重複商品の整理</h2><button type="button" id="close" class="quiet">閉じる</button></div>
       <div class="dialogbody">
-        <p class="excelhint">同じ品番で複数の商品IDがあるグループを横並びで比較します。「別注」「不明」「品番なし」は通常の品番重複と分けて表示し、その理由だけでは同一商品と判断しません。統合せず残すこともできます。全件自動統合はしません。</p>
+        <p class="merge-lead">同じ品番の商品IDを横に並べて比較します。「別注」「不明」「品番なし」は通常の品番重複と分けて表示し、その理由だけでは同一商品と判断しません。統合せず残すこともできます。</p>
         <div class="merge-toolbar">
-          <button type="button" id="mergePreview" class="primary" ${Object.keys(state.selected).length>=2?'':'disabled'}>選択した商品の統合内容を確認</button>
-          <span class="sub">選択 ${num(Object.keys(state.selected).length)}件</span>
+          <button type="button" id="mergePreview" class="primary" ${selectedCount>=2?'':'disabled'}>統合内容を確認</button>
+          <span class="merge-selected-count">選択 ${num(selectedCount)}件</span>
         </div>
-        <h3>通常の品番重複</h3>
+        <h3 class="merge-section-title">通常の品番重複</h3>
         ${normals}
-        ${specials?`<h3>別注・不明・品番なし（手動確認）</h3>${specials}`:''}
+        ${specials?`<h3 class="merge-section-title">別注・不明・品番なし（手動確認）</h3>${specials}`:''}
       </div>
-      <p id="error"></p>
-      <div class="dialogactions"><button type="button" id="close2" class="quiet">閉じる</button></div>
+      <div class="dialogactions"><p id="error" class="merge-error" hidden></p><button type="button" id="close2" class="quiet">閉じる</button></div>
     </form>`
-    dlg.showModal()
-    const close=()=>{dlg.close();dlg.innerHTML=''}
-    dlg.querySelector('#close').onclick=close
-    dlg.querySelector('#close2').onclick=close
+    if(!dlg.open)dlg.showModal()
+    dlg.querySelector('#close').onclick=closeDialog
+    dlg.querySelector('#close2').onclick=closeDialog
     dlg.querySelectorAll('[data-merge-pick]').forEach(el=>{
       el.onchange=()=>{
         const pid=Number(el.dataset.mergePick)
@@ -162,8 +189,8 @@ async function openProductMerge(deps){
       state.phase='confirm'
       paintConfirm()
     }catch(e){
-      const err=document.getElementById('error')
-      if(err)err.textContent=e.message
+      const el=document.getElementById('error')
+      if(el){el.hidden=false;el.textContent=e.message}
       else toast(e.message)
     }
   }
@@ -196,9 +223,9 @@ async function openProductMerge(deps){
         ${resolve}</li>`
     }).join('')||'<li>移動する取扱はありません</li>'
 
-    dlg.innerHTML=`<form class="merge-dialog"><div class="dialoghead"><h2>統合の確認</h2><button type="button" id="close" class="quiet">閉じる</button></div>
+    dlg.innerHTML=`<form><div class="dialoghead"><h2>統合の確認</h2><button type="button" id="close" class="quiet">閉じる</button></div>
       <div class="dialogbody">
-        <p class="excelhint">実行前の内容です。確定するまでデータベースは変わりません。失敗時は全体を取り消します。</p>
+        <p class="merge-lead">実行前の内容です。確定するまでデータベースは変わりません。失敗時は全体を取り消します。</p>
         <dl class="merge-dl merge-summary">
           <div><dt>統合対象</dt><dd>商品ID ${(p.productIds||[]).join('、')}</dd></div>
           <div><dt>残す商品ID</dt><dd>${p.keepProductId}</dd></div>
@@ -207,7 +234,7 @@ async function openProductMerge(deps){
           <div><dt>在庫ロット</dt><dd>${num(p.totals&&p.totals.lotCount)}件 / 数量 ${num(p.totals&&p.totals.qty)} / 金額 ${yen(p.totals&&p.totals.amount)}</dd></div>
           <div><dt>未解決の差異</dt><dd>${num(p.unresolvedConflicts)}</dd></div>
         </dl>
-        <div class="grid">
+        <div class="grid merge-confirm-grid">
           ${choiceSelect('mergeName',p.nameChoices,p.name,true)}
           ${choiceSelect('mergeColor',p.colorChoices,p.color,true)}
           <label>カテゴリ<select id="mergeCategory">${(p.categoryChoices||['','制服','部品・資材']).map(v=>`<option value="${esc(v)}" ${String(v)===String(p.category)?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>
@@ -216,19 +243,24 @@ async function openProductMerge(deps){
         </div>
         <fieldset class="merge-subs"><legend>サブ仕入先（通常以外）</legend>${subChecks}</fieldset>
         <fieldset class="merge-sizes"><legend>引き継ぐサイズ（表記は同一化しません）</legend>${sizeChecks}</fieldset>
-        <h3>取扱・在庫の移動</h3>
+        <h3 class="merge-section-title">取扱・在庫の移動</h3>
         <ul class="merge-moves">${moves}</ul>
-        <ul class="excelhint">${(p.notes||[]).map(n=>`<li>${esc(n)}</li>`).join('')}</ul>
+        <ul class="merge-notes">${(p.notes||[]).map(n=>`<li>${esc(n)}</li>`).join('')}</ul>
       </div>
-      <p id="error"></p>
       <div class="dialogactions">
+        <p id="error" class="merge-error" hidden></p>
         <button type="button" id="mergeBack" class="quiet">選び直す</button>
         <button type="button" id="mergeRun" class="primary">この内容で統合する</button>
       </div>
     </form>`
-    dlg.showModal()
-    const err=()=>document.getElementById('error')
-    dlg.querySelector('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
+    if(!dlg.open)dlg.showModal()
+    const showErr=msg=>{
+      const el=document.getElementById('error')
+      if(!el){toast(msg);return}
+      el.hidden=!msg
+      el.textContent=msg||''
+    }
+    dlg.querySelector('#close').onclick=closeDialog
     dlg.querySelector('#mergeBack').onclick=()=>{state.phase='pick';state.preview=null;paint()}
 
     const syncChoice=(selId,editId)=>{
@@ -269,7 +301,7 @@ async function openProductMerge(deps){
         state.preview=await api('/api/products/merge/preview',body)
         // 差異解決は維持
         paintConfirm()
-      }catch(e){err().textContent=e.message}
+      }catch(e){showErr(e.message)}
     }
     dlg.querySelector('#mergeKeepId').onchange=()=>refreshPreview()
     dlg.querySelector('#mergeSupplier').onchange=()=>refreshPreview()
@@ -309,7 +341,7 @@ async function openProductMerge(deps){
       }
       try{
         const result=await api('/api/products/merge',body)
-        dlg.close();dlg.innerHTML=''
+        closeDialog()
         const msg=result.already
           ?'この統合は保存済みです。二重には実行していません。'
           :`統合しました。数量 ${num(result.beforeQty)}→${num(result.afterQty)}、金額 ${yen(result.beforeAmount)}→${yen(result.afterAmount)}`
@@ -317,7 +349,7 @@ async function openProductMerge(deps){
         if(typeof boot==='function')await boot()
       }catch(e){
         if(e.status===409){
-          err().textContent=e.message||'対象データが変わったため、確認し直してください。'
+          showErr(e.message||'対象データが変わったため、確認し直してください。')
           try{
             state.preview=await api('/api/products/merge/preview',{
               productIds:p.productIds,
@@ -328,7 +360,7 @@ async function openProductMerge(deps){
           }catch(_){}
           return
         }
-        err().textContent=e.message
+        showErr(e.message)
       }
     }
   }

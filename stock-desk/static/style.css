@@ -458,31 +458,170 @@ fieldset.sub-suppliers legend,fieldset.merge-subs legend,fieldset.merge-sizes le
   padding:0 6px;font-size:13px
 }
 #subSupplierChecks,.merge-subs,.merge-sizes{display:flex;flex-wrap:wrap;gap:8px 14px}
-dialog .merge-dialog{width:min(1100px,96vw);max-height:min(94vh,980px)}
-dialog .merge-dialog .dialogbody{max-height:min(72vh,820px);overflow:auto}
-.merge-toolbar{display:flex;align-items:center;gap:12px;margin:8px 0 14px;flex-wrap:wrap}
-.merge-group{margin:0 0 18px}
-.merge-group h3{margin:0 0 6px;font-size:16px}
-.merge-cards{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+
+/* 幅は dialog 本体へ（form に付けない＝dialog 既定880pxとの食い違いを防ぐ） */
+dialog.merge-dialog{
+  width:min(960px,96vw);
+  max-width:96vw;
+  max-height:min(90vh,920px);
+  margin:auto;
+}
+dialog.merge-dialog .dialogbody{
+  overflow:auto;
+  overscroll-behavior:contain;
+}
+dialog.merge-dialog .dialogactions{
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+}
+dialog.merge-dialog .merge-error{
+  flex:1 1 auto;
+  margin:0;
+  color:#8a2b2b;
+  font-size:13px;
+  font-weight:600;
+  text-align:left;
+}
+dialog.merge-dialog .merge-error[hidden]{display:none!important}
+
+.merge-lead{
+  margin:0 0 10px;
+  color:#3d5146;
+  font-size:13px;
+  line-height:1.45;
+}
+.merge-toolbar{
+  position:sticky;
+  top:0;
+  z-index:3;
+  display:flex;
+  align-items:center;
   gap:10px;
+  flex-wrap:wrap;
+  margin:0 0 12px;
+  padding:8px 0;
+  background:#fff;
+  border-bottom:1px solid #e3efe4;
 }
-.merge-card{
-  border:1px solid #cfd8d2;
-  border-radius:4px;
-  padding:10px;
-  background:#fafbfa;
-}
-.merge-card.is-selected{border-color:#3a6b55;box-shadow:inset 0 0 0 1px #3a6b55}
-.merge-card.is-keep{background:#f0f6f2}
-.merge-pick,.merge-keep{display:inline-flex;align-items:center;gap:4px;margin:0 10px 8px 0;font-size:13px}
-.merge-dl{margin:0}
-.merge-dl>div{display:grid;grid-template-columns:7em 1fr;gap:4px 8px;margin:0 0 4px;font-size:13px}
-.merge-dl dt{margin:0;color:#5a6a62;font-weight:600}
-.merge-dl dd{margin:0}
-.merge-summary{margin-bottom:12px}
-.merge-moves{padding-left:1.2em}
-.merge-conflict{margin:4px 0 8px;padding:6px 8px;background:#fff8e8;border:1px solid #e6d7a8;border-radius:3px}
+.merge-toolbar .primary{white-space:nowrap}
+.merge-selected-count{font-size:13px;font-weight:700;color:#3d5146}
+.merge-section-title{margin:14px 0 8px;font-size:15px}
+.merge-group{margin:0 0 16px;min-width:0}
+.merge-group h3{margin:0 0 4px;font-size:15px}
+.merge-note{margin:0 0 8px;color:#3d5146;font-size:12.5px;line-height:1.4}
 .merge-special-note{color:#5a4a20}
+
+/* 横スクロール比較表：左列（項目）とヘッダを固定 */
+.merge-compare-scroll{
+  overflow:auto;
+  max-width:100%;
+  max-height:min(52vh,420px);
+  border:1px solid #d5e0d8;
+  border-radius:6px;
+  background:#fff;
+  -webkit-overflow-scrolling:touch;
+}
+table.merge-compare{
+  width:max-content;
+  min-width:100%;
+  border-collapse:separate;
+  border-spacing:0;
+  table-layout:fixed;
+  margin:0;
+}
+table.merge-compare th,
+table.merge-compare td{
+  padding:8px 10px;
+  border-bottom:1px solid #e8efe9;
+  border-right:1px solid #eef3ef;
+  vertical-align:top;
+  text-align:left;
+  font-size:13px;
+  line-height:1.4;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+table.merge-compare th:last-child,
+table.merge-compare td:last-child{border-right:0}
+table.merge-compare .merge-row-label{
+  position:sticky;
+  left:0;
+  z-index:2;
+  width:7.5rem;
+  min-width:7.5rem;
+  max-width:7.5rem;
+  background:#f6faf7;
+  color:#5d7268;
+  font-size:12px;
+  font-weight:700;
+  box-shadow:1px 0 0 #d5e6da;
+}
+table.merge-compare thead th{
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:#f6faf7;
+  font-weight:700;
+}
+table.merge-compare thead .merge-row-label{z-index:4}
+table.merge-compare .merge-col{
+  width:12.5rem;
+  min-width:12.5rem;
+  max-width:14rem;
+}
+table.merge-compare .merge-col-actions{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  align-items:flex-start;
+  margin-bottom:4px;
+}
+table.merge-compare .merge-col-title{
+  font-variant-numeric:tabular-nums;
+  font-size:12px;
+  color:#3d5146;
+}
+.merge-pick,.merge-keep{
+  display:inline-flex!important;
+  flex-direction:row!important;
+  align-items:center;
+  gap:6px;
+  margin:0;
+  font-size:12px;
+  font-weight:700;
+  white-space:nowrap;
+}
+.merge-pick input,.merge-keep input{width:auto;min-height:0;margin:0}
+table.merge-compare .is-selected{background:#eef7f1}
+table.merge-compare .is-keep{background:#e4f2ea}
+table.merge-compare thead th.is-selected,
+table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
+
+.merge-dl{margin:0}
+.merge-dl>div{display:grid;grid-template-columns:7em minmax(0,1fr);gap:4px 8px;margin:0 0 4px;font-size:13px}
+.merge-dl dt{margin:0;color:#5a6a62;font-weight:600}
+.merge-dl dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.merge-summary{margin-bottom:12px}
+.merge-confirm-grid{min-width:0}
+.merge-moves{padding-left:1.2em;margin:0 0 10px}
+.merge-notes{margin:0;padding-left:1.2em;color:#3d5146;font-size:12.5px}
+.merge-conflict{margin:4px 0 8px;padding:6px 8px;background:#fff8e8;border:1px solid #e6d7a8;border-radius:3px}
+.merge-conflict label{
+  display:inline-flex!important;
+  flex-direction:row!important;
+  align-items:center;
+  gap:6px;
+  margin:4px 10px 0 0;
+  font-weight:600;
+  font-size:12.5px;
+}
+.merge-conflict input{width:auto;min-height:0}
 .merge-edit{display:block;margin-top:4px}
+
+@media(max-width:640px){
+  dialog.merge-dialog{width:96vw;max-height:92vh}
+  table.merge-compare .merge-row-label{width:5.5rem;min-width:5.5rem;max-width:5.5rem;font-size:11px;padding:6px 8px}
+  table.merge-compare .merge-col{width:10.5rem;min-width:10.5rem;max-width:12rem}
+  .merge-compare-scroll{max-height:min(48vh,360px)}
+}
