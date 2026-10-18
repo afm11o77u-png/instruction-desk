@@ -49,8 +49,11 @@ class LabelPasteAssetsTest(unittest.TestCase):
         self.assertIn('width:11px;height:11px', css[css.index('#labeldesk .labelpattern input[type=radio]'):css.index('#labeldesk .labelpattern input[type=radio]') + 280])
         self.assertIn('#labeldesk .labeldesk-lead{', css)
         lead = css[css.index('#labeldesk .labeldesk-lead{'):css.index('}', css.index('#labeldesk .labeldesk-lead{')) + 1]
-        self.assertIn('overflow-x:auto', lead)
-        self.assertIn('white-space:nowrap', css[css.index('#labeldesk .labeldesk-lead>p{'):css.index('}', css.index('#labeldesk .labeldesk-lead>p{')) + 1])
+        self.assertNotIn('overflow-x:auto', lead)
+        p_rule = css[css.index('#labeldesk .labeldesk-lead>p{'):css.index('}', css.index('#labeldesk .labeldesk-lead>p{')) + 1]
+        self.assertIn('white-space:normal', p_rule)
+        self.assertNotIn('white-space:nowrap', p_rule)
+        self.assertNotIn('ellipsis', p_rule)
         self.assertIn('id="labelprint"', INDEX)
         self.assertIn('id="labelreset"', INDEX)
         self.assertIn('class="labeladdrow"', INDEX)
