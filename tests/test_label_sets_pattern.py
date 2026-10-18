@@ -221,7 +221,8 @@ class LabelDeskAssetsTest(unittest.TestCase):
         self.assertIn('<title></title>', js)
         self.assertIn('@page labels{size:A4 landscape;margin:0}', sheet_css)
         self.assertIn('@page{size:A4 portrait;margin:12mm}', sheet_css)
-        self.assertIn('id="labelprinttip"', html)
+        # 宛名タブの常時表示の印刷設定ヒントは撤去。他モード／印刷ダイアログ側の案内は残す。
+        self.assertNotIn('id="labelprinttip"', html)
         self.assertIn('ヘッダーとフッター', html)
         self.assertIn('ヘッダーとフッター', js)
 
