@@ -113,6 +113,7 @@ def schema(c):
         correct_rinko_yellow(c, DATA_DIR)
         correct_rinko_name_formats(c, DATA_DIR)
         correct_ashuka_name_formats(c, DATA_DIR)
+        ensure_three_customer_name_formats(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -2851,8 +2852,11 @@ def _ashuka_trainee_is_current(fmt, samples):
         return False
     return True
 
-def _render_ashuka_banded_sample(dst_path, bands, *, width_mm=80, height_mm=50, family_hint=ASHUKA_FAMILY):
-    """80×50mm 白地の帯付き見本を描画。帯高合計は呼び出し側で 50mm にする。"""
+def _render_ashuka_banded_sample(
+    dst_path, bands, *, width_mm=80, height_mm=50, family_hint=ASHUKA_FAMILY,
+    paper_rgb=(255, 255, 255),
+):
+    """帯付き見本を描画。帯高合計は呼び出し側で height_mm に合わせる。既定は白地。"""
     try:
         from PIL import Image, ImageDraw
     except ImportError:
@@ -2866,7 +2870,7 @@ def _render_ashuka_banded_sample(dst_path, bands, *, width_mm=80, height_mm=50, 
     px = ASHUKA_SAMPLE_PX_PER_MM
     width = max(1, int(round(width_mm * px)))
     height = max(1, int(round(height_mm * px)))
-    image = Image.new('RGB', (width, height), (255, 255, 255))
+    image = Image.new('RGB', (width, height), tuple(paper_rgb))
     draw = ImageDraw.Draw(image)
     y = 0.0
     for band in bands:
@@ -3477,6 +3481,791 @@ def correct_ashuka_name_formats(c, data_dir=None):
     )
     return report
 
+# 3社ネーム追加：最新 Excel「ネーム仕分け_五十音順2」Sheet1
+# 行25–27 エア・ウォーター・アグリ／行122–123 十勝ミートセンター／行158 ベル・クール研究所
+# - 対象顧客のみ作成・更新。他顧客は変更しない。
+# - identity 固定で重複追加しない。担当者・了承は触らない。
+THREE_NAMES_POLICY = 'excel-gojuon2-r25-27-122-123-158-v1'
+THREE_NAMES_SETTINGS_KEY = 'three_customer_name_formats'
+THREE_NAMES_REPORT = 'three-customer-name-formats-report.json'
+THREE_FAMILY = 'HG丸ゴシック'
+THREE_LARGE_W, THREE_LARGE_H = 80, 50
+THREE_SMALL_W, THREE_SMALL_H = 50, 24
+THREE_GENERIC_LARGE = {4: 48, 5: 38, 6: 30}  # B2 大汎用
+THREE_GENERIC_SMALL = {4: 26, 5: 24, 6: 20}  # B2 小汎用
+THREE_TOKACHI_SURNAME_PT = {2: 80, 3: 64, 'collision': 56}  # Excel「2文字：80　3文字：64　被：56」
+THREE_SAMPLE_FULL = '山田 太郎'
+THREE_SAMPLE_FULL_FEMALE = '山田 花子'  # 女性用フルネーム見本の規約（本関数の既定見本は男性）
+THREE_SAMPLE_SURNAME = '山田'
+THREE_PAPER_RGB = {
+    '白': (255, 255, 255),
+    '緑': (144, 238, 144),  # UI swatch #90EE90
+}
+THREE_OPEN_ITEMS = [
+    '大／小ネームの実寸は Excel に mm が無いため、既存どおり大80×50・小50×24を採用',
+    '1段・段サイズ未記入行の配置は横中央・縦中央と仮定',
+    '「白下：左前(逆さ)」は貼付向きの注記として扱い、見本画像は正立のまま',
+    '十勝「被：56」は備考どおり苗字被り時。見本は苗字「山田」（2文字→80pt）',
+    'エア・ウォーター顧客名は「エア・ウォーター・アグリ」。更別工場/札幌工場は備考へ',
+    'HG丸ゴシック太字は環境フォント次第（太字指定は備考・captionに記録）',
+]
+
+
+def _three_char_count(text):
+    return len(re.sub(r'\s+', '', str(text or '')))
+
+
+def _three_generic_pt(kind, text):
+    n = _three_char_count(text)
+    table = THREE_GENERIC_LARGE if kind == 'large' else THREE_GENERIC_SMALL
+    if n <= 4:
+        return table[4]
+    if n == 5:
+        return table[5]
+    return table[6]
+
+
+def _three_tokachi_surname_pt(text):
+    n = _three_char_count(text)
+    if n <= 2:
+        return THREE_TOKACHI_SURNAME_PT[2]
+    if n == 3:
+        return THREE_TOKACHI_SURNAME_PT[3]
+    return THREE_TOKACHI_SURNAME_PT['collision']
+
+
+def _three_band(text, *, height_mm, font_pt):
+    return {
+        'role': 'name',
+        'text': text,
+        'heightMm': float(height_mm),
+        'fontPt': float(font_pt),
+        'alignH': 'center',
+        'alignV': 'middle',
+        'indentMm': 0.0,
+    }
+
+
+def _three_format_specs():
+    """Excel 行ごとの形式定義。identity は再追加防止用に固定。"""
+    air_site = '更別工場/札幌工場'
+    air_note_base = (
+        f'拠点：{air_site}。書体は{THREE_FAMILY}（太字）。'
+        'Excel 行25–27（ネーム仕分け_五十音順2）。'
+    )
+    tokachi_note = (
+        f'書体は{THREE_FAMILY}（太字）。用紙色は白 or 緑。'
+        '苗字被りは名前の一文字目をつける（被：56pt）。'
+        '大ネーム文字サイズ：2文字80／3文字64／被56。'
+        'Excel 行122–123。'
+    )
+    bell_note = (
+        f'書体は{THREE_FAMILY}（太字）。用紙色は白。'
+        '1段・フルネーム／小汎用（4文字26・5文字24・6文字20）。'
+        'Excel 行158。'
+    )
+    full_large_pt = _three_generic_pt('large', THREE_SAMPLE_FULL)
+    full_small_pt = _three_generic_pt('small', THREE_SAMPLE_FULL)
+    surname_tokachi_pt = _three_tokachi_surname_pt(THREE_SAMPLE_SURNAME)
+    return (
+        {
+            'customerKey': 'excel:airwater-agri',
+            'customerName': 'エア・ウォーター・アグリ',
+            'reading': 'えあうぉーたーあぐり',
+            'formats': (
+                {
+                    'identity': 'airwater-agri:large-fullname',
+                    'kind': 'air-large-fullname',
+                    'sourceRow': 25,
+                    'formatName': '大ネーム（フルネーム）',
+                    'placement': '白衣：左袖25cm',
+                    'heading': 'フルネーム（大汎用）',
+                    'note': air_note_base + '大ネーム・1段・フルネーム／大汎用。',
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 0,
+                    'widthMm': THREE_LARGE_W,
+                    'heightMm': THREE_LARGE_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'maximumFont': THREE_GENERIC_LARGE[4],
+                    'sampleText': THREE_SAMPLE_FULL,
+                    'fontPt': full_large_pt,
+                    'papers': ('白',),
+                    'caption': (
+                        f'見本：フルネーム「{THREE_SAMPLE_FULL}」（大汎用・1段）。'
+                        f'書体は{THREE_FAMILY}（太字）。用紙色は白。'
+                        f'女性用フルネームは「{THREE_SAMPLE_FULL_FEMALE}」。'
+                    ),
+                },
+                {
+                    'identity': 'airwater-agri:small-pants-fullname',
+                    'kind': 'air-small-pants-fullname',
+                    'sourceRow': 26,
+                    'formatName': '小ネーム（フルネーム・ズボン）',
+                    'placement': '白下：左前(逆さ)',
+                    'heading': 'フルネーム（小汎用）',
+                    'note': air_note_base + '小ネーム・1段・フルネーム／小汎用。貼付は逆さ。',
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'maximumFont': THREE_GENERIC_SMALL[4],
+                    'sampleText': THREE_SAMPLE_FULL,
+                    'fontPt': full_small_pt,
+                    'papers': ('白',),
+                    'caption': (
+                        f'見本：フルネーム「{THREE_SAMPLE_FULL}」（小汎用・1段）。'
+                        f'書体は{THREE_FAMILY}（太字）。用紙色は白。貼付：白下左前（逆さ）。'
+                        f'女性用フルネームは「{THREE_SAMPLE_FULL_FEMALE}」。'
+                    ),
+                },
+                {
+                    'identity': 'airwater-agri:small-hat-surname',
+                    'kind': 'air-small-hat-surname',
+                    'sourceRow': 27,
+                    'formatName': '小ネーム（苗字・帽子）',
+                    'placement': '帽子：左耳上＋右耳上',
+                    'heading': '苗字のみ（36pt）',
+                    'note': air_note_base + '小ネーム・1段・苗字のみ／36pt。',
+                    'layout': 'Surname',
+                    'reading': '苗字のみ',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'maximumFont': 36,
+                    'sampleText': THREE_SAMPLE_SURNAME,
+                    'fontPt': 36,
+                    'papers': ('白',),
+                    'caption': (
+                        f'見本：苗字「{THREE_SAMPLE_SURNAME}」（36pt・1段）。'
+                        f'書体は{THREE_FAMILY}（太字）。用紙色は白。'
+                    ),
+                },
+            ),
+        },
+        {
+            'customerKey': 'excel:tokachi-meat',
+            'customerName': '十勝ミートセンター',
+            'reading': 'とかちみーとせんたー',
+            'formats': (
+                {
+                    'identity': 'tokachi-meat:large-surname',
+                    'kind': 'tokachi-large-surname',
+                    'sourceRow': 122,
+                    'formatName': '大ネーム（苗字のみ）',
+                    'placement': '白衣：左袖25cm',
+                    'heading': '苗字のみ（2文字80／3文字64／被56）',
+                    'note': tokachi_note,
+                    'layout': 'Surname',
+                    'reading': '苗字のみ',
+                    'small': 0,
+                    'widthMm': THREE_LARGE_W,
+                    'heightMm': THREE_LARGE_H,
+                    'fixedColor': '白 or 緑',
+                    'colorCaption': '白 or 緑',
+                    'groups': ['用紙色', '用紙色'],
+                    'colors': ['白', '緑'],
+                    'swatches': ['#FFFFFF', '#90EE90'],
+                    'maximumFont': THREE_TOKACHI_SURNAME_PT[2],
+                    'sampleText': THREE_SAMPLE_SURNAME,
+                    'fontPt': surname_tokachi_pt,
+                    'papers': ('白', '緑'),
+                    'caption': (
+                        f'見本：苗字「{THREE_SAMPLE_SURNAME}」（2文字→{surname_tokachi_pt}pt）。'
+                        f'書体は{THREE_FAMILY}（太字）。用紙色は白 or 緑。'
+                        '苗字被りは名前の一文字目（被：56pt）。'
+                    ),
+                },
+                {
+                    'identity': 'tokachi-meat:small-surname',
+                    'kind': 'tokachi-small-surname',
+                    'sourceRow': 123,
+                    'formatName': '小ネーム（苗字のみ）',
+                    'placement': '白下：左上　帽子：右耳上',
+                    'heading': '苗字のみ（36pt）',
+                    'note': tokachi_note + '小ネームは36pt。',
+                    'layout': 'Surname',
+                    'reading': '苗字のみ',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '白 or 緑',
+                    'colorCaption': '白 or 緑',
+                    'groups': ['用紙色', '用紙色'],
+                    'colors': ['白', '緑'],
+                    'swatches': ['#FFFFFF', '#90EE90'],
+                    'maximumFont': 36,
+                    'sampleText': THREE_SAMPLE_SURNAME,
+                    'fontPt': 36,
+                    'papers': ('白', '緑'),
+                    'caption': (
+                        f'見本：苗字「{THREE_SAMPLE_SURNAME}」（36pt・1段）。'
+                        f'書体は{THREE_FAMILY}（太字）。用紙色は白 or 緑。'
+                        '苗字被りは名前の一文字目をつける。'
+                    ),
+                },
+            ),
+        },
+        {
+            'customerKey': 'excel:bellcool',
+            'customerName': 'ベル・クール研究所',
+            'reading': 'べるくーるけんきゅうじょ',
+            'formats': (
+                {
+                    'identity': 'bellcool:small-fullname',
+                    'kind': 'bell-small-fullname',
+                    'sourceRow': 158,
+                    'formatName': '小ネーム（フルネーム）',
+                    'placement': '白衣：左袖25cm',
+                    'heading': 'フルネーム（小汎用）',
+                    'note': bell_note,
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'maximumFont': THREE_GENERIC_SMALL[4],
+                    'sampleText': THREE_SAMPLE_FULL,
+                    'fontPt': full_small_pt,
+                    'papers': ('白',),
+                    'caption': (
+                        f'見本：フルネーム「{THREE_SAMPLE_FULL}」（小汎用・1段）。'
+                        f'書体は{THREE_FAMILY}（太字）。用紙色は白。'
+                        f'女性用フルネームは「{THREE_SAMPLE_FULL_FEMALE}」。'
+                    ),
+                },
+            ),
+        },
+    )
+
+
+def _three_spec(fmt_def):
+    return {
+        'threeKind': fmt_def['kind'],
+        'threePolicy': THREE_NAMES_POLICY,
+        'sampleText': fmt_def['sampleText'],
+        'fontPt': fmt_def['fontPt'],
+        'papers': list(fmt_def['papers']),
+        'genericFontsPt': dict(
+            THREE_GENERIC_SMALL if fmt_def['small'] else THREE_GENERIC_LARGE
+        ),
+        'tokachiSurnamePt': dict(THREE_TOKACHI_SURNAME_PT) if 'tokachi' in fmt_def['kind'] else None,
+        'femaleFullName': THREE_SAMPLE_FULL_FEMALE if fmt_def['reading'] == 'フルネーム' else None,
+    }
+
+
+def _three_match_customer_name(name, target):
+    text = str(name or '').replace('\n', ' ').replace('\r', ' ').strip()
+    return text == target or text.startswith(target)
+
+
+def _three_find_customer(c, customer_def):
+    rows = c.execute(
+        'SELECT * FROM name_customers WHERE retired=0 ORDER BY id'
+    ).fetchall()
+    for row in rows:
+        if str(row['source_key'] or '') == customer_def['customerKey']:
+            return row
+    for row in rows:
+        if _three_match_customer_name(row['source_name'], customer_def['customerName']):
+            return row
+    return None
+
+
+def _three_ensure_customer(c, customer_def, backup_dir, items):
+    existing = _three_find_customer(c, customer_def)
+    if existing:
+        return existing, False
+    known = _app_customers(c)
+    linked, status = _link(customer_def['customerName'], known)
+    c.execute(
+        '''INSERT INTO name_customers(
+            source_key, source_index, source_name, reading, linked_name, link_status, manual, retired
+           ) VALUES(?,?,?,?,?,?,1,0)''',
+        (
+            customer_def['customerKey'], -1, customer_def['customerName'],
+            customer_def.get('reading') or '', linked, status,
+        ),
+    )
+    cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    row = c.execute('SELECT * FROM name_customers WHERE id=?', (cid,)).fetchone()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / f'customer-created-{cid}.json').write_text(
+        json.dumps(_row_as_dict(row), ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    items.append({
+        'action': 'create-customer',
+        'customerId': cid,
+        'customerName': customer_def['customerName'],
+        'sourceKey': customer_def['customerKey'],
+    })
+    return row, True
+
+
+def _three_is_current(fmt, samples, fmt_def):
+    if str(fmt['format_name'] or '') != fmt_def['formatName']:
+        return False
+    if str(fmt['placement'] or '') != fmt_def['placement']:
+        return False
+    if str(fmt['family'] or '') != THREE_FAMILY:
+        return False
+    if str(fmt['heading'] or '') != fmt_def['heading']:
+        return False
+    if str(fmt['note'] or '') != fmt_def['note']:
+        return False
+    if str(fmt['layout'] or '') != fmt_def['layout']:
+        return False
+    if str(fmt['reading'] or '') != fmt_def['reading']:
+        return False
+    if int(fmt['small'] or 0) != int(fmt_def['small']):
+        return False
+    if int(fmt['width_mm'] or 0) != int(fmt_def['widthMm']):
+        return False
+    if int(fmt['height_mm'] or 0) != int(fmt_def['heightMm']):
+        return False
+    if str(fmt['fixed_color'] or '') != fmt_def['fixedColor']:
+        return False
+    if str(fmt['color_caption'] or '') != fmt_def['colorCaption']:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(fmt_def['maximumFont']):
+        return False
+    if int(fmt['source_row'] or 0) != int(fmt_def['sourceRow']):
+        return False
+    spec = _load_spec(fmt)
+    if spec.get('threePolicy') != THREE_NAMES_POLICY or spec.get('threeKind') != fmt_def['kind']:
+        return False
+    want_groups = fmt_def.get('groups') or []
+    want_colors = fmt_def.get('colors') or []
+    try:
+        have_groups = json.loads(fmt['groups_json'] or '[]')
+        have_colors = json.loads(fmt['colors_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if have_groups != want_groups or have_colors != want_colors:
+        return False
+    if len(samples) != len(fmt_def['papers']):
+        return False
+    by_paper = {str(s['paper_color'] or ''): s for s in samples}
+    for paper in fmt_def['papers']:
+        sample = by_paper.get(paper)
+        if sample is None:
+            return False
+        want_key = _three_variant_key(fmt_def['papers'], paper)
+        if str(sample['variant_key'] or '') != want_key:
+            return False
+        rel = str(sample['relative_path'] or '')
+        if not rel.startswith('images/names/'):
+            return False
+        if fmt_def['kind'] not in Path(rel).name:
+            return False
+        if str(sample['caption'] or '') != fmt_def['caption']:
+            return False
+    return True
+
+
+def _three_variant_key(papers, paper):
+    if len(papers) == 1:
+        return 'standard'
+    return f'paper-{paper}'
+
+
+def _backup_three_format(c, root, backup_dir, fmt, samples):
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+
+def _write_three_samples(c, root, format_id, fmt_def):
+    band = _three_band(
+        fmt_def['sampleText'],
+        height_mm=fmt_def['heightMm'],
+        font_pt=fmt_def['fontPt'],
+    )
+    c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
+    notes = []
+    paths = []
+    for paper in fmt_def['papers']:
+        key = _three_variant_key(fmt_def['papers'], paper)
+        stem = f'{fmt_def["kind"]}-{paper}' if len(fmt_def['papers']) > 1 else fmt_def['kind']
+        rel = f'images/names/{stem}-{format_id:06}.png'
+        dst = root / rel
+        rgb = THREE_PAPER_RGB.get(paper, (255, 255, 255))
+        ok, note = _render_ashuka_banded_sample(
+            dst, (band,),
+            width_mm=fmt_def['widthMm'],
+            height_mm=fmt_def['heightMm'],
+            family_hint=THREE_FAMILY,
+            paper_rgb=rgb,
+        )
+        notes.append(f'{paper}:{note}')
+        if not ok:
+            return False, '; '.join(notes), paths
+        c.execute(
+            '''INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)
+               VALUES(?,?,?,?,?,?)''',
+            (format_id, key, paper if len(fmt_def['papers']) > 1 else '', paper, rel, fmt_def['caption']),
+        )
+        paths.append(rel)
+    return True, '; '.join(notes), paths
+
+
+def _upsert_three_format_row(c, customer_id, fmt_def, existing=None):
+    groups = json.dumps(fmt_def.get('groups') or [], ensure_ascii=False)
+    colors = json.dumps(fmt_def.get('colors') or [], ensure_ascii=False)
+    swatches = json.dumps(fmt_def.get('swatches') or [], ensure_ascii=False)
+    spec = json.dumps(_three_spec(fmt_def), ensure_ascii=False)
+    values = (
+        fmt_def['formatName'], fmt_def['placement'], THREE_FAMILY, '',
+        fmt_def['heading'], fmt_def['note'], fmt_def['layout'], fmt_def['reading'],
+        int(fmt_def['small']), int(fmt_def['widthMm']), int(fmt_def['heightMm']), 0,
+        fmt_def['fixedColor'], fmt_def['colorCaption'],
+        groups, colors, swatches, 'null',
+        '', float(fmt_def['maximumFont']), 0, 0, int(fmt_def['sourceRow']),
+        spec, 0, '[]', 0,
+    )
+    if existing:
+        c.execute(
+            '''UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,
+                layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,
+                groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,
+                heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,
+                retired=0, identity=? WHERE id=?''',
+            values + (fmt_def['identity'], existing['id']),
+        )
+        return existing['id']
+    c.execute(
+        '''INSERT INTO name_formats(
+            identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,
+            layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,
+            groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,
+            number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)''',
+        (
+            fmt_def['identity'], customer_id, -1,
+            values[0], values[1], values[2], values[3], values[4], values[5],
+            values[6], values[7], values[8], values[9], values[10], values[11],
+            values[12], values[13], values[14], values[15], values[16], values[17],
+            values[18], values[19], values[20], values[21], values[22], None,
+            values[23], values[24], values[25], values[26],
+        ),
+    )
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def _patch_three_catalog(data_dir, backup_dir, customer_defs, items):
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return False
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    catalog_backup = backup_dir / 'catalog.json'
+    if not catalog_backup.exists():
+        shutil.copy2(path, catalog_backup)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    customers = list(data.get('customers') or [])
+    formats = list(data.get('formats') or [])
+    by_key = {c.get('sourceKey'): c for c in customers}
+    changed = False
+    item_by_identity = {i.get('identity'): i for i in items if i.get('identity')}
+    for cust in customer_defs:
+        if cust['customerKey'] not in by_key:
+            customers.append({
+                'sourceKey': cust['customerKey'],
+                'sourceIndex': -1,
+                'name': cust['customerName'],
+                'reading': cust.get('reading') or '',
+            })
+            by_key[cust['customerKey']] = customers[-1]
+            changed = True
+        else:
+            entry = by_key[cust['customerKey']]
+            if entry.get('name') != cust['customerName']:
+                entry['name'] = cust['customerName']
+                changed = True
+        for fmt_def in cust['formats']:
+            item = item_by_identity.get(fmt_def['identity'])
+            existing = next(
+                (f for f in formats if f.get('identity') == fmt_def['identity']),
+                None,
+            )
+            payload = {
+                'identity': fmt_def['identity'],
+                'customerKey': cust['customerKey'],
+                'sourceKind': -1,
+                'format': fmt_def['formatName'],
+                'placement': fmt_def['placement'],
+                'family': THREE_FAMILY,
+                'heading': fmt_def['heading'],
+                'note': fmt_def['note'],
+                'layout': fmt_def['layout'],
+                'reading': fmt_def['reading'],
+                'small': bool(fmt_def['small']),
+                'widthMm': fmt_def['widthMm'],
+                'heightMm': fmt_def['heightMm'],
+                'fixedColor': fmt_def['fixedColor'],
+                'colorCaption': fmt_def['colorCaption'],
+                'groups': list(fmt_def.get('groups') or []),
+                'colors': list(fmt_def.get('colors') or []),
+                'colorSwatches': list(fmt_def.get('swatches') or []),
+                'maximumFont': fmt_def['maximumFont'],
+                'headingFont': 0,
+                'sourceRow': fmt_def['sourceRow'],
+                'manual': True,
+                **{k: v for k, v in _three_spec(fmt_def).items() if v is not None},
+                'samples': [],
+            }
+            if item:
+                payload['dbId'] = item.get('formatId')
+                paths = item.get('samplePaths') or (
+                    [item['samplePath']] if item.get('samplePath') else []
+                )
+                for idx, paper in enumerate(fmt_def['papers']):
+                    rel = paths[idx] if idx < len(paths) else ''
+                    payload['samples'].append({
+                        'key': _three_variant_key(fmt_def['papers'], paper),
+                        'condition': paper if len(fmt_def['papers']) > 1 else '',
+                        'paperColor': paper,
+                        'relativePath': rel,
+                        'caption': fmt_def['caption'],
+                    })
+            if existing is None:
+                formats.append(payload)
+                changed = True
+            else:
+                for key, value in payload.items():
+                    if existing.get(key) != value:
+                        existing[key] = value
+                        changed = True
+    if changed:
+        data['customers'] = customers
+        data['formats'] = formats
+        data['customerCount'] = len(customers)
+        data['formatCount'] = len(formats)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+
+def ensure_three_customer_name_formats(c, data_dir=None):
+    """Excel 対象3社のネーム形式を追加／更新する。他顧客は変更しない。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'three-names-{stamp}'
+    customer_defs = _three_format_specs()
+    items = []
+    open_items = list(THREE_OPEN_ITEMS)
+
+    # 既に policy 適用済みで変更不要ならバックアップディレクトリを作らない
+    needs_work = False
+    for cust in customer_defs:
+        customer = _three_find_customer(c, cust)
+        if customer is None:
+            needs_work = True
+            break
+        for fmt_def in cust['formats']:
+            row = c.execute(
+                'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+                (fmt_def['identity'],),
+            ).fetchone()
+            if row is None:
+                # 同顧客・同配置の既存があれば再利用判定へ
+                needs_work = True
+                break
+            samples = c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (row['id'],),
+            ).fetchall()
+            if not _three_is_current(row, samples, fmt_def):
+                needs_work = True
+                break
+        if needs_work:
+            break
+
+    if not needs_work:
+        report = {
+            'at': stamp,
+            'changed': 0,
+            'policy': THREE_NAMES_POLICY,
+            'backupDir': '',
+            'catalogChanged': False,
+            'openItems': open_items,
+            'customers': [cdef['customerName'] for cdef in customer_defs],
+            'items': [],
+            'reason': 'already-applied',
+        }
+        (root / THREE_NAMES_REPORT).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                THREE_NAMES_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': THREE_NAMES_REPORT,
+                    'policy': THREE_NAMES_POLICY,
+                }, ensure_ascii=False),
+            ),
+        )
+        return report
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    for cust in customer_defs:
+        customer, created = _three_ensure_customer(c, cust, backup_dir, items)
+        for fmt_def in cust['formats']:
+            by_identity = c.execute(
+                'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+                (fmt_def['identity'],),
+            ).fetchone()
+            existing = by_identity
+            if existing is None:
+                # 同顧客で同一 placement+reading+small の既存があれば再利用（重複回避）
+                candidates = c.execute(
+                    '''SELECT * FROM name_formats WHERE customer_id=? AND retired=0
+                       AND placement=? AND reading=? AND small=? ORDER BY id''',
+                    (
+                        customer['id'], fmt_def['placement'], fmt_def['reading'],
+                        int(fmt_def['small']),
+                    ),
+                ).fetchall()
+                if len(candidates) == 1:
+                    existing = candidates[0]
+                elif len(candidates) > 1:
+                    # 形式名が近いものを優先
+                    for cand in candidates:
+                        name = str(cand['format_name'] or '')
+                        if fmt_def['formatName'] in name or name in fmt_def['formatName']:
+                            existing = cand
+                            break
+                    if existing is None:
+                        existing = candidates[0]
+
+            samples = []
+            if existing:
+                samples = c.execute(
+                    'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                    (existing['id'],),
+                ).fetchall()
+                if _three_is_current(existing, samples, fmt_def):
+                    items.append({
+                        'action': 'skip',
+                        'kind': fmt_def['kind'],
+                        'formatId': existing['id'],
+                        'number': _number(existing['id']),
+                        'identity': fmt_def['identity'],
+                        'customerName': cust['customerName'],
+                        'reason': 'already-current',
+                    })
+                    continue
+                _backup_three_format(c, root, backup_dir, existing, samples)
+
+            fid = _upsert_three_format_row(c, customer['id'], fmt_def, existing=existing)
+            ok, note, paths = _write_three_samples(c, root, fid, fmt_def)
+            items.append({
+                'action': 'create' if existing is None else 'update',
+                'kind': fmt_def['kind'],
+                'formatId': fid,
+                'number': _number(fid),
+                'identity': fmt_def['identity'],
+                'customerName': cust['customerName'],
+                'sourceRow': fmt_def['sourceRow'],
+                'samplePaths': paths,
+                'samplePath': paths[0] if paths else '',
+                'sampleOk': ok,
+                'sampleNote': note,
+                'customerCreated': created,
+            })
+
+    catalog_changed = _patch_three_catalog(root, backup_dir, customer_defs, items)
+    changed = sum(1 for i in items if i.get('action') in ('create', 'update', 'create-customer'))
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'policy': THREE_NAMES_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'openItems': open_items,
+        'customers': [cdef['customerName'] for cdef in customer_defs],
+        'excel': {
+            'path': 'media/ネーム仕分け_五十音順2.xlsx',
+            'rows': {
+                'エア・ウォーター・アグリ': [25, 26, 27],
+                '十勝ミートセンター': [122, 123],
+                'ベル・クール研究所': [158],
+            },
+        },
+        'sampleNames': {
+            'fullMale': THREE_SAMPLE_FULL,
+            'fullFemale': THREE_SAMPLE_FULL_FEMALE,
+            'surname': THREE_SAMPLE_SURNAME,
+        },
+        'rules': {
+            'onlyThreeCustomers': True,
+            'createIfMissing': True,
+            'noDuplicateIdentities': True,
+            'noAssigneeChange': True,
+            'noAutoApprove': True,
+            'noTouchOtherCustomers': True,
+        },
+        'items': items,
+    }
+    report_path = root / THREE_NAMES_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    (backup_dir / 'report.json').write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            THREE_NAMES_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': THREE_NAMES_REPORT,
+                'policy': THREE_NAMES_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -3601,6 +4390,7 @@ def import_catalog(connect, data_dir):
         correct_rinko_yellow(c, data_dir)
         correct_rinko_name_formats(c, data_dir)
         correct_ashuka_name_formats(c, data_dir)
+        ensure_three_customer_name_formats(c, data_dir)
     return summary
 
 def _require(user):
