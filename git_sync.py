@@ -4,15 +4,26 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
+from datetime import datetime, timezone
 import local_settings_guard
 
 
 def git(*args, check=True):
     p = subprocess.run(['git', *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        encoding='utf-8', errors='replace')
+    log = Path(git_log_path())
+    with log.open('a', encoding='utf-8') as stream:
+        stream.write(datetime.now(timezone.utc).isoformat() + ' git ' + repr(args) + '\n' + p.stdout + p.stderr + '\nexit=' + str(p.returncode) + '\n')
     if check and p.returncode:
         raise RuntimeError(p.stderr.strip() or p.stdout.strip() or 'Gitの処理に失敗しました。')
     return p
+
+
+def git_log_path():
+    # Resolve directly to avoid recursively calling the logging wrapper.
+    result = subprocess.run(['git', 'rev-parse', '--git-path', 'desk-sync.log'],
+                            capture_output=True, text=True, check=True)
+    return result.stdout.strip()
 
 
 def validate():
@@ -42,12 +53,14 @@ def sync_protected():
     local_settings_guard.check(git, target)
     if git('merge-base', '--is-ancestor', target, 'HEAD', check=False).returncode == 0:
         return
+    if git('merge-base', '--is-ancestor', 'HEAD', target, check=False).returncode != 0:
+        raise RuntimeError('手元とGitHubの履歴が分岐しています。変更を保管したまま停止しました。手動で統合してください。')
     saved = None
     if git('status', '--porcelain').stdout:
         git('stash', 'push', '--include-untracked', '-m', 'desk-sync-' + uuid.uuid4().hex)
         saved = git('rev-parse', 'stash@{0}').stdout.strip()
         marker.write_text(saved, encoding='utf-8')
-    merged = git('-c', 'merge.autoStash=false', 'merge', '--no-edit', '--no-gpg-sign', target, check=False)
+    merged = git('-c', 'merge.autoStash=false', 'merge', '--ff-only', '--no-edit', '--no-gpg-sign', target, check=False)
     if merged.returncode:
         merge_head = Path(git('rev-parse', '--git-path', 'MERGE_HEAD').stdout.strip())
         if merge_head.exists():
@@ -57,8 +70,8 @@ def sync_protected():
         if restored.returncode:
             raise RuntimeError('手元の変更と更新が重なりました。自動処理を停止しました。'
                                '\n元の変更はGitのstashに保管されています。復旧情報: ' + str(marker.resolve()))
-        if git('rev-parse', 'stash@{0}').stdout.strip() == saved:
-            git('stash', 'drop', 'stash@{0}')
+        # Retain the recovery stash even after successful restoration.
+        print('復元元のstashを保持しました: ' + saved, flush=True)
         marker.unlink()
     if merged.returncode:
         raise RuntimeError('自動統合できませんでした。統合を取り消し、元の変更を保持しています。'

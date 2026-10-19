@@ -109,7 +109,7 @@ class BoxTicketSharedLayoutTest(unittest.TestCase):
     def test_manual_print_path_does_not_call_order_apis(self):
         self.assertIn('printManualBoxTicket', SHEET)
         start = SHEET.index('function printManualBoxTicket')
-        end = SHEET.index('document.querySelectorAll(\'input[name="labelticketkind"]\'', start)
+        end = SHEET.index('function fillFixedLabelFormatSelect()', start)
         body = SHEET[start:end]
         for forbidden in (
             "api('/api/orders",
