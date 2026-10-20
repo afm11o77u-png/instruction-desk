@@ -42,7 +42,7 @@ function ensureHistoryDefaults(){
   if(!state.history.page)state.history.page=1
   if(!state.history.pageSize)state.history.pageSize=50
 }
-const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫'],['legacyCsv','旧CSV取込']]
+const SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]
 const SETUP_TAB_IDS=new Set(SETUP_TABS.map(([id])=>id))
 const SETUP_TAB_LABEL=Object.fromEntries(SETUP_TABS)
 const SETUP_TAB_KEY='stock-desk:setup-tab'
@@ -304,7 +304,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',legacyCsv:'stock-legacy-csv',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -325,10 +325,44 @@ function syncStockListDisplaySlot(section){
   // Title-row 表示 slot: 在庫一覧系 + 登録・設定（枠外・右上）
   if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='setup'){
     slot.hidden=false
+    syncLegacyCsvBulkEntry(section)
     return
   }
   slot.hidden=true
   slot.innerHTML=''
+}
+/** 登録・設定の右上・「表示」の直前に「旧CSV一括取り込み」を置く */
+function syncLegacyCsvBulkEntry(section){
+  const slot=$('#stocklistdisplay')
+  if(!slot)return
+  let wrap=slot.querySelector('#legacyCsvBulkEntry')
+  if(section!=='setup'){
+    if(wrap)wrap.remove()
+    return
+  }
+  if(!wrap){
+    wrap=document.createElement('div')
+    wrap.id='legacyCsvBulkEntry'
+    wrap.className='legacy-csv-bulk-entry'
+    wrap.innerHTML='<button type="button" id="legacyCsvBulkOpen" class="quiet">旧CSV一括取り込み</button>'
+    const displayBar=slot.querySelector(':scope > .display-mode-bar')
+    if(displayBar)slot.insertBefore(wrap,displayBar)
+    else slot.appendChild(wrap)
+  }
+  const btn=wrap.querySelector('#legacyCsvBulkOpen')
+  if(btn)btn.onclick=()=>{
+    if(typeof ProductLedgerCsv==='undefined'||!ProductLedgerCsv.open){
+      toast('旧CSV一括取り込み画面を読み込めませんでした。')
+      return
+    }
+    ProductLedgerCsv.open({
+      api,
+      toast,
+      boot,
+      stockCanWrite,
+      actorName:(state.data&&state.data.actorName)||'',
+    })
+  }
 }
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'standard'
@@ -506,8 +540,12 @@ function paint(){
     tabs.innerHTML=''
   }
   syncStockListDisplaySlot(state.section)
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,legacyCsv:()=>typeof legacyCsvPage==='function'?legacyCsvPage():($('#main').innerHTML='<p>旧CSV取込画面を読み込めませんでした。</p>'),list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
+  // 旧「旧CSV取込」タブは廃止。残っている localStorage 値は商品タブへ寄せる
+  if(state.tab==='legacyCsv'){state.tab='products';state.setupTab='products';saveSetupTab('products')}
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
   view()
+  // 表示コントロール再マウント後も「旧CSV一括取り込み」を表示の左に維持
+  if(state.section==='setup')syncLegacyCsvBulkEntry('setup')
   if(moveRedirectNotice){moveRedirectNotice=false;toast('入庫・出庫は在庫一覧の各行から行います。')}
 }
 async function loadOpeningEntries(){
@@ -716,7 +754,7 @@ function products(){
   }),sortKey)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工仕様は取扱で区別します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
-    <div class="bar merge-entry"><button type="button" id="productLedgerCsvOpen">旧商品台帳CSVを取り込む</button><span class="excelhint">旧システムの商品台帳CSVから商品と顧客取扱だけを登録します。在庫数量・単価・履歴は変更しません（初期在庫用の「旧CSV取込」とは別）。</span></div>
+    <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>（「表示」の左）から行います。</p>
     ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
       <h3 class="verify-zone-title">検証用</h3>
       <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む商品登録全体が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
@@ -751,17 +789,6 @@ function products(){
   if(mergeBtn)mergeBtn.onclick=()=>{
     if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
     ProductMerge.open({
-      api,
-      toast,
-      boot,
-      stockCanWrite,
-      actorName:(state.data&&state.data.actorName)||'',
-    })
-  }
-  const ledgerBtn=$('#productLedgerCsvOpen')
-  if(ledgerBtn)ledgerBtn.onclick=()=>{
-    if(typeof ProductLedgerCsv==='undefined'||!ProductLedgerCsv.open){toast('商品台帳CSV取込画面を読み込めませんでした。');return}
-    ProductLedgerCsv.open({
       api,
       toast,
       boot,

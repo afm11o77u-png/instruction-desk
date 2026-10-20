@@ -1,11 +1,16 @@
-/** 旧商品台帳CSV取込（登録・設定 → 商品）。初期在庫用「旧CSV取込」とは別。
- * 通常品番は1品番=1商品。名差・仕入先差は品番ごとの比較UIで解決する。
+/** 旧CSV一括取り込み（登録・設定・右上）。商品台帳CSV必須＋初期在庫CSV任意。
+ * 判定は商品台帳パイプラインのみ。初期在庫は元CSV行対応で同時登録する。
  */
 (function(){
   const STATUS_ORDER=['create','merge','size_add','reuse','unchanged','needs_review','hold','excluded']
   const STATUS_LABELS={
     create:'新規',merge:'統合して登録',size_add:'サイズ追加',reuse:'既存使用',
     unchanged:'変更なし',needs_review:'要確認',hold:'保留',excluded:'対象外'
+  }
+  const OPEN_STATUS_ORDER=['create','reuse','qty_diff','unchanged','needs_review','hold','excluded','complement']
+  const OPEN_STATUS_LABELS={
+    create:'新規追加',reuse:'既存使用',qty_diff:'数量差異',unchanged:'変更なし',
+    needs_review:'要確認',hold:'保留',excluded:'対象外',complement:'補完候補'
   }
   const PAGE_SIZE=80
   const SKU_PAGE_SIZE=40
@@ -16,11 +21,20 @@
   const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
   let ui=null
 
+  function todayISO(){
+    const d=new Date()
+    const m=String(d.getMonth()+1).padStart(2,'0')
+    const day=String(d.getDate()).padStart(2,'0')
+    return `${d.getFullYear()}-${m}-${day}`
+  }
+
   function ensureState(){
     if(!ui){
       ui={
         file:null,fileB64:'',fileName:'',fileSize:0,
         auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
+        basisDate:'',defaultSiteName:'未確認',
+        openingSelections:{},
         history:null,historyError:'',previewError:'',preview:null,result:null,
         q:'',statusFilter:'needs_review',page:1,
         skuQ:'',skuReasonFilter:'',skuPage:1,
@@ -32,6 +46,9 @@
     if(!ui.selectedCodes)ui.selectedCodes={}
     if(!ui.expandedCodes)ui.expandedCodes={}
     if(!ui.rowClassifications)ui.rowClassifications={}
+    if(!ui.openingSelections)ui.openingSelections={}
+    if(!ui.basisDate)ui.basisDate=todayISO()
+    if(!ui.defaultSiteName)ui.defaultSiteName='未確認'
     return ui
   }
 
@@ -44,8 +61,22 @@
     if(st.auxFileB64){
       body.auxFile=st.auxFileB64
       body.auxName=st.auxFileName||'初期在庫.csv'
+      body.registerOpeningStock=true
+      body.basisDate=st.basisDate||todayISO()
+      body.defaultSiteName=st.defaultSiteName||'未確認'
+      body.openingSelections=st.openingSelections||{}
+    }else{
+      body.registerOpeningStock=false
     }
     return body
+  }
+
+  function siteOptions(selected){
+    const sites=((typeof state!=='undefined'&&state.data&&state.data.locations)||[]).filter(l=>!l.parentId&&l.active!==false)
+    const names=sites.map(s=>s.name)
+    if(selected&&!names.includes(selected))names.unshift(selected)
+    if(!names.includes('未確認'))names.unshift('未確認')
+    return names.map(n=>`<option value="${esc(n)}" ${n===selected?'selected':''}>${esc(n)}</option>`).join('')
   }
 
   function setRowClassification(st,rowNo,patch){
@@ -754,6 +785,9 @@
     if(!r)return ''
     const c=r.counts||{}
     const s=r.confirmSummary||{}
+    const openingBit=r.registerOpeningStock
+      ?`<p>初期在庫: 新規 ${c.openingCreated||0}　数量更新 ${c.openingQtyUpdated||0}　変更なし ${c.openingUnchanged||0}　保留 ${c.openingHeld||0}　補完候補スキップ ${c.openingComplementSkipped||0}</p>`
+      :`<p>在庫数量・金額・履歴: ${r.stockUnchanged?'変化なし':'要確認'}</p>`
     return `<div class="notice legacy-csv-result">
       <strong>${r.already?'同じ操作は登録済みです':'登録が完了しました'}</strong>
       <p>新規商品 ${c.productsCreated||0}　再利用行 ${c.reused||0}　統合元 ${c.productsMerged||0}
@@ -761,16 +795,70 @@
      　顧客 ${c.customersCreated||0}　仕入先 ${c.suppliersCreated||0}　サブ仕入先 ${c.subSuppliersAdded||0}
      　確定行 ${c.committedRows||0}　保留 ${c.deferred||r.deferredCount||0}　要確認残 ${r.reviewRemaining||0}　対象外 ${r.excludedCount||0}</p>
       ${s.csvRows!=null?`<p class="excelhint">確定時サマリ: CSV行 ${s.csvRows} / 新規商品 ${s.productsToCreate} / 再利用 ${s.productsToReuse} / 統合 ${s.productsToMerge}（行数≠新規商品数）</p>`:''}
-      <p>在庫数量・金額・履歴: ${r.stockUnchanged?'変化なし':'要確認'}</p>
+      ${openingBit}
     </div>`
   }
 
+  function openingStockSectionsHtml(st){
+    const os=st.preview&&st.preview.openingStock
+    if(!os||!os.enabled)return ''
+    const sum=st.preview.openingStockSummary||{}
+    const counts=os.counts||{}
+    const countLine=OPEN_STATUS_ORDER.map(k=>{
+      const n=counts[k]||0
+      if(!n&&k!=='create'&&k!=='complement')return ''
+      return `${OPEN_STATUS_LABELS[k]} ${n}件`
+    }).filter(Boolean).join('　')
+    const masters=os.mastersToCreate||{}
+    const masterBits=[]
+    if((masters.customers||[]).length)masterBits.push(`顧客新規予定: ${masters.customers.slice(0,8).map(esc).join('、')}${(masters.customers.length>8?` …他${masters.customers.length-8}`:'')}`)
+    if((masters.suppliers||[]).length)masterBits.push(`仕入先新規予定: ${masters.suppliers.slice(0,8).map(esc).join('、')}${(masters.suppliers.length>8?` …他${masters.suppliers.length-8}`:'')}`)
+    if((masters.sites||[]).length)masterBits.push(`拠点新規予定: ${masters.sites.map(esc).join('、')}`)
+    if((masters.shelves||[]).length)masterBits.push(`棚新規予定: ${masters.shelves.slice(0,8).map(esc).join('、')}`)
+    const plans=(os.plans||[]).slice(0,60)
+    const rows=plans.map(p=>{
+      const t=p.target||{}
+      const csv=p.csv||{}
+      const place=p.place||{}
+      const stock=p.stock||{}
+      const sel=st.openingSelections[String(p.rowNo)]||{}
+      const qtyCheck=p.status==='qty_diff'
+        ?`<label class="check"><input type="checkbox" data-pl-open-qty="${p.rowNo}" ${sel.updateQty?'checked':''}>CSV数量へ更新</label>`
+        :''
+      return `<tr>
+        <td>${p.rowNo}</td>
+        <td>${esc(p.statusLabel||p.status)}</td>
+        <td>${esc(t.officialName||t.productName||'')}<div class="excelhint">元: ${esc(csv.productName||'')}</div></td>
+        <td>${esc(t.size||csv.size||'')}</td>
+        <td>${esc(p.conditionLabel||'')}</td>
+        <td class="num">${p.qty!=null?esc(String(p.qty)):'—'}</td>
+        <td>${esc(place.siteName||'')}${place.shelfName?` / ${esc(place.shelfName)}`:''}${place.usedDefaultSite?' <span class="excelhint">(空→未確認)</span>':''}</td>
+        <td class="num">${p.unitCost!=null?esc(String(p.unitCost)):'—'}</td>
+        <td>${stock.exists!=null?`現在 ${esc(String(stock.currentQty))}`:'—'}</td>
+        <td>${esc((p.reasons||[]).join(' '))}${qtyCheck}</td>
+      </tr>`
+    }).join('')
+    const more=(os.plans||[]).length>60?`<p class="excelhint">先頭60件を表示（全 ${(os.plans||[]).length} 件）。絞り込みは今後拡張予定。</p>`:''
+    return `<section class="product-ledger-opening-preview">
+      <h3>初期在庫の登録予定</h3>
+      <p class="notice">${esc(os.note||sum.note||'初期在庫CSVを選んでいるため、確認後に初期在庫も登録します。')}</p>
+      <p><strong>${esc(countLine)}</strong></p>
+      ${masterBits.length?`<p class="excelhint">${masterBits.join('　')}</p>`:''}
+      <div class="legacy-csv-table-wrap"><table class="data sku-compare-table">
+        <thead><tr><th>行</th><th>判定</th><th>登録先商品</th><th>サイズ</th><th>新品中古</th><th>数量</th><th>拠点/棚</th><th>単価</th><th>既存在庫</th><th>理由</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="10">該当行なし</td></tr>'}</tbody>
+      </table></div>
+      ${more}
+    </section>`
+  }
+
   function filePickHtml(st){
-    const label=st.fileName?'台帳CSVを変更':'商品台帳CSVを選ぶ'
+    const label=st.fileName?'台帳CSVを変更':'商品台帳CSVを選ぶ（必須）'
     const sizeHint=st.fileName&&st.fileSize?`（${Number(st.fileSize).toLocaleString('ja-JP')} バイト）`:''
     const auxLabel=st.auxFileName?'初期在庫CSVを変更':'初期在庫CSV（任意）'
     const auxHint=st.auxFileName&&st.auxFileSize?`（${Number(st.auxFileSize).toLocaleString('ja-JP')} バイト）`:''
     const auxMeta=st.preview&&st.preview.auxOpeningStock
+    const auxSelected=!!st.auxFileB64
     return `<div class="product-ledger-files">
       <div class="bar product-ledger-filebar">
         <input type="file" id="plFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
@@ -780,10 +868,16 @@
       <div class="bar product-ledger-filebar">
         <input type="file" id="plAuxFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
         <button type="button" id="plPickAux" ${st.busy?'disabled':''}>${esc(auxLabel)}</button>
-        <span class="excelhint product-ledger-filename">${esc(st.auxFileName||'未選択（なくても可）')}${auxHint?` ${esc(auxHint)}`:''}${auxMeta?`（${esc(auxMeta.encoding||'')} / ${auxMeta.rowCount||0}行）`:''}</span>
+        <span class="excelhint product-ledger-filename">${esc(st.auxFileName||'未選択（台帳のみ可）')}${auxHint?` ${esc(auxHint)}`:''}${auxMeta?`（${esc(auxMeta.encoding||'')} / ${auxMeta.rowCount||0}行）`:''}</span>
         ${st.auxFileB64?`<button type="button" id="plClearAux" class="quiet" ${st.busy?'disabled':''}>初期在庫CSVを外す</button>`:''}
       </div>
-      <p class="excelhint">初期在庫用CSVは通常仕入先の判定補助だけに使います。在庫数量・単価・履歴は登録しません。未選択でも従来どおり台帳取込できます。</p>
+      ${auxSelected
+        ?`<p class="notice" role="status">初期在庫CSVを選んでいます。<strong>確認後に初期在庫も登録します</strong>（判定材料だけではありません）。数量は「在庫」列のみ。拠点空欄は「未確認」へ登録します。</p>
+          <div class="bar">
+            <label>在庫基準日<input id="plBasis" type="date" value="${esc(st.basisDate||'')}" ${st.busy?'disabled':''}></label>
+            <label>拠点空欄時の登録先<select id="plDefaultSite" ${st.busy?'disabled':''}>${siteOptions(st.defaultSiteName)}</select></label>
+          </div>`
+        :`<p class="excelhint">初期在庫CSVを選ばない場合は、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
       <div class="bar">
         <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
       </div>
@@ -861,18 +955,22 @@
     const skuPending=(st.preview&&st.preview.skuDecisionPending)||0
     const canWrite=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
     dlg.classList.add('product-ledger-dialog','legacy-csv-detail-dialog')
-    dlg.innerHTML=`<div class="dialoghead"><h2>旧商品台帳CSVを取り込む</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
+    const lead=st.auxFileB64
+      ?'商品台帳CSV（必須）と初期在庫CSV（任意）をまとめて取り込みます。同じ判定結果で商品・取扱と初期在庫を登録します。プレビューまではDBを変更しません。保留した品番の在庫は同時に保留します。'
+      :'商品台帳CSVから商品と顧客取扱を登録します。初期在庫CSVを足すと、確認後に初期在庫も同時登録します。通常品番は<strong>1品番=1商品</strong>です。プレビューまではDBを変更しません。'
+    dlg.innerHTML=`<div class="dialoghead"><h2>旧CSV一括取り込み</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
-        <p class="merge-lead">商品と顧客取扱だけを登録します。在庫数量・仕入単価・初期在庫・入出庫履歴は変更しません。通常品番は<strong>1品番=1商品</strong>です。初期在庫用の「旧CSV取込」とは別機能です。プレビューまではDBを変更しません。保留した品番は登録せず残せます。</p>
+        <p class="merge-lead">${lead}</p>
         ${filePickHtml(st)}
         ${historyBlock(st)}
         ${st.preview?`<p class="excelhint">${esc(st.preview.note||'')}</p>
-          ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定用）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
+          ${st.preview.auxOpeningStock?`<p class="${st.preview.registerOpeningStock?'notice':'excelhint'}">初期在庫CSV: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
           <p><strong>${countLine(st.preview.countsRaw)}</strong>　行の要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未決定の品番は確定できません。保留にすれば登録対象から外せます）':''}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
           ${autoMergePlansHtml(st)}
           ${skuGroupsHtml(st)}
+          ${openingStockSectionsHtml(st)}
           <div class="bar">
             <input type="search" id="plQ" placeholder="検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
             <select id="plStatus">
@@ -967,7 +1065,7 @@
           delete d.auxPrimaryConflict
         }
       })
-      st.toast('初期在庫CSVを読みました。台帳CSVとあわせて「読み込み・照合」してください。')
+      st.toast('初期在庫CSVを読みました。確認後に初期在庫も登録します。台帳CSVとあわせて「読み込み・照合」してください。')
     }catch(e){
       st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
       const msg=apiErrorMessage(e,'初期在庫CSVを読めませんでした。')
@@ -1029,6 +1127,7 @@
     const clearAux=$('#plClearAux')
     if(clearAux)clearAux.onclick=()=>{
       st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
+      st.openingSelections={}
       st.preview=null;st.previewError='';st.result=null
       Object.keys(st.skuDecisions||{}).forEach(code=>{
         const d=st.skuDecisions[code]
@@ -1039,6 +1138,16 @@
       })
       paintDialog()
     }
+    const basis=$('#plBasis')
+    if(basis)basis.onchange=()=>{st.basisDate=basis.value;st.preview=null}
+    const site=$('#plDefaultSite')
+    if(site)site.onchange=()=>{st.defaultSiteName=site.value;st.preview=null}
+    document.querySelectorAll('[data-pl-open-qty]').forEach(el=>{
+      el.onchange=()=>{
+        const rowNo=el.getAttribute('data-pl-open-qty')
+        st.openingSelections[String(rowNo)]=Object.assign({},st.openingSelections[String(rowNo)]||{},{updateQty:!!el.checked})
+      }
+    })
     const runPreview=async()=>{
       if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
       try{assertUploadSize(st.file,st.fileB64)}catch(e){
@@ -1356,8 +1465,13 @@
       const deferBlock=(p.rowsDeferred||0)
         ?`\n\n【今回は登録しない保留】 ${p.rowsDeferred} 行\n${deferList.join('\n')}${deferMore}\n（黙って捨てません。同じCSVの再読込で後から処理できます）`
         :'\n\n保留行はありません。'
-      const summary=`【登録する】新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）${deferBlock}\n\n在庫数量・金額・履歴は変更しません。よろしいですか？`
+      const osSum=st.preview.openingStockSummary||{}
+      const openingBlock=st.preview.registerOpeningStock
+        ?`\n\n【初期在庫も登録】新規 ${osSum.create||0} / 再利用 ${osSum.reuse||0} / 数量差異(選択時) ${osSum.qtyDiff||0} / 保留 ${osSum.hold||0} / 補完候補(登録しない) ${osSum.complement||0}\n在庫基準日 ${st.basisDate||''} / 拠点空欄→ ${st.defaultSiteName||'未確認'}`
+        :'\n\n初期在庫CSV未選択のため、在庫数量・金額・履歴は変更しません。'
+      const summary=`【登録する】新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）${deferBlock}${openingBlock}\n\nよろしいですか？`
       if(!confirm(summary))return
+      if(st.preview.registerOpeningStock&&!st.basisDate){st.toast('在庫基準日を指定してください。');return}
       try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       st.busy=true;paintDialog()
       try{
@@ -1369,7 +1483,7 @@
         st.result=await st.api('/api/product-ledger-csv/commit',commitBody)
         st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         if(typeof st.boot==='function')await st.boot()
-        st.toast('商品台帳CSVの登録が完了しました')
+        st.toast(st.preview.registerOpeningStock?'旧CSV一括取り込み（台帳＋初期在庫）が完了しました':'旧CSV一括取り込み（台帳のみ）が完了しました')
       }catch(e){
         if(e&&e.payload&&e.payload.code==='stale_preview'){
           st.toast('データが変わったため、もう一度照合してください。')
