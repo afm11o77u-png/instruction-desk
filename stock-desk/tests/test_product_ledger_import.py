@@ -917,7 +917,9 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             self.assertIsNotNone(preview['auxOpeningStock'])
             self.assertEqual(stock_snap(c), before)
             group = next(g for g in preview['skuGroups'] if g['code'] == '00008')
-            self.assertTrue(group['needsDecision'])
+            # 非ゼロ在庫がユニーク側1組 → フルパッケージ自動採用（色差だけでは要確認にしない）
+            self.assertFalse(group['needsDecision'])
+            self.assertTrue(group.get('auxStockPickAuto'))
             aux = group['auxPrimary']
             self.assertTrue(aux['applicable'])
             self.assertEqual(aux['autoPrimarySupplier'], '㈱ユニーク')
@@ -928,22 +930,12 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             self.assertEqual(by_sup['アイトス㈱']['auxStatusLabel'], '該当登録なし')
             # 補正在庫は使わない（Unique の補正はマイナスでも 2XL=2 で正判定）
             self.assertTrue(by_sup['㈱ユニーク']['hasPositiveStock'])
-
-            sku = {
-                '00008': {
-                    'decision': 'merge',
-                    'officialName': 'ベーシックカラーベスト　046.蛍光グリーン',
-                    # primary は自動結果を使う（未指定）
-                },
-            }
-            body2 = {**body, 'skuDecisions': sku}
-            preview2 = pli.build_preview(c, body2)
-            self.assertEqual(preview2['reviewCount'], 0)
-            self.assertEqual(preview2['skuDecisionPending'], 0)
+            self.assertEqual(preview['reviewCount'], 0)
+            self.assertEqual(preview['skuDecisionPending'], 0)
             result = pli.commit_preview(c, {
-                **body2,
-                'previewFingerprint': preview2['previewFingerprint'],
-                'previewAt': preview2['previewAt'],
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
                 'token': 'pl-aux-00008',
             }, db_path=str(path))
             c.commit()
@@ -964,7 +956,7 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             }
             self.assertIn('アイトス㈱', subs)
             # 再取込で二重登録なし
-            preview3 = pli.build_preview(c, body2)
+            preview3 = pli.build_preview(c, body)
             self.assertEqual(preview3['plannedCounts']['productsToCreate'], 0)
             n = c.execute(
                 "SELECT COUNT(*) AS n FROM products WHERE code='00008' AND merged_into_id IS NULL"
@@ -1811,11 +1803,11 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         try:
             ledger = tiny_ledger_rows([
                 '顧客A,仕入A,SKU-N1,緑つなぎ,M',
-                '顧客A,仕入A,SKU-N1,＊緑つなぎ,L',
+                '顧客A,仕入B,SKU-N1,青つなぎ,L',
             ])
             aux = tiny_opening_rows([
                 '新品,仕入A,顧客A,緑つなぎ,SKU-N1,M,1000,0,0,0,0,3,0,,本社,A1,0',
-                '中古,仕入A,顧客A,＊緑つなぎ,SKU-N1,L,1000,0,0,0,0,-1,0,,本社,A1,0',
+                '中古,仕入B,顧客A,青つなぎ,SKU-N1,L,1000,0,0,0,0,0,0,,本社,A1,0',
             ])
             preview = pli.build_preview(c, {
                 'file': csv_b64_from_text(ledger), 'name': 'l.csv',
@@ -1830,7 +1822,9 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
             self.assertFalse(aux_p.get('officialNameNeedsChoice'))
             self.assertEqual(g.get('plannedOfficialName'), '緑つなぎ')
+            self.assertIn('在庫が0以外の候補が1組', aux_p.get('pairAdoptionRule') or '')
             self.assertNotIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
+            self.assertTrue(g.get('auxStockPickAuto'))
         finally:
             c.close()
             folder.cleanup()
@@ -1890,17 +1884,17 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_aux_all_zero_does_not_adopt_any_name(self):
-        """全ゼロでは旧 aux_any_unique を使わず確認へ（#157 置き換え）。"""
+    def test_aux_all_zero_multi_candidate_needs_choice(self):
+        """候補2組以上かつ全ゼロ → 確認（旧 aux_any_unique は使わない）。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
                 '顧客A,仕入A,SKU-Z0,名前甲,M',
-                '顧客A,仕入A,SKU-Z0,＊名前甲,L',
+                '顧客A,仕入B,SKU-Z0,名前乙,L',
             ])
             aux = tiny_opening_rows([
                 opening_line('仕入A', '顧客A', '名前甲', 'SKU-Z0', 'M', '0'),
-                opening_line('仕入A', '顧客A', '＊名前甲', 'SKU-Z0', 'L', '0'),
+                opening_line('仕入B', '顧客A', '名前乙', 'SKU-Z0', 'L', '0'),
             ])
             preview = pli.build_preview(c, {
                 'file': csv_b64_from_text(ledger), 'name': 'l.csv',
@@ -1910,9 +1904,181 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-Z0')
             aux_p = g.get('auxPrimary') or {}
             self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_any_unique')
-            # 非ゼロが無いのでペアは未決（代表名は台帳コア一意などで別途決まりうる）
             self.assertTrue(aux_p.get('pairNeedsChoice'))
             self.assertTrue(any('非ゼロ' in r for r in (aux_p.get('nameReasons') or [])))
+            self.assertTrue(g['needsDecision'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_single_candidate_stock_zero_adopts(self):
+        """候補1組は在庫0でもフルパッケージ採用。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-S0,ポロシャツ（ネイビー）,M',
+                '顧客A,仕入A,SKU-S0,＊ポロシャツ（ネイビー）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'ポロシャツ（ネイビー）', 'SKU-S0', 'M', '0'),
+                opening_line('仕入A', '顧客A', '＊ポロシャツ（ネイビー）', 'SKU-S0', 'L', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-S0')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_single_candidate')
+            self.assertFalse(aux_p.get('pairNeedsChoice'))
+            self.assertFalse(g['needsDecision'])
+            self.assertEqual(aux_p.get('adoptedColor') or (aux_p.get('adoptedPackage') or {}).get('color'), 'ネイビー')
+            self.assertIn('候補が1組', aux_p.get('pairAdoptionRule') or '')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_unique_stock_clears_color_processing_review(self):
+        """色・加工が候補間で違っても、非ゼロ在庫が1組なら自動採用（要確認に残さない）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-CP,パンツ（ネイビー）,M',
+                '顧客A,仕入B,SKU-CP,パンツ（赤・背中プリント）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'パンツ（ネイビー）', 'SKU-CP', 'M', '4'),
+                opening_line('仕入B', '顧客A', 'パンツ（赤・背中プリント）', 'SKU-CP', 'L', '0'),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-CP')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertEqual(g.get('reviewTier'), 'auto')
+            self.assertFalse(g.get('colorDiffPossible'))
+            self.assertFalse(g.get('processingDiffPossible'))
+            self.assertFalse(g.get('kindDiffPossible'))
+            self.assertIn('在庫が0以外の候補が1組', g.get('auxStockPickReason') or '')
+            self.assertEqual(aux_p.get('adoptedColor'), 'ネイビー')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), 'パンツ')
+            self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
+            kept = aux_p.get('keptPackages') or []
+            self.assertTrue(any('赤' in (k.get('color') or '') or 'プリント' in (k.get('processing') or '') for k in kept))
+            # プレビュー＝コミット（未解決なし・まとめ操作不要）
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-cp-stock-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            prod = c.execute(
+                "SELECT id,name,color,material FROM products WHERE code='SKU-CP' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertIsNotNone(prod)
+            self.assertEqual(prod['name'], 'パンツ')
+            self.assertEqual(prod['color'], 'ネイビー')
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            self.assertTrue(
+                any('背中プリント' in a or 'パンツ（赤' in a for a in aliases)
+                or 'パンツ（赤・背中プリント）' in aliases
+            )
+            maps = list(c.execute(
+                'SELECT csv_product_name,csv_color,csv_processing,is_main_candidate,spec_json '
+                'FROM product_ledger_row_maps WHERE product_id=? ORDER BY source_row_no',
+                (prod['id'],),
+            ))
+            self.assertGreaterEqual(len(maps), 2)
+            main_rows = [m for m in maps if m['is_main_candidate']]
+            other_rows = [m for m in maps if not m['is_main_candidate']]
+            self.assertTrue(main_rows)
+            self.assertTrue(other_rows)
+            self.assertTrue(any(
+                '背中プリント' in (m['csv_processing'] or '') or '赤' in (m['csv_color'] or '')
+                for m in other_rows
+            ))
+            # 後続の初期在庫CSV: 非メイン別名でも同一商品へ照合。商品色はメインのまま上書きしない
+            import legacy_csv_import as legacy
+            opening = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'パンツ（赤・背中プリント）', 'SKU-CP', 'L', '2'),
+            ])
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            color_before = prod['color']
+            obody = {
+                'file': csv_b64_from_text(opening), 'name': 'open.csv',
+                'basisDate': '2026-10-01', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            oprev = legacy.build_preview(c, obody)
+            for r in oprev['rows']:
+                self.assertEqual(r['product']['id'], prod['id'])
+                self.assertIn(r['status'], ('create', 'reuse', 'size_add'))
+            legacy.commit_preview(c, {
+                **obody,
+                'previewFingerprint': oprev['previewFingerprint'],
+                'previewAt': oprev['previewAt'],
+                'token': 'leg-cp-open-1',
+            }, db_path=str(path))
+            c.commit()
+            prod2 = c.execute('SELECT color,name FROM products WHERE id=?', (prod['id'],)).fetchone()
+            self.assertEqual(prod2['color'], color_before)
+            self.assertEqual(prod2['name'], 'パンツ')
+            # 非メイン原文の色・加工は row_map に残る（メイン仕様へ書き換えない）
+            other_after = list(c.execute(
+                'SELECT csv_product_name,csv_color,csv_processing,spec_json FROM product_ledger_row_maps '
+                'WHERE product_id=? AND is_main_candidate=0',
+                (prod['id'],),
+            ))
+            self.assertTrue(any(
+                '背中プリント' in (m['csv_processing'] or '') or '赤' in (m['csv_color'] or '')
+                for m in other_after
+            ))
+            self.assertTrue(any('赤・背中プリント' in (m['csv_product_name'] or '') for m in other_after))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_multi_nonzero_still_needs_choice(self):
+        """非ゼロが複数 → 要確認（色差の有無に関わらず）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-M2,名前甲（赤）,M',
+                '顧客A,仕入B,SKU-M2,名前乙（青）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '名前甲（赤）', 'SKU-M2', 'M', '2'),
+                opening_line('仕入B', '顧客A', '名前乙（青）', 'SKU-M2', 'L', '-1'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-M2')
+            self.assertTrue(g['needsDecision'])
+            aux_p = g.get('auxPrimary') or {}
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+            self.assertTrue(any('複数' in r for r in (aux_p.get('nameReasons') or [])))
         finally:
             c.close()
             folder.cleanup()
@@ -1970,6 +2136,9 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('括弧分類', js)
         self.assertIn('生地・素材', app)
         self.assertIn('material', app)
+        self.assertIn('在庫が0以外の候補が1組', js)
+        self.assertIn('auxStockPickAuto', js)
+        self.assertIn('keptPackages', js)
 
 
 class ParenClassificationTest(unittest.TestCase):
