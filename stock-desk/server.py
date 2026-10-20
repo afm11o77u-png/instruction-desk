@@ -24,6 +24,7 @@ WRITE_PATHS = {
     '/api/legacy-csv/commit',
     '/api/product-ledger-csv/commit',
     '/api/products/merge',
+    '/api/products/registry-wipe',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
@@ -45,11 +46,22 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         body['mode'] = mode
         body['canWrite'] = bool(can_write)
         body['actorName'] = (actor or {}).get('name') or ''
+        body['actorRole'] = (actor or {}).get('role') or ''
+        body['isOwner'] = (actor or {}).get('role') == 'owner'
         return 200, body
     if path == '/api/products/duplicates':
         import stock_product_merge
         with stock.connect(db_path) as c:
             return 200, stock_product_merge.list_duplicate_groups(c)
+    if path == '/api/products/registry-wipe/preview':
+        import product_registry_wipe
+        try:
+            with stock.connect(db_path) as c:
+                return 200, product_registry_wipe.preview_wipe(c, {'_actor': actor or {}, '_canWrite': bool(can_write)})
+        except PermissionError as e:
+            return 403, {'error': str(e), 'deleted': False}
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '削除内容を確認してください。', 'deleted': False}
     if path == '/api/stock':
         try:
             with stock.connect(db_path) as c:
@@ -332,6 +344,40 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'error': '統合を中止しました。変更は完了していません。',
                 'code': 'commit_failed',
                 'registered': False,
+            }
+        return 200, result
+    if path == '/api/products/registry-wipe':
+        import product_registry_wipe
+        if not can_write:
+            return 403, {'error': '閲覧専用のため、商品登録の全削除はできません。', 'deleted': False}
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = product_registry_wipe.execute_wipe(c, payload, db_path=db_path)
+        except PermissionError as e:
+            return 403, {'error': str(e), 'deleted': False}
+        except product_registry_wipe.RegistryWipeBlocked as e:
+            return 409, e.payload
+        except stock.BackupError as e:
+            cause = getattr(e, 'cause', None)
+            print(
+                f'product registry wipe backup failed: {e}'
+                + (f' cause={type(cause).__name__}: {cause}' if cause else ''),
+                flush=True,
+            )
+            return 400, {
+                'error': '削除前のバックアップに失敗したため、削除を中止しました。商品登録は変わっていません。',
+                'code': 'backup_failed',
+                'deleted': False,
+            }
+        except ValueError as e:
+            return 400, {'error': str(e) or '削除内容を確認してください。', 'deleted': False}
+        except (RuntimeError, sqlite3.IntegrityError, OSError, sqlite3.Error) as e:
+            print(f'product registry wipe failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '商品登録の全削除を中止しました。変更は完了していません。',
+                'code': 'commit_failed',
+                'deleted': False,
             }
         return 200, result
     if path == '/api/outbound/preview':

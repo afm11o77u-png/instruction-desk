@@ -22,6 +22,7 @@ function normalizeSection(section){
   return STOCK_SECTIONS.has(section)?section:'list'
 }
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
+function stockIsOwner(){return !!(state.data&&state.data.isOwner)}
 function monthStartISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`}
 function todayISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function prevMonthBounds(d=new Date()){
@@ -716,6 +717,11 @@ function products(){
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工仕様は取扱で区別します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
     <div class="bar merge-entry"><button type="button" id="productLedgerCsvOpen">旧商品台帳CSVを取り込む</button><span class="excelhint">旧システムの商品台帳CSVから商品と顧客取扱だけを登録します。在庫数量・単価・履歴は変更しません（初期在庫用の「旧CSV取込」とは別）。</span></div>
+    ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
+      <h3 class="verify-zone-title">検証用</h3>
+      <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む商品登録全体が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
+      <div class="bar merge-entry"><button type="button" class="danger" id="productRegistryWipeOpen">商品登録を全削除（検証用）</button><span class="excelhint">旧商品台帳CSVの再取込確認用。参照があると削除せず中止します。</span></div>
+    </div>`:''}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
       const codeShow=esc(r.codeDisplay||r.code||'品番なし')
@@ -760,6 +766,17 @@ function products(){
       toast,
       boot,
       stockCanWrite,
+      actorName:(state.data&&state.data.actorName)||'',
+    })
+  }
+  const wipeBtn=$('#productRegistryWipeOpen')
+  if(wipeBtn)wipeBtn.onclick=()=>{
+    if(typeof ProductRegistryWipe==='undefined'||!ProductRegistryWipe.open){toast('商品登録全削除の画面を読み込めませんでした。');return}
+    ProductRegistryWipe.open({
+      api,
+      toast,
+      boot,
+      isOwner:stockIsOwner,
       actorName:(state.data&&state.data.actorName)||'',
     })
   }
