@@ -121,8 +121,8 @@
       </article>`
     }).join('')
     return `<div class="sku-auto-panel">
-      <h3>サイズ・顧客差の自動まとめ（要確認ではない）</h3>
-      <p class="excelhint">品番・商品名・仕入先が同じでサイズや顧客だけ違う行は、1商品としてまとめます。LL≡2L の同一化や、CSVに無い中間サイズの追加はしません。行のトレースは下表のサイズ列と「同品番 N行」で確認できます。</p>
+      <h3>サイズ・顧客・中古標記差の自動まとめ（要確認ではない）</h3>
+      <p class="excelhint">品番・仕入先が同じで、サイズや顧客だけ違う行、または商品名の差が先頭「＊/*」中古標記だけの行は、1商品としてまとめます。公式名は標記なしを優先し、CSV原文は照合用別名に残します。LL≡2L の同一化や、CSVに無い中間サイズの追加はしません。</p>
       <p class="excelhint">自動まとめ ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行（下は複数サイズまたは複数顧客の例）</p>
       ${cards||'<p class="sub">複数サイズの自動まとめ例はありません（単一行の品番のみ）。</p>'}
       ${more?`<p class="excelhint">他 ${more} 品番も同様に自動まとめ予定です。</p>`:''}
@@ -232,7 +232,7 @@
     }).join('')
     return `<div class="sku-groups-panel">
       <h3>品番ごとの比較（通常品番）</h3>
-      <p class="excelhint">商品名／色／仕入先など判断が必要な差だけここで一度決めます。サイズ・顧客だけの差は要確認に出さず、同じ商品へ自動まとめします。決定は品番単位で対象行に適用されます（適用範囲は各カードに表示）。</p>
+      <p class="excelhint">商品名／色／仕入先など判断が必要な差だけここで一度決めます。サイズ・顧客・先頭「＊/*」中古標記だけの差は要確認に出さず、同じ商品へ自動まとめします。決定は品番単位で対象行に適用されます（適用範囲は各カードに表示）。</p>
       ${cards}
     </div>`
   }
@@ -297,7 +297,8 @@
     if(h.id)bits.push(`取扱 ${h.id}`)
     else if(h.action==='create')bits.push('取扱新規（加工未整理）')
     else if(h.embroideryLabel||h.embroidery)bits.push(esc(h.embroideryLabel||h.embroidery))
-    if(r.skuAutoMerged&&(r.matchGroupCount||0)>1)bits.push('サイズ自動まとめ')
+    if(r.usedMarkerAutoMerged)bits.push('中古標記まとめ')
+    else if(r.skuAutoMerged&&(r.matchGroupCount||0)>1)bits.push('サイズ自動まとめ')
     if(r.status==='hold')bits.push(`保留 ${esc(r.deferReason||'')}`)
     return bits.join(' / ')||'—'
   }

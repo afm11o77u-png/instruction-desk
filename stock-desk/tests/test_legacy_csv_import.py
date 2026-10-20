@@ -55,6 +55,19 @@ class LegacyCsvParseTest(unittest.TestCase):
         name, star = legacy_csv_import.strip_used_marker('＊帽子')
         self.assertTrue(star)
         self.assertEqual(name, '帽子')
+        name2, star2 = legacy_csv_import.strip_used_marker('＊ 帽子')
+        self.assertTrue(star2)
+        self.assertEqual(name2, '帽子')
+        name3, star3 = legacy_csv_import.strip_used_marker('*帽子')
+        self.assertTrue(star3)
+        self.assertEqual(name3, '帽子')
+        self.assertTrue(
+            legacy_csv_import.names_differ_only_by_used_marker('緑つなぎ', '＊緑つなぎ')
+        )
+        self.assertEqual(
+            legacy_csv_import.prefer_unmarked_product_name(['＊緑つなぎ', '*緑つなぎ']),
+            '緑つなぎ',
+        )
         cond, reasons = legacy_csv_import.parse_row_condition(
             {'新古': '新品', '商品名': '＊帽子'}, 2,
         )

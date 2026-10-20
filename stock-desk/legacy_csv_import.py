@@ -210,10 +210,47 @@ def decode_upload(body):
 
 
 def strip_used_marker(name):
+    """先頭の中古標記「＊」「*」を除去する。
+
+    標記の前後の半角/全角空白は許容する。品番の # や名前途中の記号は剥がさない。
+    """
     t = stock.text(name)
-    if t.startswith('＊') or t.startswith('*'):
-        return t[1:].lstrip(), True
+    m = re.match(r'^[\s\u3000]*([＊*])[\s\u3000]*(.*)$', t)
+    if m:
+        return m.group(2), True
     return t, False
+
+
+def product_name_core_key(name):
+    """通常品番の商品名照合キー。先頭中古標記だけ無視し、空白種類を畳む。"""
+    core, _ = strip_used_marker(name)
+    return identity_match_key(core)
+
+
+def prefer_unmarked_product_name(names):
+    """公式名候補。標記なしを優先。標記のみなら剥がした名を返す。"""
+    cleaned = []
+    for raw in names or []:
+        t = stock.text(raw)
+        if t:
+            cleaned.append(t)
+    if not cleaned:
+        return ''
+    unmarked = [n for n in cleaned if not strip_used_marker(n)[1]]
+    if unmarked:
+        return unmarked[0]
+    core, _ = strip_used_marker(cleaned[0])
+    return core
+
+
+def names_differ_only_by_used_marker(a, b):
+    """商品名差が先頭の中古標記（と空白）だけかどうか。"""
+    ta, tb = stock.text(a), stock.text(b)
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return False
+    return product_name_core_key(ta) == product_name_core_key(tb)
 
 
 def parse_row_condition(item, row_no):
@@ -640,7 +677,11 @@ def _finalize_matched_product(
     info['action'] = 'reuse'
     info['id'] = prod['id']
     if stock.text(prod['name']) != name:
-        info['nameDiff'] = True  # 名・色表記差だけで除外しない
+        if names_differ_only_by_used_marker(prod['name'], name):
+            # 中古標記だけの差 → 同一商品。原文名は別名に残す（新古は条件側で保持）
+            info['usedMarkerNameDiff'] = True
+        else:
+            info['nameDiff'] = True  # 名・色表記差だけで除外しない
     existing_sizes = {
         r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (prod['id'],))
     }
@@ -802,9 +843,16 @@ def _product_preview(
             narrowed = by_sup
     if len(narrowed) > 1:
         by_name = [m for m in narrowed if stock.text(m['name']) == name]
+        if len(by_name) != 1:
+            # 先頭中古標記だけの差なら同一商品候補として絞る
+            core = product_name_core_key(name)
+            by_core = [m for m in narrowed if product_name_core_key(m['name']) == core]
+            if len(by_core) == 1:
+                by_name = by_core
         if len(by_name) == 1:
             narrowed = by_name
         else:
+            # 同一品番が複数（新旧別登録など）→ 自動ではまとめず確認
             info['action'] = 'review'
             info['candidates'] = [_product_candidate(m, c) for m in narrowed]
             info['reasons'].append(f'{row_no}行目：同じ品番の商品が複数あります。候補から選んでください。')

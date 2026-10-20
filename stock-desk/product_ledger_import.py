@@ -91,9 +91,12 @@ def match_group_key(*, customer, code, product_name, supplier):
 
 
 def sku_variant_key(*, product_name, color='', supplier=''):
-    """CSV内の商品内容バリアント（サイズ・顧客は含めない）。"""
+    """CSV内の商品内容バリアント（サイズ・顧客は含めない）。
+
+    通常品番の商品名は先頭中古標記「＊/*」だけ無視して同一視する。
+    """
     return '|'.join([
-        identity_match_key(product_name),
+        product_name_core_key(product_name),
         identity_match_key(color),
         identity_match_key(supplier),
     ])
@@ -174,8 +177,19 @@ def decode_upload(body):
 
 
 def used_marker_possible(product_name):
-    t = stock.text(product_name)
-    return t.startswith('＊') or t.startswith('*')
+    return legacy.strip_used_marker(product_name)[1]
+
+
+def product_name_core_key(name):
+    return legacy.product_name_core_key(name)
+
+
+def prefer_unmarked_product_name(names):
+    return legacy.prefer_unmarked_product_name(names)
+
+
+def names_differ_only_by_used_marker(a, b):
+    return legacy.names_differ_only_by_used_marker(a, b)
 
 
 def ensure_schema(c):
@@ -418,7 +432,10 @@ def _finalize_matched_product(
         )
         return info
     if stock.text(prod['name']) != name:
-        if not allow_name_diff:
+        if names_differ_only_by_used_marker(prod['name'], name):
+            # 先頭の中古標記だけの差 → 同一商品。原文は別名に残す。
+            info['usedMarkerNameDiff'] = True
+        elif not allow_name_diff:
             # 別注・品番なし等: 括弧付き名・加工表記差は自動同一化しない
             info['action'] = 'review'
             info['id'] = prod['id']
@@ -429,13 +446,14 @@ def _finalize_matched_product(
                 f'（既存: {prod["name"]} / CSV: {name}）。候補から選ぶか新規にしてください。'
             )
             return info
-        # 通常品番: 名差だけでは別商品にしない。公式名は品番比較UIで確定。
-        info['nameDiff'] = True
-        info['reasons'].append(
-            f'{row_no}行目：品番は一致、商品名が異なります'
-            f'（既存: {prod["name"]} / CSV: {name}）。'
-            f'同じ商品としてまとめる場合は公式名を選んでください。'
-        )
+        else:
+            # 通常品番: 名差だけでは別商品にしない。公式名は品番比較UIで確定。
+            info['nameDiff'] = True
+            info['reasons'].append(
+                f'{row_no}行目：品番は一致、商品名が異なります'
+                f'（既存: {prod["name"]} / CSV: {name}）。'
+                f'同じ商品としてまとめる場合は公式名を選んでください。'
+            )
     info['action'] = 'reuse'
     info['id'] = prod['id']
     if supplier_id and prod['supplier_id'] not in (None, supplier_id):
@@ -529,8 +547,10 @@ def _product_preview(
         return info
     if star:
         info['reasons'].append(
-            f'{row_no}行目：商品名先頭の「＊/*」は中古の可能性があります。'
-            f'記号を削除して新品へ統合しません（今回は中古在庫は作りません）。'
+            f'{row_no}行目：商品名先頭の「＊/*」は中古標記です。'
+            f'同一品番で標記なし名とだけ違う場合は1商品へ自動まとめし、'
+            f'公式名は標記なし、CSV原文は照合用別名に残します'
+            f'（台帳取込では在庫数量・新古は作りません）。'
         )
 
     supplier_id = supplier_info.get('id')
@@ -556,7 +576,10 @@ def _product_preview(
         info['action'] = 'reuse'
         info['id'] = prod['id']
         if stock.text(prod['name']) != name:
-            info['nameDiff'] = True
+            if names_differ_only_by_used_marker(prod['name'], name):
+                info['usedMarkerNameDiff'] = True
+            else:
+                info['nameDiff'] = True
         if supplier_id and prod['supplier_id'] not in (None, supplier_id):
             if stock.product_has_supplier(c, prod['id'], supplier_id):
                 info['supplierKept'] = True
@@ -916,18 +939,21 @@ def classify_row(
 
 def _row_variant(row):
     csv = row.get('csv') or {}
+    name = csv.get('productName') or ''
     return {
         'key': sku_variant_key(
-            product_name=csv.get('productName') or '',
+            product_name=name,
             color='',
             supplier=csv.get('supplier') or '',
         ),
-        'productName': csv.get('productName') or '',
+        'productName': name,
+        'productNameCore': prefer_unmarked_product_name([name]) or name,
         'supplier': csv.get('supplier') or '',
         'color': '',
         'rowNos': [],
         'sizes': [],
         'customers': [],
+        'csvNames': [],
     }
 
 
@@ -936,6 +962,7 @@ def _sku_product_plan(group):
     variants = group.get('variants') or []
     all_sizes = []
     all_customers = []
+    all_csv_names = []
     for v in variants:
         for size in v.get('sizes') or []:
             if size and size not in all_sizes:
@@ -943,7 +970,15 @@ def _sku_product_plan(group):
         for cust in v.get('customers') or []:
             if cust and cust not in all_customers:
                 all_customers.append(cust)
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            if n and n not in all_csv_names:
+                all_csv_names.append(n)
     primary = variants[0] if variants else {}
+    official = prefer_unmarked_product_name(all_csv_names) or (primary.get('productName') or '')
+    # 既存1件で標記差だけのときは、標記なし公式名を優先（既存が標記付きなら書き換え候補）
+    if group.get('existingCount') == 1 and not group.get('needsDecision'):
+        existing_name = (group.get('existingProducts') or [{}])[0].get('name') or ''
+        official = prefer_unmarked_product_name([*all_csv_names, existing_name]) or official
     if group.get('existingCount') == 1 and not group.get('needsDecision'):
         plan_kind = 'reuse'
         plan_label = '既存商品を使用'
@@ -960,7 +995,7 @@ def _sku_product_plan(group):
         'kind': plan_kind,
         'label': plan_label,
         'code': group.get('code') or '',
-        'productName': primary.get('productName') or '',
+        'productName': official,
         'supplier': primary.get('supplier') or '',
         'customers': all_customers,
         'sizes': all_sizes,
@@ -968,6 +1003,8 @@ def _sku_product_plan(group):
         'customerCount': len(all_customers),
         'csvRowCount': group.get('rowCount') or 0,
         'variantCount': group.get('variantCount') or 0,
+        'csvNames': all_csv_names,
+        'usedMarkerAutoMerged': bool(group.get('usedMarkerAutoMerged')),
     }
 
 
@@ -975,7 +1012,9 @@ def build_sku_groups(c, classified):
     """通常品番の比較グループを作る。
 
     品番+商品名+仕入先が同じでサイズ／顧客だけの差 → 自動で1商品（needsDecision=False）。
+    先頭中古標記「＊/*」だけの商品名差も自動まとめ（標記なしを公式名）。
     商品名・仕入先・色・既存重複など判断が必要な差だけ品番比較UIへ。
+    既存DBに同一品番が複数ある場合は自動まとめしない（重複整理の確認フローへ）。
     """
     by_code = defaultdict(list)
     for row in classified:
@@ -994,6 +1033,18 @@ def build_sku_groups(c, classified):
                 variants_map[key] = v
             slot = variants_map[key]
             slot['rowNos'].append(row['rowNo'])
+            csv_name = (row.get('csv') or {}).get('productName') or ''
+            if csv_name and csv_name not in slot['csvNames']:
+                slot['csvNames'].append(csv_name)
+            # 表示用は標記なしを優先（バリアント代表名）
+            if csv_name and (
+                not slot['productName']
+                or (
+                    used_marker_possible(slot['productName'])
+                    and not used_marker_possible(csv_name)
+                )
+            ):
+                slot['productName'] = csv_name
             size = (row.get('csv') or {}).get('size') or ''
             if size and size not in slot['sizes']:
                 slot['sizes'].append(size)
@@ -1002,18 +1053,34 @@ def build_sku_groups(c, classified):
                 slot['customers'].append(cust)
 
         variants = list(variants_map.values())
+        for v in variants:
+            v['productName'] = prefer_unmarked_product_name(v.get('csvNames') or [v.get('productName')]) or v.get('productName') or ''
         existing = stock_product_merge.find_live_products_by_code(c, code)
         existing_cards = [_product_candidate(m, c) for m in existing]
-        existing_names = {stock.text(m['name']) for m in existing}
-        csv_names = {v['productName'] for v in variants}
-        name_mismatch = bool(existing) and bool(csv_names - existing_names)
-        # 別名ヒットのみでも公式名差として扱う
+        existing_cores = {product_name_core_key(m['name']) for m in existing}
+        csv_cores = {product_name_core_key(n) for v in variants for n in (v.get('csvNames') or [v.get('productName') or '']) if n}
+        # コア名が既存と一致しないときだけ名差（標記だけの差は一致扱い）
+        name_mismatch = bool(existing) and bool(csv_cores - existing_cores)
+        # 別名ヒットのみでも公式名差として扱う（中古標記だけの差は除外）
         for row in rows:
             if row.get('product', {}).get('nameDiff'):
                 name_mismatch = True
                 break
 
-        # サイズ・顧客だけの差はバリアントに出ない（sku_variant_key に含めない）
+        used_marker_auto = False
+        all_csv_names = []
+        for v in variants:
+            for n in v.get('csvNames') or []:
+                if n and n not in all_csv_names:
+                    all_csv_names.append(n)
+        if len({product_name_core_key(n) for n in all_csv_names if n}) == 1 and any(
+            used_marker_possible(n) for n in all_csv_names
+        ):
+            used_marker_auto = len({stock.text(n) for n in all_csv_names}) > 1 or any(
+                used_marker_possible(n) for n in all_csv_names
+            )
+
+        # サイズ・顧客・中古標記だけの差はバリアントに出ない
         needs_decision = (
             len(variants) > 1
             or len(existing) > 1
@@ -1024,7 +1091,7 @@ def build_sku_groups(c, classified):
         apply_scope = (
             f'品番「{code}」の対象行 {len(rows)} 件'
             f'（内容の違い {len(variants)} 種 / 登録済 {len(existing)} 件）。'
-            f'サイズ・顧客だけの差は同じ商品へまとめます。'
+            f'サイズ・顧客・先頭「＊/*」中古標記だけの差は同じ商品へまとめます。'
             f'加工仕様の違いは取扱として別管理し、商品を勝手に1つへ潰しません。'
         )
 
@@ -1039,6 +1106,7 @@ def build_sku_groups(c, classified):
             'existingCount': len(existing),
             'needsDecision': needs_decision,
             'plannedSingleProduct': planned_single,
+            'usedMarkerAutoMerged': bool(used_marker_auto and planned_single),
             'applyScope': apply_scope,
             'decision': None,
             'status': 'needs_decision' if needs_decision else 'auto',
@@ -1059,7 +1127,39 @@ def _attach_product_plans(classified, sku_groups):
         plan = dict(group.get('productPlan') or {})
         row['productPlan'] = plan
         row['skuAutoMerged'] = bool(group.get('plannedSingleProduct'))
+        row['usedMarkerAutoMerged'] = bool(group.get('usedMarkerAutoMerged'))
         row['skuRowNos'] = list(group.get('rowNos') or [])
+
+
+def _apply_auto_merge_official_names(classified, sku_groups):
+    """自動まとめ品番に公式名（標記なし優先）を付け、CSV原文を別名登録できるようにする。"""
+    by_code = {g['code']: g for g in sku_groups}
+    for row in classified:
+        code = stock.text((row.get('csv') or {}).get('code'))
+        group = by_code.get(code)
+        if not group or not group.get('plannedSingleProduct'):
+            continue
+        plan = group.get('productPlan') or {}
+        official = stock.text(plan.get('productName') or '')
+        if not official:
+            continue
+        prod = dict(row.get('product') or {})
+        prod['officialName'] = official
+        csv_name = stock.text((row.get('csv') or {}).get('productName') or '')
+        if (
+            group.get('usedMarkerAutoMerged')
+            or used_marker_possible(csv_name)
+            or (
+                prod.get('id')
+                and stock.text(prod.get('name') or '') != official
+                and (
+                    names_differ_only_by_used_marker(prod.get('name'), official)
+                    or names_differ_only_by_used_marker(csv_name, official)
+                )
+            )
+        ):
+            prod['applyOfficialName'] = True
+        row['product'] = prod
 
 
 def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
@@ -1427,6 +1527,7 @@ def build_preview(c, body):
     sku_groups = build_sku_groups(c, classified)
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
     _attach_product_plans(classified, sku_groups)
+    _apply_auto_merge_official_names(classified, sku_groups)
 
     counts = defaultdict(int)
     for row in classified:
@@ -1465,9 +1566,10 @@ def build_preview(c, body):
         'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
         'note': (
             '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
-            '通常品番は1品番=1商品です。サイズ・顧客だけの差は自動で1商品にまとめ、'
-            '要確認へは流しません。商品名・括弧内表記・「＊」は原文のまま残し、'
-            '色や加工を商品名から自動分解しません。加工列が無くてもエラーにはしません。'
+            '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記だけの差は'
+            '自動で1商品にまとめ、要確認へは流しません。公式名は標記なしを優先し、'
+            'CSV原文（標記付き含む）は照合用別名に残します。括弧内表記や色・加工は'
+            '商品名から自動分解しません。加工列が無くてもエラーにはしません。'
         ),
     }
 
@@ -1572,7 +1674,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
 
     if product_info.get('id') and not force_create:
         pid = product_info['id']
-        if product_info.get('skuMerge') and official_name:
+        if (product_info.get('skuMerge') or product_info.get('applyOfficialName')) and official_name:
             _apply_official_name(
                 c, pid, official_name,
                 color=official_color if 'officialColor' in product_info else None,
@@ -1639,7 +1741,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
                 pid = matches[0]['id']
                 if stock.text(matches[0]['name']) != stock.text(csv_name):
                     stock_product_merge.ensure_name_alias(c, pid, csv_name)
-                if product_info.get('skuMerge') and official_name:
+                if (product_info.get('skuMerge') or product_info.get('applyOfficialName')) and official_name:
                     _apply_official_name(
                         c, pid, official_name,
                         color=official_color if 'officialColor' in product_info else None,
