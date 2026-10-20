@@ -55,6 +55,8 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('今回は保留する', js)
         self.assertIn('skuDecisions', js)
         self.assertIn('自動まとめ（要確認ではない）', js)
+        self.assertIn('自動決定済み', js)
+        self.assertIn('プレビュー', js)
         self.assertIn('autoMergePlans', js)
         self.assertIn('中古標記まとめ', js)
         self.assertIn('auxFile', js)
@@ -2184,6 +2186,131 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('supplierCandidateDetails', js)
         self.assertIn('初期在庫：', js)
         self.assertIn('sku-cand-stock', js)
+        self.assertIn('自動決定済み（プレビュー）', js)
+        self.assertIn('対象標記の有無', js)
+
+
+class GenderPresenceAbsenceStockPickTest(unittest.TestCase):
+    """在庫一意採用時、「女性用」有無だけでは要確認に残さない（1-001 型）。"""
+
+    def test_sku_1_001_gender_presence_cleared_by_stock(self):
+        """在庫22の「女性用長袖白衣」をメイン採用。白衣／長袖白衣／調理衣の有無差だけでは未決定にしない。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,1-001,女性用長袖白衣,M',
+                '顧客A,仕入A,1-001,白衣,L',
+                '顧客A,仕入A,1-001,長袖白衣,LL',
+                '顧客A,仕入A,1-001,調理衣,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '女性用長袖白衣', '1-001', 'M', '22'),
+                opening_line('仕入A', '顧客A', '白衣', '1-001', 'L', '0'),
+                opening_line('仕入A', '顧客A', '長袖白衣', '1-001', 'LL', '0'),
+                opening_line('仕入A', '顧客A', '調理衣', '1-001', 'S', '0'),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '1-001.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            # プレビューだけ：本番DB相当の在庫は触らない
+            self.assertEqual(stock_snap(c), before)
+
+            g = next(x for x in preview['skuGroups'] if x['code'] == '1-001')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '女性用長袖白衣')
+            self.assertIn('女性用', aux_p.get('suggestedOfficialName') or '')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertEqual(g.get('reviewTier'), 'auto')
+            self.assertEqual(g.get('reviewTierLabel'), '自動まとめ')
+            self.assertFalse(g.get('genderDiffPossible'))
+            self.assertFalse(g.get('genderConflictPossible'))
+            self.assertFalse(g.get('nameWordingDiff'))
+            self.assertEqual(g.get('plannedOfficialName'), '女性用長袖白衣')
+            reason_codes = {r.get('code') for r in (g.get('reviewReasons') or [])}
+            reason_labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
+            self.assertIn('aux_stock_pick', reason_codes)
+            self.assertNotIn('gender', reason_codes)
+            self.assertNotIn('name_wording', reason_codes)
+            self.assertFalse(any('男女・対象' in lab for lab in reason_labels), reason_labels)
+            self.assertFalse(any('個別確認' in lab for lab in reason_labels), reason_labels)
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            self.assertIn('プレビュー', preview.get('note') or '')
+
+            # 別名候補が kept に残る
+            kept_names = []
+            for k in (aux_p.get('keptPackages') or []):
+                for n in k.get('ledgerNames') or ([k.get('productName')] if k.get('productName') else []):
+                    if n:
+                        kept_names.append(n)
+            self.assertTrue(
+                {'白衣', '長袖白衣', '調理衣'} & set(kept_names)
+                or any(n in ('白衣', '長袖白衣', '調理衣') for n in kept_names)
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_male_female_conflict_still_needs_review_with_unique_stock(self):
+        """男性用と女性用が明示対立するときは在庫一意でも要確認のまま。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-GF,女性用白衣,M',
+                '顧客A,仕入B,SKU-GF,男性用白衣,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '女性用白衣', 'SKU-GF', 'M', '5'),
+                opening_line('仕入B', '顧客A', '男性用白衣', 'SKU-GF', 'L', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'gf.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-GF')
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(g.get('genderConflictPossible'))
+            self.assertTrue(g.get('genderDiffPossible'))
+            self.assertFalse(g.get('auxStockPickAuto'))
+            self.assertEqual(g.get('reviewTier'), 'individual')
+            labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
+            self.assertTrue(
+                any('明示対立' in lab or '男女・対象' in lab for lab in labels),
+                labels,
+            )
+            # メイン候補の提案自体はあるが自動クリアしない
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '女性用白衣')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_gender_presence_without_aux_still_individual(self):
+        """補助在庫なしのとき、対象標記の有無は従来どおり個別確認。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-GP,女性用長袖白衣,M',
+                '顧客A,仕入A,SKU-GP,白衣,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'gp.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-GP')
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(g.get('genderDiffPossible'))
+            self.assertFalse(g.get('genderConflictPossible'))
+            self.assertEqual(g.get('reviewTier'), 'individual')
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 class ParenClassificationTest(unittest.TestCase):
