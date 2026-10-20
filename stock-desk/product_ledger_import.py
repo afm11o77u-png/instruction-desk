@@ -176,6 +176,370 @@ def decode_upload(body):
     }
 
 
+def decode_aux_upload(body):
+    """初期在庫用CSV（任意）。在庫登録はせず、通常仕入先判定の補助入力として読む。"""
+    if not isinstance(body, dict):
+        return None
+    raw = body.get('auxFile') or body.get('openingStockFile')
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    # legacy の decode を再利用（列検証のみ。DB・在庫は触らない）
+    aux_body = {
+        'file': raw,
+        'name': body.get('auxName') or body.get('openingStockFileName') or '初期在庫.csv',
+    }
+    uploaded = legacy.decode_upload(aux_body)
+    return {
+        'fileName': uploaded['fileName'],
+        'fileSha256': uploaded['fileSha256'],
+        'fileSize': uploaded['fileSize'],
+        'encoding': uploaded['encoding'],
+        'fields': uploaded['fields'],
+        'rows': uploaded['rows'],
+        'ignoredColumns': list(legacy.IGNORED_QTY_COLUMNS),
+    }
+
+
+def parse_aux_stock_qty(raw):
+    """「在庫」列のみ。空・不正は 0 扱いせず undecidable。"""
+    t = stock.text(raw)
+    if not t:
+        return None, 'empty'
+    try:
+        qty = stock.parse_qty(raw, '在庫', allow_zero=True, allow_negative=True)
+    except ValueError:
+        return None, 'invalid'
+    return qty, 'ok'
+
+
+def _supplier_names_match(a, b):
+    ta, tb = stock.text(a), stock.text(b)
+    if not ta or not tb:
+        return False
+    if identity_match_key(ta) == identity_match_key(tb):
+        return True
+    return legacy.looks_like_company_form_variant(ta, tb)
+
+
+def _aux_row_matches_candidate(aux_item, *, code, supplier, product_name, customers):
+    """台帳側の仕入先候補へ、品番＋仕入先＋商品名（＋顧客）で紐づける。品番だけでは結びつけない。"""
+    aux_code = stock.text(aux_item.get('商品コード'))
+    # 品番は文字列のまま（先頭ゼロ保持。「8」と「00008」は同一視しない）
+    if aux_code != stock.text(code):
+        return False
+    if legacy.is_custom_order_code(aux_code) or not stock_product_merge.is_normal_product_code(aux_code):
+        return False
+    if not _supplier_names_match(aux_item.get('仕入先'), supplier):
+        return False
+    if product_name_core_key(aux_item.get('商品名')) != product_name_core_key(product_name):
+        return False
+    aux_customer = stock.text(aux_item.get('顧客'))
+    ledger_customers = [stock.text(x) for x in (customers or []) if stock.text(x)]
+    if aux_customer and ledger_customers:
+        if not any(_supplier_names_match(aux_customer, lc) or identity_match_key(aux_customer) == identity_match_key(lc)
+                   for lc in ledger_customers):
+            # 顧客名の会社表記ゆれも許容
+            if not any(legacy.looks_like_company_form_variant(aux_customer, lc) for lc in ledger_customers):
+                return False
+    return True
+
+
+def build_aux_row_index(aux_rows):
+    """品番文字列で束ねた補助索引（在庫数量は判定時に読む）。"""
+    by_code = defaultdict(list)
+    for row_no, item in aux_rows or []:
+        code = stock.text(item.get('商品コード'))
+        if not code:
+            continue
+        by_code[code].append((row_no, item))
+    return by_code
+
+
+def _collect_supplier_candidates(group):
+    """同一商品候補内の仕入先一覧（台帳側名・サイズ・顧客）。"""
+    by_sup = {}
+    for v in group.get('variants') or []:
+        sup = stock.text(v.get('supplier') or '')
+        if not sup:
+            continue
+        slot = by_sup.get(sup)
+        if not slot:
+            slot = {
+                'supplier': sup,
+                'ledgerNames': [],
+                'sizes': [],
+                'customers': [],
+                'variantKeys': [],
+            }
+            by_sup[sup] = slot
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            n = stock.text(n)
+            if n and n not in slot['ledgerNames']:
+                slot['ledgerNames'].append(n)
+        for size in v.get('sizes') or []:
+            if size and size not in slot['sizes']:
+                slot['sizes'].append(size)
+        for cust in v.get('customers') or []:
+            if cust and cust not in slot['customers']:
+                slot['customers'].append(cust)
+        key = v.get('key')
+        if key and key not in slot['variantKeys']:
+            slot['variantKeys'].append(key)
+    return list(by_sup.values())
+
+
+def _judge_aux_for_supplier(aux_index, *, code, candidate):
+    """1仕入先候補について初期在庫CSVの照合結果を返す（在庫は書かない）。"""
+    supplier = candidate['supplier']
+    names = [stock.text(n) for n in (candidate.get('ledgerNames') or []) if stock.text(n)]
+    customers = candidate.get('customers') or []
+    matched = []
+    if names:
+        for row_no, item in aux_index.get(stock.text(code), []):
+            for name in names:
+                if _aux_row_matches_candidate(
+                    item, code=code, supplier=supplier, product_name=name, customers=customers,
+                ):
+                    matched.append((row_no, item))
+                    break
+
+    size_rows = []
+    has_positive = False
+    undecidable = False
+    undecidable_reasons = []
+    for row_no, item in matched:
+        size = stock.text(item.get('サイズ'))
+        qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
+        if qstatus != 'ok':
+            undecidable = True
+            if qstatus == 'empty':
+                undecidable_reasons.append(f'{row_no}行目：在庫が空です（0扱いしません）。')
+            else:
+                undecidable_reasons.append(f'{row_no}行目：在庫「{stock.text(item.get("在庫"))}」が不正です。')
+            size_rows.append({
+                'rowNo': row_no,
+                'size': size,
+                'qty': None,
+                'qtyDisplay': '（不正/空）',
+                'qtyStatus': qstatus,
+            })
+            continue
+        if qty is not None and qty > 0:
+            has_positive = True
+        size_rows.append({
+            'rowNo': row_no,
+            'size': size,
+            'qty': qty,
+            'qtyDisplay': str(qty),
+            'qtyStatus': 'ok',
+        })
+
+    if matched:
+        aux_status = 'matched'
+        aux_status_label = '初期在庫CSVに該当あり'
+    else:
+        aux_status = 'none'
+        aux_status_label = '該当登録なし'  # 「在庫0」とは表示しない
+
+    return {
+        'supplier': supplier,
+        'ledgerNames': list(names),
+        'ledgerName': prefer_unmarked_product_name(names) or (names[0] if names else ''),
+        'auxStatus': aux_status,
+        'auxStatusLabel': aux_status_label,
+        'auxSizeStocks': size_rows,
+        'hasAnyAuxRows': bool(matched),
+        'hasPositiveStock': bool(has_positive and not undecidable),
+        'qtyUndecidable': undecidable,
+        'qtyUndecidableReasons': undecidable_reasons,
+        'customers': list(customers),
+        'ledgerSizes': list(candidate.get('sizes') or []),
+    }
+
+
+def judge_primary_supplier_from_aux(supplier_judgments):
+    """通常仕入先の自動判定。数量最大・CSV先頭行では選ばない。"""
+    judgments = list(supplier_judgments or [])
+    if len(judgments) < 2:
+        return {
+            'autoPrimarySupplier': '',
+            'autoReason': '',
+            'needsManualPrimary': False,
+            'manualReason': '',
+        }
+
+    if any(j.get('qtyUndecidable') for j in judgments):
+        reasons = []
+        for j in judgments:
+            reasons.extend(j.get('qtyUndecidableReasons') or [])
+        return {
+            'autoPrimarySupplier': '',
+            'autoReason': '',
+            'needsManualPrimary': True,
+            'manualReason': '初期在庫CSVの在庫に空欄または不正値があるため自動判定できません。'
+            + (' ' + ' '.join(reasons[:3]) if reasons else ''),
+        }
+
+    positive = [j for j in judgments if j.get('hasPositiveStock')]
+    if len(positive) == 1:
+        return {
+            'autoPrimarySupplier': positive[0]['supplier'],
+            'autoReason': '初期在庫CSVで正の在庫がある仕入先が1社のみのため、通常仕入先にしました。',
+            'needsManualPrimary': False,
+            'manualReason': '',
+        }
+    if len(positive) > 1:
+        return {
+            'autoPrimarySupplier': '',
+            'autoReason': '',
+            'needsManualPrimary': True,
+            'manualReason': '正の在庫がある仕入先が複数あるため、通常仕入先は手動で選んでください。',
+        }
+
+    with_rows = [j for j in judgments if j.get('hasAnyAuxRows')]
+    if len(with_rows) == 1:
+        return {
+            'autoPrimarySupplier': with_rows[0]['supplier'],
+            'autoReason': '正の在庫はないが、初期在庫CSVに該当行がある仕入先が1社のみのため、通常仕入先にしました。',
+            'needsManualPrimary': False,
+            'manualReason': '',
+        }
+    if len(with_rows) > 1:
+        return {
+            'autoPrimarySupplier': '',
+            'autoReason': '',
+            'needsManualPrimary': True,
+            'manualReason': '正の在庫がなく、該当行がある仕入先も複数あるため、通常仕入先は手動で選んでください。',
+        }
+    return {
+        'autoPrimarySupplier': '',
+        'autoReason': '',
+        'needsManualPrimary': True,
+        'manualReason': '初期在庫CSVに該当登録がないため、通常仕入先は手動で選んでください。',
+    }
+
+
+def _suggested_official_name_for_primary(group, primary_supplier):
+    """自動で通常仕入先が決まったとき、その仕入先の商品名が唯一なら公式名候補にする。"""
+    if not primary_supplier:
+        return '', True
+    names = []
+    for v in group.get('variants') or []:
+        if not _supplier_names_match(v.get('supplier'), primary_supplier):
+            continue
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            n = stock.text(n)
+            if n and n not in names:
+                names.append(n)
+    cores = {product_name_core_key(n) for n in names if n}
+    if len(cores) != 1:
+        return '', True
+    official = prefer_unmarked_product_name(names) or (names[0] if names else '')
+    return official, False
+
+
+def attach_aux_primary_judgment(sku_groups, aux_uploaded):
+    """品番グループへ初期在庫CSVによる通常仕入先判定を付与（在庫は変更しない）。"""
+    if not aux_uploaded:
+        for g in sku_groups:
+            g['auxPrimary'] = None
+        return None
+
+    aux_index = build_aux_row_index(aux_uploaded['rows'])
+    meta = {
+        'fileName': aux_uploaded['fileName'],
+        'fileSha256': aux_uploaded['fileSha256'],
+        'fileSize': aux_uploaded['fileSize'],
+        'encoding': aux_uploaded['encoding'],
+        'rowCount': len(aux_uploaded['rows']),
+        'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
+        'note': (
+            '初期在庫用CSVは通常仕入先の判定補助だけに使います。'
+            '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
+            '補助CSVにだけある商品・仕入先は新規作成しません。'
+        ),
+    }
+
+    for group in sku_groups:
+        candidates = _collect_supplier_candidates(group)
+        if len(candidates) < 2:
+            group['auxPrimary'] = {
+                'applicable': False,
+                'reason': '仕入先候補が1社以下のため判定不要',
+                'supplierJudgments': [
+                    _judge_aux_for_supplier(aux_index, code=group['code'], candidate=c)
+                    for c in candidates
+                ],
+                'autoPrimarySupplier': '',
+                'autoReason': '',
+                'needsManualPrimary': False,
+                'manualReason': '',
+                'suggestedOfficialName': '',
+                'officialNameNeedsChoice': False,
+            }
+            continue
+
+        judgments = [
+            _judge_aux_for_supplier(aux_index, code=group['code'], candidate=c)
+            for c in candidates
+        ]
+        decision = judge_primary_supplier_from_aux(judgments)
+        auto_primary = decision['autoPrimarySupplier']
+        for j in judgments:
+            if auto_primary and _supplier_names_match(j['supplier'], auto_primary):
+                j['plannedRole'] = 'primary'
+                j['plannedRoleLabel'] = '通常'
+            elif auto_primary:
+                j['plannedRole'] = 'sub'
+                j['plannedRoleLabel'] = 'サブ'
+            else:
+                j['plannedRole'] = 'undecided'
+                j['plannedRoleLabel'] = '未定（選択が必要）'
+
+        suggested_name, name_needs = _suggested_official_name_for_primary(group, auto_primary)
+        group['auxPrimary'] = {
+            'applicable': True,
+            'reason': '',
+            'supplierJudgments': judgments,
+            'autoPrimarySupplier': auto_primary,
+            'autoReason': decision['autoReason'],
+            'needsManualPrimary': decision['needsManualPrimary'],
+            'manualReason': decision['manualReason'],
+            'suggestedOfficialName': suggested_name,
+            'officialNameNeedsChoice': name_needs if auto_primary else True,
+        }
+    return meta
+
+
+def _existing_primary_supplier_name(group, keep_product_id):
+    if not keep_product_id:
+        return ''
+    for p in group.get('existingProducts') or []:
+        if int(p.get('id') or 0) == int(keep_product_id):
+            return stock.text(p.get('supplierName') or '')
+    return ''
+
+
+def _resolve_effective_primary_supplier(group, raw_decision):
+    """ユーザー手動指定を優先。未指定なら初期在庫CSVの自動結果を使う。"""
+    raw = raw_decision if isinstance(raw_decision, dict) else {}
+    manual = bool(raw.get('primarySupplierManual'))
+    chosen = stock.text(raw.get('primarySupplier') or '')
+    aux = group.get('auxPrimary') or {}
+    auto = stock.text(aux.get('autoPrimarySupplier') or '')
+    conflict = False
+    if manual and chosen:
+        if auto and not _supplier_names_match(chosen, auto):
+            conflict = True
+        return chosen, 'manual', conflict, auto
+    if chosen and not manual:
+        # 古いUI互換: 明示値があればそれを使う（再計算で上書きしない）
+        return chosen, 'user', False, auto
+    if auto:
+        return auto, 'auto', False, auto
+    return '', 'none', False, auto
+
+
 def used_marker_possible(product_name):
     return legacy.strip_used_marker(product_name)[1]
 
@@ -1213,14 +1577,48 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
 
         if decision == SKU_DECISION_MERGE:
             keep_id = raw.get('keepProductId') or raw.get('productId')
+            # 既存が1件だけのときは残す商品を省略しても再利用（再取込の二重新規を防ぐ）
+            if not keep_id and group.get('existingCount') == 1:
+                keep_id = (group.get('existingProducts') or [{}])[0].get('id')
             official_name = stock.text(raw.get('officialName') or raw.get('name') or '')
             color = stock.text(raw.get('color') or '')
-            primary_supplier = stock.text(raw.get('primarySupplier') or '')
+            primary_supplier, primary_source, primary_conflict, auto_primary = (
+                _resolve_effective_primary_supplier(group, raw)
+            )
+            aux = group.get('auxPrimary') or {}
+            auto_name_ok = (
+                aux.get('suggestedOfficialName')
+                and not aux.get('officialNameNeedsChoice')
+                and primary_supplier
+                and auto_primary
+                and _supplier_names_match(primary_supplier, auto_primary)
+            )
+            if not official_name and auto_name_ok:
+                official_name = stock.text(aux.get('suggestedOfficialName') or '')
             merge_source_ids = raw.get('mergeSourceIds') or []
             if isinstance(merge_source_ids, list):
                 merge_source_ids = [int(x) for x in merge_source_ids if str(x).isdigit() or isinstance(x, int)]
             else:
                 merge_source_ids = []
+
+            # グループ表示用（UIの確認パネル）
+            existing_primary = _existing_primary_supplier_name(group, keep_id)
+            primary_change = bool(
+                keep_id
+                and primary_supplier
+                and existing_primary
+                and not _supplier_names_match(existing_primary, primary_supplier)
+            )
+            confirm_primary = bool(raw.get('confirmPrimaryChange'))
+            group['primarySupplierResolved'] = {
+                'primarySupplier': primary_supplier,
+                'source': primary_source,
+                'autoPrimarySupplier': auto_primary,
+                'conflictWithAuto': primary_conflict,
+                'existingPrimarySupplier': existing_primary,
+                'primaryChangeRequiresConfirm': primary_change,
+                'primaryChangeConfirmed': confirm_primary,
+            }
 
             if group['existingCount'] > 1 and not keep_id:
                 row['status'] = STATUS_REVIEW
@@ -1248,6 +1646,32 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                     pending_decision += 1
                     continue
 
+            suppliers_in_group = {
+                stock.text(v.get('supplier') or '')
+                for v in (group.get('variants') or [])
+                if stock.text(v.get('supplier') or '')
+            }
+            if len(suppliers_in_group) > 1 and not primary_supplier:
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                why = (aux.get('manualReason') if aux else '') or '通常仕入先を選んでください。'
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の通常仕入先が未定です。{why}'
+                ]
+                pending_decision += 1
+                continue
+            if primary_change and not confirm_primary:
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の既存の通常仕入先は「{existing_primary}」です。'
+                    f'「{primary_supplier}」へ変更するには明示確認が必要です（黙って変更しません）。'
+                ]
+                pending_decision += 1
+                continue
+
             # 行ごとの登録先
             if keep_id:
                 row['product'] = dict(row.get('product') or {})
@@ -1256,6 +1680,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['officialName'] = official_name
                 row['product']['officialColor'] = color
                 row['product']['primarySupplierName'] = primary_supplier
+                row['product']['confirmPrimaryChange'] = bool(primary_change and confirm_primary)
                 row['product']['mergeSourceIds'] = merge_source_ids
                 row['product']['skuMerge'] = True
                 if group['existingCount'] > 1 and merge_source_ids:
@@ -1462,6 +1887,7 @@ def build_preview(c, body):
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
     uploaded = decode_upload(body)
+    aux_uploaded = decode_aux_upload(body)
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
     sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
 
@@ -1525,6 +1951,7 @@ def build_preview(c, body):
         row['matchGroupCount'] = group_counts[row['matchGroupKey']]
 
     sku_groups = build_sku_groups(c, classified)
+    aux_meta = attach_aux_primary_judgment(sku_groups, aux_uploaded)
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
     _attach_product_plans(classified, sku_groups)
     _apply_auto_merge_official_names(classified, sku_groups)
@@ -1542,6 +1969,17 @@ def build_preview(c, body):
     ]
     fp = db_fingerprint(c)
     snap = stock_snapshot(c)
+    note = (
+        '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
+        '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記だけの差は'
+        '自動で1商品にまとめ、要確認へは流しません。公式名は標記なしを優先し、'
+        'CSV原文（標記付き含む）は照合用別名に残します。括弧内表記や色・加工は'
+        '商品名から自動分解しません。加工列が無くてもエラーにはしません。'
+    )
+    if aux_meta:
+        note += (
+            ' 初期在庫用CSVは通常仕入先の判定補助のみに使い、在庫数量は書き込みません。'
+        )
     return {
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
@@ -1555,6 +1993,7 @@ def build_preview(c, body):
         'skuDecisionPending': decision_meta['pendingDecisionGroups'],
         'skuDecisionPendingRows': sku_pending_rows,
         'autoMergePlans': auto_plans,
+        'auxOpeningStock': aux_meta,
         'counts': dict(STATUS_LABELS),
         'countsRaw': dict(counts),
         'plannedCounts': planned,
@@ -1564,13 +2003,7 @@ def build_preview(c, body):
         'stockSnapshot': snap,
         'previousImports': previous_imports_for_file(c, uploaded['fileSha256']),
         'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
-        'note': (
-            '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
-            '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記だけの差は'
-            '自動で1商品にまとめ、要確認へは流しません。公式名は標記なしを優先し、'
-            'CSV原文（標記付き含む）は照合用別名に残します。括弧内表記や色・加工は'
-            '商品名から自動分解しません。加工列が無くてもエラーにはしません。'
-        ),
+        'note': note,
     }
 
 
@@ -1624,6 +2057,67 @@ def _ensure_sub_supplier(c, product_id, supplier_id):
     return True
 
 
+def _find_supplier_id_by_name(c, name):
+    name = stock.text(name)
+    if not name:
+        return None
+    matches, _how = legacy.find_person_matches(c, 'suppliers', name)
+    if len(matches) == 1:
+        return matches[0]['id']
+    exact = [m for m in matches if stock.text(m['name']) == name]
+    if len(exact) == 1:
+        return exact[0]['id']
+    return None
+
+
+def _product_save_payload(c, pid, *, supplier_id=None, sub_supplier_ids=None):
+    cur = stock.product_row(c, pid)
+    return {
+        'id': pid,
+        'code': cur['code'],
+        'name': cur['name'],
+        'color': cur['color'],
+        'category': cur.get('category') or '',
+        'supplierId': cur['supplierId'] if supplier_id is None else supplier_id,
+        'subSupplierIds': (
+            list(cur.get('subSupplierIds') or [])
+            if sub_supplier_ids is None
+            else list(sub_supplier_ids)
+        ),
+        'sizes': cur['sizes'],
+        'active': cur['active'],
+        'links': [
+            {
+                'customerId': link['customerId'],
+                'embroidery': link['embroidery'],
+                'isStandard': link['isStandard'],
+                'active': link['active'],
+            }
+            for link in cur['links']
+        ],
+    }
+
+
+def _apply_primary_supplier_change(c, product_id, primary_supplier_id, *, confirm):
+    """明示確認があるときだけ既存商品の通常仕入先を差し替える。旧通常はサブへ。"""
+    if not product_id or not primary_supplier_id or not confirm:
+        return False
+    prod = _load_product(c, product_id)
+    if not prod:
+        return False
+    old_id = prod['supplier_id']
+    if old_id == primary_supplier_id:
+        return False
+    cur = stock.product_row(c, product_id)
+    new_subs = [sid for sid in (cur.get('subSupplierIds') or []) if sid != primary_supplier_id]
+    if old_id and old_id != primary_supplier_id and old_id not in new_subs:
+        new_subs.append(old_id)
+    stock.save_product(c, _product_save_payload(
+        c, product_id, supplier_id=primary_supplier_id, sub_supplier_ids=new_subs,
+    ))
+    return True
+
+
 def _apply_official_name(c, product_id, official_name, color=None, csv_name=None):
     """公式名を確定し、CSV名・旧名を別名に残す。"""
     if not product_id or not official_name:
@@ -1672,6 +2166,9 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     if official_color is None:
         official_color = ''
 
+    primary_name = stock.text(product_info.get('primarySupplierName') or '')
+    primary_id = _find_supplier_id_by_name(c, primary_name) if primary_name else None
+
     if product_info.get('id') and not force_create:
         pid = product_info['id']
         if (product_info.get('skuMerge') or product_info.get('applyOfficialName')) and official_name:
@@ -1693,29 +2190,30 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
             sub_added = _ensure_sub_supplier(c, pid, product_info['subSupplierId'])
         elif product_info.get('subSupplierAdd') and supplier_id:
             sub_added = _ensure_sub_supplier(c, pid, supplier_id)
-        # 通常仕入先名が指定されていれば、未設定のときだけ通常へ。既存通常は維持しサブ追加。
-        primary_name = stock.text(product_info.get('primarySupplierName') or '')
-        if primary_name and supplier_id:
+        # 通常仕入先: 未設定なら設定。変更は明示確認があるときだけ。それ以外はサブ追加。
+        if primary_name:
             prod = _load_product(c, pid)
-            if prod and prod['supplier_id'] in (None, ''):
-                cur = stock.product_row(c, pid)
-                stock.save_product(c, {
-                    'id': pid, 'code': cur['code'], 'name': cur['name'], 'color': cur['color'],
-                    'category': cur.get('category') or '', 'supplierId': supplier_id,
-                    'subSupplierIds': cur.get('subSupplierIds') or [],
-                    'sizes': cur['sizes'], 'active': cur['active'],
-                    'links': [
-                        {
-                            'customerId': l['customerId'], 'embroidery': l['embroidery'],
-                            'isStandard': l['isStandard'], 'active': l['active'],
-                        }
-                        for l in cur['links']
-                    ],
-                })
-            elif prod and prod['supplier_id'] not in (None, supplier_id):
+            target_primary = primary_id or supplier_id
+            if prod and target_primary and prod['supplier_id'] in (None, ''):
+                stock.save_product(c, _product_save_payload(c, pid, supplier_id=target_primary))
+            elif (
+                prod
+                and target_primary
+                and prod['supplier_id'] not in (None, target_primary)
+                and product_info.get('confirmPrimaryChange')
+            ):
+                _apply_primary_supplier_change(
+                    c, pid, target_primary, confirm=True,
+                )
+            elif prod and supplier_id and prod['supplier_id'] not in (None, supplier_id):
                 sub_added = _ensure_sub_supplier(c, pid, supplier_id) or sub_added
-        if csv_name and primary_name:
+            if supplier_id and primary_id and supplier_id != primary_id:
+                sub_added = _ensure_sub_supplier(c, pid, supplier_id) or sub_added
             stock_product_merge.ensure_supplier_alias(c, pid, primary_name)
+        elif supplier_id:
+            prod = _load_product(c, pid)
+            if prod and prod['supplier_id'] not in (None, supplier_id):
+                sub_added = _ensure_sub_supplier(c, pid, supplier_id) or sub_added
         return pid, False, size_added, sub_added
 
     code = stock.text(product_info.get('code'))
@@ -1778,19 +2276,26 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
             stock.CATEGORY_UNIFORM if legacy.is_custom_order_code(code) else ''
         )
     )
+    # 新規作成時は指定の通常仕入先を優先（行順に依存しない）
+    create_supplier_id = primary_id or supplier_id
     saved = stock.save_product(c, {
         'code': code,
         'name': name,  # 公式名（未指定時はCSV原文）。色・加工の自動分解なし
         'color': stock.text(official_color) if official_color is not None else '',
         'category': category,
-        'supplierId': supplier_id,
+        'supplierId': create_supplier_id,
         'sizes': [product_info['size']],
         'links': [],
         'active': True,
     })
     if csv_name and stock.text(csv_name) != stock.text(name):
         stock_product_merge.ensure_name_alias(c, saved['id'], csv_name)
-    return saved['id'], True, False, False
+    if primary_name:
+        stock_product_merge.ensure_supplier_alias(c, saved['id'], primary_name)
+    sub_added = False
+    if supplier_id and create_supplier_id and supplier_id != create_supplier_id:
+        sub_added = _ensure_sub_supplier(c, saved['id'], supplier_id)
+    return saved['id'], True, False, sub_added
 
 
 def _ensure_handle(c, customer_id, product_id, handle_info):
@@ -1836,6 +2341,24 @@ def _run_confirmed_product_merges(c, classified, sku_decisions, *, actor_name, t
         merge_body['category'] = preview['category']
         merge_body['supplierId'] = preview['supplierId']
         merge_body['subSupplierIds'] = preview['subSupplierIds']
+        # 通常仕入先の明示指定（初期在庫CSV判定 or ユーザー選択）があれば統合結果へ反映
+        primary_name = stock.text(prod.get('primarySupplierName') or '')
+        if primary_name:
+            primary_id = _find_supplier_id_by_name(c, primary_name)
+            if primary_id:
+                old_primary = preview.get('supplierId')
+                merge_body['supplierId'] = primary_id
+                subs = [sid for sid in (preview.get('subSupplierIds') or []) if sid != primary_id]
+                if old_primary and old_primary != primary_id and old_primary not in subs:
+                    # 明示確認なしでは既存通常を黙って変えない（ここは confirm 済み行のみ）
+                    if prod.get('confirmPrimaryChange') or not old_primary:
+                        subs.append(old_primary)
+                    elif not prod.get('confirmPrimaryChange') and old_primary:
+                        # 確認なし: 統合プレビューの通常を維持し、指定先はサブへ
+                        merge_body['supplierId'] = old_primary
+                        if primary_id not in subs:
+                            subs.append(primary_id)
+                merge_body['subSupplierIds'] = subs
         merge_body['sizes'] = preview['sizes']
         # 取扱差異は「残す商品」側を優先（CSV確認で keep を選んだ前提）
         if preview.get('handleConflicts'):
@@ -2029,6 +2552,12 @@ def commit_preview(c, body, *, db_path=None):
 
                 sel = selections.get(str(row_no)) or selections.get(row_no) or {}
                 prod_info = dict(row['product'] or {})
+                # 通常仕入先名が行の仕入先と違う場合でも先に存在させる（補助CSV由来の新規は作らない＝台帳候補内のみ）
+                primary_name = stock.text(prod_info.get('primarySupplierName') or '')
+                if primary_name and primary_name != stock.text(row['csv'].get('supplier') or ''):
+                    _ensure_person(
+                        c, 'suppliers', stock.save_supplier, primary_name, create=True,
+                    )
                 code_t = stock.text(prod_info.get('codeOverride') if prod_info.get('codeOverride') is not None else row['csv']['code'])
                 force = bool(sel.get('forceCreate')) and not stock_product_merge.is_normal_product_code(code_t)
 

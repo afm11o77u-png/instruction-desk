@@ -57,13 +57,15 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('サイズ・顧客・中古標記差の自動まとめ', js)
         self.assertIn('autoMergePlans', js)
         self.assertIn('中古標記まとめ', js)
+        self.assertIn('auxFile', js)
+        self.assertIn('初期在庫CSV', js)
         self.assertIn('1品番=1商品', app)
         # 初期在庫用旧CSVタブとは別入口
         self.assertIn("['legacyCsv','旧CSV取込']", app)
 
     def test_file_picker_and_history_error_copy(self):
         js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
-        self.assertIn('ファイルを変更', js)
+        self.assertIn('台帳CSVを変更', js)
         self.assertIn('product-ledger-file-input', js)
         self.assertIn('履歴を確認できませんでした', js)
         self.assertIn('ファイル容量が上限を超えています', js)
@@ -828,6 +830,350 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             # バリアント内のサイズは比較パネル用に保持
             sizes0 = next(v['sizes'] for v in group['variants'] if v['productName'] == 'ワークパンツ')
             self.assertEqual(set(sizes0), {'SSS', 'SS', 'M'})
+        finally:
+            c.close()
+            folder.cleanup()
+
+
+def tiny_opening_rows(rows):
+    header = (
+        '新古,仕入先,顧客,商品名,商品コード,サイズ,仕入単価,'
+        '購入数量,購入金額,出荷数,出荷金額,在庫,在庫金額,営業所コード,拠点,棚,補正在庫数'
+    )
+    return '\n'.join([header] + rows)
+
+
+def opening_line(supplier, customer, name, code, size, qty, *, cost='100', adjust='0'):
+    # 補正在庫数・購入・出荷は判定に使わない（ダミー値）
+    return (
+        f'新品,{supplier},{customer},{name},{code},{size},{cost},'
+        f'9,900,8,800,{qty},0,1,本社,A1,{adjust}'
+    )
+
+
+class AuxOpeningPrimarySupplierTest(unittest.TestCase):
+    """初期在庫CSVは通常仕入先判定のみ。在庫数量は書かない。"""
+
+    def _ledger_00008(self):
+        return tiny_ledger_rows([
+            '㈱合田観光商事　ひまわり,㈱ユニーク,00008,ベーシックカラーベスト　046.蛍光グリーン,F',
+            '㈱合田観光商事　ひまわり,㈱ユニーク,00008,ベーシックカラーベスト　046.蛍光グリーン,XL',
+            '㈱合田観光商事　ひまわり,㈱ユニーク,00008,ベーシックカラーベスト　046.蛍光グリーン,2XL',
+            '㈱合田観光商事　ひまわり,アイトス㈱,00008,駐車場ベスト（緑),F',
+            '㈱合田観光商事　ひまわり,アイトス㈱,00008,駐車場ベスト（緑),2L',
+        ])
+
+    def _aux_unique_positive(self):
+        cust = '㈱合田観光商事　ひまわり'
+        name = 'ベーシックカラーベスト　046.蛍光グリーン'
+        return tiny_opening_rows([
+            opening_line('㈱ユニーク', cust, name, '00008', 'F', '0', adjust='-5'),
+            opening_line('㈱ユニーク', cust, name, '00008', 'XL', '0', adjust='-1'),
+            opening_line('㈱ユニーク', cust, name, '00008', '2XL', '2', adjust='-1'),
+        ])
+
+    def test_ui_mentions_aux_opening_csv(self):
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
+        self.assertIn('auxFile', js)
+        self.assertIn('初期在庫CSV', js)
+        self.assertIn('該当登録なし', js)
+        self.assertIn('primarySupplierManual', js)
+        self.assertIn('confirmPrimaryChange', js)
+
+    def test_without_aux_legacy_still_works(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows(['顧客A,仕入A,SC-1,スクラブ,M'])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 't.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertIsNone(preview.get('auxOpeningStock'))
+            self.assertEqual(preview['plannedCounts']['productsToCreate'], 1)
+            self.assertEqual(stock_snap(c), before)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_example_unique_positive_aitos_none(self):
+        folder, path, c = newdb()
+        try:
+            before = stock_snap(c)
+            body = {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'name': 'ledger.csv',
+                'auxFile': csv_b64_from_text(self._aux_unique_positive()),
+                'auxName': 'opening.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            self.assertIsNotNone(preview['auxOpeningStock'])
+            self.assertEqual(stock_snap(c), before)
+            group = next(g for g in preview['skuGroups'] if g['code'] == '00008')
+            self.assertTrue(group['needsDecision'])
+            aux = group['auxPrimary']
+            self.assertTrue(aux['applicable'])
+            self.assertEqual(aux['autoPrimarySupplier'], '㈱ユニーク')
+            by_sup = {j['supplier']: j for j in aux['supplierJudgments']}
+            self.assertEqual(by_sup['㈱ユニーク']['plannedRole'], 'primary')
+            self.assertEqual(by_sup['アイトス㈱']['plannedRole'], 'sub')
+            self.assertEqual(by_sup['アイトス㈱']['auxStatus'], 'none')
+            self.assertEqual(by_sup['アイトス㈱']['auxStatusLabel'], '該当登録なし')
+            # 補正在庫は使わない（Unique の補正はマイナスでも 2XL=2 で正判定）
+            self.assertTrue(by_sup['㈱ユニーク']['hasPositiveStock'])
+
+            sku = {
+                '00008': {
+                    'decision': 'merge',
+                    'officialName': 'ベーシックカラーベスト　046.蛍光グリーン',
+                    # primary は自動結果を使う（未指定）
+                },
+            }
+            body2 = {**body, 'skuDecisions': sku}
+            preview2 = pli.build_preview(c, body2)
+            self.assertEqual(preview2['reviewCount'], 0)
+            self.assertEqual(preview2['skuDecisionPending'], 0)
+            result = pli.commit_preview(c, {
+                **body2,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-aux-00008',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            prod = c.execute(
+                "SELECT id,name,supplier_id FROM products WHERE code='00008' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertEqual(prod['name'], 'ベーシックカラーベスト　046.蛍光グリーン')
+            sup = c.execute('SELECT name FROM suppliers WHERE id=?', (prod['supplier_id'],)).fetchone()
+            self.assertEqual(sup['name'], '㈱ユニーク')
+            subs = {
+                r['name'] for r in c.execute(
+                    '''SELECT s.name FROM product_suppliers ps
+                       JOIN suppliers s ON s.id=ps.supplier_id WHERE ps.product_id=?''',
+                    (prod['id'],),
+                )
+            }
+            self.assertIn('アイトス㈱', subs)
+            # 再取込で二重登録なし
+            preview3 = pli.build_preview(c, body2)
+            self.assertEqual(preview3['plannedCounts']['productsToCreate'], 0)
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='00008' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_both_positive_needs_manual(self):
+        folder, path, c = newdb()
+        try:
+            cust = '㈱合田観光商事　ひまわり'
+            aux = tiny_opening_rows([
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '00008', '2XL', '2'),
+                opening_line('アイトス㈱', cust, '駐車場ベスト（緑)', '00008', 'F', '1'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
+            self.assertEqual(auxj['autoPrimarySupplier'], '')
+            self.assertTrue(auxj['needsManualPrimary'])
+            self.assertIn('複数', auxj['manualReason'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_all_zero_unique_has_rows(self):
+        folder, path, c = newdb()
+        try:
+            cust = '㈱合田観光商事　ひまわり'
+            aux = tiny_opening_rows([
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '00008', 'F', '0'),
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '00008', 'XL', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
+            self.assertEqual(auxj['autoPrimarySupplier'], '㈱ユニーク')
+            self.assertIn('該当行がある仕入先が1社', auxj['autoReason'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_negative_not_positive(self):
+        folder, path, c = newdb()
+        try:
+            cust = '㈱合田観光商事　ひまわり'
+            aux = tiny_opening_rows([
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '00008', 'F', '-3'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
+            self.assertEqual(auxj['autoPrimarySupplier'], '㈱ユニーク')
+            j = next(x for x in auxj['supplierJudgments'] if x['supplier'] == '㈱ユニーク')
+            self.assertFalse(j['hasPositiveStock'])
+            self.assertTrue(j['hasAnyAuxRows'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_no_aux_rows_for_either(self):
+        folder, path, c = newdb()
+        try:
+            aux = tiny_opening_rows([
+                opening_line('別仕入', '別顧客', '別商品', '99999', 'M', '5'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
+            self.assertEqual(auxj['autoPrimarySupplier'], '')
+            self.assertTrue(auxj['needsManualPrimary'])
+            for j in auxj['supplierJudgments']:
+                self.assertEqual(j['auxStatusLabel'], '該当登録なし')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_empty_qty_undecidable(self):
+        folder, path, c = newdb()
+        try:
+            cust = '㈱合田観光商事　ひまわり'
+            aux = tiny_opening_rows([
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '00008', 'F', ''),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
+            self.assertEqual(auxj['autoPrimarySupplier'], '')
+            self.assertTrue(auxj['needsManualPrimary'])
+            self.assertIn('空欄または不正', auxj['manualReason'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_code_leading_zeros_not_equated(self):
+        folder, path, c = newdb()
+        try:
+            cust = '㈱合田観光商事　ひまわり'
+            # 補助が「8」でも台帳「00008」とは結びつけない
+            aux = tiny_opening_rows([
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '8', '2XL', '9'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
+            j = next(x for x in auxj['supplierJudgments'] if x['supplier'] == '㈱ユニーク')
+            self.assertEqual(j['auxStatus'], 'none')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_existing_primary_change_requires_confirm(self):
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '㈱合田観光商事　ひまわり', 'active': True})
+            su_a = stock.save_supplier(c, {'name': 'アイトス㈱', 'active': True})
+            stock.save_supplier(c, {'name': '㈱ユニーク', 'active': True})
+            pr = stock.save_product(c, {
+                'code': '00008', 'name': '駐車場ベスト（緑)', 'color': '',
+                'supplierId': su_a['id'], 'active': True, 'sizes': ['F', '2L'],
+                'links': [{'customerId': cu['id'], 'embroidery': '加工未整理', 'isStandard': False, 'active': True}],
+            })
+            c.commit()
+            before = stock_snap(c)
+            body = {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(self._aux_unique_positive()),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                'skuDecisions': {
+                    '00008': {
+                        'decision': 'merge',
+                        'keepProductId': pr['id'],
+                        'officialName': 'ベーシックカラーベスト　046.蛍光グリーン',
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            # 既存通常=アイトス → 自動通常=ユニーク のため確認必須
+            self.assertGreater(preview['reviewCount'], 0)
+            reasons = ' '.join(
+                ' '.join(r.get('reasons') or []) for r in preview['rows'] if r.get('status') == 'needs_review'
+            )
+            self.assertIn('明示確認', reasons)
+            body['skuDecisions']['00008']['confirmPrimaryChange'] = True
+            preview2 = pli.build_preview(c, body)
+            self.assertEqual(preview2['reviewCount'], 0)
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-aux-confirm-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            fresh = c.execute('SELECT supplier_id FROM products WHERE id=?', (pr['id'],)).fetchone()
+            self.assertEqual(
+                c.execute('SELECT name FROM suppliers WHERE id=?', (fresh['supplier_id'],)).fetchone()['name'],
+                '㈱ユニーク',
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_manual_primary_not_overwritten_by_auto(self):
+        folder, path, c = newdb()
+        try:
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(self._aux_unique_positive()),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                'skuDecisions': {
+                    '00008': {
+                        'decision': 'merge',
+                        'officialName': '駐車場ベスト（緑)',
+                        'primarySupplier': 'アイトス㈱',
+                        'primarySupplierManual': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            resolved = next(
+                g for g in preview['skuGroups'] if g['code'] == '00008'
+            )['primarySupplierResolved']
+            self.assertEqual(resolved['primarySupplier'], 'アイトス㈱')
+            self.assertEqual(resolved['source'], 'manual')
+            self.assertTrue(resolved['conflictWithAuto'])
+            self.assertEqual(resolved['autoPrimarySupplier'], '㈱ユニーク')
         finally:
             c.close()
             folder.cleanup()
