@@ -144,6 +144,24 @@
     return `予定: 新規商品 ${p.productsToCreate||0}　再利用 ${p.productsToReuse||0}　統合 ${p.productsToMerge||0}　保留行 ${p.rowsDeferred||0}　サイズ追加 ${p.sizesToAdd||0}　取扱新規 ${p.handlesToCreate||0}　（CSV行 ${p.csvRows||0}${auto}）`
   }
 
+  function outcomeSummaryHtml(st){
+    const s=st.preview&&st.preview.outcomeSummary
+    if(!s)return ''
+    const fmt=(arr)=>((arr||[]).slice(0,8).map(x=>`${esc(x.label)} ${x.count}`).join('／'))||'—'
+    const more=(arr)=>((arr||[]).length>8?` …他${(arr||[]).length-8}`:'')
+    return `<div class="sku-outcome-summary">
+      <h3>取込判断の件数</h3>
+      <p><strong>自動まとめ</strong> ${s.autoMergedSkuGroups||0} 品番 / ${s.autoMergedCsvRows||0} 行
+        <span class="sub">（${fmt(s.autoMergedReasons)}${more(s.autoMergedReasons)}）</span></p>
+      <p><strong>要確認（品番比較 未決定）</strong> ${s.needsReviewSkuGroups||0} 品番
+        <span class="sub">（${fmt(s.needsReviewSkuReasons)}${more(s.needsReviewSkuReasons)}）</span></p>
+      ${(s.needsReviewRows||0)?`<p><strong>要確認（行）</strong> ${s.needsReviewRows} 行
+        <span class="sub">（${fmt(s.needsReviewRowReasons)}${more(s.needsReviewRowReasons)}）</span></p>`:''}
+      <p><strong>対象外</strong> ${s.excludedRows||0} 行
+        <span class="sub">（${fmt(s.excludedReasons)}${more(s.excludedReasons)}）</span></p>
+    </div>`
+  }
+
   function autoMergePlansHtml(st){
     const plans=(st.preview&&st.preview.autoMergePlans)||[]
     if(!plans.length)return ''
@@ -162,8 +180,8 @@
       </article>`
     }).join('')
     return `<div class="sku-auto-panel">
-      <h3>サイズ・顧客・中古標記差の自動まとめ（要確認ではない）</h3>
-      <p class="excelhint">品番・仕入先が同じで、サイズや顧客だけ違う行、または商品名の差が先頭「＊/*」中古標記だけの行は、1商品としてまとめます。公式名は標記なしを優先し、CSV原文は照合用別名に残します。LL≡2L の同一化や、CSVに無い中間サイズの追加はしません。</p>
+      <h3>自動まとめ（要確認ではない）</h3>
+      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。色・生地・加工・男女の疑いは確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
       <p class="excelhint">自動まとめ ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行（下は複数サイズまたは複数顧客の例）</p>
       ${cards||'<p class="sub">複数サイズの自動まとめ例はありません（単一行の品番のみ）。</p>'}
       ${more?`<p class="excelhint">他 ${more} 品番も同様に自動まとめ予定です。</p>`:''}
@@ -389,7 +407,9 @@
     return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="8">
       <div class="sku-detail-body">
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
-        ${namePlan.adoptionRule?`<p class="excelhint">名称採用ルール: ${esc(namePlan.adoptionRule)}${namePlan.provisional?`（タグ「${esc(st.preview&&st.preview.provisionalNameTag||'名称未整理')}」）`:''}</p>`:''}
+        ${namePlan.adoptionRule?`<p class="excelhint">名称採用ルール: ${esc(namePlan.adoptionRule)}${namePlan.provisional?`（ステータス「${esc(st.preview&&st.preview.provisionalNameTag||'名称未整理')}」※名前には埋め込みません）`:''}</p>`:''}
+        ${(namePlan.nameCandidates&&namePlan.nameCandidates.length>1)?`<p class="excelhint">名称候補: ${namePlan.nameCandidates.map(esc).join('／')}</p>`:''}
+        ${(namePlan.auxNameReasons&&namePlan.auxNameReasons.length)?`<p class="excelhint">${namePlan.auxNameReasons.map(esc).join(' ')}</p>`:''}
         ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}
         ${auxPanel}
         <div class="bar sku-decision-btns">
@@ -399,7 +419,7 @@
         </div>
         ${decision==='merge'?`<div class="sku-merge-form">
           <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
-          <label>公式名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" placeholder="空なら仮代表名（名称未整理）" ${st.busy?'disabled':''}></label>
+          <label>代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
           <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||'')}" ${st.busy?'disabled':''}></label>
           <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
           ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は自動設定: ${esc(plannedSupplierDisplay(st,g))}</p>`:'')}
@@ -479,7 +499,7 @@
 
     return `<div class="sku-groups-panel">
       <h3>品番ごとの比較一覧（通常品番）</h3>
-      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。「内容の違い○種」だけでは判断させません。サイズ・顧客・先頭「＊/*」は自動まとめ済みです。一括承認候補は名差・仕入先差のみ。色・加工・商品種の疑いは個別確認（一括まとめの対象外）。公式名未設定でも仮代表名で登録できます。</p>
+      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。サイズ・顧客・＊/*・空白/全角半角・明示シノニムは自動まとめ済みです。一括承認候補は残りの名差・仕入先差のみ。色・生地・加工・男女・商品種の疑いは個別確認。代表名未確定時は「名称未整理」ステータス（名前へは埋め込みません）。</p>
       <p class="excelhint">要確認 ${pending.length} 品番（一括承認候補 ${bulkCount} / 個別確認 ${indivCount}）　決定済 ${decided}　選択中 ${selected.length} 品番</p>
       <div class="bar sku-list-toolbar">
         <input type="search" id="plSkuQ" placeholder="品番・商品名・仕入先・理由で検索" value="${esc(st.skuQ||'')}" ${st.busy?'disabled':''}>
@@ -737,6 +757,7 @@
           ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定用）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
           <p><strong>${countLine(st.preview.countsRaw)}</strong>　行の要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未決定の品番は確定できません。保留にすれば登録対象から外せます）':''}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
+          ${outcomeSummaryHtml(st)}
           ${autoMergePlansHtml(st)}
           ${skuGroupsHtml(st)}
           <div class="bar">

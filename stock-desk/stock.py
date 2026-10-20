@@ -1680,6 +1680,9 @@ def product_row(c, pid):
     code = r['code'] or ''
     merged_into = r['merged_into_id'] if 'merged_into_id' in r.keys() else None
     sub_suppliers = product_sub_suppliers(c, pid)
+    import stock_product_merge
+    stock_product_merge.migrate_product_merge(c)
+    name_aliases = stock_product_merge.list_name_aliases(c, pid)
     return {
         'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
         'name': r['name'], 'color': r['color'], 'category': category or '',
@@ -1691,6 +1694,7 @@ def product_row(c, pid):
         'mergedIntoId': merged_into,
         'mergedAt': r['merged_at'] if 'merged_at' in r.keys() else None,
         'sizes': sizes, 'links': links,
+        'nameAliases': name_aliases,
     }
 
 

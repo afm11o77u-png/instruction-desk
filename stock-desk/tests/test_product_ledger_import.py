@@ -54,7 +54,7 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('別物のため個別に整理する', js)
         self.assertIn('今回は保留する', js)
         self.assertIn('skuDecisions', js)
-        self.assertIn('サイズ・顧客・中古標記差の自動まとめ', js)
+        self.assertIn('自動まとめ（要確認ではない）', js)
         self.assertIn('autoMergePlans', js)
         self.assertIn('中古標記まとめ', js)
         self.assertIn('auxFile', js)
@@ -1200,7 +1200,7 @@ class SingleSupplierPreviewCommitConsistencyTest(unittest.TestCase):
             # 名差だけで要確認（仕入先はトムス㈱のみ）
             text = tiny_ledger_rows([
                 '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
-                '顧客A,トムス㈱,00085-CVT-031,ＣＶＴパンツ,L',
+                '顧客A,トムス㈱,00085-CVT-031,CVTズボン,L',
             ])
             before = stock_snap(c)
             body = {
@@ -1329,7 +1329,7 @@ class SingleSupplierPreviewCommitConsistencyTest(unittest.TestCase):
             # 同一候補を手動明示した場合は source=manual。
             text = tiny_ledger_rows([
                 '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
-                '顧客A,トムス㈱,00085-CVT-031,ＣＶＴパンツ,L',
+                '顧客A,トムス㈱,00085-CVT-031,CVTズボン,L',
             ])
             preview = pli.build_preview(c, {
                 'file': csv_b64_from_text(text), 'name': 'manual.csv',
@@ -1367,7 +1367,7 @@ class SingleSupplierPreviewCommitConsistencyTest(unittest.TestCase):
             c.commit()
             text = tiny_ledger_rows([
                 '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
-                '顧客A,トムス㈱,00085-CVT-031,ＣＶＴパンツ,L',
+                '顧客A,トムス㈱,00085-CVT-031,CVTズボン,L',
             ])
             body = {
                 'file': csv_b64_from_text(text), 'name': 'exist.csv',
@@ -1496,8 +1496,11 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertEqual(preview['skuDecisionPending'], 0)
             self.assertEqual(preview['reviewCount'], 0)
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-P1')
-            self.assertTrue(g.get('provisionalName') or (g.get('namePlan') or {}).get('provisional'))
-            self.assertIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
+            # 空白差のみならコア一意 → 自動まとめ（名称未整理にしない）
+            # 仕入先差があるため要確認ティアだが、merge 決定後の代表名にタグは埋め込まない
+            planned = g.get('plannedOfficialName') or ''
+            self.assertNotIn(pli.PROVISIONAL_NAME_TAG, planned)
+            self.assertNotIn('［', planned)
             self.assertTrue(g.get('nameAdoptionRule') or (g.get('namePlan') or {}).get('adoptionRule'))
             result = pli.commit_preview(c, {
                 **body,
@@ -1512,7 +1515,8 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
                 "SELECT id,name FROM products WHERE code='SKU-P1' AND merged_into_id IS NULL"
             ).fetchone()
             self.assertIsNotNone(row)
-            self.assertIn(pli.PROVISIONAL_NAME_TAG, row['name'])
+            self.assertNotIn(pli.PROVISIONAL_NAME_TAG, row['name'])
+            self.assertNotIn('［', row['name'])
             # 後から公式名編集できる（別名に原文が残る）
             aliases = {
                 r['value'] for r in c.execute(
@@ -1700,6 +1704,212 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         finally:
             c.close()
             folder.cleanup()
+
+    def test_synonym_and_whitespace_auto_merge(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-SYN,チノパンツ,M',
+                '顧客A,仕入A,SKU-SYN,チノスラックス,L',
+                '顧客B,仕入A,SKU-SYN,チノ　パンツ,S',  # 全角空白
+                '顧客A,仕入A,SKU-WS,作業　上着,M',
+                '顧客A,仕入A,SKU-WS,作業上着,L',
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'syn.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(stock_snap(c), before)
+            g_syn = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-SYN')
+            g_ws = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-WS')
+            self.assertFalse(g_syn['needsDecision'])
+            self.assertTrue(g_syn.get('synonymAutoMerged') or g_syn.get('whitespaceAutoMerged'))
+            self.assertFalse(g_ws['needsDecision'])
+            self.assertTrue(g_ws.get('whitespaceAutoMerged') or g_ws.get('plannedSingleProduct'))
+            self.assertIn('outcomeSummary', preview)
+            self.assertGreaterEqual(preview['outcomeSummary']['autoMergedSkuGroups'], 2)
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'syn.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-syn-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            n_syn = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='SKU-SYN' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n_syn, 1)
+            prod = c.execute(
+                "SELECT id,name FROM products WHERE code='SKU-SYN' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertNotIn(pli.PROVISIONAL_NAME_TAG, prod['name'])
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            # 原文表記が別名に残る（代表名以外）
+            self.assertTrue(
+                {'チノスラックス', 'チノ　パンツ'} & aliases
+                or prod['name'] in {'チノパンツ', 'チノスラックス', 'チノ　パンツ'}
+            )
+            detail = stock.product_row(c, prod['id'])
+            self.assertIn('nameAliases', detail)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_color_diff_still_needs_review(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-C1,青パンツ,M',
+                '顧客A,仕入A,SKU-C1,赤スラックス,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'color.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-C1')
+            self.assertTrue(g['needsDecision'])
+            self.assertEqual(g['reviewTier'], 'individual')
+            self.assertTrue(g.get('colorDiffPossible'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_blank_sku_ledger_uses_parts_category(self):
+        folder, path, c = newdb()
+        try:
+            # 旧制服例外ペアでも台帳取込では部品・資材
+            text = tiny_ledger_rows([
+                'グローヴ㈱,仕入A,,チェック柄ベスト(ムーリベッキ),F',
+                '顧客X,仕入B,,ネジセット,個',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'blank.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            self.assertTrue(by_no[2]['product']['blankSku'])
+            self.assertEqual(by_no[2]['product']['proposedCategory'], stock.CATEGORY_PARTS)
+            self.assertEqual(by_no[3]['product']['proposedCategory'], stock.CATEGORY_PARTS)
+            # 別商品として分かれる（全品番なしを1つに潰さない）
+            self.assertNotEqual(by_no[2]['matchGroupKey'], by_no[3]['matchGroupKey'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_main_name_positive_unique(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-N1,緑つなぎ,M',
+                '顧客A,仕入A,SKU-N1,＊緑つなぎ,L',
+            ])
+            aux = tiny_opening_rows([
+                '新品,仕入A,顧客A,緑つなぎ,SKU-N1,M,1000,0,0,0,0,3,0,,本社,A1,0',
+                '中古,仕入A,顧客A,＊緑つなぎ,SKU-N1,L,1000,0,0,0,0,-1,0,,本社,A1,0',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-N1')
+            self.assertFalse(g['needsDecision'])
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_positive_unique')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '緑つなぎ')
+            self.assertFalse(aux_p.get('officialNameNeedsChoice'))
+            self.assertEqual(g.get('plannedOfficialName'), '緑つなぎ')
+            self.assertNotIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_main_name_ambiguous_not_by_max_qty(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-N2,名前甲,M',
+                '顧客A,仕入B,SKU-N2,名前乙,L',
+            ])
+            aux = tiny_opening_rows([
+                '新品,仕入A,顧客A,名前甲,SKU-N2,M,1000,0,0,0,0,100,0,,本社,A1,0',
+                '新品,仕入B,顧客A,名前乙,SKU-N2,L,1000,0,0,0,0,1,0,,本社,A1,0',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-N2')
+            self.assertTrue(g['needsDecision'])
+            aux_p = g.get('auxPrimary') or {}
+            # 数量最大では選ばない
+            self.assertTrue(aux_p.get('officialNameNeedsChoice'))
+            self.assertEqual(aux_p.get('suggestedOfficialName') or '', '')
+            self.assertTrue(any('複数' in r for r in (aux_p.get('nameReasons') or [])))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_custom_order_size_only_merges(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '病院A,仕入X,別注,青帽子,S',
+                '病院A,仕入X,別注,青帽子,M',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'bespoke.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            self.assertEqual(by_no[2]['status'], 'create')
+            # 2行目は同一別注商品へのサイズ追加予定（要確認にしない）
+            self.assertIn(by_no[3]['status'], ('create', 'size_add', 'reuse'))
+            self.assertEqual(by_no[2]['matchGroupKey'], by_no[3]['matchGroupKey'])
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'bespoke.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-bespoke-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='別注' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+            sizes = {
+                r['label'] for r in c.execute(
+                    '''SELECT ps.label FROM product_sizes ps
+                       JOIN products p ON p.id=ps.product_id
+                       WHERE p.code='別注' AND p.merged_into_id IS NULL'''
+                )
+            }
+            self.assertEqual(sizes, {'S', 'M'})
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_ui_shows_aliases_and_outcome_summary(self):
+        app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
+        self.assertIn('nameAliases', app)
+        self.assertIn('照合用別名', app)
+        self.assertIn('outcomeSummary', js)
+        self.assertIn('取込判断の件数', js)
+        self.assertIn('名称未整理', js)
+        self.assertIn('名前には埋め込みません', js)
 
 
 if __name__ == '__main__':

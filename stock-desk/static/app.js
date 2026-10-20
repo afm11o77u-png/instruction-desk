@@ -974,9 +974,14 @@ function productForm(r){
   const scheme=detectSizeScheme(r.sizes)
   const cat=r.category||''
   const catOpts=[['','（なし）'],['制服','制服'],['部品・資材','部品・資材']].map(([v,l])=>`<option value="${esc(v)}" ${cat===v?'selected':''}>${esc(l)}</option>`).join('')
-  return `<div class="grid">${field('code','品番（空欄可）',r.code,false)}${field('name','商品名',r.name,true)}${field('color','色',r.color)}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
+  const aliases=(r.nameAliases||[]).filter(Boolean)
+  const aliasBlock=aliases.length
+    ?`<div class="name-aliases"><p class="excelhint"><strong>代表名:</strong> ${esc(r.name||'—')}</p><p class="excelhint"><strong>照合用別名:</strong> ${aliases.map(esc).join('、')}</p><p class="excelhint">代表名を変えても旧名は別名に残ります（後からのCSV照合用）。</p></div>`
+    :`<p class="excelhint">旧商品名がある場合は照合用別名として表示されます。代表名を変えても旧名は別名に残ります。</p>`
+  return `<div class="grid">${field('code','品番（空欄可）',r.code,false)}${field('name','商品名（代表名）',r.name,true)}${field('color','色',r.color)}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
+    ${aliasBlock}
     <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierChecks">${subChecks}</div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
-    <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。旧商品名は別名として残り、一覧の公式名はここで編集した商品名です。</p>
+    <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
       <span class="size-scheme-label">サイズ表記</span>
       <div class="seg" id="sizeScheme">
