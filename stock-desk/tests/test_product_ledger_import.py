@@ -53,6 +53,45 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         # 初期在庫用旧CSVタブとは別入口
         self.assertIn("['legacyCsv','旧CSV取込']", app)
 
+    def test_file_picker_and_history_error_copy(self):
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
+        self.assertIn('ファイルを変更', js)
+        self.assertIn('product-ledger-file-input', js)
+        self.assertIn('履歴を確認できませんでした', js)
+        self.assertIn('ファイル容量が上限を超えています', js)
+        self.assertIn('MAX_POST_BODY_BYTES=12_000_000', js)
+        # Must not claim "no prior import" when history fetch failed
+        self.assertIn('historyError', js)
+        self.assertIn('このファイルの過去取込記録はありません', js)
+
+
+class UploadLimitsSyncTest(unittest.TestCase):
+    def test_product_ledger_paths_share_large_body_limit(self):
+        import upload_limits as ul
+        import server as stock_server
+
+        for path in (
+            '/api/product-ledger-csv/history',
+            '/api/product-ledger-csv/preview',
+            '/api/product-ledger-csv/commit',
+        ):
+            self.assertIn(path, ul.LARGE_BODY_PATHS)
+            self.assertEqual(ul.body_limit_for(path), 12_000_000)
+            self.assertEqual(stock_server.body_limit_for(path), 12_000_000)
+        self.assertEqual(ul.OVERSIZE_BODY_ERROR, 'ファイル容量が上限を超えています')
+        self.assertEqual(stock_server.OVERSIZE_BODY_ERROR, ul.OVERSIZE_BODY_ERROR)
+        self.assertIs(stock_server.LARGE_BODY_PATHS, ul.LARGE_BODY_PATHS)
+
+    def test_root_inventory_proxy_uses_shared_limits(self):
+        root_server = (ROOT.parent / 'server.py').read_text(encoding='utf-8')
+        self.assertIn('body_limit_for(api_path)', root_server)
+        self.assertIn('OVERSIZE_BODY_ERROR', root_server)
+        # Old hardcoded allowlist without product-ledger must not remain
+        self.assertNotIn(
+            "large_body = api_path in (\n                '/api/import',\n                '/api/legacy-csv/preview',",
+            root_server,
+        )
+
 
 class ProductLedgerParseTest(unittest.TestCase):
     def test_real_file_headers_utf8_bom(self):

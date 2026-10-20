@@ -3,12 +3,16 @@
   const STATUS_ORDER=['create','size_add','reuse','unchanged','needs_review','excluded']
   const STATUS_LABELS={create:'新規',size_add:'サイズ追加',reuse:'既存使用',unchanged:'変更なし',needs_review:'要確認',excluded:'対象外'}
   const PAGE_SIZE=80
+  // Keep in sync with stock-desk/upload_limits.py (POST body 12MB; raw CSV decode 8MB).
+  const MAX_RAW_FILE_BYTES=8_000_000
+  const MAX_POST_BODY_BYTES=12_000_000
+  const OVERSIZE_MSG='ファイル容量が上限を超えています'
   let ui=null
 
   function ensureState(){
     if(!ui){
       ui={
-        file:null,fileB64:'',fileName:'',history:null,preview:null,result:null,
+        file:null,fileB64:'',fileName:'',fileSize:0,history:null,historyError:'',preview:null,result:null,
         q:'',statusFilter:'needs_review',page:1,
         selections:{},commitToken:'',busy:false,open:false,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
@@ -33,6 +37,24 @@
       reader.onerror=()=>reject(Error('ファイルを読めませんでした。'))
       reader.readAsArrayBuffer(file)
     })
+  }
+
+  function estimatePostBodyBytes(fileName,b64){
+    try{return JSON.stringify({name:fileName||'',file:b64||''}).length}
+    catch(_){return (b64||'').length+((fileName||'').length)+64}
+  }
+
+  function assertUploadSize(file,b64){
+    if(file&&file.size>MAX_RAW_FILE_BYTES)throw Error(OVERSIZE_MSG)
+    if(b64&&estimatePostBodyBytes(file&&file.name||'',b64)>MAX_POST_BODY_BYTES)throw Error(OVERSIZE_MSG)
+  }
+
+  function apiErrorMessage(e,fallback){
+    if(!e)return fallback
+    const fromPayload=e.payload&&(e.payload.error||e.payload.message)
+    const msg=fromPayload||e.message||''
+    if(!msg||msg==='処理できませんでした。')return fallback||'処理できませんでした。'
+    return msg
   }
 
   function filteredRows(st){
@@ -61,7 +83,12 @@
   }
 
   function historyBlock(st){
-    const prev=(st.history&&st.history.previousImports)||(st.preview&&st.preview.previousImports)||[]
+    if(!st.fileB64)return ''
+    if(st.historyError){
+      return `<p class="excelhint notice-inline">${esc(st.historyError)}</p>`
+    }
+    if(!st.history)return ''
+    const prev=st.history.previousImports||(st.preview&&st.preview.previousImports)||[]
     if(!prev.length)return '<p class="excelhint">このファイルの過去取込記録はありません。</p>'
     const items=prev.map(p=>{
       const when=p.committedAt||p.previewAt||p.createdAt||''
@@ -178,6 +205,17 @@
     </div>`
   }
 
+  function filePickHtml(st){
+    const label=st.fileName?'ファイルを変更':'CSVファイルを選ぶ'
+    const sizeHint=st.fileName&&st.fileSize?`（${Number(st.fileSize).toLocaleString('ja-JP')} バイト）`:''
+    return `<div class="bar product-ledger-filebar">
+      <input type="file" id="plFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
+      <button type="button" id="plPickFile" ${st.busy?'disabled':''}>${esc(label)}</button>
+      <span class="excelhint product-ledger-filename" id="plFileLabel">${esc(st.fileName||'未選択')}${sizeHint?` ${esc(sizeHint)}`:''}${st.preview?`（${esc(st.preview.encoding||'')}）`:''}</span>
+      <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
+    </div>`
+  }
+
   function paintDialog(){
     const st=ensureState()
     const dlg=document.getElementById('dialog')
@@ -188,11 +226,7 @@
     dlg.innerHTML=`<div class="dialoghead"><h2>旧商品台帳CSVを取り込む</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
         <p class="merge-lead">商品と顧客取扱だけを登録します。在庫数量・仕入単価・初期在庫・入出庫履歴は変更しません。初期在庫用の「旧CSV取込」とは別機能です。プレビューまではDBを変更しません。</p>
-        <div class="bar">
-          <label class="filepick">CSVファイル<input type="file" id="plFile" accept=".csv,text/csv" ${st.busy?'disabled':''}></label>
-          <span class="excelhint">${esc(st.fileName||'未選択')} ${st.preview?`（${st.preview.encoding||''}）`:''}</span>
-          <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
-        </div>
+        ${filePickHtml(st)}
         ${historyBlock(st)}
         ${st.preview?`<p class="excelhint">${esc(st.preview.note||'')}</p>
           <p><strong>${countLine(st.preview.countsRaw)}</strong>　要確認 ${review}件${review? '（未解決のまま確定できません）':''}</p>
@@ -212,6 +246,43 @@
     bindDialog()
   }
 
+  async function loadSelectedFile(st,f){
+    if(!f)return
+    assertUploadSize(f,null)
+    st.file=f
+    st.fileName=f.name
+    st.fileSize=f.size||0
+    st.preview=null
+    st.result=null
+    st.selections={}
+    st.page=1
+    st.history=null
+    st.historyError=''
+    st.busy=true
+    paintDialog()
+    try{
+      const b64=await readFileAsBase64(f)
+      assertUploadSize(f,b64)
+      st.fileB64=b64
+      try{
+        st.history=await st.api('/api/product-ledger-csv/history',{name:f.name,file:st.fileB64})
+        st.historyError=''
+      }catch(he){
+        st.history=null
+        const detail=apiErrorMessage(he,'')
+        st.historyError=detail&&detail!=='履歴を確認できませんでした。'
+          ?`履歴を確認できませんでした。（${detail}）`
+          :'履歴を確認できませんでした。'
+        st.toast(st.historyError)
+      }
+    }catch(e){
+      st.file=null;st.fileB64='';st.fileName='';st.fileSize=0;st.history=null;st.historyError=''
+      st.toast(apiErrorMessage(e,'ファイルを読めませんでした。'))
+    }
+    st.busy=false
+    paintDialog()
+  }
+
   function bindDialog(){
     const st=ensureState()
     const close=()=>{
@@ -222,19 +293,20 @@
     const closeBtn=$('#plClose')
     if(closeBtn)closeBtn.onclick=close
     const file=$('#plFile')
+    const pick=$('#plPickFile')
+    if(pick&&file){
+      pick.onclick=()=>{if(!st.busy)file.click()}
+    }
     if(file)file.onchange=async()=>{
       const f=file.files&&file.files[0]
       if(!f)return
-      st.busy=true;paintDialog()
-      try{
-        st.file=f;st.fileName=f.name;st.fileB64=await readFileAsBase64(f)
-        st.preview=null;st.result=null;st.selections={};st.page=1
-        st.history=await st.api('/api/product-ledger-csv/history',{name:f.name,file:st.fileB64})
-      }catch(e){st.toast(e.message||'ファイルを読めませんでした。')}
-      st.busy=false;paintDialog()
+      await loadSelectedFile(st,f)
+      // Native input is remounted on paint; keep displayed name from state only.
+      try{file.value=''}catch(_){}
     }
     const runPreview=async()=>{
       if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
+      try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       st.busy=true;paintDialog()
       try{
         st.preview=await st.api('/api/product-ledger-csv/preview',{
@@ -244,7 +316,11 @@
         st.result=null
         if(st.preview.reviewCount>0)st.statusFilter='needs_review'
         st.page=1
-      }catch(e){st.toast(e.message||'照合に失敗しました。')}
+        if(st.preview.previousImports&&!st.history){
+          st.history={previousImports:st.preview.previousImports}
+          st.historyError=''
+        }
+      }catch(e){st.toast(apiErrorMessage(e,'照合に失敗しました。'))}
       st.busy=false;paintDialog()
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
@@ -289,6 +365,7 @@
       if(!canWriteNow){st.toast('閲覧専用のため登録できません。');return}
       if((st.preview.reviewCount||0)>0){st.toast('要確認が残っています。先に解決してください。');return}
       if(!confirm('プレビューどおり商品・取扱を登録します。在庫数量・金額・履歴は変更しません。よろしいですか？'))return
+      try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       st.busy=true;paintDialog()
       try{
         if(!st.commitToken)st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
@@ -306,7 +383,7 @@
         if(e&&e.payload&&e.payload.code==='stale_preview'){
           st.toast('データが変わったため、もう一度照合してください。')
           st.preview=null
-        }else st.toast(e.message||'登録に失敗しました。')
+        }else st.toast(apiErrorMessage(e,'登録に失敗しました。'))
       }
       st.busy=false;paintDialog()
     }

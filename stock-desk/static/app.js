@@ -283,11 +283,19 @@ function listNote(summary,body){
 }
 function stockOpenBtn(id,label='開く'){return `<button type="button" class="quiet stockopen" data-id="${id}">${label}</button>`}
 async function api(path,data){
-  const r=await fetch(BASE+path,data?{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(data)}:{})
+  let r
+  try{
+    r=await fetch(BASE+path,data?{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(data)}:{})
+  }catch(e){
+    const err=Error((e&&e.message)||'通信できませんでした。')
+    err.cause=e
+    throw err
+  }
   let result={}
   try{result=await r.json()}catch(_){result={}}
   if(!r.ok){
-    const err=Error(result.error||'処理できませんでした。')
+    const msg=result.error||(r.status===413?'ファイル容量が上限を超えています':'処理できませんでした。')
+    const err=Error(msg)
     err.status=r.status
     err.payload=result
     throw err

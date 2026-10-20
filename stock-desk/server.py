@@ -7,6 +7,12 @@ import stock_history
 import stock_period
 import stock_orders
 import excel_export
+from upload_limits import (
+    LARGE_BODY_MAX_BYTES,
+    LARGE_BODY_PATHS,
+    OVERSIZE_BODY_ERROR,
+    body_limit_for,
+)
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / 'static'
@@ -23,16 +29,6 @@ WRITE_PATHS = {
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/company-profile',
-}
-
-LARGE_BODY_PATHS = {
-    '/api/import',
-    '/api/legacy-csv/preview',
-    '/api/legacy-csv/commit',
-    '/api/legacy-csv/history',
-    '/api/product-ledger-csv/preview',
-    '/api/product-ledger-csv/commit',
-    '/api/product-ledger-csv/history',
 }
 
 PO_ID_RE = re.compile(r'^/api/purchase-orders/(\d+)$')
@@ -397,9 +393,8 @@ def make_handler(db_path, mode):
                 return
             length = int(self.headers.get('Content-Length') or 0)
             path = urlparse(self.path).path
-            limit = 12_000_000 if path in LARGE_BODY_PATHS else 1_000_000
-            if length > limit:
-                self.send(400, {'error': '送信データが大きすぎます。'})
+            if length > body_limit_for(path):
+                self.send(400, {'error': OVERSIZE_BODY_ERROR})
                 return
             try:
                 body = json.loads(self.rfile.read(length).decode('utf-8') or '{}')
