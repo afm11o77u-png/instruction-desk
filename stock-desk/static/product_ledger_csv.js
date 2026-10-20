@@ -25,18 +25,20 @@
         q:'',statusFilter:'needs_review',page:1,
         skuQ:'',skuReasonFilter:'',skuPage:1,
         selectedCodes:{},expandedCodes:{},
-        selections:{},skuDecisions:{},commitToken:'',busy:false,open:false,
+        selections:{},skuDecisions:{},rowClassifications:{},commitToken:'',busy:false,open:false,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
     }
     if(!ui.selectedCodes)ui.selectedCodes={}
     if(!ui.expandedCodes)ui.expandedCodes={}
+    if(!ui.rowClassifications)ui.rowClassifications={}
     return ui
   }
 
   function previewPayload(st){
     const body={
       name:st.fileName,file:st.fileB64,selections:st.selections,skuDecisions:st.skuDecisions,
+      rowClassifications:st.rowClassifications||{},
       _canWrite:true,_actor:{name:st.actorName||''}
     }
     if(st.auxFileB64){
@@ -44,6 +46,14 @@
       body.auxName=st.auxFileName||'初期在庫.csv'
     }
     return body
+  }
+
+  function setRowClassification(st,rowNo,patch){
+    const key=String(rowNo)
+    const cur=Object.assign({},st.rowClassifications[key]||{})
+    Object.assign(cur,patch||{})
+    cur.userEdited=true
+    st.rowClassifications[key]=cur
   }
 
   function applyAuxDefaultsForMerge(st,code,group){
@@ -605,6 +615,28 @@
     return bits.join(' / ')||'—'
   }
 
+  function parenCell(st,r){
+    const pc=r.parenClassification||{}
+    const edit=st.rowClassifications[String(r.rowNo)]||{}
+    const planned=edit.plannedName!=null?edit.plannedName:(pc.plannedName||'')
+    const color=edit.color!=null?edit.color:(pc.color||'')
+    const processing=edit.processing!=null?edit.processing:(pc.processing||'')
+    const material=edit.material!=null?edit.material:(pc.material||'')
+    const unc=(edit.unclassified!=null?edit.unclassified:(pc.unclassified||[]))
+    const uncText=Array.isArray(unc)?unc.join('、'):String(unc||'')
+    const flag=pc.needsConfirm?'要確認':(pc.autoClassified?'自動':'—')
+    const disabled=st.busy?'disabled':''
+    return `<div class="pl-paren-edit">
+      <div class="excelhint">${esc(flag)}${pc.keptOriginal&&pc.needsConfirm?'（原文維持）':''}</div>
+      <label>予定名<input data-pl-paren-name="${r.rowNo}" value="${esc(planned)}" ${disabled}></label>
+      <label>色<input data-pl-paren-color="${r.rowNo}" value="${esc(color)}" ${disabled}></label>
+      <label>加工<input data-pl-paren-proc="${r.rowNo}" value="${esc(processing)}" ${disabled}></label>
+      <label>生地<input data-pl-paren-mat="${r.rowNo}" value="${esc(material)}" ${disabled}></label>
+      <label>未分類<input data-pl-paren-unc="${r.rowNo}" value="${esc(uncText)}" ${disabled}></label>
+      ${pc.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 分類を確認した</label>`:''}
+    </div>`
+  }
+
   function tableHtml(st){
     const all=filteredRows(st)
     const pages=Math.max(1,Math.ceil(all.length/PAGE_SIZE))
@@ -614,21 +646,23 @@
     const body=pageRows.map(r=>{
       const csv=r.csv||{}
       const reason=(r.reasons||[]).join(' ')
+      const pc=r.parenClassification||{}
       return `<tr class="legacy-status-${esc(r.status)}">
         <td class="lc-row">${r.rowNo}</td>
-        <td class="lc-status">${esc(r.statusLabel||'')}</td>
+        <td class="lc-status">${esc(r.statusLabel||'')}${pc.needsConfirm?' <span class="badge">括弧</span>':''}</td>
         <td class="lc-customer">${esc(csv.customer||'')}</td>
         <td class="lc-customer">${esc(csv.supplier||'')}</td>
         <td class="lc-code">${esc(csv.codeDisplay||csv.code||'')}</td>
         <td class="lc-product">${esc(csv.productName||'')}${csv.usedMarkerPossible?' <span class="badge">＊中古候補</span>':''}</td>
+        <td class="lc-paren">${parenCell(st,r)}</td>
         <td class="lc-size">${esc(csv.size||'')}</td>
         <td class="lc-handle">${targetCell(r)}</td>
         <td class="lc-detail"><span class="lc-clip">${esc(reason)}</span></td>
         <td class="lc-actions">${rowActions(st,r)}</td>
       </tr>`
-    }).join('')||'<tr><td colspan="10">該当する行はありません。</td></tr>'
+    }).join('')||'<tr><td colspan="11">該当する行はありません。</td></tr>'
     return `<div class="legacy-csv-table-wrap"><table class="legacy-csv-table product-ledger-table">
-      <thead><tr><th>行</th><th>判定</th><th>顧客</th><th>仕入先</th><th>品番</th><th>商品名</th><th>サイズ</th><th>登録先</th><th>理由</th><th>選択</th></tr></thead>
+      <thead><tr><th>行</th><th>判定</th><th>顧客</th><th>仕入先</th><th>品番</th><th>原文名</th><th>括弧分類（予定名／色／加工／生地）</th><th>サイズ</th><th>登録先</th><th>理由</th><th>選択</th></tr></thead>
       <tbody>${body}</tbody></table></div>
       <div class="bar legacy-csv-pager">
         <button type="button" id="plPrev" ${st.page<=1||st.busy?'disabled':''}>前へ</button>
@@ -787,6 +821,7 @@
     st.result=null
     st.selections={}
     st.skuDecisions={}
+    st.rowClassifications={}
     st.selectedCodes={}
     st.expandedCodes={}
     st.skuQ='';st.skuReasonFilter='';st.skuPage=1
@@ -927,6 +962,26 @@
       })
       document.querySelectorAll('[data-pl-defer-reason]').forEach(el=>{
         setSkuDecision(st,el.getAttribute('data-pl-defer-reason'),{deferReason:el.value})
+      })
+      // 括弧分類の編集は再照合・詳細開閉でも保持
+      document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
+        setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
+      })
+      document.querySelectorAll('[data-pl-paren-color]').forEach(el=>{
+        setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
+      })
+      document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
+        setRowClassification(st,el.getAttribute('data-pl-paren-proc'),{processing:el.value})
+      })
+      document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
+        setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+      })
+      document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
+        const v=el.value.trim()
+        setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]})
+      })
+      document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
+        setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
       })
       document.querySelectorAll('[data-pl-sep-code]').forEach(el=>{
         const code=el.getAttribute('data-pl-sep-code')
@@ -1144,6 +1199,33 @@
       el.onchange=()=>{
         applySelectionToGroup(st,el.getAttribute('data-pl-cat'),{category:el.value})
         paintDialog()
+      }
+    })
+    document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
+      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-color]').forEach(el=>{
+      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
+      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-proc'),{processing:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
+      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
+      el.onchange=()=>{
+        const v=el.value.trim()
+        setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{
+          unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]
+        })
+      }
+    })
+    document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
+      el.onchange=()=>{
+        setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{
+          confirmed:!!el.checked,acceptProposal:!!el.checked
+        })
       }
     })
     const commit=$('#plCommit')

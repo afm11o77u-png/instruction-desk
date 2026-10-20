@@ -432,6 +432,12 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 /* 読みやすい幅を確保しつつ長文は折り返し */
 .legacy-csv-table .lc-customer{min-width:10rem;max-width:16rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
 .legacy-csv-table .lc-product{min-width:12rem;max-width:20rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.legacy-csv-table .lc-paren{min-width:14rem;max-width:22rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere;vertical-align:top}
+.legacy-csv-table .pl-paren-edit{display:flex;flex-direction:column;gap:2px;font-size:12px}
+.legacy-csv-table .pl-paren-edit label{display:flex;flex-direction:column;gap:1px;margin:0}
+.legacy-csv-table .pl-paren-edit input[type="text"],
+.legacy-csv-table .pl-paren-edit input:not([type]){min-height:24px;padding:2px 6px;font-size:12px}
+.legacy-csv-table .pl-paren-confirm{flex-direction:row!important;align-items:center;gap:6px!important;margin-top:2px}
 .legacy-csv-table .lc-handle{min-width:7rem;max-width:12rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
 .legacy-csv-table .lc-place{min-width:9rem;max-width:14rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
 .legacy-csv-table .lc-detail{min-width:12rem;max-width:22rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}

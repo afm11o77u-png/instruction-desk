@@ -1806,7 +1806,7 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_aux_main_name_positive_unique(self):
+    def test_aux_main_name_nonzero_pair_unique(self):
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -1825,8 +1825,9 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-N1')
             self.assertFalse(g['needsDecision'])
             aux_p = g.get('auxPrimary') or {}
-            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_positive_unique')
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
             self.assertEqual(aux_p.get('suggestedOfficialName'), '緑つなぎ')
+            self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
             self.assertFalse(aux_p.get('officialNameNeedsChoice'))
             self.assertEqual(g.get('plannedOfficialName'), '緑つなぎ')
             self.assertNotIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
@@ -1853,10 +1854,65 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-N2')
             self.assertTrue(g['needsDecision'])
             aux_p = g.get('auxPrimary') or {}
-            # 数量最大では選ばない
+            # 数量最大では選ばない。非ゼロ候補が複数なら確認
             self.assertTrue(aux_p.get('officialNameNeedsChoice'))
             self.assertEqual(aux_p.get('suggestedOfficialName') or '', '')
             self.assertTrue(any('複数' in r for r in (aux_p.get('nameReasons') or [])))
+            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_any_unique')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_negative_only_picks_pair(self):
+        """負在庫も非ゼロとして候補ペアを決める（相殺なし）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-NEG,名前甲,M',
+                '顧客A,仕入B,SKU-NEG,名前乙,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '名前甲', 'SKU-NEG', 'M', '-3'),
+                opening_line('仕入B', '顧客A', '名前乙', 'SKU-NEG', 'L', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-NEG')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '名前甲')
+            self.assertEqual(aux_p.get('autoPrimarySupplier'), '仕入A')
+            self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_aux_all_zero_does_not_adopt_any_name(self):
+        """全ゼロでは旧 aux_any_unique を使わず確認へ（#157 置き換え）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-Z0,名前甲,M',
+                '顧客A,仕入A,SKU-Z0,＊名前甲,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '名前甲', 'SKU-Z0', 'M', '0'),
+                opening_line('仕入A', '顧客A', '＊名前甲', 'SKU-Z0', 'L', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'l.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-Z0')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_any_unique')
+            # 非ゼロが無いのでペアは未決（代表名は台帳コア一意などで別途決まりうる）
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+            self.assertTrue(any('非ゼロ' in r for r in (aux_p.get('nameReasons') or [])))
         finally:
             c.close()
             folder.cleanup()
@@ -1910,6 +1966,176 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('取込判断の件数', js)
         self.assertIn('名称未整理', js)
         self.assertIn('名前には埋め込みません', js)
+        self.assertIn('rowClassifications', js)
+        self.assertIn('括弧分類', js)
+        self.assertIn('生地・素材', app)
+        self.assertIn('material', app)
+
+
+class ParenClassificationTest(unittest.TestCase):
+    """括弧内の色・加工・生地分類（辞書規則のみ）。"""
+
+    def test_examples_auto(self):
+        import product_ledger_paren as pp
+        cases = [
+            ('ポロシャツ（ネイビー）', 'ポロシャツ', 'ネイビー', '', ''),
+            ('白衣（DHC刺繍あり）', '白衣', '', 'DHC刺繍あり', ''),
+            ('ベスト（赤・背中プリント）', 'ベスト', '赤', '背中プリント', ''),
+            ('パンツ（綿100％）', 'パンツ', '', '', '綿100％'),
+            ('ポロシャツ(ネイビー)', 'ポロシャツ', 'ネイビー', '', ''),  # 半角括弧
+        ]
+        for original, planned, color, proc, mat in cases:
+            with self.subTest(original=original):
+                r = pp.classify_product_name(original)
+                self.assertFalse(r['needsConfirm'], r)
+                self.assertTrue(r['autoClassified'], r)
+                self.assertEqual(r['plannedName'], planned)
+                self.assertEqual(r['color'], color)
+                self.assertEqual(r['processing'], proc)
+                self.assertEqual(r['material'], mat)
+
+    def test_unknown_keeps_original(self):
+        import product_ledger_paren as pp
+        r = pp.classify_product_name('パンツ（代替品）')
+        self.assertTrue(r['needsConfirm'])
+        self.assertEqual(r['plannedName'], 'パンツ（代替品）')
+        self.assertIn('代替品', r['unclassified'])
+        self.assertFalse(r['autoClassified'])
+
+    def test_green_not_fluorescent_green(self):
+        import product_ledger_paren as pp
+        r = pp.classify_product_name('ベスト（蛍光グリーン）')
+        self.assertEqual(r['color'], '蛍光グリーン')
+        self.assertNotEqual(r['color'], '緑')
+        r2 = pp.classify_product_name('ベスト（緑）')
+        self.assertEqual(r2['color'], '緑')
+
+    def test_broken_paren_confirm(self):
+        import product_ledger_paren as pp
+        r = pp.classify_product_name('パンツ（赤')
+        self.assertTrue(r['needsConfirm'])
+        self.assertEqual(r['plannedName'], 'パンツ（赤')
+
+    def test_preview_and_commit_paren_to_fields(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-P1,ポロシャツ（ネイビー）,M',
+                '顧客B,仕入A,SKU-P2,白衣（DHC刺繍あり）,L',
+                '顧客A,仕入A,SKU-P3,パンツ（綿100％）,S',
+                '顧客A,仕入A,SKU-P4,パンツ（代替品）,M',
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'paren.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            p1 = by_no[2]['parenClassification']
+            self.assertEqual(p1['plannedName'], 'ポロシャツ')
+            self.assertEqual(p1['color'], 'ネイビー')
+            self.assertTrue(p1['autoClassified'])
+            self.assertEqual(by_no[2]['product'].get('proposedColor'), 'ネイビー')
+
+            p2 = by_no[3]['parenClassification']
+            self.assertEqual(p2['processing'], 'DHC刺繍あり')
+            self.assertEqual(by_no[3]['handle'].get('embroidery'), 'DHC刺繍あり')
+
+            p3 = by_no[4]['parenClassification']
+            self.assertEqual(p3['material'], '綿100％')
+            self.assertEqual(by_no[4]['product'].get('proposedMaterial'), '綿100％')
+
+            p4 = by_no[5]['parenClassification']
+            self.assertTrue(p4['needsConfirm'])
+            self.assertEqual(by_no[5]['status'], 'needs_review')
+
+            # 代替品は確認済みにしてから登録（他は自動）
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'paren.csv',
+                'rowClassifications': {
+                    '5': {
+                        'plannedName': 'パンツ（代替品）',
+                        'color': '', 'processing': '', 'material': '',
+                        'unclassified': ['代替品'],
+                        'userEdited': True, 'confirmed': True, 'acceptProposal': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview2 = pli.build_preview(c, body)
+            self.assertEqual(stock_snap(c), before)
+            by2 = {r['rowNo']: r for r in preview2['rows']}
+            self.assertNotEqual(by2[5]['status'], 'needs_review')
+
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-paren-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+
+            navy = c.execute(
+                "SELECT id,name,color,material FROM products WHERE code='SKU-P1' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertEqual(navy['name'], 'ポロシャツ')
+            self.assertEqual(navy['color'], 'ネイビー')
+
+            white = c.execute(
+                "SELECT p.id FROM products p WHERE p.code='SKU-P2' AND p.merged_into_id IS NULL"
+            ).fetchone()
+            emb = c.execute(
+                'SELECT embroidery FROM customer_products WHERE product_id=?',
+                (white['id'],),
+            ).fetchone()['embroidery']
+            self.assertEqual(emb, 'DHC刺繍あり')
+
+            mat = c.execute(
+                "SELECT name,material FROM products WHERE code='SKU-P3' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertEqual(mat['name'], 'パンツ')
+            self.assertEqual(mat['material'], '綿100％')
+
+            # 原文が別名に残る
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (navy['id'],),
+                )
+            }
+            self.assertIn('ポロシャツ（ネイビー）', aliases)
+
+            # 再取込で二重登録なし
+            preview3 = pli.build_preview(c, body)
+            self.assertEqual(preview3['plannedCounts']['productsToCreate'], 0)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_composite_and_spec_diff_not_mixed(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-X1,ベスト（赤・背中プリント）,M',
+                '顧客A,仕入A,SKU-X1,ベスト（緑）,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'spec.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-X1')
+            # 色差の疑いで確認（在庫有無だけではまとめない）
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(g.get('colorDiffPossible') or g.get('reviewTier') == 'individual')
+            rows = [r for r in preview['rows'] if r['csv']['code'] == 'SKU-X1']
+            colors = {(r.get('parenClassification') or {}).get('color') for r in rows}
+            self.assertIn('赤', colors)
+            self.assertIn('緑', colors)
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 if __name__ == '__main__':
