@@ -21,7 +21,7 @@
       ui={
         file:null,fileB64:'',fileName:'',fileSize:0,
         auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
-        history:null,historyError:'',preview:null,result:null,
+        history:null,historyError:'',previewError:'',preview:null,result:null,
         q:'',statusFilter:'needs_review',page:1,
         skuQ:'',skuReasonFilter:'',skuPage:1,
         selectedCodes:{},expandedCodes:{},
@@ -760,6 +760,7 @@
       <div class="bar">
         <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
       </div>
+      ${st.previewError?`<p class="notice product-ledger-import-error" role="alert">${esc(st.previewError)}</p>`:''}
     </div>`
   }
 
@@ -869,6 +870,7 @@
     st.fileName=f.name
     st.fileSize=f.size||0
     st.preview=null
+    st.previewError=''
     st.result=null
     st.selections={}
     st.skuDecisions={}
@@ -898,7 +900,9 @@
       }
     }catch(e){
       st.file=null;st.fileB64='';st.fileName='';st.fileSize=0;st.history=null;st.historyError=''
-      st.toast(apiErrorMessage(e,'ファイルを読めませんでした。'))
+      const msg=apiErrorMessage(e,'ファイルを読めませんでした。')
+      st.previewError=msg
+      st.toast(msg,8000)
     }
     st.busy=false
     paintDialog({preserveScroll:false})
@@ -919,6 +923,7 @@
       st.auxFileSize=f.size||0
       st.auxFileB64=b64
       st.preview=null
+      st.previewError=''
       st.result=null
       // 手動指定は残し、自動結果との差分は再照合で提示
       Object.keys(st.skuDecisions||{}).forEach(code=>{
@@ -931,7 +936,9 @@
       st.toast('初期在庫CSVを読みました。台帳CSVとあわせて「読み込み・照合」してください。')
     }catch(e){
       st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
-      st.toast(apiErrorMessage(e,'初期在庫CSVを読めませんでした。'))
+      const msg=apiErrorMessage(e,'初期在庫CSVを読めませんでした。')
+      st.previewError=msg
+      st.toast(msg,8000)
     }
     st.busy=false
     paintDialog({preserveScroll:false})
@@ -988,7 +995,7 @@
     const clearAux=$('#plClearAux')
     if(clearAux)clearAux.onclick=()=>{
       st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
-      st.preview=null;st.result=null
+      st.preview=null;st.previewError='';st.result=null
       Object.keys(st.skuDecisions||{}).forEach(code=>{
         const d=st.skuDecisions[code]
         if(d&&!d.primarySupplierManual){
@@ -1000,9 +1007,21 @@
     }
     const runPreview=async()=>{
       if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
-      try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+      try{assertUploadSize(st.file,st.fileB64)}catch(e){
+        const msg=apiErrorMessage(e,OVERSIZE_MSG)
+        st.previewError=msg
+        st.toast(msg,8000)
+        paintDialog()
+        return
+      }
       if(st.auxFileB64){
-        try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+        try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){
+          const msg=apiErrorMessage(e,OVERSIZE_MSG)
+          st.previewError=msg
+          st.toast(msg,8000)
+          paintDialog()
+          return
+        }
       }
       // フォーム値を skuDecisions へ吸い上げ
       document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
@@ -1048,9 +1067,11 @@
           applyAuxDefaultsForMerge(st,g.code,g)
         }
       })
+      st.previewError=''
       st.busy=true;paintDialog()
       try{
         st.preview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
+        st.previewError=''
         st.result=null
         // 自動提案をクライアント決定へ反映（手動は上書きしない）
         ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
@@ -1065,7 +1086,13 @@
           st.history={previousImports:st.preview.previousImports}
           st.historyError=''
         }
-      }catch(e){st.toast(apiErrorMessage(e,'照合に失敗しました。'))}
+      }catch(e){
+        // Modal dialog is in the top layer; bottom toast alone is often clipped.
+        // Keep the full message inside the import modal near「読み込み・照合」.
+        const msg=apiErrorMessage(e,'照合に失敗しました。')
+        st.previewError=msg
+        st.toast(msg,8000)
+      }
       st.busy=false;paintDialog({preserveScroll:false})
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
@@ -1330,6 +1357,7 @@
     st.actorName=opts.actorName||''
     st.open=true
     st.result=null
+    st.previewError=''
     paintDialog()
   }
 
