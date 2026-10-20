@@ -16,10 +16,12 @@ def seed(c):
             {'customerId': kashiwa['id'], 'embroidery': '背中社名', 'isStandard': True, 'active': True},
         ],
     })
+    # 試用データは「重複商品の整理」デモ用に同品番を意図的に2件（本番登録では不可）
     second = stock.save_product(c, {
         'code': 'SCR-100', 'name': '白スクラブ', 'color': '白', 'supplierId': maruzen['id'], 'active': True,
         'sizes': ['M'],
         'links': [{'customerId': aoba['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
+        '_allowHistoricalDuplicateCode': True,
     })
     site1 = stock.save_location(c, {'siteName': '石狩倉庫①', 'active': True})
     site2 = stock.save_location(c, {'siteName': '石狩倉庫②', 'active': True})

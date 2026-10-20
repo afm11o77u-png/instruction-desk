@@ -233,6 +233,7 @@ class ProductMergeTests(unittest.TestCase):
                 'code': 'DIFF-1', 'name': '加工差', 'color': '白', 'supplierId': su['id'],
                 'sizes': ['M'], 'active': True,
                 'links': [{'customerId': cu['id'], 'embroidery': '加工未整理', 'isStandard': True, 'active': True}],
+                '_allowHistoricalDuplicateCode': True,
             })
             c.commit()
             preview = stock_product_merge.preview_merge(c, {
@@ -273,6 +274,7 @@ class ProductMergeTests(unittest.TestCase):
                 'code': 'STD-1', 'name': '標準差', 'color': '', 'supplierId': su['id'],
                 'sizes': ['M'], 'active': True,
                 'links': [{'customerId': cu['id'], 'embroidery': '左胸', 'isStandard': False, 'active': True}],
+                '_allowHistoricalDuplicateCode': True,
             })
             c.commit()
             preview = stock_product_merge.preview_merge(c, {

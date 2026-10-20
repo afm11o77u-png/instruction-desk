@@ -1402,19 +1402,36 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None)
         return saved['id'], True, False
 
     if code:
-        matches = find_products_by_code(c, code)
-        narrowed = matches
-        if supplier_id is not None and len(matches) > 1:
-            by_sup = [m for m in matches if m['supplier_id'] == supplier_id]
-            if by_sup:
-                narrowed = by_sup
-        by_name = [m for m in narrowed if stock.text(m['name']) == name]
-        if len(by_name) == 1:
-            narrowed = by_name
-        if len(narrowed) == 1:
-            product_info = {**product_info, 'id': narrowed[0]['id'], 'sizeAction': 'add'}
-            size_added = _save_product_sizes_and_category(c, narrowed[0]['id'], product_info)
-            return narrowed[0]['id'], False, size_added
+        import stock_product_merge
+        if stock_product_merge.is_normal_product_code(code):
+            matches = stock_product_merge.find_live_products_by_code(c, code)
+            if not matches:
+                matches = stock_product_merge.find_products_by_name_alias(c, code, name)
+            if len(matches) > 1:
+                raise ValueError(
+                    f'品番「{code}」の商品が複数あります。'
+                    f'先に「重複商品の整理」で1つにまとめてから旧CSV取込してください。'
+                )
+            if len(matches) == 1:
+                if stock.text(matches[0]['name']) != stock.text(name):
+                    stock_product_merge.ensure_name_alias(c, matches[0]['id'], name)
+                product_info = {**product_info, 'id': matches[0]['id'], 'sizeAction': 'add'}
+                size_added = _save_product_sizes_and_category(c, matches[0]['id'], product_info)
+                return matches[0]['id'], False, size_added
+        else:
+            matches = find_products_by_code(c, code)
+            narrowed = matches
+            if supplier_id is not None and len(matches) > 1:
+                by_sup = [m for m in matches if m['supplier_id'] == supplier_id]
+                if by_sup:
+                    narrowed = by_sup
+            by_name = [m for m in narrowed if stock.text(m['name']) == name]
+            if len(by_name) == 1:
+                narrowed = by_name
+            if len(narrowed) == 1:
+                product_info = {**product_info, 'id': narrowed[0]['id'], 'sizeAction': 'add'}
+                size_added = _save_product_sizes_and_category(c, narrowed[0]['id'], product_info)
+                return narrowed[0]['id'], False, size_added
     else:
         matches = find_blank_sku_products(c, name, supplier_id)
         if len(matches) == 1:

@@ -11,6 +11,140 @@ import stock
 CUSTOM_ORDER_CODE = '別注'
 UNKNOWN_CODE = '不明'
 SPECIAL_CODES = frozenset({CUSTOM_ORDER_CODE, UNKNOWN_CODE})
+ALIAS_KIND_NAME = 'name'
+ALIAS_KIND_SUPPLIER = 'supplier'
+
+
+def is_normal_product_code(code):
+    """通常品番（1品番=1商品の対象）。別注・不明・空欄は対象外。"""
+    t = stock.text(code)
+    return bool(t) and t not in SPECIAL_CODES
+
+
+def is_special_product_code(code):
+    t = stock.text(code)
+    return (not t) or t in SPECIAL_CODES
+
+
+def alias_value_key(value):
+    """照合用キー（空白種類を畳む）。"""
+    import re
+    return re.sub(r'[\s\u3000]+', '', stock.text(value))
+
+
+def find_live_products_by_code(c, code):
+    return list(c.execute(
+        '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,
+                  p.merged_into_id,s.name AS supplier_name
+           FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
+           WHERE p.code=? AND p.merged_into_id IS NULL ORDER BY p.id''',
+        (stock.text(code),),
+    ))
+
+
+def assert_normal_code_available(c, code, *, product_id=None, allow_historical_duplicate=False):
+    """通常品番の新規採番・他品番からの乗換えを拒否。既存重複の編集は許可。
+
+    既存DBに同品番の複数商品があっても UNIQUE 制約は張らない。
+    新規作成や、別コードから既存コードへの変更だけを止める。
+    allow_historical_duplicate はサンプル／テストで既存重複を意図的に作るときだけ。
+    """
+    if allow_historical_duplicate:
+        return
+    if not is_normal_product_code(code):
+        return
+    others = [
+        r for r in find_live_products_by_code(c, code)
+        if product_id is None or int(r['id']) != int(product_id)
+    ]
+    if not others:
+        return
+    if product_id is not None:
+        prev = c.execute('SELECT code FROM products WHERE id=?', (product_id,)).fetchone()
+        if prev and stock.text(prev['code']) == stock.text(code):
+            # 既にこの品番を持つ商品の編集（歴史的重複の残存）は許可
+            return
+    ids = ', '.join(str(r['id']) for r in others[:5])
+    more = ' など' if len(others) > 5 else ''
+    raise ValueError(
+        f'品番「{stock.text(code)}」は既に商品ID {ids}{more} で使われています。'
+        f'通常品番は1品番=1商品です。既存商品を編集するか、'
+        f'「重複商品の整理」で1つにまとめてから登録してください。'
+    )
+
+
+def ensure_name_alias(c, product_id, name):
+    """旧商品名を照合用別名として残す（公式名の書き換え時）。"""
+    key = alias_value_key(name)
+    if not key or not product_id:
+        return False
+    live = resolve_live_product_id(c, product_id)
+    prod = c.execute('SELECT id,name FROM products WHERE id=?', (live,)).fetchone()
+    if not prod:
+        return False
+    if alias_value_key(prod['name']) == key:
+        return False
+    exists = c.execute(
+        'SELECT id FROM product_match_aliases WHERE product_id=? AND kind=? AND value_key=?',
+        (live, ALIAS_KIND_NAME, key),
+    ).fetchone()
+    if exists:
+        return False
+    c.execute(
+        '''INSERT INTO product_match_aliases(product_id,kind,value,value_key,created_at)
+           VALUES(?,?,?,?,?)''',
+        (live, ALIAS_KIND_NAME, stock.text(name), key, stock.stamp()),
+    )
+    return True
+
+
+def ensure_supplier_alias(c, product_id, supplier_name):
+    key = alias_value_key(supplier_name)
+    if not key or not product_id:
+        return False
+    live = resolve_live_product_id(c, product_id)
+    exists = c.execute(
+        'SELECT id FROM product_match_aliases WHERE product_id=? AND kind=? AND value_key=?',
+        (live, ALIAS_KIND_SUPPLIER, key),
+    ).fetchone()
+    if exists:
+        return False
+    c.execute(
+        '''INSERT INTO product_match_aliases(product_id,kind,value,value_key,created_at)
+           VALUES(?,?,?,?,?)''',
+        (live, ALIAS_KIND_SUPPLIER, stock.text(supplier_name), key, stock.stamp()),
+    )
+    return True
+
+
+def find_products_by_name_alias(c, code, name):
+    """品番＋旧商品名別名で既存商品を探す。"""
+    if not is_normal_product_code(code):
+        return []
+    key = alias_value_key(name)
+    if not key:
+        return []
+    return list(c.execute(
+        '''SELECT DISTINCT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,
+                  p.merged_into_id,s.name AS supplier_name
+           FROM product_match_aliases a
+           JOIN products p ON p.id=a.product_id
+           LEFT JOIN suppliers s ON s.id=p.supplier_id
+           WHERE a.kind=? AND a.value_key=? AND p.code=? AND p.merged_into_id IS NULL
+           ORDER BY p.id''',
+        (ALIAS_KIND_NAME, key, stock.text(code)),
+    ))
+
+
+def list_name_aliases(c, product_id):
+    live = resolve_live_product_id(c, product_id)
+    return [
+        r['value'] for r in c.execute(
+            '''SELECT value FROM product_match_aliases
+               WHERE product_id=? AND kind=? ORDER BY id''',
+            (live, ALIAS_KIND_NAME),
+        )
+    ]
 
 
 def _tables(c):
@@ -20,6 +154,8 @@ def _tables(c):
 def needs_merge_migration(c):
     tables = _tables(c)
     if 'product_suppliers' not in tables or 'product_merges' not in tables:
+        return True
+    if 'product_match_aliases' not in tables:
         return True
     if 'products' in tables:
         cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
@@ -69,6 +205,19 @@ def migrate_product_merge(c):
     c.execute(
         'CREATE INDEX IF NOT EXISTS product_merge_sources_product '
         'ON product_merge_sources(source_product_id)'
+    )
+    c.execute('''CREATE TABLE IF NOT EXISTS product_match_aliases (
+      id INTEGER PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id),
+      kind TEXT NOT NULL,
+      value TEXT NOT NULL,
+      value_key TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(product_id, kind, value_key)
+    )''')
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_match_aliases_lookup '
+        'ON product_match_aliases(kind, value_key, product_id)'
     )
     tables = _tables(c)
     if 'products' in tables:

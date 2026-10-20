@@ -50,6 +50,11 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('ProductLedgerCsv', js)
         self.assertIn('/api/product-ledger-csv/preview', js)
         self.assertIn('/api/product-ledger-csv/commit', js)
+        self.assertIn('同じ商品としてまとめる', js)
+        self.assertIn('別物のため個別に整理する', js)
+        self.assertIn('今回は保留する', js)
+        self.assertIn('skuDecisions', js)
+        self.assertIn('1品番=1商品', app)
         # 初期在庫用旧CSVタブとは別入口
         self.assertIn("['legacyCsv','旧CSV取込']", app)
 
@@ -241,7 +246,7 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
                 '病院B,仕入Y,,ボタン 18mm,-',  # 品番空
                 '病院C,仕入Z,FT1,＊帽子,F',  # 中古候補だが在庫は作らない
                 '病院D,仕入Z,FT2,白衣,M',
-                '病院D,仕入Z,FT2,白衣（刺繍あり）,M',  # 同品番・別名 → 要確認
+                '病院D,仕入Z,FT2,白衣（刺繍あり）,M',  # 同品番・別名 → 品番比較
             ])
             # 先に白衣だけ登録
             cu = stock.save_customer(c, {'name': '病院D', 'active': True})
@@ -264,10 +269,12 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             self.assertEqual(by_no[4]['product']['blankSku'], True)
             self.assertTrue(by_no[5]['csv']['usedMarkerPossible'])
             self.assertEqual(by_no[5]['status'], 'create')
-            self.assertEqual(by_no[6]['status'], 'unchanged')  # 既存白衣
-            self.assertEqual(by_no[7]['status'], 'needs_review')  # 白衣（刺繍あり）
+            # FT2 は名差のため品番比較が必要（先頭へ自動紐づけしない／新規逃げ穴なし）
+            ft2_group = next(g for g in preview['skuGroups'] if g['code'] == 'FT2')
+            self.assertTrue(ft2_group['needsDecision'])
+            self.assertEqual(by_no[7]['status'], 'needs_review')
 
-            # 要確認ありのまま確定は拒否
+            # 未決定のまま確定は拒否
             with self.assertRaises(ValueError):
                 pli.commit_preview(c, {
                     'file': csv_b64_from_text(text), 'name': 'edge.csv',
@@ -277,19 +284,25 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
                     '_canWrite': True, '_actor': {'name': 't'},
                 }, db_path=str(path))
 
-            # 要確認行を新規指定して再照合→確定
-            selections = {
-                '7': {'forceCreate': True, 'matchGroupKey': by_no[7]['matchGroupKey']},
+            # 同じ商品としてまとめる（公式名=白衣）
+            sku_decisions = {
+                'FT2': {
+                    'decision': 'merge',
+                    'officialName': '白衣',
+                    'keepProductId': by_no[6]['product']['id'],
+                    'mergeSourceIds': [],
+                },
             }
             preview2 = pli.build_preview(c, {
                 'file': csv_b64_from_text(text), 'name': 'edge.csv',
-                'selections': selections,
+                'skuDecisions': sku_decisions,
                 '_canWrite': True, '_actor': {'name': 't'},
             })
             self.assertEqual(preview2['reviewCount'], 0)
+            self.assertEqual(preview2['skuDecisionPending'], 0)
             result = pli.commit_preview(c, {
                 'file': csv_b64_from_text(text), 'name': 'edge.csv',
-                'selections': selections,
+                'skuDecisions': sku_decisions,
                 'previewFingerprint': preview2['previewFingerprint'],
                 'previewAt': preview2['previewAt'],
                 'token': 'pl-edge-2',
@@ -301,9 +314,107 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             # ＊帽子は記号付きのまま商品名保存
             star = c.execute("SELECT name FROM products WHERE code='FT1'").fetchone()
             self.assertEqual(star['name'], '＊帽子')
-            # 別注は2商品
+            # 別注は2商品（例外）
             betchu = c.execute("SELECT COUNT(*) AS n FROM products WHERE code='別注'").fetchone()['n']
             self.assertEqual(betchu, 2)
+            # FT2 は1商品のまま。別名が残る
+            ft2n = c.execute("SELECT COUNT(*) AS n FROM products WHERE code='FT2' AND merged_into_id IS NULL").fetchone()['n']
+            self.assertEqual(ft2n, 1)
+            aliases = [
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name'"
+                )
+            ]
+            self.assertTrue(any('刺繍' in a for a in aliases))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_normal_code_uniqueness_and_multi_size_one_product(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-9,スクラブ青,M',
+                '顧客B,仕入B,SKU-9,スクラブ（青）,L',  # 名差・仕入先差 → 比較
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'one.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            groups = [g for g in preview['skuGroups'] if g['code'] == 'SKU-9']
+            self.assertEqual(len(groups), 1)
+            self.assertTrue(groups[0]['needsDecision'])
+            self.assertEqual(groups[0]['variantCount'], 2)
+
+            sku = {
+                'SKU-9': {
+                    'decision': 'merge',
+                    'officialName': 'スクラブ青',
+                    'primarySupplier': '仕入A',
+                },
+            }
+            preview2 = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'one.csv',
+                'skuDecisions': sku, '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(preview2['plannedCounts']['productsToCreate'], 1)
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'one.csv',
+                'skuDecisions': sku,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-one-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['counts']['productsCreated'], 1)
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='SKU-9' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+            prod = c.execute("SELECT id,name FROM products WHERE code='SKU-9'").fetchone()
+            self.assertEqual(prod['name'], 'スクラブ青')
+            sizes = {
+                r['label'] for r in c.execute(
+                    'SELECT label FROM product_sizes WHERE product_id=?', (prod['id'],)
+                )
+            }
+            self.assertEqual(sizes, {'M', 'L'})
+            # 手動で同品番新規は拒否
+            with self.assertRaises(ValueError) as ctx:
+                stock.save_product(c, {
+                    'code': 'SKU-9', 'name': '別物', 'color': '', 'supplierId': None,
+                    'sizes': ['S'], 'links': [], 'active': True,
+                })
+            self.assertIn('1品番=1商品', str(ctx.exception))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_hold_excludes_from_commit(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,HD-1,本体,M',
+                '顧客A,仕入A,HD-1,加工サービス,M',
+            ])
+            sku = {
+                'HD-1': {'decision': 'hold', 'deferReason': '本体と加工の切り分け未確定'},
+            }
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hold.csv',
+                'skuDecisions': sku, '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(preview['countsRaw'].get('hold'), 2)
+            with self.assertRaises(ValueError):
+                pli.commit_preview(c, {
+                    'file': csv_b64_from_text(text), 'name': 'hold.csv',
+                    'skuDecisions': sku,
+                    'previewFingerprint': preview['previewFingerprint'],
+                    'previewAt': preview['previewAt'],
+                    'token': 'pl-hold-1',
+                    '_canWrite': True, '_actor': {'name': 't'},
+                }, db_path=str(path))
         finally:
             c.close()
             folder.cleanup()

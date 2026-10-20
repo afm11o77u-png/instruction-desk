@@ -228,9 +228,20 @@ def _products(c, rows, meta=None):
                 category = stock.normalize_category(category)
             except ValueError as e:
                 raise ValueError(f'商品の{row_no}行目：{e}') from e
-        matches = _match_products(c, code, item['name'], item['color'], supplier_id)
-        if len(matches) > 1:
-            raise ValueError(f'商品の{row_no}行目：同じ品番・商品名・色・仕入先の商品が複数あります。')
+        import stock_product_merge
+        if stock_product_merge.is_normal_product_code(code):
+            by_code = stock_product_merge.find_live_products_by_code(c, code)
+            if len(by_code) > 1:
+                ids = ', '.join(str(r['id']) for r in by_code[:5])
+                raise ValueError(
+                    f'商品の{row_no}行目：品番「{code}」の商品が複数あります（商品ID {ids}）。'
+                    f'先に「重複商品の整理」で1つにまとめてからExcel取込してください。'
+                )
+            matches = [by_code[0]['id']] if by_code else []
+        else:
+            matches = _match_products(c, code, item['name'], item['color'], supplier_id)
+            if len(matches) > 1:
+                raise ValueError(f'商品の{row_no}行目：同じ品番・商品名・色・仕入先の商品が複数あります。')
         try:
             if matches:
                 current = stock.product_row(c, matches[0])
@@ -240,6 +251,23 @@ def _products(c, rows, meta=None):
                     )
                 # カテゴリ空欄の更新では既存を消さない（明示値があるときだけ上書き）
                 cat_value = category if category else (current.get('category') or '')
+                # 通常品番: 仕入先が違う場合は通常を維持しサブへ追加
+                primary_id = current['supplierId']
+                merged_subs = list(current.get('subSupplierIds') or [])
+                if stock_product_merge.is_normal_product_code(code):
+                    if supplier_id is not None and primary_id not in (None, supplier_id):
+                        if supplier_id not in merged_subs:
+                            merged_subs.append(supplier_id)
+                        supplier_id = primary_id
+                    elif primary_id is None and supplier_id is not None:
+                        pass  # 未設定なら今回の仕入先を通常に
+                    else:
+                        supplier_id = primary_id
+                    if sub_ids:
+                        for sid in sub_ids:
+                            if sid not in merged_subs and sid != supplier_id:
+                                merged_subs.append(sid)
+                    sub_ids = merged_subs
                 payload = {
                     'id': current['id'], 'code': code, 'name': item['name'], 'color': item['color'],
                     'category': cat_value,
@@ -275,14 +303,33 @@ def _links(c, rows):
             order.append(key)
         grouped[key].append((row_no, item))
     for key in order:
-        matches = c.execute(
-            'SELECT id FROM products WHERE code=? AND name=? AND color=? AND merged_into_id IS NULL',
-            key,
-        ).fetchall()
-        if not matches:
-            raise ValueError(f'取扱の{grouped[key][0][0]}行目：先に商品シートへ、この品番・商品名・色を入れてください。')
-        if len(matches) > 1:
-            raise ValueError(f'取扱の{grouped[key][0][0]}行目：同じ品番・商品名・色の商品が複数あります。')
+        import stock_product_merge
+        code, name, color = key
+        if stock_product_merge.is_normal_product_code(code):
+            by_code = stock_product_merge.find_live_products_by_code(c, code)
+            if not by_code:
+                # 別名でも探す
+                by_code = stock_product_merge.find_products_by_name_alias(c, code, name)
+            if not by_code:
+                raise ValueError(
+                    f'取扱の{grouped[key][0][0]}行目：先に商品シートへ、品番「{code}」を入れてください。'
+                )
+            if len(by_code) > 1:
+                ids = ', '.join(str(r['id']) for r in by_code[:5])
+                raise ValueError(
+                    f'取扱の{grouped[key][0][0]}行目：品番「{code}」の商品が複数あります（商品ID {ids}）。'
+                    f'先に「重複商品の整理」で1つにまとめてください。'
+                )
+            matches = [{'id': by_code[0]['id']}]
+        else:
+            matches = c.execute(
+                'SELECT id FROM products WHERE code=? AND name=? AND color=? AND merged_into_id IS NULL',
+                key,
+            ).fetchall()
+            if not matches:
+                raise ValueError(f'取扱の{grouped[key][0][0]}行目：先に商品シートへ、この品番・商品名・色を入れてください。')
+            if len(matches) > 1:
+                raise ValueError(f'取扱の{grouped[key][0][0]}行目：同じ品番・商品名・色の商品が複数あります。')
         current = stock.product_row(c, matches[0]['id'])
         links = { (link['customerId'], link['embroidery']): {'customerId': link['customerId'], 'embroidery': link['embroidery'], 'isStandard': link['isStandard'], 'active': link['active']} for link in current['links'] }
         changed = False
