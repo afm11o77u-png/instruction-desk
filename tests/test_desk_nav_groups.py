@@ -1,0 +1,84 @@
+"""指示書デスク左側メニューの目的別グループ構成。"""
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+INDEX = (ROOT / 'index.html').read_text(encoding='utf-8')
+ACCOUNT = (ROOT / 'account.js').read_text(encoding='utf-8')
+APP = (ROOT / 'app.js').read_text(encoding='utf-8')
+STYLE = (ROOT / 'style.css').read_text(encoding='utf-8')
+
+
+def _desknav() -> str:
+    aside = INDEX[INDEX.index('<aside>'):INDEX.index('</aside>')]
+    start = aside.index('id="desknav"')
+    end = aside.index('id="infonav"')
+    return aside[start:end]
+
+
+class DeskNavGroupsTest(unittest.TestCase):
+    def test_group_order_and_labels(self):
+        nav = _desknav()
+        expected = [
+            ('指示書の作成・確認', ['指示書一覧', '下書き']),
+            ('現場の作業・出荷', ['現場の作業一覧', 'ピッキングリスト', '出荷仕分け']),
+            ('管理担当者の処理', ['管理担当持込(入力)', '管理担当持込(出力)']),
+            ('印刷', ['宛名書き・管理票印刷']),
+            ('設定・管理', ['利用者管理', '管理・修正']),
+        ]
+        pos = 0
+        for caption, items in expected:
+            i = nav.index(caption, pos)
+            self.assertGreaterEqual(i, pos)
+            pos = i
+            for item in items:
+                j = nav.index(item, pos)
+                self.assertGreater(j, pos)
+                pos = j
+        self.assertIn('data-view="labels"', nav)
+        self.assertIn('>宛名書き・管理票印刷<', nav)
+        self.assertNotIn('>宛名書き<', nav)
+        self.assertIn('id="manageusers"', nav)
+        self.assertIn('id="repair-open"', nav)
+
+    def test_view_targets_unchanged(self):
+        nav = _desknav()
+        for view in ('all', 'draft', 'floor', 'picking', 'ship', 'carry-in', 'carry-out', 'labels'):
+            self.assertIn(f'data-view="{view}"', nav)
+
+    def test_info_and_stock_nav_untouched(self):
+        aside = INDEX[INDEX.index('<aside>'):INDEX.index('</aside>')]
+        info = aside[aside.index('id="infonav"'):aside.index('id="stocknav"')]
+        self.assertIn('data-view="placement"', info)
+        self.assertIn('data-view="shipinfo"', info)
+        self.assertIn('data-view="nameinfo"', info)
+        self.assertNotIn('navgroup', info)
+        stock = aside[aside.index('id="stocknav"'):]
+        self.assertIn('data-stock-section="list"', stock)
+        self.assertNotIn('navgroup', stock)
+
+    def test_settings_stay_permissioned(self):
+        self.assertIn("manageNav.hidden=!(currentUser.manage||role==='owner')", ACCOUNT)
+        self.assertIn("repairNav.hidden=role!=='owner'", ACCOUNT)
+        self.assertIn("openAccounts()", ACCOUNT)
+        self.assertIn("openRepair()", ACCOUNT)
+        # ログイン欄からは業務メニューへ移した
+        self.assertNotIn('利用者管理</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
+        self.assertNotIn('管理・修正</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
+
+    def test_labels_title_renamed(self):
+        self.assertIn("labels?'宛名書き・管理票印刷':", APP)
+
+    def test_scroll_and_wrap_styles(self):
+        self.assertIn('overflow-x:hidden', STYLE)
+        self.assertIn('overflow-y:auto', STYLE)
+        self.assertIn('overflow-wrap:anywhere', STYLE)
+        self.assertIn('#desknav .navgroup', STYLE)
+        self.assertRegex(STYLE, r'#desknav\{[^}]*display:flex')
+
+
+if __name__ == '__main__':
+    unittest.main()
