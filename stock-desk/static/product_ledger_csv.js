@@ -340,7 +340,7 @@
   }
 
   function decisionLabel(dec){
-    if(dec==='merge')return 'まとめる'
+    if(dec==='merge')return 'まとめる選択済み（未登録）'
     if(dec==='separate')return '個別整理'
     if(dec==='hold')return '保留'
     return '未決定'
@@ -467,11 +467,11 @@
           ${(g.nameAdoptionRule||(g.namePlan&&g.namePlan.adoptionRule))?`<div class="sub">${esc(g.nameAdoptionRule||g.namePlan.adoptionRule)}</div>`:''}
         </td>
         <td class="sku-action">
-          <div class="sku-action-label">${esc(decisionLabel(decision))}</div>
+          <div class="sku-action-label ${decision?`is-${esc(decision)}`:''}">${esc(decisionLabel(decision))}</div>
           <div class="bar sku-mini-btns">
-            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="quiet ${decision==='merge'?'primary':''}" ${st.busy?'disabled':''}>まとめ</button>
-            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="quiet ${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>保留</button>
-            <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'閉じる':'詳細'}</button>
+            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめ</button>
+            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" ${st.busy?'disabled':''}>保留</button>
+            <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
         </td>
       </tr>${expanded?skuRowDetailHtml(st,g):''}`

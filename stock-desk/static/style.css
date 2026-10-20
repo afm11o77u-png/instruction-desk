@@ -686,10 +686,30 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 .sku-other-diff strong{display:block;font-size:12px}
 .sku-tier-bulk td{background:#f7faf8}
 .sku-tier-individual td{background:#fff8f0}
-.sku-dec-merge td{box-shadow:inset 3px 0 0 #3a6b55}
-.sku-dec-hold td{box-shadow:inset 3px 0 0 #a67c3a}
-.sku-mini-btns{flex-wrap:wrap;gap:4px;margin-top:4px}
-.sku-action-label{font-weight:700;font-size:12px}
+/* 決定済みは太い縦線ではなく、通常枠線＋薄い背景色で区別 */
+.sku-dec-merge td{background:#e7f2ea}
+.sku-dec-hold td{background:#f4eee4}
+.sku-compare-table .sku-action{min-width:15.5rem;width:15.5rem}
+.sku-mini-btns,
+.bar.sku-mini-btns{
+  display:flex;flex-wrap:nowrap;align-items:center;gap:4px;margin-top:4px;
+  padding:0;border-bottom:0;
+}
+.sku-mini-btns button{
+  white-space:nowrap;flex:0 0 auto;padding:6px 10px;font-size:12.5px;
+}
+/* quiet+選択の競合で白文字だけ残らないよう、選択時は常に緑地＋白字 */
+.sku-mini-btns button.primary,
+.sku-mini-btns button.primary:hover,
+.sku-mini-btns button.primary:disabled{
+  background:var(--green);border-color:var(--green);color:#fff;
+}
+.sku-mini-btns button.primary:hover:not(:disabled){background:#124f2e;color:#fff}
+.sku-mini-btns button.quiet:not(:disabled){color:#17211b;background:transparent}
+.sku-mini-btns button.quiet:hover:not(:disabled){background:#eef8ef;color:#17211b}
+.sku-action-label{font-weight:700;font-size:12px;line-height:1.35}
+.sku-action-label.is-merge{color:#14532d}
+.sku-action-label.is-hold{color:#7a5a20}
 .sku-detail-row td{background:#f4f7f5}
 .sku-detail-body{padding:4px 2px 8px}
 button.linkish{
