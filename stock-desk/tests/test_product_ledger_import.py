@@ -972,7 +972,8 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_both_positive_needs_manual(self):
+    def test_both_positive_picks_max_package_as_primary(self):
+        """正の在庫が両社にあるとき、最多一意ならその候補フルパッケージ（通常仕入先含む）を採用。"""
         folder, path, c = newdb()
         try:
             cust = '㈱合田観光商事　ひまわり'
@@ -986,10 +987,27 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
                 'name': 'l.csv', 'auxName': 'o.csv',
                 '_canWrite': True, '_actor': {'name': 't'},
             })
-            auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
-            self.assertEqual(auxj['autoPrimarySupplier'], '')
-            self.assertTrue(auxj['needsManualPrimary'])
-            self.assertIn('複数', auxj['manualReason'])
+            g = next(x for x in preview['skuGroups'] if x['code'] == '00008')
+            auxj = g.get('auxPrimary') or {}
+            self.assertEqual(auxj.get('nameAdoptionRuleCode'), 'aux_max_positive_stock')
+            self.assertEqual(auxj['autoPrimarySupplier'], '㈱ユニーク')
+            self.assertFalse(auxj['needsManualPrimary'])
+            self.assertEqual(auxj.get('suggestedOfficialName'), 'ベーシックカラーベスト　046.蛍光グリーン')
+            self.assertFalse(g['needsDecision'])
+            # 同数なら従来どおり手動
+            aux_tie = tiny_opening_rows([
+                opening_line('㈱ユニーク', cust, 'ベーシックカラーベスト　046.蛍光グリーン', '00008', '2XL', '2'),
+                opening_line('アイトス㈱', cust, '駐車場ベスト（緑)', '00008', 'F', '2'),
+            ])
+            preview_tie = pli.build_preview(c, {
+                'file': csv_b64_from_text(self._ledger_00008()),
+                'auxFile': csv_b64_from_text(aux_tie),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            aux_tie_j = next(x for x in preview_tie['skuGroups'] if x['code'] == '00008')['auxPrimary']
+            self.assertEqual(aux_tie_j.get('autoPrimarySupplier') or '', '')
+            self.assertTrue(aux_tie_j.get('needsManualPrimary') or aux_tie_j.get('pairNeedsChoice'))
         finally:
             c.close()
             folder.cleanup()
@@ -1855,7 +1873,8 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_aux_main_name_ambiguous_not_by_max_qty(self):
+    def test_aux_main_name_picks_max_positive_qty(self):
+        """正の在庫が複数 → 最多が一意ならその候補を採用（旧: 要確認）。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -1872,13 +1891,16 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
                 '_canWrite': True, '_actor': {'name': 't'},
             })
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-N2')
-            self.assertTrue(g['needsDecision'])
             aux_p = g.get('auxPrimary') or {}
-            # 数量最大では選ばない。非ゼロ候補が複数なら確認
-            self.assertTrue(aux_p.get('officialNameNeedsChoice'))
-            self.assertEqual(aux_p.get('suggestedOfficialName') or '', '')
-            self.assertTrue(any('複数' in r for r in (aux_p.get('nameReasons') or [])))
-            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_any_unique')
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_max_positive_stock')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '名前甲')
+            self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
+            self.assertFalse(aux_p.get('officialNameNeedsChoice'))
+            self.assertFalse(g['needsDecision'])
+            rule = aux_p.get('pairAdoptionRule') or ''
+            self.assertIn('初期在庫が最多のため採用', rule)
+            self.assertIn('名前甲 100', rule)
+            self.assertIn('名前乙 1', rule)
         finally:
             c.close()
             folder.cleanup()
@@ -2100,8 +2122,8 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_aux_multi_nonzero_still_needs_choice(self):
-        """非ゼロが複数 → 要確認（色差の有無に関わらず）。"""
+    def test_aux_positive_beats_negative_without_netting(self):
+        """正2・負-1 → 正の候補を採用（負と相殺せず、絶対値でも選ばない）。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -2118,10 +2140,11 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
                 '_canWrite': True, '_actor': {'name': 't'},
             })
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-M2')
-            self.assertTrue(g['needsDecision'])
             aux_p = g.get('auxPrimary') or {}
-            self.assertTrue(aux_p.get('pairNeedsChoice'))
-            self.assertTrue(any('複数' in r for r in (aux_p.get('nameReasons') or [])))
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '名前甲')
+            self.assertFalse(aux_p.get('pairNeedsChoice'))
+            self.assertFalse(g['needsDecision'])
         finally:
             c.close()
             folder.cleanup()
@@ -2179,7 +2202,7 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('括弧分類', js)
         self.assertIn('生地・素材', app)
         self.assertIn('material', app)
-        self.assertIn('在庫が0以外の候補が1組', js)
+        self.assertIn('初期在庫が最多のため', js)
         self.assertIn('auxStockPickAuto', js)
         self.assertIn('keptPackages', js)
         self.assertIn('nameCandidateDetails', js)
@@ -2188,6 +2211,192 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('sku-cand-stock', js)
         self.assertIn('自動決定済み（プレビュー）', js)
         self.assertIn('対象標記の有無', js)
+
+
+class MaxPositiveStockPickTest(unittest.TestCase):
+    """正の初期在庫合計が最多の候補をメイン採用（1-002 型）。本番DBは触らない。"""
+
+    def test_sku_1_002_adopts_highest_positive(self):
+        """女性用半袖白衣 44／女性半袖調理衣 36 → 白衣側をフルパッケージ採用。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,1-002,女性用半袖白衣,M',
+                '顧客A,仕入A,1-002,女性半袖調理衣,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '女性用半袖白衣', '1-002', 'M', '44'),
+                opening_line('仕入A', '顧客A', '女性半袖調理衣', '1-002', 'L', '36'),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '1-002.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(stock_snap(c), before)
+            g = next(x for x in preview['skuGroups'] if x['code'] == '1-002')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_max_positive_stock')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '女性用半袖白衣')
+            self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertEqual(g.get('reviewTier'), 'auto')
+            rule = aux_p.get('pairAdoptionRule') or g.get('auxStockPickReason') or ''
+            self.assertIn('初期在庫が最多のため採用', rule)
+            self.assertIn('女性用半袖白衣 44', rule)
+            self.assertIn('女性半袖調理衣 36', rule)
+            # 対象標記の有無だけでは要確認に残さない
+            self.assertFalse(g.get('genderDiffPossible'))
+            self.assertFalse(g.get('genderConflictPossible'))
+            kept = aux_p.get('keptPackages') or []
+            self.assertTrue(any('調理衣' in (k.get('productName') or '') for k in kept))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_alias_double_match_does_not_double_count(self):
+        """同一補助行が標記あり／なし別名に当たっても行番号で1回だけ合算。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-DD,緑つなぎ,M',
+                '顧客A,仕入A,SKU-DD,＊緑つなぎ,L',
+                '顧客A,仕入B,SKU-DD,青つなぎ,M',
+            ])
+            # 補助CSVは標記なし1行のみ（qty=44）。別名＊が同じ行に当たっても 44+44 にしない
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '緑つなぎ', 'SKU-DD', 'M', '44'),
+                opening_line('仕入B', '顧客A', '青つなぎ', 'SKU-DD', 'M', '36'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'dd.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-DD')
+            aux_p = g.get('auxPrimary') or {}
+            pairs = {
+                (p.get('productName'), p.get('supplier')): p
+                for p in (aux_p.get('pairCandidates') or [])
+            }
+            green = pairs.get(('緑つなぎ', '仕入A')) or {}
+            self.assertEqual(green.get('auxStockTotal'), 44)
+            self.assertEqual(green.get('auxPositiveStockTotal'), 44)
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '緑つなぎ')
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_max_positive_stock')
+            rule = aux_p.get('pairAdoptionRule') or ''
+            self.assertIn('緑つなぎ 44', rule)
+            self.assertNotIn('88', rule)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_positive_tie_needs_review(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-TIE,名前甲,M',
+                '顧客A,仕入B,SKU-TIE,名前乙,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '名前甲', 'SKU-TIE', 'M', '10'),
+                opening_line('仕入B', '顧客A', '名前乙', 'SKU-TIE', 'L', '10'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'tie.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-TIE')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+            self.assertEqual(aux_p.get('suggestedOfficialName') or '', '')
+            reasons = aux_p.get('nameReasons') or []
+            self.assertTrue(any('同数' in r for r in reasons), reasons)
+            self.assertTrue(any('手動' in r for r in reasons), reasons)
+            review_labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
+            self.assertTrue(any('同数' in lab for lab in review_labels), review_labels)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_multi_negative_needs_review_not_by_abs(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-NN,名前甲,M',
+                '顧客A,仕入B,SKU-NN,名前乙,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '名前甲', 'SKU-NN', 'M', '-8'),
+                opening_line('仕入B', '顧客A', '名前乙', 'SKU-NN', 'L', '-2'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'nn.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-NN')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+            self.assertEqual(aux_p.get('suggestedOfficialName') or '', '')
+            reasons = aux_p.get('nameReasons') or []
+            self.assertTrue(any('負の在庫' in r and '絶対値' in r for r in reasons), reasons)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_positive_qty_not_netted_against_negative_sizes(self):
+        """同一候補内の負在庫は正の合計から差し引かない（最多比較は正の合算）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-NET,名前甲,M',
+                '顧客A,仕入B,SKU-NET,名前乙,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '名前甲', 'SKU-NET', 'M', '50'),
+                opening_line('仕入A', '顧客A', '名前甲', 'SKU-NET', 'S', '-20'),
+                opening_line('仕入B', '顧客A', '名前乙', 'SKU-NET', 'L', '40'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'net.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-NET')
+            aux_p = g.get('auxPrimary') or {}
+            # 正の合算 50 vs 40 → 甲。ネット 30 vs 40 では選ばない
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '名前甲')
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_max_positive_stock')
+            pairs = {
+                (p.get('productName'), p.get('supplier')): p
+                for p in (aux_p.get('pairCandidates') or [])
+            }
+            self.assertEqual(pairs.get(('名前甲', '仕入A'), {}).get('auxPositiveStockTotal'), 50)
+            self.assertEqual(pairs.get(('名前甲', '仕入A'), {}).get('auxStockTotal'), 30)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_used_marker_only_not_listed_as_color_diff_values(self):
+        """＊だけの差を色差の証拠値に並べない（白衣／＊白衣）。"""
+        variants = [
+            {'csvNames': ['白衣', '＊白衣'], 'productName': '白衣', 'supplier': '仕入A'},
+            {'csvNames': ['調理衣'], 'productName': '調理衣', 'supplier': '仕入A'},
+        ]
+        meta = pli.analyze_sku_review_diffs(variants)
+        color_values = []
+        for r in meta.get('reviewReasons') or []:
+            if r.get('code') == 'color':
+                color_values = list(r.get('values') or [])
+        self.assertNotIn('＊白衣', color_values)
+        if color_values:
+            self.assertIn('白衣', color_values)
 
 
 class GenderPresenceAbsenceStockPickTest(unittest.TestCase):

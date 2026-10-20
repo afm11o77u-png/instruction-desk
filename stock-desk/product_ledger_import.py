@@ -160,14 +160,26 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
     name_wording_diff = len(cores) > 1
     supplier_diff = len(suppliers) > 1
 
-    color_sets = [_hint_tokens(n, _COLOR_HINT_RE) for n in names]
-    proc_sets = [_hint_tokens(n, _PROCESSING_HINT_RE) for n in names]
-    kind_sets = [_kind_tokens(n) for n in names]
-    gender_sets = [_hint_tokens(n, _GENDER_HINT_RE) for n in names]
-    fabric_sets = [_hint_tokens(n, _FABRIC_HINT_RE) for n in names]
+    # 先頭「＊/*」だけの差は同一候補。色・男女などのヒント判定では標記を剥がして
+    # コアごとに1名だけ使う（＊白衣／白衣を色差の証拠に並べない）。
+    hint_names = []
+    seen_hint_cores = set()
+    for n in names:
+        core = product_name_core_key(n)
+        if not core or core in seen_hint_cores:
+            continue
+        seen_hint_cores.add(core)
+        unmarked, _ = legacy.strip_used_marker(n)
+        hint_names.append(stock.text(unmarked) or n)
+
+    color_sets = [_hint_tokens(n, _COLOR_HINT_RE) for n in hint_names]
+    proc_sets = [_hint_tokens(n, _PROCESSING_HINT_RE) for n in hint_names]
+    kind_sets = [_kind_tokens(n) for n in hint_names]
+    gender_sets = [_hint_tokens(n, _GENDER_HINT_RE) for n in hint_names]
+    fabric_sets = [_hint_tokens(n, _FABRIC_HINT_RE) for n in hint_names]
 
     def _set_diff(sets):
-        if len(names) < 2:
+        if len(hint_names) < 2:
             return False
         nonempty = [s for s in sets if s]
         if len(nonempty) >= 2 and any(s != nonempty[0] for s in nonempty[1:]):
@@ -180,7 +192,7 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
     processing_diff = _set_diff(proc_sets)
     # 商品種はシノニム正規化済み。差があれば個別確認。
     kind_diff = False
-    if len(names) >= 2:
+    if len(hint_names) >= 2:
         nonempty_kinds = [s for s in kind_sets if s]
         if len(nonempty_kinds) >= 2 and any(s != nonempty_kinds[0] for s in nonempty_kinds[1:]):
             kind_diff = True
@@ -207,34 +219,34 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         other_diffs.append({
             'code': 'color',
             'label': '色の違いの可能性',
-            'values': [n for n, s in zip(names, color_sets) if s],
+            'values': [n for n, s in zip(hint_names, color_sets) if s],
         })
         reasons.append({
             'code': 'color',
             'label': '色の違いの可能性（個別確認）',
-            'values': [n for n, s in zip(names, color_sets) if s],
+            'values': [n for n, s in zip(hint_names, color_sets) if s],
         })
     if processing_diff:
         other_diffs.append({
             'code': 'processing',
             'label': '加工の違いの可能性',
-            'values': [n for n, s in zip(names, proc_sets) if s],
+            'values': [n for n, s in zip(hint_names, proc_sets) if s],
         })
         reasons.append({
             'code': 'processing',
             'label': '加工の違いの可能性（個別確認）',
-            'values': [n for n, s in zip(names, proc_sets) if s],
+            'values': [n for n, s in zip(hint_names, proc_sets) if s],
         })
     if kind_diff:
         other_diffs.append({
             'code': 'kind',
             'label': '商品種の違いの可能性',
-            'values': [n for n, s in zip(names, kind_sets) if s],
+            'values': [n for n, s in zip(hint_names, kind_sets) if s],
         })
         reasons.append({
             'code': 'kind',
             'label': '商品種の違いの可能性（個別確認）',
-            'values': [n for n, s in zip(names, kind_sets) if s],
+            'values': [n for n, s in zip(hint_names, kind_sets) if s],
         })
     if gender_diff:
         gender_label = (
@@ -249,23 +261,23 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
                 if gender_conflict
                 else '男女・対象の違いの可能性'
             ),
-            'values': [n for n, s in zip(names, gender_sets) if s],
+            'values': [n for n, s in zip(hint_names, gender_sets) if s],
         })
         reasons.append({
             'code': 'gender',
             'label': gender_label,
-            'values': [n for n, s in zip(names, gender_sets) if s],
+            'values': [n for n, s in zip(hint_names, gender_sets) if s],
         })
     if fabric_diff:
         other_diffs.append({
             'code': 'fabric',
             'label': '生地・素材の違いの可能性',
-            'values': [n for n, s in zip(names, fabric_sets) if s],
+            'values': [n for n, s in zip(hint_names, fabric_sets) if s],
         })
         reasons.append({
             'code': 'fabric',
             'label': '生地・素材の違いの可能性（個別確認）',
-            'values': [n for n, s in zip(names, fabric_sets) if s],
+            'values': [n for n, s in zip(hint_names, fabric_sets) if s],
         })
     if existing_count > 1:
         reasons.append({
@@ -1029,11 +1041,40 @@ def _pair_candidate_payload(cand):
         'supplier': cand.get('supplier') or '',
         'ledgerNames': list(cand.get('ledgerNames') or []),
         'auxStockTotal': cand.get('auxStockTotal'),
+        'auxPositiveStockTotal': cand.get('auxPositiveStockTotal'),
         'auxStockDisplay': cand.get('auxStockDisplay') or '—',
         'hasAuxMatch': bool(cand.get('hasAuxMatch')),
         'hasNonZeroStock': bool(cand.get('hasNonZeroStock')),
         'hasPositiveStock': bool(cand.get('hasPositiveStock')),
+        'hasNegativeStock': bool(cand.get('hasNegativeStock')),
     }
+
+
+def _candidate_compare_qty(cand):
+    """比較表示用の数量。正の在庫合計があればそれを、なければ在庫合計。"""
+    if cand.get('auxPositiveStockTotal') is not None and int(cand.get('auxPositiveStockTotal') or 0) > 0:
+        return cand['auxPositiveStockTotal']
+    if cand.get('auxStockTotal') is not None:
+        return cand['auxStockTotal']
+    return None
+
+
+def _format_candidate_stock_comparison(candidates, *, qty_key='compare'):
+    """候補ごとの比較数量を「名 qty／名 qty」形式で返す。"""
+    bits = []
+    for cand in candidates or []:
+        name = stock.text(cand.get('productName') or '') or '?'
+        if qty_key == 'positive':
+            qty = cand.get('auxPositiveStockTotal')
+            if qty is None or int(qty or 0) <= 0:
+                qty = cand.get('auxStockTotal')
+        else:
+            qty = _candidate_compare_qty(cand)
+        if qty is None:
+            bits.append(f'{name} —')
+        else:
+            bits.append(f'{name} {qty}')
+    return '／'.join(bits)
 
 
 def _adopt_candidate_package(hit, *, candidates, rule, rule_code, reasons=None):
@@ -1073,11 +1114,13 @@ def suggest_main_candidate_from_aux(group, aux_index):
 
     規則:
     - 「在庫」列のみ（購入数量・出荷数・補正在庫数は使わない）
-    - 候補ごとに非ゼロ在庫行の有無を見る（正負の相殺なし。数量最大では選ばない）
-    - 候補が1組 → 在庫0でもその候補のフルパッケージを採用（単一仕入先自動は別途維持）
-    - 非ゼロを持つ候補がちょうど1つ → その候補のフルセット（名・仕入先・色・加工・素材）を採用
-    - 色・加工・素材が候補間で違っても、在庫一意採用ならそれだけでは要確認にしない
-    - 複数・全ゼロ（候補2組以上）・数量不正/空・照合不明 → 自動確定しない
+    - 候補ごとに在庫を合算（正の数量同士は足す。負は正の合計から差し引かない）
+    - 同一補助CSV行が複数別名に当たっても行番号で1回だけ加算（二重計上しない）
+    - 先頭「＊/*」だけの名差は既存どおり同一候補
+    - 候補が1組 → 在庫0でもその候補のフルパッケージを採用
+    - 正の在庫合計が最大の候補が一意 → そのフルセット（名・仕入先・色・加工・素材）を採用
+    - 正の在庫がなく、負の在庫がある候補がちょうど1つ → その候補を採用
+    - 正の最大が同数／負が複数／全ゼロ／数量不正/空 → 自動確定しない（絶対値では選ばない）
     - 別候補の商品名・仕入先・仕様を組み合わせない
     """
     empty = {
@@ -1111,7 +1154,6 @@ def suggest_main_candidate_from_aux(group, aux_index):
     name_candidates = []
     pair_candidates = []
     reasons = []
-    nonzero_hits = []
     any_undecidable = False
 
     for cand in candidates:
@@ -1120,19 +1162,24 @@ def suggest_main_candidate_from_aux(group, aux_index):
         display_name = cand['productName']
         if display_name and display_name not in name_candidates:
             name_candidates.append(display_name)
-        matched = []
+        # 補助CSV行は行番号で一意化（複数別名が同じ行に当たっても1回だけ）
+        matched_by_row = {}
         for row_no, item in aux_index.get(code, []):
+            if row_no in matched_by_row:
+                continue
             for name in names:
                 if _aux_row_matches_candidate(
                     item, code=code, supplier=supplier, product_name=name,
                     customers=cand.get('customers') or [],
                 ):
-                    matched.append((row_no, item, name))
+                    matched_by_row[row_no] = (item, name)
                     break
         has_nonzero = False
         has_positive = False
+        has_negative = False
+        positive_total = 0
         size_rows = []
-        for row_no, item, _name in matched:
+        for row_no, (item, _name) in matched_by_row.items():
             qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
             size = stock.text(item.get('サイズ'))
             if qstatus != 'ok':
@@ -1153,6 +1200,9 @@ def suggest_main_candidate_from_aux(group, aux_index):
                 continue
             if qty is not None and qty > 0:
                 has_positive = True
+                positive_total += qty
+            if qty is not None and qty < 0:
+                has_negative = True
             if qty is not None and qty != 0:
                 has_nonzero = True
             size_rows.append({
@@ -1164,13 +1214,18 @@ def suggest_main_candidate_from_aux(group, aux_index):
             })
         stock_summary = _summarize_aux_stock_rows(size_rows)
         cand['auxStockTotal'] = stock_summary['auxStockTotal']
+        if stock_summary['qtyUndecidable']:
+            cand['auxPositiveStockTotal'] = None
+        elif stock_summary['hasAuxMatch']:
+            cand['auxPositiveStockTotal'] = positive_total
+        else:
+            cand['auxPositiveStockTotal'] = None
         cand['auxStockDisplay'] = stock_summary['auxStockDisplay']
         cand['hasAuxMatch'] = stock_summary['hasAuxMatch']
         cand['hasNonZeroStock'] = bool(has_nonzero and not stock_summary['qtyUndecidable'])
         cand['hasPositiveStock'] = bool(has_positive and not stock_summary['qtyUndecidable'])
+        cand['hasNegativeStock'] = bool(has_negative and not stock_summary['qtyUndecidable'])
         pair_candidates.append(_pair_candidate_payload(cand))
-        if has_nonzero and not stock_summary['qtyUndecidable']:
-            nonzero_hits.append(cand)
 
     if any_undecidable:
         reasons.append(
@@ -1198,8 +1253,55 @@ def suggest_main_candidate_from_aux(group, aux_index):
             rule_code='aux_single_candidate', reasons=reasons,
         )
 
-    if len(nonzero_hits) == 1:
-        hit = nonzero_hits[0]
+    positive_hits = [
+        c for c in candidates
+        if c.get('hasPositiveStock') and int(c.get('auxPositiveStockTotal') or 0) > 0
+    ]
+    # 正の行がなく負の行だけある候補（正負混在は positive 側で扱う。負は正から差し引かない）
+    negative_only_hits = [
+        c for c in candidates
+        if c.get('hasNegativeStock') and not c.get('hasPositiveStock')
+    ]
+
+    comparison = _format_candidate_stock_comparison(candidates)
+
+    if positive_hits:
+        max_qty = max(int(c.get('auxPositiveStockTotal') or 0) for c in positive_hits)
+        winners = [
+            c for c in positive_hits
+            if int(c.get('auxPositiveStockTotal') or 0) == max_qty
+        ]
+        if len(winners) == 1:
+            hit = winners[0]
+            if len(positive_hits) >= 2:
+                rule = f'初期在庫が最多のため採用：{comparison}'
+                rule_code = 'aux_max_positive_stock'
+            else:
+                # 正の在庫がある候補が1組だけ（他は0／負）
+                qty_bit = _stock_qty_clause(hit)
+                qty_paren = f'（{qty_bit}）' if qty_bit else ''
+                rule = (
+                    f'在庫が0以外の候補が1組{qty_paren}のため、この候補をメインに採用'
+                )
+                rule_code = 'aux_nonzero_pair'
+            return _adopt_candidate_package(
+                hit, candidates=candidates, rule=rule,
+                rule_code=rule_code, reasons=reasons,
+            )
+        reasons.append(
+            '初期在庫の最大が同数のため要確認：'
+            f'{comparison}。手動でメイン候補を選んでください'
+            '（別候補の名・仕入先・仕様は組み合わせません）。'
+        )
+        return {
+            **empty,
+            'nameCandidates': name_candidates,
+            'pairCandidates': pair_candidates,
+            'nameReasons': reasons,
+        }
+
+    if len(negative_only_hits) == 1:
+        hit = negative_only_hits[0]
         qty_bit = _stock_qty_clause(hit)
         qty_paren = f'（{qty_bit}）' if qty_bit else ''
         rule = (
@@ -1210,18 +1312,12 @@ def suggest_main_candidate_from_aux(group, aux_index):
             rule_code='aux_nonzero_pair', reasons=reasons,
         )
 
-    if len(nonzero_hits) > 1:
-        qty_bits = []
-        for hit in nonzero_hits:
-            clause = _stock_qty_clause(hit)
-            label = f'{hit.get("productName") or "?"}／{hit.get("supplier") or "?"}'
-            qty_bits.append(f'{label}={clause}' if clause else label)
-        detail = '、'.join(qty_bits[:4])
+    if len(negative_only_hits) > 1:
         reasons.append(
-            '非ゼロ在庫がある候補が複数あるため、代表候補は自動確定しません'
-            f'（{detail}。数量最大では選びません。別候補の名・仕入先・仕様も組み合わせません）。'
+            '負の在庫がある候補が複数あるため要確認：'
+            f'{comparison}。絶対値では選びません。手動でメイン候補を選んでください。'
         )
-    elif not nonzero_hits:
+    else:
         zero_bits = []
         for cand in candidates:
             if cand.get('hasAuxMatch') and cand.get('auxStockTotal') is not None:
@@ -1391,8 +1487,8 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
         }
         pair_supplier = stock.text(pair_from_aux.get('suggestedPrimarySupplier') or '')
         pair_code = stock.text(pair_from_aux.get('pairAdoptionRuleCode') or '')
-        # 在庫一意／候補1組で決まったときは、その仕入先を通常に（別候補の名と混ぜない）。
-        # 候補1社の自動（#154）は維持し、理由を上書きしない。
+        # 在庫採用（最多／非ゼロ一意／候補1組）で決まったときは、その仕入先を通常に
+        # （別候補の名と混ぜない）。候補1社の自動（#154）は維持し、理由を上書きしない。
         if (
             pair_supplier
             and not pair_from_aux.get('pairNeedsChoice')
@@ -1400,7 +1496,9 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
         ):
             auto_primary = pair_supplier
             auto_reason = stock.text(pair_from_aux.get('pairAdoptionRule') or '') or (
-                '在庫が0以外の候補が1組のため、この候補をメインに採用'
+                '初期在庫が最多のため、この候補をメインに採用'
+                if pair_code == 'aux_max_positive_stock'
+                else '在庫が0以外の候補が1組のため、この候補をメインに採用'
             )
             needs_manual = False
             manual_reason = ''
@@ -1617,8 +1715,14 @@ def attach_aux_stock_visibility(sku_groups, *, aux_uploaded=False):
         if 'すべて在庫0' in stock_reason or '在庫0のため' in stock_reason:
             label = '初期在庫がすべて在庫0のため要確認（自動では決めません）'
             code = 'aux_stock_all_zero'
+        elif '最大が同数' in stock_reason:
+            label = '初期在庫の最大が同数のため要確認（手動でメイン候補を選んでください）'
+            code = 'aux_stock_positive_tie'
+        elif '負の在庫がある候補が複数' in stock_reason:
+            label = '負の在庫がある候補が複数あるため要確認（絶対値では選びません）'
+            code = 'aux_stock_multi_negative'
         elif '複数' in stock_reason:
-            label = '初期在庫で非ゼロ在庫の候補が複数あるため要確認'
+            label = '初期在庫で候補が複数あるため要確認'
             code = 'aux_stock_multi_nonzero'
         else:
             label = stock_reason
@@ -1636,23 +1740,28 @@ def attach_aux_stock_visibility(sku_groups, *, aux_uploaded=False):
 
 
 def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
-    """在庫一意／候補1組でメイン採用できた品番は、色・加工・素材差だけでは要確認に残さない。
+    """在庫一意／正の在庫最多／候補1組でメイン採用できた品番は、色・加工・素材差だけでは要確認に残さない。
 
     - 採用候補のフルパッケージを代表に
     - 非採用候補は別名／サブ／原文仕様マッピングとして保持（メイン仕様へ書き換えない）
     - 商品種の疑い、男女の明示対立（男性用⇔女性用）、既存重複（2件以上）は引き続き確認
-    - 「女性用」の有無だけ・一般名と具体名の言い回し差は在庫一意採用でクリア
+    - 「女性用」の有無だけ・一般名と具体名の言い回し差は在庫採用でクリア
     - 既存の通常仕入先変更は明示確認が必要（黙って変えない）
     - ユーザーの品番判断があれば自動クリアせず手動を優先
     - 括弧分類が曖昧な採用候補は自動確定しない
     """
     decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
+    stock_adopt_codes = (
+        'aux_nonzero_pair',
+        'aux_single_candidate',
+        'aux_max_positive_stock',
+    )
     for group in sku_groups:
         aux = group.get('auxPrimary') or {}
         rule_code = stock.text(
             aux.get('pairAdoptionRuleCode') or aux.get('nameAdoptionRuleCode') or ''
         )
-        if rule_code not in ('aux_nonzero_pair', 'aux_single_candidate'):
+        if rule_code not in stock_adopt_codes:
             continue
         if aux.get('pairNeedsChoice') or aux.get('officialNameNeedsChoice'):
             continue
@@ -1695,7 +1804,7 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
                 _soften_spec_only_reasons(group)
                 continue
 
-        # 「女性用」有無など対象標記の有無だけは在庫一意採用で解消（明示対立は残す）
+        # 「女性用」有無など対象標記の有無だけは在庫採用で解消（明示対立は残す）
         gender_conflict = bool(group.get('genderConflictPossible'))
         if group.get('genderDiffPossible') and not gender_conflict:
             _clear_gender_presence_absence_flags(group)
@@ -1706,7 +1815,7 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
             _attach_stock_pick_display(group, aux, package, auto_cleared=False)
             continue
 
-        # 色・加工・素材・名差・仕入先差・対象標記の有無は在庫一意採用で解消 → 自動まとめ
+        # 色・加工・素材・名差・仕入先差・対象標記の有無は在庫採用で解消 → 自動まとめ
         was_decision = bool(group.get('needsDecision'))
         group['needsDecision'] = False
         group['plannedSingleProduct'] = True
@@ -1715,7 +1824,9 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         group['auxStockPickAuto'] = True
         group['auxStockPickClearedReview'] = was_decision
         reason = stock.text(aux.get('pairAdoptionRule') or '') or (
-            '在庫が0以外の候補が1組のため、この候補をメインに採用'
+            '初期在庫が最多のため、この候補をメインに採用'
+            if rule_code == 'aux_max_positive_stock'
+            else '在庫が0以外の候補が1組のため、この候補をメインに採用'
         )
         group['auxStockPickReason'] = reason
         group['reviewTier'] = REVIEW_TIER_AUTO
@@ -1766,7 +1877,7 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
             })
         group['otherDiffs'] = []
         group['applyScope'] = (
-            f'品番「{group.get("code")}」は初期在庫CSVの在庫一意採用で'
+            f'品番「{group.get("code")}」は初期在庫CSVの在庫判定で'
             f'メイン候補のフルパッケージを自動採用します。'
             f'非採用候補の名・仕入先・色・加工・素材は原文のままマッピングに残します。'
         )
@@ -3985,11 +4096,12 @@ def build_preview(c, body):
     )
     if aux_meta:
         note += (
-            ' 初期在庫用CSVは、非ゼロ在庫がある候補が1組のとき（または候補自体が1組のとき）'
+            ' 初期在庫用CSVは、正の在庫合計が最多の候補が一意のとき'
+            '（または非ゼロが1組／候補自体が1組のとき）'
             'その候補の商品名・仕入先・色・加工・素材をセットで採用し、'
             '通常仕入先の判定補助にも使います。在庫数量は書き込みません。'
             '色・加工・素材・「女性用」等の対象標記の有無・一般名と具体名の言い回し差だけでは、'
-            '在庫一意採用なら要確認にしません。男性用と女性用の明示対立は確認のままです。'
+            '在庫採用なら要確認にしません。男性用と女性用の明示対立は確認のままです。'
         )
     return {
         'fileName': uploaded['fileName'],
