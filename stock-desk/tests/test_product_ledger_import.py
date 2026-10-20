@@ -56,7 +56,7 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('skuDecisions', js)
         self.assertIn('自動まとめ（要確認ではない）', js)
         self.assertIn('自動決定済み', js)
-        self.assertIn('プレビュー', js)
+        self.assertIn('自動決定済み（未登録）', js)
         self.assertIn('autoMergePlans', js)
         self.assertIn('中古標記まとめ', js)
         self.assertIn('auxFile', js)
@@ -952,7 +952,9 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             aux = group['auxPrimary']
             self.assertTrue(aux['applicable'])
             self.assertEqual(aux['autoPrimarySupplier'], '㈱ユニーク')
-            self.assertIn('初期在庫：', aux.get('pairAdoptionRule') or group.get('auxStockPickReason') or '')
+            rule = aux.get('pairAdoptionRule') or group.get('auxStockPickReason') or ''
+            self.assertIn('在庫が0以外の候補が1組', rule)
+            self.assertRegex(rule, r'（在庫\d+）を採用')
             by_sup = {j['supplier']: j for j in aux['supplierJudgments']}
             self.assertEqual(by_sup['㈱ユニーク']['plannedRole'], 'primary')
             self.assertEqual(by_sup['アイトス㈱']['plannedRole'], 'sub')
@@ -1890,7 +1892,7 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertEqual(g.get('plannedColor') or g.get('plannedRegisteredColor'), '緑')
             rule = aux_p.get('pairAdoptionRule') or ''
             self.assertIn('在庫が0以外の候補が1組', rule)
-            self.assertIn('初期在庫：3', rule)
+            self.assertIn('緑つなぎ（在庫3）を採用', rule)
             self.assertNotIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
             self.assertTrue(g.get('auxStockPickAuto'))
             # 比較一覧用: 候補ごとの初期在庫表示
@@ -2069,7 +2071,7 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertFalse(g.get('processingDiffPossible'))
             self.assertFalse(g.get('kindDiffPossible'))
             self.assertIn('在庫が0以外の候補が1組', g.get('auxStockPickReason') or '')
-            self.assertIn('初期在庫：4', g.get('auxStockPickReason') or '')
+            self.assertIn('パンツ（ネイビー）（在庫4）を採用', g.get('auxStockPickReason') or '')
             self.assertEqual(aux_p.get('adoptedColor'), 'ネイビー')
             self.assertEqual(aux_p.get('suggestedOfficialName'), 'パンツ')
             self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
@@ -2247,7 +2249,7 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('supplierCandidateDetails', js)
         self.assertIn('初期在庫：', js)
         self.assertIn('sku-cand-stock', js)
-        self.assertIn('自動決定済み（プレビュー）', js)
+        self.assertIn('自動決定済み（未登録）', js)
         self.assertIn('対象標記の有無', js)
 
 
@@ -2436,6 +2438,195 @@ class MaxPositiveStockPickTest(unittest.TestCase):
         self.assertNotIn('＊白衣', color_values)
         if color_values:
             self.assertIn('白衣', color_values)
+
+
+class UniqueNonzeroKindDiffStockPickTest(unittest.TestCase):
+    """非ゼロ在庫が一意なら商品種差だけでは要確認に残さない（409-60 型）。"""
+
+    def test_sku_409_60_kind_diff_cleared_by_unique_stock(self):
+        """コックシャツ0／コックコート0／ストレッチコックコート8 → 自動決定済み。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,409-60,コックシャツ,M',
+                '顧客A,仕入A,409-60,コックコート（社員）,L',
+                '顧客A,仕入A,409-60,ストレッチコックコート,LL',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'コックシャツ', '409-60', 'M', '0'),
+                opening_line('仕入A', '顧客A', 'コックコート（社員）', '409-60', 'L', '0'),
+                opening_line('仕入A', '顧客A', 'ストレッチコックコート', '409-60', 'LL', '8'),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '409-60.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(stock_snap(c), before)
+
+            g = next(x for x in preview['skuGroups'] if x['code'] == '409-60')
+            # 商品種ヒント（シャツ≠コート）は検出されるが、在庫一意でクリア
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), 'ストレッチコックコート')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertEqual(g.get('reviewTier'), 'auto')
+            self.assertFalse(g.get('kindDiffPossible'))
+            self.assertFalse(g.get('nameWordingDiff'))
+            self.assertEqual(g.get('plannedOfficialName'), 'ストレッチコックコート')
+            reason = g.get('auxStockPickReason') or aux_p.get('pairAdoptionRule') or ''
+            self.assertIn('在庫が0以外の候補が1組', reason)
+            self.assertIn('ストレッチコックコート（在庫8）を採用', reason)
+            reason_codes = {r.get('code') for r in (g.get('reviewReasons') or [])}
+            reason_labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
+            self.assertIn('aux_stock_pick', reason_codes)
+            self.assertNotIn('kind', reason_codes)
+            self.assertFalse(any('商品種' in lab for lab in reason_labels), reason_labels)
+            self.assertFalse(any('個別確認' in lab for lab in reason_labels), reason_labels)
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            # 未決定／個別確認リストに出ない
+            pending = [x for x in preview['skuGroups'] if x.get('needsDecision')]
+            self.assertFalse(any(x['code'] == '409-60' for x in pending))
+            individual = [
+                x for x in preview['skuGroups']
+                if x.get('needsDecision') and x.get('reviewTier') == 'individual'
+            ]
+            self.assertFalse(any(x['code'] == '409-60' for x in individual))
+
+            kept_names = []
+            for k in (aux_p.get('keptPackages') or []):
+                for n in k.get('ledgerNames') or ([k.get('productName')] if k.get('productName') else []):
+                    if n:
+                        kept_names.append(n)
+            self.assertTrue(
+                {'コックシャツ', 'コックコート（社員）'} & set(kept_names)
+                or any(n in ('コックシャツ', 'コックコート（社員）') for n in kept_names)
+            )
+
+            # プレビュー＝コミット同一判断。まとめ操作不要。本番在庫は不変
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '409-60.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-409-60-kind-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            prod = c.execute(
+                "SELECT id,name FROM products WHERE code='409-60' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertIsNotNone(prod)
+            self.assertEqual(prod['name'], 'ストレッチコックコート')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_kind_diff_negative_only_unique_also_clears(self):
+        """負在庫のみが一意でも商品種差だけでは要確認に残さない。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-KN,コックシャツ,M',
+                '顧客A,仕入A,SKU-KN,ストレッチコックコート,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'コックシャツ', 'SKU-KN', 'M', '0'),
+                opening_line('仕入A', '顧客A', 'ストレッチコックコート', 'SKU-KN', 'L', '-2'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'kn.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-KN')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertFalse(g.get('kindDiffPossible'))
+            self.assertEqual(g.get('plannedOfficialName'), 'ストレッチコックコート')
+            reason = g.get('auxStockPickReason') or ''
+            self.assertIn('ストレッチコックコート（在庫-2）を採用', reason)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_kind_diff_multi_positive_max_still_clears(self):
+        """正の在庫が複数でも最多が一意なら種差だけでは要確認に残さない。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-KM,コックシャツ,M',
+                '顧客A,仕入A,SKU-KM,ストレッチコックコート,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'コックシャツ', 'SKU-KM', 'M', '3'),
+                opening_line('仕入A', '顧客A', 'ストレッチコックコート', 'SKU-KM', 'L', '10'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'km.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-KM')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_max_positive_stock')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertFalse(g.get('kindDiffPossible'))
+            self.assertEqual(g.get('plannedOfficialName'), 'ストレッチコックコート')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_kind_diff_positive_tie_still_needs_review(self):
+        """正の在庫同数タイは種差の有無に関わらず要確認。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-KT,コックシャツ,M',
+                '顧客A,仕入A,SKU-KT,ストレッチコックコート,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'コックシャツ', 'SKU-KT', 'M', '5'),
+                opening_line('仕入A', '顧客A', 'ストレッチコックコート', 'SKU-KT', 'L', '5'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'kt.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-KT')
+            self.assertTrue(g['needsDecision'])
+            self.assertFalse(g.get('auxStockPickAuto'))
+            aux_p = g.get('auxPrimary') or {}
+            self.assertTrue(aux_p.get('pairNeedsChoice') or aux_p.get('officialNameNeedsChoice'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_kind_diff_without_aux_still_individual(self):
+        """補助在庫なしのとき、商品種差は従来どおり個別確認。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-KO,コックシャツ,M',
+                '顧客A,仕入A,SKU-KO,ストレッチコックコート,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'ko.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-KO')
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(g.get('kindDiffPossible'))
+            self.assertEqual(g.get('reviewTier'), 'individual')
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 class GenderPresenceAbsenceStockPickTest(unittest.TestCase):

@@ -853,6 +853,17 @@ def _stock_qty_clause(judgment):
     return f'初期在庫：{judgment["auxStockTotal"]}'
 
 
+def _unique_nonzero_adoption_rule(hit):
+    """非ゼロ在庫が一意のときの採用理由（商品名＋在庫数を明示）。"""
+    name = stock.text((hit or {}).get('productName') or '') or 'この候補'
+    if hit and hit.get('auxStockTotal') is not None:
+        return (
+            f'在庫が0以外の候補が1組のため、'
+            f'{name}（在庫{hit["auxStockTotal"]}）を採用'
+        )
+    return f'在庫が0以外の候補が1組のため、{name}を採用'
+
+
 def judge_primary_supplier_from_aux(supplier_judgments):
     """初期在庫CSVによる通常仕入先の自動判定（候補2社以上）。数量最大・CSV先頭行では選ばない。"""
     judgments = list(supplier_judgments or [])
@@ -1528,11 +1539,7 @@ def suggest_main_candidate_from_aux(group, aux_index):
                 rule_code = 'aux_max_positive_stock'
             else:
                 # 正の在庫がある候補が1組だけ（他は0／負）
-                qty_bit = _stock_qty_clause(hit)
-                qty_paren = f'（{qty_bit}）' if qty_bit else ''
-                rule = (
-                    f'在庫が0以外の候補が1組{qty_paren}のため、この候補をメインに採用'
-                )
+                rule = _unique_nonzero_adoption_rule(hit)
                 rule_code = 'aux_nonzero_pair'
             return _adopt_candidate_package(
                 hit, candidates=candidates, rule=rule,
@@ -1548,13 +1555,8 @@ def suggest_main_candidate_from_aux(group, aux_index):
 
     if len(negative_only_hits) == 1:
         hit = negative_only_hits[0]
-        qty_bit = _stock_qty_clause(hit)
-        qty_paren = f'（{qty_bit}）' if qty_bit else ''
-        rule = (
-            f'在庫が0以外の候補が1組{qty_paren}のため、この候補をメインに採用'
-        )
         return _adopt_candidate_package(
-            hit, candidates=candidates, rule=rule,
+            hit, candidates=candidates, rule=_unique_nonzero_adoption_rule(hit),
             rule_code='aux_nonzero_pair', reasons=reasons,
         )
 
@@ -1978,12 +1980,12 @@ def attach_aux_stock_visibility(sku_groups, *, aux_uploaded=False):
 
 
 def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
-    """在庫一意／正の在庫最多／候補1組でメイン採用できた品番は、色・加工・素材差だけでは要確認に残さない。
+    """在庫一意／正の在庫最多／候補1組でメイン採用できた品番は、名／種／色／加工／素材差だけでは要確認に残さない。
 
     - 採用候補のフルパッケージを代表に
     - 非採用候補は別名／サブ／原文仕様マッピングとして保持（メイン仕様へ書き換えない）
-    - 商品種の疑い、男女の明示対立（男性用⇔女性用）、既存重複（2件以上）は引き続き確認
-    - 「女性用」の有無だけ・一般名と具体名の言い回し差は在庫採用でクリア
+    - 男女の明示対立（男性用⇔女性用）、既存重複（2件以上）は引き続き確認
+    - 商品種の疑い・「女性用」の有無だけ・一般名と具体名の言い回し差は在庫採用でクリア
     - 既存の通常仕入先変更は明示確認が必要（黙って変えない）
     - ユーザーの品番判断があれば自動クリアせず手動を優先
     - 括弧分類が曖昧な採用候補は自動確定しない
@@ -2043,18 +2045,20 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
                 _soften_spec_only_reasons(group)
                 continue
 
-        # 「女性用」有無など対象標記の有無だけは在庫採用で解消（明示対立は残す）
+        # 「女性用」有無・商品種差は在庫採用で解消（男女の明示対立だけ残す）
         gender_conflict = bool(group.get('genderConflictPossible'))
         if group.get('genderDiffPossible') and not gender_conflict:
             _clear_gender_presence_absence_flags(group)
+        if group.get('kindDiffPossible'):
+            _clear_kind_diff_flags(group)
 
-        if group.get('kindDiffPossible') or gender_conflict:
-            # 商品種差／男女の明示対立 → 確認のまま（色・加工・素材・対象有無は外しうる）
+        if gender_conflict:
+            # 男女の明示対立 → 確認のまま（種・色・加工・素材・対象有無・名差は外しうる）
             _soften_spec_only_reasons(group)
             _attach_stock_pick_display(group, aux, package, auto_cleared=False)
             continue
 
-        # 色・加工・素材・名差・仕入先差・対象標記の有無は在庫採用で解消 → 自動まとめ
+        # 色・加工・素材・名差・仕入先差・対象標記の有無・商品種は在庫採用で解消 → 自動まとめ
         was_decision = bool(group.get('needsDecision'))
         group['needsDecision'] = False
         group['plannedSingleProduct'] = True
@@ -2076,6 +2080,7 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         group['colorDiffPossible'] = False
         group['processingDiffPossible'] = False
         group['fabricDiffPossible'] = False
+        group['kindDiffPossible'] = False
         group['genderDiffPossible'] = False
         group['genderConflictPossible'] = False
         # 名差・仕入先差は採用で解消済みとして表示上も落とす
@@ -2216,9 +2221,23 @@ def _clear_gender_presence_absence_flags(group):
     ]
 
 
+def _clear_kind_diff_flags(group):
+    """在庫一意／最多採用時、商品種の疑いだけでは要確認に残さない。"""
+    group['kindDiffPossible'] = False
+    group['reviewReasons'] = [
+        r for r in (group.get('reviewReasons') or [])
+        if stock.text(r.get('code') or '') != 'kind'
+    ]
+    group['otherDiffs'] = [
+        d for d in (group.get('otherDiffs') or [])
+        if stock.text(d.get('code') or '') != 'kind'
+    ]
+
+
 def _soften_spec_only_reasons(group):
-    """在庫一意採用時、色・加工・素材・対象有無の疑い理由を外し、残確認を明示（確認は継続）。"""
-    drop_codes = {'color', 'processing', 'fabric'}
+    """在庫一意採用時、色・加工・素材・種・対象有無の疑い理由を外し、残確認を明示（確認は継続）。"""
+    drop_codes = {'color', 'processing', 'fabric', 'kind'}
+    group['kindDiffPossible'] = False
     if not group.get('genderConflictPossible'):
         # 有無だけの対象差は在庫一意で解消済み扱い
         drop_codes.add('gender')
@@ -2241,8 +2260,6 @@ def _soften_spec_only_reasons(group):
             qty_bit = f'（初期在庫：{p["auxStockTotal"]}）'
             break
     remaining_bits = []
-    if group.get('kindDiffPossible'):
-        remaining_bits.append('商品種')
     if group.get('genderConflictPossible'):
         remaining_bits.append('男女・対象の明示対立')
     remain_label = '・'.join(remaining_bits) if remaining_bits else '内容'
@@ -2391,8 +2408,16 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
 
         # 自動まとめ扱い
         row['skuAutoMerged'] = True
+        # 非メイン行の括弧曖昧さは原文仕様（provenance）に残し、行の要確認は外す。
+        # 採用メイン自体の括弧曖昧は apply_aux_full_package_adoption で自動確定を止めている。
+        if row.get('parenNeedsConfirm') and not is_main:
+            row['parenNeedsConfirm'] = False
+            row['reasons'] = [
+                r for r in (row.get('reasons') or [])
+                if '括弧' not in stock.text(r)
+            ]
         if row.get('status') in (STATUS_REVIEW,) and not row.get('parenNeedsConfirm'):
-            # 色差だけで needs_review になっていた行をコミット可能へ戻す
+            # 色差・種差などで needs_review になっていた行をコミット可能へ戻す
             if prod.get('action') == 'reuse' or prod.get('id'):
                 row['status'] = STATUS_REUSE
                 row['statusLabel'] = STATUS_LABELS[STATUS_REUSE]
@@ -2402,7 +2427,12 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
             row['canCommit'] = True
             row['reasons'] = [
                 r for r in (row.get('reasons') or [])
-                if '色' not in stock.text(r) and '加工' not in stock.text(r) and '生地' not in stock.text(r)
+                if (
+                    '色' not in stock.text(r)
+                    and '加工' not in stock.text(r)
+                    and '生地' not in stock.text(r)
+                    and '括弧' not in stock.text(r)
+                )
             ]
 
 

@@ -204,7 +204,7 @@
       return `<li>${esc(bits.join(' / '))}</li>`
     }).join('')
     return `<div class="sku-stock-pick">
-      <p class="excelhint"><strong>自動決定済み（プレビュー）:</strong> ${esc(reason)}</p>
+      <p class="excelhint"><strong>自動決定済み（未登録）:</strong> ${esc(reason)}</p>
       ${nameColorSplitPreviewHtml(plan)}
       <p class="excelhint">採用メイン: ${esc(plan.productName||'—')}　仕入 ${esc(plan.supplier||'未設定')}
         ${plan.color?`　色 ${esc(plan.color)}`:''}${plan.processing?`　加工 ${esc(plan.processing)}`:''}${plan.material?`　素材 ${esc(plan.material)}`:''}</p>
@@ -233,7 +233,7 @@
     }).join('')
     return `<div class="sku-auto-panel">
       <h3>自動まとめ（要確認ではない）</h3>
-      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。初期在庫CSVで正の在庫合計が最多の候補が一意のとき（または非ゼロが1組のとき）はその候補を優先採用します。在庫で決まらないときは商品名に明示色がある候補を優先し、登録は「ベース名＋色」に振り分けます（色なし候補は色違いにしません。異なる明示色同士は要確認）。商品種の疑い・男女の明示対立は確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
+      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。初期在庫CSVで正の在庫合計が最多の候補が一意のとき（または非ゼロが1組のとき）はその候補を優先採用し、商品種・色・加工・素材・対象標記の有無だけでは要確認に残しません。在庫で決まらないときは商品名に明示色がある候補を優先し、登録は「ベース名＋色」に振り分けます（色なし候補は色違いにしません。異なる明示色同士は要確認）。男女の明示対立（男性用⇔女性用）は確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
       <p class="excelhint">自動決定済み ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行${stockPicked.length?`（うち在庫採用 ${stockPicked.length}）`:''}（下は複数サイズ・複数顧客・在庫採用の例）。※まだプレビューです。登録ボタンを押すまで台帳は変わりません。</p>
       ${cards||'<p class="sub">複数サイズの自動まとめ例はありません（単一行の品番のみ）。</p>'}
       ${more?`<p class="excelhint">他 ${more} 品番も同様に自動まとめ予定です。</p>`:''}
@@ -311,7 +311,7 @@
     }).join('')
     const splitSrc=Object.assign({},g,aux,pkg?{adoptedPackage:pkg}:{})
     const packageBlock=(pkg||aux.changeSummary||aux.plannedRegisteredColor||aux.colorDecidedNameUndecided)?`<div class="sku-stock-pick">
-      <p class="excelhint"><strong>${g.auxStockPickAuto||!g.needsDecision?'自動決定済み（プレビュー）':'提案'}:</strong> ${esc(aux.pairAdoptionRule||reason||'初期在庫が最多のため、この候補をメインに採用')}</p>
+      <p class="excelhint"><strong>${g.auxStockPickAuto||!g.needsDecision?'自動決定済み（未登録）':'提案'}:</strong> ${esc(aux.pairAdoptionRule||reason||'初期在庫が最多のため、この候補をメインに採用')}</p>
       ${(aux.pairCandidates||[]).length?`<ul class="sku-cand-list sku-pair-stock-list">${(aux.pairCandidates||[]).map(p=>{
         const bits=[p.productName||'',p.supplier?`仕入 ${p.supplier}`:''].filter(Boolean).join(' / ')
         const stockLabel=p.hasAuxMatch||p.auxStockDisplay&&p.auxStockDisplay!=='—'
@@ -587,7 +587,7 @@
 
     return `<div class="sku-groups-panel">
       <h3>品番ごとの比較一覧（通常品番）</h3>
-      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。サイズ・顧客・＊/*・空白/全角半角・明示シノニムは自動まとめ済みです。初期在庫CSVで正の在庫最多（または非ゼロ一意）の候補がある品番は自動決定済みへ回し、色・加工・素材差や対象標記の有無だけではここに出しません。一括承認候補は残りの名差・仕入先差のみ。商品種・男女の明示対立は個別確認。未解決がない品番は「未決定」「個別確認」に出さず自動決定済み（プレビュー）です。代表名未確定時は「名称未整理」ステータス（名前へは埋め込みません）。</p>
+      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。サイズ・顧客・＊/*・空白/全角半角・明示シノニムは自動まとめ済みです。初期在庫CSVで正の在庫最多（または非ゼロ一意）の候補がある品番は自動決定済み（未登録）へ回し、商品種・色・加工・素材差や対象標記の有無だけではここに出しません。一括承認候補は残りの名差・仕入先差のみ。男女の明示対立は個別確認。未解決がない品番は「未決定」「個別確認」に出さず自動決定済み（未登録）です。代表名未確定時は「名称未整理」ステータス（名前へは埋め込みません）。</p>
       <p class="excelhint">要確認 ${pending.length} 品番（一括承認候補 ${bulkCount} / 個別確認 ${indivCount}）　決定済 ${decided}　選択中 ${selected.length} 品番</p>
       <div class="bar sku-list-toolbar">
         <input type="search" id="plSkuQ" placeholder="品番・商品名・仕入先・理由で検索" value="${esc(st.skuQ||'')}" ${st.busy?'disabled':''}>
