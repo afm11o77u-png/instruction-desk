@@ -49,14 +49,13 @@
   function applyAuxDefaultsForMerge(st,code,group){
     const d=skuDecision(st,code)
     const aux=group&&group.auxPrimary
-    if(!aux||!aux.applicable)return
+    if(!aux)return
     const patch={}
+    // 候補1社の自動設定・補助CSV自動判定のどちらも適用（手動選択は上書きしない）
     if(!d.primarySupplierManual){
-      if(aux.autoPrimarySupplier){
-        if(d.primarySupplier&&d.primarySupplier!==aux.autoPrimarySupplier&&!d.primarySupplierManual){
-          // 再照合で自動結果が変わった場合: 手動でなければ自動へ寄せる
-        }
-        patch.primarySupplier=aux.autoPrimarySupplier
+      const auto=aux.autoPrimarySupplier||group.plannedPrimarySupplier||''
+      if(auto){
+        patch.primarySupplier=auto
         patch.primarySupplierManual=false
       }
     }else if(aux.autoPrimarySupplier&&d.primarySupplier&&d.primarySupplier!==aux.autoPrimarySupplier){
@@ -296,6 +295,26 @@
     return g.plannedPrimarySupplier||(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier)||''
   }
 
+  function plannedSupplierReasonForGroup(st,g){
+    const d=skuDecision(st,g.code)
+    if(d.primarySupplierManual&&d.primarySupplier)return '手動選択'
+    if(d.primarySupplier&&!(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier&&d.primarySupplier===g.auxPrimary.autoPrimarySupplier)){
+      // 明示選択だが manual フラグなし（旧UI互換）→理由なし
+      if(!g.plannedPrimarySupplierReason)return ''
+    }
+    return g.plannedPrimarySupplierReason
+      ||(g.primarySupplierResolved&&g.primarySupplierResolved.autoReason)
+      ||(g.auxPrimary&&g.auxPrimary.autoReason)
+      ||''
+  }
+
+  function plannedSupplierDisplay(st,g){
+    const sup=plannedSupplierForGroup(st,g)
+    if(!sup)return '未設定'
+    const reason=plannedSupplierReasonForGroup(st,g)
+    return reason?`${sup}（${reason}）`:sup
+  }
+
   function candidatesCell(values){
     const list=(values||[]).filter(Boolean)
     if(!list.length)return '<span class="sub">—</span>'
@@ -383,8 +402,8 @@
           <label>公式名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" placeholder="空なら仮代表名（名称未整理）" ${st.busy?'disabled':''}></label>
           <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||'')}" ${st.busy?'disabled':''}></label>
           <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
-          ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は初期在庫CSVから自動提案: ${esc(g.auxPrimary.autoPrimarySupplier)}</p>`:'')}
-          <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定通常仕入先: ${esc(plannedSupplierForGroup(st,g)||'未設定')}</p>
+          ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は自動設定: ${esc(plannedSupplierDisplay(st,g))}</p>`:'')}
+          <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</p>
           <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
           ${g.existingCount>1?`<fieldset><legend>統合する商品（残す以外）</legend>${mergeSources||'<span class="sub">残す商品を先に選んでください</span>'}</fieldset>`:''}
           <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。既存の公式名は仮名では上書きしません。サイズの LL≡2L 同一化はしません。</p>
@@ -433,7 +452,6 @@
       const expanded=!!st.expandedCodes[g.code]
       const tier=g.reviewTier||'individual'
       const plannedName=plannedNameForGroup(st,g)
-      const plannedSup=plannedSupplierForGroup(st,g)
       const provisional=!(d.officialName)&&(g.namePlan&&g.namePlan.provisional||g.provisionalName)
       return `<tr class="sku-list-row sku-tier-${esc(tier)} ${decision?`sku-dec-${esc(decision)}`:''}" data-sku-code="${esc(g.code)}">
         <td class="sku-check"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
@@ -445,7 +463,7 @@
         <td class="sku-why">${reasonCell(g)}</td>
         <td class="sku-plan">
           <div><strong>${esc(plannedName||'—')}</strong>${provisional?' <span class="badge">名称未整理</span>':''}</div>
-          <div class="sub">通常仕入先: ${esc(plannedSup||'未設定')}</div>
+          <div class="sub">通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</div>
           ${(g.nameAdoptionRule||(g.namePlan&&g.namePlan.adoptionRule))?`<div class="sub">${esc(g.nameAdoptionRule||g.namePlan.adoptionRule)}</div>`:''}
         </td>
         <td class="sku-action">
@@ -909,7 +927,7 @@
       }
       const lines=bulk.slice(0,15).map(g=>{
         const name=plannedNameForGroup(st,g)||'（仮代表名）'
-        const sup=plannedSupplierForGroup(st,g)||'未設定'
+        const sup=plannedSupplierDisplay(st,g)
         return `・${g.code}: ${name} / 通常仕入先 ${sup}`
       })
       const more=bulk.length>15?`\n…他 ${bulk.length-15} 品番`:''
