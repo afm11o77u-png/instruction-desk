@@ -1001,14 +1001,25 @@ def save_product(c, body):
     links = _links(c, body)
     t = stamp()
     pid = body.get('id')
+    import stock_product_merge
+    stock_product_merge.migrate_product_merge(c)
     if pid:
-        existing_prod = c.execute('SELECT id, merged_into_id FROM products WHERE id=?', (pid,)).fetchone()
+        existing_prod = c.execute(
+            'SELECT id, code, name, merged_into_id FROM products WHERE id=?', (pid,)
+        ).fetchone()
         if not existing_prod:
             raise ValueError('商品が見つかりません。')
         if existing_prod['merged_into_id'] not in (None, ''):
             raise ValueError(
                 f'この商品は商品ID {existing_prod["merged_into_id"]} へ統合済みのため編集できません。'
             )
+        stock_product_merge.assert_normal_code_available(
+            c, code, product_id=pid,
+            allow_historical_duplicate=bool(body.get('_allowHistoricalDuplicateCode')),
+        )
+        # 公式名を変えるとき、旧名を照合別名として残す（再取込で重複新規を防ぐ）
+        if text(existing_prod['name']) != name:
+            stock_product_merge.ensure_name_alias(c, pid, existing_prod['name'])
         c.execute(
             'UPDATE products SET code=?,name=?,color=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
             (code, name, color, category, supplier_id, active, t, pid),
@@ -1049,6 +1060,10 @@ def save_product(c, body):
         if sub_ids is not None:
             _replace_sub_suppliers(c, pid, sub_ids, t)
     else:
+        stock_product_merge.assert_normal_code_available(
+            c, code, product_id=None,
+            allow_historical_duplicate=bool(body.get('_allowHistoricalDuplicateCode')),
+        )
         c.execute(
             'INSERT INTO products(code,name,color,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
             (code, name, color, category, supplier_id, active, t, t),
