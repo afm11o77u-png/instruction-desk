@@ -176,6 +176,26 @@
     </div>`
   }
 
+  function nameColorSplitPreviewHtml(src){
+    if(!src)return ''
+    const sourceName=src.sourceAdoptedName||(src.adoptedPackage&&src.adoptedPackage.sourceName)||(src.adoptedPackage&&src.adoptedPackage.productName)||''
+    const plannedName=src.plannedRegisteredName||src.plannedOfficialName||src.productName||(src.adoptedPackage&&src.adoptedPackage.plannedName)||''
+    const plannedColor=src.plannedRegisteredColor||src.plannedColor||src.color||(src.adoptedPackage&&src.adoptedPackage.color)||''
+    const reason=src.auxStockPickReason||src.nameAdoptionRule||(src.auxPrimary&&(src.auxPrimary.pairAdoptionRule||src.auxPrimary.nameAdoptionRule))||''
+    const summary=src.changeSummary||(src.auxPrimary&&src.auxPrimary.changeSummary)||''
+    if(!sourceName&&!plannedColor&&!summary)return ''
+    return `<div class="sku-color-split-preview">
+      <p class="excelhint"><strong>登録プレビュー（商品名／色）</strong></p>
+      <ul class="sku-color-split-list">
+        <li>採用ソース商品名: <strong>${esc(sourceName||'—')}</strong></li>
+        <li>登録予定の商品名: <strong>${esc(plannedName||'—')}</strong></li>
+        <li>登録予定の色: <strong>${esc(plannedColor||'（空）')}</strong></li>
+        ${reason?`<li>採用理由: ${esc(reason)}</li>`:''}
+        ${summary?`<li class="sku-color-change">${esc(summary)}</li>`:''}
+      </ul>
+    </div>`
+  }
+
   function stockPickPackageHtml(plan){
     if(!plan||!plan.auxStockPickAuto)return ''
     const reason=plan.auxStockPickReason||'初期在庫が最多のため、この候補をメインに採用'
@@ -185,6 +205,7 @@
     }).join('')
     return `<div class="sku-stock-pick">
       <p class="excelhint"><strong>自動決定済み（プレビュー）:</strong> ${esc(reason)}</p>
+      ${nameColorSplitPreviewHtml(plan)}
       <p class="excelhint">採用メイン: ${esc(plan.productName||'—')}　仕入 ${esc(plan.supplier||'未設定')}
         ${plan.color?`　色 ${esc(plan.color)}`:''}${plan.processing?`　加工 ${esc(plan.processing)}`:''}${plan.material?`　素材 ${esc(plan.material)}`:''}</p>
       ${kept?`<p class="excelhint">非採用（別名・サブ・原文仕様として保持）:</p><ul class="sku-kept-list">${kept}</ul>`:''}
@@ -212,7 +233,7 @@
     }).join('')
     return `<div class="sku-auto-panel">
       <h3>自動まとめ（要確認ではない）</h3>
-      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。初期在庫CSVで正の在庫合計が最多の候補が一意のとき（または非ゼロが1組のとき）は、その候補の名・仕入先・色・加工・素材をセットで採用し、色・加工・素材差や「女性用」等の対象標記の有無だけでは要確認にしません。商品種の疑い・男女の明示対立（男性用⇔女性用）は確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
+      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。初期在庫CSVで正の在庫合計が最多の候補が一意のとき（または非ゼロが1組のとき）はその候補を優先採用します。在庫で決まらないときは商品名に明示色がある候補を優先し、登録は「ベース名＋色」に振り分けます（色なし候補は色違いにしません。異なる明示色同士は要確認）。商品種の疑い・男女の明示対立は確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
       <p class="excelhint">自動決定済み ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行${stockPicked.length?`（うち在庫採用 ${stockPicked.length}）`:''}（下は複数サイズ・複数顧客・在庫採用の例）。※まだプレビューです。登録ボタンを押すまで台帳は変わりません。</p>
       ${cards||'<p class="sub">複数サイズの自動まとめ例はありません（単一行の品番のみ）。</p>'}
       ${more?`<p class="excelhint">他 ${more} 品番も同様に自動まとめ予定です。</p>`:''}
@@ -288,7 +309,8 @@
       const bits=[k.productName||'',k.supplier?`仕入 ${k.supplier}`:'',k.color?`色 ${k.color}`:'',k.processing?`加工 ${k.processing}`:'',k.material?`素材 ${k.material}`:''].filter(Boolean)
       return `<li>${esc(bits.join(' / '))}</li>`
     }).join('')
-    const packageBlock=pkg?`<div class="sku-stock-pick">
+    const splitSrc=Object.assign({},g,aux,pkg?{adoptedPackage:pkg}:{})
+    const packageBlock=(pkg||aux.changeSummary||aux.plannedRegisteredColor||aux.colorDecidedNameUndecided)?`<div class="sku-stock-pick">
       <p class="excelhint"><strong>${g.auxStockPickAuto||!g.needsDecision?'自動決定済み（プレビュー）':'提案'}:</strong> ${esc(aux.pairAdoptionRule||reason||'初期在庫が最多のため、この候補をメインに採用')}</p>
       ${(aux.pairCandidates||[]).length?`<ul class="sku-cand-list sku-pair-stock-list">${(aux.pairCandidates||[]).map(p=>{
         const bits=[p.productName||'',p.supplier?`仕入 ${p.supplier}`:''].filter(Boolean).join(' / ')
@@ -297,15 +319,16 @@
           :'初期在庫：—'
         return `<li><span class="sku-cand-name">${esc(bits)}</span> <span class="sku-cand-stock">${esc(stockLabel)}</span></li>`
       }).join('')}</ul>`:''}
-      <p class="excelhint">採用メイン: ${esc(pkg.productName||aux.suggestedOfficialName||'—')}　仕入 ${esc(pkg.supplier||aux.suggestedPrimarySupplier||'—')}
-        ${pkg.color||aux.adoptedColor?`　色 ${esc(pkg.color||aux.adoptedColor)}`:''}
+      ${nameColorSplitPreviewHtml(splitSrc)}
+      ${pkg?`<p class="excelhint">採用ソース名: ${esc(pkg.productName||aux.sourceAdoptedName||'—')}　登録予定名: ${esc(aux.plannedRegisteredName||aux.suggestedOfficialName||pkg.plannedName||'—')}　仕入 ${esc(pkg.supplier||aux.suggestedPrimarySupplier||'—')}
+        ${pkg.color||aux.adoptedColor||aux.plannedRegisteredColor?`　色 ${esc(pkg.color||aux.adoptedColor||aux.plannedRegisteredColor)}`:''}
         ${pkg.processing||aux.adoptedProcessing?`　加工 ${esc(pkg.processing||aux.adoptedProcessing)}`:''}
-        ${pkg.material||aux.adoptedMaterial?`　素材 ${esc(pkg.material||aux.adoptedMaterial)}`:''}</p>
+        ${pkg.material||aux.adoptedMaterial?`　素材 ${esc(pkg.material||aux.adoptedMaterial)}`:''}</p>`:''}
       ${kept?`<p class="excelhint">非採用（別名・サブ・原文仕様として保持）:</p><ul class="sku-kept-list">${kept}</ul>`:''}
     </div>`:''
     return `<div class="sku-aux-panel">
       <h4>初期在庫CSVによる通常仕入先・メイン候補判定</h4>
-      <p class="excelhint">CSV先頭行では選びません。正の初期在庫合計が最多の候補が一意→そのフルパッケージをメイン採用（同数・全ゼロ・負が複数は要確認）。正の在庫が1社だけ→通常仕入先。手動選択は上書きしません。</p>
+      <p class="excelhint">CSV先頭行では選びません。正の初期在庫合計が最多の候補が一意→そのフルパッケージをメイン採用。在庫で決まらない（同数・全ゼロ・負が複数）ときは明示色のある商品名を優先（異なる明示色同士は要確認）。正の在庫が1社だけ→通常仕入先。手動選択は上書きしません。</p>
       ${packageBlock}
       ${reason&&!packageBlock?`<p class="excelhint">${esc(reason)}</p>`:''}
       ${conflict?`<p class="notice">自動判定「${esc(aux.autoPrimarySupplier)}」と手動選択「${esc(d.primarySupplier)}」が異なります。手動を優先します（上書きしません）。</p>`:''}
@@ -479,12 +502,13 @@
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>今回は保留する</button>
         </div>
         ${decision==='merge'?`<div class="sku-merge-form">
+          ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
           <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
-          <label>代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
-          <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||'')}" ${st.busy?'disabled':''}></label>
+          <label>代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
+          <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}" ${st.busy?'disabled':''}></label>
           <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
           ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は自動設定: ${esc(plannedSupplierDisplay(st,g))}</p>`:'')}
-          <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</p>
+          <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定色: ${esc(d.color||g.plannedRegisteredColor||g.plannedColor||'（空）')}　予定通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</p>
           <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
           ${g.existingCount>1?`<fieldset><legend>統合する商品（残す以外）</legend>${mergeSources||'<span class="sub">残す商品を先に選んでください</span>'}</fieldset>`:''}
           <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。既存の公式名は仮名では上書きしません。サイズの LL≡2L 同一化はしません。</p>
@@ -544,6 +568,9 @@
         <td class="sku-why">${reasonCell(g)}</td>
         <td class="sku-plan">
           <div><strong>${esc(plannedName||'—')}</strong>${provisional?' <span class="badge">名称未整理</span>':''}</div>
+          ${(g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||(d.color))?`<div class="sub">登録予定色: ${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}</div>`:''}
+          ${(g.sourceAdoptedName||(g.auxPrimary&&g.auxPrimary.sourceAdoptedName))?`<div class="sub">ソース名: ${esc(g.sourceAdoptedName||g.auxPrimary.sourceAdoptedName)}</div>`:''}
+          ${(g.changeSummary||(g.auxPrimary&&g.auxPrimary.changeSummary))?`<div class="sub sku-color-change">${esc(g.changeSummary||g.auxPrimary.changeSummary)}</div>`:''}
           <div class="sub">通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</div>
           ${(g.nameAdoptionRule||(g.namePlan&&g.namePlan.adoptionRule))?`<div class="sub">${esc(g.nameAdoptionRule||g.namePlan.adoptionRule)}</div>`:''}
         </td>

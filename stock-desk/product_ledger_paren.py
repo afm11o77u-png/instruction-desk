@@ -1,8 +1,11 @@
 """旧商品台帳CSVの商品名括弧分類（色・加工・生地／素材）。
 
 AI・外部サービスは使わない。明示辞書＋規則のみ。
-括弧外の色・加工らしき文言は移動・削除しない（本機能の対象外）。
+括弧内の分類に加え、候補選定・登録時は括弧外の明示色も辞書＋境界規則で抽出する。
+色に見えるが商品種の一部である語（例: 白衣の「白」）は色として切り出さない。
+緑 と 蛍光グリーンは別色（同一視しない）。
 行ごとの手編集をグローバル規則へ自動昇格しない。
+数値だけの「色コード」は根拠なく色と断定・削除しない。
 """
 from __future__ import annotations
 
@@ -19,6 +22,11 @@ COLOR_TERMS = (
     'カーキ', 'キャメル', 'ワイン', 'エンジ', 'アイボリー', 'ターコイズ',
     '水色', '紺', '白', '黒', '赤', '青', '緑', '黄', '茶', '灰',
     '銀', '金', '紫', '橙', '桃',
+)
+
+# 色文字を含むが色ではない複合語（切り出し禁止）。長い語を先に見る。
+_COLOR_COMPOUND_BLOCKLIST = (
+    '白衣',
 )
 
 PROCESSING_TERMS = (
@@ -304,6 +312,388 @@ def classify_product_name(product_name: str):
         'colorCandidates': list(colors),
         'processingCandidates': list(processings),
         'materialCandidates': list(materials),
+    }
+
+
+def color_match_key(value: str) -> str:
+    """色の同一判定用キー。緑 と 蛍光グリーンは別キー。"""
+    return _norm_token(value)
+
+
+def colors_equivalent(a: str, b: str) -> bool:
+    ka, kb = color_match_key(a), color_match_key(b)
+    if not ka or not kb:
+        return False
+    return ka == kb
+
+
+def _blocked_spans(text: str):
+    """色切り出し禁止区間（白衣 など）。"""
+    spans = []
+    raw = text or ''
+    norm = _norm_token(raw)
+    if not norm:
+        return spans
+    # 正規化後テキスト上で禁止語を探し、原文インデックスへは近似対応
+    # （空白除去正規化のため、原文走査でも同じ禁止語を探す）
+    for compound in sorted(_COLOR_COMPOUND_BLOCKLIST, key=len, reverse=True):
+        ckey = _norm_token(compound)
+        if not ckey:
+            continue
+        start = 0
+        while True:
+            idx = raw.find(compound, start)
+            if idx < 0:
+                # NFKC 差（半角など）向けに正規化照合
+                break
+            spans.append((idx, idx + len(compound)))
+            start = idx + 1
+        # 正規化キーでも原文を走査（複合が原文にそのままある場合は上で拾える）
+        if ckey != compound:
+            # 例: 全半角差。簡易に raw を NFKC して位置を探す
+            nfkc_raw = _nfkc(raw)
+            start = 0
+            while True:
+                idx = nfkc_raw.find(ckey, start)
+                if idx < 0:
+                    break
+                spans.append((idx, idx + len(ckey)))
+                start = idx + 1
+    return spans
+
+
+def _span_overlaps_blocked(start: int, end: int, blocked) -> bool:
+    for b0, b1 in blocked:
+        if start < b1 and end > b0:
+            return True
+    return False
+
+
+def find_explicit_colors_in_text(text: str):
+    """辞書色を境界付きで列挙（長い語優先・重複区間は短い方を捨てる）。
+
+    部分文字列だけで短い色を取らない（蛍光グリーン中の緑は採用しない）。
+    白衣 など禁止複合に重なる「白」は採用しない。
+    """
+    raw = text or ''
+    if not raw.strip():
+        return []
+    blocked = _blocked_spans(raw)
+    # 走査は空白除去前の原文。照合は NFKC＋空白除去キーだが、
+    # 位置は原文上で最長一致を探す。
+    hits = []
+    occupied = []
+    nfkc_raw = _nfkc(raw)
+
+    def _occupy(start, end):
+        occupied.append((start, end))
+
+    def _is_free(start, end):
+        for a, b in occupied:
+            if start < b and end > a:
+                return False
+        return True
+
+    # nfkc_raw 上で探して raw と長さが同じ前提（空白除去はしない位置ベース）
+    # 空白をまたぐ色語は辞書に無いので、NFKCのみで十分。
+    search = nfkc_raw
+    for term in _COLORS:
+        if not term:
+            continue
+        start = 0
+        while True:
+            idx = search.find(term, start)
+            if idx < 0:
+                break
+            end = idx + len(term)
+            start = idx + 1
+            if _span_overlaps_blocked(idx, end, blocked):
+                continue
+            if not _is_free(idx, end):
+                continue
+            # 語境界風: 直前直後が同じ色語の続き（より長い色の一部）になっていないか
+            # 長い語を先に処理しているので、既占有で短い方は弾かれる。
+            display = _COLOR_DISPLAY.get(term) or term
+            # 原文スライス（NFKC前後で長さが変わらない範囲を想定）
+            orig_slice = raw[idx:end] if len(raw) == len(search) else display
+            hits.append({
+                'value': orig_slice if orig_slice else display,
+                'matched': term,
+                'display': display,
+                'start': idx,
+                'end': end,
+                'key': term,
+            })
+            _occupy(idx, end)
+    hits.sort(key=lambda h: h['start'])
+    return hits
+
+
+def _outside_paren_text_spans(name: str):
+    """括弧外の原文区間リスト (start, end, text)。壊れた括弧は全体を外側扱い。"""
+    text = name or ''
+    if not paren_balance_ok(text):
+        return [(0, len(text), text)]
+    spans = []
+    last = 0
+    for m in _PAREN_PAIR_RE.finditer(text):
+        if m.start() > last:
+            spans.append((last, m.start(), text[last:m.start()]))
+        last = m.end()
+    if last < len(text):
+        spans.append((last, len(text), text[last:]))
+    return spans
+
+
+def extract_explicit_color_from_name(product_name: str):
+    """商品名から明示色を1つ（または複数候補）取り出す。
+
+    括弧内の色分類と、括弧外の辞書色の両方を見る。
+    Returns dict: color, colorKey, colorCandidates, colorSource,
+      outsideHits, parenColor, needsConfirm, confirmReasons
+    """
+    original = (product_name or '').strip()
+    empty = {
+        'color': '',
+        'colorKey': '',
+        'colorCandidates': [],
+        'colorSource': '',
+        'outsideHits': [],
+        'parenColor': '',
+        'needsConfirm': False,
+        'confirmReasons': [],
+        'hasExplicitColor': False,
+    }
+    if not original:
+        return empty
+
+    paren = classify_product_name(original)
+    paren_colors = list(paren.get('colorCandidates') or [])
+    paren_color = (paren.get('color') or '').strip()
+    # classify が複数色で color='' のとき candidates に残る
+    if not paren_color and len(paren_colors) == 1:
+        paren_color = paren_colors[0]
+
+    outside_hits = []
+    for _a, _b, seg in _outside_paren_text_spans(original):
+        for hit in find_explicit_colors_in_text(seg):
+            outside_hits.append(hit)
+
+    # 重複キー除去（出現順）
+    outside_unique = []
+    seen_out = set()
+    for h in outside_hits:
+        if h['key'] in seen_out:
+            continue
+        seen_out.add(h['key'])
+        outside_unique.append(h)
+
+    reasons = []
+    needs = False
+    color = ''
+    source = ''
+    candidates = []
+
+    if len(paren_colors) > 1:
+        needs = True
+        reasons.append('括弧内の色が複数あるため要確認: ' + '、'.join(paren_colors))
+        candidates.extend(paren_colors)
+    elif paren_color:
+        color = paren_color
+        source = 'paren'
+        candidates.append(paren_color)
+
+    if len(outside_unique) > 1:
+        needs = True
+        vals = [h['display'] for h in outside_unique]
+        reasons.append('括弧外の色が複数あるため要確認: ' + '、'.join(vals))
+        for v in vals:
+            if v not in candidates:
+                candidates.append(v)
+    elif len(outside_unique) == 1:
+        out_val = outside_unique[0]['value'] or outside_unique[0]['display']
+        out_key = outside_unique[0]['key']
+        if color:
+            if color_match_key(color) != out_key:
+                needs = True
+                reasons.append(
+                    f'括弧内の色「{color}」と括弧外の色「{out_val}」が異なるため要確認'
+                )
+                if out_val not in candidates:
+                    candidates.append(out_val)
+                color = ''
+                source = ''
+            # 同じ色なら paren を優先
+        else:
+            color = out_val
+            source = 'outside'
+            if out_val not in candidates:
+                candidates.append(out_val)
+
+    if needs:
+        color = '' if len({color_match_key(c) for c in candidates if color_match_key(c)}) != 1 else color
+        # 要確認時は単一に決めない
+        if len({color_match_key(c) for c in candidates if c}) > 1:
+            color = ''
+            source = ''
+
+    return {
+        'color': color,
+        'colorKey': color_match_key(color) if color else '',
+        'colorCandidates': list(candidates),
+        'colorSource': source,
+        'outsideHits': outside_unique,
+        'parenColor': paren_color,
+        'needsConfirm': needs,
+        'confirmReasons': reasons,
+        'hasExplicitColor': bool(color) or (len(candidates) == 1 and not needs),
+        'parenResult': paren,
+    }
+
+
+# classify 内で stock を import しないよう、色表示の正規化は自前
+_COLOR_CODE_PREFIX_RE = re.compile(r'(\d{2,3})\.\s*$')
+
+
+def _strip_outside_color_once(name: str, hit) -> str:
+    """括弧外の色ヒット1件を商品名から除く（禁止複合・括弧内は触らない）。
+
+    直前の「046.」形式は色コード接頭として色と一緒に除く（数字だけを色とは断定しない）。
+    """
+    text = name or ''
+    if not hit:
+        return text
+    # 括弧外スパン内でのみ置換
+    pieces = []
+    last = 0
+    removed = False
+    for a, b, seg in _outside_paren_text_spans(text):
+        pieces.append(text[last:a])
+        if removed:
+            pieces.append(seg)
+        else:
+            # seg 内で同じ matched を最長一致で1回だけ除去
+            local_hits = find_explicit_colors_in_text(seg)
+            target_key = hit.get('key') or ''
+            out_seg = seg
+            for lh in local_hits:
+                if lh['key'] == target_key:
+                    start = lh['start']
+                    end = lh['end']
+                    # 色の直前にある NN. / NNN. を色コード接頭として一緒に除去
+                    prefix = seg[:start]
+                    m = _COLOR_CODE_PREFIX_RE.search(prefix)
+                    if m:
+                        start = m.start()
+                    out_seg = seg[:start] + seg[end:]
+                    removed = True
+                    break
+            pieces.append(out_seg)
+        last = b
+    pieces.append(text[last:])
+    merged = ''.join(pieces)
+    merged = re.sub(r'[\s\u3000]{2,}', ' ', merged).strip()
+    # 括弧直前の余分な空白・末尾の区切り
+    merged = re.sub(r'[\s\u3000]+([（(])', r'\1', merged)
+    merged = re.sub(r'[\s\u3000・･/／]+$', '', merged)
+    return merged.strip()
+
+
+def split_name_and_color(product_name: str):
+    """登録用に商品名と色を振り分ける。
+
+    - 括弧内色: 既存 classify の plannedName / color を基本に使う
+    - 括弧外の明示色: 辞書＋境界で取り、商品名から除去（白衣の白は除去しない）
+    - 加工・素材・未分類は classify 結果を維持（消さない）
+    - 数値色コードは辞書に無い限り触らない
+    """
+    original = (product_name or '').strip()
+    paren = classify_product_name(original)
+    extracted = extract_explicit_color_from_name(original)
+    color = extracted.get('color') or ''
+    reasons = list(paren.get('confirmReasons') or [])
+    for r in extracted.get('confirmReasons') or []:
+        if r not in reasons:
+            reasons.append(r)
+    needs = bool(paren.get('needsConfirm') or extracted.get('needsConfirm'))
+
+    planned = paren.get('plannedName') or original
+    source = extracted.get('colorSource') or ''
+
+    if extracted.get('colorSource') == 'outside' and color and not extracted.get('needsConfirm'):
+        # 括弧分類が自動で planned を作れている場合は、その planned から外側色を除く
+        base_for_strip = planned if (
+            paren.get('autoClassified') or (paren.get('color') or paren.get('processing') or paren.get('material'))
+        ) and not paren.get('needsConfirm') else original
+        # 未分類などで原文維持のときは、外側色だけ除いた名を予定名にする
+        if paren.get('needsConfirm') and paren.get('keptOriginal'):
+            base_for_strip = original
+        hits = extracted.get('outsideHits') or []
+        hit = next((h for h in hits if h.get('key') == extracted.get('colorKey')), None)
+        if hit:
+            stripped = _strip_outside_color_once(base_for_strip, hit)
+            # 括弧分類で加工等を抜いた planned を使うときは、外側色除去後に再 classify しない
+            if stripped:
+                planned = stripped
+            if not planned:
+                planned = original
+                needs = True
+                reasons.append('色除去後の商品名が空になるため原文のまま要確認')
+                color = ''
+                source = ''
+
+    # 括弧内色のみで auto のときは planned は classify 済み
+    if extracted.get('colorSource') == 'paren' and color and not paren.get('needsConfirm'):
+        planned = paren.get('plannedName') or planned
+
+    # 自動確定: 括弧分類が自動、または括弧外の明示色を一意に振り分けられたとき
+    final_planned = planned or original
+    if not final_planned:
+        needs = True
+        reasons.append('色除去後の商品名が空になるため原文のまま要確認')
+        final_planned = original
+        color = ''
+        source = ''
+    auto = (not needs) and bool(
+        paren.get('autoClassified')
+        or (
+            color
+            and source == 'outside'
+            and final_planned
+            and final_planned != original
+        )
+        or (
+            color
+            and source == 'paren'
+            and final_planned
+            and not paren.get('needsConfirm')
+        )
+    )
+    change_summary = f"商品名から色『{color}』を設定します" if color else ''
+
+    return {
+        'originalName': original,
+        'sourceName': original,
+        'plannedName': final_planned,
+        'baseName': paren.get('baseName') or final_planned,
+        'color': color,
+        'colorKey': color_match_key(color) if color else '',
+        'colorSource': source,
+        'processing': paren.get('processing') or '',
+        'material': paren.get('material') or '',
+        'unclassified': list(paren.get('unclassified') or []),
+        'needsConfirm': needs,
+        'confirmReasons': reasons,
+        'autoClassified': bool(auto and not needs),
+        'parenContents': list(paren.get('parenContents') or []),
+        'segments': list(paren.get('segments') or []),
+        'keptOriginal': final_planned == original,
+        'colorCandidates': list(extracted.get('colorCandidates') or paren.get('colorCandidates') or []),
+        'processingCandidates': list(paren.get('processingCandidates') or []),
+        'materialCandidates': list(paren.get('materialCandidates') or []),
+        'hasExplicitColor': bool(color),
+        'changeSummary': change_summary,
+        'outsideHits': list(extracted.get('outsideHits') or []),
     }
 
 

@@ -172,7 +172,24 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         unmarked, _ = legacy.strip_used_marker(n)
         hint_names.append(stock.text(unmarked) or n)
 
-    color_sets = [_hint_tokens(n, _COLOR_HINT_RE) for n in hint_names]
+    # 色は明示抽出（括弧＋括弧外辞書）。白衣の「白」などは色にしない。
+    # 色なし候補と色あり候補の共存は「色の違い」にしない（異なる明示色同士だけ）。
+    color_keys = []
+    color_label_names = []
+    for n in hint_names:
+        info = paren_classify.extract_explicit_color_from_name(n)
+        key = stock.text(info.get('colorKey') or '')
+        if not key and info.get('colorCandidates'):
+            # 複数色で未確定のときも差検出用に候補キーを残す
+            cands = [
+                paren_classify.color_match_key(c)
+                for c in (info.get('colorCandidates') or [])
+                if paren_classify.color_match_key(c)
+            ]
+            key = '|'.join(sorted(set(cands))) if cands else ''
+        color_keys.append(key)
+        if key:
+            color_label_names.append(n)
     proc_sets = [_hint_tokens(n, _PROCESSING_HINT_RE) for n in hint_names]
     kind_sets = [_kind_tokens(n) for n in hint_names]
     gender_sets = [_hint_tokens(n, _GENDER_HINT_RE) for n in hint_names]
@@ -188,7 +205,16 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
             return True
         return False
 
-    color_diff = _set_diff(color_sets)
+    def _explicit_color_diff(keys):
+        """明示色キーの差。空（色なし）は衝突に数えない。緑≠蛍光グリーン。"""
+        if len(hint_names) < 2:
+            return False
+        nonempty = [k for k in keys if k]
+        if len(nonempty) < 2:
+            return False
+        return any(k != nonempty[0] for k in nonempty[1:])
+
+    color_diff = _explicit_color_diff(color_keys)
     processing_diff = _set_diff(proc_sets)
     # 商品種はシノニム正規化済み。差があれば個別確認。
     kind_diff = False
@@ -219,12 +245,12 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         other_diffs.append({
             'code': 'color',
             'label': '色の違いの可能性',
-            'values': [n for n, s in zip(hint_names, color_sets) if s],
+            'values': list(color_label_names),
         })
         reasons.append({
             'code': 'color',
             'label': '色の違いの可能性（個別確認）',
-            'values': [n for n, s in zip(hint_names, color_sets) if s],
+            'values': list(color_label_names),
         })
     if processing_diff:
         other_diffs.append({
@@ -993,22 +1019,34 @@ def _collect_name_supplier_candidates(group):
 
 
 def _full_package_for_candidate(cand):
-    """候補1組のフルパッケージ（名・仕入先・色・加工・素材）。別候補と混ぜない。"""
+    """候補1組のフルパッケージ（名・仕入先・色・加工・素材）。別候補と混ぜない。
+
+    商品名は原文（採用ソース）と、色を振り分けた登録予定名を分けて持つ。
+    """
     names = list(cand.get('ledgerNames') or [])
     display = prefer_unmarked_product_name(names) or stock.text(cand.get('productName') or '')
-    pc = paren_classify.classify_product_name(display)
+    pc = paren_classify.split_name_and_color(display)
     planned = stock.text(pc.get('plannedName') or '') or display
+    color = stock.text(pc.get('color') or '')
+    change_summary = stock.text(pc.get('changeSummary') or '')
+    if not change_summary and color:
+        change_summary = f"商品名から色『{color}』を設定します"
     return {
         'productName': display,
+        'sourceName': display,
         'plannedName': planned,
         'supplier': stock.text(cand.get('supplier') or ''),
         'ledgerNames': names,
-        'color': stock.text(pc.get('color') or ''),
+        'color': color,
+        'colorKey': stock.text(pc.get('colorKey') or '') or paren_classify.color_match_key(color),
+        'colorSource': stock.text(pc.get('colorSource') or ''),
         'processing': stock.text(pc.get('processing') or ''),
         'material': stock.text(pc.get('material') or ''),
         'parenNeedsConfirm': bool(pc.get('needsConfirm')),
         'parenConfirmReasons': list(pc.get('confirmReasons') or []),
         'autoClassified': bool(pc.get('autoClassified')),
+        'hasExplicitColor': bool(pc.get('hasExplicitColor') or color),
+        'changeSummary': change_summary,
         'sizes': list(cand.get('sizes') or []),
         'customers': list(cand.get('customers') or []),
         'variantKey': cand.get('variantKey') or '',
@@ -1081,12 +1119,20 @@ def _adopt_candidate_package(hit, *, candidates, rule, rule_code, reasons=None):
     """採用候補のフルパッケージ＋非採用の原文パッケージを返す。"""
     package = _full_package_for_candidate(hit)
     kept = _kept_packages_excluding(candidates, package)
-    chosen_name = package['plannedName'] if (
-        package.get('autoClassified') and not package.get('parenNeedsConfirm')
-    ) else package['productName']
-    # 括弧分類が曖昧なら代表名は原文のまま（フィールドだけ埋める）
+    # 登録予定名は色振り分け後。括弧／色が曖昧なら原文を代表名に残す
+    # （apply_aux 側の parenNeedsConfirm で自動確定を止める）。
     if package.get('parenNeedsConfirm'):
         chosen_name = package['productName']
+    elif package.get('color') and package.get('plannedName'):
+        chosen_name = package['plannedName']
+    elif package.get('autoClassified') and package.get('plannedName'):
+        chosen_name = package['plannedName']
+    else:
+        chosen_name = package['productName']
+    change_summary = stock.text(package.get('changeSummary') or '')
+    if not change_summary and package.get('color'):
+        change_summary = f"商品名から色『{package['color']}』を設定します"
+    package['changeSummary'] = change_summary
     return {
         'suggestedOfficialName': chosen_name,
         'suggestedPrimarySupplier': package['supplier'],
@@ -1106,7 +1152,156 @@ def _adopt_candidate_package(hit, *, candidates, rule, rule_code, reasons=None):
         'adoptedColor': package.get('color') or '',
         'adoptedProcessing': package.get('processing') or '',
         'adoptedMaterial': package.get('material') or '',
+        'sourceAdoptedName': package.get('sourceName') or package.get('productName') or '',
+        'plannedRegisteredName': chosen_name,
+        'plannedRegisteredColor': package.get('color') or '',
+        'changeSummary': change_summary,
+        'colorDecidedNameUndecided': False,
     }
+
+
+def _undecided_pair_result(
+    *,
+    empty,
+    name_candidates,
+    pair_candidates,
+    reasons,
+    adopted_color='',
+    color_decided_name_undecided=False,
+    change_summary='',
+):
+    return {
+        **empty,
+        'nameCandidates': name_candidates,
+        'pairCandidates': pair_candidates,
+        'nameReasons': reasons,
+        'adoptedColor': stock.text(adopted_color or ''),
+        'plannedRegisteredColor': stock.text(adopted_color or ''),
+        'colorDecidedNameUndecided': bool(color_decided_name_undecided),
+        'changeSummary': stock.text(change_summary or ''),
+    }
+
+
+def _try_explicit_color_adoption(
+    pool,
+    *,
+    all_candidates,
+    name_candidates,
+    pair_candidates,
+    reasons,
+    empty,
+):
+    """在庫で決まらないとき、明示色がある候補を優先する。
+
+    - 色なし候補は色ありとの「色違い」にしない
+    - 色あり同士で色キーが異なる → 自動確定しない
+    - 色ありが一意（他は色なし）→ その候補を採用し名／色を振り分け
+    - 同じ色が複数名・仕入先に付く → 色は提案、名は要確認
+    """
+    if not pool:
+        return None
+    annotated = []
+    for cand in pool:
+        pkg = _full_package_for_candidate(cand)
+        key = stock.text(pkg.get('colorKey') or '')
+        if not key and pkg.get('color'):
+            key = paren_classify.color_match_key(pkg.get('color') or '')
+        annotated.append({
+            'cand': cand,
+            'package': pkg,
+            'colorKey': key,
+            'hasColor': bool(key),
+        })
+    colored = [a for a in annotated if a['hasColor']]
+    if not colored:
+        return None
+
+    unique_keys = {a['colorKey'] for a in colored}
+    if len(unique_keys) > 1:
+        bits = []
+        for a in colored:
+            bits.append(
+                f'{a["package"].get("productName") or "?"}（色:{a["package"].get("color") or "?"}）'
+            )
+        reasons = list(reasons or [])
+        reasons.append(
+            '候補の商品名に異なる色が明示されているため、色だけではメインを'
+            f'自動確定しません：{"／".join(bits)}。手動で選んでください。'
+        )
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates or [_pair_candidate_payload(c) for c in all_candidates],
+            reasons=reasons,
+        )
+
+    color_key = next(iter(unique_keys))
+    color_display = colored[0]['package'].get('color') or color_key
+    # プール内で色あり候補が一意 → 採用
+    if len(colored) == 1:
+        hit = colored[0]['cand']
+        pkg = colored[0]['package']
+        rule = (
+            f'商品名に色「{pkg.get("color") or color_display}」が明示されているため採用'
+            f'（在庫では代表が決まらなかった候補から）'
+        )
+        adopted = _adopt_candidate_package(
+            hit,
+            candidates=all_candidates,
+            rule=rule,
+            rule_code='explicit_color_name',
+            reasons=reasons,
+        )
+        # ペア候補表示は呼び出し側の在庫付きを優先
+        if pair_candidates:
+            adopted['pairCandidates'] = pair_candidates
+        if name_candidates:
+            adopted['nameCandidates'] = name_candidates
+        return adopted
+
+    # 同じ色が複数候補 → 色は決まっても名・仕入先パッケージが未決なら要確認
+    cores = {
+        (
+            product_name_core_key(a['cand'].get('productName') or ''),
+            identity_match_key(a['cand'].get('supplier') or ''),
+        )
+        for a in colored
+    }
+    reasons = list(reasons or [])
+    if len(cores) > 1:
+        reasons.append(
+            f'色「{color_display}」は候補間で一致していますが、'
+            '商品名（または仕入先）が未確定のため要確認。色のみ先に設定候補とします。'
+        )
+        change_summary = f"商品名から色『{color_display}』を設定します"
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates or [_pair_candidate_payload(c) for c in all_candidates],
+            reasons=reasons,
+            adopted_color=color_display,
+            color_decided_name_undecided=True,
+            change_summary=change_summary,
+        )
+
+    # 同一コア・同一仕入先で色あり複数（理論上は統合済み）→ 先頭を採用
+    hit = colored[0]['cand']
+    rule = (
+        f'商品名に色「{color_display}」が明示されているため採用'
+        f'（在庫では代表が決まらなかった候補から）'
+    )
+    adopted = _adopt_candidate_package(
+        hit,
+        candidates=all_candidates,
+        rule=rule,
+        rule_code='explicit_color_name',
+        reasons=reasons,
+    )
+    if pair_candidates:
+        adopted['pairCandidates'] = pair_candidates
+    if name_candidates:
+        adopted['nameCandidates'] = name_candidates
+    return adopted
 
 
 def suggest_main_candidate_from_aux(group, aux_index):
@@ -1120,7 +1315,8 @@ def suggest_main_candidate_from_aux(group, aux_index):
     - 候補が1組 → 在庫0でもその候補のフルパッケージを採用
     - 正の在庫合計が最大の候補が一意 → そのフルセット（名・仕入先・色・加工・素材）を採用
     - 正の在庫がなく、負の在庫がある候補がちょうど1つ → その候補を採用
-    - 正の最大が同数／負が複数／全ゼロ／数量不正/空 → 自動確定しない（絶対値では選ばない）
+    - 正の最大が同数／負が複数／全ゼロ／数量不正/空 → 在庫では確定せず、
+      続けて明示色優先（色なしは色違いにしない。異なる色同士は要確認）
     - 別候補の商品名・仕入先・仕様を組み合わせない
     """
     empty = {
@@ -1140,9 +1336,12 @@ def suggest_main_candidate_from_aux(group, aux_index):
         'adoptedColor': '',
         'adoptedProcessing': '',
         'adoptedMaterial': '',
+        'sourceAdoptedName': '',
+        'plannedRegisteredName': '',
+        'plannedRegisteredColor': '',
+        'changeSummary': '',
+        'colorDecidedNameUndecided': False,
     }
-    if not aux_index:
-        return empty
     code = stock.text(group.get('code') or '')
     if not stock_product_merge.is_normal_product_code(code):
         return empty
@@ -1150,6 +1349,37 @@ def suggest_main_candidate_from_aux(group, aux_index):
     candidates = _collect_name_supplier_candidates(group)
     if not candidates:
         return empty
+
+    # 補助CSVなし → 在庫判定を飛ばし明示色のみ
+    if not aux_index:
+        name_candidates = []
+        for cand in candidates:
+            display_name = cand.get('productName') or ''
+            if display_name and display_name not in name_candidates:
+                name_candidates.append(display_name)
+        pair_candidates = [_pair_candidate_payload(c) for c in candidates]
+        if len(candidates) == 1:
+            return _adopt_candidate_package(
+                candidates[0], candidates=candidates,
+                rule='候補が1組のため、この候補をメインに採用（初期在庫CSVなし）',
+                rule_code='aux_single_candidate',
+            )
+        color_hit = _try_explicit_color_adoption(
+            candidates,
+            all_candidates=candidates,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=[],
+            empty=empty,
+        )
+        if color_hit is not None:
+            return color_hit
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=['初期在庫CSVがなく、明示色でも代表候補を自動確定できません（要確認）。'],
+        )
 
     name_candidates = []
     pair_candidates = []
@@ -1227,16 +1457,36 @@ def suggest_main_candidate_from_aux(group, aux_index):
         cand['hasNegativeStock'] = bool(has_negative and not stock_summary['qtyUndecidable'])
         pair_candidates.append(_pair_candidate_payload(cand))
 
+    def _after_stock_undecided(pool, stock_reasons):
+        """在庫未決時: 明示色優先 → それでもダメなら要確認。"""
+        color_hit = _try_explicit_color_adoption(
+            pool,
+            all_candidates=candidates,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=list(stock_reasons or []),
+            empty=empty,
+        )
+        if color_hit is not None:
+            return color_hit
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=list(stock_reasons or []),
+        )
+
     if any_undecidable:
         reasons.append(
             '在庫の空欄または不正があるため、代表候補は自動確定しません。'
         )
-        return {
-            **empty,
-            'nameCandidates': name_candidates,
-            'pairCandidates': pair_candidates,
-            'nameReasons': reasons,
-        }
+        # 数量不正時は在庫判断不能。色でも自動確定しない（根拠が弱い）
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=reasons,
+        )
 
     # 候補1組 → 在庫0でもフルパッケージ採用
     if len(candidates) == 1:
@@ -1288,17 +1538,13 @@ def suggest_main_candidate_from_aux(group, aux_index):
                 hit, candidates=candidates, rule=rule,
                 rule_code=rule_code, reasons=reasons,
             )
-        reasons.append(
+        tie_reasons = list(reasons) + [
             '初期在庫の最大が同数のため要確認：'
             f'{comparison}。手動でメイン候補を選んでください'
             '（別候補の名・仕入先・仕様は組み合わせません）。'
-        )
-        return {
-            **empty,
-            'nameCandidates': name_candidates,
-            'pairCandidates': pair_candidates,
-            'nameReasons': reasons,
-        }
+        ]
+        # 同数タイは最多候補の中だけで色優先（在庫0の色ありへ飛ばない）
+        return _after_stock_undecided(winners, tie_reasons)
 
     if len(negative_only_hits) == 1:
         hit = negative_only_hits[0]
@@ -1313,35 +1559,31 @@ def suggest_main_candidate_from_aux(group, aux_index):
         )
 
     if len(negative_only_hits) > 1:
-        reasons.append(
+        neg_reasons = list(reasons) + [
             '負の在庫がある候補が複数あるため要確認：'
             f'{comparison}。絶対値では選びません。手動でメイン候補を選んでください。'
-        )
+        ]
+        return _after_stock_undecided(negative_only_hits, neg_reasons)
+
+    zero_bits = []
+    for cand in candidates:
+        if cand.get('hasAuxMatch') and cand.get('auxStockTotal') is not None:
+            zero_bits.append(
+                f'{cand.get("productName") or "?"}／{cand.get("supplier") or "?"}'
+                f'=初期在庫：{cand["auxStockTotal"]}'
+            )
+    detail = '、'.join(zero_bits[:4])
+    if detail:
+        zero_reasons = list(reasons) + [
+            '初期在庫がすべて在庫0のため、代表候補は自動確定しません'
+            f'（{detail}。該当行の有無だけでは選びません。要確認）。'
+        ]
     else:
-        zero_bits = []
-        for cand in candidates:
-            if cand.get('hasAuxMatch') and cand.get('auxStockTotal') is not None:
-                zero_bits.append(
-                    f'{cand.get("productName") or "?"}／{cand.get("supplier") or "?"}'
-                    f'=初期在庫：{cand["auxStockTotal"]}'
-                )
-        detail = '、'.join(zero_bits[:4])
-        if detail:
-            reasons.append(
-                '初期在庫がすべて在庫0のため、代表候補は自動確定しません'
-                f'（{detail}。該当行の有無だけでは選びません。要確認）。'
-            )
-        else:
-            reasons.append(
-                '非ゼロ在庫がある候補がないため、初期在庫CSVからは代表候補を'
-                '自動確定しません（該当行の有無だけでは選びません。要確認）。'
-            )
-    return {
-        **empty,
-        'nameCandidates': name_candidates,
-        'pairCandidates': pair_candidates,
-        'nameReasons': reasons,
-    }
+        zero_reasons = list(reasons) + [
+            '非ゼロ在庫がある候補がないため、初期在庫CSVからは代表候補を'
+            '自動確定しません（該当行の有無だけでは選びません。要確認）。'
+        ]
+    return _after_stock_undecided(candidates, zero_reasons)
 
 
 def suggest_main_name_from_aux(group, aux_index):
@@ -1466,25 +1708,8 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
         manual_reason = decision['manualReason']
         decision_kind = decision.get('decisionKind') or ''
 
-        # 代表候補のフルパッケージ提案（非ゼロ在庫 or 候補1組）
-        pair_from_aux = suggest_main_candidate_from_aux(group, aux_index) if aux_index is not None else {
-            'suggestedOfficialName': '',
-            'suggestedPrimarySupplier': '',
-            'officialNameNeedsChoice': True,
-            'pairNeedsChoice': True,
-            'nameAdoptionRule': '',
-            'nameAdoptionRuleCode': '',
-            'pairAdoptionRule': '',
-            'pairAdoptionRuleCode': '',
-            'nameCandidates': [],
-            'pairCandidates': [],
-            'nameReasons': [],
-            'adoptedPackage': None,
-            'keptPackages': [],
-            'adoptedColor': '',
-            'adoptedProcessing': '',
-            'adoptedMaterial': '',
-        }
+        # 代表候補のフルパッケージ提案（在庫 → だめなら明示色。補助CSVなしでも色優先を試す）
+        pair_from_aux = suggest_main_candidate_from_aux(group, aux_index)
         pair_supplier = stock.text(pair_from_aux.get('suggestedPrimarySupplier') or '')
         pair_code = stock.text(pair_from_aux.get('pairAdoptionRuleCode') or '')
         # 在庫採用（最多／非ゼロ一意／候補1組）で決まったときは、その仕入先を通常に
@@ -1561,6 +1786,19 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
             'adoptedColor': stock.text(pair_from_aux.get('adoptedColor') or ''),
             'adoptedProcessing': stock.text(pair_from_aux.get('adoptedProcessing') or ''),
             'adoptedMaterial': stock.text(pair_from_aux.get('adoptedMaterial') or ''),
+            'sourceAdoptedName': stock.text(pair_from_aux.get('sourceAdoptedName') or ''),
+            'plannedRegisteredName': stock.text(
+                pair_from_aux.get('plannedRegisteredName')
+                or pair_from_aux.get('suggestedOfficialName')
+                or ''
+            ),
+            'plannedRegisteredColor': stock.text(
+                pair_from_aux.get('plannedRegisteredColor')
+                or pair_from_aux.get('adoptedColor')
+                or ''
+            ),
+            'changeSummary': stock.text(pair_from_aux.get('changeSummary') or ''),
+            'colorDecidedNameUndecided': bool(pair_from_aux.get('colorDecidedNameUndecided')),
         }
     attach_aux_stock_visibility(sku_groups, aux_uploaded=bool(aux_uploaded))
     return meta
@@ -1755,6 +1993,7 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         'aux_nonzero_pair',
         'aux_single_candidate',
         'aux_max_positive_stock',
+        'explicit_color_name',
     )
     for group in sku_groups:
         aux = group.get('auxPrimary') or {}
@@ -1823,11 +2062,13 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         group['usedMarkerAutoMerged'] = bool(group.get('usedMarkerAutoMerged'))
         group['auxStockPickAuto'] = True
         group['auxStockPickClearedReview'] = was_decision
-        reason = stock.text(aux.get('pairAdoptionRule') or '') or (
-            '初期在庫が最多のため、この候補をメインに採用'
-            if rule_code == 'aux_max_positive_stock'
-            else '在庫が0以外の候補が1組のため、この候補をメインに採用'
-        )
+        if rule_code == 'aux_max_positive_stock':
+            default_reason = '初期在庫が最多のため、この候補をメインに採用'
+        elif rule_code == 'explicit_color_name':
+            default_reason = '商品名に色が明示されているため、この候補をメインに採用'
+        else:
+            default_reason = '在庫が0以外の候補が1組のため、この候補をメインに採用'
+        reason = stock.text(aux.get('pairAdoptionRule') or '') or default_reason
         group['auxStockPickReason'] = reason
         group['reviewTier'] = REVIEW_TIER_AUTO
         group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_AUTO]
@@ -1864,11 +2105,46 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         )
         if adopted_pair and adopted_pair.get('auxStockTotal') is not None:
             stock_values.append(f'初期在庫：{adopted_pair["auxStockTotal"]}')
+        registered_name = (
+            stock.text(aux.get('plannedRegisteredName') or '')
+            or stock.text(aux.get('suggestedOfficialName') or '')
+            or package.get('plannedName')
+            or package.get('productName')
+            or ''
+        )
+        registered_color = (
+            stock.text(aux.get('plannedRegisteredColor') or '')
+            or stock.text(aux.get('adoptedColor') or '')
+            or package.get('color')
+            or ''
+        )
+        source_name = (
+            stock.text(aux.get('sourceAdoptedName') or '')
+            or package.get('sourceName')
+            or package.get('productName')
+            or ''
+        )
+        change_summary = stock.text(aux.get('changeSummary') or package.get('changeSummary') or '')
+        if not change_summary and registered_color:
+            change_summary = f"商品名から色『{registered_color}』を設定します"
+        reason_code = (
+            'explicit_color_pick' if rule_code == 'explicit_color_name' else 'aux_stock_pick'
+        )
         group['reviewReasons'] = [{
-            'code': 'aux_stock_pick',
+            'code': reason_code,
             'label': reason,
             'values': stock_values,
         }]
+        if change_summary:
+            group['reviewReasons'].append({
+                'code': 'color_split',
+                'label': change_summary,
+                'values': [
+                    f'採用ソース名:{source_name}' if source_name else '',
+                    f'登録予定名:{registered_name}' if registered_name else '',
+                    f'登録予定色:{registered_color}' if registered_color else '',
+                ],
+            })
         if kept_names:
             group['reviewReasons'].append({
                 'code': 'kept_aliases',
@@ -1876,30 +2152,36 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
                 'values': kept_names,
             })
         group['otherDiffs'] = []
-        group['applyScope'] = (
-            f'品番「{group.get("code")}」は初期在庫CSVの在庫判定で'
-            f'メイン候補のフルパッケージを自動採用します。'
-            f'非採用候補の名・仕入先・色・加工・素材は原文のままマッピングに残します。'
-        )
+        if rule_code == 'explicit_color_name':
+            group['applyScope'] = (
+                f'品番「{group.get("code")}」は在庫では代表が決まらなかったため、'
+                f'商品名の明示色でメイン候補を自動採用します。'
+                f'登録予定名「{registered_name}」・色「{registered_color}」。'
+                f'原文名は照合用別名として残します。'
+            )
+        else:
+            group['applyScope'] = (
+                f'品番「{group.get("code")}」は初期在庫CSVの在庫判定で'
+                f'メイン候補のフルパッケージを自動採用します。'
+                f'非採用候補の名・仕入先・色・加工・素材は原文のままマッピングに残します。'
+            )
         _attach_stock_pick_display(group, aux, package, auto_cleared=True)
 
-        # 商品計画を採用パッケージへ
+        # 商品計画を採用パッケージへ（登録予定名＝色振り分け後）
         plan = dict(group.get('productPlan') or {})
-        plan['productName'] = (
-            stock.text(aux.get('suggestedOfficialName') or '')
-            or package.get('plannedName')
-            or package.get('productName')
-            or plan.get('productName')
-            or ''
-        )
+        plan['productName'] = registered_name or plan.get('productName') or ''
         plan['supplier'] = package.get('supplier') or plan.get('supplier') or ''
-        plan['color'] = package.get('color') or ''
+        plan['color'] = registered_color
         plan['processing'] = package.get('processing') or ''
         plan['material'] = package.get('material') or ''
         plan['auxStockPickAuto'] = True
         plan['auxStockPickReason'] = reason
         plan['keptPackages'] = kept
         plan['nameAdoptionRule'] = reason
+        plan['sourceAdoptedName'] = source_name
+        plan['plannedRegisteredName'] = registered_name
+        plan['plannedRegisteredColor'] = registered_color
+        plan['changeSummary'] = change_summary
         plan['label'] = '新規商品' if int(group.get('existingCount') or 0) == 0 else '既存商品を使用'
         plan['kind'] = 'reuse' if int(group.get('existingCount') or 0) == 1 else 'create'
         group['productPlan'] = plan
@@ -1910,10 +2192,15 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
             or ''
         )
         group['plannedPrimarySupplierReason'] = reason
-        group['plannedColor'] = package.get('color') or ''
+        group['plannedColor'] = registered_color
         group['plannedProcessing'] = package.get('processing') or ''
         group['plannedMaterial'] = package.get('material') or ''
         group['nameAdoptionRule'] = reason
+        group['sourceAdoptedName'] = source_name
+        group['plannedRegisteredName'] = registered_name
+        group['plannedRegisteredColor'] = registered_color
+        group['changeSummary'] = change_summary
+        group['colorNameSplit'] = bool(registered_color)
 
 
 def _clear_gender_presence_absence_flags(group):
@@ -1959,10 +2246,20 @@ def _soften_spec_only_reasons(group):
     if group.get('genderConflictPossible'):
         remaining_bits.append('男女・対象の明示対立')
     remain_label = '・'.join(remaining_bits) if remaining_bits else '内容'
+    pick_label = '在庫／色判定'
+    aux_code = stock.text(
+        (group.get('auxPrimary') or {}).get('pairAdoptionRuleCode')
+        or (group.get('auxPrimary') or {}).get('nameAdoptionRuleCode')
+        or ''
+    )
+    if aux_code == 'explicit_color_name':
+        pick_label = '明示色優先'
+    elif aux_code in ('aux_nonzero_pair', 'aux_max_positive_stock', 'aux_single_candidate'):
+        pick_label = '在庫判定'
     reasons.append({
         'code': 'aux_stock_pick_partial',
         'label': (
-            f'在庫一意{qty_bit}でメイン候補は決まっていますが、'
+            f'{pick_label}{qty_bit}でメイン候補は決まっていますが、'
             f'{remain_label}の確認が残っています'
         ),
         'values': [],
@@ -2767,8 +3064,8 @@ def _excluded_row(row_no, item, *, reason):
 
 
 def build_paren_classification(product_name, override=None):
-    """括弧分類＋ユーザー上書き（行編集はグローバル辞書へ昇格しない）。"""
-    base = paren_classify.classify_product_name(product_name)
+    """括弧分類＋明示色振り分け＋ユーザー上書き（行編集はグローバル辞書へ昇格しない）。"""
+    base = paren_classify.split_name_and_color(product_name)
     raw = override if isinstance(override, dict) else {}
     user_touched = bool(raw.get('userEdited') or raw.get('manual'))
     planned = stock.text(raw.get('plannedName')) if 'plannedName' in raw else base['plannedName']
@@ -2800,11 +3097,15 @@ def build_paren_classification(product_name, override=None):
         auto = False  # 手動
 
     decision = 'needs_review' if needs else ('auto' if (auto or user_touched) else 'passthrough')
+    change_summary = stock.text(base.get('changeSummary') or '')
+    if color and not change_summary:
+        change_summary = f"商品名から色『{color}』を設定します"
     return {
         'originalName': base['originalName'],
         'plannedName': planned or base['originalName'],
         'baseName': base.get('baseName') or base['originalName'],
         'color': color,
+        'colorSource': stock.text(base.get('colorSource') or ''),
         'processing': processing,
         'material': material,
         'unclassified': unclassified,
@@ -2822,6 +3123,8 @@ def build_paren_classification(product_name, override=None):
         'colorCandidates': list(base.get('colorCandidates') or []),
         'processingCandidates': list(base.get('processingCandidates') or []),
         'materialCandidates': list(base.get('materialCandidates') or []),
+        'changeSummary': change_summary,
+        'hasExplicitColor': bool(color),
     }
 
 
