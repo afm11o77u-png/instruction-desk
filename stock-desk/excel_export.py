@@ -1,6 +1,8 @@
 """登録・設定台帳の確認用 Excel 出力（記入用ひな形とは別形式・非破壊）。"""
 from datetime import datetime
+from functools import cmp_to_key
 from urllib.parse import quote
+import re
 
 import excel_book
 import stock
@@ -17,6 +19,19 @@ SCOPE_FILTERED = 'filtered'
 SCOPE_ALL = 'all'
 ACTIVE_ON = '使用中'
 ACTIVE_OFF = '停止'
+PRODUCT_SORT_DEFAULT = 'codeAsc'
+PRODUCT_SORTS = (
+    'codeAsc', 'codeDesc', 'nameAsc', 'nameDesc', 'idAsc', 'idDesc',
+)
+PRODUCT_SORT_LABELS = {
+    'codeAsc': '品番順（昇順）',
+    'codeDesc': '品番順（降順）',
+    'nameAsc': '商品名順（昇順）',
+    'nameDesc': '商品名順（降順）',
+    'idAsc': '商品ID順（昇順）',
+    'idDesc': '商品ID順（降順）',
+}
+_NAT_SPLIT = re.compile(r'(\d+)')
 
 
 def _args(query):
@@ -55,6 +70,89 @@ def _kind(args):
     if kind not in KINDS:
         raise ValueError('出力する台帳を選んでください。')
     return kind
+
+
+def _product_sort(args):
+    raw = stock.text(args.get('sort')) or PRODUCT_SORT_DEFAULT
+    if raw not in PRODUCT_SORTS:
+        return PRODUCT_SORT_DEFAULT
+    return raw
+
+
+def _blank_product_code(code):
+    return not stock.text(code)
+
+
+def _natural_code_parts(text):
+    """品番の自然順キー（数値部分は整数。JS localeCompare numeric に寄せる）。"""
+    parts = []
+    for chunk in _NAT_SPLIT.split(str(text or '')):
+        if chunk == '':
+            continue
+        if chunk.isdigit():
+            parts.append((0, int(chunk)))
+        else:
+            parts.append((1, chunk))
+    return parts
+
+
+def _cmp_natural_code(a, b):
+    ka, kb = _natural_code_parts(a), _natural_code_parts(b)
+    n = min(len(ka), len(kb))
+    for i in range(n):
+        ta, va = ka[i]
+        tb, vb = kb[i]
+        if ta != tb:
+            return -1 if ta < tb else 1
+        if va != vb:
+            if ta == 0:
+                return -1 if va < vb else 1
+            # 非数字は日本語ロケール相当（Unicode 順。かなはあいうえお順）
+            return -1 if va < vb else 1
+    if len(ka) != len(kb):
+        return -1 if len(ka) < len(kb) else 1
+    return 0
+
+
+def _cmp_ja_name(a, b):
+    sa, sb = str(a or ''), str(b or '')
+    if sa == sb:
+        return 0
+    return -1 if sa < sb else 1
+
+
+def _cmp_product_rows(a, b, sort_key):
+    key = sort_key or PRODUCT_SORT_DEFAULT
+    if key == 'idAsc':
+        return (a['id'] > b['id']) - (a['id'] < b['id'])
+    if key == 'idDesc':
+        return (b['id'] > a['id']) - (b['id'] < a['id'])
+    if key in ('codeAsc', 'codeDesc'):
+        dir_ = 1 if key == 'codeAsc' else -1
+        a_blank = _blank_product_code(a.get('code'))
+        b_blank = _blank_product_code(b.get('code'))
+        if a_blank and b_blank:
+            return (a['id'] > b['id']) - (a['id'] < b['id'])
+        if a_blank:
+            return 1
+        if b_blank:
+            return -1
+        cmp = _cmp_natural_code(a.get('code') or '', b.get('code') or '')
+        if cmp:
+            return cmp * dir_
+        return (a['id'] > b['id']) - (a['id'] < b['id'])
+    if key in ('nameAsc', 'nameDesc'):
+        dir_ = 1 if key == 'nameAsc' else -1
+        cmp = _cmp_ja_name(a.get('name'), b.get('name'))
+        if cmp:
+            return cmp * dir_
+        return (a['id'] > b['id']) - (a['id'] < b['id'])
+    return (a['id'] > b['id']) - (a['id'] < b['id'])
+
+
+def sort_product_rows(products, sort_key=None):
+    key = sort_key or PRODUCT_SORT_DEFAULT
+    return sorted(products, key=cmp_to_key(lambda a, b: _cmp_product_rows(a, b, key)))
 
 
 def _active_label(active):
@@ -188,7 +286,6 @@ def _products(c, args):
         if str(supplier_raw).isdigit():
             supplier_id = int(supplier_raw)
     products = []
-    handles = []
     for r in c.execute('SELECT id FROM products ORDER BY id'):
         item = stock.product_row(c, r['id'])
         if scope == SCOPE_FILTERED:
@@ -205,6 +302,9 @@ def _products(c, args):
             if not _match_text(hay, q):
                 continue
         products.append(item)
+    products = sort_product_rows(products, _product_sort(args))
+    handles = []
+    for item in products:
         for link in item['links']:
             handles.append({
                 'id': link['id'],
@@ -355,6 +455,10 @@ def _meta_sheet(kind, scope, payload, when, args):
             sid = args.get('supplierId')
             if sid not in (None, '', 'all', 'すべて'):
                 filter_parts.append(f'仕入先ID={sid}')
+    sort_label = ''
+    if kind == 'products':
+        sort_key = _product_sort(args)
+        sort_label = PRODUCT_SORT_LABELS.get(sort_key, PRODUCT_SORT_LABELS[PRODUCT_SORT_DEFAULT])
     headers = ['項目', '値']
     rows = [
         ['台帳', KIND_LABELS[kind]],
@@ -362,9 +466,13 @@ def _meta_sheet(kind, scope, payload, when, args):
         ['出力日時', when.replace('_', ' ')],
         ['対象件数', counts['label']],
         ['絞り込み', '、'.join(filter_parts) if filter_parts else ('なし' if scope == SCOPE_FILTERED else '全件（検索・停止表示は反映しません）')],
+    ]
+    if sort_label:
+        rows.append(['並び順', sort_label])
+    rows.extend([
         ['形式', '確認用Excel（記入用Excelとは形式が異なります）'],
         ['注意', 'このファイルは確認用です。登録内容は変更しません。'],
-    ]
+    ])
     return ('出力情報', headers, rows, [18, 48])
 
 

@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',productSort:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
 const CONDITION_OPTS=[['new','新品'],['used','中古']]
 function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
 function conditionQtyText(r){
@@ -96,6 +96,16 @@ function sizeSchemePlaceholder(schemeId){
   return '例：150'
 }
 const PRODUCT_SUPPLIER_KEY='stock-desk:product-supplier-filter'
+const PRODUCT_SORT_KEY='stock-desk:product-list-sort'
+const PRODUCT_SORT_DEFAULT='codeAsc'
+const PRODUCT_SORT_OPTIONS=[
+  ['codeAsc','品番順（昇順）'],
+  ['codeDesc','品番順（降順）'],
+  ['nameAsc','商品名順（昇順）'],
+  ['nameDesc','商品名順（降順）'],
+  ['idAsc','商品ID順（昇順）'],
+  ['idDesc','商品ID順（降順）'],
+]
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function loadProductSupplierFilter(){
   try{return localStorage.getItem(PRODUCT_SUPPLIER_KEY)||''}catch(_){return ''}
@@ -105,6 +115,62 @@ function saveProductSupplierFilter(value){
     if(value)localStorage.setItem(PRODUCT_SUPPLIER_KEY,value)
     else localStorage.removeItem(PRODUCT_SUPPLIER_KEY)
   }catch(_){}
+}
+function loadProductSort(){
+  try{
+    const stored=localStorage.getItem(PRODUCT_SORT_KEY)
+    if(PRODUCT_SORT_OPTIONS.some(([id])=>id===stored))return stored
+  }catch(_){}
+  return PRODUCT_SORT_DEFAULT
+}
+function saveProductSort(value){
+  try{localStorage.setItem(PRODUCT_SORT_KEY,value||PRODUCT_SORT_DEFAULT)}catch(_){}
+}
+function resolveProductSort(){
+  const stored=state.productSort||loadProductSort()
+  const ok=PRODUCT_SORT_OPTIONS.some(([id])=>id===stored)
+  const next=ok?stored:PRODUCT_SORT_DEFAULT
+  state.productSort=next
+  return next
+}
+function isBlankProductCode(code){
+  return !String(code??'').trim()
+}
+function compareProductIds(a,b){
+  return Number(a.id)-Number(b.id)
+}
+/** 品番の自然順（数値部分を数として比較。A1→A2→A10）。空品番は呼び出し側で末尾固定。 */
+function compareProductCodesNatural(a,b){
+  return String(a).localeCompare(String(b),'ja',{numeric:true})
+}
+function compareProductNamesJa(a,b){
+  return String(a||'').localeCompare(String(b||''),'ja')
+}
+function compareProductRows(a,b,sortKey){
+  const key=sortKey||PRODUCT_SORT_DEFAULT
+  if(key==='idAsc')return compareProductIds(a,b)
+  if(key==='idDesc')return compareProductIds(b,a)
+  if(key==='codeAsc'||key==='codeDesc'){
+    const dir=key==='codeAsc'?1:-1
+    const aBlank=isBlankProductCode(a.code)
+    const bBlank=isBlankProductCode(b.code)
+    if(aBlank&&bBlank)return compareProductIds(a,b)
+    if(aBlank)return 1
+    if(bBlank)return -1
+    const cmp=compareProductCodesNatural(a.code,b.code)
+    if(cmp)return cmp*dir
+    return compareProductIds(a,b)
+  }
+  if(key==='nameAsc'||key==='nameDesc'){
+    const dir=key==='nameAsc'?1:-1
+    const cmp=compareProductNamesJa(a.name,b.name)
+    if(cmp)return cmp*dir
+    return compareProductIds(a,b)
+  }
+  return compareProductIds(a,b)
+}
+function sortProductRows(rows,sortKey){
+  return rows.slice().sort((a,b)=>compareProductRows(a,b,sortKey||resolveProductSort()))
 }
 function productSuppliersWithItems(){
   const ids=new Set()
@@ -501,6 +567,11 @@ function productSupplierControl(current){
   ).join('')
   return `<label class="supplier-filter">仕入先<select id="productSupplier" aria-label="仕入先で絞り込み">${options}</select></label>`
 }
+function productSortControl(){
+  const current=resolveProductSort()
+  const options=PRODUCT_SORT_OPTIONS.map(([id,label])=>`<option value="${id}" ${current===id?'selected':''}>${esc(label)}</option>`).join('')
+  return `<label class="product-sort">並び順<select id="productSort" aria-label="並び順">${options}</select></label>`
+}
 function registryExportQuery(kind){
   const q=new URLSearchParams({kind})
   if(kind==='opening'){
@@ -512,6 +583,7 @@ function registryExportQuery(kind){
   if(kind==='products'){
     const supplierId=resolveProductSupplierFilter()
     if(supplierId)q.set('supplierId',String(supplierId))
+    q.set('sort',resolveProductSort())
   }
   return q
 }
@@ -629,7 +701,8 @@ function suppliers(){
 }
 function products(){
   const supplierId=resolveProductSupplierFilter()
-  const rows=state.data.products.filter(r=>{
+  const sortKey=resolveProductSort()
+  const rows=sortProductRows(state.data.products.filter(r=>{
     if(r.mergedIntoId){
       if(!state.stopped)return false
     }else if(!state.stopped&&!r.active){
@@ -639,8 +712,8 @@ function products(){
     const subNames=(r.subSuppliers||[]).map(s=>s.name||'').join('')
     const text=`${r.code}${r.codeDisplay||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return text.includes(state.q)
-  })
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。品番なしも商品IDで区別します。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId),'新しく登録','products')}
+  }),sortKey)
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','品番が同じでも、中の商品IDが違えば別の商品です。品番なしも商品IDで区別します。顧客ごとの刺繍は、ここで一度登録します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
     <div class="bar merge-entry"><button type="button" id="productLedgerCsvOpen">旧商品台帳CSVを取り込む</button><span class="excelhint">旧システムの商品台帳CSVから商品と顧客取扱だけを登録します。在庫数量・単価・履歴は変更しません（初期在庫用の「旧CSV取込」とは別）。</span></div>
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
@@ -660,6 +733,12 @@ function products(){
   if(supplierSelect)supplierSelect.onchange=()=>{
     state.productSupplierId=supplierSelect.value
     saveProductSupplierFilter(state.productSupplierId)
+    paint()
+  }
+  const sortSelect=$('#productSort')
+  if(sortSelect)sortSelect.onchange=()=>{
+    state.productSort=sortSelect.value
+    saveProductSort(state.productSort)
     paint()
   }
   const mergeBtn=$('#productMergeOpen')
