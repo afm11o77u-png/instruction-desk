@@ -931,8 +931,52 @@ def _row_variant(row):
     }
 
 
+def _sku_product_plan(group):
+    """サイズ・顧客差の自動まとめ／比較用の商品計画サマリ。"""
+    variants = group.get('variants') or []
+    all_sizes = []
+    all_customers = []
+    for v in variants:
+        for size in v.get('sizes') or []:
+            if size and size not in all_sizes:
+                all_sizes.append(size)
+        for cust in v.get('customers') or []:
+            if cust and cust not in all_customers:
+                all_customers.append(cust)
+    primary = variants[0] if variants else {}
+    if group.get('existingCount') == 1 and not group.get('needsDecision'):
+        plan_kind = 'reuse'
+        plan_label = '既存商品を使用'
+    elif group.get('existingCount') > 1:
+        plan_kind = 'compare'
+        plan_label = '品番比較が必要'
+    elif group.get('needsDecision'):
+        plan_kind = 'compare'
+        plan_label = '品番比較が必要'
+    else:
+        plan_kind = 'create'
+        plan_label = '新規商品'
+    return {
+        'kind': plan_kind,
+        'label': plan_label,
+        'code': group.get('code') or '',
+        'productName': primary.get('productName') or '',
+        'supplier': primary.get('supplier') or '',
+        'customers': all_customers,
+        'sizes': all_sizes,
+        'sizeCount': len(all_sizes),
+        'customerCount': len(all_customers),
+        'csvRowCount': group.get('rowCount') or 0,
+        'variantCount': group.get('variantCount') or 0,
+    }
+
+
 def build_sku_groups(c, classified):
-    """通常品番の比較グループを作る。名差・仕入先差・既存重複があるとき needsDecision。"""
+    """通常品番の比較グループを作る。
+
+    品番+商品名+仕入先が同じでサイズ／顧客だけの差 → 自動で1商品（needsDecision=False）。
+    商品名・仕入先・色・既存重複など判断が必要な差だけ品番比較UIへ。
+    """
     by_code = defaultdict(list)
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code'))
@@ -969,12 +1013,12 @@ def build_sku_groups(c, classified):
                 name_mismatch = True
                 break
 
+        # サイズ・顧客だけの差はバリアントに出ない（sku_variant_key に含めない）
         needs_decision = (
             len(variants) > 1
             or len(existing) > 1
             or name_mismatch
         )
-        # サイズ・顧客だけ違う同内容 → 1商品へまとめる計画（決定不要）
         planned_single = not needs_decision
 
         apply_scope = (
@@ -984,7 +1028,7 @@ def build_sku_groups(c, classified):
             f'加工仕様の違いは取扱として別管理し、商品を勝手に1つへ潰しません。'
         )
 
-        groups.append({
+        group = {
             'code': code,
             'codeDisplay': code,
             'rowNos': [r['rowNo'] for r in rows],
@@ -998,12 +1042,32 @@ def build_sku_groups(c, classified):
             'applyScope': apply_scope,
             'decision': None,
             'status': 'needs_decision' if needs_decision else 'auto',
-        })
+        }
+        group['productPlan'] = _sku_product_plan(group)
+        groups.append(group)
     return groups
 
 
+def _attach_product_plans(classified, sku_groups):
+    """各行に商品計画（品番単位のまとめ先）を付け、行トレースを残す。"""
+    by_code = {g['code']: g for g in sku_groups}
+    for row in classified:
+        code = stock.text((row.get('csv') or {}).get('code'))
+        group = by_code.get(code)
+        if not group:
+            continue
+        plan = dict(group.get('productPlan') or {})
+        row['productPlan'] = plan
+        row['skuAutoMerged'] = bool(group.get('plannedSingleProduct'))
+        row['skuRowNos'] = list(group.get('rowNos') or [])
+
+
 def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
-    """品番決定を行ステータスへ反映。未決定の要確認グループは needs_review のまま。"""
+    """品番決定を行ステータスへ反映。
+
+    未決定でもサイズ行を要確認へ流し込まない。品番比較パネルで止め、
+    行ステータスは新規／既存使用／サイズ追加のまま残す。
+    """
     decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
     group_by_code = {g['code']: g for g in sku_groups}
     hold_count = 0
@@ -1027,8 +1091,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
 
         if not decision:
             pending_decision += 1
-            row['status'] = STATUS_REVIEW
-            row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+            # サイズ・顧客だけの行差を要確認一覧へ溢れさせない
             row['canCommit'] = False
             row['skuDecisionNeeded'] = True
             row['reasons'] = list(row.get('reasons') or []) + [
@@ -1223,23 +1286,43 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
     }
 
 
+def _product_plan_key(row):
+    """サイズ／取扱の重複集計用キー（通常品番は品番単位）。"""
+    code = stock.text((row.get('csv') or {}).get('code'))
+    prod = row.get('product') or {}
+    if stock_product_merge.is_normal_product_code(code):
+        return f'code:{code}'
+    if prod.get('id'):
+        return f'id:{prod["id"]}'
+    return f'row:{row.get("rowNo")}'
+
+
 def _planned_counts(classified, sku_groups):
-    """CSV行数と新規商品数を混同しないための集計。"""
+    """CSV行数と新規商品数を混同しないための集計。
+
+    サイズ追加・取扱新規は行数ではなく、商品×サイズ／顧客×商品×加工のユニーク数。
+    """
     product_create_codes = set()
     product_reuse_ids = set()
     product_merge_codes = set()
     defer_rows = 0
-    size_adds = 0
-    handle_creates = 0
+    size_keys = set()
+    handle_keys = set()
     for row in classified:
         st = row.get('status')
         if st == STATUS_HOLD:
             defer_rows += 1
             continue
-        if st == STATUS_EXCLUDED:
+        if st in (STATUS_EXCLUDED, STATUS_REVIEW):
+            continue
+        if row.get('skuDecisionNeeded') and st not in (
+            STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_MERGE, STATUS_UNCHANGED,
+        ):
             continue
         code = stock.text((row.get('csv') or {}).get('code'))
         prod = row.get('product') or {}
+        csv = row.get('csv') or {}
+        pkey = _product_plan_key(row)
         if prod.get('action') == 'create' or st == STATUS_CREATE:
             if stock_product_merge.is_normal_product_code(code):
                 product_create_codes.add(code)
@@ -1247,21 +1330,31 @@ def _planned_counts(classified, sku_groups):
                 product_create_codes.add(f'special:{row["rowNo"]}')
         if prod.get('id') and prod.get('action') == 'reuse':
             product_reuse_ids.add(prod['id'])
-        if st == STATUS_MERGE or prod.get('skuMerge') and prod.get('mergeSourceIds'):
+        if st == STATUS_MERGE or (prod.get('skuMerge') and prod.get('mergeSourceIds')):
             product_merge_codes.add(code)
-        if prod.get('sizeAction') == 'add' or st == STATUS_SIZE_ADD:
-            size_adds += 1
+        size_label = stock.text(csv.get('size') or prod.get('size') or '')
+        if size_label and (prod.get('sizeAction') == 'add' or st == STATUS_SIZE_ADD):
+            size_keys.add((pkey, size_label))
         if (row.get('handle') or {}).get('action') == 'create':
-            handle_creates += 1
+            handle_keys.add((
+                identity_match_key(csv.get('customer') or ''),
+                pkey,
+                PENDING_EMBROIDERY,
+            ))
+    auto_groups = [g for g in sku_groups if g.get('plannedSingleProduct')]
     return {
         'csvRows': len(classified),
         'productsToCreate': len(product_create_codes),
         'productsToReuse': len(product_reuse_ids),
         'productsToMerge': len(product_merge_codes),
         'rowsDeferred': defer_rows,
-        'sizesToAdd': size_adds,
-        'handlesToCreate': handle_creates,
-        'skuGroupsNeedingDecision': sum(1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')),
+        'sizesToAdd': len(size_keys),
+        'handlesToCreate': len(handle_keys),
+        'skuGroupsNeedingDecision': sum(
+            1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')
+        ),
+        'autoMergedSkuGroups': len(auto_groups),
+        'autoMergedCsvRows': sum(g.get('rowCount') or 0 for g in auto_groups),
     }
 
 
@@ -1333,13 +1426,19 @@ def build_preview(c, body):
 
     sku_groups = build_sku_groups(c, classified)
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
+    _attach_product_plans(classified, sku_groups)
 
     counts = defaultdict(int)
     for row in classified:
         counts[row['status']] += 1
 
     review_count = counts.get(STATUS_REVIEW, 0)
+    sku_pending_rows = sum(1 for r in classified if r.get('skuDecisionNeeded'))
     planned = _planned_counts(classified, sku_groups)
+    auto_plans = [
+        g.get('productPlan') for g in sku_groups
+        if g.get('plannedSingleProduct') and g.get('productPlan')
+    ]
     fp = db_fingerprint(c)
     snap = stock_snapshot(c)
     return {
@@ -1353,6 +1452,8 @@ def build_preview(c, body):
         'skuGroups': sku_groups,
         'skuGroupCount': len(sku_groups),
         'skuDecisionPending': decision_meta['pendingDecisionGroups'],
+        'skuDecisionPendingRows': sku_pending_rows,
+        'autoMergePlans': auto_plans,
         'counts': dict(STATUS_LABELS),
         'countsRaw': dict(counts),
         'plannedCounts': planned,
@@ -1364,7 +1465,8 @@ def build_preview(c, body):
         'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
         'note': (
             '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
-            '通常品番は1品番=1商品です。商品名・括弧内表記・「＊」は原文のまま残し、'
+            '通常品番は1品番=1商品です。サイズ・顧客だけの差は自動で1商品にまとめ、'
+            '要確認へは流しません。商品名・括弧内表記・「＊」は原文のまま残し、'
             '色や加工を商品名から自動分解しません。加工列が無くてもエラーにはしません。'
         ),
     }
@@ -1704,6 +1806,7 @@ def commit_preview(c, body, *, db_path=None):
     commit_rows = [
         r for r in classified
         if r['status'] in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_MERGE)
+        and not r.get('skuDecisionNeeded')
     ]
 
     pending_sku = sum(1 for g in sku_groups if g.get('needsDecision') and not g.get('decision'))
@@ -1711,6 +1814,11 @@ def commit_preview(c, body, *, db_path=None):
         raise ValueError(
             f'品番比較で未決定が {pending_sku} 件あります。'
             f'【同じ商品としてまとめる】【別物のため個別に整理する】【今回は保留する】を選んでください。'
+        )
+    if any(r.get('skuDecisionNeeded') for r in classified):
+        raise ValueError(
+            '品番比較の未決定行が残っています。'
+            'サイズ差だけの行は要確認ではありません。品番ごとの比較で決定してください。'
         )
     if review_rows and not body.get('allowCommitWithReview'):
         raise ValueError(
