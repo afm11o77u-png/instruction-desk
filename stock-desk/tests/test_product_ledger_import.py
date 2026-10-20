@@ -82,6 +82,22 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('historyError', js)
         self.assertIn('このファイルの過去取込記録はありません', js)
 
+    def test_preview_error_visible_in_modal_and_toast_css(self):
+        """Preview failures must not rely only on a bottom toast behind the modal."""
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
+        css = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
+        self.assertIn('previewError', js)
+        self.assertIn('product-ledger-import-error', js)
+        self.assertIn('role="alert"', js)
+        self.assertIn("st.previewError=msg", js)
+        self.assertIn('照合に失敗しました。', js)
+        self.assertIn('scrollIntoView', js)
+        # Toast: wrap long copy and stay above app chrome (modal still needs inline alert)
+        self.assertIn('max-width:min(36rem,calc(100vw - 2rem))', css)
+        self.assertIn('overflow-wrap:anywhere', css)
+        self.assertIn('z-index:10000', css)
+        self.assertIn('.product-ledger-import-error', css)
+
 
 class UploadLimitsSyncTest(unittest.TestCase):
     def test_product_ledger_paths_share_large_body_limit(self):

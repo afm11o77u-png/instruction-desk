@@ -148,7 +148,18 @@ dialog>form{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;max-he
 dialog.opening-dialog{width:min(1100px,96vw);max-height:min(94vh,980px)}
 dialog.opening-dialog .dialogbody{padding-bottom:8px}
 #error{color:#9a3418;font-weight:700;min-height:1.2em;flex:0 0 auto;margin:0;padding:0 18px}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
-#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#146b28;color:#fff;padding:12px 18px;border-radius:8px}
+/* width:max-content + max-width keeps long Japanese errors readable and centered
+   without half the toast sliding under the parent green nav / iframe edge.
+   z-index helps over app chrome; open <dialog> top-layer still wins — product
+   ledger preview errors also render inline (see .product-ledger-import-error). */
+#toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+  background:#146b28;color:#fff;padding:12px 18px;border-radius:8px;
+  z-index:10000;box-sizing:border-box;
+  width:max-content;max-width:min(36rem,calc(100vw - 2rem));
+  white-space:normal;overflow-wrap:anywhere;word-break:break-word;text-align:center;
+  box-shadow:0 5px 20px #0002
+}
 @media(max-width:800px){header,main,footer{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
 
 #groups{padding:8px 12px;border-bottom:1px solid var(--line)}
@@ -459,6 +470,11 @@ dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780p
 .product-ledger-filebar .product-ledger-filename{padding:0;align-self:center}
 .product-ledger-filebar .excelhint.notice-inline,
 .excelhint.notice-inline{color:#7a3e12;font-weight:600}
+.product-ledger-import-error{
+  margin:8px 0 0;padding:10px 12px;
+  border-left-color:#9a3418;color:#9a3418;font-weight:700;
+  white-space:normal;overflow-wrap:anywhere;word-break:break-word
+}
 
 /* 重複商品の整理 */
 .merge-entry{align-items:center;gap:12px;flex-wrap:wrap}
