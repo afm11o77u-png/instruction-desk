@@ -658,10 +658,72 @@
     </div>`
   }
 
-  function paintDialog(){
+  function readScrollPos(el){
+    return {top:el?el.scrollTop:0,left:el?el.scrollLeft:0}
+  }
+
+  function applyScrollPos(el,pos){
+    if(!el||!pos)return
+    el.scrollTop=pos.top||0
+    el.scrollLeft=pos.left||0
+  }
+
+  /** paintDialog の innerHTML 全描画で消えるスクロールを退避する */
+  function captureLedgerScroll(dlg){
+    return {
+      body:readScrollPos(dlg.querySelector('.legacy-csv-detail-body')),
+      wrap:readScrollPos(dlg.querySelector('.sku-compare-wrap')),
+      table:readScrollPos(dlg.querySelector('.legacy-csv-table-wrap'))
+    }
+  }
+
+  /** 操作した品番行が比較一覧・モーダルから外れないよう微調整 */
+  function ensureSkuRowInView(dlg,code){
+    if(!code)return
+    const row=dlg.querySelector(`tr.sku-list-row[data-sku-code="${CSS.escape(String(code))}"]`)
+    if(!row)return
+    const nudge=(scroller)=>{
+      if(!scroller)return
+      const sr=scroller.getBoundingClientRect()
+      const rr=row.getBoundingClientRect()
+      if(rr.top<sr.top)scroller.scrollTop-=(sr.top-rr.top)+6
+      else if(rr.bottom>sr.bottom)scroller.scrollTop+=(rr.bottom-sr.bottom)+6
+    }
+    nudge(dlg.querySelector('.sku-compare-wrap'))
+    nudge(dlg.querySelector('.legacy-csv-detail-body'))
+  }
+
+  function restoreLedgerScroll(dlg,saved,opts){
+    if(!saved)return
+    opts=opts||{}
+    applyScrollPos(dlg.querySelector('.legacy-csv-detail-body'),saved.body)
+    const wrap=dlg.querySelector('.sku-compare-wrap')
+    if(opts.resetListScroll){
+      if(wrap){wrap.scrollTop=0;wrap.scrollLeft=0}
+    }else{
+      applyScrollPos(wrap,saved.wrap)
+    }
+    const table=dlg.querySelector('.legacy-csv-table-wrap')
+    if(opts.resetTableScroll){
+      if(table){table.scrollTop=0;table.scrollLeft=0}
+    }else{
+      applyScrollPos(table,saved.table)
+    }
+    if(opts.anchorCode)ensureSkuRowInView(dlg,opts.anchorCode)
+  }
+
+  /**
+   * @param {{preserveScroll?:boolean,resetListScroll?:boolean,resetTableScroll?:boolean,anchorCode?:string}} [opts]
+   * preserveScroll 既定 true（初回描画・明示 false 以外は V/H を復元）。
+   * ページ切替・検索変更時は resetListScroll / resetTableScroll で一覧だけ先頭へ。
+   */
+  function paintDialog(opts){
+    opts=opts||{}
     const st=ensureState()
     const dlg=document.getElementById('dialog')
     if(!dlg||!st.open)return
+    const hadBody=!!dlg.querySelector('.legacy-csv-detail-body')
+    const saved=(opts.preserveScroll!==false&&hadBody)?captureLedgerScroll(dlg):null
     const review=(st.preview&&st.preview.reviewCount)||0
     const skuPending=(st.preview&&st.preview.skuDecisionPending)||0
     const canWrite=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
@@ -691,6 +753,7 @@
       </div>`
     if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
     bindDialog()
+    restoreLedgerScroll(dlg,saved,opts)
   }
 
   async function loadSelectedFile(st,f){
@@ -710,7 +773,7 @@
     st.history=null
     st.historyError=''
     st.busy=true
-    paintDialog()
+    paintDialog({preserveScroll:false})
     try{
       const b64=await readFileAsBase64(f)
       assertUploadSize(f,b64)
@@ -731,14 +794,14 @@
       st.toast(apiErrorMessage(e,'ファイルを読めませんでした。'))
     }
     st.busy=false
-    paintDialog()
+    paintDialog({preserveScroll:false})
   }
 
   async function loadAuxFile(st,f){
     if(!f)return
     assertUploadSize(f,null)
     st.busy=true
-    paintDialog()
+    paintDialog({preserveScroll:false})
     try{
       const b64=await readFileAsBase64(f)
       // 台帳+補助の合算が上限を超えないよう概算
@@ -764,7 +827,7 @@
       st.toast(apiErrorMessage(e,'初期在庫CSVを読めませんでした。'))
     }
     st.busy=false
-    paintDialog()
+    paintDialog({preserveScroll:false})
   }
 
   function syncMergeSources(st,code){
@@ -876,18 +939,18 @@
           st.historyError=''
         }
       }catch(e){st.toast(apiErrorMessage(e,'照合に失敗しました。'))}
-      st.busy=false;paintDialog()
+      st.busy=false;paintDialog({preserveScroll:false})
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
     const reBtn=$('#plRePreview');if(reBtn)reBtn.onclick=runPreview
-    const q=$('#plQ');if(q)q.oninput=()=>{st.q=q.value;st.page=1;paintDialog()}
-    const stSel=$('#plStatus');if(stSel)stSel.onchange=()=>{st.statusFilter=stSel.value;st.page=1;paintDialog()}
-    const pPrev=$('#plPrev');if(pPrev)pPrev.onclick=()=>{st.page=Math.max(1,st.page-1);paintDialog()}
-    const pNext=$('#plNext');if(pNext)pNext.onclick=()=>{st.page+=1;paintDialog()}
-    const skuQ=$('#plSkuQ');if(skuQ)skuQ.oninput=()=>{st.skuQ=skuQ.value;st.skuPage=1;paintDialog()}
-    const skuReason=$('#plSkuReason');if(skuReason)skuReason.onchange=()=>{st.skuReasonFilter=skuReason.value;st.skuPage=1;paintDialog()}
-    const skuPrev=$('#plSkuPrev');if(skuPrev)skuPrev.onclick=()=>{st.skuPage=Math.max(1,st.skuPage-1);paintDialog()}
-    const skuNext=$('#plSkuNext');if(skuNext)skuNext.onclick=()=>{st.skuPage+=1;paintDialog()}
+    const q=$('#plQ');if(q)q.oninput=()=>{st.q=q.value;st.page=1;paintDialog({resetTableScroll:true})}
+    const stSel=$('#plStatus');if(stSel)stSel.onchange=()=>{st.statusFilter=stSel.value;st.page=1;paintDialog({resetTableScroll:true})}
+    const pPrev=$('#plPrev');if(pPrev)pPrev.onclick=()=>{st.page=Math.max(1,st.page-1);paintDialog({resetTableScroll:true})}
+    const pNext=$('#plNext');if(pNext)pNext.onclick=()=>{st.page+=1;paintDialog({resetTableScroll:true})}
+    const skuQ=$('#plSkuQ');if(skuQ)skuQ.oninput=()=>{st.skuQ=skuQ.value;st.skuPage=1;paintDialog({resetListScroll:true})}
+    const skuReason=$('#plSkuReason');if(skuReason)skuReason.onchange=()=>{st.skuReasonFilter=skuReason.value;st.skuPage=1;paintDialog({resetListScroll:true})}
+    const skuPrev=$('#plSkuPrev');if(skuPrev)skuPrev.onclick=()=>{st.skuPage=Math.max(1,st.skuPage-1);paintDialog({resetListScroll:true})}
+    const skuNext=$('#plSkuNext');if(skuNext)skuNext.onclick=()=>{st.skuPage+=1;paintDialog({resetListScroll:true})}
     const selPage=$('#plSkuSelectPage')
     if(selPage)selPage.onclick=()=>{
       const all=filteredSkuGroups(st)
@@ -967,7 +1030,7 @@
       el.onclick=()=>{
         const code=el.getAttribute('data-pl-sku-expand')
         st.expandedCodes[code]=!st.expandedCodes[code]
-        paintDialog()
+        paintDialog({anchorCode:code})
       }
     })
 
@@ -983,7 +1046,7 @@
           setSkuDecision(st,code,{decision:dec})
           if(dec==='separate'||dec==='hold')st.expandedCodes[code]=true
         }
-        paintDialog()
+        paintDialog({anchorCode:code})
       }
     })
     document.querySelectorAll('[data-pl-keep]').forEach(el=>{
