@@ -215,10 +215,29 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 result = legacy_csv_import.commit_preview(c, payload, db_path=db_path)
         except stock.StockConflict as e:
             return 409, e.payload
+        except stock.BackupError as e:
+            cause = getattr(e, 'cause', None)
+            print(
+                f'legacy-csv commit backup failed: {e}'
+                + (f' cause={type(cause).__name__}: {cause}' if cause else ''),
+                flush=True,
+            )
+            return 400, {
+                'error': str(e) or stock.BACKUP_FAILED_MESSAGE,
+                'code': 'backup_failed',
+                'registered': False,
+            }
         except ValueError as e:
             return 400, {'error': str(e) or '取込を確認してください。'}
         except sqlite3.IntegrityError:
             return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
+        except (OSError, sqlite3.Error) as e:
+            print(f'legacy-csv commit failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '取込を中止しました。登録は完了していません。',
+                'code': 'commit_failed',
+                'registered': False,
+            }
         return 200, result
     if path == '/api/product-ledger-csv/preview':
         import product_ledger_import
@@ -244,12 +263,35 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 result = product_ledger_import.commit_preview(c, payload, db_path=db_path)
         except stock.StockConflict as e:
             return 409, e.payload
+        except stock.BackupError as e:
+            cause = getattr(e, 'cause', None)
+            print(
+                f'product-ledger commit backup failed: {e}'
+                + (f' cause={type(cause).__name__}: {cause}' if cause else ''),
+                flush=True,
+            )
+            return 400, {
+                'error': str(e) or stock.BACKUP_FAILED_MESSAGE,
+                'code': 'backup_failed',
+                'registered': False,
+            }
         except ValueError as e:
             return 400, {'error': str(e) or '取込を確認してください。'}
         except RuntimeError as e:
-            return 400, {'error': str(e) or '取込を中止しました。'}
+            print(f'product-ledger commit aborted: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': str(e) or '取込を中止しました。登録は完了していません。',
+                'registered': False,
+            }
         except sqlite3.IntegrityError:
             return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
+        except (OSError, sqlite3.Error) as e:
+            print(f'product-ledger commit failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '取込を中止しました。登録は完了していません。',
+                'code': 'commit_failed',
+                'registered': False,
+            }
         return 200, result
     if path == '/api/products/merge/preview':
         import stock_product_merge
@@ -268,10 +310,29 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 result = stock_product_merge.execute_merge(c, payload, db_path=db_path)
         except stock.StockConflict as e:
             return 409, e.payload
+        except stock.BackupError as e:
+            cause = getattr(e, 'cause', None)
+            print(
+                f'product merge backup failed: {e}'
+                + (f' cause={type(cause).__name__}: {cause}' if cause else ''),
+                flush=True,
+            )
+            return 400, {
+                'error': str(e) or stock.BACKUP_FAILED_MESSAGE,
+                'code': 'backup_failed',
+                'registered': False,
+            }
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '統合を確認してください。'}
         except sqlite3.IntegrityError:
             return 400, {'error': '同じ統合操作が既にあるため、中止しました。'}
+        except (OSError, sqlite3.Error) as e:
+            print(f'product merge failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '統合を中止しました。変更は完了していません。',
+                'code': 'commit_failed',
+                'registered': False,
+            }
         return 200, result
     if path == '/api/outbound/preview':
         try:
@@ -401,7 +462,16 @@ def make_handler(db_path, mode):
             except json.JSONDecodeError:
                 self.send(400, {'error': '送信内容を読めませんでした。'})
                 return
-            result = api_post(db_path, mode, urlparse(self.path).path, body, can_write=True)
+            try:
+                result = api_post(db_path, mode, urlparse(self.path).path, body, can_write=True)
+            except Exception as e:
+                # Never tear the HTTP response (browser would only show Failed to fetch).
+                print(f'api_post crashed path={path}: {type(e).__name__}: {e}', flush=True)
+                self.send(500, {
+                    'error': '処理中にエラーが発生しました。登録は完了していません。',
+                    'registered': False,
+                })
+                return
             if len(result) >= 3:
                 headers = result[3] if len(result) > 3 else None
                 self.send_bytes(result[0], result[1], result[2], headers)
