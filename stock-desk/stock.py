@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS products (
   code TEXT NOT NULL,
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT '',
+  material TEXT NOT NULL DEFAULT '',
   category TEXT NOT NULL DEFAULT '',
   supplier_id INTEGER REFERENCES suppliers(id),
   active INTEGER NOT NULL DEFAULT 1,
@@ -647,6 +648,8 @@ def migrate_schema(c):
         product_cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
         if 'category' not in product_cols:
             c.execute("ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT ''")
+        if 'material' not in product_cols:
+            c.execute("ALTER TABLE products ADD COLUMN material TEXT NOT NULL DEFAULT ''")
     import stock_product_merge
     stock_product_merge.migrate_product_merge(c)
     # Backfill business dates from lot fields only (no invented dates for outbound).
@@ -1005,7 +1008,7 @@ def save_product(c, body):
     stock_product_merge.migrate_product_merge(c)
     if pid:
         existing_prod = c.execute(
-            'SELECT id, code, name, merged_into_id FROM products WHERE id=?', (pid,)
+            'SELECT id, code, name, merged_into_id, material FROM products WHERE id=?', (pid,)
         ).fetchone()
         if not existing_prod:
             raise ValueError('商品が見つかりません。')
@@ -1013,6 +1016,11 @@ def save_product(c, body):
             raise ValueError(
                 f'この商品は商品ID {existing_prod["merged_into_id"]} へ統合済みのため編集できません。'
             )
+        # material 未指定の更新では既存値を維持（Excel等の旧呼び出し互換）
+        if 'material' in body:
+            material = optional(body.get('material'), '生地・素材', 80)
+        else:
+            material = existing_prod['material'] if 'material' in existing_prod.keys() else ''
         stock_product_merge.assert_normal_code_available(
             c, code, product_id=pid,
             allow_historical_duplicate=bool(body.get('_allowHistoricalDuplicateCode')),
@@ -1021,8 +1029,8 @@ def save_product(c, body):
         if text(existing_prod['name']) != name:
             stock_product_merge.ensure_name_alias(c, pid, existing_prod['name'])
         c.execute(
-            'UPDATE products SET code=?,name=?,color=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
-            (code, name, color, category, supplier_id, active, t, pid),
+            'UPDATE products SET code=?,name=?,color=?,material=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
+            (code, name, color, material, category, supplier_id, active, t, pid),
         )
         existing = {r['label']: r['id'] for r in c.execute('SELECT id,label FROM product_sizes WHERE product_id=?', (pid,))}
         for label in existing:
@@ -1064,9 +1072,10 @@ def save_product(c, body):
             c, code, product_id=None,
             allow_historical_duplicate=bool(body.get('_allowHistoricalDuplicateCode')),
         )
+        material = optional(body.get('material'), '生地・素材', 80)
         c.execute(
-            'INSERT INTO products(code,name,color,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-            (code, name, color, category, supplier_id, active, t, t),
+            'INSERT INTO products(code,name,color,material,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
+            (code, name, color, material, category, supplier_id, active, t, t),
         )
         pid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         for i, label in enumerate(labels):
@@ -1683,9 +1692,11 @@ def product_row(c, pid):
     import stock_product_merge
     stock_product_merge.migrate_product_merge(c)
     name_aliases = stock_product_merge.list_name_aliases(c, pid)
+    material = r['material'] if 'material' in r.keys() else ''
     return {
         'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
-        'name': r['name'], 'color': r['color'], 'category': category or '',
+        'name': r['name'], 'color': r['color'], 'material': material or '',
+        'category': category or '',
         'supplierId': r['supplier_id'],
         'supplierName': r['supplier_name'] or '',
         'subSupplierIds': [s['id'] for s in sub_suppliers],

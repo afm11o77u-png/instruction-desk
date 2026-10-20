@@ -15,6 +15,7 @@ import re
 from collections import defaultdict
 
 import legacy_csv_import as legacy
+import product_ledger_paren as paren_classify
 import stock
 import stock_product_merge
 
@@ -281,9 +282,11 @@ def plan_provisional_official_name(group, raw_decision=None):
     優先順:
     1. ユーザー指定（手動が最優先。再照合でも上書きしない）
     2. 既存商品の公式名（黙って上書きしない）
-    3. 初期在庫CSV補助の一意提案（正の在庫名 → 該当行名）
+    3. 初期在庫CSV補助の非ゼロ在庫ペア提案（商品名+仕入先をセット）
     4. 台帳CSVの商品名コアが一意
     5. 曖昧なときは仮代表名（名称未整理ステータス）＋候補表示
+
+    ※「在庫で決まらなければ補助CSVに出た名を採用」する旧規則（aux_any_unique）は使わない。
     """
     raw = raw_decision if isinstance(raw_decision, dict) else {}
     user = stock.text(raw.get('officialName') or raw.get('name') or '')
@@ -654,6 +657,7 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
 
     size_rows = []
     has_positive = False
+    has_nonzero = False
     undecidable = False
     undecidable_reasons = []
     for row_no, item in matched:
@@ -675,6 +679,8 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
             continue
         if qty is not None and qty > 0:
             has_positive = True
+        if qty is not None and qty != 0:
+            has_nonzero = True
         size_rows.append({
             'rowNo': row_no,
             'size': size,
@@ -699,6 +705,7 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
         'auxSizeStocks': size_rows,
         'hasAnyAuxRows': bool(matched),
         'hasPositiveStock': bool(has_positive and not undecidable),
+        'hasNonZeroStock': bool(has_nonzero and not undecidable),
         'qtyUndecidable': undecidable,
         'qtyUndecidableReasons': undecidable_reasons,
         'customers': list(customers),
@@ -803,19 +810,74 @@ def _unique_display_name(names):
     return prefer_unmarked_product_name(cleaned) or cleaned[0]
 
 
-def suggest_main_name_from_aux(group, aux_index):
-    """同一商品候補の中だけで、初期在庫CSVから代表名を提案する。
+def _collect_name_supplier_candidates(group):
+    """同一商品候補内の 商品名+仕入先 ペア（バリアント単位）。別候補の名と仕入先を混ぜない。"""
+    out = []
+    seen = set()
+    for v in group.get('variants') or []:
+        supplier = stock.text(v.get('supplier') or '')
+        names = []
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            n = stock.text(n)
+            if n and n not in names:
+                names.append(n)
+        if not names:
+            continue
+        display_name = prefer_unmarked_product_name(names) or names[0]
+        key = (product_name_core_key(display_name), identity_match_key(supplier))
+        if key in seen:
+            # 同一コア名＋仕入先は名前を統合
+            for slot in out:
+                if (
+                    product_name_core_key(slot['productName']) == key[0]
+                    and identity_match_key(slot['supplier']) == key[1]
+                ):
+                    for n in names:
+                        if n not in slot['ledgerNames']:
+                            slot['ledgerNames'].append(n)
+                    slot['productName'] = prefer_unmarked_product_name(slot['ledgerNames']) or slot['productName']
+                    for size in v.get('sizes') or []:
+                        if size and size not in slot['sizes']:
+                            slot['sizes'].append(size)
+                    for cust in v.get('customers') or []:
+                        if cust and cust not in slot['customers']:
+                            slot['customers'].append(cust)
+                    break
+            continue
+        seen.add(key)
+        out.append({
+            'productName': display_name,
+            'supplier': supplier,
+            'ledgerNames': list(names),
+            'sizes': list(v.get('sizes') or []),
+            'customers': list(v.get('customers') or []),
+            'variantKey': v.get('key') or '',
+        })
+    return out
 
-    補助CSVの存在だけで同一商品とは断定しない（台帳側の名コアと照合できた行のみ）。
-    「在庫」列のみ。正の在庫は行単位（負との相殺なし）。数量最大では選ばない。
-    不正／空の在庫は 0 扱いしない（正の在庫判定から除外。名前の存在照合には使う）。
+
+def suggest_main_candidate_from_aux(group, aux_index):
+    """同一商品候補の中だけで、初期在庫CSVから代表の 商品名+仕入先 ペアを提案する。
+
+    規則（#157 の aux_any_unique を置き換え）:
+    - 「在庫」列のみ（購入数量・出荷数・補正在庫数は使わない）
+    - 候補ごとに非ゼロ在庫行の有無を見る（正負の相殺なし。数量最大では選ばない）
+    - 非ゼロを持つ候補がちょうど1つ → その候補の商品名+仕入先をセットで採用
+    - 複数・全ゼロ・数量不正/空・照合不明 → 自動確定しない（ユーザー確認）
+    - 別候補の商品名と仕入先を組み合わせない
+    - 補助CSVの在庫有無だけでは別仕様の商品を自動まとめしない
     """
     empty = {
         'suggestedOfficialName': '',
+        'suggestedPrimarySupplier': '',
         'officialNameNeedsChoice': True,
+        'pairNeedsChoice': True,
         'nameAdoptionRule': '',
         'nameAdoptionRuleCode': '',
+        'pairAdoptionRule': '',
+        'pairAdoptionRuleCode': '',
         'nameCandidates': [],
+        'pairCandidates': [],
         'nameReasons': [],
     }
     if not aux_index:
@@ -824,93 +886,108 @@ def suggest_main_name_from_aux(group, aux_index):
     if not stock_product_merge.is_normal_product_code(code):
         return empty
 
-    ledger_names = []
-    for v in group.get('variants') or []:
-        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
-            n = stock.text(n)
-            if n and n not in ledger_names:
-                ledger_names.append(n)
-    if not ledger_names:
+    candidates = _collect_name_supplier_candidates(group)
+    if not candidates:
         return empty
-    ledger_cores = {product_name_core_key(n) for n in ledger_names if n}
 
-    matched = []
-    for row_no, item in aux_index.get(code, []):
-        aux_name = stock.text(item.get('商品名'))
-        if not aux_name:
-            continue
-        if product_name_core_key(aux_name) not in ledger_cores:
-            continue
-        matched.append((row_no, item, aux_name))
+    name_candidates = []
+    pair_candidates = []
+    reasons = []
+    nonzero_hits = []
+    any_undecidable = False
 
-    if not matched:
+    for cand in candidates:
+        supplier = cand['supplier']
+        names = cand['ledgerNames']
+        display_name = cand['productName']
+        if display_name and display_name not in name_candidates:
+            name_candidates.append(display_name)
+        pair_candidates.append({
+            'productName': display_name,
+            'supplier': supplier,
+            'ledgerNames': list(names),
+        })
+        matched = []
+        for row_no, item in aux_index.get(code, []):
+            for name in names:
+                if _aux_row_matches_candidate(
+                    item, code=code, supplier=supplier, product_name=name,
+                    customers=cand.get('customers') or [],
+                ):
+                    matched.append((row_no, item, name))
+                    break
+        has_nonzero = False
+        for row_no, item, _name in matched:
+            qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
+            if qstatus != 'ok':
+                any_undecidable = True
+                if qstatus == 'empty':
+                    reasons.append(f'{row_no}行目：在庫が空です（0扱いしません）。')
+                else:
+                    reasons.append(
+                        f'{row_no}行目：在庫「{stock.text(item.get("在庫"))}」が不正です（0扱いしません）。'
+                    )
+                continue
+            if qty is not None and qty != 0:
+                has_nonzero = True
+        if has_nonzero:
+            nonzero_hits.append({
+                'productName': display_name,
+                'supplier': supplier,
+                'ledgerNames': list(names),
+            })
+
+    if any_undecidable:
+        reasons.append('在庫の空欄または不正があるため、代表の商品名+仕入先は自動確定しません。')
         return {
             **empty,
-            'nameReasons': ['初期在庫CSVに、この商品候補と商品名が対応する行がありません。'],
-        }
-
-    positive_names = []
-    any_names = []
-    reasons = []
-    for row_no, item, aux_name in matched:
-        if aux_name not in any_names:
-            any_names.append(aux_name)
-        qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
-        if qstatus != 'ok':
-            if qstatus == 'empty':
-                reasons.append(f'{row_no}行目：在庫が空です（0扱いしません）。')
-            else:
-                reasons.append(
-                    f'{row_no}行目：在庫「{stock.text(item.get("在庫"))}」が不正です（0扱いしません）。'
-                )
-            continue
-        if qty is not None and qty > 0:
-            if aux_name not in positive_names:
-                positive_names.append(aux_name)
-
-    # 1) 正の在庫行の商品名が一意
-    unique_pos = _unique_display_name(positive_names)
-    if unique_pos:
-        return {
-            'suggestedOfficialName': unique_pos,
-            'officialNameNeedsChoice': False,
-            'nameAdoptionRule': '初期在庫CSVで正の在庫がある商品名が一意のため代表名に採用',
-            'nameAdoptionRuleCode': 'aux_positive_unique',
-            'nameCandidates': list(any_names),
+            'nameCandidates': name_candidates,
+            'pairCandidates': pair_candidates,
             'nameReasons': reasons,
         }
-    if len({product_name_core_key(n) for n in positive_names}) > 1:
-        reasons.append(
-            '正の在庫がある商品名が複数あるため、初期在庫CSVからは代表名を自動確定しません。'
+
+    if len(nonzero_hits) == 1:
+        hit = nonzero_hits[0]
+        chosen_name = prefer_unmarked_product_name(hit['ledgerNames']) or hit['productName']
+        rule = (
+            '初期在庫CSVで非ゼロ在庫がある候補が1組のため、'
+            'その商品名+仕入先を代表に採用'
         )
-
-    # 2) 該当する補助行全体の商品名が一意（負在庫行の名も含む）
-    unique_any = _unique_display_name(any_names)
-    if unique_any:
         return {
-            'suggestedOfficialName': unique_any,
+            'suggestedOfficialName': chosen_name,
+            'suggestedPrimarySupplier': hit['supplier'],
             'officialNameNeedsChoice': False,
-            'nameAdoptionRule': (
-                '正の在庫名は一意でないが、初期在庫CSVの該当行の商品名が一意のため代表名に採用'
-                if positive_names else
-                '初期在庫CSVの該当行の商品名が一意のため代表名に採用'
-            ),
-            'nameAdoptionRuleCode': 'aux_any_unique',
-            'nameCandidates': list(any_names),
+            'pairNeedsChoice': False,
+            'nameAdoptionRule': rule,
+            'nameAdoptionRuleCode': 'aux_nonzero_pair',
+            'pairAdoptionRule': rule,
+            'pairAdoptionRuleCode': 'aux_nonzero_pair',
+            'nameCandidates': name_candidates,
+            'pairCandidates': pair_candidates,
             'nameReasons': reasons,
         }
 
-    reasons.append(
-        '初期在庫CSVの商品名候補が複数のため代表名は自動確定しません（数量最大では選びません）。'
-    )
+    if len(nonzero_hits) > 1:
+        reasons.append(
+            '非ゼロ在庫がある候補が複数あるため、代表の商品名+仕入先は自動確定しません'
+            '（数量最大では選びません。別候補の名と仕入先も組み合わせません）。'
+        )
+    elif not nonzero_hits:
+        reasons.append(
+            '非ゼロ在庫がある候補がないため、初期在庫CSVからは代表の商品名+仕入先を'
+            '自動確定しません（該当行の有無だけでは選びません）。'
+        )
     return {
-        'suggestedOfficialName': '',
-        'officialNameNeedsChoice': True,
-        'nameAdoptionRule': '',
-        'nameAdoptionRuleCode': '',
-        'nameCandidates': list(any_names),
+        **empty,
+        'nameCandidates': name_candidates,
+        'pairCandidates': pair_candidates,
         'nameReasons': reasons,
     }
+
+
+def suggest_main_name_from_aux(group, aux_index):
+    """後方互換: ペア提案のうち名前側を返す。"""
+    return suggest_main_candidate_from_aux(group, aux_index)
 
 
 def decide_auto_primary_supplier(candidates, *, aux_judgments=None, aux_uploaded=False):
@@ -962,6 +1039,7 @@ def _empty_supplier_judgment(candidate):
         'auxSizeStocks': [],
         'hasAnyAuxRows': False,
         'hasPositiveStock': False,
+        'hasNonZeroStock': False,
         'qtyUndecidable': False,
         'qtyUndecidableReasons': [],
         'customers': list(candidate.get('customers') or []),
@@ -998,8 +1076,9 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
             'rowCount': len(aux_uploaded['rows']),
             'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
             'note': (
-                '初期在庫用CSVは通常仕入先の判定補助だけに使います。'
+                '初期在庫用CSVは通常仕入先・代表の商品名+仕入先ペアの判定補助だけに使います。'
                 '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
+                '非ゼロ在庫（負含む）がある候補が1組のときだけそのペアを提案します。'
                 '補助CSVにだけある商品・仕入先は新規作成しません。'
             ),
         }
@@ -1020,22 +1099,58 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
             aux_uploaded=bool(aux_uploaded),
         )
         auto_primary = decision['autoPrimarySupplier']
-        _apply_planned_roles(judgments, auto_primary)
-        # 代表名提案（補助CSV）と通常仕入先提案は理由を分けて持つ
-        name_from_aux = suggest_main_name_from_aux(group, aux_index) if aux_index is not None else {
+        auto_reason = decision['autoReason']
+        needs_manual = decision['needsManualPrimary']
+        manual_reason = decision['manualReason']
+        decision_kind = decision.get('decisionKind') or ''
+
+        # 代表の 商品名+仕入先 ペア提案（非ゼロ在庫・同一候補セット）
+        pair_from_aux = suggest_main_candidate_from_aux(group, aux_index) if aux_index is not None else {
             'suggestedOfficialName': '',
+            'suggestedPrimarySupplier': '',
             'officialNameNeedsChoice': True,
+            'pairNeedsChoice': True,
             'nameAdoptionRule': '',
             'nameAdoptionRuleCode': '',
+            'pairAdoptionRule': '',
+            'pairAdoptionRuleCode': '',
             'nameCandidates': [],
+            'pairCandidates': [],
             'nameReasons': [],
         }
-        suggested_name = stock.text(name_from_aux.get('suggestedOfficialName') or '')
-        name_needs = bool(name_from_aux.get('officialNameNeedsChoice', True))
-        name_rule = stock.text(name_from_aux.get('nameAdoptionRule') or '')
-        name_rule_code = stock.text(name_from_aux.get('nameAdoptionRuleCode') or '')
+        pair_supplier = stock.text(pair_from_aux.get('suggestedPrimarySupplier') or '')
+        # 非ゼロでペアが決まったときは、その仕入先を通常に（別候補の名と混ぜない）。
+        # 候補1社の自動（#154）は維持し、理由を上書きしない。
+        if (
+            pair_supplier
+            and not pair_from_aux.get('pairNeedsChoice')
+            and decision_kind != 'single_candidate'
+        ):
+            auto_primary = pair_supplier
+            auto_reason = stock.text(pair_from_aux.get('pairAdoptionRule') or '') or (
+                '初期在庫CSVで非ゼロ在庫の候補が1組のため通常仕入先にしました。'
+            )
+            needs_manual = False
+            manual_reason = ''
+            decision_kind = 'aux_nonzero_pair'
+        elif (
+            pair_supplier
+            and not pair_from_aux.get('pairNeedsChoice')
+            and decision_kind == 'single_candidate'
+            and not auto_primary
+        ):
+            auto_primary = pair_supplier
+
+        _apply_planned_roles(judgments, auto_primary)
+
+        suggested_name = stock.text(pair_from_aux.get('suggestedOfficialName') or '')
+        name_needs = bool(pair_from_aux.get('officialNameNeedsChoice', True))
+        name_rule = stock.text(pair_from_aux.get('nameAdoptionRule') or '')
+        name_rule_code = stock.text(pair_from_aux.get('nameAdoptionRuleCode') or '')
+        if not suggested_name and auto_primary and not name_needs:
+            pass
         if not suggested_name:
-            # 補助で決まらないとき、通常仕入先側の台帳名が一意なら候補にする（確定はしない）
+            # ペア未決でも、通常仕入先側の台帳名が一意なら名前候補にする（仕入先は変えない）
             fallback_name, fallback_needs = _suggested_official_name_for_primary(group, auto_primary)
             if fallback_name and not fallback_needs:
                 suggested_name = fallback_name
@@ -1046,26 +1161,31 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
         group['auxPrimary'] = {
             # 複社＋補助CSVのとき判定パネルを出す
             'applicable': bool(multi and aux_uploaded),
-            'singleCandidateAuto': decision.get('decisionKind') == 'single_candidate',
+            'singleCandidateAuto': decision_kind == 'single_candidate',
             'reason': (
                 '' if multi and aux_uploaded
                 else (
-                    SINGLE_SUPPLIER_AUTO_REASON if decision.get('decisionKind') == 'single_candidate'
+                    SINGLE_SUPPLIER_AUTO_REASON if decision_kind == 'single_candidate'
                     else ('仕入先候補なし' if len(candidates) == 0 else '')
                 )
             ),
             'supplierJudgments': judgments,
             'autoPrimarySupplier': auto_primary,
-            'autoReason': decision['autoReason'],
-            'needsManualPrimary': decision['needsManualPrimary'],
-            'manualReason': decision['manualReason'],
-            'decisionKind': decision.get('decisionKind') or '',
+            'autoReason': auto_reason,
+            'needsManualPrimary': needs_manual,
+            'manualReason': manual_reason,
+            'decisionKind': decision_kind,
             'suggestedOfficialName': suggested_name,
+            'suggestedPrimarySupplier': pair_supplier,
             'officialNameNeedsChoice': name_needs,
+            'pairNeedsChoice': bool(pair_from_aux.get('pairNeedsChoice', True)),
             'nameAdoptionRule': name_rule,
             'nameAdoptionRuleCode': name_rule_code,
-            'nameCandidates': list(name_from_aux.get('nameCandidates') or []),
-            'nameReasons': list(name_from_aux.get('nameReasons') or []),
+            'pairAdoptionRule': stock.text(pair_from_aux.get('pairAdoptionRule') or ''),
+            'pairAdoptionRuleCode': stock.text(pair_from_aux.get('pairAdoptionRuleCode') or ''),
+            'nameCandidates': list(pair_from_aux.get('nameCandidates') or []),
+            'pairCandidates': list(pair_from_aux.get('pairCandidates') or []),
+            'nameReasons': list(pair_from_aux.get('nameReasons') or []),
         }
     return meta
 
@@ -1681,10 +1801,189 @@ def _excluded_row(row_no, item, *, reason):
     }
 
 
+def build_paren_classification(product_name, override=None):
+    """括弧分類＋ユーザー上書き（行編集はグローバル辞書へ昇格しない）。"""
+    base = paren_classify.classify_product_name(product_name)
+    raw = override if isinstance(override, dict) else {}
+    user_touched = bool(raw.get('userEdited') or raw.get('manual'))
+    planned = stock.text(raw.get('plannedName')) if 'plannedName' in raw else base['plannedName']
+    color = stock.text(raw.get('color')) if 'color' in raw else base['color']
+    processing = stock.text(raw.get('processing')) if 'processing' in raw else base['processing']
+    material = stock.text(raw.get('material')) if 'material' in raw else base['material']
+    # 未分類の手編集はリストで受けてもよい
+    if 'unclassified' in raw:
+        unc = raw.get('unclassified')
+        if isinstance(unc, list):
+            unclassified = [stock.text(x) for x in unc if stock.text(x)]
+        else:
+            unclassified = [stock.text(unc)] if stock.text(unc) else []
+    else:
+        unclassified = list(base.get('unclassified') or [])
+
+    needs = bool(base.get('needsConfirm'))
+    reasons = list(base.get('confirmReasons') or [])
+    if user_touched:
+        # 手動確定後は要確認を外せる（ユーザーが内容を編集した）
+        if raw.get('confirmed') or raw.get('acceptProposal'):
+            needs = False
+            reasons = []
+        elif not raw.get('confirmed') and (unclassified or base.get('needsConfirm')):
+            needs = True
+    # 曖昧なまま自動確定しない
+    auto = bool(base.get('autoClassified')) and not needs and not user_touched
+    if user_touched and not needs:
+        auto = False  # 手動
+
+    decision = 'needs_review' if needs else ('auto' if (auto or user_touched) else 'passthrough')
+    return {
+        'originalName': base['originalName'],
+        'plannedName': planned or base['originalName'],
+        'baseName': base.get('baseName') or base['originalName'],
+        'color': color,
+        'processing': processing,
+        'material': material,
+        'unclassified': unclassified,
+        'needsConfirm': needs,
+        'confirmReasons': reasons,
+        'autoClassified': auto and not user_touched,
+        'userEdited': user_touched,
+        'decision': decision,
+        'parenContents': list(base.get('parenContents') or []),
+        'segments': list(base.get('segments') or []),
+        'keptOriginal': bool(
+            stock.text(planned or '') == stock.text(base['originalName'])
+            or base.get('keptOriginal')
+        ),
+        'colorCandidates': list(base.get('colorCandidates') or []),
+        'processingCandidates': list(base.get('processingCandidates') or []),
+        'materialCandidates': list(base.get('materialCandidates') or []),
+    }
+
+
+def attach_paren_classification(row, override=None):
+    """行へ括弧分類を付け、色・加工・生地の登録予定を反映する。"""
+    csv = dict(row.get('csv') or {})
+    original = stock.text(csv.get('productName') or '')
+    plan = build_paren_classification(original, override)
+    row['parenClassification'] = plan
+
+    prod = dict(row.get('product') or {})
+    handle = dict(row.get('handle') or {})
+
+    # 予定名（括弧分類後）。原文は別名／マッピング用に残す。
+    # 別注・品番なしは顧客×原文名で区別するため、自動では予定名へ置き換えない
+    # （色・加工・生地フィールドへの抽出は行う）。
+    code = stock.text(csv.get('code') or '')
+    keep_original_name = (
+        legacy.is_custom_order_code(code)
+        or not stock.text(code)
+        or code == stock_product_merge.UNKNOWN_CODE
+    )
+    if plan.get('plannedName'):
+        prod['csvOriginalName'] = original
+        if plan['plannedName'] != original:
+            prod['plannedNameFromParen'] = plan['plannedName']
+        if (
+            not keep_original_name
+            and (plan.get('autoClassified') or (plan.get('userEdited') and not plan.get('needsConfirm')))
+        ):
+            prod['suggestedNameFromParen'] = plan['plannedName']
+            # 代表名未設定なら括弧分類後の名を公式名候補に（SKUまとめ後も優先）
+            if not prod.get('officialName') or prod.get('officialName') == original:
+                prod['officialName'] = plan['plannedName']
+                prod['applyOfficialName'] = True
+
+    if plan.get('color'):
+        prod['proposedColor'] = plan['color']
+        if not prod.get('officialColor'):
+            prod['officialColor'] = plan['color']
+    if plan.get('material'):
+        prod['proposedMaterial'] = plan['material']
+        prod['officialMaterial'] = plan['material']
+
+    # 顧客別加工 → 取扱の加工仕様（不明時は「加工なし」へ強制しない）
+    if plan.get('processing'):
+        handle['proposedEmbroidery'] = plan['processing']
+        if handle.get('action') == 'create' or handle.get('embroidery') in (
+            '', None, PENDING_EMBROIDERY,
+        ):
+            handle['embroidery'] = plan['processing']
+            handle['embroideryLabel'] = plan['processing']
+            handle['pendingEmbroiderySort'] = False
+            handle['fromParenClassification'] = True
+
+    if plan.get('needsConfirm'):
+        row['reasons'] = list(row.get('reasons') or []) + list(plan.get('confirmReasons') or [])
+        # 未解決の曖昧さは自動確定しない（行を要確認へ。SKU未決とは独立）
+        if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD) and not (
+            plan.get('userEdited') and not plan.get('needsConfirm')
+        ):
+            # 括弧のみの要確認は status を needs_review に（コミット不可）
+            if row.get('status') in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_UNCHANGED):
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                row['parenNeedsConfirm'] = True
+
+    row['product'] = prod
+    row['handle'] = handle
+    return row
+
+
+def _apply_paren_names_after_sku_plans(classified, sku_groups):
+    """括弧分類で得た予定名を、SKU代表名より優先して商品計画へ反映する。
+
+    ただしユーザー指定の公式名・既存維持は上書きしない。
+    別注・品番なしは原文名を維持（顧客×原文名の区別を壊さない）。
+    """
+    by_code = {g['code']: g for g in sku_groups}
+    for row in classified:
+        pc = row.get('parenClassification') or {}
+        if not (pc.get('autoClassified') or (pc.get('userEdited') and not pc.get('needsConfirm'))):
+            continue
+        planned = stock.text(pc.get('plannedName') or '')
+        if not planned:
+            continue
+        code = stock.text((row.get('csv') or {}).get('code') or '')
+        keep_original_name = (
+            legacy.is_custom_order_code(code)
+            or not stock.text(code)
+            or code == stock_product_merge.UNKNOWN_CODE
+        )
+        prod = dict(row.get('product') or {})
+        original = stock.text((row.get('csv') or {}).get('productName') or '')
+        if not keep_original_name:
+            # SKUまとめの officialName が原文のままなら置き換え
+            cur = stock.text(prod.get('officialName') or '')
+            if not cur or cur == original:
+                prod['officialName'] = planned
+                prod['applyOfficialName'] = True
+                prod['suggestedNameFromParen'] = planned
+                prod['csvOriginalName'] = original
+        if pc.get('color') and not prod.get('officialColor'):
+            prod['officialColor'] = pc['color']
+        if pc.get('material'):
+            prod['officialMaterial'] = pc['material']
+            prod['proposedMaterial'] = pc['material']
+        row['product'] = prod
+        group = by_code.get(code)
+        if (
+            group
+            and group.get('plannedSingleProduct')
+            and not keep_original_name
+        ):
+            plan = dict(group.get('productPlan') or {})
+            if stock.text(plan.get('productName') or '') in ('', original):
+                plan['productName'] = planned
+                group['productPlan'] = plan
+                group['plannedOfficialName'] = planned
+
+
 def classify_row(
     c, row_no, item, *,
     selected_product_id=None, selected_handle_id=None, selected_category=None,
     force_create_product=False,
+    paren_override=None,
 ):
     customer_name = stock.text(item.get('顧客'))
     supplier_name = stock.text(item.get('仕入先'))
@@ -1853,7 +2152,7 @@ def classify_row(
         status = STATUS_REUSE
 
     can_commit = status in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD)
-    return {
+    row = {
         'rowNo': row_no,
         'status': status,
         'statusLabel': STATUS_LABELS[status],
@@ -1876,6 +2175,7 @@ def classify_row(
         'canCommit': can_commit,
         'fromImportMap': bool(product.get('fromImportMap')),
     }
+    return attach_paren_classification(row, paren_override)
 
 
 def _row_variant(row):
@@ -2663,6 +2963,9 @@ def build_preview(c, body):
     aux_uploaded = decode_aux_upload(body)
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
     sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
+    row_classifications = (
+        body.get('rowClassifications') if isinstance(body.get('rowClassifications'), dict) else {}
+    )
 
     # 品番グループへの商品選択を行へ展開
     group_product = {}
@@ -2687,7 +2990,12 @@ def build_preview(c, body):
     classified = []
     for row_no, item in uploaded['rows']:
         sel = dict(selections.get(str(row_no)) or selections.get(row_no) or {})
-        temp = classify_row(c, row_no, item)
+        paren_ov = (
+            row_classifications.get(str(row_no))
+            or row_classifications.get(row_no)
+            or sel.get('parenClassification')
+        )
+        temp = classify_row(c, row_no, item, paren_override=paren_ov)
         gk = temp['matchGroupKey']
         if gk in group_product and sel.get('productId') is None:
             sel['productId'] = group_product[gk]
@@ -2714,6 +3022,7 @@ def build_preview(c, body):
             selected_handle_id=sel.get('handleId'),
             selected_category=sel.get('category') if 'category' in sel else None,
             force_create_product=force,
+            paren_override=paren_ov,
         ))
 
     # 照合グループ件数
@@ -2752,6 +3061,7 @@ def build_preview(c, body):
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
     _attach_product_plans(classified, sku_groups)
     _apply_auto_merge_official_names(classified, sku_groups)
+    _apply_paren_names_after_sku_plans(classified, sku_groups)
 
     counts = defaultdict(int)
     for row in classified:
@@ -2771,14 +3081,18 @@ def build_preview(c, body):
         '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
         '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記・空白/全角半角・'
         '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
+        '商品名の括弧内は辞書規則で色・加工・生地へ分類し、取扱の加工仕様／商品の色・生地へ保存します。'
+        '未分類・曖昧な括弧は原文のまま要確認（自動確定しません）。'
         '色・生地・加工・男女・商品種の疑いや残り曖昧さは確認が必要です。'
         '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
-        'CSV原文は照合用別名に残します。品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
+        'CSV原文は照合用別名に残し、後続の初期在庫取込で解決できるようにします。'
+        '品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
         '保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
     )
     if aux_meta:
         note += (
-            ' 初期在庫用CSVは通常仕入先・代表名の判定補助のみに使い、在庫数量は書き込みません。'
+            ' 初期在庫用CSVは、非ゼロ在庫がある候補が1組のときの代表商品名+仕入先ペアと'
+            '通常仕入先の判定補助のみに使い、在庫数量は書き込みません。'
         )
     return {
         'fileName': uploaded['fileName'],
@@ -2882,6 +3196,7 @@ def _product_save_payload(c, pid, *, supplier_id=None, sub_supplier_ids=None):
         'code': cur['code'],
         'name': cur['name'],
         'color': cur['color'],
+        'material': cur.get('material') or '',
         'category': cur.get('category') or '',
         'supplierId': cur['supplierId'] if supplier_id is None else supplier_id,
         'subSupplierIds': (
@@ -2923,7 +3238,7 @@ def _apply_primary_supplier_change(c, product_id, primary_supplier_id, *, confir
     return True
 
 
-def _apply_official_name(c, product_id, official_name, color=None, csv_name=None):
+def _apply_official_name(c, product_id, official_name, color=None, csv_name=None, material=None):
     """公式名を確定し、CSV名・旧名を別名に残す。"""
     if not product_id or not official_name:
         return False
@@ -2933,9 +3248,11 @@ def _apply_official_name(c, product_id, official_name, color=None, csv_name=None
     if csv_name and stock.text(csv_name) != stock.text(official_name):
         stock_product_merge.ensure_name_alias(c, product_id, csv_name)
     new_color = current['color'] if color is None else stock.text(color)
+    new_material = current.get('material') or '' if material is None else stock.text(material)
     if (
         stock.text(current['name']) == stock.text(official_name)
         and stock.text(current['color']) == new_color
+        and stock.text(current.get('material') or '') == new_material
     ):
         return False
     stock.save_product(c, {
@@ -2943,6 +3260,7 @@ def _apply_official_name(c, product_id, official_name, color=None, csv_name=None
         'code': current['code'],
         'name': official_name,
         'color': new_color,
+        'material': new_material,
         'category': current.get('category') or '',
         'supplierId': current['supplierId'],
         'subSupplierIds': current.get('subSupplierIds') or [],
@@ -2966,10 +3284,32 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
         product_info = dict(product_info)
         product_info['code'] = product_info.get('codeOverride')
 
-    official_name = stock.text(product_info.get('officialName') or '') or stock.text(csv_name)
+    code_for_name = stock.text(product_info.get('codeOverride') if product_info.get('codeOverride') is not None else product_info.get('code') or '')
+    # 別注・品番なしは原文名を優先（括弧除去名へ自動置換しない）
+    keep_csv_name = (
+        legacy.is_custom_order_code(code_for_name)
+        or not stock.text(code_for_name)
+        or code_for_name == stock_product_merge.UNKNOWN_CODE
+    )
+    if keep_csv_name:
+        official_name = stock.text(product_info.get('officialName') or '') or stock.text(csv_name)
+    else:
+        official_name = (
+            stock.text(product_info.get('officialName') or '')
+            or stock.text(product_info.get('suggestedNameFromParen') or '')
+            or stock.text(product_info.get('plannedNameFromParen') or '')
+            or stock.text(csv_name)
+        )
     official_color = product_info.get('officialColor')
     if official_color is None:
+        official_color = product_info.get('proposedColor')
+    if official_color is None:
         official_color = ''
+    official_material = product_info.get('officialMaterial')
+    if official_material is None:
+        official_material = product_info.get('proposedMaterial')
+    if official_material is None:
+        official_material = ''
 
     primary_name = stock.text(product_info.get('primarySupplierName') or '')
     primary_id = _find_supplier_id_by_name(c, primary_name) if primary_name else None
@@ -2984,7 +3324,12 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
         if should_apply_official and official_name:
             _apply_official_name(
                 c, pid, official_name,
-                color=official_color if 'officialColor' in product_info else None,
+                color=official_color if (
+                    'officialColor' in product_info or 'proposedColor' in product_info
+                ) else None,
+                material=official_material if (
+                    'officialMaterial' in product_info or 'proposedMaterial' in product_info
+                ) else None,
                 csv_name=csv_name,
             )
         else:
@@ -3057,7 +3402,12 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
                 if (product_info.get('skuMerge') or product_info.get('applyOfficialName')) and official_name:
                     _apply_official_name(
                         c, pid, official_name,
-                        color=official_color if 'officialColor' in product_info else None,
+                        color=official_color if (
+                            'officialColor' in product_info or 'proposedColor' in product_info
+                        ) else None,
+                        material=official_material if (
+                            'officialMaterial' in product_info or 'proposedMaterial' in product_info
+                        ) else None,
                         csv_name=csv_name,
                     )
                 size_added = _save_product_sizes_only(c, pid, product_info.get('size'))
@@ -3095,16 +3445,21 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     create_supplier_id = primary_id or supplier_id
     saved = stock.save_product(c, {
         'code': code,
-        'name': name,  # 公式名（未指定時はCSV原文）。色・加工の自動分解なし
+        'name': name,  # 公式名（括弧分類後の予定名またはCSV原文）
         'color': stock.text(official_color) if official_color is not None else '',
+        'material': stock.text(official_material) if official_material is not None else '',
         'category': category,
         'supplierId': create_supplier_id,
         'sizes': [product_info['size']],
         'links': [],
         'active': True,
     })
+    # 原文名は照合用別名（初期在庫CSVなどの後続解決用）
     if csv_name and stock.text(csv_name) != stock.text(name):
         stock_product_merge.ensure_name_alias(c, saved['id'], csv_name)
+    orig_csv = stock.text(product_info.get('csvOriginalName') or '')
+    if orig_csv and stock.text(orig_csv) != stock.text(name):
+        stock_product_merge.ensure_name_alias(c, saved['id'], orig_csv)
     for mapping in product_info.get('nameMappings') or []:
         orig = stock.text(mapping.get('originalName') or '')
         if orig and stock.text(orig) != stock.text(name):
@@ -3118,7 +3473,28 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
 
 
 def _ensure_handle(c, customer_id, product_id, handle_info):
-    return legacy._ensure_handle(c, customer_id, product_id, handle_info)
+    """取扱を確保。括弧分類の加工仕様があれば「加工未整理」ではなくそれを使う。"""
+    info = handle_info if isinstance(handle_info, dict) else {}
+    if info.get('id'):
+        return legacy._ensure_handle(c, customer_id, product_id, info)
+    emb = stock.text(info.get('embroidery') or '')
+    proposed = stock.text(info.get('proposedEmbroidery') or '')
+    if info.get('fromParenClassification') and (emb or proposed):
+        use = emb if emb and emb != PENDING_EMBROIDERY else proposed
+        saved = stock.ensure_customer_product(c, {
+            'customerId': customer_id,
+            'productId': product_id,
+            'embroidery': use or PENDING_EMBROIDERY,
+        })
+        return saved['id'], not saved.get('already')
+    if emb and emb != PENDING_EMBROIDERY:
+        saved = stock.ensure_customer_product(c, {
+            'customerId': customer_id,
+            'productId': product_id,
+            'embroidery': emb,
+        })
+        return saved['id'], not saved.get('already')
+    return legacy._ensure_handle(c, customer_id, product_id, info)
 
 
 def _run_confirmed_product_merges(c, classified, sku_decisions, *, actor_name, token_prefix):
