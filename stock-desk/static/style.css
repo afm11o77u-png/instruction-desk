@@ -445,6 +445,13 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .legacy-csv-result{margin:10px 12px}
 dialog.legacy-csv-detail-dialog{width:min(720px,94vw);max-height:min(92vh,920px)}
 dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780px);overflow:auto;white-space:pre-wrap;word-break:break-word}
+.product-ledger-file-input{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0
+}
+.product-ledger-filebar .product-ledger-filename{padding:0;align-self:center}
+.product-ledger-filebar .excelhint.notice-inline,
+.excelhint.notice-inline{color:#7a3e12;font-weight:600}
 
 /* 重複商品の整理 */
 .merge-entry{align-items:center;gap:12px;flex-wrap:wrap}

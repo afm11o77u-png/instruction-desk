@@ -93,6 +93,16 @@ class DeskSectionNavigationTest(unittest.TestCase):
         nested = "nested = ROOT / 'stock-desk'"
         self.assertIn(nested, SERVER)
 
+    def test_inventory_proxy_shares_stockdesk_upload_limits(self):
+        self.assertIn('body_limit_for(api_path)', SERVER)
+        self.assertIn('OVERSIZE_BODY_ERROR', SERVER)
+        limits = (ROOT / 'stock-desk' / 'upload_limits.py').read_text(encoding='utf-8')
+        self.assertIn("'/api/product-ledger-csv/history'", limits)
+        self.assertIn("'/api/product-ledger-csv/preview'", limits)
+        self.assertIn("'/api/product-ledger-csv/commit'", limits)
+        self.assertIn('LARGE_BODY_MAX_BYTES = 12_000_000', limits)
+        self.assertIn('ファイル容量が上限を超えています', limits)
+
     def test_server_keeps_info_apis(self):
         self.assertIn('import placement', SERVER)
         self.assertIn('import shipping', SERVER)
