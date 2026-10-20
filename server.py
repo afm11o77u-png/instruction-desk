@@ -840,10 +840,13 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if u['role']!='owner' and not u['manage'] and not u['overview']: return self.reply(403, {'error':'在庫管理は主管理者と管理者が使用します。'})
         # overview-only (no manage) is read-only for stock quantity changes.
         can_write = u['role']=='owner' or bool(u['manage'])
-        actor = {'id': u['id'], 'name': u['name']}
+        actor = {'id': u['id'], 'name': u['name'], 'role': u['role']}
         ensure_stock()
         if path.startswith('/inventory/api'):
             api_path=path[len('/inventory'):] or '/'
+            # 商品登録の全削除（検証用）は主管理者のみ（manage 権限でも不可）
+            if api_path in ('/api/products/registry-wipe', '/api/products/registry-wipe/preview') and u['role']!='owner':
+                return self.reply(403, {'error':'商品登録の全削除は主管理者だけが実行できます。', 'deleted': False})
             if method=='GET':
                 return self.reply(*stockdesk().api_get(STOCK_DB, 'desk', api_path, parse_qs(parsed.query), can_write=can_write, actor=actor))
             if self.headers.get('X-Stock-Request')!='1': return self.reply(400, {'error':'画面からの操作だけを受け付けます。'})
