@@ -1185,6 +1185,241 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             folder.cleanup()
 
 
+class SingleSupplierPreviewCommitConsistencyTest(unittest.TestCase):
+    """候補1社のときプレビューと確定の通常仕入先が一致する（一時DBのみ）。"""
+
+    def test_ui_shows_single_candidate_reason(self):
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
+        self.assertIn('plannedSupplierDisplay', js)
+        self.assertIn('候補が1社のため自動設定', pli.SINGLE_SUPPLIER_AUTO_REASON)
+
+    def test_one_candidate_no_aux_preview_matches_commit(self):
+        """候補1社・補助CSVなし → プレビューで自動設定、確定も同じ仕入先。"""
+        folder, path, c = newdb()
+        try:
+            # 名差だけで要確認（仕入先はトムス㈱のみ）
+            text = tiny_ledger_rows([
+                '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
+                '顧客A,トムス㈱,00085-CVT-031,ＣＶＴパンツ,L',
+            ])
+            before = stock_snap(c)
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'single.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            g = next(x for x in preview['skuGroups'] if x['code'] == '00085-CVT-031')
+            self.assertEqual(g['plannedPrimarySupplier'], 'トムス㈱')
+            self.assertEqual(g['plannedPrimarySupplierReason'], pli.SINGLE_SUPPLIER_AUTO_REASON)
+            self.assertEqual(g['plannedPrimarySupplierSource'], 'single')
+            aux = g['auxPrimary']
+            self.assertIsNotNone(aux)
+            self.assertEqual(aux['autoPrimarySupplier'], 'トムス㈱')
+            self.assertEqual(aux['autoReason'], pli.SINGLE_SUPPLIER_AUTO_REASON)
+            self.assertTrue(aux['singleCandidateAuto'])
+            self.assertFalse(aux['applicable'])  # 補助CSVパネルは不要
+            self.assertIsNone(preview.get('auxOpeningStock'))
+
+            body2 = {
+                **body,
+                'skuDecisions': {
+                    '00085-CVT-031': {'decision': 'merge'},
+                },
+            }
+            preview2 = pli.build_preview(c, body2)
+            g2 = next(x for x in preview2['skuGroups'] if x['code'] == '00085-CVT-031')
+            resolved = g2['primarySupplierResolved']
+            self.assertEqual(resolved['primarySupplier'], 'トムス㈱')
+            self.assertEqual(resolved['source'], 'single')
+            self.assertEqual(resolved['autoReason'], pli.SINGLE_SUPPLIER_AUTO_REASON)
+            self.assertEqual(g2['plannedPrimarySupplier'], 'トムス㈱')
+            self.assertEqual(preview2['reviewCount'], 0)
+
+            result = pli.commit_preview(c, {
+                **body2,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-single-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            prod = c.execute(
+                "SELECT id,supplier_id FROM products WHERE code='00085-CVT-031' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertIsNotNone(prod)
+            sup = c.execute('SELECT name FROM suppliers WHERE id=?', (prod['supplier_id'],)).fetchone()
+            self.assertEqual(sup['name'], 'トムス㈱')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_multi_candidate_no_aux_stays_unset_until_manual(self):
+        """候補複数・補助なし → 未設定。手動選択後はプレビュー＝確定。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-M1,作業着,M',
+                '顧客A,仕入B,SKU-M1,作業着,L',
+            ])
+            before = stock_snap(c)
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'multi.csv',
+                'skuDecisions': {'SKU-M1': {'decision': 'merge'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-M1')
+            self.assertEqual(g['plannedPrimarySupplier'], '')
+            self.assertTrue(g['auxPrimary']['needsManualPrimary'])
+            self.assertGreater(preview['reviewCount'], 0)
+
+            body['skuDecisions']['SKU-M1'] = {
+                'decision': 'merge',
+                'primarySupplier': '仕入B',
+                'primarySupplierManual': True,
+            }
+            preview2 = pli.build_preview(c, body)
+            g2 = next(x for x in preview2['skuGroups'] if x['code'] == 'SKU-M1')
+            self.assertEqual(g2['plannedPrimarySupplier'], '仕入B')
+            self.assertEqual(g2['primarySupplierResolved']['source'], 'manual')
+            self.assertEqual(preview2['reviewCount'], 0)
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-multi-manual-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            prod = c.execute(
+                "SELECT supplier_id FROM products WHERE code='SKU-M1' AND merged_into_id IS NULL"
+            ).fetchone()
+            name = c.execute('SELECT name FROM suppliers WHERE id=?', (prod['supplier_id'],)).fetchone()['name']
+            self.assertEqual(name, '仕入B')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_zero_candidates_stays_unset(self):
+        """仕入先空欄のみ → 未設定（捏造しない）。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,,SKU-Z0,名なし商品,M',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'zero.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-Z0')
+            self.assertEqual(g['plannedPrimarySupplier'], '')
+            self.assertEqual((g.get('auxPrimary') or {}).get('autoPrimarySupplier'), '')
+            self.assertEqual((g.get('auxPrimary') or {}).get('decisionKind'), 'none')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_manual_overrides_single_candidate_auto(self):
+        """候補1社の自動より手動選択を優先。"""
+        folder, path, c = newdb()
+        try:
+            # 仕入先候補は1社だが、手動で別名を指定しても…候補外は作れない想定。
+            # 同一候補を手動明示した場合は source=manual。
+            text = tiny_ledger_rows([
+                '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
+                '顧客A,トムス㈱,00085-CVT-031,ＣＶＴパンツ,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'manual.csv',
+                'skuDecisions': {
+                    '00085-CVT-031': {
+                        'decision': 'merge',
+                        'primarySupplier': 'トムス㈱',
+                        'primarySupplierManual': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            resolved = next(
+                g for g in preview['skuGroups'] if g['code'] == '00085-CVT-031'
+            )['primarySupplierResolved']
+            self.assertEqual(resolved['primarySupplier'], 'トムス㈱')
+            self.assertEqual(resolved['source'], 'manual')
+            self.assertEqual(resolved['autoPrimarySupplier'], 'トムス㈱')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_existing_primary_not_changed_without_confirm(self):
+        """既存通常仕入先あり＋候補1社が異なる → 明示確認なしでは要確認。"""
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+            su_old = stock.save_supplier(c, {'name': '既存仕入', 'active': True})
+            stock.save_supplier(c, {'name': 'トムス㈱', 'active': True})
+            pr = stock.save_product(c, {
+                'code': '00085-CVT-031', 'name': 'CVTパンツ', 'color': '',
+                'supplierId': su_old['id'], 'active': True, 'sizes': ['M'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
+            })
+            c.commit()
+            text = tiny_ledger_rows([
+                '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
+                '顧客A,トムス㈱,00085-CVT-031,ＣＶＴパンツ,L',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'exist.csv',
+                'skuDecisions': {
+                    '00085-CVT-031': {
+                        'decision': 'merge',
+                        'keepProductId': pr['id'],
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            g = next(x for x in preview['skuGroups'] if x['code'] == '00085-CVT-031')
+            self.assertEqual(g['plannedPrimarySupplier'], 'トムス㈱')
+            self.assertTrue(g['primarySupplierResolved']['primaryChangeRequiresConfirm'])
+            self.assertGreater(preview['reviewCount'], 0)
+            reasons = ' '.join(
+                ' '.join(r.get('reasons') or []) for r in preview['rows'] if r.get('status') == 'needs_review'
+            )
+            self.assertIn('明示確認', reasons)
+            # 確認なしでは既存のまま（コミットしない）
+            fresh = c.execute('SELECT supplier_id FROM products WHERE id=?', (pr['id'],)).fetchone()
+            self.assertEqual(fresh['supplier_id'], su_old['id'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_one_candidate_with_aux_still_single_auto(self):
+        """補助CSVがあっても候補1社なら候補1社ルール（補助複社判定に入らない）。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,トムス㈱,00085-CVT-031,CVTパンツ,M',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('トムス㈱', '顧客A', 'CVTパンツ', '00085-CVT-031', 'M', '3'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text),
+                'auxFile': csv_b64_from_text(aux),
+                'name': 'l.csv', 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == '00085-CVT-031')
+            self.assertEqual(g['plannedPrimarySupplier'], 'トムス㈱')
+            self.assertEqual(g['auxPrimary']['autoReason'], pli.SINGLE_SUPPLIER_AUTO_REASON)
+            self.assertEqual(g['auxPrimary']['decisionKind'], 'single_candidate')
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 class ReviewTierAndProvisionalNameTest(unittest.TestCase):
     """3ティア分類・仮代表名・部分確定（一時DBのみ）。"""
 

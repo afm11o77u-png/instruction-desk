@@ -645,10 +645,15 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
     }
 
 
+# 仕入先候補がちょうど1社のときの自動設定理由（プレビュー表示用）
+SINGLE_SUPPLIER_AUTO_REASON = '候補が1社のため自動設定'
+
+
 def judge_primary_supplier_from_aux(supplier_judgments):
-    """通常仕入先の自動判定。数量最大・CSV先頭行では選ばない。"""
+    """初期在庫CSVによる通常仕入先の自動判定（候補2社以上）。数量最大・CSV先頭行では選ばない。"""
     judgments = list(supplier_judgments or [])
     if len(judgments) < 2:
+        # 0/1社は decide_auto_primary_supplier 側で扱う（ここは複社用）
         return {
             'autoPrimarySupplier': '',
             'autoReason': '',
@@ -726,73 +731,133 @@ def _suggested_official_name_for_primary(group, primary_supplier):
     return official, False
 
 
-def attach_aux_primary_judgment(sku_groups, aux_uploaded):
-    """品番グループへ初期在庫CSVによる通常仕入先判定を付与（在庫は変更しない）。"""
-    if not aux_uploaded:
-        for g in sku_groups:
-            g['auxPrimary'] = None
-        return None
+def decide_auto_primary_supplier(candidates, *, aux_judgments=None, aux_uploaded=False):
+    """通常仕入先の自動決定（プレビューと確定で共通）。
 
-    aux_index = build_aux_row_index(aux_uploaded['rows'])
-    meta = {
-        'fileName': aux_uploaded['fileName'],
-        'fileSha256': aux_uploaded['fileSha256'],
-        'fileSize': aux_uploaded['fileSize'],
-        'encoding': aux_uploaded['encoding'],
-        'rowCount': len(aux_uploaded['rows']),
-        'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
-        'note': (
-            '初期在庫用CSVは通常仕入先の判定補助だけに使います。'
-            '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
-            '補助CSVにだけある商品・仕入先は新規作成しません。'
-        ),
+    - 候補0社 → 未設定（捏造しない）
+    - 候補1社 → その仕入先を自動設定（初期在庫CSVの有無に依存しない）
+    - 候補2社以上 → 初期在庫CSV判定（#152）。補助なしなら手動
+    """
+    cands = list(candidates or [])
+    if len(cands) == 0:
+        return {
+            'autoPrimarySupplier': '',
+            'autoReason': '',
+            'needsManualPrimary': False,
+            'manualReason': '',
+            'decisionKind': 'none',
+        }
+    if len(cands) == 1:
+        return {
+            'autoPrimarySupplier': stock.text(cands[0].get('supplier') or ''),
+            'autoReason': SINGLE_SUPPLIER_AUTO_REASON,
+            'needsManualPrimary': False,
+            'manualReason': '',
+            'decisionKind': 'single_candidate',
+        }
+    if aux_uploaded and aux_judgments is not None:
+        decision = judge_primary_supplier_from_aux(aux_judgments)
+        kind = 'aux' if decision.get('autoPrimarySupplier') else 'manual_needed'
+        return {**decision, 'decisionKind': kind}
+    return {
+        'autoPrimarySupplier': '',
+        'autoReason': '',
+        'needsManualPrimary': True,
+        'manualReason': '通常仕入先を選んでください。',
+        'decisionKind': 'manual_needed',
     }
+
+
+def _empty_supplier_judgment(candidate):
+    """補助CSVなしのときの仕入先候補表示用。"""
+    names = [stock.text(n) for n in (candidate.get('ledgerNames') or []) if stock.text(n)]
+    return {
+        'supplier': stock.text(candidate.get('supplier') or ''),
+        'ledgerNames': list(names),
+        'ledgerName': prefer_unmarked_product_name(names) or (names[0] if names else ''),
+        'auxStatus': 'skipped',
+        'auxStatusLabel': '（補助CSVなし）',
+        'auxSizeStocks': [],
+        'hasAnyAuxRows': False,
+        'hasPositiveStock': False,
+        'qtyUndecidable': False,
+        'qtyUndecidableReasons': [],
+        'customers': list(candidate.get('customers') or []),
+        'ledgerSizes': list(candidate.get('sizes') or []),
+    }
+
+
+def _apply_planned_roles(judgments, auto_primary):
+    for j in judgments:
+        if auto_primary and _supplier_names_match(j.get('supplier'), auto_primary):
+            j['plannedRole'] = 'primary'
+            j['plannedRoleLabel'] = '通常'
+        elif auto_primary:
+            j['plannedRole'] = 'sub'
+            j['plannedRoleLabel'] = 'サブ'
+        else:
+            j['plannedRole'] = 'undecided'
+            j['plannedRoleLabel'] = '未定（選択が必要）'
+
+
+def attach_aux_primary_judgment(sku_groups, aux_uploaded):
+    """品番グループへ通常仕入先の自動判定を付与（在庫は変更しない）。
+
+    補助CSVの有無に関わらず候補1社なら自動設定する。複社は補助CSV規則（#152）。
+    """
+    aux_index = build_aux_row_index(aux_uploaded['rows']) if aux_uploaded else None
+    meta = None
+    if aux_uploaded:
+        meta = {
+            'fileName': aux_uploaded['fileName'],
+            'fileSha256': aux_uploaded['fileSha256'],
+            'fileSize': aux_uploaded['fileSize'],
+            'encoding': aux_uploaded['encoding'],
+            'rowCount': len(aux_uploaded['rows']),
+            'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
+            'note': (
+                '初期在庫用CSVは通常仕入先の判定補助だけに使います。'
+                '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
+                '補助CSVにだけある商品・仕入先は新規作成しません。'
+            ),
+        }
 
     for group in sku_groups:
         candidates = _collect_supplier_candidates(group)
-        if len(candidates) < 2:
-            group['auxPrimary'] = {
-                'applicable': False,
-                'reason': '仕入先候補が1社以下のため判定不要',
-                'supplierJudgments': [
-                    _judge_aux_for_supplier(aux_index, code=group['code'], candidate=c)
-                    for c in candidates
-                ],
-                'autoPrimarySupplier': '',
-                'autoReason': '',
-                'needsManualPrimary': False,
-                'manualReason': '',
-                'suggestedOfficialName': '',
-                'officialNameNeedsChoice': False,
-            }
-            continue
+        if aux_index is not None:
+            judgments = [
+                _judge_aux_for_supplier(aux_index, code=group['code'], candidate=c)
+                for c in candidates
+            ]
+        else:
+            judgments = [_empty_supplier_judgment(c) for c in candidates]
 
-        judgments = [
-            _judge_aux_for_supplier(aux_index, code=group['code'], candidate=c)
-            for c in candidates
-        ]
-        decision = judge_primary_supplier_from_aux(judgments)
+        decision = decide_auto_primary_supplier(
+            candidates,
+            aux_judgments=judgments if aux_index is not None else None,
+            aux_uploaded=bool(aux_uploaded),
+        )
         auto_primary = decision['autoPrimarySupplier']
-        for j in judgments:
-            if auto_primary and _supplier_names_match(j['supplier'], auto_primary):
-                j['plannedRole'] = 'primary'
-                j['plannedRoleLabel'] = '通常'
-            elif auto_primary:
-                j['plannedRole'] = 'sub'
-                j['plannedRoleLabel'] = 'サブ'
-            else:
-                j['plannedRole'] = 'undecided'
-                j['plannedRoleLabel'] = '未定（選択が必要）'
-
+        _apply_planned_roles(judgments, auto_primary)
         suggested_name, name_needs = _suggested_official_name_for_primary(group, auto_primary)
+        multi = len(candidates) >= 2
         group['auxPrimary'] = {
-            'applicable': True,
-            'reason': '',
+            # 複社＋補助CSVのとき判定パネルを出す
+            'applicable': bool(multi and aux_uploaded),
+            'singleCandidateAuto': decision.get('decisionKind') == 'single_candidate',
+            'reason': (
+                '' if multi and aux_uploaded
+                else (
+                    SINGLE_SUPPLIER_AUTO_REASON if decision.get('decisionKind') == 'single_candidate'
+                    else ('仕入先候補なし' if len(candidates) == 0 else '')
+                )
+            ),
             'supplierJudgments': judgments,
             'autoPrimarySupplier': auto_primary,
             'autoReason': decision['autoReason'],
             'needsManualPrimary': decision['needsManualPrimary'],
             'manualReason': decision['manualReason'],
+            'decisionKind': decision.get('decisionKind') or '',
             'suggestedOfficialName': suggested_name,
             'officialNameNeedsChoice': name_needs if auto_primary else True,
         }
@@ -809,23 +874,25 @@ def _existing_primary_supplier_name(group, keep_product_id):
 
 
 def _resolve_effective_primary_supplier(group, raw_decision):
-    """ユーザー手動指定を優先。未指定なら初期在庫CSVの自動結果を使う。"""
+    """ユーザー手動指定を優先。未指定なら自動結果（候補1社 or 初期在庫CSV）を使う。"""
     raw = raw_decision if isinstance(raw_decision, dict) else {}
     manual = bool(raw.get('primarySupplierManual'))
     chosen = stock.text(raw.get('primarySupplier') or '')
     aux = group.get('auxPrimary') or {}
     auto = stock.text(aux.get('autoPrimarySupplier') or '')
+    auto_reason = stock.text(aux.get('autoReason') or '')
     conflict = False
     if manual and chosen:
         if auto and not _supplier_names_match(chosen, auto):
             conflict = True
-        return chosen, 'manual', conflict, auto
+        return chosen, 'manual', conflict, auto, auto_reason
     if chosen and not manual:
         # 古いUI互換: 明示値があればそれを使う（再計算で上書きしない）
-        return chosen, 'user', False, auto
+        return chosen, 'user', False, auto, auto_reason
     if auto:
-        return auto, 'auto', False, auto
-    return '', 'none', False, auto
+        source = 'single' if aux.get('decisionKind') == 'single_candidate' else 'auto'
+        return auto, source, False, auto, auto_reason
+    return '', 'none', False, auto, auto_reason
 
 
 def used_marker_possible(product_name):
@@ -1905,7 +1972,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             if not keep_id and group.get('existingCount') == 1:
                 keep_id = (group.get('existingProducts') or [{}])[0].get('id')
             color = stock.text(raw.get('color') or '')
-            primary_supplier, primary_source, primary_conflict, auto_primary = (
+            primary_supplier, primary_source, primary_conflict, auto_primary, auto_reason = (
                 _resolve_effective_primary_supplier(group, raw)
             )
             aux = group.get('auxPrimary') or {}
@@ -1933,6 +2000,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 'primarySupplier': primary_supplier,
                 'source': primary_source,
                 'autoPrimarySupplier': auto_primary,
+                'autoReason': auto_reason,
                 'conflictWithAuto': primary_conflict,
                 'existingPrimarySupplier': existing_primary,
                 'primaryChangeRequiresConfirm': primary_change,
@@ -1940,6 +2008,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             }
             group['plannedOfficialName'] = official_name
             group['plannedPrimarySupplier'] = primary_supplier
+            group['plannedPrimarySupplierReason'] = (
+                auto_reason if primary_source in ('auto', 'single') and primary_supplier else ''
+            )
+            group['plannedPrimarySupplierSource'] = primary_source
             group['provisionalName'] = provisional
             group['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
 
@@ -2323,9 +2395,13 @@ def build_preview(c, body):
         g['plannedOfficialName'] = (g.get('namePlan') or {}).get('officialName') or ''
         g['nameAdoptionRule'] = (g.get('namePlan') or {}).get('adoptionRule') or ''
         g['provisionalName'] = bool((g.get('namePlan') or {}).get('provisional'))
-        # 通常仕入先の予定（自動 or 手動）
-        primary, _, _, _ = _resolve_effective_primary_supplier(g, raw)
+        # 通常仕入先の予定（自動 or 手動）— 確定と同じ決定結果
+        primary, source, _, _, auto_reason = _resolve_effective_primary_supplier(g, raw)
         g['plannedPrimarySupplier'] = primary
+        g['plannedPrimarySupplierReason'] = (
+            auto_reason if source in ('auto', 'single') and primary else ''
+        )
+        g['plannedPrimarySupplierSource'] = source
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
     _attach_product_plans(classified, sku_groups)
     _apply_auto_merge_official_names(classified, sku_groups)
