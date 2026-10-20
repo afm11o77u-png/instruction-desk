@@ -74,6 +74,10 @@
     if(!d.officialName&&aux.suggestedOfficialName&&!aux.officialNameNeedsChoice){
       patch.officialName=aux.suggestedOfficialName
     }
+    const pkg=aux.adoptedPackage||group.adoptedPackage
+    if(!d.color&&(aux.adoptedColor||(pkg&&pkg.color))){
+      patch.color=aux.adoptedColor||pkg.color
+    }
     if(Object.keys(patch).length)setSkuDecision(st,code,patch)
   }
 
@@ -172,27 +176,44 @@
     </div>`
   }
 
+  function stockPickPackageHtml(plan){
+    if(!plan||!plan.auxStockPickAuto)return ''
+    const reason=plan.auxStockPickReason||'在庫が0以外の候補が1組のため、この候補をメインに採用'
+    const kept=(plan.keptPackages||[]).map(k=>{
+      const bits=[k.productName||'',k.supplier?`仕入 ${k.supplier}`:'',k.color?`色 ${k.color}`:'',k.processing?`加工 ${k.processing}`:'',k.material?`素材 ${k.material}`:''].filter(Boolean)
+      return `<li>${esc(bits.join(' / '))}</li>`
+    }).join('')
+    return `<div class="sku-stock-pick">
+      <p class="excelhint"><strong>自動決定:</strong> ${esc(reason)}</p>
+      <p class="excelhint">採用メイン: ${esc(plan.productName||'—')}　仕入 ${esc(plan.supplier||'未設定')}
+        ${plan.color?`　色 ${esc(plan.color)}`:''}${plan.processing?`　加工 ${esc(plan.processing)}`:''}${plan.material?`　素材 ${esc(plan.material)}`:''}</p>
+      ${kept?`<p class="excelhint">非採用（別名・サブ・原文仕様として保持）:</p><ul class="sku-kept-list">${kept}</ul>`:''}
+    </div>`
+  }
+
   function autoMergePlansHtml(st){
     const plans=(st.preview&&st.preview.autoMergePlans)||[]
     if(!plans.length)return ''
     const p=st.preview.plannedCounts||{}
-    const sample=plans.filter(x=>(x.sizeCount||0)>1||(x.customerCount||0)>1).slice(0,12)
+    const stockPicked=plans.filter(x=>x.auxStockPickAuto)
+    const sample=plans.filter(x=>(x.sizeCount||0)>1||(x.customerCount||0)>1||x.auxStockPickAuto).slice(0,12)
     const more=Math.max(0,(p.autoMergedSkuGroups||plans.length)-sample.length)
     const cards=sample.map(plan=>{
       const sizes=(plan.sizes||[]).slice(0,12).map(esc).join('、')
       const sizeMore=(plan.sizes||[]).length>12?` …他${(plan.sizes||[]).length-12}`:''
       const custs=(plan.customers||[]).slice(0,4).map(esc).join('、')
       const custMore=(plan.customers||[]).length>4?` …他${(plan.customers||[]).length-4}`:''
-      return `<article class="sku-auto-plan">
-        <strong>${esc(plan.label||'新規商品')}</strong>
+      return `<article class="sku-auto-plan ${plan.auxStockPickAuto?'sku-auto-stock-pick':''}">
+        <strong>${esc(plan.label||'新規商品')}${plan.auxStockPickAuto?'（在庫一意採用）':''}</strong>
         <span>品番 ${esc(plan.code||'')}　${esc(plan.productName||'')}　仕入 ${esc(plan.supplier||'未設定')}</span>
+        ${stockPickPackageHtml(plan)}
         <span class="sub">取扱顧客 ${custs||'—'}${custMore}　予定サイズ ${sizes||'—'}${sizeMore}　（CSV ${plan.csvRowCount||0}行 → サイズ ${plan.sizeCount||0} / 顧客 ${plan.customerCount||0}）</span>
       </article>`
     }).join('')
     return `<div class="sku-auto-panel">
       <h3>自動まとめ（要確認ではない）</h3>
-      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。色・生地・加工・男女の疑いは確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
-      <p class="excelhint">自動まとめ ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行（下は複数サイズまたは複数顧客の例）</p>
+      <p class="excelhint">サイズ・顧客だけの差、先頭「＊/*」中古標記、空白/全角半角、明示シノニム（例: パンツ／スラックス）だけの名差は1商品へまとめます。代表名は標記なしを優先し、CSV原文は照合用別名に残します。初期在庫CSVで在庫が0以外の候補が1組のときは、その候補の名・仕入先・色・加工・素材をセットで採用し、色・加工・素材差だけでは要確認にしません。商品種・男女の疑いは確認へ回します。LL≡2L 同一化や中間サイズの追加はしません。</p>
+      <p class="excelhint">自動まとめ ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行${stockPicked.length?`（うち在庫一意採用 ${stockPicked.length}）`:''}（下は複数サイズ・複数顧客・在庫一意採用の例）</p>
       ${cards||'<p class="sub">複数サイズの自動まとめ例はありません（単一行の品番のみ）。</p>'}
       ${more?`<p class="excelhint">他 ${more} 品番も同様に自動まとめ予定です。</p>`:''}
     </div>`
@@ -255,17 +276,31 @@
         <td><strong>${esc(role)}</strong></td>
       </tr>`
     }).join('')
-    const reason=aux.autoReason||aux.manualReason||''
+    const reason=aux.autoReason||aux.manualReason||g.auxStockPickReason||''
     const conflict=(d.primarySupplierManual&&aux.autoPrimarySupplier&&d.primarySupplier&&d.primarySupplier!==aux.autoPrimarySupplier)
       ||resolved.conflictWithAuto
     const existingPrimary=resolved.existingPrimarySupplier
       ||((g.existingProducts||[]).find(p=>Number(p.id)===Number(d.keepProductId))||{}).supplierName||''
     const chosen=d.primarySupplier||resolved.primarySupplier||aux.autoPrimarySupplier||''
     const changeNeeded=!!(existingPrimary&&chosen&&existingPrimary!==chosen&&(d.keepProductId||g.existingCount===1))
+    const pkg=aux.adoptedPackage||g.adoptedPackage
+    const kept=(aux.keptPackages||g.keptPackages||[]).map(k=>{
+      const bits=[k.productName||'',k.supplier?`仕入 ${k.supplier}`:'',k.color?`色 ${k.color}`:'',k.processing?`加工 ${k.processing}`:'',k.material?`素材 ${k.material}`:''].filter(Boolean)
+      return `<li>${esc(bits.join(' / '))}</li>`
+    }).join('')
+    const packageBlock=pkg?`<div class="sku-stock-pick">
+      <p class="excelhint"><strong>${g.auxStockPickAuto||!g.needsDecision?'自動決定':'提案'}:</strong> ${esc(aux.pairAdoptionRule||reason||'在庫が0以外の候補が1組のため、この候補をメインに採用')}</p>
+      <p class="excelhint">採用メイン: ${esc(pkg.productName||aux.suggestedOfficialName||'—')}　仕入 ${esc(pkg.supplier||aux.suggestedPrimarySupplier||'—')}
+        ${pkg.color||aux.adoptedColor?`　色 ${esc(pkg.color||aux.adoptedColor)}`:''}
+        ${pkg.processing||aux.adoptedProcessing?`　加工 ${esc(pkg.processing||aux.adoptedProcessing)}`:''}
+        ${pkg.material||aux.adoptedMaterial?`　素材 ${esc(pkg.material||aux.adoptedMaterial)}`:''}</p>
+      ${kept?`<p class="excelhint">非採用（別名・サブ・原文仕様として保持）:</p><ul class="sku-kept-list">${kept}</ul>`:''}
+    </div>`:''
     return `<div class="sku-aux-panel">
-      <h4>初期在庫CSVによる通常仕入先判定</h4>
-      <p class="excelhint">数量最大やCSV先頭行では選びません。正の在庫が1社だけ→通常。正の在庫がなく該当行が1社だけ→通常。それ以外は手動選択です。</p>
-      ${reason?`<p class="excelhint">${esc(reason)}</p>`:''}
+      <h4>初期在庫CSVによる通常仕入先・メイン候補判定</h4>
+      <p class="excelhint">数量最大やCSV先頭行では選びません。在庫が0以外の候補が1組→その候補のフルパッケージをメイン採用。正の在庫が1社だけ→通常仕入先。それ以外の未解決は手動選択です。</p>
+      ${packageBlock}
+      ${reason&&!packageBlock?`<p class="excelhint">${esc(reason)}</p>`:''}
       ${conflict?`<p class="notice">自動判定「${esc(aux.autoPrimarySupplier)}」と手動選択「${esc(d.primarySupplier)}」が異なります。手動を優先します（上書きしません）。</p>`:''}
       <table class="sku-aux-table">
         <thead><tr><th>仕入先</th><th>台帳側の商品名</th><th>初期在庫CSV</th><th>サイズ別在庫</th><th>予定</th></tr></thead>
@@ -509,7 +544,7 @@
 
     return `<div class="sku-groups-panel">
       <h3>品番ごとの比較一覧（通常品番）</h3>
-      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。サイズ・顧客・＊/*・空白/全角半角・明示シノニムは自動まとめ済みです。一括承認候補は残りの名差・仕入先差のみ。色・生地・加工・男女・商品種の疑いは個別確認。代表名未確定時は「名称未整理」ステータス（名前へは埋め込みません）。</p>
+      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。サイズ・顧客・＊/*・空白/全角半角・明示シノニムは自動まとめ済みです。初期在庫CSVで在庫一意の候補がある品番は自動まとめへ回し、色・加工・素材差だけではここに出しません。一括承認候補は残りの名差・仕入先差のみ。商品種・男女の疑いは個別確認。未解決がない品番に行ごとの「まとめ」は不要です。代表名未確定時は「名称未整理」ステータス（名前へは埋め込みません）。</p>
       <p class="excelhint">要確認 ${pending.length} 品番（一括承認候補 ${bulkCount} / 個別確認 ${indivCount}）　決定済 ${decided}　選択中 ${selected.length} 品番</p>
       <div class="bar sku-list-toolbar">
         <input type="search" id="plSkuQ" placeholder="品番・商品名・仕入先・理由で検索" value="${esc(st.skuQ||'')}" ${st.busy?'disabled':''}>
