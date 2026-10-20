@@ -364,20 +364,149 @@ def needs_migration(c):
     )
 
 
+BACKUP_FAILED_MESSAGE = '登録前のバックアップに失敗したため、登録を中止しました'
+# Bound for lock waits / backup page retries. Never block forever on a locked DB.
+_BACKUP_TIMEOUT_SEC = 20.0
+_BACKUP_PAGE_CHUNK = 200
+_BACKUP_RETRY_SLEEP_SEC = 0.05
+
+
+class BackupError(RuntimeError):
+    """Pre-mutation SQLite backup failed; caller must abort without registering."""
+
+    def __init__(self, message=None, *, cause=None):
+        super().__init__(message or BACKUP_FAILED_MESSAGE)
+        self.cause = cause
+
+
+def _unlink_quiet(path):
+    try:
+        Path(path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        print(f'backup_sqlite cleanup failed path={path}: {type(e).__name__}: {e}', flush=True)
+
+
+def _backup_sqlite_online(src_path, dest_path, *, timeout_sec=None):
+    """Consistent online backup via SQLite Backup API (includes committed WAL pages).
+
+    Uses a separate source connection so a caller's open write transaction is never
+    the connection that drives backup (BEGIN+backup on the same connection can hang
+    under WAL). Optionally takes a short IMMEDIATE lock on a third connection; if
+    that lock is already held (typical during commit_preview), skip it immediately
+    instead of waiting forever.
+    """
+    import time
+
+    if timeout_sec is None:
+        timeout_sec = _BACKUP_TIMEOUT_SEC
+    src_path = Path(src_path)
+    dest_path = Path(dest_path)
+    partial = Path(str(dest_path) + '.partial')
+    _unlink_quiet(partial)
+    for suffix in ('-wal', '-shm'):
+        _unlink_quiet(Path(str(partial) + suffix))
+        _unlink_quiet(Path(str(dest_path) + suffix))
+
+    deadline = time.monotonic() + max(0.5, float(timeout_sec))
+    last_err = None
+
+    while time.monotonic() < deadline:
+        lock = src = dst = None
+        lock_held = False
+        try:
+            remaining = max(0.05, deadline - time.monotonic())
+            # Try a brief writer lock so concurrent writers pause during backup.
+            # timeout=0 → fail immediately when the caller's BEGIN IMMEDIATE holds it.
+            lock = sqlite3.connect(str(src_path), timeout=0)
+            try:
+                lock.execute('BEGIN IMMEDIATE')
+                lock_held = True
+            except sqlite3.OperationalError:
+                lock.close()
+                lock = None
+
+            busy_timeout = min(2.0, remaining)
+            src = sqlite3.connect(str(src_path), timeout=busy_timeout)
+            dst = sqlite3.connect(str(partial), timeout=busy_timeout)
+            # sleep=0: do not spin forever inside backup(); outer loop bounds waits.
+            src.backup(dst, pages=_BACKUP_PAGE_CHUNK, sleep=0)
+
+            row = dst.execute('PRAGMA integrity_check').fetchone()
+            check = (row[0] if row else '') or ''
+            if str(check).lower() != 'ok':
+                raise BackupError(f'{BACKUP_FAILED_MESSAGE}（整合性チェック: {check}）')
+
+            dst.close()
+            dst = None
+            src.close()
+            src = None
+            if lock_held and lock is not None:
+                lock.commit()
+                lock.close()
+                lock = None
+                lock_held = False
+
+            # Only promote a verified partial file to the final backup name.
+            partial.replace(dest_path)
+            return dest_path
+        except BackupError:
+            raise
+        except (sqlite3.Error, OSError, TimeoutError) as e:
+            last_err = e
+            print(
+                f'backup_sqlite attempt failed src={src_path} dest={dest_path}: '
+                f'{type(e).__name__}: {e}',
+                flush=True,
+            )
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(_BACKUP_RETRY_SLEEP_SEC)
+        finally:
+            if dst is not None:
+                try:
+                    dst.close()
+                except sqlite3.Error:
+                    pass
+            if src is not None:
+                try:
+                    src.close()
+                except sqlite3.Error:
+                    pass
+            if lock is not None:
+                try:
+                    if lock_held:
+                        lock.rollback()
+                except sqlite3.Error:
+                    pass
+                try:
+                    lock.close()
+                except sqlite3.Error:
+                    pass
+            _unlink_quiet(partial)
+            for suffix in ('-wal', '-shm'):
+                _unlink_quiet(Path(str(partial) + suffix))
+
+    cause = last_err
+    detail = f'{type(cause).__name__}: {cause}' if cause else 'timeout'
+    print(f'backup_sqlite gave up src={src_path}: {detail}', flush=True)
+    raise BackupError(BACKUP_FAILED_MESSAGE, cause=cause) from cause
+
+
 def backup_sqlite(db_path, *, tag='pre-shortage'):
-    """Copy DB (+ WAL/SHM if present) beside the original before schema migration."""
-    import shutil
+    """Consistent restorable backup beside the original (SQLite Backup API).
+
+    Replaces file-copy of main/WAL/SHM, which fails on Windows when another
+    process holds those files (WinError 33). Incomplete files are never left
+    under the final backup name.
+    """
     src = Path(db_path)
     if not src.is_file():
         return None
     stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     dest = src.with_name(f'{src.stem}.{tag}-{stamp}{src.suffix}')
-    shutil.copy2(src, dest)
-    for suffix in ('-wal', '-shm'):
-        side = Path(str(src) + suffix)
-        if side.is_file():
-            shutil.copy2(side, Path(str(dest) + suffix))
-    return dest
+    return _backup_sqlite_online(src, dest)
 
 
 def migrate_schema(c):

@@ -52,7 +52,14 @@
   function apiErrorMessage(e,fallback){
     if(!e)return fallback
     const fromPayload=e.payload&&(e.payload.error||e.payload.message)
-    const msg=fromPayload||e.message||''
+    let msg=fromPayload||e.message||''
+    // fetch() network/tear-down (e.g. unhandled server exception) → Failed to fetch
+    if(/failed to fetch|networkerror|load failed|communication/i.test(msg)){
+      return fallback||'通信できませんでした。登録は完了していません。サーバーを再起動してからやり直してください。'
+    }
+    if(e.payload&&e.payload.registered===false&&msg){
+      return msg
+    }
     if(!msg||msg==='処理できませんでした。')return fallback||'処理できませんでした。'
     return msg
   }
@@ -383,7 +390,11 @@
         if(e&&e.payload&&e.payload.code==='stale_preview'){
           st.toast('データが変わったため、もう一度照合してください。')
           st.preview=null
-        }else st.toast(apiErrorMessage(e,'登録に失敗しました。'))
+        }else if(e&&e.payload&&e.payload.code==='backup_failed'){
+          // Keep commitToken so a successful retry is not double-submitted as a new token
+          // after a pre-registration abort; still clear busy below for retry.
+          st.toast(apiErrorMessage(e,'登録前のバックアップに失敗したため、登録を中止しました'))
+        }else st.toast(apiErrorMessage(e,'登録に失敗しました。登録は完了していません。'))
       }
       st.busy=false;paintDialog()
     }

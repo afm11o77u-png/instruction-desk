@@ -1152,7 +1152,18 @@ def commit_preview(c, body, *, db_path=None):
     before_stock = stock_snapshot(c)
     backup_path = ''
     if db_path:
-        backup_path = str(stock.backup_sqlite(db_path, tag='pre-product-ledger') or '')
+        # Must succeed before any registration writes. Do not skip on failure.
+        try:
+            backup_path = str(stock.backup_sqlite(db_path, tag='pre-product-ledger') or '')
+        except stock.BackupError:
+            raise
+        except Exception as e:
+            # Unexpected errors still abort with a clear pre-registration message.
+            print(
+                f'product_ledger backup failed before register: {type(e).__name__}: {e}',
+                flush=True,
+            )
+            raise stock.BackupError(stock.BACKUP_FAILED_MESSAGE, cause=e) from e
 
     actor = stock._actor_name(body)
     t0 = stock.stamp()

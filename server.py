@@ -857,7 +857,15 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(400, {'error': sd.OVERSIZE_BODY_ERROR})
             try: body=json.loads(self.rfile.read(n).decode('utf-8') or '{}')
             except json.JSONDecodeError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
-            result=sd.api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
+            try:
+                result=sd.api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
+            except Exception as e:
+                # Keep JSON error body so /inventory/ proxy never looks like Failed to fetch.
+                print(f'inventory api_post crashed path={api_path}: {type(e).__name__}: {e}', flush=True)
+                return self.reply(500, {
+                    'error': '処理中にエラーが発生しました。登録は完了していません。',
+                    'registered': False,
+                })
             return self.reply(*result)
         rel='index.html' if path in ('/inventory','/inventory/') else path[len('/inventory/'):]
         root=(STOCK_ROOT/'static').resolve()

@@ -621,8 +621,17 @@ def execute_merge(c, body, *, db_path=None):
 
     backup_path = ''
     if db_path:
-        dest = stock.backup_sqlite(Path(db_path), tag='pre-product-merge')
-        backup_path = str(dest) if dest else ''
+        try:
+            dest = stock.backup_sqlite(Path(db_path), tag='pre-product-merge')
+            backup_path = str(dest) if dest else ''
+        except stock.BackupError:
+            raise
+        except Exception as e:
+            print(
+                f'product_merge backup failed before merge: {type(e).__name__}: {e}',
+                flush=True,
+            )
+            raise stock.BackupError(stock.BACKUP_FAILED_MESSAGE, cause=e) from e
 
     t = stock.stamp()
     # 残す商品のマスタ更新

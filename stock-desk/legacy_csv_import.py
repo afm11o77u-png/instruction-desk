@@ -1538,7 +1538,16 @@ def commit_preview(c, body, *, db_path=None):
 
     backup_path = None
     if db_path:
-        backup_path = str(stock.backup_sqlite(db_path, tag='pre-legacy-csv') or '')
+        try:
+            backup_path = str(stock.backup_sqlite(db_path, tag='pre-legacy-csv') or '')
+        except stock.BackupError:
+            raise
+        except Exception as e:
+            print(
+                f'legacy_csv backup failed before register: {type(e).__name__}: {e}',
+                flush=True,
+            )
+            raise stock.BackupError(stock.BACKUP_FAILED_MESSAGE, cause=e) from e
 
     actor = stock._actor_name(body)
     t0 = stock.stamp()
