@@ -345,23 +345,26 @@ class LegacyCsvPreviewCommitTest(unittest.TestCase):
 
 class LegacyCsvUiSourceTest(unittest.TestCase):
     def test_setup_tab_and_script_wired(self):
+        """旧CSV取込タブは廃止。入口は右上「旧CSV一括取り込み」へ統合。"""
         app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
-        self.assertIn("['legacyCsv','旧CSV取込']", app)
-        self.assertIn("legacyCsv:'stock-legacy-csv'", app)
+        js = (ROOT / 'static' / 'legacy_csv.js').read_text(encoding='utf-8')
+        self.assertNotIn("['legacyCsv','旧CSV取込']", app)
+        self.assertIn('legacyCsvBulkOpen', app)
+        self.assertIn('旧CSV一括取り込み', app)
         self.assertIn('legacy_csv.js', html)
-        self.assertIn('legacyCsvPage', (ROOT / 'static' / 'legacy_csv.js').read_text(encoding='utf-8'))
+        self.assertIn('legacyCsvPage', js)
+        self.assertIn('統合されました', js)
 
     def test_preview_table_avoids_form_grid_class(self):
-        """フォーム用 .grid { display:grid } を表に付けると見出しとデータが左右分離する。"""
-        js = (ROOT / 'static' / 'legacy_csv.js').read_text(encoding='utf-8')
+        """統合先モーダルの表は .grid を使わず、既存の table-wrap スタイルを共用。"""
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
         css = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
         self.assertNotIn('class="grid legacy-csv-table"', js)
-        self.assertIn('class="legacy-csv-table"', js)
+        self.assertIn('legacy-csv-table-wrap', js)
         self.assertIn('.legacy-csv-table{', css)
         self.assertIn('display:table', css)
         self.assertIn('.legacy-csv-table-wrap', css)
-        self.assertIn('data-lc-detail', js)
         self.assertIn('PAGE_SIZE=80', js)
 
 

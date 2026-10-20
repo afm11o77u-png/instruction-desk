@@ -44,8 +44,13 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
         js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
-        self.assertIn('productLedgerCsvOpen', app)
-        self.assertIn('旧商品台帳CSVを取り込む', app)
+        # 入口は登録・設定右上「旧CSV一括取り込み」（表示の左）
+        self.assertIn('legacyCsvBulkOpen', app)
+        self.assertIn('旧CSV一括取り込み', app)
+        self.assertIn('syncLegacyCsvBulkEntry', app)
+        self.assertNotIn('productLedgerCsvOpen', app)
+        self.assertNotIn('旧商品台帳CSVを取り込む', app)
+        self.assertNotIn("['legacyCsv','旧CSV取込']", app)
         self.assertIn('product_ledger_csv.js', html)
         self.assertIn('ProductLedgerCsv', js)
         self.assertIn('/api/product-ledger-csv/preview', js)
@@ -61,15 +66,16 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('中古標記まとめ', js)
         self.assertIn('auxFile', js)
         self.assertIn('初期在庫CSV', js)
+        self.assertIn('registerOpeningStock', js)
+        self.assertIn('確認後に初期在庫も登録します', js)
+        self.assertIn('openingStockSectionsHtml', js)
         self.assertIn('sku-compare-table', js)
         self.assertIn('一括承認候補', js)
         self.assertIn('個別確認', js)
         self.assertIn('plSkuBulkMerge', js)
         self.assertIn('plSkuSelectFiltered', js)
         self.assertIn('名称未整理', js)
-        self.assertIn('1品番=1商品', app)
-        # 初期在庫用旧CSVタブとは別入口
-        self.assertIn("['legacyCsv','旧CSV取込']", app)
+        self.assertIn('1品番=1商品', js)
 
     def test_file_picker_and_history_error_copy(self):
         js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
@@ -2678,7 +2684,8 @@ class GenderPresenceAbsenceStockPickTest(unittest.TestCase):
             self.assertFalse(any('男女・対象' in lab for lab in reason_labels), reason_labels)
             self.assertFalse(any('個別確認' in lab for lab in reason_labels), reason_labels)
             self.assertEqual(preview['skuDecisionPending'], 0)
-            self.assertIn('プレビュー', preview.get('note') or '')
+            note = preview.get('note') or ''
+            self.assertTrue('プレビュー' in note or '登録ボタンを押すまで' in note)
 
             # 別名候補が kept に残る
             kept_names = []

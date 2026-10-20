@@ -110,16 +110,19 @@ class StockListSetupNavUiTest(unittest.TestCase):
 
     def test_setup_renders_register_tabs_not_list(self):
         self.assertIn(
-            "SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫'],['legacyCsv','旧CSV取込']]",
+            "SETUP_TABS=[['customers','顧客'],['suppliers','仕入先'],['products','商品'],['locations','保管場所'],['opening','初期在庫']]",
             APP_JS,
         )
+        self.assertNotIn("['legacyCsv','旧CSV取込']", APP_JS[APP_JS.index('SETUP_TABS='):APP_JS.index('SETUP_TAB_IDS=')])
         self.assertNotIn("['list','在庫一覧']", APP_JS[APP_JS.index('SETUP_TABS='):APP_JS.index('SETUP_TAB_IDS=')])
         paint = _fn(APP_JS, 'paint')
         self.assertIn('SETUP_TABS.map', paint)
         self.assertIn("state.section==='setup'", paint)
         self.assertIn('tabs.hidden=true', paint)
-        for label in ('顧客', '仕入先', '商品', '保管場所', '初期在庫', '旧CSV取込'):
+        for label in ('顧客', '仕入先', '商品', '保管場所', '初期在庫'):
             self.assertIn(label, APP_JS[APP_JS.index('SETUP_TABS='):APP_JS.index('SETUP_TAB_IDS=')])
+        self.assertIn('旧CSV一括取り込み', APP_JS)
+        self.assertIn('legacyCsvBulkOpen', APP_JS)
 
     def test_default_entry_is_stock_list(self):
         self.assertIn("section:'list'", APP_JS)

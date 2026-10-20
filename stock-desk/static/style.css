@@ -17,8 +17,10 @@ header,.stockhead{display:flex;justify-content:flex-start;gap:10px 14px;align-it
 .tabs button.active{box-shadow:inset 0 -3px 0 var(--green);color:var(--green)}
 .stockhead-brand #stocktitle{max-width:100%;overflow-wrap:anywhere}
 /* Title row: 表示 sits at the right end (在庫一覧 + 登録・設定; after mode switch when visible) */
-.stockhead .stock-list-display{display:flex;justify-content:flex-end;align-items:center;flex:0 0 auto;min-width:0}
+.stockhead .stock-list-display{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
 .stockhead .stock-list-display[hidden]{display:none!important}
+.stockhead .legacy-csv-bulk-entry{display:flex;align-items:center;flex:0 0 auto}
+.stockhead .legacy-csv-bulk-entry #legacyCsvBulkOpen{white-space:nowrap}
 .stockhead .stock-list-display .display-mode-bar,
 .stockhead .stock-list-display .display-mode-bar-inline{
   margin:0;

@@ -1,8 +1,8 @@
 """旧システム「商品台帳.csv」からの商品・顧客取扱一括登録。
 
-初期在庫用の旧CSV取込（legacy_csv_import）とは別入口・別処理。
-在庫数量・仕入単価・初期在庫・入出庫履歴は登録・変更しない。
-プレビュー段階では DB を変更しない。確定は一括トランザクション。
+初期在庫CSV（任意）を渡すと、同一の判定結果へ行対応で初期在庫も登録できる
+（旧CSV一括取り込み）。判定エンジンは本モジュールのみ。プレビューは DB を変えない。
+確定は一括トランザクション（台帳＋初期在庫は同時成功／同時ロールバック）。
 """
 from __future__ import annotations
 
@@ -14,13 +14,14 @@ import json
 import re
 from collections import defaultdict
 
+import legacy_csv_bulk_import as bulk
 import legacy_csv_import as legacy
 import product_ledger_paren as paren_classify
 import stock
 import stock_product_merge
 
 REQUIRED_COLUMNS = ('顧客', '仕入先', '商品コード', '商品名', 'サイズ')
-IMPORT_NOTE = '旧商品台帳CSV取込'
+IMPORT_NOTE = '旧CSV一括取り込み'
 PENDING_EMBROIDERY = legacy.PENDING_EMBROIDERY
 
 STATUS_CREATE = 'create'
@@ -605,7 +606,7 @@ def decode_upload(body):
 
 
 def decode_aux_upload(body):
-    """初期在庫用CSV（任意）。在庫登録はせず、通常仕入先判定の補助入力として読む。"""
+    """初期在庫用CSV（任意）。プレビューではDBを触らず列検証のみ。"""
     if not isinstance(body, dict):
         return None
     raw = body.get('auxFile') or body.get('openingStockFile')
@@ -626,6 +627,17 @@ def decode_aux_upload(body):
         'rows': uploaded['rows'],
         'ignoredColumns': list(legacy.IGNORED_QTY_COLUMNS),
     }
+
+
+def register_opening_stock_requested(body, aux_uploaded):
+    """初期在庫CSVがあり、かつ registerOpeningStock=true のとき登録する。
+
+    フラグなし（旧クライアント／判定補助のみのテスト）は従来どおり在庫を書かない。
+    新UIは初期在庫CSV選択時に必ず true を送る。
+    """
+    if not aux_uploaded or not isinstance(body, dict):
+        return False
+    return bool(body.get('registerOpeningStock'))
 
 
 def parse_aux_stock_qty(raw):
@@ -782,6 +794,7 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
                     break
 
     size_rows = []
+    matched_aux_rows = []
     has_positive = False
     has_nonzero = False
     undecidable = False
@@ -789,6 +802,22 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
     for row_no, item in matched:
         size = stock.text(item.get('サイズ'))
         qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
+        # 初期在庫登録用に原文列を保持（判定後に改名で再照合しない）
+        matched_aux_rows.append({
+            'rowNo': row_no,
+            'code': stock.text(item.get('商品コード')),
+            'supplier': stock.text(item.get('仕入先')),
+            'customer': stock.text(item.get('顧客')),
+            'productName': stock.text(item.get('商品名')),
+            'size': size,
+            'conditionRaw': stock.text(item.get('新古')),
+            'site': stock.text(item.get('拠点')),
+            'shelf': stock.text(item.get('棚')),
+            'unitCostRaw': stock.text(item.get('仕入単価')),
+            'qtyRaw': stock.text(item.get('在庫')),
+            'qty': qty if qstatus == 'ok' else None,
+            'qtyStatus': qstatus,
+        })
         if qstatus != 'ok':
             undecidable = True
             if qstatus == 'empty':
@@ -830,6 +859,7 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
         'auxStatus': aux_status,
         'auxStatusLabel': aux_status_label,
         'auxSizeStocks': size_rows,
+        'matchedAuxRows': matched_aux_rows,
         'hasAnyAuxRows': bool(matched),
         'hasPositiveStock': bool(has_positive and not undecidable),
         'hasNonZeroStock': bool(has_nonzero and not undecidable),
@@ -1640,6 +1670,7 @@ def _empty_supplier_judgment(candidate):
         'auxStatus': 'skipped',
         'auxStatusLabel': '（補助CSVなし）',
         'auxSizeStocks': [],
+        'matchedAuxRows': [],
         'hasAnyAuxRows': False,
         'hasPositiveStock': False,
         'hasNonZeroStock': False,
@@ -1665,14 +1696,32 @@ def _apply_planned_roles(judgments, auto_primary):
             j['plannedRoleLabel'] = '未定（選択が必要）'
 
 
-def attach_aux_primary_judgment(sku_groups, aux_uploaded):
-    """品番グループへ通常仕入先の自動判定を付与（在庫は変更しない）。
+def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=False):
+    """品番グループへ通常仕入先の自動判定を付与。
 
     補助CSVの有無に関わらず候補1社なら自動設定する。複社は補助CSV規則（#152）。
+    register_opening=True のときは確認後に初期在庫も登録する旨を meta に載せる。
     """
     aux_index = build_aux_row_index(aux_uploaded['rows']) if aux_uploaded else None
     meta = None
     if aux_uploaded:
+        if register_opening:
+            note = (
+                '初期在庫CSVを選んでいるため、確認後に初期在庫も登録します。'
+                '数量は「在庫」列のみです（補正在庫数・購入・出荷は使いません）。'
+                'あわせて通常仕入先・代表候補のフルパッケージ判定にも使います。'
+                '非ゼロ在庫（負含む）がある候補が1組のとき、その候補の'
+                '商品名・仕入先・色・加工・素材をセットで採用します。'
+                '台帳に無い初期在庫だけの商品は補完候補として示し、自動では登録しません。'
+            )
+        else:
+            note = (
+                '初期在庫用CSVは通常仕入先・代表候補のフルパッケージ判定補助だけに使います。'
+                '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
+                '非ゼロ在庫（負含む）がある候補が1組のとき、その候補の'
+                '商品名・仕入先・色・加工・素材をセットで採用します。'
+                '補助CSVにだけある商品・仕入先は新規作成しません。'
+            )
         meta = {
             'fileName': aux_uploaded['fileName'],
             'fileSha256': aux_uploaded['fileSha256'],
@@ -1680,13 +1729,8 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
             'encoding': aux_uploaded['encoding'],
             'rowCount': len(aux_uploaded['rows']),
             'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
-            'note': (
-                '初期在庫用CSVは通常仕入先・代表候補のフルパッケージ判定補助だけに使います。'
-                '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
-                '非ゼロ在庫（負含む）がある候補が1組のとき、その候補の'
-                '商品名・仕入先・色・加工・素材をセットで採用します。'
-                '補助CSVにだけある商品・仕入先は新規作成しません。'
-            ),
+            'willRegisterOpeningStock': bool(register_opening),
+            'note': note,
         }
 
     for group in sku_groups:
@@ -4332,7 +4376,10 @@ def build_preview(c, body):
         row['matchGroupCount'] = group_counts[row['matchGroupKey']]
 
     sku_groups = build_sku_groups(c, classified)
-    aux_meta = attach_aux_primary_judgment(sku_groups, aux_uploaded)
+    register_opening = register_opening_stock_requested(body, aux_uploaded)
+    aux_meta = attach_aux_primary_judgment(
+        sku_groups, aux_uploaded, register_opening=register_opening,
+    )
     # 在庫一意／候補1組 → フルパッケージ採用。色・加工・素材差だけでは要確認に残さない
     apply_aux_full_package_adoption(sku_groups, sku_decisions)
     # 補助CSV判定後に仮代表名の予定を更新（決定前の画面表示用）
@@ -4414,20 +4461,37 @@ def build_preview(c, body):
     ]
     fp = db_fingerprint(c)
     snap = stock_snapshot(c)
-    note = (
-        '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
-        '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記・空白/全角半角・'
-        '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
-        '商品名の括弧内は辞書規則で色・加工・生地へ分類し、取扱の加工仕様／商品の色・生地へ保存します。'
-        '未分類・曖昧な括弧は原文のまま要確認（自動確定しません）。'
-        '色・生地・加工・商品種の疑いや残り曖昧さ、男女の明示対立（男性用⇔女性用）は確認が必要です。'
-        '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
-        'CSV原文は照合用別名に残し、後続の初期在庫取込で解決できるようにします。'
-        '品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
-        '保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
-        'この画面は確定前のプレビューです（登録ボタンを押すまで台帳は変わりません）。'
-    )
-    if aux_meta:
+    if register_opening:
+        note = (
+            '商品台帳と初期在庫をまとめて確認します。登録ボタンを押すまでDBは変わりません。'
+            '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記・空白/全角半角・'
+            '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
+            '商品名の括弧内は辞書規則で色・加工・生地へ分類し、取扱の加工仕様／商品の色・生地へ保存します。'
+            '初期在庫の数量は「在庫」列のみ（補正在庫数・購入・出荷は不使用）。0・マイナスもそのまま登録します。'
+            '対応は元CSV行→確定した商品・取扱・サイズ・仕様です（改名後の商品名だけでは再照合しません）。'
+            '保留した品番の初期在庫は同時に保留し、片方だけ登録しません。'
+            '品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
+        )
+    else:
+        note = (
+            '商品と顧客取扱を登録します。'
+            + (
+                '初期在庫CSVは判定補助のみで、在庫数量は書き込みません。'
+                if aux_meta else
+                '初期在庫CSV未選択のため在庫数量は書き込みません。'
+            )
+            + '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記・空白/全角半角・'
+            '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
+            '商品名の括弧内は辞書規則で色・加工・生地へ分類し、取扱の加工仕様／商品の色・生地へ保存します。'
+            '未分類・曖昧な括弧は原文のまま要確認（自動確定しません）。'
+            '色・生地・加工・商品種の疑いや残り曖昧さ、男女の明示対立（男性用⇔女性用）は確認が必要です。'
+            '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
+            'CSV原文は照合用別名に残します。'
+            '品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
+            '保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
+            'この画面は確定前のプレビューです（登録ボタンを押すまで台帳は変わりません）。'
+        )
+    if aux_meta and not register_opening:
         note += (
             ' 初期在庫用CSVは、正の在庫合計が最多の候補が一意のとき'
             '（または非ゼロが1組／候補自体が1組のとき）'
@@ -4436,6 +4500,24 @@ def build_preview(c, body):
             '色・加工・素材・「女性用」等の対象標記の有無・一般名と具体名の言い回し差だけでは、'
             '在庫採用なら要確認にしません。男性用と女性用の明示対立は確認のままです。'
         )
+
+    opening_stock = None
+    if register_opening and aux_uploaded:
+        opening_stock = bulk.build_opening_stock_plans(
+            c,
+            classified=classified,
+            sku_groups=sku_groups,
+            aux_uploaded=aux_uploaded,
+            default_site_name=stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME,
+            opening_selections=body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {},
+        )
+        # basisDate は確定時必須。プレビューでは任意（空なら当日想定をUI側で埋める）
+        if body.get('basisDate'):
+            try:
+                opening_stock['basisDate'] = stock.parse_date(body.get('basisDate'), '在庫基準日')
+            except ValueError as e:
+                opening_stock['basisDateError'] = str(e)
+
     return {
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
@@ -4452,6 +4534,9 @@ def build_preview(c, body):
         'individualReviewCount': planned.get('individualReviewSkuGroups', 0),
         'autoMergePlans': auto_plans,
         'auxOpeningStock': aux_meta,
+        'registerOpeningStock': register_opening,
+        'openingStock': opening_stock,
+        'openingStockSummary': bulk.summarize_opening_for_preview(opening_stock),
         'reviewTierLabels': dict(REVIEW_TIER_LABELS),
         'provisionalNameTag': PROVISIONAL_NAME_TAG,
         'counts': dict(STATUS_LABELS),
@@ -4987,12 +5072,41 @@ def commit_preview(c, body, *, db_path=None):
             f'要確認が {len(review_rows)} 件残っています。'
             f'未解決の行を黙って除外せず、候補を選ぶか解決してから確定してください。'
         )
-    if not commit_rows and not body.get('allowEmptyCommit'):
+    register_opening = bool(preview.get('registerOpeningStock'))
+    opening_stock = preview.get('openingStock') if register_opening else None
+    opening_plans = list((opening_stock or {}).get('plans') or [])
+    aux_uploaded = decode_aux_upload(body) if register_opening else None
+    opening_selections = (
+        body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {}
+    )
+    opening_commitable = False
+    if register_opening:
+        for p in opening_plans:
+            st = p.get('status')
+            if st in (legacy.STATUS_CREATE, legacy.STATUS_REUSE):
+                opening_commitable = True
+                break
+            if st == legacy.STATUS_QTY_DIFF:
+                sel = opening_selections.get(str(p['rowNo'])) or opening_selections.get(p['rowNo']) or {}
+                if sel.get('updateQty'):
+                    opening_commitable = True
+                    break
+
+    if not commit_rows and not opening_commitable and not body.get('allowEmptyCommit'):
         raise ValueError(
             '登録する行がありません。'
             f'要確認 {len(review_rows)} 件、保留 {len(hold_rows)} 件、対象外 {len(excluded_rows)} 件、'
             f'変更なし {sum(1 for r in classified if r["status"] == STATUS_UNCHANGED)} 件です。'
         )
+
+    if register_opening:
+        if not body.get('basisDate'):
+            raise ValueError('初期在庫を登録するには在庫基準日を指定してください。')
+        basis_date = stock.parse_date(body.get('basisDate'), '在庫基準日')
+        if (opening_stock or {}).get('basisDateError'):
+            raise ValueError(opening_stock['basisDateError'])
+    else:
+        basis_date = None
 
     # 確定前サマリ（行数≠新規商品数）
     confirm_summary = {
@@ -5004,14 +5118,17 @@ def commit_preview(c, body, *, db_path=None):
         'sizesToAdd': planned.get('sizesToAdd', 0),
         'handlesToCreate': planned.get('handlesToCreate', 0),
         'commitRows': len(commit_rows),
+        'registerOpeningStock': register_opening,
+        'openingStockRows': len(opening_plans),
     }
 
     before_stock = stock_snapshot(c)
     backup_path = ''
     if db_path:
         # Must succeed before any registration writes. Do not skip on failure.
+        tag = 'pre-legacy-csv-bulk' if register_opening else 'pre-product-ledger'
         try:
-            backup_path = str(stock.backup_sqlite(db_path, tag='pre-product-ledger') or '')
+            backup_path = str(stock.backup_sqlite(db_path, tag=tag) or '')
         except stock.BackupError:
             raise
         except Exception as e:
@@ -5044,6 +5161,8 @@ def commit_preview(c, body, *, db_path=None):
         'reviewed': len(review_rows), 'excluded': len(excluded_rows),
         'deferred': len(hold_rows),
         'committedRows': 0, 'failed': 0,
+        'openingCreated': 0, 'openingQtyUpdated': 0, 'openingUnchanged': 0,
+        'openingHeld': 0, 'openingComplementSkipped': 0,
     }
     failures = []
     defer_records = [
@@ -5067,6 +5186,7 @@ def commit_preview(c, body, *, db_path=None):
 
         # 同一通常品番の新規はコミット内で1商品にまとめる
         created_by_code = {}
+        product_id_by_code = {}
 
         for row in commit_rows:
             row_no = row['rowNo']
@@ -5116,6 +5236,8 @@ def commit_preview(c, body, *, db_path=None):
                 )
                 if created and stock_product_merge.is_normal_product_code(code_t):
                     created_by_code[code_t] = pid
+                if code_t and pid:
+                    product_id_by_code[code_t] = pid
                 if created:
                     result_counts['productsCreated'] += 1
                 if size_added:
@@ -5147,8 +5269,58 @@ def commit_preview(c, body, *, db_path=None):
                 failures.append({'rowNo': row_no, 'error': str(e) or '登録に失敗しました。'})
                 raise
 
+        opening_counts = {}
+        if register_opening and aux_uploaded and opening_plans:
+            for m in c.execute(
+                '''SELECT csv_product_code, product_id FROM product_ledger_row_maps
+                   WHERE run_id=? AND product_id IS NOT NULL''',
+                (run_id,),
+            ):
+                code_t = stock.text(m['csv_product_code'] or '')
+                if code_t and code_t not in product_id_by_code:
+                    product_id_by_code[code_t] = m['product_id']
+
+            def handle_resolver(cust_id, product_id, embroidery, prefer_id):
+                info = {
+                    'id': prefer_id,
+                    'action': 'reuse' if prefer_id else 'create',
+                    'embroidery': embroidery or PENDING_EMBROIDERY,
+                    'proposedEmbroidery': embroidery or '',
+                    'fromParenClassification': bool(
+                        embroidery and embroidery != PENDING_EMBROIDERY
+                    ),
+                }
+                cp_id, created_h = _ensure_handle(c, cust_id, product_id, info)
+                if created_h:
+                    result_counts['handlesCreated'] += 1
+                return cp_id
+
+            try:
+                opening_counts = bulk.commit_opening_stock_plans(
+                    c,
+                    body=body,
+                    aux_uploaded=aux_uploaded,
+                    plans=opening_plans,
+                    run_id=run_id,
+                    product_id_by_code=product_id_by_code,
+                    handle_resolver=handle_resolver,
+                    actor=actor,
+                    basis_date=basis_date,
+                )
+            except Exception as e:
+                result_counts['failed'] += 1
+                failures.append({'rowNo': None, 'error': str(e) or '初期在庫の登録に失敗しました。'})
+                raise ValueError(
+                    f'初期在庫登録で失敗したため、台帳も含めすべて取り消します: {e}'
+                ) from e
+            result_counts['openingCreated'] = opening_counts.get('openingCreated', 0)
+            result_counts['openingQtyUpdated'] = opening_counts.get('qtyUpdated', 0)
+            result_counts['openingUnchanged'] = opening_counts.get('unchanged', 0)
+            result_counts['openingHeld'] = opening_counts.get('held', 0)
+            result_counts['openingComplementSkipped'] = opening_counts.get('complementSkipped', 0)
+
         after_stock = stock_snapshot(c)
-        if after_stock != before_stock:
+        if not register_opening and after_stock != before_stock:
             raise RuntimeError(
                 '在庫数量・金額・履歴が変化したため取込を中止しました。'
                 f' before={before_stock} after={after_stock}'
@@ -5164,7 +5336,9 @@ def commit_preview(c, body, *, db_path=None):
             'backupPath': backup_path,
             'stockSnapshotBefore': before_stock,
             'stockSnapshotAfter': after_stock,
-            'stockUnchanged': True,
+            'stockUnchanged': after_stock == before_stock,
+            'registerOpeningStock': register_opening,
+            'openingCounts': opening_counts,
             'reviewRemaining': len(review_rows),
             'excludedCount': len(excluded_rows),
             'deferredCount': len(hold_rows),
