@@ -8,10 +8,12 @@
     unchanged:'変更なし',needs_review:'要確認',hold:'保留',excluded:'対象外'
   }
   const PAGE_SIZE=80
+  const SKU_PAGE_SIZE=40
   // Keep in sync with stock-desk/upload_limits.py (POST body 12MB; raw CSV decode 8MB).
   const MAX_RAW_FILE_BYTES=8_000_000
   const MAX_POST_BODY_BYTES=12_000_000
   const OVERSIZE_MSG='ファイル容量が上限を超えています'
+  const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
   let ui=null
 
   function ensureState(){
@@ -21,10 +23,14 @@
         auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
         history:null,historyError:'',preview:null,result:null,
         q:'',statusFilter:'needs_review',page:1,
+        skuQ:'',skuReasonFilter:'',skuPage:1,
+        selectedCodes:{},expandedCodes:{},
         selections:{},skuDecisions:{},commitToken:'',busy:false,open:false,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
     }
+    if(!ui.selectedCodes)ui.selectedCodes={}
+    if(!ui.expandedCodes)ui.expandedCodes={}
     return ui
   }
 
@@ -243,46 +249,129 @@
     </div>`
   }
 
-  function skuGroupsHtml(st){
-    const groups=((st.preview&&st.preview.skuGroups)||[]).filter(g=>g.needsDecision)
-    if(!groups.length)return ''
-    const cards=groups.map(g=>{
-      const d=skuDecision(st,g.code)
-      const decision=d.decision||''
-      const names=[...new Set((g.variants||[]).map(v=>v.productName).filter(Boolean))]
-      const suppliers=[...new Set((g.variants||[]).map(v=>v.supplier).filter(Boolean))]
-      const existing=(g.existingProducts||[]).map(p=>{
-        return `<label class="check"><input type="radio" name="plKeep-${esc(g.code)}" data-pl-keep="${esc(g.code)}" value="${p.id}" ${Number(d.keepProductId)===Number(p.id)?'checked':''} ${st.busy?'disabled':''}>
-          ID ${p.id}　${esc(p.name||'')}${p.color?` / ${esc(p.color)}`:''}${p.supplierName?`　仕入 ${esc(p.supplierName)}`:''}</label>`
-      }).join('')||'<span class="sub">登録済なし（新規1商品）</span>'
-      const nameOpts=names.map(n=>`<option value="${esc(n)}" ${d.officialName===n?'selected':''}>${esc(n)}</option>`).join('')
-      const effectivePrimary=d.primarySupplier||(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier)||''
-      const supOpts=suppliers.map(s=>`<option value="${esc(s)}" ${effectivePrimary===s?'selected':''}>${esc(s)}</option>`).join('')
-      const variantPlans=(g.variants||[]).map(v=>{
-        const plans=(d.plans&&typeof d.plans==='object')?d.plans:{}
-        const plan=plans[v.key]||{}
-        return `<div class="sku-variant-plan" data-variant-key="${esc(v.key)}">
-          <strong>${esc(v.productName||'（名なし）')}</strong>
-          <span class="sub">仕入 ${esc(v.supplier||'未設定')}　サイズ ${(v.sizes||[]).map(esc).join('、')||'—'}　顧客 ${(v.customers||[]).slice(0,3).map(esc).join('、')}${(v.customers||[]).length>3?'…':''}</span>
-          <label>整理方法<select data-pl-sep-approach="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" ${st.busy||decision!=='separate'?'disabled':''}>
-            <option value="">選択…</option>
-            <option value="change_code" ${plan.approach==='change_code'?'selected':''}>品番を修正して登録</option>
-            <option value="as_parts" ${plan.approach==='as_parts'?'selected':''}>部品・資材として整理</option>
-            <option value="as_blank" ${plan.approach==='as_blank'?'selected':''}>品番なしとして整理</option>
-            <option value="defer" ${plan.approach==='defer'?'selected':''}>この内容は保留</option>
-          </select></label>
-          <label>修正品番<input data-pl-sep-code="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(plan.newCode||'')}" placeholder="別の品番" ${st.busy||decision!=='separate'||plan.approach!=='change_code'?'disabled':''}></label>
-        </div>`
-      }).join('')
-      const mergeSources=(g.existingProducts||[]).filter(p=>Number(p.id)!==Number(d.keepProductId)).map(p=>{
-        const checked=(d.mergeSourceIds||[]).map(Number).includes(Number(p.id))||(decision==='merge'&&g.existingCount>1&&d.keepProductId)
-        return `<label class="check"><input type="checkbox" data-pl-merge-src="${esc(g.code)}" value="${p.id}" ${checked?'checked':''} ${st.busy||decision!=='merge'||!d.keepProductId?'disabled':''}>統合元 ID ${p.id}</label>`
-      }).join('')
-      const auxPanel=auxSupplierPanelHtml(st,g,d)
-      return `<article class="sku-group-card" data-sku-code="${esc(g.code)}">
-        <header><strong>品番 ${esc(g.codeDisplay||g.code)}</strong>
-          <span class="excelhint">${esc(g.applyScope||'')}</span></header>
-        <p>CSV内容 ${(g.variants||[]).length} 種　行 ${g.rowCount}　登録済 ${g.existingCount}</p>
+  function decisionGroups(st){
+    return ((st.preview&&st.preview.skuGroups)||[]).filter(g=>g.needsDecision)
+  }
+
+  function filteredSkuGroups(st){
+    const q=(st.skuQ||'').trim().toLowerCase()
+    const reason=st.skuReasonFilter||''
+    return decisionGroups(st).filter(g=>{
+      if(reason==='bulk'&&g.reviewTier!=='bulk')return false
+      if(reason==='individual'&&g.reviewTier!=='individual')return false
+      if(reason==='pending'&&skuDecision(st,g.code).decision)return false
+      if(reason==='merge'&&skuDecision(st,g.code).decision!=='merge')return false
+      if(reason==='hold'&&skuDecision(st,g.code).decision!=='hold')return false
+      if(reason==='name_wording'&&!g.nameWordingDiff)return false
+      if(reason==='supplier'&&!g.supplierDiff)return false
+      if(reason==='color'&&!g.colorDiffPossible)return false
+      if(reason==='processing'&&!g.processingDiffPossible)return false
+      if(reason==='kind'&&!g.kindDiffPossible)return false
+      if(!q)return true
+      const hay=[
+        g.code,g.codeDisplay,
+        (g.nameCandidates||[]).join(' '),
+        (g.supplierCandidates||[]).join(' '),
+        (g.reviewReasons||[]).map(r=>r.label).join(' '),
+        g.reviewTierLabel,g.plannedOfficialName,g.plannedPrimarySupplier,
+        g.nameAdoptionRule
+      ].join(' ').toLowerCase()
+      return hay.includes(q)
+    })
+  }
+
+  function selectedCodeList(st){
+    return Object.keys(st.selectedCodes||{}).filter(c=>st.selectedCodes[c])
+  }
+
+  function plannedNameForGroup(st,g){
+    const d=skuDecision(st,g.code)
+    if(d.officialName)return d.officialName
+    return (g.namePlan&&g.namePlan.officialName)||g.plannedOfficialName||''
+  }
+
+  function plannedSupplierForGroup(st,g){
+    const d=skuDecision(st,g.code)
+    if(d.primarySupplier)return d.primarySupplier
+    return g.plannedPrimarySupplier||(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier)||''
+  }
+
+  function candidatesCell(values){
+    const list=(values||[]).filter(Boolean)
+    if(!list.length)return '<span class="sub">—</span>'
+    return `<ul class="sku-cand-list">${list.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`
+  }
+
+  function otherDiffsCell(g){
+    const diffs=g.otherDiffs||[]
+    if(!diffs.length){
+      if(g.nameWordingDiff||g.supplierDiff)return '<span class="sub">名差・仕入先差のみ</span>'
+      return '<span class="sub">—</span>'
+    }
+    return diffs.map(d=>`<div class="sku-other-diff"><strong>${esc(d.label||'')}</strong><div>${(d.values||[]).map(esc).join(' / ')||'—'}</div></div>`).join('')
+  }
+
+  function reasonCell(g){
+    const reasons=g.reviewReasons||[]
+    if(!reasons.length)return '<span class="sub">—</span>'
+    return `<ul class="sku-reason-list">${reasons.map(r=>{
+      const vals=(r.values||[]).length?`（${(r.values||[]).map(esc).join(' / ')}）`:''
+      return `<li>${esc(r.label||'')}${vals}</li>`
+    }).join('')}</ul>`
+  }
+
+  function decisionLabel(dec){
+    if(dec==='merge')return 'まとめる'
+    if(dec==='separate')return '個別整理'
+    if(dec==='hold')return '保留'
+    return '未決定'
+  }
+
+  function skuRowDetailHtml(st,g){
+    const d=skuDecision(st,g.code)
+    const decision=d.decision||''
+    const names=[...new Set([...(g.nameCandidates||[]),...(g.variants||[]).map(v=>v.productName).filter(Boolean)])]
+    const suppliers=[...new Set([...(g.supplierCandidates||[]),...(g.variants||[]).map(v=>v.supplier).filter(Boolean)])]
+    const nameOpts=names.map(n=>`<option value="${esc(n)}" ${d.officialName===n?'selected':''}>${esc(n)}</option>`).join('')
+    const effectivePrimary=plannedSupplierForGroup(st,g)
+    const supOpts=suppliers.map(s=>`<option value="${esc(s)}" ${effectivePrimary===s?'selected':''}>${esc(s)}</option>`).join('')
+    const existing=(g.existingProducts||[]).map(p=>{
+      return `<label class="check"><input type="radio" name="plKeep-${esc(g.code)}" data-pl-keep="${esc(g.code)}" value="${p.id}" ${Number(d.keepProductId)===Number(p.id)?'checked':''} ${st.busy?'disabled':''}>
+        ID ${p.id}　${esc(p.name||'')}${p.color?` / ${esc(p.color)}`:''}${p.supplierName?`　仕入 ${esc(p.supplierName)}`:''}</label>`
+    }).join('')||'<span class="sub">登録済なし（新規1商品）</span>'
+    const mergeSources=(g.existingProducts||[]).filter(p=>Number(p.id)!==Number(d.keepProductId)).map(p=>{
+      const checked=(d.mergeSourceIds||[]).map(Number).includes(Number(p.id))||(decision==='merge'&&g.existingCount>1&&d.keepProductId)
+      return `<label class="check"><input type="checkbox" data-pl-merge-src="${esc(g.code)}" value="${p.id}" ${checked?'checked':''} ${st.busy||decision!=='merge'||!d.keepProductId?'disabled':''}>統合元 ID ${p.id}</label>`
+    }).join('')
+    const variantPlans=(g.variants||[]).map(v=>{
+      const plans=(d.plans&&typeof d.plans==='object')?d.plans:{}
+      const plan=plans[v.key]||{}
+      return `<div class="sku-variant-plan" data-variant-key="${esc(v.key)}">
+        <strong>${esc(v.productName||'（名なし）')}</strong>
+        <span class="sub">仕入 ${esc(v.supplier||'未設定')}　サイズ ${(v.sizes||[]).map(esc).join('、')||'—'}　顧客 ${(v.customers||[]).slice(0,3).map(esc).join('、')}${(v.customers||[]).length>3?'…':''}　CSV行 ${(v.rowNos||[]).join(',')||'—'}</span>
+        <label>整理方法<select data-pl-sep-approach="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" ${st.busy||decision!=='separate'?'disabled':''}>
+          <option value="">選択…</option>
+          <option value="change_code" ${plan.approach==='change_code'?'selected':''}>品番を修正して登録</option>
+          <option value="as_parts" ${plan.approach==='as_parts'?'selected':''}>部品・資材として整理</option>
+          <option value="as_blank" ${plan.approach==='as_blank'?'selected':''}>品番なしとして整理</option>
+          <option value="defer" ${plan.approach==='defer'?'selected':''}>この内容は保留</option>
+        </select></label>
+        <label>修正品番<input data-pl-sep-code="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(plan.newCode||'')}" placeholder="別の品番" ${st.busy||decision!=='separate'||plan.approach!=='change_code'?'disabled':''}></label>
+      </div>`
+    }).join('')
+    const customers=[...new Set((g.variants||[]).flatMap(v=>v.customers||[]))]
+    const sizes=[...new Set((g.variants||[]).flatMap(v=>v.sizes||[]))]
+    const rowNos=(g.rowNos||[]).join(', ')
+    const namePlan=g.namePlan||{}
+    const mappings=(namePlan.nameMappings||[]).slice(0,12).map(m=>
+      `<li>${esc(m.originalName||'')}（行${m.sourceRowNo}）→ ${esc(m.registrationName||'')}${m.isAlias?'（別名）':''}</li>`
+    ).join('')
+    const auxPanel=auxSupplierPanelHtml(st,g,d)
+    return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="8">
+      <div class="sku-detail-body">
+        <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
+        ${namePlan.adoptionRule?`<p class="excelhint">名称採用ルール: ${esc(namePlan.adoptionRule)}${namePlan.provisional?`（タグ「${esc(st.preview&&st.preview.provisionalNameTag||'名称未整理')}」）`:''}</p>`:''}
+        ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}
         ${auxPanel}
         <div class="bar sku-decision-btns">
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':''}" ${st.busy?'disabled':''}>同じ商品としてまとめる</button>
@@ -290,14 +379,15 @@
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>今回は保留する</button>
         </div>
         ${decision==='merge'?`<div class="sku-merge-form">
-          <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">選択または下で編集…</option>${nameOpts}</select></label>
-          <label>公式名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" ${st.busy?'disabled':''}></label>
+          <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
+          <label>公式名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" placeholder="空なら仮代表名（名称未整理）" ${st.busy?'disabled':''}></label>
           <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||'')}" ${st.busy?'disabled':''}></label>
           <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
           ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は初期在庫CSVから自動提案: ${esc(g.auxPrimary.autoPrimarySupplier)}</p>`:'')}
+          <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定通常仕入先: ${esc(plannedSupplierForGroup(st,g)||'未設定')}</p>
           <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
           ${g.existingCount>1?`<fieldset><legend>統合する商品（残す以外）</legend>${mergeSources||'<span class="sub">残す商品を先に選んでください</span>'}</fieldset>`:''}
-          <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。サイズは LL≡2L などの同一化はしません。取扱・加工仕様は商品に付けたまま残します。</p>
+          <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。既存の公式名は仮名では上書きしません。サイズの LL≡2L 同一化はしません。</p>
         </div>`:''}
         ${decision==='separate'?`<div class="sku-separate-form">
           <p class="excelhint">同じ通常品番のまま別商品として新規登録はできません。品番修正・部品扱い・保留のいずれかを内容ごとに選んでください。</p>
@@ -305,14 +395,109 @@
         </div>`:''}
         ${decision==='hold'?`<div class="sku-hold-form">
           <label>保留理由<input data-pl-defer-reason="${esc(g.code)}" value="${esc(d.deferReason||'')}" placeholder="例: 制服本体と加工サービスの切り分けが未確定" ${st.busy?'disabled':''}></label>
-          <p class="excelhint">この品番の対象行は今回の登録から除外します。元行はプレビューに残ります。</p>
+          <p class="excelhint">この品番は今回登録しません。同じCSVを後で再読込して処理できます。</p>
         </div>`:''}
-      </article>`
-    }).join('')
+      </div>
+    </td></tr>`
+  }
+
+  function applyMergeDefaults(st,code,group){
+    const patch={decision:'merge'}
+    // 公式名は必須にしない（仮代表名で登録可）。ユーザー指定があれば残す
+    if(group.existingCount===1){
+      patch.keepProductId=group.existingProducts[0].id
+      patch.mergeSourceIds=[]
+    }
+    setSkuDecision(st,code,patch)
+    applyAuxDefaultsForMerge(st,code,group)
+  }
+
+  function skuGroupsHtml(st){
+    const all=filteredSkuGroups(st)
+    const pending=decisionGroups(st)
+    if(!pending.length)return ''
+    const pages=Math.max(1,Math.ceil(all.length/SKU_PAGE_SIZE))
+    if(st.skuPage>pages)st.skuPage=pages
+    if(st.skuPage<1)st.skuPage=1
+    const start=(st.skuPage-1)*SKU_PAGE_SIZE
+    const pageGroups=all.slice(start,start+SKU_PAGE_SIZE)
+    const selected=selectedCodeList(st)
+    const selectedOnPage=pageGroups.filter(g=>st.selectedCodes[g.code]).length
+    const bulkCount=pending.filter(g=>g.reviewTier==='bulk').length
+    const indivCount=pending.filter(g=>g.reviewTier==='individual').length
+    const decided=pending.filter(g=>skuDecision(st,g.code).decision).length
+    const body=pageGroups.map(g=>{
+      const d=skuDecision(st,g.code)
+      const decision=d.decision||''
+      const checked=!!st.selectedCodes[g.code]
+      const expanded=!!st.expandedCodes[g.code]
+      const tier=g.reviewTier||'individual'
+      const plannedName=plannedNameForGroup(st,g)
+      const plannedSup=plannedSupplierForGroup(st,g)
+      const provisional=!(d.officialName)&&(g.namePlan&&g.namePlan.provisional||g.provisionalName)
+      return `<tr class="sku-list-row sku-tier-${esc(tier)} ${decision?`sku-dec-${esc(decision)}`:''}" data-sku-code="${esc(g.code)}">
+        <td class="sku-check"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
+        <td class="sku-code"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(g.codeDisplay||g.code)}</button>
+          <div class="sub">${esc(TIER_LABELS[tier]||g.reviewTierLabel||'')}</div></td>
+        <td class="sku-names">${candidatesCell(g.nameCandidates||(g.variants||[]).map(v=>v.productName))}</td>
+        <td class="sku-sups">${candidatesCell(g.supplierCandidates||(g.variants||[]).map(v=>v.supplier))}</td>
+        <td class="sku-other">${otherDiffsCell(g)}</td>
+        <td class="sku-why">${reasonCell(g)}</td>
+        <td class="sku-plan">
+          <div><strong>${esc(plannedName||'—')}</strong>${provisional?' <span class="badge">名称未整理</span>':''}</div>
+          <div class="sub">通常仕入先: ${esc(plannedSup||'未設定')}</div>
+          ${(g.nameAdoptionRule||(g.namePlan&&g.namePlan.adoptionRule))?`<div class="sub">${esc(g.nameAdoptionRule||g.namePlan.adoptionRule)}</div>`:''}
+        </td>
+        <td class="sku-action">
+          <div class="sku-action-label">${esc(decisionLabel(decision))}</div>
+          <div class="bar sku-mini-btns">
+            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="quiet ${decision==='merge'?'primary':''}" ${st.busy?'disabled':''}>まとめ</button>
+            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="quiet ${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>保留</button>
+            <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'閉じる':'詳細'}</button>
+          </div>
+        </td>
+      </tr>${expanded?skuRowDetailHtml(st,g):''}`
+    }).join('')||'<tr><td colspan="8">該当する品番はありません。</td></tr>'
+
     return `<div class="sku-groups-panel">
-      <h3>品番ごとの比較（通常品番）</h3>
-      <p class="excelhint">商品名／色／仕入先など判断が必要な差だけここで一度決めます。サイズ・顧客・先頭「＊/*」中古標記だけの差は要確認に出さず、同じ商品へ自動まとめします。決定は品番単位で対象行に適用されます（適用範囲は各カードに表示）。</p>
-      ${cards}
+      <h3>品番ごとの比較一覧（通常品番）</h3>
+      <p class="excelhint">1行=1品番。候補の商品名・仕入先をそのまま表示します。「内容の違い○種」だけでは判断させません。サイズ・顧客・先頭「＊/*」は自動まとめ済みです。一括承認候補は名差・仕入先差のみ。色・加工・商品種の疑いは個別確認（一括まとめの対象外）。公式名未設定でも仮代表名で登録できます。</p>
+      <p class="excelhint">要確認 ${pending.length} 品番（一括承認候補 ${bulkCount} / 個別確認 ${indivCount}）　決定済 ${decided}　選択中 ${selected.length} 品番</p>
+      <div class="bar sku-list-toolbar">
+        <input type="search" id="plSkuQ" placeholder="品番・商品名・仕入先・理由で検索" value="${esc(st.skuQ||'')}" ${st.busy?'disabled':''}>
+        <select id="plSkuReason" ${st.busy?'disabled':''}>
+          <option value="">理由すべて</option>
+          <option value="bulk" ${st.skuReasonFilter==='bulk'?'selected':''}>一括承認候補</option>
+          <option value="individual" ${st.skuReasonFilter==='individual'?'selected':''}>個別確認</option>
+          <option value="pending" ${st.skuReasonFilter==='pending'?'selected':''}>未決定のみ</option>
+          <option value="merge" ${st.skuReasonFilter==='merge'?'selected':''}>まとめ済</option>
+          <option value="hold" ${st.skuReasonFilter==='hold'?'selected':''}>保留済</option>
+          <option value="name_wording" ${st.skuReasonFilter==='name_wording'?'selected':''}>名差</option>
+          <option value="supplier" ${st.skuReasonFilter==='supplier'?'selected':''}>仕入先差</option>
+          <option value="color" ${st.skuReasonFilter==='color'?'selected':''}>色の疑い</option>
+          <option value="processing" ${st.skuReasonFilter==='processing'?'selected':''}>加工の疑い</option>
+          <option value="kind" ${st.skuReasonFilter==='kind'?'selected':''}>商品種の疑い</option>
+        </select>
+        <button type="button" id="plSkuSelectPage" ${st.busy||!pageGroups.length?'disabled':''}>このページを選択（${pageGroups.length}）</button>
+        <button type="button" id="plSkuSelectFiltered" ${st.busy||!all.length?'disabled':''}>絞り込み全件を選択（${all.length}）</button>
+        <button type="button" id="plSkuClearSel" class="quiet" ${st.busy||!selected.length?'disabled':''}>選択解除</button>
+      </div>
+      <div class="bar sku-bulk-bar">
+        <button type="button" id="plSkuBulkMerge" class="primary" ${st.busy||!selected.length?'disabled':''}>選択を同じ商品としてまとめる</button>
+        <button type="button" id="plSkuBulkHold" ${st.busy||!selected.length?'disabled':''}>選択を今回は保留する</button>
+        <span class="excelhint">選択 ${selected.length}（うちこのページ ${selectedOnPage}） / 表示 ${all.length} 品番</span>
+      </div>
+      <div class="sku-compare-wrap"><table class="sku-compare-table">
+        <thead><tr>
+          <th></th><th>品番</th><th>商品名候補</th><th>仕入先候補</th><th>色・加工など</th><th>要確認理由</th><th>予定の代表名・通常仕入先</th><th>操作</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table></div>
+      <div class="bar legacy-csv-pager">
+        <button type="button" id="plSkuPrev" ${st.skuPage<=1||st.busy?'disabled':''}>前へ</button>
+        <span>${st.skuPage} / ${pages}ページ（表示 ${all.length}品番）</span>
+        <button type="button" id="plSkuNext" ${st.skuPage>=pages||st.busy?'disabled':''}>次へ</button>
+      </div>
     </div>`
   }
 
@@ -465,12 +650,12 @@
     dlg.classList.add('product-ledger-dialog','legacy-csv-detail-dialog')
     dlg.innerHTML=`<div class="dialoghead"><h2>旧商品台帳CSVを取り込む</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
-        <p class="merge-lead">商品と顧客取扱だけを登録します。在庫数量・仕入単価・初期在庫・入出庫履歴は変更しません。通常品番は<strong>1品番=1商品</strong>です。初期在庫用の「旧CSV取込」とは別機能です。プレビューまではDBを変更しません。</p>
+        <p class="merge-lead">商品と顧客取扱だけを登録します。在庫数量・仕入単価・初期在庫・入出庫履歴は変更しません。通常品番は<strong>1品番=1商品</strong>です。初期在庫用の「旧CSV取込」とは別機能です。プレビューまではDBを変更しません。保留した品番は登録せず残せます。</p>
         ${filePickHtml(st)}
         ${historyBlock(st)}
         ${st.preview?`<p class="excelhint">${esc(st.preview.note||'')}</p>
           ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定用）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
-          <p><strong>${countLine(st.preview.countsRaw)}</strong>　要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未解決のまま確定できません）':''}</p>
+          <p><strong>${countLine(st.preview.countsRaw)}</strong>　行の要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未決定の品番は確定できません。保留にすれば登録対象から外せます）':''}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${autoMergePlansHtml(st)}
           ${skuGroupsHtml(st)}
@@ -481,7 +666,7 @@
               ${STATUS_ORDER.map(k=>`<option value="${k}" ${st.statusFilter===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
             </select>
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
-            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して登録</button>
+            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して登録（保留は除外）</button>
           </div>
           ${tableHtml(st)}`:''}
         ${resultHtml(st)}
@@ -500,6 +685,9 @@
     st.result=null
     st.selections={}
     st.skuDecisions={}
+    st.selectedCodes={}
+    st.expandedCodes={}
+    st.skuQ='';st.skuReasonFilter='';st.skuPage=1
     st.page=1
     st.history=null
     st.historyError=''
@@ -678,24 +866,104 @@
     const stSel=$('#plStatus');if(stSel)stSel.onchange=()=>{st.statusFilter=stSel.value;st.page=1;paintDialog()}
     const pPrev=$('#plPrev');if(pPrev)pPrev.onclick=()=>{st.page=Math.max(1,st.page-1);paintDialog()}
     const pNext=$('#plNext');if(pNext)pNext.onclick=()=>{st.page+=1;paintDialog()}
+    const skuQ=$('#plSkuQ');if(skuQ)skuQ.oninput=()=>{st.skuQ=skuQ.value;st.skuPage=1;paintDialog()}
+    const skuReason=$('#plSkuReason');if(skuReason)skuReason.onchange=()=>{st.skuReasonFilter=skuReason.value;st.skuPage=1;paintDialog()}
+    const skuPrev=$('#plSkuPrev');if(skuPrev)skuPrev.onclick=()=>{st.skuPage=Math.max(1,st.skuPage-1);paintDialog()}
+    const skuNext=$('#plSkuNext');if(skuNext)skuNext.onclick=()=>{st.skuPage+=1;paintDialog()}
+    const selPage=$('#plSkuSelectPage')
+    if(selPage)selPage.onclick=()=>{
+      const all=filteredSkuGroups(st)
+      const pages=Math.max(1,Math.ceil(all.length/SKU_PAGE_SIZE))
+      const start=(Math.min(st.skuPage,pages)-1)*SKU_PAGE_SIZE
+      all.slice(start,start+SKU_PAGE_SIZE).forEach(g=>{st.selectedCodes[g.code]=true})
+      st.toast(`このページ ${Math.min(SKU_PAGE_SIZE,all.length-start)} 品番を選択しました（絞り込み全件 ${all.length} とは別です）`)
+      paintDialog()
+    }
+    const selFiltered=$('#plSkuSelectFiltered')
+    if(selFiltered)selFiltered.onclick=()=>{
+      const all=filteredSkuGroups(st)
+      all.forEach(g=>{st.selectedCodes[g.code]=true})
+      st.toast(`絞り込み全件 ${all.length} 品番を選択しました`)
+      paintDialog()
+    }
+    const clearSel=$('#plSkuClearSel')
+    if(clearSel)clearSel.onclick=()=>{st.selectedCodes={};paintDialog()}
+    const bulkMerge=$('#plSkuBulkMerge')
+    if(bulkMerge)bulkMerge.onclick=()=>{
+      const codes=selectedCodeList(st)
+      if(!codes.length){st.toast('品番を選択してください。');return}
+      const groups=decisionGroups(st)
+      const byCode=Object.fromEntries(groups.map(g=>[g.code,g]))
+      const bulk=[],individual=[],missing=[]
+      codes.forEach(code=>{
+        const g=byCode[code]
+        if(!g){missing.push(code);return}
+        if(g.reviewTier==='individual')individual.push(g)
+        else bulk.push(g)
+      })
+      if(!bulk.length){
+        st.toast(individual.length
+          ?`選択 ${codes.length} 品番はすべて個別確認です。一括まとめには含めません。詳細から判断してください。`
+          :'一括まとめできる品番がありません。')
+        return
+      }
+      const lines=bulk.slice(0,15).map(g=>{
+        const name=plannedNameForGroup(st,g)||'（仮代表名）'
+        const sup=plannedSupplierForGroup(st,g)||'未設定'
+        return `・${g.code}: ${name} / 通常仕入先 ${sup}`
+      })
+      const more=bulk.length>15?`\n…他 ${bulk.length-15} 品番`:''
+      const warn=individual.length
+        ?`\n\n※個別確認 ${individual.length} 品番は一括まとめから除外します（色・加工・商品種の疑い）。`
+        :''
+      const msg=`選択 ${codes.length} 品番のうち、一括承認候補 ${bulk.length} 品番を「同じ商品としてまとめます」。\n品番ごとに予定の代表名・通常仕入先を使います（他品番の仕入先は割り当てません）。\n\n${lines.join('\n')}${more}${warn}\n\nよろしいですか？`
+      if(!confirm(msg))return
+      bulk.forEach(g=>applyMergeDefaults(st,g.code,g))
+      st.toast(`${bulk.length} 品番をまとめ予定にしました${individual.length?`（個別確認 ${individual.length} は除外）`:''}`)
+      paintDialog()
+    }
+    const bulkHold=$('#plSkuBulkHold')
+    if(bulkHold)bulkHold.onclick=()=>{
+      const codes=selectedCodeList(st)
+      if(!codes.length){st.toast('品番を選択してください。');return}
+      const groups=decisionGroups(st)
+      const byCode=Object.fromEntries(groups.map(g=>[g.code,g]))
+      const targets=codes.map(c=>byCode[c]).filter(Boolean)
+      const msg=`選択 ${targets.length} 品番を「今回は保留」します。\n保留分は今回登録せず、同じCSVの再読込で後から処理できます。\n\n品番: ${targets.slice(0,20).map(g=>g.code).join('、')}${targets.length>20?` …他${targets.length-20}`:''}\n\nよろしいですか？`
+      if(!confirm(msg))return
+      targets.forEach(g=>{
+        setSkuDecision(st,g.code,{decision:'hold',deferReason:skuDecision(st,g.code).deferReason||'一括保留'})
+      })
+      st.toast(`${targets.length} 品番を保留にしました`)
+      paintDialog()
+    }
+
+    document.querySelectorAll('[data-pl-sku-check]').forEach(el=>{
+      el.onchange=()=>{
+        const code=el.getAttribute('data-pl-sku-check')
+        st.selectedCodes[code]=!!el.checked
+        paintDialog()
+      }
+    })
+    document.querySelectorAll('[data-pl-sku-expand]').forEach(el=>{
+      el.onclick=()=>{
+        const code=el.getAttribute('data-pl-sku-expand')
+        st.expandedCodes[code]=!st.expandedCodes[code]
+        paintDialog()
+      }
+    })
 
     document.querySelectorAll('[data-pl-sku-dec]').forEach(el=>{
       el.onclick=()=>{
         const code=el.getAttribute('data-pl-sku-dec')
         const dec=el.getAttribute('data-dec')
         const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>g.code===code)
-        const patch={decision:dec}
         if(dec==='merge'&&group){
-          const names=(group.variants||[]).map(v=>v.productName).filter(Boolean)
-          if(!skuDecision(st,code).officialName&&names.length)patch.officialName=names[0]
-          if(group.existingCount===1){
-            patch.keepProductId=group.existingProducts[0].id
-            patch.mergeSourceIds=[]
-          }
-          setSkuDecision(st,code,patch)
-          applyAuxDefaultsForMerge(st,code,group)
+          applyMergeDefaults(st,code,group)
+          st.expandedCodes[code]=true
         }else{
-          setSkuDecision(st,code,patch)
+          setSkuDecision(st,code,{decision:dec})
+          if(dec==='separate'||dec==='hold')st.expandedCodes[code]=true
         }
         paintDialog()
       }
@@ -785,7 +1053,14 @@
         st.toast('要確認または品番比較の未決定が残っています。先に解決してください。');return
       }
       const p=st.preview.plannedCounts||{}
-      const summary=`新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / 保留行 ${p.rowsDeferred||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）\n在庫数量・金額・履歴は変更しません。よろしいですか？`
+      const deferList=(p.deferredReasons||[]).slice(0,12).map(d=>
+        `・行${d.rowNo} 品番${d.code||'—'} ${d.reason||'保留'}`
+      )
+      const deferMore=(p.deferredReasons||[]).length>12?`\n…他 ${(p.deferredReasons||[]).length-12} 件`:''
+      const deferBlock=(p.rowsDeferred||0)
+        ?`\n\n【今回は登録しない保留】 ${p.rowsDeferred} 行\n${deferList.join('\n')}${deferMore}\n（黙って捨てません。同じCSVの再読込で後から処理できます）`
+        :'\n\n保留行はありません。'
+      const summary=`【登録する】新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）${deferBlock}\n\n在庫数量・金額・履歴は変更しません。よろしいですか？`
       if(!confirm(summary))return
       try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       st.busy=true;paintDialog()
