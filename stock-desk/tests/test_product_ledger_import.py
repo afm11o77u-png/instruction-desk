@@ -54,8 +54,9 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('別物のため個別に整理する', js)
         self.assertIn('今回は保留する', js)
         self.assertIn('skuDecisions', js)
-        self.assertIn('サイズ・顧客差の自動まとめ', js)
+        self.assertIn('サイズ・顧客・中古標記差の自動まとめ', js)
         self.assertIn('autoMergePlans', js)
+        self.assertIn('中古標記まとめ', js)
         self.assertIn('1品番=1商品', app)
         # 初期在庫用旧CSVタブとは別入口
         self.assertIn("['legacyCsv','旧CSV取込']", app)
@@ -315,9 +316,16 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             c.commit()
             self.assertTrue(result['stockUnchanged'])
             self.assertEqual(stock_snap(c), before)
-            # ＊帽子は記号付きのまま商品名保存
-            star = c.execute("SELECT name FROM products WHERE code='FT1'").fetchone()
-            self.assertEqual(star['name'], '＊帽子')
+            # ＊帽子 → 公式名は標記なし「帽子」、CSV原文は別名
+            star = c.execute("SELECT id,name FROM products WHERE code='FT1'").fetchone()
+            self.assertEqual(star['name'], '帽子')
+            star_aliases = [
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (star['id'],),
+                )
+            ]
+            self.assertIn('＊帽子', star_aliases)
             # 別注は2商品（例外）
             betchu = c.execute("SELECT COUNT(*) AS n FROM products WHERE code='別注'").fetchone()['n']
             self.assertEqual(betchu, 2)
@@ -330,6 +338,253 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
                 )
             ]
             self.assertTrue(any('刺繍' in a for a in aliases))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_used_marker_auto_merge_not_needs_review(self):
+        """同品番で商品名差が先頭＊/*だけ → 要確認にせず1商品。サイズ・取扱は保持。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,1702,緑つなぎ,M',
+                '顧客A,仕入A,1702,＊緑つなぎ,L',
+                '顧客B,仕入A,1702,*緑つなぎ,M',
+                '顧客A,仕入A,1702,＊ 緑つなぎ,LL',  # 標記直後の空白
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'star.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            before = stock_snap(c)
+            preview = pli.build_preview(c, body)
+            self.assertEqual(preview['reviewCount'], 0)
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            self.assertEqual(preview['countsRaw'].get('needs_review', 0), 0)
+            group = next(g for g in preview['skuGroups'] if g['code'] == '1702')
+            self.assertFalse(group['needsDecision'])
+            self.assertTrue(group['plannedSingleProduct'])
+            self.assertTrue(group['usedMarkerAutoMerged'])
+            self.assertEqual(group['variantCount'], 1)
+            self.assertEqual(group['productPlan']['productName'], '緑つなぎ')
+            self.assertEqual(group['productPlan']['sizeCount'], 3)
+            self.assertEqual(group['productPlan']['customerCount'], 2)
+            for r in preview['rows']:
+                self.assertNotEqual(r['status'], 'needs_review')
+                self.assertFalse(r.get('skuDecisionNeeded'))
+                self.assertTrue(r.get('usedMarkerAutoMerged'))
+                self.assertEqual(r['product'].get('officialName'), '緑つなぎ')
+
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-star-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            self.assertEqual(result['counts']['productsCreated'], 1)
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='1702' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+            prod = c.execute("SELECT id,name FROM products WHERE code='1702'").fetchone()
+            self.assertEqual(prod['name'], '緑つなぎ')
+            sizes = {
+                r['label'] for r in c.execute(
+                    'SELECT label FROM product_sizes WHERE product_id=?', (prod['id'],)
+                )
+            }
+            self.assertEqual(sizes, {'M', 'L', 'LL'})
+            handles = c.execute(
+                'SELECT COUNT(*) AS n FROM customer_products WHERE product_id=?', (prod['id'],)
+            ).fetchone()['n']
+            self.assertEqual(handles, 2)
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            self.assertTrue(any(a.startswith('＊') or a.startswith('*') or '＊' in a for a in aliases))
+
+            # 再取込で二重登録なし
+            preview2 = pli.build_preview(c, body)
+            self.assertEqual(preview2['reviewCount'], 0)
+            self.assertEqual(preview2['plannedCounts']['productsToCreate'], 0)
+            self.assertEqual(
+                c.execute(
+                    "SELECT COUNT(*) AS n FROM products WHERE code='1702' AND merged_into_id IS NULL"
+                ).fetchone()['n'],
+                1,
+            )
+
+            # 本物の名差は引き続き品番比較
+            text_diff = tiny_ledger_rows([
+                '顧客A,仕入A,1702,緑つなぎ,M',
+                '顧客A,仕入A,1702,青つなぎ,L',
+            ])
+            preview_diff = pli.build_preview(c, {
+                'file': csv_b64_from_text(text_diff), 'name': 'diff.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g2 = next(g for g in preview_diff['skuGroups'] if g['code'] == '1702')
+            self.assertTrue(g2['needsDecision'])
+            self.assertEqual(preview_diff['skuDecisionPending'], 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_used_marker_only_names_strip_for_official(self):
+        """標記付き名だけしか無いときも公式名は標記を剥がす。要確認にしない。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,UM-1,＊作業着,M',
+                '顧客A,仕入A,UM-1,*作業着,L',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'only-star.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            group = next(g for g in preview['skuGroups'] if g['code'] == 'UM-1')
+            self.assertFalse(group['needsDecision'])
+            self.assertEqual(group['productPlan']['productName'], '作業着')
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-star-only-1',
+            }, db_path=str(path))
+            c.commit()
+            prod = c.execute("SELECT id,name FROM products WHERE code='UM-1'").fetchone()
+            self.assertEqual(prod['name'], '作業着')
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            self.assertTrue({'＊作業着', '*作業着'} & aliases)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_existing_duplicate_products_not_auto_merged_by_marker(self):
+        """DBに同一品番が複数あるときは中古標記でも自動まとめしない。"""
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入A', 'active': True})
+            stock.save_product(c, {
+                'code': 'DUP-1', 'name': '緑つなぎ', 'color': '', 'supplierId': su['id'],
+                'active': True, 'sizes': ['M'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': False, 'active': True}],
+                '_allowHistoricalDuplicateCode': True,
+            })
+            stock.save_product(c, {
+                'code': 'DUP-1', 'name': '＊緑つなぎ', 'color': '', 'supplierId': su['id'],
+                'active': True, 'sizes': ['L'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': False, 'active': True}],
+                '_allowHistoricalDuplicateCode': True,
+            })
+            c.commit()
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,DUP-1,緑つなぎ,M',
+                '顧客A,仕入A,DUP-1,＊緑つなぎ,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'dup.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            group = next(g for g in preview['skuGroups'] if g['code'] == 'DUP-1')
+            self.assertTrue(group['needsDecision'])
+            self.assertEqual(group['existingCount'], 2)
+            self.assertFalse(group.get('usedMarkerAutoMerged'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_opening_stock_links_marked_name_keeps_condition_split(self):
+        """台帳取込後の初期在庫CSV: 標記名も同一商品へ。新古在庫は分けたまま。"""
+        import legacy_csv_import as legacy
+
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '病院A,仕入A,1702,緑つなぎ,M',
+                '病院A,仕入A,1702,＊緑つなぎ,L',
+            ])
+            body = {
+                'file': csv_b64_from_text(ledger), 'name': 'ledger.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-open-link-1',
+            }, db_path=str(path))
+            c.commit()
+            prod = c.execute("SELECT id,name FROM products WHERE code='1702'").fetchone()
+            self.assertEqual(prod['name'], '緑つなぎ')
+            before_qty = c.execute('SELECT COALESCE(SUM(qty_remaining),0) AS q FROM lots').fetchone()['q']
+            self.assertEqual(before_qty, 0)
+
+            header = (
+                '新古,仕入先,顧客,商品名,商品コード,サイズ,仕入単価,購入数量,購入金額,'
+                '出荷数,出荷金額,在庫,在庫金額,営業所コード,拠点,棚,補正在庫数'
+            )
+            opening = '\n'.join([
+                header,
+                '新品,仕入A,病院A,緑つなぎ,1702,M,1000,0,0,0,0,3,0,1,,,0',
+                '中古,仕入A,病院A,＊緑つなぎ,1702,L,0,0,0,0,0,2,0,1,,,0',
+            ])
+            stock.ensure_unconfirmed_site(c)
+            c.commit()
+            obody = {
+                'file': csv_b64_from_text(opening), 'name': 'open.csv',
+                'basisDate': '2026-10-01', 'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            oprev = legacy.build_preview(c, obody)
+            for r in oprev['rows']:
+                self.assertEqual(r['product']['id'], prod['id'])
+                self.assertIn(r['status'], ('create', 'reuse'))
+            oresult = legacy.commit_preview(c, {
+                **obody,
+                'previewFingerprint': oprev['previewFingerprint'],
+                'previewAt': oprev['previewAt'],
+                'token': 'leg-open-link-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(oresult['counts']['openingCreated'], 2)
+            # 商品は1件のまま
+            self.assertEqual(
+                c.execute(
+                    "SELECT COUNT(*) AS n FROM products WHERE code='1702' AND merged_into_id IS NULL"
+                ).fetchone()['n'],
+                1,
+            )
+            lots = list(c.execute(
+                '''SELECT l.condition, l.qty_remaining, l.size_label
+                   FROM lots l
+                   JOIN customer_products cp ON cp.id=l.customer_product_id
+                   WHERE cp.product_id=? ORDER BY l.condition, l.size_label''',
+                (prod['id'],),
+            ))
+            self.assertEqual(len(lots), 2)
+            by_cond = {r['condition']: r for r in lots}
+            self.assertEqual(by_cond['new']['qty_remaining'], 3)
+            self.assertEqual(by_cond['used']['qty_remaining'], 2)
+            # 台帳再取込でも在庫を変えない
+            snap = pli.stock_snapshot(c)
+            preview2 = pli.build_preview(c, body)
+            self.assertEqual(preview2['plannedCounts']['productsToCreate'], 0)
+            self.assertEqual(pli.stock_snapshot(c), snap)
         finally:
             c.close()
             folder.cleanup()

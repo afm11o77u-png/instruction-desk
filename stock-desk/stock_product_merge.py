@@ -118,22 +118,60 @@ def ensure_supplier_alias(c, product_id, supplier_name):
 
 
 def find_products_by_name_alias(c, code, name):
-    """品番＋旧商品名別名で既存商品を探す。"""
+    """品番＋旧商品名別名で既存商品を探す。
+
+    先頭の中古標記「＊/*」の有無だけが違う別名も同一視する。
+    """
     if not is_normal_product_code(code):
         return []
-    key = alias_value_key(name)
-    if not key:
+    import legacy_csv_import as legacy
+    keys = []
+    seen_keys = set()
+    core, _marked = legacy.strip_used_marker(name)
+    for candidate in (name, core):
+        key = alias_value_key(candidate)
+        if key and key not in seen_keys:
+            seen_keys.add(key)
+            keys.append(key)
+    if not keys:
         return []
-    return list(c.execute(
-        '''SELECT DISTINCT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,
+    placeholders = ','.join('?' * len(keys))
+    by_key = list(c.execute(
+        f'''SELECT DISTINCT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,
                   p.merged_into_id,s.name AS supplier_name
            FROM product_match_aliases a
            JOIN products p ON p.id=a.product_id
            LEFT JOIN suppliers s ON s.id=p.supplier_id
-           WHERE a.kind=? AND a.value_key=? AND p.code=? AND p.merged_into_id IS NULL
+           WHERE a.kind=? AND a.value_key IN ({placeholders}) AND p.code=? AND p.merged_into_id IS NULL
            ORDER BY p.id''',
-        (ALIAS_KIND_NAME, key, stock.text(code)),
+        (ALIAS_KIND_NAME, *keys, stock.text(code)),
     ))
+    if by_key:
+        return by_key
+    core_key = legacy.product_name_core_key(name)
+    if not core_key:
+        return []
+    # ＊緑つなぎ / *緑つなぎ のように value_key が違う標記違い別名
+    rows = list(c.execute(
+        '''SELECT DISTINCT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,
+                  p.merged_into_id,s.name AS supplier_name, a.value AS alias_value
+           FROM product_match_aliases a
+           JOIN products p ON p.id=a.product_id
+           LEFT JOIN suppliers s ON s.id=p.supplier_id
+           WHERE a.kind=? AND p.code=? AND p.merged_into_id IS NULL
+           ORDER BY p.id''',
+        (ALIAS_KIND_NAME, stock.text(code)),
+    ))
+    out = []
+    seen_ids = set()
+    for r in rows:
+        if legacy.product_name_core_key(r['alias_value']) != core_key:
+            continue
+        if r['id'] in seen_ids:
+            continue
+        seen_ids.add(r['id'])
+        out.append(r)
+    return out
 
 
 def list_name_aliases(c, product_id):
