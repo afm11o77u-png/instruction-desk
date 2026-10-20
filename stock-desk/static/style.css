@@ -688,6 +688,13 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 .sku-compare-table .sku-names,.sku-compare-table .sku-sups{min-width:8rem;max-width:14rem}
 .sku-cand-list,.sku-reason-list,.sku-name-map{margin:0;padding-left:1.1em}
 .sku-cand-list li,.sku-reason-list li{margin:0 0 2px}
+.sku-cand-name{display:inline}
+.sku-cand-stock{
+  display:inline;margin-left:4px;color:#3d5a48;font-size:11.5px;font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+}
+.sku-cand-stock.is-missing{color:#8a9390}
+.sku-pair-stock-list{margin:4px 0 8px}
 .sku-other-diff{margin:0 0 4px}
 .sku-other-diff strong{display:block;font-size:12px}
 .sku-tier-bulk td{background:#f7faf8}

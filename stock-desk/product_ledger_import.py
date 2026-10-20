@@ -564,6 +564,56 @@ def parse_aux_stock_qty(raw):
     return qty, 'ok'
 
 
+def _summarize_aux_stock_rows(size_rows):
+    """サイズ別在庫行から表示用の合計を作る（比較一覧・理由文用）。"""
+    rows = list(size_rows or [])
+    if not rows:
+        return {
+            'auxStockTotal': None,
+            'auxStockDisplay': '—',
+            'hasAuxMatch': False,
+            'qtyUndecidable': False,
+        }
+    total = 0
+    any_ok = False
+    undecidable = False
+    for row in rows:
+        if row.get('qtyStatus') != 'ok' or row.get('qty') is None:
+            undecidable = True
+            continue
+        any_ok = True
+        try:
+            total += int(row['qty'])
+        except (TypeError, ValueError):
+            total += row['qty']
+    if undecidable and not any_ok:
+        return {
+            'auxStockTotal': None,
+            'auxStockDisplay': '（不正/空）',
+            'hasAuxMatch': True,
+            'qtyUndecidable': True,
+        }
+    display = str(total)
+    if undecidable:
+        display = f'{total}（一部不正）'
+    return {
+        'auxStockTotal': total if any_ok else None,
+        'auxStockDisplay': display,
+        'hasAuxMatch': True,
+        'qtyUndecidable': undecidable,
+    }
+
+
+def format_aux_stock_label(display):
+    """比較一覧用の短い在庫ラベル。"""
+    text = stock.text(display or '')
+    if not text or text == '—':
+        return '—'
+    if text.startswith('（') or text.startswith('('):
+        return text
+    return f'初期在庫：{text}'
+
+
 def _supplier_names_match(a, b):
     ta, tb = stock.text(a), stock.text(b)
     if not ta or not tb:
@@ -696,6 +746,7 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
         aux_status = 'none'
         aux_status_label = '該当登録なし'  # 「在庫0」とは表示しない
 
+    stock_summary = _summarize_aux_stock_rows(size_rows)
     return {
         'supplier': supplier,
         'ledgerNames': list(names),
@@ -708,6 +759,8 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
         'hasNonZeroStock': bool(has_nonzero and not undecidable),
         'qtyUndecidable': undecidable,
         'qtyUndecidableReasons': undecidable_reasons,
+        'auxStockTotal': stock_summary['auxStockTotal'],
+        'auxStockDisplay': stock_summary['auxStockDisplay'],
         'customers': list(customers),
         'ledgerSizes': list(candidate.get('sizes') or []),
     }
@@ -715,6 +768,13 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
 
 # 仕入先候補がちょうど1社のときの自動設定理由（プレビュー表示用）
 SINGLE_SUPPLIER_AUTO_REASON = '候補が1社のため自動設定'
+
+
+def _stock_qty_clause(judgment):
+    """理由文用の「初期在庫：N」節（サイズ合計）。不明なら空。"""
+    if not judgment or judgment.get('auxStockTotal') is None:
+        return ''
+    return f'初期在庫：{judgment["auxStockTotal"]}'
 
 
 def judge_primary_supplier_from_aux(supplier_judgments):
@@ -743,25 +803,48 @@ def judge_primary_supplier_from_aux(supplier_judgments):
 
     positive = [j for j in judgments if j.get('hasPositiveStock')]
     if len(positive) == 1:
+        qty_bit = _stock_qty_clause(positive[0])
+        qty_paren = f'（{qty_bit}）' if qty_bit else ''
         return {
             'autoPrimarySupplier': positive[0]['supplier'],
-            'autoReason': '初期在庫CSVで正の在庫がある仕入先が1社のみのため、通常仕入先にしました。',
+            'autoReason': (
+                f'初期在庫CSVで正の在庫がある仕入先が1社のみ{qty_paren}のため、'
+                '通常仕入先にしました。'
+            ),
             'needsManualPrimary': False,
             'manualReason': '',
         }
     if len(positive) > 1:
+        qty_bits = []
+        for j in positive:
+            clause = _stock_qty_clause(j)
+            if clause:
+                qty_bits.append(f'{j.get("supplier") or "?"}={clause}')
+            else:
+                qty_bits.append(stock.text(j.get('supplier') or '?'))
+        detail = '、'.join(qty_bits[:4])
         return {
             'autoPrimarySupplier': '',
             'autoReason': '',
             'needsManualPrimary': True,
-            'manualReason': '正の在庫がある仕入先が複数あるため、通常仕入先は手動で選んでください。',
+            'manualReason': (
+                '正の在庫がある仕入先が複数あるため、通常仕入先は手動で選んでください'
+                + (f'（{detail}）' if detail else '')
+                + '。'
+            ),
         }
 
     with_rows = [j for j in judgments if j.get('hasAnyAuxRows')]
     if len(with_rows) == 1:
+        qty_bit = _stock_qty_clause(with_rows[0])
+        # 正の在庫なし＝在庫0（または負のみだがこの分岐は正なし）を明示
+        stock_note = qty_bit or '在庫0'
         return {
             'autoPrimarySupplier': with_rows[0]['supplier'],
-            'autoReason': '正の在庫はないが、初期在庫CSVに該当行がある仕入先が1社のみのため、通常仕入先にしました。',
+            'autoReason': (
+                f'正の在庫はないが（{stock_note}）、初期在庫CSVに該当行がある仕入先が1社のみのため、'
+                '通常仕入先にしました。'
+            ),
             'needsManualPrimary': False,
             'manualReason': '',
         }
@@ -770,7 +853,10 @@ def judge_primary_supplier_from_aux(supplier_judgments):
             'autoPrimarySupplier': '',
             'autoReason': '',
             'needsManualPrimary': True,
-            'manualReason': '正の在庫がなく、該当行がある仕入先も複数あるため、通常仕入先は手動で選んでください。',
+            'manualReason': (
+                '正の在庫がなく（在庫0の該当のみ）、該当行がある仕入先も複数あるため、'
+                '通常仕入先は手動で選んでください。'
+            ),
         }
     return {
         'autoPrimarySupplier': '',
@@ -898,6 +984,20 @@ def _kept_packages_excluding(candidates, chosen):
     return kept
 
 
+def _pair_candidate_payload(cand):
+    """比較一覧・詳細パネル用の 名+仕入先 候補（在庫表示付き）。"""
+    return {
+        'productName': cand.get('productName') or '',
+        'supplier': cand.get('supplier') or '',
+        'ledgerNames': list(cand.get('ledgerNames') or []),
+        'auxStockTotal': cand.get('auxStockTotal'),
+        'auxStockDisplay': cand.get('auxStockDisplay') or '—',
+        'hasAuxMatch': bool(cand.get('hasAuxMatch')),
+        'hasNonZeroStock': bool(cand.get('hasNonZeroStock')),
+        'hasPositiveStock': bool(cand.get('hasPositiveStock')),
+    }
+
+
 def _adopt_candidate_package(hit, *, candidates, rule, rule_code, reasons=None):
     """採用候補のフルパッケージ＋非採用の原文パッケージを返す。"""
     package = _full_package_for_candidate(hit)
@@ -920,14 +1020,7 @@ def _adopt_candidate_package(hit, *, candidates, rule, rule_code, reasons=None):
         'nameCandidates': [
             c.get('productName') for c in (candidates or []) if c.get('productName')
         ],
-        'pairCandidates': [
-            {
-                'productName': c.get('productName') or '',
-                'supplier': c.get('supplier') or '',
-                'ledgerNames': list(c.get('ledgerNames') or []),
-            }
-            for c in (candidates or [])
-        ],
+        'pairCandidates': [_pair_candidate_payload(c) for c in (candidates or [])],
         'nameReasons': list(reasons or []),
         'adoptedPackage': package,
         'keptPackages': kept,
@@ -989,11 +1082,6 @@ def suggest_main_candidate_from_aux(group, aux_index):
         display_name = cand['productName']
         if display_name and display_name not in name_candidates:
             name_candidates.append(display_name)
-        pair_candidates.append({
-            'productName': display_name,
-            'supplier': supplier,
-            'ledgerNames': list(names),
-        })
         matched = []
         for row_no, item in aux_index.get(code, []):
             for name in names:
@@ -1004,8 +1092,11 @@ def suggest_main_candidate_from_aux(group, aux_index):
                     matched.append((row_no, item, name))
                     break
         has_nonzero = False
+        has_positive = False
+        size_rows = []
         for row_no, item, _name in matched:
             qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
+            size = stock.text(item.get('サイズ'))
             if qstatus != 'ok':
                 any_undecidable = True
                 if qstatus == 'empty':
@@ -1014,10 +1105,33 @@ def suggest_main_candidate_from_aux(group, aux_index):
                     reasons.append(
                         f'{row_no}行目：在庫「{stock.text(item.get("在庫"))}」が不正です（0扱いしません）。'
                     )
+                size_rows.append({
+                    'rowNo': row_no,
+                    'size': size,
+                    'qty': None,
+                    'qtyDisplay': '（不正/空）',
+                    'qtyStatus': qstatus,
+                })
                 continue
+            if qty is not None and qty > 0:
+                has_positive = True
             if qty is not None and qty != 0:
                 has_nonzero = True
-        if has_nonzero:
+            size_rows.append({
+                'rowNo': row_no,
+                'size': size,
+                'qty': qty,
+                'qtyDisplay': str(qty),
+                'qtyStatus': 'ok',
+            })
+        stock_summary = _summarize_aux_stock_rows(size_rows)
+        cand['auxStockTotal'] = stock_summary['auxStockTotal']
+        cand['auxStockDisplay'] = stock_summary['auxStockDisplay']
+        cand['hasAuxMatch'] = stock_summary['hasAuxMatch']
+        cand['hasNonZeroStock'] = bool(has_nonzero and not stock_summary['qtyUndecidable'])
+        cand['hasPositiveStock'] = bool(has_positive and not stock_summary['qtyUndecidable'])
+        pair_candidates.append(_pair_candidate_payload(cand))
+        if has_nonzero and not stock_summary['qtyUndecidable']:
             nonzero_hits.append(cand)
 
     if any_undecidable:
@@ -1033,31 +1147,61 @@ def suggest_main_candidate_from_aux(group, aux_index):
 
     # 候補1組 → 在庫0でもフルパッケージ採用
     if len(candidates) == 1:
-        rule = '候補が1組のため、この候補をメインに採用'
+        only = candidates[0]
+        qty_bit = _stock_qty_clause(only)
+        if qty_bit:
+            rule = f'候補が1組のため、この候補をメインに採用（{qty_bit}）'
+        elif only.get('hasAuxMatch'):
+            rule = '候補が1組のため、この候補をメインに採用（初期在庫：0）'
+        else:
+            rule = '候補が1組のため、この候補をメインに採用（初期在庫CSVに該当なし）'
         return _adopt_candidate_package(
-            candidates[0], candidates=candidates, rule=rule,
+            only, candidates=candidates, rule=rule,
             rule_code='aux_single_candidate', reasons=reasons,
         )
 
     if len(nonzero_hits) == 1:
+        hit = nonzero_hits[0]
+        qty_bit = _stock_qty_clause(hit)
+        qty_paren = f'（{qty_bit}）' if qty_bit else ''
         rule = (
-            '在庫が0以外の候補が1組のため、この候補をメインに採用'
+            f'在庫が0以外の候補が1組{qty_paren}のため、この候補をメインに採用'
         )
         return _adopt_candidate_package(
-            nonzero_hits[0], candidates=candidates, rule=rule,
+            hit, candidates=candidates, rule=rule,
             rule_code='aux_nonzero_pair', reasons=reasons,
         )
 
     if len(nonzero_hits) > 1:
+        qty_bits = []
+        for hit in nonzero_hits:
+            clause = _stock_qty_clause(hit)
+            label = f'{hit.get("productName") or "?"}／{hit.get("supplier") or "?"}'
+            qty_bits.append(f'{label}={clause}' if clause else label)
+        detail = '、'.join(qty_bits[:4])
         reasons.append(
             '非ゼロ在庫がある候補が複数あるため、代表候補は自動確定しません'
-            '（数量最大では選びません。別候補の名・仕入先・仕様も組み合わせません）。'
+            f'（{detail}。数量最大では選びません。別候補の名・仕入先・仕様も組み合わせません）。'
         )
     elif not nonzero_hits:
-        reasons.append(
-            '非ゼロ在庫がある候補がないため、初期在庫CSVからは代表候補を'
-            '自動確定しません（該当行の有無だけでは選びません）。'
-        )
+        zero_bits = []
+        for cand in candidates:
+            if cand.get('hasAuxMatch') and cand.get('auxStockTotal') is not None:
+                zero_bits.append(
+                    f'{cand.get("productName") or "?"}／{cand.get("supplier") or "?"}'
+                    f'=初期在庫：{cand["auxStockTotal"]}'
+                )
+        detail = '、'.join(zero_bits[:4])
+        if detail:
+            reasons.append(
+                '初期在庫がすべて在庫0のため、代表候補は自動確定しません'
+                f'（{detail}。該当行の有無だけでは選びません。要確認）。'
+            )
+        else:
+            reasons.append(
+                '非ゼロ在庫がある候補がないため、初期在庫CSVからは代表候補を'
+                '自動確定しません（該当行の有無だけでは選びません。要確認）。'
+            )
     return {
         **empty,
         'nameCandidates': name_candidates,
@@ -1123,6 +1267,8 @@ def _empty_supplier_judgment(candidate):
         'hasNonZeroStock': False,
         'qtyUndecidable': False,
         'qtyUndecidableReasons': [],
+        'auxStockTotal': None,
+        'auxStockDisplay': '—',
         'customers': list(candidate.get('customers') or []),
         'ledgerSizes': list(candidate.get('sizes') or []),
     }
@@ -1280,7 +1426,175 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
             'adoptedProcessing': stock.text(pair_from_aux.get('adoptedProcessing') or ''),
             'adoptedMaterial': stock.text(pair_from_aux.get('adoptedMaterial') or ''),
         }
+    attach_aux_stock_visibility(sku_groups, aux_uploaded=bool(aux_uploaded))
     return meta
+
+
+def _candidate_stock_detail(value, *, aux_stock_display, has_aux_match, aux_stock_total=None):
+    return {
+        'value': stock.text(value or ''),
+        'auxStockTotal': aux_stock_total,
+        'auxStockDisplay': stock.text(aux_stock_display or '—') or '—',
+        'auxStockLabel': format_aux_stock_label(aux_stock_display),
+        'hasAuxMatch': bool(has_aux_match),
+    }
+
+
+def attach_aux_stock_visibility(sku_groups, *, aux_uploaded=False):
+    """比較一覧用に候補ごとの初期在庫表示を付与し、在庫起因の要確認理由を明示する。"""
+    for group in sku_groups or []:
+        aux = group.get('auxPrimary') or {}
+        judgments = list(aux.get('supplierJudgments') or [])
+        pairs = list(aux.get('pairCandidates') or [])
+
+        # 仕入先候補 → 判定行の在庫合計
+        by_supplier = {}
+        for j in judgments:
+            key = identity_match_key(j.get('supplier') or '')
+            if not key:
+                continue
+            by_supplier[key] = j
+
+        supplier_details = []
+        seen_sup = set()
+        for name in group.get('supplierCandidates') or []:
+            name = stock.text(name or '')
+            if not name or name in seen_sup:
+                continue
+            seen_sup.add(name)
+            j = by_supplier.get(identity_match_key(name))
+            if not aux_uploaded:
+                supplier_details.append(_candidate_stock_detail(
+                    name, aux_stock_display='—', has_aux_match=False,
+                ))
+            elif j:
+                supplier_details.append(_candidate_stock_detail(
+                    name,
+                    aux_stock_display=j.get('auxStockDisplay') or '—',
+                    has_aux_match=bool(j.get('hasAnyAuxRows')),
+                    aux_stock_total=j.get('auxStockTotal'),
+                ))
+            else:
+                supplier_details.append(_candidate_stock_detail(
+                    name, aux_stock_display='—', has_aux_match=False,
+                ))
+
+        # 商品名候補 → 同名ペアの在庫を合算（別仕入先は足す）
+        by_name = {}
+        for pair in pairs:
+            pname = stock.text(pair.get('productName') or '')
+            if not pname:
+                continue
+            key = product_name_core_key(pname)
+            slot = by_name.get(key)
+            if not slot:
+                slot = {
+                    'total': 0,
+                    'any_match': False,
+                    'any_ok': False,
+                    'undecidable': False,
+                    'display_name': pname,
+                }
+                by_name[key] = slot
+            if pair.get('hasAuxMatch'):
+                slot['any_match'] = True
+            if pair.get('auxStockDisplay') in ('（不正/空）',) or (
+                isinstance(pair.get('auxStockDisplay'), str)
+                and '不正' in pair.get('auxStockDisplay')
+            ):
+                slot['undecidable'] = True
+            if pair.get('auxStockTotal') is not None:
+                slot['any_ok'] = True
+                try:
+                    slot['total'] += int(pair['auxStockTotal'])
+                except (TypeError, ValueError):
+                    slot['total'] += pair['auxStockTotal']
+
+        name_details = []
+        seen_names = set()
+        for name in group.get('nameCandidates') or []:
+            name = stock.text(name or '')
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            slot = by_name.get(product_name_core_key(name))
+            if not aux_uploaded or not slot:
+                name_details.append(_candidate_stock_detail(
+                    name, aux_stock_display='—', has_aux_match=False,
+                ))
+            elif slot['undecidable'] and not slot['any_ok']:
+                name_details.append(_candidate_stock_detail(
+                    name, aux_stock_display='（不正/空）', has_aux_match=True,
+                ))
+            elif slot['any_ok']:
+                disp = str(slot['total'])
+                if slot['undecidable']:
+                    disp = f'{slot["total"]}（一部不正）'
+                name_details.append(_candidate_stock_detail(
+                    name,
+                    aux_stock_display=disp,
+                    has_aux_match=True,
+                    aux_stock_total=slot['total'],
+                ))
+            elif slot['any_match']:
+                name_details.append(_candidate_stock_detail(
+                    name, aux_stock_display='0', has_aux_match=True, aux_stock_total=0,
+                ))
+            else:
+                name_details.append(_candidate_stock_detail(
+                    name, aux_stock_display='—', has_aux_match=False,
+                ))
+
+        group['nameCandidateDetails'] = name_details
+        group['supplierCandidateDetails'] = supplier_details
+
+        # 在庫が決め手の要確認を理由一覧へ明示（既存の名差・仕入先差と併記）
+        if not aux_uploaded or not group.get('needsDecision'):
+            continue
+        if not aux.get('pairNeedsChoice') and not aux.get('needsManualPrimary'):
+            continue
+        stock_labels = [
+            stock.text(r.get('label') or '')
+            for r in (group.get('reviewReasons') or [])
+        ]
+        already = any(
+            '在庫0' in lab or '初期在庫' in lab or '非ゼロ在庫' in lab
+            for lab in stock_labels
+        )
+        if already:
+            continue
+        name_reasons = list(aux.get('nameReasons') or [])
+        stock_reason = ''
+        for r in name_reasons:
+            if '在庫0' in r or '非ゼロ' in r or '初期在庫' in r:
+                stock_reason = r
+                break
+        if not stock_reason and aux.get('manualReason'):
+            mr = stock.text(aux.get('manualReason') or '')
+            if '在庫' in mr or '初期在庫' in mr:
+                stock_reason = mr
+        if not stock_reason:
+            continue
+        # 長文は要約して先頭へ
+        if 'すべて在庫0' in stock_reason or '在庫0のため' in stock_reason:
+            label = '初期在庫がすべて在庫0のため要確認（自動では決めません）'
+            code = 'aux_stock_all_zero'
+        elif '複数' in stock_reason:
+            label = '初期在庫で非ゼロ在庫の候補が複数あるため要確認'
+            code = 'aux_stock_multi_nonzero'
+        else:
+            label = stock_reason
+            code = 'aux_stock_review'
+        reasons = list(group.get('reviewReasons') or [])
+        reasons.insert(0, {
+            'code': code,
+            'label': label,
+            'values': [
+                d['value'] for d in name_details
+                if d.get('hasAuxMatch')
+            ][:6],
+        })
+        group['reviewReasons'] = reasons
 
 
 def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
@@ -1374,10 +1688,28 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
             for n in k.get('ledgerNames') or ([k.get('productName')] if k.get('productName') else []):
                 if n and n not in kept_names:
                     kept_names.append(n)
+        stock_values = [
+            package.get('productName') or '',
+            package.get('supplier') or '',
+        ]
+        adopted_pair = next(
+            (
+                p for p in (aux.get('pairCandidates') or [])
+                if product_name_core_key(p.get('productName') or '') == product_name_core_key(
+                    package.get('productName') or ''
+                )
+                and identity_match_key(p.get('supplier') or '') == identity_match_key(
+                    package.get('supplier') or ''
+                )
+            ),
+            None,
+        )
+        if adopted_pair and adopted_pair.get('auxStockTotal') is not None:
+            stock_values.append(f'初期在庫：{adopted_pair["auxStockTotal"]}')
         group['reviewReasons'] = [{
             'code': 'aux_stock_pick',
             'label': reason,
-            'values': [package.get('productName') or '', package.get('supplier') or ''],
+            'values': stock_values,
         }]
         if kept_names:
             group['reviewReasons'].append({
@@ -1434,9 +1766,20 @@ def _soften_spec_only_reasons(group):
         if code in ('color', 'processing', 'fabric'):
             continue
         reasons.append(r)
+    aux = group.get('auxPrimary') or {}
+    qty_bit = ''
+    for p in aux.get('pairCandidates') or []:
+        if not p.get('hasNonZeroStock'):
+            continue
+        if p.get('auxStockTotal') is not None:
+            qty_bit = f'（初期在庫：{p["auxStockTotal"]}）'
+            break
     reasons.append({
         'code': 'aux_stock_pick_partial',
-        'label': '在庫一意でメイン候補は決まっていますが、商品種・対象などの確認が残っています',
+        'label': (
+            f'在庫一意{qty_bit}でメイン候補は決まっていますが、'
+            '商品種・対象などの確認が残っています'
+        ),
         'values': [],
     })
     group['reviewReasons'] = reasons
