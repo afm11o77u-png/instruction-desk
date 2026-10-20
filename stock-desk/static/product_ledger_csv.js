@@ -17,13 +17,49 @@
   function ensureState(){
     if(!ui){
       ui={
-        file:null,fileB64:'',fileName:'',fileSize:0,history:null,historyError:'',preview:null,result:null,
+        file:null,fileB64:'',fileName:'',fileSize:0,
+        auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
+        history:null,historyError:'',preview:null,result:null,
         q:'',statusFilter:'needs_review',page:1,
         selections:{},skuDecisions:{},commitToken:'',busy:false,open:false,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
     }
     return ui
+  }
+
+  function previewPayload(st){
+    const body={
+      name:st.fileName,file:st.fileB64,selections:st.selections,skuDecisions:st.skuDecisions,
+      _canWrite:true,_actor:{name:st.actorName||''}
+    }
+    if(st.auxFileB64){
+      body.auxFile=st.auxFileB64
+      body.auxName=st.auxFileName||'初期在庫.csv'
+    }
+    return body
+  }
+
+  function applyAuxDefaultsForMerge(st,code,group){
+    const d=skuDecision(st,code)
+    const aux=group&&group.auxPrimary
+    if(!aux||!aux.applicable)return
+    const patch={}
+    if(!d.primarySupplierManual){
+      if(aux.autoPrimarySupplier){
+        if(d.primarySupplier&&d.primarySupplier!==aux.autoPrimarySupplier&&!d.primarySupplierManual){
+          // 再照合で自動結果が変わった場合: 手動でなければ自動へ寄せる
+        }
+        patch.primarySupplier=aux.autoPrimarySupplier
+        patch.primarySupplierManual=false
+      }
+    }else if(aux.autoPrimarySupplier&&d.primarySupplier&&d.primarySupplier!==aux.autoPrimarySupplier){
+      patch.auxPrimaryConflict=true
+    }
+    if(!d.officialName&&aux.suggestedOfficialName&&!aux.officialNameNeedsChoice){
+      patch.officialName=aux.suggestedOfficialName
+    }
+    if(Object.keys(patch).length)setSkuDecision(st,code,patch)
   }
 
   function readFileAsBase64(file){
@@ -168,6 +204,45 @@
     st.skuDecisions[code]={...(st.skuDecisions[code]||{}),...patch}
   }
 
+  function auxSupplierPanelHtml(st,g,d){
+    const aux=g.auxPrimary
+    if(!aux||!aux.applicable)return ''
+    const resolved=g.primarySupplierResolved||{}
+    const rows=(aux.supplierJudgments||[]).map(j=>{
+      const role=j.plannedRoleLabel||'—'
+      const sizes=(j.auxSizeStocks||[]).map(s=>`${esc(s.size||'—')}:${esc(s.qtyDisplay)}`).join('、')||'—'
+      const match=j.auxStatus==='none'
+        ?'<span class="aux-none">該当登録なし</span>'
+        :`<span class="aux-matched">${esc(j.auxStatusLabel||'該当あり')}</span>`
+      return `<tr>
+        <td>${esc(j.supplier||'')}</td>
+        <td>${esc(j.ledgerName||(j.ledgerNames||[]).join(' / ')||'—')}</td>
+        <td>${match}</td>
+        <td class="aux-sizes">${sizes}</td>
+        <td><strong>${esc(role)}</strong></td>
+      </tr>`
+    }).join('')
+    const reason=aux.autoReason||aux.manualReason||''
+    const conflict=(d.primarySupplierManual&&aux.autoPrimarySupplier&&d.primarySupplier&&d.primarySupplier!==aux.autoPrimarySupplier)
+      ||resolved.conflictWithAuto
+    const existingPrimary=resolved.existingPrimarySupplier
+      ||((g.existingProducts||[]).find(p=>Number(p.id)===Number(d.keepProductId))||{}).supplierName||''
+    const chosen=d.primarySupplier||resolved.primarySupplier||aux.autoPrimarySupplier||''
+    const changeNeeded=!!(existingPrimary&&chosen&&existingPrimary!==chosen&&(d.keepProductId||g.existingCount===1))
+    return `<div class="sku-aux-panel">
+      <h4>初期在庫CSVによる通常仕入先判定</h4>
+      <p class="excelhint">数量最大やCSV先頭行では選びません。正の在庫が1社だけ→通常。正の在庫がなく該当行が1社だけ→通常。それ以外は手動選択です。</p>
+      ${reason?`<p class="excelhint">${esc(reason)}</p>`:''}
+      ${conflict?`<p class="notice">自動判定「${esc(aux.autoPrimarySupplier)}」と手動選択「${esc(d.primarySupplier)}」が異なります。手動を優先します（上書きしません）。</p>`:''}
+      <table class="sku-aux-table">
+        <thead><tr><th>仕入先</th><th>台帳側の商品名</th><th>初期在庫CSV</th><th>サイズ別在庫</th><th>予定</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${changeNeeded?`<label class="check primary-change-confirm"><input type="checkbox" data-pl-confirm-primary="${esc(g.code)}" ${d.confirmPrimaryChange?'checked':''} ${st.busy?'disabled':''}>
+        通常仕入先を「${esc(existingPrimary)}」→「${esc(chosen)}」へ変更することを確認する（黙って変更しません）</label>`:''}
+    </div>`
+  }
+
   function skuGroupsHtml(st){
     const groups=((st.preview&&st.preview.skuGroups)||[]).filter(g=>g.needsDecision)
     if(!groups.length)return ''
@@ -181,7 +256,8 @@
           ID ${p.id}　${esc(p.name||'')}${p.color?` / ${esc(p.color)}`:''}${p.supplierName?`　仕入 ${esc(p.supplierName)}`:''}</label>`
       }).join('')||'<span class="sub">登録済なし（新規1商品）</span>'
       const nameOpts=names.map(n=>`<option value="${esc(n)}" ${d.officialName===n?'selected':''}>${esc(n)}</option>`).join('')
-      const supOpts=suppliers.map(s=>`<option value="${esc(s)}" ${d.primarySupplier===s?'selected':''}>${esc(s)}</option>`).join('')
+      const effectivePrimary=d.primarySupplier||(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier)||''
+      const supOpts=suppliers.map(s=>`<option value="${esc(s)}" ${effectivePrimary===s?'selected':''}>${esc(s)}</option>`).join('')
       const variantPlans=(g.variants||[]).map(v=>{
         const plans=(d.plans&&typeof d.plans==='object')?d.plans:{}
         const plan=plans[v.key]||{}
@@ -202,10 +278,12 @@
         const checked=(d.mergeSourceIds||[]).map(Number).includes(Number(p.id))||(decision==='merge'&&g.existingCount>1&&d.keepProductId)
         return `<label class="check"><input type="checkbox" data-pl-merge-src="${esc(g.code)}" value="${p.id}" ${checked?'checked':''} ${st.busy||decision!=='merge'||!d.keepProductId?'disabled':''}>統合元 ID ${p.id}</label>`
       }).join('')
+      const auxPanel=auxSupplierPanelHtml(st,g,d)
       return `<article class="sku-group-card" data-sku-code="${esc(g.code)}">
         <header><strong>品番 ${esc(g.codeDisplay||g.code)}</strong>
           <span class="excelhint">${esc(g.applyScope||'')}</span></header>
         <p>CSV内容 ${(g.variants||[]).length} 種　行 ${g.rowCount}　登録済 ${g.existingCount}</p>
+        ${auxPanel}
         <div class="bar sku-decision-btns">
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':''}" ${st.busy?'disabled':''}>同じ商品としてまとめる</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="separate" class="${decision==='separate'?'primary':''}" ${st.busy?'disabled':''}>別物のため個別に整理する</button>
@@ -215,7 +293,8 @@
           <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">選択または下で編集…</option>${nameOpts}</select></label>
           <label>公式名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||'')}" ${st.busy?'disabled':''}></label>
           <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||'')}" ${st.busy?'disabled':''}></label>
-          <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定（CSV順）</option>${supOpts}</select></label>
+          <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
+          ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は初期在庫CSVから自動提案: ${esc(g.auxPrimary.autoPrimarySupplier)}</p>`:'')}
           <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
           ${g.existingCount>1?`<fieldset><legend>統合する商品（残す以外）</legend>${mergeSources||'<span class="sub">残す商品を先に選んでください</span>'}</fieldset>`:''}
           <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。サイズは LL≡2L などの同一化はしません。取扱・加工仕様は商品に付けたまま残します。</p>
@@ -352,13 +431,27 @@
   }
 
   function filePickHtml(st){
-    const label=st.fileName?'ファイルを変更':'CSVファイルを選ぶ'
+    const label=st.fileName?'台帳CSVを変更':'商品台帳CSVを選ぶ'
     const sizeHint=st.fileName&&st.fileSize?`（${Number(st.fileSize).toLocaleString('ja-JP')} バイト）`:''
-    return `<div class="bar product-ledger-filebar">
-      <input type="file" id="plFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
-      <button type="button" id="plPickFile" ${st.busy?'disabled':''}>${esc(label)}</button>
-      <span class="excelhint product-ledger-filename" id="plFileLabel">${esc(st.fileName||'未選択')}${sizeHint?` ${esc(sizeHint)}`:''}${st.preview?`（${esc(st.preview.encoding||'')}）`:''}</span>
-      <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
+    const auxLabel=st.auxFileName?'初期在庫CSVを変更':'初期在庫CSV（任意）'
+    const auxHint=st.auxFileName&&st.auxFileSize?`（${Number(st.auxFileSize).toLocaleString('ja-JP')} バイト）`:''
+    const auxMeta=st.preview&&st.preview.auxOpeningStock
+    return `<div class="product-ledger-files">
+      <div class="bar product-ledger-filebar">
+        <input type="file" id="plFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
+        <button type="button" id="plPickFile" ${st.busy?'disabled':''}>${esc(label)}</button>
+        <span class="excelhint product-ledger-filename" id="plFileLabel">${esc(st.fileName||'未選択')}${sizeHint?` ${esc(sizeHint)}`:''}${st.preview?`（${esc(st.preview.encoding||'')}）`:''}</span>
+      </div>
+      <div class="bar product-ledger-filebar">
+        <input type="file" id="plAuxFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
+        <button type="button" id="plPickAux" ${st.busy?'disabled':''}>${esc(auxLabel)}</button>
+        <span class="excelhint product-ledger-filename">${esc(st.auxFileName||'未選択（なくても可）')}${auxHint?` ${esc(auxHint)}`:''}${auxMeta?`（${esc(auxMeta.encoding||'')} / ${auxMeta.rowCount||0}行）`:''}</span>
+        ${st.auxFileB64?`<button type="button" id="plClearAux" class="quiet" ${st.busy?'disabled':''}>初期在庫CSVを外す</button>`:''}
+      </div>
+      <p class="excelhint">初期在庫用CSVは通常仕入先の判定補助だけに使います。在庫数量・単価・履歴は登録しません。未選択でも従来どおり台帳取込できます。</p>
+      <div class="bar">
+        <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
+      </div>
     </div>`
   }
 
@@ -376,6 +469,7 @@
         ${filePickHtml(st)}
         ${historyBlock(st)}
         ${st.preview?`<p class="excelhint">${esc(st.preview.note||'')}</p>
+          ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定用）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
           <p><strong>${countLine(st.preview.countsRaw)}</strong>　要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未解決のまま確定できません）':''}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${autoMergePlansHtml(st)}
@@ -434,6 +528,39 @@
     paintDialog()
   }
 
+  async function loadAuxFile(st,f){
+    if(!f)return
+    assertUploadSize(f,null)
+    st.busy=true
+    paintDialog()
+    try{
+      const b64=await readFileAsBase64(f)
+      // 台帳+補助の合算が上限を超えないよう概算
+      const combined=estimatePostBodyBytes(st.fileName||'',st.fileB64||'')+estimatePostBodyBytes(f.name,b64)
+      if(combined>MAX_POST_BODY_BYTES)throw Error(OVERSIZE_MSG)
+      st.auxFile=f
+      st.auxFileName=f.name
+      st.auxFileSize=f.size||0
+      st.auxFileB64=b64
+      st.preview=null
+      st.result=null
+      // 手動指定は残し、自動結果との差分は再照合で提示
+      Object.keys(st.skuDecisions||{}).forEach(code=>{
+        const d=st.skuDecisions[code]
+        if(d&&!d.primarySupplierManual){
+          delete d.primarySupplier
+          delete d.auxPrimaryConflict
+        }
+      })
+      st.toast('初期在庫CSVを読みました。台帳CSVとあわせて「読み込み・照合」してください。')
+    }catch(e){
+      st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
+      st.toast(apiErrorMessage(e,'初期在庫CSVを読めませんでした。'))
+    }
+    st.busy=false
+    paintDialog()
+  }
+
   function syncMergeSources(st,code){
     const d=skuDecision(st,code)
     const keep=d.keepProductId
@@ -471,9 +598,36 @@
       await loadSelectedFile(st,f)
       try{file.value=''}catch(_){}
     }
+    const auxFile=$('#plAuxFile')
+    const pickAux=$('#plPickAux')
+    if(pickAux&&auxFile){
+      pickAux.onclick=()=>{if(!st.busy)auxFile.click()}
+    }
+    if(auxFile)auxFile.onchange=async()=>{
+      const f=auxFile.files&&auxFile.files[0]
+      if(!f)return
+      await loadAuxFile(st,f)
+      try{auxFile.value=''}catch(_){}
+    }
+    const clearAux=$('#plClearAux')
+    if(clearAux)clearAux.onclick=()=>{
+      st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
+      st.preview=null;st.result=null
+      Object.keys(st.skuDecisions||{}).forEach(code=>{
+        const d=st.skuDecisions[code]
+        if(d&&!d.primarySupplierManual){
+          delete d.primarySupplier
+          delete d.auxPrimaryConflict
+        }
+      })
+      paintDialog()
+    }
     const runPreview=async()=>{
       if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
       try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+      if(st.auxFileB64){
+        try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+      }
       // フォーム値を skuDecisions へ吸い上げ
       document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
         setSkuDecision(st,el.getAttribute('data-pl-official-name-edit'),{officialName:el.value})
@@ -493,15 +647,19 @@
         setSkuDecision(st,code,{plans})
       })
       ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
-        if(skuDecision(st,g.code).decision==='merge')syncMergeSources(st,g.code)
+        if(skuDecision(st,g.code).decision==='merge'){
+          syncMergeSources(st,g.code)
+          applyAuxDefaultsForMerge(st,g.code,g)
+        }
       })
       st.busy=true;paintDialog()
       try{
-        st.preview=await st.api('/api/product-ledger-csv/preview',{
-          name:st.fileName,file:st.fileB64,selections:st.selections,skuDecisions:st.skuDecisions,
-          _canWrite:true,_actor:{name:st.actorName||''}
-        })
+        st.preview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
         st.result=null
+        // 自動提案をクライアント決定へ反映（手動は上書きしない）
+        ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
+          if(skuDecision(st,g.code).decision==='merge')applyAuxDefaultsForMerge(st,g.code,g)
+        })
         // サイズ差の自動まとめ行は要確認に出さない。真の要確認だけ絞り込む。
         if(st.preview.reviewCount>0)st.statusFilter='needs_review'
         else if(st.preview.skuDecisionPending>0)st.statusFilter=''
@@ -534,15 +692,18 @@
             patch.keepProductId=group.existingProducts[0].id
             patch.mergeSourceIds=[]
           }
+          setSkuDecision(st,code,patch)
+          applyAuxDefaultsForMerge(st,code,group)
+        }else{
+          setSkuDecision(st,code,patch)
         }
-        setSkuDecision(st,code,patch)
         paintDialog()
       }
     })
     document.querySelectorAll('[data-pl-keep]').forEach(el=>{
       el.onchange=()=>{
         const code=el.getAttribute('data-pl-keep')
-        setSkuDecision(st,code,{keepProductId:Number(el.value)})
+        setSkuDecision(st,code,{keepProductId:Number(el.value),confirmPrimaryChange:false})
         syncMergeSources(st,code)
         paintDialog()
       }
@@ -554,7 +715,22 @@
       }
     })
     document.querySelectorAll('[data-pl-primary-sup]').forEach(el=>{
-      el.onchange=()=>setSkuDecision(st,el.getAttribute('data-pl-primary-sup'),{primarySupplier:el.value})
+      el.onchange=()=>{
+        const code=el.getAttribute('data-pl-primary-sup')
+        setSkuDecision(st,code,{
+          primarySupplier:el.value,
+          primarySupplierManual:!!el.value,
+          confirmPrimaryChange:false,
+          auxPrimaryConflict:false
+        })
+        paintDialog()
+      }
+    })
+    document.querySelectorAll('[data-pl-confirm-primary]').forEach(el=>{
+      el.onchange=()=>{
+        setSkuDecision(st,el.getAttribute('data-pl-confirm-primary'),{confirmPrimaryChange:!!el.checked})
+        paintDialog()
+      }
     })
     document.querySelectorAll('[data-pl-sep-approach]').forEach(el=>{
       el.onchange=()=>{
@@ -615,13 +791,11 @@
       st.busy=true;paintDialog()
       try{
         if(!st.commitToken)st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
-        st.result=await st.api('/api/product-ledger-csv/commit',{
-          name:st.fileName,file:st.fileB64,selections:st.selections,skuDecisions:st.skuDecisions,
-          previewFingerprint:st.preview.previewFingerprint,
-          previewAt:st.preview.previewAt,
-          token:st.commitToken,
-          _canWrite:true,_actor:{name:st.actorName||''}
-        })
+        const commitBody=previewPayload(st)
+        commitBody.previewFingerprint=st.preview.previewFingerprint
+        commitBody.previewAt=st.preview.previewAt
+        commitBody.token=st.commitToken
+        st.result=await st.api('/api/product-ledger-csv/commit',commitBody)
         st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         if(typeof st.boot==='function')await st.boot()
         st.toast('商品台帳CSVの登録が完了しました')

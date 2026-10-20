@@ -678,5 +678,21 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
   margin:6px 0;padding:6px 8px;border:1px solid #d5ddd7;border-radius:3px;background:#fff;
 }
 .sku-variant-plan .sub{display:block;margin:2px 0 6px;color:#5a6a62;font-size:12.5px}
+.product-ledger-files{margin:0 0 8px}
+.sku-aux-panel{
+  margin:8px 0;padding:8px 10px;
+  border:1px solid #c9d2e0;border-radius:3px;background:#f5f8fc;
+}
+.sku-aux-panel h4{margin:0 0 6px;font-size:0.98rem}
+.sku-aux-table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0}
+.sku-aux-table th,.sku-aux-table td{
+  border:1px solid #d0d7e2;padding:4px 6px;vertical-align:top;text-align:left;
+}
+.sku-aux-table th{background:#e8eef6}
+.sku-aux-table .aux-none{color:#7a3e12;font-weight:600}
+.sku-aux-table .aux-matched{color:#2a5a3a}
+.sku-aux-table .aux-sizes{white-space:normal;word-break:break-word}
+.primary-change-confirm{display:block;margin:8px 0 0;font-weight:600;color:#7a3e12}
 .legacy-status-hold td{background:#f3f1ea}
 .legacy-status-merge td{background:#eef5f0}
+dialog.product-ledger-dialog{width:min(960px,96vw)}
