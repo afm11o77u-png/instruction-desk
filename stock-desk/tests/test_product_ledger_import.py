@@ -89,6 +89,7 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('role="alert"', js)
         self.assertIn("st.previewError=msg", js)
         self.assertIn('照合に失敗しました。', js)
+        self.assertIn('scrollIntoView', js)
         # Toast: wrap long copy and stay above app chrome (modal still needs inline alert)
         self.assertIn('max-width:min(36rem,calc(100vw - 2rem))', css)
         self.assertIn('overflow-wrap:anywhere', css)

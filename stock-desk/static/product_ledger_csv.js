@@ -861,6 +861,13 @@
     if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
     bindDialog()
     restoreLedgerScroll(dlg,saved,opts)
+    // Preview errors sit under「読み込み・照合」; ensure they are not left below the fold.
+    if(st.previewError){
+      const errEl=dlg.querySelector('.product-ledger-import-error')
+      if(errEl&&typeof errEl.scrollIntoView==='function'){
+        try{errEl.scrollIntoView({block:'nearest',inline:'nearest'})}catch(_){errEl.scrollIntoView(false)}
+      }
+    }
   }
 
   async function loadSelectedFile(st,f){
