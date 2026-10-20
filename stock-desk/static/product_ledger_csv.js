@@ -290,6 +290,13 @@
     }).join('')
     const packageBlock=pkg?`<div class="sku-stock-pick">
       <p class="excelhint"><strong>${g.auxStockPickAuto||!g.needsDecision?'自動決定':'提案'}:</strong> ${esc(aux.pairAdoptionRule||reason||'在庫が0以外の候補が1組のため、この候補をメインに採用')}</p>
+      ${(aux.pairCandidates||[]).length?`<ul class="sku-cand-list sku-pair-stock-list">${(aux.pairCandidates||[]).map(p=>{
+        const bits=[p.productName||'',p.supplier?`仕入 ${p.supplier}`:''].filter(Boolean).join(' / ')
+        const stockLabel=p.hasAuxMatch||p.auxStockDisplay&&p.auxStockDisplay!=='—'
+          ?`初期在庫：${p.auxStockDisplay||'—'}`
+          :'初期在庫：—'
+        return `<li><span class="sku-cand-name">${esc(bits)}</span> <span class="sku-cand-stock">${esc(stockLabel)}</span></li>`
+      }).join('')}</ul>`:''}
       <p class="excelhint">採用メイン: ${esc(pkg.productName||aux.suggestedOfficialName||'—')}　仕入 ${esc(pkg.supplier||aux.suggestedPrimarySupplier||'—')}
         ${pkg.color||aux.adoptedColor?`　色 ${esc(pkg.color||aux.adoptedColor)}`:''}
         ${pkg.processing||aux.adoptedProcessing?`　加工 ${esc(pkg.processing||aux.adoptedProcessing)}`:''}
@@ -378,7 +385,16 @@
     return reason?`${sup}（${reason}）`:sup
   }
 
-  function candidatesCell(values){
+  function candidatesCell(values,details){
+    const detailList=Array.isArray(details)?details:null
+    if(detailList&&detailList.length){
+      return `<ul class="sku-cand-list">${detailList.map(d=>{
+        const name=esc(d.value||'')
+        const label=esc(d.auxStockLabel||(d.hasAuxMatch?`初期在庫：${d.auxStockDisplay||'—'}`:'—'))
+        const cls=d.hasAuxMatch?'sku-cand-stock':'sku-cand-stock is-missing'
+        return `<li><span class="sku-cand-name">${name}</span> <span class="${cls}">${label}</span></li>`
+      }).join('')}</ul>`
+    }
     const list=(values||[]).filter(Boolean)
     if(!list.length)return '<span class="sub">—</span>'
     return `<ul class="sku-cand-list">${list.map(v=>`<li>${esc(v)}</li>`).join('')}</ul>`
@@ -522,8 +538,8 @@
         <td class="sku-check"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
         <td class="sku-code"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(g.codeDisplay||g.code)}</button>
           <div class="sub">${esc(TIER_LABELS[tier]||g.reviewTierLabel||'')}</div></td>
-        <td class="sku-names">${candidatesCell(g.nameCandidates||(g.variants||[]).map(v=>v.productName))}</td>
-        <td class="sku-sups">${candidatesCell(g.supplierCandidates||(g.variants||[]).map(v=>v.supplier))}</td>
+        <td class="sku-names">${candidatesCell(g.nameCandidates||(g.variants||[]).map(v=>v.productName),g.nameCandidateDetails)}</td>
+        <td class="sku-sups">${candidatesCell(g.supplierCandidates||(g.variants||[]).map(v=>v.supplier),g.supplierCandidateDetails)}</td>
         <td class="sku-other">${otherDiffsCell(g)}</td>
         <td class="sku-why">${reasonCell(g)}</td>
         <td class="sku-plan">

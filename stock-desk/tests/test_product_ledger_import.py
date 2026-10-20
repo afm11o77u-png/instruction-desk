@@ -923,10 +923,14 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             aux = group['auxPrimary']
             self.assertTrue(aux['applicable'])
             self.assertEqual(aux['autoPrimarySupplier'], '㈱ユニーク')
+            self.assertIn('初期在庫：', aux.get('pairAdoptionRule') or group.get('auxStockPickReason') or '')
             by_sup = {j['supplier']: j for j in aux['supplierJudgments']}
             self.assertEqual(by_sup['㈱ユニーク']['plannedRole'], 'primary')
             self.assertEqual(by_sup['アイトス㈱']['plannedRole'], 'sub')
             self.assertEqual(by_sup['アイトス㈱']['auxStatus'], 'none')
+            self.assertEqual(by_sup['アイトス㈱'].get('auxStockDisplay'), '—')
+            self.assertIsNotNone(by_sup['㈱ユニーク'].get('auxStockTotal'))
+            self.assertGreater(by_sup['㈱ユニーク']['auxStockTotal'], 0)
             self.assertEqual(by_sup['アイトス㈱']['auxStatusLabel'], '該当登録なし')
             # 補正在庫は使わない（Unique の補正はマイナスでも 2XL=2 で正判定）
             self.assertTrue(by_sup['㈱ユニーク']['hasPositiveStock'])
@@ -1005,6 +1009,10 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             auxj = next(g for g in preview['skuGroups'] if g['code'] == '00008')['auxPrimary']
             self.assertEqual(auxj['autoPrimarySupplier'], '㈱ユニーク')
             self.assertIn('該当行がある仕入先が1社', auxj['autoReason'])
+            self.assertTrue(
+                '在庫0' in auxj['autoReason'] or '初期在庫：0' in auxj['autoReason'],
+                auxj['autoReason'],
+            )
         finally:
             c.close()
             folder.cleanup()
@@ -1822,9 +1830,25 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
             self.assertFalse(aux_p.get('officialNameNeedsChoice'))
             self.assertEqual(g.get('plannedOfficialName'), '緑つなぎ')
-            self.assertIn('在庫が0以外の候補が1組', aux_p.get('pairAdoptionRule') or '')
+            rule = aux_p.get('pairAdoptionRule') or ''
+            self.assertIn('在庫が0以外の候補が1組', rule)
+            self.assertIn('初期在庫：3', rule)
             self.assertNotIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
             self.assertTrue(g.get('auxStockPickAuto'))
+            # 比較一覧用: 候補ごとの初期在庫表示
+            name_details = {d['value']: d for d in (g.get('nameCandidateDetails') or [])}
+            self.assertEqual(name_details.get('緑つなぎ', {}).get('auxStockDisplay'), '3')
+            self.assertEqual(name_details.get('緑つなぎ', {}).get('auxStockLabel'), '初期在庫：3')
+            self.assertEqual(name_details.get('青つなぎ', {}).get('auxStockDisplay'), '0')
+            sup_details = {d['value']: d for d in (g.get('supplierCandidateDetails') or [])}
+            self.assertEqual(sup_details.get('仕入A', {}).get('auxStockDisplay'), '3')
+            self.assertEqual(sup_details.get('仕入B', {}).get('auxStockDisplay'), '0')
+            pairs = {
+                (p.get('productName'), p.get('supplier')): p
+                for p in (aux_p.get('pairCandidates') or [])
+            }
+            self.assertEqual(pairs.get(('緑つなぎ', '仕入A'), {}).get('auxStockTotal'), 3)
+            self.assertEqual(pairs.get(('青つなぎ', '仕入B'), {}).get('auxStockTotal'), 0)
         finally:
             c.close()
             folder.cleanup()
@@ -1905,8 +1929,22 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             aux_p = g.get('auxPrimary') or {}
             self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_any_unique')
             self.assertTrue(aux_p.get('pairNeedsChoice'))
-            self.assertTrue(any('非ゼロ' in r for r in (aux_p.get('nameReasons') or [])))
+            reasons = aux_p.get('nameReasons') or []
+            self.assertTrue(
+                any('在庫0' in r or '非ゼロ' in r for r in reasons),
+                reasons,
+            )
+            self.assertTrue(any('要確認' in r for r in reasons), reasons)
             self.assertTrue(g['needsDecision'])
+            # 比較一覧の要確認理由に在庫0が明示される
+            review_labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
+            self.assertTrue(
+                any('在庫0' in lab or '初期在庫' in lab for lab in review_labels),
+                review_labels,
+            )
+            for d in g.get('nameCandidateDetails') or []:
+                self.assertEqual(d.get('auxStockDisplay'), '0')
+                self.assertEqual(d.get('auxStockLabel'), '初期在庫：0')
         finally:
             c.close()
             folder.cleanup()
@@ -1934,7 +1972,9 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertFalse(aux_p.get('pairNeedsChoice'))
             self.assertFalse(g['needsDecision'])
             self.assertEqual(aux_p.get('adoptedColor') or (aux_p.get('adoptedPackage') or {}).get('color'), 'ネイビー')
-            self.assertIn('候補が1組', aux_p.get('pairAdoptionRule') or '')
+            rule = aux_p.get('pairAdoptionRule') or ''
+            self.assertIn('候補が1組', rule)
+            self.assertIn('初期在庫：0', rule)
         finally:
             c.close()
             folder.cleanup()
@@ -1967,6 +2007,7 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             self.assertFalse(g.get('processingDiffPossible'))
             self.assertFalse(g.get('kindDiffPossible'))
             self.assertIn('在庫が0以外の候補が1組', g.get('auxStockPickReason') or '')
+            self.assertIn('初期在庫：4', g.get('auxStockPickReason') or '')
             self.assertEqual(aux_p.get('adoptedColor'), 'ネイビー')
             self.assertEqual(aux_p.get('suggestedOfficialName'), 'パンツ')
             self.assertEqual(aux_p.get('suggestedPrimarySupplier'), '仕入A')
@@ -2139,6 +2180,10 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('在庫が0以外の候補が1組', js)
         self.assertIn('auxStockPickAuto', js)
         self.assertIn('keptPackages', js)
+        self.assertIn('nameCandidateDetails', js)
+        self.assertIn('supplierCandidateDetails', js)
+        self.assertIn('初期在庫：', js)
+        self.assertIn('sku-cand-stock', js)
 
 
 class ParenClassificationTest(unittest.TestCase):
