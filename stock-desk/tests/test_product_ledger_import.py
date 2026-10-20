@@ -54,6 +54,8 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('別物のため個別に整理する', js)
         self.assertIn('今回は保留する', js)
         self.assertIn('skuDecisions', js)
+        self.assertIn('サイズ・顧客差の自動まとめ', js)
+        self.assertIn('autoMergePlans', js)
         self.assertIn('1品番=1商品', app)
         # 初期在庫用旧CSVタブとは別入口
         self.assertIn("['legacyCsv','旧CSV取込']", app)
@@ -269,10 +271,12 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             self.assertEqual(by_no[4]['product']['blankSku'], True)
             self.assertTrue(by_no[5]['csv']['usedMarkerPossible'])
             self.assertEqual(by_no[5]['status'], 'create')
-            # FT2 は名差のため品番比較が必要（先頭へ自動紐づけしない／新規逃げ穴なし）
+            # FT2 は名差のため品番比較が必要（サイズ行を要確認へは流さない）
             ft2_group = next(g for g in preview['skuGroups'] if g['code'] == 'FT2')
             self.assertTrue(ft2_group['needsDecision'])
-            self.assertEqual(by_no[7]['status'], 'needs_review')
+            self.assertTrue(by_no[7].get('skuDecisionNeeded'))
+            self.assertNotEqual(by_no[7]['status'], 'needs_review')
+            self.assertGreaterEqual(preview['skuDecisionPending'], 1)
 
             # 未決定のまま確定は拒否
             with self.assertRaises(ValueError):
@@ -455,6 +459,120 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             self.assertEqual(prod['supplierId'], su1['id'])  # 通常仕入先不変
             self.assertIn(su2['id'], prod['subSupplierIds'])
             self.assertEqual(stock_snap(c), before)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_size_only_auto_merge_not_needs_review(self):
+        """品番+名+仕入先同一でサイズだけの差 → 要確認に出さず1商品へまとめる。"""
+        folder, path, c = newdb()
+        try:
+            sizes = ['SSS', 'SS', 'S', 'M', 'L', 'LL', '3L', '4L', '5L', '6L', 'M']
+            rows = [
+                f'㈱ＤＨＣ夕張長沼工場,アイトス㈱,AZ-6850-008,ワークパンツ,{s}'
+                for s in sizes
+            ]
+            # 別顧客・同内容 → 取扱だけ増やす（要確認にしない）
+            rows.append('㈱別顧客,アイトス㈱,AZ-6850-008,ワークパンツ,L')
+            text = tiny_ledger_rows(rows)
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'size.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            before = stock_snap(c)
+            preview = pli.build_preview(c, body)
+            self.assertEqual(preview['reviewCount'], 0)
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            self.assertEqual(preview['countsRaw'].get('needs_review', 0), 0)
+            group = next(g for g in preview['skuGroups'] if g['code'] == 'AZ-6850-008')
+            self.assertFalse(group['needsDecision'])
+            self.assertTrue(group['plannedSingleProduct'])
+            self.assertEqual(group['variantCount'], 1)
+            self.assertEqual(group['productPlan']['label'], '新規商品')
+            self.assertEqual(group['productPlan']['sizeCount'], 10)
+            self.assertEqual(group['productPlan']['customerCount'], 2)
+            for r in preview['rows']:
+                self.assertNotEqual(r['status'], 'needs_review')
+                self.assertFalse(r.get('skuDecisionNeeded'))
+                self.assertTrue(r.get('skuAutoMerged'))
+                self.assertEqual(r['productPlan']['label'], '新規商品')
+            planned = preview['plannedCounts']
+            self.assertEqual(planned['productsToCreate'], 1)
+            self.assertEqual(planned['sizesToAdd'], 10)  # 重複Mは1回
+            self.assertEqual(planned['handlesToCreate'], 2)
+            self.assertEqual(planned['csvRows'], len(rows))
+
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-size-auto-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            self.assertEqual(result['counts']['productsCreated'], 1)
+            # 新規商品作成時に先頭サイズ1つが付き、残りが sizesAdded
+            self.assertEqual(result['counts']['sizesAdded'], 9)
+            self.assertEqual(result['counts']['handlesCreated'], 2)
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='AZ-6850-008' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+            pid = c.execute("SELECT id FROM products WHERE code='AZ-6850-008'").fetchone()['id']
+            got_sizes = {
+                r['label'] for r in c.execute(
+                    'SELECT label FROM product_sizes WHERE product_id=?', (pid,)
+                )
+            }
+            self.assertEqual(got_sizes, set(sizes))  # M重複でも1つ
+            self.assertNotIn('2L', got_sizes)  # LL≡2L 同一化しない・中間サイズ捏造なし
+            handles = c.execute(
+                'SELECT COUNT(*) AS n FROM customer_products WHERE product_id=?', (pid,)
+            ).fetchone()['n']
+            self.assertEqual(handles, 2)
+
+            # 再取込で二重登録なし
+            preview2 = pli.build_preview(c, body)
+            self.assertEqual(preview2['reviewCount'], 0)
+            self.assertEqual(preview2['countsRaw'].get('unchanged', 0), len(rows))
+            self.assertEqual(preview2['plannedCounts']['productsToCreate'], 0)
+            self.assertEqual(preview2['plannedCounts']['sizesToAdd'], 0)
+            self.assertEqual(preview2['plannedCounts']['handlesToCreate'], 0)
+            group2 = next(g for g in preview2['skuGroups'] if g['code'] == 'AZ-6850-008')
+            self.assertEqual(group2['productPlan']['label'], '既存商品を使用')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_name_diff_stays_in_sku_compare_not_row_review_flood(self):
+        """同品番で商品名差があるとき、品番比較は残すがサイズ行を要確認に溢れさせない。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,AZ-6850-008,ワークパンツ,SSS',
+                '顧客A,仕入A,AZ-6850-008,ワークパンツ,SS',
+                '顧客A,仕入A,AZ-6850-008,ワークパンツ,M',
+                '顧客B,仕入A,AZ-6850-008,パンツ ネイビー,LL',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'diff.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            group = next(g for g in preview['skuGroups'] if g['code'] == 'AZ-6850-008')
+            self.assertTrue(group['needsDecision'])
+            self.assertEqual(group['variantCount'], 2)
+            self.assertEqual(preview['skuDecisionPending'], 1)
+            # 行は要確認ステータスへ流さない（品番比較未決定フラグのみ）
+            self.assertEqual(preview['countsRaw'].get('needs_review', 0), 0)
+            self.assertEqual(preview['reviewCount'], 0)
+            for r in preview['rows']:
+                self.assertTrue(r.get('skuDecisionNeeded'))
+                self.assertNotEqual(r['status'], 'needs_review')
+                self.assertIn(r['status'], ('create', 'reuse', 'size_add', 'unchanged'))
+            # バリアント内のサイズは比較パネル用に保持
+            sizes0 = next(v['sizes'] for v in group['variants'] if v['productName'] == 'ワークパンツ')
+            self.assertEqual(set(sizes0), {'SSS', 'SS', 'M'})
         finally:
             c.close()
             folder.cleanup()

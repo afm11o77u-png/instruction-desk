@@ -97,7 +97,36 @@
   function plannedLine(st){
     const p=st.preview&&st.preview.plannedCounts
     if(!p)return ''
-    return `予定: 新規商品 ${p.productsToCreate||0}　再利用 ${p.productsToReuse||0}　統合 ${p.productsToMerge||0}　保留行 ${p.rowsDeferred||0}　サイズ追加 ${p.sizesToAdd||0}　取扱新規 ${p.handlesToCreate||0}　（CSV行 ${p.csvRows||0}）`
+    const auto=p.autoMergedSkuGroups!=null
+      ?`　自動まとめ ${p.autoMergedSkuGroups||0}品番/${p.autoMergedCsvRows||0}行`
+      :''
+    return `予定: 新規商品 ${p.productsToCreate||0}　再利用 ${p.productsToReuse||0}　統合 ${p.productsToMerge||0}　保留行 ${p.rowsDeferred||0}　サイズ追加 ${p.sizesToAdd||0}　取扱新規 ${p.handlesToCreate||0}　（CSV行 ${p.csvRows||0}${auto}）`
+  }
+
+  function autoMergePlansHtml(st){
+    const plans=(st.preview&&st.preview.autoMergePlans)||[]
+    if(!plans.length)return ''
+    const p=st.preview.plannedCounts||{}
+    const sample=plans.filter(x=>(x.sizeCount||0)>1||(x.customerCount||0)>1).slice(0,12)
+    const more=Math.max(0,(p.autoMergedSkuGroups||plans.length)-sample.length)
+    const cards=sample.map(plan=>{
+      const sizes=(plan.sizes||[]).slice(0,12).map(esc).join('、')
+      const sizeMore=(plan.sizes||[]).length>12?` …他${(plan.sizes||[]).length-12}`:''
+      const custs=(plan.customers||[]).slice(0,4).map(esc).join('、')
+      const custMore=(plan.customers||[]).length>4?` …他${(plan.customers||[]).length-4}`:''
+      return `<article class="sku-auto-plan">
+        <strong>${esc(plan.label||'新規商品')}</strong>
+        <span>品番 ${esc(plan.code||'')}　${esc(plan.productName||'')}　仕入 ${esc(plan.supplier||'未設定')}</span>
+        <span class="sub">取扱顧客 ${custs||'—'}${custMore}　予定サイズ ${sizes||'—'}${sizeMore}　（CSV ${plan.csvRowCount||0}行 → サイズ ${plan.sizeCount||0} / 顧客 ${plan.customerCount||0}）</span>
+      </article>`
+    }).join('')
+    return `<div class="sku-auto-panel">
+      <h3>サイズ・顧客差の自動まとめ（要確認ではない）</h3>
+      <p class="excelhint">品番・商品名・仕入先が同じでサイズや顧客だけ違う行は、1商品としてまとめます。LL≡2L の同一化や、CSVに無い中間サイズの追加はしません。行のトレースは下表のサイズ列と「同品番 N行」で確認できます。</p>
+      <p class="excelhint">自動まとめ ${p.autoMergedSkuGroups||0} 品番 / ${p.autoMergedCsvRows||0} 行（下は複数サイズまたは複数顧客の例）</p>
+      ${cards||'<p class="sub">複数サイズの自動まとめ例はありません（単一行の品番のみ）。</p>'}
+      ${more?`<p class="excelhint">他 ${more} 品番も同様に自動まとめ予定です。</p>`:''}
+    </div>`
   }
 
   function historyBlock(st){
@@ -203,7 +232,7 @@
     }).join('')
     return `<div class="sku-groups-panel">
       <h3>品番ごとの比較（通常品番）</h3>
-      <p class="excelhint">商品名／色／仕入先が違う行はここで一度だけ決めます。サイズ・顧客だけの差は同じ商品へまとめる予定です。決定は品番単位で対象行に適用されます（適用範囲は各カードに表示）。</p>
+      <p class="excelhint">商品名／色／仕入先など判断が必要な差だけここで一度決めます。サイズ・顧客だけの差は要確認に出さず、同じ商品へ自動まとめします。決定は品番単位で対象行に適用されます（適用範囲は各カードに表示）。</p>
       ${cards}
     </div>`
   }
@@ -246,16 +275,29 @@
   function targetCell(r){
     const p=r.product||{}
     const h=r.handle||{}
+    const plan=r.productPlan||{}
     const bits=[]
-    if(p.id)bits.push(`商品ID ${p.id}`)
+    if(plan.label)bits.push(esc(plan.label))
+    else if(p.id)bits.push(`商品ID ${p.id}`)
     else if(p.action==='create')bits.push('新規商品')
+    if(p.id&&plan.label!=='既存商品を使用')bits.push(`商品ID ${p.id}`)
     if(p.officialName)bits.push(`公式名 ${esc(p.officialName)}`)
-    if(p.sizeAction==='add')bits.push(`サイズ追加 ${esc((r.csv||{}).size||'')}`)
+    if(plan.sizes&&plan.sizes.length){
+      const shown=plan.sizes.slice(0,8).map(esc).join('、')
+      const more=plan.sizes.length>8?` …他${plan.sizes.length-8}`:''
+      bits.push(`予定サイズ ${shown}${more}`)
+    }else if(p.sizeAction==='add'){
+      bits.push(`サイズ追加 ${esc((r.csv||{}).size||'')}`)
+    }
+    if(plan.customers&&plan.customers.length>1){
+      bits.push(`取扱顧客 ${plan.customerCount}件`)
+    }
     if(p.subSupplierAdd)bits.push('サブ仕入先追加（通常は変更なし）')
     if(p.mergeSourceIds&&p.mergeSourceIds.length)bits.push(`統合元 ${p.mergeSourceIds.join(',')}`)
     if(h.id)bits.push(`取扱 ${h.id}`)
     else if(h.action==='create')bits.push('取扱新規（加工未整理）')
     else if(h.embroideryLabel||h.embroidery)bits.push(esc(h.embroideryLabel||h.embroidery))
+    if(r.skuAutoMerged&&(r.matchGroupCount||0)>1)bits.push('サイズ自動まとめ')
     if(r.status==='hold')bits.push(`保留 ${esc(r.deferReason||'')}`)
     return bits.join(' / ')||'—'
   }
@@ -335,9 +377,10 @@
         ${st.preview?`<p class="excelhint">${esc(st.preview.note||'')}</p>
           <p><strong>${countLine(st.preview.countsRaw)}</strong>　要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未解決のまま確定できません）':''}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
+          ${autoMergePlansHtml(st)}
           ${skuGroupsHtml(st)}
           <div class="bar">
-            <input type="search" id="plQ" placeholder="要確認の検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
+            <input type="search" id="plQ" placeholder="検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
             <select id="plStatus">
               <option value="">すべて</option>
               ${STATUS_ORDER.map(k=>`<option value="${k}" ${st.statusFilter===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
@@ -458,7 +501,10 @@
           _canWrite:true,_actor:{name:st.actorName||''}
         })
         st.result=null
-        if(st.preview.reviewCount>0||st.preview.skuDecisionPending>0)st.statusFilter='needs_review'
+        // サイズ差の自動まとめ行は要確認に出さない。真の要確認だけ絞り込む。
+        if(st.preview.reviewCount>0)st.statusFilter='needs_review'
+        else if(st.preview.skuDecisionPending>0)st.statusFilter=''
+        else st.statusFilter=''
         st.page=1
         if(st.preview.previousImports&&!st.history){
           st.history={previousImports:st.preview.previousImports}
