@@ -80,6 +80,9 @@ _KIND_HINT_RE = re.compile(
 _GENDER_HINT_RE = re.compile(
     r'(男性用|女性用|メンズ|レディース|紳士用|婦人用|男子|女子|男児|女児)'
 )
+# 男女・対象の明示対立（在庫一意でも自動クリアしない）。有無だけの差は別扱い。
+_GENDER_FEMALE_TOKENS = frozenset({'女性用', 'レディース', '婦人用', '女子', '女児'})
+_GENDER_MALE_TOKENS = frozenset({'男性用', 'メンズ', '紳士用', '男子', '男児'})
 _FABRIC_HINT_RE = re.compile(
     r'(綿100|ポリエステル|ナイロン|ウール|麻混|デニム|ツイル|オックス|'
     r'クールマックス|吸汗|速乾|防炎|難燃|制電|透湿)'
@@ -98,6 +101,29 @@ def _hint_tokens(text, pattern):
 def _kind_tokens(text):
     """商品種ヒント。明示シノニム（パンツ／スラックス等）は代表トークンへそろえる。"""
     return {legacy.synonym_canonical_token(t) for t in _hint_tokens(text, _KIND_HINT_RE)}
+
+
+def _gender_sides(tokens):
+    """性別・対象トークンを male / female 側へ正規化する（対立検出用）。"""
+    sides = set()
+    for t in tokens or ():
+        tok = stock.text(t)
+        if tok in _GENDER_FEMALE_TOKENS:
+            sides.add('female')
+        elif tok in _GENDER_MALE_TOKENS:
+            sides.add('male')
+    return sides
+
+
+def _gender_conflict_across(gender_sets):
+    """候補名のあいだで男性側と女性側が両方出るときだけ対立とみなす。
+
+    「女性用長袖白衣」対「白衣」のような有無だけの差は対立ではない。
+    """
+    sides = set()
+    for s in gender_sets or ():
+        sides |= _gender_sides(s)
+    return 'male' in sides and 'female' in sides
 
 
 def format_provisional_official_name(base_name):
@@ -159,6 +185,8 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         if len(nonempty_kinds) >= 2 and any(s != nonempty_kinds[0] for s in nonempty_kinds[1:]):
             kind_diff = True
     gender_diff = _set_diff(gender_sets)
+    gender_conflict = _gender_conflict_across(gender_sets)
+    # 有無だけの差（例: 女性用あり／なし）も gender_diff。対立は別フラグ。
     fabric_diff = _set_diff(fabric_sets)
 
     reasons = []
@@ -209,14 +237,23 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
             'values': [n for n, s in zip(names, kind_sets) if s],
         })
     if gender_diff:
+        gender_label = (
+            '男女・対象の明示対立（個別確認）'
+            if gender_conflict
+            else '男女・対象の違いの可能性（個別確認）'
+        )
         other_diffs.append({
             'code': 'gender',
-            'label': '男女・対象の違いの可能性',
+            'label': (
+                '男女・対象の明示対立'
+                if gender_conflict
+                else '男女・対象の違いの可能性'
+            ),
             'values': [n for n, s in zip(names, gender_sets) if s],
         })
         reasons.append({
             'code': 'gender',
-            'label': '男女・対象の違いの可能性（個別確認）',
+            'label': gender_label,
             'values': [n for n, s in zip(names, gender_sets) if s],
         })
     if fabric_diff:
@@ -271,6 +308,7 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         'processingDiffPossible': processing_diff,
         'kindDiffPossible': kind_diff,
         'genderDiffPossible': gender_diff,
+        'genderConflictPossible': gender_conflict,
         'fabricDiffPossible': fabric_diff,
         'bulkApprovable': tier == REVIEW_TIER_BULK,
     }
@@ -1602,7 +1640,8 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
 
     - 採用候補のフルパッケージを代表に
     - 非採用候補は別名／サブ／原文仕様マッピングとして保持（メイン仕様へ書き換えない）
-    - 商品種・男女の疑い、既存重複（2件以上）は引き続き確認
+    - 商品種の疑い、男女の明示対立（男性用⇔女性用）、既存重複（2件以上）は引き続き確認
+    - 「女性用」の有無だけ・一般名と具体名の言い回し差は在庫一意採用でクリア
     - 既存の通常仕入先変更は明示確認が必要（黙って変えない）
     - ユーザーの品番判断があれば自動クリアせず手動を優先
     - 括弧分類が曖昧な採用候補は自動確定しない
@@ -1655,13 +1694,19 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
                 _attach_stock_pick_display(group, aux, package, auto_cleared=False)
                 _soften_spec_only_reasons(group)
                 continue
-        if group.get('kindDiffPossible') or group.get('genderDiffPossible'):
-            # 色・加工・素材以外の実質差 → 確認のまま（理由から色・加工・素材は外しうる）
+
+        # 「女性用」有無など対象標記の有無だけは在庫一意採用で解消（明示対立は残す）
+        gender_conflict = bool(group.get('genderConflictPossible'))
+        if group.get('genderDiffPossible') and not gender_conflict:
+            _clear_gender_presence_absence_flags(group)
+
+        if group.get('kindDiffPossible') or gender_conflict:
+            # 商品種差／男女の明示対立 → 確認のまま（色・加工・素材・対象有無は外しうる）
             _soften_spec_only_reasons(group)
             _attach_stock_pick_display(group, aux, package, auto_cleared=False)
             continue
 
-        # 色・加工・素材・名差・仕入先差は在庫一意採用で解消 → 自動まとめ
+        # 色・加工・素材・名差・仕入先差・対象標記の有無は在庫一意採用で解消 → 自動まとめ
         was_decision = bool(group.get('needsDecision'))
         group['needsDecision'] = False
         group['plannedSingleProduct'] = True
@@ -1679,6 +1724,8 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         group['colorDiffPossible'] = False
         group['processingDiffPossible'] = False
         group['fabricDiffPossible'] = False
+        group['genderDiffPossible'] = False
+        group['genderConflictPossible'] = False
         # 名差・仕入先差は採用で解消済みとして表示上も落とす
         group['nameWordingDiff'] = False
         group['supplierDiff'] = False
@@ -1758,12 +1805,33 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         group['nameAdoptionRule'] = reason
 
 
+def _clear_gender_presence_absence_flags(group):
+    """在庫一意採用時、「女性用」有無などの対象標記の有無だけを理由から外す（明示対立は残す）。"""
+    group['genderDiffPossible'] = False
+    group['reviewReasons'] = [
+        r for r in (group.get('reviewReasons') or [])
+        if stock.text(r.get('code') or '') != 'gender'
+    ]
+    group['otherDiffs'] = [
+        d for d in (group.get('otherDiffs') or [])
+        if stock.text(d.get('code') or '') != 'gender'
+    ]
+
+
 def _soften_spec_only_reasons(group):
-    """在庫一意採用時、色・加工・素材の疑い理由を「採用で解消」表示へ差し替え（確認は継続）。"""
+    """在庫一意採用時、色・加工・素材・対象有無の疑い理由を外し、残確認を明示（確認は継続）。"""
+    drop_codes = {'color', 'processing', 'fabric'}
+    if not group.get('genderConflictPossible'):
+        # 有無だけの対象差は在庫一意で解消済み扱い
+        drop_codes.add('gender')
+        group['genderDiffPossible'] = False
+    # 一般名⇔具体名の言い回しも在庫一意採用でメインが決まっている場合は落とす
+    drop_codes.add('name_wording')
+    group['nameWordingDiff'] = False
     reasons = []
     for r in group.get('reviewReasons') or []:
         code = stock.text(r.get('code') or '')
-        if code in ('color', 'processing', 'fabric'):
+        if code in drop_codes:
             continue
         reasons.append(r)
     aux = group.get('auxPrimary') or {}
@@ -1774,11 +1842,17 @@ def _soften_spec_only_reasons(group):
         if p.get('auxStockTotal') is not None:
             qty_bit = f'（初期在庫：{p["auxStockTotal"]}）'
             break
+    remaining_bits = []
+    if group.get('kindDiffPossible'):
+        remaining_bits.append('商品種')
+    if group.get('genderConflictPossible'):
+        remaining_bits.append('男女・対象の明示対立')
+    remain_label = '・'.join(remaining_bits) if remaining_bits else '内容'
     reasons.append({
         'code': 'aux_stock_pick_partial',
         'label': (
             f'在庫一意{qty_bit}でメイン候補は決まっていますが、'
-            '商品種・対象などの確認が残っています'
+            f'{remain_label}の確認が残っています'
         ),
         'values': [],
     })
@@ -1788,7 +1862,7 @@ def _soften_spec_only_reasons(group):
     group['fabricDiffPossible'] = False
     group['otherDiffs'] = [
         d for d in (group.get('otherDiffs') or [])
-        if stock.text(d.get('code') or '') not in ('color', 'processing', 'fabric')
+        if stock.text(d.get('code') or '') not in drop_codes
     ]
 
 
@@ -3169,6 +3243,7 @@ def build_sku_groups(c, classified):
                 'processingDiffPossible': False,
                 'kindDiffPossible': False,
                 'genderDiffPossible': False,
+                'genderConflictPossible': False,
                 'fabricDiffPossible': False,
                 'bulkApprovable': False,
             }
@@ -3901,18 +3976,20 @@ def build_preview(c, body):
         '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
         '商品名の括弧内は辞書規則で色・加工・生地へ分類し、取扱の加工仕様／商品の色・生地へ保存します。'
         '未分類・曖昧な括弧は原文のまま要確認（自動確定しません）。'
-        '色・生地・加工・男女・商品種の疑いや残り曖昧さは確認が必要です。'
+        '色・生地・加工・商品種の疑いや残り曖昧さ、男女の明示対立（男性用⇔女性用）は確認が必要です。'
         '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
         'CSV原文は照合用別名に残し、後続の初期在庫取込で解決できるようにします。'
         '品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
         '保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
+        'この画面は確定前のプレビューです（登録ボタンを押すまで台帳は変わりません）。'
     )
     if aux_meta:
         note += (
             ' 初期在庫用CSVは、非ゼロ在庫がある候補が1組のとき（または候補自体が1組のとき）'
             'その候補の商品名・仕入先・色・加工・素材をセットで採用し、'
             '通常仕入先の判定補助にも使います。在庫数量は書き込みません。'
-            '色・加工・素材が候補間で違っても、在庫一意採用ならそれだけでは要確認にしません。'
+            '色・加工・素材・「女性用」等の対象標記の有無・一般名と具体名の言い回し差だけでは、'
+            '在庫一意採用なら要確認にしません。男性用と女性用の明示対立は確認のままです。'
         )
     return {
         'fileName': uploaded['fileName'],
