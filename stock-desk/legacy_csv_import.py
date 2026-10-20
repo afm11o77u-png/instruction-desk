@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import re
+import unicodedata
 from collections import defaultdict
 
 import stock
@@ -221,9 +222,47 @@ def strip_used_marker(name):
     return t, False
 
 
+# 明示シノニム（類似度判定はしない）。照合キー上だけ同一視し、原文表記は保持する。
+NAME_SYNONYM_GROUPS = (
+    frozenset({'パンツ', 'スラックス'}),
+)
+
+
+def apply_name_synonyms(text):
+    """明示シノニムを代表表記へ置換する（文字列類似度は使わない）。"""
+    t = stock.text(text)
+    if not t:
+        return t
+    for group in NAME_SYNONYM_GROUPS:
+        if len(group) < 2:
+            continue
+        canon = sorted(group)[0]
+        for syn in sorted(group, key=len, reverse=True):
+            if syn != canon and syn in t:
+                t = t.replace(syn, canon)
+    return t
+
+
+def synonym_canonical_token(token):
+    """商品種ヒント等のトークンをシノニム代表へそろえる。"""
+    t = stock.text(token)
+    if not t:
+        return t
+    for group in NAME_SYNONYM_GROUPS:
+        if t in group:
+            return sorted(group)[0]
+    return t
+
+
 def product_name_core_key(name):
-    """通常品番の商品名照合キー。先頭中古標記だけ無視し、空白種類を畳む。"""
+    """通常品番の商品名照合キー。
+
+    先頭中古標記・空白種類・全角半角（NFKC）・明示シノニムだけを吸収する。
+    原文の表記は保存側で保持する（キーは照合専用）。
+    """
     core, _ = strip_used_marker(name)
+    core = unicodedata.normalize('NFKC', stock.text(core))
+    core = apply_name_synonyms(core)
     return identity_match_key(core)
 
 

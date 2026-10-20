@@ -27,9 +27,11 @@ def is_special_product_code(code):
 
 
 def alias_value_key(value):
-    """照合用キー（空白種類を畳む）。"""
+    """照合用キー（空白種類・全角半角を畳む。原文表記は value 側に保持）。"""
     import re
-    return re.sub(r'[\s\u3000]+', '', stock.text(value))
+    import unicodedata
+    t = unicodedata.normalize('NFKC', stock.text(value))
+    return re.sub(r'[\s\u3000]+', '', t)
 
 
 def find_live_products_by_code(c, code):

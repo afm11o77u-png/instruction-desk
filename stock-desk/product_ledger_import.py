@@ -76,6 +76,13 @@ _KIND_HINT_RE = re.compile(
     r'ブルゾン|ジャケット|コート|スカート|エプロン|手袋|グローブ|靴|シューズ|安全靴|'
     r'つなぎ|カバーオール|白衣|スクラブ|レインウェア|ポロシャツ)'
 )
+_GENDER_HINT_RE = re.compile(
+    r'(男性用|女性用|メンズ|レディース|紳士用|婦人用|男子|女子|男児|女児)'
+)
+_FABRIC_HINT_RE = re.compile(
+    r'(綿100|ポリエステル|ナイロン|ウール|麻混|デニム|ツイル|オックス|'
+    r'クールマックス|吸汗|速乾|防炎|難燃|制電|透湿)'
+)
 
 
 def _collapse_space(value):
@@ -87,14 +94,19 @@ def _hint_tokens(text, pattern):
     return {stock.text(t) for t in found if stock.text(t)}
 
 
+def _kind_tokens(text):
+    """商品種ヒント。明示シノニム（パンツ／スラックス等）は代表トークンへそろえる。"""
+    return {legacy.synonym_canonical_token(t) for t in _hint_tokens(text, _KIND_HINT_RE)}
+
+
 def format_provisional_official_name(base_name):
-    """仮代表名に検索用タグを付ける。既存名を黙って上書きしない用途。"""
+    """代表名文字列を返す。「名称未整理」は名前へ埋め込まず status フラグ側で扱う。"""
     base = stock.text(base_name)
     if not base:
-        return PROVISIONAL_NAME_TAG
-    if PROVISIONAL_NAME_TAG in base:
-        return base
-    return f'{base}［{PROVISIONAL_NAME_TAG}］'
+        return ''
+    # 旧データ互換: 以前埋め込んでいたタグが残っていれば除去
+    cleaned = base.replace(f'［{PROVISIONAL_NAME_TAG}］', '').replace(PROVISIONAL_NAME_TAG, '')
+    return stock.text(cleaned) or base
 
 
 def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False):
@@ -123,26 +135,30 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
 
     color_sets = [_hint_tokens(n, _COLOR_HINT_RE) for n in names]
     proc_sets = [_hint_tokens(n, _PROCESSING_HINT_RE) for n in names]
-    kind_sets = [_hint_tokens(n, _KIND_HINT_RE) for n in names]
+    kind_sets = [_kind_tokens(n) for n in names]
+    gender_sets = [_hint_tokens(n, _GENDER_HINT_RE) for n in names]
+    fabric_sets = [_hint_tokens(n, _FABRIC_HINT_RE) for n in names]
 
-    color_diff = False
-    processing_diff = False
+    def _set_diff(sets):
+        if len(names) < 2:
+            return False
+        nonempty = [s for s in sets if s]
+        if len(nonempty) >= 2 and any(s != nonempty[0] for s in nonempty[1:]):
+            return True
+        if nonempty and any(not s for s in sets):
+            return True
+        return False
+
+    color_diff = _set_diff(color_sets)
+    processing_diff = _set_diff(proc_sets)
+    # 商品種はシノニム正規化済み。差があれば個別確認。
     kind_diff = False
     if len(names) >= 2:
-        nonempty_colors = [s for s in color_sets if s]
-        if len(nonempty_colors) >= 2 and any(s != nonempty_colors[0] for s in nonempty_colors[1:]):
-            color_diff = True
-        elif nonempty_colors and any(not s for s in color_sets):
-            # 一方だけ色語がある
-            color_diff = True
-        nonempty_proc = [s for s in proc_sets if s]
-        if len(nonempty_proc) >= 2 and any(s != nonempty_proc[0] for s in nonempty_proc[1:]):
-            processing_diff = True
-        elif nonempty_proc and any(not s for s in proc_sets):
-            processing_diff = True
         nonempty_kinds = [s for s in kind_sets if s]
         if len(nonempty_kinds) >= 2 and any(s != nonempty_kinds[0] for s in nonempty_kinds[1:]):
             kind_diff = True
+    gender_diff = _set_diff(gender_sets)
+    fabric_diff = _set_diff(fabric_sets)
 
     reasons = []
     other_diffs = []
@@ -191,6 +207,28 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
             'label': '商品種の違いの可能性（個別確認）',
             'values': [n for n, s in zip(names, kind_sets) if s],
         })
+    if gender_diff:
+        other_diffs.append({
+            'code': 'gender',
+            'label': '男女・対象の違いの可能性',
+            'values': [n for n, s in zip(names, gender_sets) if s],
+        })
+        reasons.append({
+            'code': 'gender',
+            'label': '男女・対象の違いの可能性（個別確認）',
+            'values': [n for n, s in zip(names, gender_sets) if s],
+        })
+    if fabric_diff:
+        other_diffs.append({
+            'code': 'fabric',
+            'label': '生地・素材の違いの可能性',
+            'values': [n for n, s in zip(names, fabric_sets) if s],
+        })
+        reasons.append({
+            'code': 'fabric',
+            'label': '生地・素材の違いの可能性（個別確認）',
+            'values': [n for n, s in zip(names, fabric_sets) if s],
+        })
     if existing_count > 1:
         reasons.append({
             'code': 'existing_dup',
@@ -204,7 +242,14 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
             'values': list(names) or list(suppliers),
         })
 
-    if existing_count > 1 or color_diff or processing_diff or kind_diff:
+    if (
+        existing_count > 1
+        or color_diff
+        or processing_diff
+        or kind_diff
+        or gender_diff
+        or fabric_diff
+    ):
         tier = REVIEW_TIER_INDIVIDUAL
     elif name_wording_diff or supplier_diff or name_mismatch:
         tier = REVIEW_TIER_BULK
@@ -224,18 +269,21 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         'colorDiffPossible': color_diff,
         'processingDiffPossible': processing_diff,
         'kindDiffPossible': kind_diff,
+        'genderDiffPossible': gender_diff,
+        'fabricDiffPossible': fabric_diff,
         'bulkApprovable': tier == REVIEW_TIER_BULK,
     }
 
 
 def plan_provisional_official_name(group, raw_decision=None):
-    """公式名未指定でも登録できる仮代表名を決める。
+    """代表名を決める。「名称未整理」は名前へ埋めず provisional ステータスで示す。
 
     優先順:
-    1. ユーザー指定
-    2. 初期在庫CSVで一意に提案された名
-    3. 台帳CSV原文の行番号が最も若い代表名（決定的）
-    既存商品がある場合は既存公式名を優先し、仮名で上書きしない。
+    1. ユーザー指定（手動が最優先。再照合でも上書きしない）
+    2. 既存商品の公式名（黙って上書きしない）
+    3. 初期在庫CSV補助の一意提案（正の在庫名 → 該当行名）
+    4. 台帳CSVの商品名コアが一意
+    5. 曖昧なときは仮代表名（名称未整理ステータス）＋候補表示
     """
     raw = raw_decision if isinstance(raw_decision, dict) else {}
     user = stock.text(raw.get('officialName') or raw.get('name') or '')
@@ -269,14 +317,25 @@ def plan_provisional_official_name(group, raw_decision=None):
 
     aux = group.get('auxPrimary') or {}
     aux_name = ''
+    aux_rule = ''
+    aux_rule_code = ''
     if aux.get('suggestedOfficialName') and not aux.get('officialNameNeedsChoice'):
         aux_name = stock.text(aux.get('suggestedOfficialName') or '')
+        aux_rule = stock.text(aux.get('nameAdoptionRule') or '') or (
+            '初期在庫CSVで一意だった商品名を代表名に採用'
+        )
+        aux_rule_code = stock.text(aux.get('nameAdoptionRuleCode') or '') or 'aux_unique'
 
     unmarked = prefer_unmarked_product_name(all_csv_names) or ''
+    name_candidates = list(all_csv_names)
+    for n in (aux.get('nameCandidates') or []):
+        n = stock.text(n)
+        if n and n not in name_candidates:
+            name_candidates.append(n)
 
     if user:
-        chosen = user
-        provisional = PROVISIONAL_NAME_TAG in user
+        chosen = format_provisional_official_name(user) or user
+        provisional = False
         rule = 'ユーザー指定の公式名'
         rule_code = 'user'
     elif existing_name:
@@ -285,35 +344,33 @@ def plan_provisional_official_name(group, raw_decision=None):
         rule = '既存商品の公式名を維持（仮名では上書きしない）'
         rule_code = 'existing'
     elif aux_name:
-        chosen = format_provisional_official_name(
-            prefer_unmarked_product_name([aux_name]) or aux_name
-        )
-        provisional = True
-        rule = '初期在庫CSVで一意だった商品名を仮代表名に採用'
-        rule_code = 'aux_unique'
+        chosen = prefer_unmarked_product_name([aux_name]) or aux_name
+        provisional = False
+        rule = aux_rule
+        rule_code = aux_rule_code
     elif unmarked and len({product_name_core_key(n) for n in all_csv_names if n}) == 1:
-        chosen = format_provisional_official_name(unmarked)
-        provisional = True
-        rule = '台帳CSVの商品名コアが一意のため標記なしを仮代表名に採用'
+        chosen = unmarked
+        provisional = False
+        rule = '台帳CSVの商品名コアが一意のため標記なしを代表名に採用'
         rule_code = 'unique_core'
     elif earliest_name:
-        chosen = format_provisional_official_name(
-            prefer_unmarked_product_name([earliest_name]) or earliest_name
-        )
+        chosen = prefer_unmarked_product_name([earliest_name]) or earliest_name
         provisional = True
         rule = (
-            f'台帳CSV原文の先頭行（行{earliest_row}）の商品名を仮代表名に採用'
+            f'候補が複数のため仮代表名（行{earliest_row}の商品名）。名称未整理'
             if earliest_row is not None
-            else '台帳CSV原文順の先頭商品名を仮代表名に採用'
+            else '候補が複数のため仮代表名。名称未整理'
         )
         rule_code = 'csv_row_order'
     else:
-        chosen = format_provisional_official_name(group.get('code') or '未命名')
+        chosen = stock.text(group.get('code') or '') or '未命名'
         provisional = True
-        rule = '商品名が空のため品番をもとに仮代表名を作成'
+        rule = '商品名が空のため品番をもとに仮代表名を作成（名称未整理）'
         rule_code = 'fallback_code'
 
-    # 原文 → 登録先（仮代表名）の対応
+    chosen = format_provisional_official_name(chosen) or chosen
+
+    # 原文 → 登録先（代表名）の対応
     mappings = []
     seen = set()
     for item in name_row_map:
@@ -325,16 +382,20 @@ def plan_provisional_official_name(group, raw_decision=None):
             'originalName': item['originalName'],
             'sourceRowNo': item['sourceRowNo'],
             'registrationName': chosen,
-            'isAlias': stock.text(item['originalName']) != stock.text(chosen),
+            'isAlias': product_name_core_key(item['originalName']) != product_name_core_key(chosen)
+            or stock.text(item['originalName']) != stock.text(chosen),
         })
 
     return {
         'officialName': chosen,
         'provisional': provisional,
         'provisionalTag': PROVISIONAL_NAME_TAG if provisional else '',
+        'provisionalStatus': PROVISIONAL_NAME_TAG if provisional else '',
         'adoptionRule': rule,
         'adoptionRuleCode': rule_code,
         'nameMappings': mappings,
+        'nameCandidates': name_candidates,
+        'auxNameReasons': list(aux.get('nameReasons') or []),
         'keepsExistingOfficialName': bool(existing_name) and rule_code == 'existing',
     }
 
@@ -731,6 +792,127 @@ def _suggested_official_name_for_primary(group, primary_supplier):
     return official, False
 
 
+def _unique_display_name(names):
+    """コアが一意なら標記なし優先の表示名。複数なら空。"""
+    cleaned = [stock.text(n) for n in (names or []) if stock.text(n)]
+    if not cleaned:
+        return ''
+    cores = {product_name_core_key(n) for n in cleaned}
+    if len(cores) != 1:
+        return ''
+    return prefer_unmarked_product_name(cleaned) or cleaned[0]
+
+
+def suggest_main_name_from_aux(group, aux_index):
+    """同一商品候補の中だけで、初期在庫CSVから代表名を提案する。
+
+    補助CSVの存在だけで同一商品とは断定しない（台帳側の名コアと照合できた行のみ）。
+    「在庫」列のみ。正の在庫は行単位（負との相殺なし）。数量最大では選ばない。
+    不正／空の在庫は 0 扱いしない（正の在庫判定から除外。名前の存在照合には使う）。
+    """
+    empty = {
+        'suggestedOfficialName': '',
+        'officialNameNeedsChoice': True,
+        'nameAdoptionRule': '',
+        'nameAdoptionRuleCode': '',
+        'nameCandidates': [],
+        'nameReasons': [],
+    }
+    if not aux_index:
+        return empty
+    code = stock.text(group.get('code') or '')
+    if not stock_product_merge.is_normal_product_code(code):
+        return empty
+
+    ledger_names = []
+    for v in group.get('variants') or []:
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            n = stock.text(n)
+            if n and n not in ledger_names:
+                ledger_names.append(n)
+    if not ledger_names:
+        return empty
+    ledger_cores = {product_name_core_key(n) for n in ledger_names if n}
+
+    matched = []
+    for row_no, item in aux_index.get(code, []):
+        aux_name = stock.text(item.get('商品名'))
+        if not aux_name:
+            continue
+        if product_name_core_key(aux_name) not in ledger_cores:
+            continue
+        matched.append((row_no, item, aux_name))
+
+    if not matched:
+        return {
+            **empty,
+            'nameReasons': ['初期在庫CSVに、この商品候補と商品名が対応する行がありません。'],
+        }
+
+    positive_names = []
+    any_names = []
+    reasons = []
+    for row_no, item, aux_name in matched:
+        if aux_name not in any_names:
+            any_names.append(aux_name)
+        qty, qstatus = parse_aux_stock_qty(item.get('在庫'))
+        if qstatus != 'ok':
+            if qstatus == 'empty':
+                reasons.append(f'{row_no}行目：在庫が空です（0扱いしません）。')
+            else:
+                reasons.append(
+                    f'{row_no}行目：在庫「{stock.text(item.get("在庫"))}」が不正です（0扱いしません）。'
+                )
+            continue
+        if qty is not None and qty > 0:
+            if aux_name not in positive_names:
+                positive_names.append(aux_name)
+
+    # 1) 正の在庫行の商品名が一意
+    unique_pos = _unique_display_name(positive_names)
+    if unique_pos:
+        return {
+            'suggestedOfficialName': unique_pos,
+            'officialNameNeedsChoice': False,
+            'nameAdoptionRule': '初期在庫CSVで正の在庫がある商品名が一意のため代表名に採用',
+            'nameAdoptionRuleCode': 'aux_positive_unique',
+            'nameCandidates': list(any_names),
+            'nameReasons': reasons,
+        }
+    if len({product_name_core_key(n) for n in positive_names}) > 1:
+        reasons.append(
+            '正の在庫がある商品名が複数あるため、初期在庫CSVからは代表名を自動確定しません。'
+        )
+
+    # 2) 該当する補助行全体の商品名が一意（負在庫行の名も含む）
+    unique_any = _unique_display_name(any_names)
+    if unique_any:
+        return {
+            'suggestedOfficialName': unique_any,
+            'officialNameNeedsChoice': False,
+            'nameAdoptionRule': (
+                '正の在庫名は一意でないが、初期在庫CSVの該当行の商品名が一意のため代表名に採用'
+                if positive_names else
+                '初期在庫CSVの該当行の商品名が一意のため代表名に採用'
+            ),
+            'nameAdoptionRuleCode': 'aux_any_unique',
+            'nameCandidates': list(any_names),
+            'nameReasons': reasons,
+        }
+
+    reasons.append(
+        '初期在庫CSVの商品名候補が複数のため代表名は自動確定しません（数量最大では選びません）。'
+    )
+    return {
+        'suggestedOfficialName': '',
+        'officialNameNeedsChoice': True,
+        'nameAdoptionRule': '',
+        'nameAdoptionRuleCode': '',
+        'nameCandidates': list(any_names),
+        'nameReasons': reasons,
+    }
+
+
 def decide_auto_primary_supplier(candidates, *, aux_judgments=None, aux_uploaded=False):
     """通常仕入先の自動決定（プレビューと確定で共通）。
 
@@ -839,7 +1021,27 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
         )
         auto_primary = decision['autoPrimarySupplier']
         _apply_planned_roles(judgments, auto_primary)
-        suggested_name, name_needs = _suggested_official_name_for_primary(group, auto_primary)
+        # 代表名提案（補助CSV）と通常仕入先提案は理由を分けて持つ
+        name_from_aux = suggest_main_name_from_aux(group, aux_index) if aux_index is not None else {
+            'suggestedOfficialName': '',
+            'officialNameNeedsChoice': True,
+            'nameAdoptionRule': '',
+            'nameAdoptionRuleCode': '',
+            'nameCandidates': [],
+            'nameReasons': [],
+        }
+        suggested_name = stock.text(name_from_aux.get('suggestedOfficialName') or '')
+        name_needs = bool(name_from_aux.get('officialNameNeedsChoice', True))
+        name_rule = stock.text(name_from_aux.get('nameAdoptionRule') or '')
+        name_rule_code = stock.text(name_from_aux.get('nameAdoptionRuleCode') or '')
+        if not suggested_name:
+            # 補助で決まらないとき、通常仕入先側の台帳名が一意なら候補にする（確定はしない）
+            fallback_name, fallback_needs = _suggested_official_name_for_primary(group, auto_primary)
+            if fallback_name and not fallback_needs:
+                suggested_name = fallback_name
+                name_needs = False
+                name_rule = '通常仕入先候補に紐づく台帳商品名が一意のため代表名に採用'
+                name_rule_code = 'primary_supplier_unique_name'
         multi = len(candidates) >= 2
         group['auxPrimary'] = {
             # 複社＋補助CSVのとき判定パネルを出す
@@ -859,7 +1061,11 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded):
             'manualReason': decision['manualReason'],
             'decisionKind': decision.get('decisionKind') or '',
             'suggestedOfficialName': suggested_name,
-            'officialNameNeedsChoice': name_needs if auto_primary else True,
+            'officialNameNeedsChoice': name_needs,
+            'nameAdoptionRule': name_rule,
+            'nameAdoptionRuleCode': name_rule_code,
+            'nameCandidates': list(name_from_aux.get('nameCandidates') or []),
+            'nameReasons': list(name_from_aux.get('nameReasons') or []),
         }
     return meta
 
@@ -909,6 +1115,14 @@ def prefer_unmarked_product_name(names):
 
 def names_differ_only_by_used_marker(a, b):
     return legacy.names_differ_only_by_used_marker(a, b)
+
+
+def names_equivalent_core(a, b):
+    """空白・全角半角・先頭＊/*・明示シノニムを吸収したコアが一致するか。"""
+    ta, tb = stock.text(a), stock.text(b)
+    if not ta or not tb:
+        return False
+    return product_name_core_key(ta) == product_name_core_key(tb)
 
 
 def ensure_schema(c):
@@ -1151,9 +1365,12 @@ def _finalize_matched_product(
         )
         return info
     if stock.text(prod['name']) != name:
-        if names_differ_only_by_used_marker(prod['name'], name):
-            # 先頭の中古標記だけの差 → 同一商品。原文は別名に残す。
-            info['usedMarkerNameDiff'] = True
+        if names_equivalent_core(prod['name'], name):
+            # 標記・空白/全角半角・明示シノニムのみ → 同一商品。原文は別名に残す。
+            if names_differ_only_by_used_marker(prod['name'], name):
+                info['usedMarkerNameDiff'] = True
+            else:
+                info['normalizedNameDiff'] = True
         elif not allow_name_diff:
             # 別注・品番なし等: 括弧付き名・加工表記差は自動同一化しない
             info['action'] = 'review'
@@ -1224,8 +1441,10 @@ def _product_preview(
     blank_sku = not code
     custom_order = legacy.is_custom_order_code(code)
     star = used_marker_possible(name)
+    # 台帳取込の品番空欄は一律「部品・資材」（旧・品番なし制服例外は使わない）。
+    # 登録後のカテゴリ変更は選択／編集で可能。
     proposed_category = (
-        legacy.proposed_blank_sku_category(customer_name, name) if blank_sku
+        stock.CATEGORY_PARTS if blank_sku
         else (stock.CATEGORY_UNIFORM if custom_order else '')
     )
     if selected_category is not None and selected_category != '':
@@ -1295,8 +1514,11 @@ def _product_preview(
         info['action'] = 'reuse'
         info['id'] = prod['id']
         if stock.text(prod['name']) != name:
-            if names_differ_only_by_used_marker(prod['name'], name):
-                info['usedMarkerNameDiff'] = True
+            if names_equivalent_core(prod['name'], name):
+                if names_differ_only_by_used_marker(prod['name'], name):
+                    info['usedMarkerNameDiff'] = True
+                else:
+                    info['normalizedNameDiff'] = True
             else:
                 info['nameDiff'] = True
         if supplier_id and prod['supplier_id'] not in (None, supplier_id):
@@ -1724,6 +1946,12 @@ def _sku_product_plan(group):
         'variantCount': group.get('variantCount') or 0,
         'csvNames': all_csv_names,
         'usedMarkerAutoMerged': bool(group.get('usedMarkerAutoMerged')),
+        'synonymAutoMerged': bool(group.get('synonymAutoMerged')),
+        'whitespaceAutoMerged': bool(group.get('whitespaceAutoMerged')),
+        'autoMergeReason': (
+            ((group.get('reviewReasons') or [{}])[0].get('label') or '')
+            if group.get('plannedSingleProduct') else ''
+        ),
     }
 
 
@@ -1787,19 +2015,40 @@ def build_sku_groups(c, classified):
                 break
 
         used_marker_auto = False
+        synonym_auto = False
+        whitespace_auto = False
         all_csv_names = []
         for v in variants:
             for n in v.get('csvNames') or []:
                 if n and n not in all_csv_names:
                     all_csv_names.append(n)
-        if len({product_name_core_key(n) for n in all_csv_names if n}) == 1 and any(
-            used_marker_possible(n) for n in all_csv_names
-        ):
-            used_marker_auto = len({stock.text(n) for n in all_csv_names}) > 1 or any(
+        cores = {product_name_core_key(n) for n in all_csv_names if n}
+        raw_names = {stock.text(n) for n in all_csv_names if stock.text(n)}
+        if len(cores) == 1 and any(used_marker_possible(n) for n in all_csv_names):
+            used_marker_auto = len(raw_names) > 1 or any(
                 used_marker_possible(n) for n in all_csv_names
             )
+        if len(cores) == 1 and len(raw_names) > 1:
+            # 標記以外の表記ゆれ（空白・全角半角・明示シノニム）を区別
+            import unicodedata
+            cores_no_syn = set()
+            for n in all_csv_names:
+                if not stock.text(n):
+                    continue
+                core, _ = legacy.strip_used_marker(n)
+                core = unicodedata.normalize('NFKC', stock.text(core))
+                cores_no_syn.add(identity_match_key(core))
+            if len(cores_no_syn) > 1:
+                # NFKC+空白だけでは不一致 → 明示シノニムが効いて同一化した
+                synonym_auto = True
+            else:
+                unmarked_set = {
+                    stock.text(legacy.strip_used_marker(n)[0]) for n in all_csv_names if stock.text(n)
+                }
+                if len(unmarked_set) > 1:
+                    whitespace_auto = True
 
-        # サイズ・顧客・中古標記だけの差はバリアントに出ない
+        # サイズ・顧客・中古標記・空白/全角半角・明示シノニムだけの差はバリアントに出ない
         needs_decision = (
             len(variants) > 1
             or len(existing) > 1
@@ -1812,13 +2061,20 @@ def build_sku_groups(c, classified):
                 variants, existing_count=len(existing), name_mismatch=name_mismatch,
             )
         else:
+            auto_bits = ['サイズ', '顧客']
+            if used_marker_auto:
+                auto_bits.append('先頭「＊/*」中古標記')
+            if synonym_auto:
+                auto_bits.append('明示シノニム（例: パンツ／スラックス）')
+            if whitespace_auto:
+                auto_bits.append('空白・全角半角の表記差')
             diff_meta = {
                 'reviewTier': REVIEW_TIER_AUTO,
                 'reviewTierLabel': REVIEW_TIER_LABELS[REVIEW_TIER_AUTO],
                 'reviewReasons': [{
                     'code': 'auto',
-                    'label': 'サイズ・顧客・中古標記のみの差（自動まとめ）',
-                    'values': [],
+                    'label': '・'.join(auto_bits) + 'のみの差（自動まとめ）',
+                    'values': list(all_csv_names),
                 }],
                 'nameCandidates': all_csv_names,
                 'supplierCandidates': [
@@ -1832,6 +2088,8 @@ def build_sku_groups(c, classified):
                 'colorDiffPossible': False,
                 'processingDiffPossible': False,
                 'kindDiffPossible': False,
+                'genderDiffPossible': False,
+                'fabricDiffPossible': False,
                 'bulkApprovable': False,
             }
 
@@ -1841,7 +2099,7 @@ def build_sku_groups(c, classified):
             f'（候補名 {len(diff_meta.get("nameCandidates") or [])} / '
             f'仕入先候補 {len(diff_meta.get("supplierCandidates") or [])} / '
             f'登録済 {len(existing)} 件）。'
-            f'サイズ・顧客・先頭「＊/*」中古標記だけの差は同じ商品へまとめます。'
+            f'サイズ・顧客・先頭「＊/*」・空白/全角半角・明示シノニムだけの差は同じ商品へまとめます。'
             f'加工仕様の違いは取扱として別管理し、商品を勝手に1つへ潰しません。'
         )
         if reason_labels:
@@ -1859,6 +2117,8 @@ def build_sku_groups(c, classified):
             'needsDecision': needs_decision,
             'plannedSingleProduct': planned_single,
             'usedMarkerAutoMerged': bool(used_marker_auto and planned_single),
+            'synonymAutoMerged': bool(synonym_auto and planned_single),
+            'whitespaceAutoMerged': bool(whitespace_auto and planned_single),
             'applyScope': apply_scope,
             'decision': None,
             'status': 'needs_decision' if needs_decision else 'auto',
@@ -1883,6 +2143,8 @@ def _attach_product_plans(classified, sku_groups):
         row['productPlan'] = plan
         row['skuAutoMerged'] = bool(group.get('plannedSingleProduct'))
         row['usedMarkerAutoMerged'] = bool(group.get('usedMarkerAutoMerged'))
+        row['synonymAutoMerged'] = bool(group.get('synonymAutoMerged'))
+        row['whitespaceAutoMerged'] = bool(group.get('whitespaceAutoMerged'))
         row['skuRowNos'] = list(group.get('rowNos') or [])
 
 
@@ -1903,14 +2165,18 @@ def _apply_auto_merge_official_names(classified, sku_groups):
         csv_name = stock.text((row.get('csv') or {}).get('productName') or '')
         if (
             group.get('usedMarkerAutoMerged')
+            or group.get('synonymAutoMerged')
+            or group.get('whitespaceAutoMerged')
             or used_marker_possible(csv_name)
             or (
                 prod.get('id')
                 and stock.text(prod.get('name') or '') != official
-                and (
-                    names_differ_only_by_used_marker(prod.get('name'), official)
-                    or names_differ_only_by_used_marker(csv_name, official)
-                )
+                and names_equivalent_core(prod.get('name'), official)
+            )
+            or (
+                csv_name
+                and stock.text(csv_name) != official
+                and names_equivalent_core(csv_name, official)
             )
         ):
             prod['applyOfficialName'] = True
@@ -2317,6 +2583,79 @@ def _planned_counts(classified, sku_groups):
     }
 
 
+def _preview_outcome_summary(classified, sku_groups, planned, decision_meta):
+    """プレビュー要約: 自動まとめ / 要確認 / 対象外（理由つき）。"""
+    auto_reasons = defaultdict(int)
+    for g in sku_groups:
+        if not g.get('plannedSingleProduct'):
+            continue
+        label = ''
+        for r in g.get('reviewReasons') or []:
+            if r.get('code') == 'auto':
+                label = r.get('label') or ''
+                break
+        auto_reasons[label or '自動まとめ'] += 1
+
+    review_reasons = defaultdict(int)
+    for g in sku_groups:
+        if not g.get('needsDecision'):
+            continue
+        decided = isinstance(g.get('decision'), dict) and stock.text(
+            (g.get('decision') or {}).get('decision') or ''
+        )
+        if decided:
+            continue
+        for r in g.get('reviewReasons') or []:
+            label = stock.text(r.get('label') or '') or '要確認'
+            review_reasons[label] += 1
+        if not (g.get('reviewReasons') or []):
+            review_reasons['要確認'] += 1
+
+    # 行単位の要確認・対象外（品番比較以外）
+    row_review_reasons = defaultdict(int)
+    excluded_reasons = defaultdict(int)
+    for row in classified:
+        st = row.get('status')
+        if st == STATUS_EXCLUDED:
+            reason = ''
+            for r in row.get('reasons') or []:
+                reason = stock.text(r)
+                if reason:
+                    break
+            excluded_reasons[reason or '対象外'] += 1
+        elif st == STATUS_REVIEW and not row.get('skuDecisionNeeded'):
+            reason = ''
+            for r in row.get('reasons') or []:
+                reason = stock.text(r)
+                if reason:
+                    break
+            row_review_reasons[reason or '要確認'] += 1
+
+    pending_sku = int(decision_meta.get('pendingDecisionGroups') or 0)
+    return {
+        'autoMergedSkuGroups': int(planned.get('autoMergedSkuGroups') or 0),
+        'autoMergedCsvRows': int(planned.get('autoMergedCsvRows') or 0),
+        'autoMergedReasons': [
+            {'label': k, 'count': v} for k, v in sorted(auto_reasons.items(), key=lambda x: (-x[1], x[0]))
+        ],
+        'needsReviewSkuGroups': pending_sku,
+        'needsReviewSkuReasons': [
+            {'label': k, 'count': v}
+            for k, v in sorted(review_reasons.items(), key=lambda x: (-x[1], x[0]))
+        ],
+        'needsReviewRows': sum(row_review_reasons.values()),
+        'needsReviewRowReasons': [
+            {'label': k, 'count': v}
+            for k, v in sorted(row_review_reasons.items(), key=lambda x: (-x[1], x[0]))
+        ],
+        'excludedRows': sum(excluded_reasons.values()),
+        'excludedReasons': [
+            {'label': k, 'count': v}
+            for k, v in sorted(excluded_reasons.items(), key=lambda x: (-x[1], x[0]))
+        ],
+    }
+
+
 def build_preview(c, body):
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
@@ -2395,6 +2734,14 @@ def build_preview(c, body):
         g['plannedOfficialName'] = (g.get('namePlan') or {}).get('officialName') or ''
         g['nameAdoptionRule'] = (g.get('namePlan') or {}).get('adoptionRule') or ''
         g['provisionalName'] = bool((g.get('namePlan') or {}).get('provisional'))
+        # 自動まとめ品番は namePlan の代表名を商品計画へ反映（タグは埋め込まない）
+        if g.get('plannedSingleProduct') and g.get('namePlan'):
+            plan = dict(g.get('productPlan') or {})
+            if g['plannedOfficialName']:
+                plan['productName'] = g['plannedOfficialName']
+            plan['nameAdoptionRule'] = g['nameAdoptionRule']
+            plan['provisional'] = g['provisionalName']
+            g['productPlan'] = plan
         # 通常仕入先の予定（自動 or 手動）— 確定と同じ決定結果
         primary, source, _, _, auto_reason = _resolve_effective_primary_supplier(g, raw)
         g['plannedPrimarySupplier'] = primary
@@ -2413,6 +2760,7 @@ def build_preview(c, body):
     review_count = counts.get(STATUS_REVIEW, 0)
     sku_pending_rows = sum(1 for r in classified if r.get('skuDecisionNeeded'))
     planned = _planned_counts(classified, sku_groups)
+    summary = _preview_outcome_summary(classified, sku_groups, planned, decision_meta)
     auto_plans = [
         g.get('productPlan') for g in sku_groups
         if g.get('plannedSingleProduct') and g.get('productPlan')
@@ -2421,15 +2769,16 @@ def build_preview(c, body):
     snap = stock_snapshot(c)
     note = (
         '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
-        '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記だけの差は'
-        '自動で1商品にまとめます。商品名の言い回し・仕入先差は一括承認候補、'
-        '色・加工・商品種の疑いは個別確認です。公式名未設定でも仮代表名（名称未整理）'
-        'で登録でき、後から編集できます。既存の公式名は黙って上書きしません。'
-        'CSV原文は照合用別名に残します。保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
+        '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記・空白/全角半角・'
+        '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
+        '色・生地・加工・男女・商品種の疑いや残り曖昧さは確認が必要です。'
+        '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
+        'CSV原文は照合用別名に残します。品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
+        '保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
     )
     if aux_meta:
         note += (
-            ' 初期在庫用CSVは通常仕入先の判定補助のみに使い、在庫数量は書き込みません。'
+            ' 初期在庫用CSVは通常仕入先・代表名の判定補助のみに使い、在庫数量は書き込みません。'
         )
     return {
         'fileName': uploaded['fileName'],
@@ -2452,6 +2801,7 @@ def build_preview(c, body):
         'counts': dict(STATUS_LABELS),
         'countsRaw': dict(counts),
         'plannedCounts': planned,
+        'outcomeSummary': summary,
         'reviewCount': review_count,
         'previewFingerprint': fp,
         'previewAt': stock.stamp(),
