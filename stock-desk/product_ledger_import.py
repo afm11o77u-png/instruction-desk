@@ -46,9 +46,297 @@ SKU_DECISION_MERGE = 'merge'
 SKU_DECISION_SEPARATE = 'separate'
 SKU_DECISION_HOLD = 'hold'
 
+# 品番比較の判断ティア（自動まとめは needsDecision=False）
+REVIEW_TIER_AUTO = 'auto'
+REVIEW_TIER_BULK = 'bulk'  # 名差・仕入先差のみ → 一括承認候補
+REVIEW_TIER_INDIVIDUAL = 'individual'  # 色・加工・商品種の疑い → 個別確認
+
+REVIEW_TIER_LABELS = {
+    REVIEW_TIER_AUTO: '自動まとめ',
+    REVIEW_TIER_BULK: '一括承認候補',
+    REVIEW_TIER_INDIVIDUAL: '個別確認',
+}
+
+PROVISIONAL_NAME_TAG = '名称未整理'
+
+# 色・加工・商品種の「疑い」検出（自動で同一商品と断定しない。個別確認へ振り分けるだけ）
+_COLOR_HINT_RE = re.compile(
+    r'(蛍光|ネイビー|ブラック|ホワイト|レッド|ブルー|グリーン|イエロー|オレンジ|ピンク|'
+    r'グレー|グレイ|ブラウン|ベージュ|シルバー|ゴールド|'
+    r'紺|白|黒|赤|青|緑|黄|茶|灰|銀|金|紫|橙|桃|水色|カーキ|キャメル|ワイン|エンジ|アイボリー|'
+    r'カラー|色|'
+    r'\d{2,3}\.\s*[\u3040-\u30ff\u4e00-\u9fff]+)'
+)
+_PROCESSING_HINT_RE = re.compile(
+    r'(加工|刺繍|プリント|ネーム|スナッパー|マジックテープ|反射|コーティング|'
+    r'アイロン|ワッペン|カット|縫製)'
+)
+_KIND_HINT_RE = re.compile(
+    r'(帽子|キャップ|ヘルメット|ベスト|パンツ|ズボン|スラックス|シャツ|ブラウス|'
+    r'ブルゾン|ジャケット|コート|スカート|エプロン|手袋|グローブ|靴|シューズ|安全靴|'
+    r'つなぎ|カバーオール|白衣|スクラブ|レインウェア|ポロシャツ)'
+)
+
 
 def _collapse_space(value):
     return re.sub(r'[\s\u3000]+', '', stock.text(value))
+
+
+def _hint_tokens(text, pattern):
+    found = pattern.findall(stock.text(text) or '')
+    return {stock.text(t) for t in found if stock.text(t)}
+
+
+def format_provisional_official_name(base_name):
+    """仮代表名に検索用タグを付ける。既存名を黙って上書きしない用途。"""
+    base = stock.text(base_name)
+    if not base:
+        return PROVISIONAL_NAME_TAG
+    if PROVISIONAL_NAME_TAG in base:
+        return base
+    return f'{base}［{PROVISIONAL_NAME_TAG}］'
+
+
+def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False):
+    """品番グループの差分を具体値つきで整理し、判断ティアを返す。
+
+    - auto: 呼び出し側で needsDecision=False のときのみ
+    - bulk: 商品名の言い回し差・仕入先差のみ（色・加工・商品種の疑いなし）
+    - individual: 色／加工／商品種の疑い、または既存重複など慎重確認が必要
+
+    キーワード一致だけで「同じ商品」とは断定しない。
+    """
+    names = []
+    suppliers = []
+    for v in variants or []:
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            n = stock.text(n)
+            if n and n not in names:
+                names.append(n)
+        s = stock.text(v.get('supplier') or '')
+        if s and s not in suppliers:
+            suppliers.append(s)
+
+    cores = {product_name_core_key(n) for n in names if n}
+    name_wording_diff = len(cores) > 1
+    supplier_diff = len(suppliers) > 1
+
+    color_sets = [_hint_tokens(n, _COLOR_HINT_RE) for n in names]
+    proc_sets = [_hint_tokens(n, _PROCESSING_HINT_RE) for n in names]
+    kind_sets = [_hint_tokens(n, _KIND_HINT_RE) for n in names]
+
+    color_diff = False
+    processing_diff = False
+    kind_diff = False
+    if len(names) >= 2:
+        nonempty_colors = [s for s in color_sets if s]
+        if len(nonempty_colors) >= 2 and any(s != nonempty_colors[0] for s in nonempty_colors[1:]):
+            color_diff = True
+        elif nonempty_colors and any(not s for s in color_sets):
+            # 一方だけ色語がある
+            color_diff = True
+        nonempty_proc = [s for s in proc_sets if s]
+        if len(nonempty_proc) >= 2 and any(s != nonempty_proc[0] for s in nonempty_proc[1:]):
+            processing_diff = True
+        elif nonempty_proc and any(not s for s in proc_sets):
+            processing_diff = True
+        nonempty_kinds = [s for s in kind_sets if s]
+        if len(nonempty_kinds) >= 2 and any(s != nonempty_kinds[0] for s in nonempty_kinds[1:]):
+            kind_diff = True
+
+    reasons = []
+    other_diffs = []
+    if name_wording_diff or name_mismatch:
+        reasons.append({
+            'code': 'name_wording',
+            'label': '商品名の言い回しが異なる',
+            'values': list(names),
+        })
+    if supplier_diff:
+        reasons.append({
+            'code': 'supplier',
+            'label': '仕入先が異なる',
+            'values': list(suppliers),
+        })
+    if color_diff:
+        other_diffs.append({
+            'code': 'color',
+            'label': '色の違いの可能性',
+            'values': [n for n, s in zip(names, color_sets) if s],
+        })
+        reasons.append({
+            'code': 'color',
+            'label': '色の違いの可能性（個別確認）',
+            'values': [n for n, s in zip(names, color_sets) if s],
+        })
+    if processing_diff:
+        other_diffs.append({
+            'code': 'processing',
+            'label': '加工の違いの可能性',
+            'values': [n for n, s in zip(names, proc_sets) if s],
+        })
+        reasons.append({
+            'code': 'processing',
+            'label': '加工の違いの可能性（個別確認）',
+            'values': [n for n, s in zip(names, proc_sets) if s],
+        })
+    if kind_diff:
+        other_diffs.append({
+            'code': 'kind',
+            'label': '商品種の違いの可能性',
+            'values': [n for n, s in zip(names, kind_sets) if s],
+        })
+        reasons.append({
+            'code': 'kind',
+            'label': '商品種の違いの可能性（個別確認）',
+            'values': [n for n, s in zip(names, kind_sets) if s],
+        })
+    if existing_count > 1:
+        reasons.append({
+            'code': 'existing_dup',
+            'label': f'登録済が {existing_count} 件（残す商品の選択が必要）',
+            'values': [],
+        })
+    if not reasons and existing_count <= 1:
+        reasons.append({
+            'code': 'compare',
+            'label': '内容の確認が必要',
+            'values': list(names) or list(suppliers),
+        })
+
+    if existing_count > 1 or color_diff or processing_diff or kind_diff:
+        tier = REVIEW_TIER_INDIVIDUAL
+    elif name_wording_diff or supplier_diff or name_mismatch:
+        tier = REVIEW_TIER_BULK
+    else:
+        # 既存1件との名差など、上記に入らない要確認
+        tier = REVIEW_TIER_INDIVIDUAL if existing_count else REVIEW_TIER_BULK
+
+    return {
+        'reviewTier': tier,
+        'reviewTierLabel': REVIEW_TIER_LABELS.get(tier, tier),
+        'reviewReasons': reasons,
+        'nameCandidates': names,
+        'supplierCandidates': suppliers,
+        'otherDiffs': other_diffs,
+        'nameWordingDiff': name_wording_diff or bool(name_mismatch),
+        'supplierDiff': supplier_diff,
+        'colorDiffPossible': color_diff,
+        'processingDiffPossible': processing_diff,
+        'kindDiffPossible': kind_diff,
+        'bulkApprovable': tier == REVIEW_TIER_BULK,
+    }
+
+
+def plan_provisional_official_name(group, raw_decision=None):
+    """公式名未指定でも登録できる仮代表名を決める。
+
+    優先順:
+    1. ユーザー指定
+    2. 初期在庫CSVで一意に提案された名
+    3. 台帳CSV原文の行番号が最も若い代表名（決定的）
+    既存商品がある場合は既存公式名を優先し、仮名で上書きしない。
+    """
+    raw = raw_decision if isinstance(raw_decision, dict) else {}
+    user = stock.text(raw.get('officialName') or raw.get('name') or '')
+    variants = group.get('variants') or []
+    all_csv_names = []
+    earliest_name = ''
+    earliest_row = None
+    name_row_map = []
+    for v in variants:
+        for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+            n = stock.text(n)
+            if not n:
+                continue
+            if n not in all_csv_names:
+                all_csv_names.append(n)
+            for rn in v.get('rowNos') or []:
+                name_row_map.append({'originalName': n, 'sourceRowNo': rn})
+                if earliest_row is None or int(rn) < int(earliest_row):
+                    earliest_row = rn
+                    earliest_name = n
+
+    existing = group.get('existingProducts') or []
+    existing_name = ''
+    if len(existing) == 1:
+        existing_name = stock.text(existing[0].get('name') or '')
+    elif raw.get('keepProductId'):
+        for p in existing:
+            if int(p.get('id') or 0) == int(raw.get('keepProductId') or 0):
+                existing_name = stock.text(p.get('name') or '')
+                break
+
+    aux = group.get('auxPrimary') or {}
+    aux_name = ''
+    if aux.get('suggestedOfficialName') and not aux.get('officialNameNeedsChoice'):
+        aux_name = stock.text(aux.get('suggestedOfficialName') or '')
+
+    unmarked = prefer_unmarked_product_name(all_csv_names) or ''
+
+    if user:
+        chosen = user
+        provisional = PROVISIONAL_NAME_TAG in user
+        rule = 'ユーザー指定の公式名'
+        rule_code = 'user'
+    elif existing_name:
+        chosen = existing_name
+        provisional = False
+        rule = '既存商品の公式名を維持（仮名では上書きしない）'
+        rule_code = 'existing'
+    elif aux_name:
+        chosen = format_provisional_official_name(
+            prefer_unmarked_product_name([aux_name]) or aux_name
+        )
+        provisional = True
+        rule = '初期在庫CSVで一意だった商品名を仮代表名に採用'
+        rule_code = 'aux_unique'
+    elif unmarked and len({product_name_core_key(n) for n in all_csv_names if n}) == 1:
+        chosen = format_provisional_official_name(unmarked)
+        provisional = True
+        rule = '台帳CSVの商品名コアが一意のため標記なしを仮代表名に採用'
+        rule_code = 'unique_core'
+    elif earliest_name:
+        chosen = format_provisional_official_name(
+            prefer_unmarked_product_name([earliest_name]) or earliest_name
+        )
+        provisional = True
+        rule = (
+            f'台帳CSV原文の先頭行（行{earliest_row}）の商品名を仮代表名に採用'
+            if earliest_row is not None
+            else '台帳CSV原文順の先頭商品名を仮代表名に採用'
+        )
+        rule_code = 'csv_row_order'
+    else:
+        chosen = format_provisional_official_name(group.get('code') or '未命名')
+        provisional = True
+        rule = '商品名が空のため品番をもとに仮代表名を作成'
+        rule_code = 'fallback_code'
+
+    # 原文 → 登録先（仮代表名）の対応
+    mappings = []
+    seen = set()
+    for item in name_row_map:
+        key = (item['originalName'], item['sourceRowNo'])
+        if key in seen:
+            continue
+        seen.add(key)
+        mappings.append({
+            'originalName': item['originalName'],
+            'sourceRowNo': item['sourceRowNo'],
+            'registrationName': chosen,
+            'isAlias': stock.text(item['originalName']) != stock.text(chosen),
+        })
+
+    return {
+        'officialName': chosen,
+        'provisional': provisional,
+        'provisionalTag': PROVISIONAL_NAME_TAG if provisional else '',
+        'adoptionRule': rule,
+        'adoptionRuleCode': rule_code,
+        'nameMappings': mappings,
+        'keepsExistingOfficialName': bool(existing_name) and rule_code == 'existing',
+    }
 
 
 def identity_match_key(value):
@@ -1452,12 +1740,45 @@ def build_sku_groups(c, classified):
         )
         planned_single = not needs_decision
 
+        if needs_decision:
+            diff_meta = analyze_sku_review_diffs(
+                variants, existing_count=len(existing), name_mismatch=name_mismatch,
+            )
+        else:
+            diff_meta = {
+                'reviewTier': REVIEW_TIER_AUTO,
+                'reviewTierLabel': REVIEW_TIER_LABELS[REVIEW_TIER_AUTO],
+                'reviewReasons': [{
+                    'code': 'auto',
+                    'label': 'サイズ・顧客・中古標記のみの差（自動まとめ）',
+                    'values': [],
+                }],
+                'nameCandidates': all_csv_names,
+                'supplierCandidates': [
+                    stock.text(v.get('supplier') or '')
+                    for v in variants
+                    if stock.text(v.get('supplier') or '')
+                ],
+                'otherDiffs': [],
+                'nameWordingDiff': False,
+                'supplierDiff': False,
+                'colorDiffPossible': False,
+                'processingDiffPossible': False,
+                'kindDiffPossible': False,
+                'bulkApprovable': False,
+            }
+
+        reason_labels = [r.get('label') or '' for r in (diff_meta.get('reviewReasons') or []) if r.get('label')]
         apply_scope = (
             f'品番「{code}」の対象行 {len(rows)} 件'
-            f'（内容の違い {len(variants)} 種 / 登録済 {len(existing)} 件）。'
+            f'（候補名 {len(diff_meta.get("nameCandidates") or [])} / '
+            f'仕入先候補 {len(diff_meta.get("supplierCandidates") or [])} / '
+            f'登録済 {len(existing)} 件）。'
             f'サイズ・顧客・先頭「＊/*」中古標記だけの差は同じ商品へまとめます。'
             f'加工仕様の違いは取扱として別管理し、商品を勝手に1つへ潰しません。'
         )
+        if reason_labels:
+            apply_scope += ' 要確認理由: ' + '／'.join(reason_labels)
 
         group = {
             'code': code,
@@ -1474,7 +1795,10 @@ def build_sku_groups(c, classified):
             'applyScope': apply_scope,
             'decision': None,
             'status': 'needs_decision' if needs_decision else 'auto',
+            **diff_meta,
         }
+        # 仮代表名の予定（決定前でも画面表示用）
+        group['namePlan'] = plan_provisional_official_name(group, None)
         group['productPlan'] = _sku_product_plan(group)
         groups.append(group)
     return groups
@@ -1580,21 +1904,16 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             # 既存が1件だけのときは残す商品を省略しても再利用（再取込の二重新規を防ぐ）
             if not keep_id and group.get('existingCount') == 1:
                 keep_id = (group.get('existingProducts') or [{}])[0].get('id')
-            official_name = stock.text(raw.get('officialName') or raw.get('name') or '')
             color = stock.text(raw.get('color') or '')
             primary_supplier, primary_source, primary_conflict, auto_primary = (
                 _resolve_effective_primary_supplier(group, raw)
             )
             aux = group.get('auxPrimary') or {}
-            auto_name_ok = (
-                aux.get('suggestedOfficialName')
-                and not aux.get('officialNameNeedsChoice')
-                and primary_supplier
-                and auto_primary
-                and _supplier_names_match(primary_supplier, auto_primary)
-            )
-            if not official_name and auto_name_ok:
-                official_name = stock.text(aux.get('suggestedOfficialName') or '')
+            # 公式名未指定でも仮代表名で登録可（既存公式名は上書きしない）
+            name_plan = plan_provisional_official_name(group, {**raw, 'keepProductId': keep_id})
+            group['namePlan'] = name_plan
+            official_name = stock.text(name_plan.get('officialName') or '')
+            provisional = bool(name_plan.get('provisional'))
             merge_source_ids = raw.get('mergeSourceIds') or []
             if isinstance(merge_source_ids, list):
                 merge_source_ids = [int(x) for x in merge_source_ids if str(x).isdigit() or isinstance(x, int)]
@@ -1619,6 +1938,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 'primaryChangeRequiresConfirm': primary_change,
                 'primaryChangeConfirmed': confirm_primary,
             }
+            group['plannedOfficialName'] = official_name
+            group['plannedPrimarySupplier'] = primary_supplier
+            group['provisionalName'] = provisional
+            group['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
 
             if group['existingCount'] > 1 and not keep_id:
                 row['status'] = STATUS_REVIEW
@@ -1630,21 +1953,14 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 pending_decision += 1
                 continue
             if not official_name:
-                # 既存1件ならその公式名を仮採用可だが、名差があるなら明示を要求
-                if group['existingCount'] == 1 and not any(
-                    r.get('product', {}).get('nameDiff') for r in classified
-                    if stock.text((r.get('csv') or {}).get('code')) == code
-                ) and group['variantCount'] <= 1:
-                    official_name = group['existingProducts'][0].get('name') or ''
-                if not official_name:
-                    row['status'] = STATUS_REVIEW
-                    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
-                    row['canCommit'] = False
-                    row['reasons'] = list(row.get('reasons') or []) + [
-                        f'品番「{code}」の公式商品名を指定してください。'
-                    ]
-                    pending_decision += 1
-                    continue
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の代表商品名を決められませんでした。'
+                ]
+                pending_decision += 1
+                continue
 
             suppliers_in_group = {
                 stock.text(v.get('supplier') or '')
@@ -1673,6 +1989,17 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 continue
 
             # 行ごとの登録先
+            # 既存商品へ仮代表名を適用しない（公式名の黙った上書き禁止）
+            apply_official = bool(official_name) and not (
+                keep_id and name_plan.get('keepsExistingOfficialName')
+            )
+            # ユーザーが明示した公式名は既存にも適用可。仮名は新規のみ。
+            user_set_name = bool(stock.text(raw.get('officialName') or raw.get('name') or ''))
+            if keep_id and provisional and not user_set_name:
+                apply_official = False
+            elif keep_id and name_plan.get('keepsExistingOfficialName') and not user_set_name:
+                apply_official = False
+
             if keep_id:
                 row['product'] = dict(row.get('product') or {})
                 row['product']['id'] = int(keep_id)
@@ -1683,6 +2010,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['confirmPrimaryChange'] = bool(primary_change and confirm_primary)
                 row['product']['mergeSourceIds'] = merge_source_ids
                 row['product']['skuMerge'] = True
+                row['product']['provisionalName'] = provisional
+                row['product']['applyOfficialName'] = apply_official
+                row['product']['nameMappings'] = name_plan.get('nameMappings') or []
+                row['product']['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
                 if group['existingCount'] > 1 and merge_source_ids:
                     row['status'] = STATUS_MERGE
                     row['statusLabel'] = STATUS_LABELS[STATUS_MERGE]
@@ -1710,7 +2041,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                     STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_MERGE,
                 )
             else:
-                # 既存なし → 新規1商品（公式名で作成）
+                # 既存なし → 新規1商品（仮代表名可）
                 row['product'] = dict(row.get('product') or {})
                 row['product']['action'] = 'create'
                 row['product']['id'] = None
@@ -1718,6 +2049,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['officialColor'] = color
                 row['product']['primarySupplierName'] = primary_supplier
                 row['product']['skuMerge'] = True
+                row['product']['provisionalName'] = provisional
+                row['product']['applyOfficialName'] = True
+                row['product']['nameMappings'] = name_plan.get('nameMappings') or []
+                row['product']['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
                 row['status'] = STATUS_CREATE
                 row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
                 row['canCommit'] = True
@@ -1867,6 +2202,31 @@ def _planned_counts(classified, sku_groups):
                 PENDING_EMBROIDERY,
             ))
     auto_groups = [g for g in sku_groups if g.get('plannedSingleProduct')]
+    bulk_groups = [
+        g for g in sku_groups
+        if g.get('needsDecision') and g.get('reviewTier') == REVIEW_TIER_BULK
+    ]
+    individual_groups = [
+        g for g in sku_groups
+        if g.get('needsDecision') and g.get('reviewTier') == REVIEW_TIER_INDIVIDUAL
+    ]
+    defer_reasons = []
+    for row in classified:
+        if row.get('status') != STATUS_HOLD:
+            continue
+        defer_reasons.append({
+            'rowNo': row.get('rowNo'),
+            'code': stock.text((row.get('csv') or {}).get('code') or ''),
+            'reason': stock.text(row.get('deferReason') or '') or '保留',
+        })
+    resolved_sku = sum(
+        1 for g in sku_groups
+        if g.get('needsDecision') and isinstance(g.get('decision'), dict)
+        and stock.text((g.get('decision') or {}).get('decision'))
+    )
+    pending_sku = sum(
+        1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')
+    )
     return {
         'csvRows': len(classified),
         'productsToCreate': len(product_create_codes),
@@ -1875,9 +2235,11 @@ def _planned_counts(classified, sku_groups):
         'rowsDeferred': defer_rows,
         'sizesToAdd': len(size_keys),
         'handlesToCreate': len(handle_keys),
-        'skuGroupsNeedingDecision': sum(
-            1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')
-        ),
+        'skuGroupsNeedingDecision': pending_sku,
+        'skuGroupsResolved': resolved_sku,
+        'bulkApprovableSkuGroups': len(bulk_groups),
+        'individualReviewSkuGroups': len(individual_groups),
+        'deferredReasons': defer_reasons,
         'autoMergedSkuGroups': len(auto_groups),
         'autoMergedCsvRows': sum(g.get('rowCount') or 0 for g in auto_groups),
     }
@@ -1952,6 +2314,18 @@ def build_preview(c, body):
 
     sku_groups = build_sku_groups(c, classified)
     aux_meta = attach_aux_primary_judgment(sku_groups, aux_uploaded)
+    # 補助CSV判定後に仮代表名の予定を更新（決定前の画面表示用）
+    for g in sku_groups:
+        raw = sku_decisions.get(g['code']) or sku_decisions.get(str(g['code'])) or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        g['namePlan'] = plan_provisional_official_name(g, raw if stock.text(raw.get('decision')) else None)
+        g['plannedOfficialName'] = (g.get('namePlan') or {}).get('officialName') or ''
+        g['nameAdoptionRule'] = (g.get('namePlan') or {}).get('adoptionRule') or ''
+        g['provisionalName'] = bool((g.get('namePlan') or {}).get('provisional'))
+        # 通常仕入先の予定（自動 or 手動）
+        primary, _, _, _ = _resolve_effective_primary_supplier(g, raw)
+        g['plannedPrimarySupplier'] = primary
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
     _attach_product_plans(classified, sku_groups)
     _apply_auto_merge_official_names(classified, sku_groups)
@@ -1972,9 +2346,10 @@ def build_preview(c, body):
     note = (
         '在庫数量・仕入単価・初期在庫・入出庫履歴は登録しません。'
         '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記だけの差は'
-        '自動で1商品にまとめ、要確認へは流しません。公式名は標記なしを優先し、'
-        'CSV原文（標記付き含む）は照合用別名に残します。括弧内表記や色・加工は'
-        '商品名から自動分解しません。加工列が無くてもエラーにはしません。'
+        '自動で1商品にまとめます。商品名の言い回し・仕入先差は一括承認候補、'
+        '色・加工・商品種の疑いは個別確認です。公式名未設定でも仮代表名（名称未整理）'
+        'で登録でき、後から編集できます。既存の公式名は黙って上書きしません。'
+        'CSV原文は照合用別名に残します。保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
     )
     if aux_meta:
         note += (
@@ -1992,8 +2367,12 @@ def build_preview(c, body):
         'skuGroupCount': len(sku_groups),
         'skuDecisionPending': decision_meta['pendingDecisionGroups'],
         'skuDecisionPendingRows': sku_pending_rows,
+        'bulkApprovableCount': planned.get('bulkApprovableSkuGroups', 0),
+        'individualReviewCount': planned.get('individualReviewSkuGroups', 0),
         'autoMergePlans': auto_plans,
         'auxOpeningStock': aux_meta,
+        'reviewTierLabels': dict(REVIEW_TIER_LABELS),
+        'provisionalNameTag': PROVISIONAL_NAME_TAG,
         'counts': dict(STATUS_LABELS),
         'countsRaw': dict(counts),
         'plannedCounts': planned,
@@ -2171,17 +2550,27 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
 
     if product_info.get('id') and not force_create:
         pid = product_info['id']
-        if (product_info.get('skuMerge') or product_info.get('applyOfficialName')) and official_name:
+        # applyOfficialName=False（仮名・既存維持）のときは公式名を上書きしない
+        if 'applyOfficialName' in product_info:
+            should_apply_official = bool(product_info.get('applyOfficialName'))
+        else:
+            should_apply_official = bool(product_info.get('skuMerge'))
+        if should_apply_official and official_name:
             _apply_official_name(
                 c, pid, official_name,
                 color=official_color if 'officialColor' in product_info else None,
                 csv_name=csv_name,
             )
-        elif stock.text(csv_name) and stock_product_merge.is_normal_product_code(product_info.get('code')):
-            # 再利用時も CSV 名を別名に残す（公式名は変えない）
-            prod = _load_product(c, pid)
-            if prod and stock.text(prod['name']) != stock.text(csv_name):
-                stock_product_merge.ensure_name_alias(c, pid, csv_name)
+        else:
+            # 再利用時は CSV 名・対応表の原文を別名に残す（公式名は変えない）
+            if stock.text(csv_name) and stock_product_merge.is_normal_product_code(product_info.get('code')):
+                prod = _load_product(c, pid)
+                if prod and stock.text(prod['name']) != stock.text(csv_name):
+                    stock_product_merge.ensure_name_alias(c, pid, csv_name)
+            for mapping in product_info.get('nameMappings') or []:
+                orig = stock.text(mapping.get('originalName') or '')
+                if orig:
+                    stock_product_merge.ensure_name_alias(c, pid, orig)
         size_added = False
         if product_info.get('sizeAction') == 'add':
             size_added = _save_product_sizes_only(c, pid, product_info.get('size'))
@@ -2290,6 +2679,10 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     })
     if csv_name and stock.text(csv_name) != stock.text(name):
         stock_product_merge.ensure_name_alias(c, saved['id'], csv_name)
+    for mapping in product_info.get('nameMappings') or []:
+        orig = stock.text(mapping.get('originalName') or '')
+        if orig and stock.text(orig) != stock.text(name):
+            stock_product_merge.ensure_name_alias(c, saved['id'], orig)
     if primary_name:
         stock_product_merge.ensure_supplier_alias(c, saved['id'], primary_name)
     sub_added = False

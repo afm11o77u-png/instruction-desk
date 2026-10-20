@@ -59,6 +59,12 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('中古標記まとめ', js)
         self.assertIn('auxFile', js)
         self.assertIn('初期在庫CSV', js)
+        self.assertIn('sku-compare-table', js)
+        self.assertIn('一括承認候補', js)
+        self.assertIn('個別確認', js)
+        self.assertIn('plSkuBulkMerge', js)
+        self.assertIn('plSkuSelectFiltered', js)
+        self.assertIn('名称未整理', js)
         self.assertIn('1品番=1商品', app)
         # 初期在庫用旧CSVタブとは別入口
         self.assertIn("['legacyCsv','旧CSV取込']", app)
@@ -1174,6 +1180,288 @@ class AuxOpeningPrimarySupplierTest(unittest.TestCase):
             self.assertEqual(resolved['source'], 'manual')
             self.assertTrue(resolved['conflictWithAuto'])
             self.assertEqual(resolved['autoPrimarySupplier'], '㈱ユニーク')
+        finally:
+            c.close()
+            folder.cleanup()
+
+
+class ReviewTierAndProvisionalNameTest(unittest.TestCase):
+    """3ティア分類・仮代表名・部分確定（一時DBのみ）。"""
+
+    def test_supplier_only_diff_is_bulk_approvable(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-B1,作業着,M',
+                '顧客A,仕入B,SKU-B1,作業着,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'bulk.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-B1')
+            self.assertTrue(g['needsDecision'])
+            self.assertEqual(g['reviewTier'], 'bulk')
+            self.assertTrue(g['bulkApprovable'])
+            self.assertTrue(g['supplierDiff'])
+            self.assertFalse(g['colorDiffPossible'])
+            self.assertIn('仕入A', g['supplierCandidates'])
+            self.assertIn('仕入B', g['supplierCandidates'])
+            # 「内容の違い○種」だけに頼らない具体候補
+            self.assertEqual(g['nameCandidates'], ['作業着'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_color_or_processing_diff_is_individual(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-I1,帽子,F',
+                '顧客A,仕入A,SKU-I1,スナッパー加工,F',
+                '顧客B,仕入A,SKU-I2,ワークパンツ,M',
+                '顧客B,仕入A,SKU-I2,パンツ ネイビー,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'indiv.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g1 = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-I1')
+            g2 = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-I2')
+            self.assertEqual(g1['reviewTier'], 'individual')
+            self.assertFalse(g1['bulkApprovable'])
+            self.assertTrue(g1['kindDiffPossible'] or g1['processingDiffPossible'])
+            self.assertEqual(g2['reviewTier'], 'individual')
+            self.assertTrue(g2['colorDiffPossible'])
+            self.assertTrue(any('帽子' in n or 'スナッパー' in n for n in g1['nameCandidates']))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_provisional_name_allows_merge_without_official(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-P1,作業上着,M',
+                '顧客A,仕入B,SKU-P1,作業 上着,L',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'prov.csv',
+                'skuDecisions': {
+                    'SKU-P1': {
+                        'decision': 'merge',
+                        'primarySupplier': '仕入A',
+                        'primarySupplierManual': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            before = stock_snap(c)
+            preview = pli.build_preview(c, body)
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            self.assertEqual(preview['reviewCount'], 0)
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-P1')
+            self.assertTrue(g.get('provisionalName') or (g.get('namePlan') or {}).get('provisional'))
+            self.assertIn(pli.PROVISIONAL_NAME_TAG, g.get('plannedOfficialName') or '')
+            self.assertTrue(g.get('nameAdoptionRule') or (g.get('namePlan') or {}).get('adoptionRule'))
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-prov-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            row = c.execute(
+                "SELECT id,name FROM products WHERE code='SKU-P1' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertIn(pli.PROVISIONAL_NAME_TAG, row['name'])
+            # 後から公式名編集できる（別名に原文が残る）
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (row['id'],),
+                )
+            }
+            self.assertTrue(aliases & {'作業上着', '作業 上着'} or '作業上着' in row['name'])
+            stock.save_product(c, {
+                **{k: stock.product_row(c, row['id'])[k] for k in ()},
+                'id': row['id'],
+                'code': 'SKU-P1',
+                'name': '作業上着（整理済）',
+                'color': '',
+                'category': '',
+                'supplierId': stock.product_row(c, row['id'])['supplierId'],
+                'subSupplierIds': stock.product_row(c, row['id']).get('subSupplierIds') or [],
+                'sizes': stock.product_row(c, row['id'])['sizes'],
+                'active': True,
+                'links': [
+                    {
+                        'customerId': link['customerId'],
+                        'embroidery': link['embroidery'],
+                        'isStandard': link['isStandard'],
+                        'active': link['active'],
+                    }
+                    for link in stock.product_row(c, row['id'])['links']
+                ],
+            })
+            c.commit()
+            edited = c.execute('SELECT name FROM products WHERE id=?', (row['id'],)).fetchone()
+            self.assertEqual(edited['name'], '作業上着（整理済）')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_provisional_does_not_overwrite_existing_official_name(self):
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入A', 'active': True})
+            pr = stock.save_product(c, {
+                'code': 'SKU-E1', 'name': '既存公式名', 'color': '', 'supplierId': su['id'],
+                'active': True, 'sizes': ['M'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': False, 'active': True}],
+            })
+            c.commit()
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-E1,別名A,M',
+                '顧客A,仕入B,SKU-E1,別名B,L',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'keep.csv',
+                'skuDecisions': {
+                    'SKU-E1': {
+                        'decision': 'merge',
+                        'keepProductId': pr['id'],
+                        'primarySupplier': '仕入A',
+                        'primarySupplierManual': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-keep-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            name = c.execute('SELECT name FROM products WHERE id=?', (pr['id'],)).fetchone()['name']
+            self.assertEqual(name, '既存公式名')
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (pr['id'],),
+                )
+            }
+            self.assertTrue({'別名A', '別名B'} & aliases)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_partial_commit_hold_then_reimport_no_dupes(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-H1,作業着,M',
+                '顧客A,仕入B,SKU-H1,作業着,L',
+                '顧客A,仕入A,SKU-H2,帽子,F',
+                '顧客A,仕入A,SKU-H2,スナッパー加工,F',
+            ])
+            body = {
+                'file': csv_b64_from_text(text), 'name': 'partial.csv',
+                'skuDecisions': {
+                    'SKU-H1': {
+                        'decision': 'merge',
+                        'primarySupplier': '仕入A',
+                        'primarySupplierManual': True,
+                    },
+                    'SKU-H2': {'decision': 'hold', 'deferReason': '加工切り分け未確定'},
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            before = stock_snap(c)
+            preview = pli.build_preview(c, body)
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            self.assertGreaterEqual(preview['plannedCounts']['rowsDeferred'], 1)
+            defer_reasons = preview['plannedCounts'].get('deferredReasons') or []
+            self.assertTrue(any(d.get('code') == 'SKU-H2' for d in defer_reasons))
+            result = pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-partial-1',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            n1 = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='SKU-H1' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            n2 = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='SKU-H2' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n1, 1)
+            self.assertEqual(n2, 0)
+
+            # 保留分を後からまとめて再取込（二重登録なし）
+            body2 = {
+                'file': csv_b64_from_text(text), 'name': 'partial.csv',
+                'skuDecisions': {
+                    'SKU-H1': {
+                        'decision': 'merge',
+                        'primarySupplier': '仕入A',
+                        'primarySupplierManual': True,
+                    },
+                    'SKU-H2': {
+                        'decision': 'merge',
+                        'officialName': '帽子（整理）',
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            }
+            preview2 = pli.build_preview(c, body2)
+            result2 = pli.commit_preview(c, {
+                **body2,
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-partial-2',
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result2['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            n1b = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='SKU-H1' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            n2b = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE code='SKU-H2' AND merged_into_id IS NULL"
+            ).fetchone()['n']
+            self.assertEqual(n1b, 1)
+            self.assertEqual(n2b, 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_size_auto_merge_still_auto_tier(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-A1,作業着,M',
+                '顧客A,仕入A,SKU-A1,作業着,L',
+                '顧客B,仕入A,SKU-A1,＊作業着,S',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'auto.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-A1')
+            self.assertFalse(g['needsDecision'])
+            self.assertEqual(g['reviewTier'], 'auto')
+            self.assertEqual(preview['skuDecisionPending'], 0)
         finally:
             c.close()
             folder.cleanup()
