@@ -25,7 +25,7 @@ class DeskNavGroupsTest(unittest.TestCase):
         expected = [
             ('指示書の作成・確認', ['指示書一覧', '下書き']),
             ('現場の作業・出荷', ['現場の作業一覧', 'ピッキングリスト', '出荷仕分け']),
-            ('管理担当者の処理', ['管理担当持込(入力)', '管理担当持込(出力)']),
+            ('管理担当持込', ['入力', '出力']),
             ('印刷', ['宛名書き・管理票印刷']),
             ('設定・管理', ['利用者管理', '管理・修正']),
         ]
@@ -35,7 +35,7 @@ class DeskNavGroupsTest(unittest.TestCase):
             self.assertGreaterEqual(i, pos)
             pos = i
             for item in items:
-                j = nav.index(item, pos)
+                j = nav.index(f'>{item}<', pos)
                 self.assertGreater(j, pos)
                 pos = j
         self.assertIn('data-view="labels"', nav)
@@ -43,6 +43,12 @@ class DeskNavGroupsTest(unittest.TestCase):
         self.assertNotIn('>宛名書き<', nav)
         self.assertIn('id="manageusers"', nav)
         self.assertIn('id="repair-open"', nav)
+        self.assertNotIn('管理担当者の処理', nav)
+        self.assertNotIn('管理担当持込(入力)', nav)
+        self.assertNotIn('管理担当持込(出力)', nav)
+        # 2ボタンは横並び1行
+        self.assertIn('class="navrow"', nav)
+        self.assertEqual(nav.count('class="navrow"'), 2)
 
     def test_view_targets_unchanged(self):
         nav = _desknav()
@@ -68,9 +74,18 @@ class DeskNavGroupsTest(unittest.TestCase):
         # ログイン欄からは業務メニューへ移した
         self.assertNotIn('利用者管理</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
         self.assertNotIn('管理・修正</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
+        # navrow 内のボタンも空グループ判定に含める
+        self.assertIn("g.querySelectorAll('.nav')", ACCOUNT)
+        self.assertNotIn(":scope > .nav", ACCOUNT)
 
     def test_labels_title_renamed(self):
         self.assertIn("labels?'宛名書き・管理票印刷':", APP)
+
+    def test_pair_row_styles(self):
+        self.assertIn('#desknav .navrow', STYLE)
+        self.assertIn('#desknav .navrow .nav', STYLE)
+        self.assertRegex(STYLE, r'#desknav\.navrow|#desknav \.navrow\{[^}]*display:flex')
+        self.assertRegex(STYLE, r'#desknav \.navrow \.nav\{[^}]*flex:1 1 0')
 
     def test_scroll_and_wrap_styles(self):
         self.assertIn('overflow-x:hidden', STYLE)
