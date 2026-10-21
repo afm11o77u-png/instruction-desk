@@ -113,7 +113,7 @@
       if(!g||!g.needsDecision)return
       const dec=effectiveDecision(st,g)
       const tier=g.reviewTier||'individual'
-      if(dec==='merge'){approved.push(g);return}
+      if(dec==='merge'||dec==='color_split'){approved.push(g);return}
       if(dec==='hold'){hold.push(g);return}
       if(dec==='separate'){separate.push(g);return}
       if(tier==='bulk'){bulkUnapproved.push(g);return}
@@ -602,9 +602,51 @@
 
   function decisionLabel(dec){
     if(dec==='merge')return '承認済み（未登録）'
+    if(dec==='color_split')return '色分割選択済み（未登録）'
     if(dec==='separate')return '個別整理（未登録）'
     if(dec==='hold')return '保留'
     return '未決定'
+  }
+
+  function colorSplitFormHtml(st,g,d){
+    const split=g.colorSplitPlans||{}
+    const plans=split.plans||[]
+    const unassigned=split.unassignedRows||[]
+    const colorOpts=plans.map(p=>`<option value="${esc(p.colorKey||p.color)}">${esc(p.color)}</option>`).join('')
+    const planCards=plans.map(p=>{
+      const existing=(p.existingProducts||[]).map(x=>
+        `<label class="check"><input type="radio" name="plColorKeep-${esc(g.code)}-${esc(p.colorKey)}" data-pl-color-keep="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${x.id}" ${Number(p.keepProductId)===Number(x.id)?'checked':''} ${st.busy?'disabled':''}>
+          既存を使う ID ${x.id}　${esc(x.name||'')}${x.color?` / ${esc(x.color)}`:''}</label>`
+      ).join('')
+      const collision=p.needsCollisionChoice
+        ?`<p class="notice">社内管理品番「${esc(p.internalCode)}」が衝突しています。既存を使うか、品番を編集してください（上書きしません）。</p>
+           <fieldset><legend>衝突の解決</legend>
+             ${existing||'<span class="sub">既存候補なし（品番を編集）</span>'}
+             <label class="check"><input type="radio" name="plColorKeep-${esc(g.code)}-${esc(p.colorKey)}" data-pl-color-keep="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="" ${!p.keepProductId?'checked':''} ${st.busy?'disabled':''}>品番を編集して新規</label>
+           </fieldset>`
+        :(p.collision&&p.keepProductId?`<p class="excelhint">既存商品 ID ${esc(String(p.keepProductId))} を使用予定</p>`:'')
+      return `<div class="sku-color-plan" data-color-key="${esc(p.colorKey)}">
+        <strong>色: ${esc(p.color)}</strong>
+        <span class="sub">CSV行 ${(p.rowNos||[]).join(',')||'—'}　メーカー品番 ${esc(p.makerCode||g.code)}</span>
+        <label>社内管理品番<input data-pl-color-internal="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${esc(p.internalCode||'')}" placeholder="${esc(p.suggestedInternalCode||'')}" ${st.busy?'disabled':''}></label>
+        <label>商品名<input data-pl-color-name="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${esc(p.productName||'')}" ${st.busy?'disabled':''}></label>
+        <label>色（確認）<input data-pl-color-color="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${esc(p.color||'')}" ${st.busy?'disabled':''}></label>
+        ${collision}
+      </div>`
+    }).join('')
+    const unCards=unassigned.map(u=>`<div class="sku-color-unassigned">
+      <span>行 ${u.rowNo}: ${esc(u.originalName||'')} — ${esc(u.reason||'')}</span>
+      <label>登録先の色<select data-pl-color-dest="${esc(g.code)}" data-pl-row="${u.rowNo}" ${st.busy||!plans.length?'disabled':''}>
+        <option value="">選択…</option>${colorOpts}
+      </select></label>
+    </div>`).join('')
+    return `<div class="sku-color-split-form">
+      <p class="excelhint">${esc(split.note||'色ごとに別商品として登録予定です。まだ保存していません。確認・編集のうえ最終登録してください。')}</p>
+      <p class="excelhint">メーカー品番は元の「${esc(g.code)}」のまま（先頭ゼロも維持）。社内管理品番の初期値は「品番-色」です。緑と蛍光グリーンは別色です。</p>
+      ${planCards||'<p class="notice">色候補をまだ作れません。商品名の色を確認するか、行き先を指定してください。</p>'}
+      ${unCards?`<div class="sku-color-unassigned-list"><h4>行き先未定の行</h4>${unCards}</div>`:''}
+      ${split.complete?'<p class="excelhint">予定は揃っています。再照合のあと「確認して商品を登録」で確定できます。</p>':'<p class="excelhint">未定の行き先・品番衝突を解消してから再照合してください。</p>'}
+    </div>`
   }
 
   function matchesSkuFilters(st,g){
@@ -682,9 +724,11 @@
         ${auxPanel}
         <div class="bar sku-decision-btns">
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':''}" ${st.busy?'disabled':''}>同じ商品としてまとめる</button>
+          <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':''}" ${st.busy?'disabled':''}>色別に分けて登録</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="separate" class="${decision==='separate'?'primary':''}" ${st.busy?'disabled':''}>別物のため個別に整理する</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>今回は保留する</button>
         </div>
+        ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
           ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
           <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
@@ -758,6 +802,7 @@
           <div class="sku-action-label ${decision?`is-${esc(decision)}`:''}">${esc(stateLabel)}</div>
           <div class="bar sku-mini-btns">
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめ</button>
+            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" ${st.busy?'disabled':''}>保留</button>
             <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
@@ -1554,6 +1599,58 @@
           plans[key]={...(plans[key]||{}),newCode:el.value}
           setSkuDecision(st,code,{plans})
         })
+        // 色分割フォーム → skuDecisions.colorPlans / rowDestinations
+        ;(()=>{
+          const byCode={}
+          document.querySelectorAll('[data-pl-color-internal]').forEach(el=>{
+            const code=el.getAttribute('data-pl-color-internal')
+            const key=el.getAttribute('data-pl-color-key')
+            if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+            byCode[code].colorPlans[key]={...(byCode[code].colorPlans[key]||{}),internalCode:el.value,colorKey:key}
+          })
+          document.querySelectorAll('[data-pl-color-name]').forEach(el=>{
+            const code=el.getAttribute('data-pl-color-name')
+            const key=el.getAttribute('data-pl-color-key')
+            if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+            byCode[code].colorPlans[key]={...(byCode[code].colorPlans[key]||{}),productName:el.value,colorKey:key}
+          })
+          document.querySelectorAll('[data-pl-color-color]').forEach(el=>{
+            const code=el.getAttribute('data-pl-color-color')
+            const key=el.getAttribute('data-pl-color-key')
+            if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+            byCode[code].colorPlans[key]={...(byCode[code].colorPlans[key]||{}),color:el.value,colorKey:key}
+          })
+          document.querySelectorAll('[data-pl-color-keep]:checked').forEach(el=>{
+            const code=el.getAttribute('data-pl-color-keep')
+            const key=el.getAttribute('data-pl-color-key')
+            if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+            const vid=el.value
+            byCode[code].colorPlans[key]={
+              ...(byCode[code].colorPlans[key]||{}),
+              colorKey:key,
+              keepProductId:vid?Number(vid):null,
+              collisionAction:vid?'reuse':'edit'
+            }
+          })
+          document.querySelectorAll('[data-pl-color-dest]').forEach(el=>{
+            const code=el.getAttribute('data-pl-color-dest')
+            const rowNo=el.getAttribute('data-pl-row')
+            if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+            if(el.value)byCode[code].rowDestinations[String(rowNo)]=el.value
+            else delete byCode[code].rowDestinations[String(rowNo)]
+          })
+          Object.keys(byCode).forEach(code=>{
+            const prev=skuDecision(st,code)
+            const mergedPlans={...(prev.colorPlans||{}),...byCode[code].colorPlans}
+            Object.keys(byCode[code].colorPlans).forEach(k=>{
+              mergedPlans[k]={...(prev.colorPlans&&prev.colorPlans[k]||{}),...byCode[code].colorPlans[k]}
+            })
+            setSkuDecision(st,code,{
+              colorPlans:mergedPlans,
+              rowDestinations:{...(prev.rowDestinations||{}),...byCode[code].rowDestinations}
+            })
+          })
+        })()
         ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
           if(skuDecision(st,g.code).decision==='merge'){
             syncMergeSources(st,g.code)
@@ -1712,6 +1809,14 @@
         if(dec==='merge'&&group){
           applyMergeDefaults(st,code,group)
           st.expandedCodes[code]=true
+        }else if(dec==='color_split'){
+          setSkuDecision(st,code,{decision:'color_split'})
+          st.expandedCodes[code]=true
+          // 予定は再照合でサーバ生成（クリックだけでは保存しない）
+          st.toast('色別の登録予定を作ります。内容を確認・編集してから最終登録してください。')
+          paintDialog({anchorCode:code})
+          runPreview()
+          return
         }else{
           setSkuDecision(st,code,{decision:dec})
           if(dec==='separate'||dec==='hold')st.expandedCodes[code]=true

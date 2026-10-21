@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS suppliers (
 CREATE TABLE IF NOT EXISTS products (
   id INTEGER PRIMARY KEY,
   code TEXT NOT NULL,
+  maker_code TEXT NOT NULL DEFAULT '',
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT '',
   material TEXT NOT NULL DEFAULT '',
@@ -316,6 +317,35 @@ def normalize_category(value):
     if t not in PRODUCT_CATEGORIES:
         raise ValueError('カテゴリは空欄・制服・部品・資材のいずれかです。')
     return t
+
+
+def maker_code_of(row_or_code, maker_code=None):
+    """発注・メーカー向けに出す品番。maker_code が空なら社内品番 code をそのまま使う。"""
+    if isinstance(row_or_code, dict) or hasattr(row_or_code, 'keys'):
+        code = text(row_or_code['code'] if 'code' in row_or_code.keys() else '')
+        mk = ''
+        if 'maker_code' in row_or_code.keys():
+            mk = text(row_or_code['maker_code'] or '')
+        elif 'makerCode' in row_or_code.keys():
+            mk = text(row_or_code['makerCode'] or '')
+        return mk or code
+    code = text(row_or_code)
+    mk = text(maker_code or '')
+    return mk or code
+
+
+def order_product_code_label(*, code, maker_code='', color='', internal_code=None):
+    """発注画面・発注書用: メーカー品番＋色。社内品番が別なら併記。"""
+    maker = maker_code_of(code, maker_code)
+    color_t = text(color)
+    internal = text(internal_code if internal_code is not None else code)
+    bits = [maker]
+    if color_t:
+        bits.append(color_t)
+    label = ' '.join(x for x in bits if x).strip()
+    if internal and maker and internal != maker:
+        label = f'{label}（社内 {internal}）' if label else f'社内 {internal}'
+    return label
 
 
 def product_code_display(code, category=''):
@@ -650,6 +680,9 @@ def migrate_schema(c):
             c.execute("ALTER TABLE products ADD COLUMN category TEXT NOT NULL DEFAULT ''")
         if 'material' not in product_cols:
             c.execute("ALTER TABLE products ADD COLUMN material TEXT NOT NULL DEFAULT ''")
+        if 'maker_code' not in product_cols:
+            # 社内管理品番(code)とメーカー品番を分離。空なら従来どおり code をメーカー品番扱い。
+            c.execute("ALTER TABLE products ADD COLUMN maker_code TEXT NOT NULL DEFAULT ''")
     import stock_product_merge
     stock_product_merge.migrate_product_merge(c)
     # Backfill business dates from lot fields only (no invented dates for outbound).
@@ -990,6 +1023,11 @@ def save_product(c, body):
     code = optional(body.get('code'), '品番', 40)
     if code in (BLANK_SKU_DISPLAY, BLANK_SKU_UNIFORM_DISPLAY):
         code = ''
+    # メーカー品番（空＝社内品番と同じ扱い。色分割登録時のみ明示）
+    if 'makerCode' in body or 'maker_code' in body:
+        maker_code = optional(body.get('makerCode', body.get('maker_code')), 'メーカー品番', 40)
+    else:
+        maker_code = None  # 更新時は既存維持
     name = need(body.get('name'), '商品名', 80)
     color = optional(body.get('color'), '色', 40)
     category = normalize_category(body.get('category', ''))
@@ -1006,9 +1044,10 @@ def save_product(c, body):
     pid = body.get('id')
     import stock_product_merge
     stock_product_merge.migrate_product_merge(c)
+    migrate_schema(c)
     if pid:
         existing_prod = c.execute(
-            'SELECT id, code, name, merged_into_id, material FROM products WHERE id=?', (pid,)
+            'SELECT id, code, name, merged_into_id, material, maker_code FROM products WHERE id=?', (pid,)
         ).fetchone()
         if not existing_prod:
             raise ValueError('商品が見つかりません。')
@@ -1021,6 +1060,8 @@ def save_product(c, body):
             material = optional(body.get('material'), '生地・素材', 80)
         else:
             material = existing_prod['material'] if 'material' in existing_prod.keys() else ''
+        if maker_code is None:
+            maker_code = text(existing_prod['maker_code'] or '') if 'maker_code' in existing_prod.keys() else ''
         stock_product_merge.assert_normal_code_available(
             c, code, product_id=pid,
             allow_historical_duplicate=bool(body.get('_allowHistoricalDuplicateCode')),
@@ -1029,8 +1070,8 @@ def save_product(c, body):
         if text(existing_prod['name']) != name:
             stock_product_merge.ensure_name_alias(c, pid, existing_prod['name'])
         c.execute(
-            'UPDATE products SET code=?,name=?,color=?,material=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
-            (code, name, color, material, category, supplier_id, active, t, pid),
+            'UPDATE products SET code=?,maker_code=?,name=?,color=?,material=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
+            (code, maker_code, name, color, material, category, supplier_id, active, t, pid),
         )
         existing = {r['label']: r['id'] for r in c.execute('SELECT id,label FROM product_sizes WHERE product_id=?', (pid,))}
         for label in existing:
@@ -1073,9 +1114,11 @@ def save_product(c, body):
             allow_historical_duplicate=bool(body.get('_allowHistoricalDuplicateCode')),
         )
         material = optional(body.get('material'), '生地・素材', 80)
+        if maker_code is None:
+            maker_code = ''
         c.execute(
-            'INSERT INTO products(code,name,color,material,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)',
-            (code, name, color, material, category, supplier_id, active, t, t),
+            'INSERT INTO products(code,maker_code,name,color,material,category,supplier_id,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (code, maker_code, name, color, material, category, supplier_id, active, t, t),
         )
         pid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         for i, label in enumerate(labels):
@@ -1693,8 +1736,11 @@ def product_row(c, pid):
     stock_product_merge.migrate_product_merge(c)
     name_aliases = stock_product_merge.list_name_aliases(c, pid)
     material = r['material'] if 'material' in r.keys() else ''
+    maker_code = text(r['maker_code'] or '') if 'maker_code' in r.keys() else ''
     return {
         'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
+        'makerCode': maker_code,
+        'makerCodeDisplay': maker_code_of(code, maker_code),
         'name': r['name'], 'color': r['color'], 'material': material or '',
         'category': category or '',
         'supplierId': r['supplier_id'],

@@ -769,7 +769,10 @@ button.linkish{
 }
 .sku-group-card header{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;margin-bottom:6px}
 .sku-decision-btns{flex-wrap:wrap;gap:6px;margin:8px 0}
-.sku-merge-form,.sku-separate-form,.sku-hold-form{margin-top:8px}
+.sku-merge-form,.sku-separate-form,.sku-hold-form,.sku-color-split-form{margin-top:8px}
+.sku-color-plan{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;display:grid;gap:6px}
+.sku-color-unassigned-list{margin-top:8px}
+.sku-color-unassigned{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:4px 0}
 .sku-variant-plan{
   margin:6px 0;padding:6px 8px;border:1px solid #d5ddd7;border-radius:3px;background:#fff;
 }

@@ -216,7 +216,7 @@ def _normalize_lines(c, body, customer_id, supplier_id):
         if not isinstance(cp_id, int):
             raise ValueError('商品の取扱を選んでください。')
         cp = c.execute(
-            '''SELECT cp.*, p.id AS product_id, p.code, p.name AS product_name, p.color,
+            '''SELECT cp.*, p.id AS product_id, p.code, p.maker_code, p.name AS product_name, p.color,
                       p.supplier_id, p.active AS product_active, cu.active AS customer_active
                FROM customer_products cp
                JOIN products p ON p.id=cp.product_id
@@ -250,6 +250,11 @@ def _normalize_lines(c, body, customer_id, supplier_id):
             for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (cp['product_id'],))
         }
         note = stock.optional(item.get('note') or item.get('lineNote'), '明細備考', 200)
+        # 発注書の品番はメーカー品番（色分割の社内品番 ABC-100-赤 をメーカー品番扱いにしない）
+        maker_code = ''
+        if 'maker_code' in cp.keys():
+            maker_code = stock.text(cp['maker_code'] or '')
+        order_code = stock.maker_code_of(cp['code'], maker_code)
         for label, qty in size_rows:
             if label not in registered:
                 raise ValueError(f'登録済みのサイズから選んでください（{label}）。')
@@ -258,7 +263,8 @@ def _normalize_lines(c, body, customer_id, supplier_id):
                 'lineNo': line_no,
                 'customerProductId': cp['id'],
                 'productId': cp['product_id'],
-                'productCode': cp['code'],
+                'productCode': order_code,
+                'productInternalCode': cp['code'],
                 'productName': cp['product_name'],
                 'productColor': cp['color'] or '',
                 'embroidery': cp['embroidery'] or '',
@@ -283,7 +289,7 @@ def product_candidates(c, args=None):
     rows = []
     for r in c.execute(
         '''SELECT cp.id AS customer_product_id, cp.embroidery, cp.is_standard,
-                  p.id AS product_id, p.code, p.name, p.color, p.supplier_id,
+                  p.id AS product_id, p.code, p.maker_code, p.name, p.color, p.supplier_id,
                   s.name AS supplier_name
            FROM customer_products cp
            JOIN products p ON p.id=cp.product_id
@@ -308,10 +314,20 @@ def product_candidates(c, args=None):
                 (r['product_id'],),
             )
         ]
+        maker = ''
+        if 'maker_code' in r.keys():
+            maker = stock.text(r['maker_code'] or '')
+        order_code = stock.maker_code_of(r['code'], maker)
+        label = stock.order_product_code_label(
+            code=r['code'], maker_code=maker, color=r['color'] or '',
+            internal_code=r['code'],
+        )
         item = {
             'customerProductId': r['customer_product_id'],
             'productId': r['product_id'],
-            'code': r['code'],
+            'code': order_code,
+            'internalCode': r['code'],
+            'makerCode': maker,
             'name': r['name'],
             'color': r['color'] or '',
             'embroidery': r['embroidery'] or '',
@@ -320,11 +336,12 @@ def product_candidates(c, args=None):
             'supplierId': r['supplier_id'],
             'supplierName': r['supplier_name'] or '',
             'sizes': sizes,
-            'label': f"{r['code']} {r['name']} {r['color'] or ''} / {stock.embroidery_label(r['embroidery'])}".strip(),
+            'label': f"{label} {r['name']} / {stock.embroidery_label(r['embroidery'])}".strip(),
         }
         if q:
             hay = ' '.join([
-                item['code'], item['name'], item['color'], item['embroideryLabel'],
+                item['code'], item.get('internalCode') or '', item.get('makerCode') or '',
+                item['name'], item['color'], item['embroideryLabel'],
                 str(item['productId']), item['supplierName'],
             ]).lower()
             if q not in hay:
@@ -333,7 +350,7 @@ def product_candidates(c, args=None):
     return {'customerId': customer_id, 'supplierId': supplier_id, 'products': rows}
 
 
-def _line_dict(r):
+def _line_dict(r, *, internal_code=''):
     ordered = r['qty_ordered']
     received = r['qty_received']
     return {
@@ -342,6 +359,7 @@ def _line_dict(r):
         'customerProductId': r['customer_product_id'],
         'productId': r['product_id'],
         'code': r['product_code'],
+        'internalCode': stock.text(internal_code or ''),
         'productName': r['product_name'],
         'color': r['product_color'],
         'embroidery': r['embroidery'],
@@ -358,13 +376,26 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
     po = c.execute('SELECT * FROM purchase_orders WHERE id=?', (po_id,)).fetchone()
     if not po:
         raise ValueError('発注書が見つかりません。')
-    lines = [
-        _line_dict(r)
-        for r in c.execute(
-            'SELECT * FROM purchase_order_lines WHERE purchase_order_id=? ORDER BY line_no,id',
-            (po_id,),
-        )
-    ]
+    lines = []
+    for r in c.execute(
+        'SELECT * FROM purchase_order_lines WHERE purchase_order_id=? ORDER BY line_no,id',
+        (po_id,),
+    ):
+        internal = ''
+        if r['product_id']:
+            prod = c.execute(
+                'SELECT code, maker_code FROM products WHERE id=?', (r['product_id'],)
+            ).fetchone()
+            if prod:
+                # 社内品番（メーカー品番と違うときだけ発注書に併記）
+                maker = ''
+                if 'maker_code' in prod.keys():
+                    maker = stock.text(prod['maker_code'] or '')
+                if maker and stock.text(prod['code'] or '') != maker:
+                    internal = stock.text(prod['code'] or '')
+                elif stock.text(r['product_code'] or '') and stock.text(prod['code'] or '') != stock.text(r['product_code'] or ''):
+                    internal = stock.text(prod['code'] or '')
+        lines.append(_line_dict(r, internal_code=internal))
     body = {
         'id': po['id'],
         'number': po['number'],
@@ -1005,11 +1036,19 @@ def render_po_html(doc):
 
     rows = []
     for ln in doc.get('lines') or []:
-        name = f"{ln.get('productName') or ''} {ln.get('color') or ''}".strip()
+        # 発注書: メーカー品番＋色。社内品番（色分割の ABC-100-赤 等）はメーカー品番欄に出さない
+        color = ln.get('color') or ''
+        name = f"{ln.get('productName') or ''} {color}".strip()
         code = ln.get('code') or ''
+        internal = ln.get('internalCode') or ln.get('productInternalCode') or ''
+        code_line = f'品番 {_esc(code)}'
+        if color:
+            code_line = f'品番 {_esc(code)}　色 {_esc(color)}'
+        if internal and internal != code:
+            code_line += f'<div style="font-size:8pt;margin-top:1px;color:#444">社内 {_esc(internal)}</div>'
         rows.append(
             '<tr>'
-            f'<td>{_esc(name)}<div style="font-size:8.5pt;margin-top:2px">品番 {_esc(code)}</div></td>'
+            f'<td>{_esc(name)}<div style="font-size:8.5pt;margin-top:2px">{code_line}</div></td>'
             f'<td class="size">{_esc(ln.get("size"))}</td>'
             f'<td class="qty">{_esc(ln.get("qtyOrdered"))}</td>'
             f'<td class="note">{_esc(ln.get("lineNote") or "")}</td>'

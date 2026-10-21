@@ -277,6 +277,7 @@ const PurchaseOrders={
             <div class="po-product-head">
               <strong>${esc(p.code)} ${esc(p.name)} ${esc(p.color)}</strong>
               <span class="sub">${esc(p.embroideryLabel||'加工なし')}（社内）</span>
+              ${p.internalCode&&p.internalCode!==p.code?`<span class="sub">社内品番 ${esc(p.internalCode)}</span>`:''}
               <button type="button" data-rm-prod="${i}">外す</button>
             </div>
             <div class="po-size-matrix">${sizes.map(sz=>`<label class="po-size-cell">${esc(sz)}
@@ -316,7 +317,8 @@ const PurchaseOrders={
           if(!p)return
           draft.products.push({
             customerProductId:p.customerProductId,productId:p.productId,
-            code:p.code,name:p.name,color:p.color,
+            code:p.code,internalCode:p.internalCode||p.code,makerCode:p.makerCode||'',
+            name:p.name,color:p.color,
             embroidery:p.embroidery,embroideryLabel:p.embroideryLabel,
             sizes:{},note:'',sizeList:p.sizes||[],
           })
