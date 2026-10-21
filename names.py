@@ -116,6 +116,7 @@ def schema(c):
         ensure_three_customer_name_formats(c, DATA_DIR)
         ensure_fk_name_formats(c, DATA_DIR)
         ensure_benkama_name_formats(c, DATA_DIR)
+        ensure_small_surname_36_exact_samples(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -549,15 +550,24 @@ def _font_px_from_meta(image, width_mm, height_mm, maximum_font_pt, ink_box):
         return max(8, int((ink_box[3] - ink_box[1]) * 0.92))
     return max(10, int(image.height * 0.28))
 
-def _fit_font_to_box(text, family_hint, target_w, target_h, prefer_size):
-    """指定矩形に収まる最大フォントを探す。"""
+def _fit_font_to_box(text, family_hint, target_w, target_h, prefer_size, *, allow_grow=True):
+    """指定矩形に収まるフォントを探す。
+
+    allow_grow=True（既定）: prefer 以上にも拡大して枠を埋める（大汎用・小汎用など）。
+    allow_grow=False: 登録 pt 由来の prefer を上限にし、溢れるときだけ縮小する。
+    """
     if target_w < 4 or target_h < 4:
         return None, None
     try:
         from PIL import Image, ImageDraw
     except ImportError:
         return None, None
-    lo, hi = 8, max(8, int(max(prefer_size * 1.35, target_h)))
+    prefer = max(8, int(prefer_size or 8))
+    if allow_grow:
+        hi = max(8, int(max(prefer * 1.35, target_h)))
+    else:
+        hi = prefer
+    lo = 8
     best = None
     best_font = None
     probe = Image.new('L', (1, 1))
@@ -575,6 +585,57 @@ def _fit_font_to_box(text, family_hint, target_w, target_h, prefer_size):
         else:
             hi = mid - 1
     return best_font, best
+
+
+def _family_is_maru_or_p_gothic(family_hint):
+    """丸ゴシック36 / Pゴシック36 系の書体か。"""
+    text = str(family_hint or '')
+    if '丸ゴシック' in text:
+        return True
+    if 'Pゴシック' in text or 'Ｐゴシック' in text:
+        return True
+    if 'MSP' in text.upper() or 'MS P' in text.upper() or 'ＭＳＰ' in text:
+        return True
+    return False
+
+
+def _is_small_surname_36_format(fmt_or_def):
+    """小ネーム・苗字のみ・36pt・丸/Pゴシック系か（見本を exact-pt 描画する対象）。"""
+    small = int(_row_get(fmt_or_def, 'small', 'small') or 0)
+    layout = str(_row_get(fmt_or_def, 'layout', 'layout') or '')
+    reading = str(_row_get(fmt_or_def, 'reading', 'reading') or '')
+    family = str(_row_get(fmt_or_def, 'family', 'family') or '')
+    try:
+        maximum = float(
+            _row_get(fmt_or_def, 'maximum_font', 'maximumFont')
+            or _row_get(fmt_or_def, 'fontPt', 'font_pt')
+            or 0
+        )
+    except (TypeError, ValueError):
+        maximum = 0
+    if small != 1:
+        return False
+    if layout != 'Surname' and reading != '苗字のみ':
+        return False
+    if abs(maximum - 36.0) > 0.01:
+        return False
+    return _family_is_maru_or_p_gothic(family)
+
+
+def _sample_fit_mode_for_format(fmt_or_def, *, font_pt=0):
+    """帯描画のフィット方針。36pt 小ネーム苗字のみは登録 pt 厳守。"""
+    probe = dict(fmt_or_def) if isinstance(fmt_or_def, dict) else {
+        'small': _row_get(fmt_or_def, 'small'),
+        'layout': _row_get(fmt_or_def, 'layout'),
+        'reading': _row_get(fmt_or_def, 'reading'),
+        'family': _row_get(fmt_or_def, 'family'),
+        'maximumFont': _row_get(fmt_or_def, 'maximum_font', 'maximumFont'),
+        'fontPt': font_pt or _row_get(fmt_or_def, 'fontPt', 'font_pt'),
+    }
+    if font_pt:
+        probe['fontPt'] = font_pt
+        probe['maximumFont'] = probe.get('maximumFont') or font_pt
+    return 'exact' if _is_small_surname_36_format(probe) else 'fill'
 
 def _regeneration_hold_reason(candidate):
     """再生成できないときの保留理由。閾値緩和や推測描き直しへは落とさない。"""
@@ -2856,9 +2917,14 @@ def _ashuka_trainee_is_current(fmt, samples):
 
 def _render_ashuka_banded_sample(
     dst_path, bands, *, width_mm=80, height_mm=50, family_hint=ASHUKA_FAMILY,
-    paper_rgb=(255, 255, 255),
+    paper_rgb=(255, 255, 255), fit_mode='fill',
 ):
-    """帯付き見本を描画。帯高合計は呼び出し側で height_mm に合わせる。既定は白地。"""
+    """帯付き見本を描画。帯高合計は呼び出し側で height_mm に合わせる。既定は白地。
+
+    fit_mode:
+      - fill: 枠に収まる最大サイズへ拡大可（大汎用・小汎用など従来どおり）
+      - exact: 登録 fontPt→px を上限（溢れるときだけ縮小）。丸/Pゴシック36 苗字用
+    """
     try:
         from PIL import Image, ImageDraw
     except ImportError:
@@ -2874,6 +2940,7 @@ def _render_ashuka_banded_sample(
     height = max(1, int(round(height_mm * px)))
     image = Image.new('RGB', (width, height), tuple(paper_rgb))
     draw = ImageDraw.Draw(image)
+    allow_grow = str(fit_mode or 'fill') != 'exact'
     y = 0.0
     for band in bands:
         band_h = float(band['heightMm']) * px
@@ -2890,6 +2957,7 @@ def _render_ashuka_banded_sample(
             max(8, width - int(round((float(band.get('indentMm') or 0) + 2.0) * px)) - 4),
             max(8, box_h - 4),
             font_px,
+            allow_grow=allow_grow,
         )
         font = fitted_font or _load_font(used or font_px, family_hint) or _load_font(font_px, family_hint)
         if font is None:
@@ -2916,7 +2984,8 @@ def _render_ashuka_banded_sample(
     dst_path = Path(dst_path)
     dst_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(dst_path, format='PNG')
-    return True, f'banded sample {width_mm}x{height_mm}mm bands={len(bands)}'
+    mode_note = 'exact-pt' if not allow_grow else 'fill'
+    return True, f'banded sample {width_mm}x{height_mm}mm bands={len(bands)} fit={mode_note}'
 
 def _backup_ashuka_format(c, root, backup_dir, fmt, samples):
     """変更前の形式・見本画像を backups/ashuka-names-<stamp>/ へ退避。"""
@@ -3491,6 +3560,11 @@ THREE_NAMES_POLICY = 'excel-gojuon2-r25-27-122-123-158-v1'
 THREE_NAMES_SETTINGS_KEY = 'three_customer_name_formats'
 THREE_NAMES_REPORT = 'three-customer-name-formats-report.json'
 THREE_FAMILY = 'HG丸ゴシック'
+# 小ネーム・苗字のみ・36pt（丸ゴシック36 / Pゴシック36）の exact-pt 見本方針
+SMALL_SURNAME_36_POLICY = 'exact-pt-v1'
+SMALL_SURNAME_36_SETTINGS_KEY = 'small_surname_36_exact_pt'
+SMALL_SURNAME_36_REPORT = 'small-surname-36-exact-pt-report.json'
+SMALL_SURNAME_36_DEFAULT_TEXT = '山田'
 THREE_LARGE_W, THREE_LARGE_H = 80, 50
 THREE_SMALL_W, THREE_SMALL_H = 50, 24
 THREE_GENERIC_LARGE = {4: 48, 5: 38, 6: 30}  # B2 大汎用
@@ -3643,6 +3717,7 @@ def _three_format_specs():
                     'maximumFont': 36,
                     'sampleText': THREE_SAMPLE_SURNAME,
                     'fontPt': 36,
+                    'sampleFit': 'exact',
                     'papers': ('白',),
                     'caption': (
                         f'見本：苗字「{THREE_SAMPLE_SURNAME}」（36pt・1段）。'
@@ -3705,6 +3780,7 @@ def _three_format_specs():
                     'maximumFont': 36,
                     'sampleText': THREE_SAMPLE_SURNAME,
                     'fontPt': 36,
+                    'sampleFit': 'exact',
                     'papers': ('白', '緑'),
                     'caption': (
                         f'見本：苗字「{THREE_SAMPLE_SURNAME}」（36pt・1段）。'
@@ -3750,7 +3826,7 @@ def _three_format_specs():
 
 
 def _three_spec(fmt_def):
-    return {
+    spec = {
         'threeKind': fmt_def['kind'],
         'threePolicy': THREE_NAMES_POLICY,
         'sampleText': fmt_def['sampleText'],
@@ -3762,6 +3838,11 @@ def _three_spec(fmt_def):
         'tokachiSurnamePt': dict(THREE_TOKACHI_SURNAME_PT) if 'tokachi' in fmt_def['kind'] else None,
         'femaleFullName': THREE_SAMPLE_FULL_FEMALE if fmt_def['reading'] == 'フルネーム' else None,
     }
+    if fmt_def.get('sampleFit'):
+        spec['sampleFit'] = fmt_def['sampleFit']
+        if fmt_def['sampleFit'] == 'exact':
+            spec['exactPtPolicy'] = SMALL_SURNAME_36_POLICY
+    return spec
 
 
 def _three_match_customer_name(name, target):
@@ -3844,6 +3925,10 @@ def _three_is_current(fmt, samples, fmt_def):
     spec = _load_spec(fmt)
     if spec.get('threePolicy') != THREE_NAMES_POLICY or spec.get('threeKind') != fmt_def['kind']:
         return False
+    want_fit = fmt_def.get('sampleFit') or ''
+    have_fit = spec.get('sampleFit') or ''
+    if want_fit != have_fit:
+        return False
     want_groups = fmt_def.get('groups') or []
     want_colors = fmt_def.get('colors') or []
     try:
@@ -3907,6 +3992,17 @@ def _write_three_samples(c, root, format_id, fmt_def):
         height_mm=fmt_def['heightMm'],
         font_pt=fmt_def['fontPt'],
     )
+    fit_mode = fmt_def.get('sampleFit') or _sample_fit_mode_for_format(
+        {
+            'small': fmt_def['small'],
+            'layout': fmt_def['layout'],
+            'reading': fmt_def['reading'],
+            'family': THREE_FAMILY,
+            'maximumFont': fmt_def['maximumFont'],
+            'fontPt': fmt_def['fontPt'],
+        },
+        font_pt=fmt_def['fontPt'],
+    )
     c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
     notes = []
     paths = []
@@ -3922,6 +4018,7 @@ def _write_three_samples(c, root, format_id, fmt_def):
             height_mm=fmt_def['heightMm'],
             family_hint=THREE_FAMILY,
             paper_rgb=rgb,
+            fit_mode=fit_mode,
         )
         notes.append(f'{paper}:{note}')
         if not ok:
@@ -4332,6 +4429,7 @@ def _fk_format_def():
         'maximumFont': FK_MAXIMUM_FONT,
         'sampleText': FK_SAMPLE_SURNAME,
         'fontPt': FK_MAXIMUM_FONT,
+        'sampleFit': 'exact',
         'papers': FK_PAPERS,
         'caption': FK_CAPTION,
     }
@@ -4344,6 +4442,8 @@ def _fk_spec(fmt_def):
         'surnameOnly': True,
         'sampleText': fmt_def['sampleText'],
         'fontPt': fmt_def['fontPt'],
+        'sampleFit': fmt_def.get('sampleFit') or 'exact',
+        'exactPtPolicy': SMALL_SURNAME_36_POLICY,
         'papers': list(fmt_def['papers']),
         'colorRoles': dict(zip(FK_GROUPS, FK_COLORS)),
     }
@@ -4434,6 +4534,9 @@ def _fk_is_current(fmt, samples, fmt_def):
         return False
     if spec.get('surnameOnly') is not True:
         return False
+    want_fit = fmt_def.get('sampleFit') or 'exact'
+    if (spec.get('sampleFit') or '') != want_fit:
+        return False
     try:
         have_groups = json.loads(fmt['groups_json'] or '[]')
         have_colors = json.loads(fmt['colors_json'] or '[]')
@@ -4492,6 +4595,17 @@ def _write_fk_samples(c, root, format_id, fmt_def):
         height_mm=fmt_def['heightMm'],
         font_pt=fmt_def['fontPt'],
     )
+    fit_mode = fmt_def.get('sampleFit') or _sample_fit_mode_for_format(
+        {
+            'small': fmt_def['small'],
+            'layout': fmt_def['layout'],
+            'reading': fmt_def['reading'],
+            'family': FK_FAMILY,
+            'maximumFont': fmt_def['maximumFont'],
+            'fontPt': fmt_def['fontPt'],
+        },
+        font_pt=fmt_def['fontPt'],
+    )
     c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
     notes = []
     paths = []
@@ -4507,6 +4621,7 @@ def _write_fk_samples(c, root, format_id, fmt_def):
             height_mm=fmt_def['heightMm'],
             family_hint=FK_FAMILY,
             paper_rgb=rgb,
+            fit_mode=fit_mode,
         )
         notes.append(f'{paper}:{note}')
         if not ok:
@@ -4858,6 +4973,272 @@ def ensure_fk_name_formats(c, data_dir=None):
     return report
 
 
+# --- 小ネーム・苗字のみ・36pt（丸ゴシック36 / Pゴシック36）見本スケール修正 ---
+# Excel「★ネーム作成管理用」シート相当。登録 36pt を fill 拡大せず exact-pt で描く。
+
+
+def _paper_rgb_for_sample(paper_color, existing_path=None):
+    """用紙色名または既存画像の四隅から RGB を決める。"""
+    name = str(paper_color or '').strip()
+    known = {
+        **THREE_PAPER_RGB,
+        **FK_PAPER_RGB,
+        '赤': (255, 99, 71),
+        '青': (135, 206, 250),
+        '緑': (144, 238, 144),
+        '白': (255, 255, 255),
+    }
+    if name in known:
+        return known[name]
+    if existing_path and Path(existing_path).is_file():
+        try:
+            from PIL import Image
+            image = Image.open(existing_path).convert('RGB')
+            return _corner_background(image)
+        except (OSError, ImportError):
+            pass
+    return (255, 255, 255)
+
+
+def _sample_text_for_surname_format(fmt, sample=None, spec=None):
+    """見本に描く苗字。spec / caption の「…」を優先し、無ければ既定。"""
+    spec = spec if spec is not None else _load_spec(fmt)
+    text = str(spec.get('sampleText') or '').strip()
+    if text:
+        return text
+    caption = ''
+    if sample is not None:
+        caption = str(_row_get(sample, 'caption') or '')
+    if not caption:
+        caption = str(_row_get(fmt, 'caption') or '')
+    match = re.search(r'「([^」]+)」', caption)
+    if match:
+        return match.group(1).strip() or SMALL_SURNAME_36_DEFAULT_TEXT
+    return SMALL_SURNAME_36_DEFAULT_TEXT
+
+
+def _rewrite_small_surname_36_sample(root, fmt, sample, *, backup_dir):
+    """1見本を exact-pt で描き直す。寸法・書体・用紙色・caption は維持。"""
+    rel = str(sample['relative_path'] or '')
+    width_mm = float(fmt['width_mm'] or 0) or float(THREE_SMALL_W)
+    height_mm = float(fmt['height_mm'] or 0) or float(THREE_SMALL_H)
+    family = str(fmt['family'] or THREE_FAMILY)
+    paper = str(sample['paper_color'] or '') or str(fmt['fixed_color'] or '白')
+    src = root / rel if rel else None
+    if backup_dir is not None and src and src.is_file():
+        images_backup = backup_dir / 'images'
+        images_backup.mkdir(parents=True, exist_ok=True)
+        dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+        if not dest.exists():
+            shutil.copy2(src, dest)
+    text = _sample_text_for_surname_format(fmt, sample)
+    band = _three_band(text, height_mm=height_mm, font_pt=36)
+    if not rel:
+        stem = f'surname36-{fmt["id"]:06}-{sample["id"]}'
+        rel = f'images/names/{stem}.png'
+    dst = root / rel
+    rgb = _paper_rgb_for_sample(paper, src if src and src.is_file() else None)
+    ok, note = _render_ashuka_banded_sample(
+        dst, (band,),
+        width_mm=width_mm,
+        height_mm=height_mm,
+        family_hint=family,
+        paper_rgb=rgb,
+        fit_mode='exact',
+    )
+    return ok, note, rel, text
+
+
+def ensure_small_surname_36_exact_samples(c, data_dir=None):
+    """DB上の小ネーム・苗字のみ・36pt・丸/Pゴシック見本を exact-pt で再生成する。
+
+    大汎用・小汎用・他サイズ／他 layout は対象外。形式メタ（mm・36pt・書体）は変更しない。
+    """
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    rows = c.execute(
+        '''SELECT * FROM name_formats
+           WHERE retired=0 AND small=1 AND maximum_font=36
+             AND (layout='Surname' OR reading='苗字のみ')
+           ORDER BY id'''
+    ).fetchall()
+    targets = [row for row in rows if _family_is_maru_or_p_gothic(row['family'])]
+    items = []
+    needs = []
+    for fmt in targets:
+        spec = _load_spec(fmt)
+        samples = c.execute(
+            'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+            (fmt['id'],),
+        ).fetchall()
+        if not samples:
+            continue
+        if spec.get('sampleFit') == 'exact' and spec.get('exactPtPolicy') == SMALL_SURNAME_36_POLICY:
+            # 既に exact 印付きでも、画像が旧 fill のままなら再描画が必要
+            # → 印字高さ比が 0.65 超なら要再生成（Excel 目安は ~40%）
+            stale = False
+            for sample in samples:
+                rel = str(sample['relative_path'] or '')
+                path = root / rel if rel else None
+                if not path or not path.is_file():
+                    stale = True
+                    break
+                try:
+                    from PIL import Image
+                    image = Image.open(path).convert('RGB')
+                    bg = _corner_background(image)
+                    ink_box = _ink_bbox(image, bg)
+                    if not ink_box:
+                        stale = True
+                        break
+                    h_ratio = (ink_box[3] - ink_box[1] + 1) / max(1, image.height)
+                    if h_ratio > 0.65:
+                        stale = True
+                        break
+                except (OSError, ImportError, ValueError):
+                    stale = True
+                    break
+            if not stale:
+                items.append({
+                    'action': 'skip',
+                    'formatId': fmt['id'],
+                    'number': _number(fmt['id']),
+                    'identity': fmt['identity'],
+                    'family': fmt['family'],
+                    'reason': 'already-exact-pt',
+                })
+                continue
+        needs.append((fmt, samples, spec))
+
+    if not needs:
+        report = {
+            'at': stamp,
+            'changed': 0,
+            'policy': SMALL_SURNAME_36_POLICY,
+            'backupDir': '',
+            'matchedFormats': len(targets),
+            'items': items,
+            'reason': 'already-applied',
+        }
+        (root / SMALL_SURNAME_36_REPORT).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                SMALL_SURNAME_36_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': SMALL_SURNAME_36_REPORT,
+                    'policy': SMALL_SURNAME_36_POLICY,
+                }, ensure_ascii=False),
+            ),
+        )
+        return report
+
+    backup_dir = root / 'backups' / f'small-surname-36-{stamp}'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    changed = 0
+    for fmt, samples, spec in needs:
+        payload = {
+            'format': _row_as_dict(fmt),
+            'samples': [_row_as_dict(s) for s in samples],
+        }
+        (backup_dir / f'format-{fmt["id"]}.json').write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        sample_notes = []
+        paths = []
+        ok_all = True
+        for sample in samples:
+            ok, note, rel, text = _rewrite_small_surname_36_sample(
+                root, fmt, sample, backup_dir=backup_dir,
+            )
+            sample_notes.append(f'{sample["id"]}:{note}')
+            paths.append(rel)
+            if not ok:
+                ok_all = False
+                continue
+            c.execute(
+                'UPDATE name_samples SET relative_path=? WHERE id=?',
+                (rel, sample['id']),
+            )
+        new_spec = dict(spec or {})
+        new_spec['sampleFit'] = 'exact'
+        new_spec['exactPtPolicy'] = SMALL_SURNAME_36_POLICY
+        if 'sampleText' not in new_spec:
+            new_spec['sampleText'] = _sample_text_for_surname_format(fmt, samples[0], spec)
+        c.execute(
+            'UPDATE name_formats SET spec_json=? WHERE id=?',
+            (json.dumps(new_spec, ensure_ascii=False), fmt['id']),
+        )
+        changed += 1
+        items.append({
+            'action': 'rewrite-samples',
+            'formatId': fmt['id'],
+            'number': _number(fmt['id']),
+            'identity': fmt['identity'],
+            'family': fmt['family'],
+            'maximumFont': fmt['maximum_font'],
+            'widthMm': fmt['width_mm'],
+            'heightMm': fmt['height_mm'],
+            'samplePaths': paths,
+            'sampleOk': ok_all,
+            'sampleNote': '; '.join(sample_notes),
+            'sampleText': new_spec.get('sampleText'),
+        })
+
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'policy': SMALL_SURNAME_36_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/'),
+        'matchedFormats': len(targets),
+        'excelScope': {
+            'source': 'media/ネーム仕分け_五十音順2.xlsx',
+            'criteria': '小ネーム + 苗字のみ + 36pt + (HG丸ゴシック|MSPゴシック)',
+            'maruGothic36Rows': 15,
+            'pGothic36Rows': 10,
+            'note': 'Excel全件。DBに存在する該当形式のみ再描画。',
+        },
+        'rules': {
+            'keepLabelMm': True,
+            'keepRegistered36pt': True,
+            'keepFamilyAndPaper': True,
+            'noTouchGenericLargeSmall': True,
+            'exactPtNoFillUpscale': True,
+        },
+        'items': items,
+    }
+    (root / SMALL_SURNAME_36_REPORT).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    (backup_dir / 'report.json').write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            SMALL_SURNAME_36_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': SMALL_SURNAME_36_REPORT,
+                'policy': SMALL_SURNAME_36_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
 
 
 # --- 弁釜（Excel 行159–160）ネーム形式 ---
@@ -5790,6 +6171,7 @@ def import_catalog(connect, data_dir):
         ensure_three_customer_name_formats(c, data_dir)
         ensure_fk_name_formats(c, data_dir)
         ensure_benkama_name_formats(c, data_dir)
+        ensure_small_surname_36_exact_samples(c, data_dir)
     return summary
 
 def _require(user):
