@@ -108,6 +108,7 @@ def initialize():
         names.correct_ashuka_name_formats(c, DATA)
         names.ensure_three_customer_name_formats(c, DATA)
         names.ensure_fk_name_formats(c, DATA)
+        names.ensure_benkama_name_formats(c, DATA)
 
 def order_number(row, payload=None):
     payload=json.loads(row['payload']) if payload is None else payload
