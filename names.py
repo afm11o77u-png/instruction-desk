@@ -117,6 +117,10 @@ def schema(c):
         ensure_fk_name_formats(c, DATA_DIR)
         ensure_benkama_name_formats(c, DATA_DIR)
         ensure_six_customers_name_formats(c, DATA_DIR)
+        correct_moritan_solo_white(c, DATA_DIR)
+        correct_fresh_legacy_formats(c, DATA_DIR)
+        correct_takeda_duplicate_formats(c, DATA_DIR)
+        ensure_asuka_bakery_name_formats(c, DATA_DIR)
         ensure_small_surname_36_exact_samples(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
@@ -2011,12 +2015,14 @@ def correct_rinko_yellow(c, data_dir=None):
     )
     return report
 
-# 鱗幸食品：訂正版 Excel Sheet1 230–231 行（大・小ネーム）に合わせる。
-# - 大ネーム：上下2段（上段自由入力 26pt／下段フルネーム・大汎用）、80×50、白衣左袖25cm
+# 鱗幸食品：訂正版 Excel Sheet1 239–240 行（大・小ネーム）に合わせる。
+# - 大ネーム：列1・1段フルネーム・大汎用、80×50、白衣左袖25cm（上段○○プレースホルダは出さない）
 # - 小ネーム：1段フルネーム・小汎用、50×24、白下ベルト後左／白帽子右耳上
 # - 色：先方から指定（赤・青・緑・白・黄色）＋役職対応。黄色専用見本は作らない（#105）
 # - 担当者・了承は勝手に変更しない。他顧客は変更しない。重複形式は追加しない。
-RINKO_LARGE_FORMAT_NAME = '大ネーム（上段自由入力・氏名）'
+# Excel フォントサイズ欄はなお「上段：26　下段：大汎用」表記だが、列=1・段サイズ空・
+# 利用者要望により表示は大汎用1段（上段○○なし）。
+RINKO_LARGE_FORMAT_NAME = '大ネーム（フルネーム）'
 RINKO_SMALL_FORMAT_NAME = '小ネーム（フルネーム）'
 RINKO_LARGE_PLACEMENT = '白衣：左袖25cm'
 RINKO_SMALL_PLACEMENT = '白下：ベルト後左　白帽子：右耳上'
@@ -2024,14 +2030,11 @@ RINKO_FAMILY = 'HG丸ゴシック'
 # B2 汎用文字サイズ（小／大）
 RINKO_SMALL_GENERIC_PT = {4: 26, 5: 24, 6: 20}
 RINKO_LARGE_GENERIC_PT = {4: 48, 5: 38, 6: 30}
-RINKO_LARGE_UPPER_PT = 26
 RINKO_LARGE_WIDTH_MM = 80
 RINKO_LARGE_HEIGHT_MM = 50
 RINKO_SMALL_WIDTH_MM = 50
 RINKO_SMALL_HEIGHT_MM = 24
-RINKO_BAND_HEIGHT_MM = 25.0
 RINKO_SAMPLE_NAME = '山田 太郎'
-RINKO_SAMPLE_UPPER = '○○'  # 上段は自由入力。役職名などに置き換えない
 RINKO_COLOR_GROUPS = ['工場長・次長・課長', '主任・係長', '社員', 'パート', '特殊色']
 RINKO_COLOR_VALUES = ['赤', '緑', '青', '白', '黄']
 RINKO_COLOR_SWATCHES = ['#F08080', '#90EE90', '#87CEFA', '#FFFFFF', '#FFFFE0']
@@ -2043,24 +2046,19 @@ RINKO_COLOR_NOTE = (
     '工場長・次長・課長：赤／主任・係長：緑／社員：青／パート：白／特殊色：黄。'
     '黄色は5色見本の選択肢に含め、黄色専用の見本は持たない。'
 )
-RINKO_LARGE_HEADING = '上段：自由入力　下段：フルネーム（大汎用）'
-# Excel 行239 で段サイズ列が空になったため、備考・caption から帯mm指定を外す。
-# 見本描画の内部帯（各25mm）は既存レイアウト維持（Excel 沈黙時の確認事項）。
+RINKO_LARGE_HEADING = 'フルネーム（大汎用）'
 RINKO_LARGE_NOTE = (
     f'{RINKO_COLOR_NOTE}\n'
-    '上段のみ左にインデント。'
-    '上段：26pt／下段：大汎用（4文字48・5文字38・6文字30）。'
-    'Excel 段サイズ列は空（帯mmは資料未記入）。'
+    '1段・フルネーム／大汎用（4文字48・5文字38・6文字30）。'
+    'Excel 列1・段サイズ列は空。見出しプレースホルダは出さない。'
 )
 RINKO_SMALL_HEADING = 'フルネーム（小汎用）'
 RINKO_SMALL_NOTE = (
     f'{RINKO_COLOR_NOTE}\n'
     '1段・フルネーム／小汎用（4文字26・5文字24・6文字20）。'
-    '大ネームの上下帯指定は適用しない。'
 )
 RINKO_LARGE_SAMPLE_CAPTION = (
-    f'見本：上段自由入力「{RINKO_SAMPLE_UPPER}」・下段フルネーム「{RINKO_SAMPLE_NAME}」。'
-    '上段26pt・左インデント／下段大汎用・横中央。'
+    f'見本：フルネーム「{RINKO_SAMPLE_NAME}」（大汎用・1段）。'
     f'書体は{RINKO_FAMILY}（太字）。用紙色は先方から指定（赤・青・緑・白・黄色）。'
 )
 RINKO_SMALL_SAMPLE_CAPTION = (
@@ -2069,7 +2067,7 @@ RINKO_SMALL_SAMPLE_CAPTION = (
 )
 RINKO_NAMES_REPORT = 'rinko-name-formats-report.json'
 RINKO_NAMES_SETTINGS_KEY = 'rinko_name_formats'
-RINKO_NAMES_POLICY = 'excel-gojuon2-r239-240-v1'
+RINKO_NAMES_POLICY = 'excel-gojuon2-r239-large-1band-v1'
 RINKO_LARGE_SOURCE_ROW = 239
 RINKO_SMALL_SOURCE_ROW = 240
 RINKO_SAMPLE_PX_PER_MM = 10
@@ -2087,17 +2085,13 @@ def _rinko_generic_font_pt(kind, text):
     return table[6]
 
 def _rinko_large_bands():
-    lower_pt = _rinko_generic_font_pt('large', RINKO_SAMPLE_NAME)
+    """大ネーム見本は1段（大汎用）。上段○○は描画しない。"""
+    pt = _rinko_generic_font_pt('large', RINKO_SAMPLE_NAME)
     return (
         {
-            'role': 'upper', 'text': RINKO_SAMPLE_UPPER,
-            'heightMm': RINKO_BAND_HEIGHT_MM, 'fontPt': RINKO_LARGE_UPPER_PT,
-            'alignH': 'left', 'alignV': 'middle', 'indentMm': 4.0,
-        },
-        {
             'role': 'name', 'text': RINKO_SAMPLE_NAME,
-            'heightMm': RINKO_BAND_HEIGHT_MM, 'fontPt': lower_pt,
-            'alignH': 'center', 'alignV': 'top', 'indentMm': 0.0,
+            'heightMm': float(RINKO_LARGE_HEIGHT_MM), 'fontPt': pt,
+            'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0,
         },
     )
 
@@ -2132,8 +2126,6 @@ def _rinko_spec(kind):
         'bandFontsPt': [b['fontPt'] for b in bands],
         'bandHeightsMm': [b['heightMm'] for b in bands],
         'genericFontsPt': dict(RINKO_LARGE_GENERIC_PT),
-        'upperFontPt': RINKO_LARGE_UPPER_PT,
-        'sampleUpper': RINKO_SAMPLE_UPPER,
         'sampleName': RINKO_SAMPLE_NAME,
         'colorRoles': dict(zip(RINKO_COLOR_GROUPS, RINKO_COLOR_VALUES)),
     }
@@ -2189,7 +2181,7 @@ def _rinko_large_is_current(fmt, samples):
         return False
     if str(fmt['note'] or '') != RINKO_LARGE_NOTE:
         return False
-    if str(fmt['layout'] or '') != 'HeadingName':
+    if str(fmt['layout'] or '') != 'Name':
         return False
     if str(fmt['reading'] or '') != 'フルネーム':
         return False
@@ -2203,11 +2195,20 @@ def _rinko_large_is_current(fmt, samples):
         return False
     if float(fmt['maximum_font'] or 0) != float(RINKO_LARGE_GENERIC_PT[4]):
         return False
-    if float(fmt['heading_font'] or 0) != float(RINKO_LARGE_UPPER_PT):
+    if float(fmt['heading_font'] or 0) != 0:
         return False
     if int(fmt['source_row'] or 0) != RINKO_LARGE_SOURCE_ROW:
         return False
-    if '上段帯' in str(fmt['note'] or '') or '25mm' in str(fmt['note'] or ''):
+    note = str(fmt['note'] or '')
+    caption_blob = ' '.join(str(s['caption'] or '') for s in samples)
+    # 旧2段／○○プレースホルダが残っていれば未適用
+    if any(token in note + caption_blob for token in ('○○', '〇〇', '上段：', '自由入力')):
+        return False
+    if '上段帯' in note or '25mm' in note:
+        return False
+    if spec.get('sampleUpper') or spec.get('upperFontPt'):
+        return False
+    if len(spec.get('bandHeightsMm') or []) != 1:
         return False
     if not _rinko_groups_match(fmt):
         return False
@@ -2226,7 +2227,7 @@ def _rinko_large_is_current(fmt, samples):
         return False
     if str(sample['caption'] or '') != RINKO_LARGE_SAMPLE_CAPTION:
         return False
-    if '25mm' in str(sample['caption'] or ''):
+    if any(token in str(sample['caption'] or '') for token in ('○○', '〇〇', '上段', '25mm')):
         return False
     return True
 
@@ -2349,10 +2350,10 @@ def _update_rinko_format_row(c, format_id, *, kind, existing_fixed_color):
     else:
         values = (
             RINKO_LARGE_FORMAT_NAME, RINKO_LARGE_PLACEMENT, RINKO_FAMILY, '',
-            RINKO_LARGE_HEADING, RINKO_LARGE_NOTE, 'HeadingName', 'フルネーム',
+            RINKO_LARGE_HEADING, RINKO_LARGE_NOTE, 'Name', 'フルネーム',
             0, RINKO_LARGE_WIDTH_MM, RINKO_LARGE_HEIGHT_MM, 0, fixed, RINKO_COLOR_CAPTION,
             groups, colors, swatches, 'null',
-            '', RINKO_LARGE_GENERIC_PT[4], RINKO_LARGE_UPPER_PT, 0, RINKO_LARGE_SOURCE_ROW,
+            '', RINKO_LARGE_GENERIC_PT[4], 0, 0, RINKO_LARGE_SOURCE_ROW,
             json.dumps(_rinko_spec('large'), ensure_ascii=False),
             0, json.dumps([], ensure_ascii=False), 0, format_id,
         )
@@ -2423,13 +2424,13 @@ def _patch_rinko_name_catalog(data_dir, backup_dir, items):
             fmt['placement'] = RINKO_LARGE_PLACEMENT
             fmt['heading'] = RINKO_LARGE_HEADING
             fmt['note'] = RINKO_LARGE_NOTE
-            fmt['layout'] = 'HeadingName'
+            fmt['layout'] = 'Name'
             fmt['reading'] = 'フルネーム'
             fmt['small'] = False
             fmt['widthMm'] = RINKO_LARGE_WIDTH_MM
             fmt['heightMm'] = RINKO_LARGE_HEIGHT_MM
             fmt['maximumFont'] = RINKO_LARGE_GENERIC_PT[4]
-            fmt['headingFont'] = RINKO_LARGE_UPPER_PT
+            fmt['headingFont'] = 0
             fmt['sourceRow'] = RINKO_LARGE_SOURCE_ROW
             caption = RINKO_LARGE_SAMPLE_CAPTION
         fmt['family'] = RINKO_FAMILY
@@ -2458,7 +2459,7 @@ def correct_rinko_name_formats(c, data_dir=None):
     """鱗幸食品の大・小ネームを Excel 239–240 行仕様へ更新する。
 
     - 既存形式を更新し、同じ形式を重複追加しない
-    - 大ネームの Excel 段サイズ列クリアを備考・caption に反映（帯mmは描画内部のみ）
+    - 大ネームは列1の大汎用1段。見出し／見本の○○プレースホルダは削除
     - 黄色は mixColors／説明に残し、黄色専用見本は削除・再追加しない
     - 担当者は触らない。了承 digest は既存トリガのみ
     """
@@ -2683,8 +2684,8 @@ def correct_rinko_name_formats(c, data_dir=None):
         'rules': {
             'onlyCustomer': RINKO_CUSTOMER_NAME,
             'onlyLargeSmallMix': True,
-            'preferTwoBandOverExcelCount': True,
-            'keepFreeUpperInput': True,
+            'largeOneBandGeneric': True,
+            'noUpperPlaceholderOo': True,
             'noSoloYellowSamples': True,
             'noDuplicateFormats': True,
             'noAutoApprove': True,
@@ -6056,7 +6057,7 @@ def ensure_benkama_name_formats(c, data_dir=None):
 # --- 6社ネーム更新（健診/タケダ/フレッシュ/モリタン + FK検証 + 鱗幸は correct_rinko） ---
 # Excel: ネーム仕分け_五十音順2（行82/109-110/159/211-212）。明日佳・あすかHOUSE系は触らない。
 
-SIX_NAMES_POLICY = 'excel-gojuon2-six-v1'
+SIX_NAMES_POLICY = 'excel-gojuon2-six-v2'
 SIX_NAMES_SETTINGS_KEY = 'six_customers_name_formats'
 SIX_NAMES_REPORT = 'six-customers-name-formats-report.json'
 SIX_FAMILY_HG = THREE_FAMILY
@@ -6081,14 +6082,32 @@ KENSHIN_ALIASES = (KENSHIN_OLD_NAME, KENSHIN_CUSTOMER_NAME)
 TAKEDA_CUSTOMER_NAME = 'タケダ海産'
 TAKEDA_CUSTOMER_KEY = 'excel:takeda-kaisan'
 TAKEDA_CUSTOMER_READING = 'たけだかいさん'
+TAKEDA_KEEP_IDENTITIES = frozenset({'takeda:large-fullname', 'takeda:small-fullname'})
+TAKEDA_SMALL_PLACEMENT = '白下：ベルト後左　白帽子：右耳上'
+TAKEDA_LARGE_PLACEMENT = '白衣：左袖25cm'
+TAKEDA_DUP_REPORT = 'takeda-duplicate-formats-report.json'
+TAKEDA_DUP_SETTINGS_KEY = 'takeda_duplicate_formats'
+TAKEDA_DUP_POLICY = 'retire-duplicate-small-v1'
 
 FRESH_CUSTOMER_NAME = 'フレッシュフーズ'
 FRESH_CUSTOMER_KEY = 'excel:fresh-foods'
 FRESH_CUSTOMER_READING = 'ふれっしゅふーず'
+FRESH_KEEP_IDENTITIES = frozenset({'fresh:small-surname'})
+FRESH_ROLE_GROUPS = ['社員', 'パート']
+FRESH_ROLE_COLORS = ['緑', '青']
+FRESH_LEGACY_REPORT = 'fresh-legacy-formats-report.json'
+FRESH_LEGACY_SETTINGS_KEY = 'fresh_legacy_formats'
+FRESH_LEGACY_POLICY = 'retire-legacy-keep-36-v1'
 
 MORITAN_CUSTOMER_NAME = 'モリタン紋別'
 MORITAN_CUSTOMER_KEY = 'excel:moritan-mombetsu'
 MORITAN_CUSTOMER_READING = 'もりたんもんべつ'
+MORITAN_KEEP_IDENTITIES = frozenset({'moritan:large-fullname', 'moritan:small-fullname'})
+MORITAN_ROLE_GROUPS = ['社員', '派遣', '工員', '研修生']
+MORITAN_ROLE_COLORS = ['白', '赤', '青', '緑']
+MORITAN_SOLO_WHITE_REPORT = 'moritan-solo-white-report.json'
+MORITAN_SOLO_WHITE_SETTINGS_KEY = 'moritan_solo_white'
+MORITAN_SOLO_WHITE_POLICY = 'retire-solo-white-v1'
 
 # 明日佳・あすかHOUSE系は HARD EXCLUSION（誤検知防止の照合用）
 SIX_HARD_EXCLUSIONS = (
@@ -6102,7 +6121,10 @@ SIX_OPEN_ITEMS = [
     '健診「サイズ表記」の見本文字は Excel 例が無いため「L」を仮置き（要確認）',
     'タケダ大ネーム：旧役職2段見本はバックアップ後に大汎用1段見本へ置換。役職専用見本の扱い要確認',
     '鱗幸「先方から指定？」表記と黄色専用見本は既存 yellow policy を維持（黄色見本は再追加しない）',
-    '鱗幸大ネーム：Excel 段サイズ列クリア。描画内部帯は従来どおり各25mm（合計50mm）を維持（要確認）',
+    '鱗幸大ネーム：Excel 列1のため大汎用1段（上段○○削除）。フォントサイズ欄の「上段：26　下段：大汎用」表記は Excel 原文のまま',
+    'モリタン：色グループ更新後に残る単色白専用形式は correct_moritan_solo_white で退職',
+    'フレッシュ：旧「先方から指定／フルネーム／小汎用」は退職。新形式は利用者指定で36pt exact（Excel行159は小汎用表記）',
+    'タケダ：小ネーム重複は correct_takeda_duplicate_formats で1件残し退職。旧役職大が残れば同様に整理',
     'エフケーは #167 仕様と一致すれば no-op（36pt exact-fit 維持）。Excel行番号31への追随はしない',
 ]
 
@@ -6149,10 +6171,11 @@ def _six_format_specs():
 
     fresh_note = (
         f'書体は{SIX_FAMILY_HG}（太字）。色は社員：緑／パート：青。'
-        '小ネーム・1段・苗字のみ／小汎用。Excel 行159。'
+        '小ネーム・1段・苗字のみ／36pt（exact・fill拡大なし）。'
+        'Excel 行159のフォントサイズ欄は小汎用だが、登録は36ptへ揃える。'
     )
     fresh_caption = (
-        f'見本：苗字「{SIX_SAMPLE_SURNAME}」（小汎用・1段）。'
+        f'見本：苗字「{SIX_SAMPLE_SURNAME}」（36pt・exact・1段）。'
         f'書体は{SIX_FAMILY_HG}（太字）。色は社員：緑／パート：青。'
     )
 
@@ -6285,7 +6308,7 @@ def _six_format_specs():
                     'formatName': '小ネーム（苗字のみ）',
                     'placement': '白衣：左袖25cm　白下：左前　白帽子：右耳上',
                     'family': SIX_FAMILY_HG,
-                    'heading': '苗字のみ（小汎用）',
+                    'heading': '苗字のみ（36pt）',
                     'note': fresh_note,
                     'layout': 'Surname',
                     'reading': '苗字のみ',
@@ -6297,9 +6320,10 @@ def _six_format_specs():
                     'groups': ['社員', 'パート'],
                     'colors': ['緑', '青'],
                     'swatches': ['#90EE90', '#87CEFA'],
-                    'maximumFont': THREE_GENERIC_SMALL[4],
+                    'maximumFont': 36,
                     'sampleText': SIX_SAMPLE_SURNAME,
-                    'fontPt': surname_small_pt,
+                    'fontPt': 36,
+                    'sampleFit': 'exact',
                     'papers': ('緑', '青'),
                     'caption': fresh_caption,
                     'surnameOnly': True,
@@ -6863,7 +6887,10 @@ def _six_verify_exclusions_untouched(c, before_snapshot):
 def ensure_six_customers_name_formats(c, data_dir=None):
     """Excel 6社更新のうち健診/タケダ/フレッシュ/モリタンを ensure。FK検証も記録。
 
-    鱗幸の段サイズクリアは correct_rinko_name_formats（policy r239-240）が担当。
+    鱗幸大ネームの1段化（○○削除）は correct_rinko_name_formats が担当。
+    モリタン白専用の残骸削除は correct_moritan_solo_white が担当。
+    フレッシュ旧形式の退職は correct_fresh_legacy_formats が担当。
+    タケダ小ネーム重複の整理は correct_takeda_duplicate_formats が担当。
     明日佳・あすかHOUSE系は変更しない。
     """
     root = Path(data_dir) if data_dir is not None else DATA_DIR
@@ -7085,6 +7112,1188 @@ def ensure_six_customers_name_formats(c, data_dir=None):
     )
     return report
 
+
+def _moritan_role_colors_match(fmt):
+    try:
+        groups = json.loads(fmt['groups_json'] or '[]')
+        colors = json.loads(fmt['colors_json'] or '[]')
+    except (TypeError, json.JSONDecodeError, KeyError):
+        return False
+    return groups == MORITAN_ROLE_GROUPS and colors == MORITAN_ROLE_COLORS
+
+
+def _moritan_is_keep_format(fmt):
+    """色グループ付きの正規大／小は残す。"""
+    if str(fmt['identity'] or '') in MORITAN_KEEP_IDENTITIES:
+        return True
+    return _moritan_role_colors_match(fmt)
+
+
+def _moritan_is_solo_white_format(fmt, samples):
+    """旧・単色白だけ登録の残骸か。曖昧なら False（削除しない）。"""
+    if _moritan_is_keep_format(fmt):
+        return False
+    fixed = str(fmt['fixed_color'] or '').strip()
+    papers = [str(s['paper_color'] or '').strip() for s in samples]
+    non_empty_papers = [p for p in papers if p]
+    try:
+        groups = json.loads(fmt['groups_json'] or '[]')
+        colors = json.loads(fmt['colors_json'] or '[]')
+    except (TypeError, json.JSONDecodeError, KeyError):
+        groups, colors = [], []
+    caption = str(fmt['color_caption'] or '')
+    note = str(fmt['note'] or '')
+    # 役割色の説明が付いている形式は白専用とみなさない
+    if any(token in caption + note for token in ('派遣', '工員', '研修生', '社員：白')):
+        return False
+    if groups == MORITAN_ROLE_GROUPS or colors == MORITAN_ROLE_COLORS:
+        return False
+    # 他色見本が1件でもあれば白専用ではない（推測削除しない）
+    if any(p and p != '白' for p in non_empty_papers):
+        return False
+    # 固定色が白、かつ見本が無い／白のみ
+    if fixed == '白' and (not non_empty_papers or all(p == '白' for p in non_empty_papers)):
+        return True
+    # 固定色なし・色グループなし・見本が白1色のみ
+    if fixed in ('', '白') and not groups and (not colors or colors == ['白']):
+        if non_empty_papers and all(p == '白' for p in non_empty_papers):
+            return True
+    return False
+
+
+def correct_moritan_solo_white(c, data_dir=None):
+    """モリタン紋別：色グループ更新後に残る単色「白」専用形式をバックアップ後に退職する。
+
+    - 社員白／派遣赤／工員青／研修生緑の正規形式・見本は残す
+    - 他顧客・明日佳・あすか・担当者は触らない
+    - 曖昧な形式は削除せず ambiguous として報告する
+    """
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    customers = c.execute(
+        'SELECT id, source_name, source_key FROM name_customers WHERE retired=0'
+        ' AND (source_name=? OR source_key=?)',
+        (MORITAN_CUSTOMER_NAME, MORITAN_CUSTOMER_KEY),
+    ).fetchall()
+    if not customers:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'モリタン紋別なし',
+            'customer': MORITAN_CUSTOMER_NAME,
+            'policy': MORITAN_SOLO_WHITE_POLICY,
+        }
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'moritan-solo-white-{stamp}'
+    items = []
+    ambiguous = []
+    removed_formats = 0
+    removed_samples = 0
+
+    for customer in customers:
+        if _six_is_excluded_name(customer['source_name']):
+            continue
+        formats = c.execute(
+            'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+            (customer['id'],),
+        ).fetchall()
+        for fmt in formats:
+            samples = list(c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (fmt['id'],),
+            ))
+            if _moritan_is_keep_format(fmt):
+                items.append({
+                    'action': 'keep',
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                    'formatName': fmt['format_name'],
+                    'fixedColor': fmt['fixed_color'],
+                    'sampleCount': len(samples),
+                    'papers': [s['paper_color'] for s in samples],
+                })
+                continue
+            if _moritan_is_solo_white_format(fmt, samples):
+                _backup_six_format(c, root, backup_dir, fmt, samples)
+                for sample in samples:
+                    rel = str(sample['relative_path'] or '')
+                    if rel:
+                        path = root / rel
+                        if path.is_file():
+                            path.unlink()
+                    c.execute('DELETE FROM name_samples WHERE id=?', (sample['id'],))
+                    removed_samples += 1
+                c.execute('UPDATE name_formats SET retired=1 WHERE id=?', (fmt['id'],))
+                removed_formats += 1
+                items.append({
+                    'action': 'retire-solo-white',
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                    'formatName': fmt['format_name'],
+                    'fixedColor': fmt['fixed_color'],
+                    'removedSamples': len(samples),
+                    'papers': [s['paper_color'] for s in samples],
+                })
+                continue
+            # 正規でも白専用でもない → 曖昧。消さない
+            ambiguous.append({
+                'formatId': fmt['id'],
+                'identity': fmt['identity'],
+                'formatName': fmt['format_name'],
+                'fixedColor': fmt['fixed_color'],
+                'papers': [s['paper_color'] for s in samples],
+                'reason': 'not-solo-white-and-not-keep',
+            })
+            items.append({
+                'action': 'ambiguous-skip',
+                'formatId': fmt['id'],
+                'identity': fmt['identity'],
+                'formatName': fmt['format_name'],
+                'fixedColor': fmt['fixed_color'],
+                'papers': [s['paper_color'] for s in samples],
+            })
+
+    # catalog からも白専用残骸を落とす（正規 identity 以外・固定白）
+    catalog_changed = False
+    catalog_path = root / 'name-import' / 'catalog.json'
+    if catalog_path.is_file() and removed_formats:
+        try:
+            data = json.loads(catalog_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if data:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            cat_backup = backup_dir / 'catalog.json'
+            if not cat_backup.exists():
+                shutil.copy2(catalog_path, cat_backup)
+            cat_customers = {
+                item.get('sourceKey')
+                for item in (data.get('customers') or [])
+                if str(item.get('name') or '').strip() == MORITAN_CUSTOMER_NAME
+                or item.get('sourceKey') == MORITAN_CUSTOMER_KEY
+            }
+            kept_formats = []
+            for fmt in data.get('formats') or []:
+                if fmt.get('customerKey') not in cat_customers:
+                    kept_formats.append(fmt)
+                    continue
+                identity = str(fmt.get('identity') or '')
+                if identity in MORITAN_KEEP_IDENTITIES:
+                    kept_formats.append(fmt)
+                    continue
+                fixed = str(fmt.get('fixedColor') or '').strip()
+                samples = list(fmt.get('samples') or [])
+                papers = [str(s.get('paperColor') or '').strip() for s in samples]
+                groups = list(fmt.get('groups') or [])
+                colors = list(fmt.get('colors') or [])
+                if groups == MORITAN_ROLE_GROUPS and colors == MORITAN_ROLE_COLORS:
+                    kept_formats.append(fmt)
+                    continue
+                if fixed == '白' and (not papers or all(p in ('', '白') for p in papers)):
+                    catalog_changed = True
+                    continue
+                kept_formats.append(fmt)
+            if catalog_changed:
+                data['formats'] = kept_formats
+                catalog_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8',
+                )
+
+    report = {
+        'at': stamp,
+        'changed': removed_formats,
+        'removedFormats': removed_formats,
+        'removedSamples': removed_samples,
+        'customer': MORITAN_CUSTOMER_NAME,
+        'policy': MORITAN_SOLO_WHITE_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'ambiguous': ambiguous,
+        'rules': {
+            'onlyCustomer': MORITAN_CUSTOMER_NAME,
+            'keepRoleColorFormats': True,
+            'keepIdentities': list(MORITAN_KEEP_IDENTITIES),
+            'retireSoloWhiteOnly': True,
+            'noGuessDelete': True,
+            'noTouchOtherCustomers': True,
+        },
+        'items': items,
+    }
+    report_path = root / MORITAN_SOLO_WHITE_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            MORITAN_SOLO_WHITE_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': removed_formats,
+                'removedFormats': removed_formats,
+                'removedSamples': removed_samples,
+                'report': MORITAN_SOLO_WHITE_REPORT,
+                'policy': MORITAN_SOLO_WHITE_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
+def _fresh_role_colors_match(fmt):
+    try:
+        groups = json.loads(fmt['groups_json'] or '[]')
+        colors = json.loads(fmt['colors_json'] or '[]')
+    except (TypeError, json.JSONDecodeError, KeyError):
+        return False
+    return groups == FRESH_ROLE_GROUPS and colors == FRESH_ROLE_COLORS
+
+
+def _fresh_is_keep_format(fmt):
+    if str(fmt['identity'] or '') in FRESH_KEEP_IDENTITIES:
+        return True
+    if str(fmt['reading'] or '') != '苗字のみ':
+        return False
+    return _fresh_role_colors_match(fmt)
+
+
+def _fresh_is_legacy_format(fmt, samples):
+    """更新前の先方指定／フルネーム／小汎用などの旧形式か。曖昧なら False。"""
+    if _fresh_is_keep_format(fmt):
+        return False
+    fixed = str(fmt['fixed_color'] or '').strip()
+    caption = str(fmt['color_caption'] or '')
+    note = str(fmt['note'] or '')
+    heading = str(fmt['heading'] or '')
+    name = str(fmt['format_name'] or '')
+    reading = str(fmt['reading'] or '')
+    papers = [str(s['paper_color'] or '').strip() for s in samples]
+    non_empty = [p for p in papers if p]
+    try:
+        groups = json.loads(fmt['groups_json'] or '[]')
+        colors = json.loads(fmt['colors_json'] or '[]')
+    except (TypeError, json.JSONDecodeError, KeyError):
+        groups, colors = [], []
+
+    # 既に社員緑／パート青の役割色なら旧ではない
+    if groups == FRESH_ROLE_GROUPS and colors == FRESH_ROLE_COLORS:
+        return False
+    if any(p in ('緑', '青') for p in non_empty) and reading == '苗字のみ':
+        # 役割色見本がある苗字形式は keep 判定漏れの可能性 → 消さない
+        return False
+
+    markers = 0
+    if _is_mix_color(fixed) or '先方から指定' in fixed or '先方から指定' in caption:
+        markers += 1
+    if reading == 'フルネーム' or 'フルネーム' in name:
+        markers += 1
+    if '小汎用' in heading or '小汎用' in note or '小汎用' in caption:
+        markers += 1
+    if fixed == '白' and (not non_empty or all(p == '白' for p in non_empty)) and reading != '苗字のみ':
+        markers += 1
+    # 旧形式の典型はマーカー2つ以上
+    return markers >= 2
+
+
+def correct_fresh_legacy_formats(c, data_dir=None):
+    """フレッシュフーズ：旧形式をバックアップ後に退職し、新形式（緑／青・苗字・36pt）を残す。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    customers = c.execute(
+        'SELECT id, source_name, source_key FROM name_customers WHERE retired=0'
+        ' AND (source_name=? OR source_key=?)',
+        (FRESH_CUSTOMER_NAME, FRESH_CUSTOMER_KEY),
+    ).fetchall()
+    if not customers:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'フレッシュフーズなし',
+            'customer': FRESH_CUSTOMER_NAME,
+            'policy': FRESH_LEGACY_POLICY,
+        }
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'fresh-legacy-{stamp}'
+    items = []
+    ambiguous = []
+    removed_formats = 0
+    removed_samples = 0
+
+    for customer in customers:
+        if _six_is_excluded_name(customer['source_name']):
+            continue
+        formats = c.execute(
+            'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+            (customer['id'],),
+        ).fetchall()
+        for fmt in formats:
+            samples = list(c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (fmt['id'],),
+            ))
+            if _fresh_is_keep_format(fmt):
+                items.append({
+                    'action': 'keep',
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                    'formatName': fmt['format_name'],
+                    'reading': fmt['reading'],
+                    'maximumFont': fmt['maximum_font'],
+                    'papers': [s['paper_color'] for s in samples],
+                })
+                continue
+            if _fresh_is_legacy_format(fmt, samples):
+                _backup_six_format(c, root, backup_dir, fmt, samples)
+                for sample in samples:
+                    rel = str(sample['relative_path'] or '')
+                    if rel:
+                        path = root / rel
+                        if path.is_file():
+                            path.unlink()
+                    c.execute('DELETE FROM name_samples WHERE id=?', (sample['id'],))
+                    removed_samples += 1
+                c.execute('UPDATE name_formats SET retired=1 WHERE id=?', (fmt['id'],))
+                removed_formats += 1
+                items.append({
+                    'action': 'retire-legacy',
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                    'formatName': fmt['format_name'],
+                    'fixedColor': fmt['fixed_color'],
+                    'reading': fmt['reading'],
+                    'removedSamples': len(samples),
+                    'papers': [s['paper_color'] for s in samples],
+                })
+                continue
+            ambiguous.append({
+                'formatId': fmt['id'],
+                'identity': fmt['identity'],
+                'formatName': fmt['format_name'],
+                'fixedColor': fmt['fixed_color'],
+                'reading': fmt['reading'],
+                'papers': [s['paper_color'] for s in samples],
+            })
+            items.append({
+                'action': 'ambiguous-skip',
+                'formatId': fmt['id'],
+                'identity': fmt['identity'],
+                'formatName': fmt['format_name'],
+            })
+
+    catalog_changed = False
+    catalog_path = root / 'name-import' / 'catalog.json'
+    if catalog_path.is_file() and removed_formats:
+        try:
+            data = json.loads(catalog_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if data:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            cat_backup = backup_dir / 'catalog.json'
+            if not cat_backup.exists():
+                shutil.copy2(catalog_path, cat_backup)
+            cat_customers = {
+                item.get('sourceKey')
+                for item in (data.get('customers') or [])
+                if str(item.get('name') or '').strip() == FRESH_CUSTOMER_NAME
+                or item.get('sourceKey') == FRESH_CUSTOMER_KEY
+            }
+            kept = []
+            for fmt in data.get('formats') or []:
+                if fmt.get('customerKey') not in cat_customers:
+                    kept.append(fmt)
+                    continue
+                identity = str(fmt.get('identity') or '')
+                if identity in FRESH_KEEP_IDENTITIES:
+                    kept.append(fmt)
+                    continue
+                groups = list(fmt.get('groups') or [])
+                colors = list(fmt.get('colors') or [])
+                if groups == FRESH_ROLE_GROUPS and colors == FRESH_ROLE_COLORS:
+                    kept.append(fmt)
+                    continue
+                fixed = str(fmt.get('fixedColor') or '')
+                reading = str(fmt.get('reading') or '')
+                caption = str(fmt.get('colorCaption') or '')
+                if (
+                    _is_mix_color(fixed) or '先方から指定' in fixed or '先方から指定' in caption
+                    or reading == 'フルネーム'
+                ):
+                    catalog_changed = True
+                    continue
+                kept.append(fmt)
+            if catalog_changed:
+                data['formats'] = kept
+                catalog_path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8',
+                )
+
+    report = {
+        'at': stamp,
+        'changed': removed_formats,
+        'removedFormats': removed_formats,
+        'removedSamples': removed_samples,
+        'customer': FRESH_CUSTOMER_NAME,
+        'policy': FRESH_LEGACY_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'ambiguous': ambiguous,
+        'rules': {
+            'onlyCustomer': FRESH_CUSTOMER_NAME,
+            'keepIdentities': list(FRESH_KEEP_IDENTITIES),
+            'keepRoleColors': FRESH_ROLE_COLORS,
+            'retireLegacyMixFullname': True,
+            'noGuessDelete': True,
+        },
+        'items': items,
+    }
+    report_path = root / FRESH_LEGACY_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            FRESH_LEGACY_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': removed_formats,
+                'removedFormats': removed_formats,
+                'removedSamples': removed_samples,
+                'report': FRESH_LEGACY_REPORT,
+                'policy': FRESH_LEGACY_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
+def _takeda_is_canonical_small(fmt):
+    if str(fmt['identity'] or '') == 'takeda:small-fullname':
+        return True
+    if int(fmt['small'] or 0) != 1:
+        return False
+    return (
+        str(fmt['placement'] or '') == TAKEDA_SMALL_PLACEMENT
+        and str(fmt['family'] or '') == SIX_FAMILY_HG
+        and str(fmt['reading'] or '') == 'フルネーム'
+        and str(fmt['fixed_color'] or '') in ('白', '')
+    )
+
+
+def _takeda_is_canonical_large(fmt):
+    if str(fmt['identity'] or '') == 'takeda:large-fullname':
+        return True
+    if int(fmt['small'] or 0) != 0:
+        return False
+    heading = str(fmt['heading'] or '')
+    name = str(fmt['format_name'] or '')
+    if '役職' in heading or '役職' in name:
+        return False
+    return (
+        str(fmt['placement'] or '') == TAKEDA_LARGE_PLACEMENT
+        and str(fmt['family'] or '') == SIX_FAMILY_HG
+        and str(fmt['layout'] or '') == 'Name'
+        and str(fmt['reading'] or '') == 'フルネーム'
+    )
+
+
+def _takeda_is_legacy_large_title(fmt):
+    """旧役職2段の大ネームか。"""
+    if int(fmt['small'] or 0) != 0:
+        return False
+    if _takeda_is_canonical_large(fmt):
+        return False
+    heading = str(fmt['heading'] or '')
+    name = str(fmt['format_name'] or '')
+    layout = str(fmt['layout'] or '')
+    return '役職' in heading or '役職' in name or layout == 'HeadingName'
+
+
+def _takeda_retire_format(c, root, backup_dir, fmt, samples, action, items, counters):
+    _backup_six_format(c, root, backup_dir, fmt, samples)
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if rel:
+            path = root / rel
+            if path.is_file():
+                path.unlink()
+        c.execute('DELETE FROM name_samples WHERE id=?', (sample['id'],))
+        counters['samples'] += 1
+    c.execute('UPDATE name_formats SET retired=1 WHERE id=?', (fmt['id'],))
+    counters['formats'] += 1
+    items.append({
+        'action': action,
+        'formatId': fmt['id'],
+        'identity': fmt['identity'],
+        'formatName': fmt['format_name'],
+        'placement': fmt['placement'],
+        'small': fmt['small'],
+        'removedSamples': len(samples),
+    })
+
+
+def correct_takeda_duplicate_formats(c, data_dir=None):
+    """タケダ海産：小ネーム重複を1件残して退職。旧役職大が残ればそれも整理。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    customers = c.execute(
+        'SELECT id, source_name, source_key FROM name_customers WHERE retired=0'
+        ' AND (source_name=? OR source_key=?)',
+        (TAKEDA_CUSTOMER_NAME, TAKEDA_CUSTOMER_KEY),
+    ).fetchall()
+    if not customers:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'タケダ海産なし',
+            'customer': TAKEDA_CUSTOMER_NAME,
+            'policy': TAKEDA_DUP_POLICY,
+        }
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'takeda-dup-{stamp}'
+    items = []
+    ambiguous = []
+    counters = {'formats': 0, 'samples': 0, 'smallRetired': 0, 'largeRetired': 0}
+
+    for customer in customers:
+        if _six_is_excluded_name(customer['source_name']):
+            continue
+        formats = list(c.execute(
+            'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+            (customer['id'],),
+        ))
+        smalls = [f for f in formats if int(f['small'] or 0) == 1]
+        larges = [f for f in formats if int(f['small'] or 0) == 0]
+
+        # --- 小ネーム：正規を1件残し、他の小は重複として退職 ---
+        keep_small = None
+        for fmt in smalls:
+            if str(fmt['identity'] or '') == 'takeda:small-fullname':
+                keep_small = fmt
+                break
+        if keep_small is None:
+            canonical = [f for f in smalls if _takeda_is_canonical_small(f)]
+            if canonical:
+                keep_small = canonical[0]
+        if keep_small is None and len(smalls) == 1 and _takeda_is_canonical_small(smalls[0]):
+            keep_small = smalls[0]
+
+        if keep_small is not None:
+            samples = list(c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (keep_small['id'],),
+            ))
+            items.append({
+                'action': 'keep-small',
+                'formatId': keep_small['id'],
+                'identity': keep_small['identity'],
+                'formatName': keep_small['format_name'],
+                'placement': keep_small['placement'],
+                'sampleCount': len(samples),
+            })
+            for fmt in smalls:
+                if fmt['id'] == keep_small['id']:
+                    continue
+                samples = list(c.execute(
+                    'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                    (fmt['id'],),
+                ))
+                # 小ネーム同士の重複は削除。配置が違っても同顧客の余分な小は重複扱い
+                _takeda_retire_format(
+                    c, root, backup_dir, fmt, samples,
+                    'retire-duplicate-small', items, counters,
+                )
+                counters['smallRetired'] += 1
+        else:
+            for fmt in smalls:
+                ambiguous.append({
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                    'formatName': fmt['format_name'],
+                    'placement': fmt['placement'],
+                    'reason': 'no-canonical-small-to-keep',
+                })
+                items.append({
+                    'action': 'ambiguous-skip-small',
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                })
+
+        # --- 大ネーム：正規1件を残し、旧役職大を退職 ---
+        keep_large = None
+        for fmt in larges:
+            if str(fmt['identity'] or '') == 'takeda:large-fullname':
+                keep_large = fmt
+                break
+        if keep_large is None:
+            canonical = [f for f in larges if _takeda_is_canonical_large(f)]
+            if canonical:
+                keep_large = canonical[0]
+
+        if keep_large is not None:
+            samples = list(c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (keep_large['id'],),
+            ))
+            items.append({
+                'action': 'keep-large',
+                'formatId': keep_large['id'],
+                'identity': keep_large['identity'],
+                'formatName': keep_large['format_name'],
+                'sampleCount': len(samples),
+            })
+            for fmt in larges:
+                if fmt['id'] == keep_large['id']:
+                    continue
+                if not _takeda_is_legacy_large_title(fmt):
+                    # 役職でも正規でもない大は曖昧
+                    ambiguous.append({
+                        'formatId': fmt['id'],
+                        'identity': fmt['identity'],
+                        'formatName': fmt['format_name'],
+                        'reason': 'extra-large-not-clearly-legacy',
+                    })
+                    items.append({
+                        'action': 'ambiguous-skip-large',
+                        'formatId': fmt['id'],
+                        'identity': fmt['identity'],
+                    })
+                    continue
+                samples = list(c.execute(
+                    'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                    (fmt['id'],),
+                ))
+                _takeda_retire_format(
+                    c, root, backup_dir, fmt, samples,
+                    'retire-legacy-large-title', items, counters,
+                )
+                counters['largeRetired'] += 1
+        else:
+            for fmt in larges:
+                if _takeda_is_legacy_large_title(fmt) and len(larges) > 1:
+                    # 正規が無く旧役職だけ複数 → 曖昧（全部消さない）
+                    ambiguous.append({
+                        'formatId': fmt['id'],
+                        'identity': fmt['identity'],
+                        'formatName': fmt['format_name'],
+                        'reason': 'legacy-large-without-canonical',
+                    })
+                    items.append({
+                        'action': 'ambiguous-skip-large',
+                        'formatId': fmt['id'],
+                    })
+
+    report = {
+        'at': stamp,
+        'changed': counters['formats'],
+        'removedFormats': counters['formats'],
+        'removedSamples': counters['samples'],
+        'smallRetired': counters['smallRetired'],
+        'largeRetired': counters['largeRetired'],
+        'customer': TAKEDA_CUSTOMER_NAME,
+        'policy': TAKEDA_DUP_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'ambiguous': ambiguous,
+        'rules': {
+            'onlyCustomer': TAKEDA_CUSTOMER_NAME,
+            'keepIdentities': list(TAKEDA_KEEP_IDENTITIES),
+            'keepSmallPlacement': TAKEDA_SMALL_PLACEMENT,
+            'retireDuplicateSmall': True,
+            'retireLegacyLargeTitle': True,
+            'noGuessDelete': True,
+        },
+        'items': items,
+    }
+    report_path = root / TAKEDA_DUP_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            TAKEDA_DUP_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': counters['formats'],
+                'removedFormats': counters['formats'],
+                'removedSamples': counters['samples'],
+                'smallRetired': counters['smallRetired'],
+                'largeRetired': counters['largeRetired'],
+                'report': TAKEDA_DUP_REPORT,
+                'policy': TAKEDA_DUP_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
+# --- あすかベーカリー（Excel 行14）。あすかHOUSE / 東苗穂 / 明日佳は絶対に触らない。 ---
+ASUKA_BAKERY_CUSTOMER_NAME = 'あすかベーカリー'
+ASUKA_BAKERY_CUSTOMER_KEY = 'excel:asuka-bakery'
+ASUKA_BAKERY_CUSTOMER_READING = 'あすかべーかりー'
+ASUKA_BAKERY_IDENTITY = 'asuka-bakery:small-surname'
+ASUKA_BAKERY_KIND = 'asuka-bakery-small-surname'
+ASUKA_BAKERY_SOURCE_ROW = 14
+ASUKA_BAKERY_FAMILY = SIX_FAMILY_MSP
+ASUKA_BAKERY_PLACEMENT = (
+    'シャツ：メーカータグ下　パンツ：ベルト後左裏　キャップ：挟み貼り　胸当て：左表上'
+)
+ASUKA_BAKERY_FORMAT_NAME = '小ネーム（苗字のみ）'
+ASUKA_BAKERY_HEADING = '苗字のみ（36pt）'
+ASUKA_BAKERY_COLOR_CAPTION = '赤 or 青'
+ASUKA_BAKERY_COLORS = ['赤', '青']
+ASUKA_BAKERY_SWATCHES = ['#F08080', '#87CEFA']
+ASUKA_BAKERY_PAPERS = ('赤', '青')
+ASUKA_BAKERY_MAXIMUM_FONT = 36
+ASUKA_BAKERY_WIDTH_MM, ASUKA_BAKERY_HEIGHT_MM = THREE_SMALL_W, THREE_SMALL_H
+ASUKA_BAKERY_NOTE = (
+    f'書体は{ASUKA_BAKERY_FAMILY}。色は赤 or 青。'
+    '小ネーム・1段・苗字のみ／36pt（exact）。'
+    f'Excel 行{ASUKA_BAKERY_SOURCE_ROW}（ネーム仕分け_五十音順2）。'
+)
+ASUKA_BAKERY_CAPTION = (
+    f'見本：苗字「{SIX_SAMPLE_SURNAME}」（36pt・exact・1段）。'
+    f'書体は{ASUKA_BAKERY_FAMILY}。色は赤 or 青。'
+)
+ASUKA_BAKERY_REPORT = 'asuka-bakery-name-formats-report.json'
+ASUKA_BAKERY_SETTINGS_KEY = 'asuka_bakery_name_formats'
+ASUKA_BAKERY_POLICY = 'excel-gojuon2-r14-red-blue-v1'
+ASUKA_BAKERY_FORBIDDEN_SUBSTRINGS = (
+    'あすかHOUSE', '明日佳', '明日香',
+)
+
+
+def _asuka_bakery_forbidden(name):
+    text = str(name or '')
+    if text.strip() == ASUKA_BAKERY_CUSTOMER_NAME:
+        return False
+    return any(token in text for token in ASUKA_BAKERY_FORBIDDEN_SUBSTRINGS)
+
+
+def _asuka_bakery_format_def():
+    return {
+        'identity': ASUKA_BAKERY_IDENTITY,
+        'kind': ASUKA_BAKERY_KIND,
+        'sourceRow': ASUKA_BAKERY_SOURCE_ROW,
+        'formatName': ASUKA_BAKERY_FORMAT_NAME,
+        'placement': ASUKA_BAKERY_PLACEMENT,
+        'family': ASUKA_BAKERY_FAMILY,
+        'heading': ASUKA_BAKERY_HEADING,
+        'note': ASUKA_BAKERY_NOTE,
+        'layout': 'Surname',
+        'reading': '苗字のみ',
+        'small': 1,
+        'widthMm': ASUKA_BAKERY_WIDTH_MM,
+        'heightMm': ASUKA_BAKERY_HEIGHT_MM,
+        'fixedColor': '',
+        'colorCaption': ASUKA_BAKERY_COLOR_CAPTION,
+        'groups': [],
+        'colors': list(ASUKA_BAKERY_COLORS),
+        'swatches': list(ASUKA_BAKERY_SWATCHES),
+        'maximumFont': ASUKA_BAKERY_MAXIMUM_FONT,
+        'sampleText': SIX_SAMPLE_SURNAME,
+        'fontPt': ASUKA_BAKERY_MAXIMUM_FONT,
+        'sampleFit': 'exact',
+        'papers': ASUKA_BAKERY_PAPERS,
+        'caption': ASUKA_BAKERY_CAPTION,
+        'surnameOnly': True,
+    }
+
+
+def _asuka_bakery_spec(fmt_def):
+    return {
+        'asukaBakeryKind': fmt_def['kind'],
+        'asukaBakeryPolicy': ASUKA_BAKERY_POLICY,
+        'surnameOnly': True,
+        'sampleText': fmt_def['sampleText'],
+        'fontPt': fmt_def['fontPt'],
+        'sampleFit': 'exact',
+        'exactPtPolicy': SMALL_SURNAME_36_POLICY,
+        'papers': list(fmt_def['papers']),
+    }
+
+
+def _asuka_bakery_find_customer(c):
+    rows = c.execute(
+        'SELECT * FROM name_customers WHERE retired=0 ORDER BY id'
+    ).fetchall()
+    for row in rows:
+        if str(row['source_key'] or '') == ASUKA_BAKERY_CUSTOMER_KEY:
+            if _asuka_bakery_forbidden(row['source_name']):
+                return None
+            return row
+    for row in rows:
+        name = str(row['source_name'] or '').strip()
+        if name == ASUKA_BAKERY_CUSTOMER_NAME:
+            return row
+    return None
+
+
+def _asuka_bakery_is_current(fmt, samples, fmt_def):
+    if str(fmt['identity'] or '') != fmt_def['identity']:
+        return False
+    if str(fmt['format_name'] or '') != fmt_def['formatName']:
+        return False
+    if str(fmt['placement'] or '') != fmt_def['placement']:
+        return False
+    if str(fmt['family'] or '') != fmt_def['family']:
+        return False
+    if str(fmt['heading'] or '') != fmt_def['heading']:
+        return False
+    if str(fmt['note'] or '') != fmt_def['note']:
+        return False
+    if str(fmt['layout'] or '') != 'Surname':
+        return False
+    if str(fmt['reading'] or '') != '苗字のみ':
+        return False
+    if int(fmt['small'] or 0) != 1:
+        return False
+    if str(fmt['color_caption'] or '') != ASUKA_BAKERY_COLOR_CAPTION:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(ASUKA_BAKERY_MAXIMUM_FONT):
+        return False
+    if int(fmt['source_row'] or 0) != ASUKA_BAKERY_SOURCE_ROW:
+        return False
+    try:
+        colors = json.loads(fmt['colors_json'] or '[]')
+        swatches = json.loads(fmt['swatches_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if colors != ASUKA_BAKERY_COLORS or swatches != ASUKA_BAKERY_SWATCHES:
+        return False
+    spec = _load_spec(fmt)
+    if spec.get('asukaBakeryPolicy') != ASUKA_BAKERY_POLICY:
+        return False
+    if spec.get('sampleFit') != 'exact':
+        return False
+    if len(samples) != len(ASUKA_BAKERY_PAPERS):
+        return False
+    by_paper = {str(s['paper_color'] or ''): s for s in samples}
+    for paper in ASUKA_BAKERY_PAPERS:
+        sample = by_paper.get(paper)
+        if sample is None:
+            return False
+        if str(sample['caption'] or '') != ASUKA_BAKERY_CAPTION:
+            return False
+        rel = str(sample['relative_path'] or '')
+        if not rel.startswith('images/names/') or ASUKA_BAKERY_KIND not in Path(rel).name:
+            return False
+    return True
+
+
+def _asuka_bakery_is_legacy_solo(fmt, samples):
+    """旧単色（赤／赤？／白だけ等）。正規の赤青2色は対象外。"""
+    if str(fmt['identity'] or '') == ASUKA_BAKERY_IDENTITY:
+        return False
+    try:
+        colors = json.loads(fmt['colors_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        colors = []
+    if colors == ASUKA_BAKERY_COLORS:
+        return False
+    papers = [str(s['paper_color'] or '').strip() for s in samples]
+    non_empty = [p for p in papers if p]
+    fixed = str(fmt['fixed_color'] or '').strip()
+    caption = str(fmt['color_caption'] or '')
+    # 赤・青の両方が揃っているなら旧単色ではない
+    if '赤' in non_empty and '青' in non_empty:
+        return False
+    if fixed in ('赤', '赤？', '青', '白') or fixed.endswith('？'):
+        return True
+    if caption in ('赤', '赤？', '青', '白') or '？' in caption:
+        return True
+    if non_empty and len(set(non_empty)) == 1 and non_empty[0] in ('赤', '青', '白'):
+        return True
+    return False
+
+
+def ensure_asuka_bakery_name_formats(c, data_dir=None):
+    """あすかベーカリーのみ：色を赤・青、36pt苗字見本を ensure。HOUSE/明日佳は触らない。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'asuka-bakery-{stamp}'
+    fmt_def = _asuka_bakery_format_def()
+    items = []
+    retired = 0
+    removed_samples = 0
+
+    # 除外顧客を誤って拾っていないか先に確認
+    forbidden_hits = c.execute(
+        "SELECT id, source_name FROM name_customers WHERE retired=0 AND ("
+        "source_name LIKE '%あすかHOUSE%' OR source_name LIKE '%明日佳%' OR source_name LIKE '%明日香%')"
+    ).fetchall()
+    forbidden_snapshot = {
+        row['id']: str(row['source_name'] or '') for row in forbidden_hits
+    }
+
+    customer = _asuka_bakery_find_customer(c)
+    if customer is None:
+        known = _app_customers(c)
+        linked, status = _link(ASUKA_BAKERY_CUSTOMER_NAME, known)
+        c.execute(
+            'INSERT INTO name_customers('
+            'source_key, source_index, source_name, reading, linked_name, link_status, manual, retired'
+            ') VALUES(?,?,?,?,?,?,1,0)',
+            (
+                ASUKA_BAKERY_CUSTOMER_KEY, -1, ASUKA_BAKERY_CUSTOMER_NAME,
+                ASUKA_BAKERY_CUSTOMER_READING, linked, status,
+            ),
+        )
+        cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        customer = c.execute('SELECT * FROM name_customers WHERE id=?', (cid,)).fetchone()
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        (backup_dir / f'customer-created-{cid}.json').write_text(
+            json.dumps(_row_as_dict(customer), ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        items.append({
+            'action': 'create-customer',
+            'customerId': cid,
+            'customerName': ASUKA_BAKERY_CUSTOMER_NAME,
+        })
+    elif _asuka_bakery_forbidden(customer['source_name']):
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'forbidden-customer-name',
+            'customer': customer['source_name'],
+            'policy': ASUKA_BAKERY_POLICY,
+        }
+
+    by_identity = c.execute(
+        'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+        (ASUKA_BAKERY_IDENTITY,),
+    ).fetchone()
+    existing = by_identity
+    if existing is None:
+        candidates = c.execute(
+            'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 AND small=1 ORDER BY id',
+            (customer['id'],),
+        ).fetchall()
+        for cand in candidates:
+            if str(cand['reading'] or '') == '苗字のみ' or str(cand['layout'] or '') == 'Surname':
+                existing = cand
+                break
+
+    samples = []
+    if existing:
+        samples = list(c.execute(
+            'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+            (existing['id'],),
+        ))
+
+    needs = existing is None or not _asuka_bakery_is_current(existing, samples, fmt_def)
+    if needs:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        if existing:
+            _backup_six_format(c, root, backup_dir, existing, samples)
+        # upsert
+        groups = json.dumps([], ensure_ascii=False)
+        colors = json.dumps(ASUKA_BAKERY_COLORS, ensure_ascii=False)
+        swatches = json.dumps(ASUKA_BAKERY_SWATCHES, ensure_ascii=False)
+        spec = json.dumps(_asuka_bakery_spec(fmt_def), ensure_ascii=False)
+        values = (
+            ASUKA_BAKERY_FORMAT_NAME, ASUKA_BAKERY_PLACEMENT, ASUKA_BAKERY_FAMILY, '',
+            ASUKA_BAKERY_HEADING, ASUKA_BAKERY_NOTE, 'Surname', '苗字のみ',
+            1, ASUKA_BAKERY_WIDTH_MM, ASUKA_BAKERY_HEIGHT_MM, 0,
+            '', ASUKA_BAKERY_COLOR_CAPTION,
+            groups, colors, swatches, 'null',
+            '', float(ASUKA_BAKERY_MAXIMUM_FONT), 0, 0, ASUKA_BAKERY_SOURCE_ROW,
+            spec, 0, '[]', 0,
+        )
+        if existing:
+            c.execute(
+                'UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,'
+                ' layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,'
+                ' groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,'
+                ' heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,'
+                ' retired=0, identity=? WHERE id=?',
+                values + (ASUKA_BAKERY_IDENTITY, existing['id']),
+            )
+            fid = existing['id']
+            action = 'update'
+        else:
+            c.execute(
+                'INSERT INTO name_formats('
+                'identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,'
+                'layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,'
+                'groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,'
+                'number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired'
+                ') VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)',
+                (
+                    ASUKA_BAKERY_IDENTITY, customer['id'], -1,
+                    values[0], values[1], values[2], values[3], values[4], values[5],
+                    values[6], values[7], values[8], values[9], values[10], values[11],
+                    values[12], values[13], values[14], values[15], values[16], values[17],
+                    values[18], values[19], values[20], values[21], values[22], None,
+                    values[23], values[24], values[25], values[26],
+                ),
+            )
+            fid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+            action = 'create'
+        ok, note, paths = _write_six_samples(c, root, fid, fmt_def)
+        items.append({
+            'action': action,
+            'formatId': fid,
+            'identity': ASUKA_BAKERY_IDENTITY,
+            'samplePaths': paths,
+            'sampleOk': ok,
+            'sampleNote': note,
+            'papers': list(ASUKA_BAKERY_PAPERS),
+        })
+    else:
+        items.append({
+            'action': 'skip',
+            'formatId': existing['id'],
+            'identity': ASUKA_BAKERY_IDENTITY,
+            'reason': 'already-current',
+        })
+        fid = existing['id']
+
+    # 同顧客の旧単色を退職
+    for fmt in c.execute(
+        'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+        (customer['id'],),
+    ):
+        if fmt['id'] == fid:
+            continue
+        samples = list(c.execute(
+            'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+            (fmt['id'],),
+        ))
+        if not _asuka_bakery_is_legacy_solo(fmt, samples):
+            items.append({
+                'action': 'ambiguous-skip',
+                'formatId': fmt['id'],
+                'identity': fmt['identity'],
+                'formatName': fmt['format_name'],
+                'fixedColor': fmt['fixed_color'],
+            })
+            continue
+        _backup_six_format(c, root, backup_dir, fmt, samples)
+        for sample in samples:
+            rel = str(sample['relative_path'] or '')
+            if rel:
+                path = root / rel
+                if path.is_file():
+                    path.unlink()
+            c.execute('DELETE FROM name_samples WHERE id=?', (sample['id'],))
+            removed_samples += 1
+        c.execute('UPDATE name_formats SET retired=1 WHERE id=?', (fmt['id'],))
+        retired += 1
+        items.append({
+            'action': 'retire-solo-color',
+            'formatId': fmt['id'],
+            'identity': fmt['identity'],
+            'formatName': fmt['format_name'],
+            'fixedColor': fmt['fixed_color'],
+            'removedSamples': len(samples),
+        })
+
+    # 除外顧客が変わっていないこと
+    after_forbidden = c.execute(
+        "SELECT id, source_name FROM name_customers WHERE retired=0 AND ("
+        "source_name LIKE '%あすかHOUSE%' OR source_name LIKE '%明日佳%' OR source_name LIKE '%明日香%')"
+    ).fetchall()
+    after_map = {row['id']: str(row['source_name'] or '') for row in after_forbidden}
+    exclusions_untouched = after_map == forbidden_snapshot
+
+    changed = sum(
+        1 for i in items
+        if i.get('action') in ('create', 'update', 'create-customer', 'retire-solo-color')
+    )
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'retiredSoloFormats': retired,
+        'removedSamples': removed_samples,
+        'customer': ASUKA_BAKERY_CUSTOMER_NAME,
+        'policy': ASUKA_BAKERY_POLICY,
+        'colors': list(ASUKA_BAKERY_COLORS),
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'exclusionsUntouched': exclusions_untouched,
+        'hardExclusions': list(ASUKA_BAKERY_FORBIDDEN_SUBSTRINGS),
+        'rules': {
+            'onlyCustomer': ASUKA_BAKERY_CUSTOMER_NAME,
+            'neverTouchHouseOrAshuka': True,
+            'redBluePapers': True,
+            'exact36Surname': True,
+        },
+        'items': items,
+    }
+    (root / ASUKA_BAKERY_REPORT).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            ASUKA_BAKERY_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'retiredSoloFormats': retired,
+                'report': ASUKA_BAKERY_REPORT,
+                'policy': ASUKA_BAKERY_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -7213,6 +8422,10 @@ def import_catalog(connect, data_dir):
         ensure_fk_name_formats(c, data_dir)
         ensure_benkama_name_formats(c, data_dir)
         ensure_six_customers_name_formats(c, data_dir)
+        correct_moritan_solo_white(c, data_dir)
+        correct_fresh_legacy_formats(c, data_dir)
+        correct_takeda_duplicate_formats(c, data_dir)
+        ensure_asuka_bakery_name_formats(c, data_dir)
         ensure_small_surname_36_exact_samples(c, data_dir)
     return summary
 

@@ -1,4 +1,4 @@
-"""鱗幸食品：Excel 230–231 行に合わせた大・小ネーム更新。"""
+"""鱗幸食品：Excel 239–240 行に合わせた大・小ネーム更新（大は1段大汎用）。"""
 import json
 import sqlite3
 import sys
@@ -72,20 +72,32 @@ class RinkoNameFormatsTest(unittest.TestCase):
 
     def test_band_heights_sum(self):
         large = names._rinko_large_bands()
-        self.assertEqual(len(large), 2)
-        self.assertAlmostEqual(sum(b['heightMm'] for b in large), 50.0, places=2)
-        self.assertEqual(large[0]['fontPt'], 26)
-        self.assertEqual(large[0]['alignH'], 'left')
+        self.assertEqual(len(large), 1)
+        self.assertAlmostEqual(large[0]['heightMm'], 50.0, places=2)
+        self.assertEqual(large[0]['role'], 'name')
+        self.assertEqual(large[0]['text'], '山田 太郎')
+        self.assertNotIn('○○', large[0]['text'])
+        self.assertNotIn('〇〇', large[0]['text'])
+        self.assertEqual(large[0]['alignH'], 'center')
         self.assertEqual(large[0]['alignV'], 'middle')
-        self.assertEqual(large[0]['text'], '○○')
-        self.assertNotIn('工場長', large[0]['text'])
-        self.assertEqual(large[1]['alignH'], 'center')
-        self.assertEqual(large[1]['alignV'], 'top')
-        self.assertEqual(large[1]['fontPt'], 48)
+        self.assertEqual(large[0]['fontPt'], 48)
         small = names._rinko_small_bands()
         self.assertEqual(len(small), 1)
         self.assertAlmostEqual(small[0]['heightMm'], 24.0, places=2)
         self.assertEqual(small[0]['fontPt'], 26)
+
+    def test_large_heading_clears_placeholder(self):
+        self.assertEqual(names.RINKO_LARGE_HEADING, 'フルネーム（大汎用）')
+        self.assertNotIn('○○', names.RINKO_LARGE_HEADING)
+        self.assertNotIn('〇〇', names.RINKO_LARGE_HEADING)
+        self.assertNotIn('上段', names.RINKO_LARGE_HEADING)
+        self.assertNotIn('○○', names.RINKO_LARGE_SAMPLE_CAPTION)
+        self.assertNotIn('〇〇', names.RINKO_LARGE_SAMPLE_CAPTION)
+        self.assertNotIn('上段', names.RINKO_LARGE_SAMPLE_CAPTION)
+        spec = names._rinko_spec('large')
+        self.assertNotIn('sampleUpper', spec)
+        self.assertNotIn('upperFontPt', spec)
+        self.assertEqual(len(spec['bandHeightsMm']), 1)
 
     def test_mix_color_preserves_question_mark(self):
         self.assertTrue(names._is_mix_color('先方から指定？'))
@@ -165,16 +177,21 @@ class RinkoNameFormatsTest(unittest.TestCase):
                 self.assertEqual(fmt_large['format_name'], names.RINKO_LARGE_FORMAT_NAME)
                 self.assertEqual(fmt_large['placement'], names.RINKO_LARGE_PLACEMENT)
                 self.assertEqual(fmt_large['family'], names.RINKO_FAMILY)
-                self.assertEqual(fmt_large['layout'], 'HeadingName')
+                self.assertEqual(fmt_large['layout'], 'Name')
                 self.assertEqual(fmt_large['reading'], 'フルネーム')
                 self.assertEqual(fmt_large['heading'], names.RINKO_LARGE_HEADING)
                 self.assertEqual(fmt_large['note'], names.RINKO_LARGE_NOTE)
                 self.assertNotIn('上段帯', fmt_large['note'])
                 self.assertNotIn('25mm', fmt_large['note'])
                 self.assertNotIn('3段', fmt_large['note'])
+                self.assertNotIn('○○', fmt_large['heading'])
+                self.assertNotIn('〇〇', fmt_large['heading'])
+                self.assertNotIn('上段：', fmt_large['heading'])
+                self.assertNotIn('○○', fmt_large['note'])
+                self.assertNotIn('〇〇', fmt_large['note'])
                 self.assertEqual(fmt_large['width_mm'], 80)
                 self.assertEqual(fmt_large['height_mm'], 50)
-                self.assertEqual(fmt_large['heading_font'], 26)
+                self.assertEqual(fmt_large['heading_font'], 0)
                 self.assertEqual(fmt_large['maximum_font'], 48)
                 self.assertEqual(fmt_large['source_row'], names.RINKO_LARGE_SOURCE_ROW)
                 self.assertEqual(fmt_large['fixed_color'], '先方から指定')
@@ -207,8 +224,14 @@ class RinkoNameFormatsTest(unittest.TestCase):
                 self.assertEqual(len(large_samples), 1)
                 self.assertEqual(large_samples[0]['paper_color'], '先方から指定')
                 self.assertEqual(large_samples[0]['caption'], names.RINKO_LARGE_SAMPLE_CAPTION)
+                self.assertNotIn('○○', large_samples[0]['caption'])
+                self.assertNotIn('〇〇', large_samples[0]['caption'])
+                self.assertNotIn('上段', large_samples[0]['caption'])
                 self.assertIn('rinko-large', large_samples[0]['relative_path'])
                 self.assertFalse(old_yellow.exists())
+                large_spec = json.loads(fmt_large['spec_json'] or '{}')
+                self.assertEqual(len(large_spec.get('bandHeightsMm') or []), 1)
+                self.assertNotIn('sampleUpper', large_spec)
 
                 small_samples = list(c.execute(
                     'SELECT * FROM name_samples WHERE format_id=? ORDER BY id', (small,),
