@@ -13,12 +13,30 @@ def schema(c):
   c.execute('CREATE TRIGGER IF NOT EXISTS name_review_sample_'+event.lower()+' AFTER '+event+' ON name_samples BEGIN UPDATE name_reviews SET confirmed_digest=NULL WHERE format_id='+ref+'.format_id; END')
  c.execute('CREATE TRIGGER IF NOT EXISTS name_review_customer_changed AFTER UPDATE ON name_customers WHEN OLD.source_name IS NOT NEW.source_name OR OLD.reading IS NOT NEW.reading BEGIN UPDATE name_reviews SET confirmed_digest=NULL WHERE format_id IN (SELECT id FROM name_formats WHERE customer_id=NEW.id); END')
 
+_DIGEST_SKIP_FORMAT_KEYS=frozenset({
+ 'deleted_at','deleted_by','deleted_by_name','deleted_with_parent',
+})
+
+def _format_for_digest(row):
+ data=dict(row)
+ for key in _DIGEST_SKIP_FORMAT_KEYS:
+  data.pop(key,None)
+ return data
+
 def digest(c,fid):
- row=c.execute('SELECT * FROM name_formats WHERE id=? AND retired=0',(fid,)).fetchone()
+ row=c.execute(
+  "SELECT * FROM name_formats WHERE id=? AND retired=0 AND (deleted_at IS NULL OR deleted_at='')",
+  (fid,),
+ ).fetchone()
  if not row:return None
+ parent=c.execute(
+  "SELECT deleted_at FROM name_customers WHERE id=?",
+  (row['customer_id'],),
+ ).fetchone()
+ if not parent or parent['deleted_at']:return None
  customer=c.execute('SELECT source_name,reading FROM name_customers WHERE id=?',(row['customer_id'],)).fetchone()
  samples=[dict(r) for r in c.execute('SELECT * FROM name_samples WHERE format_id=? ORDER BY id',(fid,))]
- return hashlib.sha256(json.dumps([dict(row),list(customer),samples],ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+ return hashlib.sha256(json.dumps([_format_for_digest(row),list(customer),samples],ensure_ascii=False,sort_keys=True).encode()).hexdigest()
 
 def state(c,fid,user):
  r=c.execute('SELECT r.*,u.name,u.active FROM name_reviews r LEFT JOIN users u ON u.id=r.assignee_id WHERE format_id=?',(fid,)).fetchone()

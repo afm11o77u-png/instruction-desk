@@ -970,6 +970,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/api/name-labels' or path.startswith('/api/name-labels/'):
             with connect() as c:
                 if path=='/api/name-labels': result=names.search(self, c)
+                elif path=='/api/name-labels/deleted': result=names.list_deleted(self, c)
                 elif path.startswith('/api/name-labels/customers/'): result=names.customer(self, c, int(path.rsplit('/',1)[1]))
                 elif path.startswith('/api/name-labels/formats/'): result=names.detail(self, c, int(path.rsplit('/',1)[1]))
                 elif path.startswith('/api/name-labels/samples/'): result=names.send_sample(self, c, int(path.rsplit('/',1)[1]))
@@ -1145,6 +1146,16 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     result=names.create(self, c, d) if self.path=='/api/name-labels' else names.update(self, c, d)
+                return self.reply(*result)
+            if self.path=='/api/name-labels/delete':
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    result=names.soft_delete(self, c, d)
+                return self.reply(*result)
+            if self.path=='/api/name-labels/restore':
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    result=names.restore(self, c, d)
                 return self.reply(*result)
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
             payload=validate(d); now=datetime.now().isoformat(timespec='seconds')

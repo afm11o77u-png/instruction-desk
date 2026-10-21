@@ -4,7 +4,7 @@ import name_review
 統合ネームラベルの登録を、形式ごとの見本つきで参照する。
 元ソフトと元資料は変更しない。Excelの行番号は登録番号にしない。
 """
-import hashlib, json, os, re, uuid, base64, shutil
+import hashlib, json, os, re, uuid, base64, shutil, sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -105,6 +105,7 @@ def schema(c):
     )''')
     _column(c, 'name_customers', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
     _column(c, 'name_formats', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
+    _ensure_soft_delete_columns(c)
     name_review.schema(c)
     correct_customer_names(c)
     # 女性見本の画像変換は起動・schema では行わない（DBロック／起動失敗の再発防止）。
@@ -127,6 +128,72 @@ def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
     if name not in have:
         c.execute(f'ALTER TABLE {table} ADD COLUMN {ddl}')
+
+# 利用者による論理削除（catalog の retired とは別）。ensure_* / import_catalog は retired のみ見る。
+SOFT_DELETE_CUSTOMER_COLS = (
+    ('deleted_at', 'deleted_at TEXT'),
+    ('deleted_by', 'deleted_by INTEGER'),
+    ('deleted_by_name', 'deleted_by_name TEXT NOT NULL DEFAULT \'\''),
+)
+SOFT_DELETE_FORMAT_COLS = SOFT_DELETE_CUSTOMER_COLS + (
+    ('deleted_with_parent', 'deleted_with_parent INTEGER NOT NULL DEFAULT 0'),
+)
+# 通常一覧・詳細で「未削除」とみなす SQL 断片（retired とは独立）
+NOT_SOFT_DELETED = "(deleted_at IS NULL OR deleted_at='')"
+IS_SOFT_DELETED = "(deleted_at IS NOT NULL AND deleted_at<>'')"
+
+def _soft_delete_columns_missing(c):
+    cust = {row['name'] for row in c.execute('PRAGMA table_info(name_customers)')}
+    fmt = {row['name'] for row in c.execute('PRAGMA table_info(name_formats)')}
+    return any(name not in cust for name, _ in SOFT_DELETE_CUSTOMER_COLS) or any(
+        name not in fmt for name, _ in SOFT_DELETE_FORMAT_COLS
+    )
+
+def _backup_before_soft_delete_migrate(c):
+    """カラム追加前に instructions.sqlite3 を data/backups/pre-name-soft-delete-<stamp>/ へ退避。"""
+    if DATA_DIR is None:
+        return None
+    db_path = Path(DATA_DIR) / 'instructions.sqlite3'
+    if not db_path.is_file():
+        return None
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = Path(DATA_DIR) / 'backups' / f'pre-name-soft-delete-{stamp}'
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    dest = backup_dir / 'instructions.sqlite3'
+    try:
+        with sqlite3.connect(str(dest)) as dest_conn:
+            c.backup(dest_conn)
+        (backup_dir / 'README.txt').write_text(
+            'ネーム情報の論理削除カラム追加前のバックアップです。\n'
+            '既存データは ALTER TABLE で保持されます。万一戻す場合は、\n'
+            'サーバ停止後にこの instructions.sqlite3 を data/ へ戻してください。\n'
+            f'作成日時: {stamp}\n',
+            encoding='utf-8',
+        )
+        return str(backup_dir.relative_to(Path(DATA_DIR))).replace('\\', '/')
+    except (OSError, sqlite3.Error):
+        return None
+
+def _ensure_soft_delete_columns(c):
+    """利用者論理削除用カラムを追加（既存行は NULL／0 のまま。retired は触らない）。"""
+    if _soft_delete_columns_missing(c):
+        _backup_before_soft_delete_migrate(c)
+    for name, ddl in SOFT_DELETE_CUSTOMER_COLS:
+        _column(c, 'name_customers', name, ddl)
+    for name, ddl in SOFT_DELETE_FORMAT_COLS:
+        _column(c, 'name_formats', name, ddl)
+
+def _now():
+    return datetime.now().isoformat(timespec='seconds')
+
+def _row_deleted(row):
+    if row is None:
+        return False
+    try:
+        value = row['deleted_at']
+    except (KeyError, IndexError):
+        return False
+    return bool(value)
 
 # ネーム情報の顧客名の既知の表記ゆれ（取込元・既存行の表示名を直す）
 CUSTOMER_NAME_CORRECTIONS = {
@@ -8459,7 +8526,7 @@ def search(handler, c):
     blocked = _require(handler.user)
     if blocked: return blocked
     q = (parse_qs(urlparse(handler.path).query).get('q') or [''])[0].strip()
-    where = 'WHERE retired=0'
+    where = f'WHERE retired=0 AND {NOT_SOFT_DELETED}'
     args = []
     if q:
         where += ' AND source_name LIKE ?'
@@ -8467,9 +8534,15 @@ def search(handler, c):
     rows = c.execute(f'SELECT * FROM name_customers {where} ORDER BY source_name, id', args).fetchall()
     items = []
     for row in rows:
-        counts = c.execute('SELECT COUNT(*) n, SUM(needs_review) review FROM name_formats WHERE customer_id=? AND retired=0', (row['id'],)).fetchone()
+        counts = c.execute(
+            f'SELECT COUNT(*) n, SUM(needs_review) review FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+            (row['id'],),
+        ).fetchone()
         assignees, approved, unapproved = [], 0, 0
-        for form in c.execute('SELECT id FROM name_formats WHERE customer_id=? AND retired=0', (row['id'],)):
+        for form in c.execute(
+            f'SELECT id FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+            (row['id'],),
+        ):
             state = name_review.state(c, form['id'], handler.user)
             label = state['assigneeName'] or state['sourceLabel'] or '未設定'
             if label not in assignees: assignees.append(label)
@@ -8489,10 +8562,16 @@ def search(handler, c):
 def customer(handler, c, customer_id):
     blocked = _require(handler.user)
     if blocked: return blocked
-    row = c.execute('SELECT * FROM name_customers WHERE id=? AND retired=0', (customer_id,)).fetchone()
+    row = c.execute(
+        f'SELECT * FROM name_customers WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (customer_id,),
+    ).fetchone()
     if not row: return 404, {'error': '顧客が見つかりません。'}
     formats = []
-    for item in c.execute('SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id', (row['id'],)):
+    for item in c.execute(
+        f'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED} ORDER BY id',
+        (row['id'],),
+    ):
         sample = c.execute('SELECT id, relative_path FROM name_samples WHERE format_id=? AND relative_path<>"" ORDER BY id LIMIT 1', (item['id'],)).fetchone()
         formats.append({
             'id': item['id'], 'number': _number(item['id']), 'format': item['format_name'],
@@ -8510,9 +8589,14 @@ def customer(handler, c, customer_id):
 def detail(handler, c, format_id):
     blocked = _require(handler.user)
     if blocked: return blocked
-    row = c.execute('SELECT * FROM name_formats WHERE id=? AND retired=0', (format_id,)).fetchone()
+    row = c.execute(
+        f'SELECT * FROM name_formats WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (format_id,),
+    ).fetchone()
     if not row: return 404, {'error': '形式が見つかりません。'}
     customer_row = c.execute('SELECT * FROM name_customers WHERE id=?', (row['customer_id'],)).fetchone()
+    if not customer_row or customer_row['retired'] or _row_deleted(customer_row):
+        return 404, {'error': '形式が見つかりません。'}
     samples = []
     for sample in c.execute('SELECT * FROM name_samples WHERE format_id=? ORDER BY id', (row['id'],)):
         samples.append({
@@ -8549,7 +8633,15 @@ def detail(handler, c, format_id):
 def send_sample(handler, c, sample_id):
     blocked = _require(handler.user)
     if blocked: return blocked
-    row = c.execute('SELECT relative_path FROM name_samples WHERE id=?', (sample_id,)).fetchone()
+    row = c.execute(
+        f'''SELECT s.relative_path FROM name_samples s
+            JOIN name_formats f ON f.id=s.format_id
+            JOIN name_customers cu ON cu.id=f.customer_id
+            WHERE s.id=? AND f.retired=0 AND cu.retired=0
+              AND (f.deleted_at IS NULL OR f.deleted_at='')
+              AND (cu.deleted_at IS NULL OR cu.deleted_at='')''',
+        (sample_id,),
+    ).fetchone()
     if not row or not row['relative_path']: return 404, {'error': '見本画像はありません。'}
     root = (DATA_DIR / 'images' / 'names').resolve()
     path = (DATA_DIR / row['relative_path']).resolve()
@@ -8562,6 +8654,183 @@ def _owner(user):
     if blocked: return blocked
     if user['role'] != 'owner': return 403, {'error': 'ネーム情報の登録と修正は主管理者だけができます。'}
     return None
+
+def _owner_delete(user):
+    blocked = _require(user)
+    if blocked: return blocked
+    if user['role'] != 'owner': return 403, {'error': 'ネーム情報の削除と復元は主管理者だけができます。'}
+    return None
+
+def _actor_fields(user):
+    return _now(), user['id'], user['name'] or ''
+
+def soft_delete_customer(handler, c, d):
+    """大元（顧客）を論理削除。未削除の子形式もまとめて非表示（deleted_with_parent=1）。画像ファイルは残す。"""
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    try: customer_id = int(d.get('id'))
+    except (TypeError, ValueError): return 400, {'error': '顧客が見つかりません。'}
+    row = c.execute(
+        f'SELECT * FROM name_customers WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (customer_id,),
+    ).fetchone()
+    if not row: return 404, {'error': '顧客が見つかりません。'}
+    child_count = c.execute(
+        f'SELECT COUNT(*) n FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (customer_id,),
+    ).fetchone()['n']
+    at, by_id, by_name = _actor_fields(handler.user)
+    c.execute(
+        'UPDATE name_customers SET deleted_at=?, deleted_by=?, deleted_by_name=? WHERE id=?',
+        (at, by_id, by_name, customer_id),
+    )
+    c.execute(
+        f'''UPDATE name_formats SET deleted_at=?, deleted_by=?, deleted_by_name=?, deleted_with_parent=1
+            WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED}''',
+        (at, by_id, by_name, customer_id),
+    )
+    return 200, {
+        'ok': True, 'kind': 'customer', 'id': customer_id,
+        'sourceName': row['source_name'], 'hiddenFormats': child_count,
+        'deletedAt': at, 'deletedByName': by_name,
+    }
+
+def soft_delete_format(handler, c, d):
+    """子情報（形式）だけを論理削除。大元と他の子は残す。画像ファイルは残す。"""
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    try: format_id = int(d.get('id'))
+    except (TypeError, ValueError): return 400, {'error': '形式が見つかりません。'}
+    row = c.execute(
+        f'SELECT * FROM name_formats WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (format_id,),
+    ).fetchone()
+    if not row: return 404, {'error': '形式が見つかりません。'}
+    customer_row = c.execute(
+        f'SELECT * FROM name_customers WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (row['customer_id'],),
+    ).fetchone()
+    if not customer_row: return 404, {'error': '形式が見つかりません。'}
+    at, by_id, by_name = _actor_fields(handler.user)
+    c.execute(
+        '''UPDATE name_formats SET deleted_at=?, deleted_by=?, deleted_by_name=?, deleted_with_parent=0
+           WHERE id=?''',
+        (at, by_id, by_name, format_id),
+    )
+    return 200, {
+        'ok': True, 'kind': 'format', 'id': format_id,
+        'format': row['format_name'], 'sourceName': customer_row['source_name'],
+        'customerId': customer_row['id'], 'deletedAt': at, 'deletedByName': by_name,
+    }
+
+def restore_customer(handler, c, d):
+    """大元を復元。親削除時に一緒に隠した子（deleted_with_parent=1）だけ戻す。個別削除の子は戻さない。"""
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    try: customer_id = int(d.get('id'))
+    except (TypeError, ValueError): return 400, {'error': '顧客が見つかりません。'}
+    row = c.execute(
+        f'SELECT * FROM name_customers WHERE id=? AND retired=0 AND {IS_SOFT_DELETED}',
+        (customer_id,),
+    ).fetchone()
+    if not row: return 404, {'error': '削除済みの顧客が見つかりません。'}
+    restored_formats = c.execute(
+        f'''SELECT COUNT(*) n FROM name_formats
+            WHERE customer_id=? AND retired=0 AND {IS_SOFT_DELETED} AND deleted_with_parent=1''',
+        (customer_id,),
+    ).fetchone()['n']
+    c.execute(
+        'UPDATE name_customers SET deleted_at=NULL, deleted_by=NULL, deleted_by_name=? WHERE id=?',
+        ('', customer_id),
+    )
+    c.execute(
+        f'''UPDATE name_formats SET deleted_at=NULL, deleted_by=NULL, deleted_by_name=?, deleted_with_parent=0
+            WHERE customer_id=? AND retired=0 AND {IS_SOFT_DELETED} AND deleted_with_parent=1''',
+        ('', customer_id),
+    )
+    return 200, {
+        'ok': True, 'kind': 'customer', 'id': customer_id,
+        'sourceName': row['source_name'], 'restoredFormats': restored_formats,
+    }
+
+def restore_format(handler, c, d):
+    """個別に削除した子情報を復元。親が削除中なら親復元後に見える。"""
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    try: format_id = int(d.get('id'))
+    except (TypeError, ValueError): return 400, {'error': '形式が見つかりません。'}
+    row = c.execute(
+        f'SELECT * FROM name_formats WHERE id=? AND retired=0 AND {IS_SOFT_DELETED}',
+        (format_id,),
+    ).fetchone()
+    if not row: return 404, {'error': '削除済みの形式が見つかりません。'}
+    customer_row = c.execute('SELECT * FROM name_customers WHERE id=?', (row['customer_id'],)).fetchone()
+    c.execute(
+        'UPDATE name_formats SET deleted_at=NULL, deleted_by=NULL, deleted_by_name=?, deleted_with_parent=0 WHERE id=?',
+        ('', format_id),
+    )
+    return 200, {
+        'ok': True, 'kind': 'format', 'id': format_id,
+        'format': row['format_name'],
+        'sourceName': customer_row['source_name'] if customer_row else '',
+        'customerId': row['customer_id'],
+        'parentDeleted': bool(customer_row and _row_deleted(customer_row)),
+    }
+
+def list_deleted(handler, c):
+    """主管理者向け削除済み一覧。親削除に巻き込まれた子は親行に含め、個別削除の子だけ別表示。"""
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    customers = []
+    for row in c.execute(
+        f'SELECT * FROM name_customers WHERE retired=0 AND {IS_SOFT_DELETED} ORDER BY deleted_at DESC, id DESC'
+    ):
+        with_parent = c.execute(
+            f'''SELECT COUNT(*) n FROM name_formats
+                WHERE customer_id=? AND retired=0 AND {IS_SOFT_DELETED} AND deleted_with_parent=1''',
+            (row['id'],),
+        ).fetchone()['n']
+        individual = c.execute(
+            f'''SELECT COUNT(*) n FROM name_formats
+                WHERE customer_id=? AND retired=0 AND {IS_SOFT_DELETED} AND deleted_with_parent=0''',
+            (row['id'],),
+        ).fetchone()['n']
+        customers.append({
+            'kind': 'customer', 'id': row['id'], 'sourceName': row['source_name'],
+            'reading': row['reading'], 'deletedAt': row['deleted_at'],
+            'deletedByName': row['deleted_by_name'] or '',
+            'hiddenWithParent': with_parent, 'individuallyDeletedFormats': individual,
+        })
+    formats = []
+    for row in c.execute(
+        f'''SELECT f.*, cu.source_name, cu.deleted_at AS customer_deleted_at
+            FROM name_formats f
+            JOIN name_customers cu ON cu.id=f.customer_id
+            WHERE f.retired=0 AND cu.retired=0
+              AND (f.deleted_at IS NOT NULL AND f.deleted_at<>'')
+              AND f.deleted_with_parent=0
+            ORDER BY f.deleted_at DESC, f.id DESC'''
+    ):
+        formats.append({
+            'kind': 'format', 'id': row['id'], 'number': _number(row['id']),
+            'format': row['format_name'], 'sourceName': row['source_name'],
+            'customerId': row['customer_id'], 'deletedAt': row['deleted_at'],
+            'deletedByName': row['deleted_by_name'] or '',
+            'parentDeleted': bool(row['customer_deleted_at']),
+        })
+    return 200, {'customers': customers, 'formats': formats}
+
+def soft_delete(handler, c, d):
+    kind = str(d.get('kind') or '').strip()
+    if kind == 'customer': return soft_delete_customer(handler, c, d)
+    if kind == 'format': return soft_delete_format(handler, c, d)
+    return 400, {'error': '削除対象を指定してください。'}
+
+def restore(handler, c, d):
+    kind = str(d.get('kind') or '').strip()
+    if kind == 'customer': return restore_customer(handler, c, d)
+    if kind == 'format': return restore_format(handler, c, d)
+    return 400, {'error': '復元対象を指定してください。'}
 
 def _text(value, limit, label):
     if value is None: value = ''
@@ -8684,15 +8953,24 @@ def _apply_customer(c, fields, customer_id):
     known = _app_customers(c)
     linked, status = _link(fields['customer'], known)
     if customer_id:
-        row = c.execute('SELECT * FROM name_customers WHERE id=? AND retired=0', (customer_id,)).fetchone()
+        row = c.execute(
+            f'SELECT * FROM name_customers WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+            (customer_id,),
+        ).fetchone()
         if not row: raise ValueError('顧客が見つかりません。')
-        other = c.execute('SELECT id FROM name_customers WHERE retired=0 AND source_name=? AND id<>?', (fields['customer'], customer_id)).fetchone()
+        other = c.execute(
+            f'SELECT id FROM name_customers WHERE retired=0 AND {NOT_SOFT_DELETED} AND source_name=? AND id<>?',
+            (fields['customer'], customer_id),
+        ).fetchone()
         if other: raise ValueError('同じ顧客名がすでにあります。その顧客に形式を追加してください。')
         changed = row['source_name'] != fields['customer'] or (row['reading'] or '') != fields['reading']
         c.execute('UPDATE name_customers SET source_name=?, reading=?, linked_name=?, link_status=?, manual=? WHERE id=?',
             (fields['customer'], fields['reading'], linked, status, 1 if changed or row['manual'] else 0, customer_id))
         return customer_id
-    found = c.execute('SELECT id FROM name_customers WHERE retired=0 AND source_name=?', (fields['customer'],)).fetchone()
+    found = c.execute(
+        f'SELECT id FROM name_customers WHERE retired=0 AND {NOT_SOFT_DELETED} AND source_name=?',
+        (fields['customer'],),
+    ).fetchone()
     if found:
         if fields['reading']:
             c.execute('UPDATE name_customers SET reading=? WHERE id=? AND reading=?', (fields['reading'], found['id'], ''))
@@ -8703,8 +8981,10 @@ def _apply_customer(c, fields, customer_id):
     return c.execute('SELECT last_insert_rowid()').fetchone()[0]
 
 def _write_format(c, fields, customer_id, current=None):
-    other = c.execute('SELECT id FROM name_formats WHERE retired=0 AND customer_id=? AND format_name=? AND id<>?',
-        (customer_id, fields['format'], current['id'] if current else 0)).fetchone()
+    other = c.execute(
+        f'SELECT id FROM name_formats WHERE retired=0 AND {NOT_SOFT_DELETED} AND customer_id=? AND format_name=? AND id<>?',
+        (customer_id, fields['format'], current['id'] if current else 0),
+    ).fetchone()
     if other: raise ValueError('この顧客に同じ形式名があります。')
     swatches = [_swatch(color) for color in fields['colors']]
     review = 1 if fields['reasons'] else 0
@@ -8752,7 +9032,10 @@ def update(handler, c, d):
     if blocked: return blocked
     try: format_id = int(d.get('id'))
     except (TypeError, ValueError): return 400, {'error': '形式が見つかりません。'}
-    current = c.execute('SELECT * FROM name_formats WHERE id=? AND retired=0', (format_id,)).fetchone()
+    current = c.execute(
+        f'SELECT * FROM name_formats WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}',
+        (format_id,),
+    ).fetchone()
     if not current: return 404, {'error': '形式が見つかりません。'}
     fields = _fields(d)
     customer_id = _apply_customer(c, fields, current['customer_id'])
