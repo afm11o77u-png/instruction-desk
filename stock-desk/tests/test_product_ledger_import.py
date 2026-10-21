@@ -2000,20 +2000,18 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-Z0')
             aux_p = g.get('auxPrimary') or {}
             self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_any_unique')
+            # 1票ずつ同数 → 最多名称でも決まらず要確認
             self.assertTrue(aux_p.get('pairNeedsChoice'))
             reasons = aux_p.get('nameReasons') or []
             self.assertTrue(
-                any('在庫0' in r or '非ゼロ' in r for r in reasons),
+                any('同数' in r or '在庫0' in r or '非ゼロ' in r for r in reasons),
                 reasons,
             )
             self.assertTrue(any('要確認' in r for r in reasons), reasons)
             self.assertTrue(g['needsDecision'])
-            # 比較一覧の要確認理由に在庫0が明示される
-            review_labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
-            self.assertTrue(
-                any('在庫0' in lab or '初期在庫' in lab for lab in review_labels),
-                review_labels,
-            )
+            votes = aux_p.get('ledgerNameVotes') or g.get('ledgerNameVotes') or []
+            self.assertEqual(len(votes), 2)
+            self.assertEqual({int(v.get('count') or 0) for v in votes}, {1})
             for d in g.get('nameCandidateDetails') or []:
                 self.assertEqual(d.get('auxStockDisplay'), '0')
                 self.assertEqual(d.get('auxStockLabel'), '初期在庫：0')
@@ -2258,7 +2256,10 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
         self.assertIn('初期在庫：', js)
         self.assertIn('sku-cand-stock', js)
         self.assertIn('自動決定済み（未登録）', js)
-        self.assertIn('対象標記の有無', js)
+        self.assertIn('全候補が確認済み在庫0', js)
+        self.assertIn('ledgerNameVotes', js)
+        py = (ROOT / 'product_ledger_import.py').read_text(encoding='utf-8')
+        self.assertIn('対象標記の有無', py)
 
 
 class MaxPositiveStockPickTest(unittest.TestCase):
@@ -2952,8 +2953,8 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
         self.assertNotEqual(outside_fg['color'], '緑')
         self.assertEqual(outside_fg['plannedName'], 'つなぎ')
 
-    def test_9_471_salon_black_preferred_when_stock_undecided(self):
-        """品番9-471: 在庫未決 → サロン（黒）採用、登録名サロン／色黒。"""
+    def test_9_471_salon_apron_max_name_when_all_stock_zero(self):
+        """品番9-471: 全候補在庫0 → 台帳最多名（サロンエプロン2行）を色優先より採用。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -2974,30 +2975,22 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             })
             g = next(x for x in preview['skuGroups'] if x['code'] == '9-471')
             aux_p = g.get('auxPrimary') or {}
-            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'explicit_color_name')
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'explicit_color_name')
             self.assertFalse(g['needsDecision'])
             self.assertTrue(g.get('auxStockPickAuto'))
-            self.assertEqual(aux_p.get('sourceAdoptedName'), 'サロン（黒）')
-            self.assertEqual(aux_p.get('plannedRegisteredName') or aux_p.get('suggestedOfficialName'), 'サロン')
-            self.assertEqual(aux_p.get('plannedRegisteredColor') or aux_p.get('adoptedColor'), '黒')
-            self.assertIn('黒', aux_p.get('changeSummary') or g.get('changeSummary') or '')
-            self.assertEqual(g.get('plannedOfficialName'), 'サロン')
-            self.assertEqual(g.get('plannedColor') or g.get('plannedRegisteredColor'), '黒')
-            kept_names = []
-            for k in (aux_p.get('keptPackages') or []):
-                kept_names.extend(k.get('ledgerNames') or ([k.get('productName')] if k.get('productName') else []))
-            self.assertTrue(
-                any('サロンエプロン' in n for n in kept_names)
-                or any('サロンエプロン' in n for n in (g.get('nameCandidates') or [])),
-                kept_names,
+            self.assertEqual(
+                aux_p.get('plannedRegisteredName') or aux_p.get('suggestedOfficialName'),
+                'サロンエプロン',
             )
+            self.assertIn('2行', aux_p.get('pairAdoptionRule') or '')
 
             result = pli.commit_preview(c, {
                 'file': csv_b64_from_text(ledger), 'name': '9471.csv',
                 'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
                 'previewFingerprint': preview['previewFingerprint'],
                 'previewAt': preview['previewAt'],
-                'token': 'pl-9471-color',
+                'token': 'pl-9471-maxname',
                 '_canWrite': True, '_actor': {'name': 't'},
             }, db_path=str(path))
             c.commit()
@@ -3006,16 +2999,46 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             prod = c.execute(
                 "SELECT id,name,color FROM products WHERE code='9-471' AND merged_into_id IS NULL"
             ).fetchone()
-            self.assertEqual(prod['name'], 'サロン')
-            self.assertEqual(prod['color'], '黒')
+            self.assertEqual(prod['name'], 'サロンエプロン')
             aliases = {
                 r['value'] for r in c.execute(
                     "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
                     (prod['id'],),
                 )
             }
-            self.assertIn('サロン（黒）', aliases)
-            self.assertTrue(any('サロンエプロン' in a for a in aliases))
+            self.assertTrue(
+                any('サロンエプロン' in a or 'サロン（黒）' in a or a == '＊サロンエプロン' for a in aliases)
+                or 'サロンエプロン' in aliases,
+                aliases,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_9_471_salon_black_color_when_stock_undecidable(self):
+        """在庫が不正/空で未決のときだけ明示色優先（全ゼロ最多名ルールは使わない）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,9-471,サロン（黒）,M',
+                '顧客A,仕入A,9-471,サロンエプロン,L',
+                '顧客A,仕入A,9-471,＊サロンエプロン,LL',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'サロン（黒）', '9-471', 'M', ''),
+                opening_line('仕入A', '顧客A', 'サロンエプロン', '9-471', 'L', '0'),
+                opening_line('仕入A', '顧客A', '＊サロンエプロン', '9-471', 'LL', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '9471-empty.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == '9-471')
+            aux_p = g.get('auxPrimary') or {}
+            # 空在庫は0扱いでない → 最多名ルールなし。色でも自動確定しない（不正時）
+            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
         finally:
             c.close()
             folder.cleanup()
@@ -3044,6 +3067,7 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             folder.cleanup()
 
     def test_different_explicit_colors_need_review(self):
+        """全ゼロ＋票同数 → 色優先せず要確認（票数を示す）。色差フラグは分析側で残る。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -3065,13 +3089,15 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             self.assertTrue(g['needsDecision'])
             self.assertTrue(g.get('colorDiffPossible'))
             reasons = aux_p.get('nameReasons') or []
-            self.assertTrue(any('異なる色' in r for r in reasons), reasons)
+            self.assertTrue(any('同数' in r for r in reasons), reasons)
+            votes = aux_p.get('ledgerNameVotes') or []
+            self.assertEqual(sorted(int(v['count']) for v in votes), [1, 1])
         finally:
             c.close()
             folder.cleanup()
 
     def test_same_color_different_names_color_only(self):
-        """同じ明示色・異なる商品名 → 色は提案、名は要確認。"""
+        """同じ明示色・異なる商品名。全ゼロ同数票 → 色提案より票同数の要確認。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -3090,11 +3116,37 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-SC')
             aux_p = g.get('auxPrimary') or {}
             self.assertTrue(g['needsDecision'])
-            self.assertTrue(aux_p.get('colorDecidedNameUndecided'))
-            self.assertEqual(aux_p.get('adoptedColor') or aux_p.get('plannedRegisteredColor'), '黒')
-            self.assertIn('黒', aux_p.get('changeSummary') or '')
+            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'explicit_color_name')
             reasons = aux_p.get('nameReasons') or []
-            self.assertTrue(any('商品名' in r and '未確定' in r for r in reasons), reasons)
+            self.assertTrue(any('同数' in r for r in reasons), reasons)
+            votes = aux_p.get('ledgerNameVotes') or []
+            self.assertEqual(len(votes), 2)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_same_color_different_names_when_stock_undecidable(self):
+        """在庫不正で未決のとき: 同じ明示色・異なる商品名 → 色は提案、名は要確認。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-SC2,サロン（黒）,M',
+                '顧客A,仕入A,SKU-SC2,エプロン（黒）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'サロン（黒）', 'SKU-SC2', 'M', 'x'),
+                opening_line('仕入A', '顧客A', 'エプロン（黒）', 'SKU-SC2', 'L', 'y'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sc2.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-SC2')
+            aux_p = g.get('auxPrimary') or {}
+            # 不正時は色でも自動確定しない
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+            self.assertNotEqual(aux_p.get('nameAdoptionRuleCode'), 'ledger_max_name_zero_stock')
         finally:
             c.close()
             folder.cleanup()
@@ -3175,11 +3227,13 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
         try:
             ledger = tiny_ledger_rows([
                 '顧客A,仕入A,9-471,サロン（黒）,M',
-                '顧客A,仕入A,9-471,サロンエプロン,L',
+                '顧客A,仕入A,9-471,サロン（黒）,L',
+                '顧客A,仕入A,9-471,サロンエプロン,LL',
             ])
             aux = tiny_opening_rows([
                 opening_line('仕入A', '顧客A', 'サロン（黒）', '9-471', 'M', '0'),
-                opening_line('仕入A', '顧客A', 'サロンエプロン', '9-471', 'L', '0'),
+                opening_line('仕入A', '顧客A', 'サロン（黒）', '9-471', 'L', '0'),
+                opening_line('仕入A', '顧客A', 'サロンエプロン', '9-471', 'LL', '0'),
             ])
             preview = pli.build_preview(c, {
                 'file': csv_b64_from_text(ledger), 'name': 'man.csv',
@@ -3196,19 +3250,13 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
                 '_canWrite': True, '_actor': {'name': 't'},
             })
             g = next(x for x in preview['skuGroups'] if x['code'] == '9-471')
-            # 手動があるので自動クリアしない
-            self.assertTrue(g.get('auxStockPickManualOverride') or g.get('needsDecision') is False)
+            # 手動があるので自動クリアしない（最多名提案があっても上書きしない）
+            self.assertTrue(g.get('auxStockPickManualOverride'))
+            self.assertFalse(g.get('auxStockPickAuto'))
             name_plan = g.get('namePlan') or {}
-            # ユーザー指定公式名が残る
-            self.assertEqual(
-                (preview.get('skuDecisions') or {}).get('9-471', {}).get('officialName')
-                or name_plan.get('officialName')
-                or 'サロンエプロン',
-                'サロンエプロン',
-            )
-            # 提案自体は色優先のまま残ってよい
+            self.assertEqual(name_plan.get('officialName'), 'サロンエプロン')
             aux_p = g.get('auxPrimary') or {}
-            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'explicit_color_name')
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'ledger_max_name_zero_stock')
         finally:
             c.close()
             folder.cleanup()
@@ -3494,6 +3542,308 @@ class StockAdoptColorwayReviewTest(unittest.TestCase):
         finally:
             c.close()
             folder.cleanup()
+
+
+class ZeroStockMaxLedgerNameTest(unittest.TestCase):
+    """全候補が確認済み在庫0のとき、商品台帳の最多正規化名を採用（SKU 6801-008 型）。
+
+    本番DBへの商品登録・削除・在庫ミューテーションはしない（一時DBのみ）。
+    """
+
+    CODE = '6801-008'
+
+    def test_normalize_merges_kana_space_colorway_used_mark(self):
+        a = '長袖ブルゾン　ネイビー×シルバーグレー'
+        b = '長袖ブルゾン ﾈｲﾋﾞｰ*ｼﾙﾊﾞｰｸﾞﾚｰ'
+        c = '＊長袖ブルゾン ネイビー×シルバーグレー'
+        key = pli.normalize_ledger_name_for_vote(a)
+        self.assertEqual(key, '長袖ブルゾン ネイビー×シルバーグレー')
+        self.assertEqual(pli.normalize_ledger_name_for_vote(b), key)
+        self.assertEqual(pli.normalize_ledger_name_for_vote(c), key)
+        self.assertNotEqual(
+            pli.normalize_ledger_name_for_vote('ネイビー'),
+            pli.normalize_ledger_name_for_vote('ネイビー×シルバーグレー'),
+        )
+
+    def test_6801_008_notation_merge_adopts_max_name(self):
+        """表記ゆれを合算し最多名を採用。色振り分け・サイズ差は1票ずつ。"""
+        folder, path, c = newdb()
+        before = stock_snap(c)
+        try:
+            ledger = tiny_ledger_rows([
+                # 配色（全角×）: 3行
+                'ユニシス,㈱ユニコロン,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+                'ユニシス,㈱ユニコロン,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,M',
+                'ユニシス,㈱ユニコロン,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,L',
+                # 配色（半角カナ*）: 2行 → 上記と合算5票
+                '㈱合田観光商事　ひまわり,㈱ユニコロン,6801-008,長袖ブルゾン　ﾈｲﾋﾞｰ*ｼﾙﾊﾞｰｸﾞﾚｰ,S',
+                '㈱合田観光商事　ひまわり,㈱ユニコロン,6801-008,＊長袖ブルゾン　ﾈｲﾋﾞｰ*ｼﾙﾊﾞｰｸﾞﾚｰ,M',
+                # 別名称: 2行
+                '㈱ダイイチ,アイトス㈱,6801-008,長袖ブルゾン,L',
+                '㈱ダイイチ,アイトス㈱,6801-008,長袖ブルゾン,LL',
+                # ネイビーのみ（配色とは別）: 1行
+                '㈱道新総合印刷,アイトス㈱,6801-008,長袖ブルゾン　ネイビー,LL',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('㈱ユニコロン', 'ユニシス', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'S', '0'),
+                opening_line('㈱ユニコロン', 'ユニシス', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'M', '0'),
+                opening_line('㈱ユニコロン', 'ユニシス', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'L', '0'),
+                opening_line('㈱ユニコロン', '㈱合田観光商事　ひまわり', '長袖ブルゾン　ﾈｲﾋﾞｰ*ｼﾙﾊﾞｰｸﾞﾚｰ', '6801-008', 'S', '0'),
+                opening_line('㈱ユニコロン', '㈱合田観光商事　ひまわり', '＊長袖ブルゾン　ﾈｲﾋﾞｰ*ｼﾙﾊﾞｰｸﾞﾚｰ', '6801-008', 'M', '0'),
+                opening_line('アイトス㈱', '㈱ダイイチ', '長袖ブルゾン', '6801-008', 'L', '0'),
+                opening_line('アイトス㈱', '㈱ダイイチ', '長袖ブルゾン', '6801-008', 'LL', '0'),
+                opening_line('アイトス㈱', '㈱道新総合印刷', '長袖ブルゾン　ネイビー', '6801-008', 'LL', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '6801-008.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('pairAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            self.assertFalse(aux_p.get('pairNeedsChoice'))
+            self.assertFalse(g['needsDecision'])
+            self.assertTrue(g.get('auxStockPickAuto'))
+            rule = aux_p.get('pairAdoptionRule') or g.get('auxStockPickReason') or ''
+            self.assertIn('全候補の在庫が0のため、商品台帳で最多の名称を採用', rule)
+            self.assertIn('5行', rule)
+            self.assertEqual(g.get('plannedRegisteredName') or aux_p.get('plannedRegisteredName'), '長袖ブルゾン')
+            self.assertEqual(
+                g.get('plannedRegisteredColor') or aux_p.get('plannedRegisteredColor'),
+                'ネイビー×シルバーグレー',
+            )
+            votes = aux_p.get('ledgerNameVotes') or []
+            by_name = {v['normalizedName']: int(v['count']) for v in votes}
+            self.assertEqual(by_name.get('長袖ブルゾン ネイビー×シルバーグレー'), 5)
+            self.assertEqual(by_name.get('長袖ブルゾン'), 2)
+            self.assertEqual(by_name.get('長袖ブルゾン ネイビー'), 1)
+            # 原文表記→登録先の対応が残る
+            mappings = (g.get('namePlan') or {}).get('nameMappings') or []
+            originals = {m.get('originalName') for m in mappings}
+            self.assertTrue(any('ﾈｲﾋﾞｰ' in (o or '') or 'ネイビー×' in (o or '') for o in originals))
+            self.assertEqual(stock_snap(c), before)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_max_tie_leaves_review_with_counts(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,M',
+                '顧客B,仕入B,6801-008,長袖ブルゾン,S',
+                '顧客B,仕入B,6801-008,長袖ブルゾン,M',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'S', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'M', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン', '6801-008', 'S', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン', '6801-008', 'M', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'tie.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            aux_p = g.get('auxPrimary') or {}
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(
+                any('同数' in (r or '') for r in (aux_p.get('nameReasons') or [])),
+                aux_p.get('nameReasons'),
+            )
+            votes = aux_p.get('ledgerNameVotes') or []
+            self.assertEqual(sorted(int(v['count']) for v in votes), [2, 2])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_prefers_max_count_over_explicit_color(self):
+        """全ゼロ時は明示色より最多票を優先。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン,M',
+                '顧客A,仕入A,6801-008,長袖ブルゾン,L',
+                '顧客B,仕入B,6801-008,長袖ブルゾン　ネイビー,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン', '6801-008', 'S', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン', '6801-008', 'M', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン', '6801-008', 'L', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン　ネイビー', '6801-008', 'S', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'color.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('pairAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            self.assertNotEqual(aux_p.get('pairAdoptionRuleCode'), 'explicit_color_name')
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '長袖ブルゾン')
+            self.assertFalse(aux_p.get('adoptedColor'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_no_matching_aux_rows_does_not_treat_as_zero(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,M',
+                '顧客B,仕入B,6801-008,長袖ブルゾン,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('別仕入', '別顧客', '別商品', '99999', 'M', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'nomatch.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            aux_p = g.get('auxPrimary') or {}
+            # 該当なしは在庫0扱いにしない → 最多名称ルールは発動しない
+            self.assertNotEqual(aux_p.get('pairAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            self.assertFalse(aux_p.get('ledgerNameVoteAdopted'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_invalid_qty_does_not_treat_as_zero(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,M',
+                '顧客B,仕入B,6801-008,長袖ブルゾン,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'S', 'abc'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'M', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン', '6801-008', 'S', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'badqty.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            aux_p = g.get('auxPrimary') or {}
+            self.assertNotEqual(aux_p.get('pairAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            self.assertTrue(aux_p.get('pairNeedsChoice'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_positive_stock_still_wins_over_max_name(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン,M',
+                '顧客A,仕入A,6801-008,長袖ブルゾン,L',
+                '顧客B,仕入B,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン', '6801-008', 'S', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン', '6801-008', 'M', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン', '6801-008', 'L', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'S', '7'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'pos.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            aux_p = g.get('auxPrimary') or {}
+            self.assertIn(aux_p.get('pairAdoptionRuleCode'), ('aux_nonzero_pair', 'aux_max_positive_stock'))
+            self.assertNotEqual(aux_p.get('pairAdoptionRuleCode'), 'ledger_max_name_zero_stock')
+            # 在庫7の配色側を採用（登録名は色振り分け後「長袖ブルゾン」）
+            self.assertEqual(aux_p.get('plannedRegisteredName') or aux_p.get('suggestedOfficialName'), '長袖ブルゾン')
+            self.assertEqual(
+                aux_p.get('plannedRegisteredColor') or aux_p.get('adoptedColor'),
+                'ネイビー×シルバーグレー',
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_manual_override_beats_max_name(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,M',
+                '顧客B,仕入B,6801-008,長袖ブルゾン,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'S', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'M', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン', '6801-008', 'S', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'manual.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'skuDecisions': {
+                    '6801-008': {
+                        'decision': 'merge',
+                        'officialName': '手決めブルゾン',
+                        'primarySupplier': '仕入B',
+                        'primarySupplierManual': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            self.assertTrue(g.get('auxStockPickManualOverride'))
+            self.assertFalse(g.get('auxStockPickAuto'))
+            name_plan = g.get('namePlan') or {}
+            self.assertEqual(name_plan.get('officialName'), '手決めブルゾン')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_color_split_override_beats_max_name(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,S',
+                '顧客A,仕入A,6801-008,長袖ブルゾン　ネイビー×シルバーグレー,M',
+                '顧客B,仕入B,6801-008,長袖ブルゾン　ネイビー,S',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'S', '0'),
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー×シルバーグレー', '6801-008', 'M', '0'),
+                opening_line('仕入B', '顧客B', '長袖ブルゾン　ネイビー', '6801-008', 'S', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'csplit.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'skuDecisions': {'6801-008': {'decision': 'color_split'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            self.assertTrue(g.get('colorSplit') or (g.get('decision') or {}).get('decision') == 'color_split')
+            self.assertTrue(g.get('excludeAuxStockAutoMerge') or g.get('auxStockPickManualOverride'))
+            self.assertFalse(g.get('auxStockPickAuto'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_ui_mentions_zero_stock_max_name(self):
+        js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
+        self.assertIn('全候補が確認済み在庫0', js)
+        self.assertIn('ledgerNameVotes', js)
+        self.assertIn('商品台帳の名称票', js)
 
 
 if __name__ == '__main__':

@@ -16,6 +16,7 @@ import io
 import json
 import re
 import time
+import unicodedata
 from collections import defaultdict
 
 import legacy_csv_bulk_import as bulk
@@ -23,6 +24,11 @@ import legacy_csv_import as legacy
 import product_ledger_paren as paren_classify
 import stock
 import stock_product_merge
+
+# 半角カタカナ（濁点・半濁点含む）→ 全角カタカナ用
+_HALFWIDTH_KATAKANA_RE = re.compile(r'[\uff61-\uff9f]+')
+# 配色つなぎ（先頭中古標記を除いたあとの * / ＊ / ×）
+_COLORWAY_SEP_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
 
 REQUIRED_COLUMNS = ('顧客', '仕入先', '商品コード', '商品名', 'サイズ')
 IMPORT_NOTE = '旧CSV一括取り込み'
@@ -383,18 +389,32 @@ def plan_provisional_official_name(group, raw_decision=None):
     earliest_name = ''
     earliest_row = None
     name_row_map = []
+
+    def _note_name_row(n, rn):
+        nonlocal earliest_name, earliest_row
+        n = stock.text(n)
+        if not n:
+            return
+        if n not in all_csv_names:
+            all_csv_names.append(n)
+        name_row_map.append({'originalName': n, 'sourceRowNo': rn})
+        try:
+            rn_i = int(rn)
+        except (TypeError, ValueError):
+            return
+        if earliest_row is None or rn_i < int(earliest_row):
+            earliest_row = rn_i
+            earliest_name = n
+
     for v in variants:
+        source_rows = v.get('sourceRows') or []
+        if source_rows:
+            for sr in source_rows:
+                _note_name_row(sr.get('productName'), sr.get('rowNo'))
+            continue
         for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
-            n = stock.text(n)
-            if not n:
-                continue
-            if n not in all_csv_names:
-                all_csv_names.append(n)
             for rn in v.get('rowNos') or []:
-                name_row_map.append({'originalName': n, 'sourceRowNo': rn})
-                if earliest_row is None or int(rn) < int(earliest_row):
-                    earliest_row = rn
-                    earliest_name = n
+                _note_name_row(n, rn)
 
     existing = group.get('existingProducts') or []
     existing_name = ''
@@ -1276,8 +1296,9 @@ def _undecided_pair_result(
     adopted_color='',
     color_decided_name_undecided=False,
     change_summary='',
+    ledger_name_votes=None,
 ):
-    return {
+    out = {
         **empty,
         'nameCandidates': name_candidates,
         'pairCandidates': pair_candidates,
@@ -1287,6 +1308,380 @@ def _undecided_pair_result(
         'colorDecidedNameUndecided': bool(color_decided_name_undecided),
         'changeSummary': stock.text(change_summary or ''),
     }
+    if ledger_name_votes is not None:
+        out['ledgerNameVotes'] = ledger_name_votes
+    return out
+
+
+def _ledger_source_rows_for_votes(group):
+    """商品台帳CSVの各データ行を1票として列挙（同一行の二重計上なし）。"""
+    rows = []
+    seen = set()
+    for v in group.get('variants') or []:
+        source_rows = v.get('sourceRows')
+        if source_rows:
+            for sr in source_rows:
+                rn = sr.get('rowNo')
+                try:
+                    rn_key = int(rn)
+                except (TypeError, ValueError):
+                    rn_key = rn
+                if rn_key in seen:
+                    continue
+                seen.add(rn_key)
+                name = stock.text(sr.get('productName') or '')
+                if not name:
+                    continue
+                rows.append({
+                    'rowNo': rn_key,
+                    'productName': name,
+                    'supplier': stock.text(sr.get('supplier') or v.get('supplier') or ''),
+                    'preNormalizeName': name,
+                })
+            continue
+        # フォールバック: バリアント代表名で各行を1票（sourceRows 未付与時）
+        display = (
+            prefer_unmarked_product_name(v.get('csvNames') or [])
+            or stock.text(v.get('productName') or '')
+        )
+        if not display:
+            continue
+        for rn in v.get('rowNos') or []:
+            try:
+                rn_key = int(rn)
+            except (TypeError, ValueError):
+                rn_key = rn
+            if rn_key in seen:
+                continue
+            seen.add(rn_key)
+            rows.append({
+                'rowNo': rn_key,
+                'productName': display,
+                'supplier': stock.text(v.get('supplier') or ''),
+                'preNormalizeName': display,
+            })
+    return rows
+
+
+def _count_ledger_name_votes(group):
+    """正規化名ごとの票数（商品台帳行のみ。初期在庫行・在庫数は混ぜない）。"""
+    buckets = {}
+    order = []
+    for row in _ledger_source_rows_for_votes(group):
+        key = normalize_ledger_name_for_vote(row['productName'])
+        if not key:
+            continue
+        slot = buckets.get(key)
+        if not slot:
+            slot = {
+                'normalizedName': key,
+                'count': 0,
+                'preNormalizeNames': [],
+                'rowNos': [],
+            }
+            buckets[key] = slot
+            order.append(key)
+        slot['count'] += 1
+        raw = row['preNormalizeName']
+        if raw and raw not in slot['preNormalizeNames']:
+            slot['preNormalizeNames'].append(raw)
+        if row['rowNo'] not in slot['rowNos']:
+            slot['rowNos'].append(row['rowNo'])
+    return [buckets[k] for k in order]
+
+
+def _all_candidates_confirmed_stock_zero(candidates):
+    """全候補が「確認済み在庫0」か。
+
+    初期在庫CSVなし・該当行なし・照合不能・数量不正/空は在庫0扱いしない。
+    """
+    if not candidates:
+        return False
+    for cand in candidates:
+        if not cand.get('hasAuxMatch'):
+            return False
+        if cand.get('auxStockTotal') is None:
+            return False
+        if cand.get('hasNonZeroStock') or cand.get('hasPositiveStock') or cand.get('hasNegativeStock'):
+            return False
+        try:
+            if int(cand.get('auxStockTotal') or 0) != 0:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _candidate_matches_vote_key(cand, vote_key):
+    key = stock.text(vote_key or '')
+    if not key:
+        return False
+    names = list(cand.get('ledgerNames') or [])
+    display = stock.text(cand.get('productName') or '')
+    if display and display not in names:
+        names = [display, *names]
+    for n in names:
+        if normalize_ledger_name_for_vote(n) == key:
+            return True
+    return False
+
+
+def _full_package_for_adopted_ledger_name(cand, adopted_name):
+    """票で決めた正規化名をソースに色・加工・素材を振り分けたパッケージ。"""
+    names = list(cand.get('ledgerNames') or [])
+    display = format_ledger_adopted_name(adopted_name) or stock.text(adopted_name or '')
+    pc = paren_classify.split_name_and_color(display)
+    planned = stock.text(pc.get('plannedName') or '') or display
+    color = stock.text(pc.get('color') or '')
+    change_summary = stock.text(pc.get('changeSummary') or '')
+    if not change_summary and color:
+        change_summary = f"商品名から色『{color}』を設定します"
+    return {
+        'productName': display,
+        'sourceName': display,
+        'plannedName': planned,
+        'supplier': stock.text(cand.get('supplier') or ''),
+        'ledgerNames': names,
+        'color': color,
+        'colorKey': stock.text(pc.get('colorKey') or '') or paren_classify.color_match_key(color),
+        'colorSource': stock.text(pc.get('colorSource') or ''),
+        'processing': stock.text(pc.get('processing') or ''),
+        'material': stock.text(pc.get('material') or ''),
+        'parenNeedsConfirm': bool(pc.get('needsConfirm')),
+        'parenConfirmReasons': list(pc.get('confirmReasons') or []),
+        'autoClassified': bool(pc.get('autoClassified')),
+        'hasExplicitColor': bool(pc.get('hasExplicitColor') or color),
+        'changeSummary': change_summary,
+        'sizes': list(cand.get('sizes') or []),
+        'customers': list(cand.get('customers') or []),
+        'variantKey': cand.get('variantKey') or '',
+    }
+
+
+def _pick_candidate_for_vote_name(matching):
+    """採用名に紐づく候補から仕入先を既存規則で選ぶ（行順では選ばない）。"""
+    pool = list(matching or [])
+    if not pool:
+        return None
+    if len(pool) == 1:
+        return pool[0]
+    suppliers = []
+    seen = set()
+    for c in pool:
+        s = stock.text(c.get('supplier') or '')
+        key = identity_match_key(s)
+        if not s or key in seen:
+            continue
+        seen.add(key)
+        suppliers.append(c)
+    if len(suppliers) == 1:
+        return suppliers[0]
+    positive = [c for c in pool if c.get('hasPositiveStock')]
+    if len(positive) == 1:
+        return positive[0]
+    with_rows = [c for c in pool if c.get('hasAuxMatch')]
+    if len(with_rows) == 1:
+        return with_rows[0]
+    # 複数仕入先かつ在庫では決まらない → 行順では選ばない
+    return None
+
+
+def _adopt_ledger_max_name_package(
+    hit,
+    *,
+    candidates,
+    adopted_name,
+    vote_count,
+    votes,
+    reasons=None,
+):
+    """最多名称採用のフルパッケージ結果。"""
+    package = _full_package_for_adopted_ledger_name(hit, adopted_name)
+    kept = []
+    win_key = normalize_ledger_name_for_vote(adopted_name)
+    for cand in candidates or []:
+        if _candidate_matches_vote_key(cand, win_key):
+            # 同一正規化名の別仕入先は別名パッケージではなく仕入先差として残す
+            if identity_match_key(cand.get('supplier') or '') == identity_match_key(
+                hit.get('supplier') or ''
+            ):
+                continue
+            kept.append(_full_package_for_candidate(cand))
+            continue
+        kept.append(_full_package_for_candidate(cand))
+    if package.get('parenNeedsConfirm'):
+        chosen_name = package['productName']
+    elif package.get('color') and package.get('plannedName'):
+        chosen_name = package['plannedName']
+    elif package.get('autoClassified') and package.get('plannedName'):
+        chosen_name = package['plannedName']
+    else:
+        chosen_name = package['productName']
+    change_summary = stock.text(package.get('changeSummary') or '')
+    if not change_summary and package.get('color'):
+        change_summary = f"商品名から色『{package['color']}』を設定します"
+    package['changeSummary'] = change_summary
+    rule = (
+        f'全候補の在庫が0のため、商品台帳で最多の名称を採用'
+        f'（表記違いを合算：{int(vote_count)}行）'
+    )
+    return {
+        'suggestedOfficialName': chosen_name,
+        'suggestedPrimarySupplier': package['supplier'],
+        'officialNameNeedsChoice': False,
+        'pairNeedsChoice': False,
+        'nameAdoptionRule': rule,
+        'nameAdoptionRuleCode': 'ledger_max_name_zero_stock',
+        'pairAdoptionRule': rule,
+        'pairAdoptionRuleCode': 'ledger_max_name_zero_stock',
+        'nameCandidates': [
+            c.get('productName') for c in (candidates or []) if c.get('productName')
+        ],
+        'pairCandidates': [_pair_candidate_payload(c) for c in (candidates or [])],
+        'nameReasons': list(reasons or []),
+        'adoptedPackage': package,
+        'keptPackages': kept,
+        'adoptedColor': package.get('color') or '',
+        'adoptedProcessing': package.get('processing') or '',
+        'adoptedMaterial': package.get('material') or '',
+        'sourceAdoptedName': package.get('sourceName') or package.get('productName') or '',
+        'plannedRegisteredName': chosen_name,
+        'plannedRegisteredColor': package.get('color') or '',
+        'changeSummary': change_summary,
+        'colorDecidedNameUndecided': False,
+        'ledgerNameVotes': votes,
+        'ledgerNameVoteAdopted': {
+            'normalizedName': win_key,
+            'count': int(vote_count),
+            'preNormalizeNames': list(
+                next(
+                    (v.get('preNormalizeNames') or [] for v in (votes or [])
+                     if v.get('normalizedName') == win_key),
+                    [],
+                )
+            ),
+        },
+    }
+
+
+def _try_ledger_max_name_adoption(
+    group,
+    *,
+    candidates,
+    name_candidates,
+    pair_candidates,
+    reasons,
+    empty,
+):
+    """全候補が確認済み在庫0のとき、商品台帳の最多正規化名を採用する。
+
+    明示色優先よりこちらを優先。同数最多は要確認（候補＋票数を示す）。
+    """
+    votes = _count_ledger_name_votes(group)
+    if not votes:
+        return None
+    max_count = max(int(v.get('count') or 0) for v in votes)
+    winners = [v for v in votes if int(v.get('count') or 0) == max_count]
+    vote_payload = [
+        {
+            'normalizedName': v.get('normalizedName') or '',
+            'count': int(v.get('count') or 0),
+            'preNormalizeNames': list(v.get('preNormalizeNames') or []),
+            'rowNos': list(v.get('rowNos') or []),
+        }
+        for v in votes
+    ]
+    if len(winners) != 1:
+        bits = [
+            f'{v.get("normalizedName") or "?"}（{int(v.get("count") or 0)}行）'
+            for v in sorted(winners, key=lambda x: x.get('normalizedName') or '')
+        ]
+        tie_reasons = list(reasons or []) + [
+            '全候補の在庫が0だが、商品台帳の最多名称が同数のため要確認：'
+            f'{"／".join(bits)}。手動でメイン候補を選んでください。'
+        ]
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=tie_reasons,
+            ledger_name_votes=vote_payload,
+        )
+
+    win = winners[0]
+    win_key = win.get('normalizedName') or ''
+    adopted_name = format_ledger_adopted_name(win_key) or win_key
+    matching = [c for c in candidates if _candidate_matches_vote_key(c, win_key)]
+    if not matching:
+        # 票はあるが候補照合できない（理論上まれ）→ 要確認
+        return _undecided_pair_result(
+            empty=empty,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=list(reasons or []) + [
+                '商品台帳の最多名称に対応する候補を特定できません（要確認）。'
+            ],
+            ledger_name_votes=vote_payload,
+        )
+    hit = _pick_candidate_for_vote_name(matching)
+    if hit is None:
+        # 名称は決まっても仕入先は既存規則で未決 → 名称提案＋仕入先要確認（行順では選ばない）
+        package = _full_package_for_adopted_ledger_name(matching[0], adopted_name)
+        package['supplier'] = ''
+        chosen_name = (
+            package.get('plannedName')
+            if package.get('color') and not package.get('parenNeedsConfirm')
+            else package.get('productName')
+        ) or adopted_name
+        rule = (
+            f'全候補の在庫が0のため、商品台帳で最多の名称を採用'
+            f'（表記違いを合算：{int(win.get("count") or 0)}行）。'
+            '仕入先は複数あるため手動で選んでください（行順では選びません）。'
+        )
+        return {
+            **empty,
+            'suggestedOfficialName': chosen_name,
+            'suggestedPrimarySupplier': '',
+            'officialNameNeedsChoice': False,
+            'pairNeedsChoice': True,
+            'nameAdoptionRule': rule,
+            'nameAdoptionRuleCode': 'ledger_max_name_zero_stock',
+            'pairAdoptionRule': rule,
+            'pairAdoptionRuleCode': 'ledger_max_name_zero_stock',
+            'nameCandidates': name_candidates,
+            'pairCandidates': pair_candidates,
+            'nameReasons': list(reasons or []) + [rule],
+            'adoptedPackage': package,
+            'keptPackages': [
+                _full_package_for_candidate(c)
+                for c in candidates
+                if not _candidate_matches_vote_key(c, win_key)
+            ],
+            'adoptedColor': package.get('color') or '',
+            'adoptedProcessing': package.get('processing') or '',
+            'adoptedMaterial': package.get('material') or '',
+            'sourceAdoptedName': package.get('sourceName') or '',
+            'plannedRegisteredName': chosen_name,
+            'plannedRegisteredColor': package.get('color') or '',
+            'changeSummary': package.get('changeSummary') or '',
+            'colorDecidedNameUndecided': False,
+            'ledgerNameVotes': vote_payload,
+            'ledgerNameVoteAdopted': {
+                'normalizedName': win_key,
+                'count': int(win.get('count') or 0),
+                'preNormalizeNames': list(win.get('preNormalizeNames') or []),
+            },
+            'nameDecidedSupplierUndecided': True,
+        }
+
+    return _adopt_ledger_max_name_package(
+        hit,
+        candidates=candidates,
+        adopted_name=adopted_name,
+        vote_count=int(win.get('count') or 0),
+        votes=vote_payload,
+        reasons=reasons,
+    )
 
 
 def _try_explicit_color_adoption(
@@ -1422,8 +1817,10 @@ def suggest_main_candidate_from_aux(group, aux_index):
     - 候補が1組 → 在庫0でもその候補のフルパッケージを採用
     - 正の在庫合計が最大の候補が一意 → そのフルセット（名・仕入先・色・加工・素材）を採用
     - 正の在庫がなく、負の在庫がある候補がちょうど1つ → その候補を採用
-    - 正の最大が同数／負が複数／全ゼロ／数量不正/空 → 在庫では確定せず、
+    - 正の最大が同数／負が複数／数量不正/空 → 在庫では確定せず、
       続けて明示色優先（色なしは色違いにしない。異なる色同士は要確認）
+    - 全候補が確認済み在庫0 → 商品台帳の最多正規化名を採用（明示色より優先）。
+      同数最多は要確認。初期在庫CSVなし・該当なし・不正/空は在庫0扱いしない
     - 別候補の商品名・仕入先・仕様を組み合わせない
     """
     empty = {
@@ -1448,6 +1845,9 @@ def suggest_main_candidate_from_aux(group, aux_index):
         'plannedRegisteredColor': '',
         'changeSummary': '',
         'colorDecidedNameUndecided': False,
+        'ledgerNameVotes': [],
+        'ledgerNameVoteAdopted': None,
+        'nameDecidedSupplierUndecided': False,
     }
     code = stock.text(group.get('code') or '')
     if not stock_product_merge.is_normal_product_code(code):
@@ -1663,6 +2063,29 @@ def suggest_main_candidate_from_aux(group, aux_index):
         ]
         return _after_stock_undecided(negative_only_hits, neg_reasons)
 
+    # 全候補が確認済み在庫0 → 商品台帳の最多名称（明示色優先よりこちら）
+    if _all_candidates_confirmed_stock_zero(candidates):
+        zero_bits = []
+        for cand in candidates:
+            zero_bits.append(
+                f'{cand.get("productName") or "?"}／{cand.get("supplier") or "?"}'
+                f'=初期在庫：{cand.get("auxStockTotal")}'
+            )
+        detail = '、'.join(zero_bits[:4])
+        zero_reasons = list(reasons) + (
+            [f'全候補の初期在庫が0です（{detail}）。'] if detail else []
+        )
+        vote_hit = _try_ledger_max_name_adoption(
+            group,
+            candidates=candidates,
+            name_candidates=name_candidates,
+            pair_candidates=pair_candidates,
+            reasons=zero_reasons,
+            empty=empty,
+        )
+        if vote_hit is not None:
+            return vote_hit
+
     zero_bits = []
     for cand in candidates:
         if cand.get('hasAuxMatch') and cand.get('auxStockTotal') is not None:
@@ -1838,7 +2261,11 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
             auto_reason = stock.text(pair_from_aux.get('pairAdoptionRule') or '') or (
                 '初期在庫が最多のため、この候補をメインに採用'
                 if pair_code == 'aux_max_positive_stock'
-                else '在庫が0以外の候補が1組のため、この候補をメインに採用'
+                else (
+                    '全候補の在庫が0のため、商品台帳で最多の名称を採用'
+                    if pair_code == 'ledger_max_name_zero_stock'
+                    else '在庫が0以外の候補が1組のため、この候補をメインに採用'
+                )
             )
             needs_manual = False
             manual_reason = ''
@@ -1914,6 +2341,11 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
             ),
             'changeSummary': stock.text(pair_from_aux.get('changeSummary') or ''),
             'colorDecidedNameUndecided': bool(pair_from_aux.get('colorDecidedNameUndecided')),
+            'ledgerNameVotes': list(pair_from_aux.get('ledgerNameVotes') or []),
+            'ledgerNameVoteAdopted': pair_from_aux.get('ledgerNameVoteAdopted'),
+            'nameDecidedSupplierUndecided': bool(
+                pair_from_aux.get('nameDecidedSupplierUndecided')
+            ),
         }
     attach_aux_stock_visibility(sku_groups, aux_uploaded=bool(aux_uploaded))
     return meta
@@ -2109,12 +2541,21 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         'aux_single_candidate',
         'aux_max_positive_stock',
         'explicit_color_name',
+        'ledger_max_name_zero_stock',
     )
     for group in sku_groups:
         aux = group.get('auxPrimary') or {}
         rule_code = stock.text(
             aux.get('pairAdoptionRuleCode') or aux.get('nameAdoptionRuleCode') or ''
         )
+        # 名称は最多票で決定・仕入先だけ未決 → 名差だけでは要確認に残さない
+        if (
+            rule_code == 'ledger_max_name_zero_stock'
+            and aux.get('nameDecidedSupplierUndecided')
+            and not aux.get('officialNameNeedsChoice')
+        ):
+            _soften_name_diff_after_ledger_vote(group, aux)
+            continue
         if rule_code not in stock_adopt_codes:
             continue
         if aux.get('pairNeedsChoice') or aux.get('officialNameNeedsChoice'):
@@ -2252,6 +2693,10 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
             default_reason = '初期在庫が最多のため、この候補をメインに採用'
         elif rule_code == 'explicit_color_name':
             default_reason = '商品名に色が明示されているため、この候補をメインに採用'
+        elif rule_code == 'ledger_max_name_zero_stock':
+            default_reason = (
+                '全候補の在庫が0のため、商品台帳で最多の名称を採用'
+            )
         else:
             default_reason = '在庫が0以外の候補が1組のため、この候補をメインに採用'
         reason = stock.text(aux.get('pairAdoptionRule') or '') or default_reason
@@ -2268,6 +2713,8 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         # 名差・仕入先差は採用で解消済みとして表示上も落とす
         group['nameWordingDiff'] = False
         group['supplierDiff'] = False
+        group['ledgerNameVotes'] = list(aux.get('ledgerNameVotes') or [])
+        group['ledgerNameVoteAdopted'] = aux.get('ledgerNameVoteAdopted')
         kept = list(aux.get('keptPackages') or [])
         kept_names = []
         for k in kept:
@@ -2314,14 +2761,28 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         change_summary = stock.text(aux.get('changeSummary') or package.get('changeSummary') or '')
         if not change_summary and registered_color:
             change_summary = f"商品名から色『{registered_color}』を設定します"
-        reason_code = (
-            'explicit_color_pick' if rule_code == 'explicit_color_name' else 'aux_stock_pick'
-        )
+        if rule_code == 'explicit_color_name':
+            reason_code = 'explicit_color_pick'
+        elif rule_code == 'ledger_max_name_zero_stock':
+            reason_code = 'ledger_max_name_pick'
+        else:
+            reason_code = 'aux_stock_pick'
         group['reviewReasons'] = [{
             'code': reason_code,
             'label': reason,
             'values': stock_values,
         }]
+        vote_adopted = aux.get('ledgerNameVoteAdopted') or {}
+        if vote_adopted and rule_code == 'ledger_max_name_zero_stock':
+            pre_names = list(vote_adopted.get('preNormalizeNames') or [])
+            group['reviewReasons'].append({
+                'code': 'ledger_name_votes',
+                'label': (
+                    f'商品台帳の名称票（正規化後最多 '
+                    f'{vote_adopted.get("count") or "?"} 行）'
+                ),
+                'values': pre_names[:8],
+            })
         if change_summary:
             group['reviewReasons'].append({
                 'code': 'color_split',
@@ -2345,6 +2806,13 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
                 f'商品名の明示色でメイン候補を自動採用します。'
                 f'登録予定名「{registered_name}」・色「{registered_color}」。'
                 f'原文名は照合用別名として残します。'
+            )
+        elif rule_code == 'ledger_max_name_zero_stock':
+            group['applyScope'] = (
+                f'品番「{group.get("code")}」は全候補の在庫が0のため、'
+                f'商品台帳で最多の名称を採用します。'
+                f'登録予定名「{registered_name}」・色「{registered_color}」。'
+                f'原文表記は照合用別名として残します。'
             )
         else:
             group['applyScope'] = (
@@ -2388,6 +2856,75 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         group['plannedRegisteredColor'] = registered_color
         group['changeSummary'] = change_summary
         group['colorNameSplit'] = bool(registered_color)
+
+
+def _soften_name_diff_after_ledger_vote(group, aux):
+    """最多名称は決定済みだが仕入先未決のとき、名差だけでは要確認に残さない。"""
+    package = aux.get('adoptedPackage') if isinstance(aux.get('adoptedPackage'), dict) else {}
+    registered_name = (
+        stock.text(aux.get('plannedRegisteredName') or '')
+        or stock.text(aux.get('suggestedOfficialName') or '')
+        or package.get('plannedName')
+        or package.get('productName')
+        or ''
+    )
+    registered_color = (
+        stock.text(aux.get('plannedRegisteredColor') or '')
+        or stock.text(aux.get('adoptedColor') or '')
+        or package.get('color')
+        or ''
+    )
+    reason = stock.text(aux.get('pairAdoptionRule') or '') or (
+        '全候補の在庫が0のため、商品台帳で最多の名称を採用'
+    )
+    group['nameWordingDiff'] = False
+    group['ledgerNameVotes'] = list(aux.get('ledgerNameVotes') or [])
+    group['ledgerNameVoteAdopted'] = aux.get('ledgerNameVoteAdopted')
+    group['sourceAdoptedName'] = stock.text(aux.get('sourceAdoptedName') or '') or (
+        package.get('sourceName') or package.get('productName') or ''
+    )
+    group['plannedRegisteredName'] = registered_name
+    group['plannedRegisteredColor'] = registered_color
+    group['changeSummary'] = stock.text(aux.get('changeSummary') or package.get('changeSummary') or '')
+    group['nameAdoptionRule'] = reason
+    # 名差理由を外し、仕入先・その他の未解決理由だけ残す
+    cleaned = []
+    for r in (group.get('reviewReasons') or []):
+        code = stock.text(r.get('code') or '')
+        if code in ('name', 'name_wording', 'aux_stock_all_zero', 'name_candidates'):
+            continue
+        cleaned.append(r)
+    vote_adopted = aux.get('ledgerNameVoteAdopted') or {}
+    cleaned.insert(0, {
+        'code': 'ledger_max_name_pick_partial',
+        'label': reason,
+        'values': [
+            registered_name,
+            f'票数:{vote_adopted.get("count")}' if vote_adopted.get('count') is not None else '',
+        ],
+    })
+    if aux.get('needsManualPrimary') or group.get('supplierDiff'):
+        cleaned.append({
+            'code': 'supplier',
+            'label': '通常仕入先を選んでください（名称は商品台帳の最多で決定済み）',
+            'values': list(group.get('supplierCandidates') or [])[:6],
+        })
+    group['reviewReasons'] = cleaned
+    group['plannedOfficialName'] = registered_name or group.get('plannedOfficialName') or ''
+    plan = dict(group.get('productPlan') or {})
+    if registered_name:
+        plan['productName'] = registered_name
+    if registered_color:
+        plan['color'] = registered_color
+    plan['sourceAdoptedName'] = group['sourceAdoptedName']
+    plan['plannedRegisteredName'] = registered_name
+    plan['plannedRegisteredColor'] = registered_color
+    plan['nameAdoptionRule'] = reason
+    group['productPlan'] = plan
+    _attach_stock_pick_display(group, aux, package or {
+        'productName': registered_name,
+        'color': registered_color,
+    }, auto_cleared=False)
 
 
 def _clear_gender_presence_absence_flags(group):
@@ -2651,6 +3188,45 @@ def _resolve_effective_primary_supplier(group, raw_decision):
 
 def used_marker_possible(product_name):
     return legacy.strip_used_marker(product_name)[1]
+
+
+def halfwidth_katakana_to_fullwidth(text):
+    """半角カタカナだけを全角へ（濁点・半濁点は NFKC で合成）。他記号は触らない。"""
+    t = stock.text(text)
+    if not t:
+        return t
+    return _HALFWIDTH_KATAKANA_RE.sub(
+        lambda m: unicodedata.normalize('NFKC', m.group(0)),
+        t,
+    )
+
+
+def normalize_ledger_name_for_vote(name):
+    """同一通常品番内の名称票カウント用正規化。
+
+    - 先頭中古標記「＊/*」は比較から除外（表示用原文は別保持）
+    - 半角カタカナ → 全角カタカナ（濁点・半濁点を正しく合成）
+    - 全角/半角空白 → 半角空白、連続を1つに、trim
+    - 配色つなぎの * / ＊ / × → ×（中古標記と区別。先頭標記除去後に適用）
+    - その他の記号は無条件に消さない
+    - 品番・メーカー品番には使わない（先頭ゼロ維持）
+    """
+    t = stock.text(name)
+    if not t:
+        return ''
+    t, _ = legacy.strip_used_marker(t)
+    t = stock.text(t)
+    t = halfwidth_katakana_to_fullwidth(t)
+    t = re.sub(r'[\s\u3000]+', ' ', t).strip()
+    if not t:
+        return ''
+    t = _COLORWAY_SEP_RE.sub('×', t)
+    return t
+
+
+def format_ledger_adopted_name(name):
+    """採用表示名: 全角カタカナ・半角空白（票キーと同じ正規化結果）。"""
+    return normalize_ledger_name_for_vote(name)
 
 
 def product_name_core_key(name):
@@ -3947,6 +4523,7 @@ def _row_variant(row):
         'sizes': [],
         'customers': [],
         'csvNames': [],
+        'sourceRows': [],
     }
 
 
@@ -4035,6 +4612,11 @@ def build_sku_groups(c, classified):
             csv_name = (row.get('csv') or {}).get('productName') or ''
             if csv_name and csv_name not in slot['csvNames']:
                 slot['csvNames'].append(csv_name)
+            slot.setdefault('sourceRows', []).append({
+                'rowNo': row['rowNo'],
+                'productName': csv_name,
+                'supplier': (row.get('csv') or {}).get('supplier') or '',
+            })
             # 表示用は標記なしを優先（バリアント代表名）
             if csv_name and (
                 not slot['productName']

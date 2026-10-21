@@ -469,8 +469,19 @@
       return `<li>${esc(bits.join(' / '))}</li>`
     }).join('')
     const splitSrc=Object.assign({},g,aux,pkg?{adoptedPackage:pkg}:{})
-    const packageBlock=(pkg||aux.changeSummary||aux.plannedRegisteredColor||aux.colorDecidedNameUndecided)?`<div class="sku-stock-pick">
+    const votes=aux.ledgerNameVotes||g.ledgerNameVotes||[]
+    const voteAdopted=aux.ledgerNameVoteAdopted||g.ledgerNameVoteAdopted
+    const voteBlock=votes.length?`<div class="sku-ledger-votes">
+      <p class="excelhint"><strong>商品台帳の名称票（正規化後）</strong></p>
+      <ul class="sku-cand-list">${votes.map(v=>{
+        const raw=(v.preNormalizeNames||[]).map(esc).join(' / ')||esc(v.normalizedName||'')
+        const mark=voteAdopted&&v.normalizedName===voteAdopted.normalizedName?' ←採用':''
+        return `<li><span class="sku-cand-name">${raw}</span> <span class="sku-cand-stock">${esc(String(v.count||0))}行${mark}</span></li>`
+      }).join('')}</ul>
+    </div>`:''
+    const packageBlock=(pkg||aux.changeSummary||aux.plannedRegisteredColor||aux.colorDecidedNameUndecided||votes.length)?`<div class="sku-stock-pick">
       <p class="excelhint"><strong>${g.auxStockPickAuto||!g.needsDecision?'自動決定済み（未登録）':'提案'}:</strong> ${esc(aux.pairAdoptionRule||reason||'初期在庫が最多のため、この候補をメインに採用')}</p>
+      ${voteBlock}
       ${(aux.pairCandidates||[]).length?`<ul class="sku-cand-list sku-pair-stock-list">${(aux.pairCandidates||[]).map(p=>{
         const bits=[p.productName||'',p.supplier?`仕入 ${p.supplier}`:''].filter(Boolean).join(' / ')
         const stockLabel=p.hasAuxMatch||p.auxStockDisplay&&p.auxStockDisplay!=='—'
@@ -487,7 +498,7 @@
     </div>`:''
     return `<div class="sku-aux-panel">
       <h4>初期在庫CSVによる通常仕入先・メイン候補判定</h4>
-      <p class="excelhint">CSV先頭行では選びません。正の初期在庫合計が最多の候補が一意→そのフルパッケージをメイン採用。在庫で決まらない（同数・全ゼロ・負が複数）ときは明示色のある商品名を優先（異なる明示色同士は要確認）。正の在庫が1社だけ→通常仕入先。手動選択は上書きしません。</p>
+      <p class="excelhint">CSV先頭行では選びません。正の初期在庫合計が最多の候補が一意→そのフルパッケージをメイン採用。全候補が確認済み在庫0→商品台帳で最多の名称を採用（表記ゆれを合算。同数は要確認。明示色より優先）。在庫で決まらない（同数・該当なし・不正/空・負が複数）ときは明示色のある商品名を優先。正の在庫が1社だけ→通常仕入先。手動選択・色別に分けて登録は上書きしません。</p>
       ${packageBlock}
       ${reason&&!packageBlock?`<p class="excelhint">${esc(reason)}</p>`:''}
       ${conflict?`<p class="notice">自動判定「${esc(aux.autoPrimarySupplier)}」と手動選択「${esc(d.primarySupplier)}」が異なります。手動を優先します（上書きしません）。</p>`:''}
