@@ -270,6 +270,8 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                 self.assertGreaterEqual(report['changed'], 1)
                 self.assertTrue(report['exclusionsUntouched'])
                 self.assertEqual(report['colors'], ['赤', '青'])
+                self.assertEqual(report.get('activeFormatCount'), 1)
+                self.assertEqual(report['policy'], names.ASUKA_BAKERY_POLICY)
 
                 keep = c.execute(
                     'SELECT * FROM name_formats WHERE identity=? AND retired=0',
@@ -280,6 +282,9 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                 self.assertEqual(keep['maximum_font'], 36)
                 self.assertEqual(keep['family'], 'MSPゴシック')
                 self.assertEqual(json.loads(keep['colors_json']), ['赤', '青'])
+                spec = json.loads(keep['spec_json'] or '{}')
+                self.assertEqual(spec.get('sampleFit'), 'exact')
+                self.assertEqual(spec.get('asukaBakeryPolicy'), names.ASUKA_BAKERY_POLICY)
                 papers = [
                     s['paper_color']
                     for s in c.execute(
@@ -288,6 +293,13 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                     )
                 ]
                 self.assertEqual(papers, ['赤', '青'])
+                self.assertEqual(
+                    c.execute(
+                        'SELECT COUNT(*) n FROM name_formats WHERE customer_id=? AND retired=0',
+                        (bakery,),
+                    ).fetchone()['n'],
+                    1,
+                )
 
                 # 正規のあとで単色残骸を足し、再実行で退職されること
                 solo = _add_format(
@@ -298,7 +310,8 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                 )
                 _add_sample(c, solo, paper='赤？', path='')
                 cleanup = names.ensure_asuka_bakery_name_formats(c, data_dir)
-                self.assertGreaterEqual(cleanup.get('retiredSoloFormats', 0), 1)
+                self.assertGreaterEqual(cleanup.get('retiredExtraFormats', 0), 1)
+                self.assertEqual(cleanup.get('activeFormatCount'), 1)
                 self.assertEqual(
                     c.execute('SELECT retired FROM name_formats WHERE id=?', (solo,)).fetchone()['retired'],
                     1,
@@ -312,9 +325,116 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                     c.execute('SELECT note FROM name_formats WHERE id=?', (ashuka_fmt,)).fetchone()['note'],
                     '明日佳の備考は触るな',
                 )
+                self.assertEqual(
+                    c.execute('SELECT retired FROM name_formats WHERE id=?', (house_fmt,)).fetchone()['retired'],
+                    0,
+                )
+                self.assertEqual(
+                    c.execute('SELECT retired FROM name_formats WHERE id=?', (ashuka_fmt,)).fetchone()['retired'],
+                    0,
+                )
 
                 again = names.ensure_asuka_bakery_name_formats(c, data_dir)
-                self.assertEqual(again.get('retiredSoloFormats', 0), 0)
+                self.assertEqual(again.get('retiredExtraFormats', 0), 0)
+                self.assertEqual(again.get('activeFormatCount'), 1)
+
+    def test_merges_duplicate_red_blue_formats_keeps_images(self):
+        """#171 後に赤青付きが2件残った場合も1件に統合し、退職側の画像は消さない。"""
+        try:
+            from PIL import Image  # noqa: F401
+        except ImportError:
+            self.skipTest('Pillow未導入')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            images = data_dir / 'images' / 'names'
+            images.mkdir(parents=True)
+            with _connect(data_dir / 'desk.sqlite3') as c:
+                names.bind(data_dir)
+                names.DATA_DIR = None
+                names.schema(c)
+                names.bind(data_dir)
+
+                house = _add_customer(c, 'house', 'あすかHOUSE')
+                house_fmt = _add_format(
+                    c, house, 'house-keep', '大ネーム',
+                    note='HOUSE本体も触るな', small=0, width=80, height=50, fixed='白',
+                )
+                bakery = _add_customer(c, 'bakery', 'あすかベーカリー')
+                first = _add_format(
+                    c, bakery, names.ASUKA_BAKERY_IDENTITY, '小ネーム（苗字のみ）',
+                    placement=names.ASUKA_BAKERY_PLACEMENT,
+                    reading='苗字のみ', layout='Surname',
+                    color_caption='赤 or 青',
+                    colors=['赤', '青'], swatches=['#F08080', '#87CEFA'],
+                    maximum_font=36, family='MSPゴシック',
+                    spec={'asukaBakeryPolicy': 'excel-gojuon2-r14-red-blue-v1', 'sampleFit': 'exact'},
+                )
+                second = _add_format(
+                    c, bakery, 'asuka-bakery:small-surname-dup', '小ネーム（苗字のみ）',
+                    placement=names.ASUKA_BAKERY_PLACEMENT,
+                    reading='苗字のみ', layout='Surname',
+                    color_caption='赤 or 青',
+                    colors=['赤', '青'], swatches=['#F08080', '#87CEFA'],
+                    maximum_font=36, family='MSPゴシック',
+                )
+                kept_paths = []
+                for fid in (first, second):
+                    for paper in ('赤', '青'):
+                        rel = f'images/names/pre-{paper}-{fid:06}.png'
+                        path = data_dir / rel
+                        path.write_bytes(b'PNG-KEEP')
+                        _add_sample(c, fid, key=f'paper-{paper}', paper=paper, path=rel)
+                        if fid == second:
+                            kept_paths.append(path)
+
+                report = names.ensure_asuka_bakery_name_formats(c, data_dir)
+                self.assertGreaterEqual(report.get('retiredExtraFormats', 0), 1)
+                self.assertEqual(report.get('activeFormatCount'), 1)
+                self.assertFalse(report.get('imagesUnlinked'))
+
+                active = list(c.execute(
+                    'SELECT * FROM name_formats WHERE customer_id=? AND retired=0',
+                    (bakery,),
+                ))
+                self.assertEqual(len(active), 1)
+                self.assertEqual(active[0]['identity'], names.ASUKA_BAKERY_IDENTITY)
+                self.assertEqual(json.loads(active[0]['colors_json']), ['赤', '青'])
+                papers = [
+                    s['paper_color']
+                    for s in c.execute(
+                        'SELECT paper_color FROM name_samples WHERE format_id=? ORDER BY id',
+                        (active[0]['id'],),
+                    )
+                ]
+                self.assertEqual(papers, ['赤', '青'])
+
+                self.assertEqual(
+                    c.execute('SELECT retired FROM name_formats WHERE id=?', (second,)).fetchone()['retired'],
+                    1,
+                )
+                # 退職側の見本行・画像ファイルは残る
+                self.assertEqual(
+                    c.execute(
+                        'SELECT COUNT(*) n FROM name_samples WHERE format_id=?', (second,),
+                    ).fetchone()['n'],
+                    2,
+                )
+                for path in kept_paths:
+                    self.assertTrue(path.is_file(), path)
+
+                self.assertEqual(
+                    c.execute('SELECT note FROM name_formats WHERE id=?', (house_fmt,)).fetchone()['note'],
+                    'HOUSE本体も触るな',
+                )
+                self.assertEqual(
+                    c.execute('SELECT retired FROM name_formats WHERE id=?', (house_fmt,)).fetchone()['retired'],
+                    0,
+                )
+
+                again = names.ensure_asuka_bakery_name_formats(c, data_dir)
+                self.assertEqual(again.get('retiredExtraFormats', 0), 0)
+                self.assertEqual(again.get('activeFormatCount'), 1)
 
 
 if __name__ == '__main__':

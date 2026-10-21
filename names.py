@@ -7964,7 +7964,8 @@ ASUKA_BAKERY_CAPTION = (
 )
 ASUKA_BAKERY_REPORT = 'asuka-bakery-name-formats-report.json'
 ASUKA_BAKERY_SETTINGS_KEY = 'asuka_bakery_name_formats'
-ASUKA_BAKERY_POLICY = 'excel-gojuon2-r14-red-blue-v1'
+# v1: 赤・青見本を ensure。v2: 子形式を必ず1件に統合（重複赤青も退職・画像は残す）
+ASUKA_BAKERY_POLICY = 'excel-gojuon2-r14-one-format-red-blue-v2'
 ASUKA_BAKERY_FORBIDDEN_SUBSTRINGS = (
     'あすかHOUSE', '明日佳', '明日香',
 )
@@ -8088,34 +8089,31 @@ def _asuka_bakery_is_current(fmt, samples, fmt_def):
     return True
 
 
-def _asuka_bakery_is_legacy_solo(fmt, samples):
-    """旧単色（赤／赤？／白だけ等）。正規の赤青2色は対象外。"""
-    if str(fmt['identity'] or '') == ASUKA_BAKERY_IDENTITY:
-        return False
-    try:
-        colors = json.loads(fmt['colors_json'] or '[]')
-    except (TypeError, json.JSONDecodeError):
-        colors = []
-    if colors == ASUKA_BAKERY_COLORS:
-        return False
-    papers = [str(s['paper_color'] or '').strip() for s in samples]
-    non_empty = [p for p in papers if p]
-    fixed = str(fmt['fixed_color'] or '').strip()
-    caption = str(fmt['color_caption'] or '')
-    # 赤・青の両方が揃っているなら旧単色ではない
-    if '赤' in non_empty and '青' in non_empty:
-        return False
-    if fixed in ('赤', '赤？', '青', '白') or fixed.endswith('？'):
-        return True
-    if caption in ('赤', '赤？', '青', '白') or '？' in caption:
-        return True
-    if non_empty and len(set(non_empty)) == 1 and non_empty[0] in ('赤', '青', '白'):
-        return True
-    return False
+def _asuka_bakery_retire_extra(c, root, backup_dir, fmt, samples, keep_id, items):
+    """正規1件以外の子形式をバックアップ後に retired=1。見本画像ファイルは消さない。"""
+    _backup_six_format(c, root, backup_dir, fmt, samples)
+    # サンプル行は残す（復元用）。画像パスも unlink しない。
+    c.execute('UPDATE name_formats SET retired=1 WHERE id=?', (fmt['id'],))
+    sample_paths = [
+        str(s['relative_path'] or '') for s in samples if str(s['relative_path'] or '')
+    ]
+    items.append({
+        'action': 'retire-duplicate-format',
+        'formatId': fmt['id'],
+        'keepFormatId': keep_id,
+        'identity': fmt['identity'],
+        'formatName': fmt['format_name'],
+        'fixedColor': fmt['fixed_color'],
+        'colorCaption': fmt['color_caption'],
+        'sampleCount': len(samples),
+        'samplePathsKept': sample_paths,
+        'imagesUnlinked': False,
+    })
+    return 1
 
 
 def ensure_asuka_bakery_name_formats(c, data_dir=None):
-    """あすかベーカリーのみ：色を赤・青、36pt苗字見本を ensure。HOUSE/明日佳は触らない。"""
+    """あすかベーカリーのみ：子形式1件（赤・青見本）に統合。HOUSE/明日佳は触らない。"""
     root = Path(data_dir) if data_dir is not None else DATA_DIR
     if root is None:
         return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
@@ -8131,7 +8129,6 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
     fmt_def = _asuka_bakery_format_def()
     items = []
     retired = 0
-    removed_samples = 0
 
     # 除外顧客を誤って拾っていないか先に確認
     forbidden_hits = c.execute(
@@ -8176,9 +8173,10 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
             'policy': ASUKA_BAKERY_POLICY,
         }
 
+    # この顧客配下の正規 identity のみを残す候補にする（他社の同 identity は触らない）
     by_identity = c.execute(
-        'SELECT * FROM name_formats WHERE identity=? AND retired=0',
-        (ASUKA_BAKERY_IDENTITY,),
+        'SELECT * FROM name_formats WHERE identity=? AND customer_id=? AND retired=0 ORDER BY id',
+        (ASUKA_BAKERY_IDENTITY, customer['id']),
     ).fetchone()
     existing = by_identity
     if existing is None:
@@ -8190,6 +8188,9 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
             if str(cand['reading'] or '') == '苗字のみ' or str(cand['layout'] or '') == 'Surname':
                 existing = cand
                 break
+        if existing is None and candidates:
+            # Excel 行14は小ネーム1件のみ → 先頭の小を統合先にする
+            existing = candidates[0]
 
     samples = []
     if existing:
@@ -8266,7 +8267,7 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
         })
         fid = existing['id']
 
-    # 同顧客の旧単色を退職
+    # Excel 行14は1形式のみ → 同顧客の他子形式はすべて退職（単色残骸も赤青重複も）
     for fmt in c.execute(
         'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
         (customer['id'],),
@@ -8277,34 +8278,14 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
             'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
             (fmt['id'],),
         ))
-        if not _asuka_bakery_is_legacy_solo(fmt, samples):
-            items.append({
-                'action': 'ambiguous-skip',
-                'formatId': fmt['id'],
-                'identity': fmt['identity'],
-                'formatName': fmt['format_name'],
-                'fixedColor': fmt['fixed_color'],
-            })
-            continue
-        _backup_six_format(c, root, backup_dir, fmt, samples)
-        for sample in samples:
-            rel = str(sample['relative_path'] or '')
-            if rel:
-                path = root / rel
-                if path.is_file():
-                    path.unlink()
-            c.execute('DELETE FROM name_samples WHERE id=?', (sample['id'],))
-            removed_samples += 1
-        c.execute('UPDATE name_formats SET retired=1 WHERE id=?', (fmt['id'],))
-        retired += 1
-        items.append({
-            'action': 'retire-solo-color',
-            'formatId': fmt['id'],
-            'identity': fmt['identity'],
-            'formatName': fmt['format_name'],
-            'fixedColor': fmt['fixed_color'],
-            'removedSamples': len(samples),
-        })
+        retired += _asuka_bakery_retire_extra(
+            c, root, backup_dir, fmt, samples, fid, items,
+        )
+
+    active_count = c.execute(
+        'SELECT COUNT(*) n FROM name_formats WHERE customer_id=? AND retired=0',
+        (customer['id'],),
+    ).fetchone()['n']
 
     # 除外顧客が変わっていないこと
     after_forbidden = c.execute(
@@ -8316,13 +8297,20 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
 
     changed = sum(
         1 for i in items
-        if i.get('action') in ('create', 'update', 'create-customer', 'retire-solo-color')
+        if i.get('action') in (
+            'create', 'update', 'create-customer',
+            'retire-duplicate-format', 'retire-solo-color',
+        )
     )
     report = {
         'at': stamp,
         'changed': changed,
-        'retiredSoloFormats': retired,
-        'removedSamples': removed_samples,
+        'retiredSoloFormats': retired,  # 互換キー（単色・重複を含む退職件数）
+        'retiredExtraFormats': retired,
+        'activeFormatCount': active_count,
+        'keptFormatId': fid,
+        'removedSamples': 0,
+        'imagesUnlinked': False,
         'customer': ASUKA_BAKERY_CUSTOMER_NAME,
         'policy': ASUKA_BAKERY_POLICY,
         'colors': list(ASUKA_BAKERY_COLORS),
@@ -8332,8 +8320,10 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
         'rules': {
             'onlyCustomer': ASUKA_BAKERY_CUSTOMER_NAME,
             'neverTouchHouseOrAshuka': True,
+            'oneChildFormat': True,
             'redBluePapers': True,
             'exact36Surname': True,
+            'keepSampleImagesOnRetire': True,
         },
         'items': items,
     }
@@ -8352,6 +8342,8 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
                 'at': stamp,
                 'changed': changed,
                 'retiredSoloFormats': retired,
+                'retiredExtraFormats': retired,
+                'activeFormatCount': active_count,
                 'report': ASUKA_BAKERY_REPORT,
                 'policy': ASUKA_BAKERY_POLICY,
                 'backupDir': report['backupDir'],
