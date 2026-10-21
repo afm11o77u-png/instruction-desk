@@ -114,6 +114,7 @@ def schema(c):
         correct_rinko_name_formats(c, DATA_DIR)
         correct_ashuka_name_formats(c, DATA_DIR)
         ensure_three_customer_name_formats(c, DATA_DIR)
+        ensure_fk_name_formats(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -4266,6 +4267,596 @@ def ensure_three_customer_name_formats(c, data_dir=None):
     return report
 
 
+# --- エフケー（Excel 行29）ネーム形式 ---
+FK_NAMES_POLICY = 'excel-gojuon2-r29-v1'
+FK_NAMES_SETTINGS_KEY = 'fk_name_formats'
+FK_NAMES_REPORT = 'fk-name-formats-report.json'
+FK_CUSTOMER_KEY = 'excel:fk'
+FK_CUSTOMER_NAME = 'エフケー'
+FK_CUSTOMER_READING = 'えふけー'
+FK_IDENTITY = 'fk:small-surname'
+FK_KIND = 'fk-small-surname'
+FK_SOURCE_ROW = 29
+FK_FAMILY = THREE_FAMILY
+FK_PLACEMENT = '白衣：左袖25cm　白下：左前　白帽子：右耳上'
+FK_FORMAT_NAME = '小ネーム（苗字のみ）'
+FK_HEADING = '苗字のみ（36pt）'
+FK_COLOR_CAPTION = '社員：緑　パート：青'
+FK_GROUPS = ['社員', 'パート']
+FK_COLORS = ['緑', '青']
+FK_SWATCHES = ['#90EE90', '#87CEFA']
+FK_PAPERS = ('緑', '青')
+FK_PAPER_RGB = {
+    '緑': (144, 238, 144),  # #90EE90
+    '青': (135, 206, 250),  # #87CEFA
+}
+FK_SAMPLE_SURNAME = THREE_SAMPLE_SURNAME
+FK_MAXIMUM_FONT = 36
+FK_WIDTH_MM, FK_HEIGHT_MM = THREE_SMALL_W, THREE_SMALL_H
+FK_NOTE = (
+    f'書体は{FK_FAMILY}（太字）。色は社員：緑／パート：青。'
+    '小ネーム・1段・苗字のみ／36pt。'
+    f'Excel 行{FK_SOURCE_ROW}（ネーム仕分け_五十音順2）。'
+)
+FK_CAPTION = (
+    f'見本：苗字「{FK_SAMPLE_SURNAME}」（36pt・1段）。'
+    f'書体は{FK_FAMILY}（太字）。色は社員：緑／パート：青。'
+)
+FK_OPEN_ITEMS = [
+    '小ネーム実寸は Excel に mm が無いため、既存どおり 50×24 を採用',
+    '1段・段サイズ未記入は横中央・縦中央と仮定',
+    'HG丸ゴシック太字は環境フォント次第（太字指定は備考・captionに記録）',
+]
+
+
+def _fk_format_def():
+    return {
+        'identity': FK_IDENTITY,
+        'kind': FK_KIND,
+        'sourceRow': FK_SOURCE_ROW,
+        'formatName': FK_FORMAT_NAME,
+        'placement': FK_PLACEMENT,
+        'heading': FK_HEADING,
+        'note': FK_NOTE,
+        'layout': 'Surname',
+        'reading': '苗字のみ',
+        'small': 1,
+        'widthMm': FK_WIDTH_MM,
+        'heightMm': FK_HEIGHT_MM,
+        'fixedColor': '',
+        'colorCaption': FK_COLOR_CAPTION,
+        'groups': list(FK_GROUPS),
+        'colors': list(FK_COLORS),
+        'swatches': list(FK_SWATCHES),
+        'maximumFont': FK_MAXIMUM_FONT,
+        'sampleText': FK_SAMPLE_SURNAME,
+        'fontPt': FK_MAXIMUM_FONT,
+        'papers': FK_PAPERS,
+        'caption': FK_CAPTION,
+    }
+
+
+def _fk_spec(fmt_def):
+    return {
+        'fkKind': fmt_def['kind'],
+        'fkPolicy': FK_NAMES_POLICY,
+        'surnameOnly': True,
+        'sampleText': fmt_def['sampleText'],
+        'fontPt': fmt_def['fontPt'],
+        'papers': list(fmt_def['papers']),
+        'colorRoles': dict(zip(FK_GROUPS, FK_COLORS)),
+    }
+
+
+def _fk_customer_def():
+    return {
+        'customerKey': FK_CUSTOMER_KEY,
+        'customerName': FK_CUSTOMER_NAME,
+        'reading': FK_CUSTOMER_READING,
+        'formats': (_fk_format_def(),),
+    }
+
+
+def _fk_find_customer(c):
+    rows = c.execute(
+        'SELECT * FROM name_customers WHERE retired=0 ORDER BY id'
+    ).fetchall()
+    for row in rows:
+        if str(row['source_key'] or '') == FK_CUSTOMER_KEY:
+            return row
+    for row in rows:
+        if str(row['source_name'] or '').strip() == FK_CUSTOMER_NAME:
+            return row
+    return None
+
+
+def _fk_ensure_customer(c, backup_dir, items):
+    existing = _fk_find_customer(c)
+    if existing:
+        return existing, False
+    known = _app_customers(c)
+    linked, status = _link(FK_CUSTOMER_NAME, known)
+    c.execute(
+        '''INSERT INTO name_customers(
+            source_key, source_index, source_name, reading, linked_name, link_status, manual, retired
+           ) VALUES(?,?,?,?,?,?,1,0)''',
+        (FK_CUSTOMER_KEY, -1, FK_CUSTOMER_NAME, FK_CUSTOMER_READING, linked, status),
+    )
+    cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    row = c.execute('SELECT * FROM name_customers WHERE id=?', (cid,)).fetchone()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / f'customer-created-{cid}.json').write_text(
+        json.dumps(_row_as_dict(row), ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    items.append({
+        'action': 'create-customer',
+        'customerId': cid,
+        'customerName': FK_CUSTOMER_NAME,
+        'sourceKey': FK_CUSTOMER_KEY,
+    })
+    return row, True
+
+
+def _fk_is_current(fmt, samples, fmt_def):
+    if str(fmt['format_name'] or '') != fmt_def['formatName']:
+        return False
+    if str(fmt['placement'] or '') != fmt_def['placement']:
+        return False
+    if str(fmt['family'] or '') != FK_FAMILY:
+        return False
+    if str(fmt['heading'] or '') != fmt_def['heading']:
+        return False
+    if str(fmt['note'] or '') != fmt_def['note']:
+        return False
+    if str(fmt['layout'] or '') != fmt_def['layout']:
+        return False
+    if str(fmt['reading'] or '') != fmt_def['reading']:
+        return False
+    if int(fmt['small'] or 0) != int(fmt_def['small']):
+        return False
+    if int(fmt['width_mm'] or 0) != int(fmt_def['widthMm']):
+        return False
+    if int(fmt['height_mm'] or 0) != int(fmt_def['heightMm']):
+        return False
+    if str(fmt['fixed_color'] or '') != fmt_def['fixedColor']:
+        return False
+    if str(fmt['color_caption'] or '') != fmt_def['colorCaption']:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(fmt_def['maximumFont']):
+        return False
+    if int(fmt['source_row'] or 0) != int(fmt_def['sourceRow']):
+        return False
+    if str(fmt['identity'] or '') != fmt_def['identity']:
+        return False
+    spec = _load_spec(fmt)
+    if spec.get('fkPolicy') != FK_NAMES_POLICY or spec.get('fkKind') != fmt_def['kind']:
+        return False
+    if spec.get('surnameOnly') is not True:
+        return False
+    try:
+        have_groups = json.loads(fmt['groups_json'] or '[]')
+        have_colors = json.loads(fmt['colors_json'] or '[]')
+        have_swatches = json.loads(fmt['swatches_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if have_groups != fmt_def['groups'] or have_colors != fmt_def['colors']:
+        return False
+    if have_swatches != fmt_def['swatches']:
+        return False
+    if len(samples) != len(fmt_def['papers']):
+        return False
+    by_paper = {str(s['paper_color'] or ''): s for s in samples}
+    for paper in fmt_def['papers']:
+        sample = by_paper.get(paper)
+        if sample is None:
+            return False
+        want_key = _three_variant_key(fmt_def['papers'], paper)
+        if str(sample['variant_key'] or '') != want_key:
+            return False
+        rel = str(sample['relative_path'] or '')
+        if not rel.startswith('images/names/'):
+            return False
+        if fmt_def['kind'] not in Path(rel).name:
+            return False
+        if str(sample['caption'] or '') != fmt_def['caption']:
+            return False
+    return True
+
+
+def _backup_fk_format(c, root, backup_dir, fmt, samples):
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+
+def _write_fk_samples(c, root, format_id, fmt_def):
+    band = _three_band(
+        fmt_def['sampleText'],
+        height_mm=fmt_def['heightMm'],
+        font_pt=fmt_def['fontPt'],
+    )
+    c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
+    notes = []
+    paths = []
+    for paper in fmt_def['papers']:
+        key = _three_variant_key(fmt_def['papers'], paper)
+        stem = f'{fmt_def["kind"]}-{paper}'
+        rel = f'images/names/{stem}-{format_id:06}.png'
+        dst = root / rel
+        rgb = FK_PAPER_RGB.get(paper, (255, 255, 255))
+        ok, note = _render_ashuka_banded_sample(
+            dst, (band,),
+            width_mm=fmt_def['widthMm'],
+            height_mm=fmt_def['heightMm'],
+            family_hint=FK_FAMILY,
+            paper_rgb=rgb,
+        )
+        notes.append(f'{paper}:{note}')
+        if not ok:
+            return False, '; '.join(notes), paths
+        c.execute(
+            '''INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)
+               VALUES(?,?,?,?,?,?)''',
+            (format_id, key, paper, paper, rel, fmt_def['caption']),
+        )
+        paths.append(rel)
+    return True, '; '.join(notes), paths
+
+
+def _upsert_fk_format_row(c, customer_id, fmt_def, existing=None):
+    groups = json.dumps(fmt_def.get('groups') or [], ensure_ascii=False)
+    colors = json.dumps(fmt_def.get('colors') or [], ensure_ascii=False)
+    swatches = json.dumps(fmt_def.get('swatches') or [], ensure_ascii=False)
+    spec = json.dumps(_fk_spec(fmt_def), ensure_ascii=False)
+    values = (
+        fmt_def['formatName'], fmt_def['placement'], FK_FAMILY, '',
+        fmt_def['heading'], fmt_def['note'], fmt_def['layout'], fmt_def['reading'],
+        int(fmt_def['small']), int(fmt_def['widthMm']), int(fmt_def['heightMm']), 0,
+        fmt_def['fixedColor'], fmt_def['colorCaption'],
+        groups, colors, swatches, 'null',
+        '', float(fmt_def['maximumFont']), 0, 0, int(fmt_def['sourceRow']),
+        spec, 0, '[]', 0,
+    )
+    if existing:
+        c.execute(
+            '''UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,
+                layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,
+                groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,
+                heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,
+                retired=0, identity=? WHERE id=?''',
+            values + (fmt_def['identity'], existing['id']),
+        )
+        return existing['id']
+    c.execute(
+        '''INSERT INTO name_formats(
+            identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,
+            layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,
+            groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,
+            number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)''',
+        (
+            fmt_def['identity'], customer_id, -1,
+            values[0], values[1], values[2], values[3], values[4], values[5],
+            values[6], values[7], values[8], values[9], values[10], values[11],
+            values[12], values[13], values[14], values[15], values[16], values[17],
+            values[18], values[19], values[20], values[21], values[22], None,
+            values[23], values[24], values[25], values[26],
+        ),
+    )
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def _patch_fk_catalog(data_dir, backup_dir, fmt_def, items):
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return False
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    catalog_backup = backup_dir / 'catalog.json'
+    if not catalog_backup.exists():
+        shutil.copy2(path, catalog_backup)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    customers = list(data.get('customers') or [])
+    formats = list(data.get('formats') or [])
+    by_key = {c.get('sourceKey'): c for c in customers}
+    changed = False
+    if FK_CUSTOMER_KEY not in by_key:
+        customers.append({
+            'sourceKey': FK_CUSTOMER_KEY,
+            'sourceIndex': -1,
+            'name': FK_CUSTOMER_NAME,
+            'reading': FK_CUSTOMER_READING,
+        })
+        by_key[FK_CUSTOMER_KEY] = customers[-1]
+        changed = True
+    else:
+        entry = by_key[FK_CUSTOMER_KEY]
+        if entry.get('name') != FK_CUSTOMER_NAME:
+            entry['name'] = FK_CUSTOMER_NAME
+            changed = True
+    item_by_identity = {i.get('identity'): i for i in items if i.get('identity')}
+    item = item_by_identity.get(fmt_def['identity'])
+    existing = next(
+        (f for f in formats if f.get('identity') == fmt_def['identity']),
+        None,
+    )
+    payload = {
+        'identity': fmt_def['identity'],
+        'customerKey': FK_CUSTOMER_KEY,
+        'sourceKind': -1,
+        'format': fmt_def['formatName'],
+        'placement': fmt_def['placement'],
+        'family': FK_FAMILY,
+        'heading': fmt_def['heading'],
+        'note': fmt_def['note'],
+        'layout': fmt_def['layout'],
+        'reading': fmt_def['reading'],
+        'small': bool(fmt_def['small']),
+        'widthMm': fmt_def['widthMm'],
+        'heightMm': fmt_def['heightMm'],
+        'fixedColor': fmt_def['fixedColor'],
+        'colorCaption': fmt_def['colorCaption'],
+        'groups': list(fmt_def.get('groups') or []),
+        'colors': list(fmt_def.get('colors') or []),
+        'colorSwatches': list(fmt_def.get('swatches') or []),
+        'maximumFont': fmt_def['maximumFont'],
+        'headingFont': 0,
+        'sourceRow': fmt_def['sourceRow'],
+        'manual': True,
+        'surnameOnly': True,
+        **{k: v for k, v in _fk_spec(fmt_def).items() if v is not None},
+        'samples': [],
+    }
+    if item:
+        payload['dbId'] = item.get('formatId')
+        paths = item.get('samplePaths') or (
+            [item['samplePath']] if item.get('samplePath') else []
+        )
+        for idx, paper in enumerate(fmt_def['papers']):
+            rel = paths[idx] if idx < len(paths) else ''
+            payload['samples'].append({
+                'key': _three_variant_key(fmt_def['papers'], paper),
+                'condition': paper,
+                'paperColor': paper,
+                'relativePath': rel,
+                'caption': fmt_def['caption'],
+            })
+    if existing is None:
+        formats.append(payload)
+        changed = True
+    else:
+        for key, value in payload.items():
+            if existing.get(key) != value:
+                existing[key] = value
+                changed = True
+    if changed:
+        data['customers'] = customers
+        data['formats'] = formats
+        data['customerCount'] = len(customers)
+        data['formatCount'] = len(formats)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+
+def ensure_fk_name_formats(c, data_dir=None):
+    """Excel 行29 エフケーのネーム形式を追加／更新する。他顧客は変更しない。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'fk-names-{stamp}'
+    cust = _fk_customer_def()
+    fmt_def = cust['formats'][0]
+    items = []
+    open_items = list(FK_OPEN_ITEMS)
+
+    customer = _fk_find_customer(c)
+    needs_work = customer is None
+    if not needs_work:
+        row = c.execute(
+            'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+            (fmt_def['identity'],),
+        ).fetchone()
+        if row is None:
+            needs_work = True
+        else:
+            samples = c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (row['id'],),
+            ).fetchall()
+            if not _fk_is_current(row, samples, fmt_def):
+                needs_work = True
+
+    if not needs_work:
+        report = {
+            'at': stamp,
+            'changed': 0,
+            'policy': FK_NAMES_POLICY,
+            'backupDir': '',
+            'catalogChanged': False,
+            'openItems': open_items,
+            'customers': [FK_CUSTOMER_NAME],
+            'items': [],
+            'reason': 'already-applied',
+        }
+        (root / FK_NAMES_REPORT).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                FK_NAMES_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': FK_NAMES_REPORT,
+                    'policy': FK_NAMES_POLICY,
+                }, ensure_ascii=False),
+            ),
+        )
+        return report
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    customer, created = _fk_ensure_customer(c, backup_dir, items)
+
+    by_identity = c.execute(
+        'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+        (fmt_def['identity'],),
+    ).fetchone()
+    existing = by_identity
+    if existing is None:
+        candidates = c.execute(
+            '''SELECT * FROM name_formats WHERE customer_id=? AND retired=0
+               AND placement=? ORDER BY id''',
+            (customer['id'], fmt_def['placement']),
+        ).fetchall()
+        if len(candidates) == 1:
+            existing = candidates[0]
+        elif len(candidates) > 1:
+            for cand in candidates:
+                name = str(cand['format_name'] or '')
+                if fmt_def['formatName'] in name or name in fmt_def['formatName'] or '小ネーム' in name:
+                    existing = cand
+                    break
+            if existing is None:
+                existing = candidates[0]
+        if existing is None:
+            # 旧仕様（フルネーム／先方から指定）の単一形式があれば再利用
+            all_fmt = c.execute(
+                'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+                (customer['id'],),
+            ).fetchall()
+            if len(all_fmt) == 1:
+                existing = all_fmt[0]
+
+    samples = []
+    if existing:
+        samples = c.execute(
+            'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+            (existing['id'],),
+        ).fetchall()
+        if _fk_is_current(existing, samples, fmt_def):
+            items.append({
+                'action': 'skip',
+                'kind': fmt_def['kind'],
+                'formatId': existing['id'],
+                'number': _number(existing['id']),
+                'identity': fmt_def['identity'],
+                'customerName': FK_CUSTOMER_NAME,
+                'reason': 'already-current',
+            })
+        else:
+            _backup_fk_format(c, root, backup_dir, existing, samples)
+            fid = _upsert_fk_format_row(c, customer['id'], fmt_def, existing=existing)
+            ok, note, paths = _write_fk_samples(c, root, fid, fmt_def)
+            items.append({
+                'action': 'update',
+                'kind': fmt_def['kind'],
+                'formatId': fid,
+                'number': _number(fid),
+                'identity': fmt_def['identity'],
+                'customerName': FK_CUSTOMER_NAME,
+                'sourceRow': fmt_def['sourceRow'],
+                'samplePaths': paths,
+                'samplePath': paths[0] if paths else '',
+                'sampleOk': ok,
+                'sampleNote': note,
+                'customerCreated': created,
+            })
+    else:
+        fid = _upsert_fk_format_row(c, customer['id'], fmt_def, existing=None)
+        ok, note, paths = _write_fk_samples(c, root, fid, fmt_def)
+        items.append({
+            'action': 'create',
+            'kind': fmt_def['kind'],
+            'formatId': fid,
+            'number': _number(fid),
+            'identity': fmt_def['identity'],
+            'customerName': FK_CUSTOMER_NAME,
+            'sourceRow': fmt_def['sourceRow'],
+            'samplePaths': paths,
+            'samplePath': paths[0] if paths else '',
+            'sampleOk': ok,
+            'sampleNote': note,
+            'customerCreated': created,
+        })
+
+    catalog_changed = _patch_fk_catalog(root, backup_dir, fmt_def, items)
+    changed = sum(1 for i in items if i.get('action') in ('create', 'update', 'create-customer'))
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'policy': FK_NAMES_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'openItems': open_items,
+        'customers': [FK_CUSTOMER_NAME],
+        'excel': {
+            'path': 'media/ネーム仕分け_五十音順2.xlsx',
+            'rows': {FK_CUSTOMER_NAME: [FK_SOURCE_ROW]},
+            'diff': {
+                '色': {'old': '先方から指定', 'new': FK_COLOR_CAPTION},
+                'フォントサイズ': {'old': '小汎用', 'new': '36'},
+                '名前': {'old': 'フルネーム', 'new': '苗字のみ'},
+            },
+        },
+        'sampleNames': {'surname': FK_SAMPLE_SURNAME},
+        'rules': {
+            'onlyFkCustomer': True,
+            'createIfMissing': True,
+            'noDuplicateIdentities': True,
+            'noAssigneeChange': True,
+            'noAutoApprove': True,
+            'noTouchOtherCustomers': True,
+        },
+        'items': items,
+    }
+    report_path = root / FK_NAMES_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    (backup_dir / 'report.json').write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            FK_NAMES_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': FK_NAMES_REPORT,
+                'policy': FK_NAMES_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -4391,6 +4982,7 @@ def import_catalog(connect, data_dir):
         correct_rinko_name_formats(c, data_dir)
         correct_ashuka_name_formats(c, data_dir)
         ensure_three_customer_name_formats(c, data_dir)
+        ensure_fk_name_formats(c, data_dir)
     return summary
 
 def _require(user):

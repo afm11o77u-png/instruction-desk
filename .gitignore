@@ -56,6 +56,7 @@ data/rinko-yellow-report.json
 data/rinko-name-formats-report.json
 data/ashuka-name-formats-report.json
 data/three-customer-name-formats-report.json
+data/fk-name-formats-report.json
 
 # 秘密鍵・ローカル証明書
 tls/
