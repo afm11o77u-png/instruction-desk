@@ -115,6 +115,7 @@ def schema(c):
         correct_ashuka_name_formats(c, DATA_DIR)
         ensure_three_customer_name_formats(c, DATA_DIR)
         ensure_fk_name_formats(c, DATA_DIR)
+        ensure_benkama_name_formats(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
     have = {row['name'] for row in c.execute(f'PRAGMA table_info({table})')}
@@ -4857,6 +4858,811 @@ def ensure_fk_name_formats(c, data_dir=None):
     return report
 
 
+
+
+# --- 弁釜（Excel 行159–160）ネーム形式 ---
+BENKAMA_NAMES_POLICY = 'excel-gojuon2-r159-160-v1'
+BENKAMA_NAMES_SETTINGS_KEY = 'benkama_name_formats'
+BENKAMA_NAMES_REPORT = 'benkama-name-formats-report.json'
+BENKAMA_CUSTOMER_KEY = 'excel:benkama'
+BENKAMA_CUSTOMER_NAME = '弁釜本社/札幌/八軒/旭川/函館/ローズD/'
+BENKAMA_CUSTOMER_READING = 'べんかま'
+BENKAMA_CUSTOMER_ALIASES = (
+    '弁釜',
+    '弁釜札幌',
+    '弁釜本社',
+    '弁釜本社/札幌/八軒/旭川/函館/ローズD',
+)
+BENKAMA_FAMILY = 'MSPゴシック'
+BENKAMA_PLACEMENT = '白衣：左袖25cm'
+BENKAMA_WIDTH_MM, BENKAMA_HEIGHT_MM = THREE_LARGE_W, THREE_LARGE_H
+BENKAMA_BAND_HEIGHT_MM = 25.0
+BENKAMA_UPPER_PT = 20
+BENKAMA_HEADING = '上段：社員番号：〇〇〇〇〇〇〇'
+BENKAMA_HEADING_SAMPLE = '社員番号：1234567'
+BENKAMA_NUMBER_LENGTH = 7
+BENKAMA_COLUMNS = 2
+BENKAMA_SAMPLE_FULL = THREE_SAMPLE_FULL
+BENKAMA_SAMPLE_PERIOD = '1 ﾃｷ ｼﾎｳ'  # Excel 例「① ﾃｷ ｼﾎｳ」に合わせたカタカナ＋期数字
+BENKAMA_PAPER_RGB = {
+    '白': (255, 255, 255),
+    '青': (135, 206, 250),  # #87CEFA
+    '緑': (144, 238, 144),  # #90EE90
+    '赤': (240, 128, 128),  # #F08080
+}
+BENKAMA_STAFF_COLOR_CAPTION = '社員：青　パート：白'
+BENKAMA_STAFF_GROUPS = ['社員', 'パート']
+BENKAMA_STAFF_COLORS = ['青', '白']
+BENKAMA_STAFF_SWATCHES = ['#87CEFA', '#FFFFFF']
+BENKAMA_STAFF_PAPERS = ('青', '白')
+BENKAMA_STAFF_NOTE = (
+    '社員番号7ケタ。書体はMSPゴシック。上段：20／下段：大汎用。'
+    '列2。上段帯25mm・中揃え／下段帯25mm・中揃え・上揃え。'
+    f'Excel 行159（ネーム仕分け_五十音順2）。色は{BENKAMA_STAFF_COLOR_CAPTION}。'
+)
+BENKAMA_PERIOD_COLOR_CAPTION = (
+    '札幌　1期生：赤　2期生：緑　3期生：青　4期生：白\n'
+    '旭川　1期生：赤　2期生：緑　3期生：青　4期生：赤　5期生：青　'
+    '6期生：白　7期生：赤　8期生：白　9期生：青　10期生：白\n'
+    '函館　1～4期生：無し　5期生：緑　6期生：青　7期生：赤　8期生：白\n'
+    '八軒　1期生：赤'
+)
+BENKAMA_PERIOD_NOTE = (
+    'ラベル色は５期生以降ループ（札幌のみ、他は規則性なし？）\n'
+    '名前は全てカタカナ表記で頭に何期生かを記す数字\n'
+    '例　① ﾃｷ ｼﾎｳ\n'
+    '書体はMSPゴシック。上段：20／下段：大汎用。列2。社員番号7ケタ。'
+    'Excel 行160（ネーム仕分け_五十音順2）。'
+)
+BENKAMA_OPEN_ITEMS = [
+    '大ネーム実寸は Excel に mm が無いため、既存どおり 80×50 を採用',
+    '上段帯・下段帯は各25mm（合計50mm）。横中揃え／上段縦中・下段縦上',
+    'MSPゴシックは環境フォント次第（msgothic 等へフォールバック）',
+    '期生色の見本はユニーク色（赤・緑・青・白）のみ。無しは見本なし',
+    '顧客名は Excel「弁釜本社/札幌/八軒/旭川/函館/ローズD/」。既存の弁釜系別名は同一顧客へ寄せる',
+]
+
+
+def _benkama_period_color_rows():
+    """拠点×期生の色表（無しは除外）。UI groups/colors/swatches 用。"""
+    rows = []
+    for site, pairs in (
+        ('札幌', [(1, '赤'), (2, '緑'), (3, '青'), (4, '白')]),
+        ('旭川', [
+            (1, '赤'), (2, '緑'), (3, '青'), (4, '赤'), (5, '青'),
+            (6, '白'), (7, '赤'), (8, '白'), (9, '青'), (10, '白'),
+        ]),
+        ('函館', [(5, '緑'), (6, '青'), (7, '赤'), (8, '白')]),
+        ('八軒', [(1, '赤')]),
+    ):
+        for period, color in pairs:
+            rows.append((f'{site}{period}期生', color, _swatch(color)))
+    return rows
+
+
+def _benkama_lower_pt(text):
+    return _three_generic_pt('large', text)
+
+
+def _benkama_bands(fmt_def):
+    lower_pt = float(fmt_def['fontPt'])
+    return (
+        {
+            'role': 'upper',
+            'text': BENKAMA_HEADING_SAMPLE,
+            'heightMm': BENKAMA_BAND_HEIGHT_MM,
+            'fontPt': float(BENKAMA_UPPER_PT),
+            'alignH': 'center',
+            'alignV': 'middle',
+            'indentMm': 0.0,
+        },
+        {
+            'role': 'name',
+            'text': fmt_def['sampleText'],
+            'heightMm': BENKAMA_BAND_HEIGHT_MM,
+            'fontPt': lower_pt,
+            'alignH': 'center',
+            'alignV': 'top',
+            'indentMm': 0.0,
+        },
+    )
+
+
+def _benkama_format_defs():
+    period_rows = _benkama_period_color_rows()
+    period_groups = [r[0] for r in period_rows]
+    period_colors = [r[1] for r in period_rows]
+    period_swatches = [r[2] for r in period_rows]
+    staff_pt = _benkama_lower_pt(BENKAMA_SAMPLE_FULL)
+    period_pt = _benkama_lower_pt(BENKAMA_SAMPLE_PERIOD)
+    return (
+        {
+            'identity': 'benkama:large-staff',
+            'kind': 'benkama-staff',
+            'sourceRow': 159,
+            'formatName': '大ネーム（社員・パート色）',
+            'placement': BENKAMA_PLACEMENT,
+            'heading': BENKAMA_HEADING,
+            'note': BENKAMA_STAFF_NOTE,
+            'layout': 'HeadingName',
+            'reading': 'フルネーム',
+            'small': 0,
+            'widthMm': BENKAMA_WIDTH_MM,
+            'heightMm': BENKAMA_HEIGHT_MM,
+            'fixedColor': '',
+            'colorCaption': BENKAMA_STAFF_COLOR_CAPTION,
+            'groups': list(BENKAMA_STAFF_GROUPS),
+            'colors': list(BENKAMA_STAFF_COLORS),
+            'swatches': list(BENKAMA_STAFF_SWATCHES),
+            'maximumFont': THREE_GENERIC_LARGE[4],
+            'headingFont': BENKAMA_UPPER_PT,
+            'numberLength': BENKAMA_NUMBER_LENGTH,
+            'sampleText': BENKAMA_SAMPLE_FULL,
+            'fontPt': staff_pt,
+            'papers': BENKAMA_STAFF_PAPERS,
+            'caption': (
+                f'見本：上段「{BENKAMA_HEADING_SAMPLE}」・下段フルネーム「{BENKAMA_SAMPLE_FULL}」。'
+                f'上段{BENKAMA_UPPER_PT}pt／下段大汎用。書体は{BENKAMA_FAMILY}。'
+                f'色は{BENKAMA_STAFF_COLOR_CAPTION}。'
+            ),
+        },
+        {
+            'identity': 'benkama:large-period',
+            'kind': 'benkama-period',
+            'sourceRow': 160,
+            'formatName': '大ネーム（期生色表）',
+            'placement': BENKAMA_PLACEMENT,
+            'heading': BENKAMA_HEADING,
+            'note': BENKAMA_PERIOD_NOTE,
+            'layout': 'HeadingName',
+            'reading': 'フルネーム',
+            'small': 0,
+            'widthMm': BENKAMA_WIDTH_MM,
+            'heightMm': BENKAMA_HEIGHT_MM,
+            'fixedColor': '',
+            'colorCaption': BENKAMA_PERIOD_COLOR_CAPTION,
+            'groups': period_groups,
+            'colors': period_colors,
+            'swatches': period_swatches,
+            'maximumFont': THREE_GENERIC_LARGE[4],
+            'headingFont': BENKAMA_UPPER_PT,
+            'numberLength': BENKAMA_NUMBER_LENGTH,
+            'sampleText': BENKAMA_SAMPLE_PERIOD,
+            'fontPt': period_pt,
+            'papers': ('赤', '緑', '青', '白'),
+            'caption': (
+                f'見本：上段「{BENKAMA_HEADING_SAMPLE}」・下段カタカナ期生名「{BENKAMA_SAMPLE_PERIOD}」。'
+                f'上段{BENKAMA_UPPER_PT}pt／下段大汎用。書体は{BENKAMA_FAMILY}。'
+                'ラベル色は５期生以降ループ（札幌のみ、他は規則性なし？）。'
+            ),
+        },
+    )
+
+
+def _benkama_spec(fmt_def):
+    return {
+        'benkamaKind': fmt_def['kind'],
+        'benkamaPolicy': BENKAMA_NAMES_POLICY,
+        'sampleText': fmt_def['sampleText'],
+        'fontPt': fmt_def['fontPt'],
+        'headingFontPt': BENKAMA_UPPER_PT,
+        'papers': list(fmt_def['papers']),
+        'columns': BENKAMA_COLUMNS,
+        'numberLength': BENKAMA_NUMBER_LENGTH,
+        'bandHeightsMm': [BENKAMA_BAND_HEIGHT_MM, BENKAMA_BAND_HEIGHT_MM],
+        'bandFontsPt': [BENKAMA_UPPER_PT, fmt_def['fontPt']],
+        'genericFontsPt': dict(THREE_GENERIC_LARGE),
+        'colorRoles': dict(zip(fmt_def.get('groups') or [], fmt_def.get('colors') or [])),
+    }
+
+
+def _benkama_customer_def():
+    return {
+        'customerKey': BENKAMA_CUSTOMER_KEY,
+        'customerName': BENKAMA_CUSTOMER_NAME,
+        'reading': BENKAMA_CUSTOMER_READING,
+        'formats': _benkama_format_defs(),
+    }
+
+
+def _benkama_normalize_name(name):
+    return str(name or '').replace('\n', ' ').replace('\r', ' ').strip().rstrip('/')
+
+
+def _benkama_is_alias(name):
+    text = str(name or '').replace('\n', ' ').replace('\r', ' ').strip()
+    if not text:
+        return False
+    if text == BENKAMA_CUSTOMER_NAME:
+        return True
+    if _benkama_normalize_name(text) == _benkama_normalize_name(BENKAMA_CUSTOMER_NAME):
+        return True
+    if text in BENKAMA_CUSTOMER_ALIASES:
+        return True
+    # 「弁釜」「弁釜札幌」など、弁釜で始まり他社名を含まないもの
+    if text.startswith('弁釜') and '明日' not in text:
+        return True
+    return False
+
+
+def _benkama_find_customer(c):
+    rows = c.execute(
+        'SELECT * FROM name_customers WHERE retired=0 ORDER BY id'
+    ).fetchall()
+    for row in rows:
+        if str(row['source_key'] or '') == BENKAMA_CUSTOMER_KEY:
+            return row
+    for row in rows:
+        if str(row['source_name'] or '').strip() == BENKAMA_CUSTOMER_NAME:
+            return row
+    for row in rows:
+        if _benkama_is_alias(row['source_name']):
+            return row
+    return None
+
+
+def _benkama_ensure_customer(c, backup_dir, items):
+    existing = _benkama_find_customer(c)
+    if existing:
+        changed = False
+        if str(existing['source_name'] or '') != BENKAMA_CUSTOMER_NAME:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            (backup_dir / f'customer-rename-{existing["id"]}.json').write_text(
+                json.dumps({
+                    'before': _row_as_dict(existing),
+                    'afterName': BENKAMA_CUSTOMER_NAME,
+                }, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+            c.execute(
+                'UPDATE name_customers SET source_name=?, source_key=?, reading=? WHERE id=?',
+                (
+                    BENKAMA_CUSTOMER_NAME, BENKAMA_CUSTOMER_KEY,
+                    BENKAMA_CUSTOMER_READING, existing['id'],
+                ),
+            )
+            changed = True
+            items.append({
+                'action': 'rename-customer',
+                'customerId': existing['id'],
+                'from': existing['source_name'],
+                'to': BENKAMA_CUSTOMER_NAME,
+            })
+        elif str(existing['source_key'] or '') != BENKAMA_CUSTOMER_KEY:
+            c.execute(
+                'UPDATE name_customers SET source_key=?, reading=? WHERE id=?',
+                (BENKAMA_CUSTOMER_KEY, BENKAMA_CUSTOMER_READING, existing['id']),
+            )
+            changed = True
+        if changed:
+            existing = c.execute(
+                'SELECT * FROM name_customers WHERE id=?', (existing['id'],),
+            ).fetchone()
+        return existing, False
+    known = _app_customers(c)
+    linked, status = _link(BENKAMA_CUSTOMER_NAME, known)
+    # 指示書側に「弁釜札幌」等があればリンクを寄せる
+    if not linked:
+        for alias in BENKAMA_CUSTOMER_ALIASES:
+            if alias in known:
+                linked, status = alias, '対応'
+                break
+    c.execute(
+        '''INSERT INTO name_customers(
+            source_key, source_index, source_name, reading, linked_name, link_status, manual, retired
+           ) VALUES(?,?,?,?,?,?,1,0)''',
+        (
+            BENKAMA_CUSTOMER_KEY, -1, BENKAMA_CUSTOMER_NAME,
+            BENKAMA_CUSTOMER_READING, linked, status,
+        ),
+    )
+    cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    row = c.execute('SELECT * FROM name_customers WHERE id=?', (cid,)).fetchone()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / f'customer-created-{cid}.json').write_text(
+        json.dumps(_row_as_dict(row), ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    items.append({
+        'action': 'create-customer',
+        'customerId': cid,
+        'customerName': BENKAMA_CUSTOMER_NAME,
+        'sourceKey': BENKAMA_CUSTOMER_KEY,
+    })
+    return row, True
+
+
+def _benkama_is_current(fmt, samples, fmt_def):
+    if str(fmt['format_name'] or '') != fmt_def['formatName']:
+        return False
+    if str(fmt['placement'] or '') != fmt_def['placement']:
+        return False
+    if str(fmt['family'] or '') != BENKAMA_FAMILY:
+        return False
+    if str(fmt['heading'] or '') != fmt_def['heading']:
+        return False
+    if str(fmt['note'] or '') != fmt_def['note']:
+        return False
+    if str(fmt['layout'] or '') != fmt_def['layout']:
+        return False
+    if str(fmt['reading'] or '') != fmt_def['reading']:
+        return False
+    if int(fmt['small'] or 0) != int(fmt_def['small']):
+        return False
+    if int(fmt['width_mm'] or 0) != int(fmt_def['widthMm']):
+        return False
+    if int(fmt['height_mm'] or 0) != int(fmt_def['heightMm']):
+        return False
+    if str(fmt['fixed_color'] or '') != fmt_def['fixedColor']:
+        return False
+    if str(fmt['color_caption'] or '') != fmt_def['colorCaption']:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(fmt_def['maximumFont']):
+        return False
+    if float(fmt['heading_font'] or 0) != float(fmt_def['headingFont']):
+        return False
+    if int(fmt['number_length'] or 0) != int(fmt_def['numberLength']):
+        return False
+    if int(fmt['source_row'] or 0) != int(fmt_def['sourceRow']):
+        return False
+    if str(fmt['identity'] or '') != fmt_def['identity']:
+        return False
+    spec = _load_spec(fmt)
+    if spec.get('benkamaPolicy') != BENKAMA_NAMES_POLICY or spec.get('benkamaKind') != fmt_def['kind']:
+        return False
+    try:
+        have_groups = json.loads(fmt['groups_json'] or '[]')
+        have_colors = json.loads(fmt['colors_json'] or '[]')
+        have_swatches = json.loads(fmt['swatches_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if have_groups != fmt_def['groups'] or have_colors != fmt_def['colors']:
+        return False
+    if have_swatches != fmt_def['swatches']:
+        return False
+    if len(samples) != len(fmt_def['papers']):
+        return False
+    by_paper = {str(s['paper_color'] or ''): s for s in samples}
+    for paper in fmt_def['papers']:
+        sample = by_paper.get(paper)
+        if sample is None:
+            return False
+        want_key = _three_variant_key(fmt_def['papers'], paper)
+        if str(sample['variant_key'] or '') != want_key:
+            return False
+        rel = str(sample['relative_path'] or '')
+        if not rel.startswith('images/names/'):
+            return False
+        if fmt_def['kind'] not in Path(rel).name:
+            return False
+        if str(sample['caption'] or '') != fmt_def['caption']:
+            return False
+    return True
+
+
+def _backup_benkama_format(c, root, backup_dir, fmt, samples):
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+
+def _write_benkama_samples(c, root, format_id, fmt_def):
+    bands = _benkama_bands(fmt_def)
+    c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
+    notes = []
+    paths = []
+    for paper in fmt_def['papers']:
+        key = _three_variant_key(fmt_def['papers'], paper)
+        stem = f'{fmt_def["kind"]}-{paper}'
+        rel = f'images/names/{stem}-{format_id:06}.png'
+        dst = root / rel
+        rgb = BENKAMA_PAPER_RGB.get(paper, (255, 255, 255))
+        ok, note = _render_ashuka_banded_sample(
+            dst, bands,
+            width_mm=fmt_def['widthMm'],
+            height_mm=fmt_def['heightMm'],
+            family_hint=BENKAMA_FAMILY,
+            paper_rgb=rgb,
+        )
+        notes.append(f'{paper}:{note}')
+        if not ok:
+            return False, '; '.join(notes), paths
+        c.execute(
+            '''INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)
+               VALUES(?,?,?,?,?,?)''',
+            (format_id, key, paper, paper, rel, fmt_def['caption']),
+        )
+        paths.append(rel)
+    return True, '; '.join(notes), paths
+
+
+def _upsert_benkama_format_row(c, customer_id, fmt_def, existing=None):
+    groups = json.dumps(fmt_def.get('groups') or [], ensure_ascii=False)
+    colors = json.dumps(fmt_def.get('colors') or [], ensure_ascii=False)
+    swatches = json.dumps(fmt_def.get('swatches') or [], ensure_ascii=False)
+    spec = json.dumps(_benkama_spec(fmt_def), ensure_ascii=False)
+    values = (
+        fmt_def['formatName'], fmt_def['placement'], BENKAMA_FAMILY, '',
+        fmt_def['heading'], fmt_def['note'], fmt_def['layout'], fmt_def['reading'],
+        int(fmt_def['small']), int(fmt_def['widthMm']), int(fmt_def['heightMm']), 0,
+        fmt_def['fixedColor'], fmt_def['colorCaption'],
+        groups, colors, swatches, 'null',
+        '', float(fmt_def['maximumFont']), float(fmt_def['headingFont']),
+        int(fmt_def['numberLength']), int(fmt_def['sourceRow']),
+        spec, 0, '[]', 0,
+    )
+    if existing:
+        c.execute(
+            '''UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,
+                layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,
+                groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,
+                heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,
+                retired=0, identity=? WHERE id=?''',
+            values + (fmt_def['identity'], existing['id']),
+        )
+        return existing['id']
+    c.execute(
+        '''INSERT INTO name_formats(
+            identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,
+            layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,
+            groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,
+            number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)''',
+        (
+            fmt_def['identity'], customer_id, -1,
+            values[0], values[1], values[2], values[3], values[4], values[5],
+            values[6], values[7], values[8], values[9], values[10], values[11],
+            values[12], values[13], values[14], values[15], values[16], values[17],
+            values[18], values[19], values[20], values[21], values[22], None,
+            values[23], values[24], values[25], values[26],
+        ),
+    )
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def _benkama_match_legacy(fmt, fmt_def):
+    """同一顧客の既存大ネームを社員／期生のどちらかに割り当てる。"""
+    caption = str(fmt['color_caption'] or '')
+    note = str(fmt['note'] or '')
+    name = str(fmt['format_name'] or '')
+    if fmt_def['kind'] == 'benkama-staff':
+        if '期生' in caption or '期生' in note or '期生' in name:
+            return False
+        if '社員' in caption or 'パート' in caption or '社員番号7ケタ' in note:
+            return True
+        if '社員' in name or 'パート' in name:
+            return True
+        return False
+    if fmt_def['kind'] == 'benkama-period':
+        return '期生' in caption or '期生' in note or '期生' in name or 'カタカナ' in note
+    return False
+
+
+def _patch_benkama_catalog(data_dir, backup_dir, fmt_defs, items):
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return False
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    catalog_backup = backup_dir / 'catalog.json'
+    if not catalog_backup.exists():
+        shutil.copy2(path, catalog_backup)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    customers = list(data.get('customers') or [])
+    formats = list(data.get('formats') or [])
+    by_key = {c.get('sourceKey'): c for c in customers}
+    changed = False
+    if BENKAMA_CUSTOMER_KEY not in by_key:
+        customers.append({
+            'sourceKey': BENKAMA_CUSTOMER_KEY,
+            'sourceIndex': -1,
+            'name': BENKAMA_CUSTOMER_NAME,
+            'reading': BENKAMA_CUSTOMER_READING,
+        })
+        by_key[BENKAMA_CUSTOMER_KEY] = customers[-1]
+        changed = True
+    else:
+        entry = by_key[BENKAMA_CUSTOMER_KEY]
+        if entry.get('name') != BENKAMA_CUSTOMER_NAME:
+            entry['name'] = BENKAMA_CUSTOMER_NAME
+            changed = True
+    item_by_identity = {i.get('identity'): i for i in items if i.get('identity')}
+    for fmt_def in fmt_defs:
+        item = item_by_identity.get(fmt_def['identity'])
+        existing = next(
+            (f for f in formats if f.get('identity') == fmt_def['identity']),
+            None,
+        )
+        payload = {
+            'identity': fmt_def['identity'],
+            'customerKey': BENKAMA_CUSTOMER_KEY,
+            'sourceKind': -1,
+            'format': fmt_def['formatName'],
+            'placement': fmt_def['placement'],
+            'family': BENKAMA_FAMILY,
+            'heading': fmt_def['heading'],
+            'note': fmt_def['note'],
+            'layout': fmt_def['layout'],
+            'reading': fmt_def['reading'],
+            'small': bool(fmt_def['small']),
+            'widthMm': fmt_def['widthMm'],
+            'heightMm': fmt_def['heightMm'],
+            'fixedColor': fmt_def['fixedColor'],
+            'colorCaption': fmt_def['colorCaption'],
+            'groups': list(fmt_def.get('groups') or []),
+            'colors': list(fmt_def.get('colors') or []),
+            'colorSwatches': list(fmt_def.get('swatches') or []),
+            'maximumFont': fmt_def['maximumFont'],
+            'headingFont': fmt_def['headingFont'],
+            'numberLength': fmt_def['numberLength'],
+            'sourceRow': fmt_def['sourceRow'],
+            'manual': True,
+            **{k: v for k, v in _benkama_spec(fmt_def).items() if v is not None},
+            'samples': [],
+        }
+        if item:
+            payload['dbId'] = item.get('formatId')
+            paths = item.get('samplePaths') or (
+                [item['samplePath']] if item.get('samplePath') else []
+            )
+            for idx, paper in enumerate(fmt_def['papers']):
+                rel = paths[idx] if idx < len(paths) else ''
+                payload['samples'].append({
+                    'key': _three_variant_key(fmt_def['papers'], paper),
+                    'condition': paper,
+                    'paperColor': paper,
+                    'relativePath': rel,
+                    'caption': fmt_def['caption'],
+                })
+        if existing is None:
+            formats.append(payload)
+            changed = True
+        else:
+            for key, value in payload.items():
+                if existing.get(key) != value:
+                    existing[key] = value
+                    changed = True
+    if changed:
+        data['customers'] = customers
+        data['formats'] = formats
+        data['customerCount'] = len(customers)
+        data['formatCount'] = len(formats)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+
+def ensure_benkama_name_formats(c, data_dir=None):
+    """Excel 行159–160 弁釜のネーム形式を追加／更新する。他顧客は変更しない。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'benkama-names-{stamp}'
+    cust = _benkama_customer_def()
+    fmt_defs = cust['formats']
+    items = []
+    open_items = list(BENKAMA_OPEN_ITEMS)
+
+    customer = _benkama_find_customer(c)
+    needs_work = customer is None
+    if not needs_work:
+        # 別名のままなら Excel 名へ寄せる
+        if str(customer['source_name'] or '') != BENKAMA_CUSTOMER_NAME:
+            needs_work = True
+        else:
+            for fmt_def in fmt_defs:
+                row = c.execute(
+                    'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+                    (fmt_def['identity'],),
+                ).fetchone()
+                if row is None:
+                    needs_work = True
+                    break
+                samples = c.execute(
+                    'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                    (row['id'],),
+                ).fetchall()
+                if not _benkama_is_current(row, samples, fmt_def):
+                    needs_work = True
+                    break
+
+    if not needs_work:
+        report = {
+            'at': stamp,
+            'changed': 0,
+            'policy': BENKAMA_NAMES_POLICY,
+            'backupDir': '',
+            'catalogChanged': False,
+            'openItems': open_items,
+            'customers': [BENKAMA_CUSTOMER_NAME],
+            'items': [],
+            'reason': 'already-applied',
+        }
+        (root / BENKAMA_NAMES_REPORT).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                BENKAMA_NAMES_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': BENKAMA_NAMES_REPORT,
+                    'policy': BENKAMA_NAMES_POLICY,
+                }, ensure_ascii=False),
+            ),
+        )
+        return report
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    customer, created = _benkama_ensure_customer(c, backup_dir, items)
+    claimed_ids = set()
+
+    for fmt_def in fmt_defs:
+        by_identity = c.execute(
+            'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+            (fmt_def['identity'],),
+        ).fetchone()
+        existing = by_identity
+        if existing is None:
+            candidates = c.execute(
+                '''SELECT * FROM name_formats WHERE customer_id=? AND retired=0
+                   AND placement=? AND small=? ORDER BY id''',
+                (customer['id'], fmt_def['placement'], int(fmt_def['small'])),
+            ).fetchall()
+            matched = [cand for cand in candidates if cand['id'] not in claimed_ids and _benkama_match_legacy(cand, fmt_def)]
+            if len(matched) == 1:
+                existing = matched[0]
+            elif len(matched) > 1:
+                existing = matched[0]
+            elif len(candidates) == 1 and candidates[0]['id'] not in claimed_ids:
+                # 旧仕様が1件のみ（色＝白など）なら社員行へ寄せる
+                if fmt_def['kind'] == 'benkama-staff':
+                    existing = candidates[0]
+
+        samples = []
+        if existing:
+            claimed_ids.add(existing['id'])
+            samples = c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (existing['id'],),
+            ).fetchall()
+            if _benkama_is_current(existing, samples, fmt_def):
+                items.append({
+                    'action': 'skip',
+                    'kind': fmt_def['kind'],
+                    'formatId': existing['id'],
+                    'number': _number(existing['id']),
+                    'identity': fmt_def['identity'],
+                    'customerName': BENKAMA_CUSTOMER_NAME,
+                    'reason': 'already-current',
+                })
+                continue
+            _backup_benkama_format(c, root, backup_dir, existing, samples)
+            fid = _upsert_benkama_format_row(c, customer['id'], fmt_def, existing=existing)
+            ok, note, paths = _write_benkama_samples(c, root, fid, fmt_def)
+            items.append({
+                'action': 'update',
+                'kind': fmt_def['kind'],
+                'formatId': fid,
+                'number': _number(fid),
+                'identity': fmt_def['identity'],
+                'customerName': BENKAMA_CUSTOMER_NAME,
+                'sourceRow': fmt_def['sourceRow'],
+                'samplePaths': paths,
+                'samplePath': paths[0] if paths else '',
+                'sampleOk': ok,
+                'sampleNote': note,
+                'customerCreated': created,
+            })
+        else:
+            fid = _upsert_benkama_format_row(c, customer['id'], fmt_def, existing=None)
+            claimed_ids.add(fid)
+            ok, note, paths = _write_benkama_samples(c, root, fid, fmt_def)
+            items.append({
+                'action': 'create',
+                'kind': fmt_def['kind'],
+                'formatId': fid,
+                'number': _number(fid),
+                'identity': fmt_def['identity'],
+                'customerName': BENKAMA_CUSTOMER_NAME,
+                'sourceRow': fmt_def['sourceRow'],
+                'samplePaths': paths,
+                'samplePath': paths[0] if paths else '',
+                'sampleOk': ok,
+                'sampleNote': note,
+                'customerCreated': created,
+            })
+
+    catalog_changed = _patch_benkama_catalog(root, backup_dir, fmt_defs, items)
+    changed = sum(
+        1 for i in items
+        if i.get('action') in ('create', 'update', 'create-customer', 'rename-customer')
+    )
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'policy': BENKAMA_NAMES_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'openItems': open_items,
+        'customers': [BENKAMA_CUSTOMER_NAME],
+        'excel': {
+            'path': 'media/ネーム仕分け_五十音順2.xlsx',
+            'rows': {BENKAMA_CUSTOMER_NAME: [159, 160]},
+            'diff': {
+                '色(行159)': {'old': '白', 'new': BENKAMA_STAFF_COLOR_CAPTION},
+                '色(行160)': {
+                    'old': '札幌1–4／旭川1–4のみ',
+                    'new': '札幌1–4＋旭川1–10＋函館1–8＋八軒1期',
+                },
+                '備考(行160)': {
+                    'old': 'ラベル色は５期生以降ループ',
+                    'new': 'ラベル色は５期生以降ループ（札幌のみ、他は規則性なし？）',
+                },
+            },
+        },
+        'sampleNames': {
+            'full': BENKAMA_SAMPLE_FULL,
+            'periodKatakana': BENKAMA_SAMPLE_PERIOD,
+            'employeeNumber': BENKAMA_HEADING_SAMPLE,
+        },
+        'rules': {
+            'onlyBenkamaCustomer': True,
+            'createIfMissing': True,
+            'noDuplicateIdentities': True,
+            'noAssigneeChange': True,
+            'noAutoApprove': True,
+            'noTouchOtherCustomers': True,
+        },
+        'items': items,
+    }
+    report_path = root / BENKAMA_NAMES_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    (backup_dir / 'report.json').write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            BENKAMA_NAMES_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': BENKAMA_NAMES_REPORT,
+                'policy': BENKAMA_NAMES_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -4983,6 +5789,7 @@ def import_catalog(connect, data_dir):
         correct_ashuka_name_formats(c, data_dir)
         ensure_three_customer_name_formats(c, data_dir)
         ensure_fk_name_formats(c, data_dir)
+        ensure_benkama_name_formats(c, data_dir)
     return summary
 
 def _require(user):
