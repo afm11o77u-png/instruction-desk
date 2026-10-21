@@ -1,5 +1,6 @@
-/** 旧CSV一括取り込み（登録・設定・右上）。商品台帳CSV必須＋初期在庫CSV任意。
- * 判定は商品台帳パイプラインのみ。初期在庫は元CSV行対応で同時登録する。
+/** 旧CSV一括取り込み（登録・設定・右上）。標準は二段階:
+ *  1. 商品を登録（台帳必須・初期在庫CSVは判定補助のみ／在庫は書かない）
+ *  2. 初期在庫を登録（初期在庫CSVのみ＋永続マップで登録先解決）
  */
 (function(){
   const STATUS_ORDER=['create','merge','size_add','reuse','unchanged','needs_review','hold','excluded']
@@ -20,6 +21,10 @@
   const OVERSIZE_MSG='ファイル容量が上限を超えています'
   const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
   const SECTION_DEFAULTS={individual:true,bulk:false,auto:false,hold:false}
+  const MODE_CHOOSE=''
+  const MODE_PRODUCTS='products'
+  const MODE_OPENING='opening_stock'
+  const AUX_JUDGMENT_ONLY_COPY='初期在庫CSVは商品選定の判断にだけ使います。在庫は登録しません'
   let ui=null
 
   function todayISO(){
@@ -32,6 +37,8 @@
   function ensureState(){
     if(!ui){
       ui={
+        importMode:MODE_CHOOSE,
+        progressLabel:'',
         file:null,fileB64:'',fileName:'',fileSize:0,
         auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
         basisDate:'',defaultSiteName:'未確認',
@@ -46,6 +53,8 @@
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
     }
+    if(ui.importMode==null)ui.importMode=MODE_CHOOSE
+    if(ui.progressLabel==null)ui.progressLabel=''
     if(!ui.selectedCodes)ui.selectedCodes={}
     if(!ui.expandedCodes)ui.expandedCodes={}
     if(!ui.rowClassifications)ui.rowClassifications={}
@@ -59,6 +68,21 @@
     if(!ui.basisDate)ui.basisDate=todayISO()
     if(!ui.defaultSiteName)ui.defaultSiteName='未確認'
     return ui
+  }
+
+  function isProductsMode(st){return (st||ensureState()).importMode===MODE_PRODUCTS}
+  function isOpeningMode(st){return (st||ensureState()).importMode===MODE_OPENING}
+
+  function resetStageFiles(st){
+    st.file=null;st.fileB64='';st.fileName='';st.fileSize=0
+    st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
+    st.history=null;st.historyError='';st.preview=null;st.previewError='';st.result=null
+    st.selections={};st.skuDecisions={};st.rowClassifications={}
+    st.selectedCodes={};st.expandedCodes={};st.openingSelections={}
+    st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
+    st.sectionPages={individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.skuQ='';st.skuReasonFilter='';st.skuPage=1;st.page=1
+    st.progressLabel=''
   }
 
   /** クライアント決定を優先（折りたたみでは承認にしない。state の decision のみ）。 */
@@ -150,19 +174,28 @@
 
   function previewPayload(st){
     const body={
-      name:st.fileName,file:st.fileB64,selections:st.selections,skuDecisions:st.skuDecisions,
+      importMode:st.importMode||MODE_PRODUCTS,
+      selections:st.selections,skuDecisions:st.skuDecisions,
       rowClassifications:st.rowClassifications||{},
       _canWrite:true,_actor:{name:st.actorName||''}
     }
-    if(st.auxFileB64){
+    if(isOpeningMode(st)){
+      // 段階2: 初期在庫CSVのみ。台帳CSVは送らない（再判定しない）
       body.auxFile=st.auxFileB64
       body.auxName=st.auxFileName||'初期在庫.csv'
       body.registerOpeningStock=true
       body.basisDate=st.basisDate||todayISO()
       body.defaultSiteName=st.defaultSiteName||'未確認'
       body.openingSelections=st.openingSelections||{}
-    }else{
-      body.registerOpeningStock=false
+      return body
+    }
+    // 段階1: 商品登録。初期在庫CSVがあっても在庫は登録しない
+    body.name=st.fileName
+    body.file=st.fileB64
+    body.registerOpeningStock=false
+    if(st.auxFileB64){
+      body.auxFile=st.auxFileB64
+      body.auxName=st.auxFileName||'初期在庫.csv'
     }
     return body
   }
@@ -987,22 +1020,35 @@
       </div>`
   }
 
+  function timingsHtml(st){
+    const t=st.preview&&st.preview.timingsMs
+    if(!t)return ''
+    return `<p class="excelhint" data-pl-timings>計測: CSV読込 ${t.csvParse||0}ms　商品照合 ${t.productJudgment||0}ms　初期在庫準備 ${t.openingStockPrep||0}ms　合計 ${t.total||0}ms</p>`
+  }
+
   function resultHtml(st){
     const r=st.result
     if(!r)return ''
     const c=r.counts||{}
     const s=r.confirmSummary||{}
+    if(r.importMode===MODE_OPENING||(r.registerOpeningStock&&!c.productsCreated&&!s.productsToCreate)){
+      return `<div class="notice legacy-csv-result">
+        <strong>${r.already?'同じ操作は登録済みです':'初期在庫の登録が完了しました'}</strong>
+        <p>初期在庫: 新規 ${c.openingCreated||0}　数量更新 ${c.openingQtyUpdated||0}　変更なし ${c.openingUnchanged||0}　保留 ${c.openingHeld||0}　補完候補スキップ ${c.openingComplementSkipped||0}</p>
+      </div>`
+    }
     const openingBit=r.registerOpeningStock
       ?`<p>初期在庫: 新規 ${c.openingCreated||0}　数量更新 ${c.openingQtyUpdated||0}　変更なし ${c.openingUnchanged||0}　保留 ${c.openingHeld||0}　補完候補スキップ ${c.openingComplementSkipped||0}</p>`
-      :`<p>在庫数量・金額・履歴: ${r.stockUnchanged?'変化なし':'要確認'}</p>`
+      :`<p>在庫数量・金額・履歴: ${r.stockUnchanged?'変化なし':'要確認'}（商品登録段階では在庫を書きません）</p>`
     return `<div class="notice legacy-csv-result">
-      <strong>${r.already?'同じ操作は登録済みです':'登録が完了しました'}</strong>
+      <strong>${r.already?'同じ操作は登録済みです':'商品登録が完了しました'}</strong>
       <p>新規商品 ${c.productsCreated||0}　再利用行 ${c.reused||0}　統合元 ${c.productsMerged||0}
      　サイズ追加 ${c.sizesAdded||0}　取扱新規 ${c.handlesCreated||0}
      　顧客 ${c.customersCreated||0}　仕入先 ${c.suppliersCreated||0}　サブ仕入先 ${c.subSuppliersAdded||0}
      　確定行 ${c.committedRows||0}　保留 ${c.deferred||r.deferredCount||0}　要確認残 ${r.reviewRemaining||0}　対象外 ${r.excludedCount||0}</p>
       ${s.csvRows!=null?`<p class="excelhint">確定時サマリ: CSV行 ${s.csvRows} / 新規商品 ${s.productsToCreate} / 再利用 ${s.productsToReuse} / 統合 ${s.productsToMerge}（行数≠新規商品数）</p>`:''}
       ${openingBit}
+      <p class="excelhint">初期在庫は画面を閉じて「旧CSV一括取り込み」→「初期在庫を登録」から行えます（マップは保存済み）。</p>
     </div>`
   }
 
@@ -1048,7 +1094,7 @@
     const more=(os.plans||[]).length>60?`<p class="excelhint">先頭60件を表示（全 ${(os.plans||[]).length} 件）。絞り込みは今後拡張予定。</p>`:''
     return `<section class="product-ledger-opening-preview">
       <h3>初期在庫の登録予定</h3>
-      <p class="notice">${esc(os.note||sum.note||'初期在庫CSVを選んでいるため、確認後に初期在庫も登録します。')}</p>
+      <p class="notice">${esc(os.note||sum.note||'確認後に初期在庫を登録します。数量・新品中古・拠点・単価を確認してください。')}</p>
       <p><strong>${esc(countLine)}</strong></p>
       ${masterBits.length?`<p class="excelhint">${masterBits.join('　')}</p>`:''}
       <div class="legacy-csv-table-wrap"><table class="data sku-compare-table">
@@ -1059,10 +1105,44 @@
     </section>`
   }
 
+  function modeChooserHtml(st){
+    return `<div class="product-ledger-mode-chooser">
+      <p class="merge-lead">旧CSV一括取り込みは<strong>二段階</strong>です。先に商品を登録し、あとから初期在庫を登録します（待ち時間を分けます）。</p>
+      <div class="bar product-ledger-mode-actions">
+        <button type="button" class="primary" id="plModeProducts" ${st.busy?'disabled':''}>商品を登録</button>
+        <button type="button" class="primary" id="plModeOpening" ${st.busy?'disabled':''}>初期在庫を登録</button>
+      </div>
+      <p class="excelhint">商品登録では初期在庫CSVを判定補助に使えても在庫は書きません。初期在庫登録は商品台帳CSVの再選択不要です。</p>
+    </div>`
+  }
+
   function filePickHtml(st){
+    if(isOpeningMode(st)){
+      const auxLabel=st.auxFileName?'初期在庫CSVを変更':'初期在庫CSVを選ぶ（必須）'
+      const auxHint=st.auxFileName&&st.auxFileSize?`（${Number(st.auxFileSize).toLocaleString('ja-JP')} バイト）`:''
+      const auxMeta=st.preview&&st.preview.auxOpeningStock
+      return `<div class="product-ledger-files">
+        <p class="notice" role="status">商品台帳CSVの再選択は不要です。商品登録時に保存した原文→登録先マップで照合します（メイン名選定のやり直しなし）。</p>
+        <div class="bar product-ledger-filebar">
+          <input type="file" id="plAuxFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
+          <button type="button" id="plPickAux" ${st.busy?'disabled':''}>${esc(auxLabel)}</button>
+          <span class="excelhint product-ledger-filename">${esc(st.auxFileName||'未選択')}${auxHint?` ${esc(auxHint)}`:''}${auxMeta?`（${esc(auxMeta.encoding||'')} / ${auxMeta.rowCount||0}行）`:''}</span>
+        </div>
+        <div class="bar">
+          <label>在庫基準日<input id="plBasis" type="date" value="${esc(st.basisDate||'')}" ${st.busy?'disabled':''}></label>
+          <label>拠点空欄時の登録先<select id="plDefaultSite" ${st.busy?'disabled':''}>${siteOptions(st.defaultSiteName)}</select></label>
+        </div>
+        <div class="bar">
+          <button type="button" id="plPreview" class="primary" ${!st.auxFileB64||st.busy?'disabled':''}>読み込み・照合</button>
+          <button type="button" id="plBackMode" class="quiet" ${st.busy?'disabled':''}>段階選択に戻る</button>
+        </div>
+        ${st.progressLabel?`<p class="excelhint" role="status">${esc(st.progressLabel)}</p>`:''}
+        ${st.previewError?`<p class="notice product-ledger-import-error" role="alert">${esc(st.previewError)}</p>`:''}
+      </div>`
+    }
     const label=st.fileName?'台帳CSVを変更':'商品台帳CSVを選ぶ（必須）'
     const sizeHint=st.fileName&&st.fileSize?`（${Number(st.fileSize).toLocaleString('ja-JP')} バイト）`:''
-    const auxLabel=st.auxFileName?'初期在庫CSVを変更':'初期在庫CSV（任意）'
+    const auxLabel=st.auxFileName?'初期在庫CSVを変更':'初期在庫CSV（任意・判定補助）'
     const auxHint=st.auxFileName&&st.auxFileSize?`（${Number(st.auxFileSize).toLocaleString('ja-JP')} バイト）`:''
     const auxMeta=st.preview&&st.preview.auxOpeningStock
     const auxSelected=!!st.auxFileB64
@@ -1079,15 +1159,13 @@
         ${st.auxFileB64?`<button type="button" id="plClearAux" class="quiet" ${st.busy?'disabled':''}>初期在庫CSVを外す</button>`:''}
       </div>
       ${auxSelected
-        ?`<p class="notice" role="status">初期在庫CSVを選んでいます。<strong>確認後に初期在庫も登録します</strong>（判定材料だけではありません）。数量は「在庫」列のみ。拠点空欄は「未確認」へ登録します。</p>
-          <div class="bar">
-            <label>在庫基準日<input id="plBasis" type="date" value="${esc(st.basisDate||'')}" ${st.busy?'disabled':''}></label>
-            <label>拠点空欄時の登録先<select id="plDefaultSite" ${st.busy?'disabled':''}>${siteOptions(st.defaultSiteName)}</select></label>
-          </div>`
-        :`<p class="excelhint">初期在庫CSVを選ばない場合は、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
+        ?`<p class="notice" role="status"><strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。メイン商品名・仕入先・仕様の選定にだけ使い、在庫数量・単価・入出庫履歴は書きません。</p>`
+        :`<p class="excelhint">初期在庫CSVを選ばない場合も、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
       <div class="bar">
         <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
+        <button type="button" id="plBackMode" class="quiet" ${st.busy?'disabled':''}>段階選択に戻る</button>
       </div>
+      ${st.progressLabel?`<p class="excelhint" role="status">${esc(st.progressLabel)}</p>`:''}
       ${st.previewError?`<p class="notice product-ledger-import-error" role="alert">${esc(st.previewError)}</p>`:''}
     </div>`
   }
@@ -1174,21 +1252,34 @@
     const skuPending=(st.preview&&st.preview.skuDecisionPending)||0
     const canWrite=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
     dlg.classList.add('product-ledger-dialog','legacy-csv-detail-dialog')
-    const lead=st.auxFileB64
-      ?'商品台帳CSV（必須）と初期在庫CSV（任意）をまとめて取り込みます。同じ判定結果で商品・取扱と初期在庫を登録します。プレビューまではDBを変更しません。保留した品番の在庫は同時に保留します。'
-      :'商品台帳CSVから商品と顧客取扱を登録します。初期在庫CSVを足すと、確認後に初期在庫も同時登録します。通常品番は<strong>1品番=1商品</strong>です。プレビューまではDBを変更しません。'
-    dlg.innerHTML=`<div class="dialoghead"><h2>旧CSV一括取り込み</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
-      <div class="dialogbody legacy-csv-detail-body">
-        <p class="merge-lead">${lead}</p>
-        ${filePickHtml(st)}
-        ${historyBlock(st)}
-        ${st.preview?`<p class="excelhint">${esc(st.preview.note||'')}</p>
-          ${st.preview.auxOpeningStock?`<p class="${st.preview.registerOpeningStock?'notice':'excelhint'}">初期在庫CSV: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
+    if(!st.importMode){
+      dlg.innerHTML=`<div class="dialoghead"><h2>旧CSV一括取り込み</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
+        <div class="dialogbody legacy-csv-detail-body">${modeChooserHtml(st)}${resultHtml(st)}</div>`
+      if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
+      bindDialog()
+      return
+    }
+    const openingOnly=isOpeningMode(st)
+    const title=openingOnly?'旧CSV一括取り込み（初期在庫を登録）':'旧CSV一括取り込み（商品を登録）'
+    const lead=openingOnly
+      ?'初期在庫CSVだけで登録します。登録先は商品登録時の永続マップから原文キーで解決します。曖昧・削除済み・未登録は理由を示し、別商品へ推測登録しません。プレビューまではDBを変更しません。'
+      :`商品台帳CSVから商品と顧客取扱を登録します。初期在庫CSVは任意で、<strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。通常品番は<strong>1品番=1商品</strong>です。プレビューまではDBを変更しません。`
+    const previewBody=st.preview?(openingOnly
+      ?`<p class="excelhint">${esc(st.preview.note||'')}</p>
+          ${timingsHtml(st)}
+          ${st.preview.auxOpeningStock?`<p class="notice">初期在庫CSV: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
+          ${openingStockSectionsHtml(st)}
+          <div class="bar">
+            <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
+            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite?'disabled':''}>確認して初期在庫を登録</button>
+          </div>`
+      :`<p class="excelhint">${esc(st.preview.note||'')}</p>
+          ${timingsHtml(st)}
+          ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定補助）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
           <p><strong>${countLine(st.preview.countsRaw)}</strong>　行の要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未決定の品番は確定できません。保留にすれば登録対象から外せます）':''}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
           ${skuGroupsHtml(st)}
-          ${openingStockSectionsHtml(st)}
           <div class="bar">
             <input type="search" id="plQ" placeholder="検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
             <select id="plStatus">
@@ -1196,9 +1287,15 @@
               ${STATUS_ORDER.map(k=>`<option value="${k}" ${st.statusFilter===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
             </select>
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
-            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して登録（保留は除外）</button>
+            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して商品を登録（保留は除外）</button>
           </div>
-          ${tableHtml(st)}`:''}
+          ${tableHtml(st)}`):''
+    dlg.innerHTML=`<div class="dialoghead"><h2>${esc(title)}</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
+      <div class="dialogbody legacy-csv-detail-body">
+        <p class="merge-lead">${lead}</p>
+        ${filePickHtml(st)}
+        ${historyBlock(st)}
+        ${previewBody}
         ${resultHtml(st)}
       </div>`
     if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
@@ -1285,7 +1382,9 @@
           delete d.auxPrimaryConflict
         }
       })
-      st.toast('初期在庫CSVを読みました。確認後に初期在庫も登録します。台帳CSVとあわせて「読み込み・照合」してください。')
+      st.toast(isOpeningMode(st)
+        ?'初期在庫CSVを読みました。「読み込み・照合」で登録予定を確認してください。'
+        :`${AUX_JUDGMENT_ONLY_COPY}。台帳CSVとあわせて「読み込み・照合」してください。`)
     }catch(e){
       st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
       const msg=apiErrorMessage(e,'初期在庫CSVを読めませんでした。')
@@ -1322,6 +1421,27 @@
     }
     const closeBtn=$('#plClose')
     if(closeBtn)closeBtn.onclick=close
+    const modeProducts=$('#plModeProducts')
+    if(modeProducts)modeProducts.onclick=()=>{
+      if(st.busy)return
+      resetStageFiles(st)
+      st.importMode=MODE_PRODUCTS
+      paintDialog({preserveScroll:false})
+    }
+    const modeOpening=$('#plModeOpening')
+    if(modeOpening)modeOpening.onclick=()=>{
+      if(st.busy)return
+      resetStageFiles(st)
+      st.importMode=MODE_OPENING
+      paintDialog({preserveScroll:false})
+    }
+    const backMode=$('#plBackMode')
+    if(backMode)backMode.onclick=()=>{
+      if(st.busy)return
+      resetStageFiles(st)
+      st.importMode=MODE_CHOOSE
+      paintDialog({preserveScroll:false})
+    }
     const file=$('#plFile')
     const pick=$('#plPickFile')
     if(pick&&file){
@@ -1369,15 +1489,8 @@
       }
     })
     const runPreview=async()=>{
-      if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
-      try{assertUploadSize(st.file,st.fileB64)}catch(e){
-        const msg=apiErrorMessage(e,OVERSIZE_MSG)
-        st.previewError=msg
-        st.toast(msg,8000)
-        paintDialog()
-        return
-      }
-      if(st.auxFileB64){
+      if(isOpeningMode(st)){
+        if(!st.auxFileB64){st.toast('初期在庫CSVを選んでください。');return}
         try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){
           const msg=apiErrorMessage(e,OVERSIZE_MSG)
           st.previewError=msg
@@ -1385,66 +1498,90 @@
           paintDialog()
           return
         }
-      }
-      // フォーム値を skuDecisions へ吸い上げ
-      document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
-        setSkuDecision(st,el.getAttribute('data-pl-official-name-edit'),{officialName:el.value})
-      })
-      document.querySelectorAll('[data-pl-official-color]').forEach(el=>{
-        setSkuDecision(st,el.getAttribute('data-pl-official-color'),{color:el.value})
-      })
-      document.querySelectorAll('[data-pl-defer-reason]').forEach(el=>{
-        setSkuDecision(st,el.getAttribute('data-pl-defer-reason'),{deferReason:el.value})
-      })
-      // 括弧分類の編集は再照合・詳細開閉でも保持
-      document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
-        setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
-      })
-      document.querySelectorAll('[data-pl-paren-color]').forEach(el=>{
-        setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
-      })
-      document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
-        setRowClassification(st,el.getAttribute('data-pl-paren-proc'),{processing:el.value})
-      })
-      document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
-        setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
-      })
-      document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
-        const v=el.value.trim()
-        setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]})
-      })
-      document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
-        setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
-      })
-      document.querySelectorAll('[data-pl-sep-code]').forEach(el=>{
-        const code=el.getAttribute('data-pl-sep-code')
-        const key=el.getAttribute('data-pl-sep-key')
-        const d=skuDecision(st,code)
-        const plans={...(d.plans||{})}
-        plans[key]={...(plans[key]||{}),newCode:el.value}
-        setSkuDecision(st,code,{plans})
-      })
-      ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
-        if(skuDecision(st,g.code).decision==='merge'){
-          syncMergeSources(st,g.code)
-          applyAuxDefaultsForMerge(st,g.code,g)
+      }else{
+        if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
+        try{assertUploadSize(st.file,st.fileB64)}catch(e){
+          const msg=apiErrorMessage(e,OVERSIZE_MSG)
+          st.previewError=msg
+          st.toast(msg,8000)
+          paintDialog()
+          return
         }
-      })
+        if(st.auxFileB64){
+          try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){
+            const msg=apiErrorMessage(e,OVERSIZE_MSG)
+            st.previewError=msg
+            st.toast(msg,8000)
+            paintDialog()
+            return
+          }
+        }
+        // フォーム値を skuDecisions へ吸い上げ
+        document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
+          setSkuDecision(st,el.getAttribute('data-pl-official-name-edit'),{officialName:el.value})
+        })
+        document.querySelectorAll('[data-pl-official-color]').forEach(el=>{
+          setSkuDecision(st,el.getAttribute('data-pl-official-color'),{color:el.value})
+        })
+        document.querySelectorAll('[data-pl-defer-reason]').forEach(el=>{
+          setSkuDecision(st,el.getAttribute('data-pl-defer-reason'),{deferReason:el.value})
+        })
+        // 括弧分類の編集は再照合・詳細開閉でも保持
+        document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
+          setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
+        })
+        document.querySelectorAll('[data-pl-paren-color]').forEach(el=>{
+          setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
+        })
+        document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
+          setRowClassification(st,el.getAttribute('data-pl-paren-proc'),{processing:el.value})
+        })
+        document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
+          setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+        })
+        document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
+          const v=el.value.trim()
+          setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]})
+        })
+        document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
+          setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
+        })
+        document.querySelectorAll('[data-pl-sep-code]').forEach(el=>{
+          const code=el.getAttribute('data-pl-sep-code')
+          const key=el.getAttribute('data-pl-sep-key')
+          const d=skuDecision(st,code)
+          const plans={...(d.plans||{})}
+          plans[key]={...(plans[key]||{}),newCode:el.value}
+          setSkuDecision(st,code,{plans})
+        })
+        ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
+          if(skuDecision(st,g.code).decision==='merge'){
+            syncMergeSources(st,g.code)
+            applyAuxDefaultsForMerge(st,g.code,g)
+          }
+        })
+      }
       st.previewError=''
+      st.progressLabel=isOpeningMode(st)?'CSVを読み込み中…':'CSVを読み込み中…'
       st.busy=true;paintDialog()
       try{
+        st.progressLabel=isOpeningMode(st)?'初期在庫の登録予定を作成中…':'商品を照合中…'
+        paintDialog()
         st.preview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
         st.previewError=''
         st.result=null
-        // 自動提案をクライアント決定へ反映（手動は上書きしない）
-        ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
-          if(skuDecision(st,g.code).decision==='merge')applyAuxDefaultsForMerge(st,g.code,g)
-        })
-        // サイズ差の自動まとめ行は要確認に出さない。真の要確認だけ絞り込む。
-        if(st.preview.reviewCount>0)st.statusFilter='needs_review'
-        else if(st.preview.skuDecisionPending>0)st.statusFilter=''
-        else st.statusFilter=''
-        st.page=1
+        st.progressLabel=''
+        if(!isOpeningMode(st)){
+          // 自動提案をクライアント決定へ反映（手動は上書きしない）
+          ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
+            if(skuDecision(st,g.code).decision==='merge')applyAuxDefaultsForMerge(st,g.code,g)
+          })
+          // サイズ差の自動まとめ行は要確認に出さない。真の要確認だけ絞り込む。
+          if(st.preview.reviewCount>0)st.statusFilter='needs_review'
+          else if(st.preview.skuDecisionPending>0)st.statusFilter=''
+          else st.statusFilter=''
+          st.page=1
+        }
         if(st.preview.previousImports&&!st.history){
           st.history={previousImports:st.preview.previousImports}
           st.historyError=''
@@ -1454,6 +1591,7 @@
         // Keep the full message inside the import modal near「読み込み・照合」.
         const msg=apiErrorMessage(e,'照合に失敗しました。')
         st.previewError=msg
+        st.progressLabel=''
         st.toast(msg,8000)
       }
       st.busy=false;paintDialog({preserveScroll:false})
@@ -1689,28 +1827,32 @@
       const canWriteNow=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
       if(!st.preview)return
       if(!canWriteNow){st.toast('閲覧専用のため登録できません。');return}
-      if((st.preview.reviewCount||0)>0||(st.preview.skuDecisionPending||0)>0){
-        st.toast('要確認または品番比較の未決定が残っています。先に解決してください。');return
+      if(isOpeningMode(st)){
+        const osSum=st.preview.openingStockSummary||{}
+        const summary=`【初期在庫を登録】新規 ${osSum.create||0} / 再利用 ${osSum.reuse||0} / 数量差異(選択時) ${osSum.qtyDiff||0} / 要確認 ${osSum.needsReview||0} / 補完候補(登録しない) ${osSum.complement||0}\n在庫基準日 ${st.basisDate||''} / 拠点空欄→ ${st.defaultSiteName||'未確認'}\n登録先は商品登録時の永続マップから解決します。\n\nよろしいですか？`
+        if(!confirm(summary))return
+        if(!st.basisDate){st.toast('在庫基準日を指定してください。');return}
+        try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+      }else{
+        if((st.preview.reviewCount||0)>0||(st.preview.skuDecisionPending||0)>0){
+          st.toast('要確認または品番比較の未決定が残っています。先に解決してください。');return
+        }
+        const p=st.preview.plannedCounts||{}
+        const jc=judgmentStatusCounts(st)
+        const statusBlock=`\n\n【判断区分の件数】未解決 ${jc.unresolved} / 未承認 ${jc.unapproved} / 承認済み（未登録） ${jc.approved} / 自動決定済み（未登録） ${jc.autoDecided} / 保留 ${jc.hold}${jc.excluded?` / 対象外 ${jc.excluded}`:''}`
+        const deferList=(p.deferredReasons||[]).slice(0,12).map(d=>
+          `・行${d.rowNo} 品番${d.code||'—'} ${d.reason||'保留'}`
+        )
+        const deferMore=(p.deferredReasons||[]).length>12?`\n…他 ${(p.deferredReasons||[]).length-12} 件`:''
+        const deferBlock=(p.rowsDeferred||0)
+          ?`\n\n【今回は登録しない保留】 ${p.rowsDeferred} 行\n${deferList.join('\n')}${deferMore}\n（黙って捨てません。同じCSVの再読込で後から処理できます）`
+          :'\n\n保留行はありません。'
+        const stockNote=`\n\n${AUX_JUDGMENT_ONLY_COPY}。在庫数量・金額・履歴は変更しません。`
+        const summary=`【商品を登録】新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）${statusBlock}${deferBlock}${stockNote}\n\nよろしいですか？`
+        if(!confirm(summary))return
+        try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }
-      const p=st.preview.plannedCounts||{}
-      const jc=judgmentStatusCounts(st)
-      const statusBlock=`\n\n【判断区分の件数】未解決 ${jc.unresolved} / 未承認 ${jc.unapproved} / 承認済み（未登録） ${jc.approved} / 自動決定済み（未登録） ${jc.autoDecided} / 保留 ${jc.hold}${jc.excluded?` / 対象外 ${jc.excluded}`:''}`
-      const deferList=(p.deferredReasons||[]).slice(0,12).map(d=>
-        `・行${d.rowNo} 品番${d.code||'—'} ${d.reason||'保留'}`
-      )
-      const deferMore=(p.deferredReasons||[]).length>12?`\n…他 ${(p.deferredReasons||[]).length-12} 件`:''
-      const deferBlock=(p.rowsDeferred||0)
-        ?`\n\n【今回は登録しない保留】 ${p.rowsDeferred} 行\n${deferList.join('\n')}${deferMore}\n（黙って捨てません。同じCSVの再読込で後から処理できます）`
-        :'\n\n保留行はありません。'
-      const osSum=st.preview.openingStockSummary||{}
-      const openingBlock=st.preview.registerOpeningStock
-        ?`\n\n【初期在庫も登録】新規 ${osSum.create||0} / 再利用 ${osSum.reuse||0} / 数量差異(選択時) ${osSum.qtyDiff||0} / 保留 ${osSum.hold||0} / 補完候補(登録しない) ${osSum.complement||0}\n在庫基準日 ${st.basisDate||''} / 拠点空欄→ ${st.defaultSiteName||'未確認'}`
-        :'\n\n初期在庫CSV未選択のため、在庫数量・金額・履歴は変更しません。'
-      const summary=`【登録する】新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）${statusBlock}${deferBlock}${openingBlock}\n\nよろしいですか？`
-      if(!confirm(summary))return
-      if(st.preview.registerOpeningStock&&!st.basisDate){st.toast('在庫基準日を指定してください。');return}
-      try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
-      st.busy=true;paintDialog()
+      st.busy=true;st.progressLabel='登録処理中…';paintDialog()
       try{
         if(!st.commitToken)st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         const commitBody=previewPayload(st)
@@ -1720,7 +1862,7 @@
         st.result=await st.api('/api/product-ledger-csv/commit',commitBody)
         st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         if(typeof st.boot==='function')await st.boot()
-        st.toast(st.preview.registerOpeningStock?'旧CSV一括取り込み（台帳＋初期在庫）が完了しました':'旧CSV一括取り込み（台帳のみ）が完了しました')
+        st.toast(isOpeningMode(st)?'初期在庫の登録が完了しました':'商品登録が完了しました（在庫は書いていません）')
       }catch(e){
         if(e&&e.payload&&e.payload.code==='stale_preview'){
           st.toast('データが変わったため、もう一度照合してください。')
@@ -1729,6 +1871,7 @@
           st.toast(apiErrorMessage(e,'登録前のバックアップに失敗したため、登録を中止しました'))
         }else st.toast(apiErrorMessage(e,'登録に失敗しました。登録は完了していません。'))
       }
+      st.progressLabel=''
       st.busy=false;paintDialog()
     }
   }
@@ -1743,6 +1886,10 @@
     st.open=true
     st.result=null
     st.previewError=''
+    st.progressLabel=''
+    // 毎回段階選択から（閉じたあとも標準フローを保つ）
+    resetStageFiles(st)
+    st.importMode=MODE_CHOOSE
     paintDialog()
   }
 
@@ -1756,7 +1903,11 @@
       decisionLabel,
       SECTION_DEFAULTS,
       pageSlice,
-      SKU_PAGE_SIZE
+      SKU_PAGE_SIZE,
+      MODE_PRODUCTS,
+      MODE_OPENING,
+      AUX_JUDGMENT_ONLY_COPY,
+      previewPayload
     }
   }
 })()
