@@ -116,6 +116,7 @@ def schema(c):
         ensure_three_customer_name_formats(c, DATA_DIR)
         ensure_fk_name_formats(c, DATA_DIR)
         ensure_benkama_name_formats(c, DATA_DIR)
+        ensure_six_customers_name_formats(c, DATA_DIR)
         ensure_small_surname_36_exact_samples(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
@@ -2043,12 +2044,13 @@ RINKO_COLOR_NOTE = (
     '黄色は5色見本の選択肢に含め、黄色専用の見本は持たない。'
 )
 RINKO_LARGE_HEADING = '上段：自由入力　下段：フルネーム（大汎用）'
+# Excel 行239 で段サイズ列が空になったため、備考・caption から帯mm指定を外す。
+# 見本描画の内部帯（各25mm）は既存レイアウト維持（Excel 沈黙時の確認事項）。
 RINKO_LARGE_NOTE = (
     f'{RINKO_COLOR_NOTE}\n'
-    '上段のみ左にインデント\n'
-    '上段帯：25mm／26pt／横左揃え・縦中央／'
-    '下段帯：25mm／大汎用（4文字48・5文字38・6文字30）／横中央・縦上揃え'
-    '（上下2段・合計50mm。段数欄の1より配置指定を優先）'
+    '上段のみ左にインデント。'
+    '上段：26pt／下段：大汎用（4文字48・5文字38・6文字30）。'
+    'Excel 段サイズ列は空（帯mmは資料未記入）。'
 )
 RINKO_SMALL_HEADING = 'フルネーム（小汎用）'
 RINKO_SMALL_NOTE = (
@@ -2058,7 +2060,7 @@ RINKO_SMALL_NOTE = (
 )
 RINKO_LARGE_SAMPLE_CAPTION = (
     f'見本：上段自由入力「{RINKO_SAMPLE_UPPER}」・下段フルネーム「{RINKO_SAMPLE_NAME}」。'
-    '上段25mm（26pt・左インデント・縦中央）／下段25mm（大汎用・横中央・縦上揃え）。'
+    '上段26pt・左インデント／下段大汎用・横中央。'
     f'書体は{RINKO_FAMILY}（太字）。用紙色は先方から指定（赤・青・緑・白・黄色）。'
 )
 RINKO_SMALL_SAMPLE_CAPTION = (
@@ -2067,7 +2069,9 @@ RINKO_SMALL_SAMPLE_CAPTION = (
 )
 RINKO_NAMES_REPORT = 'rinko-name-formats-report.json'
 RINKO_NAMES_SETTINGS_KEY = 'rinko_name_formats'
-RINKO_NAMES_POLICY = 'excel-gojuon2-r230-231-v1'
+RINKO_NAMES_POLICY = 'excel-gojuon2-r239-240-v1'
+RINKO_LARGE_SOURCE_ROW = 239
+RINKO_SMALL_SOURCE_ROW = 240
 RINKO_SAMPLE_PX_PER_MM = 10
 
 def _rinko_char_count(text):
@@ -2201,7 +2205,9 @@ def _rinko_large_is_current(fmt, samples):
         return False
     if float(fmt['heading_font'] or 0) != float(RINKO_LARGE_UPPER_PT):
         return False
-    if int(fmt['source_row'] or 0) != 230:
+    if int(fmt['source_row'] or 0) != RINKO_LARGE_SOURCE_ROW:
+        return False
+    if '上段帯' in str(fmt['note'] or '') or '25mm' in str(fmt['note'] or ''):
         return False
     if not _rinko_groups_match(fmt):
         return False
@@ -2219,6 +2225,8 @@ def _rinko_large_is_current(fmt, samples):
     if not rel.startswith('images/names/') or 'rinko-large' not in Path(rel).name:
         return False
     if str(sample['caption'] or '') != RINKO_LARGE_SAMPLE_CAPTION:
+        return False
+    if '25mm' in str(sample['caption'] or ''):
         return False
     return True
 
@@ -2253,7 +2261,7 @@ def _rinko_small_is_current(fmt, samples):
         return False
     if float(fmt['heading_font'] or 0) != 0:
         return False
-    if int(fmt['source_row'] or 0) != 231:
+    if int(fmt['source_row'] or 0) != RINKO_SMALL_SOURCE_ROW:
         return False
     if not _rinko_groups_match(fmt):
         return False
@@ -2334,7 +2342,7 @@ def _update_rinko_format_row(c, format_id, *, kind, existing_fixed_color):
             RINKO_SMALL_HEADING, RINKO_SMALL_NOTE, 'Name', 'フルネーム',
             1, RINKO_SMALL_WIDTH_MM, RINKO_SMALL_HEIGHT_MM, 0, fixed, RINKO_COLOR_CAPTION,
             groups, colors, swatches, 'null',
-            '', RINKO_SMALL_GENERIC_PT[4], 0, 0, 231,
+            '', RINKO_SMALL_GENERIC_PT[4], 0, 0, RINKO_SMALL_SOURCE_ROW,
             json.dumps(_rinko_spec('small'), ensure_ascii=False),
             0, json.dumps([], ensure_ascii=False), 0, format_id,
         )
@@ -2344,7 +2352,7 @@ def _update_rinko_format_row(c, format_id, *, kind, existing_fixed_color):
             RINKO_LARGE_HEADING, RINKO_LARGE_NOTE, 'HeadingName', 'フルネーム',
             0, RINKO_LARGE_WIDTH_MM, RINKO_LARGE_HEIGHT_MM, 0, fixed, RINKO_COLOR_CAPTION,
             groups, colors, swatches, 'null',
-            '', RINKO_LARGE_GENERIC_PT[4], RINKO_LARGE_UPPER_PT, 0, 230,
+            '', RINKO_LARGE_GENERIC_PT[4], RINKO_LARGE_UPPER_PT, 0, RINKO_LARGE_SOURCE_ROW,
             json.dumps(_rinko_spec('large'), ensure_ascii=False),
             0, json.dumps([], ensure_ascii=False), 0, format_id,
         )
@@ -2408,7 +2416,7 @@ def _patch_rinko_name_catalog(data_dir, backup_dir, items):
             fmt['heightMm'] = RINKO_SMALL_HEIGHT_MM
             fmt['maximumFont'] = RINKO_SMALL_GENERIC_PT[4]
             fmt['headingFont'] = 0
-            fmt['sourceRow'] = 231
+            fmt['sourceRow'] = RINKO_SMALL_SOURCE_ROW
             caption = RINKO_SMALL_SAMPLE_CAPTION
         else:
             fmt['format'] = RINKO_LARGE_FORMAT_NAME
@@ -2422,7 +2430,7 @@ def _patch_rinko_name_catalog(data_dir, backup_dir, items):
             fmt['heightMm'] = RINKO_LARGE_HEIGHT_MM
             fmt['maximumFont'] = RINKO_LARGE_GENERIC_PT[4]
             fmt['headingFont'] = RINKO_LARGE_UPPER_PT
-            fmt['sourceRow'] = 230
+            fmt['sourceRow'] = RINKO_LARGE_SOURCE_ROW
             caption = RINKO_LARGE_SAMPLE_CAPTION
         fmt['family'] = RINKO_FAMILY
         existing_fixed = fmt.get('fixedColor') or MIX_FIXED_COLOR
@@ -2447,9 +2455,10 @@ def _patch_rinko_name_catalog(data_dir, backup_dir, items):
     return changed
 
 def correct_rinko_name_formats(c, data_dir=None):
-    """鱗幸食品の大・小ネームを Excel 230–231 行仕様へ更新する。
+    """鱗幸食品の大・小ネームを Excel 239–240 行仕様へ更新する。
 
     - 既存形式を更新し、同じ形式を重複追加しない
+    - 大ネームの Excel 段サイズ列クリアを備考・caption に反映（帯mmは描画内部のみ）
     - 黄色は mixColors／説明に残し、黄色専用見本は削除・再追加しない
     - 担当者は触らない。了承 digest は既存トリガのみ
     """
@@ -6044,6 +6053,1038 @@ def ensure_benkama_name_formats(c, data_dir=None):
     return report
 
 
+# --- 6社ネーム更新（健診/タケダ/フレッシュ/モリタン + FK検証 + 鱗幸は correct_rinko） ---
+# Excel: ネーム仕分け_五十音順2（行82/109-110/159/211-212）。明日佳・あすかHOUSE系は触らない。
+
+SIX_NAMES_POLICY = 'excel-gojuon2-six-v1'
+SIX_NAMES_SETTINGS_KEY = 'six_customers_name_formats'
+SIX_NAMES_REPORT = 'six-customers-name-formats-report.json'
+SIX_FAMILY_HG = THREE_FAMILY
+SIX_FAMILY_MSP = 'MSPゴシック'
+SIX_PAPER_RGB = {
+    '白': (255, 255, 255),
+    '緑': (144, 238, 144),  # #90EE90
+    '青': (135, 206, 250),  # #87CEFA
+    '赤': (240, 128, 128),  # #F08080
+}
+SIX_SAMPLE_FULL = THREE_SAMPLE_FULL
+SIX_SAMPLE_FULL_FEMALE = THREE_SAMPLE_FULL_FEMALE
+SIX_SAMPLE_SURNAME = THREE_SAMPLE_SURNAME
+SIX_SAMPLE_SIZE = 'L'  # サイズ表記の見本文字（Excel例なし→確認事項）
+
+KENSHIN_OLD_NAME = '札幌健診センター'
+KENSHIN_CUSTOMER_NAME = '札幌健診センター/札幌きたはち健診センター（健診衣）'
+KENSHIN_CUSTOMER_KEY = 'excel:kenshin-kitahachi'
+KENSHIN_CUSTOMER_READING = 'さっぽろけんしん'
+KENSHIN_ALIASES = (KENSHIN_OLD_NAME, KENSHIN_CUSTOMER_NAME)
+
+TAKEDA_CUSTOMER_NAME = 'タケダ海産'
+TAKEDA_CUSTOMER_KEY = 'excel:takeda-kaisan'
+TAKEDA_CUSTOMER_READING = 'たけだかいさん'
+
+FRESH_CUSTOMER_NAME = 'フレッシュフーズ'
+FRESH_CUSTOMER_KEY = 'excel:fresh-foods'
+FRESH_CUSTOMER_READING = 'ふれっしゅふーず'
+
+MORITAN_CUSTOMER_NAME = 'モリタン紋別'
+MORITAN_CUSTOMER_KEY = 'excel:moritan-mombetsu'
+MORITAN_CUSTOMER_READING = 'もりたんもんべつ'
+
+# 明日佳・あすかHOUSE系は HARD EXCLUSION（誤検知防止の照合用）
+SIX_HARD_EXCLUSIONS = (
+    '札幌/桜台/白石/岩見沢/宮の沢明日佳',
+    'あすかHOUSE',
+    'あすかHOUSE東苗穂',
+)
+
+SIX_OPEN_ITEMS = [
+    '健診・タケダ・フレッシュ・モリタンの実寸は Excel に mm 無し。既存どおり小50×24／大80×50を採用（当該顧客で既に使用時）',
+    '健診「サイズ表記」の見本文字は Excel 例が無いため「L」を仮置き（要確認）',
+    'タケダ大ネーム：旧役職2段見本はバックアップ後に大汎用1段見本へ置換。役職専用見本の扱い要確認',
+    '鱗幸「先方から指定？」表記と黄色専用見本は既存 yellow policy を維持（黄色見本は再追加しない）',
+    '鱗幸大ネーム：Excel 段サイズ列クリア。描画内部帯は従来どおり各25mm（合計50mm）を維持（要確認）',
+    'エフケーは #167 仕様と一致すれば no-op（36pt exact-fit 維持）。Excel行番号31への追随はしない',
+]
+
+
+def _six_variant_key(papers, paper):
+    if len(papers) == 1:
+        return 'standard'
+    return f'paper-{paper}'
+
+
+def _six_format_specs():
+    """対象4社の形式定義。identity 固定で重複追加を防ぐ。"""
+    full_large_pt = _three_generic_pt('large', SIX_SAMPLE_FULL)
+    full_small_pt = _three_generic_pt('small', SIX_SAMPLE_FULL)
+    surname_small_pt = _three_generic_pt('small', SIX_SAMPLE_SURNAME)
+
+    kenshin_note = (
+        f'書体は{SIX_FAMILY_MSP}。小ネーム・1段・サイズ表記／36pt。'
+        f'Excel 行82（{KENSHIN_CUSTOMER_NAME}）。'
+    )
+    kenshin_caption = (
+        f'見本：サイズ表記「{SIX_SAMPLE_SIZE}」（36pt・1段）。'
+        f'書体は{SIX_FAMILY_MSP}。用紙色は白。'
+    )
+
+    takeda_large_note = (
+        f'書体は{SIX_FAMILY_HG}（太字）。大ネーム・1段・フルネーム／大汎用。列1。'
+        'Excel 行109（旧2段見出しは廃止し1列大汎用へ統一）。'
+    )
+    takeda_large_caption = (
+        f'見本：フルネーム「{SIX_SAMPLE_FULL}」（大汎用・1段）。'
+        f'書体は{SIX_FAMILY_HG}（太字）。用紙色は白。'
+        f'女性用フルネームは「{SIX_SAMPLE_FULL_FEMALE}」。'
+    )
+    takeda_small_note = (
+        f'書体は{SIX_FAMILY_HG}（太字）。小ネーム・1段・フルネーム／小汎用。'
+        'Excel 行110。'
+    )
+    takeda_small_caption = (
+        f'見本：フルネーム「{SIX_SAMPLE_FULL}」（小汎用・1段）。'
+        f'書体は{SIX_FAMILY_HG}（太字）。用紙色は白。'
+        f'女性用フルネームは「{SIX_SAMPLE_FULL_FEMALE}」。'
+    )
+
+    fresh_note = (
+        f'書体は{SIX_FAMILY_HG}（太字）。色は社員：緑／パート：青。'
+        '小ネーム・1段・苗字のみ／小汎用。Excel 行159。'
+    )
+    fresh_caption = (
+        f'見本：苗字「{SIX_SAMPLE_SURNAME}」（小汎用・1段）。'
+        f'書体は{SIX_FAMILY_HG}（太字）。色は社員：緑／パート：青。'
+    )
+
+    moritan_color = '社員：白　派遣：赤　工員：青　研修生：緑'
+    moritan_groups = ['社員', '派遣', '工員', '研修生']
+    moritan_colors = ['白', '赤', '青', '緑']
+    moritan_swatches = ['#FFFFFF', '#F08080', '#87CEFA', '#90EE90']
+    moritan_large_note = (
+        f'書体は{SIX_FAMILY_HG}（太字）。色は{moritan_color}。'
+        '大ネーム・1段・フルネーム／大汎用。Excel 行211。'
+    )
+    moritan_small_note = (
+        f'書体は{SIX_FAMILY_HG}（太字）。色は{moritan_color}。'
+        '小ネーム・1段・フルネーム／小汎用。Excel 行212。'
+    )
+    moritan_large_caption = (
+        f'見本：フルネーム「{SIX_SAMPLE_FULL}」（大汎用・1段）。'
+        f'書体は{SIX_FAMILY_HG}（太字）。色は{moritan_color}。'
+        f'女性用フルネームは「{SIX_SAMPLE_FULL_FEMALE}」。'
+    )
+    moritan_small_caption = (
+        f'見本：フルネーム「{SIX_SAMPLE_FULL}」（小汎用・1段）。'
+        f'書体は{SIX_FAMILY_HG}（太字）。色は{moritan_color}。'
+        f'女性用フルネームは「{SIX_SAMPLE_FULL_FEMALE}」。'
+    )
+
+    return (
+        {
+            'customerKey': KENSHIN_CUSTOMER_KEY,
+            'customerName': KENSHIN_CUSTOMER_NAME,
+            'reading': KENSHIN_CUSTOMER_READING,
+            'aliases': KENSHIN_ALIASES,
+            'formats': (
+                {
+                    'identity': 'kenshin:small-size',
+                    'kind': 'kenshin-small-size',
+                    'sourceRow': 82,
+                    'formatName': '小ネーム（サイズ表記）',
+                    'placement': '健診衣上下',
+                    'family': SIX_FAMILY_MSP,
+                    'heading': 'サイズ表記（36pt）',
+                    'note': kenshin_note,
+                    'layout': 'FreeText',
+                    'reading': 'サイズ表記',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'groups': [],
+                    'colors': [],
+                    'swatches': [],
+                    'maximumFont': 36,
+                    'sampleText': SIX_SAMPLE_SIZE,
+                    'fontPt': 36,
+                    'sampleFit': 'exact',
+                    'papers': ('白',),
+                    'caption': kenshin_caption,
+                },
+            ),
+        },
+        {
+            'customerKey': TAKEDA_CUSTOMER_KEY,
+            'customerName': TAKEDA_CUSTOMER_NAME,
+            'reading': TAKEDA_CUSTOMER_READING,
+            'aliases': (TAKEDA_CUSTOMER_NAME,),
+            'formats': (
+                {
+                    'identity': 'takeda:large-fullname',
+                    'kind': 'takeda-large-fullname',
+                    'sourceRow': 109,
+                    'formatName': '大ネーム（フルネーム）',
+                    'placement': '白衣：左袖25cm',
+                    'family': SIX_FAMILY_HG,
+                    'heading': 'フルネーム（大汎用）',
+                    'note': takeda_large_note,
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 0,
+                    'widthMm': THREE_LARGE_W,
+                    'heightMm': THREE_LARGE_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'groups': [],
+                    'colors': [],
+                    'swatches': [],
+                    'maximumFont': THREE_GENERIC_LARGE[4],
+                    'sampleText': SIX_SAMPLE_FULL,
+                    'fontPt': full_large_pt,
+                    'papers': ('白',),
+                    'caption': takeda_large_caption,
+                },
+                {
+                    'identity': 'takeda:small-fullname',
+                    'kind': 'takeda-small-fullname',
+                    'sourceRow': 110,
+                    'formatName': '小ネーム（フルネーム）',
+                    'placement': '白下：ベルト後左　白帽子：右耳上',
+                    'family': SIX_FAMILY_HG,
+                    'heading': 'フルネーム（小汎用）',
+                    'note': takeda_small_note,
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '白',
+                    'colorCaption': '白',
+                    'groups': [],
+                    'colors': [],
+                    'swatches': [],
+                    'maximumFont': THREE_GENERIC_SMALL[4],
+                    'sampleText': SIX_SAMPLE_FULL,
+                    'fontPt': full_small_pt,
+                    'papers': ('白',),
+                    'caption': takeda_small_caption,
+                },
+            ),
+        },
+        {
+            'customerKey': FRESH_CUSTOMER_KEY,
+            'customerName': FRESH_CUSTOMER_NAME,
+            'reading': FRESH_CUSTOMER_READING,
+            'aliases': (FRESH_CUSTOMER_NAME,),
+            'formats': (
+                {
+                    'identity': 'fresh:small-surname',
+                    'kind': 'fresh-small-surname',
+                    'sourceRow': 159,
+                    'formatName': '小ネーム（苗字のみ）',
+                    'placement': '白衣：左袖25cm　白下：左前　白帽子：右耳上',
+                    'family': SIX_FAMILY_HG,
+                    'heading': '苗字のみ（小汎用）',
+                    'note': fresh_note,
+                    'layout': 'Surname',
+                    'reading': '苗字のみ',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '',
+                    'colorCaption': '社員：緑　パート：青',
+                    'groups': ['社員', 'パート'],
+                    'colors': ['緑', '青'],
+                    'swatches': ['#90EE90', '#87CEFA'],
+                    'maximumFont': THREE_GENERIC_SMALL[4],
+                    'sampleText': SIX_SAMPLE_SURNAME,
+                    'fontPt': surname_small_pt,
+                    'papers': ('緑', '青'),
+                    'caption': fresh_caption,
+                    'surnameOnly': True,
+                },
+            ),
+        },
+        {
+            'customerKey': MORITAN_CUSTOMER_KEY,
+            'customerName': MORITAN_CUSTOMER_NAME,
+            'reading': MORITAN_CUSTOMER_READING,
+            'aliases': (MORITAN_CUSTOMER_NAME,),
+            'formats': (
+                {
+                    'identity': 'moritan:large-fullname',
+                    'kind': 'moritan-large-fullname',
+                    'sourceRow': 211,
+                    'formatName': '大ネーム（フルネーム）',
+                    'placement': '白衣：左袖25cm',
+                    'family': SIX_FAMILY_HG,
+                    'heading': 'フルネーム（大汎用）',
+                    'note': moritan_large_note,
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 0,
+                    'widthMm': THREE_LARGE_W,
+                    'heightMm': THREE_LARGE_H,
+                    'fixedColor': '',
+                    'colorCaption': moritan_color,
+                    'groups': list(moritan_groups),
+                    'colors': list(moritan_colors),
+                    'swatches': list(moritan_swatches),
+                    'maximumFont': THREE_GENERIC_LARGE[4],
+                    'sampleText': SIX_SAMPLE_FULL,
+                    'fontPt': full_large_pt,
+                    'papers': tuple(moritan_colors),
+                    'caption': moritan_large_caption,
+                },
+                {
+                    'identity': 'moritan:small-fullname',
+                    'kind': 'moritan-small-fullname',
+                    'sourceRow': 212,
+                    'formatName': '小ネーム（フルネーム）',
+                    'placement': '白下：左前　白帽子：左耳上',
+                    'family': SIX_FAMILY_HG,
+                    'heading': 'フルネーム（小汎用）',
+                    'note': moritan_small_note,
+                    'layout': 'Name',
+                    'reading': 'フルネーム',
+                    'small': 1,
+                    'widthMm': THREE_SMALL_W,
+                    'heightMm': THREE_SMALL_H,
+                    'fixedColor': '',
+                    'colorCaption': moritan_color,
+                    'groups': list(moritan_groups),
+                    'colors': list(moritan_colors),
+                    'swatches': list(moritan_swatches),
+                    'maximumFont': THREE_GENERIC_SMALL[4],
+                    'sampleText': SIX_SAMPLE_FULL,
+                    'fontPt': full_small_pt,
+                    'papers': tuple(moritan_colors),
+                    'caption': moritan_small_caption,
+                },
+            ),
+        },
+    )
+
+
+def _six_spec(fmt_def):
+    spec = {
+        'sixKind': fmt_def['kind'],
+        'sixPolicy': SIX_NAMES_POLICY,
+        'sampleText': fmt_def['sampleText'],
+        'fontPt': fmt_def['fontPt'],
+        'papers': list(fmt_def['papers']),
+    }
+    if fmt_def.get('sampleFit'):
+        spec['sampleFit'] = fmt_def['sampleFit']
+    if fmt_def.get('surnameOnly'):
+        spec['surnameOnly'] = True
+    groups = fmt_def.get('groups') or []
+    colors = fmt_def.get('colors') or []
+    if groups and colors and len(groups) == len(colors):
+        spec['colorRoles'] = dict(zip(groups, colors))
+    return spec
+
+
+def _six_is_excluded_name(name):
+    text = str(name or '').strip()
+    if not text:
+        return False
+    for ex in SIX_HARD_EXCLUSIONS:
+        if text == ex or text.startswith(ex):
+            return True
+    if '明日佳' in text or '明日香' in text:
+        return True
+    if 'あすかHOUSE' in text:
+        return True
+    return False
+
+
+def _six_find_customer(c, cust):
+    rows = c.execute(
+        'SELECT * FROM name_customers WHERE retired=0 ORDER BY id'
+    ).fetchall()
+    aliases = tuple(cust.get('aliases') or (cust['customerName'],))
+    for row in rows:
+        if str(row['source_key'] or '') == cust['customerKey']:
+            return row
+    for row in rows:
+        name = str(row['source_name'] or '').strip()
+        if _six_is_excluded_name(name):
+            continue
+        if name in aliases or name == cust['customerName']:
+            return row
+    if cust['customerKey'] == KENSHIN_CUSTOMER_KEY:
+        for row in rows:
+            name = str(row['source_name'] or '').strip()
+            if name == KENSHIN_OLD_NAME:
+                return row
+    return None
+
+
+def _six_ensure_customer(c, cust, backup_dir, items):
+    existing = _six_find_customer(c, cust)
+    if existing:
+        if _six_is_excluded_name(existing['source_name']):
+            raise RuntimeError(f'除外顧客を更新しようとした: {existing["source_name"]}')
+        changed = False
+        if str(existing['source_name'] or '') != cust['customerName']:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            (backup_dir / f'customer-rename-{existing["id"]}.json').write_text(
+                json.dumps({
+                    'before': _row_as_dict(existing),
+                    'afterName': cust['customerName'],
+                }, ensure_ascii=False, indent=2),
+                encoding='utf-8',
+            )
+            c.execute(
+                'UPDATE name_customers SET source_name=?, source_key=?, reading=? WHERE id=?',
+                (
+                    cust['customerName'], cust['customerKey'],
+                    cust.get('reading') or '', existing['id'],
+                ),
+            )
+            changed = True
+            items.append({
+                'action': 'rename-customer',
+                'customerId': existing['id'],
+                'from': existing['source_name'],
+                'to': cust['customerName'],
+            })
+        elif str(existing['source_key'] or '') != cust['customerKey']:
+            c.execute(
+                'UPDATE name_customers SET source_key=?, reading=? WHERE id=?',
+                (cust['customerKey'], cust.get('reading') or '', existing['id']),
+            )
+            changed = True
+        if changed:
+            existing = c.execute(
+                'SELECT * FROM name_customers WHERE id=?', (existing['id'],),
+            ).fetchone()
+        return existing, False
+    known = _app_customers(c)
+    linked, status = _link(cust['customerName'], known)
+    if not linked:
+        for alias in (cust.get('aliases') or ()):
+            if alias in known:
+                linked, status = alias, '対応'
+                break
+    c.execute(
+        'INSERT INTO name_customers('
+        'source_key, source_index, source_name, reading, linked_name, link_status, manual, retired'
+        ') VALUES(?,?,?,?,?,?,1,0)',
+        (
+            cust['customerKey'], -1, cust['customerName'],
+            cust.get('reading') or '', linked, status,
+        ),
+    )
+    cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    row = c.execute('SELECT * FROM name_customers WHERE id=?', (cid,)).fetchone()
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    (backup_dir / f'customer-created-{cid}.json').write_text(
+        json.dumps(_row_as_dict(row), ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    items.append({
+        'action': 'create-customer',
+        'customerId': cid,
+        'customerName': cust['customerName'],
+        'sourceKey': cust['customerKey'],
+    })
+    return row, True
+
+
+def _six_is_current(fmt, samples, fmt_def):
+    if str(fmt['identity'] or '') != fmt_def['identity']:
+        return False
+    if str(fmt['format_name'] or '') != fmt_def['formatName']:
+        return False
+    if str(fmt['placement'] or '') != fmt_def['placement']:
+        return False
+    if str(fmt['family'] or '') != fmt_def['family']:
+        return False
+    if str(fmt['heading'] or '') != fmt_def['heading']:
+        return False
+    if str(fmt['note'] or '') != fmt_def['note']:
+        return False
+    if str(fmt['layout'] or '') != fmt_def['layout']:
+        return False
+    if str(fmt['reading'] or '') != fmt_def['reading']:
+        return False
+    if int(fmt['small'] or 0) != int(fmt_def['small']):
+        return False
+    if int(fmt['width_mm'] or 0) != int(fmt_def['widthMm']):
+        return False
+    if int(fmt['height_mm'] or 0) != int(fmt_def['heightMm']):
+        return False
+    if str(fmt['fixed_color'] or '') != fmt_def['fixedColor']:
+        return False
+    if str(fmt['color_caption'] or '') != fmt_def['colorCaption']:
+        return False
+    if float(fmt['maximum_font'] or 0) != float(fmt_def['maximumFont']):
+        return False
+    if int(fmt['source_row'] or 0) != int(fmt_def['sourceRow']):
+        return False
+    if fmt_def['kind'] == 'takeda-large-fullname':
+        # 旧「上段：役職」見出し／形式名のみを未適用とみなす（備考の説明文は対象外）
+        if '役職' in str(fmt['heading'] or '') or '役職' in str(fmt['format_name'] or ''):
+            return False
+    spec = _load_spec(fmt)
+    if spec.get('sixPolicy') != SIX_NAMES_POLICY or spec.get('sixKind') != fmt_def['kind']:
+        return False
+    want_fit = fmt_def.get('sampleFit') or ''
+    if (spec.get('sampleFit') or '') != want_fit:
+        return False
+    if fmt_def.get('surnameOnly') and spec.get('surnameOnly') is not True:
+        return False
+    try:
+        have_groups = json.loads(fmt['groups_json'] or '[]')
+        have_colors = json.loads(fmt['colors_json'] or '[]')
+        have_swatches = json.loads(fmt['swatches_json'] or '[]')
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if have_groups != list(fmt_def.get('groups') or []):
+        return False
+    if have_colors != list(fmt_def.get('colors') or []):
+        return False
+    if have_swatches != list(fmt_def.get('swatches') or []):
+        return False
+    if len(samples) != len(fmt_def['papers']):
+        return False
+    by_paper = {str(s['paper_color'] or ''): s for s in samples}
+    for paper in fmt_def['papers']:
+        sample = by_paper.get(paper)
+        if sample is None:
+            return False
+        want_key = _six_variant_key(fmt_def['papers'], paper)
+        if str(sample['variant_key'] or '') != want_key:
+            return False
+        rel = str(sample['relative_path'] or '')
+        if not rel.startswith('images/names/'):
+            return False
+        if fmt_def['kind'] not in Path(rel).name:
+            return False
+        if str(sample['caption'] or '') != fmt_def['caption']:
+            return False
+    return True
+
+
+def _six_match_legacy(fmt, fmt_def):
+    """旧形式を identity 無しで拾う（重複作成防止）。"""
+    if int(fmt['small'] or 0) != int(fmt_def['small']):
+        return False
+    placement = str(fmt['placement'] or '')
+    if placement and placement != fmt_def['placement']:
+        if fmt_def['kind'].startswith('kenshin'):
+            return False
+    name = str(fmt['format_name'] or '')
+    if fmt_def['small']:
+        if not (name.startswith('小') or '小ネーム' in name or int(fmt['small'] or 0) == 1):
+            return False
+    else:
+        if name.startswith('小'):
+            return False
+    if fmt_def['kind'] == 'takeda-large-fullname':
+        if placement and placement != fmt_def['placement']:
+            return False
+        return True
+    if placement == fmt_def['placement']:
+        return True
+    if not placement:
+        return True
+    return False
+
+
+def _backup_six_format(c, root, backup_dir, fmt, samples):
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+
+def _write_six_samples(c, root, format_id, fmt_def):
+    band = _three_band(
+        fmt_def['sampleText'],
+        height_mm=fmt_def['heightMm'],
+        font_pt=fmt_def['fontPt'],
+    )
+    fit_mode = fmt_def.get('sampleFit') or 'fill'
+    c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
+    notes = []
+    paths = []
+    for paper in fmt_def['papers']:
+        key = _six_variant_key(fmt_def['papers'], paper)
+        stem = f'{fmt_def["kind"]}-{paper}' if len(fmt_def['papers']) > 1 else fmt_def['kind']
+        rel = f'images/names/{stem}-{format_id:06}.png'
+        dst = root / rel
+        rgb = SIX_PAPER_RGB.get(paper, (255, 255, 255))
+        ok, note = _render_ashuka_banded_sample(
+            dst, (band,),
+            width_mm=fmt_def['widthMm'],
+            height_mm=fmt_def['heightMm'],
+            family_hint=fmt_def['family'],
+            paper_rgb=rgb,
+            fit_mode=fit_mode,
+        )
+        notes.append(f'{paper}:{note}')
+        if not ok:
+            return False, '; '.join(notes), paths
+        c.execute(
+            'INSERT INTO name_samples(format_id, variant_key, condition_label, paper_color, relative_path, caption)'
+            ' VALUES(?,?,?,?,?,?)',
+            (
+                format_id, key,
+                paper if len(fmt_def['papers']) > 1 else '',
+                paper, rel, fmt_def['caption'],
+            ),
+        )
+        paths.append(rel)
+    return True, '; '.join(notes), paths
+
+
+def _upsert_six_format_row(c, customer_id, fmt_def, existing=None):
+    groups = json.dumps(fmt_def.get('groups') or [], ensure_ascii=False)
+    colors = json.dumps(fmt_def.get('colors') or [], ensure_ascii=False)
+    swatches = json.dumps(fmt_def.get('swatches') or [], ensure_ascii=False)
+    spec = json.dumps(_six_spec(fmt_def), ensure_ascii=False)
+    values = (
+        fmt_def['formatName'], fmt_def['placement'], fmt_def['family'], '',
+        fmt_def['heading'], fmt_def['note'], fmt_def['layout'], fmt_def['reading'],
+        int(fmt_def['small']), int(fmt_def['widthMm']), int(fmt_def['heightMm']), 0,
+        fmt_def['fixedColor'], fmt_def['colorCaption'],
+        groups, colors, swatches, 'null',
+        '', float(fmt_def['maximumFont']), 0, 0, int(fmt_def['sourceRow']),
+        spec, 0, '[]', 0,
+    )
+    if existing:
+        c.execute(
+            'UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,'
+            ' layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,'
+            ' groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,'
+            ' heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,'
+            ' retired=0, identity=? WHERE id=?',
+            values + (fmt_def['identity'], existing['id']),
+        )
+        return existing['id']
+    c.execute(
+        'INSERT INTO name_formats('
+        'identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,'
+        'layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,'
+        'groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,'
+        'number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired'
+        ') VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)',
+        (
+            fmt_def['identity'], customer_id, -1,
+            values[0], values[1], values[2], values[3], values[4], values[5],
+            values[6], values[7], values[8], values[9], values[10], values[11],
+            values[12], values[13], values[14], values[15], values[16], values[17],
+            values[18], values[19], values[20], values[21], values[22], None,
+            values[23], values[24], values[25], values[26],
+        ),
+    )
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+def _patch_six_catalog(data_dir, backup_dir, customer_defs, items):
+    path = Path(data_dir) / 'name-import' / 'catalog.json'
+    if not path.is_file():
+        return False
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    catalog_backup = backup_dir / 'catalog.json'
+    if not catalog_backup.exists():
+        shutil.copy2(path, catalog_backup)
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return False
+    customers = list(data.get('customers') or [])
+    formats = list(data.get('formats') or [])
+    by_key = {c.get('sourceKey'): c for c in customers}
+    changed = False
+    item_by_identity = {i.get('identity'): i for i in items if i.get('identity')}
+    for cust in customer_defs:
+        if cust['customerKey'] not in by_key:
+            renamed = False
+            for entry in customers:
+                name = str(entry.get('name') or '').strip()
+                if _six_is_excluded_name(name):
+                    continue
+                if name in (cust.get('aliases') or ()) or name == cust['customerName']:
+                    entry['sourceKey'] = cust['customerKey']
+                    entry['name'] = cust['customerName']
+                    entry['reading'] = cust.get('reading') or entry.get('reading') or ''
+                    by_key[cust['customerKey']] = entry
+                    changed = True
+                    renamed = True
+                    break
+            if not renamed:
+                customers.append({
+                    'sourceKey': cust['customerKey'],
+                    'sourceIndex': -1,
+                    'name': cust['customerName'],
+                    'reading': cust.get('reading') or '',
+                })
+                by_key[cust['customerKey']] = customers[-1]
+                changed = True
+        else:
+            entry = by_key[cust['customerKey']]
+            if _six_is_excluded_name(entry.get('name')):
+                continue
+            if entry.get('name') != cust['customerName']:
+                entry['name'] = cust['customerName']
+                changed = True
+        for fmt_def in cust['formats']:
+            item = item_by_identity.get(fmt_def['identity'])
+            existing = next(
+                (f for f in formats if f.get('identity') == fmt_def['identity']),
+                None,
+            )
+            payload = {
+                'identity': fmt_def['identity'],
+                'customerKey': cust['customerKey'],
+                'sourceKind': -1,
+                'format': fmt_def['formatName'],
+                'placement': fmt_def['placement'],
+                'family': fmt_def['family'],
+                'heading': fmt_def['heading'],
+                'note': fmt_def['note'],
+                'layout': fmt_def['layout'],
+                'reading': fmt_def['reading'],
+                'small': bool(fmt_def['small']),
+                'widthMm': fmt_def['widthMm'],
+                'heightMm': fmt_def['heightMm'],
+                'fixedColor': fmt_def['fixedColor'],
+                'colorCaption': fmt_def['colorCaption'],
+                'groups': list(fmt_def.get('groups') or []),
+                'colors': list(fmt_def.get('colors') or []),
+                'colorSwatches': list(fmt_def.get('swatches') or []),
+                'maximumFont': fmt_def['maximumFont'],
+                'headingFont': 0,
+                'sourceRow': fmt_def['sourceRow'],
+                'manual': True,
+                **{k: v for k, v in _six_spec(fmt_def).items() if v is not None},
+                'samples': [],
+            }
+            if item:
+                payload['dbId'] = item.get('formatId')
+                paths = item.get('samplePaths') or (
+                    [item['samplePath']] if item.get('samplePath') else []
+                )
+                for idx, paper in enumerate(fmt_def['papers']):
+                    rel = paths[idx] if idx < len(paths) else ''
+                    payload['samples'].append({
+                        'key': _six_variant_key(fmt_def['papers'], paper),
+                        'condition': paper if len(fmt_def['papers']) > 1 else '',
+                        'paperColor': paper,
+                        'relativePath': rel,
+                        'caption': fmt_def['caption'],
+                    })
+            if existing is None:
+                formats.append(payload)
+                changed = True
+            else:
+                for key, value in payload.items():
+                    if existing.get(key) != value:
+                        existing[key] = value
+                        changed = True
+    if changed:
+        data['customers'] = customers
+        data['formats'] = formats
+        data['customerCount'] = len(customers)
+        data['formatCount'] = len(formats)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    return changed
+
+
+def _six_verify_fk(c, data_dir):
+    """エフケーは既存 ensure_fk に委譲。一致なら no-op。"""
+    report = ensure_fk_name_formats(c, data_dir)
+    return {
+        'customer': FK_CUSTOMER_NAME,
+        'action': 'verify-fk',
+        'changed': int(report.get('changed') or 0),
+        'reason': report.get('reason') or ('updated' if report.get('changed') else 'matched'),
+        'policy': report.get('policy') or FK_NAMES_POLICY,
+        'items': report.get('items') or [],
+    }
+
+
+def _six_snapshot_exclusions(c):
+    snap = {}
+    for row in c.execute(
+        "SELECT id, source_name FROM name_customers WHERE retired=0 AND ("
+        "source_name LIKE '%明日佳%' OR source_name LIKE '%明日香%' OR source_name LIKE '%あすかHOUSE%')"
+    ):
+        formats = c.execute(
+            'SELECT id, identity, note, color_caption, reading, format_name '
+            'FROM name_formats WHERE customer_id=? AND retired=0 ORDER BY id',
+            (row['id'],),
+        ).fetchall()
+        snap[f'customer:{row["id"]}'] = {
+            'name': row['source_name'],
+            'formats': [
+                {
+                    'id': f['id'],
+                    'identity': f['identity'],
+                    'note': f['note'],
+                    'color_caption': f['color_caption'],
+                    'reading': f['reading'],
+                    'format_name': f['format_name'],
+                }
+                for f in formats
+            ],
+        }
+    return snap
+
+
+def _six_verify_exclusions_untouched(c, before_snapshot):
+    problems = []
+    after = _six_snapshot_exclusions(c)
+    for key, before in before_snapshot.items():
+        if after.get(key) != before:
+            problems.append({'key': key, 'name': before.get('name')})
+    return problems
+
+
+def ensure_six_customers_name_formats(c, data_dir=None):
+    """Excel 6社更新のうち健診/タケダ/フレッシュ/モリタンを ensure。FK検証も記録。
+
+    鱗幸の段サイズクリアは correct_rinko_name_formats（policy r239-240）が担当。
+    明日佳・あすかHOUSE系は変更しない。
+    """
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'six-names-{stamp}'
+    customer_defs = _six_format_specs()
+    items = []
+    open_items = list(SIX_OPEN_ITEMS)
+    exclusion_before = _six_snapshot_exclusions(c)
+
+    needs_work = False
+    for cust in customer_defs:
+        customer = _six_find_customer(c, cust)
+        if customer is None:
+            needs_work = True
+            break
+        if str(customer['source_name'] or '') != cust['customerName']:
+            needs_work = True
+            break
+        for fmt_def in cust['formats']:
+            row = c.execute(
+                'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+                (fmt_def['identity'],),
+            ).fetchone()
+            if row is None:
+                needs_work = True
+                break
+            samples = c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (row['id'],),
+            ).fetchall()
+            if not _six_is_current(row, samples, fmt_def):
+                needs_work = True
+                break
+        if needs_work:
+            break
+
+    if not needs_work:
+        fk_verify = _six_verify_fk(c, root)
+        report = {
+            'at': stamp,
+            'changed': 0,
+            'policy': SIX_NAMES_POLICY,
+            'backupDir': '',
+            'catalogChanged': False,
+            'openItems': open_items,
+            'customers': [cdef['customerName'] for cdef in customer_defs] + [FK_CUSTOMER_NAME, RINKO_CUSTOMER_NAME],
+            'fkVerify': fk_verify,
+            'exclusionsUntouched': True,
+            'hardExclusions': list(SIX_HARD_EXCLUSIONS),
+            'items': [],
+            'reason': 'already-applied',
+        }
+        (root / SIX_NAMES_REPORT).write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        c.execute(
+            'INSERT OR REPLACE INTO settings VALUES(?,?)',
+            (
+                SIX_NAMES_SETTINGS_KEY,
+                json.dumps({
+                    'at': stamp,
+                    'changed': 0,
+                    'report': SIX_NAMES_REPORT,
+                    'policy': SIX_NAMES_POLICY,
+                }, ensure_ascii=False),
+            ),
+        )
+        return report
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    for cust in customer_defs:
+        customer, created = _six_ensure_customer(c, cust, backup_dir, items)
+        if _six_is_excluded_name(customer['source_name']):
+            items.append({
+                'action': 'skip-excluded',
+                'customerName': customer['source_name'],
+                'reason': 'hard-exclusion',
+            })
+            continue
+        claimed_ids = set()
+        for fmt_def in cust['formats']:
+            by_identity = c.execute(
+                'SELECT * FROM name_formats WHERE identity=? AND retired=0',
+                (fmt_def['identity'],),
+            ).fetchone()
+            existing = by_identity
+            if existing is None:
+                candidates = c.execute(
+                    'SELECT * FROM name_formats WHERE customer_id=? AND retired=0'
+                    ' AND small=? ORDER BY id',
+                    (customer['id'], int(fmt_def['small'])),
+                ).fetchall()
+                matched = [
+                    cand for cand in candidates
+                    if cand['id'] not in claimed_ids and _six_match_legacy(cand, fmt_def)
+                ]
+                if len(matched) >= 1:
+                    exact = [m for m in matched if str(m['placement'] or '') == fmt_def['placement']]
+                    existing = exact[0] if exact else matched[0]
+
+            samples = []
+            if existing:
+                claimed_ids.add(existing['id'])
+                samples = c.execute(
+                    'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                    (existing['id'],),
+                ).fetchall()
+                if _six_is_current(existing, samples, fmt_def):
+                    items.append({
+                        'action': 'skip',
+                        'kind': fmt_def['kind'],
+                        'formatId': existing['id'],
+                        'number': _number(existing['id']),
+                        'identity': fmt_def['identity'],
+                        'customerName': cust['customerName'],
+                        'reason': 'already-current',
+                    })
+                    continue
+                _backup_six_format(c, root, backup_dir, existing, samples)
+                if fmt_def['kind'] == 'takeda-large-fullname' and samples:
+                    open_items.append(
+                        f'タケダ大 NM-{existing["id"]:06}: 旧見本{len(samples)}件をバックアップ後に大汎用へ置換'
+                    )
+
+            fid = _upsert_six_format_row(c, customer['id'], fmt_def, existing=existing)
+            if existing is None:
+                claimed_ids.add(fid)
+            ok, note, paths = _write_six_samples(c, root, fid, fmt_def)
+            items.append({
+                'action': 'create' if existing is None else 'update',
+                'kind': fmt_def['kind'],
+                'formatId': fid,
+                'number': _number(fid),
+                'identity': fmt_def['identity'],
+                'customerName': cust['customerName'],
+                'sourceRow': fmt_def['sourceRow'],
+                'samplePaths': paths,
+                'samplePath': paths[0] if paths else '',
+                'sampleOk': ok,
+                'sampleNote': note,
+                'customerCreated': created,
+            })
+
+    catalog_changed = _patch_six_catalog(root, backup_dir, customer_defs, items)
+    fk_verify = _six_verify_fk(c, root)
+    exclusion_problems = _six_verify_exclusions_untouched(c, exclusion_before)
+    changed = sum(
+        1 for i in items
+        if i.get('action') in ('create', 'update', 'create-customer', 'rename-customer')
+    )
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'policy': SIX_NAMES_POLICY,
+        'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
+        'catalogChanged': catalog_changed,
+        'openItems': open_items,
+        'customers': [cdef['customerName'] for cdef in customer_defs] + [FK_CUSTOMER_NAME, RINKO_CUSTOMER_NAME],
+        'fkVerify': fk_verify,
+        'exclusionsUntouched': not exclusion_problems,
+        'exclusionProblems': exclusion_problems,
+        'hardExclusions': list(SIX_HARD_EXCLUSIONS),
+        'excel': {
+            'path': 'media/ネーム仕分け_五十音順2.xlsx',
+            'rows': {
+                KENSHIN_CUSTOMER_NAME: [82],
+                TAKEDA_CUSTOMER_NAME: [109, 110],
+                FRESH_CUSTOMER_NAME: [159],
+                MORITAN_CUSTOMER_NAME: [211, 212],
+                FK_CUSTOMER_NAME: [31],
+                RINKO_CUSTOMER_NAME: [239, 240],
+            },
+        },
+        'sampleNames': {
+            'fullMale': SIX_SAMPLE_FULL,
+            'fullFemale': SIX_SAMPLE_FULL_FEMALE,
+            'surname': SIX_SAMPLE_SURNAME,
+            'size': SIX_SAMPLE_SIZE,
+        },
+        'rules': {
+            'onlySixTargets': True,
+            'createIfMissing': True,
+            'noDuplicateIdentities': True,
+            'noAssigneeChange': True,
+            'noAutoApprove': True,
+            'noTouchOtherCustomers': True,
+            'noTouchAshukaAsuka': True,
+        },
+        'items': items,
+    }
+    report_path = root / SIX_NAMES_REPORT
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+    (backup_dir / 'report.json').write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            SIX_NAMES_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': SIX_NAMES_REPORT,
+                'policy': SIX_NAMES_POLICY,
+                'backupDir': report['backupDir'],
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -6171,6 +7212,7 @@ def import_catalog(connect, data_dir):
         ensure_three_customer_name_formats(c, data_dir)
         ensure_fk_name_formats(c, data_dir)
         ensure_benkama_name_formats(c, data_dir)
+        ensure_six_customers_name_formats(c, data_dir)
         ensure_small_surname_36_exact_samples(c, data_dir)
     return summary
 

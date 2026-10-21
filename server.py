@@ -109,6 +109,7 @@ def initialize():
         names.ensure_three_customer_name_formats(c, DATA)
         names.ensure_fk_name_formats(c, DATA)
         names.ensure_benkama_name_formats(c, DATA)
+        names.ensure_six_customers_name_formats(c, DATA)
         names.ensure_small_surname_36_exact_samples(c, DATA)
 
 def order_number(row, payload=None):
