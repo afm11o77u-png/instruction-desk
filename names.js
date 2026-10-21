@@ -98,14 +98,19 @@ function paintNameFormats(data){
  const box=$('#nameformats');
  const link=data.linkStatus==='対応'?`指示書デスクの顧客名と一致：${data.linkedName}`:'指示書デスクの顧客とは未対応です。名前だけでは結び付けていません。';
  const formats=(data.formats||[]).map(item=>`<button type="button" class="namecard" data-id="${item.id}"><span class="namesize-heading">${esc(nameSizeHeading(item))}</span>${nameScalePicture(item,item.hasImage?nameSampleUrl(item.sampleId):null)}<b>${esc(item.format)}</b><span class="namecolors">${nameSwatches(item.colors,item.fixedColor,item.mixColors)}</span><span>${esc(item.placement)||'貼付け位置の指定なし'}</span>${item.needsReview?'<em>要確認</em>':''}</button>`).join('');
- box.innerHTML=`<div class="namehead"><h2>${esc(data.sourceName)}</h2><p>${esc(link)}</p><p>${esc(data.reading)?`読み：${esc(data.reading)}`:''}</p>${currentUser?.role==='owner'?`<button type="button" id="nameaddformat">この顧客に形式を追加</button>`:''}</div><p class="namescale-note">大小を同じ縮尺で表示しています（実物大ではありません）。形式を開くと、見本をクリックして拡大できます。</p><div class="namegrid">${formats||'<p>形式はありません。</p>'}</div>`;
+ const owner=currentUser?.role==='owner';
+ const childCount=(data.formats||[]).length;
+ box.innerHTML=`<div class="namehead"><h2>${esc(data.sourceName)}</h2><p>${esc(link)}</p><p>${esc(data.reading)?`読み：${esc(data.reading)}`:''}</p>${owner?`<div class="namehead-actions"><button type="button" id="nameaddformat">この顧客に形式を追加</button><button type="button" class="danger" id="namedeletecustomer">この顧客を削除</button></div>`:''}</div><p class="namescale-note">大小を同じ縮尺で表示しています（実物大ではありません）。形式を開くと、見本をクリックして拡大できます。</p><div class="namegrid">${formats||'<p>形式はありません。</p>'}</div>`;
  box.querySelectorAll('.namecard').forEach(button=>button.onclick=()=>openNameFormat(Number(button.dataset.id)));
  const add=$('#nameaddformat');
  if(add)add.onclick=()=>openNameEditor(null,{id:data.id,sourceName:data.sourceName,reading:data.reading||''});
+ const del=$('#namedeletecustomer');
+ if(del)del.onclick=()=>confirmDeleteCustomer(data,childCount);
 }
 async function loadNames(reset){
  if(nameBusy)return;
  nameBusy=true;
+ syncNameDeletedButton();
  if(reset)$('#nameformats').innerHTML='<p class="nameempty">左の顧客を選ぶと、形式がここに出ます。</p>';
  $('#namestatus').textContent='読み込んでいます。';
  try{
@@ -150,15 +155,83 @@ function paintNameDetail(item){
  $('#namebody').querySelectorAll('[data-namezoom]').forEach(button=>button.onclick=()=>{const sample=item.samples.find(x=>String(x.id)===button.dataset.namezoom);if(sample)openNameZoom(item,sample)});
  const edit=$('#nameeditbtn');
  if(edit){edit.hidden=currentUser?.role!=='owner';edit.onclick=()=>openNameEditor(item)}
+ const delFmt=$('#namedeleteformat');
+ if(delFmt){delFmt.hidden=currentUser?.role!=='owner';delFmt.onclick=()=>confirmDeleteFormat(item)}
 }
 async function openNameFormat(id){
  const item=await api('/api/name-labels/formats/'+id);
  paintNameDetail(item);
  if(!$('#namedetail').open)$('#namedetail').showModal();
 }
+async function confirmDeleteCustomer(data,childCount){
+ if(currentUser?.role!=='owner')return;
+ const n=Number(childCount)||0;
+ const msg=`「${data.sourceName}」を削除しますか？\n\n子情報（形式）${n}件もまとめて一覧から非表示になります。\n見本画像ファイルは削除しません。後から「削除済み」から復元できます。\n\nキャンセルなら何も変わりません。`;
+ if(!confirm(msg))return;
+ try{
+  await api('/api/name-labels/delete',{kind:'customer',id:data.id});
+  $('#nameformats').innerHTML='<p class="nameempty">左の顧客を選ぶと、形式がここに出ます。</p>';
+  await loadNames(false);
+  toast('顧客を削除しました（復元できます）。');
+ }catch(e){toast(e.message||'削除できませんでした。')}
+}
+async function confirmDeleteFormat(item){
+ if(currentUser?.role!=='owner')return;
+ const msg=`「${item.format}」（顧客：${item.sourceName}）を削除しますか？\n\nこの形式と見本表示だけが一覧から消えます。顧客や他の形式は残ります。\n見本画像ファイルは削除しません。後から「削除済み」から復元できます。\n\nキャンセルなら何も変わりません。`;
+ if(!confirm(msg))return;
+ try{
+  await api('/api/name-labels/delete',{kind:'format',id:item.id});
+  if($('#namedetail').open)$('#namedetail').close();
+  if(item.customerId)await openNameCustomer(item.customerId);
+  await loadNames(false);
+  toast('形式を削除しました（復元できます）。');
+ }catch(e){toast(e.message||'削除できませんでした。')}
+}
+async function openNameDeleted(){
+ if(currentUser?.role!=='owner')return;
+ const box=$('#namedeletedbody');
+ box.innerHTML='<p>読み込んでいます。</p>';
+ if(!$('#namedeleted').open)$('#namedeleted').showModal();
+ try{
+  const data=await api('/api/name-labels/deleted');
+  const customers=(data.customers||[]).map(item=>`<div class="namedeleted-row"><div><b>${esc(item.sourceName)}</b><span>大元（顧客）／削除 ${esc(item.deletedAt||'—')}／${esc(item.deletedByName||'—')}</span><span>一緒に隠した子情報：${item.hiddenWithParent||0}件${item.individuallyDeletedFormats?`（別途個別削除：${item.individuallyDeletedFormats}件）`:''}</span></div><button type="button" data-restore-customer="${item.id}">復元</button></div>`).join('');
+  const formats=(data.formats||[]).map(item=>`<div class="namedeleted-row"><div><b>${esc(item.format)}</b><span>子情報（形式）${esc(item.number||'')}／顧客：${esc(item.sourceName)}${item.parentDeleted?'（顧客も削除中）':''}</span><span>削除 ${esc(item.deletedAt||'—')}／${esc(item.deletedByName||'—')}</span></div><button type="button" data-restore-format="${item.id}">復元</button></div>`).join('');
+  box.innerHTML=(customers||formats)?`<h3>削除済みの大元（顧客）</h3>${customers||'<p>ありません。</p>'}<h3>個別に削除した子情報（形式）</h3>${formats||'<p>ありません。</p>'}`:'<p>削除済みはありません。</p>';
+  box.querySelectorAll('[data-restore-customer]').forEach(button=>button.onclick=async()=>{
+   if(!confirm('この顧客と、一緒に削除した子情報を復元しますか？\n（以前に個別削除した子情報は戻りません）'))return;
+   try{
+    await api('/api/name-labels/restore',{kind:'customer',id:Number(button.dataset.restoreCustomer)});
+    toast('顧客を復元しました。');
+    await openNameDeleted();
+    await loadNames(false);
+   }catch(e){toast(e.message||'復元できませんでした。')}
+  });
+  box.querySelectorAll('[data-restore-format]').forEach(button=>button.onclick=async()=>{
+   if(!confirm('この形式を復元しますか？'))return;
+   try{
+    const result=await api('/api/name-labels/restore',{kind:'format',id:Number(button.dataset.restoreFormat)});
+    toast(result.parentDeleted?'形式を復元しました（顧客が削除中のため、顧客の復元後に表示されます）。':'形式を復元しました。');
+    await openNameDeleted();
+    await loadNames(false);
+    if(result.customerId&&!result.parentDeleted)await openNameCustomer(result.customerId);
+   }catch(e){toast(e.message||'復元できませんでした。')}
+  });
+ }catch(e){box.innerHTML=`<p>${esc(e.message||'読み込めませんでした。')}</p>`}
+}
+function syncNameDeletedButton(){
+ const button=$('#namedeletedopen');
+ if(button)button.hidden=currentUser?.role!=='owner';
+}
 $('#namesearch').onsubmit=e=>{e.preventDefault();loadNames(true)};
 $('#nameclose').onclick=()=>$('#namedetail').close();
 $('#namedetail').addEventListener('cancel',e=>{e.preventDefault();$('#namedetail').close()});
+const nameDeletedOpen=$('#namedeletedopen');
+ if(nameDeletedOpen)nameDeletedOpen.onclick=()=>openNameDeleted();
+const nameDeletedClose=$('#namedeletedclose');
+ if(nameDeletedClose)nameDeletedClose.onclick=()=>$('#namedeleted').close();
+const nameDeletedDialog=$('#namedeleted');
+ if(nameDeletedDialog)nameDeletedDialog.addEventListener('cancel',e=>{e.preventDefault();nameDeletedDialog.close()});
+syncNameDeletedButton();
 let nameEditing=null;
 function syncNameSize(){
  const kind=$('#nameformsize').value;
