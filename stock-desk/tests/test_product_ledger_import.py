@@ -3214,5 +3214,287 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             folder.cleanup()
 
 
+class StockAdoptColorwayReviewTest(unittest.TestCase):
+    """在庫一意採用後、配色（×）を1色として自動決定へ進める。"""
+
+    def test_colorway_outside_paren_extracts_as_single_color(self):
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('長袖ブルゾン　サックス×シルバーグレー')
+        self.assertFalse(r['needsConfirm'], r)
+        self.assertEqual(r['plannedName'], '長袖ブルゾン')
+        self.assertEqual(r['color'], 'サックス×シルバーグレー')
+        hits = pp.find_explicit_colors_in_text('長袖ブルゾン　サックス×シルバーグレー')
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]['value'], 'サックス×シルバーグレー')
+
+    def test_colorway_in_paren_extracts_as_single_color(self):
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('長袖ブルゾン（サックス×シルバーグレー）')
+        self.assertFalse(r['needsConfirm'], r)
+        self.assertEqual(r['plannedName'], '長袖ブルゾン')
+        self.assertEqual(r['color'], 'サックス×シルバーグレー')
+
+    def test_dot_separated_multi_color_still_needs_confirm(self):
+        """・区切りの複数色は配色1色にしない（従来どおり要確認）。"""
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('ベスト（赤・青）')
+        self.assertTrue(r['needsConfirm'])
+        self.assertIn('複数', ''.join(r.get('confirmReasons') or ''))
+
+    def test_6801_007_colorway_stock_adopt_auto_decides(self):
+        """非ゼロ在庫1組の配色候補は個別確認に残さず自動決定済み（未登録）。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-007,長袖ブルゾン　サックス×シルバーグレー,M',
+                '顧客A,仕入B,6801-007,長袖ブルゾン　ネイビー,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', '長袖ブルゾン　サックス×シルバーグレー',
+                    '6801-007', 'M', '2',
+                ),
+                opening_line(
+                    '仕入B', '顧客A', '長袖ブルゾン　ネイビー',
+                    '6801-007', 'L', '0',
+                ),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '6801-007.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == '6801-007')
+            aux_p = g.get('auxPrimary') or {}
+            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'aux_nonzero_pair')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertFalse(g.get('auxStockPickBlocked'))
+            self.assertEqual(g.get('reviewTier'), 'auto')
+            self.assertEqual(preview['skuDecisionPending'], 0)
+            self.assertEqual(aux_p.get('suggestedOfficialName'), '長袖ブルゾン')
+            self.assertEqual(
+                aux_p.get('plannedRegisteredColor') or aux_p.get('adoptedColor'),
+                'サックス×シルバーグレー',
+            )
+            self.assertEqual(g.get('plannedRegisteredName'), '長袖ブルゾン')
+            self.assertEqual(g.get('plannedRegisteredColor'), 'サックス×シルバーグレー')
+            reason = g.get('auxStockPickReason') or aux_p.get('pairAdoptionRule') or ''
+            self.assertIn('在庫が0以外の候補が1組', reason)
+            self.assertIn('サックス×シルバーグレー', reason)
+            individual = [
+                x for x in preview['skuGroups']
+                if x.get('needsDecision') and x.get('reviewTier') == 'individual'
+            ]
+            self.assertFalse(any(x['code'] == '6801-007' for x in individual))
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': '6801-007.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-6801-007-colorway-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            prod = c.execute(
+                "SELECT id,name,color FROM products "
+                "WHERE code='6801-007' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertIsNotNone(prod)
+            self.assertEqual(prod['name'], '長袖ブルゾン')
+            self.assertEqual(prod['color'], 'サックス×シルバーグレー')
+            # 配色は1商品。色違い候補は別名として残る
+            self.assertEqual(
+                c.execute(
+                    "SELECT COUNT(*) AS n FROM products "
+                    "WHERE code='6801-007' AND merged_into_id IS NULL"
+                ).fetchone()['n'],
+                1,
+            )
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            self.assertTrue(
+                any('ネイビー' in a for a in aliases)
+                or '長袖ブルゾン　ネイビー' in aliases
+                or any('サックス' in a for a in aliases),
+                aliases,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_solid_color_stock_adopt_still_auto(self):
+        """単色候補の在庫一意採用も従来どおり自動決定。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-SC,長袖ブルゾン　ネイビー,M',
+                '顧客A,仕入B,SKU-SC,長袖ブルゾン　赤,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー', 'SKU-SC', 'M', '3'),
+                opening_line('仕入B', '顧客A', '長袖ブルゾン　赤', 'SKU-SC', 'L', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sc.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-SC')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('auxStockPickAuto'))
+            self.assertEqual(g.get('plannedRegisteredName'), '長袖ブルゾン')
+            self.assertEqual(g.get('plannedRegisteredColor'), 'ネイビー')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_existing_dup_after_stock_adopt_keeps_review_with_clear_reason(self):
+        """在庫でメイン決定後も、登録済み商品が複数なら残す商品の選択が必要。"""
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入A', 'active': True})
+            stock.save_product(c, {
+                'code': '6801-007', 'name': '長袖ブルゾン旧1', 'color': '',
+                'supplierId': su['id'], 'active': True, 'sizes': ['M'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': False, 'active': True}],
+                '_allowHistoricalDuplicateCode': True,
+            })
+            stock.save_product(c, {
+                'code': '6801-007', 'name': '長袖ブルゾン旧2', 'color': '',
+                'supplierId': su['id'], 'active': True, 'sizes': ['L'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': False, 'active': True}],
+                '_allowHistoricalDuplicateCode': True,
+            })
+            c.commit()
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-007,長袖ブルゾン　サックス×シルバーグレー,M',
+                '顧客A,仕入A,6801-007,長袖ブルゾン　ネイビー,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', '長袖ブルゾン　サックス×シルバーグレー',
+                    '6801-007', 'M', '2',
+                ),
+                opening_line(
+                    '仕入A', '顧客A', '長袖ブルゾン　ネイビー',
+                    '6801-007', 'L', '0',
+                ),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'dup.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == '6801-007')
+            self.assertTrue(g['needsDecision'])
+            self.assertEqual(g.get('existingCount'), 2)
+            self.assertTrue(g.get('auxStockPickPendingExisting'))
+            self.assertFalse(g.get('auxStockPickAuto'))
+            labels = [r.get('label') or '' for r in (g.get('reviewReasons') or [])]
+            self.assertTrue(
+                any('登録済み商品が2件' in lab and '残す商品' in lab for lab in labels),
+                labels,
+            )
+            self.assertTrue(
+                any('在庫2' in lab or '在庫を根拠' in lab for lab in labels),
+                labels,
+            )
+            # 候補差の色違いだけでは残さない（既存重複が理由）
+            self.assertFalse(g.get('colorDiffPossible'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_primary_supplier_change_still_needs_confirm_after_stock_adopt(self):
+        """既存1件で通常仕入先が変わる場合は在庫採用後も明示確認。"""
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+            su_old = stock.save_supplier(c, {'name': '仕入旧', 'active': True})
+            stock.save_supplier(c, {'name': '仕入A', 'active': True})
+            stock.save_product(c, {
+                'code': 'SKU-PS', 'name': '長袖ブルゾン', 'color': 'ネイビー',
+                'supplierId': su_old['id'], 'active': True, 'sizes': ['M'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': False, 'active': True}],
+            })
+            c.commit()
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-PS,長袖ブルゾン　ネイビー,M',
+                '顧客A,仕入B,SKU-PS,長袖ブルゾン　赤,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', '長袖ブルゾン　ネイビー', 'SKU-PS', 'M', '4'),
+                opening_line('仕入B', '顧客A', '長袖ブルゾン　赤', 'SKU-PS', 'L', '0'),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'ps.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-PS')
+            self.assertTrue(g['needsDecision'])
+            self.assertTrue(g.get('auxStockPickNeedsPrimaryConfirm'))
+            self.assertFalse(g.get('auxStockPickAuto'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_manual_override_not_cleared_by_colorway_stock_adopt(self):
+        """手動判断があるときは配色在庫採用でも自動クリアしない。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,6801-007,長袖ブルゾン　サックス×シルバーグレー,M',
+                '顧客A,仕入B,6801-007,長袖ブルゾン　ネイビー,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', '長袖ブルゾン　サックス×シルバーグレー',
+                    '6801-007', 'M', '2',
+                ),
+                opening_line(
+                    '仕入B', '顧客A', '長袖ブルゾン　ネイビー',
+                    '6801-007', 'L', '0',
+                ),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'man.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'skuDecisions': {
+                    '6801-007': {
+                        'decision': 'merge',
+                        'officialName': '手決めブルゾン',
+                        'color': 'ネイビー',
+                        'primarySupplier': '仕入B',
+                        'primarySupplierManual': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == '6801-007')
+            self.assertTrue(g.get('auxStockPickManualOverride'))
+            self.assertFalse(g.get('auxStockPickAuto'))
+            name_plan = g.get('namePlan') or {}
+            self.assertEqual(
+                (preview.get('skuDecisions') or {}).get('6801-007', {}).get('officialName')
+                or name_plan.get('officialName')
+                or '手決めブルゾン',
+                '手決めブルゾン',
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()
