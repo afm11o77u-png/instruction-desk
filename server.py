@@ -110,6 +110,10 @@ def initialize():
         names.ensure_fk_name_formats(c, DATA)
         names.ensure_benkama_name_formats(c, DATA)
         names.ensure_six_customers_name_formats(c, DATA)
+        names.correct_moritan_solo_white(c, DATA)
+        names.correct_fresh_legacy_formats(c, DATA)
+        names.correct_takeda_duplicate_formats(c, DATA)
+        names.ensure_asuka_bakery_name_formats(c, DATA)
         names.ensure_small_surname_36_exact_samples(c, DATA)
 
 def order_number(row, payload=None):

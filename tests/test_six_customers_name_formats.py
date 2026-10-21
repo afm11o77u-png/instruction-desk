@@ -116,6 +116,11 @@ class SixCustomersNameFormatsTest(unittest.TestCase):
         self.assertEqual(f['reading'], '苗字のみ')
         self.assertEqual(f['sampleText'], '山田')
         self.assertEqual(f['papers'], ('緑', '青'))
+        self.assertEqual(f['maximumFont'], 36)
+        self.assertEqual(f['fontPt'], 36)
+        self.assertEqual(f['sampleFit'], 'exact')
+        self.assertEqual(f['heading'], '苗字のみ（36pt）')
+        self.assertNotIn('小汎用', f['heading'])
 
         m_large, m_small = by_name[names.MORITAN_CUSTOMER_NAME]['formats']
         self.assertEqual(m_large['colorCaption'], '社員：白　派遣：赤　工員：青　研修生：緑')
@@ -325,7 +330,9 @@ class SixCustomersNameFormatsTest(unittest.TestCase):
         self.assertNotIn('上段帯', names.RINKO_LARGE_NOTE)
         self.assertNotIn('25mm', names.RINKO_LARGE_NOTE)
         self.assertNotIn('25mm', names.RINKO_LARGE_SAMPLE_CAPTION)
-        self.assertEqual(names.RINKO_NAMES_POLICY, 'excel-gojuon2-r239-240-v1')
+        self.assertEqual(names.RINKO_NAMES_POLICY, 'excel-gojuon2-r239-large-1band-v1')
+        self.assertEqual(names.RINKO_LARGE_HEADING, 'フルネーム（大汎用）')
+        self.assertNotIn('○○', names.RINKO_LARGE_SAMPLE_CAPTION)
         self.assertEqual(names.RINKO_LARGE_SOURCE_ROW, 239)
         self.assertEqual(names.RINKO_SMALL_SOURCE_ROW, 240)
 
