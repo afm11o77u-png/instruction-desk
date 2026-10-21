@@ -45,6 +45,14 @@ class LegacyCsvBulkUiTest(unittest.TestCase):
         self.assertIn('insertBefore(wrap,displayBar)', app)
         self.assertIn('registerOpeningStock', js)
         self.assertIn('openingStockSectionsHtml', js)
+        self.assertIn('plModeProducts', js)
+        self.assertIn('plModeOpening', js)
+        self.assertIn('商品を登録', js)
+        self.assertIn('初期在庫を登録', js)
+        self.assertIn('初期在庫CSVは商品選定の判断にだけ使います。在庫は登録しません', js)
+        self.assertIn("importMode:st.importMode||MODE_PRODUCTS", js)
+        self.assertIn('CSVを読み込み中', js)
+        self.assertIn('商品を照合中', js)
 
 
 class LegacyCsvBulkImportTest(unittest.TestCase):

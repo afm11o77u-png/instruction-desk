@@ -1,8 +1,11 @@
 """旧システム「商品台帳.csv」からの商品・顧客取扱一括登録。
 
-初期在庫CSV（任意）を渡すと、同一の判定結果へ行対応で初期在庫も登録できる
-（旧CSV一括取り込み）。判定エンジンは本モジュールのみ。プレビューは DB を変えない。
-確定は一括トランザクション（台帳＋初期在庫は同時成功／同時ロールバック）。
+標準フローは二段階:
+  1. importMode=products … 商品・取扱登録（初期在庫CSVは判定補助のみ。在庫は書かない）
+  2. importMode=opening_stock … 初期在庫CSVのみ＋永続マップで初期在庫登録
+
+後方互換: importMode なしで registerOpeningStock=true のときのみ従来の同時登録。
+プレビューは DB を変えない。確定は一括トランザクション。
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import hashlib
 import io
 import json
 import re
+import time
 from collections import defaultdict
 
 import legacy_csv_bulk_import as bulk
@@ -22,6 +26,12 @@ import stock_product_merge
 
 REQUIRED_COLUMNS = ('顧客', '仕入先', '商品コード', '商品名', 'サイズ')
 IMPORT_NOTE = '旧CSV一括取り込み'
+IMPORT_MODE_PRODUCTS = 'products'
+IMPORT_MODE_OPENING = 'opening_stock'
+IMPORT_MODE_COMBINED = 'combined'
+AUX_JUDGMENT_ONLY_NOTE = (
+    '初期在庫CSVは商品選定の判断にだけ使います。在庫は登録しません'
+)
 PENDING_EMBROIDERY = legacy.PENDING_EMBROIDERY
 
 STATUS_CREATE = 'create'
@@ -582,8 +592,23 @@ def parse_csv_text(text):
     return fields, rows
 
 
+def _request_decode_cache(body):
+    if not isinstance(body, dict):
+        return {}
+    cache = body.get('_decodeCache')
+    if not isinstance(cache, dict):
+        cache = {}
+        body['_decodeCache'] = cache
+    return cache
+
+
 def decode_upload(body):
+    cache = _request_decode_cache(body)
     raw = body.get('file') if isinstance(body, dict) else None
+    raw_key = raw if isinstance(raw, str) else ''
+    cached = cache.get('ledger')
+    if cached and cache.get('ledgerRaw') == raw_key:
+        return cached
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError('CSVファイルを選んでください。')
     try:
@@ -594,7 +619,7 @@ def decode_upload(body):
     fields, rows = parse_csv_text(text)
     name = stock.text(body.get('name') or body.get('fileName') or '商品台帳.csv') or '商品台帳.csv'
     sha = hashlib.sha256(blob).hexdigest()
-    return {
+    result = {
         'fileName': name,
         'fileSha256': sha,
         'fileSize': len(blob),
@@ -603,14 +628,23 @@ def decode_upload(body):
         'rows': rows,
         'blob': blob,
     }
+    cache['ledger'] = result
+    cache['ledgerRaw'] = raw_key
+    return result
 
 
 def decode_aux_upload(body):
     """初期在庫用CSV（任意）。プレビューではDBを触らず列検証のみ。"""
     if not isinstance(body, dict):
         return None
+    cache = _request_decode_cache(body)
     raw = body.get('auxFile') or body.get('openingStockFile')
+    raw_key = raw if isinstance(raw, str) else ''
+    if 'aux' in cache and cache.get('auxRaw') == raw_key:
+        return cache['aux']
     if not isinstance(raw, str) or not raw.strip():
+        cache['aux'] = None
+        cache['auxRaw'] = raw_key
         return None
     # legacy の decode を再利用（列検証のみ。DB・在庫は触らない）
     aux_body = {
@@ -618,7 +652,7 @@ def decode_aux_upload(body):
         'name': body.get('auxName') or body.get('openingStockFileName') or '初期在庫.csv',
     }
     uploaded = legacy.decode_upload(aux_body)
-    return {
+    result = {
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
         'fileSize': uploaded['fileSize'],
@@ -627,14 +661,45 @@ def decode_aux_upload(body):
         'rows': uploaded['rows'],
         'ignoredColumns': list(legacy.IGNORED_QTY_COLUMNS),
     }
+    cache['aux'] = result
+    cache['auxRaw'] = raw_key
+    return result
+
+
+def resolve_import_mode(body, aux_uploaded=None):
+    """取込モード: products / opening_stock / combined（後方互換）。"""
+    if not isinstance(body, dict):
+        return IMPORT_MODE_PRODUCTS
+    raw = stock.text(body.get('importMode') or body.get('mode') or '').lower()
+    if raw in ('products', 'products_only', 'product', 'ledger', 'stage1'):
+        return IMPORT_MODE_PRODUCTS
+    if raw in ('opening_stock', 'opening', 'stock', 'initial_stock', 'stage2'):
+        return IMPORT_MODE_OPENING
+    # 明示モードなし: 旧 registerOpeningStock フラグのみ後方互換で同時登録
+    if aux_uploaded is None:
+        has_aux = bool(body.get('auxFile') or body.get('openingStockFile'))
+        aux_uploaded = True if has_aux and body.get('registerOpeningStock') else None
+        if has_aux and not body.get('registerOpeningStock'):
+            return IMPORT_MODE_PRODUCTS
+        if has_aux and body.get('registerOpeningStock'):
+            return IMPORT_MODE_COMBINED
+        return IMPORT_MODE_PRODUCTS
+    if aux_uploaded and body.get('registerOpeningStock'):
+        return IMPORT_MODE_COMBINED
+    return IMPORT_MODE_PRODUCTS
 
 
 def register_opening_stock_requested(body, aux_uploaded):
-    """初期在庫CSVがあり、かつ registerOpeningStock=true のとき登録する。
+    """初期在庫の準備・登録が必要か。
 
-    フラグなし（旧クライアント／判定補助のみのテスト）は従来どおり在庫を書かない。
-    新UIは初期在庫CSV選択時に必ず true を送る。
+    importMode=products では常に False（判定補助CSVがあっても在庫準備しない）。
+    importMode=opening_stock / combined（旧フラグ）では True。
     """
+    mode = resolve_import_mode(body, aux_uploaded)
+    if mode == IMPORT_MODE_PRODUCTS:
+        return False
+    if mode == IMPORT_MODE_OPENING:
+        return bool(aux_uploaded)
     if not aux_uploaded or not isinstance(body, dict):
         return False
     return bool(body.get('registerOpeningStock'))
@@ -1701,6 +1766,7 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
 
     補助CSVの有無に関わらず候補1社なら自動設定する。複社は補助CSV規則（#152）。
     register_opening=True のときは確認後に初期在庫も登録する旨を meta に載せる。
+    products モードでは判定補助のみ（在庫は登録しない）を明示する。
     """
     aux_index = build_aux_row_index(aux_uploaded['rows']) if aux_uploaded else None
     meta = None
@@ -1716,7 +1782,8 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
             )
         else:
             note = (
-                '初期在庫用CSVは通常仕入先・代表候補のフルパッケージ判定補助だけに使います。'
+                f'{AUX_JUDGMENT_ONLY_NOTE}。'
+                '通常仕入先・代表候補のフルパッケージ判定補助だけに使います。'
                 '在庫数量・単価・初期在庫・入出庫履歴は登録・変更しません。'
                 '非ゼロ在庫（負含む）がある候補が1組のとき、その候補の'
                 '商品名・仕入先・色・加工・素材をセットで採用します。'
@@ -1730,6 +1797,7 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
             'rowCount': len(aux_uploaded['rows']),
             'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
             'willRegisterOpeningStock': bool(register_opening),
+            'judgmentOnly': not bool(register_opening),
             'note': note,
         }
 
@@ -4299,16 +4367,115 @@ def _preview_outcome_summary(classified, sku_groups, planned, decision_meta):
     }
 
 
+def build_opening_stock_preview(c, body):
+    """段階2: 初期在庫CSVのみ。商品台帳CSVは不要。永続マップで登録先を解決。"""
+    ensure_schema(c)
+    stock_product_merge.migrate_product_merge(c)
+    t_all = time.perf_counter()
+    t0 = time.perf_counter()
+    aux_uploaded = decode_aux_upload(body)
+    parse_ms = round((time.perf_counter() - t0) * 1000, 2)
+    if not aux_uploaded:
+        raise ValueError('初期在庫CSVを選んでください。')
+    opening_stock = bulk.build_opening_stock_plans_from_maps(
+        c,
+        aux_uploaded=aux_uploaded,
+        default_site_name=stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME,
+        opening_selections=(
+            body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {}
+        ),
+    )
+    if body.get('basisDate'):
+        try:
+            opening_stock['basisDate'] = stock.parse_date(body.get('basisDate'), '在庫基準日')
+        except ValueError as e:
+            opening_stock['basisDateError'] = str(e)
+    prep_ms = (opening_stock.get('timingsMs') or {}).get('openingStockPrep', 0)
+    fp = db_fingerprint(c)
+    snap = stock_snapshot(c)
+    total_ms = round((time.perf_counter() - t_all) * 1000, 2)
+    return {
+        'importMode': IMPORT_MODE_OPENING,
+        'registerOpeningStock': True,
+        'fileName': '',
+        'fileSha256': '',
+        'fileSize': 0,
+        'encoding': '',
+        'fields': [],
+        'rowCount': 0,
+        'rows': [],
+        'skuGroups': [],
+        'skuGroupCount': 0,
+        'skuDecisionPending': 0,
+        'skuDecisionPendingRows': 0,
+        'bulkApprovableCount': 0,
+        'individualReviewCount': 0,
+        'autoMergePlans': [],
+        'auxOpeningStock': {
+            'fileName': aux_uploaded['fileName'],
+            'fileSha256': aux_uploaded['fileSha256'],
+            'fileSize': aux_uploaded['fileSize'],
+            'encoding': aux_uploaded['encoding'],
+            'rowCount': len(aux_uploaded['rows']),
+            'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
+            'willRegisterOpeningStock': True,
+            'judgmentOnly': False,
+            'note': opening_stock.get('note') or '',
+        },
+        'openingStock': opening_stock,
+        'openingStockSummary': bulk.summarize_opening_for_preview(opening_stock),
+        'reviewTierLabels': dict(REVIEW_TIER_LABELS),
+        'provisionalNameTag': PROVISIONAL_NAME_TAG,
+        'counts': dict(STATUS_LABELS),
+        'countsRaw': {},
+        'plannedCounts': {},
+        'outcomeSummary': {},
+        'reviewCount': 0,
+        'previewFingerprint': fp,
+        'previewAt': stock.stamp(),
+        'stockSnapshot': snap,
+        'previousImports': previous_imports_for_file(c, aux_uploaded['fileSha256']),
+        'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
+        'progressLabels': {
+            'parse': 'CSVを読み込み中',
+            'judge': '商品を照合中',
+            'opening': '初期在庫の登録予定を作成中',
+        },
+        'timingsMs': {
+            'csvParse': parse_ms,
+            'productJudgment': 0,
+            'openingStockPrep': prep_ms,
+            'total': total_ms,
+        },
+        'note': (
+            '初期在庫CSVだけで登録予定を作ります。商品台帳CSVの再選択は不要です。'
+            '登録先は商品登録時に保存した原文対応マップから解決します'
+            '（改名・色／加工分割後も原文名で照合）。'
+            '曖昧・削除済み・未登録は理由を表示し、別商品へ推測登録しません。'
+            '数量は「在庫」列のみ。プレビューではDBを変えません。'
+        ),
+    }
+
+
 def build_preview(c, body):
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
+    mode = resolve_import_mode(body)
+    if mode == IMPORT_MODE_OPENING:
+        return build_opening_stock_preview(c, body)
+
+    t_all = time.perf_counter()
+    t0 = time.perf_counter()
     uploaded = decode_upload(body)
     aux_uploaded = decode_aux_upload(body)
+    parse_ms = round((time.perf_counter() - t0) * 1000, 2)
+    mode = resolve_import_mode(body, aux_uploaded)
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
     sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
     row_classifications = (
         body.get('rowClassifications') if isinstance(body.get('rowClassifications'), dict) else {}
     )
+    t_judge = time.perf_counter()
 
     # 品番グループへの商品選択を行へ展開
     group_product = {}
@@ -4377,6 +4544,9 @@ def build_preview(c, body):
 
     sku_groups = build_sku_groups(c, classified)
     register_opening = register_opening_stock_requested(body, aux_uploaded)
+    # products モードでは初期在庫準備を絶対に走らせない（判定補助のみ）
+    if mode == IMPORT_MODE_PRODUCTS:
+        register_opening = False
     aux_meta = attach_aux_primary_judgment(
         sku_groups, aux_uploaded, register_opening=register_opening,
     )
@@ -4476,7 +4646,7 @@ def build_preview(c, body):
         note = (
             '商品と顧客取扱を登録します。'
             + (
-                '初期在庫CSVは判定補助のみで、在庫数量は書き込みません。'
+                f'{AUX_JUDGMENT_ONLY_NOTE}。'
                 if aux_meta else
                 '初期在庫CSV未選択のため在庫数量は書き込みません。'
             )
@@ -4486,14 +4656,16 @@ def build_preview(c, body):
             '未分類・曖昧な括弧は原文のまま要確認（自動確定しません）。'
             '色・生地・加工・商品種の疑いや残り曖昧さ、男女の明示対立（男性用⇔女性用）は確認が必要です。'
             '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
-            'CSV原文は照合用別名に残します。'
+            'CSV原文は照合用別名に残します。登録時に原文→商品／取扱／仕様の対応を永続化します。'
             '品番空欄は部品・資材として取り込み（登録後にカテゴリ変更可）。'
             '保留した品番は今回登録せず、同じCSVの再読込で処理できます。'
             'この画面は確定前のプレビューです（登録ボタンを押すまで台帳は変わりません）。'
+            '初期在庫の登録は別段階「初期在庫を登録」で行います。'
         )
     if aux_meta and not register_opening:
         note += (
-            ' 初期在庫用CSVは、正の在庫合計が最多の候補が一意のとき'
+            f' {AUX_JUDGMENT_ONLY_NOTE}。'
+            '正の在庫合計が最多の候補が一意のとき'
             '（または非ゼロが1組／候補自体が1組のとき）'
             'その候補の商品名・仕入先・色・加工・素材をセットで採用し、'
             '通常仕入先の判定補助にも使います。在庫数量は書き込みません。'
@@ -4501,8 +4673,11 @@ def build_preview(c, body):
             '在庫採用なら要確認にしません。男性用と女性用の明示対立は確認のままです。'
         )
 
+    judge_ms = round((time.perf_counter() - t_judge) * 1000, 2)
     opening_stock = None
-    if register_opening and aux_uploaded:
+    opening_prep_ms = 0.0
+    if register_opening and aux_uploaded and mode != IMPORT_MODE_PRODUCTS:
+        t_open = time.perf_counter()
         opening_stock = bulk.build_opening_stock_plans(
             c,
             classified=classified,
@@ -4511,6 +4686,7 @@ def build_preview(c, body):
             default_site_name=stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME,
             opening_selections=body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {},
         )
+        opening_prep_ms = round((time.perf_counter() - t_open) * 1000, 2)
         # basisDate は確定時必須。プレビューでは任意（空なら当日想定をUI側で埋める）
         if body.get('basisDate'):
             try:
@@ -4518,7 +4694,9 @@ def build_preview(c, body):
             except ValueError as e:
                 opening_stock['basisDateError'] = str(e)
 
+    total_ms = round((time.perf_counter() - t_all) * 1000, 2)
     return {
+        'importMode': mode,
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
         'fileSize': uploaded['fileSize'],
@@ -4549,6 +4727,17 @@ def build_preview(c, body):
         'stockSnapshot': snap,
         'previousImports': previous_imports_for_file(c, uploaded['fileSha256']),
         'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
+        'progressLabels': {
+            'parse': 'CSVを読み込み中',
+            'judge': '商品を照合中',
+            'opening': '初期在庫の登録予定を作成中',
+        },
+        'timingsMs': {
+            'csvParse': parse_ms,
+            'productJudgment': judge_ms,
+            'openingStockPrep': opening_prep_ms,
+            'total': total_ms,
+        },
         'note': note,
     }
 
@@ -4998,10 +5187,205 @@ def _run_confirmed_product_merges(c, classified, sku_decisions, *, actor_name, t
     return merged
 
 
+def _assert_fresh_preview(c, body, preview):
+    preview_fp = stock.text(body.get('previewFingerprint'))
+    if not preview_fp:
+        raise ValueError('プレビュー結果を指定してください。もう一度読み込み直してください。')
+    fp_now = db_fingerprint(c)
+    if preview_fp != fp_now or preview.get('previewFingerprint') != fp_now:
+        raise stock.StockConflict({
+            'error': 'プレビュー後にデータが変わったため、確認し直してください。',
+            'code': 'stale_preview',
+            'previewFingerprint': preview_fp,
+            'currentFingerprint': fp_now,
+        })
+    return preview_fp
+
+
+def _reuse_commit_token(c, token):
+    existing_token = c.execute(
+        'SELECT id,result_json FROM product_ledger_import_runs WHERE commit_token=?', (token,)
+    ).fetchone()
+    if not existing_token:
+        return None
+    try:
+        result = json.loads(existing_token['result_json'] or '{}')
+    except json.JSONDecodeError:
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    return {**result, 'already': True, 'runId': existing_token['id']}
+
+
+def commit_opening_stock_preview(c, body, *, db_path=None):
+    """段階2確定: 初期在庫のみ。商品・取扱の新規作成ループは走らせない。"""
+    stock._require_write(body)
+    ensure_schema(c)
+    stock_product_merge.migrate_product_merge(c)
+    preview = build_opening_stock_preview(c, body)
+    token = stock._token(body.get('token') or body.get('commitToken'))
+    reused = _reuse_commit_token(c, token)
+    if reused is not None:
+        return reused
+    preview_fp = _assert_fresh_preview(c, body, preview)
+
+    aux_uploaded = decode_aux_upload(body)
+    if not aux_uploaded:
+        raise ValueError('初期在庫CSVを選んでください。')
+    opening_stock = preview.get('openingStock') or {}
+    opening_plans = list(opening_stock.get('plans') or [])
+    opening_selections = (
+        body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {}
+    )
+    opening_commitable = False
+    for p in opening_plans:
+        st = p.get('status')
+        if st in (legacy.STATUS_CREATE, legacy.STATUS_REUSE):
+            opening_commitable = True
+            break
+        if st == legacy.STATUS_QTY_DIFF:
+            sel = opening_selections.get(str(p['rowNo'])) or opening_selections.get(p['rowNo']) or {}
+            if sel.get('updateQty'):
+                opening_commitable = True
+                break
+    if not opening_commitable and not body.get('allowEmptyCommit'):
+        raise ValueError(
+            '登録できる初期在庫行がありません。'
+            '曖昧・未登録・削除済みの行は理由を確認し、商品登録や補完を先に行ってください。'
+        )
+    if not body.get('basisDate'):
+        raise ValueError('初期在庫を登録するには在庫基準日を指定してください。')
+    basis_date = stock.parse_date(body.get('basisDate'), '在庫基準日')
+    if opening_stock.get('basisDateError'):
+        raise ValueError(opening_stock['basisDateError'])
+
+    before_stock = stock_snapshot(c)
+    backup_path = ''
+    if db_path:
+        try:
+            backup_path = str(stock.backup_sqlite(db_path, tag='pre-legacy-csv-opening') or '')
+        except stock.BackupError:
+            raise
+        except Exception as e:
+            print(
+                f'opening_stock backup failed before register: {type(e).__name__}: {e}',
+                flush=True,
+            )
+            raise stock.BackupError(stock.BACKUP_FAILED_MESSAGE, cause=e) from e
+
+    actor = stock._actor_name(body)
+    t0 = stock.stamp()
+    c.execute(
+        '''INSERT INTO product_ledger_import_runs(
+             file_sha256,file_name,file_size,row_count,actor_name,
+             preview_at,preview_fingerprint,commit_token,created_at,backup_path)
+           VALUES(?,?,?,?,?,?,?,?,?,?)''',
+        (
+            aux_uploaded['fileSha256'], aux_uploaded['fileName'], aux_uploaded['fileSize'],
+            len(opening_plans),
+            actor, stock.text(body.get('previewAt')) or t0, preview_fp, token, t0, backup_path,
+        ),
+    )
+    run_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    result_counts = {
+        'customersCreated': 0, 'suppliersCreated': 0, 'productsCreated': 0,
+        'sizesAdded': 0, 'handlesCreated': 0, 'subSuppliersAdded': 0,
+        'productsMerged': 0, 'reused': 0, 'unchanged': 0,
+        'reviewed': 0, 'excluded': 0, 'deferred': 0,
+        'committedRows': 0, 'failed': 0,
+        'openingCreated': 0, 'openingQtyUpdated': 0, 'openingUnchanged': 0,
+        'openingHeld': 0, 'openingComplementSkipped': 0,
+    }
+    failures = []
+    product_id_by_code = {}
+    for m in c.execute(
+        '''SELECT csv_product_code, product_id FROM product_ledger_row_maps
+           WHERE product_id IS NOT NULL'''
+    ):
+        code_t = stock.text(m['csv_product_code'] or '')
+        if code_t and code_t not in product_id_by_code:
+            product_id_by_code[code_t] = m['product_id']
+
+    def handle_resolver(cust_id, product_id, embroidery, prefer_id):
+        info = {
+            'id': prefer_id,
+            'action': 'reuse' if prefer_id else 'create',
+            'embroidery': embroidery or PENDING_EMBROIDERY,
+            'proposedEmbroidery': embroidery or '',
+            'fromParenClassification': bool(
+                embroidery and embroidery != PENDING_EMBROIDERY
+            ),
+        }
+        cp_id, created_h = _ensure_handle(c, cust_id, product_id, info)
+        if created_h:
+            result_counts['handlesCreated'] += 1
+        return cp_id
+
+    try:
+        opening_counts = bulk.commit_opening_stock_plans(
+            c,
+            body=body,
+            aux_uploaded=aux_uploaded,
+            plans=opening_plans,
+            run_id=run_id,
+            product_id_by_code=product_id_by_code,
+            handle_resolver=handle_resolver,
+            actor=actor,
+            basis_date=basis_date,
+        )
+        result_counts['openingCreated'] = opening_counts.get('openingCreated', 0)
+        result_counts['openingQtyUpdated'] = opening_counts.get('qtyUpdated', 0)
+        result_counts['openingUnchanged'] = opening_counts.get('unchanged', 0)
+        result_counts['openingHeld'] = opening_counts.get('held', 0)
+        result_counts['openingComplementSkipped'] = opening_counts.get('complementSkipped', 0)
+        after_stock = stock_snapshot(c)
+        result = {
+            'runId': run_id,
+            'already': False,
+            'importMode': IMPORT_MODE_OPENING,
+            'counts': result_counts,
+            'confirmSummary': {
+                'registerOpeningStock': True,
+                'openingStockRows': len(opening_plans),
+                'fromPersistedMap': True,
+            },
+            'deferredRows': [],
+            'failures': failures,
+            'backupPath': backup_path,
+            'stockSnapshotBefore': before_stock,
+            'stockSnapshotAfter': after_stock,
+            'stockUnchanged': after_stock == before_stock,
+            'registerOpeningStock': True,
+            'openingCounts': opening_counts,
+            'reviewRemaining': 0,
+            'excludedCount': 0,
+            'deferredCount': 0,
+            'fileName': aux_uploaded['fileName'],
+            'fileSha256': aux_uploaded['fileSha256'],
+            'actorName': actor,
+            'committedAt': stock.stamp(),
+            'note': bulk.STAGE2_OPENING_NOTE,
+            'timingsMs': preview.get('timingsMs') or {},
+        }
+        c.execute(
+            'UPDATE product_ledger_import_runs SET committed_at=?, result_json=? WHERE id=?',
+            (result['committedAt'], json.dumps(result, ensure_ascii=False), run_id),
+        )
+        return result
+    except Exception as e:
+        result_counts['failed'] += 1
+        failures.append({'rowNo': None, 'error': str(e) or '初期在庫の登録に失敗しました。'})
+        raise
+
+
 def commit_preview(c, body, *, db_path=None):
     stock._require_write(body)
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
+    mode = resolve_import_mode(body)
+    if mode == IMPORT_MODE_OPENING:
+        return commit_opening_stock_preview(c, body, db_path=db_path)
+
     # プレビューと同じ経路で再分類（確定直前の再チェック）
     preview = build_preview(c, body)
     classified = preview['rows']
@@ -5009,39 +5393,11 @@ def commit_preview(c, body, *, db_path=None):
     planned = preview.get('plannedCounts') or {}
 
     token = stock._token(body.get('token') or body.get('commitToken'))
-    existing_token = c.execute(
-        'SELECT id,result_json FROM product_ledger_import_runs WHERE commit_token=?', (token,)
-    ).fetchone()
-    if existing_token:
-        try:
-            result = json.loads(existing_token['result_json'] or '{}')
-        except json.JSONDecodeError:
-            result = {}
-        if not isinstance(result, dict):
-            result = {}
-        return {**result, 'already': True, 'runId': existing_token['id']}
+    reused = _reuse_commit_token(c, token)
+    if reused is not None:
+        return reused
 
-    preview_fp = stock.text(body.get('previewFingerprint'))
-    if not preview_fp:
-        raise ValueError('プレビュー結果を指定してください。もう一度読み込み直してください。')
-    fp_now = db_fingerprint(c)
-    if preview_fp != fp_now:
-        raise stock.StockConflict({
-            'error': 'プレビュー後にデータが変わったため、確認し直してください。',
-            'code': 'stale_preview',
-            'previewFingerprint': preview_fp,
-            'currentFingerprint': fp_now,
-        })
-
-    # プレビュー応答の fingerprint と一致させるため、build_preview 結果を使う
-    if preview['previewFingerprint'] != fp_now:
-        # build_preview は DB を変えないので通常は一致。不一致なら再読込を促す。
-        raise stock.StockConflict({
-            'error': 'プレビュー後にデータが変わったため、確認し直してください。',
-            'code': 'stale_preview',
-            'previewFingerprint': preview_fp,
-            'currentFingerprint': fp_now,
-        })
+    preview_fp = _assert_fresh_preview(c, body, preview)
 
     uploaded = decode_upload(body)
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
@@ -5072,7 +5428,7 @@ def commit_preview(c, body, *, db_path=None):
             f'要確認が {len(review_rows)} 件残っています。'
             f'未解決の行を黙って除外せず、候補を選ぶか解決してから確定してください。'
         )
-    register_opening = bool(preview.get('registerOpeningStock'))
+    register_opening = bool(preview.get('registerOpeningStock')) and mode != IMPORT_MODE_PRODUCTS
     opening_stock = preview.get('openingStock') if register_opening else None
     opening_plans = list((opening_stock or {}).get('plans') or [])
     aux_uploaded = decode_aux_upload(body) if register_opening else None
@@ -5120,6 +5476,7 @@ def commit_preview(c, body, *, db_path=None):
         'commitRows': len(commit_rows),
         'registerOpeningStock': register_opening,
         'openingStockRows': len(opening_plans),
+        'importMode': mode,
     }
 
     before_stock = stock_snapshot(c)
@@ -5329,6 +5686,7 @@ def commit_preview(c, body, *, db_path=None):
         result = {
             'runId': run_id,
             'already': False,
+            'importMode': mode,
             'counts': result_counts,
             'confirmSummary': confirm_summary,
             'deferredRows': defer_records,
@@ -5347,6 +5705,7 @@ def commit_preview(c, body, *, db_path=None):
             'actorName': actor,
             'committedAt': stock.stamp(),
             'note': IMPORT_NOTE,
+            'timingsMs': preview.get('timingsMs') or {},
         }
         c.execute(
             'UPDATE product_ledger_import_runs SET committed_at=?, result_json=? WHERE id=?',
@@ -5360,9 +5719,21 @@ def commit_preview(c, body, *, db_path=None):
 
 def file_history(c, body):
     ensure_schema(c)
+    mode = resolve_import_mode(body)
+    if mode == IMPORT_MODE_OPENING:
+        aux = decode_aux_upload(body)
+        if not aux:
+            raise ValueError('初期在庫CSVを選んでください。')
+        return {
+            'fileName': aux['fileName'],
+            'fileSha256': aux['fileSha256'],
+            'previousImports': previous_imports_for_file(c, aux['fileSha256']),
+            'importMode': IMPORT_MODE_OPENING,
+        }
     uploaded = decode_upload(body)
     return {
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
         'previousImports': previous_imports_for_file(c, uploaded['fileSha256']),
+        'importMode': mode,
     }

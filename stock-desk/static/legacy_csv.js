@@ -7,7 +7,7 @@
     if(main){
       main.innerHTML=`<section class="panel">
         <p class="notice">「旧CSV取込」は <strong>旧CSV一括取り込み</strong> に統合されました。</p>
-        <p class="excelhint">登録・設定画面の右上（「表示」の左）のボタンから、商品台帳CSVと初期在庫CSVをまとめて取り込めます。</p>
+        <p class="excelhint">登録・設定画面の右上（「表示」の左）のボタンから、商品登録と初期在庫登録を段階的に取り込めます。</p>
         <div class="bar"><button type="button" class="primary" id="legacyCsvRedirectOpen">旧CSV一括取り込みを開く</button></div>
       </section>`
       const btn=document.getElementById('legacyCsvRedirectOpen')

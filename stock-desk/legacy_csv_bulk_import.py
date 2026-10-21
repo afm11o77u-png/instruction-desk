@@ -3,17 +3,22 @@
 判定エンジンは product_ledger_import をそのまま使う。ここでは初期在庫CSV行を
 「元CSV行→商品・取扱・サイズ・仕様」対応で載せ、在庫数量の登録計画だけを組み立てる。
 商品名の改名だけで再照合しない。
+
+二段階取込の「初期在庫を登録」では、商品登録時に永続化した
+product_ledger_row_maps から登録先を解決する（メイン名選定のやり直しはしない）。
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections import defaultdict
 
 import legacy_csv_import as legacy
 import stock
 
 BULK_OPENING_NOTE = '旧CSV一括取り込み（初期在庫）'
+STAGE2_OPENING_NOTE = '旧CSV一括取り込み（初期在庫・段階2）'
 COMPLEMENT_STATUS = 'complement'
 COMPLEMENT_LABEL = '補完候補'
 
@@ -805,4 +810,505 @@ def summarize_opening_for_preview(opening):
         'excluded': counts.get(legacy.STATUS_EXCLUDED, 0),
         'complement': counts.get(COMPLEMENT_STATUS, 0),
         'note': opening.get('note') or '',
+    }
+
+
+def _person_names_match(a, b):
+    ta, tb = stock.text(a), stock.text(b)
+    if not ta or not tb:
+        return False
+    if legacy.identity_match_key(ta) == legacy.identity_match_key(tb):
+        return True
+    return legacy.looks_like_company_form_variant(ta, tb)
+
+
+def _spec_signature(color, processing, material):
+    return '|'.join([
+        legacy.identity_match_key(color or ''),
+        legacy.identity_match_key(processing or ''),
+        legacy.identity_match_key(material or ''),
+    ])
+
+
+def _map_row_spec(map_row):
+    color = ''
+    processing = ''
+    material = ''
+    if map_row is None:
+        return color, processing, material
+    keys = map_row.keys() if hasattr(map_row, 'keys') else []
+    if 'csv_color' in keys:
+        color = stock.text(map_row['csv_color'] or '')
+    if 'csv_processing' in keys:
+        processing = stock.text(map_row['csv_processing'] or '')
+    if 'csv_material' in keys:
+        material = stock.text(map_row['csv_material'] or '')
+    if not (color or processing or material):
+        raw = ''
+        if 'spec_json' in keys:
+            raw = map_row['spec_json'] or ''
+        if raw:
+            try:
+                spec = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                spec = {}
+            if isinstance(spec, dict):
+                color = stock.text(spec.get('color') or color)
+                processing = stock.text(spec.get('processing') or processing)
+                material = stock.text(spec.get('material') or material)
+    return color, processing, material
+
+
+def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, supplier):
+    """原文キーで対応（改名後の公式名では探さない）。行番号は使わない。"""
+    if stock.text(map_row['csv_product_code'] or '') != stock.text(code):
+        return False
+    if supplier and stock.text(map_row['csv_supplier'] or ''):
+        if not _person_names_match(supplier, map_row['csv_supplier']):
+            return False
+    if customer and stock.text(map_row['csv_customer'] or ''):
+        if not _person_names_match(customer, map_row['csv_customer']):
+            return False
+    map_name = stock.text(map_row['csv_product_name'] or '')
+    if not _names_equivalent_core(map_name, product_name):
+        return False
+    map_size = stock.text(map_row['csv_size'] or '')
+    aux_size = size if isinstance(size, str) else ('' if size is None else str(size))
+    aux_size = aux_size.strip()
+    # サイズが双方あるときは一致必須（空はワイルドカード扱い）
+    if map_size and aux_size and map_size != aux_size:
+        return False
+    return True
+
+
+def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size, supplier):
+    """商品登録で永続化したマップから登録先候補を返す（推測で別商品へ寄せない）。"""
+    import product_ledger_import as pli
+
+    pli.ensure_schema(c)
+    code_t = stock.text(code)
+    if not code_t:
+        return {
+            'status': 'missing',
+            'reason': '商品コードが空のため、商品登録マップから登録先を特定できません。',
+            'matches': [],
+        }
+    rows = c.execute(
+        '''SELECT * FROM product_ledger_row_maps
+           WHERE csv_product_code=? AND product_id IS NOT NULL
+           ORDER BY id DESC''',
+        (code_t,),
+    ).fetchall()
+    matches = []
+    seen = set()
+    for row in rows:
+        if not _map_matches_aux_identity(
+            row,
+            customer=customer,
+            code=code_t,
+            product_name=product_name,
+            size=size,
+            supplier=supplier,
+        ):
+            continue
+        pid = row['product_id']
+        cpid = row['customer_product_id']
+        cid = row['customer_id']
+        color, processing, material = _map_row_spec(row)
+        key = (pid, cpid, cid, _spec_signature(color, processing, material))
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append({
+            'mapId': row['id'],
+            'productId': pid,
+            'customerProductId': cpid,
+            'customerId': cid,
+            'csvCustomer': stock.text(row['csv_customer'] or ''),
+            'csvSupplier': stock.text(row['csv_supplier'] or ''),
+            'csvProductName': stock.text(row['csv_product_name'] or ''),
+            'csvSize': stock.text(row['csv_size'] or ''),
+            'color': color,
+            'processing': processing,
+            'material': material,
+            'isMainCandidate': bool(row['is_main_candidate']) if 'is_main_candidate' in row.keys() else True,
+            'fileSha256': stock.text(row['file_sha256'] or ''),
+            'runId': row['run_id'],
+            'sourceRowNo': row['source_row_no'],
+        })
+
+    if not matches:
+        return {
+            'status': 'missing',
+            'reason': (
+                '商品登録マップに対応がありません。先に「商品を登録」で台帳を確定するか、'
+                '不足している商品・取扱を補完してください（別商品へ推測登録しません）。'
+            ),
+            'matches': [],
+        }
+
+    # 同一別名でも仕様（色・加工・素材）や登録先が食い違うときは曖昧
+    dest_keys = {
+        (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
+        for m in matches
+    }
+    if len(dest_keys) > 1:
+        return {
+            'status': 'ambiguous',
+            'reason': (
+                '同じ原文キーに複数の登録先（別仕様・別商品／取扱）が残っています。'
+                '推測で寄せず、商品登録側の対応を確認・補完してください。'
+            ),
+            'matches': matches,
+        }
+
+    chosen = matches[0]
+    # 生存確認（削除・統合・停止は推測で別商品へ振り替えない）
+    live_pid = None
+    if chosen['productId']:
+        live_pid = None
+        try:
+            import stock_product_merge
+            live_pid = stock_product_merge.resolve_live_product_id(c, chosen['productId'])
+        except Exception:
+            live_pid = chosen['productId']
+        prod = c.execute(
+            'SELECT id, name, code, active, merged_into_id FROM products WHERE id=?',
+            (live_pid,),
+        ).fetchone()
+        if not prod:
+            return {
+                'status': 'deleted',
+                'reason': 'マップ先の商品が削除されています。別商品へ推測登録しません。商品を補完してください。',
+                'matches': matches,
+            }
+        if not prod['active']:
+            return {
+                'status': 'deleted',
+                'reason': 'マップ先の商品が停止中です。別商品へ推測登録しません。商品を確認してください。',
+                'matches': matches,
+                'productId': prod['id'],
+                'productName': prod['name'],
+            }
+        chosen = dict(chosen)
+        chosen['productId'] = prod['id']
+        chosen['officialName'] = prod['name']
+        chosen['productCode'] = prod['code']
+
+    handle = None
+    if chosen.get('customerProductId'):
+        handle = c.execute(
+            '''SELECT id, customer_id, product_id, embroidery, active
+               FROM customer_products WHERE id=?''',
+            (chosen['customerProductId'],),
+        ).fetchone()
+        if not handle:
+            return {
+                'status': 'deleted',
+                'reason': 'マップ先の取扱が削除されています。別取扱へ推測登録しません。取扱を補完してください。',
+                'matches': matches,
+                'productId': chosen.get('productId'),
+            }
+        if not handle['active']:
+            return {
+                'status': 'deleted',
+                'reason': 'マップ先の取扱が停止中です。別取扱へ推測登録しません。取扱を確認してください。',
+                'matches': matches,
+                'productId': chosen.get('productId'),
+                'handleId': handle['id'],
+            }
+        if chosen.get('productId') and handle['product_id'] != chosen['productId']:
+            return {
+                'status': 'ambiguous',
+                'reason': 'マップの商品と取扱の紐づけが一致しません。推測で修正せず確認してください。',
+                'matches': matches,
+            }
+        chosen = dict(chosen)
+        chosen['customerId'] = handle['customer_id']
+        chosen['embroidery'] = handle['embroidery']
+        chosen['handleId'] = handle['id']
+
+    return {
+        'status': 'ok',
+        'reason': '',
+        'matches': matches,
+        'destination': chosen,
+    }
+
+
+def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
+    """段階2: 永続マップだけで1行の初期在庫予定を組み立てる（判定UIを再実行しない）。"""
+    payload = _aux_item_payload(row_no, item)
+    qty, cost, qreasons = legacy.parse_row_qty_cost(item, row_no)
+    condition, creasons = legacy.parse_row_condition(item, row_no)
+    place = legacy.location_resolve(c, item.get('拠点'), item.get('棚'), default_site)
+    if place.get('siteEmpty'):
+        place = dict(place)
+        place['usedDefaultSite'] = True
+    if place.get('siteExists') is False:
+        place['action'] = 'create_site'
+    elif place.get('siteActive') is False:
+        place['action'] = 'review'
+    else:
+        place['action'] = 'reuse_site'
+    if place.get('shelfName'):
+        if place.get('shelfExists') is False and place.get('action') != 'review':
+            place['action'] = 'create_shelf'
+        elif place.get('shelfActive') is False:
+            place['action'] = 'review'
+
+    resolved = lookup_ledger_destinations_for_aux(
+        c,
+        customer=payload['customer'],
+        code=payload['code'],
+        product_name=payload['productName'],
+        size=payload['size'],
+        supplier=payload['supplier'],
+    )
+    reasons = list(creasons) + list(qreasons)
+    dest = resolved.get('destination') or {}
+    map_status = resolved.get('status') or 'missing'
+
+    if map_status != 'ok':
+        status = legacy.STATUS_REVIEW if map_status in ('ambiguous', 'deleted') else COMPLEMENT_STATUS
+        if map_status == 'missing':
+            status = COMPLEMENT_STATUS
+        reasons = [resolved.get('reason') or '登録先を特定できません。', *reasons]
+        cust_preview = legacy._person_preview(c, 'customers', '顧客', payload['customer'], row_no)
+        return {
+            'rowNo': row_no,
+            'status': status,
+            'statusLabel': OPENING_STATUS_LABELS.get(status, status),
+            'qty': qty,
+            'unitCost': cost,
+            'condition': condition,
+            'conditionLabel': stock.condition_label(condition) if condition else '',
+            'reasons': reasons,
+            'csv': payload,
+            'target': {
+                'productId': dest.get('productId'),
+                'productCode': payload['code'],
+                'productName': payload['productName'],
+                'officialName': dest.get('officialName') or '',
+                'fromOriginalName': payload['productName'],
+                'customer': payload['customer'],
+                'customerId': dest.get('customerId') or cust_preview.get('id'),
+                'customerAction': cust_preview.get('action') or 'create',
+                'supplier': payload['supplier'],
+                'size': payload['size'],
+                'embroidery': dest.get('embroidery') or legacy.PENDING_EMBROIDERY,
+                'handleId': dest.get('handleId') or dest.get('customerProductId'),
+                'isMainSpec': bool(dest.get('isMainCandidate', True)),
+                'color': dest.get('color') or '',
+                'processing': dest.get('processing') or '',
+                'material': dest.get('material') or '',
+                'mapStatus': map_status,
+                'mapMatches': len(resolved.get('matches') or []),
+            },
+            'place': place,
+            'stock': None,
+            'matchedLedger': False,
+            'complement': status == COMPLEMENT_STATUS,
+            'heldWithProduct': False,
+            'selected': False,
+            'mapResolve': resolved,
+            'fromPersistedMap': True,
+        }
+
+    product_id = dest.get('productId')
+    handle_id = dest.get('handleId') or dest.get('customerProductId')
+    customer_id = dest.get('customerId')
+    embroidery = stock.text(dest.get('embroidery') or '') or legacy.PENDING_EMBROIDERY
+    official_name = stock.text(dest.get('officialName') or '')
+    cust_preview = legacy._person_preview(c, 'customers', '顧客', payload['customer'], row_no)
+    if cust_preview.get('id'):
+        customer_id = cust_preview['id']
+    customer_action = cust_preview.get('action') or ('reuse' if customer_id else 'create')
+    sup_preview = legacy._person_preview(c, 'suppliers', '仕入先', payload['supplier'], row_no)
+
+    if place.get('action') == 'review':
+        reasons.append(f'{row_no}行目：拠点または棚が停止中です。')
+
+    prior = None
+    stock_info = None
+    if reasons or condition is None or qty is None or cost is None:
+        status = legacy.STATUS_REVIEW
+    else:
+        stock_info = legacy._stock_match(
+            c, handle_id, payload['size'], place.get('locationId'), condition, cost,
+        )
+        prior = legacy.lookup_stock_map(
+            c,
+            customer=payload['customer'],
+            code=payload['code'],
+            product_name=payload['productName'],
+            size=payload['size'],
+            condition=condition,
+            unit_cost=cost,
+            site=payload['site'],
+            shelf=payload['shelf'],
+        )
+        if stock_info and stock_info.get('exists'):
+            if stock_info['currentQty'] == qty:
+                status = legacy.STATUS_UNCHANGED
+            else:
+                status = legacy.STATUS_QTY_DIFF
+                reasons.append(
+                    f'{row_no}行目：既存在庫 {stock_info["currentQty"]} とCSV数量 {qty} が異なります。'
+                    '明示選択したときだけ更新します（黙って上書きしません）。'
+                )
+        elif prior and prior.get('lot_ids_json'):
+            status = legacy.STATUS_REVIEW
+            reasons.append(f'{row_no}行目：以前取り込んだ行の記録があります。内容を確認してください。')
+        else:
+            master_new = customer_action == 'create' or not product_id or place.get('action') in (
+                'create_site', 'create_shelf',
+            )
+            status = legacy.STATUS_CREATE if master_new else legacy.STATUS_REUSE
+
+    sel = selection if isinstance(selection, dict) else {}
+    return {
+        'rowNo': row_no,
+        'status': status,
+        'statusLabel': OPENING_STATUS_LABELS.get(status, status),
+        'qty': qty,
+        'unitCost': cost,
+        'condition': condition,
+        'conditionLabel': stock.condition_label(condition) if condition else '',
+        'reasons': reasons,
+        'csv': payload,
+        'target': {
+            'productId': product_id,
+            'productCode': dest.get('productCode') or payload['code'],
+            'productName': official_name or payload['productName'],
+            'officialName': official_name,
+            'fromOriginalName': payload['productName'],
+            'customer': payload['customer'],
+            'customerId': customer_id,
+            'customerAction': customer_action,
+            'supplier': payload['supplier'],
+            'supplierId': sup_preview.get('id'),
+            'supplierAction': sup_preview.get('action'),
+            'size': payload['size'],
+            'embroidery': embroidery,
+            'handleId': handle_id,
+            'isMainSpec': bool(dest.get('isMainCandidate', True)),
+            'color': dest.get('color') or '',
+            'processing': dest.get('processing') or '',
+            'material': dest.get('material') or '',
+            'mapStatus': 'ok',
+            'mapId': dest.get('mapId'),
+        },
+        'place': place,
+        'stock': stock_info,
+        'matchedLedger': True,
+        'complement': False,
+        'heldWithProduct': False,
+        'selected': bool(sel.get('updateQty')) if status == legacy.STATUS_QTY_DIFF else False,
+        'priorImport': bool(prior) if status != legacy.STATUS_HOLD else False,
+        'mapResolve': resolved,
+        'fromPersistedMap': True,
+    }
+
+
+def build_opening_stock_plans_from_maps(
+    c,
+    *,
+    aux_uploaded,
+    default_site_name='',
+    opening_selections=None,
+):
+    """段階2専用: 初期在庫CSVのみ＋永続マップで登録予定を組む（商品判定は再実行しない）。"""
+    t0 = time.perf_counter()
+    if not aux_uploaded:
+        return {
+            'enabled': False,
+            'plans': [],
+            'counts': {},
+            'complementCandidates': [],
+            'mastersToCreate': {'customers': [], 'suppliers': [], 'sites': [], 'shelves': []},
+            'note': '',
+            'fromPersistedMap': True,
+            'timingsMs': {'openingStockPrep': 0},
+        }
+
+    default_site = stock.text(default_site_name) or stock.UNCONFIRMED_SITE_NAME
+    selections = opening_selections if isinstance(opening_selections, dict) else {}
+    aux_rows = list(aux_uploaded.get('rows') or [])
+    plans = []
+    complement = []
+    masters = {
+        'customers': set(),
+        'suppliers': set(),
+        'sites': set(),
+        'shelves': set(),
+    }
+
+    for row_no, item in aux_rows:
+        product_name = stock.text(item.get('商品名'))
+        qty, cost, qreasons = legacy.parse_row_qty_cost(item, row_no)
+        if not product_name and qty == 0 and not qreasons:
+            plans.append({
+                'rowNo': row_no,
+                'status': legacy.STATUS_EXCLUDED,
+                'statusLabel': OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED],
+                'qty': qty,
+                'unitCost': cost,
+                'condition': None,
+                'conditionLabel': '',
+                'reasons': [f'{row_no}行目：商品名が空欄で在庫が0のため対象外です（登録しません）。'],
+                'csv': _aux_item_payload(row_no, item),
+                'target': None,
+                'place': legacy.location_resolve(c, item.get('拠点'), item.get('棚'), default_site),
+                'stock': None,
+                'matchedLedger': False,
+                'complement': False,
+                'heldWithProduct': False,
+                'fromPersistedMap': True,
+            })
+            continue
+        plan = _plan_opening_row_from_map(
+            c,
+            row_no=row_no,
+            item=item,
+            default_site=default_site,
+            selection=selections.get(str(row_no)) or selections.get(row_no) or {},
+        )
+        plans.append(plan)
+        if plan.get('complement') or plan.get('status') == COMPLEMENT_STATUS:
+            complement.append(plan)
+        _collect_master_additions(plan, masters)
+
+    counts = defaultdict(int)
+    for p in plans:
+        counts[p['status']] += 1
+
+    prep_ms = round((time.perf_counter() - t0) * 1000, 2)
+    return {
+        'enabled': True,
+        'willRegisterOpeningStock': True,
+        'fromPersistedMap': True,
+        'fileName': aux_uploaded.get('fileName') or '',
+        'fileSha256': aux_uploaded.get('fileSha256') or '',
+        'encoding': aux_uploaded.get('encoding') or '',
+        'rowCount': len(aux_rows),
+        'plans': plans,
+        'counts': dict(counts),
+        'complementCandidates': complement,
+        'mastersToCreate': {
+            'customers': sorted(masters['customers']),
+            'suppliers': sorted(masters['suppliers']),
+            'sites': sorted(masters['sites']),
+            'shelves': sorted(masters['shelves']),
+        },
+        'defaultSiteName': default_site,
+        'ignoredQtyColumns': list(legacy.IGNORED_QTY_COLUMNS),
+        'timingsMs': {'openingStockPrep': prep_ms},
+        'note': (
+            '初期在庫CSVと、商品登録時に保存した原文→登録先マップで照合します。'
+            'メイン名選定や一括承認のやり直しはしません。'
+            '数量は「在庫」列のみ（0・マイナスもそのまま）。拠点空欄は「未確認」へ登録します。'
+            '曖昧・削除済み・未登録の行は理由を示し、別商品へ推測登録しません。'
+            '再取込では二重加算しません。数量差異は明示選択時のみ更新します。'
+        ),
     }
