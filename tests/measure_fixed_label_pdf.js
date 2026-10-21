@@ -118,6 +118,22 @@ function dumpDomMetrics(htmlPath, kind) {
           cellsMm:cells.map(c=>{const b=c.getBoundingClientRect();return {w:mm(b.width),h:mm(b.height)}}),
           titles:[...document.querySelectorAll('.title')].map(el=>el.textContent),
           checksOnFirst:cells[0]?[...cells[0].querySelectorAll('.check')].map(el=>el.textContent.trim()):[],
+          darumaStack:cells[0]?(()=>{
+            const no=cells[0].querySelector('.no');
+            const sama=cells[0].querySelector('.sama');
+            const nameRow=cells[0].querySelector('.name-row');
+            if(!no||!sama||!nameRow) return null;
+            const nb=no.getBoundingClientRect();
+            const sb=sama.getBoundingClientRect();
+            const nr=nameRow.getBoundingClientRect();
+            const mm=v=>+(v*25.4/96).toFixed(2);
+            return {
+              stacked: sb.top > nb.bottom - 2,
+              gapMm: mm(sb.top - nb.bottom),
+              samaRightOfMid: sb.left > nr.left + nr.width * 0.55,
+              nameRowWmm: mm(nr.width),
+            };
+          })():null,
           imageCount:imgs.length,
           images:imgs.map(img=>{
             const b=img.getBoundingClientRect();
@@ -231,6 +247,11 @@ for (const c of darumaDom.cellsMm) {
 }
 assert.ok(darumaDom.checksOnFirst.length === 13)
 assert.ok(darumaDom.titles.every((t) => t === 'だるま食品銭函工場'))
+assert.ok(darumaDom.darumaStack, 'daruma NO/様 stack metrics missing')
+assert.ok(darumaDom.darumaStack.stacked, 'NO. and 様 must be vertically stacked')
+assert.ok(darumaDom.darumaStack.gapMm >= 8, `name space gap too small: ${darumaDom.darumaStack.gapMm}mm`)
+assert.ok(darumaDom.darumaStack.samaRightOfMid, '様 must sit at lower-right')
+assert.ok(darumaDom.darumaStack.nameRowWmm >= 100, `name-row width ${darumaDom.darumaStack.nameRowWmm}`)
 
 const imageDom = {}
 for (const f of imageFormats) {
@@ -262,6 +283,7 @@ console.log(
         cellsMm: darumaDom.cellsMm,
         checkCount: darumaDom.checksOnFirst.length,
         checksOnFirst: darumaDom.checksOnFirst,
+        stack: darumaDom.darumaStack,
       },
       imageDom,
     },

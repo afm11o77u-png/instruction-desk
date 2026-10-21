@@ -35,12 +35,15 @@
     '.check{display:flex;align-items:center;gap:.35mm;font-size:13.5pt;line-height:1.25;' +
     'font-weight:500;white-space:nowrap;min-width:0}' +
     '.check .box{flex:0 0 auto;font-size:14pt;line-height:1;font-weight:400}' +
-    '.idrow{display:flex;align-items:flex-end;justify-content:space-between;gap:8mm;' +
-    'margin:3mm 0 0;min-height:20mm}' +
-    '.no{display:flex;align-items:flex-end;gap:2mm;flex:0 1 auto;min-width:0;' +
-    'width:42%;max-width:48%;padding-bottom:1.5mm}' +
+    /* NO.＿＿＿ と「様」は縦に分離。様は右下、左に手書き氏名スペース */
+    '.idblock{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;' +
+    'margin:2mm 0 0}' +
+    '.no{display:flex;align-items:flex-end;gap:2mm;flex:0 0 auto;min-width:0;' +
+    'width:42%;max-width:48%;margin-top:1mm}' +
     '.no .label{font-size:16pt;font-weight:700;letter-spacing:.06em;line-height:1;flex:0 0 auto}' +
     '.no .line{flex:1 1 auto;border-bottom:1.6px solid #000;height:0;min-width:28mm;margin-bottom:1px}' +
+    '.name-row{display:flex;justify-content:flex-end;align-items:flex-end;' +
+    'flex:1 1 auto;min-height:18mm;margin-top:2mm}' +
     '.sama{font-size:42pt;font-weight:700;line-height:1;flex:0 0 auto;padding:0 1mm 0 0}' +
     '.footer{margin-top:auto;text-align:center;font-size:18pt;font-weight:700;' +
     'letter-spacing:.08em;line-height:1.2;padding-top:2mm;white-space:pre}' +
@@ -69,9 +72,9 @@
           row('four', ['製造部', '設備保全課', '商品部', '新規事業部']) +
           row('five', ['衛生', '清掃', '営業部', '貸出用', '工場長']) +
           '</div>' +
-          '<div class="idrow">' +
+          '<div class="idblock">' +
           '<div class="no"><span class="label">NO.</span><span class="line"></span></div>' +
-          '<div class="sama">様</div>' +
+          '<div class="name-row"><div class="sama">様</div></div>' +
           '</div>' +
           '<div class="footer">新規　交換　その他</div>' +
           '</section>'

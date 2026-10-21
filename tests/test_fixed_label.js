@@ -72,6 +72,12 @@ for (const sheets of [1, 3, 10]) {
   assert.ok(html.includes('NO.'))
   assert.ok(html.includes('様'))
   assert.ok(html.includes('新規　交換　その他'))
+  // NO.＿＿＿ と「様」は縦積み（同一行の idrow ではない）
+  assert.ok(html.includes('class="idblock"'), 'idblock wraps NO + name row')
+  assert.ok(html.includes('class="name-row"'), 'name-row holds 様 at lower-right')
+  assert.ok(!html.includes('class="idrow"'), 'legacy same-row idrow removed')
+  assert.ok(html.indexOf('class="no"') < html.indexOf('class="name-row"'))
+  assert.ok(html.indexOf('class="name-row"') < html.indexOf('class="sama"'))
   assert.ok(!html.includes('api('))
 }
 
@@ -96,6 +102,9 @@ assert.ok(FIXED_LABEL_CSS.includes('210mm'))
 assert.ok(FIXED_LABEL_CSS.includes('148.5mm'))
 assert.ok(FIXED_LABEL_CSS.includes('105mm'))
 assert.ok(FIXED_LABEL_CSS.includes('dashed'))
+assert.ok(FIXED_LABEL_CSS.includes('.idblock{display:flex;flex-direction:column'))
+assert.ok(FIXED_LABEL_CSS.includes('.name-row{display:flex;justify-content:flex-end'))
+assert.ok(!FIXED_LABEL_CSS.includes('.idrow{'))
 assert.ok(FIXED_LABEL_CSS.includes('.page.page-image'))
 assert.ok(FIXED_LABEL_CSS.includes('object-fit:contain'))
 
