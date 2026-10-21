@@ -948,19 +948,40 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
         }
 
     # 同一別名でも仕様（色・加工・素材）や登録先が食い違うときは曖昧
+    # 色分割後: 初期在庫CSVの商品名から明示色が取れ、マップ色と一意に一致すれば絞る
     dest_keys = {
         (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
         for m in matches
     }
     if len(dest_keys) > 1:
-        return {
-            'status': 'ambiguous',
-            'reason': (
-                '同じ原文キーに複数の登録先（別仕様・別商品／取扱）が残っています。'
-                '推測で寄せず、商品登録側の対応を確認・補完してください。'
-            ),
-            'matches': matches,
-        }
+        try:
+            import product_ledger_paren as paren_classify
+            extracted = paren_classify.extract_explicit_color_from_name(product_name)
+            aux_color = stock.text(extracted.get('color') or '')
+            aux_key = paren_classify.color_match_key(aux_color) if aux_color else ''
+        except Exception:
+            aux_key = ''
+        if aux_key:
+            narrowed = [
+                m for m in matches
+                if paren_classify.color_match_key(m.get('color') or '') == aux_key
+            ]
+            narrow_keys = {
+                (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
+                for m in narrowed
+            }
+            if len(narrow_keys) == 1:
+                matches = narrowed
+                dest_keys = narrow_keys
+        if len(dest_keys) > 1:
+            return {
+                'status': 'ambiguous',
+                'reason': (
+                    '同じ原文キーに複数の登録先（色分割・別仕様・別商品／取扱）が残っています。'
+                    '推測で一方へ寄せず、確認してください（在庫数量の二重登録もしません）。'
+                ),
+                'matches': matches,
+            }
 
     chosen = matches[0]
     # 生存確認（削除・統合・停止は推測で別商品へ振り替えない）

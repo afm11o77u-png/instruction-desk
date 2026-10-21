@@ -57,6 +57,7 @@ STATUS_LABELS = {
 SKU_DECISION_MERGE = 'merge'
 SKU_DECISION_SEPARATE = 'separate'
 SKU_DECISION_HOLD = 'hold'
+SKU_DECISION_COLOR_SPLIT = 'color_split'
 
 # 品番比較の判断ティア（自動まとめは needsDecision=False）
 REVIEW_TIER_AUTO = 'auto'
@@ -2124,9 +2125,12 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         code = stock.text(group.get('code') or '')
         raw = decisions.get(code) or decisions.get(str(code)) or {}
         if isinstance(raw, dict) and stock.text(raw.get('decision')):
-            # 手動判断あり → 提案表示のみ（上書きしない）
+            # 手動判断あり（色分割含む）→ 提案表示のみ。在庫自動まとめしない
             _attach_stock_pick_display(group, aux, package, auto_cleared=False)
             group['auxStockPickManualOverride'] = True
+            if stock.text(raw.get('decision')) == SKU_DECISION_COLOR_SPLIT:
+                group['excludeAuxStockAutoMerge'] = True
+                group['colorSplit'] = True
             continue
         if package.get('parenNeedsConfirm'):
             # 採用候補自体の括弧が曖昧 → 自動確定しない
@@ -2601,6 +2605,278 @@ def names_equivalent_core(a, b):
     if not ta or not tb:
         return False
     return product_name_core_key(ta) == product_name_core_key(tb)
+
+
+def suggest_color_split_internal_code(maker_code, color):
+    """社内管理品番の提案: メーカー品番 + '-' + 色名（先頭ゼロは落とさない）。"""
+    maker = stock.text(maker_code)
+    color_t = stock.text(color)
+    if not maker or not color_t:
+        return ''
+    return f'{maker}-{color_t}'
+
+
+def _row_color_extraction(row):
+    """CSV行から明示色を抽出。曖昧・複数・無しは autoColor を空にする。"""
+    csv_info = row.get('csv') or {}
+    name = stock.text(csv_info.get('productName') or '')
+    pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+    provenance = row.get('specProvenance') if isinstance(row.get('specProvenance'), dict) else {}
+    split = paren_classify.split_name_and_color(name)
+    extracted = paren_classify.extract_explicit_color_from_name(name)
+    color = stock.text(
+        provenance.get('color')
+        or pc.get('color')
+        or split.get('color')
+        or extracted.get('color')
+        or ''
+    )
+    needs = bool(
+        split.get('needsConfirm')
+        or extracted.get('needsConfirm')
+        or pc.get('needsConfirm')
+    )
+    candidates = []
+    for src in (
+        provenance.get('colorCandidates'),
+        pc.get('colorCandidates'),
+        split.get('colorCandidates'),
+        extracted.get('colorCandidates'),
+    ):
+        for c in (src or []):
+            t = stock.text(c)
+            if t and t not in candidates:
+                candidates.append(t)
+    if needs or (len({paren_classify.color_match_key(c) for c in candidates if c}) > 1):
+        color = ''
+    if not color and len(candidates) == 1 and not needs:
+        color = candidates[0]
+    planned_name = stock.text(
+        provenance.get('plannedName')
+        or split.get('plannedName')
+        or pc.get('plannedName')
+        or name
+    )
+    # 色が決まっているときだけ名から色を外した登録予定名を使う
+    if color and planned_name:
+        product_name = planned_name
+    else:
+        product_name = name
+    return {
+        'color': color,
+        'colorKey': paren_classify.color_match_key(color) if color else '',
+        'colorCandidates': candidates,
+        'needsConfirm': bool(needs or (not color and candidates)),
+        'productName': product_name,
+        'originalName': name,
+        'processing': stock.text(
+            provenance.get('processing') or pc.get('processing') or split.get('processing') or ''
+        ),
+        'material': stock.text(
+            provenance.get('material') or pc.get('material') or split.get('material') or ''
+        ),
+    }
+
+
+def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
+    """同一メーカー品番を色ごとに別商品として登録する予定を組み立てる。
+
+    - 緑と蛍光グリーンは別色（color_match_key で同一視しない）
+    - 色不明・複数解釈・ラベルなしは自動割当しない
+    - 社内品番衝突は use-existing / 品番編集を求め、無条件の上書きはしない
+    - クリック時点では保存しない（プレビューのみ）
+    """
+    raw = decision_raw if isinstance(decision_raw, dict) else {}
+    maker_code = stock.text(group.get('code') or '')
+    user_plans = raw.get('colorPlans') if isinstance(raw.get('colorPlans'), dict) else {}
+    row_destinations = raw.get('rowDestinations') if isinstance(raw.get('rowDestinations'), dict) else {}
+
+    row_by_no = {}
+    for row in (classified or []):
+        try:
+            row_by_no[int(row.get('rowNo'))] = row
+        except (TypeError, ValueError):
+            continue
+
+    color_buckets = {}  # colorKey -> plan draft
+    unassigned_rows = []
+
+    def _ensure_bucket(color_display, product_name_hint=''):
+        key = paren_classify.color_match_key(color_display)
+        if not key:
+            return None
+        if key not in color_buckets:
+            suggested = suggest_color_split_internal_code(maker_code, color_display)
+            user = user_plans.get(key) or user_plans.get(color_display) or {}
+            if not isinstance(user, dict):
+                user = {}
+            internal = stock.text(user.get('internalCode') or user.get('code') or '') or suggested
+            color_buckets[key] = {
+                'colorKey': key,
+                'color': stock.text(user.get('color') or color_display),
+                'makerCode': maker_code,
+                'internalCode': internal,
+                'suggestedInternalCode': suggested,
+                'productName': stock.text(user.get('productName') or product_name_hint or ''),
+                'rowNos': [],
+                'keepProductId': user.get('keepProductId') or user.get('productId'),
+                'collisionAction': stock.text(user.get('collisionAction') or ''),
+                'existingProducts': [],
+                'collision': False,
+                'needsCollisionChoice': False,
+            }
+        return color_buckets[key]
+
+    source_rows = []
+    for rn in (group.get('rowNos') or []):
+        row = row_by_no.get(int(rn))
+        if row:
+            source_rows.append(row)
+    if not source_rows:
+        # variants から擬似行（classified 未渡し時のフォールバック）
+        for v in (group.get('variants') or []):
+            for rn in (v.get('rowNos') or []):
+                source_rows.append({
+                    'rowNo': rn,
+                    'csv': {
+                        'code': maker_code,
+                        'productName': v.get('productName') or (v.get('csvNames') or [''])[0],
+                        'supplier': v.get('supplier') or '',
+                        'size': '',
+                        'customer': '',
+                    },
+                    'parenClassification': {},
+                    'specProvenance': {},
+                })
+
+    for row in source_rows:
+        row_no = int(row.get('rowNo') or 0)
+        info = _row_color_extraction(row)
+        dest_key = stock.text(row_destinations.get(str(row_no)) or row_destinations.get(row_no) or '')
+        if dest_key:
+            # ユーザー指定の行き先（色キーまたは色表示）
+            bucket = _ensure_bucket(dest_key, info.get('productName') or info.get('originalName'))
+            if bucket:
+                if row_no not in bucket['rowNos']:
+                    bucket['rowNos'].append(row_no)
+                if not bucket['productName'] and info.get('productName'):
+                    bucket['productName'] = info['productName']
+                continue
+        if info['color'] and not info['needsConfirm']:
+            bucket = _ensure_bucket(info['color'], info.get('productName') or info.get('originalName'))
+            if bucket:
+                if row_no not in bucket['rowNos']:
+                    bucket['rowNos'].append(row_no)
+                if not bucket['productName']:
+                    bucket['productName'] = info.get('productName') or info.get('originalName') or ''
+                continue
+        unassigned_rows.append({
+            'rowNo': row_no,
+            'originalName': info.get('originalName') or '',
+            'colorCandidates': list(info.get('colorCandidates') or []),
+            'reason': (
+                '色が不明・複数解釈のため自動割当しません'
+                if (info.get('needsConfirm') or info.get('colorCandidates'))
+                else '色ラベルがないため行き先を選んでください'
+            ),
+        })
+
+    # ユーザーが colorPlans だけ追加した場合も残す
+    for uk, user in user_plans.items():
+        if not isinstance(user, dict):
+            continue
+        color_disp = stock.text(user.get('color') or uk)
+        if not color_disp:
+            continue
+        bucket = _ensure_bucket(color_disp, user.get('productName') or '')
+        if bucket and stock.text(user.get('internalCode') or ''):
+            bucket['internalCode'] = stock.text(user.get('internalCode'))
+
+    # 衝突検査（既存商品・計画同士）
+    seen_internal = {}
+    plans = []
+    for key in sorted(color_buckets.keys()):
+        plan = color_buckets[key]
+        internal = stock.text(plan.get('internalCode') or '')
+        existing = []
+        if internal and stock_product_merge.is_normal_product_code(internal):
+            existing = [
+                {
+                    'id': r['id'],
+                    'code': r['code'],
+                    'name': r['name'],
+                    'color': r['color'] or '',
+                    'supplierName': r['supplier_name'] or '',
+                }
+                for r in stock_product_merge.find_live_products_by_code(c, internal)
+            ]
+        plan['existingProducts'] = existing
+        collision = bool(existing)
+        if internal and internal in seen_internal:
+            collision = True
+            plan['collidesWithPlan'] = seen_internal[internal]
+        else:
+            plan['collidesWithPlan'] = ''
+        if internal:
+            seen_internal[internal] = plan['color']
+        plan['collision'] = collision
+        keep_id = plan.get('keepProductId')
+        action = stock.text(plan.get('collisionAction') or '')
+        if collision:
+            if keep_id and any(int(p['id']) == int(keep_id) for p in existing):
+                plan['needsCollisionChoice'] = False
+                plan['collisionAction'] = action or 'reuse'
+            elif action == 'edit' and internal and internal != plan.get('suggestedInternalCode'):
+                # 編集後に衝突が消えていればOK（上で existing 再評価済み）
+                plan['needsCollisionChoice'] = bool(existing) or bool(plan.get('collidesWithPlan'))
+            else:
+                plan['needsCollisionChoice'] = True
+        else:
+            plan['needsCollisionChoice'] = False
+        if not plan.get('productName'):
+            # フォールバック: グループの予定名
+            plan['productName'] = stock.text(
+                group.get('plannedRegisteredName')
+                or group.get('plannedOfficialName')
+                or ((group.get('nameCandidates') or [None])[0])
+                or maker_code
+            )
+        plans.append(plan)
+
+    complete = bool(plans) and not unassigned_rows and not any(p.get('needsCollisionChoice') for p in plans)
+    return {
+        'makerCode': maker_code,
+        'plans': plans,
+        'unassignedRows': unassigned_rows,
+        'complete': complete,
+        'note': (
+            '色ごとに別商品として登録予定です（まだ保存していません）。'
+            '社内管理品番は編集できます。メーカー品番は元の品番のままです。'
+        ),
+    }
+
+
+def attach_color_split_plans(c, sku_groups, sku_decisions, *, classified=None):
+    """色分割を選んだ品番（または再照合で保持）に予定を付与。在庫自動まとめ対象外。"""
+    decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
+    for group in sku_groups:
+        code = stock.text(group.get('code') or '')
+        raw = decisions.get(code) or decisions.get(str(code)) or {}
+        if not isinstance(raw, dict):
+            continue
+        if stock.text(raw.get('decision')) != SKU_DECISION_COLOR_SPLIT:
+            continue
+        group['colorSplit'] = True
+        group['excludeAuxStockAutoMerge'] = True
+        # 在庫数量によるメイン自動採用を抑止（選択は再照合でも維持）
+        if group.get('auxStockPickAuto'):
+            group['auxStockPickAuto'] = False
+            group['needsDecision'] = True
+            group['plannedSingleProduct'] = False
+            group['status'] = 'needs_decision'
+        group['colorSplitPlans'] = build_color_split_plans(
+            c, group, raw, classified=classified,
+        )
 
 
 def ensure_schema(c):
@@ -3905,6 +4181,17 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
     hold_count = 0
     pending_decision = 0
 
+    # 色分割予定は品番単位で一度だけ組み立てる
+    for group in sku_groups:
+        code = stock.text(group.get('code') or '')
+        raw = decisions.get(code) or decisions.get(str(code)) or {}
+        if isinstance(raw, dict) and stock.text(raw.get('decision')) == SKU_DECISION_COLOR_SPLIT:
+            group['colorSplitPlans'] = build_color_split_plans(
+                c, group, raw, classified=classified,
+            )
+            group['colorSplit'] = True
+            group['excludeAuxStockAutoMerge'] = True
+
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code'))
         if not stock_product_merge.is_normal_product_code(code):
@@ -3928,7 +4215,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             row['skuDecisionNeeded'] = True
             row['reasons'] = list(row.get('reasons') or []) + [
                 f'品番「{code}」の比較で【同じ商品としてまとめる】'
-                f'【別物のため個別に整理する】【今回は保留する】のいずれかを選んでください。'
+                f'【色別に分けて登録】【別物のため個別に整理する】【今回は保留する】のいずれかを選んでください。'
             ]
             continue
 
@@ -4173,6 +4460,110 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 pending_decision += 1
             continue
 
+        if decision == SKU_DECISION_COLOR_SPLIT:
+            split_info = group.get('colorSplitPlans') or {}
+            plans = split_info.get('plans') or []
+            unassigned = {
+                int(u.get('rowNo')): u for u in (split_info.get('unassignedRows') or [])
+            }
+            plan_by_row = {}
+            for plan in plans:
+                for rn in (plan.get('rowNos') or []):
+                    plan_by_row[int(rn)] = plan
+
+            row_no = int(row.get('rowNo') or 0)
+            if row_no in unassigned or row_no not in plan_by_row:
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                why = (unassigned.get(row_no) or {}).get('reason') or (
+                    '色別登録の行き先が未定です。色を選ぶか、行の行き先を指定してください。'
+                )
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の色別登録: {why}'
+                ]
+                pending_decision += 1
+                continue
+
+            plan = plan_by_row[row_no]
+            if plan.get('needsCollisionChoice'):
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                existing_ids = ', '.join(
+                    str(p['id']) for p in (plan.get('existingProducts') or [])[:5]
+                )
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の色「{plan.get("color")}」の社内管理品番'
+                    f'「{plan.get("internalCode")}」が既存商品（ID {existing_ids or "—"}）'
+                    f'または他の予定と衝突しています。既存を使うか、社内品番を編集してください'
+                    f'（無条件の上書きはしません）。'
+                ]
+                pending_decision += 1
+                continue
+
+            internal = stock.text(plan.get('internalCode') or '')
+            color = stock.text(plan.get('color') or '')
+            pname = stock.text(plan.get('productName') or '') or stock.text(
+                (row.get('csv') or {}).get('productName') or ''
+            )
+            keep_id = plan.get('keepProductId')
+            if keep_id and plan.get('collisionAction') in ('', 'reuse'):
+                row['product'] = dict(row.get('product') or {})
+                row['product']['id'] = int(keep_id)
+                row['product']['action'] = 'reuse'
+                row['product']['code'] = internal
+                row['product']['codeOverride'] = internal
+                row['product']['makerCode'] = code
+                row['product']['officialName'] = pname
+                row['product']['officialColor'] = color
+                row['product']['applyOfficialName'] = True
+                row['product']['colorSplit'] = True
+                row['product']['skuMerge'] = False
+                # メーカー品番は CSV 原文のまま（マップ・初期在庫照合用）。社内品番は codeOverride。
+                row['csv'] = dict(row.get('csv') or {})
+                row['csv']['makerCode'] = code
+                if row.get('product', {}).get('sizeAction') == 'add':
+                    row['status'] = STATUS_SIZE_ADD
+                    row['statusLabel'] = STATUS_LABELS[STATUS_SIZE_ADD]
+                else:
+                    row['status'] = STATUS_REUSE
+                    row['statusLabel'] = STATUS_LABELS[STATUS_REUSE]
+                row['canCommit'] = True
+            else:
+                row['product'] = dict(row.get('product') or {})
+                row['product']['id'] = None
+                row['product']['action'] = 'create'
+                row['product']['code'] = internal
+                row['product']['codeOverride'] = internal
+                row['product']['makerCode'] = code
+                row['product']['officialName'] = pname
+                row['product']['officialColor'] = color
+                row['product']['applyOfficialName'] = True
+                row['product']['colorSplit'] = True
+                row['product']['skuMerge'] = False
+                row['csv'] = dict(row.get('csv') or {})
+                row['csv']['makerCode'] = code
+                # 原文名は別名に残す
+                orig = stock.text((row.get('csv') or {}).get('productName') or '')
+                if orig and orig != pname:
+                    row['product']['csvOriginalName'] = orig
+                row['status'] = STATUS_CREATE
+                row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
+                row['canCommit'] = True
+            # 色・予定名を仕様由来に残し、初期在庫マップで色解決できるようにする
+            provenance = dict(row.get('specProvenance') or {})
+            provenance['color'] = color
+            provenance['plannedName'] = pname
+            provenance['originalName'] = stock.text(
+                provenance.get('originalName')
+                or (row.get('csv') or {}).get('productName')
+                or ''
+            )
+            provenance['isMainCandidate'] = True
+            row['specProvenance'] = provenance
+            continue
+
         # 不明な decision
         row['status'] = STATUS_REVIEW
         row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
@@ -4196,9 +4587,12 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
 
 
 def _product_plan_key(row):
-    """サイズ／取扱の重複集計用キー（通常品番は品番単位）。"""
-    code = stock.text((row.get('csv') or {}).get('code'))
+    """サイズ／取扱の重複集計用キー（通常品番は品番単位。色分割は社内品番）。"""
     prod = row.get('product') or {}
+    code = stock.text(
+        prod.get('codeOverride') if prod.get('codeOverride') is not None
+        else (row.get('csv') or {}).get('code')
+    )
     if stock_product_merge.is_normal_product_code(code):
         return f'code:{code}'
     if prod.get('id'):
@@ -4228,9 +4622,11 @@ def _planned_counts(classified, sku_groups):
             STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_MERGE, STATUS_UNCHANGED,
         ):
             continue
-        code = stock.text((row.get('csv') or {}).get('code'))
-        prod = row.get('product') or {}
         csv = row.get('csv') or {}
+        prod = row.get('product') or {}
+        code = stock.text(
+            prod.get('codeOverride') if prod.get('codeOverride') is not None else csv.get('code')
+        )
         pkey = _product_plan_key(row)
         if prod.get('action') == 'create' or st == STATUS_CREATE:
             if stock_product_merge.is_normal_product_code(code):
@@ -4552,6 +4948,8 @@ def build_preview(c, body):
     )
     # 在庫一意／候補1組 → フルパッケージ採用。色・加工・素材差だけでは要確認に残さない
     apply_aux_full_package_adoption(sku_groups, sku_decisions)
+    # 色別に分けて登録: 選択を再照合でも保持し、在庫自動まとめ対象外の予定を付与
+    attach_color_split_plans(c, sku_groups, sku_decisions, classified=classified)
     # 補助CSV判定後に仮代表名の予定を更新（決定前の画面表示用）
     for g in sku_groups:
         raw = sku_decisions.get(g['code']) or sku_decisions.get(str(g['code'])) or {}
@@ -5059,7 +5457,8 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     )
     # 新規作成時は指定の通常仕入先を優先（行順に依存しない）
     create_supplier_id = primary_id or supplier_id
-    saved = stock.save_product(c, {
+    maker_code = stock.text(product_info.get('makerCode') or product_info.get('maker_code') or '')
+    save_body = {
         'code': code,
         'name': name,  # 公式名（括弧分類後の予定名またはCSV原文）
         'color': stock.text(official_color) if official_color is not None else '',
@@ -5069,7 +5468,10 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
         'sizes': [product_info['size']],
         'links': [],
         'active': True,
-    })
+    }
+    if maker_code:
+        save_body['makerCode'] = maker_code
+    saved = stock.save_product(c, save_body)
     # 原文名は照合用別名（初期在庫CSVなどの後続解決用）
     if csv_name and stock.text(csv_name) != stock.text(name):
         stock_product_merge.ensure_name_alias(c, saved['id'], csv_name)

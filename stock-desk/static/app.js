@@ -749,7 +749,7 @@ function products(){
     }
     if(supplierId&&!productMatchesSupplierFilter(r,supplierId))return false
     const subNames=(r.subSuppliers||[]).map(s=>s.name||'').join('')
-    const text=`${r.code}${r.codeDisplay||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
+    const text=`${r.code}${r.codeDisplay||''}${r.makerCode||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return text.includes(state.q)
   }),sortKey)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工仕様は取扱で区別します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productSortControl(),'新しく登録','products')}
@@ -763,15 +763,19 @@ function products(){
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
       const codeShow=esc(r.codeDisplay||r.code||'品番なし')
+      const makerBit=r.makerCode&&r.makerCode!==r.code?` <span class="sub">メーカー ${esc(r.makerCode)}</span>`:''
       const cat=r.category?` / ${esc(r.category)}`:''
       const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
       const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
       const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
-      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span> ${r.active?'':'<span class="badge stop">停止</span>'}${merged}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}${cat}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
+      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id">${r.id}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}${cat}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
     }).join('')||'<tr><td colspan="5">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.codeDisplay||r.code||'品番なし')} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>{
+    const maker=r.makerCode&&r.makerCode!==r.code?`　メーカー ${esc(r.makerCode)}`:''
+    return `<article class="dm-card"><div class="dm-primary">${esc(r.codeDisplay||r.code||'品番なし')} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
+  }).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows.filter(r=>!r.mergedIntoId),'商品',productForm,body=>api('/api/products',body),'products')
   const supplierSelect=$('#productSupplier')
   if(supplierSelect)supplierSelect.onchange=()=>{
@@ -1005,10 +1009,10 @@ function productForm(r){
   const aliasBlock=aliases.length
     ?`<div class="name-aliases"><p class="excelhint"><strong>代表名:</strong> ${esc(r.name||'—')}</p><p class="excelhint"><strong>照合用別名:</strong> ${aliases.map(esc).join('、')}</p><p class="excelhint">代表名を変えても旧名は別名に残ります（後からのCSV照合用）。</p></div>`
     :`<p class="excelhint">旧商品名がある場合は照合用別名として表示されます。代表名を変えても旧名は別名に残ります。</p>`
-  return `<div class="grid">${field('code','品番（空欄可）',r.code,false)}${field('name','商品名（代表名）',r.name,true)}${field('color','色',r.color)}${field('material','生地・素材',r.material||'')}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
+  return `<div class="grid">${field('code','社内管理品番（空欄可）',r.code,false)}${field('makerCode','メーカー品番（空＝社内と同じ）',r.makerCode||'',false)}${field('name','商品名（代表名）',r.name,true)}${field('color','色',r.color)}${field('material','生地・素材',r.material||'')}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
     ${aliasBlock}
     <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierChecks">${subChecks}</div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
-    <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。</p>
+    <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。色分割登録では社内管理品番とメーカー品番を分け、発注書にはメーカー品番＋色を出します。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
       <span class="size-scheme-label">サイズ表記</span>
       <div class="seg" id="sizeScheme">
@@ -1175,7 +1179,8 @@ function readForm(row){
     return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false}
   })
   const categoryEl=$('#category')
-  return {id:row&&row.id,code:$('#code').value,name:$('#name').value,color:$('#color').value,material:($('#material')&&$('#material').value)||'',category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,subSupplierIds,sizes:editor.sizes,links,active}
+  const makerEl=$('#makerCode')
+  return {id:row&&row.id,code:$('#code').value,makerCode:makerEl?makerEl.value:'',name:$('#name').value,color:$('#color').value,material:($('#material')&&$('#material').value)||'',category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,subSupplierIds,sizes:editor.sizes,links,active}
 }
 function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,value,required=true}){
   const req=required?'（必須）':''
