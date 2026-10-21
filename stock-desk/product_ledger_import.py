@@ -2133,14 +2133,80 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
                 group['colorSplit'] = True
             continue
         if package.get('parenNeedsConfirm'):
-            # 採用候補自体の括弧が曖昧 → 自動確定しない
+            # メイン候補は在庫で決定済み。色・括弧の振り分けだけが未確定 → 「候補未決定」とはしない
             group['auxStockPickBlocked'] = True
-            group['auxStockPickBlockReason'] = '採用候補の括弧分類が曖昧なため自動確定しません'
+            paren_reasons = [
+                stock.text(r) for r in (package.get('parenConfirmReasons') or []) if stock.text(r)
+            ]
+            detail = '／'.join(paren_reasons[:3]) if paren_reasons else '色・加工・括弧の振り分けが曖昧'
+            group['auxStockPickBlockReason'] = (
+                'メイン候補は在庫を根拠に決定済みですが、'
+                f'{detail}のため、登録名と色の振り分けを確認してください。'
+            )
+            _attach_stock_pick_display(group, aux, package, auto_cleared=False)
+            _soften_spec_only_reasons(group)
+            # 残確認を色振り分けとして明示（候補差の個別確認理由に見せない）
+            reasons = [
+                r for r in (group.get('reviewReasons') or [])
+                if stock.text(r.get('code') or '') not in (
+                    'aux_stock_pick_partial', 'aux_stock_pick', 'explicit_color_pick',
+                )
+            ]
+            reasons.insert(0, {
+                'code': 'aux_stock_pick_paren',
+                'label': group['auxStockPickBlockReason'],
+                'values': [
+                    package.get('productName') or '',
+                    package.get('supplier') or '',
+                ],
+            })
+            group['reviewReasons'] = reasons
             continue
         if int(group.get('existingCount') or 0) > 1:
             # 残す商品の選択が必要。パッケージ情報だけ付与
             group['auxStockPickPendingExisting'] = True
             _attach_stock_pick_display(group, aux, package, auto_cleared=False)
+            _soften_spec_only_reasons(group)
+            existing_n = int(group.get('existingCount') or 0)
+            qty_bit = ''
+            adopted_pair = next(
+                (
+                    p for p in (aux.get('pairCandidates') or [])
+                    if product_name_core_key(p.get('productName') or '') == product_name_core_key(
+                        package.get('productName') or ''
+                    )
+                    and identity_match_key(p.get('supplier') or '') == identity_match_key(
+                        package.get('supplier') or ''
+                    )
+                ),
+                None,
+            )
+            if adopted_pair and adopted_pair.get('auxStockTotal') is not None:
+                qty_bit = str(adopted_pair['auxStockTotal'])
+            elif adopted_pair and adopted_pair.get('auxPositiveStockTotal') is not None:
+                qty_bit = str(adopted_pair['auxPositiveStockTotal'])
+            label = (
+                f'メイン候補は在庫{qty_bit}を根拠に決定済みですが、'
+                f'登録済み商品が{existing_n}件あるため、残す商品を選んでください。'
+                if qty_bit else
+                f'メイン候補は在庫を根拠に決定済みですが、'
+                f'登録済み商品が{existing_n}件あるため、残す商品を選んでください。'
+            )
+            reasons = [
+                r for r in (group.get('reviewReasons') or [])
+                if stock.text(r.get('code') or '') not in (
+                    'existing_dup', 'aux_stock_pick_partial', 'aux_stock_pick',
+                )
+            ]
+            reasons.insert(0, {
+                'code': 'aux_stock_pick_existing',
+                'label': label,
+                'values': [
+                    package.get('productName') or '',
+                    package.get('supplier') or '',
+                ],
+            })
+            group['reviewReasons'] = reasons
             continue
         # 既存1件で通常仕入先が変わる場合は明示確認が必要
         if int(group.get('existingCount') or 0) == 1:

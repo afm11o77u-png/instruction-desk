@@ -46,6 +46,11 @@ MATERIAL_TERMS = (
 
 _SEGMENT_SPLIT_RE = re.compile(r'[・･、,，/／&＆]+')
 _PAREN_PAIR_RE = re.compile(r'[（(]([^（）()]*)[）)]')
+# 配色のつなぎ（サックス×グレー）。・や／は複数色分割のまま残す。
+_COLORWAY_JOIN_CHARS = '×✕ｘxX'
+_COLORWAY_BRIDGE_RE = re.compile(
+    rf'^[{re.escape(_COLORWAY_JOIN_CHARS)}]+$'
+)
 
 
 def _nfkc(value: str) -> str:
@@ -133,11 +138,87 @@ def _processing_match(seg_key: str, seg_raw: str):
     return None, None
 
 
+def _is_colorway_bridge(between: str) -> bool:
+    """色ヒット間が配色として1色にまとめてよいか。
+
+    - 空（辞書色の直結: シルバーグレー）→ まとめる
+    - × 系のみ（空白可）→ 配色1色
+    - 空白だけ・・／など → まとめない（別色の並び）
+    """
+    if between == '':
+        return True
+    compact = re.sub(r'[\s\u3000]+', '', between or '')
+    if not compact:
+        return False
+    return bool(_COLORWAY_BRIDGE_RE.fullmatch(compact))
+
+
+def coalesce_colorway_hits(raw: str, hits):
+    """隣接／×接続の辞書色ヒットを配色1色へまとめる。
+
+    例: サックス×シルバーグレー → 1ヒット（シルバー＋グレーの直結も含む）。
+    ・や／で区切られた複数色はまとめない。
+    """
+    if not hits:
+        return []
+    ordered = sorted(hits, key=lambda h: (h.get('start', 0), h.get('end', 0)))
+    if len(ordered) == 1:
+        return list(ordered)
+    text = raw or ''
+    groups = [[ordered[0]]]
+    for nxt in ordered[1:]:
+        prev = groups[-1][-1]
+        between = text[int(prev['end']):int(nxt['start'])]
+        if _is_colorway_bridge(between):
+            groups[-1].append(nxt)
+        else:
+            groups.append([nxt])
+    out = []
+    for group in groups:
+        if len(group) == 1:
+            out.append(dict(group[0]))
+            continue
+        start = int(group[0]['start'])
+        end = int(group[-1]['end'])
+        value = text[start:end]
+        key = _norm_token(value)
+        out.append({
+            'value': value,
+            'matched': key,
+            'display': value,
+            'start': start,
+            'end': end,
+            'key': key,
+            'isColorway': True,
+        })
+    return out
+
+
+def _classify_as_pure_color_span(raw: str):
+    """セグメント全体が辞書色の直結または × 配色なら単一色として返す。"""
+    text = (raw or '').strip()
+    if not text:
+        return None
+    hits = find_explicit_colors_in_text(text)
+    if len(hits) != 1:
+        return None
+    hit = hits[0]
+    if int(hit.get('start') or 0) != 0 or int(hit.get('end') or 0) != len(text):
+        return None
+    return {
+        'kind': 'color',
+        'value': text,
+        'matched': hit.get('key') or _norm_token(text),
+        'original': raw,
+    }
+
+
 def classify_paren_segment(segment: str):
     """1セグメントを色／加工／素材／不明に分類。
 
     部分文字列だけで色を取らない（例: 蛍光グリーン の中の 緑 は使わない）。
     表示は原文セグメントを優先（％/% の全半角など）。
+    サックス×シルバーグレー のような配色は1色として扱う。
     """
     raw = (segment or '').strip()
     if not raw:
@@ -155,6 +236,10 @@ def classify_paren_segment(segment: str):
             'matched': color,
             'original': raw,
         }
+    # 配色・辞書色の直結（括弧内の サックス×グレー / シルバーグレー）
+    colorway = _classify_as_pure_color_span(raw)
+    if colorway:
+        return colorway
     material = _exact_in(_MATERIALS, key)
     if material:
         return {
@@ -426,7 +511,8 @@ def find_explicit_colors_in_text(text: str):
             })
             _occupy(idx, end)
     hits.sort(key=lambda h: h['start'])
-    return hits
+    # サックス×シルバーグレー は配色1色（辞書の サックス／シルバー／グレーへ割らない）
+    return coalesce_colorway_hits(raw, hits)
 
 
 def _outside_paren_text_spans(name: str):
