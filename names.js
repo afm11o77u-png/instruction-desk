@@ -127,17 +127,45 @@ async function openNameCustomer(id){
   $('#nameformats').scrollTop=0;
  }catch(e){$('#namestatus').textContent=e.message||'読み込めませんでした。'}
 }
+function paintNameDeptRoleSection(item){
+ const depts=item.departments||[];
+ const roles=item.roles||[];
+ const pairs=Array.isArray(item.deptRolePairs)?item.deptRolePairs:[];
+ // 役職あり／ペアありのときだけ独立セクション（部署のみの従来顧客は貼付け位置下の一行表示を維持）
+ if(!roles.length&&!pairs.length)return{html:'',hideInlineDepartments:false};
+ let body='';
+ if(pairs.length){
+  body=`<table class="namedeptrole-table"><thead><tr><th>部署</th><th>役職</th></tr></thead><tbody>${pairs.map(row=>{
+   const dept=esc(row&&row.department!=null?row.department:row&&row[0]!=null?row[0]:'');
+   const role=esc(row&&row.role!=null?row.role:row&&row[1]!=null?row[1]:'');
+   return `<tr><td>${dept}</td><td>${role}</td></tr>`;
+  }).join('')}</tbody></table>`;
+ }else{
+  if(depts.length){
+   body+=`<h4>部署</h4><ul class="namedeptrole-list">${depts.map(text=>`<li>${esc(text)}</li>`).join('')}</ul>`;
+  }
+  if(roles.length){
+   body+=`<h4>役職</h4><ul class="namedeptrole-list">${roles.map(text=>`<li>${esc(text)}</li>`).join('')}</ul>`;
+  }
+ }
+ return{
+  html:`<section class="namedeptrole"><h3>部署・役職</h3>${body}</section>`,
+  hideInlineDepartments:true,
+ };
+}
 function paintNameDetail(item){
  const colors=nameSwatches(item.colors,item.fixedColor,item.mixColors);
  const mixNoteFor=value=>nameMixNote(value,item.mixColors);
  const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${mixNoteFor(sample.paperColor||item.fixedColor)?`<br>${esc(mixNoteFor(sample.paperColor||item.fixedColor))}`:''}</figcaption></figure>`).join('');
  const reasons=(item.reviewReasons||[]).filter(text=>!/書体|代替表示/.test(text)).map(text=>`<li>${esc(text)}</li>`).join('');
- const departments=(item.departments||[]).map(esc).join('、');
+ const deptRole=paintNameDeptRoleSection(item);
+ const departments=deptRole.hideInlineDepartments?'':(item.departments||[]).map(esc).join('、');
  const mixCount=nameMixColors(item.mixColors).length;
  $('#nametitle').textContent=item.format||'ネーム形式';
  $('#namenumber').textContent=item.number||'';
  $('#namebody').innerHTML=`<p class="namewarn">画像の背景は用紙の色です。「先方から指定」の${mixCount}色表示は色の選択肢を示し、実物が多色という意味ではありません。文字とコードはプリンターが印字する内容です。氏名と番号は架空です。</p>
   <p class="namescale-note">大小を同じ縮尺で表示しています。実物大ではありません。寸法は画像の向きで表記しています。</p><div class="namesamples">${samples||'<p>見本画像はありません。</p>'}</div>
+  ${deptRole.html}
   <dl class="namedef">
    <dt>元の顧客名</dt><dd>${esc(item.sourceName)||'—'}</dd>
    <dt>指示書デスクの顧客</dt><dd>${item.linkStatus==='対応'?esc(item.linkedName):'未対応'}</dd>
