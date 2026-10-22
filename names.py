@@ -105,6 +105,7 @@ def schema(c):
     )''')
     _column(c, 'name_customers', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
     _column(c, 'name_formats', 'manual', 'manual INTEGER NOT NULL DEFAULT 0')
+    _column(c, 'name_formats', 'roles_json', "roles_json TEXT NOT NULL DEFAULT 'null'")
     _ensure_soft_delete_columns(c)
     name_review.schema(c)
     correct_customer_names(c)
@@ -122,6 +123,7 @@ def schema(c):
         correct_fresh_legacy_formats(c, DATA_DIR)
         correct_takeda_duplicate_formats(c, DATA_DIR)
         ensure_asuka_bakery_name_formats(c, DATA_DIR)
+        ensure_asuka_house_higashi_naebo_depts(c, DATA_DIR)
         ensure_small_surname_36_exact_samples(c, DATA_DIR)
 
 def _column(c, table, name, ddl):
@@ -8353,6 +8355,334 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
     return report
 
 
+# --- あすかHOUSE東苗穂：部署・役職一覧（Excel 行11–13）。見本画像・配置・フォントは触らない。 ---
+# 行12「部署名：介護、デイケア、看護、リハビリ、栄養課、医師…」／行13「役職：リーダー、主任、課長、施設長…」
+# 部署と役職は独立リスト（ペアではない）。削除済「あすかHOUSE」や他顧客は絶対に触らない。
+ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME = 'あすかHOUSE東苗穂'
+ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS = [
+    '介護', 'デイケア', '看護', 'リハビリ', '栄養課', '医師',
+]
+ASUKA_HOUSE_HIGASHI_NAEBO_ROLES = [
+    'リーダー', '主任', '課長', '施設長',
+]
+ASUKA_HOUSE_HIGASHI_NAEBO_SETTINGS_KEY = 'asuka_house_higashi_naebo_depts'
+ASUKA_HOUSE_HIGASHI_NAEBO_POLICY = 'excel-gojuon2-r11-13-depts-roles-v1'
+ASUKA_HOUSE_HIGASHI_NAEBO_REPORT = 'asuka-house-higashi-naebo-depts-report.json'
+ASUKA_HOUSE_HIGASHI_NAEBO_EXACT_EXCLUSIONS = ('あすかHOUSE',)
+
+
+def _json_null_list(raw):
+    try:
+        value = json.loads(raw or 'null')
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return list(value) if isinstance(value, list) else []
+
+
+def _asuka_hn_lists_current(fmt):
+    keys = set(fmt.keys()) if hasattr(fmt, 'keys') else set()
+    depts = _json_null_list(fmt['departments_json'] if 'departments_json' in keys else 'null')
+    roles = _json_null_list(fmt['roles_json'] if 'roles_json' in keys else 'null')
+    return (
+        depts == ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS
+        and roles == ASUKA_HOUSE_HIGASHI_NAEBO_ROLES
+    )
+
+
+def _backup_asuka_hn_format(c, root, backup_dir, fmt, samples):
+    """変更前の形式 JSON（と見本画像があれば）を backups/asuka-house-higashi-naebo-<stamp>/ へ退避。"""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    images_backup = backup_dir / 'images'
+    images_backup.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'format': _row_as_dict(fmt),
+        'samples': [_row_as_dict(s) for s in samples],
+    }
+    (backup_dir / f'format-{fmt["id"]}.json').write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    for sample in samples:
+        rel = str(sample['relative_path'] or '')
+        if not rel:
+            continue
+        src = root / rel
+        if src.is_file():
+            dest = images_backup / f'{fmt["id"]}-{Path(rel).name}'
+            if not dest.exists():
+                shutil.copy2(src, dest)
+
+
+def _asuka_hn_exclusion_snapshot(c):
+    """除外顧客（あすかHOUSE 完全一致）の形式・見本メタを照合用に控える。"""
+    out = {}
+    cust_cols = {row['name'] for row in c.execute('PRAGMA table_info(name_customers)')}
+    fmt_cols = {row['name'] for row in c.execute('PRAGMA table_info(name_formats)')}
+    cust_deleted = 'deleted_at' in cust_cols
+    fmt_deleted = 'deleted_at' in fmt_cols
+    roles_col = 'roles_json' in fmt_cols
+    for name in ASUKA_HOUSE_HIGASHI_NAEBO_EXACT_EXCLUSIONS:
+        cust_select = 'id, source_name, retired' + (', deleted_at' if cust_deleted else '')
+        rows = c.execute(
+            f'SELECT {cust_select} FROM name_customers WHERE source_name=?',
+            (name,),
+        ).fetchall()
+        for row in rows:
+            fmts = []
+            fmt_select = (
+                'id, departments_json, placement, family, heading, note, format_name, retired, spec_json'
+                + (', roles_json' if roles_col else '')
+                + (', deleted_at' if fmt_deleted else '')
+            )
+            for fmt in c.execute(
+                f'SELECT {fmt_select} FROM name_formats WHERE customer_id=? ORDER BY id',
+                (row['id'],),
+            ):
+                samples = [
+                    {
+                        'id': s['id'],
+                        'relative_path': s['relative_path'],
+                        'caption': s['caption'],
+                        'paper_color': s['paper_color'],
+                    }
+                    for s in c.execute(
+                        'SELECT id, relative_path, caption, paper_color FROM name_samples'
+                        ' WHERE format_id=? ORDER BY id',
+                        (fmt['id'],),
+                    )
+                ]
+                fmts.append({
+                    'id': fmt['id'],
+                    'departments_json': fmt['departments_json'],
+                    'roles_json': fmt['roles_json'] if roles_col else 'null',
+                    'placement': fmt['placement'],
+                    'family': fmt['family'],
+                    'heading': fmt['heading'],
+                    'note': fmt['note'],
+                    'format_name': fmt['format_name'],
+                    'retired': fmt['retired'],
+                    'deleted_at': fmt['deleted_at'] if fmt_deleted else None,
+                    'spec_json': fmt['spec_json'],
+                    'samples': samples,
+                })
+            out[row['id']] = {
+                'source_name': row['source_name'],
+                'retired': row['retired'],
+                'deleted_at': row['deleted_at'] if cust_deleted else None,
+                'formats': fmts,
+            }
+    return out
+
+
+def ensure_asuka_house_higashi_naebo_depts(c, data_dir=None):
+    """あすかHOUSE東苗穂のみ：部署・役職の独立リストを登録。見本画像は再生成しない。"""
+    root = Path(data_dir) if data_dir is not None else DATA_DIR
+    if root is None:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
+
+    have = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_formats'"
+    ).fetchone()
+    if not have:
+        return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'name_formats未作成'}
+
+    _column(c, 'name_formats', 'roles_json', "roles_json TEXT NOT NULL DEFAULT 'null'")
+    if _soft_delete_columns_missing(c):
+        _ensure_soft_delete_columns(c)
+
+    prior = c.execute(
+        'SELECT value FROM settings WHERE key=?',
+        (ASUKA_HOUSE_HIGASHI_NAEBO_SETTINGS_KEY,),
+    ).fetchone()
+    prior_policy = ''
+    if prior:
+        try:
+            prior_policy = json.loads(prior['value'] or '{}').get('policy') or ''
+        except (TypeError, json.JSONDecodeError):
+            prior_policy = ''
+
+    before_excl = _asuka_hn_exclusion_snapshot(c)
+
+    customers = c.execute(
+        'SELECT * FROM name_customers WHERE retired=0 AND source_name=? ORDER BY id',
+        (ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME,),
+    ).fetchall()
+    if not customers:
+        return {
+            'changed': 0,
+            'items': [],
+            'skipped': True,
+            'reason': 'あすかHOUSE東苗穂顧客なし',
+            'customer': ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME,
+            'policy': ASUKA_HOUSE_HIGASHI_NAEBO_POLICY,
+            'departments': list(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS),
+            'roles': list(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES),
+        }
+
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup_dir = root / 'backups' / f'asuka-house-higashi-naebo-{stamp}'
+    items = []
+    depts_json = json.dumps(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS, ensure_ascii=False)
+    roles_json = json.dumps(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES, ensure_ascii=False)
+
+    for customer in customers:
+        # 完全一致のみ。あすかHOUSE（削除済含む）やあすかベーカリー等は対象外。
+        if str(customer['source_name'] or '').strip() != ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME:
+            continue
+        formats = list(c.execute(
+            f'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED} ORDER BY id',
+            (customer['id'],),
+        ).fetchall())
+        if not formats:
+            items.append({
+                'action': 'skip-no-formats',
+                'customerId': customer['id'],
+                'customerName': customer['source_name'],
+            })
+            continue
+        for fmt in formats:
+            samples = list(c.execute(
+                'SELECT * FROM name_samples WHERE format_id=? ORDER BY id',
+                (fmt['id'],),
+            ).fetchall())
+            sample_snapshot = [
+                {
+                    'id': s['id'],
+                    'relative_path': s['relative_path'],
+                    'caption': s['caption'],
+                    'paper_color': s['paper_color'],
+                }
+                for s in samples
+            ]
+            if _asuka_hn_lists_current(fmt):
+                items.append({
+                    'action': 'skip',
+                    'formatId': fmt['id'],
+                    'identity': fmt['identity'],
+                    'reason': 'already-current',
+                    'sampleSnapshot': sample_snapshot,
+                })
+                continue
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            _backup_asuka_hn_format(c, root, backup_dir, fmt, samples)
+            c.execute(
+                'UPDATE name_formats SET departments_json=?, roles_json=? WHERE id=?',
+                (depts_json, roles_json, fmt['id']),
+            )
+            # 見本行・画像パスは一切触らない（再 SELECT で不変を確認）
+            after_samples = [
+                {
+                    'id': s['id'],
+                    'relative_path': s['relative_path'],
+                    'caption': s['caption'],
+                    'paper_color': s['paper_color'],
+                }
+                for s in c.execute(
+                    'SELECT id, relative_path, caption, paper_color FROM name_samples'
+                    ' WHERE format_id=? ORDER BY id',
+                    (fmt['id'],),
+                )
+            ]
+            items.append({
+                'action': 'update-depts-roles',
+                'formatId': fmt['id'],
+                'identity': fmt['identity'],
+                'customerId': customer['id'],
+                'customerName': customer['source_name'],
+                'departments': list(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS),
+                'roles': list(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES),
+                'displayMode': 'separate-lists',
+                'samplesUnchanged': after_samples == sample_snapshot,
+                'sampleSnapshot': after_samples,
+            })
+
+    after_excl = _asuka_hn_exclusion_snapshot(c)
+    exclusions_untouched = after_excl == before_excl
+
+    changed = sum(1 for i in items if i.get('action') == 'update-depts-roles')
+    policy_needs = prior_policy != ASUKA_HOUSE_HIGASHI_NAEBO_POLICY
+    if changed == 0 and all(
+        i.get('action') in ('skip', 'skip-no-formats') for i in items
+    ):
+        report = {
+            'at': stamp,
+            'changed': 0,
+            'items': items,
+            'skipped': True,
+            'reason': 'policy更新のみ' if policy_needs else 'already-current',
+            'customer': ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME,
+            'policy': ASUKA_HOUSE_HIGASHI_NAEBO_POLICY,
+            'departments': list(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS),
+            'roles': list(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES),
+            'displayMode': 'separate-lists',
+            'backupDir': '',
+            'exclusionsUntouched': exclusions_untouched,
+            'exactExclusions': list(ASUKA_HOUSE_HIGASHI_NAEBO_EXACT_EXCLUSIONS),
+        }
+        if policy_needs:
+            c.execute(
+                'INSERT OR REPLACE INTO settings VALUES(?,?)',
+                (
+                    ASUKA_HOUSE_HIGASHI_NAEBO_SETTINGS_KEY,
+                    json.dumps({
+                        'at': stamp, 'changed': 0, 'policy': ASUKA_HOUSE_HIGASHI_NAEBO_POLICY,
+                        'report': ASUKA_HOUSE_HIGASHI_NAEBO_REPORT,
+                        'departments': list(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS),
+                        'roles': list(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES),
+                    }, ensure_ascii=False),
+                ),
+            )
+        return report
+
+    report = {
+        'at': stamp,
+        'changed': changed,
+        'items': items,
+        'customer': ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME,
+        'policy': ASUKA_HOUSE_HIGASHI_NAEBO_POLICY,
+        'departments': list(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS),
+        'roles': list(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES),
+        'displayMode': 'separate-lists',
+        'sectionTitle': '部署・役職',
+        'excelRows': {'format': 11, 'departments': 12, 'roles': 13},
+        'backupDir': (
+            str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else ''
+        ),
+        'exclusionsUntouched': exclusions_untouched,
+        'exactExclusions': list(ASUKA_HOUSE_HIGASHI_NAEBO_EXACT_EXCLUSIONS),
+        'rules': {
+            'onlyCustomer': ASUKA_HOUSE_HIGASHI_NAEBO_CUSTOMER_NAME,
+            'neverTouchDeletedHouse': True,
+            'neverTouchOtherCustomers': True,
+            'separateDeptAndRoleLists': True,
+            'doNotInventPairs': True,
+            'doNotChangeSamples': True,
+        },
+    }
+    (root / ASUKA_HOUSE_HIGASHI_NAEBO_REPORT).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+    )
+    if backup_dir.exists():
+        (backup_dir / 'report.json').write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+    c.execute(
+        'INSERT OR REPLACE INTO settings VALUES(?,?)',
+        (
+            ASUKA_HOUSE_HIGASHI_NAEBO_SETTINGS_KEY,
+            json.dumps({
+                'at': stamp,
+                'changed': changed,
+                'report': ASUKA_HOUSE_HIGASHI_NAEBO_REPORT,
+                'policy': ASUKA_HOUSE_HIGASHI_NAEBO_POLICY,
+                'backupDir': report['backupDir'],
+                'departments': list(ASUKA_HOUSE_HIGASHI_NAEBO_DEPARTMENTS),
+                'roles': list(ASUKA_HOUSE_HIGASHI_NAEBO_ROLES),
+            }, ensure_ascii=False),
+        ),
+    )
+    return report
+
+
 def _app_customers(c):
     names = set()
     for table in ('placements', 'shipments'):
@@ -8485,6 +8815,7 @@ def import_catalog(connect, data_dir):
         correct_fresh_legacy_formats(c, data_dir)
         correct_takeda_duplicate_formats(c, data_dir)
         ensure_asuka_bakery_name_formats(c, data_dir)
+        ensure_asuka_house_higashi_naebo_depts(c, data_dir)
         ensure_small_surname_36_exact_samples(c, data_dir)
     return summary
 
@@ -8612,8 +8943,11 @@ def detail(handler, c, format_id):
         'fixedColor': row['fixed_color'], 'colorCaption': row['color_caption'], 'colors': _colors(row),
         'mixColors': mix_colors_for(row),
         'colorText': _color_text(row),
-        'departments': json.loads(row['departments_json'] or 'null'),
-        'departmentText': '\n'.join(json.loads(row['departments_json'] or 'null') or []),
+        'departments': _json_null_list(row['departments_json']),
+        'departmentText': '\n'.join(_json_null_list(row['departments_json'])),
+        'roles': _json_null_list(row['roles_json'] if 'roles_json' in row.keys() else 'null'),
+        'roleText': '\n'.join(_json_null_list(row['roles_json'] if 'roles_json' in row.keys() else 'null')),
+        'deptRolePairs': None,
         'maximumFont': row['maximum_font'], 'headingFont': row['heading_font'], 'numberLength': row['number_length'],
         'sourceRow': row['source_row'], 'identity': row['identity'],
         'needsReview': bool(row['needs_review']), 'reviewReasons': json.loads(row['review_json'] or '[]'),
