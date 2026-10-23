@@ -1,4 +1,4 @@
-"""明日佳：訂正版 Excel 78–80 行に合わせた3段更新と実習生用2段追加。"""
+"""明日佳：Excel 83–86 行に合わせた3段更新と実習生用（ふりがな空き）追加。"""
 import json
 import sqlite3
 import sys
@@ -82,9 +82,23 @@ def _add_sample(c, format_id, *, key='standard', paper='白', path='', caption='
 
 
 class AshukaNameFormatsTest(unittest.TestCase):
+    def test_excel_lists_and_policy(self):
+        self.assertEqual(names.ASHUKA_NAMES_POLICY, 'excel-gojuon2-r83-86-v2')
+        self.assertEqual(names.ASHUKA_THREE_SOURCE_ROW, 83)
+        self.assertEqual(names.ASHUKA_TRAINEE_SOURCE_ROW, 84)
+        self.assertIn('中央洗濯室', names.ASHUKA_DEPARTMENTS)
+        self.assertIn('臨床工学科', names.ASHUKA_DEPARTMENTS)
+        self.assertIn('PSW', names.ASHUKA_DEPARTMENTS)
+        self.assertEqual(names.ASHUKA_ROLES, ['主任', '師長', '科長', '部長'])
+        self.assertEqual(names.ASHUKA_THREE_BANDS[1]['text'], 'よしだ')
+        self.assertEqual(names.ASHUKA_THREE_BANDS[2]['text'], '吉田')
+        self.assertEqual(names.ASHUKA_TRAINEE_BANDS[2]['text'], 'リン')
+        self.assertEqual(names.ASHUKA_TRAINEE_BANDS[1]['text'], '')
+
     def test_band_heights_sum_to_50(self):
         self.assertAlmostEqual(sum(b['heightMm'] for b in names.ASHUKA_THREE_BANDS), 50.0, places=2)
         self.assertAlmostEqual(sum(b['heightMm'] for b in names.ASHUKA_TRAINEE_BANDS), 50.0, places=2)
+        self.assertEqual([b['heightMm'] for b in names.ASHUKA_TRAINEE_BANDS], [12.8, 12.5, 24.7])
 
     def test_render_sample_images(self):
         try:
@@ -103,6 +117,14 @@ class AshukaNameFormatsTest(unittest.TestCase):
                 self.assertEqual(im.getpixel((0, 0)), (255, 255, 255))
             with Image.open(trainee) as im2:
                 self.assertEqual(im2.size, (800, 500))
+                gray = im2.convert('L')
+                # 中段（ふりがな帯）は空：インクがほぼ無い（12.8〜25.3mm @10px/mm）
+                mid = gray.crop((0, 128, 800, 253))
+                mid_dark = sum(1 for p in mid.getdata() if p < 200)
+                self.assertLess(mid_dark / (mid.size[0] * mid.size[1]), 0.01)
+                bot = gray.crop((0, 253, 800, 500))
+                bot_dark = sum(1 for p in bot.getdata() if p < 200)
+                self.assertGreater(bot_dark / (bot.size[0] * bot.size[1]), 0.01)
 
     def test_updates_nm150_and_reuses_empty_nm229(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,10 +177,14 @@ class AshukaNameFormatsTest(unittest.TestCase):
                 self.assertEqual(float(fmt150['maximum_font']), 50)
                 self.assertEqual(float(fmt150['heading_font']), 24)
                 self.assertEqual(json.loads(fmt150['departments_json']), names.ASHUKA_DEPARTMENTS)
+                self.assertEqual(json.loads(fmt150['roles_json']), names.ASHUKA_ROLES)
+                self.assertEqual(fmt150['source_row'], names.ASHUKA_THREE_SOURCE_ROW)
                 spec = json.loads(fmt150['spec_json'])
                 self.assertEqual(spec['ashukaKind'], 'three')
                 self.assertEqual(spec['bandHeightsMm'], [12.8, 12.5, 24.7])
                 self.assertEqual(spec['bandFontsPt'], [24, 28, 50])
+                self.assertEqual(spec['sampleFurigana'], 'よしだ')
+                self.assertEqual(spec['sampleSurname'], '吉田')
 
                 sample150 = c.execute(
                     'SELECT * FROM name_samples WHERE format_id=? ORDER BY id', (150,),
@@ -166,6 +192,7 @@ class AshukaNameFormatsTest(unittest.TestCase):
                 self.assertIsNotNone(sample150)
                 self.assertEqual(sample150['paper_color'], '白')
                 self.assertEqual(sample150['caption'], names.ASHUKA_THREE_SAMPLE_CAPTION)
+                self.assertIn('吉田', sample150['caption'])
                 self.assertTrue((data_dir / sample150['relative_path']).is_file())
 
                 fmt229 = c.execute('SELECT * FROM name_formats WHERE id=?', (229,)).fetchone()
@@ -174,12 +201,18 @@ class AshukaNameFormatsTest(unittest.TestCase):
                 self.assertEqual(fmt229['layout'], 'DeptName')
                 self.assertIn('ターシャー', fmt229['heading'])
                 self.assertIn('ふりがななし', fmt229['note'])
+                self.assertIn('上へ詰め', fmt229['note'])
                 self.assertEqual(json.loads(fmt229['departments_json']), names.ASHUKA_DEPARTMENTS)
+                self.assertEqual(json.loads(fmt229['roles_json']), names.ASHUKA_ROLES)
+                self.assertEqual(fmt229['source_row'], names.ASHUKA_TRAINEE_SOURCE_ROW)
                 sample229 = c.execute(
                     'SELECT * FROM name_samples WHERE format_id=?', (229,),
                 ).fetchone()
                 self.assertTrue((data_dir / sample229['relative_path']).is_file())
-                self.assertIn('ターシャー', sample229['caption'])
+                self.assertIn('リン', sample229['caption'])
+                trainee_spec = json.loads(fmt229['spec_json'])
+                self.assertEqual(trainee_spec['sampleName'], 'リン')
+                self.assertTrue(trainee_spec.get('keepFuriganaGap'))
 
                 # 担当は維持。了承digestは内容変更で無効化（自動了承しない）
                 review150 = c.execute(

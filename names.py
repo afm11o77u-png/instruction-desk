@@ -2782,11 +2782,12 @@ def correct_rinko_name_formats(c, data_dir=None):
     )
     return report
 
-# 明日佳（札幌/桜台/白石/岩見沢/宮の沢明日佳）：訂正版 Excel Sheet1 78–80 行に合わせる。
-# - NM-000150（id=150）の3段ネームを更新
-# - 外国人（実習生）用2段ネームを追加（空の NM-000229 があれば再利用、内容ありは触らない）
+# 明日佳（札幌/桜台/白石/岩見沢/宮の沢明日佳）：Excel Sheet1 83–86 行に合わせる。
+# - NM-000150（id=150）の3段ネームを更新（見本：看護部／よしだ／吉田）
+# - 外国人（実習生）用：ふりがな帯を空けたまま下段にカタカナ（見本：リン）。空の NM-000229 があれば再利用
+# - 部署・役職は独立リスト（ペアを捏造しない）。詳細の「部署・役職」に表示
 # - 担当者・了承は勝手に変更しない（形式更新トリガで了承消化のみ）
-# - 他顧客は変更しない
+# - あすかHOUSE／東苗穂／ベーカリーなど他顧客は変更しない
 ASHUKA_CUSTOMER_NAME = '札幌/桜台/白石/岩見沢/宮の沢明日佳'
 ASHUKA_THREE_FORMAT_ID = 150
 ASHUKA_EMPTY_FORMAT_ID = 229
@@ -2798,7 +2799,9 @@ ASHUKA_FAMILY = 'HG丸ゴシック'
 ASHUKA_DEPARTMENTS = [
     '看護部', 'ﾘﾊﾋﾞﾘﾃｰｼｮﾝ科', '歯科', '薬剤科', '栄養科', '検査科',
     '放射線科', '臨床検査科', 'デイケア科', '医師', '歯科医師', '院長',
+    '中央洗濯室', '臨床工学科', 'PSW',
 ]
+ASHUKA_ROLES = ['主任', '師長', '科長', '部長']
 ASHUKA_THREE_HEADING = '上段：部署名　中段：ふりがな　下段：苗字'
 ASHUKA_THREE_NOTE = (
     'ふりがなはひらがなで\n'
@@ -2810,31 +2813,37 @@ ASHUKA_THREE_NOTE = (
 ASHUKA_TRAINEE_HEADING = '上段：部署名　下段：ファーストネーム 例「ターシャー」'
 ASHUKA_TRAINEE_NOTE = (
     '外国人（実習生）の場合はカタカナ表記のためふりがななし\n'
-    '上段帯：12.8mm／24pt／横左揃え・縦中央／下段帯：37.2mm／50pt／横中央・縦中央（合計50mm）'
+    'ふりがな帯は空けたまま下段位置に置く（上へ詰めて隙間を埋めない）\n'
+    '上段帯：12.8mm／24pt／横左揃え・縦中央／中段帯（空）：12.5mm／'
+    '下段帯：24.7mm／50pt／横中央・縦中央（合計50mm・Excel下段37.2mm相当）'
 )
 ASHUKA_THREE_SAMPLE_CAPTION = (
-    '見本：部署「看護部」・ふりがな「や ま だ」・苗字「山田」。'
+    '見本：部署「看護部」・ふりがな「よしだ」・苗字「吉田」。'
     '上段12.8mm（24pt・左インデント）／中段12.5mm（28pt・中央）／下段24.7mm（50pt・中央）。'
     '書体はHG丸ゴシック（太字）。用紙色は白。'
 )
 ASHUKA_TRAINEE_SAMPLE_CAPTION = (
-    '見本：部署「看護部」・ファーストネーム「ターシャー」。'
-    '上段12.8mm（24pt・左インデント）／下段37.2mm（50pt・中央）。ふりがななし。'
+    '見本：部署「看護部」・ファーストネーム「リン」。'
+    '上段12.8mm（24pt・左インデント）／中段空12.5mm／下段24.7mm（50pt・中央）。ふりがななし。'
     '書体はHG丸ゴシック（太字）。用紙色は白。'
 )
 ASHUKA_THREE_BANDS = (
     {'role': 'dept', 'text': '看護部', 'heightMm': 12.8, 'fontPt': 24, 'alignH': 'left', 'alignV': 'middle', 'indentMm': 4.0},
-    {'role': 'furigana', 'text': 'や ま だ', 'heightMm': 12.5, 'fontPt': 28, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
-    {'role': 'surname', 'text': '山田', 'heightMm': 24.7, 'fontPt': 50, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+    {'role': 'furigana', 'text': 'よしだ', 'heightMm': 12.5, 'fontPt': 28, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+    {'role': 'surname', 'text': '吉田', 'heightMm': 24.7, 'fontPt': 50, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
 )
+# 実習生：Excelは2段（12.8+37.2）だが見本はふりがな位置を空けて下段に名前を置く
 ASHUKA_TRAINEE_BANDS = (
     {'role': 'dept', 'text': '看護部', 'heightMm': 12.8, 'fontPt': 24, 'alignH': 'left', 'alignV': 'middle', 'indentMm': 4.0},
-    {'role': 'given', 'text': 'ターシャー', 'heightMm': 37.2, 'fontPt': 50, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+    {'role': 'spacer', 'text': '', 'heightMm': 12.5, 'fontPt': 28, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
+    {'role': 'given', 'text': 'リン', 'heightMm': 24.7, 'fontPt': 50, 'alignH': 'center', 'alignV': 'middle', 'indentMm': 0.0},
 )
 ASHUKA_NAMES_REPORT = 'ashuka-name-formats-report.json'
 ASHUKA_NAMES_SETTINGS_KEY = 'ashuka_name_formats'
-ASHUKA_NAMES_POLICY = 'excel-gojuon2-r78-80-v1'
+ASHUKA_NAMES_POLICY = 'excel-gojuon2-r83-86-v2'
 ASHUKA_SAMPLE_PX_PER_MM = 10
+ASHUKA_THREE_SOURCE_ROW = 83
+ASHUKA_TRAINEE_SOURCE_ROW = 84
 
 def _ashuka_spec(kind):
     """kind: 'three' | 'trainee'。帯仕様を spec_json に残し再生成と照合に使う。"""
@@ -2846,7 +2855,9 @@ def _ashuka_spec(kind):
             'ashukaPolicy': ASHUKA_NAMES_POLICY,
             'bandFontsPt': [b['fontPt'] for b in bands],
             'bandHeightsMm': [b['heightMm'] for b in bands],
-            'sampleName': 'ターシャー',
+            'excelBandHeightsMm': [12.8, 37.2],
+            'sampleName': 'リン',
+            'keepFuriganaGap': True,
         }
     bands = ASHUKA_THREE_BANDS
     return {
@@ -2856,8 +2867,8 @@ def _ashuka_spec(kind):
         'ashukaPolicy': ASHUKA_NAMES_POLICY,
         'bandFontsPt': [b['fontPt'] for b in bands],
         'bandHeightsMm': [b['heightMm'] for b in bands],
-        'sampleFurigana': 'や ま だ',
-        'sampleSurname': '山田',
+        'sampleFurigana': 'よしだ',
+        'sampleSurname': '吉田',
     }
 
 def _ashuka_format_matches_target(fmt, *, kind):
@@ -2904,6 +2915,16 @@ def _ashuka_is_empty_shell(fmt, samples):
     has_image = any(str(s['relative_path'] or '').strip() for s in samples)
     return not heading and not note and not departments and not has_image
 
+def _ashuka_roles_list(fmt):
+    keys = set(fmt.keys()) if hasattr(fmt, 'keys') else set()
+    if 'roles_json' not in keys:
+        return []
+    try:
+        roles = json.loads(fmt['roles_json'] or 'null') or []
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return list(roles) if isinstance(roles, list) else []
+
 def _ashuka_three_is_current(fmt, samples):
     try:
         departments = json.loads(fmt['departments_json'] or 'null') or []
@@ -2936,6 +2957,10 @@ def _ashuka_three_is_current(fmt, samples):
     if float(fmt['maximum_font'] or 0) != 50 or float(fmt['heading_font'] or 0) != 24:
         return False
     if departments != ASHUKA_DEPARTMENTS:
+        return False
+    if _ashuka_roles_list(fmt) != ASHUKA_ROLES:
+        return False
+    if int(fmt['source_row'] or 0) != ASHUKA_THREE_SOURCE_ROW:
         return False
     if spec.get('ashukaPolicy') != ASHUKA_NAMES_POLICY or spec.get('ashukaKind') != 'three':
         return False
@@ -2982,6 +3007,10 @@ def _ashuka_trainee_is_current(fmt, samples):
         return False
     if departments != ASHUKA_DEPARTMENTS:
         return False
+    if _ashuka_roles_list(fmt) != ASHUKA_ROLES:
+        return False
+    if int(fmt['source_row'] or 0) != ASHUKA_TRAINEE_SOURCE_ROW:
+        return False
     if spec.get('ashukaPolicy') != ASHUKA_NAMES_POLICY or spec.get('ashukaKind') != 'trainee':
         return False
     if not samples:
@@ -3003,6 +3032,7 @@ def _render_ashuka_banded_sample(
     fit_mode:
       - fill: 枠に収まる最大サイズへ拡大可（大汎用・小汎用など従来どおり）
       - exact: 登録 fontPt→px を上限（溢れるときだけ縮小）。丸/Pゴシック36 苗字用
+    空テキスト帯（実習生のふりがな空き）は描画せず高だけ確保する。
     """
     try:
         from PIL import Image, ImageDraw
@@ -3028,37 +3058,38 @@ def _render_ashuka_banded_sample(
         if band is bands[-1]:
             bottom = height
         box_h = max(1, bottom - top)
-        font_pt = float(band['fontPt'])
-        font_px = max(8, int(round(font_pt * px * 25.4 / 72.0)))
         text = str(band.get('text') or '')
-        fitted_font, used = _fit_font_to_box(
-            text, family_hint,
-            max(8, width - int(round((float(band.get('indentMm') or 0) + 2.0) * px)) - 4),
-            max(8, box_h - 4),
-            font_px,
-            allow_grow=allow_grow,
-        )
-        font = fitted_font or _load_font(used or font_px, family_hint) or _load_font(font_px, family_hint)
-        if font is None:
-            return False, '利用可能なフォントがありません'
-        bbox = draw.textbbox((0, 0), text, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-        indent = float(band.get('indentMm') or 0) * px
-        align_h = str(band.get('alignH') or 'center')
-        if align_h == 'left':
-            x = int(round(indent if indent > 0 else 2 * px))
-        else:
-            x = int(round((width - tw) / 2))
-        x = max(0, min(x, width - max(1, tw)))
-        align_v = str(band.get('alignV') or 'middle')
-        if align_v == 'top':
-            ty = top + 2
-        elif align_v == 'bottom':
-            ty = bottom - th - 2
-        else:
-            ty = top + int(round((box_h - th) / 2))
-        ty = max(top, min(ty, bottom - max(1, th)))
-        draw.text((x - bbox[0], ty - bbox[1]), text, font=font, fill=(0, 0, 0))
+        if text:
+            font_pt = float(band['fontPt'])
+            font_px = max(8, int(round(font_pt * px * 25.4 / 72.0)))
+            fitted_font, used = _fit_font_to_box(
+                text, family_hint,
+                max(8, width - int(round((float(band.get('indentMm') or 0) + 2.0) * px)) - 4),
+                max(8, box_h - 4),
+                font_px,
+                allow_grow=allow_grow,
+            )
+            font = fitted_font or _load_font(used or font_px, family_hint) or _load_font(font_px, family_hint)
+            if font is None:
+                return False, '利用可能なフォントがありません'
+            bbox = draw.textbbox((0, 0), text, font=font)
+            tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+            indent = float(band.get('indentMm') or 0) * px
+            align_h = str(band.get('alignH') or 'center')
+            if align_h == 'left':
+                x = int(round(indent if indent > 0 else 2 * px))
+            else:
+                x = int(round((width - tw) / 2))
+            x = max(0, min(x, width - max(1, tw)))
+            align_v = str(band.get('alignV') or 'middle')
+            if align_v == 'top':
+                ty = top + 2
+            elif align_v == 'bottom':
+                ty = bottom - th - 2
+            else:
+                ty = top + int(round((box_h - th) / 2))
+            ty = max(top, min(ty, bottom - max(1, th)))
+            draw.text((x - bbox[0], ty - bbox[1]), text, font=font, fill=(0, 0, 0))
         y += band_h
     dst_path = Path(dst_path)
     dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3107,6 +3138,9 @@ def _write_ashuka_sample(c, root, format_id, *, kind, caption):
 
 def _update_ashuka_format_row(c, format_id, *, kind, source_row, identity=None):
     """明日佳の形式行を Excel 仕様へ更新（担当・了承レコードは触らない）。"""
+    _column(c, 'name_formats', 'roles_json', "roles_json TEXT NOT NULL DEFAULT 'null'")
+    roles_json = json.dumps(ASHUKA_ROLES, ensure_ascii=False)
+    depts_json = json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False)
     if kind == 'trainee':
         values = (
             ASHUKA_TRAINEE_FORMAT_NAME, ASHUKA_PLACEMENT, ASHUKA_FAMILY, '',
@@ -3114,7 +3148,7 @@ def _update_ashuka_format_row(c, format_id, *, kind, source_row, identity=None):
             'カタカナのファーストネーム（ふりがななし）',
             0, 80, 50, 0, '白', '',
             json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False),
-            json.dumps([], ensure_ascii=False), json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False),
+            json.dumps([], ensure_ascii=False), depts_json, roles_json,
             '', 50, 24, 0, source_row,
             json.dumps(_ashuka_spec('trainee'), ensure_ascii=False),
             0, json.dumps([], ensure_ascii=False), 0, format_id,
@@ -3125,7 +3159,7 @@ def _update_ashuka_format_row(c, format_id, *, kind, source_row, identity=None):
             ASHUKA_THREE_HEADING, ASHUKA_THREE_NOTE, 'DeptFurigana', '苗字のみ',
             0, 80, 50, 0, '白', '',
             json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False),
-            json.dumps([], ensure_ascii=False), json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False),
+            json.dumps([], ensure_ascii=False), depts_json, roles_json,
             '', 50, 24, 0, source_row,
             json.dumps(_ashuka_spec('three'), ensure_ascii=False),
             0, json.dumps([], ensure_ascii=False), 0, format_id,
@@ -3133,7 +3167,7 @@ def _update_ashuka_format_row(c, format_id, *, kind, source_row, identity=None):
     c.execute(
         '''UPDATE name_formats SET format_name=?, placement=?, family=?, header_family=?, heading=?, note=?,
             layout=?, reading=?, small=?, width_mm=?, height_mm=?, unknown_size=?, fixed_color=?, color_caption=?,
-            groups_json=?, colors_json=?, swatches_json=?, departments_json=?, pending=?, maximum_font=?,
+            groups_json=?, colors_json=?, swatches_json=?, departments_json=?, roles_json=?, pending=?, maximum_font=?,
             heading_font=?, number_length=?, source_row=?, spec_json=?, needs_review=?, review_json=?, blank=?,
             retired=0 WHERE id=?''',
         values,
@@ -3142,21 +3176,23 @@ def _update_ashuka_format_row(c, format_id, *, kind, source_row, identity=None):
         c.execute('UPDATE name_formats SET identity=? WHERE id=?', (identity, format_id))
 
 def _insert_ashuka_trainee_format(c, customer_id):
-    """実習生用2段ネームを新規追加。identity は再追加防止用に固定。"""
+    """実習生用ネームを新規追加。identity は再追加防止用に固定。"""
+    _column(c, 'name_formats', 'roles_json', "roles_json TEXT NOT NULL DEFAULT 'null'")
     c.execute(
         '''INSERT INTO name_formats(
             identity, customer_id, source_kind, format_name, placement, family, header_family, heading, note,
             layout, reading, small, width_mm, height_mm, unknown_size, fixed_color, color_caption,
-            groups_json, colors_json, swatches_json, departments_json, pending, maximum_font, heading_font,
+            groups_json, colors_json, swatches_json, departments_json, roles_json, pending, maximum_font, heading_font,
             number_length, source_row, previous_source_row, spec_json, needs_review, review_json, blank, manual, retired
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)''',
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)''',
         (
             ASHUKA_TRAINEE_IDENTITY, customer_id, -1, ASHUKA_TRAINEE_FORMAT_NAME, ASHUKA_PLACEMENT,
             ASHUKA_FAMILY, '', ASHUKA_TRAINEE_HEADING, ASHUKA_TRAINEE_NOTE, 'DeptName',
             'カタカナのファーストネーム（ふりがななし）', 0, 80, 50, 0, '白', '',
             json.dumps([], ensure_ascii=False), json.dumps([], ensure_ascii=False),
             json.dumps([], ensure_ascii=False), json.dumps(ASHUKA_DEPARTMENTS, ensure_ascii=False),
-            '', 50, 24, 0, 79, None,
+            json.dumps(ASHUKA_ROLES, ensure_ascii=False),
+            '', 50, 24, 0, ASHUKA_TRAINEE_SOURCE_ROW, None,
             json.dumps(_ashuka_spec('trainee'), ensure_ascii=False),
             0, json.dumps([], ensure_ascii=False), 0,
         ),
@@ -3229,9 +3265,10 @@ def _patch_ashuka_catalog(data_dir, backup_dir, items):
                 fmt['heightMm'] = 50
                 fmt['fixedColor'] = '白'
                 fmt['departments'] = list(ASHUKA_DEPARTMENTS)
+                fmt['roles'] = list(ASHUKA_ROLES)
                 fmt['maximumFont'] = 50
                 fmt['headingFont'] = 24
-                fmt['sourceRow'] = 79 if kind == 'trainee' else 78
+                fmt['sourceRow'] = ASHUKA_TRAINEE_SOURCE_ROW if kind == 'trainee' else ASHUKA_THREE_SOURCE_ROW
                 for key, value in _ashuka_spec(kind).items():
                     fmt[key] = value
                 rel = item.get('samplePath') or ''
@@ -3270,9 +3307,10 @@ def _patch_ashuka_catalog(data_dir, backup_dir, items):
             'heightMm': 50,
             'fixedColor': '白',
             'departments': list(ASHUKA_DEPARTMENTS),
+            'roles': list(ASHUKA_ROLES),
             'maximumFont': 50,
             'headingFont': 24,
-            'sourceRow': 79,
+            'sourceRow': ASHUKA_TRAINEE_SOURCE_ROW,
             **_ashuka_spec('trainee'),
             'samples': [{
                 'key': 'standard',
@@ -3288,7 +3326,7 @@ def _patch_ashuka_catalog(data_dir, backup_dir, items):
     return changed
 
 def correct_ashuka_name_formats(c, data_dir=None):
-    """明日佳の3段ネーム更新と実習生用2段追加。他顧客・担当者は変更しない。"""
+    """明日佳の3段ネーム更新と実習生用追加。他顧客・担当者は変更しない。"""
     root = Path(data_dir) if data_dir is not None else DATA_DIR
     if root is None:
         return {'changed': 0, 'items': [], 'skipped': True, 'reason': 'data_dir未設定'}
@@ -3461,7 +3499,7 @@ def correct_ashuka_name_formats(c, data_dir=None):
         samples = samples_by_fid.get(three['id'], [])
         if not _ashuka_three_is_current(three, samples):
             _backup_ashuka_format(c, root, backup_dir, three, samples)
-            _update_ashuka_format_row(c, three['id'], kind='three', source_row=78)
+            _update_ashuka_format_row(c, three['id'], kind='three', source_row=ASHUKA_THREE_SOURCE_ROW)
             ok, note, rel = _write_ashuka_sample(
                 c, root, three['id'], kind='three', caption=ASHUKA_THREE_SAMPLE_CAPTION,
             )
@@ -3490,7 +3528,7 @@ def correct_ashuka_name_formats(c, data_dir=None):
         samples = samples_by_fid.get(trainee['id'], [])
         if not _ashuka_trainee_is_current(trainee, samples):
             _backup_ashuka_format(c, root, backup_dir, trainee, samples)
-            _update_ashuka_format_row(c, trainee['id'], kind='trainee', source_row=79)
+            _update_ashuka_format_row(c, trainee['id'], kind='trainee', source_row=ASHUKA_TRAINEE_SOURCE_ROW)
             ok, note, rel = _write_ashuka_sample(
                 c, root, trainee['id'], kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
             )
@@ -3510,7 +3548,8 @@ def correct_ashuka_name_formats(c, data_dir=None):
         samples = samples_by_fid.get(empty229['id'], [])
         _backup_ashuka_format(c, root, backup_dir, empty229, samples)
         _update_ashuka_format_row(
-            c, empty229['id'], kind='trainee', source_row=79, identity=ASHUKA_TRAINEE_IDENTITY,
+            c, empty229['id'], kind='trainee', source_row=ASHUKA_TRAINEE_SOURCE_ROW,
+            identity=ASHUKA_TRAINEE_IDENTITY,
         )
         ok, note, rel = _write_ashuka_sample(
             c, root, empty229['id'], kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
@@ -3540,7 +3579,7 @@ def correct_ashuka_name_formats(c, data_dir=None):
             fmt = c.execute('SELECT * FROM name_formats WHERE id=?', (fid,)).fetchone()
             samples = list(c.execute('SELECT * FROM name_samples WHERE format_id=? ORDER BY id', (fid,)))
             _backup_ashuka_format(c, root, backup_dir, fmt, samples)
-            _update_ashuka_format_row(c, fid, kind='trainee', source_row=79)
+            _update_ashuka_format_row(c, fid, kind='trainee', source_row=ASHUKA_TRAINEE_SOURCE_ROW)
             ok, note, rel = _write_ashuka_sample(
                 c, root, fid, kind='trainee', caption=ASHUKA_TRAINEE_SAMPLE_CAPTION,
             )
@@ -3599,15 +3638,21 @@ def correct_ashuka_name_formats(c, data_dir=None):
         'backupDir': str(backup_dir.relative_to(root)).replace('\\', '/') if backup_dir.exists() else '',
         'catalogChanged': catalog_changed,
         'departments': list(ASHUKA_DEPARTMENTS),
+        'roles': list(ASHUKA_ROLES),
+        'excelRows': {'three': ASHUKA_THREE_SOURCE_ROW, 'trainee': ASHUKA_TRAINEE_SOURCE_ROW, 'departments': 85, 'roles': 86},
         'rules': {
             'onlyCustomer': ASHUKA_CUSTOMER_NAME,
             'updateThree': True,
             'preferFormatId': ASHUKA_THREE_FORMAT_ID,
             'reuseEmpty229': True,
             'traineeIdentity': ASHUKA_TRAINEE_IDENTITY,
+            'keepFuriganaGapOnTrainee': True,
+            'separateDeptAndRoleLists': True,
+            'doNotInventPairs': True,
             'noAssigneeChange': True,
             'noAutoApprove': True,
             'noDeleteOtherFormats': True,
+            'excludeHouseBakery': True,
         },
         'items': items,
     }
