@@ -689,37 +689,49 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 }
 
 /* 旧商品台帳CSV: 品番ごとの比較一覧（判断区分） */
-.sku-groups-panel{margin:12px 0 16px}
-.sku-groups-panel h3{margin:0 0 6px;font-size:1.05rem}
-.sku-judgment-status-bar{margin:8px 0;padding:6px 8px;border:1px solid #d5ddd7;background:#f7faf8}
+.sku-groups-panel{margin:6px 0 8px}
+.sku-groups-panel h3{margin:0 0 4px;font-size:1.05rem}
+.sku-groups-panel>p.excelhint{margin:0 0 4px}
+.sku-judgment-status-bar{margin:4px 0;padding:4px 8px;border:1px solid #d5ddd7;background:#f7faf8}
+.sku-judgment-status-bar .excelhint{margin:0}
 .sku-judgment-section{
-  margin:10px 0;padding:8px 10px;
+  margin:6px 0;padding:6px 8px;
   border:1px solid #c5d0c8;background:#fff;
 }
 .sku-section-individual{border-left:4px solid #c47a3a}
 .sku-section-bulk{border-left:4px solid #3d7a55}
 .sku-section-auto{border-left:4px solid #5a6a62}
 .sku-section-hold{border-left:4px solid #8a7355}
-.sku-section-header{align-items:center;gap:8px;margin:0 0 6px;flex-wrap:wrap}
+.sku-section-header{align-items:center;gap:8px;margin:0 0 4px;flex-wrap:wrap}
 .sku-section-header h4{margin:0;font-size:1rem;flex:1 1 auto}
 .sku-section-count{font-weight:700;font-variant-numeric:tabular-nums}
-.sku-section-body{margin-top:6px}
-.sku-section-collapsed-hint{margin:4px 0 0}
-.sku-subsection{margin-top:12px;padding-top:8px;border-top:1px dashed #d5ddd7}
-.sku-subsection h4{margin:0 0 6px;font-size:0.95rem}
-.sku-list-toolbar,.sku-bulk-bar{flex-wrap:wrap;gap:6px 8px;margin:8px 0}
+.sku-section-body{margin-top:4px}
+.sku-section-collapsed-hint{margin:2px 0 0}
+.sku-subsection{margin-top:8px;padding-top:6px;border-top:1px dashed #d5ddd7}
+.sku-subsection h4{margin:0 0 4px;font-size:0.95rem}
+.sku-list-toolbar,.sku-bulk-bar{flex-wrap:wrap;gap:6px 8px;margin:4px 0}
 .sku-list-toolbar input[type=search]{min-width:14rem;flex:1}
-.sku-compare-wrap{overflow:auto;max-height:min(40vh,420px);border:1px solid #c5d0c8;background:#fff}
-.sku-compare-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.sku-section-pager{margin:4px 0 6px}
+/* 縦はモーダル本体のみ。内側 max-height を外し二重スクロールを解消 */
+.sku-compare-wrap{
+  overflow-x:auto;overflow-y:visible;max-height:none;
+  border:1px solid #c5d0c8;background:#fff;
+}
+.sku-compare-table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:auto}
 .sku-compare-table th,.sku-compare-table td{
   border:1px solid #d5ddd7;padding:6px 8px;vertical-align:top;text-align:left;
 }
 .sku-compare-table thead th{
   position:sticky;top:0;z-index:1;background:#eef3f0;font-weight:700;
+  white-space:nowrap;
 }
-.sku-compare-table .sku-check{width:2rem;text-align:center}
-.sku-compare-table .sku-code{min-width:6.5rem;font-variant-numeric:tabular-nums}
-.sku-compare-table .sku-names,.sku-compare-table .sku-sups{min-width:8rem;max-width:14rem}
+.sku-compare-table .sku-check{width:2.25rem;min-width:2.25rem;text-align:center}
+.sku-compare-table .sku-code{min-width:7.5rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+.sku-compare-table .sku-names{min-width:11rem;max-width:20rem}
+.sku-compare-table .sku-sups{min-width:9.5rem;max-width:16rem}
+.sku-compare-table .sku-other{min-width:8rem;max-width:14rem}
+.sku-compare-table .sku-why{min-width:9rem;max-width:16rem}
+.sku-compare-table .sku-plan{min-width:12rem;max-width:20rem}
 .sku-cand-list,.sku-reason-list,.sku-name-map{margin:0;padding-left:1.1em}
 .sku-cand-list li,.sku-reason-list li{margin:0 0 2px}
 .sku-cand-name{display:inline}
@@ -736,7 +748,7 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 /* 決定済みは太い縦線ではなく、通常枠線＋薄い背景色で区別 */
 .sku-dec-merge td{background:#e7f2ea}
 .sku-dec-hold td{background:#f4eee4}
-.sku-compare-table .sku-action{min-width:15.5rem;width:15.5rem}
+.sku-compare-table .sku-action{min-width:17.5rem;width:17.5rem}
 .sku-mini-btns,
 .bar.sku-mini-btns{
   display:flex;flex-wrap:nowrap;align-items:center;gap:4px;margin-top:4px;
@@ -797,4 +809,38 @@ button.linkish{
 .primary-change-confirm{display:block;margin:8px 0 0;font-weight:600;color:#7a3e12}
 .legacy-status-hold td{background:#f3f1ea}
 .legacy-status-merge td{background:#eef5f0}
-dialog.product-ledger-dialog{width:min(1100px,98vw)}
+/* 商品台帳モーダル: 高く広げ、legacy-csv-detail の短い max-height / pre-wrap を打ち消す。
+   縦スクロールは .legacy-csv-detail-body のみ（.sku-compare-wrap は横だけ）。 */
+dialog.product-ledger-dialog,
+dialog.product-ledger-dialog.legacy-csv-detail-dialog{
+  width:min(1280px,98vw);
+  max-height:min(96vh,1100px);
+}
+dialog.product-ledger-dialog .legacy-csv-detail-body{
+  max-height:none;
+  flex:1 1 auto;
+  min-height:0;
+  overflow:auto;
+  white-space:normal;
+  word-break:normal;
+  overflow-wrap:anywhere;
+  overscroll-behavior:contain;
+  padding-bottom:10px;
+}
+dialog.product-ledger-dialog .sku-section-header{
+  position:sticky;top:0;z-index:3;
+  background:#fff;
+  padding-top:4px;padding-bottom:4px;
+  box-shadow:0 1px 0 #d5ddd7;
+}
+dialog.product-ledger-dialog .sku-compare-table thead th{
+  z-index:2;
+  top:0;
+}
+dialog.product-ledger-dialog .product-ledger-preview-actions{
+  position:sticky;bottom:0;z-index:4;
+  margin:8px 0 0;padding:8px 0;
+  background:#fff;
+  border-top:1px solid #d5ddd7;
+  box-shadow:0 -1px 0 #d5ddd7;
+}

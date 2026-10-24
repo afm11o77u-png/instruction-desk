@@ -65,6 +65,7 @@
       if(ui.sectionOpen[k]==null)ui.sectionOpen[k]=SECTION_DEFAULTS[k]
     })
     if(!ui.sectionPages)ui.sectionPages={individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    if(ui.previewReqSeq==null)ui.previewReqSeq=0
     if(!ui.basisDate)ui.basisDate=todayISO()
     if(!ui.defaultSiteName)ui.defaultSiteName='未確認'
     return ui
@@ -394,8 +395,8 @@
     return `<div class="sku-auto-panel sku-section-body">
       <p class="excelhint">サイズ・顧客・＊/*・空白/全角半角・明示シノニムなどは自動で1商品へまとめています。ここも<strong>まだ未登録</strong>です（最終の「確認して登録」まで台帳は変わりません）。</p>
       <p class="excelhint">自動決定済み ${part.autoCount||0} 品番 / ${p.autoMergedCsvRows||0} 行${stockPicked.length?`（うち在庫採用 ${stockPicked.length}）`:''}</p>
-      ${cards||'<p class="sub">自動決定の明細はありません。</p>'}
       ${sectionPagerHtml('auto',slice,plans.length)}
+      ${cards||'<p class="sub">自動決定の明細はありません。</p>'}
     </div>`
   }
 
@@ -864,32 +865,32 @@
       :'未承認の一括承認候補はありません。'
 
     const indivBody=indivOpen?`<div class="sku-section-body">
-      ${skuCompareTableHtml(st,indivSlice.pageItems,{section:'individual'})}
       ${sectionPagerHtml('individual',indivSlice,indivAll.length)}
+      ${skuCompareTableHtml(st,indivSlice.pageItems,{section:'individual'})}
       ${separateAll.length?`<div class="sku-subsection">
         <h4>個別整理済み（未登録） ${separateAll.length} 件</h4>
-        ${skuCompareTableHtml(st,separateSlice.pageItems,{section:'separate'})}
         ${sectionPagerHtml('separate',separateSlice,separateAll.length)}
+        ${skuCompareTableHtml(st,separateSlice.pageItems,{section:'separate'})}
       </div>`:''}
     </div>`:''
 
     const bulkBody=bulkOpen?`<div class="sku-section-body">
       <p class="excelhint">${esc(bulkScopeHint)}</p>
       <h4>未承認 ${part.bulkUnapproved.length} 件</h4>
-      ${skuCompareTableHtml(st,bulkSlice.pageItems,{section:'bulk',showApproveHint:true})}
       ${sectionPagerHtml('bulk',bulkSlice,bulkAll.length)}
+      ${skuCompareTableHtml(st,bulkSlice.pageItems,{section:'bulk',showApproveHint:true})}
       <h4>承認済み（未登録） ${part.approved.length} 件</h4>
       <p class="excelhint">一括承認後も内容を確認できます。最終登録が終わるまで「未登録」です（折りたたみ＝承認ではありません）。</p>
-      ${skuCompareTableHtml(st,approvedSlice.pageItems,{section:'approved'})}
       ${sectionPagerHtml('approved',approvedSlice,approvedAll.length)}
+      ${skuCompareTableHtml(st,approvedSlice.pageItems,{section:'approved'})}
     </div>`:''
 
     const autoBody=autoOpen?autoDecidedBodyHtml(st,part):''
 
     const holdBody=holdOpen?`<div class="sku-section-body">
       <p class="excelhint">保留は登録対象外です。件数は隠さず残します。対象外 ${part.excludedRows||0} 行も outcome に計上されています。</p>
-      ${skuCompareTableHtml(st,holdSlice.pageItems,{section:'hold'})}
       ${sectionPagerHtml('hold',holdSlice,holdAll.length)}
+      ${skuCompareTableHtml(st,holdSlice.pageItems,{section:'hold'})}
     </div>`:''
 
     return `<div class="sku-groups-panel sku-judgment-sections" data-sku-judgment-sections>
@@ -1226,6 +1227,17 @@
     </div>`
   }
 
+  // 診断用。本番ノイズを避けるため既定オフ（?ledgerScrollDebug=1 で有効）。
+  function ledgerScrollDebug(){
+    try{
+      return !!(typeof location!=='undefined'&&location.search&&/[?&]ledgerScrollDebug=1(?:&|$)/.test(location.search))
+    }catch(_){return false}
+  }
+  function scrollLog(){
+    if(!ledgerScrollDebug())return
+    try{console.debug.apply(console,['[ledger-scroll]'].concat([].slice.call(arguments)))}catch(_){}
+  }
+
   function readScrollPos(el){
     return {top:el?el.scrollTop:0,left:el?el.scrollLeft:0}
   }
@@ -1236,52 +1248,136 @@
     el.scrollLeft=pos.left||0
   }
 
+  function ledgerBodyEl(dlg){
+    return dlg?dlg.querySelector('.legacy-csv-detail-body'):null
+  }
+
+  /** 縦スクロール本体（モーダル）内で見えている先頭 SKU と相対位置 */
+  function captureVisibleSkuAnchor(dlg){
+    const body=ledgerBodyEl(dlg)
+    if(!body)return null
+    const br=body.getBoundingClientRect()
+    const rows=dlg.querySelectorAll('tr.sku-list-row[data-sku-code]')
+    for(let i=0;i<rows.length;i++){
+      const row=rows[i]
+      const rr=row.getBoundingClientRect()
+      if(rr.bottom<=br.top+4)continue
+      if(rr.top>=br.bottom-4)break
+      return {
+        code:row.getAttribute('data-sku-code')||'',
+        offset:rr.top-br.top,
+        section:row.getAttribute('data-sku-section')||''
+      }
+    }
+    return null
+  }
+
   /** paintDialog の innerHTML 全描画で消えるスクロールを退避する */
   function captureLedgerScroll(dlg){
     const wraps={}
     dlg.querySelectorAll('.sku-compare-wrap').forEach((el,i)=>{
       wraps[el.closest('[data-sku-section-block]')?.getAttribute('data-sku-section-block')||`wrap${i}`]=readScrollPos(el)
     })
-    return {
-      body:readScrollPos(dlg.querySelector('.legacy-csv-detail-body')),
+    const body=ledgerBodyEl(dlg)
+    const visibleAnchor=captureVisibleSkuAnchor(dlg)
+    const snap={
+      body:readScrollPos(body),
       wrap:readScrollPos(dlg.querySelector('.sku-compare-wrap')),
       wraps,
       sections:readScrollPos(dlg.querySelector('.sku-judgment-sections')),
-      table:readScrollPos(dlg.querySelector('.legacy-csv-table-wrap'))
+      table:readScrollPos(dlg.querySelector('.legacy-csv-table-wrap')),
+      visibleAnchor
     }
+    scrollLog('capture',snap)
+    return snap
   }
 
-  /** 操作した品番行が比較一覧・モーダルから外れないよう微調整 */
-  function ensureSkuRowInView(dlg,code){
-    if(!code)return
+  /**
+   * 操作した品番行をモーダル縦スクロール内の同じ相対位置へ。
+   * 縦の主スクローラーは .legacy-csv-detail-body（一覧 wrap は横専用）。
+   */
+  function ensureSkuRowInView(dlg,code,opts){
+    opts=opts||{}
+    if(!code)return false
     const row=dlg.querySelector(`tr.sku-list-row[data-sku-code="${CSS.escape(String(code))}"]`)
-    if(!row)return
-    const nudge=(scroller)=>{
-      if(!scroller)return
-      const sr=scroller.getBoundingClientRect()
-      const rr=row.getBoundingClientRect()
-      if(rr.top<sr.top)scroller.scrollTop-=(sr.top-rr.top)+6
-      else if(rr.bottom>sr.bottom)scroller.scrollTop+=(rr.bottom-sr.bottom)+6
+    if(!row){
+      scrollLog('anchor-missing',code)
+      return false
     }
-    nudge(dlg.querySelector('.sku-compare-wrap'))
-    nudge(dlg.querySelector('.legacy-csv-detail-body'))
+    const body=ledgerBodyEl(dlg)
+    const wrap=row.closest('.sku-compare-wrap')
+    if(body){
+      const br=body.getBoundingClientRect()
+      const rr=row.getBoundingClientRect()
+      const preferred=opts.offset!=null?opts.offset:Math.min(140,Math.max(48,body.clientHeight*0.22))
+      const delta=rr.top-br.top-preferred
+      if(Math.abs(delta)>2)body.scrollTop+=delta
+    }
+    if(wrap){
+      const wr=wrap.getBoundingClientRect()
+      const rr=row.getBoundingClientRect()
+      if(rr.left<wr.left+4)wrap.scrollLeft-=(wr.left-rr.left)+8
+      else if(rr.right>wr.right-4)wrap.scrollLeft+=(rr.right-wr.right)+8
+    }
+    return true
+  }
+
+  /** 操作行が区分移動で消えたとき、同区分の近傍行を同じオフセットへ */
+  function restoreNearbySkuInView(dlg,saved,movedCode){
+    if(!saved||!saved.visibleAnchor)return
+    const body=ledgerBodyEl(dlg)
+    if(!body)return
+    const sec=saved.visibleAnchor.section||''
+    const offset=saved.visibleAnchor.offset
+    const sel=sec
+      ?`tr.sku-list-row[data-sku-section="${CSS.escape(sec)}"]`
+      :'tr.sku-list-row[data-sku-code]'
+    const rows=[].slice.call(dlg.querySelectorAll(sel))
+    if(!rows.length)return
+    const br=body.getBoundingClientRect()
+    let best=null
+    let bestDist=Infinity
+    rows.forEach(r=>{
+      const c=r.getAttribute('data-sku-code')
+      if(movedCode&&c===movedCode)return
+      const dist=Math.abs((r.getBoundingClientRect().top-br.top)-(offset!=null?offset:80))
+      if(dist<bestDist){bestDist=dist;best=r}
+    })
+    const pick=best||rows[0]
+    if(pick)ensureSkuRowInView(dlg,pick.getAttribute('data-sku-code'),{offset})
   }
 
   function restoreLedgerScroll(dlg,saved,opts){
     if(!saved)return
     opts=opts||{}
-    applyScrollPos(dlg.querySelector('.legacy-csv-detail-body'),saved.body)
-    applyScrollPos(dlg.querySelector('.sku-judgment-sections'),saved.sections)
+    const body=ledgerBodyEl(dlg)
     const wrapEls=dlg.querySelectorAll('.sku-compare-wrap')
     if(opts.resetListScroll){
+      // ページ／検索など意図的な一覧先頭へ。横は戻し、縦は判断一覧パネル先頭へ。
       wrapEls.forEach(wrap=>{wrap.scrollTop=0;wrap.scrollLeft=0})
-    }else if(saved.wraps){
-      wrapEls.forEach((el,i)=>{
-        const key=el.closest('[data-sku-section-block]')?.getAttribute('data-sku-section-block')||`wrap${i}`
-        applyScrollPos(el,saved.wraps[key]||saved.wrap)
-      })
+      if(body){
+        const panel=dlg.querySelector('.sku-judgment-sections')||dlg.querySelector('.sku-groups-panel')
+        if(panel){
+          const br=body.getBoundingClientRect()
+          const pr=panel.getBoundingClientRect()
+          body.scrollTop+=(pr.top-br.top)-6
+        }else{
+          applyScrollPos(body,{top:0,left:(saved.body&&saved.body.left)||0})
+        }
+      }
     }else{
-      applyScrollPos(dlg.querySelector('.sku-compare-wrap'),saved.wrap)
+      applyScrollPos(body,saved.body)
+      if(saved.wraps){
+        wrapEls.forEach((el,i)=>{
+          const key=el.closest('[data-sku-section-block]')?.getAttribute('data-sku-section-block')||`wrap${i}`
+          const pos=saved.wraps[key]||saved.wrap||{top:0,left:0}
+          // 縦は body に一本化。wrap は横位置のみ復元。
+          applyScrollPos(el,{top:0,left:pos.left||0})
+        })
+      }else{
+        const w=dlg.querySelector('.sku-compare-wrap')
+        if(w&&saved.wrap)applyScrollPos(w,{top:0,left:saved.wrap.left||0})
+      }
     }
     const table=dlg.querySelector('.legacy-csv-table-wrap')
     if(opts.resetTableScroll){
@@ -1289,7 +1385,18 @@
     }else{
       applyScrollPos(table,saved.table)
     }
-    if(opts.anchorCode)ensureSkuRowInView(dlg,opts.anchorCode)
+    if(!opts.resetListScroll){
+      const anchorCode=opts.anchorCode||(saved.visibleAnchor&&saved.visibleAnchor.code)||''
+      const offset=saved.visibleAnchor?saved.visibleAnchor.offset:undefined
+      if(anchorCode){
+        if(!ensureSkuRowInView(dlg,anchorCode,{offset})){
+          restoreNearbySkuInView(dlg,saved,anchorCode)
+        }
+      }else if(saved.visibleAnchor){
+        restoreNearbySkuInView(dlg,saved,'')
+      }
+    }
+    scrollLog('restore',{opts,body:readScrollPos(body),anchor:opts.anchorCode||(saved.visibleAnchor&&saved.visibleAnchor.code)})
   }
 
   /**
@@ -1325,7 +1432,7 @@
           ${timingsHtml(st)}
           ${st.preview.auxOpeningStock?`<p class="notice">初期在庫CSV: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
           ${openingStockSectionsHtml(st)}
-          <div class="bar">
+          <div class="bar product-ledger-preview-actions">
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
             <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite?'disabled':''}>確認して初期在庫を登録</button>
           </div>`
@@ -1336,7 +1443,7 @@
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
           ${skuGroupsHtml(st)}
-          <div class="bar">
+          <div class="bar product-ledger-preview-actions">
             <input type="search" id="plQ" placeholder="検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
             <select id="plStatus">
               <option value="">すべて</option>
@@ -1545,13 +1652,21 @@
       }
     })
     const runPreview=async()=>{
+      // 既にプレビュー表示中の再照合はスクロール維持。初回照合のみ先頭へ。
+      const keepScroll=!!st.preview
+      const reqId=(st.previewReqSeq=(st.previewReqSeq||0)+1)
+      const paintPreview=(extra)=>{
+        const o=Object.assign({},extra||{})
+        if(!keepScroll)o.preserveScroll=false
+        paintDialog(o)
+      }
       if(isOpeningMode(st)){
         if(!st.auxFileB64){st.toast('初期在庫CSVを選んでください。');return}
         try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){
           const msg=apiErrorMessage(e,OVERSIZE_MSG)
           st.previewError=msg
           st.toast(msg,8000)
-          paintDialog()
+          paintPreview()
           return
         }
       }else{
@@ -1560,7 +1675,7 @@
           const msg=apiErrorMessage(e,OVERSIZE_MSG)
           st.previewError=msg
           st.toast(msg,8000)
-          paintDialog()
+          paintPreview()
           return
         }
         if(st.auxFileB64){
@@ -1568,7 +1683,7 @@
             const msg=apiErrorMessage(e,OVERSIZE_MSG)
             st.previewError=msg
             st.toast(msg,8000)
-            paintDialog()
+            paintPreview()
             return
           }
         }
@@ -1671,11 +1786,17 @@
       }
       st.previewError=''
       st.progressLabel=isOpeningMode(st)?'CSVを読み込み中…':'CSVを読み込み中…'
-      st.busy=true;paintDialog()
+      st.busy=true;paintPreview()
       try{
         st.progressLabel=isOpeningMode(st)?'初期在庫の登録予定を作成中…':'商品を照合中…'
-        paintDialog()
-        st.preview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
+        paintPreview()
+        const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
+        // 遅い応答が新しい照合結果を上書きしない
+        if(reqId!==st.previewReqSeq){
+          scrollLog('stale-preview-ignored',reqId,st.previewReqSeq)
+          return
+        }
+        st.preview=nextPreview
         st.previewError=''
         st.result=null
         st.progressLabel=''
@@ -1695,6 +1816,10 @@
           st.historyError=''
         }
       }catch(e){
+        if(reqId!==st.previewReqSeq){
+          scrollLog('stale-preview-error-ignored',reqId,st.previewReqSeq)
+          return
+        }
         // Modal dialog is in the top layer; bottom toast alone is often clipped.
         // Keep the full message inside the import modal near「読み込み・照合」.
         const msg=apiErrorMessage(e,'照合に失敗しました。')
@@ -1702,7 +1827,10 @@
         st.progressLabel=''
         st.toast(msg,8000)
       }
-      st.busy=false;paintDialog({preserveScroll:false})
+      if(reqId!==st.previewReqSeq)return
+      st.busy=false
+      // 再照合は位置維持。初回のみ先頭（preserveScroll:false）。
+      paintPreview(keepScroll?{}:{preserveScroll:false})
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
     const reBtn=$('#plRePreview');if(reBtn)reBtn.onclick=runPreview
@@ -1801,7 +1929,7 @@
       el.onchange=()=>{
         const code=el.getAttribute('data-pl-sku-check')
         st.selectedCodes[code]=!!el.checked
-        paintDialog()
+        paintDialog({anchorCode:code})
       }
     })
     document.querySelectorAll('[data-pl-sku-expand]').forEach(el=>{
