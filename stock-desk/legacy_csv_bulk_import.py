@@ -40,10 +40,17 @@ OPENING_STATUS_LABELS = {
 
 
 def _names_equivalent_core(a, b):
+    """原文名の同一判定。core key（NFKC）に加え、取込表記統一でも一致を見る。"""
     ta, tb = stock.text(a), stock.text(b)
     if not ta or not tb:
         return False
-    return legacy.product_name_core_key(ta) == legacy.product_name_core_key(tb)
+    if legacy.product_name_core_key(ta) == legacy.product_name_core_key(tb):
+        return True
+    # 半角カナ等: classify と同じ unify（SKU 全体 NFKC はしない）でも照合
+    import product_ledger_paren as paren_classify
+    ua = paren_classify.unify_import_notation(ta)
+    ub = paren_classify.unify_import_notation(tb)
+    return bool(ua and ub and ua == ub)
 
 
 def _aux_item_payload(row_no, item):
