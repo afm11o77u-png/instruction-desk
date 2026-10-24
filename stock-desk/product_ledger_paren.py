@@ -44,13 +44,19 @@ MATERIAL_TERMS = (
     'ツイル', 'オックス', '綿', '吸汗', '速乾', '防炎', '難燃', '制電', '透湿',
 )
 
-_SEGMENT_SPLIT_RE = re.compile(r'[・･、,，/／&＆]+')
+# ・や、は複数候補分割。/／ は配色つなぎなのでここでは分割しない
+# （配色判定後、非色混在時だけ /／ で再分割する）。
+_SEGMENT_SPLIT_RE = re.compile(r'[・･、,，&＆]+')
+_SLASH_SPLIT_RE = re.compile(r'[/／]+')
 _PAREN_PAIR_RE = re.compile(r'[（(]([^（）()]*)[）)]')
-# 配色のつなぎ（サックス×グレー）。・や／は複数色分割のまま残す。
-_COLORWAY_JOIN_CHARS = '×✕ｘxX'
+# 配色のつなぎ（サックス×グレー、黒／ワイン）。・は複数色分割のまま残す。
+_COLORWAY_JOIN_CHARS = '×✕ｘxX/／'
 _COLORWAY_BRIDGE_RE = re.compile(
     rf'^[{re.escape(_COLORWAY_JOIN_CHARS)}]+$'
 )
+_HALFWIDTH_KATAKANA_RE = re.compile(r'[\uff61-\uff9f]+')
+_SLASH_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[/／][\s\u3000]*')
+_TIMES_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[×✕][\s\u3000]*')
 
 
 def _nfkc(value: str) -> str:
@@ -138,12 +144,34 @@ def _processing_match(seg_key: str, seg_raw: str):
     return None, None
 
 
+def _halfwidth_katakana_to_fullwidth(text: str) -> str:
+    """半角カタカナだけを全角へ（濁点・半濁点は NFKC で合成）。"""
+    t = text or ''
+    if not t:
+        return t
+    return _HALFWIDTH_KATAKANA_RE.sub(
+        lambda m: unicodedata.normalize('NFKC', m.group(0)),
+        t,
+    )
+
+
+def normalize_colorway_display(value: str) -> str:
+    """配色の登録表示: 半角カナ→全角、区切り空白除去、/ → ／。× は × のまま。"""
+    t = _halfwidth_katakana_to_fullwidth((value or '').strip())
+    if not t:
+        return ''
+    t = _SLASH_SEP_NORMALIZE_RE.sub('／', t)
+    t = _TIMES_SEP_NORMALIZE_RE.sub('×', t)
+    return t.strip()
+
+
 def _is_colorway_bridge(between: str) -> bool:
     """色ヒット間が配色として1色にまとめてよいか。
 
     - 空（辞書色の直結: シルバーグレー）→ まとめる
     - × 系のみ（空白可）→ 配色1色
-    - 空白だけ・・／など → まとめない（別色の並び）
+    - / ／ のみ（空白可）→ 配色1色（登録時は ／ に正規化）
+    - 空白だけ・など → まとめない（別色の並び）
     """
     if between == '':
         return True
@@ -154,10 +182,11 @@ def _is_colorway_bridge(between: str) -> bool:
 
 
 def coalesce_colorway_hits(raw: str, hits):
-    """隣接／×接続の辞書色ヒットを配色1色へまとめる。
+    """隣接／×／スラッシュ接続の辞書色ヒットを配色1色へまとめる。
 
     例: サックス×シルバーグレー → 1ヒット（シルバー＋グレーの直結も含む）。
-    ・や／で区切られた複数色はまとめない。
+    例: 黒／ワイン・紺/白/赤 → 1ヒット（区切りは ／ に正規化）。
+    ・で区切られた複数色はまとめない。
     """
     if not hits:
         return []
@@ -180,7 +209,8 @@ def coalesce_colorway_hits(raw: str, hits):
             continue
         start = int(group[0]['start'])
         end = int(group[-1]['end'])
-        value = text[start:end]
+        raw_value = text[start:end]
+        value = normalize_colorway_display(raw_value)
         key = _norm_token(value)
         out.append({
             'value': value,
@@ -195,7 +225,7 @@ def coalesce_colorway_hits(raw: str, hits):
 
 
 def _classify_as_pure_color_span(raw: str):
-    """セグメント全体が辞書色の直結または × 配色なら単一色として返す。"""
+    """セグメント全体が辞書色の直結・×配色・スラッシュ配色なら単一色として返す。"""
     text = (raw or '').strip()
     if not text:
         return None
@@ -205,11 +235,15 @@ def _classify_as_pure_color_span(raw: str):
     hit = hits[0]
     if int(hit.get('start') or 0) != 0 or int(hit.get('end') or 0) != len(text):
         return None
+    value = hit.get('value') or text
+    if hit.get('isColorway') or any(ch in text for ch in '/／×✕'):
+        value = normalize_colorway_display(value)
     return {
         'kind': 'color',
-        'value': text,
-        'matched': hit.get('key') or _norm_token(text),
+        'value': value,
+        'matched': hit.get('key') or _norm_token(value),
         'original': raw,
+        'isColorway': bool(hit.get('isColorway') or any(ch in text for ch in '/／×✕')),
     }
 
 
@@ -218,7 +252,7 @@ def classify_paren_segment(segment: str):
 
     部分文字列だけで色を取らない（例: 蛍光グリーン の中の 緑 は使わない）。
     表示は原文セグメントを優先（％/% の全半角など）。
-    サックス×シルバーグレー のような配色は1色として扱う。
+    サックス×シルバーグレー・黒／ワイン のような配色は1色として扱う。
     """
     raw = (segment or '').strip()
     if not raw:
@@ -232,11 +266,11 @@ def classify_paren_segment(segment: str):
     if color:
         return {
             'kind': 'color',
-            'value': raw,
+            'value': _halfwidth_katakana_to_fullwidth(raw),
             'matched': color,
             'original': raw,
         }
-    # 配色・辞書色の直結（括弧内の サックス×グレー / シルバーグレー）
+    # 配色・辞書色の直結（括弧内の サックス×グレー / 黒／ワイン / シルバーグレー）
     colorway = _classify_as_pure_color_span(raw)
     if colorway:
         return colorway
@@ -262,6 +296,49 @@ def classify_paren_segment(segment: str):
         'matched': '',
         'original': raw,
     }
+
+
+def _classify_paren_parts(content: str):
+    """括弧内側をセグメント分類。スラッシュ配色は1色、非色混在時は分割。"""
+    raw = content if content is not None else ''
+    text = raw.strip()
+    hits = []
+    if not text:
+        hits.append({
+            'kind': 'unknown', 'value': raw, 'matched': '', 'original': raw,
+        })
+        return hits
+
+    # 全体が配色（× または /／）なら1色
+    pure = _classify_as_pure_color_span(text)
+    if pure:
+        return [pure]
+
+    parts = [p.strip() for p in _SEGMENT_SPLIT_RE.split(text) if p.strip()]
+    if not parts:
+        parts = [text]
+
+    for part in parts:
+        if _SLASH_SPLIT_RE.search(part):
+            pure_part = _classify_as_pure_color_span(part)
+            if pure_part:
+                hits.append(pure_part)
+                continue
+            # 色が1つでも含まれるときだけ / で割る。色が無ければ原文のまま
+            # （冬／夏 などを配色扱いにせず、未分類として名に残す）
+            subparts = [p.strip() for p in _SLASH_SPLIT_RE.split(part) if p.strip()]
+            if len(subparts) < 2:
+                hits.append(classify_paren_segment(part))
+                continue
+            sub_hits = [classify_paren_segment(sp) for sp in subparts]
+            if not any(h and h.get('kind') == 'color' for h in sub_hits):
+                hits.append(classify_paren_segment(part))
+                continue
+            # 非色混在: 配色にはせず個別分類（色は抽出、非色は名に残す等）
+            hits.extend(sub_hits)
+        else:
+            hits.append(classify_paren_segment(part))
+    return hits
 
 
 def _paren_inner_to_keep(content: str, part_hits: list):
@@ -362,28 +439,30 @@ def classify_product_name(product_name: str):
     unclassified = []
     segments = []
     paren_hits = []  # 括弧ごとの part hit リスト
+    colorway_notices = []
     for content in contents:
-        parts = [p.strip() for p in _SEGMENT_SPLIT_RE.split(content) if p.strip()]
-        if not parts and content.strip():
-            parts = [content.strip()]
-        hits_for_paren = []
-        if not parts:
+        hits_for_paren = _classify_paren_parts(content)
+        if not hits_for_paren:
             unclassified.append(content)
             hit = {
                 'kind': 'unknown', 'value': content, 'matched': '', 'original': content,
             }
-            hits_for_paren.append(hit)
+            hits_for_paren = [hit]
             segments.append({'paren': content, **hit})
             paren_hits.append(hits_for_paren)
             continue
-        for part in parts:
-            hit = classify_paren_segment(part)
-            hits_for_paren.append(hit)
+        for hit in hits_for_paren:
+            if not hit:
+                continue
             segments.append({'paren': content, **hit})
             kind = hit['kind']
             if kind == 'color':
                 if hit['value'] not in colors:
                     colors.append(hit['value'])
+                if hit.get('isColorway'):
+                    notice = f"配色として1商品で登録：{hit['value']}"
+                    if notice not in colorway_notices:
+                        colorway_notices.append(notice)
             elif kind == 'processing':
                 if hit['value'] not in processings:
                     processings.append(hit['value'])
@@ -397,10 +476,11 @@ def classify_product_name(product_name: str):
 
     base = strip_parens(original)
     reasons = []
-    info_notices = []
+    info_notices = list(colorway_notices)
     needs = False
 
     # 複数色・複数素材は自動確定しない（商品.color / material は単一）
+    # スラッシュ／× 配色は1色にまとめたあとなので、ここでは色候補が複数のときだけ要確認
     color = colors[0] if len(colors) == 1 else ''
     material = materials[0] if len(materials) == 1 else ''
     processing = '・'.join(processings) if processings else ''
@@ -578,7 +658,7 @@ def find_explicit_colors_in_text(text: str):
             })
             _occupy(idx, end)
     hits.sort(key=lambda h: h['start'])
-    # サックス×シルバーグレー は配色1色（辞書の サックス／シルバー／グレーへ割らない）
+    # サックス×グレー・黒／ワイン は配色1色（辞書色へ割らない）
     return coalesce_colorway_hits(raw, hits)
 
 
@@ -791,7 +871,12 @@ def split_name_and_color(product_name: str):
             base_for_strip = original
         hits = extracted.get('outsideHits') or []
         hit = next((h for h in hits if h.get('key') == extracted.get('colorKey')), None)
+        if not hit and len(hits) == 1:
+            hit = hits[0]
         if hit:
+            # 括弧外配色の表示を ／ 正規化（strip は原文位置のまま）
+            if hit.get('isColorway'):
+                color = normalize_colorway_display(hit.get('value') or color)
             stripped = _strip_outside_color_once(base_for_strip, hit)
             # 括弧分類で加工等を抜いた planned を使うときは、外側色除去後に再 classify しない
             if stripped:
@@ -806,6 +891,8 @@ def split_name_and_color(product_name: str):
     # 括弧内色のみで auto のときは planned は classify 済み
     if extracted.get('colorSource') == 'paren' and color and not paren.get('needsConfirm'):
         planned = paren.get('plannedName') or planned
+        if color and any(ch in color for ch in '/／×✕'):
+            color = normalize_colorway_display(color)
 
     # 自動確定: 括弧分類が自動、または括弧外の明示色を一意に振り分けられたとき
     final_planned = planned or original
@@ -831,6 +918,20 @@ def split_name_and_color(product_name: str):
         )
     )
     change_summary = f"商品名から色『{color}』を設定します" if color else ''
+
+    # 括弧外配色の案内（括弧内は classify 側で付与済み）
+    if color and not needs:
+        is_cw = bool(
+            any(ch in color for ch in '／×')
+            or any(
+                h.get('isColorway')
+                for h in (extracted.get('outsideHits') or [])
+            )
+        )
+        if is_cw:
+            notice = f'配色として1商品で登録：{color}'
+            if notice not in info_notices:
+                info_notices.append(notice)
 
     return {
         'originalName': original,

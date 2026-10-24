@@ -3916,5 +3916,281 @@ class ZeroStockMaxLedgerNameTest(unittest.TestCase):
         self.assertIn('商品台帳の名称票', js)
 
 
+class SlashColorwayClassificationTest(unittest.TestCase):
+    """スラッシュ配色（/／）を1色として扱う。テストDBのみ・本番未変更。"""
+
+    def test_half_and_full_slash_paren_colorway(self):
+        import product_ledger_paren as pp
+        for original, color in (
+            ('エプロン（黒／ワイン）', '黒／ワイン'),
+            ('エプロン（黒/ワイン）', '黒／ワイン'),
+            ('ブルゾン（紺/白/赤）', '紺／白／赤'),
+            ('ブルゾン（紺／白／赤）', '紺／白／赤'),
+        ):
+            with self.subTest(original=original):
+                r = pp.split_name_and_color(original)
+                self.assertFalse(r['needsConfirm'], r)
+                self.assertTrue(r['autoClassified'], r)
+                self.assertEqual(r['plannedName'], original.split('（')[0])
+                self.assertEqual(r['color'], color)
+                self.assertIn(
+                    f'配色として1商品で登録：{color}',
+                    r.get('infoNotices') or [],
+                )
+
+    def test_outside_slash_and_whitespace_halfwidth_kana(self):
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('ブルゾン 紺 / 白 / 赤')
+        self.assertFalse(r['needsConfirm'], r)
+        self.assertEqual(r['plannedName'], 'ブルゾン')
+        self.assertEqual(r['color'], '紺／白／赤')
+
+        kana = pp.split_name_and_color('エプロン（黒 / ﾜｲﾝ）')
+        self.assertFalse(kana['needsConfirm'], kana)
+        self.assertEqual(kana['plannedName'], 'エプロン')
+        self.assertEqual(kana['color'], '黒／ワイン')
+
+    def test_mixed_non_color_does_not_force_colorway(self):
+        import product_ledger_paren as pp
+        mixed = pp.split_name_and_color('エプロン（黒／代替品）')
+        self.assertFalse(mixed['needsConfirm'], mixed)
+        self.assertNotEqual(mixed['color'], '黒／代替品')
+        self.assertEqual(mixed['color'], '黒')
+        self.assertEqual(mixed['plannedName'], 'エプロン（代替品）')
+        self.assertIn('代替品', mixed['unclassified'])
+
+        season = pp.classify_product_name('ブルゾン（冬／夏）')
+        self.assertFalse(season['needsConfirm'], season)
+        self.assertEqual(season['plannedName'], 'ブルゾン（冬／夏）')
+        self.assertEqual(season['color'], '')
+        self.assertIn('冬／夏', season['unclassified'])
+
+        # ・区切りの複数色は従来どおり要確認
+        dot = pp.split_name_and_color('ベスト（赤・青）')
+        self.assertTrue(dot['needsConfirm'])
+
+    def test_times_colorway_still_works(self):
+        """PR #178 の × 配色は維持。"""
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('長袖ブルゾン（サックス×シルバーグレー）')
+        self.assertFalse(r['needsConfirm'], r)
+        self.assertEqual(r['plannedName'], '長袖ブルゾン')
+        self.assertEqual(r['color'], 'サックス×シルバーグレー')
+
+    def test_slash_colorway_preview_commit_one_product(self):
+        """配色は1商品。数量・取扱を色ごとに増やさない。原文は別名に残す。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SL-100,エプロン（黒／ワイン）,M',
+                '顧客A,仕入A,SL-100,エプロン（黒/ワイン）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', 'エプロン（黒／ワイン）',
+                    'SL-100', 'M', '3',
+                ),
+                opening_line(
+                    '仕入A', '顧客A', 'エプロン（黒/ワイン）',
+                    'SL-100', 'L', '2',
+                ),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SL-100')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertEqual(g.get('reviewTier'), 'auto')
+            self.assertEqual(g.get('plannedRegisteredName'), 'エプロン')
+            self.assertEqual(g.get('plannedRegisteredColor'), '黒／ワイン')
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            notices = []
+            for r in by_no.values():
+                if (r.get('csv') or {}).get('code') != 'SL-100':
+                    continue
+                pc = r.get('parenClassification') or {}
+                self.assertEqual(pc.get('color'), '黒／ワイン')
+                self.assertEqual(pc.get('plannedName'), 'エプロン')
+                notices.extend(pc.get('infoNotices') or [])
+            self.assertTrue(
+                any('配色として1商品で登録：黒／ワイン' in n for n in notices),
+                notices,
+            )
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-slash-colorway-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            products = c.execute(
+                "SELECT id,name,color FROM products "
+                "WHERE code='SL-100' AND merged_into_id IS NULL"
+            ).fetchall()
+            self.assertEqual(len(products), 1)
+            self.assertEqual(products[0]['name'], 'エプロン')
+            self.assertEqual(products[0]['color'], '黒／ワイン')
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases "
+                    "WHERE kind='name' AND product_id=?",
+                    (products[0]['id'],),
+                )
+            }
+            self.assertTrue(
+                any('黒／ワイン' in a or '黒/ワイン' in a for a in aliases),
+                aliases,
+            )
+
+            # 再取込・再照合でも同じ分類。商品は増えない
+            preview2 = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g2 = next(x for x in preview2['skuGroups'] if x['code'] == 'SL-100')
+            self.assertEqual(g2.get('plannedRegisteredName'), 'エプロン')
+            self.assertEqual(g2.get('plannedRegisteredColor'), '黒／ワイン')
+            result2 = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'pl-slash-colorway-2',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result2['stockUnchanged'])
+            self.assertEqual(
+                c.execute(
+                    "SELECT COUNT(*) AS n FROM products "
+                    "WHERE code='SL-100' AND merged_into_id IS NULL"
+                ).fetchone()['n'],
+                1,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_manual_and_color_split_override_slash_colorway(self):
+        """手動上書き・色別に分けて登録は配色自動より優先。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SL-200,エプロン（黒／ワイン）,M',
+                '顧客A,仕入B,SL-200,エプロン（紺）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', 'エプロン（黒／ワイン）',
+                    'SL-200', 'M', '4',
+                ),
+                opening_line(
+                    '仕入B', '顧客A', 'エプロン（紺）',
+                    'SL-200', 'L', '0',
+                ),
+            ])
+            # 色分割を明示 → 自動配色まとめをしない
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl2.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'skuDecisions': {'SL-200': {'decision': 'color_split'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SL-200')
+            self.assertTrue(
+                g.get('colorSplit')
+                or (g.get('decision') or {}).get('decision') == 'color_split'
+            )
+            self.assertTrue(
+                g.get('excludeAuxStockAutoMerge')
+                or g.get('auxStockPickManualOverride')
+            )
+
+            # 行の手動色上書き（CSVヘッダ行の次が rowNo=2）
+            preview2 = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl2.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'rowClassifications': {
+                    '2': {
+                        'plannedName': 'エプロン特注',
+                        'color': 'カスタム赤',
+                        'userEdited': True,
+                        'confirmed': True,
+                    },
+                },
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            by_no = {r['rowNo']: r for r in preview2['rows']}
+            pc = by_no[2].get('parenClassification') or {}
+            self.assertEqual(pc.get('plannedName'), 'エプロン特注')
+            self.assertEqual(pc.get('color'), 'カスタム赤')
+            self.assertTrue(pc.get('userEdited'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_undecided_supplier_still_blocks_not_slash(self):
+        """配色だけでは個別確認に残さない。他ブロッカー（仕入未決）は残す。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SL-300,エプロン（黒／ワイン）,M',
+                '顧客A,仕入B,SL-300,エプロン（黒／ワイン）,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', 'エプロン（黒／ワイン）',
+                    'SL-300', 'M', '2',
+                ),
+                opening_line(
+                    '仕入B', '顧客A', 'エプロン（黒／ワイン）',
+                    'SL-300', 'L', '2',
+                ),
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'sl3.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SL-300')
+            reason_text = ' '.join(
+                (r.get('label') if isinstance(r, dict) else str(r)) or ''
+                for r in (g.get('reviewReasons') or [])
+            )
+            # 色が複数だから、では残さない
+            self.assertNotIn('括弧内の色が複数', reason_text)
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            pc_notices = []
+            for r in by_no.values():
+                if (r.get('csv') or {}).get('code') != 'SL-300':
+                    continue
+                pc = r.get('parenClassification') or {}
+                self.assertFalse(pc.get('needsConfirm'), pc)
+                self.assertEqual(pc.get('color'), '黒／ワイン')
+                pc_notices.extend(pc.get('infoNotices') or [])
+            self.assertTrue(
+                any('配色として1商品で登録' in n for n in pc_notices),
+                pc_notices,
+            )
+            # 仕入が複数で未決なら要判断は残り得る（配色以外の理由）
+            if g.get('needsDecision'):
+                self.assertTrue(
+                    any(k in reason_text for k in ('仕入', '在庫', '候補')),
+                    reason_text,
+                )
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()
