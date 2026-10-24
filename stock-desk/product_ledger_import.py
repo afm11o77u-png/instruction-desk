@@ -25,8 +25,6 @@ import product_ledger_paren as paren_classify
 import stock
 import stock_product_merge
 
-# 半角カタカナ（濁点・半濁点含む）→ 全角カタカナ用
-_HALFWIDTH_KATAKANA_RE = re.compile(r'[\uff61-\uff9f]+')
 # 配色つなぎ（先頭中古標記を除いたあとの * / ＊ / ×）
 _COLORWAY_SEP_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
 
@@ -1153,7 +1151,11 @@ def _full_package_for_candidate(cand):
     names = list(cand.get('ledgerNames') or [])
     display = prefer_unmarked_product_name(names) or stock.text(cand.get('productName') or '')
     pc = paren_classify.split_name_and_color(display)
-    planned = stock.text(pc.get('plannedName') or '') or display
+    planned = (
+        stock.text(pc.get('plannedName') or '')
+        or unify_import_notation(display)
+        or display
+    )
     color = stock.text(pc.get('color') or '')
     change_summary = stock.text(pc.get('changeSummary') or '')
     if not change_summary and color:
@@ -1246,16 +1248,8 @@ def _adopt_candidate_package(hit, *, candidates, rule, rule_code, reasons=None):
     """採用候補のフルパッケージ＋非採用の原文パッケージを返す。"""
     package = _full_package_for_candidate(hit)
     kept = _kept_packages_excluding(candidates, package)
-    # 登録予定名は色振り分け後。括弧／色が曖昧なら原文を代表名に残す
-    # （apply_aux 側の parenNeedsConfirm で自動確定を止める）。
-    if package.get('parenNeedsConfirm'):
-        chosen_name = package['productName']
-    elif package.get('color') and package.get('plannedName'):
-        chosen_name = package['plannedName']
-    elif package.get('autoClassified') and package.get('plannedName'):
-        chosen_name = package['plannedName']
-    else:
-        chosen_name = package['productName']
+    # 登録予定名は色振り分け＋表記統一後。括弧／色が曖昧でも表記は統一する。
+    chosen_name = registered_name_from_package(package)
     change_summary = stock.text(package.get('changeSummary') or '')
     if not change_summary and package.get('color'):
         change_summary = f"商品名から色『{package['color']}』を設定します"
@@ -1509,14 +1503,7 @@ def _adopt_ledger_max_name_package(
             kept.append(_full_package_for_candidate(cand))
             continue
         kept.append(_full_package_for_candidate(cand))
-    if package.get('parenNeedsConfirm'):
-        chosen_name = package['productName']
-    elif package.get('color') and package.get('plannedName'):
-        chosen_name = package['plannedName']
-    elif package.get('autoClassified') and package.get('plannedName'):
-        chosen_name = package['plannedName']
-    else:
-        chosen_name = package['productName']
+    chosen_name = registered_name_from_package(package)
     change_summary = stock.text(package.get('changeSummary') or '')
     if not change_summary and package.get('color'):
         change_summary = f"商品名から色『{package['color']}』を設定します"
@@ -1628,11 +1615,7 @@ def _try_ledger_max_name_adoption(
         # 名称は決まっても仕入先は既存規則で未決 → 名称提案＋仕入先要確認（行順では選ばない）
         package = _full_package_for_adopted_ledger_name(matching[0], adopted_name)
         package['supplier'] = ''
-        chosen_name = (
-            package.get('plannedName')
-            if package.get('color') and not package.get('parenNeedsConfirm')
-            else package.get('productName')
-        ) or adopted_name
+        chosen_name = registered_name_from_package(package) or adopted_name
         rule = (
             f'全候補の在庫が0のため、商品台帳で最多の名称を採用'
             f'（表記違いを合算：{int(win.get("count") or 0)}行）。'
@@ -3192,13 +3175,12 @@ def used_marker_possible(product_name):
 
 def halfwidth_katakana_to_fullwidth(text):
     """半角カタカナだけを全角へ（濁点・半濁点は NFKC で合成）。他記号は触らない。"""
-    t = stock.text(text)
-    if not t:
-        return t
-    return _HALFWIDTH_KATAKANA_RE.sub(
-        lambda m: unicodedata.normalize('NFKC', m.group(0)),
-        t,
-    )
+    return paren_classify.halfwidth_katakana_to_fullwidth(stock.text(text))
+
+
+def unify_import_notation(text):
+    """取込用表記統一（半角カナ→全角・空白整理）。SKU/ASCII は全角化しない。"""
+    return paren_classify.unify_import_notation(stock.text(text))
 
 
 def normalize_ledger_name_for_vote(name):
@@ -3210,14 +3192,13 @@ def normalize_ledger_name_for_vote(name):
     - 配色つなぎの * / ＊ / × → ×（中古標記と区別。先頭標記除去後に適用）
     - その他の記号は無条件に消さない
     - 品番・メーカー品番には使わない（先頭ゼロ維持）
+    - 文字列全体への NFKC はしない（SKU・先頭ゼロを守る）
     """
     t = stock.text(name)
     if not t:
         return ''
     t, _ = legacy.strip_used_marker(t)
-    t = stock.text(t)
-    t = halfwidth_katakana_to_fullwidth(t)
-    t = re.sub(r'[\s\u3000]+', ' ', t).strip()
+    t = unify_import_notation(t)
     if not t:
         return ''
     t = _COLORWAY_SEP_RE.sub('×', t)
@@ -3227,6 +3208,19 @@ def normalize_ledger_name_for_vote(name):
 def format_ledger_adopted_name(name):
     """採用表示名: 全角カタカナ・半角空白（票キーと同じ正規化結果）。"""
     return normalize_ledger_name_for_vote(name)
+
+
+def registered_name_from_package(package):
+    """登録予定名: 表記統一済み plannedName を優先（要確認時も統一表記）。"""
+    pkg = package or {}
+    planned = stock.text(pkg.get('plannedName') or '')
+    source = stock.text(pkg.get('sourceName') or pkg.get('productName') or '')
+    if pkg.get('parenNeedsConfirm'):
+        # 要確認でも半角カナ等は統一（括弧構造は planned 側で維持済み）
+        return planned or unify_import_notation(source) or source
+    if planned:
+        return planned
+    return unify_import_notation(source) or source
 
 
 def product_name_core_key(name):

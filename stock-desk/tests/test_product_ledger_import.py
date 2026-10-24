@@ -4192,5 +4192,189 @@ class SlashColorwayClassificationTest(unittest.TestCase):
             folder.cleanup()
 
 
+class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
+    """半角カナ表記統一とスラッシュ配色の位置ずれ修正。テストDBのみ。"""
+
+    def test_unify_import_notation_kana_space_sku_safe(self):
+        import product_ledger_paren as pp
+        self.assertEqual(pp.unify_import_notation('ｴﾌﾟﾛﾝ'), 'エプロン')
+        self.assertEqual(pp.unify_import_notation('長袖ﾌﾞﾙｿﾞﾝ'), '長袖ブルゾン')
+        # 濁点・半濁点合成
+        self.assertEqual(pp.unify_import_notation('ｶﾞｷﾞｸﾞｹﾞｺﾞ'), 'ガギグゲゴ')
+        self.assertEqual(pp.unify_import_notation('ﾊﾟﾋﾟﾌﾟﾍﾟﾎﾟ'), 'パピプペポ')
+        # 全角空白→半角・連続畳み
+        self.assertEqual(pp.unify_import_notation('エプロン　  紺'), 'エプロン 紺')
+        self.assertEqual(pp.unify_import_notation('エプロン　  ネイビー'), 'エプロン ネイビー')
+        # SKU・先頭ゼロ・ASCII は全角化しない（全体 NFKC しない）
+        self.assertEqual(pp.unify_import_notation('00008'), '00008')
+        self.assertEqual(pp.unify_import_notation('SKU-001'), 'SKU-001')
+        self.assertEqual(pp.unify_import_notation('ＡＢＣ'), 'ＡＢＣ')
+        # 冪等
+        self.assertEqual(
+            pp.unify_import_notation(pp.unify_import_notation('ﾁｬｺｰﾙ')),
+            'チャコール',
+        )
+
+    def test_halfwidth_slash_colorway_same_as_fullwidth(self):
+        import product_ledger_paren as pp
+        cases = (
+            ('エプロン(ﾁｬｺｰﾙ/ｸﾞﾚｰ)', 'エプロン', 'チャコール／グレー'),
+            ('エプロン(チャコール/グレー)', 'エプロン', 'チャコール／グレー'),
+            ('エプロン(ﾌﾞﾗｳﾝ/ﾍﾞｰｼﾞｭ)', 'エプロン', 'ブラウン／ベージュ'),
+            ('エプロン(ブラウン/ベージュ)', 'エプロン', 'ブラウン／ベージュ'),
+            ('エプロン（ﾁｬｺｰﾙ／ｸﾞﾚｰ）', 'エプロン', 'チャコール／グレー'),
+            ('ブルゾン(紺/白/赤)', 'ブルゾン', '紺／白／赤'),
+        )
+        for original, name, color in cases:
+            with self.subTest(original=original):
+                r = pp.split_name_and_color(original)
+                self.assertFalse(r['needsConfirm'], r)
+                self.assertTrue(r['autoClassified'], r)
+                self.assertEqual(r['originalName'], original)
+                self.assertEqual(r['plannedName'], name)
+                self.assertEqual(r['color'], color)
+                self.assertEqual(
+                    r.get('changeSummary'),
+                    '商品名から配色を抽出。1商品として登録',
+                )
+                self.assertIn(
+                    f'配色として1商品で登録：{color}',
+                    r.get('infoNotices') or [],
+                )
+
+    def test_positions_use_same_normalized_string(self):
+        """変換前後の位置を混ぜない。濁点で長さが変わる半角カナでも配色1色。"""
+        import product_ledger_paren as pp
+        raw = 'ﾁｬｺｰﾙ/ｸﾞﾚｰ'
+        # 変換前 len と変換後 len が異なることが前提（バグ再現条件）
+        self.assertNotEqual(len(raw), len(pp.unify_import_notation(raw)))
+        hits = pp.find_explicit_colors_in_text(raw)
+        self.assertEqual(len(hits), 1, hits)
+        self.assertTrue(hits[0].get('isColorway'), hits)
+        self.assertEqual(hits[0]['value'], 'チャコール／グレー')
+        pure = pp._classify_as_pure_color_span(raw)
+        self.assertIsNotNone(pure)
+        self.assertEqual(pure['value'], 'チャコール／グレー')
+
+    def test_name_without_slash_still_unifies(self):
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('ｴﾌﾟﾛﾝ')
+        self.assertEqual(r['plannedName'], 'エプロン')
+        self.assertEqual(r['color'], '')
+        self.assertFalse(r['needsConfirm'])
+        r2 = pp.split_name_and_color('長袖ﾌﾞﾙｿﾞﾝ')
+        self.assertEqual(r2['plannedName'], '長袖ブルゾン')
+        outside = pp.split_name_and_color('ﾌﾞﾙｿﾞﾝ ﾈｲﾋﾞｰ')
+        self.assertEqual(outside['plannedName'], 'ブルゾン')
+        self.assertEqual(outside['color'], 'ネイビー')
+
+    def test_times_colorway_and_mixed_non_color_unaffected(self):
+        import product_ledger_paren as pp
+        times = pp.split_name_and_color('長袖ブルゾン（サックス×シルバーグレー）')
+        self.assertFalse(times['needsConfirm'], times)
+        self.assertEqual(times['plannedName'], '長袖ブルゾン')
+        self.assertEqual(times['color'], 'サックス×シルバーグレー')
+        mixed = pp.split_name_and_color('エプロン（黒／代替品）')
+        self.assertEqual(mixed['color'], '黒')
+        self.assertEqual(mixed['plannedName'], 'エプロン（代替品）')
+
+    def test_preview_register_halfwidth_colorway_one_product(self):
+        """半角カナ配色: preview=register。1商品。別名に原文。在庫二重計上なし。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,HW-100,エプロン(ﾁｬｺｰﾙ/ｸﾞﾚｰ),M',
+                '顧客A,仕入A,HW-100,エプロン(チャコール/グレー),L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', 'エプロン(ﾁｬｺｰﾙ/ｸﾞﾚｰ)',
+                    'HW-100', 'M', '3',
+                ),
+                opening_line(
+                    '仕入A', '顧客A', 'エプロン(チャコール/グレー)',
+                    'HW-100', 'L', '2',
+                ),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'hw.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'HW-100')
+            self.assertEqual(g.get('plannedRegisteredName'), 'エプロン')
+            self.assertEqual(g.get('plannedRegisteredColor'), 'チャコール／グレー')
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            notices = []
+            for r in by_no.values():
+                if (r.get('csv') or {}).get('code') != 'HW-100':
+                    continue
+                pc = r.get('parenClassification') or {}
+                self.assertFalse(pc.get('needsConfirm'), pc)
+                self.assertEqual(pc.get('plannedName'), 'エプロン')
+                self.assertEqual(pc.get('color'), 'チャコール／グレー')
+                notices.extend(pc.get('infoNotices') or [])
+            self.assertTrue(
+                any('配色として1商品で登録：チャコール／グレー' in n for n in notices),
+                notices,
+            )
+            # 半角行の原文は残る
+            self.assertEqual(
+                (by_no[2].get('parenClassification') or {}).get('originalName'),
+                'エプロン(ﾁｬｺｰﾙ/ｸﾞﾚｰ)',
+            )
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'hw.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-halfwidth-colorway-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            products = c.execute(
+                "SELECT id,name,color FROM products "
+                "WHERE code='HW-100' AND merged_into_id IS NULL"
+            ).fetchall()
+            self.assertEqual(len(products), 1)
+            self.assertEqual(products[0]['name'], 'エプロン')
+            self.assertEqual(products[0]['color'], 'チャコール／グレー')
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases "
+                    "WHERE kind='name' AND product_id=?",
+                    (products[0]['id'],),
+                )
+            }
+            self.assertTrue(
+                any('ﾁｬｺｰﾙ' in a or 'チャコール' in a for a in aliases),
+                aliases,
+            )
+
+            # 初期在庫ステージ: 原文キーでマップ照合。unify で行・数量が増えない
+            opening = pli.build_preview(c, {
+                'importMode': 'opening_stock',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o2.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = (opening.get('openingStock') or {}).get('plans') or []
+            qty_vals = []
+            for p in plans:
+                q = p.get('qty')
+                if q is None and isinstance(p.get('opening'), dict):
+                    q = p['opening'].get('qty')
+                if q is not None:
+                    qty_vals.append(int(q))
+            self.assertEqual(len(qty_vals), 2, plans)
+            self.assertEqual(sum(qty_vals), 5, plans)
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()
