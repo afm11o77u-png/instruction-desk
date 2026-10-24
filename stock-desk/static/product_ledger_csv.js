@@ -1030,10 +1030,15 @@
     const material=edit.material!=null?edit.material:(pc.material||'')
     const unc=(edit.unclassified!=null?edit.unclassified:(pc.unclassified||[]))
     const uncText=Array.isArray(unc)?unc.join('、'):String(unc||'')
+    const notices=Array.isArray(pc.infoNotices)?pc.infoNotices:[]
+    const noticeHtml=notices.length
+      ?`<div class="excelhint pl-paren-info">${notices.map(n=>esc(n)).join('<br>')}</div>`
+      :''
     const flag=pc.needsConfirm?'要確認':(pc.autoClassified?'自動':'—')
     const disabled=st.busy?'disabled':''
     return `<div class="pl-paren-edit">
       <div class="excelhint">${esc(flag)}${pc.keptOriginal&&pc.needsConfirm?'（原文維持）':''}</div>
+      ${noticeHtml}
       <label>予定名<input data-pl-paren-name="${r.rowNo}" value="${esc(planned)}" ${disabled}></label>
       <label>色<input data-pl-paren-color="${r.rowNo}" value="${esc(color)}" ${disabled}></label>
       <label>加工<input data-pl-paren-proc="${r.rowNo}" value="${esc(processing)}" ${disabled}></label>

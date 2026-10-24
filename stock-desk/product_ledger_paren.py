@@ -264,12 +264,64 @@ def classify_paren_segment(segment: str):
     }
 
 
+def _paren_inner_to_keep(content: str, part_hits: list):
+    """括弧1個ぶんの残す内側テキスト。None なら括弧ごと除去。
+
+    - 分類できた部分だけ → 除去
+    - 未分類だけ → 原文の内側をそのまま残す（削除・推測しない）
+    - 混在 → 未分類だけを残す（区切りで安全に分割できた場合）。
+      分割できない／空になる場合は原文の内側を丸ごと残す
+    """
+    hits = [h for h in (part_hits or []) if h]
+    if not hits:
+        raw = (content or '').strip()
+        return raw if raw else (content if content is not None else None)
+    unclassified = [h for h in hits if h.get('kind') == 'unknown']
+    classified = [h for h in hits if h.get('kind') != 'unknown']
+    if classified and not unclassified:
+        return None
+    if unclassified and not classified:
+        return content
+    # 混在: 未分類を落とさない。分割結果から未分類だけ再構成
+    kept_vals = [h.get('value') or h.get('original') or '' for h in unclassified]
+    kept_vals = [v for v in kept_vals if str(v).strip()]
+    if not kept_vals:
+        return content
+    # 元が単一未分類＋分類の並びなら・でつなぐ（元区切りを推測しすぎない）
+    return '・'.join(kept_vals)
+
+
+def _rebuild_name_keeping_unclassified(original: str, keep_inners: list):
+    """分類済み括弧を除き、未分類を残した予定名を組み立てる。"""
+    text = original or ''
+    matches = list(_PAREN_PAIR_RE.finditer(text))
+    if len(matches) != len(keep_inners):
+        return text
+    parts = []
+    last = 0
+    for m, inner in zip(matches, keep_inners):
+        parts.append(text[last:m.start()])
+        if inner is not None:
+            open_br = text[m.start()]
+            close_br = text[m.end() - 1]
+            parts.append(f'{open_br}{inner}{close_br}')
+        last = m.end()
+    parts.append(text[last:])
+    merged = ''.join(parts)
+    merged = re.sub(r'[\s\u3000]{2,}', ' ', merged)
+    merged = re.sub(r'[\s\u3000]+([（(])', r'\1', merged)
+    return merged.strip()
+
+
 def classify_product_name(product_name: str):
     """商品名の括弧内容を分類する。
 
+    未分類の括弧文言は削除せず商品名に残す。未分類だけでは要確認にしない
+    （情報通知のみ）。色・加工・生地へ明確に分類できる部分は従来どおり抽出する。
+
     Returns dict:
       originalName, plannedName, color, processing, material,
-      unclassified (list), needsConfirm, confirmReasons,
+      unclassified (list), needsConfirm, confirmReasons, infoNotices,
       autoClassified, parenContents, segments
     """
     original = (product_name or '').strip()
@@ -283,6 +335,7 @@ def classify_product_name(product_name: str):
         'unclassified': [],
         'needsConfirm': False,
         'confirmReasons': [],
+        'infoNotices': [],
         'autoClassified': False,
         'parenContents': [],
         'segments': [],
@@ -308,18 +361,24 @@ def classify_product_name(product_name: str):
     materials = []
     unclassified = []
     segments = []
+    paren_hits = []  # 括弧ごとの part hit リスト
     for content in contents:
         parts = [p.strip() for p in _SEGMENT_SPLIT_RE.split(content) if p.strip()]
         if not parts and content.strip():
             parts = [content.strip()]
+        hits_for_paren = []
         if not parts:
             unclassified.append(content)
-            segments.append({
-                'paren': content, 'kind': 'unknown', 'value': content, 'original': content,
-            })
+            hit = {
+                'kind': 'unknown', 'value': content, 'matched': '', 'original': content,
+            }
+            hits_for_paren.append(hit)
+            segments.append({'paren': content, **hit})
+            paren_hits.append(hits_for_paren)
             continue
         for part in parts:
             hit = classify_paren_segment(part)
+            hits_for_paren.append(hit)
             segments.append({'paren': content, **hit})
             kind = hit['kind']
             if kind == 'color':
@@ -334,50 +393,57 @@ def classify_product_name(product_name: str):
             else:
                 if hit['value'] not in unclassified:
                     unclassified.append(hit['value'])
+        paren_hits.append(hits_for_paren)
 
     base = strip_parens(original)
     reasons = []
+    info_notices = []
     needs = False
 
     # 複数色・複数素材は自動確定しない（商品.color / material は単一）
     color = colors[0] if len(colors) == 1 else ''
     material = materials[0] if len(materials) == 1 else ''
     processing = '・'.join(processings) if processings else ''
+    multi_color = len(colors) > 1
+    multi_material = len(materials) > 1
 
-    if len(colors) > 1:
+    if multi_color:
         needs = True
         reasons.append('括弧内の色が複数あるため要確認: ' + '、'.join(colors))
         color = ''
-    if len(materials) > 1:
+    if multi_material:
         needs = True
         reasons.append('括弧内の生地・素材が複数あるため要確認: ' + '、'.join(materials))
         material = ''
-    if unclassified:
-        needs = True
-        reasons.append('括弧内に未分類の文言あり: ' + '、'.join(unclassified))
 
-    # 未分類があれば原文を残す（削除しない）
-    if unclassified or (len(colors) > 1) or (len(materials) > 1):
+    # 未分類は商品名に残して登録（単独ではブロックしない）
+    if unclassified:
+        for u in unclassified:
+            label = str(u).strip() or u
+            notice = f"未分類の『{label}』は商品名に残して登録します"
+            if notice not in info_notices:
+                info_notices.append(notice)
+
+    if multi_color or multi_material:
+        # 曖昧なときは原文を崩さない（未分類も落とさない）
         planned = original
         kept = True
-        needs = True
-    elif colors or processings or materials:
-        planned = base or original
-        kept = planned == original
-        # 分類できたものだけ抜き、ベース名へ
-        if not base:
+    else:
+        keep_inners = [
+            _paren_inner_to_keep(content, hits)
+            for content, hits in zip(contents, paren_hits)
+        ]
+        planned = _rebuild_name_keeping_unclassified(original, keep_inners)
+        if not planned:
             planned = original
             kept = True
             needs = True
             reasons.append('括弧除去後の商品名が空になるため原文のまま要確認')
-    else:
-        # 括弧はあるが何も分類できない
-        planned = original
-        kept = True
-        needs = True
-        reasons.append('括弧内を色・加工・生地へ分類できないため原文のまま要確認')
+        else:
+            kept = planned == original
 
-    auto = bool((colors or processings or materials) and not needs)
+    # 分類抽出できた、または未分類を名に残して確定できるとき自動
+    auto = (not needs) and bool(colors or processings or materials or unclassified)
 
     return {
         'originalName': original,
@@ -389,6 +455,7 @@ def classify_product_name(product_name: str):
         'unclassified': list(unclassified),
         'needsConfirm': needs,
         'confirmReasons': reasons,
+        'infoNotices': info_notices,
         'autoClassified': auto,
         'parenContents': list(contents),
         'segments': segments,
@@ -690,7 +757,7 @@ def split_name_and_color(product_name: str):
 
     - 括弧内色: 既存 classify の plannedName / color を基本に使う
     - 括弧外の明示色: 辞書＋境界で取り、商品名から除去（白衣の白は除去しない）
-    - 加工・素材・未分類は classify 結果を維持（消さない）
+    - 加工・素材は classify 結果を維持。未分類は商品名に残す（単独では要確認にしない）
     - 数値色コードは辞書に無い限り触らない
     """
     original = (product_name or '').strip()
@@ -701,17 +768,25 @@ def split_name_and_color(product_name: str):
     for r in extracted.get('confirmReasons') or []:
         if r not in reasons:
             reasons.append(r)
+    info_notices = list(paren.get('infoNotices') or [])
     needs = bool(paren.get('needsConfirm') or extracted.get('needsConfirm'))
 
     planned = paren.get('plannedName') or original
     source = extracted.get('colorSource') or ''
 
     if extracted.get('colorSource') == 'outside' and color and not extracted.get('needsConfirm'):
-        # 括弧分類が自動で planned を作れている場合は、その planned から外側色を除く
-        base_for_strip = planned if (
-            paren.get('autoClassified') or (paren.get('color') or paren.get('processing') or paren.get('material'))
-        ) and not paren.get('needsConfirm') else original
-        # 未分類などで原文維持のときは、外側色だけ除いた名を予定名にする
+        # 括弧分類が確定できる planned（未分類残しも含む）から外側色を除く
+        if not paren.get('needsConfirm') and (
+            paren.get('autoClassified')
+            or paren.get('color')
+            or paren.get('processing')
+            or paren.get('material')
+            or paren.get('unclassified')
+        ):
+            base_for_strip = planned
+        else:
+            base_for_strip = original
+        # 複数色など括弧が要確認で原文維持のときは、外側色だけ原文から除く
         if paren.get('needsConfirm') and paren.get('keptOriginal'):
             base_for_strip = original
         hits = extracted.get('outsideHits') or []
@@ -770,6 +845,7 @@ def split_name_and_color(product_name: str):
         'unclassified': list(paren.get('unclassified') or []),
         'needsConfirm': needs,
         'confirmReasons': reasons,
+        'infoNotices': info_notices,
         'autoClassified': bool(auto and not needs),
         'parenContents': list(paren.get('parenContents') or []),
         'segments': list(paren.get('segments') or []),

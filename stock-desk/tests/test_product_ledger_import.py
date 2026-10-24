@@ -2784,13 +2784,49 @@ class ParenClassificationTest(unittest.TestCase):
                 self.assertEqual(r['processing'], proc)
                 self.assertEqual(r['material'], mat)
 
-    def test_unknown_keeps_original(self):
+    def test_unknown_keeps_in_name_without_blocking(self):
+        """未分類のみは商品名に残し、要確認にしない。"""
         import product_ledger_paren as pp
         r = pp.classify_product_name('パンツ（代替品）')
-        self.assertTrue(r['needsConfirm'])
+        self.assertFalse(r['needsConfirm'], r)
         self.assertEqual(r['plannedName'], 'パンツ（代替品）')
         self.assertIn('代替品', r['unclassified'])
-        self.assertFalse(r['autoClassified'])
+        self.assertTrue(r['autoClassified'], r)
+        self.assertTrue(any('代替品' in n and '商品名に残して' in n for n in r.get('infoNotices') or []))
+
+        winter = pp.classify_product_name('ブルゾン（冬）')
+        self.assertFalse(winter['needsConfirm'], winter)
+        self.assertEqual(winter['plannedName'], 'ブルゾン（冬）')
+        self.assertEqual(winter['color'], '')
+        self.assertIn('冬', winter['unclassified'])
+
+        mixed = pp.classify_product_name('ブルゾン（冬）（紺）')
+        self.assertFalse(mixed['needsConfirm'], mixed)
+        self.assertEqual(mixed['plannedName'], 'ブルゾン（冬）')
+        self.assertEqual(mixed['color'], '紺')
+        self.assertIn('冬', mixed['unclassified'])
+
+        mixed_proc = pp.classify_product_name('白衣（冬）（DHC刺繍あり）')
+        self.assertFalse(mixed_proc['needsConfirm'], mixed_proc)
+        self.assertEqual(mixed_proc['plannedName'], '白衣（冬）')
+        self.assertEqual(mixed_proc['processing'], 'DHC刺繍あり')
+
+        same_paren = pp.classify_product_name('ブルゾン（冬・紺）')
+        self.assertFalse(same_paren['needsConfirm'], same_paren)
+        self.assertEqual(same_paren['plannedName'], 'ブルゾン（冬）')
+        self.assertEqual(same_paren['color'], '紺')
+
+        # 冬／夏は照合キーでも区別したまま（剥がして同一視しない）
+        import legacy_csv_import as legacy
+        self.assertNotEqual(
+            legacy.product_name_core_key('ブルゾン（冬）'),
+            legacy.product_name_core_key('ブルゾン（夏）'),
+        )
+        winter2 = pp.split_name_and_color('ブルゾン（冬）')
+        summer = pp.split_name_and_color('ブルゾン（夏）')
+        self.assertEqual(winter2['plannedName'], 'ブルゾン（冬）')
+        self.assertEqual(summer['plannedName'], 'ブルゾン（夏）')
+        self.assertNotEqual(winter2['plannedName'], summer['plannedName'])
 
     def test_green_not_fluorescent_green(self):
         import product_ledger_paren as pp
@@ -2814,6 +2850,7 @@ class ParenClassificationTest(unittest.TestCase):
                 '顧客B,仕入A,SKU-P2,白衣（DHC刺繍あり）,L',
                 '顧客A,仕入A,SKU-P3,パンツ（綿100％）,S',
                 '顧客A,仕入A,SKU-P4,パンツ（代替品）,M',
+                '顧客A,仕入A,SKU-P5,ブルゾン（冬）（紺）,L',
             ])
             before = stock_snap(c)
             preview = pli.build_preview(c, {
@@ -2836,31 +2873,45 @@ class ParenClassificationTest(unittest.TestCase):
             self.assertEqual(by_no[4]['product'].get('proposedMaterial'), '綿100％')
 
             p4 = by_no[5]['parenClassification']
-            self.assertTrue(p4['needsConfirm'])
-            self.assertEqual(by_no[5]['status'], 'needs_review')
+            self.assertFalse(p4['needsConfirm'], p4)
+            self.assertEqual(p4['plannedName'], 'パンツ（代替品）')
+            self.assertNotEqual(by_no[5]['status'], 'needs_review')
+            self.assertTrue(any('代替品' in n for n in (p4.get('infoNotices') or [])))
 
-            # 代替品は確認済みにしてから登録（他は自動）
+            p5 = by_no[6]['parenClassification']
+            self.assertFalse(p5['needsConfirm'], p5)
+            self.assertEqual(p5['plannedName'], 'ブルゾン（冬）')
+            self.assertEqual(p5['color'], '紺')
+            self.assertEqual(by_no[6]['product'].get('proposedColor'), '紺')
+            self.assertNotEqual(by_no[6]['status'], 'needs_review')
+
             body = {
                 'file': csv_b64_from_text(text), 'name': 'paren.csv',
-                'rowClassifications': {
-                    '5': {
-                        'plannedName': 'パンツ（代替品）',
-                        'color': '', 'processing': '', 'material': '',
-                        'unclassified': ['代替品'],
-                        'userEdited': True, 'confirmed': True, 'acceptProposal': True,
-                    },
-                },
                 '_canWrite': True, '_actor': {'name': 't'},
             }
-            preview2 = pli.build_preview(c, body)
+            # 手動編集は再照合で上書きしない
+            body_edit = {
+                **body,
+                'rowClassifications': {
+                    '6': {
+                        'plannedName': 'ブルゾン手編集',
+                        'color': '紺',
+                        'processing': '', 'material': '',
+                        'unclassified': ['冬'],
+                        'userEdited': True,
+                    },
+                },
+            }
+            preview_edit = pli.build_preview(c, body_edit)
             self.assertEqual(stock_snap(c), before)
-            by2 = {r['rowNo']: r for r in preview2['rows']}
-            self.assertNotEqual(by2[5]['status'], 'needs_review')
+            pe = {r['rowNo']: r for r in preview_edit['rows']}[6]['parenClassification']
+            self.assertEqual(pe['plannedName'], 'ブルゾン手編集')
+            self.assertTrue(pe.get('userEdited'))
 
             result = pli.commit_preview(c, {
                 **body,
-                'previewFingerprint': preview2['previewFingerprint'],
-                'previewAt': preview2['previewAt'],
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
                 'token': 'pl-paren-1',
             }, db_path=str(path))
             c.commit()
@@ -2888,6 +2939,18 @@ class ParenClassificationTest(unittest.TestCase):
             self.assertEqual(mat['name'], 'パンツ')
             self.assertEqual(mat['material'], '綿100％')
 
+            alt = c.execute(
+                "SELECT name,color FROM products WHERE code='SKU-P4' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertEqual(alt['name'], 'パンツ（代替品）')
+            self.assertEqual(alt['color'] or '', '')
+
+            blouson = c.execute(
+                "SELECT id,name,color FROM products WHERE code='SKU-P5' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertEqual(blouson['name'], 'ブルゾン（冬）')
+            self.assertEqual(blouson['color'], '紺')
+
             # 原文が別名に残る
             aliases = {
                 r['value'] for r in c.execute(
@@ -2896,6 +2959,13 @@ class ParenClassificationTest(unittest.TestCase):
                 )
             }
             self.assertIn('ポロシャツ（ネイビー）', aliases)
+            blouson_aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (blouson['id'],),
+                )
+            }
+            self.assertIn('ブルゾン（冬）（紺）', blouson_aliases)
 
             # 再取込で二重登録なし
             preview3 = pli.build_preview(c, body)

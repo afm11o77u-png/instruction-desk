@@ -4146,10 +4146,11 @@ def build_paren_classification(product_name, override=None):
     reasons = list(base.get('confirmReasons') or [])
     if user_touched:
         # 手動確定後は要確認を外せる（ユーザーが内容を編集した）
+        # 未分類の残存だけでは要確認に戻さない（情報通知のみ）
         if raw.get('confirmed') or raw.get('acceptProposal'):
             needs = False
             reasons = []
-        elif not raw.get('confirmed') and (unclassified or base.get('needsConfirm')):
+        elif not raw.get('confirmed') and base.get('needsConfirm'):
             needs = True
     # 曖昧なまま自動確定しない
     auto = bool(base.get('autoClassified')) and not needs and not user_touched
@@ -4160,6 +4161,7 @@ def build_paren_classification(product_name, override=None):
     change_summary = stock.text(base.get('changeSummary') or '')
     if color and not change_summary:
         change_summary = f"商品名から色『{color}』を設定します"
+    info_notices = list(base.get('infoNotices') or [])
     return {
         'originalName': base['originalName'],
         'plannedName': planned or base['originalName'],
@@ -4171,6 +4173,7 @@ def build_paren_classification(product_name, override=None):
         'unclassified': unclassified,
         'needsConfirm': needs,
         'confirmReasons': reasons,
+        'infoNotices': info_notices,
         'autoClassified': auto and not user_touched,
         'userEdited': user_touched,
         'decision': decision,
@@ -5699,7 +5702,8 @@ def build_preview(c, body):
             + '通常品番は1品番=1商品です。サイズ・顧客・先頭「＊/*」中古標記・空白/全角半角・'
             '明示シノニム（例: パンツ／スラックス）だけの差は自動で1商品にまとめます。'
             '商品名の括弧内は辞書規則で色・加工・生地へ分類し、取扱の加工仕様／商品の色・生地へ保存します。'
-            '未分類・曖昧な括弧は原文のまま要確認（自動確定しません）。'
+            '未分類の括弧文言は商品名に残して登録します（未分類だけでは要確認にしません）。'
+            '複数色・複数生地など曖昧な括弧は原文のまま要確認（自動確定しません）。'
             '色・生地・加工・商品種の疑いや残り曖昧さ、男女の明示対立（男性用⇔女性用）は確認が必要です。'
             '代表名が未確定のときは「名称未整理」ステータスで示し、名前文字列には埋め込みません。'
             'CSV原文は照合用別名に残します。登録時に原文→商品／取扱／仕様の対応を永続化します。'
