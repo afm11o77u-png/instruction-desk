@@ -1081,12 +1081,14 @@
     const list=cands.map((c,i)=>{
       const diff=c.diff||{}
       return `<li class="pl-maker-cand">
-        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}
+        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.supplement?`　補足 ${esc(c.supplement)}`:''}
+          ${c.makerSku?`　品番 ${esc(c.makerSku)}`:''}
+          ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
           ${c.fromSaved?' <span class="badge">保存済み</span>':''}
           ${c.preferred?' <span class="sub">優先候補</span>':''}
         </div>
-        <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')}</div>
-        <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'}</div>
+        <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')} / 補足 ${esc(diff.currentSupplement||'（空）')}</div>
+        <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'} / 補足 ${diff.supplementChanged?'変わる':'同じ'}</div>
         ${c.sourceUrl?`<div class="excelhint"><a href="${esc(c.sourceUrl)}" target="_blank" rel="noopener">参考URL</a></div>`:''}
         <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy?'disabled':''}>採用</button>
       </li>`
@@ -1105,7 +1107,7 @@
       ${panel.error?`<p class="product-ledger-import-error" role="alert">${esc(panel.error)}</p>`:''}
       ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:`<p class="excelhint">採用できる候補はありません。</p>`}
       ${ref?`<p class="excelhint"><a href="${esc(ref)}" target="_blank" rel="noopener">参考ページを開く</a>（開いただけでは補正完了になりません）</p>`:''}
-      <p class="excelhint">「採用」はプレビューの予定名／色だけを更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
+      <p class="excelhint">「採用」はプレビューの予定名／色／補足だけを更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
     </div>`
   }
 
@@ -2134,23 +2136,29 @@
         if(!mk.eligible||!mk.makerSku){st.toast('メーカー品番が対象外です。');return}
         const pc=row.parenClassification||{}
         const edit=st.rowClassifications[String(rowNo)]||{}
-        const currentName=edit.plannedName!=null?edit.plannedName:(pc.plannedName||(row.product&&row.product.officialName)||(row.csv&&row.csv.productName)||'')
+        const sourceName=(row.csv&&row.csv.productName)||''
+        const currentName=edit.plannedName!=null?edit.plannedName:(pc.plannedName||(row.product&&row.product.officialName)||sourceName||'')
         const currentColor=edit.color!=null?edit.color:(pc.color||(row.product&&row.product.officialColor)||'')
+        const currentSupplement=edit.supplement!=null?edit.supplement:(pc.supplement||'')
         st.busy=true
         st.makerLookup={
           rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
-          supplier:(row.csv&&row.csv.supplier)||'',statusLabel:'検索中…',result:null,error:''
+          supplier:(row.csv&&row.csv.supplier)||'',sourceName,
+          statusLabel:'検索中…',result:null,error:''
         }
         paintDialog()
         try{
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
             makerSku:mk.makerSku,
-            currentName,currentColor,
+            currentName,currentColor,currentSupplement,
+            sourceName,
             supplier:(row.csv&&row.csv.supplier)||''
           })
           st.makerLookup=Object.assign({},st.makerLookup,{
-            result,statusLabel:result.statusLabel||result.status||'',error:''
+            result,
+            manufacturer:result.manufacturer||mk.manufacturer||'',
+            statusLabel:result.statusLabel||result.status||'',error:''
           })
         }catch(e){
           st.makerLookup=Object.assign({},st.makerLookup,{
@@ -2178,21 +2186,26 @@
         paintDialog()
         try{
           await st.api('/api/product-ledger-csv/maker-lookup/adopt',{
-            manufacturer:panel.manufacturer||panel.result.manufacturer||'',
+            manufacturer:cand.manufacturer||panel.manufacturer||panel.result.manufacturer||'',
             makerSku:panel.makerSku,
             name:cand.name||'',
             color:cand.color||'',
+            supplement:cand.supplement||'',
             sourceUrl:cand.sourceUrl||''
           })
-          // プレビューのみ更新（台帳登録は「確認して商品を登録」）。原文は別名に残る。
+          // プレビューのみ更新（台帳登録は「確認して商品を登録」）。原文は別名に残す。
+          // メーカー情報を名・色の根拠にし、旧名の「白」などとの色競合を確認待ちに残さない。
           setRowClassification(st,panel.rowNo,{
             plannedName:cand.name||'',
             color:cand.color||'',
+            supplement:cand.supplement||'',
+            unclassified:[],
             userEdited:true,
             confirmed:true,
             acceptProposal:true,
             makerAdopted:true,
-            makerSourceUrl:cand.sourceUrl||''
+            makerSourceUrl:cand.sourceUrl||'',
+            makerManufacturer:cand.manufacturer||panel.manufacturer||''
           })
           st.makerLookup=null
           st.toast('メーカー情報を予定へ採用しました（まだ台帳には登録していません）')
