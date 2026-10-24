@@ -768,6 +768,7 @@
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':''}" ${st.busy?'disabled':''}>色別に分けて登録</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="separate" class="${decision==='separate'?'primary':''}" ${st.busy?'disabled':''}>別物のため個別に整理する</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>今回は保留する</button>
+          ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
         </div>
         ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
@@ -845,6 +846,7 @@
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめ</button>
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" ${st.busy?'disabled':''}>保留</button>
+            ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
             <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
         </td>
@@ -1103,6 +1105,10 @@
     const status=esc(res.statusLabel||panel.statusLabel||'—')
     const note=esc(res.note||'')
     const ref=res.referenceUrl||''
+    const skuScope=panel.scope==='sku'
+    const scopeLabel=skuScope
+      ?`品番 ${esc(panel.skuCode||panel.makerSku||'')}（グループ ${(panel.rowNos||[]).length||0} 行）`
+      :`行 ${esc(String(panel.rowNo||''))}`
     const list=cands.map((c,i)=>{
       const diff=c.diff||{}
       return `<li class="pl-maker-cand">
@@ -1121,7 +1127,7 @@
     return `<div class="notice pl-maker-lookup-panel" role="region" aria-label="メーカー情報で補正">
       <div class="bar">
         <strong>メーカー情報で補正</strong>
-        <span class="sub">行 ${esc(String(panel.rowNo||''))}　メーカー品番 ${esc(panel.makerSku||'')}
+        <span class="sub">${scopeLabel}　メーカー品番 ${esc(panel.makerSku||'')}
           ${panel.manufacturer?`　メーカー ${esc(panel.manufacturer)}`:''}
           ${panel.supplier?`　仕入先（検索キー外） ${esc(panel.supplier)}`:''}
         </span>
@@ -1129,6 +1135,7 @@
       </div>
       <p>状態: <strong>${status}</strong></p>
       ${note?`<p class="excelhint">${note}</p>`:''}
+      ${skuScope?`<p class="excelhint">品番内の色表記ゆれをメーカー情報で揃え、1商品の登録予定へまとめます。メーカー側に複数色がある場合は候補から選んでください（自動では決めません）。</p>`:''}
       ${panel.error?`<p class="product-ledger-import-error" role="alert">${esc(panel.error)}</p>`:''}
       ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:`<p class="excelhint">採用できる候補はありません。</p>`}
       ${ref?`<p class="excelhint"><a href="${esc(ref)}" target="_blank" rel="noopener">参考ページを開く</a>（開いただけでは補正完了になりません）</p>`:''}
@@ -2167,7 +2174,7 @@
         const currentSupplement=edit.supplement!=null?edit.supplement:(pc.supplement||'')
         st.busy=true
         st.makerLookup={
-          rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
+          scope:'row',rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
           supplier:(row.csv&&row.csv.supplier)||'',sourceName,
           statusLabel:'検索中…',result:null,error:''
         }
@@ -2198,6 +2205,54 @@
         }
       }
     })
+    document.querySelectorAll('[data-pl-sku-maker-correct]').forEach(el=>{
+      el.onclick=async()=>{
+        const code=el.getAttribute('data-pl-sku-maker-correct')
+        const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(code))
+        if(!group){st.toast('対象品番が見つかりません。');return}
+        const mk=group.makerCorrection||{}
+        if(!mk.showButton||!mk.makerSku){st.toast('メーカー品番が対象外か、色競合がありません。');return}
+        const rowNos=Array.isArray(mk.rowNos)&&mk.rowNos.length?mk.rowNos:(group.rowNos||[])
+        const firstRow=(st.preview.rows||[]).find(r=>rowNos.map(Number).includes(Number(r.rowNo)))
+        const d=skuDecision(st,code)
+        const sourceName=mk.sourceNameHint||(firstRow&&firstRow.csv&&firstRow.csv.productName)||''
+        const currentName=d.officialName||(group.plannedOfficialName)||(group.namePlan&&group.namePlan.officialName)||sourceName||''
+        const currentColor=d.color||group.plannedRegisteredColor||group.plannedColor||''
+        const currentSupplement=''
+        st.busy=true
+        st.makerLookup={
+          scope:'sku',skuCode:code,rowNos,rowNo:firstRow?firstRow.rowNo:null,
+          makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
+          supplier:mk.supplier||(firstRow&&firstRow.csv&&firstRow.csv.supplier)||'',
+          sourceName,statusLabel:'検索中…',result:null,error:''
+        }
+        paintDialog()
+        try{
+          const result=await st.api('/api/product-ledger-csv/maker-lookup',{
+            manufacturer:mk.manufacturer||'',
+            makerSku:mk.makerSku,
+            currentName,currentColor,currentSupplement,
+            sourceName,
+            supplier:mk.supplier||(firstRow&&firstRow.csv&&firstRow.csv.supplier)||''
+          })
+          st.makerLookup=Object.assign({},st.makerLookup,{
+            result,
+            manufacturer:result.manufacturer||mk.manufacturer||'',
+            statusLabel:result.statusLabel||result.status||'',error:''
+          })
+        }catch(e){
+          st.makerLookup=Object.assign({},st.makerLookup,{
+            result:{status:'fetch_failed',statusLabel:'取得できない',candidates:[],
+              referenceUrl:'',note:'検索リクエストに失敗しました。'},
+            statusLabel:'取得できない',
+            error:apiErrorMessage(e,'メーカー情報を取得できませんでした。')
+          })
+        }finally{
+          st.busy=false
+          paintDialog()
+        }
+      }
+    })
     const makerClose=$('#plMakerLookupClose')
     if(makerClose)makerClose.onclick=()=>{st.makerLookup=null;paintDialog()}
     document.querySelectorAll('[data-pl-maker-adopt]').forEach(el=>{
@@ -2207,6 +2262,23 @@
         const idx=Number(el.getAttribute('data-pl-maker-adopt'))
         const cand=(panel.result.candidates||[])[idx]
         if(!cand){st.toast('候補が見つかりません。');return}
+        const skuScope=panel.scope==='sku'
+        if(skuScope){
+          const code=panel.skuCode
+          const d=skuDecision(st,code)
+          if((d.decision||'')==='color_split'){
+            const ok=confirm(
+              `現在「色別に分けて登録」が選ばれています。\n`+
+              `メーカー情報の採用で「同じ商品としてまとめる」に切り替えます。\n\n`+
+              `変更内容:\n`+
+              `・判断: 色別に分けて登録 → 同じ商品としてまとめる\n`+
+              `・登録予定名: ${cand.name||'—'}\n`+
+              `・登録予定色: ${cand.color||'（空）'}\n\n`+
+              `よろしいですか？`
+            )
+            if(!ok)return
+          }
+        }
         st.busy=true
         paintDialog()
         try{
@@ -2218,9 +2290,7 @@
             supplement:cand.supplement||'',
             sourceUrl:cand.sourceUrl||''
           })
-          // プレビューのみ更新（台帳登録は「確認して商品を登録」）。原文は別名に残す。
-          // メーカー情報を名・色の根拠にし、旧名の「白」などとの色競合を確認待ちに残さない。
-          setRowClassification(st,panel.rowNo,{
+          const classPatch={
             plannedName:cand.name||'',
             color:cand.color||'',
             supplement:cand.supplement||'',
@@ -2231,9 +2301,38 @@
             makerAdopted:true,
             makerSourceUrl:cand.sourceUrl||'',
             makerManufacturer:cand.manufacturer||panel.manufacturer||''
-          })
+          }
+          if(skuScope){
+            const rowNos=panel.rowNos||[]
+            rowNos.forEach(rn=>setRowClassification(st,rn,classPatch))
+            // 1商品へまとめる（色分割の明示指定は上で確認済み）
+            const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(panel.skuCode))
+            setSkuDecision(st,panel.skuCode,{
+              decision:'merge',
+              officialName:cand.name||'',
+              color:cand.color||'',
+              makerAdopted:true,
+              makerSourceUrl:cand.sourceUrl||'',
+              makerManufacturer:cand.manufacturer||panel.manufacturer||''
+            })
+            if(group)applyMergeDefaults(st,panel.skuCode,group)
+            // applyMergeDefaults が decision を再設定しうるので maker フラグを再付与
+            setSkuDecision(st,panel.skuCode,{
+              decision:'merge',
+              officialName:cand.name||'',
+              color:cand.color||'',
+              makerAdopted:true,
+              makerSourceUrl:cand.sourceUrl||'',
+              makerManufacturer:cand.manufacturer||panel.manufacturer||''
+            })
+          }else{
+            // プレビューのみ更新（台帳登録は「確認して商品を登録」）。原文は別名に残す。
+            setRowClassification(st,panel.rowNo,classPatch)
+          }
           st.makerLookup=null
-          st.toast('メーカー情報を予定へ採用しました（まだ台帳には登録していません）')
+          st.toast(skuScope
+            ?'メーカー情報を品番グループの登録予定へ採用しました（まだ台帳には登録していません）'
+            :'メーカー情報を予定へ採用しました（まだ台帳には登録していません）')
           // 再照合して差分を画面へ反映
           const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
           st.preview=nextPreview

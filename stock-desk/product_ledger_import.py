@@ -2954,6 +2954,56 @@ def _clear_kind_diff_flags(group):
     ]
 
 
+def _soften_after_maker_adopt(group, raw):
+    """メーカー情報で補正を採用した品番グループ: 解消した名・色競合だけ理由から外す。
+
+    加工・種・男女など未解決の理由は残す。原文CSV名は照合用に維持（ここでは触らない）。
+    """
+    if not isinstance(raw, dict) or not raw.get('makerAdopted'):
+        return
+    if stock.text(raw.get('decision')) != SKU_DECISION_MERGE:
+        return
+    drop_codes = {'color', 'name_wording'}
+    group['colorDiffPossible'] = False
+    group['nameWordingDiff'] = False
+    reasons = []
+    for r in group.get('reviewReasons') or []:
+        code = stock.text(r.get('code') or '')
+        if code in drop_codes:
+            continue
+        reasons.append(r)
+    adopted_name = stock.text(raw.get('officialName') or raw.get('name') or '')
+    adopted_color = stock.text(raw.get('color') or '')
+    label_bits = []
+    if adopted_name:
+        label_bits.append(f'登録予定名「{adopted_name}」')
+    if adopted_color:
+        label_bits.append(f'色「{adopted_color}」')
+    detail = '・'.join(label_bits) if label_bits else 'メーカー情報'
+    reasons.insert(0, {
+        'code': 'maker_adopt',
+        'label': (
+            f'メーカー情報で補正を採用し、商品名・色の競合を解消（{detail}）。'
+            '原文名は照合用に残します。'
+        ),
+        'values': [adopted_name, adopted_color],
+    })
+    group['reviewReasons'] = reasons
+    group['otherDiffs'] = [
+        d for d in (group.get('otherDiffs') or [])
+        if stock.text(d.get('code') or '') not in drop_codes
+    ]
+    # メーカー補正後は1商品まとめ前提（色分割を自動では戻さない）
+    if adopted_name:
+        group['plannedOfficialName'] = adopted_name
+        group['plannedRegisteredName'] = adopted_name
+    if adopted_color:
+        group['plannedRegisteredColor'] = adopted_color
+        group['plannedColor'] = adopted_color
+    group['makerCorrectionAdopted'] = True
+    # ボタン再表示: 色競合が解消されたので showButton は後段メタ再計算で落ちる
+
+
 def _soften_spec_only_reasons(group):
     """在庫一意採用時、色・加工・素材・種・対象有無の疑い理由を外し、残確認を明示（確認は継続）。"""
     drop_codes = {'color', 'processing', 'fabric', 'kind'}
@@ -5381,6 +5431,9 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             )
             group['colorSplit'] = True
             group['excludeAuxStockAutoMerge'] = True
+        # メーカー情報で補正の採用 → 名・色競合理由だけ落とす（プレビュー）
+        if isinstance(raw, dict) and raw.get('makerAdopted'):
+            _soften_after_maker_adopt(group, raw)
 
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code'))
@@ -6211,6 +6264,16 @@ def build_preview(c, body):
     # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
     for row in classified:
         row['makerCorrection'] = maker_sku_lookup.row_maker_correction_meta(row)
+    # 品番比較一覧用: 色競合＋有効メーカー品番があるグループにボタンメタ
+    rows_by_no = {r.get('rowNo'): r for r in classified}
+    for g in sku_groups:
+        group_rows = [
+            rows_by_no[n] for n in (g.get('rowNos') or [])
+            if n in rows_by_no
+        ]
+        g['makerCorrection'] = maker_sku_lookup.sku_group_maker_correction_meta(
+            g, group_rows,
+        )
 
     counts = defaultdict(int)
     for row in classified:
