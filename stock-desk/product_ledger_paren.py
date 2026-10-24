@@ -48,6 +48,14 @@ PROCESSING_TERMS = (
 # 加工は「DHC刺繍あり」「背中プリント」のように語を含む複合も可（完全一致優先）。
 PROCESSING_COMPOUND_OK = True
 
+# パンツ系の一般記載「丈加工」は統合判定・加工欄から除外する。
+# 商品種ヒント（product_ledger_import._KIND_HINT_RE）と同じパンツ語を使う。
+# 股下寸法・仕上がり寸法などの具体数値は対象外（削除しない）。
+PANTS_KIND_MARKERS = ('パンツ', 'スラックス', 'ズボン')
+HEM_PROCESSING_LITERAL = '丈加工'
+# 括弧内外・空白差を吸収した「丈加工」フレーズ
+_HEM_PHRASE_RE = re.compile(r'丈[\s\u3000]*加[\s\u3000]*工')
+
 MATERIAL_TERMS = (
     'クールマックス', 'ポリエステル', 'ナイロン', 'ウール',
     '綿100％', '綿100%', '綿100パーセント', '麻混', 'デニム',
@@ -225,6 +233,63 @@ def _processing_match(seg_key: str, seg_raw: str):
             # 複合は原文セグメントを加工仕様として残す
             return term, seg_raw.strip()
     return None, None
+
+
+def name_looks_like_pants(name: str) -> bool:
+    """パンツ／スラックス／ズボン系の商品名か（既存の商品種ヒント語を利用）。"""
+    t = _nfkc(name or '')
+    if not t:
+        return False
+    return any(marker in t for marker in PANTS_KIND_MARKERS)
+
+
+def is_hem_processing_segment(text: str) -> bool:
+    """一般記載『丈加工』か。股下72・仕上がり丈70 などは False。"""
+    key = _norm_token(text)
+    return bool(key) and key == _norm_token(HEM_PROCESSING_LITERAL)
+
+
+def strip_hem_processing_from_text(text: str) -> str:
+    """括弧内外の『丈加工』を除去し、空括弧・余分空白・余分な区切りを整理する。"""
+    t = text if text is not None else ''
+    if not t or not _HEM_PHRASE_RE.search(t):
+        return t
+
+    def _paren_repl(m):
+        inner = m.group(1)
+        open_b = m.group(0)[0]
+        close_b = m.group(0)[-1]
+        parts = [p.strip() for p in _SEGMENT_SPLIT_RE.split(inner) if p.strip()]
+        if not parts:
+            raw_inner = (inner or '').strip()
+            parts = [raw_inner] if raw_inner else []
+        kept = [p for p in parts if not is_hem_processing_segment(p)]
+        if not kept:
+            return ''
+        if len(kept) == len(parts) and '・'.join(kept) == '・'.join(parts):
+            # 丈加工以外はそのまま（区切りを推測し直さない）
+            return m.group(0)
+        return f'{open_b}{"・".join(kept)}{close_b}'
+
+    t = _PAREN_PAIR_RE.sub(_paren_repl, t)
+    # 括弧外に残った『丈加工』フレーズを除去
+    t = _HEM_PHRASE_RE.sub('', t)
+    # 空括弧・連続区切り・余分空白
+    t = re.sub(r'[（(][\s\u3000]*[）)]', '', t)
+    t = re.sub(r'[・･]{2,}', '・', t)
+    t = re.sub(r'[\s\u3000]*[・･][\s\u3000]*$', '', t)
+    t = re.sub(r'^[\s\u3000]*[・･][\s\u3000]*', '', t)
+    t = re.sub(r'[\s\u3000]{2,}', ' ', t)
+    t = re.sub(r'[\s\u3000]+([（(])', r'\1', t)
+    return t.strip()
+
+
+def strip_pants_hem_processing(name: str) -> str:
+    """パンツ系なら『丈加工』を名から除去。非パンツはそのまま。"""
+    original = name if name is not None else ''
+    if not original or not name_looks_like_pants(original):
+        return original
+    return strip_hem_processing_from_text(original)
 
 
 def halfwidth_katakana_to_fullwidth(text: str) -> str:
@@ -410,12 +475,13 @@ def _classify_as_pure_color_span(raw: str):
     }
 
 
-def classify_paren_segment(segment: str):
+def classify_paren_segment(segment: str, *, pants: bool = False):
     """1セグメントを色／加工／素材／不明に分類。
 
     部分文字列だけで色を取らない（例: 蛍光グリーン の中の 緑 は使わない）。
     表示・照合は表記統一後の値を使う（％/% など ASCII 記号は全角化しない）。
     サックス×シルバーグレー・黒／ワイン のような配色は1色として扱う。
+    パンツ系の一般『丈加工』は加工欄へ入れず、名から落とす印（hem_ignore）にする。
     """
     source = segment if segment is not None else ''
     raw = unify_import_notation(source)
@@ -458,8 +524,24 @@ def classify_paren_segment(segment: str):
             'matched': material,
             'original': source,
         }
+    # パンツの一般『丈加工』は加工にも未分類にもしない（括弧からは除去）
+    if pants and is_hem_processing_segment(raw):
+        return {
+            'kind': 'hem_ignore',
+            'value': raw,
+            'matched': _norm_token(HEM_PROCESSING_LITERAL),
+            'original': source,
+        }
     proc_key, proc_val = _processing_match(key, raw)
     if proc_key:
+        # 複合「丈加工・刺繍」は分割後に来る。単体複合で丈加工だけのときも無視
+        if pants and is_hem_processing_segment(raw):
+            return {
+                'kind': 'hem_ignore',
+                'value': raw,
+                'matched': _norm_token(HEM_PROCESSING_LITERAL),
+                'original': source,
+            }
         return {
             'kind': 'processing',
             'value': proc_val if proc_val == raw else raw,
@@ -474,7 +556,7 @@ def classify_paren_segment(segment: str):
     }
 
 
-def _classify_paren_parts(content: str):
+def _classify_paren_parts(content: str, *, pants: bool = False):
     """括弧内側をセグメント分類。スラッシュ配色は1色、非色混在時は分割。"""
     source = content if content is not None else ''
     text = unify_import_notation(source)
@@ -509,16 +591,16 @@ def _classify_paren_parts(content: str):
             # （冬／夏 などを配色扱いにせず、未分類として名に残す）
             subparts = [p.strip() for p in _SLASH_SPLIT_RE.split(part) if p.strip()]
             if len(subparts) < 2:
-                hits.append(classify_paren_segment(part))
+                hits.append(classify_paren_segment(part, pants=pants))
                 continue
-            sub_hits = [classify_paren_segment(sp) for sp in subparts]
+            sub_hits = [classify_paren_segment(sp, pants=pants) for sp in subparts]
             if not any(h and h.get('kind') == 'color' for h in sub_hits):
-                hits.append(classify_paren_segment(part))
+                hits.append(classify_paren_segment(part, pants=pants))
                 continue
             # 非色混在: 配色にはせず個別分類（色は抽出、非色は名に残す等）
             hits.extend(sub_hits)
         else:
-            hits.append(classify_paren_segment(part))
+            hits.append(classify_paren_segment(part, pants=pants))
     return hits
 
 
@@ -576,6 +658,7 @@ def classify_product_name(product_name: str):
 
     未分類の括弧文言は削除せず商品名に残す。未分類だけでは要確認にしない
     （情報通知のみ）。色・加工・生地へ明確に分類できる部分は従来どおり抽出する。
+    パンツ系の一般『丈加工』は加工欄に入れず予定名からも除去する（原文は originalName）。
     分類・再構成は表記統一後の同一文字列上で行い、原文は originalName に残す。
 
     Returns dict:
@@ -585,6 +668,7 @@ def classify_product_name(product_name: str):
     """
     original = (product_name or '').strip()
     unified = unify_import_notation(original)
+    pants = name_looks_like_pants(unified or original)
     empty = {
         'originalName': original,
         'plannedName': unified,
@@ -605,17 +689,32 @@ def classify_product_name(product_name: str):
         return empty
 
     if not paren_balance_ok(unified):
+        # 括弧壊れでもパンツの括弧外『丈加工』は除去を試みる（構造は触らない）
+        planned_broken = strip_pants_hem_processing(unified or original) if pants else (unified or original)
+        planned_broken = unify_import_notation(planned_broken) or planned_broken
         return {
             **empty,
             'needsConfirm': True,
             'confirmReasons': ['括弧の対応が取れていないため原文のまま要確認'],
-            'plannedName': unified or original,
+            'plannedName': planned_broken or unified or original,
             'keptOriginal': True,
         }
 
     # 以降の位置・分割はすべて unified 上（半角カナ変換後）で行う
     contents = extract_paren_segments(unified)
     if not contents:
+        # 括弧なしでもパンツの外側『丈加工』を予定名から落とす
+        if pants:
+            planned_out = strip_pants_hem_processing(unified)
+            planned_out = unify_import_notation(planned_out) or planned_out or unified
+            if planned_out != unified:
+                return {
+                    **empty,
+                    'plannedName': planned_out,
+                    'baseName': planned_out,
+                    'autoClassified': True,
+                    'keptOriginal': planned_out == original,
+                }
         return empty
 
     colors = []
@@ -625,8 +724,9 @@ def classify_product_name(product_name: str):
     segments = []
     paren_hits = []  # 括弧ごとの part hit リスト
     colorway_notices = []
+    hem_ignored = False
     for content in contents:
-        hits_for_paren = _classify_paren_parts(content)
+        hits_for_paren = _classify_paren_parts(content, pants=pants)
         if not hits_for_paren:
             unc = unify_import_notation(content) or content
             unclassified.append(unc)
@@ -655,6 +755,8 @@ def classify_product_name(product_name: str):
             elif kind == 'material':
                 if hit['value'] not in materials:
                     materials.append(hit['value'])
+            elif kind == 'hem_ignore':
+                hem_ignored = True
             else:
                 if hit['value'] not in unclassified:
                     unclassified.append(hit['value'])
@@ -710,8 +812,22 @@ def classify_product_name(product_name: str):
         else:
             kept = planned == original
 
+    # パンツ: 括弧外に残った『丈加工』も予定名から除去（加工欄には載せない）
+    if pants and not needs:
+        stripped = strip_pants_hem_processing(planned)
+        stripped = unify_import_notation(stripped) or stripped
+        if stripped:
+            if stripped != planned:
+                hem_ignored = True
+            planned = stripped
+            kept = planned == original
+            base = strip_pants_hem_processing(base) if base else base
+            base = unify_import_notation(base) or base
+
     # 分類抽出できた、または未分類を名に残して確定できるとき自動
-    auto = (not needs) and bool(colors or processings or materials or unclassified)
+    auto = (not needs) and bool(
+        colors or processings or materials or unclassified or hem_ignored
+    )
 
     return {
         'originalName': original,

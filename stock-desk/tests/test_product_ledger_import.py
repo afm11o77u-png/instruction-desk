@@ -2762,6 +2762,234 @@ class GenderPresenceAbsenceStockPickTest(unittest.TestCase):
             folder.cleanup()
 
 
+class PantsHemProcessingIgnoreTest(unittest.TestCase):
+    """パンツ一般『丈加工』は統合判定・加工欄から除外（股下寸法などは残す）。"""
+
+    def test_classify_strips_hem_for_pants_only(self):
+        import product_ledger_paren as pp
+        cases = [
+            ('黒パンツ（丈加工）', '黒パンツ', ''),
+            ('黒パンツ(丈加工)', '黒パンツ', ''),
+            ('ワークパンツ（丈 加 工）', 'ワークパンツ', ''),
+            ('スラックス（丈加工）', 'スラックス', ''),
+            ('ズボン（丈加工）', 'ズボン', ''),
+            ('黒パンツ 丈加工', '黒パンツ', ''),
+            ('黒パンツ（丈加工・刺繍）', '黒パンツ', '刺繍'),
+            ('黒パンツ（刺繍）', '黒パンツ', '刺繍'),
+            ('黒パンツ（股下72）', '黒パンツ（股下72）', ''),
+            ('黒パンツ（仕上がり丈70）', '黒パンツ（仕上がり丈70）', ''),
+            # 非パンツは従来どおり加工へ
+            ('シャツ（丈加工）', 'シャツ', '丈加工'),
+        ]
+        for original, planned, proc in cases:
+            with self.subTest(original=original):
+                r = pp.classify_product_name(original)
+                self.assertEqual(r['plannedName'], planned, r)
+                self.assertEqual(r['processing'], proc, r)
+                self.assertEqual(r['originalName'], original)
+
+    def test_core_key_ignores_pants_hem(self):
+        self.assertEqual(
+            pli.product_name_core_key('黒パンツ（丈加工）'),
+            pli.product_name_core_key('黒パンツ'),
+        )
+        self.assertEqual(
+            pli.product_name_core_key('黒パンツ（丈加工・刺繍）'),
+            pli.product_name_core_key('黒パンツ（刺繍）'),
+        )
+        # 具体股下寸法は同一視しない
+        self.assertNotEqual(
+            pli.product_name_core_key('黒パンツ（股下72）'),
+            pli.product_name_core_key('黒パンツ（股下74）'),
+        )
+        self.assertNotEqual(
+            pli.product_name_core_key('黒パンツ（股下72）'),
+            pli.product_name_core_key('黒パンツ'),
+        )
+
+    def test_hem_presence_alone_auto_merges(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-HEM,黒パンツ（丈加工）,M',
+                '顧客A,仕入A,SKU-HEM,黒パンツ,L',
+                '顧客A,仕入A,SKU-HEM2,黒パンツ（丈加工・刺繍）,M',
+                '顧客A,仕入A,SKU-HEM2,黒パンツ（刺繍）,L',
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hem.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(stock_snap(c), before)
+            g1 = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HEM')
+            g2 = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HEM2')
+            self.assertFalse(g1['needsDecision'], g1.get('reviewReasons'))
+            self.assertTrue(g1.get('pantsHemAutoMerged') or g1.get('plannedSingleProduct'))
+            self.assertFalse(g1.get('processingDiffPossible'))
+            self.assertFalse(g2['needsDecision'], g2.get('reviewReasons'))
+            self.assertFalse(g2.get('processingDiffPossible'))
+
+            by_no = {r['rowNo']: r for r in preview['rows']}
+            pc_hem = by_no[2]['parenClassification']
+            self.assertEqual(pc_hem['processing'], '')
+            self.assertNotIn('丈加工', pc_hem.get('plannedName') or '')
+            pc_mix = by_no[4]['parenClassification']
+            self.assertEqual(pc_mix['processing'], '刺繍')
+            self.assertEqual(by_no[4]['handle'].get('embroidery'), '刺繍')
+            self.assertEqual(by_no[5]['handle'].get('embroidery'), '刺繍')
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hem.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-hem-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+
+            prod = c.execute(
+                "SELECT id,name FROM products WHERE code='SKU-HEM' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertNotIn('丈加工', prod['name'])
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            # 原文（丈加工付き）は照合用別名に残る
+            self.assertTrue(
+                '黒パンツ（丈加工）' in aliases or '黒パンツ（丈加工）' == prod['name']
+                or any('丈加工' in a for a in aliases),
+                aliases,
+            )
+
+            emb_prod = c.execute(
+                "SELECT id FROM products WHERE code='SKU-HEM2' AND merged_into_id IS NULL"
+            ).fetchone()
+            handles = list(c.execute(
+                "SELECT embroidery FROM customer_products WHERE product_id=?",
+                (emb_prod['id'],),
+            ))
+            self.assertTrue(any((h['embroidery'] or '') == '刺繍' for h in handles), handles)
+            self.assertFalse(any('丈加工' in (h['embroidery'] or '') for h in handles), handles)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_other_processing_and_supplier_still_review(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-HX,黒パンツ（丈加工）,M',
+                '顧客A,仕入A,SKU-HX,黒パンツ（刺繍）,L',
+                '顧客A,仕入A,SKU-HS,黒パンツ（丈加工）,M',
+                '顧客B,仕入B,SKU-HS,黒パンツ,L',
+                '顧客A,仕入A,SKU-HI,黒パンツ（股下72）,M',
+                '顧客A,仕入A,SKU-HI,黒パンツ（股下74）,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hem-rev.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            gx = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HX')
+            gs = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HS')
+            gi = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HI')
+            self.assertTrue(gx['needsDecision'])
+            self.assertTrue(gx.get('processingDiffPossible'))
+            self.assertTrue(gs['needsDecision'])
+            self.assertTrue(gs.get('supplierDiff'))
+            self.assertFalse(gs.get('processingDiffPossible'))
+            self.assertTrue(gi['needsDecision'])
+            self.assertTrue(gi.get('nameWordingDiff'))
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_opening_stock_matches_hem_alias_name(self):
+        """登録済み補正名へ、丈加工付き旧名称の初期在庫行が照合できる。"""
+        folder, path, c = newdb()
+        try:
+            # 先頭色語を避け、丈加工補正だけを見る
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-HO,ワークパンツ（丈加工）,M',
+                '顧客A,仕入A,SKU-HO,ワークパンツ,L',
+            ])
+            opening = tiny_opening_rows([
+                opening_line('仕入A', '顧客A', 'ワークパンツ（丈加工）', 'SKU-HO', 'M', '3'),
+                opening_line('仕入A', '顧客A', 'ワークパンツ', 'SKU-HO', 'L', '2'),
+                # 具体股下は別物（この補正だけでは混同しない）
+                opening_line('仕入A', '顧客A', 'ワークパンツ（股下72）', 'SKU-HO', 'S', '9'),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'hem-ledger.csv',
+                'auxFile': csv_b64_from_text(opening), 'auxName': 'open-hem.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(stock_snap(c), before)
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HO')
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            aux = g.get('auxPrimary') or {}
+            official = (
+                aux.get('suggestedOfficialName')
+                or g.get('plannedOfficialName')
+                or (g.get('productPlan') or {}).get('productName')
+                or ''
+            )
+            self.assertTrue(official)
+            self.assertNotIn('丈加工', official)
+            self.assertIn('パンツ', official)
+
+            # 初期在庫の丈加工付き名も同一コアへ照合
+            self.assertTrue(pli._aux_row_matches_candidate(
+                {'商品コード': 'SKU-HO', '仕入先': '仕入A', '商品名': 'ワークパンツ（丈加工）', '顧客': '顧客A'},
+                code='SKU-HO', supplier='仕入A', product_name=official, customers=['顧客A'],
+            ))
+            self.assertTrue(pli._aux_row_matches_candidate(
+                {'商品コード': 'SKU-HO', '仕入先': '仕入A', '商品名': 'ワークパンツ', '顧客': '顧客A'},
+                code='SKU-HO', supplier='仕入A', product_name=official, customers=['顧客A'],
+            ))
+            # 股下寸法違いは同一視しない
+            self.assertFalse(pli._aux_row_matches_candidate(
+                {'商品コード': 'SKU-HO', '仕入先': '仕入A', '商品名': 'ワークパンツ（股下72）', '顧客': '顧客A'},
+                code='SKU-HO', supplier='仕入A', product_name=official, customers=['顧客A'],
+            ))
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'hem-ledger.csv',
+                'auxFile': csv_b64_from_text(opening), 'auxName': 'open-hem.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-hem-open-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+
+            prod = c.execute(
+                "SELECT id,name FROM products WHERE code='SKU-HO' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertNotIn('丈加工', prod['name'])
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (prod['id'],),
+                )
+            }
+            self.assertTrue(
+                any('丈加工' in a for a in aliases) or 'ワークパンツ（丈加工）' in aliases,
+                aliases,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 class ParenClassificationTest(unittest.TestCase):
     """括弧内の色・加工・生地分類（辞書規則のみ）。"""
 
