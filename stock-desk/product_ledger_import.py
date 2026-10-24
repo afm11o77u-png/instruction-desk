@@ -23,6 +23,7 @@ import legacy_csv_bulk_import as bulk
 import legacy_csv_import as legacy
 import maker_sku_lookup
 import product_ledger_paren as paren_classify
+import product_ledger_processing_service as proc_svc
 import product_ledger_scoped_color as scoped_color
 import stock
 import stock_product_merge
@@ -171,7 +172,8 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
             if n and n not in names:
                 names.append(n)
         s = stock.text(v.get('supplier') or '')
-        if s and s not in suppliers:
+        # 加工業者は本体の仕入先候補・仕入先差に混ぜない
+        if s and s not in suppliers and not proc_svc.is_processing_vendor(s):
             suppliers.append(s)
 
     cores = {product_name_core_key(n) for n in names if n}
@@ -839,11 +841,16 @@ def build_aux_row_index(aux_rows):
 
 
 def _collect_supplier_candidates(group):
-    """同一商品候補内の仕入先一覧（台帳側名・サイズ・顧客）。"""
+    """同一商品候補内の仕入先一覧（台帳側名・サイズ・顧客）。
+
+    加工業者（K2・エルムス等）は商品本体の通常仕入先候補へ混ぜない。
+    """
     by_sup = {}
     for v in group.get('variants') or []:
         sup = stock.text(v.get('supplier') or '')
         if not sup:
+            continue
+        if proc_svc.is_processing_vendor(sup):
             continue
         slot = by_sup.get(sup)
         if not slot:
@@ -3722,6 +3729,7 @@ def upsert_row_map(
     planned_name = stock.text(
         provenance.get('plannedName') or pc.get('plannedName') or product_name
     )
+    ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
     spec_json = json.dumps({
         # 照合用対応（表示用ではない）: 変換前名／色と登録先IDは行マップ本体
         'originalName': provenance.get('originalName') or product_name,
@@ -3730,7 +3738,7 @@ def upsert_row_map(
         'originalSupplier': provenance.get('originalSupplier') or supplier,
         'color': csv_color,
         'unifiedColor': csv_color,
-        'processing': csv_processing,
+        'processing': csv_processing or stock.text(provenance.get('processingServiceName') or ps.get('serviceName') or ''),
         'material': csv_material,
         'supplement': stock.text(
             provenance.get('supplement')
@@ -3748,6 +3756,21 @@ def upsert_row_map(
             or (row.get('product') or {}).get('scopedColorCorrection')
         ),
         'colorNotationUnify': bool(source_color and csv_color and source_color != csv_color),
+        # 加工サービス分離の内部照合（初期在庫で利用）
+        'rowKind': stock.text(provenance.get('rowKind') or '') or (
+            'processing_service' if (row.get('product') or {}).get('processingServiceProduct') else ''
+        ),
+        'processingVendor': stock.text(
+            provenance.get('processingVendor') or ps.get('vendorName') or ''
+        ),
+        'processingServiceName': stock.text(
+            provenance.get('processingServiceName') or ps.get('serviceName') or ''
+        ),
+        'targetGarmentCode': stock.text(
+            provenance.get('targetGarmentCode') or csv_info.get('code') or ''
+        ),
+        'processingProductId': provenance.get('processingProductId'),
+        'rowSpecs': provenance.get('rowSpecs') or ps.get('rowSpecs') or {},
     }, ensure_ascii=False)
     pkey = product_map_key(customer=customer, code=code, product_name=product_name)
     rkey = row_map_key(
@@ -4889,6 +4912,400 @@ def build_sku_groups(c, classified):
     return groups
 
 
+def attach_processing_service_detection(classified):
+    """各行へ加工サービス判定を付与（DBは変えない）。"""
+    for row in classified or []:
+        if row.get('status') == STATUS_EXCLUDED:
+            continue
+        csv = row.get('csv') or {}
+        pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+        info = proc_svc.classify_processing_service_row(
+            supplier=csv.get('supplier') or '',
+            product_name=csv.get('productName') or '',
+            code=csv.get('code') or '',
+            paren_processing=pc.get('processing') or '',
+        )
+        row['processingService'] = info
+        if info.get('needsConfirm') and not info.get('identifiable'):
+            row['reasons'] = list(row.get('reasons') or []) + list(info.get('confirmReasons') or [])
+            if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD):
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                row['processingServiceNeedsConfirm'] = True
+
+
+def _processing_service_plan_payload(info, *, source_row_nos=None, garment_codes=None):
+    name = stock.text(info.get('serviceName') or '')
+    vendor = stock.text(info.get('vendorName') or '')
+    return {
+        'serviceName': name,
+        'vendorName': vendor,
+        'dedupeKey': proc_svc.service_dedupe_key(name, vendor),
+        'category': stock.CATEGORY_PARTS,
+        'blankSku': True,
+        'code': '',
+        'internalKind': 'processing_service',
+        'displayLabel': f'{name}／{vendor}' if name and vendor else name or vendor,
+        'sourceRowNos': list(source_row_nos or []),
+        'targetGarmentCodes': sorted({stock.text(x) for x in (garment_codes or []) if stock.text(x)}),
+        'autoRegister': bool(info.get('identifiable') and name and vendor),
+        'rowSpecsSamples': [],
+    }
+
+
+def apply_processing_service_split(c, classified, sku_groups):
+    """加工業者行を本体SKUから切り離し、加工サービス計画を組み立てる。
+
+    - 特定できた加工は自動登録対象（衣服種差・在庫0では個別確認に出さない）
+    - 本体が特定できるときは再利用し、加工側に本体品番を流用しない
+    - 本体不明のときは本体登録だけ確認対象。特定できた加工は確認待ちにしない
+    """
+    service_plans = {}
+    by_code = {g['code']: g for g in (sku_groups or [])}
+
+    # グループ単位: 加工業者を仕入先候補・差分から外し、本体名を推定
+    for group in sku_groups or []:
+        code = stock.text(group.get('code') or '')
+        rows = [
+            r for r in (classified or [])
+            if stock.text((r.get('csv') or {}).get('code') or '') == code
+        ]
+        proc_rows = [r for r in rows if (r.get('processingService') or {}).get('isProcessingVendor')]
+        garment_rows = [
+            r for r in rows
+            if not (r.get('processingService') or {}).get('isProcessingVendor')
+        ]
+        if not proc_rows:
+            # 仕入先候補だけでも加工業者を落とす
+            group['supplierCandidates'] = proc_svc.filter_garment_supplier_names(
+                group.get('supplierCandidates') or []
+            )
+            continue
+
+        body_names = []
+        for r in garment_rows:
+            n = stock.text((r.get('csv') or {}).get('productName') or '')
+            if n and n not in body_names:
+                body_names.append(n)
+        for r in proc_rows:
+            n = stock.text((r.get('csv') or {}).get('productName') or '')
+            if n and n not in body_names:
+                body_names.append(n)
+
+        service_names = [
+            stock.text((r.get('processingService') or {}).get('serviceName') or '')
+            for r in proc_rows
+            if (r.get('processingService') or {}).get('identifiable')
+        ]
+        body_name = proc_svc.garment_body_name_from_variants(
+            body_names, service_name=service_names[0] if service_names else '',
+        )
+        # 既存商品があれば本体再利用
+        existing = group.get('existingProducts') or []
+        body_known = bool(garment_rows) or bool(existing) or bool(body_name and _KIND_HINT_RE.search(body_name))
+        if existing and not body_name:
+            body_name = stock.text((existing[0] or {}).get('name') or '')
+
+        group['processingVendorRows'] = [r['rowNo'] for r in proc_rows]
+        group['garmentBodyKnown'] = bool(body_known and (garment_rows or existing or body_name))
+        group['plannedGarmentName'] = body_name
+        group['supplierCandidates'] = proc_svc.filter_garment_supplier_names(
+            group.get('supplierCandidates') or []
+        )
+        # 加工業者バリアントを本体比較から外す（名差・仕入先差・加工／種の疑い）
+        garment_variants = []
+        for v in group.get('variants') or []:
+            if proc_svc.is_processing_vendor(v.get('supplier') or ''):
+                continue
+            garment_variants.append(v)
+        garment_names = []
+        for v in garment_variants:
+            for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
+                n = stock.text(n)
+                if n and n not in garment_names:
+                    garment_names.append(n)
+        if body_name and body_name not in garment_names:
+            garment_names = [body_name] + garment_names
+        if garment_names:
+            group['nameCandidates'] = garment_names
+        group['processingDiffPossible'] = False
+
+        if group.get('needsDecision') and group.get('garmentBodyKnown'):
+            soft_reasons = []
+            for r in list(group.get('reviewReasons') or []):
+                code_r = stock.text(r.get('code') or '')
+                if code_r in ('processing', 'kind', 'fabric', 'color'):
+                    # 加工行由来の疑い。本体側に実差が残るかは garment_variants で見る
+                    continue
+                if code_r == 'supplier':
+                    if len(group.get('supplierCandidates') or []) <= 1:
+                        continue
+                if code_r in ('name_wording', 'name'):
+                    # 加工業者行の元名称との差だけなら無視
+                    cores = {product_name_core_key(n) for n in garment_names if n}
+                    if len(cores) <= 1:
+                        continue
+                soft_reasons.append(r)
+            group['reviewReasons'] = soft_reasons
+            group['nameWordingDiff'] = len({product_name_core_key(n) for n in garment_names if n}) > 1
+            if len(garment_variants) <= 1 and len(existing) <= 1 and not soft_reasons:
+                group['needsDecision'] = False
+                group['plannedSingleProduct'] = True
+                group['status'] = 'auto'
+                group['reviewTier'] = REVIEW_TIER_AUTO
+                group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_AUTO]
+                group['reviewReasons'] = [{
+                    'code': 'auto',
+                    'label': '加工サービス行を分離（本体は自動まとめ）',
+                    'values': [body_name] if body_name else list(garment_names),
+                }]
+                group['processingServiceAutoSplit'] = True
+                if body_name:
+                    plan = dict(group.get('productPlan') or {})
+                    plan['productName'] = body_name
+                    group['productPlan'] = plan
+                else:
+                    group['productPlan'] = _sku_product_plan(group)
+                # 行の skuDecisionNeeded を後で落とすためフラグ
+                group['skuDecisionNeeded'] = False
+
+        # 本体不明: 本体側だけ確認。加工サービスは別途自動
+        if not group.get('garmentBodyKnown'):
+            group['needsDecision'] = True
+            group['plannedSingleProduct'] = False
+            group['status'] = 'needs_decision'
+            group['reviewTier'] = REVIEW_TIER_INDIVIDUAL
+            group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_INDIVIDUAL]
+            reasons = list(group.get('reviewReasons') or [])
+            if not any(stock.text(r.get('code')) == 'garment_body_unknown' for r in reasons):
+                reasons.insert(0, {
+                    'code': 'garment_body_unknown',
+                    'label': '加工行のみで商品本体情報を特定できません（本体登録の確認が必要）',
+                    'values': [code],
+                })
+            group['reviewReasons'] = reasons
+            group['garmentBodyReviewOnly'] = True
+
+        # 予定の通常仕入先から加工業者を除外
+        primary = stock.text(group.get('plannedPrimarySupplier') or '')
+        if primary and proc_svc.is_processing_vendor(primary):
+            group['plannedPrimarySupplier'] = (
+                (group.get('supplierCandidates') or [None])[0] or ''
+            )
+            group['plannedPrimarySupplierReason'] = '加工業者を本体の通常仕入先から除外'
+        plan = dict(group.get('productPlan') or {})
+        if body_name:
+            plan['productName'] = body_name
+        if group.get('plannedPrimarySupplier'):
+            plan['supplier'] = group['plannedPrimarySupplier']
+        # 加工業者を本体の primary / sub にしない
+        plan['excludeProcessingVendors'] = True
+        group['productPlan'] = plan
+
+    # 行単位: 加工サービス計画・本体への取扱加工・行マップ用 provenance
+    for row in classified or []:
+        info = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+        if not info:
+            continue
+        csv = dict(row.get('csv') or {})
+        code = stock.text(csv.get('code') or '')
+        group = by_code.get(code)
+
+        if info.get('identifiable') and info.get('isProcessingService'):
+            key = proc_svc.service_dedupe_key(info['serviceName'], info['vendorName'])
+            plan = service_plans.get(key)
+            if not plan:
+                plan = _processing_service_plan_payload(
+                    info,
+                    source_row_nos=[row['rowNo']],
+                    garment_codes=[code] if code else [],
+                )
+                existing_svc = proc_svc.find_existing_processing_service(
+                    c, info['serviceName'], info['vendorName'],
+                )
+                if existing_svc:
+                    plan['action'] = 'reuse'
+                    plan['productId'] = existing_svc['id']
+                    plan['autoRegister'] = True
+                else:
+                    plan['action'] = 'create'
+                service_plans[key] = plan
+            else:
+                if row['rowNo'] not in plan['sourceRowNos']:
+                    plan['sourceRowNos'].append(row['rowNo'])
+                if code and code not in plan['targetGarmentCodes']:
+                    plan['targetGarmentCodes'].append(code)
+            specs = info.get('rowSpecs') or {}
+            if specs and len(plan.get('rowSpecsSamples') or []) < 8:
+                plan.setdefault('rowSpecsSamples', []).append({
+                    'rowNo': row['rowNo'],
+                    **{k: specs.get(k) for k in (
+                        'originalName', 'position', 'dimensions',
+                        'composition', 'customerSpecific', 'parenProcessing',
+                    )},
+                })
+
+            # 本体があるとき: この行の商品は本体へ寄せ、仕入先は加工業者のまま provenance に残す
+            prod = dict(row.get('product') or {})
+            handle = dict(row.get('handle') or {})
+            if group and group.get('garmentBodyKnown'):
+                body_name = stock.text(
+                    group.get('plannedGarmentName')
+                    or (group.get('productPlan') or {}).get('productName')
+                    or ''
+                )
+                if body_name:
+                    prod['officialName'] = body_name
+                    prod['applyOfficialName'] = True
+                    prod['csvOriginalName'] = csv.get('productName') or ''
+                # 通常仕入先は本体候補（加工業者はサブにもしない）
+                garment_sup = ''
+                if group.get('supplierCandidates'):
+                    garment_sup = stock.text(group['supplierCandidates'][0] or '')
+                elif group.get('plannedPrimarySupplier'):
+                    garment_sup = stock.text(group['plannedPrimarySupplier'] or '')
+                if garment_sup and not proc_svc.is_processing_vendor(garment_sup):
+                    prod['primarySupplierName'] = garment_sup
+                prod['subSupplierAdd'] = False
+                prod['processingServiceSplit'] = True
+                # 既存本体があれば再利用
+                if group.get('existingCount') == 1 and (group.get('existingProducts') or []):
+                    keep = group['existingProducts'][0]
+                    prod['id'] = keep.get('id')
+                    prod['action'] = 'reuse'
+                elif group.get('productPlan', {}).get('action') == 'reuse' and group.get('productPlan', {}).get('id'):
+                    prod['id'] = group['productPlan']['id']
+                    prod['action'] = 'reuse'
+                row['product'] = prod
+                # 取扱の加工仕様 = 統一加工名（個別仕様は provenance）
+                emb = stock.text(info.get('serviceName') or '')
+                # 寸法・位置は取扱キーへ足さず provenance に残す（共通サービスと分離）
+                if emb:
+                    handle['proposedEmbroidery'] = emb
+                    handle['embroidery'] = emb
+                    handle['embroideryLabel'] = emb
+                    handle['pendingEmbroiderySort'] = False
+                    handle['fromProcessingServiceSplit'] = True
+                row['handle'] = handle
+                # ステータス: 本体寄せができていればコミット可
+                if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD) and not info.get('needsConfirm'):
+                    if prod.get('action') in ('create', 'reuse') and (
+                        row.get('customer', {}).get('action') in ('create', 'reuse')
+                    ):
+                        row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                        row['statusLabel'] = STATUS_LABELS[row['status']]
+                        row['canCommit'] = True
+                        row['skuDecisionNeeded'] = bool(
+                            group.get('needsDecision')
+                            and not group.get('decision')
+                            and not group.get('processingServiceAutoSplit')
+                        )
+                prov_kind = 'processing_service_link'
+            else:
+                # 本体不明 or 品番なし: この行は加工サービス商品のみ登録（本体品番は流用しない）
+                # 本体SKUグループ側は確認対象のまま。特定できた加工は確認待ちにしない。
+                if group and group.get('garmentBodyReviewOnly'):
+                    row['garmentBodyReviewOnly'] = True
+                prod['category'] = stock.CATEGORY_PARTS
+                prod['proposedCategory'] = stock.CATEGORY_PARTS
+                prod['code'] = ''
+                prod['codeOverride'] = ''
+                prod['blankSku'] = True
+                prod['officialName'] = info['serviceName']
+                prod['applyOfficialName'] = True
+                prod['primarySupplierName'] = info['vendorName']
+                prod['processingServiceProduct'] = True
+                prod['ignoreSkuDecisionGate'] = True
+                if plan.get('productId'):
+                    prod['id'] = plan['productId']
+                    prod['action'] = 'reuse'
+                else:
+                    prod['action'] = 'create'
+                row['product'] = prod
+                row['handle'] = {
+                    'action': 'excluded', 'id': None, 'candidates': [], 'reasons': [],
+                    'embroidery': '', 'embroideryLabel': '',
+                    'skipForProcessingService': True,
+                }
+                if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD) and not info.get('needsConfirm'):
+                    row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                    row['statusLabel'] = STATUS_LABELS[row['status']]
+                    row['canCommit'] = True
+                    row['skuDecisionNeeded'] = False
+                prov_kind = 'processing_service'
+
+            # 内部照合用 provenance
+            prov = dict(row.get('specProvenance') or {})
+            prov.update({
+                'originalName': csv.get('productName') or '',
+                'originalSupplier': csv.get('supplier') or '',
+                'processing': info.get('serviceName') or '',
+                'processingVendor': info.get('vendorName') or '',
+                'processingServiceName': info.get('serviceName') or '',
+                'rowKind': prov_kind,
+                'targetGarmentCode': code,
+                'isMainCandidate': True,
+                'rowSpecs': info.get('rowSpecs') or {},
+            })
+            row['specProvenance'] = prov
+            row['processingServicePlanKey'] = key
+
+        elif info.get('isProcessingVendor') and info.get('needsConfirm'):
+            # 既に attach_processing_service_detection で要確認化済み
+            pass
+
+    # 分離後に自動まとめになった品番は、全行の SKU ゲートを下ろす
+    for group in sku_groups or []:
+        if not group.get('processingServiceAutoSplit'):
+            continue
+        code = stock.text(group.get('code') or '')
+        for r in classified or []:
+            if stock.text((r.get('csv') or {}).get('code') or '') == code:
+                r['skuDecisionNeeded'] = False
+                r['skuAutoMerged'] = True
+
+    plans = list(service_plans.values())
+    plans.sort(key=lambda p: (p.get('vendorName') or '', p.get('serviceName') or ''))
+    return {
+        'processingServicePlans': plans,
+        'autoCount': sum(1 for p in plans if p.get('autoRegister')),
+        'reuseCount': sum(1 for p in plans if p.get('action') == 'reuse'),
+        'createCount': sum(1 for p in plans if p.get('action') == 'create'),
+    }
+
+
+def _ensure_processing_service_product(c, plan):
+    """加工サービスを部品・資材として確保（本体品番は流用しない）。"""
+    name = stock.text(plan.get('serviceName') or '')
+    vendor = stock.text(plan.get('vendorName') or '')
+    if not name or not vendor:
+        raise ValueError('加工サービス名と業者が必要です。')
+    existing = proc_svc.find_existing_processing_service(c, name, vendor)
+    if existing:
+        return existing['id'], False
+    sup_id, _ = _ensure_person(c, 'suppliers', stock.save_supplier, vendor, create=True)
+    # 品番なし・部品・資材。管理品番に対象衣服品番を載せない
+    saved = stock.save_product(c, {
+        'code': '',
+        'name': name,
+        'color': '',
+        'material': '',
+        'category': stock.CATEGORY_PARTS,
+        'supplierId': sup_id,
+        # サイズ必須制約回避。加工サービスに衣服サイズ在庫は付けない
+        'sizes': ['—'],
+        'links': [],  # 顧客紐づけしない（衣服在庫を付けない）
+        'active': True,
+    })
+    pid = saved['id'] if isinstance(saved, dict) else int(saved)
+    # 対象品番は別名メモとして残す（品番カラムは空のまま）
+    for gcode in plan.get('targetGarmentCodes') or []:
+        note = f'加工対象品番:{stock.text(gcode)}'
+        stock_product_merge.ensure_name_alias(c, pid, note)
+    return pid, True
+
+
 def _attach_product_plans(classified, sku_groups):
     """各行に商品計画（品番単位のまとめ先）を付け、行トレースを残す。"""
     by_code = {g['code']: g for g in sku_groups}
@@ -5711,7 +6128,9 @@ def build_preview(c, body):
     for row in classified:
         row['matchGroupCount'] = group_counts[row['matchGroupKey']]
 
+    attach_processing_service_detection(classified)
     sku_groups = build_sku_groups(c, classified)
+    processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
     register_opening = register_opening_stock_requested(body, aux_uploaded)
     # products モードでは初期在庫準備を絶対に走らせない（判定補助のみ）
     if mode == IMPORT_MODE_PRODUCTS:
@@ -5787,6 +6206,8 @@ def build_preview(c, body):
     _apply_auto_merge_official_names(classified, sku_groups)
     _apply_paren_names_after_sku_plans(classified, sku_groups)
     stamp_aux_adopted_package_on_rows(classified, sku_groups)
+    # 補助CSV・SKU決定のあとでも加工分離を再適用（provenance / 仕入先除外を守る）
+    processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
     # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
     for row in classified:
         row['makerCorrection'] = maker_sku_lookup.row_maker_correction_meta(row)
@@ -5886,6 +6307,12 @@ def build_preview(c, body):
         'bulkApprovableCount': planned.get('bulkApprovableSkuGroups', 0),
         'individualReviewCount': planned.get('individualReviewSkuGroups', 0),
         'autoMergePlans': auto_plans,
+        'processingServicePlans': (processing_split_meta or {}).get('processingServicePlans') or [],
+        'processingServiceSummary': {
+            'autoCount': (processing_split_meta or {}).get('autoCount') or 0,
+            'reuseCount': (processing_split_meta or {}).get('reuseCount') or 0,
+            'createCount': (processing_split_meta or {}).get('createCount') or 0,
+        },
         'auxOpeningStock': aux_meta,
         'registerOpeningStock': register_opening,
         'openingStock': opening_stock,
@@ -6613,20 +7040,38 @@ def commit_preview(c, body, *, db_path=None):
         and not r.get('skuDecisionNeeded')
     ]
 
-    pending_sku = sum(1 for g in sku_groups if g.get('needsDecision') and not g.get('decision'))
+    # 加工行のみで本体不明のグループは「本体確認残」だが、特定できた加工サービスの確定は止めない
+    pending_sku = sum(
+        1 for g in sku_groups
+        if g.get('needsDecision') and not g.get('decision') and not g.get('garmentBodyReviewOnly')
+    )
     if pending_sku:
         raise ValueError(
             f'品番比較で未決定が {pending_sku} 件あります。'
             f'【同じ商品としてまとめる】【別物のため個別に整理する】【今回は保留する】を選んでください。'
         )
-    if any(r.get('skuDecisionNeeded') for r in classified):
+    if any(
+        r.get('skuDecisionNeeded')
+        for r in classified
+        if not (r.get('product') or {}).get('processingServiceProduct')
+        and not r.get('garmentBodyReviewOnly')
+    ):
         raise ValueError(
             '品番比較の未決定行が残っています。'
             'サイズ差だけの行は要確認ではありません。品番ごとの比較で決定してください。'
         )
-    if review_rows and not body.get('allowCommitWithReview'):
+    # 加工名不足などの真の要確認だけブロック（本体不明でサービス化済みの行は除く）
+    blocking_review = [
+        r for r in review_rows
+        if not (r.get('product') or {}).get('processingServiceProduct')
+        and not (
+            r.get('garmentBodyReviewOnly')
+            and (r.get('processingService') or {}).get('identifiable')
+        )
+    ]
+    if blocking_review and not body.get('allowCommitWithReview'):
         raise ValueError(
-            f'要確認が {len(review_rows)} 件残っています。'
+            f'要確認が {len(blocking_review)} 件残っています。'
             f'未解決の行を黙って除外せず、候補を選ぶか解決してから確定してください。'
         )
     register_opening = bool(preview.get('registerOpeningStock')) and mode != IMPORT_MODE_PRODUCTS
@@ -6745,6 +7190,24 @@ def commit_preview(c, body, *, db_path=None):
         # 同一通常品番の新規はコミット内で1商品にまとめる
         created_by_code = {}
         product_id_by_code = {}
+        # 加工サービス（部品・資材）は先に一意キーで確保し、本体コミットから再利用
+        processing_plans = list(preview.get('processingServicePlans') or [])
+        processing_ids_by_key = {}
+        result_counts['processingServicesCreated'] = 0
+        result_counts['processingServicesReused'] = 0
+        for pplan in processing_plans:
+            if not pplan.get('autoRegister'):
+                continue
+            key = stock.text(pplan.get('dedupeKey') or '')
+            if not key or key in processing_ids_by_key:
+                continue
+            ps_id, ps_created = _ensure_processing_service_product(c, pplan)
+            processing_ids_by_key[key] = ps_id
+            if ps_created:
+                result_counts['processingServicesCreated'] += 1
+                result_counts['productsCreated'] += 1
+            else:
+                result_counts['processingServicesReused'] += 1
 
         for row in commit_rows:
             row_no = row['rowNo']
@@ -6757,23 +7220,45 @@ def commit_preview(c, body, *, db_path=None):
                     result_counts['customersCreated'] += 1
 
                 sup_id = None
-                if row['csv']['supplier']:
+                csv_supplier = stock.text(row['csv'].get('supplier') or '')
+                # 加工業者は本体商品の通常仕入先／サブにしない（サービス商品側で確保済み）
+                link_supplier = csv_supplier and not proc_svc.is_processing_vendor(csv_supplier)
+                if link_supplier:
                     sup_id, created = _ensure_person(
-                        c, 'suppliers', stock.save_supplier, row['csv']['supplier'],
+                        c, 'suppliers', stock.save_supplier, csv_supplier,
                         create=row['supplier']['action'] == 'create',
                     )
                     if created:
                         result_counts['suppliersCreated'] += 1
+                elif csv_supplier and proc_svc.is_processing_vendor(csv_supplier):
+                    # 業者マスタ自体は作成（サービス確保で済んでいることが多い）
+                    _ensure_person(
+                        c, 'suppliers', stock.save_supplier, csv_supplier, create=True,
+                    )
 
                 sel = selections.get(str(row_no)) or selections.get(row_no) or {}
                 prod_info = dict(row['product'] or {})
                 # 通常仕入先名が行の仕入先と違う場合でも先に存在させる（補助CSV由来の新規は作らない＝台帳候補内のみ）
                 primary_name = stock.text(prod_info.get('primarySupplierName') or '')
-                if primary_name and primary_name != stock.text(row['csv'].get('supplier') or ''):
+                if primary_name and proc_svc.is_processing_vendor(primary_name):
+                    primary_name = ''
+                    prod_info['primarySupplierName'] = ''
+                if primary_name and primary_name != csv_supplier:
                     _ensure_person(
                         c, 'suppliers', stock.save_supplier, primary_name, create=True,
                     )
+                # 加工サービス商品行: 既に確保した ID を再利用
+                ps_key = stock.text(row.get('processingServicePlanKey') or '')
+                if prod_info.get('processingServiceProduct') and ps_key in processing_ids_by_key:
+                    prod_info['id'] = processing_ids_by_key[ps_key]
+                    prod_info['action'] = 'reuse'
+                    prod_info['code'] = ''
+                    prod_info['codeOverride'] = ''
+                    prod_info['blankSku'] = True
+                    prod_info['category'] = stock.CATEGORY_PARTS
                 code_t = stock.text(prod_info.get('codeOverride') if prod_info.get('codeOverride') is not None else row['csv']['code'])
+                if prod_info.get('processingServiceProduct'):
+                    code_t = ''
                 force = bool(sel.get('forceCreate')) and not stock_product_merge.is_normal_product_code(code_t)
 
                 # 同一品番で直前に作った商品へ再利用
@@ -6787,8 +7272,15 @@ def commit_preview(c, body, *, db_path=None):
                     if prod_info.get('size') and prod_info.get('sizeAction') != 'reuse':
                         prod_info['sizeAction'] = 'add'
 
+                # 加工業者仕入先を本体へ渡さない
+                ensure_sup_id = None if (
+                    prod_info.get('processingServiceSplit') and not prod_info.get('processingServiceProduct')
+                ) else sup_id
+                if prod_info.get('processingServiceProduct'):
+                    ensure_sup_id = None  # ID 再利用時は仕入先変更しない
+
                 pid, created, size_added, sub_added = _ensure_product(
-                    c, prod_info, sup_id, row['csv']['productName'],
+                    c, prod_info, ensure_sup_id, row['csv']['productName'],
                     customer_id=cust_id,
                     force_create=force,
                 )
@@ -6806,15 +7298,31 @@ def commit_preview(c, body, *, db_path=None):
                     result_counts['reused'] += 1
 
                 handle_info = dict(row.get('handle') or {})
-                if sel.get('handleId'):
-                    handle_info['id'] = sel['handleId']
-                    handle_info['action'] = 'reuse'
-                elif row.get('handle', {}).get('id'):
-                    handle_info['id'] = row['handle']['id']
-                    handle_info['action'] = 'reuse'
-                cp_id, created_h = _ensure_handle(c, cust_id, pid, handle_info)
-                if created_h:
-                    result_counts['handlesCreated'] += 1
+                cp_id = None
+                if handle_info.get('skipForProcessingService') or handle_info.get('action') == 'excluded':
+                    cp_id = None
+                else:
+                    if sel.get('handleId'):
+                        handle_info['id'] = sel['handleId']
+                        handle_info['action'] = 'reuse'
+                    elif row.get('handle', {}).get('id'):
+                        handle_info['id'] = row['handle']['id']
+                        handle_info['action'] = 'reuse'
+                    cp_id, created_h = _ensure_handle(c, cust_id, pid, handle_info)
+                    if created_h:
+                        result_counts['handlesCreated'] += 1
+
+                # 加工サービス ID を provenance へ
+                if ps_key and ps_key in processing_ids_by_key:
+                    prov = dict(row.get('specProvenance') or {})
+                    prov['processingProductId'] = processing_ids_by_key[ps_key]
+                    if not prov.get('rowKind'):
+                        prov['rowKind'] = (
+                            'processing_service'
+                            if prod_info.get('processingServiceProduct')
+                            else 'processing_service_link'
+                        )
+                    row['specProvenance'] = prov
 
                 upsert_row_map(
                     c, run_id=run_id, file_sha256=uploaded['fileSha256'],
