@@ -180,6 +180,7 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
 
     # 先頭「＊/*」だけの差は同一候補。色・男女などのヒント判定では標記を剥がして
     # コアごとに1名だけ使う（＊白衣／白衣を色差の証拠に並べない）。
+    # パンツ一般『丈加工』もヒント名から除き、加工差の誤検出を防ぐ。
     hint_names = []
     seen_hint_cores = set()
     for n in names:
@@ -188,6 +189,7 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
             continue
         seen_hint_cores.add(core)
         unmarked, _ = legacy.strip_used_marker(n)
+        unmarked = paren_classify.strip_pants_hem_processing(stock.text(unmarked) or n)
         hint_names.append(stock.text(unmarked) or n)
 
     # 色は明示抽出（括弧＋括弧外辞書）。白衣の「白」などは色にしない。
@@ -479,6 +481,11 @@ def plan_provisional_official_name(group, raw_decision=None):
         rule = '商品名が空のため品番をもとに仮代表名を作成（名称未整理）'
         rule_code = 'fallback_code'
 
+    # 既存公式名は維持。新規採用名からはパンツ一般『丈加工』を除く
+    if rule_code != 'existing' and rule_code != 'user':
+        stripped = paren_classify.strip_pants_hem_processing(chosen)
+        if stripped:
+            chosen = stripped
     chosen = format_provisional_official_name(chosen) or chosen
 
     # 原文 → 登録先（代表名）の対応
@@ -4638,6 +4645,11 @@ def _sku_product_plan(group):
     if group.get('existingCount') == 1 and not group.get('needsDecision'):
         existing_name = (group.get('existingProducts') or [{}])[0].get('name') or ''
         official = prefer_unmarked_product_name([*all_csv_names, existing_name]) or official
+    else:
+        # 新規まとめではパンツ一般『丈加工』を代表名に残さない
+        stripped = paren_classify.strip_pants_hem_processing(official)
+        if stripped:
+            official = stripped
     if group.get('existingCount') == 1 and not group.get('needsDecision'):
         plan_kind = 'reuse'
         plan_label = '既存商品を使用'
@@ -4666,6 +4678,7 @@ def _sku_product_plan(group):
         'usedMarkerAutoMerged': bool(group.get('usedMarkerAutoMerged')),
         'synonymAutoMerged': bool(group.get('synonymAutoMerged')),
         'whitespaceAutoMerged': bool(group.get('whitespaceAutoMerged')),
+        'pantsHemAutoMerged': bool(group.get('pantsHemAutoMerged')),
         'autoMergeReason': (
             ((group.get('reviewReasons') or [{}])[0].get('label') or '')
             if group.get('plannedSingleProduct') else ''
@@ -4741,6 +4754,7 @@ def build_sku_groups(c, classified):
         synonym_auto = False
         whitespace_auto = False
         color_notation_auto = False
+        pants_hem_auto = False
         all_csv_names = []
         for v in variants:
             for n in v.get('csvNames') or []:
@@ -4753,34 +4767,40 @@ def build_sku_groups(c, classified):
                 used_marker_possible(n) for n in all_csv_names
             )
         if len(cores) == 1 and len(raw_names) > 1:
-            # 標記以外の表記ゆれ（空白・全角半角・明示シノニム・色表記）を区別
+            # 標記以外の表記ゆれ（空白・丈加工・シノニム・色表記）を区別
+            # product_name_core_key と同じ順: NFKC → 丈加工除去 → 名シノニム → 色
             import unicodedata
-            cores_no_syn = set()
-            cores_name_syn_only = set()
+            cores_nfkc = set()
+            cores_after_hem = set()
+            cores_after_syn = set()
             for n in all_csv_names:
                 if not stock.text(n):
                     continue
                 core, _ = legacy.strip_used_marker(n)
                 core = unicodedata.normalize('NFKC', stock.text(core))
-                cores_no_syn.add(identity_match_key(core))
-                cores_name_syn_only.add(
-                    identity_match_key(legacy.apply_name_synonyms(core))
+                cores_nfkc.add(identity_match_key(core))
+                hemmed = paren_classify.strip_pants_hem_processing(core)
+                cores_after_hem.add(identity_match_key(hemmed))
+                cores_after_syn.add(
+                    identity_match_key(legacy.apply_name_synonyms(hemmed))
                 )
-            if len(cores_no_syn) > 1:
-                if len(cores_name_syn_only) == 1:
-                    # 名シノニム（パンツ／スラックス）だけで同一化
-                    synonym_auto = True
-                else:
-                    # 色辞書・配色区切りで同一化した（共有 normalize）
-                    color_notation_auto = True
-            else:
+            if len(cores_nfkc) == 1:
                 unmarked_set = {
                     stock.text(legacy.strip_used_marker(n)[0]) for n in all_csv_names if stock.text(n)
                 }
                 if len(unmarked_set) > 1:
                     whitespace_auto = True
+            elif len(cores_after_hem) == 1:
+                # パンツ一般『丈加工』有無だけの差
+                pants_hem_auto = True
+            elif len(cores_after_syn) == 1:
+                # 名シノニム（パンツ／スラックス）だけで同一化
+                synonym_auto = True
+            else:
+                # 色辞書・配色区切りで同一化した（共有 normalize）
+                color_notation_auto = True
 
-        # サイズ・顧客・中古標記・空白/全角半角・明示シノニム・色表記だけの差はバリアントに出ない
+        # サイズ・顧客・中古標記・空白/全角半角・明示シノニム・色表記・丈加工だけの差はバリアントに出ない
         needs_decision = (
             len(variants) > 1
             or len(existing) > 1
@@ -4796,6 +4816,8 @@ def build_sku_groups(c, classified):
             auto_bits = ['サイズ', '顧客']
             if used_marker_auto:
                 auto_bits.append('先頭「＊/*」中古標記')
+            if pants_hem_auto:
+                auto_bits.append('パンツの一般「丈加工」')
             if synonym_auto:
                 auto_bits.append('明示シノニム（例: パンツ／スラックス）')
             if color_notation_auto:
@@ -4854,6 +4876,7 @@ def build_sku_groups(c, classified):
             'usedMarkerAutoMerged': bool(used_marker_auto and planned_single),
             'synonymAutoMerged': bool(synonym_auto and planned_single),
             'whitespaceAutoMerged': bool(whitespace_auto and planned_single),
+            'pantsHemAutoMerged': bool(pants_hem_auto and planned_single),
             'applyScope': apply_scope,
             'decision': None,
             'status': 'needs_decision' if needs_decision else 'auto',
@@ -4880,6 +4903,7 @@ def _attach_product_plans(classified, sku_groups):
         row['usedMarkerAutoMerged'] = bool(group.get('usedMarkerAutoMerged'))
         row['synonymAutoMerged'] = bool(group.get('synonymAutoMerged'))
         row['whitespaceAutoMerged'] = bool(group.get('whitespaceAutoMerged'))
+        row['pantsHemAutoMerged'] = bool(group.get('pantsHemAutoMerged'))
         row['skuRowNos'] = list(group.get('rowNos') or [])
 
 
@@ -4902,6 +4926,7 @@ def _apply_auto_merge_official_names(classified, sku_groups):
             group.get('usedMarkerAutoMerged')
             or group.get('synonymAutoMerged')
             or group.get('whitespaceAutoMerged')
+            or group.get('pantsHemAutoMerged')
             or used_marker_possible(csv_name)
             or (
                 prod.get('id')

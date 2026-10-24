@@ -260,12 +260,18 @@ _COLORWAY_SEP_IN_NAME_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
 def product_name_core_key(name):
     """通常品番の商品名照合キー。
 
-    先頭中古標記・空白種類・全角半角（NFKC）・明示名シノニム・
-    配色区切り（*／＊／×）・明示色辞書（別名→代表）だけを吸収する。
+    先頭中古標記・空白種類・全角半角（NFKC）・パンツ一般『丈加工』・
+    明示名シノニム・配色区切り（*／＊／×）・明示色辞書（別名→代表）だけを吸収する。
     類似度だけでは寄せない。原文の表記は保存側で保持する（キーは照合専用）。
     """
     core, _ = strip_used_marker(name)
     core = unicodedata.normalize('NFKC', stock.text(core))
+    try:
+        import product_ledger_paren as paren_classify
+        # パンツ系の『丈加工』有無だけでは別商品にしない（股下寸法などは残す）
+        core = paren_classify.strip_pants_hem_processing(core)
+    except Exception:
+        pass
     core = apply_name_synonyms(core)
     if core:
         core = _COLORWAY_SEP_IN_NAME_RE.sub('×', core)
