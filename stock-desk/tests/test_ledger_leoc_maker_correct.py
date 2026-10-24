@@ -310,7 +310,9 @@ class MakerLookupFlowTest(unittest.TestCase):
             self.assertTrue(changed)
             self.assertEqual(saved['adopted_name'], '公式ポロ')
 
-            with mock.patch.object(msl, '_ddg_candidates', side_effect=OSError('net down')):
+            with mock.patch.object(msl, '_ddg_candidates', side_effect=OSError('net down')), \
+                    mock.patch.object(msl, '_catalog_searches_for', side_effect=OSError('net down')), \
+                    mock.patch.object(msl, '_midori_ec_candidates', side_effect=OSError('net down')):
                 res = msl.search_maker_product(
                     c,
                     manufacturer='テストメーカー',
@@ -356,28 +358,40 @@ class MakerLookupFlowTest(unittest.TestCase):
             self.assertEqual(row['adopted_color'], '白')
 
             # 候補なし
-            with mock.patch.object(msl, '_ddg_candidates', return_value=[]):
+            with mock.patch.object(msl, '_ddg_candidates', return_value=[]), \
+                    mock.patch.object(msl, '_catalog_searches_for', return_value=[]), \
+                    mock.patch.object(msl, '_midori_ec_candidates', return_value=[]):
                 none = msl.search_maker_product(
                     c, manufacturer='', maker_sku='ZZZ999NOMATCH',
                 )
             self.assertEqual(none['status'], 'no_match')
 
-            # 複数候補
+            # 複数候補（掲載名に品番＋色を含める）
             fake_hits = [
-                {'title': 'ZZ1 シャツ 白', 'url': 'https://servo.example/zz1', 'preferred': True, 'source': 'x'},
-                {'title': 'ZZ1 シャツ 黒', 'url': 'https://shop.example/zz1', 'preferred': False, 'source': 'x'},
+                {
+                    'title': '公式シャツ ZZ1 白',
+                    'url': 'https://servo.example/zz1w',
+                    'preferred': True, 'source': 'midori_ec', 'manufacturer': 'テスト',
+                },
+                {
+                    'title': '公式シャツ ZZ1 黒',
+                    'url': 'https://shop.example/zz1k',
+                    'preferred': False, 'source': 'sales_page', 'manufacturer': 'テスト',
+                },
             ]
 
-            def fake_get(url, timeout=8):
-                if 'duckduckgo' in url:
-                    return url, ''
-                body = f'<html><title>ZZ1 シャツ</title><body>SKU ZZ1 シャツ</body></html>'
-                return url, body
+            def fake_get(url, timeout=10):
+                if 'zz1w' in url:
+                    return url, '<html><title>公式シャツ ZZ1 白</title><body>ZZ1 白</body></html>'
+                if 'zz1k' in url:
+                    return url, '<html><title>公式シャツ ZZ1 黒</title><body>ZZ1 黒</body></html>'
+                return url, '<html></html>'
 
-            with mock.patch.object(msl, '_ddg_candidates', return_value=fake_hits), \
+            with mock.patch.object(msl, '_ddg_candidates', return_value=[]), \
+                    mock.patch.object(msl, '_catalog_searches_for', return_value=fake_hits), \
                     mock.patch.object(msl, '_http_get', side_effect=fake_get):
                 multi = msl.search_maker_product(
-                    c, manufacturer='', maker_sku='ZZ1',
+                    c, manufacturer='テスト', maker_sku='ZZ1',
                     current_name='仮', current_color='',
                 )
             self.assertEqual(multi['status'], 'multiple')

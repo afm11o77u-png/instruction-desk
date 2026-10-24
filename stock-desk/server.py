@@ -316,6 +316,12 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                     maker_sku=payload.get('makerSku') or payload.get('maker_sku') or '',
                     current_name=payload.get('currentName') or payload.get('current_name') or '',
                     current_color=payload.get('currentColor') or payload.get('current_color') or '',
+                    current_supplement=(
+                        payload.get('currentSupplement')
+                        or payload.get('current_supplement')
+                        or ''
+                    ),
+                    source_name=payload.get('sourceName') or payload.get('source_name') or '',
                     supplier=payload.get('supplier') or '',
                 )
         except ValueError as e:
@@ -335,6 +341,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                     maker_sku=payload.get('makerSku') or payload.get('maker_sku') or '',
                     name=payload.get('name') or '',
                     color=payload.get('color') or '',
+                    supplement=payload.get('supplement') or '',
                     source_url=payload.get('sourceUrl') or payload.get('source_url') or '',
                 )
                 c.commit()
