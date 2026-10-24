@@ -712,32 +712,40 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 .sku-list-toolbar,.sku-bulk-bar{flex-wrap:wrap;gap:6px 8px;margin:4px 0}
 .sku-list-toolbar input[type=search]{min-width:14rem;flex:1}
 .sku-section-pager{margin:4px 0 6px}
-/* 縦はモーダル本体のみ。内側 max-height を外し二重スクロールを解消 */
+/* 縦はモーダル本体のみ。内側 max-height を外し二重スクロールを解消。
+   wrap は親幅に拘束（min-width:0）し、はみ出し＋スクロール不可を防ぐ。 */
 .sku-compare-wrap{
-  overflow-x:auto;overflow-y:visible;max-height:none;
+  width:100%;max-width:100%;min-width:0;box-sizing:border-box;
+  overflow-x:auto;overflow-y:hidden;max-height:none;
   border:1px solid #c5d0c8;background:#fff;
+  -webkit-overflow-scrolling:touch;
 }
-.sku-compare-table{width:100%;border-collapse:collapse;font-size:12.5px;table-layout:auto}
+.sku-compare-table{
+  width:100%;max-width:100%;border-collapse:collapse;font-size:12.5px;
+  table-layout:fixed;
+}
 .sku-compare-table th,.sku-compare-table td{
-  border:1px solid #d5ddd7;padding:6px 8px;vertical-align:top;text-align:left;
+  border:1px solid #d5ddd7;padding:5px 6px;vertical-align:top;text-align:left;
+  overflow-wrap:anywhere;word-break:break-word;white-space:normal;
 }
 .sku-compare-table thead th{
   position:sticky;top:0;z-index:1;background:#eef3f0;font-weight:700;
-  white-space:nowrap;
+  white-space:normal;line-height:1.25;
 }
-.sku-compare-table .sku-check{width:2.25rem;min-width:2.25rem;text-align:center}
-.sku-compare-table .sku-code{min-width:7.5rem;white-space:nowrap;font-variant-numeric:tabular-nums}
-.sku-compare-table .sku-names{min-width:11rem;max-width:20rem}
-.sku-compare-table .sku-sups{min-width:9.5rem;max-width:16rem}
-.sku-compare-table .sku-other{min-width:8rem;max-width:14rem}
-.sku-compare-table .sku-why{min-width:9rem;max-width:16rem}
-.sku-compare-table .sku-plan{min-width:12rem;max-width:20rem}
+/* 操作列を先に確保。テキスト列は折り返しで親幅に収める（極端なフォント縮小なし） */
+.sku-compare-table .sku-check{width:2.1rem;min-width:2.1rem;text-align:center}
+.sku-compare-table .sku-code{width:7%;min-width:4.5rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.sku-compare-table .sku-names{width:14%;min-width:0}
+.sku-compare-table .sku-sups{width:12%;min-width:0}
+.sku-compare-table .sku-other{width:11%;min-width:0}
+.sku-compare-table .sku-why{width:13%;min-width:0}
+.sku-compare-table .sku-plan{width:18%;min-width:0}
 .sku-cand-list,.sku-reason-list,.sku-name-map{margin:0;padding-left:1.1em}
 .sku-cand-list li,.sku-reason-list li{margin:0 0 2px}
 .sku-cand-name{display:inline}
 .sku-cand-stock{
   display:inline;margin-left:4px;color:#3d5a48;font-size:11.5px;font-variant-numeric:tabular-nums;
-  white-space:nowrap;
+  white-space:normal;
 }
 .sku-cand-stock.is-missing{color:#8a9390}
 .sku-pair-stock-list{margin:4px 0 8px}
@@ -748,14 +756,26 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 /* 決定済みは太い縦線ではなく、通常枠線＋薄い背景色で区別 */
 .sku-dec-merge td{background:#e7f2ea}
 .sku-dec-hold td{background:#f4eee4}
-.sku-compare-table .sku-action{min-width:17.5rem;width:17.5rem}
+.sku-compare-table .sku-action{
+  width:9.75rem;min-width:9.75rem;max-width:10.5rem;
+  position:sticky;right:0;z-index:2;
+  background:#fff;box-shadow:-3px 0 0 #d5ddd7;
+}
+.sku-compare-table thead th.sku-action-h,
+.sku-compare-table .sku-action{background:#eef3f0}
+.sku-compare-table tbody td.sku-action{background:#fff}
+.sku-compare-table tbody tr.sku-tier-bulk td.sku-action{background:#f7faf8}
+.sku-compare-table tbody tr.sku-tier-individual td.sku-action{background:#fff8f0}
+.sku-compare-table tbody tr.sku-dec-merge td.sku-action{background:#e7f2ea}
+.sku-compare-table tbody tr.sku-dec-hold td.sku-action{background:#f4eee4}
 .sku-mini-btns,
 .bar.sku-mini-btns{
-  display:flex;flex-wrap:nowrap;align-items:center;gap:4px;margin-top:4px;
+  display:flex;flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:4px;margin-top:4px;
   padding:0;border-bottom:0;
 }
 .sku-mini-btns button{
-  white-space:nowrap;flex:0 0 auto;padding:6px 10px;font-size:12.5px;
+  white-space:normal;flex:0 0 auto;padding:6px 8px;font-size:12.5px;width:100%;text-align:center;
+  line-height:1.25;
 }
 /* quiet+選択の競合で白文字だけ残らないよう、選択時は常に緑地＋白字 */
 .sku-mini-btns button.primary,
@@ -809,23 +829,30 @@ button.linkish{
 .primary-change-confirm{display:block;margin:8px 0 0;font-weight:600;color:#7a3e12}
 .legacy-status-hold td{background:#f3f1ea}
 .legacy-status-merge td{background:#eef5f0}
-/* 商品台帳モーダル: 高く広げ、legacy-csv-detail の短い max-height / pre-wrap を打ち消す。
-   縦スクロールは .legacy-csv-detail-body のみ（.sku-compare-wrap は横だけ）。 */
+/* 商品台帳モーダル: 画面幅いっぱいに近づけ、legacy-csv-detail の短い max-height / pre-wrap を打ち消す。
+   縦スクロールは .legacy-csv-detail-body。比較表は親幅拘束＋操作列 sticky。 */
 dialog.product-ledger-dialog,
 dialog.product-ledger-dialog.legacy-csv-detail-dialog{
-  width:min(1280px,98vw);
+  width:calc(100vw - 24px);
+  max-width:calc(100vw - 24px);
   max-height:min(96vh,1100px);
+  box-sizing:border-box;
 }
 dialog.product-ledger-dialog .legacy-csv-detail-body{
   max-height:none;
   flex:1 1 auto;
-  min-height:0;
+  min-width:0;min-height:0;
   overflow:auto;
   white-space:normal;
   word-break:normal;
   overflow-wrap:anywhere;
   overscroll-behavior:contain;
   padding-bottom:10px;
+}
+dialog.product-ledger-dialog .sku-groups-panel,
+dialog.product-ledger-dialog .sku-judgment-section,
+dialog.product-ledger-dialog .sku-section-body{
+  min-width:0;max-width:100%;
 }
 dialog.product-ledger-dialog .sku-section-header{
   position:sticky;top:0;z-index:3;
@@ -837,10 +864,56 @@ dialog.product-ledger-dialog .sku-compare-table thead th{
   z-index:2;
   top:0;
 }
+dialog.product-ledger-dialog .sku-compare-table thead th.sku-action-h{
+  z-index:3;right:0;
+}
 dialog.product-ledger-dialog .product-ledger-preview-actions{
   position:sticky;bottom:0;z-index:4;
   margin:8px 0 0;padding:8px 0;
   background:#fff;
   border-top:1px solid #d5ddd7;
   box-shadow:0 -1px 0 #d5ddd7;
+}
+/* 小画面・強い拡大: 品番ごとに項目を縦積みし、全情報・操作へ到達可能に */
+@media(max-width:960px){
+  dialog.product-ledger-dialog,
+  dialog.product-ledger-dialog.legacy-csv-detail-dialog{
+    width:calc(100vw - 12px);
+    max-width:calc(100vw - 12px);
+  }
+  .sku-compare-wrap{overflow-x:visible;overflow-y:visible;border:0;background:transparent}
+  .sku-compare-table,
+  .sku-compare-table thead,
+  .sku-compare-table tbody,
+  .sku-compare-table tr,
+  .sku-compare-table th,
+  .sku-compare-table td{display:block;width:100%!important;max-width:none!important;min-width:0!important}
+  .sku-compare-table{table-layout:auto;border:0}
+  .sku-compare-table thead{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0}
+  .sku-compare-table tr.sku-list-row{
+    margin:0 0 10px;padding:8px 10px;
+    border:1px solid #c5d0c8;background:#fff;
+  }
+  .sku-compare-table tr.sku-list-row td{
+    border:0;border-bottom:1px dashed #e2e8e4;padding:6px 0;
+  }
+  .sku-compare-table tr.sku-list-row td:last-child{border-bottom:0}
+  .sku-compare-table tr.sku-list-row td[data-label]::before{
+    content:attr(data-label);
+    display:block;font-weight:700;font-size:12px;color:#3d5146;margin:0 0 2px;
+  }
+  .sku-compare-table tr.sku-list-row td.sku-check{
+    display:flex;align-items:center;gap:8px;
+  }
+  .sku-compare-table tr.sku-list-row td.sku-check::before{content:none}
+  .sku-compare-table .sku-action,
+  .sku-compare-table thead th.sku-action-h{
+    position:static;box-shadow:none;background:inherit;width:100%!important;max-width:none!important;
+  }
+  .sku-mini-btns,.bar.sku-mini-btns{flex-direction:column}
+  .sku-compare-table tr.sku-detail-row{
+    margin:-6px 0 12px;padding:0 10px 10px;
+    border:1px solid #c5d0c8;border-top:0;background:#f4f7f5;
+  }
+  .sku-compare-table tr.sku-detail-row td{border:0;padding:4px 0}
 }
