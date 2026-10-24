@@ -23,6 +23,7 @@ WRITE_PATHS = {
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/legacy-csv/commit',
     '/api/product-ledger-csv/commit',
+    '/api/product-ledger-csv/maker-lookup/adopt',
     '/api/products/merge',
     '/api/products/registry-wipe',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
@@ -304,6 +305,44 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'code': 'commit_failed',
                 'registered': False,
             }
+        return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup':
+        import maker_sku_lookup
+        try:
+            with stock.connect(db_path) as c:
+                result = maker_sku_lookup.search_maker_product(
+                    c,
+                    manufacturer=payload.get('manufacturer') or '',
+                    maker_sku=payload.get('makerSku') or payload.get('maker_sku') or '',
+                    current_name=payload.get('currentName') or payload.get('current_name') or '',
+                    current_color=payload.get('currentColor') or payload.get('current_color') or '',
+                    supplier=payload.get('supplier') or '',
+                )
+        except ValueError as e:
+            return 400, {'error': str(e) or 'メーカー品番を確認してください。'}
+        except (OSError, sqlite3.Error) as e:
+            print(f'maker-lookup failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {'error': 'メーカー情報の検索に失敗しました。', 'code': 'maker_lookup_failed'}
+        return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/adopt':
+        import maker_sku_lookup
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = maker_sku_lookup.adopt_maker_correction(
+                    c,
+                    manufacturer=payload.get('manufacturer') or '',
+                    maker_sku=payload.get('makerSku') or payload.get('maker_sku') or '',
+                    name=payload.get('name') or '',
+                    color=payload.get('color') or '',
+                    source_url=payload.get('sourceUrl') or payload.get('source_url') or '',
+                )
+                c.commit()
+        except ValueError as e:
+            return 400, {'error': str(e) or '採用内容を確認してください。'}
+        except (OSError, sqlite3.Error) as e:
+            print(f'maker-lookup adopt failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {'error': '採用内容の保存に失敗しました。', 'code': 'maker_adopt_failed'}
         return 200, result
     if path == '/api/products/merge/preview':
         import stock_product_merge

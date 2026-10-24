@@ -21,7 +21,9 @@ from collections import defaultdict
 
 import legacy_csv_bulk_import as bulk
 import legacy_csv_import as legacy
+import maker_sku_lookup
 import product_ledger_paren as paren_classify
+import product_ledger_scoped_color as scoped_color
 import stock
 import stock_product_merge
 
@@ -3586,6 +3588,7 @@ def ensure_schema(c):
         'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file '
         'ON product_ledger_row_maps(file_sha256, source_row_no)'
     )
+    maker_sku_lookup.ensure_schema(c)
 
 
 def db_fingerprint(c):
@@ -3711,10 +3714,20 @@ def upsert_row_map(
         'color': csv_color,
         'processing': csv_processing,
         'material': csv_material,
+        'supplement': stock.text(
+            provenance.get('supplement')
+            or pc.get('supplement')
+            or (row.get('product') or {}).get('officialSupplement')
+            or ''
+        ),
         'plannedName': provenance.get('plannedName') or pc.get('plannedName') or product_name,
         'isMainCandidate': bool(is_main),
         'auxStockPickAuto': bool(row.get('auxStockPickAuto')),
         'auxStockPickReason': stock.text(row.get('auxStockPickReason') or ''),
+        'scopedColorCorrection': bool(
+            pc.get('scopedColorCorrection')
+            or (row.get('product') or {}).get('scopedColorCorrection')
+        ),
     }, ensure_ascii=False)
     pkey = product_map_key(customer=customer, code=code, product_name=product_name)
     rkey = row_map_key(
@@ -4126,6 +4139,10 @@ def build_paren_classification(product_name, override=None):
     color = stock.text(raw.get('color')) if 'color' in raw else base['color']
     processing = stock.text(raw.get('processing')) if 'processing' in raw else base['processing']
     material = stock.text(raw.get('material')) if 'material' in raw else base['material']
+    if 'supplement' in raw:
+        supplement = stock.text(raw.get('supplement') or '')
+    else:
+        supplement = stock.text(base.get('supplement') or '')
     # 未分類の手編集はリストで受けてもよい
     if 'unclassified' in raw:
         unc = raw.get('unclassified')
@@ -4164,6 +4181,7 @@ def build_paren_classification(product_name, override=None):
         'colorSource': stock.text(base.get('colorSource') or ''),
         'processing': processing,
         'material': material,
+        'supplement': supplement,
         'unclassified': unclassified,
         'needsConfirm': needs,
         'confirmReasons': reasons,
@@ -4182,6 +4200,7 @@ def build_paren_classification(product_name, override=None):
         'materialCandidates': list(base.get('materialCandidates') or []),
         'changeSummary': change_summary,
         'hasExplicitColor': bool(color),
+        'scopedColorCorrection': bool(base.get('scopedColorCorrection')),
     }
 
 
@@ -4190,6 +4209,20 @@ def attach_paren_classification(row, override=None):
     csv = dict(row.get('csv') or {})
     original = stock.text(csv.get('productName') or '')
     plan = build_paren_classification(original, override)
+    raw_override = override if isinstance(override, dict) else {}
+    user_touched = bool(raw_override.get('userEdited') or raw_override.get('manual'))
+    # LEOC×ユニスタイル×別注×ブルー/サックスエプロン: スコープ付き色名補正
+    # 手編集がある行は自動補正しない（メーカー補正の採用は userEdited で再投入される）
+    if (
+        not user_touched
+        and scoped_color.matches_scoped_color_correction(
+            customer=csv.get('customer') or '',
+            supplier=csv.get('supplier') or '',
+            code=csv.get('code') or '',
+            product_name=original,
+        )
+    ):
+        plan = scoped_color.apply_scoped_color_correction(plan, original_name=original)
     row['parenClassification'] = plan
 
     prod = dict(row.get('product') or {})
@@ -4198,11 +4231,16 @@ def attach_paren_classification(row, override=None):
     # 予定名（括弧分類後）。原文は別名／マッピング用に残す。
     # 別注・品番なしは顧客×原文名で区別するため、自動では予定名へ置き換えない
     # （色・加工・生地フィールドへの抽出は行う）。
+    # ただしスコープ付き色名補正が付いた別注は、登録予定名へ反映する（原文は別名維持）。
     code = stock.text(csv.get('code') or '')
+    scoped = bool(plan.get('scopedColorCorrection'))
     keep_original_name = (
-        legacy.is_custom_order_code(code)
-        or not stock.text(code)
-        or code == stock_product_merge.UNKNOWN_CODE
+        (
+            legacy.is_custom_order_code(code)
+            or not stock.text(code)
+            or code == stock_product_merge.UNKNOWN_CODE
+        )
+        and not scoped
     )
     if plan.get('plannedName'):
         prod['csvOriginalName'] = original
@@ -4210,21 +4248,37 @@ def attach_paren_classification(row, override=None):
             prod['plannedNameFromParen'] = plan['plannedName']
         if (
             not keep_original_name
-            and (plan.get('autoClassified') or (plan.get('userEdited') and not plan.get('needsConfirm')))
+            and (plan.get('autoClassified') or (plan.get('userEdited') and not plan.get('needsConfirm')) or scoped)
         ):
             prod['suggestedNameFromParen'] = plan['plannedName']
             # 代表名未設定なら括弧分類後の名を公式名候補に（SKUまとめ後も優先）
-            if not prod.get('officialName') or prod.get('officialName') == original:
+            if not prod.get('officialName') or prod.get('officialName') == original or scoped:
                 prod['officialName'] = plan['plannedName']
                 prod['applyOfficialName'] = True
 
     if plan.get('color'):
         prod['proposedColor'] = plan['color']
-        if not prod.get('officialColor'):
+        if not prod.get('officialColor') or scoped:
             prod['officialColor'] = plan['color']
     if plan.get('material'):
         prod['proposedMaterial'] = plan['material']
         prod['officialMaterial'] = plan['material']
+    if plan.get('supplement'):
+        # 専用カラムが無いため、既存の括弧分類構造（supplement）と
+        # 商品側の公式補足として保持。コミット時は名に括弧で載せる。
+        prod['officialSupplement'] = plan['supplement']
+        prod['proposedSupplement'] = plan['supplement']
+
+    if scoped:
+        prod['plannedRegisteredName'] = plan.get('plannedName') or ''
+        prod['plannedRegisteredColor'] = plan.get('color') or ''
+        prod['plannedRegisteredSupplement'] = plan.get('supplement') or ''
+        prod['scopedColorCorrection'] = True
+        prod['scopedColorCorrectionReason'] = scoped_color.SCOPED_REASON
+        row['plannedRegisteredName'] = prod['plannedRegisteredName']
+        row['plannedRegisteredColor'] = prod['plannedRegisteredColor']
+        row['plannedRegisteredSupplement'] = prod['plannedRegisteredSupplement']
+        row['changeSummary'] = plan.get('changeSummary') or scoped_color.SCOPED_REASON
 
     # 顧客別加工 → 取扱の加工仕様（不明時は「加工なし」へ強制しない）
     if plan.get('processing'):
@@ -4252,6 +4306,8 @@ def attach_paren_classification(row, override=None):
 
     row['product'] = prod
     row['handle'] = handle
+    # メーカー品番補正ボタン用メタ（要確認行の操作欄で参照）
+    row['makerCorrection'] = maker_sku_lookup.row_maker_correction_meta(row)
     return row
 
 
@@ -4260,36 +4316,53 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
 
     ただしユーザー指定の公式名・既存維持は上書きしない。
     別注・品番なしは原文名を維持（顧客×原文名の区別を壊さない）。
+    スコープ付き色名補正が付いた別注は登録予定名へ反映する。
     """
     by_code = {g['code']: g for g in sku_groups}
     for row in classified:
         pc = row.get('parenClassification') or {}
-        if not (pc.get('autoClassified') or (pc.get('userEdited') and not pc.get('needsConfirm'))):
+        scoped = bool(pc.get('scopedColorCorrection'))
+        if not (
+            pc.get('autoClassified')
+            or scoped
+            or (pc.get('userEdited') and not pc.get('needsConfirm'))
+        ):
             continue
         planned = stock.text(pc.get('plannedName') or '')
         if not planned:
             continue
         code = stock.text((row.get('csv') or {}).get('code') or '')
         keep_original_name = (
-            legacy.is_custom_order_code(code)
-            or not stock.text(code)
-            or code == stock_product_merge.UNKNOWN_CODE
+            (
+                legacy.is_custom_order_code(code)
+                or not stock.text(code)
+                or code == stock_product_merge.UNKNOWN_CODE
+            )
+            and not scoped
         )
         prod = dict(row.get('product') or {})
         original = stock.text((row.get('csv') or {}).get('productName') or '')
         if not keep_original_name:
             # SKUまとめの officialName が原文のままなら置き換え
             cur = stock.text(prod.get('officialName') or '')
-            if not cur or cur == original:
+            if not cur or cur == original or scoped:
                 prod['officialName'] = planned
                 prod['applyOfficialName'] = True
                 prod['suggestedNameFromParen'] = planned
                 prod['csvOriginalName'] = original
-        if pc.get('color') and not prod.get('officialColor'):
+        if pc.get('color') and (not prod.get('officialColor') or scoped):
             prod['officialColor'] = pc['color']
         if pc.get('material'):
             prod['officialMaterial'] = pc['material']
             prod['proposedMaterial'] = pc['material']
+        if pc.get('supplement'):
+            prod['officialSupplement'] = pc['supplement']
+            prod['proposedSupplement'] = pc['supplement']
+        if scoped:
+            prod['scopedColorCorrection'] = True
+            prod['plannedRegisteredName'] = planned
+            prod['plannedRegisteredColor'] = stock.text(pc.get('color') or '')
+            prod['plannedRegisteredSupplement'] = stock.text(pc.get('supplement') or '')
         row['product'] = prod
         group = by_code.get(code)
         if (
@@ -5659,6 +5732,9 @@ def build_preview(c, body):
     _apply_auto_merge_official_names(classified, sku_groups)
     _apply_paren_names_after_sku_plans(classified, sku_groups)
     stamp_aux_adopted_package_on_rows(classified, sku_groups)
+    # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
+    for row in classified:
+        row['makerCorrection'] = maker_sku_lookup.row_maker_correction_meta(row)
 
     counts = defaultdict(int)
     for row in classified:
@@ -5939,17 +6015,35 @@ def _apply_official_name(c, product_id, official_name, color=None, csv_name=None
     return True
 
 
+def _registration_name_with_supplement(official_name, supplement):
+    """補足専用カラムが無いため、既存の商品名構造（括弧）へ載せる。"""
+    name = stock.text(official_name or '')
+    supp = stock.text(supplement or '')
+    if not supp:
+        return name
+    if not name:
+        return f'（{supp}）'
+    if supp in name:
+        return name
+    return f'{name}（{supp}）'
+
+
 def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None, force_create=False):
     if product_info.get('codeOverride') is not None:
         product_info = dict(product_info)
         product_info['code'] = product_info.get('codeOverride')
 
     code_for_name = stock.text(product_info.get('codeOverride') if product_info.get('codeOverride') is not None else product_info.get('code') or '')
+    scoped = bool(product_info.get('scopedColorCorrection'))
     # 別注・品番なしは原文名を優先（括弧除去名へ自動置換しない）
+    # スコープ付き色名補正が付いた別注は登録予定名を使う（原文は別名へ）。
     keep_csv_name = (
-        legacy.is_custom_order_code(code_for_name)
-        or not stock.text(code_for_name)
-        or code_for_name == stock_product_merge.UNKNOWN_CODE
+        (
+            legacy.is_custom_order_code(code_for_name)
+            or not stock.text(code_for_name)
+            or code_for_name == stock_product_merge.UNKNOWN_CODE
+        )
+        and not scoped
     )
     if keep_csv_name:
         official_name = stock.text(product_info.get('officialName') or '') or stock.text(csv_name)
@@ -5960,6 +6054,10 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
             or stock.text(product_info.get('plannedNameFromParen') or '')
             or stock.text(csv_name)
         )
+    official_name = _registration_name_with_supplement(
+        official_name,
+        product_info.get('officialSupplement') or product_info.get('proposedSupplement') or '',
+    )
     official_color = product_info.get('officialColor')
     if official_color is None:
         official_color = product_info.get('proposedColor')

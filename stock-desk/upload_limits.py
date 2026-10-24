@@ -22,6 +22,8 @@ LARGE_BODY_PATHS = frozenset({
     '/api/product-ledger-csv/preview',
     '/api/product-ledger-csv/commit',
     '/api/product-ledger-csv/history',
+    '/api/product-ledger-csv/maker-lookup',
+    '/api/product-ledger-csv/maker-lookup/adopt',
 })
 
 # Shown to the UI when Content-Length exceeds the path's limit.
