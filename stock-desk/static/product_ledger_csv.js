@@ -377,6 +377,30 @@
     </div>`
   }
 
+  function processingServiceAutoHtml(st){
+    const plans=((st.preview&&st.preview.processingServicePlans)||[]).filter(p=>p&&p.autoRegister)
+    if(!plans.length)return ''
+    const items=plans.map(p=>{
+      const codes=(p.targetGarmentCodes||[]).slice(0,6).map(esc).join('、')
+      const more=(p.targetGarmentCodes||[]).length>6?` …他${(p.targetGarmentCodes||[]).length-6}`:''
+      const samples=(p.rowSpecsSamples||[]).slice(0,3).map(s=>{
+        const bits=[s.originalName||'',s.position?`位置 ${s.position}`:'',s.dimensions?`寸法 ${s.dimensions}`:'',s.composition?`構成 ${s.composition}`:''].filter(Boolean)
+        return `<li>行${esc(s.rowNo)}: ${esc(bits.join(' / ')||'—')}</li>`
+      }).join('')
+      return `<article class="sku-auto-plan sku-auto-processing" data-sku-section="auto-processing">
+        <strong>${esc(p.serviceName||'加工')} <span class="badge">加工サービス（自動）</span></strong>
+        <span>業者 ${esc(p.vendorName||'—')}　部品・資材／加工　品番なし（対象品番 ${codes||'—'}${more}）</span>
+        <p class="excelhint">通常画面には統一後の加工名と業者のみを出します。元商品名の列挙はしません。</p>
+        ${samples?`<details class="sku-processing-specs"><summary>元行の個別仕様（内部照合用）</summary><ul>${samples}</ul></details>`:''}
+      </article>`
+    }).join('')
+    const sum=st.preview&&st.preview.processingServiceSummary||{}
+    return `<div class="sku-processing-auto">
+      <p class="excelhint"><strong>加工サービスの自動整理</strong>（${sum.autoCount||plans.length} 件 / 新規予定 ${sum.createCount||0}・再利用 ${sum.reuseCount||0}）。確定まで未登録です。</p>
+      ${items}
+    </div>`
+  }
+
   function autoDecidedBodyHtml(st,part){
     const plans=part.autoPlans||[]
     const p=(st.preview&&st.preview.plannedCounts)||{}
@@ -399,6 +423,7 @@
     return `<div class="sku-auto-panel sku-section-body">
       <p class="excelhint">サイズ・顧客・＊/*・空白/全角半角・明示シノニムなどは自動で1商品へまとめています。ここも<strong>まだ未登録</strong>です（最終の「確認して登録」まで台帳は変わりません）。</p>
       <p class="excelhint">自動決定済み ${part.autoCount||0} 品番 / ${p.autoMergedCsvRows||0} 行${stockPicked.length?`（うち在庫採用 ${stockPicked.length}）`:''}</p>
+      ${processingServiceAutoHtml(st)}
       ${sectionPagerHtml('auto',slice,plans.length)}
       ${cards||'<p class="sub">自動決定の明細はありません。</p>'}
     </div>`

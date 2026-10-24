@@ -846,12 +846,18 @@ def _spec_signature(color, processing, material):
     ])
 
 
-def _map_row_spec(map_row):
+def _map_row_spec_full(map_row):
+    """色・加工・素材に加え、加工サービス分離メタを返す。"""
     color = ''
     processing = ''
     material = ''
+    row_kind = ''
+    processing_product_id = None
     if map_row is None:
-        return color, processing, material
+        return {
+            'color': color, 'processing': processing, 'material': material,
+            'rowKind': row_kind, 'processingProductId': processing_product_id,
+        }
     keys = map_row.keys() if hasattr(map_row, 'keys') else []
     if 'csv_color' in keys:
         color = stock.text(map_row['csv_color'] or '')
@@ -859,20 +865,38 @@ def _map_row_spec(map_row):
         processing = stock.text(map_row['csv_processing'] or '')
     if 'csv_material' in keys:
         material = stock.text(map_row['csv_material'] or '')
-    if not (color or processing or material):
-        raw = ''
-        if 'spec_json' in keys:
-            raw = map_row['spec_json'] or ''
-        if raw:
+    raw = ''
+    if 'spec_json' in keys:
+        raw = map_row['spec_json'] or ''
+    spec = {}
+    if raw:
+        try:
+            spec = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            spec = {}
+    if isinstance(spec, dict):
+        if not (color or processing or material):
+            color = stock.text(spec.get('color') or color)
+            processing = stock.text(spec.get('processing') or processing)
+            material = stock.text(spec.get('material') or material)
+        if not processing:
+            processing = stock.text(spec.get('processingServiceName') or '')
+        row_kind = stock.text(spec.get('rowKind') or '')
+        pid = spec.get('processingProductId')
+        if pid not in (None, ''):
             try:
-                spec = json.loads(raw)
-            except (TypeError, json.JSONDecodeError):
-                spec = {}
-            if isinstance(spec, dict):
-                color = stock.text(spec.get('color') or color)
-                processing = stock.text(spec.get('processing') or processing)
-                material = stock.text(spec.get('material') or material)
-    return color, processing, material
+                processing_product_id = int(pid)
+            except (TypeError, ValueError):
+                processing_product_id = None
+    return {
+        'color': color, 'processing': processing, 'material': material,
+        'rowKind': row_kind, 'processingProductId': processing_product_id,
+    }
+
+
+def _map_row_spec(map_row):
+    full = _map_row_spec_full(map_row)
+    return full['color'], full['processing'], full['material']
 
 
 def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, supplier):
@@ -927,10 +951,18 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             supplier=supplier,
         ):
             continue
+        full = _map_row_spec_full(row)
+        # 加工サービス商品自体には衣服在庫を付けない（リンク行の本体 product_id を使う）
+        if full.get('rowKind') == 'processing_service':
+            continue
         pid = row['product_id']
+        # 誤って加工サービス商品 ID が本体欄に入っていればスキップ
+        if full.get('processingProductId') and int(pid) == int(full['processingProductId']):
+            if full.get('rowKind') == 'processing_service':
+                continue
         cpid = row['customer_product_id']
         cid = row['customer_id']
-        color, processing, material = _map_row_spec(row)
+        color, processing, material = full['color'], full['processing'], full['material']
         key = (pid, cpid, cid, _spec_signature(color, processing, material))
         if key in seen:
             continue
@@ -947,6 +979,8 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             'color': color,
             'processing': processing,
             'material': material,
+            'rowKind': full.get('rowKind') or '',
+            'processingProductId': full.get('processingProductId'),
             'isMainCandidate': bool(row['is_main_candidate']) if 'is_main_candidate' in row.keys() else True,
             'fileSha256': stock.text(row['file_sha256'] or ''),
             'runId': row['run_id'],

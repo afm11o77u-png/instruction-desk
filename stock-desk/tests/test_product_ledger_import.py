@@ -62,6 +62,8 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('自動決定済み', js)
         self.assertIn('自動決定済み（未登録）', js)
         self.assertIn('autoMergePlans', js)
+        self.assertIn('processingServicePlans', js)
+        self.assertIn('加工サービスの自動整理', js)
         self.assertIn('中古標記まとめ', js)
         self.assertIn('auxFile', js)
         self.assertIn('初期在庫CSV', js)
