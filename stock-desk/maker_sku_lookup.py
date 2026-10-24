@@ -177,6 +177,95 @@ def row_maker_correction_meta(row: dict) -> dict:
     }
 
 
+def strip_color_tokens_from_name(name: str) -> str:
+    """色語トークンを除いた商品名（色競合グループの検索で一色にロックしない）。"""
+    unified = paren_classify.unify_import_notation(stock.text(name) or '')
+    if not unified:
+        return ''
+    kept = []
+    for tok in re.split(r'[\s\u3000]+', unified):
+        if not tok:
+            continue
+        if _token_is_color(tok):
+            continue
+        if any(sep in tok for sep in ('/', '／', '×', '✕')):
+            # 配色表記トークンも検索補助名から外す
+            continue
+        kept.append(tok)
+    return ' '.join(kept).strip()
+
+
+def neutral_search_source_name(names) -> str:
+    """複数の旧名から、色を除いた検索補助名を選ぶ。"""
+    stripped = []
+    for n in names or []:
+        s = strip_color_tokens_from_name(n)
+        if s and s not in stripped:
+            stripped.append(s)
+    if not stripped:
+        return ''
+    # 最短の共通っぽい名を優先（例: スクラブ ブルー／ワイン → スクラブ）
+    stripped.sort(key=lambda x: (len(x), x))
+    return stripped[0]
+
+
+def sku_group_maker_correction_meta(group: dict, rows=None) -> dict:
+    """品番比較一覧の「メーカー情報で補正」表示用。
+
+    表示条件:
+    - 有効なメーカー品番がある（別注・品番なし・空は不可）
+    - 同じ品番内に、正規化後も異なる色候補が複数ある（colorDiffPossible）
+    社内管理品番がある行は元のメーカー品番（makerCode）を使う。
+    """
+    color_diff = bool(group.get('colorDiffPossible'))
+    row_list = [r for r in (rows or []) if isinstance(r, dict)]
+    maker_sku = ''
+    manufacturer = ''
+    supplier = ''
+    source_names = []
+    for row in row_list:
+        meta = row.get('makerCorrection') if isinstance(row.get('makerCorrection'), dict) else {}
+        if not meta:
+            meta = row_maker_correction_meta(row)
+        sku = stock.text(meta.get('makerSku') or '')
+        if sku and is_valid_maker_sku(sku) and not maker_sku:
+            maker_sku = sku
+            manufacturer = stock.text(meta.get('manufacturer') or '')
+        csv = row.get('csv') if isinstance(row.get('csv'), dict) else {}
+        if not supplier:
+            supplier = stock.text(csv.get('supplier') or '')
+        n = stock.text(csv.get('productName') or '')
+        if n and n not in source_names:
+            source_names.append(n)
+    if not maker_sku:
+        # 行が無い／メタ未付与時はグループ品番を試す
+        code = stock.text(group.get('code') or '')
+        if is_valid_maker_sku(code):
+            maker_sku = code
+    if not manufacturer:
+        manufacturer = resolve_manufacturer(manufacturer='', supplier=supplier)
+    if not source_names:
+        source_names = [
+            stock.text(n)
+            for n in (group.get('nameCandidates') or [])
+            if stock.text(n)
+        ]
+    eligible = bool(maker_sku) and is_valid_maker_sku(maker_sku) and color_diff
+    return {
+        'eligible': eligible,
+        'showButton': eligible,
+        'makerSku': maker_sku if (maker_sku and is_valid_maker_sku(maker_sku)) else '',
+        'manufacturer': manufacturer,
+        'supplier': supplier,
+        # 色競合時は色語を除いた名で検索し、一色ヒントで候補を落とさない
+        'sourceNameHint': neutral_search_source_name(source_names) if color_diff else (
+            source_names[0] if source_names else ''
+        ),
+        'colorDiffPossible': color_diff,
+        'rowNos': list(group.get('rowNos') or []),
+    }
+
+
 def extract_name_search_hints(old_name: str) -> dict:
     """旧商品名から検索補助語を取り出す。
 
