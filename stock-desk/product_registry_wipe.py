@@ -252,6 +252,7 @@ def count_targets(c):
         'productMergeSources': safe('product_merge_sources'),
         'productMatchAliases': safe('product_match_aliases'),
         'productLedgerRowMaps': safe('product_ledger_row_maps'),
+        'makerSkuCorrections': safe('maker_sku_corrections'),
         'legacyCsvRowMaps': legacy_maps,
     }
 

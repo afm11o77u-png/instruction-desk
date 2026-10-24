@@ -50,6 +50,7 @@
         sectionOpen:Object.assign({},SECTION_DEFAULTS),
         sectionPages:{individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1},
         selections:{},skuDecisions:{},rowClassifications:{},commitToken:'',busy:false,open:false,
+        makerLookup:null,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
     }
@@ -59,6 +60,7 @@
     if(!ui.expandedCodes)ui.expandedCodes={}
     if(!ui.rowClassifications)ui.rowClassifications={}
     if(!ui.openingSelections)ui.openingSelections={}
+    if(ui.makerLookup===undefined)ui.makerLookup=null
     if(!ui.sectionOpen)ui.sectionOpen=Object.assign({},SECTION_DEFAULTS)
     // 再描画でユーザーが開いた区分を閉じない（欠けたキーだけ既定値で補う）
     Object.keys(SECTION_DEFAULTS).forEach(k=>{
@@ -339,18 +341,20 @@
 
   function nameColorSplitPreviewHtml(src){
     if(!src)return ''
-    const sourceName=src.sourceAdoptedName||(src.adoptedPackage&&src.adoptedPackage.sourceName)||(src.adoptedPackage&&src.adoptedPackage.productName)||''
+    const sourceName=src.sourceAdoptedName||(src.adoptedPackage&&src.adoptedPackage.sourceName)||(src.adoptedPackage&&src.adoptedPackage.productName)||src.csvOriginalName||''
     const plannedName=src.plannedRegisteredName||src.plannedOfficialName||src.productName||(src.adoptedPackage&&src.adoptedPackage.plannedName)||''
     const plannedColor=src.plannedRegisteredColor||src.plannedColor||src.color||(src.adoptedPackage&&src.adoptedPackage.color)||''
-    const reason=src.auxStockPickReason||src.nameAdoptionRule||(src.auxPrimary&&(src.auxPrimary.pairAdoptionRule||src.auxPrimary.nameAdoptionRule))||''
+    const plannedSupplement=src.plannedRegisteredSupplement||src.supplement||(src.parenClassification&&src.parenClassification.supplement)||''
+    const reason=src.auxStockPickReason||src.nameAdoptionRule||src.scopedColorCorrectionReason||(src.auxPrimary&&(src.auxPrimary.pairAdoptionRule||src.auxPrimary.nameAdoptionRule))||''
     const summary=src.changeSummary||(src.auxPrimary&&src.auxPrimary.changeSummary)||''
-    if(!sourceName&&!plannedColor&&!summary)return ''
+    if(!sourceName&&!plannedColor&&!summary&&!plannedSupplement)return ''
     return `<div class="sku-color-split-preview">
       <p class="excelhint"><strong>登録プレビュー（商品名／色）</strong></p>
       <ul class="sku-color-split-list">
         <li>採用ソース商品名: <strong>${esc(sourceName||'—')}</strong></li>
         <li>登録予定の商品名: <strong>${esc(plannedName||'—')}</strong></li>
         <li>登録予定の色: <strong>${esc(plannedColor||'（空）')}</strong></li>
+        ${plannedSupplement?`<li>登録予定の補足: <strong>${esc(plannedSupplement)}</strong></li>`:''}
         ${reason?`<li>採用理由: ${esc(reason)}</li>`:''}
         ${summary?`<li class="sku-color-change">${esc(summary)}</li>`:''}
       </ul>
@@ -985,6 +989,11 @@
       const opts=(st.preview&&st.preview.categoryOptions)||['','制服','部品・資材']
       bits.push(`<label>区分<select data-pl-cat="${r.rowNo}" ${st.busy?'disabled':''}>${opts.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>`)
     }
+    // メーカー情報で補正: 要確認かつ具体的なメーカー品番がある行だけ
+    const mk=r.makerCorrection||{}
+    if(r.status==='needs_review'&&mk.eligible&&mk.makerSku){
+      bits.push(`<button type="button" class="quiet" data-pl-maker-correct="${r.rowNo}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`)
+    }
     if(r.skuDecisionNeeded)bits.push('<span class="excelhint">↑品番比較で決定</span>')
     if(r.matchGroupCount>1)bits.push(`<span class="excelhint">同品番 ${r.matchGroupCount}行</span>`)
     return bits.join(' ')
@@ -1028,23 +1037,75 @@
     const color=edit.color!=null?edit.color:(pc.color||'')
     const processing=edit.processing!=null?edit.processing:(pc.processing||'')
     const material=edit.material!=null?edit.material:(pc.material||'')
+    const supplement=edit.supplement!=null?edit.supplement:(pc.supplement||r.plannedRegisteredSupplement||'')
     const unc=(edit.unclassified!=null?edit.unclassified:(pc.unclassified||[]))
     const uncText=Array.isArray(unc)?unc.join('、'):String(unc||'')
     const notices=Array.isArray(pc.infoNotices)?pc.infoNotices:[]
     const noticeHtml=notices.length
       ?`<div class="excelhint pl-paren-info">${notices.map(n=>esc(n)).join('<br>')}</div>`
       :''
-    const flag=pc.needsConfirm?'要確認':(pc.autoClassified?'自動':'—')
+    const scopedPreview=(pc.scopedColorCorrection||r.scopedColorCorrectionReason||r.changeSummary)
+      ? nameColorSplitPreviewHtml(Object.assign({},r,pc,{
+          sourceAdoptedName:(r.csv&&r.csv.productName)||pc.originalName||'',
+          plannedRegisteredName:planned,
+          plannedRegisteredColor:color,
+          plannedRegisteredSupplement:supplement,
+          changeSummary:pc.changeSummary||r.changeSummary||'',
+          scopedColorCorrectionReason:r.product&&r.product.scopedColorCorrectionReason
+        }))
+      :''
+    const flag=pc.needsConfirm?'要確認':(pc.autoClassified||pc.scopedColorCorrection?'自動':'—')
     const disabled=st.busy?'disabled':''
     return `<div class="pl-paren-edit">
       <div class="excelhint">${esc(flag)}${pc.keptOriginal&&pc.needsConfirm?'（原文維持）':''}</div>
       ${noticeHtml}
+      ${scopedPreview}
       <label>予定名<input data-pl-paren-name="${r.rowNo}" value="${esc(planned)}" ${disabled}></label>
       <label>色<input data-pl-paren-color="${r.rowNo}" value="${esc(color)}" ${disabled}></label>
+      <label>補足<input data-pl-paren-supp="${r.rowNo}" value="${esc(supplement)}" ${disabled}></label>
       <label>加工<input data-pl-paren-proc="${r.rowNo}" value="${esc(processing)}" ${disabled}></label>
       <label>生地<input data-pl-paren-mat="${r.rowNo}" value="${esc(material)}" ${disabled}></label>
       <label>未分類<input data-pl-paren-unc="${r.rowNo}" value="${esc(uncText)}" ${disabled}></label>
       ${pc.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 分類を確認した</label>`:''}
+    </div>`
+  }
+
+  function makerLookupPanelHtml(st){
+    const panel=st.makerLookup
+    if(!panel)return ''
+    const res=panel.result||{}
+    const cands=Array.isArray(res.candidates)?res.candidates:[]
+    const status=esc(res.statusLabel||panel.statusLabel||'—')
+    const note=esc(res.note||'')
+    const ref=res.referenceUrl||''
+    const list=cands.map((c,i)=>{
+      const diff=c.diff||{}
+      return `<li class="pl-maker-cand">
+        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}
+          ${c.fromSaved?' <span class="badge">保存済み</span>':''}
+          ${c.preferred?' <span class="sub">優先候補</span>':''}
+        </div>
+        <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')}</div>
+        <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'}</div>
+        ${c.sourceUrl?`<div class="excelhint"><a href="${esc(c.sourceUrl)}" target="_blank" rel="noopener">参考URL</a></div>`:''}
+        <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy?'disabled':''}>採用</button>
+      </li>`
+    }).join('')
+    return `<div class="notice pl-maker-lookup-panel" role="region" aria-label="メーカー情報で補正">
+      <div class="bar">
+        <strong>メーカー情報で補正</strong>
+        <span class="sub">行 ${esc(String(panel.rowNo||''))}　メーカー品番 ${esc(panel.makerSku||'')}
+          ${panel.manufacturer?`　メーカー ${esc(panel.manufacturer)}`:''}
+          ${panel.supplier?`　仕入先（検索キー外） ${esc(panel.supplier)}`:''}
+        </span>
+        <button type="button" class="quiet" id="plMakerLookupClose" ${st.busy?'disabled':''}>閉じる</button>
+      </div>
+      <p>状態: <strong>${status}</strong></p>
+      ${note?`<p class="excelhint">${note}</p>`:''}
+      ${panel.error?`<p class="product-ledger-import-error" role="alert">${esc(panel.error)}</p>`:''}
+      ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:`<p class="excelhint">採用できる候補はありません。</p>`}
+      ${ref?`<p class="excelhint"><a href="${esc(ref)}" target="_blank" rel="noopener">参考ページを開く</a>（開いただけでは補正完了になりません）</p>`:''}
+      <p class="excelhint">「採用」はプレビューの予定名／色だけを更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
     </div>`
   }
 
@@ -1457,6 +1518,7 @@
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
             <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して商品を登録（保留は除外）</button>
           </div>
+          ${makerLookupPanelHtml(st)}
           ${tableHtml(st)}`):''
     dlg.innerHTML=`<div class="dialoghead"><h2>${esc(title)}</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
@@ -1490,6 +1552,7 @@
     st.selections={}
     st.skuDecisions={}
     st.rowClassifications={}
+    st.makerLookup=null
     st.selectedCodes={}
     st.expandedCodes={}
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
@@ -1714,6 +1777,9 @@
         })
         document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
           setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+        })
+        document.querySelectorAll('[data-pl-paren-supp]').forEach(el=>{
+          setRowClassification(st,el.getAttribute('data-pl-paren-supp'),{supplement:el.value})
         })
         document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
           const v=el.value.trim()
@@ -2055,6 +2121,92 @@
     })
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-supp]').forEach(el=>{
+      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-supp'),{supplement:el.value})
+    })
+    document.querySelectorAll('[data-pl-maker-correct]').forEach(el=>{
+      el.onclick=async()=>{
+        const rowNo=Number(el.getAttribute('data-pl-maker-correct'))
+        const row=(st.preview&&st.preview.rows||[]).find(r=>Number(r.rowNo)===rowNo)
+        if(!row){st.toast('対象行が見つかりません。');return}
+        const mk=row.makerCorrection||{}
+        if(!mk.eligible||!mk.makerSku){st.toast('メーカー品番が対象外です。');return}
+        const pc=row.parenClassification||{}
+        const edit=st.rowClassifications[String(rowNo)]||{}
+        const currentName=edit.plannedName!=null?edit.plannedName:(pc.plannedName||(row.product&&row.product.officialName)||(row.csv&&row.csv.productName)||'')
+        const currentColor=edit.color!=null?edit.color:(pc.color||(row.product&&row.product.officialColor)||'')
+        st.busy=true
+        st.makerLookup={
+          rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
+          supplier:(row.csv&&row.csv.supplier)||'',statusLabel:'検索中…',result:null,error:''
+        }
+        paintDialog()
+        try{
+          const result=await st.api('/api/product-ledger-csv/maker-lookup',{
+            manufacturer:mk.manufacturer||'',
+            makerSku:mk.makerSku,
+            currentName,currentColor,
+            supplier:(row.csv&&row.csv.supplier)||''
+          })
+          st.makerLookup=Object.assign({},st.makerLookup,{
+            result,statusLabel:result.statusLabel||result.status||'',error:''
+          })
+        }catch(e){
+          st.makerLookup=Object.assign({},st.makerLookup,{
+            result:{status:'fetch_failed',statusLabel:'取得できない',candidates:[],
+              referenceUrl:'',note:'検索リクエストに失敗しました。'},
+            statusLabel:'取得できない',
+            error:apiErrorMessage(e,'メーカー情報を取得できませんでした。')
+          })
+        }finally{
+          st.busy=false
+          paintDialog()
+        }
+      }
+    })
+    const makerClose=$('#plMakerLookupClose')
+    if(makerClose)makerClose.onclick=()=>{st.makerLookup=null;paintDialog()}
+    document.querySelectorAll('[data-pl-maker-adopt]').forEach(el=>{
+      el.onclick=async()=>{
+        const panel=st.makerLookup
+        if(!panel||!panel.result)return
+        const idx=Number(el.getAttribute('data-pl-maker-adopt'))
+        const cand=(panel.result.candidates||[])[idx]
+        if(!cand){st.toast('候補が見つかりません。');return}
+        st.busy=true
+        paintDialog()
+        try{
+          await st.api('/api/product-ledger-csv/maker-lookup/adopt',{
+            manufacturer:panel.manufacturer||panel.result.manufacturer||'',
+            makerSku:panel.makerSku,
+            name:cand.name||'',
+            color:cand.color||'',
+            sourceUrl:cand.sourceUrl||''
+          })
+          // プレビューのみ更新（台帳登録は「確認して商品を登録」）。原文は別名に残る。
+          setRowClassification(st,panel.rowNo,{
+            plannedName:cand.name||'',
+            color:cand.color||'',
+            userEdited:true,
+            confirmed:true,
+            acceptProposal:true,
+            makerAdopted:true,
+            makerSourceUrl:cand.sourceUrl||''
+          })
+          st.makerLookup=null
+          st.toast('メーカー情報を予定へ採用しました（まだ台帳には登録していません）')
+          // 再照合して差分を画面へ反映
+          const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
+          st.preview=nextPreview
+          st.previewError=''
+        }catch(e){
+          st.toast(apiErrorMessage(e,'採用に失敗しました。'),6000)
+        }finally{
+          st.busy=false
+          paintDialog()
+        }
+      }
     })
     document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
       el.onchange=()=>{

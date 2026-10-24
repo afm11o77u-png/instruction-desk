@@ -477,6 +477,10 @@ dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780p
   border-left-color:#9a3418;color:#9a3418;font-weight:700;
   white-space:normal;overflow-wrap:anywhere;word-break:break-word
 }
+.pl-maker-lookup-panel{margin:10px 0;padding:10px 12px}
+.pl-maker-cand-list{margin:6px 0 0;padding-left:1.1em}
+.pl-maker-cand{margin:8px 0;padding:6px 0;border-top:1px solid rgba(0,0,0,.08)}
+.pl-maker-cand .primary{margin-top:4px}
 
 /* 重複商品の整理 */
 .merge-entry{align-items:center;gap:12px;flex-wrap:wrap}
