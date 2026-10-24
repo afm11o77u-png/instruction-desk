@@ -15,7 +15,6 @@ class JudgmentListScrollLayoutSourceTest(unittest.TestCase):
         js = JS.read_text(encoding='utf-8')
         # 内側一覧の短い max-height を廃し、縦はモーダル本体へ一本化
         self.assertIn('max-height:none', css)
-        self.assertIn('overflow-y:visible', css)
         self.assertNotIn('max-height:min(40vh,420px)', css)
         self.assertIn('dialog.product-ledger-dialog', css)
         self.assertIn('max-height:min(96vh,1100px)', css)
@@ -25,10 +24,9 @@ class JudgmentListScrollLayoutSourceTest(unittest.TestCase):
         self.assertIn('product-ledger-preview-actions', css)
         self.assertIn('position:sticky', css)
         self.assertIn('product-ledger-preview-actions', js)
-        # 列幅はフォント縮小ではなく min-width で確保
-        self.assertIn('min-width:7.5rem', css)
-        self.assertIn('min-width:17.5rem', css)
-        self.assertIn('white-space:nowrap', css)
+        # wrap は親幅拘束（はみ出し＋スクロール不可を防ぐ）
+        self.assertIn('min-width:0', css)
+        self.assertIn('table-layout:fixed', css)
 
     def test_scroll_anchor_and_stale_preview_guards(self):
         js = JS.read_text(encoding='utf-8')

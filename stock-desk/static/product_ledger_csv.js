@@ -793,14 +793,14 @@
       const provisional=!(d.officialName)&&(g.namePlan&&g.namePlan.provisional||g.provisionalName)
       const stateLabel=decision?decisionLabel(decision):(tier==='bulk'?'未承認（一括承認候補）':(TIER_LABELS[tier]||g.reviewTierLabel||'未決定'))
       return `<tr class="sku-list-row sku-tier-${esc(tier)} ${decision?`sku-dec-${esc(decision)}`:''}" data-sku-code="${esc(g.code)}" data-sku-section="${esc(section)}" data-review-tier="${esc(tier)}" data-decision="${esc(decision||'')}">
-        <td class="sku-check"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
-        <td class="sku-code"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(g.codeDisplay||g.code)}</button>
+        <td class="sku-check" data-label="選択"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
+        <td class="sku-code" data-label="品番"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(g.codeDisplay||g.code)}</button>
           <div class="sub">${esc(TIER_LABELS[tier]||g.reviewTierLabel||'')}</div></td>
-        <td class="sku-names">${candidatesCell(g.nameCandidates||(g.variants||[]).map(v=>v.productName),g.nameCandidateDetails)}</td>
-        <td class="sku-sups">${candidatesCell(g.supplierCandidates||(g.variants||[]).map(v=>v.supplier),g.supplierCandidateDetails)}</td>
-        <td class="sku-other">${otherDiffsCell(g)}</td>
-        <td class="sku-why">${reasonCell(g)}</td>
-        <td class="sku-plan">
+        <td class="sku-names" data-label="商品名候補">${candidatesCell(g.nameCandidates||(g.variants||[]).map(v=>v.productName),g.nameCandidateDetails)}</td>
+        <td class="sku-sups" data-label="仕入先候補">${candidatesCell(g.supplierCandidates||(g.variants||[]).map(v=>v.supplier),g.supplierCandidateDetails)}</td>
+        <td class="sku-other" data-label="色・加工など">${otherDiffsCell(g)}</td>
+        <td class="sku-why" data-label="要確認理由">${reasonCell(g)}</td>
+        <td class="sku-plan" data-label="予定の代表名・通常仕入先">
           <div><strong>${esc(plannedName||'—')}</strong>${provisional?' <span class="badge">名称未整理</span>':''}</div>
           ${showApproveHint&&!decision?`<div class="sub">採用理由: ${(g.reviewReasons||[]).map(r=>esc(r.label||'')).filter(Boolean).join('／')||'名差・仕入先差のみ'}</div>
           <div class="sub">登録予定: ${esc(plannedName||'—')} / 通常仕入先 ${esc(plannedSupplierDisplay(st,g))}</div>`:''}
@@ -810,7 +810,7 @@
           <div class="sub">通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</div>
           ${(g.nameAdoptionRule||(g.namePlan&&g.namePlan.adoptionRule))?`<div class="sub">${esc(g.nameAdoptionRule||g.namePlan.adoptionRule)}</div>`:''}
         </td>
-        <td class="sku-action">
+        <td class="sku-action" data-label="操作">
           <div class="sku-action-label ${decision?`is-${esc(decision)}`:''}">${esc(stateLabel)}</div>
           <div class="bar sku-mini-btns">
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめ</button>
@@ -826,7 +826,7 @@
   function skuCompareTableHtml(st,groups,opts){
     return `<div class="sku-compare-wrap"><table class="sku-compare-table">
       <thead><tr>
-        <th></th><th>品番</th><th>商品名候補</th><th>仕入先候補</th><th>色・加工など</th><th>要確認理由</th><th>予定の代表名・通常仕入先</th><th>操作</th>
+        <th></th><th>品番</th><th>商品名候補</th><th>仕入先候補</th><th>色・加工など</th><th>要確認理由</th><th>予定の代表名・通常仕入先</th><th class="sku-action-h">操作</th>
       </tr></thead>
       <tbody>${skuListRowsHtml(st,groups,opts)}</tbody>
     </table></div>`
