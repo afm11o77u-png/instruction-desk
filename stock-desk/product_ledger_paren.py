@@ -14,15 +14,25 @@ import unicodedata
 
 # 長い語を先に照合するため、定義順は長さ降順でソートして使う。
 # 緑 と 蛍光グリーンは別エントリ（同一視しない）。
+# ライトブルー は ブルー と別色（この規則だけでは同一視しない）。
 COLOR_TERMS = (
     '蛍光グリーン', '蛍光イエロー', '蛍光オレンジ', '蛍光ピンク',
-    'ネイビー', 'ブラック', 'ホワイト', 'レッド', 'ブルー', 'グリーン',
-    'イエロー', 'オレンジ', 'ピンク', 'グレー', 'グレイ', 'ブラウン',
-    'ベージュ', 'シルバー', 'ゴールド', 'サックス', 'チャコール',
+    'ライトブルー', 'ネイビー', 'ブラック', 'ホワイト', 'レッド', 'ブルー',
+    'グリーン', 'イエロー', 'オレンジ', 'ピンク', 'グレー', 'グレイ',
+    'ブラウン', 'ベージュ', 'シルバー', 'ゴールド', 'サックス', 'チャコール',
     'カーキ', 'キャメル', 'ワイン', 'エンジ', 'アイボリー', 'ターコイズ',
+    'バイオレット',
     '水色', '紺', '白', '黒', '赤', '青', '緑', '黄', '茶', '灰',
     '銀', '金', '紫', '橙', '桃',
 )
+
+# 誤記・別名 → 代表色。明示エントリのみ（「ミスト」を機械的に全除去しない）。
+# 類似度だけでは自動統一しない。ブルー↔ライトブルーはここに入れない。
+COLOR_SYNONYMS = {
+    'バイオレッド': 'バイオレット',
+    'ミストバイオレッド': 'バイオレット',
+    'ミストバイオレット': 'バイオレット',
+}
 
 # 色文字を含むが色ではない複合語（切り出し禁止）。長い語を先に見る。
 _COLOR_COMPOUND_BLOCKLIST = (
@@ -49,14 +59,16 @@ MATERIAL_TERMS = (
 _SEGMENT_SPLIT_RE = re.compile(r'[・･、,，&＆]+')
 _SLASH_SPLIT_RE = re.compile(r'[/／]+')
 _PAREN_PAIR_RE = re.compile(r'[（(]([^（）()]*)[）)]')
-# 配色のつなぎ（サックス×グレー、黒／ワイン）。・は複数色分割のまま残す。
-_COLORWAY_JOIN_CHARS = '×✕ｘxX/／'
+# 配色のつなぎ（サックス×グレー、黒／ワイン、ネイビー*グレー）。
+# ・は複数色分割のまま。先頭の中古標記 ＊/* は bridge 判定の対象外（色ヒット間だけ見る）。
+_COLORWAY_JOIN_CHARS = '×✕ｘxX*＊/／'
 _COLORWAY_BRIDGE_RE = re.compile(
     rf'^[{re.escape(_COLORWAY_JOIN_CHARS)}]+$'
 )
 _HALFWIDTH_KATAKANA_RE = re.compile(r'[\uff61-\uff9f]+')
 _SLASH_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[/／][\s\u3000]*')
-_TIMES_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[×✕][\s\u3000]*')
+_TIMES_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[×✕*＊][\s\u3000]*')
+_COLORWAY_SPLIT_RE = re.compile(r'[×✕*＊/／]+')
 
 
 def _nfkc(value: str) -> str:
@@ -74,24 +86,95 @@ def _sorted_terms(terms):
     return sorted({_norm_token(t) for t in terms if _norm_token(t)}, key=len, reverse=True)
 
 
-_COLORS = _sorted_terms(COLOR_TERMS)
+def _rebuild_color_tables():
+    """COLOR_TERMS / COLOR_SYNONYMS から照合表を組み立てる。"""
+    global _COLORS, _COLOR_DISPLAY, _COLOR_MATCH_TERMS
+    global _COLOR_SYNONYM_BY_KEY, _COLOR_SYNONYM_PAIRS
+    _COLOR_DISPLAY = {_norm_token(t): t for t in COLOR_TERMS}
+    _COLOR_SYNONYM_BY_KEY = {}
+    pairs = []
+    for syn, canon in COLOR_SYNONYMS.items():
+        syn_k = _norm_token(syn)
+        canon_t = (canon or '').strip()
+        if not syn_k or not canon_t:
+            continue
+        _COLOR_SYNONYM_BY_KEY[syn_k] = canon_t
+        # 表示用原文キーも残す（unify 後の置換用）
+        pairs.append((syn.strip(), canon_t))
+        pairs.append((syn_k, canon_t))
+    # 長い別名から置換（ミストバイオレッド を レッド より先に）
+    _COLOR_SYNONYM_PAIRS = sorted(
+        {(a, b) for a, b in pairs if a and b and a != b},
+        key=lambda x: len(x[0]),
+        reverse=True,
+    )
+    # 検索対象: 辞書色＋別名（長い語優先）
+    match_keys = set(_COLOR_DISPLAY.keys()) | set(_COLOR_SYNONYM_BY_KEY.keys())
+    _COLOR_MATCH_TERMS = sorted(match_keys, key=len, reverse=True)
+    _COLORS = _sorted_terms(list(_COLOR_DISPLAY.values()))
+
+
 _PROCESSINGS = _sorted_terms(PROCESSING_TERMS)
 _MATERIALS = _sorted_terms(MATERIAL_TERMS)
 
 # 表示用（正規化キー → 辞書の代表表記）
-_COLOR_DISPLAY = {_norm_token(t): t for t in COLOR_TERMS}
+_COLOR_DISPLAY = {}
+_COLOR_MATCH_TERMS = []
+_COLOR_SYNONYM_BY_KEY = {}
+_COLOR_SYNONYM_PAIRS = []
+_COLORS = []
+_rebuild_color_tables()
+
 _PROCESSING_DISPLAY = {_norm_token(t): t for t in PROCESSING_TERMS}
 _MATERIAL_DISPLAY = {_norm_token(t): t for t in MATERIAL_TERMS}
 
 
 def _display_for(kind: str, key: str, original: str) -> str:
     if kind == 'color':
+        if key in _COLOR_SYNONYM_BY_KEY:
+            return _COLOR_SYNONYM_BY_KEY[key]
         return _COLOR_DISPLAY.get(key) or original
     if kind == 'processing':
         return _PROCESSING_DISPLAY.get(key) or original
     if kind == 'material':
         return _MATERIAL_DISPLAY.get(key) or original
     return original
+
+
+def canonical_color_display(value: str) -> str:
+    """単色トークンを辞書の代表表記へ。未知・非辞書はそのまま（類似度では寄せない）。"""
+    t = unify_import_notation(value)
+    if not t:
+        return ''
+    key = _norm_token(t)
+    if not key:
+        return ''
+    if key in _COLOR_SYNONYM_BY_KEY:
+        return _COLOR_SYNONYM_BY_KEY[key]
+    if key in _COLOR_DISPLAY:
+        return _COLOR_DISPLAY[key]
+    return t
+
+
+def apply_color_synonyms_in_text(value: str) -> str:
+    """文字列中の明示色別名だけを代表表記へ置換（長い語優先）。ミストの機械除去はしない。"""
+    t = value or ''
+    if not t:
+        return ''
+    for syn, canon in _COLOR_SYNONYM_PAIRS:
+        if syn and canon and syn in t:
+            t = t.replace(syn, canon)
+    return t
+
+
+def normalize_color_value(value: str) -> str:
+    """色・配色の共有正規化（表記統一＋区切り＋色辞書）。照合・登録表示の双方で使う。"""
+    t = unify_import_notation(value)
+    if not t:
+        return ''
+    if any(ch in t for ch in '×✕*＊/／'):
+        return normalize_colorway_display(t)
+    return canonical_color_display(t)
 
 
 def paren_balance_ok(name: str) -> bool:
@@ -175,21 +258,67 @@ def unify_import_notation(value: str) -> str:
     return t
 
 
+_NAME_COLORWAY_SEP_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
+
+
+def normalize_name_for_color_compare(value: str) -> str:
+    """同一SKU内の名照合用。中古標記除去＋表記統一＋配色区切り＋色辞書。
+
+    先頭の中古標記は比較から外す（表示用原文は呼び出し側で保持）。
+    類似度では寄せない。SKU・ASCII は全角化しない。
+    """
+    t = (value or '').strip()
+    if not t:
+        return ''
+    # 先頭中古標記（legacy と同じ規則を軽量に）
+    m = re.match(r'^[\s\u3000]*[*＊]+[\s\u3000]*(.*)$', t)
+    if m:
+        t = (m.group(1) or '').strip()
+    t = unify_import_notation(t)
+    if not t:
+        return ''
+    t = _NAME_COLORWAY_SEP_RE.sub('×', t)
+    t = apply_color_synonyms_in_text(t)
+    return t
+
+
 def normalize_colorway_display(value: str) -> str:
-    """配色の登録表示: 表記統一、区切り空白除去、/ → ／。× は × のまま。"""
+    """配色の登録表示: 表記統一、区切り正規化、成分ごとの色辞書適用。
+
+    - / ／ → ／（スラッシュ配色）
+    - * ＊ × → ×（アスタリスクは色間の配色つなぎ。先頭中古標記とは別）
+    - 各成分を COLOR_SYNONYMS / COLOR_TERMS の代表へ
+    """
     t = unify_import_notation(value)
     if not t:
         return ''
+    # 区切り種類を先に判定（正規化で * が × になってもスラッシュ配色を維持）
+    slash_only = bool(re.search(r'[/／]', t)) and not bool(re.search(r'[×✕*＊]', t))
     t = _SLASH_SEP_NORMALIZE_RE.sub('／', t)
     t = _TIMES_SEP_NORMALIZE_RE.sub('×', t)
-    return t.strip()
+    t = t.strip()
+    if not t:
+        return ''
+    if slash_only or ('／' in t and '×' not in t):
+        parts = [p for p in re.split(r'／+', t) if p]
+        sep = '／'
+    else:
+        parts = [p for p in re.split(r'×+', t) if p]
+        sep = '×'
+    if len(parts) <= 1 and not any(ch in (value or '') for ch in '×✕*＊/／'):
+        return canonical_color_display(t) or t
+    canon_parts = []
+    for part in parts:
+        c = canonical_color_display(part)
+        canon_parts.append(c if c else part.strip())
+    return sep.join(canon_parts)
 
 
 def _is_colorway_bridge(between: str) -> bool:
     """色ヒット間が配色として1色にまとめてよいか。
 
     - 空（辞書色の直結: シルバーグレー）→ まとめる
-    - × 系のみ（空白可）→ 配色1色
+    - × / * ＊ 系のみ（空白可）→ 配色1色
     - / ／ のみ（空白可）→ 配色1色（登録時は ／ に正規化）
     - 空白だけ・など → まとめない（別色の並び）
     """
@@ -225,7 +354,15 @@ def coalesce_colorway_hits(raw: str, hits):
     out = []
     for group in groups:
         if len(group) == 1:
-            out.append(dict(group[0]))
+            hit = dict(group[0])
+            # 単色も代表表記へ（別名→辞書色）。原文スライスは sourceColor に残す。
+            src = hit.get('sourceColor') or hit.get('value') or ''
+            display = hit.get('display') or canonical_color_display(src) or src
+            hit['sourceColor'] = src
+            hit['display'] = display
+            hit['value'] = display
+            hit['key'] = _norm_token(display) or hit.get('key') or ''
+            out.append(hit)
             continue
         start = int(group[0]['start'])
         end = int(group[-1]['end'])
@@ -236,6 +373,7 @@ def coalesce_colorway_hits(raw: str, hits):
             'value': value,
             'matched': key,
             'display': value,
+            'sourceColor': raw_value,
             'start': start,
             'end': end,
             'key': key,
@@ -259,14 +397,16 @@ def _classify_as_pure_color_span(raw: str):
     if int(hit.get('start') or 0) != 0 or int(hit.get('end') or 0) != len(text):
         return None
     value = hit.get('value') or text
-    if hit.get('isColorway') or any(ch in text for ch in '/／×✕'):
+    if hit.get('isColorway') or any(ch in text for ch in '/／×✕*＊'):
         value = normalize_colorway_display(value)
+    else:
+        value = canonical_color_display(value) or value
     return {
         'kind': 'color',
         'value': value,
         'matched': hit.get('key') or _norm_token(value),
         'original': raw,
-        'isColorway': bool(hit.get('isColorway') or any(ch in text for ch in '/／×✕')),
+        'isColorway': bool(hit.get('isColorway') or any(ch in text for ch in '/／×✕*＊')),
     }
 
 
@@ -285,20 +425,30 @@ def classify_paren_segment(segment: str):
     if not key:
         return None
 
-    # 完全一致を優先（長い語が先）
+    # 完全一致を優先（長い語が先）。別名は代表色へ。
+    if key in _COLOR_SYNONYM_BY_KEY:
+        canon = _COLOR_SYNONYM_BY_KEY[key]
+        return {
+            'kind': 'color',
+            'value': canon,
+            'matched': _norm_token(canon),
+            'original': source,
+            'sourceColor': raw,
+        }
     color = _exact_in(_COLORS, key)
     if color:
         return {
             'kind': 'color',
-            'value': raw,
+            'value': _COLOR_DISPLAY.get(color) or raw,
             'matched': color,
             'original': source,
         }
-    # 配色・辞書色の直結（括弧内の サックス×グレー / 黒／ワイン / シルバーグレー）
+    # 配色・辞書色の直結（括弧内の サックス×グレー / 黒／ワイン / ネイビー*グレー）
     colorway = _classify_as_pure_color_span(raw)
     if colorway:
         colorway = dict(colorway)
         colorway['original'] = source
+        colorway['sourceColor'] = raw
         return colorway
     material = _exact_in(_MATERIALS, key)
     if material:
@@ -586,8 +736,13 @@ def classify_product_name(product_name: str):
 
 
 def color_match_key(value: str) -> str:
-    """色の同一判定用キー。緑 と 蛍光グリーンは別キー。"""
-    return _norm_token(value)
+    """色の同一判定用キー。
+
+    共有正規化（半角カナ・配色区切り・色辞書）後のキー。
+    緑 と 蛍光グリーン、ブルー と ライトブルーは別キー。
+    類似度だけでは同一視しない。
+    """
+    return _norm_token(normalize_color_value(value))
 
 
 def colors_equivalent(a: str, b: str) -> bool:
@@ -650,9 +805,10 @@ def find_explicit_colors_in_text(text: str):
                 return False
         return True
 
-    # 検索対象もスライス対象も raw（表記統一済み）で統一する
+    # 検索対象もスライス対象も raw（表記統一済み）で統一する。
+    # 別名（ミストバイオレッド 等）も長い語優先で照合し、display/key は代表色へ。
     search = raw
-    for term in _COLORS:
+    for term in _COLOR_MATCH_TERMS:
         if not term:
             continue
         start = 0
@@ -667,19 +823,21 @@ def find_explicit_colors_in_text(text: str):
             if not _is_free(idx, end):
                 continue
             # 長い語を先に処理しているので、既占有で短い方は弾かれる
-            display = _COLOR_DISPLAY.get(term) or term
+            display = _display_for('color', term, term)
+            key = _norm_token(display) or term
             orig_slice = raw[idx:end]
             hits.append({
                 'value': orig_slice if orig_slice else display,
                 'matched': term,
                 'display': display,
+                'sourceColor': orig_slice if orig_slice else display,
                 'start': idx,
                 'end': end,
-                'key': term,
+                'key': key,
             })
             _occupy(idx, end)
     hits.sort(key=lambda h: h['start'])
-    # サックス×グレー・黒／ワイン は配色1色（辞書色へ割らない）
+    # サックス×グレー・黒／ワイン・ネイビー*グレー は配色1色（辞書色へ割らない）
     return coalesce_colorway_hits(raw, hits)
 
 
@@ -768,10 +926,19 @@ def extract_explicit_color_from_name(product_name: str):
             if v not in candidates:
                 candidates.append(v)
     elif len(outside_unique) == 1:
-        out_val = outside_unique[0]['value'] or outside_unique[0]['display']
-        out_key = outside_unique[0]['key']
+        out_hit = outside_unique[0]
+        out_val = (
+            out_hit.get('display')
+            or out_hit.get('value')
+            or ''
+        )
+        if out_hit.get('isColorway') or any(ch in (out_val or '') for ch in '/／×✕'):
+            out_val = normalize_colorway_display(out_val) or out_val
+        else:
+            out_val = canonical_color_display(out_val) or out_val
+        out_key = out_hit.get('key') or color_match_key(out_val)
         if color:
-            if color_match_key(color) != out_key:
+            if color_match_key(color) != out_key and color_match_key(color) != color_match_key(out_val):
                 needs = True
                 reasons.append(
                     f'括弧内の色「{color}」と括弧外の色「{out_val}」が異なるため要確認'
@@ -780,6 +947,9 @@ def extract_explicit_color_from_name(product_name: str):
                     candidates.append(out_val)
                 color = ''
                 source = ''
+            # 同じ色なら paren を優先（括弧側も代表表記へ）
+            elif color:
+                color = normalize_color_value(color) or color
             # 同じ色なら paren を優先
         else:
             color = out_val
@@ -918,17 +1088,41 @@ def split_name_and_color(product_name: str):
     # 括弧内色のみで auto のときは planned は classify 済み
     if extracted.get('colorSource') == 'paren' and color and not paren.get('needsConfirm'):
         planned = paren.get('plannedName') or planned
-        if color and any(ch in color for ch in '/／×✕'):
+        if color and any(ch in color for ch in '/／×✕*＊'):
             color = normalize_colorway_display(color)
+        elif color:
+            color = normalize_color_value(color) or color
+
+    # 登録色は常に共有正規化（半色残り・別名残りを防ぐ）
+    # 変換前色は照合用に残し、通常画面の表示には使わない
+    source_color = ''
+    if color:
+        for h in (extracted.get('outsideHits') or []):
+            if h.get('sourceColor'):
+                source_color = (h.get('sourceColor') or '').strip()
+                break
+        if not source_color:
+            for seg in (paren.get('segments') or []):
+                if seg.get('kind') == 'color' and seg.get('sourceColor'):
+                    source_color = (seg.get('sourceColor') or '').strip()
+                    break
+                if seg.get('kind') == 'color' and seg.get('original'):
+                    source_color = (seg.get('original') or '').strip()
+                    break
+        if not source_color and paren.get('color') and paren.get('color') != color:
+            source_color = (paren.get('color') or '').strip()
+        color = normalize_color_value(color) or color
 
     # 自動確定: 括弧分類が自動、または括弧外の明示色を一意に振り分けられたとき
     final_planned = unify_import_notation(planned) or unified or original
+    # 名に残った色別名も代表へ寄せない（色は color 欄へ抽出済み）。名側の半角等は unify 済み。
     if not final_planned:
         needs = True
         reasons.append('色除去後の商品名が空になるため原文のまま要確認')
         final_planned = unified or original
         color = ''
         source = ''
+        source_color = ''
     auto = (not needs) and bool(
         paren.get('autoClassified')
         or (
@@ -980,6 +1174,7 @@ def split_name_and_color(product_name: str):
         'color': color,
         'colorKey': color_match_key(color) if color else '',
         'colorSource': source,
+        'sourceColor': source_color,
         'processing': paren.get('processing') or '',
         'material': paren.get('material') or '',
         'unclassified': list(paren.get('unclassified') or []),
@@ -1001,12 +1196,22 @@ def split_name_and_color(product_name: str):
 
 def extend_color_terms(extra):
     """テスト・拡張用（実行時辞書への追加。行編集の自動昇格には使わない）。"""
-    global _COLORS, _COLOR_DISPLAY
-    for t in extra or []:
-        k = _norm_token(t)
-        if k:
-            _COLOR_DISPLAY[k] = t
-    _COLORS = _sorted_terms(list(_COLOR_DISPLAY.values()))
+    global COLOR_TERMS
+    added = tuple(t for t in (extra or []) if t)
+    if added:
+        COLOR_TERMS = tuple(dict.fromkeys([*COLOR_TERMS, *added]))
+    _rebuild_color_tables()
+
+
+def extend_color_synonyms(extra):
+    """テスト・拡張用の色別名追加（行編集の自動昇格には使わない）。"""
+    global COLOR_SYNONYMS
+    mapping = dict(COLOR_SYNONYMS)
+    for syn, canon in (extra or {}).items():
+        if syn and canon:
+            mapping[str(syn)] = str(canon)
+    COLOR_SYNONYMS = mapping
+    _rebuild_color_tables()
 
 
 def extend_processing_terms(extra):

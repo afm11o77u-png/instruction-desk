@@ -1171,6 +1171,7 @@ def _full_package_for_candidate(cand):
         'color': color,
         'colorKey': stock.text(pc.get('colorKey') or '') or paren_classify.color_match_key(color),
         'colorSource': stock.text(pc.get('colorSource') or ''),
+        'sourceColor': stock.text(pc.get('sourceColor') or ''),
         'processing': stock.text(pc.get('processing') or ''),
         'material': stock.text(pc.get('material') or ''),
         'parenNeedsConfirm': bool(pc.get('needsConfirm')),
@@ -1441,6 +1442,7 @@ def _full_package_for_adopted_ledger_name(cand, adopted_name):
         'color': color,
         'colorKey': stock.text(pc.get('colorKey') or '') or paren_classify.color_match_key(color),
         'colorSource': stock.text(pc.get('colorSource') or ''),
+        'sourceColor': stock.text(pc.get('sourceColor') or ''),
         'processing': stock.text(pc.get('processing') or ''),
         'material': stock.text(pc.get('material') or ''),
         'parenNeedsConfirm': bool(pc.get('needsConfirm')),
@@ -3041,6 +3043,7 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
             'originalName': csv_name,
             'originalSupplier': csv_supplier,
             'color': stock.text(pc.get('color') or ''),
+            'sourceColor': stock.text(pc.get('sourceColor') or ''),
             'processing': stock.text(pc.get('processing') or ''),
             'material': stock.text(pc.get('material') or ''),
             'plannedName': stock.text(pc.get('plannedName') or '') or csv_name,
@@ -3192,19 +3195,12 @@ def normalize_ledger_name_for_vote(name):
     - 半角カタカナ → 全角カタカナ（濁点・半濁点を正しく合成）
     - 全角/半角空白 → 半角空白、連続を1つに、trim
     - 配色つなぎの * / ＊ / × → ×（中古標記と区別。先頭標記除去後に適用）
+    - 色辞書の別名・誤記 → 代表色（共有 normalize。類似度では寄せない）
     - その他の記号は無条件に消さない
     - 品番・メーカー品番には使わない（先頭ゼロ維持）
     - 文字列全体への NFKC はしない（SKU・先頭ゼロを守る）
     """
-    t = stock.text(name)
-    if not t:
-        return ''
-    t, _ = legacy.strip_used_marker(t)
-    t = unify_import_notation(t)
-    if not t:
-        return ''
-    t = _COLORWAY_SEP_RE.sub('×', t)
-    return t
+    return paren_classify.normalize_name_for_color_compare(stock.text(name))
 
 
 def format_ledger_adopted_name(name):
@@ -3698,8 +3694,16 @@ def upsert_row_map(
     size = stock.text(csv_info.get('size'))
     provenance = row.get('specProvenance') if isinstance(row.get('specProvenance'), dict) else {}
     pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+    # 登録色（統一表記）。変換前色は sourceColor に残し通常画面には出さない
     csv_color = stock.text(
         provenance.get('color') or pc.get('color') or ''
+    )
+    if csv_color:
+        csv_color = paren_classify.normalize_color_value(csv_color) or csv_color
+    source_color = stock.text(
+        provenance.get('sourceColor')
+        or pc.get('sourceColor')
+        or ''
     )
     csv_processing = stock.text(
         provenance.get('processing') or pc.get('processing') or ''
@@ -3708,10 +3712,17 @@ def upsert_row_map(
         provenance.get('material') or pc.get('material') or ''
     )
     is_main = 1 if provenance.get('isMainCandidate') else 0
+    planned_name = stock.text(
+        provenance.get('plannedName') or pc.get('plannedName') or product_name
+    )
     spec_json = json.dumps({
+        # 照合用対応（表示用ではない）: 変換前名／色と登録先IDは行マップ本体
         'originalName': provenance.get('originalName') or product_name,
+        'sourceName': provenance.get('originalName') or product_name,
+        'sourceColor': source_color,
         'originalSupplier': provenance.get('originalSupplier') or supplier,
         'color': csv_color,
+        'unifiedColor': csv_color,
         'processing': csv_processing,
         'material': csv_material,
         'supplement': stock.text(
@@ -3720,7 +3731,8 @@ def upsert_row_map(
             or (row.get('product') or {}).get('officialSupplement')
             or ''
         ),
-        'plannedName': provenance.get('plannedName') or pc.get('plannedName') or product_name,
+        'plannedName': planned_name,
+        'unifiedName': planned_name,
         'isMainCandidate': bool(is_main),
         'auxStockPickAuto': bool(row.get('auxStockPickAuto')),
         'auxStockPickReason': stock.text(row.get('auxStockPickReason') or ''),
@@ -3728,6 +3740,7 @@ def upsert_row_map(
             pc.get('scopedColorCorrection')
             or (row.get('product') or {}).get('scopedColorCorrection')
         ),
+        'colorNotationUnify': bool(source_color and csv_color and source_color != csv_color),
     }, ensure_ascii=False)
     pkey = product_map_key(customer=customer, code=code, product_name=product_name)
     rkey = row_map_key(
@@ -4173,12 +4186,18 @@ def build_paren_classification(product_name, override=None):
     if color and not change_summary:
         change_summary = f"商品名から色『{color}』を設定します"
     info_notices = list(base.get('infoNotices') or [])
+    if color and not user_touched:
+        color = paren_classify.normalize_color_value(color) or color
+    source_color = stock.text(base.get('sourceColor') or '')
+    if user_touched and 'sourceColor' in raw:
+        source_color = stock.text(raw.get('sourceColor') or '') or source_color
     return {
         'originalName': base['originalName'],
         'plannedName': planned or base['originalName'],
         'baseName': base.get('baseName') or base['originalName'],
         'color': color,
         'colorSource': stock.text(base.get('colorSource') or ''),
+        'sourceColor': source_color,
         'processing': processing,
         'material': material,
         'supplement': supplement,
@@ -4721,6 +4740,7 @@ def build_sku_groups(c, classified):
         used_marker_auto = False
         synonym_auto = False
         whitespace_auto = False
+        color_notation_auto = False
         all_csv_names = []
         for v in variants:
             for n in v.get('csvNames') or []:
@@ -4733,18 +4753,26 @@ def build_sku_groups(c, classified):
                 used_marker_possible(n) for n in all_csv_names
             )
         if len(cores) == 1 and len(raw_names) > 1:
-            # 標記以外の表記ゆれ（空白・全角半角・明示シノニム）を区別
+            # 標記以外の表記ゆれ（空白・全角半角・明示シノニム・色表記）を区別
             import unicodedata
             cores_no_syn = set()
+            cores_name_syn_only = set()
             for n in all_csv_names:
                 if not stock.text(n):
                     continue
                 core, _ = legacy.strip_used_marker(n)
                 core = unicodedata.normalize('NFKC', stock.text(core))
                 cores_no_syn.add(identity_match_key(core))
+                cores_name_syn_only.add(
+                    identity_match_key(legacy.apply_name_synonyms(core))
+                )
             if len(cores_no_syn) > 1:
-                # NFKC+空白だけでは不一致 → 明示シノニムが効いて同一化した
-                synonym_auto = True
+                if len(cores_name_syn_only) == 1:
+                    # 名シノニム（パンツ／スラックス）だけで同一化
+                    synonym_auto = True
+                else:
+                    # 色辞書・配色区切りで同一化した（共有 normalize）
+                    color_notation_auto = True
             else:
                 unmarked_set = {
                     stock.text(legacy.strip_used_marker(n)[0]) for n in all_csv_names if stock.text(n)
@@ -4752,7 +4780,7 @@ def build_sku_groups(c, classified):
                 if len(unmarked_set) > 1:
                     whitespace_auto = True
 
-        # サイズ・顧客・中古標記・空白/全角半角・明示シノニムだけの差はバリアントに出ない
+        # サイズ・顧客・中古標記・空白/全角半角・明示シノニム・色表記だけの差はバリアントに出ない
         needs_decision = (
             len(variants) > 1
             or len(existing) > 1
@@ -4770,6 +4798,8 @@ def build_sku_groups(c, classified):
                 auto_bits.append('先頭「＊/*」中古標記')
             if synonym_auto:
                 auto_bits.append('明示シノニム（例: パンツ／スラックス）')
+            if color_notation_auto:
+                auto_bits.append('色表記の統一（半角カナ・配色区切り・色辞書）')
             if whitespace_auto:
                 auto_bits.append('空白・全角半角の表記差')
             diff_meta = {
