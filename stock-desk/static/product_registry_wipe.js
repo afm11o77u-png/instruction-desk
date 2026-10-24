@@ -35,6 +35,7 @@
       `顧客取扱 ${c.customerProducts||0}`,
       `統合記録 ${c.productMerges||0}`,
       `照合別名 ${c.productMatchAliases||0}`,
+      `メーカー補正 ${c.makerSkuCorrections||0}`,
       `台帳CSVマップ ${c.productLedgerRowMaps||0}`,
       `旧CSV商品マップ ${c.legacyCsvRowMaps||0}`,
     ].join('　')

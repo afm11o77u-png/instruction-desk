@@ -312,6 +312,8 @@ def _delete_registry(c):
         run_delete('productMerges', 'DELETE FROM product_merges')
     if 'product_match_aliases' in tables:
         run_delete('productMatchAliases', 'DELETE FROM product_match_aliases')
+    if 'maker_sku_corrections' in tables:
+        run_delete('makerSkuCorrections', 'DELETE FROM maker_sku_corrections')
     if 'product_ledger_row_maps' in tables:
         run_delete('productLedgerRowMaps', 'DELETE FROM product_ledger_row_maps')
     if 'legacy_csv_row_maps' in tables:
