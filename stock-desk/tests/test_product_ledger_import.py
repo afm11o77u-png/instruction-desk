@@ -4376,5 +4376,281 @@ class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
             folder.cleanup()
 
 
+class ColorSynonymUnifyTest(unittest.TestCase):
+    """色表記の共有正規化（辞書＋配色区切り）。テストDBのみ・本番未変更。"""
+
+    CODE = 'CSU-6801'
+
+    def test_split_violet_synonyms_and_asterisk_colorway(self):
+        import product_ledger_paren as pp
+        cases = (
+            ('長袖ブルゾン ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ', '長袖ブルゾン', 'バイオレット×ネイビー'),
+            ('長袖ブルゾン バイオレット×ネイビー', '長袖ブルゾン', 'バイオレット×ネイビー'),
+            ('長袖ブルゾン（ミストバイオレット×ネイビー）', '長袖ブルゾン', 'バイオレット×ネイビー'),
+            ('長袖ブルゾン バイオレッド×ネイビー', '長袖ブルゾン', 'バイオレット×ネイビー'),
+        )
+        for original, name, color in cases:
+            with self.subTest(original=original):
+                r = pp.split_name_and_color(original)
+                self.assertFalse(r['needsConfirm'], r)
+                self.assertEqual(r['plannedName'], name)
+                self.assertEqual(r['color'], color)
+                # 配色の半分を名に残さない
+                self.assertNotIn('バイオ', r['plannedName'])
+                self.assertNotIn('ネイビー', r['plannedName'])
+                self.assertNotIn('ミスト', r['plannedName'])
+        self.assertTrue(
+            pp.colors_equivalent('ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ', 'バイオレット×ネイビー')
+        )
+        self.assertFalse(pp.colors_equivalent('ブルー', 'ライトブルー'))
+
+    def test_no_mechanical_mist_strip_or_similarity_merge(self):
+        import product_ledger_paren as pp
+        # 「ミスト」を機械除去しない（辞書に無いミスト◯◯は別名扱いにしない）
+        mist_only = pp.apply_color_synonyms_in_text('ミストグレー')
+        self.assertEqual(mist_only, 'ミストグレー')
+        # 類似度だけでは寄せない（辞書外の近傍表記）
+        self.assertFalse(pp.colors_equivalent('バイオレット', 'バイオラット'))
+        light = pp.split_name_and_color('エプロン ライトブルー')
+        blue = pp.split_name_and_color('エプロン ブルー')
+        self.assertEqual(light['color'], 'ライトブルー')
+        self.assertEqual(blue['color'], 'ブルー')
+        self.assertFalse(pp.colors_equivalent(light['color'], blue['color']))
+
+    def test_leading_used_mark_not_colorway_bridge(self):
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('＊長袖ブルゾン バイオレット×ネイビー')
+        self.assertFalse(r['needsConfirm'], r)
+        self.assertEqual(r['plannedName'], '＊長袖ブルゾン')
+        self.assertEqual(r['color'], 'バイオレット×ネイビー')
+
+    def test_vote_key_and_core_unify_synonyms(self):
+        a = '長袖ブルゾン ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ'
+        b = '長袖ブルゾン バイオレット×ネイビー'
+        c = '＊長袖ブルゾン ミストバイオレッド*ネイビー'
+        key = pli.normalize_ledger_name_for_vote(a)
+        self.assertEqual(key, '長袖ブルゾン バイオレット×ネイビー')
+        self.assertEqual(pli.normalize_ledger_name_for_vote(b), key)
+        self.assertEqual(pli.normalize_ledger_name_for_vote(c), key)
+        self.assertEqual(
+            pli.product_name_core_key(a),
+            pli.product_name_core_key(b),
+        )
+
+    def test_preview_register_opening_stock_correspondence(self):
+        """商品登録→初期在庫: 旧表記が永続対応で統一商品へ。UIは統一名/色のみ。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                f'顧客A,仕入A,{self.CODE},長袖ブルゾン　ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ,S',
+                f'顧客A,仕入A,{self.CODE},長袖ブルゾン　ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ,M',
+                f'顧客B,仕入A,{self.CODE},長袖ブルゾン　バイオレット×ネイビー,L',
+                f'顧客B,仕入A,{self.CODE},長袖ブルゾン　バイオレット×ネイビー,LL',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', '長袖ブルゾン　ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ',
+                    self.CODE, 'S', '3',
+                ),
+                opening_line(
+                    '仕入A', '顧客A', '長袖ブルゾン　ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ',
+                    self.CODE, 'M', '2',
+                ),
+                opening_line(
+                    '仕入A', '顧客B', '長袖ブルゾン　バイオレット×ネイビー',
+                    self.CODE, 'L', '4',
+                ),
+                opening_line(
+                    '仕入A', '顧客B', '長袖ブルゾン　バイオレット×ネイビー',
+                    self.CODE, 'LL', '1',
+                ),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'violet.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            reason_codes = {r.get('code') for r in (g.get('reviewReasons') or [])}
+            self.assertNotIn('color', reason_codes)
+            self.assertEqual(
+                g.get('plannedRegisteredName')
+                or (g.get('auxPrimary') or {}).get('plannedRegisteredName'),
+                '長袖ブルゾン',
+            )
+            self.assertEqual(
+                g.get('plannedRegisteredColor')
+                or (g.get('auxPrimary') or {}).get('plannedRegisteredColor'),
+                'バイオレット×ネイビー',
+            )
+            # 通常プレビューに変換前色の字幕リストを増やさない（planned は統一のみ）
+            for row in preview['rows']:
+                if (row.get('csv') or {}).get('code') != self.CODE:
+                    continue
+                pc = row.get('parenClassification') or {}
+                self.assertEqual(pc.get('plannedName'), '長袖ブルゾン')
+                self.assertEqual(pc.get('color'), 'バイオレット×ネイビー')
+                self.assertNotIn('preConversionNames', pc)
+                self.assertNotIn('legacyColorList', pc)
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'violet.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-color-synonym-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            products = c.execute(
+                "SELECT id,name,color FROM products "
+                "WHERE code=? AND merged_into_id IS NULL",
+                (self.CODE,),
+            ).fetchall()
+            self.assertEqual(len(products), 1, products)
+            self.assertEqual(products[0]['name'], '長袖ブルゾン')
+            self.assertEqual(products[0]['color'], 'バイオレット×ネイビー')
+            pid = products[0]['id']
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases "
+                    "WHERE kind='name' AND product_id=?",
+                    (pid,),
+                )
+            }
+            self.assertTrue(
+                any('ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ' in a or 'ミストバイオ' in a for a in aliases),
+                aliases,
+            )
+            maps = list(c.execute(
+                'SELECT csv_product_name,csv_color,csv_customer,csv_size,'
+                'product_id,customer_product_id,spec_json '
+                'FROM product_ledger_row_maps WHERE csv_product_code=?',
+                (self.CODE,),
+            ))
+            self.assertGreaterEqual(len(maps), 4, maps)
+            for m in maps:
+                self.assertEqual(m['product_id'], pid)
+                self.assertTrue(m['customer_product_id'])
+                # 登録色は統一表記。変換前は spec_json（内部照合用）
+                self.assertEqual(m['csv_color'], 'バイオレット×ネイビー')
+                spec = m['spec_json'] or ''
+                self.assertIn('sourceName', spec)
+                self.assertIn('sourceColor', spec)
+
+            # 初期在庫: 旧表記CSVが永続マップで同一商品・取扱・サイズへ。数量二重なし
+            opening = pli.build_preview(c, {
+                'importMode': 'opening_stock',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o2.csv',
+                'basisDate': '2024-04-01',
+                'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = (opening.get('openingStock') or {}).get('plans') or []
+            self.assertTrue((opening.get('openingStock') or {}).get('fromPersistedMap'))
+            qty_by_size = {}
+            for p in plans:
+                size = (p.get('csv') or {}).get('size') or ''
+                q = p.get('qty')
+                if q is None and isinstance(p.get('opening'), dict):
+                    q = p['opening'].get('qty')
+                self.assertIsNotNone(q, p)
+                qty_by_size[size] = int(q)
+                tgt = p.get('target') or {}
+                self.assertEqual(tgt.get('productId'), pid, p)
+                # 取扱は handleId（customer_product）。mapResolve にも customerProductId
+                handle_id = tgt.get('handleId') or (
+                    ((p.get('mapResolve') or {}).get('destination') or {})
+                    .get('customerProductId')
+                )
+                self.assertTrue(handle_id, p)
+                self.assertEqual(tgt.get('color'), 'バイオレット×ネイビー', p)
+            self.assertEqual(qty_by_size, {'S': 3, 'M': 2, 'L': 4, 'LL': 1})
+            self.assertEqual(sum(qty_by_size.values()), 10)
+
+            # 旧表記だけでも解決（別表記マップとの color-normalize 対応）
+            aux_old_only = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客B', '長袖ブルゾン　ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ',
+                    self.CODE, 'L', '7',
+                ),
+            ])
+            opening2 = pli.build_preview(c, {
+                'importMode': 'opening_stock',
+                'auxFile': csv_b64_from_text(aux_old_only), 'auxName': 'o3.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans2 = (opening2.get('openingStock') or {}).get('plans') or []
+            self.assertEqual(len(plans2), 1, plans2)
+            self.assertEqual((plans2[0].get('target') or {}).get('productId'), pid)
+            self.assertEqual(
+                (plans2[0].get('mapResolve') or {}).get('status'),
+                'ok',
+                plans2[0],
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_different_sku_and_color_split_not_merged(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-A,長袖ブルゾン　バイオレット×ネイビー,M',
+                '顧客A,仕入A,SKU-B,長袖ブルゾン　バイオレット×ネイビー,M',
+                '顧客A,仕入A,SPLIT-1,エプロン（黒）,M',
+                '顧客A,仕入A,SPLIT-1,エプロン（白）,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'nosku.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            by_code = {x['code']: x for x in preview['skuGroups']}
+            self.assertIn('SKU-A', by_code)
+            self.assertIn('SKU-B', by_code)
+            # 色統一はSKUをまたがない
+            self.assertEqual(by_code['SKU-A'].get('plannedRegisteredColor')
+                             or 'バイオレット×ネイビー', 'バイオレット×ネイビー')
+            # 黒/白は別色 → 色差の個別確認が残る（自動で1色に寄せない）
+            split = by_code['SPLIT-1']
+            if split.get('needsDecision'):
+                codes = {r.get('code') for r in (split.get('reviewReasons') or [])}
+                self.assertTrue(
+                    'color' in codes or split.get('colorDiffPossible'),
+                    split.get('reviewReasons'),
+                )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_slash_and_leoc_unaffected(self):
+        """#185 スラッシュ配色・#187 LEOC スコープ補正は維持。"""
+        import product_ledger_paren as pp
+        slash = pp.split_name_and_color('エプロン（黒／ワイン）')
+        self.assertEqual(slash['color'], '黒／ワイン')
+        self.assertEqual(slash['plannedName'], 'エプロン')
+        folder, path, c = newdb()
+        try:
+            import product_ledger_scoped_color as scoped
+            plan = pli.build_paren_classification('ピンクエプロン (胸当・ﾋﾟﾝｸ)')
+            # ピンク別注は LEOC スコープ外（顧客・仕入先条件なし）
+            self.assertFalse(plan.get('scopedColorCorrection'))
+            self.assertTrue(
+                scoped.matches_scoped_color_correction(
+                    customer='㈱ＬＥＯＣ',
+                    supplier='(有)ユニスタイル',
+                    code='別注',
+                    product_name='エプロン(ブルー・サックス)',
+                )
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()

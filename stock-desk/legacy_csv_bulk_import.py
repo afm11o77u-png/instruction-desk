@@ -40,7 +40,11 @@ OPENING_STATUS_LABELS = {
 
 
 def _names_equivalent_core(a, b):
-    """原文名の同一判定。core key（NFKC）に加え、取込表記統一でも一致を見る。"""
+    """原文名の同一判定。
+
+    core key（NFKC）・取込表記統一に加え、共有の色表記正規化（半角カナ・配色区切り・色辞書）
+    でも一致を見る。類似度だけでは寄せない。別SKUへは呼び出し側の品番フィルタが守る。
+    """
     ta, tb = stock.text(a), stock.text(b)
     if not ta or not tb:
         return False
@@ -50,7 +54,12 @@ def _names_equivalent_core(a, b):
     import product_ledger_paren as paren_classify
     ua = paren_classify.unify_import_notation(ta)
     ub = paren_classify.unify_import_notation(tb)
-    return bool(ua and ub and ua == ub)
+    if ua and ub and ua == ub:
+        return True
+    # 色別名・配色区切りゆれ（ﾐｽﾄﾊﾞｲｵﾚｯﾄﾞ*ﾈｲﾋﾞｰ ↔ バイオレット×ネイビー）
+    na = paren_classify.normalize_name_for_color_compare(ta)
+    nb = paren_classify.normalize_name_for_color_compare(tb)
+    return bool(na and nb and na == nb)
 
 
 def _aux_item_payload(row_no, item):
