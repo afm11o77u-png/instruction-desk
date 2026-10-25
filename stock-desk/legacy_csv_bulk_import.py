@@ -1281,12 +1281,35 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
     reasons = list(creasons) + list(qreasons)
     dest = resolved.get('destination') or {}
     map_status = resolved.get('status') or 'missing'
+    import product_ledger_import as pli
+    product_excl = pli.lookup_product_registration_exclusion(
+        c,
+        customer=payload['customer'],
+        code=payload['code'],
+        product_name=payload['productName'],
+        size=payload['size'],
+        supplier=payload['supplier'],
+    )
+    # 商品登録時の除外を数量除外へ自動適用しない。表示し、登録先なしは確認対象のまま。
+    if product_excl:
+        label = product_excl.get('label') or pli.PRODUCT_REGISTRATION_EXCLUDED_LABEL
+        if label not in reasons:
+            reasons = [label, *reasons]
 
     if map_status != 'ok':
         status = legacy.STATUS_REVIEW if map_status in ('ambiguous', 'deleted') else COMPLEMENT_STATUS
         if map_status == 'missing':
             status = COMPLEMENT_STATUS
+        # 除外記録があっても数量を黙って破棄せず確認対象にする
+        if product_excl and status == COMPLEMENT_STATUS:
+            status = legacy.STATUS_REVIEW
         reasons = [resolved.get('reason') or '登録先を特定できません。', *reasons]
+        # 重複除去（除外ラベルを先頭に保つ）
+        deduped = []
+        for r in reasons:
+            if r and r not in deduped:
+                deduped.append(r)
+        reasons = deduped
         cust_preview = legacy._person_preview(c, 'customers', '顧客', payload['customer'], row_no)
         return {
             'rowNo': row_no,
@@ -1326,6 +1349,10 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
             'selected': False,
             'mapResolve': resolved,
             'fromPersistedMap': True,
+            'productRegistrationExcluded': bool(product_excl),
+            'productRegistrationExcludedLabel': (
+                product_excl.get('label') if product_excl else ''
+            ),
         }
 
     product_id = dest.get('productId')
@@ -1380,6 +1407,11 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
             status = legacy.STATUS_CREATE if master_new else legacy.STATUS_REUSE
 
     sel = selection if isinstance(selection, dict) else {}
+    # 登録先があっても除外表示は残す（数量除外へは自動適用しない／登録済み扱いしない）
+    if product_excl:
+        label = product_excl.get('label') or pli.PRODUCT_REGISTRATION_EXCLUDED_LABEL
+        if label not in reasons:
+            reasons = [label, *reasons]
     return {
         'rowNo': row_no,
         'status': status,
@@ -1421,6 +1453,10 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
         'priorImport': bool(prior) if status != legacy.STATUS_HOLD else False,
         'mapResolve': resolved,
         'fromPersistedMap': True,
+        'productRegistrationExcluded': bool(product_excl),
+        'productRegistrationExcludedLabel': (
+            product_excl.get('label') if product_excl else ''
+        ),
     }
 
 

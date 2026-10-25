@@ -638,6 +638,268 @@ def row_map_key(*, customer, code, product_name, size, supplier):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+# 今回の取り込みだけ「この行を登録しない」。恒久ルールにはしない。
+USER_ROW_EXCLUDE_REASON = 'この行を登録しない（今回の取り込み）'
+PRODUCT_REGISTRATION_EXCLUDED_LABEL = '商品登録時に除外した項目'
+
+
+def csv_row_identity(csv_or_row):
+    """元CSV行の安定識別（表示順・再描画でずれない）。"""
+    if not isinstance(csv_or_row, dict):
+        return {
+            'customer': '', 'code': '', 'productName': '', 'size': '', 'supplier': '',
+        }
+    csv = csv_or_row.get('csv') if isinstance(csv_or_row.get('csv'), dict) else csv_or_row
+    return {
+        'customer': stock.text(csv.get('customer') or ''),
+        'code': stock.text(csv.get('code') or csv.get('productCode') or ''),
+        'productName': stock.text(csv.get('productName') or ''),
+        'size': stock.text(csv.get('size') or ''),
+        'supplier': stock.text(csv.get('supplier') or ''),
+    }
+
+
+def stable_row_exclusion_key(*, customer='', code='', product_name='', size='', supplier='', **_extra):
+    """除外判断の安定キー（row_map_key と同材料）。"""
+    return row_map_key(
+        customer=customer, code=code, product_name=product_name, size=size, supplier=supplier,
+    )
+
+
+def _parse_row_exclusions(body):
+    """preview/commit の rowExclusions を安定キー集合へ。
+
+    形式:
+    - { "<stableKey>": true | {excluded:true, ...identity} , ... }
+    - [ {customer, code, productName, size, supplier, excluded?} , ... ]
+    """
+    raw = body.get('rowExclusions') if isinstance(body, dict) else None
+    keys = set()
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if v is False or v is None:
+                continue
+            if isinstance(v, dict):
+                if v.get('excluded') is False:
+                    continue
+                ident = csv_row_identity(v)
+                if any(ident.values()):
+                    keys.add(stable_row_exclusion_key(
+                        customer=ident['customer'],
+                        code=ident['code'],
+                        product_name=ident['productName'],
+                        size=ident['size'],
+                        supplier=ident['supplier'],
+                    ))
+                    continue
+            sk = stock.text(k)
+            if sk:
+                keys.add(sk)
+    elif isinstance(raw, list):
+        for v in raw:
+            if not isinstance(v, dict) or v.get('excluded') is False:
+                continue
+            ident = csv_row_identity(v)
+            keys.add(stable_row_exclusion_key(
+                customer=ident['customer'],
+                code=ident['code'],
+                product_name=ident['productName'],
+                size=ident['size'],
+                supplier=ident['supplier'],
+            ))
+    return keys
+
+
+def _apply_user_row_exclusions(classified, sku_groups, processing_split_meta, exclusion_keys):
+    """ユーザーが選んだ元行だけを今回の登録対象から外す（STATUS_HOLD 再利用）。
+
+    - 未除外の同行グループ／他対象の予定・確認は維持
+    - 全行除外の品番は未決定ブロックから外す
+    - 加工サービス計画の sourceRowNos からも外す（空なら計画削除）
+    - 自動整理・メーカー補正のあとに呼ぶ（勝手に登録対象へ戻さない）
+    """
+    keys = set(exclusion_keys or [])
+    if not keys:
+        return {
+            'excludedRowCount': 0,
+            'excludedRowNos': [],
+            'processingPlansDropped': 0,
+        }
+    excluded_nos = []
+    for row in classified or []:
+        ident = csv_row_identity(row)
+        sk = stable_row_exclusion_key(
+            customer=ident['customer'],
+            code=ident['code'],
+            product_name=ident['productName'],
+            size=ident['size'],
+            supplier=ident['supplier'],
+        )
+        if sk not in keys:
+            # 既存のユーザー除外フラグを自動処理が付け直さないよう、未指定なら落とす
+            if row.get('userRowExcluded') and not row.get('skuHold'):
+                pass
+            continue
+        row['status'] = STATUS_HOLD
+        row['statusLabel'] = STATUS_LABELS[STATUS_HOLD]
+        row['canCommit'] = False
+        row['userRowExcluded'] = True
+        row['skuDecisionNeeded'] = False
+        row['deferReason'] = USER_ROW_EXCLUDE_REASON
+        reasons = [
+            r for r in (row.get('reasons') or [])
+            if USER_ROW_EXCLUDE_REASON not in stock.text(r)
+        ]
+        reasons.append(USER_ROW_EXCLUDE_REASON)
+        row['reasons'] = reasons
+        excluded_nos.append(row.get('rowNo'))
+
+    excluded_set = {n for n in excluded_nos if n is not None}
+
+    # 品番グループ: 全行除外なら未決定から外す（部分除外は残り行の確認を維持）
+    rows_by_code = defaultdict(list)
+    for row in classified or []:
+        code = stock.text((row.get('csv') or {}).get('code') or '')
+        if stock_product_merge.is_normal_product_code(code):
+            rows_by_code[code].append(row)
+    for group in sku_groups or []:
+        code = stock.text(group.get('code') or '')
+        grow = rows_by_code.get(code) or []
+        if not grow:
+            continue
+        active = [r for r in grow if not r.get('userRowExcluded')]
+        group['userExcludedRowNos'] = [
+            r.get('rowNo') for r in grow if r.get('userRowExcluded')
+        ]
+        group['activeRowNos'] = [r.get('rowNo') for r in active]
+        if not active and group.get('needsDecision'):
+            group['needsDecision'] = False
+            group['userAllRowsExcluded'] = True
+            group['decision'] = {
+                'decision': SKU_DECISION_HOLD,
+                'deferReason': USER_ROW_EXCLUDE_REASON,
+                'userRowExcluded': True,
+            }
+
+    dropped_plans = 0
+    meta = processing_split_meta if isinstance(processing_split_meta, dict) else {}
+    plans = list(meta.get('processingServicePlans') or [])
+    kept = []
+    for plan in plans:
+        src = [
+            n for n in (plan.get('sourceRowNos') or [])
+            if n not in excluded_set
+        ]
+        if not src:
+            dropped_plans += 1
+            continue
+        plan = dict(plan)
+        plan['sourceRowNos'] = src
+        kept.append(plan)
+    if plans:
+        meta['processingServicePlans'] = kept
+    return {
+        'excludedRowCount': len(excluded_nos),
+        'excludedRowNos': excluded_nos,
+        'processingPlansDropped': dropped_plans,
+    }
+
+
+def lookup_product_registration_exclusion(c, *, customer, code, product_name, size, supplier):
+    """商品登録時に「この行を登録しない」とした記録（product_id なしのマップ）。"""
+    ensure_schema(c)
+    key = row_map_key(
+        customer=customer, code=code, product_name=product_name, size=size, supplier=supplier,
+    )
+    row = c.execute(
+        '''SELECT * FROM product_ledger_row_maps
+           WHERE row_map_key=? ORDER BY id DESC LIMIT 1''',
+        (key,),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        spec = json.loads(row['spec_json'] or '') or {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        spec = {}
+    if not isinstance(spec, dict) or not spec.get('excludedFromRegistration'):
+        return None
+    return {
+        'mapId': row['id'],
+        'rowMapKey': key,
+        'sourceRowNo': row['source_row_no'],
+        'label': PRODUCT_REGISTRATION_EXCLUDED_LABEL,
+        'productId': row['product_id'],
+        'runId': row['run_id'],
+    }
+
+
+def upsert_exclusion_row_map(c, *, run_id, file_sha256, file_name, row):
+    """除外判断だけを永続化（商品・取扱・在庫は作らない）。"""
+    ensure_schema(c)
+    csv_info = row.get('csv') or {}
+    customer = stock.text(csv_info.get('customer'))
+    supplier = stock.text(csv_info.get('supplier'))
+    code = stock.text(csv_info.get('sourceCode') or csv_info.get('code'))
+    product_name = stock.text(csv_info.get('productName'))
+    size = stock.text(csv_info.get('size'))
+    pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+    ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    spec_json = json.dumps({
+        'excludedFromRegistration': True,
+        'exclusionScope': 'this_import',
+        'exclusionReason': USER_ROW_EXCLUDE_REASON,
+        'originalName': product_name,
+        'sourceName': product_name,
+        'processing': stock.text(pc.get('processing') or ps.get('serviceName') or ''),
+        'processingVendor': stock.text(ps.get('vendorName') or supplier or ''),
+        'processingServiceName': stock.text(ps.get('serviceName') or ''),
+        'rowKind': 'excluded_from_registration',
+        'csvSize': size,
+    }, ensure_ascii=False)
+    pkey = product_map_key(customer=customer, code=code, product_name=product_name)
+    rkey = row_map_key(
+        customer=customer, code=code, product_name=product_name, size=size, supplier=supplier,
+    )
+    gkey = row.get('matchGroupKey') or match_group_key(
+        customer=customer, code=code, product_name=product_name, supplier=supplier,
+    )
+    t = stock.stamp()
+    existing = c.execute(
+        'SELECT id FROM product_ledger_row_maps WHERE row_map_key=? ORDER BY id DESC LIMIT 1',
+        (rkey,),
+    ).fetchone()
+    vals = (
+        pkey, rkey, gkey, file_sha256, file_name, row.get('rowNo'),
+        customer, supplier, code, product_name, size,
+        '', '', '', 0, spec_json,
+        None, None, None, run_id, t,
+    )
+    if existing:
+        c.execute(
+            '''UPDATE product_ledger_row_maps SET
+                 product_map_key=?, row_map_key=?, match_group_key=?, file_sha256=?, file_name=?,
+                 source_row_no=?, csv_customer=?, csv_supplier=?, csv_product_code=?,
+                 csv_product_name=?, csv_size=?,
+                 csv_color=?, csv_processing=?, csv_material=?, is_main_candidate=?, spec_json=?,
+                 customer_id=?, product_id=?,
+                 customer_product_id=?, run_id=?, updated_at=?
+               WHERE id=?''',
+            vals + (existing['id'],),
+        )
+        return existing['id']
+    c.execute(
+        '''INSERT INTO product_ledger_row_maps(
+             product_map_key,row_map_key,match_group_key,file_sha256,file_name,source_row_no,
+             csv_customer,csv_supplier,csv_product_code,csv_product_name,csv_size,
+             csv_color,csv_processing,csv_material,is_main_candidate,spec_json,
+             customer_id,product_id,customer_product_id,run_id,created_at,updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        vals + (t,),
+    )
+    return c.execute('SELECT last_insert_rowid() AS id').fetchone()['id']
+
+
 def decode_csv_bytes(blob):
     return legacy.decode_csv_bytes(blob)
 
@@ -7080,6 +7342,17 @@ def build_preview(c, body):
         g['makerCorrection'] = maker_sku_lookup.sku_group_maker_correction_meta(
             g, group_rows,
         )
+    # ユーザー行除外は自動整理・メーカー補正のあとで適用（勝手に登録対象へ戻さない）
+    row_exclusion_meta = _apply_user_row_exclusions(
+        classified, sku_groups, processing_split_meta, _parse_row_exclusions(body),
+    )
+    if isinstance(decision_meta, dict):
+        decision_meta = dict(decision_meta)
+        decision_meta['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
+        # 全行除外で needsDecision を落とした分を pending から再計算
+        decision_meta['pendingDecisionGroups'] = sum(
+            1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')
+        )
 
     counts = defaultdict(int)
     for row in classified:
@@ -7088,7 +7361,9 @@ def build_preview(c, body):
     review_count = counts.get(STATUS_REVIEW, 0)
     sku_pending_rows = sum(1 for r in classified if r.get('skuDecisionNeeded'))
     planned = _planned_counts(classified, sku_groups)
+    planned['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
     summary = _preview_outcome_summary(classified, sku_groups, planned, decision_meta)
+    summary['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
     auto_plans = [
         g.get('productPlan') for g in sku_groups
         if g.get('plannedSingleProduct') and g.get('productPlan')
@@ -7192,6 +7467,11 @@ def build_preview(c, body):
         'countsRaw': dict(counts),
         'plannedCounts': planned,
         'outcomeSummary': summary,
+        'userRowExclusions': {
+            'count': row_exclusion_meta.get('excludedRowCount') or 0,
+            'rowNos': row_exclusion_meta.get('excludedRowNos') or [],
+            'reason': USER_ROW_EXCLUDE_REASON,
+        },
         'reviewCount': review_count,
         'previewFingerprint': fp,
         'previewAt': stock.stamp(),
@@ -7942,10 +8222,12 @@ def commit_preview(c, body, *, db_path=None):
     review_rows = [r for r in classified if r['status'] == STATUS_REVIEW]
     excluded_rows = [r for r in classified if r['status'] == STATUS_EXCLUDED]
     hold_rows = [r for r in classified if r['status'] == STATUS_HOLD]
+    user_excluded_rows = [r for r in hold_rows if r.get('userRowExcluded')]
     commit_rows = [
         r for r in classified
         if r['status'] in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_MERGE)
         and not r.get('skuDecisionNeeded')
+        and not r.get('userRowExcluded')
     ]
 
     # 加工行のみで本体不明のグループは「本体確認残」だが、特定できた加工サービスの確定は止めない
@@ -8071,6 +8353,7 @@ def commit_preview(c, body, *, db_path=None):
         'reused': 0, 'unchanged': sum(1 for r in classified if r['status'] == STATUS_UNCHANGED),
         'reviewed': len(review_rows), 'excluded': len(excluded_rows),
         'deferred': len(hold_rows),
+        'userExcludedRows': len(user_excluded_rows),
         'committedRows': 0, 'failed': 0,
         'openingCreated': 0, 'openingQtyUpdated': 0, 'openingUnchanged': 0,
         'openingHeld': 0, 'openingComplementSkipped': 0,
@@ -8083,11 +8366,22 @@ def commit_preview(c, body, *, db_path=None):
             'productName': (r.get('csv') or {}).get('productName'),
             'reason': r.get('deferReason') or '',
             'csv': r.get('csv'),
+            'userRowExcluded': bool(r.get('userRowExcluded')),
         }
         for r in hold_rows
     ]
 
     try:
+        # 除外行は商品・加工・サイズ・取扱を作らず、判断だけ永続化（初期在庫で表示用）
+        for ex_row in user_excluded_rows:
+            upsert_exclusion_row_map(
+                c,
+                run_id=run_id,
+                file_sha256=uploaded['fileSha256'],
+                file_name=uploaded['fileName'],
+                row=ex_row,
+            )
+
         merge_results = _run_confirmed_product_merges(
             c, classified, sku_decisions, actor_name=actor, token_prefix=token,
         )

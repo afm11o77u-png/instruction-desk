@@ -21,7 +21,9 @@
   const OVERSIZE_MSG='ファイル容量が上限を超えています'
   const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
   // unified=確認リスト（旧・個別確認＋行要確認の統合）。sourceRows=元行一覧（詳細確認用・既定折りたたみ）
-  const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,sourceRows:false}
+  // rowExcluded=登録しない項目（今回の取り込みだけの行除外）
+  const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,rowExcluded:false,sourceRows:false}
+  const USER_ROW_EXCLUDE_REASON='この行を登録しない（今回の取り込み）'
   // 一覧テーブル列数。展開詳細行の colspan は必ずこれと一致させる（不一致だと table-layout:fixed で列が縮む）
   const SKU_COMPARE_COL_COUNT=8
   const UNIFIED_REVIEW_COL_COUNT=5
@@ -59,7 +61,7 @@
         sectionOpen:Object.assign({},SECTION_DEFAULTS),
         sectionPages:{unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1},
         expandedUnified:{},
-        selections:{},skuDecisions:{},rowClassifications:{},commitToken:'',busy:false,open:false,
+        selections:{},skuDecisions:{},rowClassifications:{},rowExclusions:{},commitToken:'',busy:false,open:false,
         makerLookup:null,bulkMakerLookup:null,_bulkMakerPoll:null,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
@@ -69,6 +71,7 @@
     if(!ui.selectedCodes)ui.selectedCodes={}
     if(!ui.expandedCodes)ui.expandedCodes={}
     if(!ui.rowClassifications)ui.rowClassifications={}
+    if(!ui.rowExclusions)ui.rowExclusions={}
     if(!ui.openingSelections)ui.openingSelections={}
     if(ui.makerLookup===undefined)ui.makerLookup=null
     if(ui.bulkMakerLookup===undefined)ui.bulkMakerLookup=null
@@ -96,15 +99,116 @@
     st.file=null;st.fileB64='';st.fileName='';st.fileSize=0
     st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
     st.history=null;st.historyError='';st.preview=null;st.previewError='';st.result=null
-    st.selections={};st.skuDecisions={};st.rowClassifications={}
+    st.selections={};st.skuDecisions={};st.rowClassifications={};st.rowExclusions={}
     st.selectedCodes={};st.expandedCodes={};st.openingSelections={}
     st.makerLookup=null;st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
-    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,rowExcluded:1,separate:1}
     st.expandedUnified={}
     st.skuQ='';st.skuReasonFilter='';st.skuPage=1;st.page=1
     st.progressLabel=''
+  }
+
+  /** 元CSV行の安定キー（表示順変更で別行へ適用されない）。サーバ row_map_key と同材料。 */
+  function stableRowKeyFromCsv(csv){
+    const c=csv||{}
+    return [c.customer||'',c.code||'',c.productName||'',c.size||'',c.supplier||''].join('\u0001')
+  }
+  function stableRowKeyFromRow(r){
+    return stableRowKeyFromCsv((r&&r.csv)||{})
+  }
+  function isRowExcluded(st,r){
+    if(!r)return false
+    if(r.userRowExcluded)return true
+    const key=stableRowKeyFromRow(r)
+    const ent=st.rowExclusions&&st.rowExclusions[key]
+    return !!(ent&&ent.excluded!==false)
+  }
+  function setRowExcluded(st,r,excluded){
+    if(!r)return
+    const csv=r.csv||{}
+    const key=stableRowKeyFromRow(r)
+    if(!st.rowExclusions)st.rowExclusions={}
+    if(excluded){
+      st.rowExclusions[key]={
+        excluded:true,
+        rowNo:r.rowNo,
+        customer:csv.customer||'',
+        code:csv.code||'',
+        productName:csv.productName||'',
+        size:csv.size||'',
+        supplier:csv.supplier||'',
+        reason:USER_ROW_EXCLUDE_REASON
+      }
+    }else{
+      delete st.rowExclusions[key]
+    }
+  }
+  /**
+   * 同じ内容の複数行キー。サイズ違いの同一商品はまとめる。
+   * 加工名未定＋同じ業者だけではまとめない（無関係な加工行を巻き込み防止）。
+   */
+  function sameContentKey(r){
+    if(!r)return ''
+    const csv=r.csv||{}
+    const ps=r.processingService||{}
+    const pc=r.parenClassification||{}
+    const physicalParts=!!(r.physicalPartsView||pc.physicalPartsView||ps.isPhysicalParts)
+    const processingView=!!(r.processingServiceView||pc.processingServiceView||(ps.isProcessingVendor&&!physicalParts))
+    if(processingView){
+      const name=String(ps.serviceName||pc.processing||'').trim()
+      if(!name)return ''
+      const vendor=String(ps.vendorName||csv.supplier||'').trim()
+      const customer=String(csv.customer||'').trim()
+      return `proc\u0001${name}\u0001${vendor}\u0001${customer}`
+    }
+    return `g\u0001${csv.customer||''}\u0001${csv.code||''}\u0001${csv.productName||''}\u0001${csv.supplier||''}`
+  }
+  function sameContentRows(st,r){
+    const key=sameContentKey(r)
+    if(!key)return []
+    return ((st.preview&&st.preview.rows)||[]).filter(x=>sameContentKey(x)===key)
+  }
+  function listExcludedRows(st){
+    const rows=((st.preview&&st.preview.rows)||[])
+    const byKey={}
+    rows.forEach(r=>{
+      if(isRowExcluded(st,r))byKey[stableRowKeyFromRow(r)]=r
+    })
+    // プレビューに無いが除外マップに残る分（再照合直後の一瞬など）
+    Object.keys(st.rowExclusions||{}).forEach(k=>{
+      const ent=st.rowExclusions[k]
+      if(!ent||ent.excluded===false||byKey[k])return
+      byKey[k]={rowNo:ent.rowNo,csv:ent,userRowExcluded:true,status:'hold',statusLabel:'登録しない',reasons:[ent.reason||USER_ROW_EXCLUDE_REASON]}
+    })
+    return Object.keys(byKey).map(k=>byKey[k]).sort((a,b)=>(Number(a.rowNo)||0)-(Number(b.rowNo)||0))
+  }
+  function rebindExclusionsAfterPreview(st){
+    // 安定キーで付け直し。入力（rowClassifications）は rowNo キーのまま維持。
+    const next={}
+    const rows=((st.preview&&st.preview.rows)||[])
+    const byKey={}
+    rows.forEach(r=>{byKey[stableRowKeyFromRow(r)]=r})
+    Object.keys(st.rowExclusions||{}).forEach(k=>{
+      const ent=st.rowExclusions[k]
+      if(!ent||ent.excluded===false)return
+      const row=byKey[k]
+      if(row){
+        next[k]=Object.assign({},ent,{
+          rowNo:row.rowNo,
+          customer:(row.csv||{}).customer||ent.customer||'',
+          code:(row.csv||{}).code||ent.code||'',
+          productName:(row.csv||{}).productName||ent.productName||'',
+          size:(row.csv||{}).size||ent.size||'',
+          supplier:(row.csv||{}).supplier||ent.supplier||'',
+          excluded:true
+        })
+      }else{
+        next[k]=Object.assign({},ent,{excluded:true})
+      }
+    })
+    st.rowExclusions=next
   }
 
   /** クライアント決定を優先（折りたたみでは承認にしない。state の decision のみ）。 */
@@ -251,8 +355,19 @@
     const part=partitionJudgmentGroups(st)
     const items=[]
     const coveredSkuCodes=new Set()
+    const previewRows=((st.preview&&st.preview.rows)||[])
 
     ;(part.individual||[]).forEach(g=>{
+      const groupRows=previewRows.filter(r=>{
+        const code=String((r.csv||{}).code||'')
+        return code&&code===String(g.code)
+      })
+      const activeRows=groupRows.filter(r=>!isRowExcluded(st,r))
+      // 全行除外の対象は未解決リストから外す
+      if(groupRows.length&&!activeRows.length){
+        coveredSkuCodes.add(String(g.code))
+        return
+      }
       const reasons=(g.reviewReasons||[]).map(r=>({
         type:'sku_reason',
         code:r.code||'',
@@ -273,16 +388,17 @@
         issues,
         unresolvedIssueCount:issues.filter(i=>!i.resolved).length,
         group:g,
-        rows:[],
-        rowNos:g.rowNos||[],
+        rows:activeRows,
+        rowNos:activeRows.length?activeRows.map(x=>x.rowNo):(g.rowNos||[]),
         code:g.code
       })
       coveredSkuCodes.add(String(g.code))
     })
 
     const buckets={}
-    ;((st.preview&&st.preview.rows)||[]).forEach(r=>{
+    previewRows.forEach(r=>{
       if(!r||r.status!=='needs_review')return
+      if(isRowExcluded(st,r))return
       // 品番比較待ちは SKU 区分（個別／一括）側。下リストへ重複させない
       if(r.skuDecisionNeeded)return
       const csv=r.csv||{}
@@ -348,6 +464,7 @@
   function judgmentStatusCounts(st){
     const p=partitionJudgmentGroups(st)
     const unified=unifiedReviewCounts(st)
+    const rowExcluded=listExcludedRows(st).length
     return {
       // 未解決 = 統合リストの未解決対象数（上下二重計上しない）
       unresolved:unified.unresolved,
@@ -358,7 +475,8 @@
       autoDecided:p.autoCount,
       hold:p.hold.length,
       separate:p.separate.length,
-      excluded:p.excludedRows
+      excluded:p.excludedRows,
+      rowExcluded
     }
   }
 
@@ -394,9 +512,9 @@
     const c=judgmentStatusCounts(st)
     return `<div class="sku-judgment-status-bar" data-sku-status-counts>
       <p class="excelhint"><strong>登録前の件数:</strong>
-        未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}
+        未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}
       </p>
-      <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。保留 ${c.hold} 件は登録対象外です。</p>
+      <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。保留 ${c.hold} 件・登録しない ${c.rowExcluded||0} 行は登録対象外です。</p>
     </div>`
   }
 
@@ -405,6 +523,7 @@
       importMode:st.importMode||MODE_PRODUCTS,
       selections:st.selections,skuDecisions:st.skuDecisions,
       rowClassifications:st.rowClassifications||{},
+      rowExclusions:st.rowExclusions||{},
       _canWrite:true,_actor:{name:st.actorName||''}
     }
     if(isOpeningMode(st)){
@@ -1261,12 +1380,18 @@
   }
 
   function unifiedRowDetailHtml(st,item){
-    const rows=item.rows||[]
+    let rows=item.rows||[]
+    // 品番対象でも元行カードを出し、行単位の「登録しない」を使えるようにする
+    if(!rows.length&&item.kind==='sku'&&item.group){
+      const code=String(item.code||item.group.code||'')
+      rows=((st.preview&&st.preview.rows)||[]).filter(r=>String((r.csv||{}).code||'')===code)
+    }
     if(!rows.length)return ''
     const body=rows.map(r=>{
       const csv=r.csv||{}
-      return `<div class="unified-row-detail-card" data-unified-row="${r.rowNo}">
-        <p class="excelhint">行 ${r.rowNo}　顧客 ${esc(csv.customer||'—')}　サイズ ${esc(csv.size||'—')}　原文 ${esc(csv.productName||'—')}　仕入先 ${esc(csv.supplier||'—')}</p>
+      const excluded=isRowExcluded(st,r)
+      return `<div class="unified-row-detail-card${excluded?' is-row-excluded':''}" data-unified-row="${r.rowNo}">
+        <p class="excelhint">行 ${r.rowNo}　顧客 ${esc(csv.customer||'—')}　サイズ ${esc(csv.size||'—')}　原文 ${esc(csv.productName||'—')}　仕入先 ${esc(csv.supplier||'—')}${excluded?'　<span class="badge">登録しない</span>':''}</p>
         <div class="unified-row-detail-grid">
           <div>${parenCell(st,r)}</div>
           <div><p class="excelhint">登録先: ${targetCell(r)}</p><div class="bar">${rowActions(st,r)}</div></div>
@@ -1276,7 +1401,7 @@
     }).join('')
     return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="${UNIFIED_REVIEW_COL_COUNT}">
       <div class="sku-detail-body">
-        <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。</p>
+        <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。</p>
         ${body}
       </div>
     </td></tr>`
@@ -1313,7 +1438,7 @@
               <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${skuExpanded?'詳細を閉じる':'詳細を開く'}</button>
             </div>
           </td>
-        </tr>${skuMakerLookupRowHtml(st,g.code,detailOpts)}${skuExpanded?skuRowDetailHtml(st,g,detailOpts):''}`
+        </tr>${skuMakerLookupRowHtml(st,g.code,detailOpts)}${skuExpanded?skuRowDetailHtml(st,g,detailOpts):''}${skuExpanded?unifiedRowDetailHtml(st,item):''}`
       }
       const kindLabel={processing:'加工サービス',blank:'品番なし・部品資材',custom:'別注',unknown:'不明',sku_row:'行要確認',row:'行要確認'}[item.kind]||'要確認'
       return `<tr class="sku-list-row unified-list-row unified-kind-${esc(item.kind)}" data-unified-id="${esc(item.id)}" data-sku-section="unified">
@@ -1370,7 +1495,8 @@
     const part=partitionJudgmentGroups(st)
     const counts=judgmentStatusCounts(st)
     const unifiedAll=buildUnifiedReviewItems(st).filter(it=>matchesUnifiedFilters(st,it))
-    const hasAny=counts.unresolved||counts.unapproved||counts.approved||counts.autoDecided||counts.hold||counts.separate||counts.excluded
+    const excludedRowList=listExcludedRows(st)
+    const hasAny=counts.unresolved||counts.unapproved||counts.approved||counts.autoDecided||counts.hold||counts.separate||counts.excluded||counts.rowExcluded
     if(!hasAny&&!(st.preview&&(st.preview.skuGroups||[]).length)&&!((st.preview&&st.preview.rows)||[]).length)return ''
     const selected=selectedCodeList(st)
     const filterList=(arr)=>arr.filter(g=>matchesSkuFilters(st,g))
@@ -1383,11 +1509,13 @@
     const approvedSlice=pageSlice(st,'approved',approvedAll)
     const holdSlice=pageSlice(st,'hold',holdAll)
     const separateSlice=pageSlice(st,'separate',separateAll)
+    const rowExSlice=pageSlice(st,'rowExcluded',excludedRowList)
     const bulkPages=bulkSlice.pages
     const unifiedOpen=!!(st.sectionOpen&&(st.sectionOpen.unified!=null?st.sectionOpen.unified:st.sectionOpen.individual))
     const bulkOpen=!!(st.sectionOpen&&st.sectionOpen.bulk)
     const autoOpen=!!(st.sectionOpen&&st.sectionOpen.auto)
     const holdOpen=!!(st.sectionOpen&&st.sectionOpen.hold)
+    const rowExOpen=!!(st.sectionOpen&&st.sectionOpen.rowExcluded)
     const bulkApproveLabel=`一括承認候補${part.bulkUnapproved.length}件を承認`
     const bulkScopeHint=part.bulkUnapproved.length
       ?`承認対象は「一括承認候補」区分の未承認 ${part.bulkUnapproved.length} 件すべて（${bulkPages}ページ分）。確認リスト（未解決）・保留・自動決定済みは含みません。折りたたみだけでは承認されません。`
@@ -1485,6 +1613,60 @@
         </header>
         ${holdOpen?holdBody:`<p class="excelhint sku-section-collapsed-hint">件数は上の登録前サマリでも確認できます。黙って非表示にはしません（保留 ${part.hold.length} / 対象外 ${part.excludedRows||0}）。</p>`}
       </section>
+
+      <section class="sku-judgment-section sku-section-row-excluded" data-sku-section-block="rowExcluded">
+        <header class="sku-section-header bar">
+          <h4>登録しない項目 <span class="sku-section-count">${excludedRowList.length}行</span></h4>
+          ${sectionToggleBtn(st,'rowExcluded')}
+        </header>
+        ${rowExOpen?`<div class="sku-section-body">
+          <p class="excelhint">今回の取り込みだけ商品登録対象から外した元CSV行です（削除ではありません。恒久除外ルールにはしません）。「登録対象に戻す」と現在の入力内容で確認事項を再判定します。</p>
+          ${sectionPagerHtml('rowExcluded',rowExSlice,excludedRowList.length)}
+          <div class="legacy-csv-table-wrap"><table class="legacy-csv-table product-ledger-table">
+            <thead><tr><th>行</th><th>顧客</th><th>仕入先</th><th>品番</th><th>原文名</th><th>サイズ</th><th>操作</th></tr></thead>
+            <tbody>${(rowExSlice.pageItems||[]).map(r=>{
+              const csv=r.csv||{}
+              return `<tr class="legacy-status-hold">
+                <td>${r.rowNo||'—'}</td>
+                <td>${esc(csv.customer||'')}</td>
+                <td>${esc(csv.supplier||'')}</td>
+                <td>${esc(csv.codeDisplay||csv.code||'')}</td>
+                <td>${esc(csv.productName||'')}</td>
+                <td>${esc(csv.size||'')}</td>
+                <td><button type="button" class="quiet" data-pl-row-include="${r.rowNo}" data-pl-row-include-key="${esc(stableRowKeyFromRow(r))}" ${st.busy?'disabled':''}>登録対象に戻す</button></td>
+              </tr>`
+            }).join('')||'<tr><td colspan="7">登録しない行はありません。</td></tr>'}
+          </tbody></table></div>
+        </div>`:`<p class="excelhint sku-section-collapsed-hint">折りたたみ中。登録しない ${excludedRowList.length} 行（開いても他の選択・入力は消えません）。</p>`}
+      </section>
+    </div>`
+  }
+
+  function rowExcludeActionsHtml(st,r){
+    if(!r||isOpeningMode(st))return ''
+    const excluded=isRowExcluded(st,r)
+    if(excluded){
+      return `<div class="pl-row-exclude-actions" data-pl-row-exclude-box="${r.rowNo}">
+        <p class="excelhint">この行は今回の商品登録対象から外しています（削除ではありません）。</p>
+        <button type="button" class="quiet" data-pl-row-include="${r.rowNo}" ${st.busy?'disabled':''}>登録対象に戻す</button>
+      </div>`
+    }
+    const peers=sameContentRows(st,r).filter(x=>!isRowExcluded(st,x))
+    const multi=peers.length>1
+    const peerHint=multi
+      ?`<details class="pl-same-content-detail"><summary>同じ内容の対象を確認（${peers.length}行）</summary>
+          <ul class="excelhint">${peers.map(p=>{
+            const c=p.csv||{}
+            return `<li>行${p.rowNo}　サイズ ${esc(c.size||'—')}　顧客 ${esc(c.customer||'—')}　原文 ${esc(c.productName||'—')}　仕入先 ${esc(c.supplier||'—')}</li>`
+          }).join('')}</ul>
+          <button type="button" class="quiet" data-pl-row-exclude-same="${r.rowNo}" ${st.busy?'disabled':''}>同じ内容の${peers.length}行を登録しない</button>
+          <p class="excelhint">個別の「この行を登録しない」とは別操作です。加工名未定＋同じ業者だけではまとめません。</p>
+        </details>`
+      :''
+    return `<div class="pl-row-exclude-actions" data-pl-row-exclude-box="${r.rowNo}">
+      <button type="button" class="quiet" data-pl-row-exclude="${r.rowNo}" ${st.busy?'disabled':''}>この行を登録しない</button>
+      ${peerHint}
+      <p class="excelhint">取り込み対象から外します（元CSV・登録済みデータは消しません）。</p>
     </div>`
   }
 
@@ -1525,6 +1707,8 @@
     }
     if(r.skuDecisionNeeded)bits.push('<span class="excelhint">↑品番比較で決定</span>')
     if(r.matchGroupCount>1)bits.push(`<span class="excelhint">同品番 ${r.matchGroupCount}行</span>`)
+    // 区分の下へ「この行を登録しない」（削除ではない）
+    bits.push(rowExcludeActionsHtml(st,r))
     return bits.join(' ')
   }
 
@@ -2216,13 +2400,17 @@
         <td>${esc(place.siteName||'')}${place.shelfName?` / ${esc(place.shelfName)}`:''}${place.usedDefaultSite?' <span class="excelhint">(空→未確認)</span>':''}</td>
         <td class="num">${p.unitCost!=null?esc(String(p.unitCost)):'—'}</td>
         <td>${stock.exists!=null?`現在 ${esc(String(stock.currentQty))}`:'—'}</td>
-        <td>${esc((p.reasons||[]).join(' '))}${qtyCheck}</td>
+        <td>${esc((p.reasons||[]).join(' '))}${p.productRegistrationExcluded?` <span class="badge">${esc(p.productRegistrationExcludedLabel||'商品登録時に除外した項目')}</span>`:''}${qtyCheck}</td>
       </tr>`
     }).join('')
     const more=(os.plans||[]).length>60?`<p class="excelhint">先頭60件を表示（全 ${(os.plans||[]).length} 件）。絞り込みは今後拡張予定。</p>`:''
+    const exclHint=((os.plans||[]).some(p=>p.productRegistrationExcluded))
+      ?'<p class="excelhint">「商品登録時に除外した項目」は表示のみです。初期在庫数量を自動では外しません。登録先が無い行は確認対象のままです。</p>'
+      :''
     return `<section class="product-ledger-opening-preview">
       <h3>初期在庫の登録予定</h3>
       <p class="notice">${esc(os.note||sum.note||'確認後に初期在庫を登録します。数量・新品中古・拠点・単価を確認してください。')}</p>
+      ${exclHint}
       <p><strong>${esc(countLine)}</strong></p>
       ${masterBits.length?`<p class="excelhint">${masterBits.join('　')}</p>`:''}
       <div class="legacy-csv-table-wrap"><table class="data sku-compare-table">
@@ -2518,8 +2706,9 @@
           <p><strong>${countLine(st.preview.countsRaw)}</strong>
            　確認リスト未解決 ${statusCounts?statusCounts.unresolved:0}件　確認事項 ${statusCounts?statusCounts.issueCount:0}
            　未承認 ${statusCounts?statusCounts.unapproved:0}
+           　登録しない ${statusCounts?statusCounts.rowExcluded:0}行
            　（参考: 行要確認 ${review} / 品番未決定 ${skuPending}）
-            ${registerBlocked?' — 未解決または未承認が残っているため登録できません。保留にすれば登録対象から外せます。':' — 確認リストの未解決が0で承認も完了しているため登録可能です。'}</p>
+            ${registerBlocked?' — 未解決または未承認が残っているため登録できません。保留または「この行を登録しない」で登録対象から外せます。':' — 確認リストの未解決が0で承認も完了しているため登録可能です。'}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
           ${skuGroupsHtml(st)}
@@ -2561,13 +2750,14 @@
     st.selections={}
     st.skuDecisions={}
     st.rowClassifications={}
+    st.rowExclusions={}
     st.makerLookup=null
     st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
     st.selectedCodes={}
     st.expandedCodes={}
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
-    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,rowExcluded:1,separate:1}
     st.expandedUnified={}
     st.skuQ='';st.skuReasonFilter='';st.skuPage=1
     st.page=1
@@ -2893,7 +3083,9 @@
         st.result=null
         st.progressLabel=''
         if(!isOpeningMode(st)){
-          // 自動提案をクライアント決定へ反映（手動は上書きしない）
+          // 除外判断を安定キーで付け直し（表示順変更・自動整理で別行へ飛ばない）
+          rebindExclusionsAfterPreview(st)
+          // 自動提案をクライアント決定へ反映（手動は上書きしない／除外を勝手に戻さない）
           ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
             if(skuDecision(st,g.code).decision==='merge')applyAuxDefaultsForMerge(st,g.code,g)
           })
@@ -3380,6 +3572,61 @@
         })
       }
     })
+    const findPreviewRowByNo=(rowNo)=>((st.preview&&st.preview.rows)||[]).find(r=>Number(r.rowNo)===Number(rowNo))
+    document.querySelectorAll('[data-pl-row-exclude]').forEach(el=>{
+      el.onclick=()=>{
+        if(st.busy)return
+        const row=findPreviewRowByNo(el.getAttribute('data-pl-row-exclude'))
+        if(!row){st.toast('対象行が見つかりません。');return}
+        setRowExcluded(st,row,true)
+        st.toast(`行 ${row.rowNo} を今回の登録対象から外しました（削除ではありません）`)
+        runPreview()
+      }
+    })
+    document.querySelectorAll('[data-pl-row-exclude-same]').forEach(el=>{
+      el.onclick=()=>{
+        if(st.busy)return
+        const row=findPreviewRowByNo(el.getAttribute('data-pl-row-exclude-same'))
+        if(!row){st.toast('対象行が見つかりません。');return}
+        const peers=sameContentRows(st,row)
+        if(peers.length<2){st.toast('同じ内容の複数行がありません。');return}
+        const lines=peers.slice(0,12).map(p=>{
+          const c=p.csv||{}
+          return `・行${p.rowNo} サイズ${c.size||'—'} 顧客${c.customer||'—'} ${c.productName||''}`
+        })
+        const more=peers.length>12?`\n…他 ${peers.length-12} 行`:''
+        const ok=confirm(
+          `同じ内容の ${peers.length} 行を今回の登録対象から外します（削除ではありません）。\n`+
+          `個別の「この行を登録しない」とは別操作です。\n\n${lines.join('\n')}${more}\n\nよろしいですか？`
+        )
+        if(!ok)return
+        peers.forEach(p=>setRowExcluded(st,p,true))
+        st.toast(`同じ内容の ${peers.length} 行を登録対象から外しました`)
+        runPreview()
+      }
+    })
+    document.querySelectorAll('[data-pl-row-include]').forEach(el=>{
+      el.onclick=()=>{
+        if(st.busy)return
+        const rowNo=el.getAttribute('data-pl-row-include')
+        const keyAttr=el.getAttribute('data-pl-row-include-key')
+        let row=findPreviewRowByNo(rowNo)
+        if(!row&&keyAttr&&st.rowExclusions[keyAttr]){
+          const ent=st.rowExclusions[keyAttr]
+          row={rowNo:ent.rowNo,csv:ent}
+        }
+        if(!row&&keyAttr){
+          delete st.rowExclusions[keyAttr]
+          st.toast('登録対象に戻しました')
+          runPreview()
+          return
+        }
+        if(!row){st.toast('対象行が見つかりません。');return}
+        setRowExcluded(st,row,false)
+        st.toast(`行 ${row.rowNo} を登録対象に戻しました（確認事項を再判定します）`)
+        runPreview()
+      }
+    })
     const commit=$('#plCommit')
     if(commit)commit.onclick=async()=>{
       const canWriteNow=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
@@ -3476,10 +3723,20 @@
       MODE_PRODUCTS,
       MODE_OPENING,
       AUX_JUDGMENT_ONLY_COPY,
+      USER_ROW_EXCLUDE_REASON,
       previewPayload,
       selectedCodeList,
       syncSkuSelectionUi,
-      ensureState
+      ensureState,
+      stableRowKeyFromCsv,
+      stableRowKeyFromRow,
+      isRowExcluded,
+      setRowExcluded,
+      sameContentKey,
+      sameContentRows,
+      listExcludedRows,
+      rebindExclusionsAfterPreview,
+      rowExcludeActionsHtml
     }
   }
 })()

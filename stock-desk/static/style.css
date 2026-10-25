@@ -728,7 +728,13 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 .sku-section-bulk{border-left:4px solid #3d7a55}
 .sku-section-auto{border-left:4px solid #5a6a62}
 .sku-section-hold{border-left:4px solid #8a7355}
+.sku-section-row-excluded{border-left:4px solid #6a7a8a;background:#f6f7f8}
 .sku-section-source-rows{border-left:4px solid #8a9094;background:#fafbfa}
+.pl-row-exclude-actions{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin-top:6px}
+.pl-row-exclude-actions .excelhint{margin:0}
+.pl-same-content-detail{margin-top:2px;max-width:100%}
+.pl-same-content-detail summary{cursor:pointer;font-weight:700}
+.unified-row-detail-card.is-row-excluded{opacity:.78;background:#f3f4f5}
 /* 統合リストは5列。8列用の .sku-compare-table 幅指定を上書きし、展開詳細でも列幅を維持 */
 .unified-review-table .sku-code{width:18%;min-width:6rem}
 .unified-review-table .sku-plan{width:28%;min-width:0}
