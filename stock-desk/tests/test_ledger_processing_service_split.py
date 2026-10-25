@@ -52,12 +52,48 @@ def tiny_opening(rows):
 
 class ProcessingServiceUnitTest(unittest.TestCase):
     def test_unify_embroidery_aliases(self):
+        # 一般統一（非エルムス経路）は従来どおり「刺繍加工」
         self.assertEqual(ps.unify_processing_service_name('刺繍'), '刺繍加工')
         self.assertEqual(ps.unify_processing_service_name('刺繍入れ'), '刺繍加工')
         self.assertEqual(
             ps.unify_processing_service_name('コックコート七分袖加工／七分袖加工'),
             '七分袖加工',
         )
+
+    def test_elms_force_embroidery_regardless_of_name_or_code(self):
+        """エルムス行は品番・商品名にかかわらず加工名「刺繍」。他業者へは適用しない。"""
+        cases = [
+            ('(有)エルムスコーポレーション', '刺繍', ''),
+            ('㈲エルムスコーポレーション', '刺繍入れ', '刺繍'),
+            ('エルムス', '', ''),
+            ('有限会社エルムスコーポレーション', 'エプロン', 'A-1'),
+            ('(有)エルムスコーポレーション', 'ポロシャツ袖', ''),
+            ('エルムスコーポレーション', 'サンプル2型', 'S-2'),
+            ('(有)エルムスコーポレーション', 'ワッペン作製', '刺繍入れ'),
+        ]
+        for supplier, name, code in cases:
+            r = ps.classify_processing_service_row(
+                supplier=supplier, product_name=name, code=code,
+            )
+            self.assertTrue(r['elmsEmbroideryRule'], msg=(supplier, name, code))
+            self.assertTrue(r['isProcessingService'], msg=(supplier, name, code))
+            self.assertTrue(r['identifiable'], msg=(supplier, name, code))
+            self.assertFalse(r['needsConfirm'], msg=(supplier, name, code))
+            self.assertEqual(r['serviceName'], '刺繍')
+            self.assertEqual(r['displayName'], '刺繍')
+            self.assertEqual(r['vendorName'], '(有)エルムスコーポレーション')
+        # 他業者の衣服名は加工サービス化しない
+        other = ps.classify_processing_service_row(
+            supplier='某メーカー', product_name='エプロン', code='',
+        )
+        self.assertFalse(other['isProcessingService'])
+        self.assertFalse(other['elmsEmbroideryRule'])
+        # K2 の不明名は従来どおり要確認（エルムス強制を流用しない）
+        k2 = ps.classify_processing_service_row(
+            supplier='K2スタッフ工房', product_name='エプロン', code='',
+        )
+        self.assertTrue(k2['needsConfirm'])
+        self.assertFalse(k2.get('elmsEmbroideryRule'))
 
     def test_pocket_attach_without_kako_char(self):
         """『加工』文字がなくてもポケット取付は認識。表記差は同一名へ。"""
@@ -192,14 +228,25 @@ class ProcessingServiceImportTest(unittest.TestCase):
             plans = preview.get('processingServicePlans') or []
             auto = [p for p in plans if p.get('autoRegister')]
             self.assertEqual(len(auto), 1)
-            self.assertEqual(auto[0]['serviceName'], '刺繍加工')
+            self.assertEqual(auto[0]['serviceName'], '刺繍')
+            self.assertEqual(auto[0]['displayName'], '刺繍')
             self.assertEqual(auto[0]['vendorName'], '(有)エルムスコーポレーション')
-            # 衣服種差・在庫0で個別確認に出さない
+            self.assertTrue(auto[0].get('elmsEmbroideryRule'))
+            # 衣服種差・在庫0・本体不明で確認待ちにしない
             for g in preview.get('skuGroups') or []:
-                if g.get('garmentBodyReviewOnly'):
-                    continue
+                self.assertFalse(g.get('garmentBodyReviewOnly'), msg=g.get('code'))
                 reasons = [r.get('code') for r in (g.get('reviewReasons') or [])]
                 self.assertNotIn('kind', reasons)
+                self.assertNotIn('garment_body_unknown', reasons)
+            for row in preview.get('rows') or []:
+                ps_info = row.get('processingService') or {}
+                if not ps_info.get('elmsEmbroideryRule'):
+                    continue
+                self.assertFalse(row.get('processingServiceNeedsConfirm'))
+                self.assertEqual(ps_info.get('serviceName'), '刺繍')
+                prov = row.get('specProvenance') or {}
+                self.assertEqual(prov.get('originalName'), (row.get('csv') or {}).get('productName'))
+                self.assertTrue(prov.get('hideOriginalNameAsAlias'))
 
             result = pli.commit_preview(c, {
                 'file': csv_b64(text), 'name': 'emb.csv',
@@ -212,7 +259,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertGreaterEqual(result['counts'].get('processingServicesCreated', 0), 1)
             services = list(c.execute(
                 "SELECT id,code,name,category,supplier_id FROM products WHERE category=? AND name=?",
-                (stock.CATEGORY_PARTS, '刺繍加工'),
+                (stock.CATEGORY_PARTS, '刺繍'),
             ))
             self.assertEqual(len(services), 1)
             self.assertEqual(services[0]['code'], '')
@@ -231,9 +278,17 @@ class ProcessingServiceImportTest(unittest.TestCase):
             c.commit()
             services2 = list(c.execute(
                 "SELECT id FROM products WHERE category=? AND name=?",
-                (stock.CATEGORY_PARTS, '刺繍加工'),
+                (stock.CATEGORY_PARTS, '刺繍'),
             ))
             self.assertEqual(len(services2), 1)
+            # 旧名称「刺繍加工」の残骸も増やさない
+            self.assertEqual(
+                c.execute(
+                    "SELECT COUNT(*) AS n FROM products WHERE category=? AND name=?",
+                    (stock.CATEGORY_PARTS, '刺繍加工'),
+                ).fetchone()['n'],
+                0,
+            )
         finally:
             c.close()
             folder.cleanup()
@@ -334,6 +389,8 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertEqual(len(plans), 2)
             keys = {p['dedupeKey'] for p in plans}
             self.assertEqual(len(keys), 2)
+            elms = next(p for p in plans if 'エルムス' in (p.get('vendorName') or ''))
+            self.assertEqual(elms['serviceName'], '刺繍')
             pli.commit_preview(c, {
                 'file': csv_b64(text), 'name': 'vend.csv',
                 'previewFingerprint': preview['previewFingerprint'],
@@ -347,6 +404,147 @@ class ProcessingServiceImportTest(unittest.TestCase):
                 (stock.CATEGORY_PARTS,),
             ).fetchone()['n']
             self.assertEqual(n, 2)
+            elms_prod = c.execute(
+                "SELECT name FROM products WHERE category=? AND name=?",
+                (stock.CATEGORY_PARTS, '刺繍'),
+            ).fetchone()
+            self.assertIsNotNone(elms_prod)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_elms_varied_names_one_service_keeps_provenance(self):
+        """複数顧客・衣服名・空品番でも刺繍1件。元情報は provenance に保持。"""
+        folder, path, c = newdb()
+        try:
+            text = ledger(
+                '顧客A,㈲エルムスコーポレーション,,エプロン,',
+                '顧客B,(有)エルムスコーポレーション,刺繍,ポロシャツ袖,M',
+                '顧客C,エルムス,刺繍入れ,サンプル2型,L',
+                '顧客A,有限会社エルムスコーポレーション,,ワッペン作製,',
+                '顧客D,某メーカー,X-9,別物シャツ,M',
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'elms-var.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auto = [
+                p for p in (preview.get('processingServicePlans') or [])
+                if p.get('autoRegister')
+            ]
+            elms_plans = [p for p in auto if p.get('elmsEmbroideryRule')]
+            self.assertEqual(len(elms_plans), 1, msg=elms_plans)
+            self.assertEqual(elms_plans[0]['serviceName'], '刺繍')
+            self.assertEqual(elms_plans[0]['vendorName'], '(有)エルムスコーポレーション')
+            self.assertGreaterEqual(len(elms_plans[0].get('sourceRowNos') or []), 4)
+
+            elms_rows = [
+                r for r in (preview.get('rows') or [])
+                if (r.get('processingService') or {}).get('elmsEmbroideryRule')
+            ]
+            self.assertEqual(len(elms_rows), 4)
+            originals = {
+                (r.get('csv') or {}).get('productName') for r in elms_rows
+            }
+            self.assertEqual(
+                originals,
+                {'エプロン', 'ポロシャツ袖', 'サンプル2型', 'ワッペン作製'},
+            )
+            for r in elms_rows:
+                self.assertFalse(r.get('processingServiceNeedsConfirm'))
+                self.assertNotIn('加工名を特定できません', ' '.join(r.get('reasons') or []))
+                prov = r.get('specProvenance') or {}
+                self.assertEqual(prov.get('processingServiceName'), '刺繍')
+                self.assertEqual(prov.get('originalName'), (r.get('csv') or {}).get('productName'))
+                self.assertTrue(prov.get('targetCustomer'))
+
+            # 某メーカー行は加工サービス計画に混ざらない
+            for p in auto:
+                self.assertNotIn('某メーカー', p.get('vendorName') or '')
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'elms-var.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'ps-elms-var-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['counts'].get('failed', 0), 0)
+            services = list(c.execute(
+                "SELECT id,name,code FROM products WHERE category=? AND name=?",
+                (stock.CATEGORY_PARTS, '刺繍'),
+            ))
+            self.assertEqual(len(services), 1)
+            # マップに元名・顧客が残る
+            maps = list(c.execute(
+                '''SELECT csv_customer,csv_product_name,csv_product_code,spec_json
+                   FROM product_ledger_row_maps
+                   WHERE csv_supplier LIKE '%エルムス%' OR csv_supplier='エルムス' '''
+            ))
+            self.assertGreaterEqual(len(maps), 4)
+            for m in maps:
+                spec = json.loads(m['spec_json'] or '{}')
+                self.assertEqual(spec.get('processingServiceName'), '刺繍')
+                self.assertTrue(spec.get('originalName') or m['csv_product_name'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_elms_reuses_existing_embroidery_kako_alias(self):
+        """既存「刺繍加工」＋エルムスは同一サービスとして再利用し表示を「刺繍」へ。"""
+        folder, path, c = newdb()
+        try:
+            # 事前に旧名称で登録
+            sup = stock.save_supplier(c, {
+                'name': '(有)エルムスコーポレーション', 'active': True,
+            })
+            sid = sup['id'] if isinstance(sup, dict) else int(sup)
+            old = stock.save_product(c, {
+                'code': '',
+                'name': '刺繍加工',
+                'color': '',
+                'category': stock.CATEGORY_PARTS,
+                'supplierId': sid,
+                'sizes': ['—'],
+                'links': [],
+                'active': True,
+            })
+            old_id = old['id'] if isinstance(old, dict) else int(old)
+            c.commit()
+
+            text = ledger(
+                '顧客A,エルムス,,刺繍入れ,',
+                '顧客B,㈲エルムスコーポレーション,,エプロン,',
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'elms-reuse.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            auto = [
+                p for p in (preview.get('processingServicePlans') or [])
+                if p.get('autoRegister')
+            ]
+            self.assertEqual(len(auto), 1)
+            self.assertEqual(auto[0]['action'], 'reuse')
+            self.assertEqual(int(auto[0]['productId']), old_id)
+            self.assertEqual(auto[0]['serviceName'], '刺繍')
+
+            pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'elms-reuse.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'ps-elms-reuse-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            rows = list(c.execute(
+                "SELECT id,name FROM products WHERE category=? AND supplier_id=?",
+                (stock.CATEGORY_PARTS, sid),
+            ))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['id'], old_id)
+            self.assertEqual(rows[0]['name'], '刺繍')
         finally:
             c.close()
             folder.cleanup()
