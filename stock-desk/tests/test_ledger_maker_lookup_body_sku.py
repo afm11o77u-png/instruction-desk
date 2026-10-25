@@ -78,7 +78,7 @@ class BodySkuMatchHelpersTest(unittest.TestCase):
             'APK100-1',
             sku_verified=True,
         )
-        self.assertIn('／', colorway['color'])
+        self.assertIn('×', colorway['color'])
         self.assertEqual(colorway['size'], '')
         self.assertIn('ブラック', colorway['color'])
         self.assertIn('ワイン', colorway['color'])

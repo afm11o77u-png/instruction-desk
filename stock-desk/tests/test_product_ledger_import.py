@@ -4152,10 +4152,10 @@ class SlashColorwayClassificationTest(unittest.TestCase):
     def test_half_and_full_slash_paren_colorway(self):
         import product_ledger_paren as pp
         for original, color in (
-            ('エプロン（黒／ワイン）', 'ブラック／ワイン'),
-            ('エプロン（黒/ワイン）', 'ブラック／ワイン'),
-            ('ブルゾン（紺/白/赤）', 'ネイビー／ホワイト／レッド'),
-            ('ブルゾン（紺／白／赤）', 'ネイビー／ホワイト／レッド'),
+            ('エプロン（黒／ワイン）', 'ブラック×ワイン'),
+            ('エプロン（黒/ワイン）', 'ブラック×ワイン'),
+            ('ブルゾン（紺/白/赤）', 'ネイビー×ホワイト×レッド'),
+            ('ブルゾン（紺／白／赤）', 'ネイビー×ホワイト×レッド'),
         ):
             with self.subTest(original=original):
                 r = pp.split_name_and_color(original)
@@ -4173,12 +4173,12 @@ class SlashColorwayClassificationTest(unittest.TestCase):
         r = pp.split_name_and_color('ブルゾン 紺 / 白 / 赤')
         self.assertFalse(r['needsConfirm'], r)
         self.assertEqual(r['plannedName'], 'ブルゾン')
-        self.assertEqual(r['color'], 'ネイビー／ホワイト／レッド')
+        self.assertEqual(r['color'], 'ネイビー×ホワイト×レッド')
 
         kana = pp.split_name_and_color('エプロン（黒 / ﾜｲﾝ）')
         self.assertFalse(kana['needsConfirm'], kana)
         self.assertEqual(kana['plannedName'], 'エプロン')
-        self.assertEqual(kana['color'], 'ブラック／ワイン')
+        self.assertEqual(kana['color'], 'ブラック×ワイン')
 
     def test_mixed_non_color_does_not_force_colorway(self):
         import product_ledger_paren as pp
@@ -4235,18 +4235,18 @@ class SlashColorwayClassificationTest(unittest.TestCase):
             self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
             self.assertEqual(g.get('reviewTier'), 'auto')
             self.assertEqual(g.get('plannedRegisteredName'), 'エプロン')
-            self.assertEqual(g.get('plannedRegisteredColor'), 'ブラック／ワイン')
+            self.assertEqual(g.get('plannedRegisteredColor'), 'ブラック×ワイン')
             by_no = {r['rowNo']: r for r in preview['rows']}
             notices = []
             for r in by_no.values():
                 if (r.get('csv') or {}).get('code') != 'SL-100':
                     continue
                 pc = r.get('parenClassification') or {}
-                self.assertEqual(pc.get('color'), 'ブラック／ワイン')
+                self.assertEqual(pc.get('color'), 'ブラック×ワイン')
                 self.assertEqual(pc.get('plannedName'), 'エプロン')
                 notices.extend(pc.get('infoNotices') or [])
             self.assertTrue(
-                any('配色として1商品で登録：ブラック／ワイン' in n for n in notices),
+                any('配色として1商品で登録：ブラック×ワイン' in n for n in notices),
                 notices,
             )
 
@@ -4267,7 +4267,7 @@ class SlashColorwayClassificationTest(unittest.TestCase):
             ).fetchall()
             self.assertEqual(len(products), 1)
             self.assertEqual(products[0]['name'], 'エプロン')
-            self.assertEqual(products[0]['color'], 'ブラック／ワイン')
+            self.assertEqual(products[0]['color'], 'ブラック×ワイン')
             aliases = {
                 r['value'] for r in c.execute(
                     "SELECT value FROM product_match_aliases "
@@ -4288,7 +4288,7 @@ class SlashColorwayClassificationTest(unittest.TestCase):
             })
             g2 = next(x for x in preview2['skuGroups'] if x['code'] == 'SL-100')
             self.assertEqual(g2.get('plannedRegisteredName'), 'エプロン')
-            self.assertEqual(g2.get('plannedRegisteredColor'), 'ブラック／ワイン')
+            self.assertEqual(g2.get('plannedRegisteredColor'), 'ブラック×ワイン')
             result2 = pli.commit_preview(c, {
                 'file': csv_b64_from_text(ledger), 'name': 'sl.csv',
                 'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
@@ -4405,7 +4405,7 @@ class SlashColorwayClassificationTest(unittest.TestCase):
                     continue
                 pc = r.get('parenClassification') or {}
                 self.assertFalse(pc.get('needsConfirm'), pc)
-                self.assertEqual(pc.get('color'), 'ブラック／ワイン')
+                self.assertEqual(pc.get('color'), 'ブラック×ワイン')
                 pc_notices.extend(pc.get('infoNotices') or [])
             self.assertTrue(
                 any('配色として1商品で登録' in n for n in pc_notices),
@@ -4448,12 +4448,12 @@ class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
     def test_halfwidth_slash_colorway_same_as_fullwidth(self):
         import product_ledger_paren as pp
         cases = (
-            ('エプロン(ﾁｬｺｰﾙ/ｸﾞﾚｰ)', 'エプロン', 'チャコール／グレー'),
-            ('エプロン(チャコール/グレー)', 'エプロン', 'チャコール／グレー'),
-            ('エプロン(ﾌﾞﾗｳﾝ/ﾍﾞｰｼﾞｭ)', 'エプロン', 'ブラウン／ベージュ'),
-            ('エプロン(ブラウン/ベージュ)', 'エプロン', 'ブラウン／ベージュ'),
-            ('エプロン（ﾁｬｺｰﾙ／ｸﾞﾚｰ）', 'エプロン', 'チャコール／グレー'),
-            ('ブルゾン(紺/白/赤)', 'ブルゾン', 'ネイビー／ホワイト／レッド'),
+            ('エプロン(ﾁｬｺｰﾙ/ｸﾞﾚｰ)', 'エプロン', 'チャコール×グレー'),
+            ('エプロン(チャコール/グレー)', 'エプロン', 'チャコール×グレー'),
+            ('エプロン(ﾌﾞﾗｳﾝ/ﾍﾞｰｼﾞｭ)', 'エプロン', 'ブラウン×ベージュ'),
+            ('エプロン(ブラウン/ベージュ)', 'エプロン', 'ブラウン×ベージュ'),
+            ('エプロン（ﾁｬｺｰﾙ／ｸﾞﾚｰ）', 'エプロン', 'チャコール×グレー'),
+            ('ブルゾン(紺/白/赤)', 'ブルゾン', 'ネイビー×ホワイト×レッド'),
         )
         for original, name, color in cases:
             with self.subTest(original=original):
@@ -4481,10 +4481,10 @@ class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
         hits = pp.find_explicit_colors_in_text(raw)
         self.assertEqual(len(hits), 1, hits)
         self.assertTrue(hits[0].get('isColorway'), hits)
-        self.assertEqual(hits[0]['value'], 'チャコール／グレー')
+        self.assertEqual(hits[0]['value'], 'チャコール×グレー')
         pure = pp._classify_as_pure_color_span(raw)
         self.assertIsNotNone(pure)
-        self.assertEqual(pure['value'], 'チャコール／グレー')
+        self.assertEqual(pure['value'], 'チャコール×グレー')
 
     def test_name_without_slash_still_unifies(self):
         import product_ledger_paren as pp
@@ -4534,7 +4534,7 @@ class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
             })
             g = next(x for x in preview['skuGroups'] if x['code'] == 'HW-100')
             self.assertEqual(g.get('plannedRegisteredName'), 'エプロン')
-            self.assertEqual(g.get('plannedRegisteredColor'), 'チャコール／グレー')
+            self.assertEqual(g.get('plannedRegisteredColor'), 'チャコール×グレー')
             by_no = {r['rowNo']: r for r in preview['rows']}
             notices = []
             for r in by_no.values():
@@ -4543,10 +4543,10 @@ class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
                 pc = r.get('parenClassification') or {}
                 self.assertFalse(pc.get('needsConfirm'), pc)
                 self.assertEqual(pc.get('plannedName'), 'エプロン')
-                self.assertEqual(pc.get('color'), 'チャコール／グレー')
+                self.assertEqual(pc.get('color'), 'チャコール×グレー')
                 notices.extend(pc.get('infoNotices') or [])
             self.assertTrue(
-                any('配色として1商品で登録：チャコール／グレー' in n for n in notices),
+                any('配色として1商品で登録：チャコール×グレー' in n for n in notices),
                 notices,
             )
             # 半角行の原文は残る
@@ -4572,7 +4572,7 @@ class HalfwidthKanaColorwayUnifyTest(unittest.TestCase):
             ).fetchall()
             self.assertEqual(len(products), 1)
             self.assertEqual(products[0]['name'], 'エプロン')
-            self.assertEqual(products[0]['color'], 'チャコール／グレー')
+            self.assertEqual(products[0]['color'], 'チャコール×グレー')
             aliases = {
                 r['value'] for r in c.execute(
                     "SELECT value FROM product_match_aliases "
@@ -4861,7 +4861,7 @@ class ColorSynonymUnifyTest(unittest.TestCase):
         """#185 スラッシュ配色・#187 LEOC スコープ補正は維持。"""
         import product_ledger_paren as pp
         slash = pp.split_name_and_color('エプロン（黒／ワイン）')
-        self.assertEqual(slash['color'], 'ブラック／ワイン')
+        self.assertEqual(slash['color'], 'ブラック×ワイン')
         self.assertEqual(slash['plannedName'], 'エプロン')
         folder, path, c = newdb()
         try:
@@ -4921,7 +4921,7 @@ class ColorNameKanaUnifyTest(unittest.TestCase):
         self.assertFalse(pp.colors_equivalent('グリーン', '蛍光グリーン'))
         # 配色の成分は欠落させず代表へ
         way = pp.split_name_and_color('エプロン（黒／ワイン）')
-        self.assertEqual(way['color'], 'ブラック／ワイン')
+        self.assertEqual(way['color'], 'ブラック×ワイン')
         self.assertEqual(way['plannedName'], 'エプロン')
 
     def test_notation_only_does_not_block_review(self):
@@ -5033,6 +5033,254 @@ class ColorNameKanaUnifyTest(unittest.TestCase):
                 self.assertEqual((p.get('target') or {}).get('color'), 'ホワイト', p)
             self.assertEqual(qty_by_size, {'M': 2, 'L': 3, 'LL': 4, 'S': 1})
             self.assertEqual(sum(qty_by_size.values()), 10)
+        finally:
+            c.close()
+            folder.cleanup()
+
+
+class ColorwaySeparatorUnifyTest(unittest.TestCase):
+    """配色区切り（/／×✕*＊）を × へ共通統一。テストDBのみ・本番未変更。"""
+
+    CODE = 'BW6501-1'
+
+    def test_separator_variants_same_colorway(self):
+        import product_ledger_paren as pp
+        variants = (
+            '白／黒',
+            '白/黒',
+            '白×黒',
+            '白✕黒',
+            '白*黒',
+            '白＊黒',
+            'ﾎﾜｲﾄ*ﾌﾞﾗｯｸ',
+            'ホワイト×ブラック',
+        )
+        for raw in variants:
+            with self.subTest(raw=raw):
+                self.assertTrue(pp.looks_like_colorway_text(raw), raw)
+                self.assertEqual(pp.normalize_color_value(raw), 'ホワイト×ブラック')
+                self.assertTrue(pp.colors_equivalent(raw, 'ホワイト×ブラック'))
+        # 3色・順序維持
+        self.assertEqual(
+            pp.normalize_color_value('紺／白／赤'),
+            'ネイビー×ホワイト×レッド',
+        )
+        self.assertEqual(
+            pp.normalize_color_value('赤／白／紺'),
+            'レッド×ホワイト×ネイビー',
+        )
+        self.assertFalse(
+            pp.colors_equivalent('紺／白／赤', '赤／白／紺'),
+            '配色順序を入れ替えない',
+        )
+
+    def test_color_plus_size_or_processing_not_colorway(self):
+        import product_ledger_paren as pp
+        self.assertFalse(pp.looks_like_colorway_text('ホワイト／フリー'))
+        self.assertFalse(pp.looks_like_colorway_text('ホワイト／刺繍'))
+        self.assertEqual(pp.normalize_color_value('ホワイト／フリー'), 'ホワイト／フリー')
+        self.assertEqual(pp.normalize_color_value('ホワイト／刺繍'), 'ホワイト／刺繍')
+        # 名比較キーでも色+非色の区切りは触らない
+        self.assertIn('／', pp.normalize_name_for_color_compare('エプロン ホワイト／フリー'))
+        self.assertNotIn('×', pp.normalize_name_for_color_compare('エプロン ホワイト／刺繍'))
+
+    def test_leading_used_mark_distinct_from_colorway_star(self):
+        import product_ledger_paren as pp
+        r = pp.split_name_and_color('＊コックコート 白＊黒')
+        self.assertFalse(r['needsConfirm'], r)
+        self.assertEqual(r['plannedName'], '＊コックコート')
+        self.assertEqual(r['color'], 'ホワイト×ブラック')
+        # 比較キーは中古標記を除き配色を統一
+        self.assertEqual(
+            pp.normalize_name_for_color_compare('＊コックコート 白／黒'),
+            pp.normalize_name_for_color_compare('コックコート 白×黒'),
+        )
+
+    def test_bw6501_1_preview_one_product_no_review(self):
+        """品番 BW6501-1: 白／黒 と 白×黒 は1商品。表記差だけの確認待ちにしない。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                f'顧客A,仕入A,{self.CODE},コックコート 白／黒,M',
+                f'顧客A,仕入A,{self.CODE},コックコート 白×黒,L',
+                f'顧客B,仕入A,{self.CODE},コックコート ﾎﾜｲﾄ*ﾌﾞﾗｯｸ,LL',
+            ])
+            # 在庫情報なしでも区切り差だけでまとまる
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'bw6501.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            reason_codes = {r.get('code') for r in (g.get('reviewReasons') or [])}
+            self.assertNotIn('color', reason_codes)
+            self.assertNotIn('name_wording', reason_codes)
+            self.assertEqual(
+                g.get('plannedRegisteredName')
+                or (g.get('auxPrimary') or {}).get('plannedRegisteredName'),
+                'コックコート',
+            )
+            self.assertEqual(
+                g.get('plannedRegisteredColor')
+                or g.get('plannedColor')
+                or (g.get('auxPrimary') or {}).get('plannedRegisteredColor'),
+                'ホワイト×ブラック',
+            )
+            # 商品名に配色を残さない
+            for row in preview['rows']:
+                if (row.get('csv') or {}).get('code') != self.CODE:
+                    continue
+                pc = row.get('parenClassification') or {}
+                self.assertEqual(pc.get('plannedName'), 'コックコート', row)
+                self.assertEqual(pc.get('color'), 'ホワイト×ブラック', row)
+                self.assertNotIn('白', pc.get('plannedName') or '')
+                self.assertNotIn('黒', pc.get('plannedName') or '')
+            self.assertEqual(stock_snap(c), before)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_bw6501_1_register_and_opening_map(self):
+        """登録色は ×。旧表記の初期在庫CSVも同一商品へ照合。"""
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                f'顧客A,仕入A,{self.CODE},コックコート 白／黒,M',
+                f'顧客A,仕入A,{self.CODE},コックコート 白×黒,L',
+            ])
+            aux = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', 'コックコート 白／黒',
+                    self.CODE, 'M', '3',
+                ),
+                opening_line(
+                    '仕入A', '顧客A', 'コックコート 白×黒',
+                    self.CODE, 'L', '2',
+                ),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'bw.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertEqual(g.get('plannedRegisteredColor'), 'ホワイト×ブラック')
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'bw.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-bw6501-sep-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            products = c.execute(
+                "SELECT id,name,color FROM products "
+                "WHERE code=? AND merged_into_id IS NULL",
+                (self.CODE,),
+            ).fetchall()
+            self.assertEqual(len(products), 1, products)
+            self.assertEqual(products[0]['name'], 'コックコート')
+            self.assertEqual(products[0]['color'], 'ホワイト×ブラック')
+            pid = products[0]['id']
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases "
+                    "WHERE kind='name' AND product_id=?",
+                    (pid,),
+                )
+            }
+            self.assertTrue(
+                any('白／黒' in a or '白×黒' in a for a in aliases),
+                aliases,
+            )
+            maps = list(c.execute(
+                'SELECT csv_product_name,csv_color,product_id,spec_json '
+                'FROM product_ledger_row_maps WHERE csv_product_code=?',
+                (self.CODE,),
+            ))
+            self.assertGreaterEqual(len(maps), 2, maps)
+            for m in maps:
+                self.assertEqual(m['product_id'], pid)
+                self.assertEqual(m['csv_color'], 'ホワイト×ブラック')
+                spec = m['spec_json'] or ''
+                self.assertIn('sourceName', spec)
+
+            opening = pli.build_preview(c, {
+                'importMode': 'opening_stock',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'o2.csv',
+                'basisDate': '2024-04-01',
+                'defaultSiteName': '未確認',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = (opening.get('openingStock') or {}).get('plans') or []
+            self.assertTrue((opening.get('openingStock') or {}).get('fromPersistedMap'))
+            qty_by_size = {}
+            for p in plans:
+                size = (p.get('csv') or {}).get('size') or ''
+                q = p.get('qty')
+                if q is None and isinstance(p.get('opening'), dict):
+                    q = p['opening'].get('qty')
+                self.assertIsNotNone(q, p)
+                qty_by_size[size] = int(q)
+                tgt = p.get('target') or {}
+                self.assertEqual(tgt.get('productId'), pid, p)
+                self.assertEqual(tgt.get('color'), 'ホワイト×ブラック', p)
+            self.assertEqual(qty_by_size, {'M': 3, 'L': 2})
+            self.assertEqual(sum(qty_by_size.values()), 5)
+
+            # 後日の旧表記のみCSVでも同一商品へ
+            aux_old = tiny_opening_rows([
+                opening_line(
+                    '仕入A', '顧客A', 'コックコート 白／黒',
+                    self.CODE, 'M', '7',
+                ),
+            ])
+            opening2 = pli.build_preview(c, {
+                'importMode': 'opening_stock',
+                'auxFile': csv_b64_from_text(aux_old), 'auxName': 'o3.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans2 = (opening2.get('openingStock') or {}).get('plans') or []
+            self.assertEqual(len(plans2), 1, plans2)
+            self.assertEqual((plans2[0].get('target') or {}).get('productId'), pid)
+            self.assertEqual(
+                (plans2[0].get('mapResolve') or {}).get('status'),
+                'ok',
+                plans2[0],
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_manual_color_split_not_overridden(self):
+        folder, path, c = newdb()
+        try:
+            ledger = tiny_ledger_rows([
+                f'顧客A,仕入A,{self.CODE},コックコート 白／黒,M',
+                f'顧客A,仕入A,{self.CODE},コックコート 白×黒,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(ledger), 'name': 'split.csv',
+                'skuDecisions': {self.CODE: {'decision': 'color_split'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == self.CODE)
+            self.assertTrue(
+                g.get('colorSplit')
+                or (g.get('decision') or {}).get('decision') == 'color_split'
+            )
+            self.assertTrue(
+                g.get('excludeAuxStockAutoMerge')
+                or g.get('auxStockPickManualOverride')
+                or (g.get('decision') or {}).get('decision') == 'color_split'
+            )
         finally:
             c.close()
             folder.cleanup()

@@ -254,14 +254,12 @@ def synonym_canonical_token(token):
     return t
 
 
-_COLORWAY_SEP_IN_NAME_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
-
-
 def product_name_core_key(name):
     """通常品番の商品名照合キー。
 
     先頭中古標記・空白種類・全角半角（NFKC）・パンツ一般『丈加工』・
-    明示名シノニム・配色区切り（*／＊／×）・明示色辞書（別名→代表）だけを吸収する。
+    明示名シノニム・配色区切り（/／×✕*＊→×、色要素確認時のみ）・
+    明示色辞書（別名→代表）だけを吸収する。
     類似度だけでは寄せない。原文の表記は保存側で保持する（キーは照合専用）。
     """
     core, _ = strip_used_marker(name)
@@ -274,9 +272,10 @@ def product_name_core_key(name):
         pass
     core = apply_name_synonyms(core)
     if core:
-        core = _COLORWAY_SEP_IN_NAME_RE.sub('×', core)
         try:
             import product_ledger_paren as paren_classify
+            # 共有規則: 配色区切り統一（色+サイズ等は触らない）＋色辞書
+            core = paren_classify.unify_known_colorway_seps_in_text(core)
             core = paren_classify.apply_color_synonyms_in_text(core)
         except Exception:
             pass
