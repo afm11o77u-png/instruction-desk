@@ -453,28 +453,30 @@
       issues.push({
         type:'processing_name',
         label:'加工名の確認',
-        detail:(ps.missingFields||[]).join('・')||pc.processingMissingHint||''
+        detail:(ps.missingFields||[]).join('・')||pc.processingMissingHint||'',
+        fieldKey:'procName'
       })
     }else if(pc.needsConfirm||r.parenNeedsConfirm){
       issues.push({
         type:'paren_confirm',
         label:'括弧分類・メーカー補正候補の確認',
-        detail:(r.reasons||[]).join(' ')
+        detail:(r.reasons||[]).join(' '),
+        fieldKey:'name'
       })
     }
     if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length&&!r.skuDecisionNeeded){
-      issues.push({type:'product_pick',label:'商品の選択',detail:''})
+      issues.push({type:'product_pick',label:'商品の選択',detail:'',fieldKey:'name'})
     }
     if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
-      issues.push({type:'handle_pick',label:'取扱の選択',detail:''})
+      issues.push({type:'handle_pick',label:'取扱の選択',detail:'',fieldKey:'supplier'})
     }
     if(r.status==='needs_review'&&r.product&&r.product.blankSku){
-      issues.push({type:'category',label:'区分の確認',detail:''})
+      issues.push({type:'category',label:'区分の確認',detail:'',fieldKey:'sku'})
     }
     if(r.status==='needs_review'&&!issues.length){
       const labs=(r.reasons||[]).filter(Boolean)
       ;(labs.length?labs:['要確認']).forEach(lab=>{
-        issues.push({type:'generic',label:String(lab),detail:''})
+        issues.push({type:'generic',label:String(lab),detail:'',fieldKey:''})
       })
     }
     return issues.map(iss=>Object.assign({},iss,{resolved:rowIssueResolved(st,r,iss)}))
@@ -536,9 +538,10 @@
         label:r.label||'要確認',
         detail:(r.values||[]).join(' / '),
         values:r.values||[],
+        fieldKey:planFieldKeyForReason(r.code||''),
         resolved:false
       }))
-      const issues=reasons.length?reasons:[{type:'sku_reason',label:'個別確認',detail:'',resolved:false}]
+      const issues=reasons.length?reasons:[{type:'sku_reason',label:'個別確認',detail:'',fieldKey:'',resolved:false}]
       items.push({
         id:`sku:${g.code}`,
         kind:'sku',
@@ -673,6 +676,7 @@
   function judgmentStatusBarHtml(st){
     const c=judgmentStatusCounts(st)
     return `<div class="sku-judgment-status-bar" data-sku-status-counts>
+      <p class="notice sku-preregister-banner"><strong>登録確定前の確認画面です。</strong>「自動決定済み」「手動確定済み」は登録予定の状態であり、台帳への保存済みではありません。最終の「確認して商品を登録」まで商品・在庫は変わりません。</p>
       <p class="excelhint"><strong>登録前の件数:</strong>
         未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}
       </p>
@@ -1281,8 +1285,8 @@
         <option value="">選択…</option>${colorOpts}
       </select></label>
     </div>`).join('')
-    return `<div class="sku-color-split-form">
-      <p class="excelhint">${esc(split.note||'色ごとに別商品として登録予定です。まだ保存していません。確認・編集のうえ最終登録してください。')}</p>
+    return `<div class="sku-color-split-form" data-plan-edit="color">
+      <p class="excelhint">${esc(split.note||'色ごとに別商品として登録予定です。まだ保存していません。確認・編集のうえ最終登録してください。統合用の仮代表名は使いません。')}</p>
       <p class="excelhint">メーカー品番は元の「${esc(g.code)}」のまま（先頭ゼロも維持）。社内管理品番の初期値は「品番-色」です。緑と蛍光グリーンは別色です。</p>
       ${planCards||'<p class="notice">色候補をまだ作れません。商品名の色を確認するか、行き先を指定してください。</p>'}
       ${unCards?`<div class="sku-color-unassigned-list"><h4>行き先未定の行</h4>${unCards}</div>`:''}
@@ -1395,10 +1399,10 @@
         ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
           ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
-          <label>公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
-          <label>代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
-          <label>色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}" ${st.busy?'disabled':''}></label>
-          <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
+          <label data-plan-edit="name">公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
+          <label data-plan-edit="name">代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
+          <label data-plan-edit="color">色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}" ${st.busy?'disabled':''}></label>
+          <label data-plan-edit="supplier">通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
           ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は自動設定: ${esc(plannedSupplierDisplay(st,g))}</p>`:'')}
           <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定色: ${esc(d.color||g.plannedRegisteredColor||g.plannedColor||'（空）')}　予定通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</p>
           <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
@@ -1441,14 +1445,10 @@
       const checked=!!st.selectedCodes[g.code]
       const expanded=!!st.expandedCodes[g.code]
       const tier=g.reviewTier||'individual'
-      const plannedName=plannedNameForGroup(st,g)
       const isColorSplit=decision==='color_split'
-      const provisional=!isColorSplit&&!(d.officialName)&&(g.namePlan&&g.namePlan.provisional||g.provisionalName)
       const stateLabel=decision?decisionLabel(decision):(tier==='bulk'?'未承認（一括承認候補）':(TIER_LABELS[tier]||g.reviewTierLabel||'未決定'))
-      const colorPlanBits=isColorSplit?(g.colorSplitPlans&&g.colorSplitPlans.plans||[]).map(p=>{
-        const rows=(p.rowNos||[]).length?`行${(p.rowNos||[]).join(',')}`:''
-        return `${esc(p.productName||'—')}／色 ${esc(p.color||'—')}${rows?`（${rows}）`:''}`
-      }):[]
+      // 統合リストと同じ項目別状態表示（色別中も仮代表名を確定値に見せない）
+      const planItem={kind:'sku',code:g.code,targetLabel:g.codeDisplay||g.code,group:g,rows:[],rowNos:g.rowNos||[],issues:[]}
       return `<tr class="sku-list-row sku-tier-${esc(tier)} ${decision?`sku-dec-${esc(decision)}`:''}" data-sku-code="${esc(g.code)}" data-sku-section="${esc(section)}" data-review-tier="${esc(tier)}" data-decision="${esc(decision||'')}">
         <td class="sku-check" data-label="選択"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
         <td class="sku-code" data-label="品番"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(g.codeDisplay||g.code)}</button>
@@ -1458,16 +1458,10 @@
         <td class="sku-other" data-label="色・加工など">${otherDiffsCell(g)}</td>
         <td class="sku-why" data-label="要確認理由">${reasonCell(g)}</td>
         <td class="sku-plan" data-label="予定の代表名・通常仕入先">
-          <div><strong>${esc(plannedName||'—')}</strong>${provisional?' <span class="badge">名称未整理</span>':''}</div>
-          ${isColorSplit&&colorPlanBits.length?`<div class="sub">${colorPlanBits.join(' ／ ')}</div>`:''}
-          ${isColorSplit&&g.colorSplitPlans&&(g.colorSplitPlans.unassignedRows||[]).length?`<div class="sub notice">行き先未定 ${g.colorSplitPlans.unassignedRows.length} 行</div>`:''}
-          ${showApproveHint&&!decision?`<div class="sub">採用理由: ${(g.reviewReasons||[]).map(r=>esc(r.label||'')).filter(Boolean).join('／')||'名差・仕入先差のみ'}</div>
-          <div class="sub">登録予定: ${esc(plannedName||'—')} / 通常仕入先 ${esc(plannedSupplierDisplay(st,g))}</div>`:''}
-          ${!isColorSplit&&(g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||(d.color))?`<div class="sub">登録予定色: ${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}</div>`:''}
+          ${unifiedPlanHtml(st,planItem)}
+          ${showApproveHint&&!decision?`<div class="sub">採用理由: ${(g.reviewReasons||[]).map(r=>esc(r.label||'')).filter(Boolean).join('／')||'名差・仕入先差のみ'}</div>`:''}
           ${!isColorSplit&&(g.sourceAdoptedName||(g.auxPrimary&&g.auxPrimary.sourceAdoptedName))?`<div class="sub">ソース名: ${esc(g.sourceAdoptedName||g.auxPrimary.sourceAdoptedName)}</div>`:''}
           ${!isColorSplit&&(g.changeSummary||(g.auxPrimary&&g.auxPrimary.changeSummary))?`<div class="sub sku-color-change">${esc(g.changeSummary||g.auxPrimary.changeSummary)}</div>`:''}
-          <div class="sub">通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</div>
-          ${(g.nameAdoptionRule||(g.namePlan&&g.namePlan.adoptionRule))?`<div class="sub">${esc(isColorSplit?'色別に分けて登録':(g.nameAdoptionRule||g.namePlan.adoptionRule))}</div>`:''}
         </td>
         <td class="sku-action" data-label="操作">
           <div class="sku-action-label ${decision?`is-${esc(decision)}`:''}">${esc(stateLabel)}</div>
@@ -1518,27 +1512,469 @@
     return hay.includes(q)
   }
 
+  const PLAN_STATUS={
+    AUTO:'自動決定済み',
+    MANUAL:'手動確定済み',
+    PROVISIONAL:'仮',
+    NEED_CHOICE:'選択が必要',
+    UNSET:'未設定',
+    NA:'該当なし'
+  }
+  const PLAN_FIELD_LABELS={
+    sku:'品番',
+    name:'商品名',
+    color:'色',
+    supplier:'仕入先',
+    processing:'必要な加工・仕様',
+    procName:'加工名',
+    procVendor:'加工業者',
+    procSpec:'補足／個別仕様'
+  }
+
+  function planFieldKeyForReason(code){
+    const c=String(code||'')
+    if(c==='color')return 'color'
+    if(c==='name_wording'||c==='existing_dup'||c==='compare')return 'name'
+    if(c==='supplier')return 'supplier'
+    if(c==='processing'||c==='kind'||c==='gender'||c==='fabric')return 'processing'
+    return ''
+  }
+
+  function planFieldKeyForIssue(issue){
+    if(!issue)return ''
+    if(issue.fieldKey)return issue.fieldKey
+    if(issue.type==='sku_reason')return planFieldKeyForReason(issue.code||'')
+    if(issue.type==='processing_name')return 'procName'
+    if(issue.type==='paren_confirm')return 'name'
+    if(issue.type==='product_pick')return 'name'
+    if(issue.type==='handle_pick')return 'supplier'
+    if(issue.type==='category')return 'sku'
+    return ''
+  }
+
+  function planStatusUnsettled(status){
+    return status===PLAN_STATUS.PROVISIONAL
+      ||status===PLAN_STATUS.NEED_CHOICE
+      ||status===PLAN_STATUS.UNSET
+  }
+
+  function makePlanField(key,value,status,opts){
+    opts=opts||{}
+    const v=(value==null||value==='')?'':String(value)
+    return {
+      key,
+      label:PLAN_FIELD_LABELS[key]||key,
+      value:v,
+      status:status||'',
+      unsettled:planStatusUnsettled(status),
+      hint:opts.hint||'',
+      editHint:opts.editHint||''
+    }
+  }
+
+  function uniqueNonEmpty(values){
+    const out=[]
+    ;(values||[]).forEach(v=>{
+      const t=String(v==null?'':v).trim()
+      if(t&&!out.includes(t))out.push(t)
+    })
+    return out
+  }
+
+  function sharedVariantProductName(g){
+    const names=uniqueNonEmpty((g.variants||[]).map(v=>v.productName||v.productNameBase||''))
+    if(names.length===1)return names[0]
+    const planName=String((g.productPlan&&g.productPlan.productName)||'').trim()
+    if(planName)return planName
+    return ''
+  }
+
+  function variantColors(g){
+    return uniqueNonEmpty((g.variants||[]).map(v=>v.color||''))
+  }
+
+  function variantProcessings(g){
+    return uniqueNonEmpty((g.variants||[]).map(v=>v.processing||''))
+  }
+
+  function hasReasonCode(g,code){
+    return (g.reviewReasons||[]).some(r=>(r.code||'')===code)
+  }
+
+  function skuNamePlanField(st,g,d){
+    const aux=g.auxPrimary||{}
+    const namePlan=g.namePlan||{}
+    if(d.officialName){
+      return makePlanField('name',d.officialName,PLAN_STATUS.MANUAL,{editHint:'詳細の代表名'})
+    }
+    const adopted=String(g.plannedRegisteredName||aux.plannedRegisteredName||'').trim()
+    if(adopted&&!aux.officialNameNeedsChoice&&!namePlan.provisional){
+      return makePlanField('name',adopted,PLAN_STATUS.AUTO,{
+        hint:g.nameAdoptionRule||aux.nameAdoptionRule||namePlan.adoptionRule||'',
+        editHint:'詳細の代表名'
+      })
+    }
+    const shared=sharedVariantProductName(g)
+    const colorOpen=!!(g.colorDiffPossible||hasReasonCode(g,'color'))
+    const nameOpen=!!(
+      namePlan.provisional
+      ||g.provisionalName
+      ||aux.officialNameNeedsChoice
+      ||aux.pairNeedsChoice
+      ||g.nameWordingDiff
+      ||hasReasonCode(g,'name_wording')
+    )
+    // 色差があり共通ベース名だけ取れるときは、仮の「スクラブ ブルー」を確定値に見せない
+    if(shared&&(colorOpen||nameOpen||!adopted)){
+      if(colorOpen&&!g.nameWordingDiff){
+        return makePlanField('name',shared,PLAN_STATUS.PROVISIONAL,{
+          hint:'共通部分',
+          editHint:'詳細の代表名／色別登録'
+        })
+      }
+      if(g.nameWordingDiff&&!shared){
+        const cands=uniqueNonEmpty(g.nameCandidates||[]).join('／')
+        return makePlanField('name',cands||'—',PLAN_STATUS.NEED_CHOICE,{
+          hint:'候補から選択',
+          editHint:'詳細の公式商品名'
+        })
+      }
+      if(namePlan.provisional||g.provisionalName||aux.officialNameNeedsChoice){
+        return makePlanField('name',shared||namePlan.officialName||g.plannedOfficialName||'—',PLAN_STATUS.PROVISIONAL,{
+          hint:shared?'共通部分':'仮代表名',
+          editHint:'詳細の代表名'
+        })
+      }
+      if(shared){
+        return makePlanField('name',shared,PLAN_STATUS.AUTO,{
+          hint:namePlan.adoptionRule||g.nameAdoptionRule||'共通部分',
+          editHint:'詳細の代表名'
+        })
+      }
+    }
+    if(g.nameWordingDiff||aux.officialNameNeedsChoice||aux.pairNeedsChoice){
+      const cands=uniqueNonEmpty([
+        ...(g.nameCandidates||[]),
+        ...((g.variants||[]).map(v=>v.productName||''))
+      ]).join('／')
+      return makePlanField('name',cands||namePlan.officialName||'—',PLAN_STATUS.NEED_CHOICE,{
+        hint:'候補から選択',
+        editHint:'詳細の公式商品名'
+      })
+    }
+    if(namePlan.provisional||g.provisionalName){
+      return makePlanField('name',namePlan.officialName||g.plannedOfficialName||'—',PLAN_STATUS.PROVISIONAL,{
+        hint:'仮代表名',
+        editHint:'詳細の代表名'
+      })
+    }
+    const fallback=namePlan.officialName||g.plannedOfficialName||g.plannedRegisteredName||shared||''
+    if(!fallback){
+      return makePlanField('name','',PLAN_STATUS.UNSET,{editHint:'詳細の代表名'})
+    }
+    const autoRule=namePlan.adoptionRuleCode||aux.nameAdoptionRuleCode||''
+    const auto=autoRule&&autoRule!=='csv_row_order'&&autoRule!=='fallback_code'
+    return makePlanField('name',fallback,auto?PLAN_STATUS.AUTO:PLAN_STATUS.PROVISIONAL,{
+      hint:namePlan.adoptionRule||g.nameAdoptionRule||'',
+      editHint:'詳細の代表名'
+    })
+  }
+
+  function skuColorPlanField(st,g,d){
+    const aux=g.auxPrimary||{}
+    if(d.color){
+      return makePlanField('color',d.color,PLAN_STATUS.MANUAL,{editHint:'詳細の色'})
+    }
+    const adopted=String(
+      g.plannedRegisteredColor||g.plannedColor||aux.plannedRegisteredColor||aux.adoptedColor||''
+    ).trim()
+    const colors=variantColors(g)
+    const colorOpen=!!(g.colorDiffPossible||hasReasonCode(g,'color'))
+    if(colorOpen){
+      return makePlanField('color',colors.join('／')||(g.reviewReasons||[])
+        .filter(r=>r.code==='color')
+        .flatMap(r=>r.values||[])
+        .join('／')||'—',PLAN_STATUS.NEED_CHOICE,{
+        hint:colors.length>1?'候補':'色の確認',
+        editHint:'詳細の色／色別に分けて登録'
+      })
+    }
+    if(adopted){
+      return makePlanField('color',adopted,PLAN_STATUS.AUTO,{editHint:'詳細の色'})
+    }
+    if(colors.length===1){
+      return makePlanField('color',colors[0],PLAN_STATUS.AUTO,{editHint:'詳細の色'})
+    }
+    if(colors.length>1){
+      return makePlanField('color',colors.join('／'),PLAN_STATUS.NEED_CHOICE,{
+        editHint:'詳細の色／色別に分けて登録'
+      })
+    }
+    // 色情報なし＝この商品では色欄が不要（情報不足の未設定と区別）
+    return makePlanField('color','',PLAN_STATUS.NA)
+  }
+
+  function skuSupplierPlanField(st,g,d){
+    const aux=g.auxPrimary||{}
+    const value=plannedSupplierForGroup(st,g)
+    const reason=plannedSupplierReasonForGroup(st,g)
+    if(d.primarySupplierManual&&d.primarySupplier){
+      return makePlanField('supplier',d.primarySupplier,PLAN_STATUS.MANUAL,{
+        hint:'手動選択',
+        editHint:'詳細の通常仕入先'
+      })
+    }
+    if(g.supplierDiff||hasReasonCode(g,'supplier')||aux.needsManualPrimary){
+      const cands=uniqueNonEmpty(g.supplierCandidates||[]).join('／')
+      return makePlanField('supplier',value||cands||'',value?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.NEED_CHOICE,{
+        hint:aux.manualReason||(cands?'候補から選択':''),
+        editHint:'詳細の通常仕入先'
+      })
+    }
+    if(value){
+      const auto=!!(
+        aux.singleCandidateAuto
+        ||aux.autoPrimarySupplier
+        ||g.auxStockPickAuto
+        ||reason
+      )
+      return makePlanField('supplier',value,auto?PLAN_STATUS.AUTO:PLAN_STATUS.MANUAL,{
+        hint:reason||aux.autoReason||'',
+        editHint:'詳細の通常仕入先'
+      })
+    }
+    const cands=uniqueNonEmpty(g.supplierCandidates||[])
+    if(cands.length){
+      return makePlanField('supplier',cands.join('／'),PLAN_STATUS.NEED_CHOICE,{
+        editHint:'詳細の通常仕入先'
+      })
+    }
+    return makePlanField('supplier','',PLAN_STATUS.UNSET,{
+      hint:'仕入先情報が不足',
+      editHint:'詳細の通常仕入先'
+    })
+  }
+
+  function skuProcessingPlanField(st,g,d){
+    const procs=variantProcessings(g)
+    if(g.processingDiffPossible||hasReasonCode(g,'processing')){
+      return makePlanField('processing',procs.join('／')||'—',PLAN_STATUS.NEED_CHOICE,{
+        editHint:'詳細の色・加工など'
+      })
+    }
+    if(procs.length===1){
+      return makePlanField('processing',procs[0],PLAN_STATUS.AUTO)
+    }
+    if(procs.length>1){
+      return makePlanField('processing',procs.join('／'),PLAN_STATUS.NEED_CHOICE,{
+        editHint:'詳細'
+      })
+    }
+    return makePlanField('processing','',PLAN_STATUS.NA)
+  }
+
+  function colorSplitPlanFields(st,g,d){
+    const fields=[]
+    fields.push(makePlanField('sku',g.codeDisplay||g.code||'',PLAN_STATUS.AUTO,{hint:'色別登録中'}))
+    const split=g.colorSplitPlans||{}
+    const plans=split.plans||[]
+    const unassigned=split.unassignedRows||[]
+    if(!plans.length){
+      fields.push(makePlanField('name','',PLAN_STATUS.NEED_CHOICE,{
+        hint:'色別の登録先未作成',
+        editHint:'詳細の色別に分けて登録'
+      }))
+      fields.push(makePlanField('color','',PLAN_STATUS.NEED_CHOICE,{editHint:'詳細の色別に分けて登録'}))
+    }else{
+      // 統合用の仮代表名は出さない。色ごとの予定だけを並べる
+      const nameBits=plans.map(p=>{
+        const edited=d.colorPlans&&d.colorPlans[p.colorKey]
+        const name=(edited&&edited.productName!=null&&edited.productName!=='')?edited.productName:(p.productName||'')
+        return `${name||'—'}（${p.color||'?'}）`
+      })
+      const anyManualName=plans.some(p=>{
+        const edited=d.colorPlans&&d.colorPlans[p.colorKey]
+        return edited&&edited.productName!=null&&String(edited.productName)!==''&&String(edited.productName)!==String(p.productName||'')
+      })
+      const nameStatus=unassigned.length||!split.complete
+        ?PLAN_STATUS.NEED_CHOICE
+        :(anyManualName?PLAN_STATUS.MANUAL:PLAN_STATUS.AUTO)
+      fields.push(makePlanField('name',nameBits.join('／'),nameStatus,{
+        hint:'色別の各登録予定',
+        editHint:'詳細の色別フォーム'
+      }))
+      const colorBits=plans.map(p=>p.color||'').filter(Boolean)
+      const collision=plans.some(p=>p.needsCollisionChoice)
+      const colorStatus=(unassigned.length||collision||!split.complete)
+        ?PLAN_STATUS.NEED_CHOICE
+        :PLAN_STATUS.AUTO
+      fields.push(makePlanField('color',colorBits.join('／'),colorStatus,{
+        hint:unassigned.length?`行き先未定 ${unassigned.length} 行`:(collision?'品番衝突の解消が必要':''),
+        editHint:'詳細の色別フォーム'
+      }))
+    }
+    fields.push(skuSupplierPlanField(st,g,d))
+    fields.push(skuProcessingPlanField(st,g,d))
+    return fields
+  }
+
+  function skuPlannedStatusFields(st,item){
+    const g=item.group
+    if(!g)return []
+    const d=skuDecision(st,g.code)
+    if((d.decision||'')==='color_split'){
+      return colorSplitPlanFields(st,g,d)
+    }
+    return [
+      makePlanField('sku',g.codeDisplay||g.code||item.targetLabel||'',PLAN_STATUS.AUTO),
+      skuNamePlanField(st,g,d),
+      skuColorPlanField(st,g,d),
+      skuSupplierPlanField(st,g,d),
+      skuProcessingPlanField(st,g,d)
+    ]
+  }
+
+  function processingPlannedStatusFields(st,item){
+    const rows=item.rows||[]
+    const sample=rows[0]||{}
+    const csv=sample.csv||{}
+    const ps=sample.processingService||{}
+    const pc=sample.parenClassification||{}
+    const edit=(st.rowClassifications&&st.rowClassifications[String(sample.rowNo)])||{}
+    const name=String(edit.processing!=null?edit.processing:(edit.plannedName!=null?edit.plannedName:(ps.serviceName||pc.processing||''))).trim()
+    const vendor=String(ps.vendorName||csv.supplier||item.plannedSupplier||'').trim()
+    const supplement=String(
+      edit.supplement!=null?edit.supplement:(pc.supplement||sample.plannedRegisteredSupplement||'')
+    ).trim()
+    const specBits=uniqueNonEmpty((rows||[]).flatMap(r=>{
+      const raw=(r.processingService&&r.processingService.rowSpecs)||[]
+      const list=Array.isArray(raw)?raw:(raw&&typeof raw==='object'?[raw]:[])
+      return list.map(x=>[
+        x.customerSpecific,x.position,x.dimensions,x.composition,x.originalName
+      ].filter(Boolean).join(' / '))
+    }))
+    const specText=supplement||specBits.slice(0,3).join('／')
+    const needsName=!!(ps.needsConfirm||pc.needsConfirm||!name)
+    const nameManual=edit.processing!=null||(edit.plannedName!=null&&edit.userEdited)
+    const nameStatus=nameManual
+      ?PLAN_STATUS.MANUAL
+      :(needsName?(name?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.UNSET):(name?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET))
+    const vendorStatus=vendor
+      ?(edit.vendor!=null?PLAN_STATUS.MANUAL:PLAN_STATUS.AUTO)
+      :PLAN_STATUS.UNSET
+    let specStatus=PLAN_STATUS.NA
+    if(specText)specStatus=edit.supplement!=null?PLAN_STATUS.MANUAL:PLAN_STATUS.AUTO
+    else if(ps.missingFields&&ps.missingFields.length)specStatus=PLAN_STATUS.UNSET
+    return [
+      makePlanField('procName',name,nameStatus,{editHint:'詳細の加工名'}),
+      makePlanField('procVendor',vendor,vendorStatus,{editHint:'詳細'}),
+      makePlanField('procSpec',specText,specStatus,{
+        hint:specBits.length>3?'他は詳細へ':'',
+        editHint:'詳細の補足／個別仕様'
+      })
+    ]
+  }
+
+  function rowPlannedStatusFields(st,item){
+    const rows=item.rows||[]
+    const sample=rows[0]||{}
+    const csv=sample.csv||{}
+    const pc=sample.parenClassification||{}
+    const edit=(st.rowClassifications&&st.rowClassifications[String(sample.rowNo)])||{}
+    const code=item.code||csv.code||''
+    const name=edit.plannedName!=null?edit.plannedName:(pc.plannedName||csv.productName||item.plannedName||'')
+    const color=edit.color!=null?edit.color:(pc.color||item.plannedColor||'')
+    const supplier=csv.supplier||item.plannedSupplier||''
+    const nameNeed=!!(pc.needsConfirm||sample.parenNeedsConfirm||(item.issues||[]).some(i=>!i.resolved&&(i.type==='paren_confirm'||i.type==='product_pick')))
+    const colorCands=uniqueNonEmpty(pc.colorCandidates||[])
+    const colorNeed=colorCands.length>1||!!(pc.needsConfirm&&!color&&colorCands.length)
+    const fields=[]
+    if(code){
+      fields.push(makePlanField('sku',csv.codeDisplay||code,PLAN_STATUS.AUTO))
+    }
+    fields.push(makePlanField(
+      'name',
+      name||(nameNeed?(uniqueNonEmpty(pc.nameCandidates||[csv.productName]).join('／')):''),
+      edit.plannedName!=null?PLAN_STATUS.MANUAL:(nameNeed?PLAN_STATUS.NEED_CHOICE:(name?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
+      {editHint:'詳細の予定名'}
+    ))
+    if(colorNeed||color||colorCands.length){
+      fields.push(makePlanField(
+        'color',
+        color||colorCands.join('／'),
+        edit.color!=null?PLAN_STATUS.MANUAL:(colorNeed||colorCands.length>1?PLAN_STATUS.NEED_CHOICE:(color?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
+        {editHint:'詳細の色'}
+      ))
+    }else{
+      fields.push(makePlanField('color','',PLAN_STATUS.NA))
+    }
+    fields.push(makePlanField(
+      'supplier',
+      supplier,
+      supplier?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET,
+      {hint:supplier?'':'仕入先情報が不足'}
+    ))
+    fields.push(makePlanField('processing','',PLAN_STATUS.NA))
+    return fields
+  }
+
+  function buildPlannedStatusFields(st,item){
+    if(!item)return []
+    if(item.kind==='sku')return skuPlannedStatusFields(st,item)
+    if(item.kind==='processing')return processingPlannedStatusFields(st,item)
+    return rowPlannedStatusFields(st,item)
+  }
+
+  function planFieldStatusClass(status){
+    if(status===PLAN_STATUS.NEED_CHOICE)return 'is-need-choice'
+    if(status===PLAN_STATUS.PROVISIONAL)return 'is-provisional'
+    if(status===PLAN_STATUS.UNSET)return 'is-unset'
+    if(status===PLAN_STATUS.AUTO)return 'is-auto'
+    if(status===PLAN_STATUS.MANUAL)return 'is-manual'
+    if(status===PLAN_STATUS.NA)return 'is-na'
+    return ''
+  }
+
+  function renderPlanFieldHtml(field){
+    const status=field.status||''
+    const cls=['sku-plan-field',planFieldStatusClass(status)]
+    if(field.unsettled)cls.push('is-unsettled')
+    const valueText=field.value||'—'
+    const statusBit=status?`<span class="sku-plan-status">【${esc(status)}】</span>`:''
+    const hintBit=field.hint?`<span class="sku-plan-hint">（${esc(field.hint)}）</span>`:''
+    const editBit=(field.unsettled&&field.editHint)
+      ?`<span class="sku-plan-edit-hint">${esc(field.editHint)}</span>`:''
+    return `<div class="${cls.join(' ')}" data-plan-field="${esc(field.key)}">
+      <span class="sku-plan-label">${esc(field.label)}</span>
+      <span class="sku-plan-main">
+        <span class="sku-plan-value">${esc(valueText)}</span>
+        ${statusBit}${hintBit}${editBit}
+      </span>
+    </div>`
+  }
+
   function unifiedIssuesHtml(item){
     const open=(item.issues||[]).filter(i=>!i.resolved)
     if(!open.length)return '<span class="sub">—</span>'
     return `<ul class="sku-reason-list unified-issue-list">${open.map(i=>{
+      const fieldKey=planFieldKeyForIssue(i)
+      const fieldLab=fieldKey?(PLAN_FIELD_LABELS[fieldKey]||fieldKey):''
       const det=i.detail?`（${esc(i.detail)}）`:''
-      return `<li>${esc(i.label||'')}${det}</li>`
+      const mapBit=fieldLab?`<span class="unified-issue-field">→ ${esc(fieldLab)}</span>`:''
+      return `<li data-issue-field="${esc(fieldKey||'')}">${esc(i.label||'')}${det}${mapBit}</li>`
     }).join('')}</ul>`
   }
 
-  function unifiedPlanHtml(item){
-    const bits=[]
-    bits.push(`<div><strong>${esc(item.plannedName||'—')}</strong></div>`)
-    if(item.plannedColor)bits.push(`<div class="sub">色: ${esc(item.plannedColor)}</div>`)
-    if(item.plannedSupplier)bits.push(`<div class="sub">${item.kind==='processing'?'加工業者':'仕入先'}: ${esc(item.plannedSupplier)}</div>`)
-    if(item.kind==='sku'&&item.group&&item.group.nameAdoptionRule){
-      bits.push(`<div class="sub">${esc(item.group.nameAdoptionRule)}</div>`)
+  function unifiedPlanHtml(st,item){
+    const fields=buildPlannedStatusFields(st,item)
+    if(!fields.length){
+      return `<div class="sku-plan-fields"><div class="sub">—</div></div>`
     }
-    if((item.rowNos||[]).length){
-      bits.push(`<div class="sub">CSV行 ${(item.rowNos||[]).slice(0,8).join(',')}${(item.rowNos||[]).length>8?'…':''}</div>`)
-    }
-    return bits.join('')
+    const unsettled=fields.filter(f=>f.unsettled)
+    const head=unsettled.length
+      ?`<div class="sku-plan-summary is-unsettled">未確定 ${unsettled.length} 項目（登録確定前）</div>`
+      :`<div class="sku-plan-summary">予定は揃っています（まだ未登録）</div>`
+    return `<div class="sku-plan-fields">${head}${fields.map(renderPlanFieldHtml).join('')}</div>`
   }
 
   function unifiedRowDetailHtml(st,item){
@@ -1561,9 +1997,12 @@
         <p class="excelhint">${esc((r.reasons||[]).join(' ')||'')}</p>
       </div>`
     }).join('')
+    const rowNos=(item.rowNos||[]).length
+      ?`<p class="excelhint">元CSV行: ${(item.rowNos||[]).join(', ')}</p>`:''
     return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="${UNIFIED_REVIEW_COL_COUNT}">
       <div class="sku-detail-body">
-        <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。</p>
+        <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。登録予定の未確定項目は下の入力欄で選択・編集してください（まだ未登録）。</p>
+        ${rowNos}
         ${body}
       </div>
     </td></tr>`
@@ -1587,7 +2026,7 @@
           <td class="sku-check" data-label="選択"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
           <td class="sku-code" data-label="対象"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(item.targetLabel)}</button>
             <div class="sub">品番単位</div></td>
-          <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(item)}</td>
+          <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(st,item)}</td>
           <td class="sku-why" data-label="残っている確認事項">${unifiedIssuesHtml(item)}</td>
           <td class="sku-action" data-label="操作">
             <div class="sku-action-label">${esc(decision?decisionLabel(decision):'未決定')}</div>
@@ -1607,7 +2046,7 @@
         <td class="sku-check" data-label="選択"><span class="sub">—</span></td>
         <td class="sku-code" data-label="対象"><button type="button" class="linkish" data-pl-unified-expand="${esc(item.id)}">${esc(item.targetLabel)}</button>
           <div class="sub">${esc(kindLabel)}</div></td>
-        <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(item)}</td>
+        <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(st,item)}</td>
         <td class="sku-why" data-label="残っている確認事項">${unifiedIssuesHtml(item)}</td>
         <td class="sku-action" data-label="操作">
           <div class="sku-action-label">要確認</div>
@@ -1685,6 +2124,7 @@
 
     const unifiedBody=unifiedOpen?`<div class="sku-section-body">
       <p class="excelhint">1行＝登録・判断する対象（通常品番／色別の親品番／加工名＋業者／品番なし・別注・部品資材の識別単位）。同じ対象の複数確認は同じ行にまとめ、解決した項目だけ外します。下の元行一覧を別途確認する必要はありません。</p>
+      <p class="excelhint">「登録予定」は品番・商品名・色・仕入先・加工／仕様ごとの<strong>予定値と状態</strong>です。未確定だけを強調します。「自動決定済み／手動確定済み」も登録確定前の予定です。長い判定根拠や元CSV行番号は「詳細を開く」側で確認してください。</p>
       ${sectionPagerHtml('unified',unifiedSlice,unifiedAll.length)}
       ${unifiedCompareTableHtml(st,unifiedSlice.pageItems)}
       ${separateAll.length?`<div class="sku-subsection">
@@ -3922,6 +4362,12 @@
       processingUnifiedKey,
       unifiedListRowsHtml,
       unifiedRowDetailHtml,
+      unifiedPlanHtml,
+      unifiedIssuesHtml,
+      buildPlannedStatusFields,
+      plannedNameForGroup,
+      plannedSupplierForGroup,
+      PLAN_STATUS,
       skuRowDetailHtml,
       effectiveDecision,
       decisionLabel,

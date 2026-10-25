@@ -111,6 +111,15 @@ class UnifiedReviewListSourceTest(unittest.TestCase):
         self.assertIn('encodeURIComponent', js)
         self.assertIn('colspan:UNIFIED_REVIEW_COL_COUNT', js)
         self.assertIn('unified-review-table .sku-code', css)
+        # 登録予定の項目別状態表示
+        self.assertIn('buildPlannedStatusFields', js)
+        self.assertIn('unifiedPlanHtml', js)
+        self.assertIn('自動決定済み', js)
+        self.assertIn('選択が必要', js)
+        self.assertIn('登録確定前の確認画面です', js)
+        self.assertIn('sku-plan-field', css)
+        self.assertIn('is-need-choice', css)
+        self.assertIn('sku-preregister-banner', css)
 
 
 EXPAND_HARNESS = r'''
@@ -210,7 +219,7 @@ class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
                 '顧客A,仕入A,109-PCT,パンツ紺,L',
                 # エルムスは専用ルールで「刺繍」自動確定（要確認リストに出さない）
                 '顧客A,(有)エルムスコーポレーション,,謎の加工行,1',
-                # 加工名未定×2（K2・別の読めない名）。末尾「加工」だと自動確定されるため読めない名にする
+                # K2の加工名不明は自動除外（確認リストではなく「登録しない」側）
                 '顧客A,K2スタッフ工房,,不明XYZ,1',
                 '顧客A,K2スタッフ工房,,別の不明行,1',
                 # 品番なし部品（要確認になるよう括弧色など）
@@ -221,11 +230,37 @@ class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
                 '_canWrite': True, '_actor': {'name': 't'},
             })
             before_products = c.execute('select count(*) from products').fetchone()[0]
+            # 加工サービスの詳細開閉用に、要確認の加工行を合成（NULキー切れ回帰）
+            synth_proc = {
+                'rowNo': 9001,
+                'status': 'needs_review',
+                'skuDecisionNeeded': False,
+                'matchGroupKey': 'proc-synth',
+                'processingServiceView': True,
+                'csv': {
+                    'customer': '顧客A', 'code': '', 'productName': '',
+                    'size': '', 'supplier': '(有)エルムスコーポレーション',
+                },
+                'processingService': {
+                    'isProcessingVendor': True,
+                    'isProcessingService': True,
+                    'serviceName': '',
+                    'vendorName': '(有)エルムスコーポレーション',
+                    'needsConfirm': True,
+                    'missingFields': ['加工名'],
+                    'rowSpecs': {},
+                },
+                'parenClassification': {'processingServiceView': True, 'needsConfirm': True},
+                'reasons': ['加工名の確認'],
+                'product': {},
+                'handle': {},
+            }
+            rows = list(preview.get('rows') or []) + [synth_proc]
 
             st = {
                 'preview': {
                     'skuGroups': preview.get('skuGroups') or [],
-                    'rows': preview.get('rows') or [],
+                    'rows': rows,
                     'autoMergePlans': preview.get('autoMergePlans') or [],
                     'plannedCounts': preview.get('plannedCounts') or {},
                     'outcomeSummary': preview.get('outcomeSummary') or {},
@@ -277,28 +312,18 @@ class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
             self.assertEqual(len(elms_plans), 1)
             self.assertEqual(elms_plans[0].get('serviceName'), '刺繍')
 
-            # 加工名未定の K2 行が統合リストに出る（同業者の未定名は1行に集約）
+            # 合成した加工要確認が統合リストに出る（K2不明は自動除外のためリスト外）
             proc_labs = out['procLabels']
             self.assertGreaterEqual(len(out['procIds']), 1, {
                 'kinds': list(zip(out['itemKinds'], out['itemLabels'])),
-                'rows': [
-                    {
-                        'status': r.get('status'),
-                        'code': (r.get('csv') or {}).get('code'),
-                        'name': (r.get('csv') or {}).get('productName'),
-                        'supplier': (r.get('csv') or {}).get('supplier'),
-                        'ps': r.get('processingService'),
-                        'view': r.get('processingServiceView'),
-                    }
-                    for r in (preview.get('rows') or [])
-                ],
+                'procIds': out['procIds'],
             })
             self.assertTrue(out['procExpandVisible'], {
                 'procIds': out['procIds'], 'labels': proc_labs,
             })
-            # エルムス自動確定分は要確認ラベルに出さない
-            self.assertFalse(any('エルムス' in lab for lab in proc_labs), proc_labs)
-            self.assertTrue(any('K2' in lab for lab in proc_labs), proc_labs)
+            # 実CSVのエルムス自動確定分は要確認ラベルに出さない。合成の要確認は業者名を含む
+            self.assertTrue(any('エルムス' in lab for lab in proc_labs), proc_labs)
+            self.assertFalse(any('K2' in lab for lab in proc_labs), proc_labs)
 
             self.assertTrue(out['allDetailColspan5'], out['detailColspans'])
             self.assertTrue(out['noColspan8InUnified'], {
@@ -466,6 +491,272 @@ class UnifiedReviewListAggregationTest(unittest.TestCase):
             self.assertFalse(out['after_all']['blocked'])
             self.assertEqual(out['after_all']['unresolved'], 0)
             self.assertEqual(out['after_all']['unapproved'], 0)
+        finally:
+            c.close()
+            folder.cleanup()
+
+
+PLAN_STATUS_HARNESS = r'''
+const fs = require('fs');
+const vm = require('vm');
+const jsPath = process.argv[2];
+const casesPath = process.argv[3];
+const code = fs.readFileSync(jsPath, 'utf8');
+const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
+const sandbox = {
+  window: {},
+  document: { getElementById() { return null; }, querySelector() { return null; }, querySelectorAll() { return []; } },
+  console,
+  CSS: { escape: (s) => String(s == null ? '' : s) },
+  esc: (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+  $: () => null,
+};
+vm.createContext(sandbox);
+vm.runInContext(code, sandbox);
+const api = sandbox.window.ProductLedgerCsv && sandbox.window.ProductLedgerCsv.__test;
+if (!api) { console.error('missing __test'); process.exit(2); }
+
+function fieldMap(fields) {
+  const out = {};
+  for (const f of fields || []) {
+    out[f.key] = { value: f.value, status: f.status, unsettled: !!f.unsettled, hint: f.hint || '' };
+  }
+  return out;
+}
+
+const out = {};
+for (const [name, st] of Object.entries(cases)) {
+  const items = api.buildUnifiedReviewItems(st);
+  let sku = items.find(i => i.kind === 'sku' && String(i.code) === '72-1226')
+    || items.find(i => i.kind === 'sku');
+  // 色別登録などは承認済み区分へ移るため、skuGroups から直接 item を組む
+  if (!sku || st.forceSkuFromGroup) {
+    const g = ((st.preview && st.preview.skuGroups) || []).find(x => String(x.code) === '72-1226');
+    if (g) {
+      sku = {
+        id: 'sku:' + g.code,
+        kind: 'sku',
+        code: g.code,
+        targetLabel: g.codeDisplay || g.code,
+        group: g,
+        rows: [],
+        rowNos: g.rowNos || [],
+        issues: (g.reviewReasons || []).map(r => ({
+          type: 'sku_reason', code: r.code || '', label: r.label || '',
+          detail: (r.values || []).join(' / '), fieldKey: r.code === 'color' ? 'color' : '',
+          resolved: false,
+        })),
+        unresolvedIssueCount: (g.reviewReasons || []).length || 1,
+      };
+    }
+  }
+  const proc = items.find(i => i.kind === 'processing') || (st.synthProcessingItem || null);
+  const fields = sku ? api.buildPlannedStatusFields(st, sku) : [];
+  const html = sku ? api.unifiedPlanHtml(st, sku) : '';
+  const issuesHtml = sku ? api.unifiedIssuesHtml(sku) : '';
+  const listHtml = api.unifiedListRowsHtml(st, items);
+  const approvedHtml = (() => {
+    const groups = ((st.preview && st.preview.skuGroups) || []).filter(g => {
+      const d = (st.skuDecisions && st.skuDecisions[g.code]) || {};
+      return (d.decision || '') === 'color_split' || (d.decision || '') === 'merge';
+    });
+    // skuListRowsHtml は __test に無いので unifiedPlanHtml で同等確認
+    return groups.map(g => api.unifiedPlanHtml(st, {
+      kind: 'sku', code: g.code, targetLabel: g.codeDisplay || g.code,
+      group: g, rows: [], rowNos: g.rowNos || [], issues: [],
+    })).join('\\n');
+  })();
+  const fmap = fieldMap(fields);
+  const procFields = proc ? api.buildPlannedStatusFields(st, proc) : [];
+  out[name] = {
+    itemIds: items.map(i => i.id),
+    skuId: sku && sku.id,
+    fieldKeys: fields.map(f => f.key),
+    fields: fmap,
+    html,
+    approvedHtml,
+    hasProvisionalBlueAsDecided: /スクラブ ブルー【自動決定済み】|スクラブ ブルー【手動確定済み】/.test(html + approvedHtml),
+    showsScrubCommon: /スクラブ/.test(html) && (fmap.name && fmap.name.value === 'スクラブ'),
+    showsColorNeed: !!(fmap.color && fmap.color.status === api.PLAN_STATUS.NEED_CHOICE),
+    showsSupplierAuto: !!(fmap.supplier && fmap.supplier.status === api.PLAN_STATUS.AUTO
+      && String(fmap.supplier.value || '').includes('モンブラン')),
+    showsProcessingNa: !!(fmap.processing && fmap.processing.status === api.PLAN_STATUS.NA),
+    issueMapsColor: /→ 色/.test(issuesHtml),
+    noCsvRowInPlan: !/CSV行/.test(html),
+    listHasPlanFields: /sku-plan-field/.test(listHtml + approvedHtml),
+    unsettledCount: fields.filter(f => f.unsettled).length,
+    allSettledWhileUnresolved: fields.length
+      ? fields.every(f => !f.unsettled) && ((sku && sku.unresolvedIssueCount) > 0)
+      : false,
+    procFieldKeys: procFields.map(f => f.key),
+    procHasGarmentSlots: procFields.some(f => ['sku', 'name', 'color', 'supplier'].includes(f.key)),
+    colorSplitHidesMergeProvisional: !!(fmap.name && !/色別登録：/.test(fmap.name.value || '')
+      && fmap.name.value !== 'スクラブ ブルー'),
+  };
+}
+process.stdout.write(JSON.stringify(out));
+'''
+
+
+class UnifiedPlannedStatusDisplayTest(unittest.TestCase):
+    """登録予定欄の項目別状態表示（表示層のみ。登録値は変えない）。"""
+
+    def _run(self, cases):
+        folder = tempfile.TemporaryDirectory()
+        try:
+            cases_path = Path(folder.name) / 'plan-cases.json'
+            harness_path = Path(folder.name) / 'plan-harness.js'
+            cases_path.write_text(json.dumps(cases, ensure_ascii=False), encoding='utf-8')
+            harness_path.write_text(PLAN_STATUS_HARNESS, encoding='utf-8')
+            proc = subprocess.run(
+                ['node', str(harness_path), str(JS), str(cases_path)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+            return json.loads(proc.stdout)
+        finally:
+            folder.cleanup()
+
+    def _preview_state(self, c, text, *, sku_decisions=None, row_classifications=None):
+        preview = pli.build_preview(c, {
+            'importMode': 'products',
+            'file': csv_b64_from_text(text),
+            'name': 'plan-status.csv',
+            'skuDecisions': sku_decisions or {},
+            'rowClassifications': row_classifications or {},
+            '_canWrite': True,
+            '_actor': {'name': 't'},
+        })
+        return {
+            'preview': {
+                'skuGroups': preview.get('skuGroups') or [],
+                'rows': preview.get('rows') or [],
+                'autoMergePlans': preview.get('autoMergePlans') or [],
+                'plannedCounts': preview.get('plannedCounts') or {},
+                'outcomeSummary': preview.get('outcomeSummary') or {},
+                'reviewCount': preview.get('reviewCount') or 0,
+                'processingServicePlans': preview.get('processingServicePlans') or [],
+            },
+            'skuDecisions': sku_decisions or {},
+            'rowClassifications': row_classifications or {},
+            'selections': {},
+            'selectedCodes': {},
+            'expandedCodes': {},
+            'expandedUnified': {},
+            'sectionOpen': {
+                'unified': True, 'individual': True, 'bulk': False,
+                'auto': False, 'hold': False, 'sourceRows': False,
+            },
+            'busy': False,
+        }
+
+    def test_scrub_72_1226_supplier_auto_color_needs_choice(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,住商モンブラン㈱,72-1226,スクラブ ブルー,M',
+                '顧客A,住商モンブラン㈱,72-1226,スクラブ ワイン,L',
+            ])
+            before = c.execute('select count(*) from products').fetchone()[0]
+            synth_proc = {
+                'id': 'proc:synth',
+                'kind': 'processing',
+                'targetLabel': '（加工名未定）／テスト加工店',
+                'plannedName': '',
+                'plannedSupplier': 'テスト加工店',
+                'plannedColor': '',
+                'issues': [{'type': 'processing_name', 'label': '加工名の確認', 'fieldKey': 'procName', 'resolved': False}],
+                'unresolvedIssueCount': 1,
+                'rows': [{
+                    'rowNo': 8001,
+                    'status': 'needs_review',
+                    'processingServiceView': True,
+                    'csv': {'supplier': 'テスト加工店', 'productName': '', 'code': ''},
+                    'processingService': {
+                        'serviceName': '', 'vendorName': 'テスト加工店',
+                        'needsConfirm': True, 'missingFields': ['加工名'], 'rowSpecs': {},
+                    },
+                    'parenClassification': {},
+                }],
+                'rowNos': [8001],
+                'code': '',
+            }
+            st = self._preview_state(c, text)
+            st['synthProcessingItem'] = synth_proc
+            st_split = self._preview_state(
+                c, text, sku_decisions={'72-1226': {'decision': 'color_split'}}
+            )
+            st_split['forceSkuFromGroup'] = True
+            st_manual = self._preview_state(
+                c, text,
+                sku_decisions={
+                    '72-1226': {
+                        'decision': 'merge',
+                        'officialName': 'スクラブ',
+                        'color': 'ワイン',
+                        'primarySupplier': '住商モンブラン㈱',
+                        'primarySupplierManual': True,
+                    }
+                },
+            )
+            st_manual['forceSkuFromGroup'] = True
+            out = self._run({
+                'undecided': st,
+                'color_split': st_split,
+                'manual_merge': st_manual,
+            })
+
+            u = out['undecided']
+            self.assertEqual(u['skuId'], 'sku:72-1226')
+            self.assertEqual(
+                u['fieldKeys'],
+                ['sku', 'name', 'color', 'supplier', 'processing'],
+            )
+            self.assertTrue(u['showsScrubCommon'], u['fields'])
+            self.assertNotEqual(u['fields']['name']['value'], 'スクラブ ブルー')
+            self.assertIn(u['fields']['name']['status'], ('仮', '自動決定済み'))
+            self.assertTrue(u['showsColorNeed'], u['fields'])
+            self.assertIn('ブルー', u['fields']['color']['value'])
+            self.assertIn('ワイン', u['fields']['color']['value'])
+            self.assertTrue(u['showsSupplierAuto'], u['fields'])
+            self.assertIn('候補が1社', u['fields']['supplier']['hint'] or '')
+            self.assertTrue(u['showsProcessingNa'], u['fields'])
+            self.assertFalse(u['hasProvisionalBlueAsDecided'], u['html'])
+            self.assertTrue(u['issueMapsColor'], u)
+            self.assertTrue(u['noCsvRowInPlan'], u['html'])
+            self.assertTrue(u['listHasPlanFields'])
+            self.assertGreater(u['unsettledCount'], 0)
+            self.assertFalse(u['allSettledWhileUnresolved'], u['fields'])
+            # 加工サービスは商品用スロットを並べない
+            self.assertEqual(
+                u['procFieldKeys'],
+                ['procName', 'procVendor', 'procSpec'],
+                u['procFieldKeys'],
+            )
+            self.assertFalse(u['procHasGarmentSlots'])
+
+            split = out['color_split']
+            self.assertIn('color', split['fields'], split['fields'])
+            self.assertIn('ブルー', split['fields']['color']['value'])
+            self.assertIn('ワイン', split['fields']['color']['value'])
+            # 統合用仮代表名（色別登録：…／スクラブ ブルー単体）を商品名確定値に見せない
+            self.assertNotEqual(split['fields']['name']['value'], 'スクラブ ブルー')
+            self.assertNotIn('色別登録：', split['fields']['name']['value'])
+            self.assertIn('（ブルー）', split['fields']['name']['value'] or '')
+            self.assertTrue(split['colorSplitHidesMergeProvisional'], split['fields'])
+            self.assertFalse(split['hasProvisionalBlueAsDecided'], split['html'])
+
+            manual = out['manual_merge']
+            self.assertEqual(manual['fields']['name']['status'], '手動確定済み')
+            self.assertEqual(manual['fields']['name']['value'], 'スクラブ')
+            self.assertEqual(manual['fields']['color']['status'], '手動確定済み')
+            self.assertEqual(manual['fields']['color']['value'], 'ワイン')
+            self.assertEqual(manual['fields']['supplier']['status'], '手動確定済み')
+
+            after = c.execute('select count(*) from products').fetchone()[0]
+            self.assertEqual(before, after)
         finally:
             c.close()
             folder.cleanup()
