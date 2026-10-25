@@ -29,8 +29,8 @@ import product_ledger_scoped_color as scoped_color
 import stock
 import stock_product_merge
 
-# 配色つなぎ（先頭中古標記を除いたあとの * / ＊ / ×）
-_COLORWAY_SEP_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
+# 配色つなぎ（先頭中古標記を除いたあとの /／×✕*＊ → 比較上 ×）
+_COLORWAY_SEP_RE = re.compile(r'[\s\u3000]*[/／×✕*＊][\s\u3000]*')
 
 REQUIRED_COLUMNS = ('顧客', '仕入先', '商品コード', '商品名', 'サイズ')
 IMPORT_NOTE = '旧CSV一括取り込み'
@@ -3322,7 +3322,7 @@ def normalize_ledger_name_for_vote(name):
     - 先頭中古標記「＊/*」は比較から除外（表示用原文は別保持）
     - 半角カタカナ → 全角カタカナ（濁点・半濁点を正しく合成）
     - 全角/半角空白 → 半角空白、連続を1つに、trim
-    - 配色つなぎの * / ＊ / × → ×（中古標記と区別。先頭標記除去後に適用）
+    - 配色つなぎの /／×✕*＊ → ×（色要素確認時のみ。先頭中古標記の * と区別）
     - 色辞書の別名・誤記 → 代表色（共有 normalize。類似度では寄せない）
     - その他の記号は無条件に消さない
     - 品番・メーカー品番には使わない（先頭ゼロ維持）

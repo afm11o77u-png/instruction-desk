@@ -131,9 +131,12 @@ _COLORWAY_BRIDGE_RE = re.compile(
     rf'^[{re.escape(_COLORWAY_JOIN_CHARS)}]+$'
 )
 _HALFWIDTH_KATAKANA_RE = re.compile(r'[\uff61-\uff9f]+')
-_SLASH_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[/／][\s\u3000]*')
-_TIMES_SEP_NORMALIZE_RE = re.compile(r'[\s\u3000]*[×✕*＊][\s\u3000]*')
-_COLORWAY_SPLIT_RE = re.compile(r'[×✕*＊/／]+')
+# 色と色の間の配色区切り（比較・登録とも × へ統一）。先頭の中古標記 *／＊ は含めない。
+_COLORWAY_SEP_CHARS = '/／×✕*＊'
+_COLORWAY_SEP_NORMALIZE_RE = re.compile(
+    rf'[\s\u3000]*[{re.escape(_COLORWAY_SEP_CHARS)}][{re.escape(_COLORWAY_SEP_CHARS)}\s\u3000]*'
+)
+_COLORWAY_SPLIT_RE = re.compile(rf'[{re.escape(_COLORWAY_SEP_CHARS)}]+')
 
 
 def _nfkc(value: str) -> str:
@@ -255,12 +258,18 @@ def apply_color_synonyms_in_text(value: str) -> str:
 
 
 def normalize_color_value(value: str) -> str:
-    """色・配色の共有正規化（表記統一＋区切り＋色辞書）。照合・登録表示の双方で使う。"""
+    """色・配色の共有正規化（表記統一＋区切り＋色辞書）。照合・登録表示の双方で使う。
+
+    配色区切り（/／×✕*＊）は、各要素が色名と確認できるときだけ × へ統一する。
+    色+サイズ・色+加工などは配色にしない。先頭の中古標記 * は色欄入力には来ない想定。
+    """
     t = unify_import_notation(value)
     if not t:
         return ''
-    if any(ch in t for ch in '×✕*＊/／'):
-        return normalize_colorway_display(t)
+    if any(ch in t for ch in _COLORWAY_SEP_CHARS):
+        if looks_like_colorway_text(t):
+            return normalize_colorway_display(t)
+        return t
     return canonical_color_display(t)
 
 
@@ -402,13 +411,69 @@ def unify_import_notation(value: str) -> str:
     return t
 
 
-_NAME_COLORWAY_SEP_RE = re.compile(r'[\s\u3000]*[*＊×][\s\u3000]*')
+# 名中の配色つなぎ（先頭中古標記を除いたあとの /／×✕*＊）
+_NAME_COLORWAY_SEP_RE = re.compile(
+    rf'[\s\u3000]*[{re.escape(_COLORWAY_SEP_CHARS)}][{re.escape(_COLORWAY_SEP_CHARS)}\s\u3000]*'
+)
+
+
+def _is_known_color_token(value: str) -> bool:
+    """単色トークンが辞書色（代表または別名）か。配色や複合未知語は False。"""
+    t = unify_import_notation(value)
+    if not t or any(ch in t for ch in _COLORWAY_SEP_CHARS):
+        return False
+    key = _norm_token(t)
+    if not key:
+        return False
+    return key in _COLOR_SYNONYM_BY_KEY or key in _COLOR_DISPLAY
+
+
+def _colorway_sep_runs(value: str):
+    """配色区切りで割った断片と、断片間の区切り有無を返す。"""
+    t = value or ''
+    if not t:
+        return [], False
+    parts = _COLORWAY_SPLIT_RE.split(t)
+    has_sep = bool(_COLORWAY_SPLIT_RE.search(t))
+    return [p.strip() for p in parts], has_sep
+
+
+def _part_is_color_span(part: str) -> bool:
+    """1断片が辞書単色、または辞書色の直結複合（シルバーグレー等）か。"""
+    if _is_known_color_token(part):
+        return True
+    t = unify_import_notation(part)
+    if not t or any(ch in t for ch in _COLORWAY_SEP_CHARS):
+        return False
+    hits = find_explicit_colors_in_text(t)
+    if len(hits) != 1:
+        return False
+    hit = hits[0]
+    return int(hit.get('start') or 0) == 0 and int(hit.get('end') or 0) == len(t)
+
+
+def looks_like_colorway_text(value: str) -> bool:
+    """区切った各要素が色として確認できるときだけ配色テキストとみなす。
+
+    色+サイズ（ホワイト／フリー）・色+加工（ホワイト／刺繍）・非色（冬／夏）は False。
+    直結複合色（サックス×シルバーグレー）は True。順序の入れ替えはしない。
+    """
+    t = unify_import_notation(value)
+    if not t or not any(ch in t for ch in _COLORWAY_SEP_CHARS):
+        return False
+    parts, has_sep = _colorway_sep_runs(t)
+    parts = [p for p in parts if p]
+    if not has_sep or len(parts) < 2:
+        return False
+    return all(_part_is_color_span(p) for p in parts)
 
 
 def normalize_name_for_color_compare(value: str) -> str:
     """同一SKU内の名照合用。中古標記除去＋表記統一＋配色区切り＋色辞書。
 
     先頭の中古標記は比較から外す（表示用原文は呼び出し側で保持）。
+    色間の /／×✕*＊ は、両側が辞書色の配色区間だけ比較上 × へそろえる
+    （中古標記の先頭 * とは区別。色+サイズ／色+加工は触らない）。
     類似度では寄せない。SKU・ASCII は全角化しない。
     """
     t = (value or '').strip()
@@ -421,49 +486,68 @@ def normalize_name_for_color_compare(value: str) -> str:
     t = unify_import_notation(t)
     if not t:
         return ''
-    t = _NAME_COLORWAY_SEP_RE.sub('×', t)
+    t = unify_known_colorway_seps_in_text(t)
     t = apply_color_synonyms_in_text(t)
     return t
 
 
-def normalize_colorway_display(value: str) -> str:
-    """配色の登録表示: 表記統一、区切り正規化、成分ごとの色辞書適用。
+def unify_known_colorway_seps_in_text(value: str) -> str:
+    """空白区切りトークン単位で、辞書色のみの配色区間の区切りを × へそろえる。"""
+    t = value or ''
+    if not t or not any(ch in t for ch in _COLORWAY_SEP_CHARS):
+        return t
+    # 空白でトークン分割し、各トークンが配色なら正規化（名の他部分は維持）
+    pieces = re.split(r'([\s\u3000]+)', t)
+    out = []
+    for piece in pieces:
+        if not piece or re.fullmatch(r'[\s\u3000]+', piece):
+            out.append(piece)
+            continue
+        if looks_like_colorway_text(piece):
+            out.append(normalize_colorway_display(piece))
+        else:
+            # 括弧付き「（黒／ワイン）」など
+            def _paren_repl(m):
+                inner = m.group(1)
+                open_b, close_b = m.group(0)[0], m.group(0)[-1]
+                if looks_like_colorway_text(inner):
+                    return f'{open_b}{normalize_colorway_display(inner)}{close_b}'
+                return m.group(0)
+            out.append(_PAREN_PAIR_RE.sub(_paren_repl, piece))
+    return ''.join(out)
 
-    - / ／ → ／（スラッシュ配色）
-    - * ＊ × → ×（アスタリスクは色間の配色つなぎ。先頭中古標記とは別）
+
+def normalize_colorway_display(value: str) -> str:
+    """配色の登録表示: 表記統一、区切りを × へ統一、成分ごとの色辞書適用。
+
+    - / ／ × ✕ * ＊ → ×（色間の配色つなぎ。先頭中古標記の * とは別）
     - 各成分を COLOR_SYNONYMS / COLOR_TERMS の代表へ
+    - 順序は維持（入れ替えない）
     """
     t = unify_import_notation(value)
     if not t:
         return ''
-    # 区切り種類を先に判定（正規化で * が × になってもスラッシュ配色を維持）
-    slash_only = bool(re.search(r'[/／]', t)) and not bool(re.search(r'[×✕*＊]', t))
-    t = _SLASH_SEP_NORMALIZE_RE.sub('／', t)
-    t = _TIMES_SEP_NORMALIZE_RE.sub('×', t)
-    t = t.strip()
+    if not any(ch in t for ch in _COLORWAY_SEP_CHARS):
+        return canonical_color_display(t) or t
+    t = _COLORWAY_SEP_NORMALIZE_RE.sub('×', t)
+    t = t.strip('×').strip()
     if not t:
         return ''
-    if slash_only or ('／' in t and '×' not in t):
-        parts = [p for p in re.split(r'／+', t) if p]
-        sep = '／'
-    else:
-        parts = [p for p in re.split(r'×+', t) if p]
-        sep = '×'
-    if len(parts) <= 1 and not any(ch in (value or '') for ch in '×✕*＊/／'):
-        return canonical_color_display(t) or t
+    parts = [p.strip() for p in re.split(r'×+', t) if p.strip()]
+    if len(parts) <= 1:
+        return canonical_color_display(parts[0] if parts else t) or (parts[0] if parts else t)
     canon_parts = []
     for part in parts:
         c = canonical_color_display(part)
         canon_parts.append(c if c else part.strip())
-    return sep.join(canon_parts)
+    return '×'.join(canon_parts)
 
 
 def _is_colorway_bridge(between: str) -> bool:
     """色ヒット間が配色として1色にまとめてよいか。
 
     - 空（辞書色の直結: シルバーグレー）→ まとめる
-    - × / * ＊ 系のみ（空白可）→ 配色1色
-    - / ／ のみ（空白可）→ 配色1色（登録時は ／ に正規化）
+    - × / * ＊ /／ 系のみ（空白可）→ 配色1色（登録表示は × に正規化）
     - 空白だけ・など → まとめない（別色の並び）
     """
     if between == '':
@@ -478,7 +562,7 @@ def coalesce_colorway_hits(raw: str, hits):
     """隣接／×／スラッシュ接続の辞書色ヒットを配色1色へまとめる。
 
     例: サックス×シルバーグレー → 1ヒット（シルバー＋グレーの直結も含む）。
-    例: 黒／ワイン・紺/白/赤 → 1ヒット（区切りは ／ に正規化）。
+    例: 黒／ワイン・紺/白/赤 → 1ヒット（区切りは × に正規化）。
     ・で区切られた複数色はまとめない。
     """
     if not hits:
@@ -1281,7 +1365,7 @@ def split_name_and_color(product_name: str):
         if not hit and len(hits) == 1:
             hit = hits[0]
         if hit:
-            # 括弧外配色の表示を ／ 正規化（strip は unified 位置のまま）
+            # 括弧外配色の表示を × 正規化（strip は unified 位置のまま）
             if hit.get('isColorway'):
                 color = normalize_colorway_display(hit.get('value') or color)
             stripped = _strip_outside_color_once(base_for_strip, hit)
