@@ -720,6 +720,17 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 .sku-groups-panel>p.excelhint{margin:0 0 4px}
 .sku-judgment-status-bar{margin:4px 0;padding:4px 8px;border:1px solid #d5ddd7;background:#f7faf8}
 .sku-judgment-status-bar .excelhint{margin:0}
+.pl-pending-rematch-bar{
+  display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;
+  margin:8px 0;padding:8px 10px;
+  border:1px solid #c9a227;background:#fff8e6;
+  position:sticky;top:0;z-index:5;
+}
+.pl-pending-rematch-bar .pl-pending-rematch-copy{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.pl-pending-rematch-bar .pl-pending-rematch-copy .excelhint{margin:0}
+.pl-pending-rematch-bar strong{color:#6a4a08}
+.sku-action-label.is-pending-rematch{color:#6a4a08;font-weight:700}
+.sku-list-row.is-pending-rematch .sku-action-label{color:#6a4a08}
 .sku-judgment-section{
   margin:6px 0;padding:6px 8px;
   border:1px solid #c5d0c8;background:#fff;
