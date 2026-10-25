@@ -120,6 +120,14 @@ class UnifiedReviewListSourceTest(unittest.TestCase):
         self.assertIn('sku-plan-field', css)
         self.assertIn('is-need-choice', css)
         self.assertIn('sku-preregister-banner', css)
+        # 未確定強調は青系（薄い茶に戻さない）
+        plan_css = css[css.find('.sku-plan-fields'):css.find('.unified-row-detail-card{', css.find('.sku-plan-fields'))]
+        self.assertIn('.sku-plan-summary.is-unsettled{color:#0c4a8c', plan_css)
+        self.assertIn('.sku-plan-field.is-unsettled .sku-plan-value{color:#0c4a8c', plan_css)
+        self.assertIn('background:#e8f2fc', plan_css)
+        self.assertNotIn('#7a4a12', plan_css)
+        self.assertNotIn('#6a3d08', plan_css)
+        self.assertNotIn('#5a4a20', plan_css)
 
 
 EXPAND_HARNESS = r'''
