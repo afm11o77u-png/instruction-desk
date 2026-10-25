@@ -103,6 +103,197 @@ class UnifiedReviewListSourceTest(unittest.TestCase):
         self.assertIn('確認作業の第二リストではありません', js)
         # チェックだけで承認しない（既存）
         self.assertIn('チェックだけでは検索・再照合・承認・登録を開始しない', js)
+        # 詳細開閉・横幅不具合の再発防止
+        self.assertIn('processingUnifiedKey', js)
+        self.assertIn('UNIFIED_REVIEW_COL_COUNT', js)
+        self.assertNotIn(r'proc:${name}\0${vendor}', js)
+        self.assertNotIn('proc:${name}\\0${vendor}', js)
+        self.assertIn('encodeURIComponent', js)
+        self.assertIn('colspan:UNIFIED_REVIEW_COL_COUNT', js)
+        self.assertIn('unified-review-table .sku-code', css)
+
+
+EXPAND_HARNESS = r'''
+const fs = require('fs');
+const vm = require('vm');
+const jsPath = process.argv[2];
+const casesPath = process.argv[3];
+const code = fs.readFileSync(jsPath, 'utf8');
+const cases = JSON.parse(fs.readFileSync(casesPath, 'utf8'));
+const sandbox = {
+  window: {},
+  document: { getElementById() { return null; }, querySelector() { return null; }, querySelectorAll() { return []; } },
+  console,
+  CSS: { escape: (s) => String(s).replace(/["\\]/g, '\\$&') },
+  esc: (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
+  $: () => null,
+};
+vm.createContext(sandbox);
+vm.runInContext(code, sandbox);
+const api = sandbox.window.ProductLedgerCsv && sandbox.window.ProductLedgerCsv.__test;
+if (!api) { console.error('missing __test'); process.exit(2); }
+
+function simulateAttrRoundTrip(id) {
+  // HTML 属性は NUL で切れ、制御文字も落ちうる。getAttribute 相当の切り出しを模擬。
+  const raw = String(id == null ? '' : id);
+  const cut = raw.split('\0')[0];
+  return cut;
+}
+
+const out = {};
+for (const [name, st] of Object.entries(cases)) {
+  const items = api.buildUnifiedReviewItems(st);
+  const procItems = items.filter(i => i.kind === 'processing');
+  const skuItems = items.filter(i => i.kind === 'sku');
+  const blankItems = items.filter(i => i.kind === 'blank' || i.kind === 'row' || i.kind === 'custom' || i.kind === 'unknown' || i.kind === 'sku_row');
+
+  // クリック相当: data 属性の往復後に expandedUnified を立てて描画
+  const expandedUnified = {};
+  for (const it of procItems) {
+    const attr = simulateAttrRoundTrip(it.id);
+    expandedUnified[attr] = true;
+  }
+  const stOpen = Object.assign({}, st, {
+    expandedUnified,
+    expandedCodes: Object.fromEntries(skuItems.map(i => [i.code, true])),
+  });
+  const html = api.unifiedListRowsHtml(stOpen, items);
+  const detailCols = [...html.matchAll(/class="sku-detail-row[^"]*"[^>]*>\s*<td colspan="(\d+)"/g)]
+    .map(m => Number(m[1]));
+  const makerCols = [...html.matchAll(/class="sku-maker-lookup-row"[^>]*>\s*<td colspan="(\d+)"/g)]
+    .map(m => Number(m[1]));
+  const expandBtns = [...html.matchAll(/data-pl-unified-expand="([^"]*)"/g)].map(m => m[1]);
+  const detailIds = [...html.matchAll(/data-unified-detail="([^"]*)"/g)].map(m => m[1]);
+
+  out[name] = {
+    itemIds: items.map(i => i.id),
+    itemKinds: items.map(i => i.kind),
+    itemLabels: items.map(i => i.targetLabel),
+    procIds: procItems.map(i => i.id),
+    procLabels: procItems.map(i => i.targetLabel),
+    idsHaveNul: items.some(i => String(i.id).includes('\0')),
+    idsAttrSafe: items.every(i => simulateAttrRoundTrip(i.id) === String(i.id)),
+    procExpandVisible: procItems.length
+      ? procItems.every(i => detailIds.includes(String(i.id)))
+      : true,
+    expandAttrMatchesId: expandBtns.every((a, idx) => {
+      // 各ボタンの属性値が対応 item.id と一致（NUL 切れなし）
+      return items.some(i => String(i.id) === a);
+    }),
+    detailColspans: detailCols,
+    makerColspans: makerCols,
+    allDetailColspan5: detailCols.length ? detailCols.every(c => c === api.UNIFIED_REVIEW_COL_COUNT) : true,
+    noColspan8InUnified: !detailCols.includes(8) && !makerCols.includes(8),
+    skuDetailCount: detailCols.length,
+    blankOrRowCount: blankItems.length,
+    keyEmptyNameElm: api.processingUnifiedKey('', '(有)エルムスコーポレーション'),
+    keyEmptyNameK2: api.processingUnifiedKey('', 'K2スタッフ工房'),
+    keysDistinct: api.processingUnifiedKey('', '(有)エルムスコーポレーション')
+      !== api.processingUnifiedKey('', 'K2スタッフ工房'),
+  };
+}
+process.stdout.write(JSON.stringify(out));
+'''
+
+
+class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
+    """加工の詳細開閉（NULキー切れ）と統合リスト colspan 不一致の回帰。"""
+
+    def test_processing_expand_and_unified_colspan(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                # 通常商品・個別確認（色差）→ 109-PCT 相当の開閉＋colspan
+                '顧客A,仕入A,109-PCT,パンツ黒,M',
+                '顧客A,仕入A,109-PCT,パンツ紺,L',
+                # 加工名未定×2業者（現象の2件）。末尾「加工」だと自動確定されるため読めない名にする
+                '顧客A,(有)エルムスコーポレーション,,謎の加工行,1',
+                '顧客A,K2スタッフ工房,,不明XYZ,1',
+                # 品番なし部品（要確認になるよう括弧色など）
+                '顧客A,仕入B,,ボタン（赤・青）,1',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'expand.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            before_products = c.execute('select count(*) from products').fetchone()[0]
+
+            st = {
+                'preview': {
+                    'skuGroups': preview.get('skuGroups') or [],
+                    'rows': preview.get('rows') or [],
+                    'autoMergePlans': preview.get('autoMergePlans') or [],
+                    'plannedCounts': preview.get('plannedCounts') or {},
+                    'outcomeSummary': preview.get('outcomeSummary') or {},
+                    'reviewCount': preview.get('reviewCount') or 0,
+                    'skuDecisionPending': preview.get('skuDecisionPending') or 0,
+                },
+                'skuDecisions': {},
+                'rowClassifications': {},
+                'selections': {},
+                'selectedCodes': {},
+                'expandedCodes': {},
+                'expandedUnified': {},
+                'makerLookup': None,
+                'sectionOpen': dict(
+                    unified=True, individual=True, bulk=False, auto=False, hold=False, sourceRows=False
+                ),
+            }
+            cases_path = Path(folder.name) / 'expand-cases.json'
+            harness_path = Path(folder.name) / 'expand-harness.js'
+            cases_path.write_text(json.dumps({'base': st}, ensure_ascii=False), encoding='utf-8')
+            harness_path.write_text(EXPAND_HARNESS, encoding='utf-8')
+            proc = subprocess.run(
+                ['node', str(harness_path), str(JS), str(cases_path)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+            out = json.loads(proc.stdout)['base']
+
+            self.assertFalse(out['idsHaveNul'], out['itemIds'])
+            self.assertTrue(out['idsAttrSafe'], out['itemIds'])
+            self.assertTrue(out['keysDistinct'])
+            self.assertTrue(out['keyEmptyNameElm'].startswith('proc:'))
+            self.assertNotIn('\0', out['keyEmptyNameElm'])
+            self.assertNotIn('\0', out['keyEmptyNameK2'])
+
+            # 加工名未定2業者が統合リストに出る（プレビューが needs_review のとき）
+            proc_labs = out['procLabels']
+            self.assertGreaterEqual(len(out['procIds']), 2, {
+                'kinds': list(zip(out['itemKinds'], out['itemLabels'])),
+                'rows': [
+                    {
+                        'status': r.get('status'),
+                        'code': (r.get('csv') or {}).get('code'),
+                        'name': (r.get('csv') or {}).get('productName'),
+                        'supplier': (r.get('csv') or {}).get('supplier'),
+                        'ps': r.get('processingService'),
+                        'view': r.get('processingServiceView'),
+                    }
+                    for r in (preview.get('rows') or [])
+                ],
+            })
+            self.assertTrue(out['procExpandVisible'], {
+                'procIds': out['procIds'], 'labels': proc_labs,
+            })
+            self.assertTrue(any('エルムス' in lab for lab in proc_labs), proc_labs)
+            self.assertTrue(any('K2' in lab for lab in proc_labs), proc_labs)
+
+            self.assertTrue(out['allDetailColspan5'], out['detailColspans'])
+            self.assertTrue(out['noColspan8InUnified'], {
+                'detail': out['detailColspans'], 'maker': out['makerColspans'],
+            })
+            # 109-PCT の詳細が開いている
+            self.assertIn('sku:109-PCT', out['itemIds'])
+            self.assertGreaterEqual(out['skuDetailCount'], 1)
+
+            after_products = c.execute('select count(*) from products').fetchone()[0]
+            self.assertEqual(before_products, after_products)
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 class UnifiedReviewListAggregationTest(unittest.TestCase):

@@ -22,11 +22,19 @@
   const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
   // unified=確認リスト（旧・個別確認＋行要確認の統合）。sourceRows=元行一覧（詳細確認用・既定折りたたみ）
   const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,sourceRows:false}
+  // 一覧テーブル列数。展開詳細行の colspan は必ずこれと一致させる（不一致だと table-layout:fixed で列が縮む）
+  const SKU_COMPARE_COL_COUNT=8
+  const UNIFIED_REVIEW_COL_COUNT=5
   const MODE_CHOOSE=''
   const MODE_PRODUCTS='products'
   const MODE_OPENING='opening_stock'
   const AUX_JUDGMENT_ONLY_COPY='初期在庫CSVは商品選定の判断にだけ使います。在庫は登録しません'
   let ui=null
+
+  /** 加工サービス統合キー。HTML data 属性でも壊れない区切り（NUL は属性値で切れるため使わない） */
+  function processingUnifiedKey(name,vendor){
+    return `proc:${encodeURIComponent(String(name||''))}|${encodeURIComponent(String(vendor||''))}`
+  }
 
   function todayISO(){
     const d=new Date()
@@ -216,7 +224,7 @@
       const name=ps.serviceName||pc.processing||''
       const vendor=ps.vendorName||csv.supplier||''
       const label=`${name||'（加工名未定）'}／${vendor||'（業者未定）'}`
-      return {key:`proc:${name}\0${vendor}`,kind:'processing',label,code:''}
+      return {key:processingUnifiedKey(name,vendor),kind:'processing',label,code:''}
     }
     const code=String(csv.code||'')
     if(isNormalLedgerCode(code)&&!(r.product&&r.product.blankSku)){
@@ -1026,7 +1034,8 @@
     return hay.includes(q)
   }
 
-  function skuRowDetailHtml(st,g){
+  function skuRowDetailHtml(st,g,opts){
+    opts=opts||{}
     const d=skuDecision(st,g.code)
     const decision=d.decision||''
     const names=[...new Set([...(g.nameCandidates||[]),...(g.variants||[]).map(v=>v.productName).filter(Boolean)])]
@@ -1089,7 +1098,8 @@
         ${(namePlan.auxNameReasons&&namePlan.auxNameReasons.length)?`<p class="excelhint">${namePlan.auxNameReasons.map(esc).join(' ')}</p>`:''}
         ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`)
     const auxPanel=auxSupplierPanelHtml(st,g,d)
-    return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="8">
+    const colspan=Number(opts.colspan)||SKU_COMPARE_COL_COUNT
+    return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="${colspan}">
       <div class="sku-detail-body">
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
         ${namePlanBlock}
@@ -1142,7 +1152,7 @@
     const section=opts.section||''
     const showApproveHint=!!opts.showApproveHint
     if(!(groups||[]).length){
-      return '<tr><td colspan="8">該当する品番はありません。</td></tr>'
+      return `<tr><td colspan="${SKU_COMPARE_COL_COUNT}">該当する品番はありません。</td></tr>`
     }
     return groups.map(g=>{
       const d=skuDecision(st,g.code)
@@ -1264,7 +1274,7 @@
         <p class="excelhint">${esc((r.reasons||[]).join(' ')||'')}</p>
       </div>`
     }).join('')
-    return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="5">
+    return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="${UNIFIED_REVIEW_COL_COUNT}">
       <div class="sku-detail-body">
         <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。</p>
         ${body}
@@ -1274,8 +1284,9 @@
 
   function unifiedListRowsHtml(st,items){
     if(!(items||[]).length){
-      return '<tr><td colspan="5">未解決の確認対象はありません。</td></tr>'
+      return `<tr><td colspan="${UNIFIED_REVIEW_COL_COUNT}">未解決の確認対象はありません。</td></tr>`
     }
+    const detailOpts={colspan:UNIFIED_REVIEW_COL_COUNT}
     return items.map(item=>{
       const expanded=!!(st.expandedUnified&&st.expandedUnified[item.id])
       if(item.kind==='sku'&&item.group){
@@ -1302,7 +1313,7 @@
               <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${skuExpanded?'詳細を閉じる':'詳細を開く'}</button>
             </div>
           </td>
-        </tr>${skuMakerLookupRowHtml(st,g.code)}${skuExpanded?skuRowDetailHtml(st,g):''}`
+        </tr>${skuMakerLookupRowHtml(st,g.code,detailOpts)}${skuExpanded?skuRowDetailHtml(st,g,detailOpts):''}`
       }
       const kindLabel={processing:'加工サービス',blank:'品番なし・部品資材',custom:'別注',unknown:'不明',sku_row:'行要確認',row:'行要確認'}[item.kind]||'要確認'
       return `<tr class="sku-list-row unified-list-row unified-kind-${esc(item.kind)}" data-unified-id="${esc(item.id)}" data-sku-section="unified">
@@ -1697,10 +1708,12 @@
     </div>`
   }
 
-  function skuMakerLookupRowHtml(st,code){
+  function skuMakerLookupRowHtml(st,code,opts){
+    opts=opts||{}
     const panel=st.makerLookup
     if(!panel||panel.scope!=='sku'||String(panel.skuCode)!==String(code))return ''
-    return `<tr class="sku-maker-lookup-row" data-sku-maker-lookup="${esc(code)}"><td colspan="8">${makerLookupPanelHtml(st,{forSkuCode:code})}</td></tr>`
+    const colspan=Number(opts.colspan)||SKU_COMPARE_COL_COUNT
+    return `<tr class="sku-maker-lookup-row" data-sku-maker-lookup="${esc(code)}"><td colspan="${colspan}">${makerLookupPanelHtml(st,{forSkuCode:code})}</td></tr>`
   }
 
   function scrollMakerLookupIntoView(){
@@ -2357,7 +2370,10 @@
   function ensureSkuRowInView(dlg,code,opts){
     opts=opts||{}
     if(!code)return false
-    const row=dlg.querySelector(`tr.sku-list-row[data-sku-code="${CSS.escape(String(code))}"]`)
+    const key=CSS.escape(String(code))
+    // 統合リストの加工・品番なし等は data-unified-id、品番行は data-sku-code
+    const row=dlg.querySelector(`tr.sku-list-row[data-sku-code="${key}"]`)
+      ||dlg.querySelector(`tr.sku-list-row[data-unified-id="${key}"]`)
     if(!row){
       scrollLog('anchor-missing',code)
       return false
@@ -3446,9 +3462,15 @@
       productsRegisterBlocked,
       collectRowIssues,
       unifiedTargetMetaForRow,
+      processingUnifiedKey,
+      unifiedListRowsHtml,
+      unifiedRowDetailHtml,
+      skuRowDetailHtml,
       effectiveDecision,
       decisionLabel,
       SECTION_DEFAULTS,
+      SKU_COMPARE_COL_COUNT,
+      UNIFIED_REVIEW_COL_COUNT,
       pageSlice,
       SKU_PAGE_SIZE,
       MODE_PRODUCTS,
