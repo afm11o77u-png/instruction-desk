@@ -112,6 +112,22 @@ class ProcessingServiceUnitTest(unittest.TestCase):
             ps.service_dedupe_key('丈直し', 'K2スタッフ工房'),
         )
 
+    def test_size_down_classified_as_service(self):
+        """『サイズダウン』単独は加工サービス。別語へ推測しない。"""
+        self.assertEqual(ps.unify_processing_service_name('サイズダウン'), 'サイズダウン')
+        r = ps.classify_processing_service_row(
+            supplier='K2スタッフ工房', product_name='サイズダウン', code='',
+        )
+        self.assertTrue(r['identifiable'])
+        self.assertTrue(r['isProcessingService'])
+        self.assertFalse(r['needsConfirm'])
+        self.assertEqual(r['serviceName'], 'サイズダウン')
+        self.assertEqual(r['displayName'], 'サイズダウン')
+        self.assertEqual(r['vendorName'], 'K2スタッフ工房')
+        # 原文にない具体化はしない
+        self.assertNotEqual(r['serviceName'], 'サイズアップ')
+        self.assertNotEqual(r['serviceName'], '丈直し')
+
     def test_customer_specific_uwagi_kept(self):
         name = 'わらく堂用上衣加工（衿・裾・袖）'
         self.assertEqual(ps.unify_processing_service_name(name), '上衣加工')
@@ -572,6 +588,188 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertIn('衿', samples[0].get('customerSpecific') or samples[0].get('parenSpecs') or '')
             # 勝手に別加工へ置き換えない
             self.assertNotEqual(plans[0]['serviceName'], '七分袖加工')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_size_down_k2_auto_no_manual(self):
+        """サイズダウン／K2 は手入力なしで加工名認識。表示名は加工名と同一。"""
+        folder, path, c = newdb()
+        try:
+            text = ledger(
+                '顧客A,某メーカー,S-1,シャツ,M',
+                '顧客A,K2スタッフ工房,S-1,サイズダウン,M',
+                '顧客B,K2スタッフ工房,,サイズダウン,',
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'size-down.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans), 1, msg=plans)
+            self.assertEqual(plans[0]['serviceName'], 'サイズダウン')
+            self.assertEqual(plans[0]['displayName'], 'サイズダウン')
+            self.assertEqual(plans[0]['vendorName'], 'K2スタッフ工房')
+
+            for row in preview.get('rows') or []:
+                csv = row.get('csv') or {}
+                if (csv.get('productName') or '') != 'サイズダウン':
+                    continue
+                reasons = ' '.join(row.get('reasons') or [])
+                self.assertNotIn('加工名を特定できません', reasons)
+                self.assertNotIn('加工名不足', reasons)
+                self.assertFalse(row.get('processingServiceNeedsConfirm'))
+                ps_info = row.get('processingService') or {}
+                self.assertTrue(ps_info.get('identifiable'))
+                self.assertEqual(ps_info.get('serviceName'), 'サイズダウン')
+                self.assertEqual(ps_info.get('displayName'), 'サイズダウン')
+                pc = row.get('parenClassification') or {}
+                self.assertEqual(pc.get('processing'), 'サイズダウン')
+                self.assertEqual(pc.get('plannedName'), 'サイズダウン')
+                # 登録時表示名の別欄は持たず、加工名と予定名が一致
+                self.assertEqual(pc.get('processing'), pc.get('plannedName'))
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'size-down.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'ps-sizedown-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['counts'].get('failed', 0), 0)
+            services = list(c.execute(
+                "SELECT id,name,code,category FROM products WHERE name=? AND category=?",
+                ('サイズダウン', stock.CATEGORY_PARTS),
+            ))
+            self.assertEqual(len(services), 1)
+            self.assertEqual(services[0]['code'], '')
+
+            # 再照合でも同一サービス再利用・表示名は加工名のまま
+            preview2 = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'size-down.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans2 = [p for p in (preview2.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans2), 1)
+            self.assertEqual(plans2[0].get('action'), 'reuse')
+            self.assertEqual(plans2[0]['displayName'], 'サイズダウン')
+            pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'size-down.csv',
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'ps-sizedown-2',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE name=? AND category=?",
+                ('サイズダウン', stock.CATEGORY_PARTS),
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+
+            maps = list(c.execute(
+                "SELECT csv_product_name,spec_json,product_id FROM product_ledger_row_maps "
+                "WHERE csv_product_name=?",
+                ('サイズダウン',),
+            ))
+            self.assertTrue(maps)
+            for m in maps:
+                spec = json.loads(m['spec_json'] or '{}')
+                self.assertEqual(spec.get('processingServiceName'), 'サイズダウン')
+                self.assertEqual(spec.get('processingDisplayName'), 'サイズダウン')
+                self.assertEqual(spec.get('processingVendor'), 'K2スタッフ工房')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_display_name_not_filled_from_planned_when_unknown(self):
+        """不明な原文では予定名から加工名を無条件補完しない。"""
+        r = ps.classify_processing_service_row(
+            supplier='K2スタッフ工房', product_name='謎の一行', code='X',
+        )
+        self.assertTrue(r['needsConfirm'])
+        self.assertFalse(r['identifiable'])
+        self.assertEqual(r.get('serviceName') or '', '')
+        self.assertEqual(r.get('displayName') or '', '')
+
+        folder, path, c = newdb()
+        try:
+            text = ledger('顧客A,K2スタッフ工房,X-9,謎の一行,M')
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'unk.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+                'rowClassifications': {
+                    '2': {
+                        # 表示名だけ別語が残っていても加工名へ流し込まない
+                        'plannedName': 'サイズダウン',
+                        'processing': '',
+                        'userEdited': True,
+                    },
+                },
+            })
+            row = (preview.get('rows') or [None])[0]
+            self.assertIsNotNone(row)
+            ps_info = row.get('processingService') or {}
+            self.assertTrue(ps_info.get('needsConfirm'))
+            self.assertFalse(ps_info.get('identifiable'))
+            self.assertEqual(ps_info.get('serviceName') or '', '')
+            pc = row.get('parenClassification') or {}
+            # 加工名欄は空のまま（plannedName から補完しない）
+            self.assertEqual(pc.get('processing') or '', '')
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(plans, [])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_user_edited_processing_name_syncs_display(self):
+        """手入力の加工名が登録・表示・重複判定へ一貫反映される。"""
+        folder, path, c = newdb()
+        try:
+            text = ledger('顧客A,K2スタッフ工房,,手直し候補,')
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'manual-proc.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+                'rowClassifications': {
+                    '2': {
+                        'processing': '刺繍加工',
+                        'plannedName': '刺繍加工',
+                        'userEdited': True,
+                        'confirmed': True,
+                    },
+                },
+            })
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans), 1)
+            self.assertEqual(plans[0]['serviceName'], '刺繍加工')
+            self.assertEqual(plans[0]['displayName'], '刺繍加工')
+            row = (preview.get('rows') or [None])[0]
+            pc = row.get('parenClassification') or {}
+            self.assertEqual(pc.get('processing'), '刺繍加工')
+            self.assertEqual(pc.get('plannedName'), '刺繍加工')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_physical_parts_view_not_processing_labels(self):
+        """実物部品は加工サービス表示にしない。"""
+        folder, path, c = newdb()
+        try:
+            text = ledger('顧客A,K2スタッフ工房,,ボタン,')
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'btn.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            row = (preview.get('rows') or [None])[0]
+            self.assertIsNotNone(row)
+            ps_info = row.get('processingService') or {}
+            self.assertTrue(ps_info.get('isPhysicalParts'))
+            self.assertFalse(ps_info.get('isProcessingService'))
+            self.assertTrue(row.get('physicalPartsView'))
+            self.assertFalse(row.get('processingServiceView'))
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(plans, [])
         finally:
             c.close()
             folder.cleanup()

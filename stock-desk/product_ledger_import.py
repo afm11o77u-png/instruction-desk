@@ -4038,10 +4038,9 @@ def upsert_row_map(
             provenance.get('processingServiceName') or ps.get('serviceName') or ''
         ),
         'processingDisplayName': stock.text(
-            provenance.get('processingDisplayName')
-            or provenance.get('processingServiceName')
-            or ps.get('displayName')
+            provenance.get('processingServiceName')
             or ps.get('serviceName')
+            or provenance.get('processingDisplayName')
             or ''
         ),
         'targetGarmentCode': stock.text(
@@ -4664,10 +4663,20 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
     別注・品番なしは原文名を維持（顧客×原文名の区別を壊さない）。
     スコープ付き色名補正が付いた別注は登録予定名へ反映する。
     色別に分けて登録の行は色別予定の商品名を優先し、括弧除去名で上書きしない。
+    加工サービス行は加工名同期を apply_processing_service_split に任せ、ここでは触らない
+    （古い表示名やメーカー採用名が加工名・本体名へ混入しないようにする）。
     """
     by_code = {g['code']: g for g in sku_groups}
     for row in classified:
         pc = row.get('parenClassification') or {}
+        if (
+            row.get('processingServiceView')
+            or pc.get('processingServiceView')
+            or (row.get('processingService') or {}).get('isProcessingService')
+            or (row.get('product') or {}).get('processingServiceProduct')
+            or (row.get('product') or {}).get('processingServiceSplit')
+        ):
+            continue
         scoped = bool(pc.get('scopedColorCorrection'))
         if not (
             pc.get('autoClassified')
@@ -5280,18 +5289,44 @@ def build_sku_groups(c, classified):
 
 
 def attach_processing_service_detection(classified):
-    """各行へ加工サービス判定を付与（DBは変えない）。"""
+    """各行へ加工サービス判定を付与（DBは変えない）。
+
+    加工名が唯一の入力元。表示名（plannedName）から無条件に加工名を補完しない。
+    ユーザーが加工名欄を明示したときだけ、その値を優先して再判定する。
+    """
     for row in classified or []:
         if row.get('status') == STATUS_EXCLUDED:
             continue
         csv = row.get('csv') or {}
         pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
-        info = proc_svc.classify_processing_service_row(
-            supplier=csv.get('supplier') or '',
-            product_name=csv.get('productName') or '',
-            code=csv.get('code') or '',
-            paren_processing=pc.get('processing') or '',
-        )
+        csv_name = stock.text(csv.get('productName') or '')
+        user_proc = stock.text(pc.get('processing') or '')
+        user_edited = bool(pc.get('userEdited') or pc.get('manual'))
+        # 手入力の加工名を優先（表示名＝plannedName は使わない）
+        if user_edited and user_proc:
+            info = proc_svc.classify_processing_service_row(
+                supplier=csv.get('supplier') or '',
+                product_name=user_proc,
+                code=csv.get('code') or '',
+                paren_processing='',
+            )
+            if not info.get('identifiable'):
+                info = proc_svc.classify_processing_service_row(
+                    supplier=csv.get('supplier') or '',
+                    product_name=csv_name,
+                    code=csv.get('code') or '',
+                    paren_processing=user_proc,
+                )
+        else:
+            info = proc_svc.classify_processing_service_row(
+                supplier=csv.get('supplier') or '',
+                product_name=csv_name,
+                code=csv.get('code') or '',
+                paren_processing=user_proc,
+            )
+        # 特定できた加工名は表示名へ常に同期（古い別表示名を残さない）
+        if info.get('identifiable') and info.get('serviceName'):
+            info['displayName'] = info['serviceName']
         row['processingService'] = info
         if info.get('needsConfirm') and not info.get('identifiable'):
             row['reasons'] = list(row.get('reasons') or []) + list(info.get('confirmReasons') or [])
@@ -5305,11 +5340,10 @@ def attach_processing_service_detection(classified):
 def _processing_service_plan_payload(info, *, source_row_nos=None, garment_codes=None):
     name = stock.text(info.get('serviceName') or '')
     vendor = stock.text(info.get('vendorName') or '')
-    display = stock.text(info.get('displayName') or name)
+    # 表示名は加工名からのみ（別項目・旧 displayName を優先しない）
     return {
         'serviceName': name,
-        # 登録時表示名＝加工名（予定名との二重入力不要）
-        'displayName': display or name,
+        'displayName': name,
         'vendorName': vendor,
         'dedupeKey': proc_svc.service_dedupe_key(name, vendor),
         'category': stock.CATEGORY_PARTS,
@@ -5520,7 +5554,9 @@ def apply_processing_service_split(c, classified, sku_groups):
             # 本体があるとき: この行の商品は本体へ寄せ、仕入先は加工業者のまま provenance に残す
             prod = dict(row.get('product') or {})
             handle = dict(row.get('handle') or {})
-            service_display = stock.text(info.get('displayName') or info.get('serviceName') or '')
+            # 表示名＝加工名（旧 displayName や別の予定名を復活させない）
+            service_display = stock.text(info.get('serviceName') or '')
+            info['displayName'] = service_display
             if group and group.get('garmentBodyKnown'):
                 body_name = stock.text(
                     group.get('plannedGarmentName')
@@ -5590,7 +5626,7 @@ def apply_processing_service_split(c, classified, sku_groups):
                 prod['code'] = ''
                 prod['codeOverride'] = ''
                 prod['blankSku'] = True
-                # 登録時表示名＝加工名
+                # 登録時の商品名＝加工名（別表示名欄なし）
                 prod['officialName'] = service_display or info['serviceName']
                 prod['applyOfficialName'] = True
                 prod['primarySupplierName'] = info['vendorName']
@@ -5608,8 +5644,10 @@ def apply_processing_service_split(c, classified, sku_groups):
                     'skipForProcessingService': True,
                 }
                 pc = dict(row.get('parenClassification') or {})
-                pc['processing'] = service_display or info.get('serviceName') or ''
-                pc['plannedName'] = service_display or info.get('serviceName') or pc.get('plannedName') or ''
+                synced = service_display or info.get('serviceName') or ''
+                pc['processing'] = synced
+                # 古い予定名／表示名を残さず加工名へ揃える
+                pc['plannedName'] = synced
                 pc['processingServiceView'] = True
                 row['parenClassification'] = pc
                 if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD) and not info.get('needsConfirm'):
@@ -5641,13 +5679,24 @@ def apply_processing_service_split(c, classified, sku_groups):
             row['processingServicePlanKey'] = key
             row['processingServiceView'] = True
 
+        elif info.get('isPhysicalParts'):
+            # 実物の部品・資材: 加工サービス欄ではなく名称・仕入先・仕様
+            row['physicalPartsView'] = True
+            pc = dict(row.get('parenClassification') or {})
+            pc['physicalPartsView'] = True
+            pc['processingServiceView'] = False
+            row['parenClassification'] = pc
         elif info.get('isProcessingVendor') and info.get('needsConfirm'):
             # 既に attach_processing_service_detection で要確認化済み
             # 画面は加工サービス向け欄へ（色・生地と加工名の迷いを減らす）
+            # 表示名（plannedName）を加工名へ無条件コピーしない
             row['processingServiceView'] = True
             pc = dict(row.get('parenClassification') or {})
             pc['processingServiceView'] = True
             pc['processingVendor'] = info.get('vendorName') or (row.get('csv') or {}).get('supplier') or ''
+            # 加工名が空のまま予定名だけ残っている場合は加工名欄へ流し込まない
+            if not stock.text(pc.get('processing') or ''):
+                pc['processing'] = ''
             missing = info.get('missingFields') or []
             if missing:
                 pc['processingMissingHint'] = '・'.join(str(x) for x in missing)
@@ -5676,9 +5725,9 @@ def apply_processing_service_split(c, classified, sku_groups):
 def _ensure_processing_service_product(c, plan):
     """加工サービスを部品・資材として確保（本体品番は流用しない）。
 
-    登録時表示名は加工名と同じ。加工サービスに衣服数量は付けない。
+    登録名・一覧表示は加工名のみ。別表示名は使わない。加工に衣服数量は付けない。
     """
-    name = stock.text(plan.get('serviceName') or plan.get('displayName') or '')
+    name = stock.text(plan.get('serviceName') or '')
     vendor = stock.text(plan.get('vendorName') or '')
     if not name or not vendor:
         raise ValueError('加工サービス名と業者が必要です。')
@@ -5686,12 +5735,13 @@ def _ensure_processing_service_product(c, plan):
     if existing:
         return existing['id'], False
     # 別名表記（取り付け等）でも同じキーで再利用できるよう正規化名で保存
-    display = stock.text(plan.get('displayName') or name)
+    # 表示名は加工名からのみ（plan.displayName の古い値を優先しない）
+    plan['displayName'] = name
     sup_id, _ = _ensure_person(c, 'suppliers', stock.save_supplier, vendor, create=True)
     # 品番なし・部品・資材。管理品番に対象衣服品番を載せない
     saved = stock.save_product(c, {
         'code': '',
-        'name': display or name,
+        'name': name,
         'color': '',
         'material': '',
         'category': stock.CATEGORY_PARTS,
