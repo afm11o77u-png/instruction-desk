@@ -640,6 +640,8 @@ def row_map_key(*, customer, code, product_name, size, supplier):
 
 # 今回の取り込みだけ「この行を登録しない」。恒久ルールにはしない。
 USER_ROW_EXCLUDE_REASON = 'この行を登録しない（今回の取り込み）'
+# 自動除外（K2 加工内容不明など）。手動除外と理由を区別する。
+K2_AUTO_EXCLUDE_REASON = proc_svc.K2_AUTO_EXCLUDE_REASON
 PRODUCT_REGISTRATION_EXCLUDED_LABEL = '商品登録時に除外した項目'
 
 
@@ -710,6 +712,144 @@ def _parse_row_exclusions(body):
     return keys
 
 
+def _mark_row_excluded_from_registration(
+    row,
+    *,
+    reason,
+    exclusion_kind='manual',
+):
+    """1行を今回の登録対象外へ（商品・加工は作らない）。手動／自動を区別。"""
+    reason_t = stock.text(reason) or USER_ROW_EXCLUDE_REASON
+    row['status'] = STATUS_HOLD
+    row['statusLabel'] = STATUS_LABELS[STATUS_HOLD]
+    row['canCommit'] = False
+    row['skuDecisionNeeded'] = False
+    row['deferReason'] = reason_t
+    row['processingServiceNeedsConfirm'] = False
+    if exclusion_kind == 'auto':
+        row['autoRowExcluded'] = True
+        row['userRowExcluded'] = False
+        row['exclusionKind'] = 'auto'
+    else:
+        row['userRowExcluded'] = True
+        row['autoRowExcluded'] = False
+        row['exclusionKind'] = 'manual'
+    drop_tokens = (USER_ROW_EXCLUDE_REASON, K2_AUTO_EXCLUDE_REASON)
+    reasons = [
+        r for r in (row.get('reasons') or [])
+        if not any(tok in stock.text(r) for tok in drop_tokens)
+    ]
+    reasons.append(reason_t)
+    row['reasons'] = reasons
+    # 加工サービス計画から外すための表示フラグ
+    pc = dict(row.get('parenClassification') or {})
+    pc['processingServiceView'] = True
+    pc['rowExcludedView'] = True
+    pc['exclusionKind'] = row['exclusionKind']
+    pc['exclusionReason'] = reason_t
+    row['parenClassification'] = pc
+    row['processingServiceView'] = True
+
+
+def _prune_excluded_from_processing_plans(processing_split_meta, excluded_set):
+    dropped_plans = 0
+    meta = processing_split_meta if isinstance(processing_split_meta, dict) else {}
+    plans = list(meta.get('processingServicePlans') or [])
+    kept = []
+    for plan in plans:
+        src = [
+            n for n in (plan.get('sourceRowNos') or [])
+            if n not in excluded_set
+        ]
+        if not src:
+            dropped_plans += 1
+            continue
+        plan = dict(plan)
+        plan['sourceRowNos'] = src
+        kept.append(plan)
+    if plans:
+        meta['processingServicePlans'] = kept
+    return dropped_plans
+
+
+def _sync_sku_groups_after_row_exclusions(classified, sku_groups):
+    """除外後の品番グループ: 全行除外なら未決定から外す（他対象は維持）。"""
+    rows_by_code = defaultdict(list)
+    for row in classified or []:
+        code = stock.text((row.get('csv') or {}).get('code') or '')
+        if stock_product_merge.is_normal_product_code(code):
+            rows_by_code[code].append(row)
+    for group in sku_groups or []:
+        code = stock.text(group.get('code') or '')
+        grow = rows_by_code.get(code) or []
+        if not grow:
+            continue
+        active = [
+            r for r in grow
+            if not r.get('userRowExcluded') and not r.get('autoRowExcluded')
+        ]
+        group['userExcludedRowNos'] = [
+            r.get('rowNo') for r in grow
+            if r.get('userRowExcluded') or r.get('autoRowExcluded')
+        ]
+        group['activeRowNos'] = [r.get('rowNo') for r in active]
+        if not active and group.get('needsDecision'):
+            # 除外理由は先頭の除外行から（手動優先表示）
+            reason = USER_ROW_EXCLUDE_REASON
+            kind = 'manual'
+            for r in grow:
+                if r.get('userRowExcluded'):
+                    reason = r.get('deferReason') or USER_ROW_EXCLUDE_REASON
+                    kind = 'manual'
+                    break
+                if r.get('autoRowExcluded'):
+                    reason = r.get('deferReason') or K2_AUTO_EXCLUDE_REASON
+                    kind = 'auto'
+            group['needsDecision'] = False
+            group['userAllRowsExcluded'] = True
+            group['decision'] = {
+                'decision': SKU_DECISION_HOLD,
+                'deferReason': reason,
+                'userRowExcluded': kind == 'manual',
+                'autoRowExcluded': kind == 'auto',
+                'exclusionKind': kind,
+            }
+
+
+def _apply_k2_auto_exclusions(classified, sku_groups, processing_split_meta):
+    """K2スタッフ工房で加工名不明の行を確認待ちから外し、登録しないへ移す。
+
+    - 当該加工元行だけを除外（同品番の正常な商品本体は巻き込まない）
+    - 別行の加工名は借用しない（判定は行単位で完了済み）
+    - 利用者が明示復帰した行は再適用しない
+    """
+    excluded_nos = []
+    for row in classified or []:
+        info = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+        if not info.get('k2AutoExclude'):
+            continue
+        if info.get('identifiable'):
+            continue
+        pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+        if pc.get('userRestoredFromAutoExclude'):
+            continue
+        if row.get('userRowExcluded'):
+            # 手動除外が優先（理由は手動のまま）
+            continue
+        reason = stock.text(info.get('autoExcludeReason') or '') or K2_AUTO_EXCLUDE_REASON
+        _mark_row_excluded_from_registration(row, reason=reason, exclusion_kind='auto')
+        excluded_nos.append(row.get('rowNo'))
+
+    excluded_set = {n for n in excluded_nos if n is not None}
+    dropped = _prune_excluded_from_processing_plans(processing_split_meta, excluded_set)
+    _sync_sku_groups_after_row_exclusions(classified, sku_groups)
+    return {
+        'autoExcludedRowCount': len(excluded_nos),
+        'autoExcludedRowNos': excluded_nos,
+        'processingPlansDropped': dropped,
+    }
+
+
 def _apply_user_row_exclusions(classified, sku_groups, processing_split_meta, exclusion_keys):
     """ユーザーが選んだ元行だけを今回の登録対象から外す（STATUS_HOLD 再利用）。
 
@@ -717,6 +857,7 @@ def _apply_user_row_exclusions(classified, sku_groups, processing_split_meta, ex
     - 全行除外の品番は未決定ブロックから外す
     - 加工サービス計画の sourceRowNos からも外す（空なら計画削除）
     - 自動整理・メーカー補正のあとに呼ぶ（勝手に登録対象へ戻さない）
+    - 自動除外済みの行は手動理由で上書き可
     """
     keys = set(exclusion_keys or [])
     if not keys:
@@ -740,64 +881,14 @@ def _apply_user_row_exclusions(classified, sku_groups, processing_split_meta, ex
             if row.get('userRowExcluded') and not row.get('skuHold'):
                 pass
             continue
-        row['status'] = STATUS_HOLD
-        row['statusLabel'] = STATUS_LABELS[STATUS_HOLD]
-        row['canCommit'] = False
-        row['userRowExcluded'] = True
-        row['skuDecisionNeeded'] = False
-        row['deferReason'] = USER_ROW_EXCLUDE_REASON
-        reasons = [
-            r for r in (row.get('reasons') or [])
-            if USER_ROW_EXCLUDE_REASON not in stock.text(r)
-        ]
-        reasons.append(USER_ROW_EXCLUDE_REASON)
-        row['reasons'] = reasons
+        _mark_row_excluded_from_registration(
+            row, reason=USER_ROW_EXCLUDE_REASON, exclusion_kind='manual',
+        )
         excluded_nos.append(row.get('rowNo'))
 
     excluded_set = {n for n in excluded_nos if n is not None}
-
-    # 品番グループ: 全行除外なら未決定から外す（部分除外は残り行の確認を維持）
-    rows_by_code = defaultdict(list)
-    for row in classified or []:
-        code = stock.text((row.get('csv') or {}).get('code') or '')
-        if stock_product_merge.is_normal_product_code(code):
-            rows_by_code[code].append(row)
-    for group in sku_groups or []:
-        code = stock.text(group.get('code') or '')
-        grow = rows_by_code.get(code) or []
-        if not grow:
-            continue
-        active = [r for r in grow if not r.get('userRowExcluded')]
-        group['userExcludedRowNos'] = [
-            r.get('rowNo') for r in grow if r.get('userRowExcluded')
-        ]
-        group['activeRowNos'] = [r.get('rowNo') for r in active]
-        if not active and group.get('needsDecision'):
-            group['needsDecision'] = False
-            group['userAllRowsExcluded'] = True
-            group['decision'] = {
-                'decision': SKU_DECISION_HOLD,
-                'deferReason': USER_ROW_EXCLUDE_REASON,
-                'userRowExcluded': True,
-            }
-
-    dropped_plans = 0
-    meta = processing_split_meta if isinstance(processing_split_meta, dict) else {}
-    plans = list(meta.get('processingServicePlans') or [])
-    kept = []
-    for plan in plans:
-        src = [
-            n for n in (plan.get('sourceRowNos') or [])
-            if n not in excluded_set
-        ]
-        if not src:
-            dropped_plans += 1
-            continue
-        plan = dict(plan)
-        plan['sourceRowNos'] = src
-        kept.append(plan)
-    if plans:
-        meta['processingServicePlans'] = kept
+    dropped_plans = _prune_excluded_from_processing_plans(processing_split_meta, excluded_set)
+    _sync_sku_groups_after_row_exclusions(classified, sku_groups)
     return {
         'excludedRowCount': len(excluded_nos),
         'excludedRowNos': excluded_nos,
@@ -835,7 +926,7 @@ def lookup_product_registration_exclusion(c, *, customer, code, product_name, si
 
 
 def upsert_exclusion_row_map(c, *, run_id, file_sha256, file_name, row):
-    """除外判断だけを永続化（商品・取扱・在庫は作らない）。"""
+    """除外判断だけを永続化（商品・取扱・在庫は作らない）。手動／自動理由を保持。"""
     ensure_schema(c)
     csv_info = row.get('csv') or {}
     customer = stock.text(csv_info.get('customer'))
@@ -845,10 +936,17 @@ def upsert_exclusion_row_map(c, *, run_id, file_sha256, file_name, row):
     size = stock.text(csv_info.get('size'))
     pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
     ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    exclusion_kind = stock.text(row.get('exclusionKind') or '') or (
+        'auto' if row.get('autoRowExcluded') else 'manual'
+    )
+    exclusion_reason = stock.text(row.get('deferReason') or '') or (
+        K2_AUTO_EXCLUDE_REASON if exclusion_kind == 'auto' else USER_ROW_EXCLUDE_REASON
+    )
     spec_json = json.dumps({
         'excludedFromRegistration': True,
         'exclusionScope': 'this_import',
-        'exclusionReason': USER_ROW_EXCLUDE_REASON,
+        'exclusionKind': exclusion_kind,
+        'exclusionReason': exclusion_reason,
         'originalName': product_name,
         'sourceName': product_name,
         'processing': stock.text(pc.get('processing') or ps.get('serviceName') or ''),
@@ -856,6 +954,7 @@ def upsert_exclusion_row_map(c, *, run_id, file_sha256, file_name, row):
         'processingServiceName': stock.text(ps.get('serviceName') or ''),
         'rowKind': 'excluded_from_registration',
         'csvSize': size,
+        'k2AutoExclude': bool(row.get('autoRowExcluded') or ps.get('k2AutoExclude')),
     }, ensure_ascii=False)
     pkey = product_map_key(customer=customer, code=code, product_name=product_name)
     rkey = row_map_key(
@@ -5814,6 +5913,7 @@ def attach_processing_service_detection(classified):
 
     加工名が唯一の入力元。表示名（plannedName）から無条件に加工名を補完しない。
     ユーザーが加工名欄を明示したときだけ、その値を優先して再判定する。
+    利用者が明示復帰した行（userRestoredFromAutoExclude）は再照合で勝手に自動除外しない。
     """
     for row in classified or []:
         if row.get('status') == STATUS_EXCLUDED:
@@ -5823,8 +5923,9 @@ def attach_processing_service_detection(classified):
         csv_name = stock.text(csv.get('productName') or '')
         user_proc = stock.text(pc.get('processing') or '')
         user_edited = bool(pc.get('userEdited') or pc.get('manual'))
+        user_restored = bool(pc.get('userRestoredFromAutoExclude'))
         # 手入力の加工名を優先（表示名＝plannedName は使わない）
-        if user_edited and user_proc:
+        if (user_edited or user_restored) and user_proc:
             info = proc_svc.classify_processing_service_row(
                 supplier=csv.get('supplier') or '',
                 product_name=user_proc,
@@ -5838,6 +5939,11 @@ def attach_processing_service_detection(classified):
                     code=csv.get('code') or '',
                     paren_processing=user_proc,
                 )
+            # 明示復帰＋加工名ありなら、自動除外フラグを立て直さない
+            if info.get('identifiable'):
+                info['k2AutoExclude'] = False
+                info['autoExcludeReason'] = ''
+                info['userRestoredFromAutoExclude'] = True
         else:
             info = proc_svc.classify_processing_service_row(
                 supplier=csv.get('supplier') or '',
@@ -5845,10 +5951,20 @@ def attach_processing_service_detection(classified):
                 code=csv.get('code') or '',
                 paren_processing=user_proc,
             )
+            # 加工名なしで復帰フラグだけ残っている場合は自動除外を抑止し確認へ
+            if user_restored and info.get('k2AutoExclude'):
+                info['k2AutoExclude'] = False
+                info['needsConfirm'] = True
+                info['autoExcludeReason'] = ''
+                info['userRestoredFromAutoExclude'] = True
         # 特定できた加工名は表示名へ常に同期（古い別表示名を残さない）
         if info.get('identifiable') and info.get('serviceName'):
             info['displayName'] = info['serviceName']
         row['processingService'] = info
+        if info.get('k2AutoExclude') and not info.get('identifiable'):
+            # 確認待ちに残さず、後段の自動除外適用へ（ここではフラグのみ）
+            row['processingServiceNeedsConfirm'] = False
+            continue
         if info.get('needsConfirm') and not info.get('identifiable'):
             row['reasons'] = list(row.get('reasons') or []) + list(info.get('confirmReasons') or [])
             if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD):
@@ -6262,6 +6378,17 @@ def apply_processing_service_split(c, classified, sku_groups):
             pc = dict(row.get('parenClassification') or {})
             pc['physicalPartsView'] = True
             pc['processingServiceView'] = False
+            row['parenClassification'] = pc
+        elif info.get('k2AutoExclude'):
+            # 後段 _apply_k2_auto_exclusions で登録しないへ。確認待ち欄は出さない
+            row['processingServiceView'] = True
+            row['processingServiceNeedsConfirm'] = False
+            pc = dict(row.get('parenClassification') or {})
+            pc['processingServiceView'] = True
+            pc['processingVendor'] = info.get('vendorName') or (row.get('csv') or {}).get('supplier') or ''
+            if not stock.text(pc.get('processing') or ''):
+                pc['processing'] = ''
+            pc['k2AutoExcludePending'] = True
             row['parenClassification'] = pc
         elif info.get('isProcessingVendor') and info.get('needsConfirm'):
             # 既に attach_processing_service_detection で要確認化済み
@@ -7342,13 +7469,18 @@ def build_preview(c, body):
         g['makerCorrection'] = maker_sku_lookup.sku_group_maker_correction_meta(
             g, group_rows,
         )
-    # ユーザー行除外は自動整理・メーカー補正のあとで適用（勝手に登録対象へ戻さない）
+    # K2 加工名不明の自動除外 → ユーザー手動除外の順
+    # （手動が最終上書き。自動整理・メーカー補正のあとに適用し、勝手に登録対象へ戻さない）
+    k2_auto_meta = _apply_k2_auto_exclusions(
+        classified, sku_groups, processing_split_meta,
+    )
     row_exclusion_meta = _apply_user_row_exclusions(
         classified, sku_groups, processing_split_meta, _parse_row_exclusions(body),
     )
     if isinstance(decision_meta, dict):
         decision_meta = dict(decision_meta)
         decision_meta['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
+        decision_meta['autoExcludedRows'] = k2_auto_meta.get('autoExcludedRowCount') or 0
         # 全行除外で needsDecision を落とした分を pending から再計算
         decision_meta['pendingDecisionGroups'] = sum(
             1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')
@@ -7362,8 +7494,14 @@ def build_preview(c, body):
     sku_pending_rows = sum(1 for r in classified if r.get('skuDecisionNeeded'))
     planned = _planned_counts(classified, sku_groups)
     planned['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
+    planned['autoExcludedRows'] = k2_auto_meta.get('autoExcludedRowCount') or 0
+    planned['registrationExcludedRows'] = (
+        (planned['userExcludedRows'] or 0) + (planned['autoExcludedRows'] or 0)
+    )
     summary = _preview_outcome_summary(classified, sku_groups, planned, decision_meta)
     summary['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
+    summary['autoExcludedRows'] = k2_auto_meta.get('autoExcludedRowCount') or 0
+    summary['registrationExcludedRows'] = planned['registrationExcludedRows']
     auto_plans = [
         g.get('productPlan') for g in sku_groups
         if g.get('plannedSingleProduct') and g.get('productPlan')
@@ -7471,6 +7609,11 @@ def build_preview(c, body):
             'count': row_exclusion_meta.get('excludedRowCount') or 0,
             'rowNos': row_exclusion_meta.get('excludedRowNos') or [],
             'reason': USER_ROW_EXCLUDE_REASON,
+        },
+        'autoRowExclusions': {
+            'count': k2_auto_meta.get('autoExcludedRowCount') or 0,
+            'rowNos': k2_auto_meta.get('autoExcludedRowNos') or [],
+            'reason': K2_AUTO_EXCLUDE_REASON,
         },
         'reviewCount': review_count,
         'previewFingerprint': fp,
@@ -8223,11 +8366,40 @@ def commit_preview(c, body, *, db_path=None):
     excluded_rows = [r for r in classified if r['status'] == STATUS_EXCLUDED]
     hold_rows = [r for r in classified if r['status'] == STATUS_HOLD]
     user_excluded_rows = [r for r in hold_rows if r.get('userRowExcluded')]
+    auto_excluded_rows = [r for r in hold_rows if r.get('autoRowExcluded')]
+    registration_excluded_rows = user_excluded_rows + [
+        r for r in auto_excluded_rows if not r.get('userRowExcluded')
+    ]
+    # 登録確定時: 除外状態と登録条件をサーバー側でも再検証（プレビュー改ざん耐性）
+    exclusion_keys = _parse_row_exclusions(body)
+    for r in classified:
+        if r.get('userRowExcluded') or r.get('autoRowExcluded'):
+            if r['status'] not in (STATUS_HOLD, STATUS_EXCLUDED):
+                raise ValueError(
+                    f'行 {r.get("rowNo")} は除外扱いですが状態が不正です。再照合してから確定してください。'
+                )
+            if r.get('canCommit'):
+                raise ValueError(
+                    f'行 {r.get("rowNo")} は登録対象外のため確定できません。'
+                )
+        ident = csv_row_identity(r)
+        sk = stable_row_exclusion_key(
+            customer=ident['customer'],
+            code=ident['code'],
+            product_name=ident['productName'],
+            size=ident['size'],
+            supplier=ident['supplier'],
+        )
+        if sk in exclusion_keys and not r.get('userRowExcluded'):
+            raise ValueError(
+                f'行 {r.get("rowNo")} の除外指定がプレビュー結果と一致しません。再照合してください。'
+            )
     commit_rows = [
         r for r in classified
         if r['status'] in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD, STATUS_MERGE)
         and not r.get('skuDecisionNeeded')
         and not r.get('userRowExcluded')
+        and not r.get('autoRowExcluded')
     ]
 
     # 加工行のみで本体不明のグループは「本体確認残」だが、特定できた加工サービスの確定は止めない
@@ -8354,6 +8526,7 @@ def commit_preview(c, body, *, db_path=None):
         'reviewed': len(review_rows), 'excluded': len(excluded_rows),
         'deferred': len(hold_rows),
         'userExcludedRows': len(user_excluded_rows),
+        'autoExcludedRows': len(auto_excluded_rows),
         'committedRows': 0, 'failed': 0,
         'openingCreated': 0, 'openingQtyUpdated': 0, 'openingUnchanged': 0,
         'openingHeld': 0, 'openingComplementSkipped': 0,
@@ -8367,13 +8540,17 @@ def commit_preview(c, body, *, db_path=None):
             'reason': r.get('deferReason') or '',
             'csv': r.get('csv'),
             'userRowExcluded': bool(r.get('userRowExcluded')),
+            'autoRowExcluded': bool(r.get('autoRowExcluded')),
+            'exclusionKind': r.get('exclusionKind') or (
+                'auto' if r.get('autoRowExcluded') else ('manual' if r.get('userRowExcluded') else '')
+            ),
         }
         for r in hold_rows
     ]
 
     try:
         # 除外行は商品・加工・サイズ・取扱を作らず、判断だけ永続化（初期在庫で表示用）
-        for ex_row in user_excluded_rows:
+        for ex_row in registration_excluded_rows:
             upsert_exclusion_row_map(
                 c,
                 run_id=run_id,

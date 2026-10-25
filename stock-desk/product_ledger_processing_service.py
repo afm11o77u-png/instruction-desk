@@ -21,6 +21,15 @@ _PROCESSING_VENDOR_DISPLAY = {
     'エルムス': '(有)エルムスコーポレーション',
 }
 
+K2_VENDOR_DISPLAY = 'K2スタッフ工房'
+K2_AUTO_EXCLUDE_REASON = (
+    'K2スタッフ工房の加工行ですが、加工内容を特定できないため登録対象外'
+)
+_K2_VENDOR_KEYS = frozenset({
+    'k2スタッフ工房',
+    'k2スタツフ工房',
+})
+
 # エルムスコーポレーション専用: 仕入先行は品番・商品名にかかわらず「刺繍」1サービスへ。
 ELMS_VENDOR_DISPLAY = '(有)エルムスコーポレーション'
 ELMS_EMBROIDERY_SERVICE_NAME = '刺繍'
@@ -98,6 +107,17 @@ _SERVICE_NAME_ALIASES = {
     'ポケット縫い付け': 'ポケット取付',
     'ポケット縫付け': 'ポケット取付',
     '上衣加工': '上衣加工',
+    # K2 実務で確認済み（「加工」接尾が無くても明確な加工内容）
+    'ほつれ補修': 'ほつれ補修',
+    'ホツレ補修': 'ほつれ補修',
+    '綻び補修': 'ほつれ補修',
+    'インナー外し': 'インナー外し',
+    'インナー取り外し': 'インナー外し',
+    'インナー取外し': 'インナー外し',
+    'インナー取付': 'インナー取付',
+    'インナー取り付け': 'インナー取付',
+    'インナー取付け': 'インナー取付',
+    'インナー付け': 'インナー取付',
 }
 
 # 商品名から加工サービス名を拾うときの候補（長い語優先）
@@ -114,7 +134,8 @@ _SERVICE_NAME_CANDIDATES = sorted(
 
 # 明確な加工サービスを示す接尾（「加工」文字がなくても可）
 _SERVICE_SUFFIX_RE = re.compile(
-    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|裾上げ|裾直し|丈直し|サイズダウン|付け)$'
+    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|裾上げ|裾直し|丈直し|'
+    r'サイズダウン|付け|補修|外し|取り外し|取外し)$'
 )
 # 顧客固有の「〜用」接頭（わらく堂用上衣加工 など）
 _CUSTOMER_USE_RE = re.compile(r'^(.+?用)(.+)$')
@@ -166,6 +187,23 @@ def is_elms_corporation_vendor(supplier_name: str) -> bool:
     return False
 
 
+def is_k2_staff_workshop(supplier_name: str) -> bool:
+    """K2スタッフ工房（全角・半角・空白・法人格表記差含む）か。"""
+    key = normalize_vendor_key(supplier_name)
+    if not key:
+        return False
+    if key in _K2_VENDOR_KEYS:
+        return True
+    if 'k2' in key and 'スタッフ' in key:
+        return True
+    if key in {normalize_vendor_key(k) for k in _K2_VENDOR_KEYS}:
+        return True
+    disp_key = normalize_vendor_key(K2_VENDOR_DISPLAY)
+    if key == disp_key:
+        return True
+    return False
+
+
 def is_elms_embroidery_alias(service_name: str) -> bool:
     """刺繍／刺繍入れ／刺繍加工など同一サービス別名か。"""
     sk = normalize_service_key(service_name)
@@ -201,6 +239,8 @@ def canonical_processing_vendor(supplier_name: str) -> str:
     raw = stock.text(supplier_name)
     if is_elms_corporation_vendor(raw):
         return ELMS_VENDOR_DISPLAY
+    if is_k2_staff_workshop(raw):
+        return K2_VENDOR_DISPLAY
     key = normalize_vendor_key(raw)
     if key in _PROCESSING_VENDOR_DISPLAY:
         return _PROCESSING_VENDOR_DISPLAY[key]
@@ -213,6 +253,42 @@ def canonical_processing_vendor(supplier_name: str) -> str:
         t = re.sub(r'[\s\u3000]+', '', t)
         return t or raw
     return raw
+
+
+def _resolve_service_name_from_row_fields(
+    *,
+    product_name: str = '',
+    paren_processing: str = '',
+    code: str = '',
+) -> tuple[str, str]:
+    """当該行の情報だけから加工名を取る。別行からの借用はしない。
+
+    優先: 元商品名 → 加工欄 → 品番欄。衣服種だけの名称は採用しない。
+    戻り値: (serviceName, sourceField) sourceField は name/paren/code/''。
+    """
+    for field, raw in (
+        ('name', product_name),
+        ('paren', paren_processing),
+        ('code', code),
+    ):
+        t = stock.text(raw)
+        if not t:
+            continue
+        # 衣服種だけの名称（帽子・ベスト等）を加工名へ流用しない
+        if field != 'paren' and is_physical_parts_name(t):
+            continue
+        service = unify_processing_service_name(t)
+        if not service:
+            continue
+        # 衣服種だけの名称（帽子等）を加工名へ流用しない
+        # unify が空を返すのが本筋だが、strip 後が空なら棄却する
+        if field in ('name', 'code'):
+            stripped = _KIND_STRIP_RE.sub('', canonicalize_attach_verbs(t))
+            stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', stripped or ''))
+            if not stripped:
+                continue
+        return service, field
+    return '', ''
 
 
 def is_physical_parts_name(product_name: str) -> bool:
@@ -484,9 +560,11 @@ def classify_processing_service_row(
     supplier_t = stock.text(supplier)
     name_t = stock.text(product_name)
     code_t = stock.text(code)
+    paren_t = stock.text(paren_processing)
     vendor = is_processing_vendor(supplier_t)
     physical = is_physical_parts_name(name_t)
     elms = is_elms_corporation_vendor(supplier_t)
+    k2 = is_k2_staff_workshop(supplier_t)
     result = {
         'isProcessingVendor': vendor,
         'isPhysicalParts': physical,
@@ -500,6 +578,10 @@ def classify_processing_service_row(
         'identifiable': False,
         'excludeFromGarmentSuppliers': vendor,
         'elmsEmbroideryRule': False,
+        'k2StaffWorkshopRule': False,
+        'k2AutoExclude': False,
+        'autoExcludeReason': '',
+        'serviceNameSource': '',
     }
     # エルムスコーポレーション: 品番・商品名・実物部品らしさにかかわらず「刺繍」へ確定
     # （エプロン／ポロシャツ袖／サンプル／ワッペン作製／空欄／刺繍入れ も同じ）
@@ -531,35 +613,67 @@ def classify_processing_service_row(
         # （本体行の括弧加工は取扱へ。ここでは業者行のみサービス化する）
         return result
 
-    # 加工業者行
-    service = unify_processing_service_name(name_t)
-    if not service and paren_processing:
-        service = unify_processing_service_name(paren_processing)
+    # 加工業者行: 当該行の商品名・加工欄・品番欄のみから加工名を取る（別行は見ない）
+    service, source = _resolve_service_name_from_row_fields(
+        product_name=name_t, paren_processing=paren_t, code=code_t,
+    )
     if service:
         result['isProcessingService'] = True
         result['serviceName'] = service
         # 表示名の唯一の入力元は加工名（別項目を持たず常に同期）
         result['displayName'] = service
         result['identifiable'] = True
+        result['serviceNameSource'] = source
+        if k2:
+            result['k2StaffWorkshopRule'] = True
+            result['vendorName'] = K2_VENDOR_DISPLAY
         # 構成があれば specs に残す
         if result['rowSpecs'].get('composition') and result['rowSpecs']['composition'] != service:
             pass
         elif '＋' in service:
             result['rowSpecs']['composition'] = service
+        # 品番欄から加工名を取った場合、元品番は衣服SKUではないので対象コードを空に近づける
+        if source == 'code' and not unify_processing_service_name(name_t):
+            # 品番欄は加工名。衣服SKUとしては保持しない（別行の本体を巻き込まない）
+            result['targetGarmentCode'] = ''
+            result['rowSpecs']['originalCode'] = code_t
+            result['rowSpecs']['serviceNameFromCode'] = True
         return result
 
     # 業者は加工だが加工名が読めない → 架空加工を作らず確認
     # 業者名だけを根拠に不明な加工内容を推測しない
     # 表示名（予定名）から無条件に加工名を補完しない
-    result['needsConfirm'] = True
+    # K2: 確認待ちに残さず自動で登録対象外（別行の加工名は借用しない）
     result['displayName'] = ''
     missing = []
-    if not stock.text(name_t):
-        missing.append('加工名（原文名が空）')
+    if not stock.text(name_t) and not stock.text(code_t) and not paren_t:
+        missing.append('加工名（原文名・品番・加工欄が空）')
     else:
-        missing.append(f'加工名（原文「{name_t}」から明確な加工内容を特定できない）')
+        bits = []
+        if name_t:
+            bits.append(f'原文「{name_t}」')
+        if code_t:
+            bits.append(f'品番「{code_t}」')
+        if paren_t:
+            bits.append(f'加工欄「{paren_t}」')
+        missing.append(
+            f'加工名（{"・".join(bits) or "当該行"}から明確な加工内容を特定できない）'
+        )
     if not result['vendorName'] and not supplier_t:
         missing.append('加工業者')
+    if k2:
+        result['isProcessingVendor'] = True
+        result['k2StaffWorkshopRule'] = True
+        result['k2AutoExclude'] = True
+        result['needsConfirm'] = False
+        result['vendorName'] = K2_VENDOR_DISPLAY
+        result['autoExcludeReason'] = K2_AUTO_EXCLUDE_REASON
+        result['confirmReasons'] = [K2_AUTO_EXCLUDE_REASON]
+        result['missingFields'] = missing
+        result['excludeFromGarmentSuppliers'] = True
+        return result
+
+    result['needsConfirm'] = True
     result['confirmReasons'] = [
         f'加工業者「{result["vendorName"] or supplier_t or "（不明）"}」行ですが、'
         f'{"・".join(missing)}。架空の加工サービスは自動作成しません。'
