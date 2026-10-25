@@ -62,7 +62,7 @@
         sectionOpen:Object.assign({},SECTION_DEFAULTS),
         sectionPages:{unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1},
         expandedUnified:{},
-        selections:{},skuDecisions:{},rowClassifications:{},rowExclusions:{},commitToken:'',busy:false,open:false,
+        selections:{},skuDecisions:{},appliedSkuDecisions:{},rowClassifications:{},rowExclusions:{},commitToken:'',busy:false,open:false,
         makerLookup:null,bulkMakerLookup:null,_bulkMakerPoll:null,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
@@ -73,6 +73,7 @@
     if(!ui.expandedCodes)ui.expandedCodes={}
     if(!ui.rowClassifications)ui.rowClassifications={}
     if(!ui.rowExclusions)ui.rowExclusions={}
+    if(!ui.appliedSkuDecisions)ui.appliedSkuDecisions={}
     if(!ui.openingSelections)ui.openingSelections={}
     if(ui.makerLookup===undefined)ui.makerLookup=null
     if(ui.bulkMakerLookup===undefined)ui.bulkMakerLookup=null
@@ -100,7 +101,7 @@
     st.file=null;st.fileB64='';st.fileName='';st.fileSize=0
     st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
     st.history=null;st.historyError='';st.preview=null;st.previewError='';st.result=null
-    st.selections={};st.skuDecisions={};st.rowClassifications={};st.rowExclusions={}
+    st.selections={};st.skuDecisions={};st.appliedSkuDecisions={};st.rowClassifications={};st.rowExclusions={}
     st.rowExcludeSnapshots={}
     st.selectedCodes={};st.expandedCodes={};st.openingSelections={}
     st.makerLookup=null;st.bulkMakerLookup=null
@@ -647,8 +648,8 @@
 
   function productsRegisterBlocked(st){
     const c=judgmentStatusCounts(st)
-    // 確認リスト未解決=0 かつ 一括承認候補の未承認=0 で登録可
-    return (c.unresolved>0)||(c.unapproved>0)
+    // 確認リスト未解決=0 かつ 一括承認候補の未承認=0、かつ未反映の方針変更なしで登録可
+    return (c.unresolved>0)||(c.unapproved>0)||(pendingRematchCount(st)>0)
   }
 
   function pageSlice(st,key,items){
@@ -675,12 +676,14 @@
 
   function judgmentStatusBarHtml(st){
     const c=judgmentStatusCounts(st)
+    const pending=pendingRematchCount(st)
     return `<div class="sku-judgment-status-bar" data-sku-status-counts>
       <p class="notice sku-preregister-banner"><strong>登録確定前の確認画面です。</strong>「自動決定済み」「手動確定済み」は登録予定の状態であり、台帳への保存済みではありません。最終の「確認して商品を登録」まで商品・在庫は変わりません。</p>
       <p class="excelhint"><strong>登録前の件数:</strong>
-        未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}
+        未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}${pending?`　未反映 ${pending}`:''}
       </p>
-      <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。保留 ${c.hold} 件・登録しない ${c.rowExcluded||0} 行は登録対象外です。</p>
+      <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。保留 ${c.hold} 件・登録しない ${c.rowExcluded||0} 行は登録対象外です。${pending?' 未反映の方針変更がある間は再照合してください。':''}</p>
+      ${pendingRematchBannerHtml(st)}
     </div>`
   }
 
@@ -993,6 +996,81 @@
     st.skuDecisions[code]={...(st.skuDecisions[code]||{}),...patch}
   }
 
+  /** 直近の成功した再照合時点の方針（decision）だけを記録。成功時のみ更新。 */
+  function appliedDecisionForCode(st,code){
+    const snap=st.appliedSkuDecisions&&st.appliedSkuDecisions[code]
+    if(snap&&Object.prototype.hasOwnProperty.call(snap,'decision'))return snap.decision||''
+    return ''
+  }
+
+  function snapshotAppliedSkuDecisions(st){
+    const snap={}
+    const codes=new Set([
+      ...Object.keys(st.skuDecisions||{}),
+      ...(((st.preview&&st.preview.skuGroups)||[]).map(g=>g&&g.code).filter(Boolean))
+    ])
+    codes.forEach(code=>{
+      const local=skuDecision(st,code)
+      let dec=local.decision||''
+      if(!dec){
+        const g=((st.preview&&st.preview.skuGroups)||[]).find(x=>x&&x.code===code)
+        const remote=g&&g.decision
+        if(remote&&typeof remote==='object')dec=remote.decision||''
+        else if(typeof remote==='string')dec=remote
+      }
+      snap[code]={decision:dec||''}
+    })
+    st.appliedSkuDecisions=snap
+  }
+
+  function skuDecisionPendingRematch(st,code){
+    if(!code||!st||!st.preview)return false
+    const cur=skuDecision(st,code).decision||''
+    const applied=appliedDecisionForCode(st,code)
+    return cur!==applied
+  }
+
+  function pendingRematchCodes(st){
+    const codes=new Set()
+    Object.keys(st.skuDecisions||{}).forEach(code=>{
+      if(skuDecisionPendingRematch(st,code))codes.add(code)
+    })
+    ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
+      if(g&&g.code&&skuDecisionPendingRematch(st,g.code))codes.add(g.code)
+    })
+    return [...codes]
+  }
+
+  function pendingRematchCount(st){
+    return pendingRematchCodes(st).length
+  }
+
+  function pendingDecisionLabel(dec){
+    if(dec==='merge')return 'まとめるを選択中【未反映】'
+    if(dec==='color_split')return '色別に分けて登録を選択中【未反映】'
+    if(dec==='separate')return '個別に整理を選択中【未反映】'
+    if(dec==='hold')return '保留を選択中【未反映】'
+    return '選択中【未反映】'
+  }
+
+  function decisionDisplayLabel(st,g){
+    const dec=effectiveDecision(st,g)
+    if(dec&&skuDecisionPendingRematch(st,g&&g.code))return pendingDecisionLabel(dec)
+    return decisionLabel(dec)
+  }
+
+  function pendingRematchBannerHtml(st){
+    const n=pendingRematchCount(st)
+    if(!n)return ''
+    return `<div class="pl-pending-rematch-bar" role="status" data-pl-pending-count="${n}">
+      <div class="pl-pending-rematch-copy">
+        <strong>未反映の変更 ${n} 件</strong>
+        <span class="excelhint">方針の選択は編集状態に保存済みです。登録予定への反映は「選択を反映して再照合」でまとめて行います。</span>
+      </div>
+      <button type="button" id="plRePreviewPending" class="primary" ${st.busy?'disabled':''}>選択を反映して再照合</button>
+    </div>`
+  }
+
   function auxSupplierPanelHtml(st,g,d){
     const aux=g.auxPrimary
     if(!aux||!aux.applicable)return ''
@@ -1285,10 +1363,20 @@
         <option value="">選択…</option>${colorOpts}
       </select></label>
     </div>`).join('')
+    const pending=skuDecisionPendingRematch(st,g.code)
+    const hasPlans=!!plans.length
+    // 再照合前は色別予定が無い／古い統合対応表を確定予定として出さない
+    if(pending&&!hasPlans){
+      return `<div class="sku-color-split-form" data-plan-edit="color">
+        <p class="notice">色別に分けて登録を選択中【未反映】。色別の登録先・社内管理品番は再照合後に設定できます。</p>
+        <p class="excelhint">入力済みの色別編集があれば保持します。方針切替では消しません。「選択を反映して再照合」で登録予定を更新してください。</p>
+      </div>`
+    }
     return `<div class="sku-color-split-form" data-plan-edit="color">
       <p class="excelhint">${esc(split.note||'色ごとに別商品として登録予定です。まだ保存していません。確認・編集のうえ最終登録してください。統合用の仮代表名は使いません。')}</p>
+      ${pending?'<p class="notice">色別に分けて登録を選択中【未反映】。表示中の予定は前回の再照合結果です。再照合で最新化してください。</p>':''}
       <p class="excelhint">メーカー品番は元の「${esc(g.code)}」のまま（先頭ゼロも維持）。社内管理品番の初期値は「品番-色」です。緑と蛍光グリーンは別色です。</p>
-      ${planCards||'<p class="notice">色候補をまだ作れません。商品名の色を確認するか、行き先を指定してください。</p>'}
+      ${planCards||'<p class="notice">色候補をまだ作れません。商品名の色を確認するか、行き先を指定してください。再照合後に設定できます。</p>'}
       ${unCards?`<div class="sku-color-unassigned-list"><h4>行き先未定の行</h4>${unCards}</div>`:''}
       ${split.complete?'<p class="excelhint">予定は揃っています。再照合のあと「確認して商品を登録」で確定できます。</p>':'<p class="excelhint">未定の行き先・品番衝突を解消してから再照合してください。</p>'}
     </div>`
@@ -1377,16 +1465,18 @@
         <p class="excelhint">名称採用: 色別に分けて登録（${esc(colorSplitSummaryForGroup(g))}）</p>
         ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`
       :(namePlan.colorSplit
-        ?`<p class="excelhint">「同じ商品としてまとめる」に切り替えました。再照合すると統合用の名称予定が表示されます（色別の対応表は使いません）。</p>`
+        ?`<p class="excelhint">「同じ商品としてまとめる」に切り替えました。再照合すると統合用の名称予定が表示されます（色別の対応表は使いません）。${skuDecisionPendingRematch(st,g.code)?'【未反映】':''}</p>`
         :`${namePlan.adoptionRule?`<p class="excelhint">名称採用ルール: ${esc(namePlan.adoptionRule)}${namePlan.provisional?`（ステータス「${esc(st.preview&&st.preview.provisionalNameTag||'名称未整理')}」※名前には埋め込みません）`:''}</p>`:''}
         ${(namePlan.nameCandidates&&namePlan.nameCandidates.length>1)?`<p class="excelhint">名称候補: ${namePlan.nameCandidates.map(esc).join('／')}</p>`:''}
         ${(namePlan.auxNameReasons&&namePlan.auxNameReasons.length)?`<p class="excelhint">${namePlan.auxNameReasons.map(esc).join(' ')}</p>`:''}
         ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`)
     const auxPanel=auxSupplierPanelHtml(st,g,d)
     const colspan=Number(opts.colspan)||SKU_COMPARE_COL_COUNT
+    const decisionPending=!!(decision&&skuDecisionPendingRematch(st,g.code))
     return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="${colspan}">
       <div class="sku-detail-body">
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
+        ${decisionPending?`<p class="notice">${esc(pendingDecisionLabel(decision))} — 登録予定の再計算は「選択を反映して再照合」でまとめて行います。</p>`:''}
         ${namePlanBlock}
         ${isColorSplit?'':auxPanel}
         <div class="bar sku-decision-btns">
@@ -1398,6 +1488,7 @@
         </div>
         ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
+          ${decisionPending&&(namePlan.colorSplit||!(namePlan.nameMappings||[]).length)?'<p class="excelhint">統合用の名称予定は再照合後に設定できます。代表名・色・通常仕入先は今すぐ編集できます（方針切替では消しません）。</p>':''}
           ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
           <label data-plan-edit="name">公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
           <label data-plan-edit="name">代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
@@ -1411,11 +1502,12 @@
         </div>`:''}
         ${decision==='separate'?`<div class="sku-separate-form">
           <p class="excelhint">同じ通常品番のまま別商品として新規登録はできません。品番修正・部品扱い・保留のいずれかを内容ごとに選んでください。</p>
+          ${decisionPending?'<p class="excelhint">個別整理の内容は保持します。登録予定への反映は再照合後です。</p>':''}
           ${variantPlans}
         </div>`:''}
         ${decision==='hold'?`<div class="sku-hold-form">
           <label>保留理由<input data-pl-defer-reason="${esc(g.code)}" value="${esc(d.deferReason||'')}" placeholder="例: 制服本体と加工サービスの切り分けが未確定" ${st.busy?'disabled':''}></label>
-          <p class="excelhint">この品番は今回登録しません。同じCSVを後で再読込して処理できます。</p>
+          <p class="excelhint">この品番は今回登録しません。同じCSVを後で再読込して処理できます。${decisionPending?'【未反映】再照合で登録予定へ反映します。':''}</p>
         </div>`:''}
       </div>
     </td></tr>`
@@ -1446,10 +1538,12 @@
       const expanded=!!st.expandedCodes[g.code]
       const tier=g.reviewTier||'individual'
       const isColorSplit=decision==='color_split'
-      const stateLabel=decision?decisionLabel(decision):(tier==='bulk'?'未承認（一括承認候補）':(TIER_LABELS[tier]||g.reviewTierLabel||'未決定'))
+      const stateLabel=decision
+        ?(skuDecisionPendingRematch(st,g.code)?pendingDecisionLabel(decision):decisionLabel(decision))
+        :(tier==='bulk'?'未承認（一括承認候補）':(TIER_LABELS[tier]||g.reviewTierLabel||'未決定'))
       // 統合リストと同じ項目別状態表示（色別中も仮代表名を確定値に見せない）
       const planItem={kind:'sku',code:g.code,targetLabel:g.codeDisplay||g.code,group:g,rows:[],rowNos:g.rowNos||[],issues:[]}
-      return `<tr class="sku-list-row sku-tier-${esc(tier)} ${decision?`sku-dec-${esc(decision)}`:''}" data-sku-code="${esc(g.code)}" data-sku-section="${esc(section)}" data-review-tier="${esc(tier)}" data-decision="${esc(decision||'')}">
+      return `<tr class="sku-list-row sku-tier-${esc(tier)} ${decision?`sku-dec-${esc(decision)}`:''}${skuDecisionPendingRematch(st,g.code)?' is-pending-rematch':''}" data-sku-code="${esc(g.code)}" data-sku-section="${esc(section)}" data-review-tier="${esc(tier)}" data-decision="${esc(decision||'')}">
         <td class="sku-check" data-label="選択"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
         <td class="sku-code" data-label="品番"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(g.codeDisplay||g.code)}</button>
           <div class="sub">${esc(TIER_LABELS[tier]||g.reviewTierLabel||'')}</div></td>
@@ -1464,7 +1558,7 @@
           ${!isColorSplit&&(g.changeSummary||(g.auxPrimary&&g.auxPrimary.changeSummary))?`<div class="sub sku-color-change">${esc(g.changeSummary||g.auxPrimary.changeSummary)}</div>`:''}
         </td>
         <td class="sku-action" data-label="操作">
-          <div class="sku-action-label ${decision?`is-${esc(decision)}`:''}">${esc(stateLabel)}</div>
+          <div class="sku-action-label ${decision?`is-${esc(decision)}`:''}${skuDecisionPendingRematch(st,g.code)?' is-pending-rematch':''}">${esc(stateLabel)}</div>
           <div class="bar sku-mini-btns">
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめ</button>
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
@@ -2022,14 +2116,15 @@
         const decision=d.decision||''
         const checked=!!st.selectedCodes[g.code]
         const skuExpanded=!!st.expandedCodes[g.code]
-        return `<tr class="sku-list-row unified-list-row sku-tier-individual" data-unified-id="${esc(item.id)}" data-sku-code="${esc(g.code)}" data-sku-section="unified" data-review-tier="individual" data-decision="${esc(decision||'')}">
+        const pendingDec=!!(decision&&skuDecisionPendingRematch(st,g.code))
+        return `<tr class="sku-list-row unified-list-row sku-tier-individual${pendingDec?' is-pending-rematch':''}" data-unified-id="${esc(item.id)}" data-sku-code="${esc(g.code)}" data-sku-section="unified" data-review-tier="individual" data-decision="${esc(decision||'')}">
           <td class="sku-check" data-label="選択"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
           <td class="sku-code" data-label="対象"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(item.targetLabel)}</button>
             <div class="sub">品番単位</div></td>
           <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(st,item)}</td>
           <td class="sku-why" data-label="残っている確認事項">${unifiedIssuesHtml(item)}</td>
           <td class="sku-action" data-label="操作">
-            <div class="sku-action-label">${esc(decision?decisionLabel(decision):'未決定')}</div>
+            <div class="sku-action-label${pendingDec?' is-pending-rematch':''}">${esc(decision?(pendingDec?pendingDecisionLabel(decision):decisionLabel(decision)):'未決定')}</div>
             <div class="bar sku-mini-btns">
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめる</button>
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
@@ -3012,6 +3107,7 @@
       const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
       st.preview=nextPreview
       st.previewError=''
+      snapshotAppliedSkuDecisions(st)
       st.toast(`メーカー補正を ${adopted} 件採用しました（プレビュー反映のみ。台帳未登録）`)
     }catch(e){
       st.toast(apiErrorMessage(e,'一括採用に失敗しました。'),6000)
@@ -3304,6 +3400,66 @@
       plans[key]={...(plans[key]||{}),newCode:el.value}
       setSkuDecision(st,code,{plans})
     })
+    document.querySelectorAll('[data-pl-sep-approach]').forEach(el=>{
+      const code=el.getAttribute('data-pl-sep-approach')
+      const key=el.getAttribute('data-pl-sep-key')
+      const d=skuDecision(st,code)
+      const plans={...(d.plans||{})}
+      plans[key]={...(plans[key]||{}),approach:el.value}
+      setSkuDecision(st,code,{plans})
+    })
+    // 色別登録先・社内管理品番は方針切替でも消さない
+    ;(()=>{
+      const byCode={}
+      document.querySelectorAll('[data-pl-color-internal]').forEach(el=>{
+        const code=el.getAttribute('data-pl-color-internal')
+        const key=el.getAttribute('data-pl-color-key')
+        if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+        byCode[code].colorPlans[key]={...(byCode[code].colorPlans[key]||{}),internalCode:el.value,colorKey:key}
+      })
+      document.querySelectorAll('[data-pl-color-name]').forEach(el=>{
+        const code=el.getAttribute('data-pl-color-name')
+        const key=el.getAttribute('data-pl-color-key')
+        if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+        byCode[code].colorPlans[key]={...(byCode[code].colorPlans[key]||{}),productName:el.value,colorKey:key}
+      })
+      document.querySelectorAll('[data-pl-color-color]').forEach(el=>{
+        const code=el.getAttribute('data-pl-color-color')
+        const key=el.getAttribute('data-pl-color-key')
+        if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+        byCode[code].colorPlans[key]={...(byCode[code].colorPlans[key]||{}),color:el.value,colorKey:key}
+      })
+      document.querySelectorAll('[data-pl-color-keep]:checked').forEach(el=>{
+        const code=el.getAttribute('data-pl-color-keep')
+        const key=el.getAttribute('data-pl-color-key')
+        if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+        const vid=el.value
+        byCode[code].colorPlans[key]={
+          ...(byCode[code].colorPlans[key]||{}),
+          colorKey:key,
+          keepProductId:vid?Number(vid):null,
+          collisionAction:vid?'reuse':'edit'
+        }
+      })
+      document.querySelectorAll('[data-pl-color-dest]').forEach(el=>{
+        const code=el.getAttribute('data-pl-color-dest')
+        const rowNo=el.getAttribute('data-pl-row')
+        if(!byCode[code])byCode[code]={colorPlans:{},rowDestinations:{...(skuDecision(st,code).rowDestinations||{})}}
+        if(el.value)byCode[code].rowDestinations[String(rowNo)]=el.value
+        else delete byCode[code].rowDestinations[String(rowNo)]
+      })
+      Object.keys(byCode).forEach(code=>{
+        const prev=skuDecision(st,code)
+        const mergedPlans={...(prev.colorPlans||{}),...byCode[code].colorPlans}
+        Object.keys(byCode[code].colorPlans).forEach(k=>{
+          mergedPlans[k]={...(prev.colorPlans&&prev.colorPlans[k]||{}),...byCode[code].colorPlans[k]}
+        })
+        setSkuDecision(st,code,{
+          colorPlans:mergedPlans,
+          rowDestinations:{...(prev.rowDestinations||{}),...byCode[code].rowDestinations}
+        })
+      })
+    })()
   }
 
   /** paintDialog の innerHTML 全描画で消えるスクロールを退避する */
@@ -3483,13 +3639,18 @@
            　未承認 ${statusCounts?statusCounts.unapproved:0}
            　登録しない ${statusCounts?statusCounts.rowExcluded:0}行
            　（参考: 行要確認 ${review} / 品番未決定 ${skuPending}）
-            ${registerBlocked?' — 未解決または未承認が残っているため登録できません。保留または「この行を登録しない」で登録対象から外せます。':' — 確認リストの未解決が0で承認も完了しているため登録可能です。'}</p>
+            ${registerBlocked
+              ?(pendingRematchCount(st)>0
+                ?' — 未反映の方針変更があります。再照合してください。'
+                :' — 未解決または未承認が残っているため登録できません。保留または「この行を登録しない」で登録対象から外せます。')
+              :' — 確認リストの未解決が0で承認も完了しているため登録可能です。'}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
+          ${pendingRematchBannerHtml(st)}
           ${skuGroupsHtml(st)}
           <div class="bar product-ledger-preview-actions">
-            <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
-            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||registerBlocked?'disabled':''}>確認して商品を登録（保留は除外）</button>
+            <button type="button" id="plRePreview" class="${pendingRematchCount(st)?'primary':''}" ${st.busy?'disabled':''}>選択を反映して再照合</button>
+            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||registerBlocked?'disabled':''} title="${pendingRematchCount(st)?'再照合してください':''}">確認して商品を登録（保留は除外）</button>
           </div>
           ${st.makerLookup&&st.makerLookup.scope==='row'?makerLookupPanelHtml(st,{forRowNo:st.makerLookup.rowNo}):''}
           ${sourceRowsPanelHtml(st)}`):''
@@ -3524,6 +3685,7 @@
     st.result=null
     st.selections={}
     st.skuDecisions={}
+    st.appliedSkuDecisions={}
     st.rowClassifications={}
     st.rowExclusions={}
     st.rowExcludeSnapshots={}
@@ -3820,10 +3982,14 @@
           ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
             if(skuDecision(st,g.code).decision==='merge')applyAuxDefaultsForMerge(st,g.code,g)
           })
+          // 成功時のみ未反映を解消（失敗時は appliedSkuDecisions を触らない）
+          snapshotAppliedSkuDecisions(st)
           // 元行一覧は詳細確認用。既定はすべて表示（確認作業は統合リスト側）
           st.statusFilter=''
           if(st.sectionOpen)st.sectionOpen.sourceRows=false
           st.page=1
+        }else{
+          snapshotAppliedSkuDecisions(st)
         }
         if(st.preview.previousImports&&!st.history){
           st.history={previousImports:st.preview.previousImports}
@@ -3848,6 +4014,7 @@
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
     const reBtn=$('#plRePreview');if(reBtn)reBtn.onclick=runPreview
+    const rePending=$('#plRePreviewPending');if(rePending)rePending.onclick=runPreview
     const q=$('#plQ');if(q)q.oninput=()=>{st.q=q.value;st.page=1;paintDialog({resetTableScroll:true})}
     const stSel=$('#plStatus');if(stSel)stSel.onchange=()=>{st.statusFilter=stSel.value;st.page=1;paintDialog({resetTableScroll:true})}
     const pPrev=$('#plPrev');if(pPrev)pPrev.onclick=()=>{st.page=Math.max(1,st.page-1);paintDialog({resetTableScroll:true})}
@@ -3963,8 +4130,12 @@
       const jc=judgmentStatusCounts(st)
       const msg=`【承認対象スコープ】一括承認候補の未承認 ${bulk.length} 件すべて（${pages}ページ分）\n確認リストの未解決 ${jc.unresolved} 件は含めません。\n品番ごとに予定の代表名・通常仕入先を使います（他品番の仕入先は割り当てません）。\n承認後は「承認済み（未登録）」として確認できます（折りたたみだけでは承認されません。最終登録までは未登録です）。\n\n${lines.join('\n')}${more}\n\nよろしいですか？`
       if(!confirm(msg))return
+      harvestFormEdits(st)
       bulk.forEach(g=>applyMergeDefaults(st,g.code,g))
-      st.toast(`一括承認候補 ${bulk.length} 件を承認済み（未登録）にしました（確認リスト未解決 ${jc.unresolved} 件は対象外）`)
+      const pendingN=pendingRematchCount(st)
+      st.toast(pendingN
+        ?`一括承認候補 ${bulk.length} 件を選択しました【未反映 ${pendingN}】。「選択を反映して再照合」で登録予定を更新してください。`
+        :`一括承認候補 ${bulk.length} 件を承認済み（未登録）にしました（確認リスト未解決 ${jc.unresolved} 件は対象外）`)
       paintDialog()
     }
     const bulkHold=$('#plSkuBulkHold')
@@ -3976,10 +4147,14 @@
       const targets=codes.map(c=>byCode[c]).filter(Boolean)
       const msg=`選択 ${targets.length} 品番を「今回は保留」します。\n保留分は今回登録せず、同じCSVの再読込で後から処理できます。\n\n品番: ${targets.slice(0,20).map(g=>g.code).join('、')}${targets.length>20?` …他${targets.length-20}`:''}\n\nよろしいですか？`
       if(!confirm(msg))return
+      harvestFormEdits(st)
       targets.forEach(g=>{
         setSkuDecision(st,g.code,{decision:'hold',deferReason:skuDecision(st,g.code).deferReason||'一括保留'})
       })
-      st.toast(`${targets.length} 品番を保留にしました`)
+      const pendingN=pendingRematchCount(st)
+      st.toast(pendingN
+        ?`${targets.length} 品番を保留にしました【未反映 ${pendingN}】。再照合で登録予定へ反映します。`
+        :`${targets.length} 品番を保留にしました`)
       paintDialog()
     }
 
@@ -4001,34 +4176,33 @@
 
     document.querySelectorAll('[data-pl-sku-dec]').forEach(el=>{
       el.onclick=()=>{
+        if(st.busy)return
         const code=el.getAttribute('data-pl-sku-dec')
         const dec=el.getAttribute('data-dec')
         const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>g.code===code)
+        // 方針選択は編集状態へ保存するだけ。全件再照合・CSV再読込・メーカー検索はしない。
+        harvestFormEdits(st)
         if(dec==='merge'&&group){
-          const needRematch=(skuDecision(st,code).decision==='color_split')
-            ||!!(group.namePlan&&group.namePlan.colorSplit)
-            ||!!group.colorSplit
           applyMergeDefaults(st,code,group)
           st.expandedCodes[code]=true
-          paintDialog({anchorCode:code})
-          // 色別→まとめの切替後は統合用 namePlan を再生成して表示を一致させる
-          if(needRematch){
-            runPreview({anchorCode:code})
-            return
+          if(skuDecisionPendingRematch(st,code)){
+            st.toast('まとめるを選択しました【未反映】。「選択を反映して再照合」で登録予定を更新してください。')
           }
         }else if(dec==='color_split'){
+          // 色別の colorPlans / 個別整理 plans 等は方針切替で消さない
           setSkuDecision(st,code,{decision:'color_split'})
           st.expandedCodes[code]=true
-          // 予定は再照合でサーバ生成（クリックだけでは保存しない）
-          st.toast('色別の登録予定を作ります。内容を確認・編集してから最終登録してください。')
-          paintDialog({anchorCode:code})
-          runPreview({anchorCode:code})
-          return
+          st.toast('色別に分けて登録を選択しました【未反映】。登録予定は再照合後に設定できます。')
         }else{
           setSkuDecision(st,code,{decision:dec})
           if(dec==='separate'||dec==='hold')st.expandedCodes[code]=true
+          if(skuDecisionPendingRematch(st,code)){
+            st.toast(dec==='hold'
+              ?'保留を選択しました【未反映】。再照合で登録予定へ反映します。'
+              :'個別に整理を選択しました【未反映】。再照合で登録予定へ反映します。')
+          }
         }
-        // 切替直後に詳細表示を現在の選択へ合わせる（統合対応表と色別フォームの混在防止）
+        // 軽いUI更新のみ（サーバ再照合・全画面データ再生成はしない）
         paintDialog({anchorCode:code})
       }
     })
@@ -4412,10 +4586,11 @@
           st.toast(skuScope
             ?'メーカー情報を品番グループの登録予定へ採用しました（まだ台帳には登録していません）'
             :'メーカー情報を予定へ採用しました（まだ台帳には登録していません）')
-          // 再照合して差分を画面へ反映
+          // 再照合して差分を画面へ反映（成功時のみ反映済み）
           const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
           st.preview=nextPreview
           st.previewError=''
+          snapshotAppliedSkuDecisions(st)
         }catch(e){
           st.toast(apiErrorMessage(e,'採用に失敗しました。'),6000)
         }finally{
@@ -4537,6 +4712,9 @@
         try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }else{
         if(productsRegisterBlocked(st)){
+          if(pendingRematchCount(st)>0){
+            st.toast('未反映の方針変更があります。再照合してください。');return
+          }
           st.toast('確認リストの未解決、または一括承認候補の未承認が残っています。先に解決してください。');return
         }
         const p=st.preview.plannedCounts||{}
@@ -4618,6 +4796,16 @@
       skuRowDetailHtml,
       effectiveDecision,
       decisionLabel,
+      pendingDecisionLabel,
+      decisionDisplayLabel,
+      appliedDecisionForCode,
+      snapshotAppliedSkuDecisions,
+      skuDecisionPendingRematch,
+      pendingRematchCodes,
+      pendingRematchCount,
+      pendingRematchBannerHtml,
+      setSkuDecision,
+      applyMergeDefaults,
       SECTION_DEFAULTS,
       SKU_COMPARE_COL_COUNT,
       UNIFIED_REVIEW_COL_COUNT,
