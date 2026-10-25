@@ -924,7 +924,7 @@
             <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
         </td>
-      </tr>${expanded?skuRowDetailHtml(st,g):''}`
+      </tr>${skuMakerLookupRowHtml(st,g.code)}${expanded?skuRowDetailHtml(st,g):''}`
     }).join('')
   }
 
@@ -1171,12 +1171,18 @@
     </div>`
   }
 
-  function makerLookupPanelHtml(st){
+  function makerLookupPanelHtml(st,opts){
+    opts=opts||{}
     const panel=st.makerLookup
     if(!panel)return ''
+    // 品番行インライン表示時は、その品番向けパネルだけ出す
+    if(opts.forSkuCode!=null&&(panel.scope!=='sku'||String(panel.skuCode)!==String(opts.forSkuCode)))return ''
+    if(opts.forRowNo!=null&&(panel.scope!=='row'||Number(panel.rowNo)!==Number(opts.forRowNo)))return ''
     const res=panel.result||{}
     const cands=Array.isArray(res.candidates)?res.candidates:[]
-    const status=esc(res.statusLabel||panel.statusLabel||'—')
+    const matchedPages=Array.isArray(res.matchedPages)?res.matchedPages:[]
+    const searching=!panel.result&&!panel.error&&(panel.statusLabel==='検索中…'||st.busy)
+    const status=esc(res.statusLabel||panel.statusLabel||(searching?'検索中…':'—'))
     const note=esc(res.note||'')
     const ref=res.referenceUrl||''
     const skuScope=panel.scope==='sku'
@@ -1185,20 +1191,33 @@
       :`行 ${esc(String(panel.rowNo||''))}`
     const list=cands.map((c,i)=>{
       const diff=c.diff||{}
+      const missing=(c.missingFields||[]).filter(Boolean)
       return `<li class="pl-maker-cand">
-        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.supplement?`　補足 ${esc(c.supplement)}`:''}
+        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${c.supplement?`　補足 ${esc(c.supplement)}`:''}
           ${c.makerSku?`　品番 ${esc(c.makerSku)}`:''}
           ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
           ${c.fromSaved?' <span class="badge">保存済み</span>':''}
           ${c.preferred?' <span class="sub">優先候補</span>':''}
+          ${c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':''}
         </div>
+        ${missing.length?`<div class="excelhint">不足項目: ${missing.map(esc).join('、')}</div>`:''}
         <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')} / 補足 ${esc(diff.currentSupplement||'（空）')}</div>
         <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'} / 補足 ${diff.supplementChanged?'変わる':'同じ'}</div>
         ${c.sourceUrl?`<div class="excelhint"><a href="${esc(c.sourceUrl)}" target="_blank" rel="noopener">参考URL</a></div>`:''}
-        <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy?'disabled':''}>採用</button>
+        <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy||!c.name?'disabled':''}>採用</button>
       </li>`
     }).join('')
-    return `<div class="notice pl-maker-lookup-panel" role="region" aria-label="メーカー情報で補正">
+    const matchedList=matchedPages.length
+      ?`<ul class="pl-maker-matched-pages">${matchedPages.map(p=>{
+          const miss=(p.missingFields||[]).filter(Boolean)
+          return `<li class="excelhint">
+            ${p.sourceUrl?`<a href="${esc(p.sourceUrl)}" target="_blank" rel="noopener">参照ページ</a>`:'参照ページ'}
+            ${p.title?` — ${esc(p.title)}`:''}
+            ${miss.length?`　不足: ${miss.map(esc).join('、')}`:''}
+          </li>`
+        }).join('')}</ul>`
+      :''
+    return `<div class="notice pl-maker-lookup-panel" role="region" aria-label="メーカー情報で補正" data-pl-maker-panel="${esc(panel.scope||'')}">
       <div class="bar">
         <strong>メーカー情報で補正</strong>
         <span class="sub">${scopeLabel}　メーカー品番 ${esc(panel.makerSku||'')}
@@ -1207,14 +1226,30 @@
         </span>
         <button type="button" class="quiet" id="plMakerLookupClose" ${st.busy?'disabled':''}>閉じる</button>
       </div>
-      <p>状態: <strong>${status}</strong></p>
+      <p>状態: <strong>${status}</strong>${searching?' <span class="sub">メーカーページを検索しています…</span>':''}</p>
       ${note?`<p class="excelhint">${note}</p>`:''}
       ${skuScope?`<p class="excelhint">品番内の色表記ゆれをメーカー情報で揃え、1商品の登録予定へまとめます。メーカー側に複数色がある場合は候補から選んでください（自動では決めません）。</p>`:''}
       ${panel.error?`<p class="product-ledger-import-error" role="alert">${esc(panel.error)}</p>`:''}
-      ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:`<p class="excelhint">採用できる候補はありません。</p>`}
+      ${matchedList}
+      ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:(searching?'':`<p class="excelhint">採用できる候補はありません。</p>`)}
       ${ref?`<p class="excelhint"><a href="${esc(ref)}" target="_blank" rel="noopener">参考ページを開く</a>（開いただけでは補正完了になりません）</p>`:''}
       <p class="excelhint">「採用」はプレビューの予定名／色／補足だけを更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
     </div>`
+  }
+
+  function skuMakerLookupRowHtml(st,code){
+    const panel=st.makerLookup
+    if(!panel||panel.scope!=='sku'||String(panel.skuCode)!==String(code))return ''
+    return `<tr class="sku-maker-lookup-row" data-sku-maker-lookup="${esc(code)}"><td colspan="8">${makerLookupPanelHtml(st,{forSkuCode:code})}</td></tr>`
+  }
+
+  function scrollMakerLookupIntoView(){
+    const dlg=document.getElementById('productLedgerCsvDialog')||document.querySelector('dialog.product-ledger-csv-dialog')
+    const root=dlg||document
+    const el=root.querySelector('.pl-maker-lookup-panel')||root.querySelector('[data-sku-maker-lookup]')
+    if(el&&typeof el.scrollIntoView==='function'){
+      try{el.scrollIntoView({block:'nearest',inline:'nearest'})}catch(_){el.scrollIntoView(false)}
+    }
   }
 
   function tableHtml(st){
@@ -1626,7 +1661,7 @@
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
             <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して商品を登録（保留は除外）</button>
           </div>
-          ${makerLookupPanelHtml(st)}
+          ${st.makerLookup&&st.makerLookup.scope==='row'?makerLookupPanelHtml(st,{forRowNo:st.makerLookup.rowNo}):''}
           ${tableHtml(st)}`):''
     dlg.innerHTML=`<div class="dialoghead"><h2>${esc(title)}</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
@@ -2266,6 +2301,7 @@
           statusLabel:'検索中…',result:null,error:''
         }
         paintDialog()
+        scrollMakerLookupIntoView()
         try{
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
@@ -2281,14 +2317,15 @@
           })
         }catch(e){
           st.makerLookup=Object.assign({},st.makerLookup,{
-            result:{status:'fetch_failed',statusLabel:'取得できない',candidates:[],
-              referenceUrl:'',note:'検索リクエストに失敗しました。'},
-            statusLabel:'取得できない',
+            result:{status:'fetch_failed',statusLabel:'検索結果取得不可',candidates:[],
+              matchedPages:[],referenceUrl:'',note:'検索リクエストに失敗しました。'},
+            statusLabel:'検索結果取得不可',
             error:apiErrorMessage(e,'メーカー情報を取得できませんでした。')
           })
         }finally{
           st.busy=false
           paintDialog()
+          scrollMakerLookupIntoView()
         }
       }
     })
@@ -2307,6 +2344,8 @@
         const currentColor=d.color||group.plannedRegisteredColor||group.plannedColor||''
         const currentSupplement=''
         st.busy=true
+        // 結果を品番の直下に出すため、検索中も展開しておく
+        st.expandedCodes[code]=true
         st.makerLookup={
           scope:'sku',skuCode:code,rowNos,rowNo:firstRow?firstRow.rowNo:null,
           makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
@@ -2314,6 +2353,7 @@
           sourceName,statusLabel:'検索中…',result:null,error:''
         }
         paintDialog()
+        scrollMakerLookupIntoView()
         try{
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
@@ -2329,14 +2369,15 @@
           })
         }catch(e){
           st.makerLookup=Object.assign({},st.makerLookup,{
-            result:{status:'fetch_failed',statusLabel:'取得できない',candidates:[],
-              referenceUrl:'',note:'検索リクエストに失敗しました。'},
-            statusLabel:'取得できない',
+            result:{status:'fetch_failed',statusLabel:'検索結果取得不可',candidates:[],
+              matchedPages:[],referenceUrl:'',note:'検索リクエストに失敗しました。'},
+            statusLabel:'検索結果取得不可',
             error:apiErrorMessage(e,'メーカー情報を取得できませんでした。')
           })
         }finally{
           st.busy=false
           paintDialog()
+          scrollMakerLookupIntoView()
         }
       }
     })

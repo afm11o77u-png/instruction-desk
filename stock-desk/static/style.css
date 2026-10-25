@@ -478,6 +478,9 @@ dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780p
   white-space:normal;overflow-wrap:anywhere;word-break:break-word
 }
 .pl-maker-lookup-panel{margin:10px 0;padding:10px 12px}
+.sku-maker-lookup-row td{background:#f7faf8;padding:6px 8px;border-top:0}
+.sku-maker-lookup-row .pl-maker-lookup-panel{margin:4px 0 8px}
+.pl-maker-matched-pages{margin:6px 0;padding-left:1.2em}
 .pl-maker-cand-list{margin:6px 0 0;padding-left:1.1em}
 .pl-maker-cand{margin:8px 0;padding:6px 0;border-top:1px solid rgba(0,0,0,.08)}
 .pl-maker-cand .primary{margin-top:4px}

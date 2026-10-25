@@ -322,7 +322,7 @@ class MakerLookupFlowTest(unittest.TestCase):
                     supplier='仕入A',
                 )
             self.assertEqual(res['status'], 'fetch_failed')
-            self.assertEqual(res['statusLabel'], '取得できない')
+            self.assertEqual(res['statusLabel'], '検索結果取得不可')
             self.assertTrue(res.get('referenceUrl'))
             self.assertEqual(res['supplierIgnored'], '仕入A')
             # 保存済みは残る

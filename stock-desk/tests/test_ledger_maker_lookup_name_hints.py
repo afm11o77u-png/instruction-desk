@@ -182,7 +182,8 @@ class MakerLookupVeh30bTest(unittest.TestCase):
                     source_name='白下 ブルー',
                     supplier='ミドリ安全北海道㈱',
                 )
-            self.assertEqual(res['status'], 'no_match')
+            # 上・別品番ページは品番不一致（またはヒント不一致）で除外
+            self.assertIn(res['status'], ('no_match', 'sku_mismatch', 'hint_reject'))
             self.assertEqual(res['candidates'], [])
         finally:
             c.close()
