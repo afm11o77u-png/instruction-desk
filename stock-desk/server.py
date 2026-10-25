@@ -336,6 +336,40 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             print(f'maker-lookup failed: {type(e).__name__}: {e}', flush=True)
             return 400, {'error': 'メーカー情報の検索に失敗しました。', 'code': 'maker_lookup_failed'}
         return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/from-url':
+        import maker_sku_lookup
+        try:
+            with stock.connect(db_path) as c:
+                result = maker_sku_lookup.lookup_maker_product_from_url(
+                    c,
+                    url=payload.get('url') or payload.get('sourceUrl') or payload.get('source_url') or '',
+                    manufacturer=payload.get('manufacturer') or '',
+                    maker_sku=payload.get('makerSku') or payload.get('maker_sku') or '',
+                    current_name=payload.get('currentName') or payload.get('current_name') or '',
+                    current_color=payload.get('currentColor') or payload.get('current_color') or '',
+                    current_supplement=(
+                        payload.get('currentSupplement')
+                        or payload.get('current_supplement')
+                        or ''
+                    ),
+                    current_sku=(
+                        payload.get('currentSku')
+                        or payload.get('current_sku')
+                        or payload.get('plannedRegisteredSku')
+                        or ''
+                    ),
+                    source_name=payload.get('sourceName') or payload.get('source_name') or '',
+                    supplier=payload.get('supplier') or '',
+                )
+        except ValueError as e:
+            return 400, {'error': str(e) or 'URLとメーカー品番を確認してください。'}
+        except (OSError, sqlite3.Error) as e:
+            print(f'maker-lookup from-url failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '指定URLからの商品情報取得に失敗しました。',
+                'code': 'maker_lookup_from_url_failed',
+            }
+        return 200, result
     if path == '/api/product-ledger-csv/maker-lookup/adopt':
         import maker_sku_lookup
         try:
