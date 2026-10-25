@@ -325,6 +325,7 @@ class SkuCompareMakerPreviewTest(unittest.TestCase):
                     c, manufacturer='ミドリ安全', maker_sku='72-1226',
                 )
             self.assertEqual(fail['status'], 'fetch_failed')
+            self.assertEqual(fail['statusLabel'], '検索結果取得不可')
 
             bad = msl.search_maker_product(c, manufacturer='', maker_sku='別注')
             self.assertEqual(bad['status'], 'invalid_sku')
@@ -344,6 +345,9 @@ class SkuCompareMakerUiSourceTest(unittest.TestCase):
         self.assertIn('makerAdopted:true', js)
         # 既存の行単位ボタンも維持
         self.assertIn('data-pl-maker-correct', js)
+        # 品番直下の結果パネル
+        self.assertIn('skuMakerLookupRowHtml', js)
+        self.assertIn('scrollMakerLookupIntoView', js)
 
 
 if __name__ == '__main__':
