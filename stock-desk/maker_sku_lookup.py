@@ -331,11 +331,16 @@ def sku_group_maker_correction_meta(group: dict, rows=None) -> dict:
     """品番比較一覧の「メーカー情報で補正」表示用。
 
     表示条件:
+    - 確認待ち（needsDecision）である
     - 有効なメーカー品番がある（別注・品番なし・空は不可）
-    - 同じ品番内に、正規化後も異なる色候補が複数ある（colorDiffPossible）
+    - メーカー情報をまだ採用していない
+    色・商品名・商品種など確認理由の種類では非表示にしない。
     社内管理品番がある行は元のメーカー品番（makerCode）を使う。
+    一括取得（bulkEligible）も同じ「有効メーカー品番」判定。
     """
     color_diff = bool(group.get('colorDiffPossible'))
+    needs_decision = bool(group.get('needsDecision'))
+    already_adopted = bool(group.get('makerCorrectionAdopted'))
     row_list = [r for r in (rows or []) if isinstance(r, dict)]
     maker_sku = ''
     manufacturer = ''
@@ -369,19 +374,23 @@ def sku_group_maker_correction_meta(group: dict, rows=None) -> dict:
             if stock.text(n)
         ]
     valid_sku = bool(maker_sku) and is_valid_maker_sku(maker_sku)
-    eligible = valid_sku and color_diff
+    # 確認待ち＋有効品番。色競合の有無では落とさない
+    show_button = valid_sku and needs_decision and not already_adopted
+    multi_names = len(source_names) > 1
+    if color_diff or multi_names:
+        # 複数旧名／色競合時は色語を除き、一色・一名ヒントで候補を落とさない
+        source_hint = neutral_search_source_name(source_names)
+    else:
+        source_hint = source_names[0] if source_names else ''
     return {
-        'eligible': eligible,
-        'showButton': eligible,
+        'eligible': show_button,
+        'showButton': show_button,
         # 一括取得は色競合の有無に関わらず、有効メーカー品番があれば対象
         'bulkEligible': valid_sku,
         'makerSku': maker_sku if valid_sku else '',
         'manufacturer': manufacturer,
         'supplier': supplier,
-        # 色競合時は色語を除いた名で検索し、一色ヒントで候補を落とさない
-        'sourceNameHint': neutral_search_source_name(source_names) if color_diff else (
-            source_names[0] if source_names else ''
-        ),
+        'sourceNameHint': source_hint,
         'colorDiffPossible': color_diff,
         'rowNos': list(group.get('rowNos') or []),
     }
