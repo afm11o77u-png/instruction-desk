@@ -43,13 +43,19 @@ OPENING_STATUS_LABELS = {
 def _names_equivalent_core(a, b):
     """原文名の同一判定。
 
-    core key（NFKC）・取込表記統一に加え、共有の色表記正規化（半角カナ・配色区切り・色辞書）
-    でも一致を見る。類似度だけでは寄せない。別SKUへは呼び出し側の品番フィルタが守る。
+    core key（本体＋明示色）・取込表記統一に加え、共有の色表記正規化（半角カナ・配色区切り・色辞書）
+    でも一致を見る。括弧内外の色位置差・帽子／キャップ等の明示シノニムも吸収する。
+    類似度だけでは寄せない。別SKUへは呼び出し側の品番フィルタが守る。
     """
     ta, tb = stock.text(a), stock.text(b)
     if not ta or not tb:
         return False
     if legacy.product_name_core_key(ta) == legacy.product_name_core_key(tb):
+        return True
+    # 本体キー一致＋色キー一致（片方色なしはここでは同一視しない＝色省略は上位処理）
+    ba, ca, _, _ = legacy.product_name_base_and_color(ta)
+    bb, cb, _, _ = legacy.product_name_base_and_color(tb)
+    if ba and ba == bb and ca == cb:
         return True
     # 半角カナ等: classify と同じ unify（SKU 全体 NFKC はしない）でも照合
     import product_ledger_paren as paren_classify
