@@ -20,7 +20,8 @@
   const MAX_POST_BODY_BYTES=12_000_000
   const OVERSIZE_MSG='ファイル容量が上限を超えています'
   const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
-  const SECTION_DEFAULTS={individual:true,bulk:false,auto:false,hold:false}
+  // unified=確認リスト（旧・個別確認＋行要確認の統合）。sourceRows=元行一覧（詳細確認用・既定折りたたみ）
+  const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,sourceRows:false}
   const MODE_CHOOSE=''
   const MODE_PRODUCTS='products'
   const MODE_OPENING='opening_stock'
@@ -48,7 +49,8 @@
         skuQ:'',skuReasonFilter:'',skuPage:1,
         selectedCodes:{},expandedCodes:{},
         sectionOpen:Object.assign({},SECTION_DEFAULTS),
-        sectionPages:{individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1},
+        sectionPages:{unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1},
+        expandedUnified:{},
         selections:{},skuDecisions:{},rowClassifications:{},commitToken:'',busy:false,open:false,
         makerLookup:null,bulkMakerLookup:null,_bulkMakerPoll:null,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
@@ -67,7 +69,12 @@
     Object.keys(SECTION_DEFAULTS).forEach(k=>{
       if(ui.sectionOpen[k]==null)ui.sectionOpen[k]=SECTION_DEFAULTS[k]
     })
-    if(!ui.sectionPages)ui.sectionPages={individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    // 旧「individual」開閉を確認リストへ引き継ぐ
+    if(ui.sectionOpen.unified==null&&ui.sectionOpen.individual!=null){
+      ui.sectionOpen.unified=!!ui.sectionOpen.individual
+    }
+    if(!ui.sectionPages)ui.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    if(!ui.expandedUnified)ui.expandedUnified={}
     if(ui.previewReqSeq==null)ui.previewReqSeq=0
     if(!ui.basisDate)ui.basisDate=todayISO()
     if(!ui.defaultSiteName)ui.defaultSiteName='未確認'
@@ -86,7 +93,8 @@
     st.makerLookup=null;st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
-    st.sectionPages={individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.expandedUnified={}
     st.skuQ='';st.skuReasonFilter='';st.skuPage=1;st.page=1
     st.progressLabel=''
   }
@@ -135,10 +143,208 @@
     }
   }
 
+  function isNormalLedgerCode(code){
+    const t=String(code||'').trim()
+    if(!t)return false
+    if(t==='別注'||t==='不明')return false
+    return true
+  }
+
+  function rowIssueResolved(st,r,issue){
+    const key=String(r.rowNo)
+    const edit=(st.rowClassifications&&st.rowClassifications[key])||{}
+    const sel=(st.selections&&st.selections[key])||{}
+    if(issue.type==='paren_confirm')return !!edit.confirmed
+    if(issue.type==='processing_name'){
+      const ps=r.processingService||{}
+      const pc=r.parenClassification||{}
+      const name=String(edit.processing!=null?edit.processing:(ps.serviceName||pc.processing||'')).trim()
+      return !!edit.confirmed&&!!name
+    }
+    if(issue.type==='product_pick')return !!(sel.productId||sel.forceCreate)
+    if(issue.type==='handle_pick')return !!sel.handleId
+    if(issue.type==='category'){
+      const cur=sel.category!=null?sel.category:((r.product||{}).category||'')
+      return cur!=null&&String(cur)!==''
+    }
+    return false
+  }
+
+  function collectRowIssues(st,r){
+    const issues=[]
+    const ps=r.processingService||{}
+    const pc=r.parenClassification||{}
+    const processingView=!!(r.processingServiceView||pc.processingServiceView||(ps.isProcessingVendor&&!r.physicalPartsView&&!pc.physicalPartsView&&!ps.isPhysicalParts))
+    if(processingView&&(ps.needsConfirm||pc.needsConfirm)){
+      issues.push({
+        type:'processing_name',
+        label:'加工名の確認',
+        detail:(ps.missingFields||[]).join('・')||pc.processingMissingHint||''
+      })
+    }else if(pc.needsConfirm||r.parenNeedsConfirm){
+      issues.push({
+        type:'paren_confirm',
+        label:'括弧分類・メーカー補正候補の確認',
+        detail:(r.reasons||[]).join(' ')
+      })
+    }
+    if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length&&!r.skuDecisionNeeded){
+      issues.push({type:'product_pick',label:'商品の選択',detail:''})
+    }
+    if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
+      issues.push({type:'handle_pick',label:'取扱の選択',detail:''})
+    }
+    if(r.status==='needs_review'&&r.product&&r.product.blankSku){
+      issues.push({type:'category',label:'区分の確認',detail:''})
+    }
+    if(r.status==='needs_review'&&!issues.length){
+      const labs=(r.reasons||[]).filter(Boolean)
+      ;(labs.length?labs:['要確認']).forEach(lab=>{
+        issues.push({type:'generic',label:String(lab),detail:''})
+      })
+    }
+    return issues.map(iss=>Object.assign({},iss,{resolved:rowIssueResolved(st,r,iss)}))
+  }
+
+  function unifiedTargetMetaForRow(r){
+    const csv=r.csv||{}
+    const ps=r.processingService||{}
+    const pc=r.parenClassification||{}
+    const physicalParts=!!(r.physicalPartsView||pc.physicalPartsView||ps.isPhysicalParts)
+    const processingView=!!(r.processingServiceView||pc.processingServiceView||(ps.isProcessingVendor&&!physicalParts))
+    if(processingView){
+      const name=ps.serviceName||pc.processing||''
+      const vendor=ps.vendorName||csv.supplier||''
+      const label=`${name||'（加工名未定）'}／${vendor||'（業者未定）'}`
+      return {key:`proc:${name}\0${vendor}`,kind:'processing',label,code:''}
+    }
+    const code=String(csv.code||'')
+    if(isNormalLedgerCode(code)&&!(r.product&&r.product.blankSku)){
+      return {key:`sku-row:${code}`,kind:'sku_row',label:csv.codeDisplay||code,code}
+    }
+    // 品番なし・別注・不明・実物部品: 既存 matchGroupKey で無関係なものをまとめない
+    const mg=r.matchGroupKey||`row:${r.rowNo}`
+    let kind='row'
+    if(physicalParts||(r.product&&r.product.blankSku)||!code)kind='blank'
+    else if(code==='別注')kind='custom'
+    else if(code==='不明')kind='unknown'
+    const label=code
+      ?`${csv.codeDisplay||code}／${csv.productName||'—'}`
+      :(csv.productName||`行${r.rowNo}`)
+    return {key:`mg:${mg}`,kind,label,code,matchGroupKey:mg}
+  }
+
+  /**
+   * 統合確認リスト（表示用）。品番単位の個別確認と行単位の要確認を
+   * 「登録するもの・判断する対象ごと」に1行へ集約。二重表示しない。
+   * 判定・保存ロジック自体は skuGroups / rows のまま。
+   */
+  function buildUnifiedReviewItems(st){
+    const part=partitionJudgmentGroups(st)
+    const items=[]
+    const coveredSkuCodes=new Set()
+
+    ;(part.individual||[]).forEach(g=>{
+      const reasons=(g.reviewReasons||[]).map(r=>({
+        type:'sku_reason',
+        code:r.code||'',
+        label:r.label||'要確認',
+        detail:(r.values||[]).join(' / '),
+        values:r.values||[],
+        resolved:false
+      }))
+      const issues=reasons.length?reasons:[{type:'sku_reason',label:'個別確認',detail:'',resolved:false}]
+      items.push({
+        id:`sku:${g.code}`,
+        kind:'sku',
+        sortKey:String(g.codeDisplay||g.code||''),
+        targetLabel:g.codeDisplay||g.code,
+        plannedName:plannedNameForGroup(st,g),
+        plannedSupplier:plannedSupplierDisplay(st,g),
+        plannedColor:g.plannedRegisteredColor||g.plannedColor||'',
+        issues,
+        unresolvedIssueCount:issues.filter(i=>!i.resolved).length,
+        group:g,
+        rows:[],
+        rowNos:g.rowNos||[],
+        code:g.code
+      })
+      coveredSkuCodes.add(String(g.code))
+    })
+
+    const buckets={}
+    ;((st.preview&&st.preview.rows)||[]).forEach(r=>{
+      if(!r||r.status!=='needs_review')return
+      // 品番比較待ちは SKU 区分（個別／一括）側。下リストへ重複させない
+      if(r.skuDecisionNeeded)return
+      const csv=r.csv||{}
+      const code=String(csv.code||'')
+      if(code&&coveredSkuCodes.has(code))return
+      const meta=unifiedTargetMetaForRow(r)
+      if(!buckets[meta.key])buckets[meta.key]={meta,rows:[],issueMap:{}}
+      buckets[meta.key].rows.push(r)
+      collectRowIssues(st,r).forEach(iss=>{
+        const ik=`${iss.type}|${iss.label}`
+        const prev=buckets[meta.key].issueMap[ik]
+        if(!prev)buckets[meta.key].issueMap[ik]=iss
+        else if(!iss.resolved)prev.resolved=false
+      })
+    })
+
+    Object.keys(buckets).forEach(bk=>{
+      const b=buckets[bk]
+      let issues=Object.keys(b.issueMap).map(k=>b.issueMap[k])
+      let open=issues.filter(i=>!i.resolved)
+      // 行ステータスが needs_review のままなら、ローカル確認済みでも再照合までリストに残す
+      if(!open.length&&issues.length){
+        issues=issues.concat([{type:'repreview',label:'再照合して反映',detail:'確認内容をプレビューへ反映してください',resolved:false}])
+        open=issues.filter(i=>!i.resolved)
+      }
+      if(!open.length)return
+      const sample=b.rows[0]||{}
+      const csv=sample.csv||{}
+      const ps=sample.processingService||{}
+      const pc=sample.parenClassification||{}
+      const edit=(st.rowClassifications&&st.rowClassifications[String(sample.rowNo)])||{}
+      items.push({
+        id:b.meta.key,
+        kind:b.meta.kind,
+        sortKey:String(b.meta.label||''),
+        targetLabel:b.meta.label,
+        plannedName:edit.plannedName!=null?edit.plannedName:(ps.serviceName||pc.plannedName||csv.productName||''),
+        plannedSupplier:ps.vendorName||csv.supplier||'',
+        plannedColor:edit.color!=null?edit.color:(pc.color||''),
+        issues,
+        unresolvedIssueCount:open.length,
+        group:null,
+        rows:b.rows,
+        rowNos:b.rows.map(x=>x.rowNo),
+        code:b.meta.code||csv.code||'',
+        matchGroupKey:b.meta.matchGroupKey||sample.matchGroupKey||''
+      })
+    })
+
+    items.sort((a,b)=>String(a.sortKey).localeCompare(String(b.sortKey),'ja'))
+    return items
+  }
+
+  function unifiedReviewCounts(st){
+    const items=buildUnifiedReviewItems(st)
+    return {
+      items,
+      unresolved:items.length,
+      issueCount:items.reduce((n,it)=>n+(Number(it.unresolvedIssueCount)||0),0)
+    }
+  }
+
   function judgmentStatusCounts(st){
     const p=partitionJudgmentGroups(st)
+    const unified=unifiedReviewCounts(st)
     return {
-      unresolved:p.individual.length,
+      // 未解決 = 統合リストの未解決対象数（上下二重計上しない）
+      unresolved:unified.unresolved,
+      issueCount:unified.issueCount,
+      individualSku:p.individual.length,
       unapproved:p.bulkUnapproved.length,
       approved:p.approved.length,
       autoDecided:p.autoCount,
@@ -146,6 +352,12 @@
       separate:p.separate.length,
       excluded:p.excludedRows
     }
+  }
+
+  function productsRegisterBlocked(st){
+    const c=judgmentStatusCounts(st)
+    // 確認リスト未解決=0 かつ 一括承認候補の未承認=0 で登録可
+    return (c.unresolved>0)||(c.unapproved>0)
   }
 
   function pageSlice(st,key,items){
@@ -162,9 +374,10 @@
 
   function sectionPagerHtml(key,slice,total){
     if(!total)return ''
+    const unit=key==='unified'?'件':'品番'
     return `<div class="bar legacy-csv-pager sku-section-pager" data-sku-section-pager="${esc(key)}">
       <button type="button" data-pl-section-page="${esc(key)}" data-dir="-1" ${slice.page<=1?'disabled':''}>前へ</button>
-      <span>${slice.page} / ${slice.pages}ページ（${total}品番）</span>
+      <span>${slice.page} / ${slice.pages}ページ（${total}${unit}）</span>
       <button type="button" data-pl-section-page="${esc(key)}" data-dir="1" ${slice.page>=slice.pages?'disabled':''}>次へ</button>
     </div>`
   }
@@ -173,8 +386,9 @@
     const c=judgmentStatusCounts(st)
     return `<div class="sku-judgment-status-bar" data-sku-status-counts>
       <p class="excelhint"><strong>登録前の件数:</strong>
-        未解決 ${c.unresolved}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}
+        未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　承認済み（未登録） ${c.approved}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.separate?`　個別整理 ${c.separate}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}
       </p>
+      <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。保留 ${c.hold} 件は登録対象外です。</p>
     </div>`
   }
 
@@ -327,16 +541,19 @@
   function outcomeSummaryHtml(st){
     const s=st.preview&&st.preview.outcomeSummary
     if(!s)return ''
+    const c=judgmentStatusCounts(st)
     const fmt=(arr)=>((arr||[]).slice(0,8).map(x=>`${esc(x.label)} ${x.count}`).join('／'))||'—'
     const more=(arr)=>((arr||[]).length>8?` …他${(arr||[]).length-8}`:'')
     return `<div class="sku-outcome-summary">
       <h3>取込判断の件数</h3>
+      <p><strong>確認リスト未解決</strong> ${c.unresolved} 件（確認事項 ${c.issueCount}）
+        <span class="sub">品番比較・行要確認を統合。同じ対象は二重計上しません</span></p>
       <p><strong>自動まとめ</strong> ${s.autoMergedSkuGroups||0} 品番 / ${s.autoMergedCsvRows||0} 行
         <span class="sub">（${fmt(s.autoMergedReasons)}${more(s.autoMergedReasons)}）</span></p>
-      <p><strong>要確認（品番比較 未決定）</strong> ${s.needsReviewSkuGroups||0} 品番
+      <p><strong>参考: 品番比較 未決定</strong> ${s.needsReviewSkuGroups||0} 品番
         <span class="sub">（${fmt(s.needsReviewSkuReasons)}${more(s.needsReviewSkuReasons)}）</span></p>
-      ${(s.needsReviewRows||0)?`<p><strong>要確認（行）</strong> ${s.needsReviewRows} 行
-        <span class="sub">（${fmt(s.needsReviewRowReasons)}${more(s.needsReviewRowReasons)}）</span></p>`:''}
+      ${(s.needsReviewRows||0)?`<p><strong>参考: 行要確認</strong> ${s.needsReviewRows} 行
+        <span class="sub">（${fmt(s.needsReviewRowReasons)}${more(s.needsReviewRowReasons)}）／作業は確認リスト側</span></p>`:''}
       <p><strong>対象外</strong> ${s.excludedRows||0} 行
         <span class="sub">（${fmt(s.excludedReasons)}${more(s.excludedReasons)}）</span></p>
     </div>`
@@ -989,36 +1206,186 @@
     return `<button type="button" class="quiet" data-pl-section-toggle="${esc(key)}" ${st.busy?'disabled':''}>${open?'閉じる':(openLabel||'開く')}</button>`
   }
 
+  function matchesUnifiedFilters(st,item){
+    const q=(st.skuQ||'').trim().toLowerCase()
+    const reason=st.skuReasonFilter||''
+    if(reason==='bulk')return false
+    if(reason==='merge'||reason==='hold')return false
+    if(reason==='individual'&&item.kind!=='sku')return false
+    if(reason==='pending'&&!(item.unresolvedIssueCount>0))return false
+    if(reason==='name_wording'&&!(item.group&&item.group.nameWordingDiff))return false
+    if(reason==='supplier'&&!(item.group&&item.group.supplierDiff))return false
+    if(reason==='color'&&!(item.group&&item.group.colorDiffPossible))return false
+    if(reason==='processing'&&!(item.group&&item.group.processingDiffPossible)&&item.kind!=='processing')return false
+    if(reason==='kind'&&!(item.group&&item.group.kindDiffPossible))return false
+    if(!q)return true
+    const hay=[
+      item.targetLabel,item.plannedName,item.plannedSupplier,item.plannedColor,item.code,
+      (item.issues||[]).map(i=>i.label).join(' '),
+      (item.rowNos||[]).join(' ')
+    ].join(' ').toLowerCase()
+    return hay.includes(q)
+  }
+
+  function unifiedIssuesHtml(item){
+    const open=(item.issues||[]).filter(i=>!i.resolved)
+    if(!open.length)return '<span class="sub">—</span>'
+    return `<ul class="sku-reason-list unified-issue-list">${open.map(i=>{
+      const det=i.detail?`（${esc(i.detail)}）`:''
+      return `<li>${esc(i.label||'')}${det}</li>`
+    }).join('')}</ul>`
+  }
+
+  function unifiedPlanHtml(item){
+    const bits=[]
+    bits.push(`<div><strong>${esc(item.plannedName||'—')}</strong></div>`)
+    if(item.plannedColor)bits.push(`<div class="sub">色: ${esc(item.plannedColor)}</div>`)
+    if(item.plannedSupplier)bits.push(`<div class="sub">${item.kind==='processing'?'加工業者':'仕入先'}: ${esc(item.plannedSupplier)}</div>`)
+    if(item.kind==='sku'&&item.group&&item.group.nameAdoptionRule){
+      bits.push(`<div class="sub">${esc(item.group.nameAdoptionRule)}</div>`)
+    }
+    if((item.rowNos||[]).length){
+      bits.push(`<div class="sub">CSV行 ${(item.rowNos||[]).slice(0,8).join(',')}${(item.rowNos||[]).length>8?'…':''}</div>`)
+    }
+    return bits.join('')
+  }
+
+  function unifiedRowDetailHtml(st,item){
+    const rows=item.rows||[]
+    if(!rows.length)return ''
+    const body=rows.map(r=>{
+      const csv=r.csv||{}
+      return `<div class="unified-row-detail-card" data-unified-row="${r.rowNo}">
+        <p class="excelhint">行 ${r.rowNo}　顧客 ${esc(csv.customer||'—')}　サイズ ${esc(csv.size||'—')}　原文 ${esc(csv.productName||'—')}　仕入先 ${esc(csv.supplier||'—')}</p>
+        <div class="unified-row-detail-grid">
+          <div>${parenCell(st,r)}</div>
+          <div><p class="excelhint">登録先: ${targetCell(r)}</p><div class="bar">${rowActions(st,r)}</div></div>
+        </div>
+        <p class="excelhint">${esc((r.reasons||[]).join(' ')||'')}</p>
+      </div>`
+    }).join('')
+    return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="5">
+      <div class="sku-detail-body">
+        <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。</p>
+        ${body}
+      </div>
+    </td></tr>`
+  }
+
+  function unifiedListRowsHtml(st,items){
+    if(!(items||[]).length){
+      return '<tr><td colspan="5">未解決の確認対象はありません。</td></tr>'
+    }
+    return items.map(item=>{
+      const expanded=!!(st.expandedUnified&&st.expandedUnified[item.id])
+      if(item.kind==='sku'&&item.group){
+        // 既存の品番操作を統合リストから利用（チェック・まとめ／色別／保留／メーカー／詳細）
+        const g=item.group
+        const d=skuDecision(st,g.code)
+        const decision=d.decision||''
+        const checked=!!st.selectedCodes[g.code]
+        const skuExpanded=!!st.expandedCodes[g.code]
+        return `<tr class="sku-list-row unified-list-row sku-tier-individual" data-unified-id="${esc(item.id)}" data-sku-code="${esc(g.code)}" data-sku-section="unified" data-review-tier="individual" data-decision="${esc(decision||'')}">
+          <td class="sku-check" data-label="選択"><input type="checkbox" data-pl-sku-check="${esc(g.code)}" ${checked?'checked':''} ${st.busy?'disabled':''}></td>
+          <td class="sku-code" data-label="対象"><button type="button" class="linkish" data-pl-sku-expand="${esc(g.code)}">${esc(item.targetLabel)}</button>
+            <div class="sub">品番単位</div></td>
+          <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(item)}</td>
+          <td class="sku-why" data-label="残っている確認事項">${unifiedIssuesHtml(item)}</td>
+          <td class="sku-action" data-label="操作">
+            <div class="sku-action-label">${esc(decision?decisionLabel(decision):'未決定')}</div>
+            <div class="bar sku-mini-btns">
+              <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめる</button>
+              <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
+              <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="separate" class="${decision==='separate'?'primary':'quiet'}" ${st.busy?'disabled':''}>別物のため個別に整理</button>
+              <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" ${st.busy?'disabled':''}>保留</button>
+              ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
+              <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${skuExpanded?'詳細を閉じる':'詳細を開く'}</button>
+            </div>
+          </td>
+        </tr>${skuMakerLookupRowHtml(st,g.code)}${skuExpanded?skuRowDetailHtml(st,g):''}`
+      }
+      const kindLabel={processing:'加工サービス',blank:'品番なし・部品資材',custom:'別注',unknown:'不明',sku_row:'行要確認',row:'行要確認'}[item.kind]||'要確認'
+      return `<tr class="sku-list-row unified-list-row unified-kind-${esc(item.kind)}" data-unified-id="${esc(item.id)}" data-sku-section="unified">
+        <td class="sku-check" data-label="選択"><span class="sub">—</span></td>
+        <td class="sku-code" data-label="対象"><button type="button" class="linkish" data-pl-unified-expand="${esc(item.id)}">${esc(item.targetLabel)}</button>
+          <div class="sub">${esc(kindLabel)}</div></td>
+        <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(item)}</td>
+        <td class="sku-why" data-label="残っている確認事項">${unifiedIssuesHtml(item)}</td>
+        <td class="sku-action" data-label="操作">
+          <div class="sku-action-label">要確認</div>
+          <div class="bar sku-mini-btns">
+            ${item.rows&&item.rows[0]&&(item.rows[0].makerCorrection||{}).eligible&&(item.rows[0].makerCorrection||{}).makerSku
+              ?`<button type="button" class="quiet" data-pl-maker-correct="${item.rows[0].rowNo}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
+            <button type="button" class="quiet" data-pl-unified-expand="${esc(item.id)}">${expanded?'詳細を閉じる':'詳細を開く'}</button>
+          </div>
+        </td>
+      </tr>${expanded?unifiedRowDetailHtml(st,item):''}`
+    }).join('')
+  }
+
+  function unifiedCompareTableHtml(st,items){
+    return `<div class="sku-compare-wrap unified-review-wrap"><table class="sku-compare-table unified-review-table">
+      <thead><tr>
+        <th></th><th>対象</th><th>登録予定</th><th>残っている確認事項</th><th class="sku-action-h">操作</th>
+      </tr></thead>
+      <tbody>${unifiedListRowsHtml(st,items)}</tbody>
+    </table></div>`
+  }
+
+  function sourceRowsPanelHtml(st){
+    const open=!!(st.sectionOpen&&st.sectionOpen.sourceRows)
+    const review=(st.preview&&st.preview.reviewCount)||0
+    return `<section class="sku-judgment-section sku-section-source-rows" data-sku-section-block="sourceRows">
+      <header class="sku-section-header bar">
+        <h4>元行一覧（詳細確認用） <span class="sub">確認作業の第二リストではありません</span></h4>
+        ${sectionToggleBtn(st,'sourceRows',open?'閉じる':'開く')}
+      </header>
+      ${open?`<div class="sku-section-body">
+        <p class="excelhint">顧客・サイズ・行番号・原文・行ごとの仕様／登録先はここか、確認リストの「詳細を開く」で確認してください。通常の未解決処理は上の確認リストだけで完結します。</p>
+        <div class="bar product-ledger-preview-actions">
+          <input type="search" id="plQ" placeholder="検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
+          <select id="plStatus">
+            <option value="">すべて</option>
+            ${STATUS_ORDER.map(k=>`<option value="${k}" ${st.statusFilter===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
+          </select>
+          <span class="excelhint">行の要確認 ${review} 件（参考。未解決件数は確認リスト側）</span>
+        </div>
+        ${tableHtml(st)}
+      </div>`:`<p class="excelhint sku-section-collapsed-hint">折りたたみ中。確認リストの操作後に行の対応を見たいときだけ開いてください。</p>`}
+    </section>`
+  }
+
   function skuGroupsHtml(st){
     const part=partitionJudgmentGroups(st)
     const counts=judgmentStatusCounts(st)
+    const unifiedAll=buildUnifiedReviewItems(st).filter(it=>matchesUnifiedFilters(st,it))
     const hasAny=counts.unresolved||counts.unapproved||counts.approved||counts.autoDecided||counts.hold||counts.separate||counts.excluded
-    if(!hasAny&&!(st.preview&&(st.preview.skuGroups||[]).length))return ''
+    if(!hasAny&&!(st.preview&&(st.preview.skuGroups||[]).length)&&!((st.preview&&st.preview.rows)||[]).length)return ''
     const selected=selectedCodeList(st)
     const filterList=(arr)=>arr.filter(g=>matchesSkuFilters(st,g))
-    const indivAll=filterList(part.individual)
     const bulkAll=filterList(part.bulkUnapproved)
     const approvedAll=filterList(part.approved)
     const holdAll=filterList(part.hold)
     const separateAll=filterList(part.separate)
-    const indivSlice=pageSlice(st,'individual',indivAll)
+    const unifiedSlice=pageSlice(st,'unified',unifiedAll)
     const bulkSlice=pageSlice(st,'bulk',bulkAll)
     const approvedSlice=pageSlice(st,'approved',approvedAll)
     const holdSlice=pageSlice(st,'hold',holdAll)
     const separateSlice=pageSlice(st,'separate',separateAll)
     const bulkPages=bulkSlice.pages
-    const indivOpen=!!(st.sectionOpen&&st.sectionOpen.individual)
+    const unifiedOpen=!!(st.sectionOpen&&(st.sectionOpen.unified!=null?st.sectionOpen.unified:st.sectionOpen.individual))
     const bulkOpen=!!(st.sectionOpen&&st.sectionOpen.bulk)
     const autoOpen=!!(st.sectionOpen&&st.sectionOpen.auto)
     const holdOpen=!!(st.sectionOpen&&st.sectionOpen.hold)
     const bulkApproveLabel=`一括承認候補${part.bulkUnapproved.length}件を承認`
     const bulkScopeHint=part.bulkUnapproved.length
-      ?`承認対象は「一括承認候補」区分の未承認 ${part.bulkUnapproved.length} 件すべて（${bulkPages}ページ分）。個別確認が必要・保留・自動決定済みは含みません。折りたたみだけでは承認されません。`
+      ?`承認対象は「一括承認候補」区分の未承認 ${part.bulkUnapproved.length} 件すべて（${bulkPages}ページ分）。確認リスト（未解決）・保留・自動決定済みは含みません。折りたたみだけでは承認されません。`
       :'未承認の一括承認候補はありません。'
 
-    const indivBody=indivOpen?`<div class="sku-section-body">
-      ${sectionPagerHtml('individual',indivSlice,indivAll.length)}
-      ${skuCompareTableHtml(st,indivSlice.pageItems,{section:'individual'})}
+    const unifiedBody=unifiedOpen?`<div class="sku-section-body">
+      <p class="excelhint">1行＝登録・判断する対象（通常品番／色別の親品番／加工名＋業者／品番なし・別注・部品資材の識別単位）。同じ対象の複数確認は同じ行にまとめ、解決した項目だけ外します。下の元行一覧を別途確認する必要はありません。</p>
+      ${sectionPagerHtml('unified',unifiedSlice,unifiedAll.length)}
+      ${unifiedCompareTableHtml(st,unifiedSlice.pageItems)}
       ${separateAll.length?`<div class="sku-subsection">
         <h4>個別整理済み（未登録） ${separateAll.length} 件</h4>
         ${sectionPagerHtml('separate',separateSlice,separateAll.length)}
@@ -1046,15 +1413,15 @@
     </div>`:''
 
     return `<div class="sku-groups-panel sku-judgment-sections" data-sku-judgment-sections>
-      <h3>品番ごとの判断一覧（通常品番）</h3>
-      <p class="excelhint">区分は判断状態（reviewTier / needsDecision / decision）で振り分けます。色は見た目の補助だけです。1行=1品番。未解決から順に対応してください。代表名未確定時は「名称未整理」ステータス（名前へは埋め込みません）。</p>
+      <h3>確認リスト（統合）</h3>
+      <p class="excelhint">品番単位の判断とCSV行単位の要確認を1つのリストに統合しています。未解決から順に対応してください。チェックは一括操作の選択だけで、チェックだけでは承認・検索・登録しません。</p>
       ${judgmentStatusBarHtml(st)}
       <div class="bar sku-list-toolbar">
-        <input type="search" id="plSkuQ" placeholder="品番・商品名・仕入先・理由で検索" value="${esc(st.skuQ||'')}" ${st.busy?'disabled':''}>
+        <input type="search" id="plSkuQ" placeholder="対象・商品名・仕入先・確認事項で検索" value="${esc(st.skuQ||'')}" ${st.busy?'disabled':''}>
         <select id="plSkuReason" ${st.busy?'disabled':''}>
           <option value="">理由すべて</option>
           <option value="bulk" ${st.skuReasonFilter==='bulk'?'selected':''}>一括承認候補</option>
-          <option value="individual" ${st.skuReasonFilter==='individual'?'selected':''}>個別確認</option>
+          <option value="individual" ${st.skuReasonFilter==='individual'?'selected':''}>品番の個別確認</option>
           <option value="pending" ${st.skuReasonFilter==='pending'?'selected':''}>未決定のみ</option>
           <option value="merge" ${st.skuReasonFilter==='merge'?'selected':''}>承認済み</option>
           <option value="hold" ${st.skuReasonFilter==='hold'?'selected':''}>保留済</option>
@@ -1064,7 +1431,7 @@
           <option value="processing" ${st.skuReasonFilter==='processing'?'selected':''}>加工の疑い</option>
           <option value="kind" ${st.skuReasonFilter==='kind'?'selected':''}>商品種の疑い</option>
         </select>
-        <button type="button" id="plSkuSelectPage" ${st.busy||!(indivOpen||bulkOpen)?'disabled':''}>開いている区分の表示ページを選択</button>
+        <button type="button" id="plSkuSelectPage" ${st.busy||!(unifiedOpen||bulkOpen)?'disabled':''}>開いている区分の表示ページを選択</button>
         <button type="button" id="plSkuClearSel" class="quiet" ${st.busy||!selected.length?'disabled':''}>選択解除</button>
         <button type="button" id="plSkuBulkHold" ${st.busy||!selected.length?'disabled':''}>選択を今回は保留する</button>
         <button type="button" id="plBulkMakerFetch" class="quiet" ${st.busy||!selected.length||(st.bulkMakerLookup&&st.bulkMakerLookup.running)?'disabled':''}>選択した商品のメーカー情報を取得</button>
@@ -1072,12 +1439,13 @@
       </div>
       ${bulkMakerPanelHtml(st)}
 
-      <section class="sku-judgment-section sku-section-individual" data-sku-section-block="individual">
+      <section class="sku-judgment-section sku-section-individual sku-section-unified" data-sku-section-block="unified">
         <header class="sku-section-header bar">
-          <h4>個別確認が必要 <span class="sku-section-count">${part.individual.length}件</span>${part.separate.length?` <span class="sub">／個別整理 ${part.separate.length}</span>`:''}</h4>
-          ${sectionToggleBtn(st,'individual')}
+          <h4>確認リスト <span class="sku-section-count">未解決 ${counts.unresolved}件</span>
+            <span class="sub">確認事項 ${counts.issueCount}${part.separate.length?` ／個別整理 ${part.separate.length}`:''}</span></h4>
+          ${sectionToggleBtn(st,'unified')}
         </header>
-        ${indivOpen?indivBody:`<p class="excelhint sku-section-collapsed-hint">閉じています。未解決 ${part.individual.length} 件${part.separate.length?`／個別整理 ${part.separate.length} 件`:''}（開いても選択・編集は消えません）。</p>`}
+        ${unifiedOpen?unifiedBody:`<p class="excelhint sku-section-collapsed-hint">閉じています。未解決 ${counts.unresolved} 件／確認事項 ${counts.issueCount}${part.separate.length?`／個別整理 ${part.separate.length} 件`:''}（開いても選択・編集は消えません）。</p>`}
       </section>
 
       <section class="sku-judgment-section sku-section-bulk" data-sku-section-block="bulk">
@@ -2103,6 +2471,8 @@
     const saved=(opts.preserveScroll!==false&&hadBody)?captureLedgerScroll(dlg):null
     const review=(st.preview&&st.preview.reviewCount)||0
     const skuPending=(st.preview&&st.preview.skuDecisionPending)||0
+    const statusCounts=st.preview?judgmentStatusCounts(st):null
+    const registerBlocked=st.preview?productsRegisterBlocked(st):true
     const canWrite=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
     dlg.classList.add('product-ledger-dialog','legacy-csv-detail-dialog')
     if(!st.importMode){
@@ -2129,21 +2499,20 @@
       :`<p class="excelhint">${esc(st.preview.note||'')}</p>
           ${timingsHtml(st)}
           ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定補助）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
-          <p><strong>${countLine(st.preview.countsRaw)}</strong>　行の要確認 ${review}件　品番未決定 ${skuPending}件${(review||skuPending)? '（未決定の品番は確定できません。保留にすれば登録対象から外せます）':''}</p>
+          <p><strong>${countLine(st.preview.countsRaw)}</strong>
+           　確認リスト未解決 ${statusCounts?statusCounts.unresolved:0}件　確認事項 ${statusCounts?statusCounts.issueCount:0}
+           　未承認 ${statusCounts?statusCounts.unapproved:0}
+           　（参考: 行要確認 ${review} / 品番未決定 ${skuPending}）
+            ${registerBlocked?' — 未解決または未承認が残っているため登録できません。保留にすれば登録対象から外せます。':' — 確認リストの未解決が0で承認も完了しているため登録可能です。'}</p>
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
           ${skuGroupsHtml(st)}
           <div class="bar product-ledger-preview-actions">
-            <input type="search" id="plQ" placeholder="検索（顧客・品番・商品名・理由）" value="${esc(st.q||'')}">
-            <select id="plStatus">
-              <option value="">すべて</option>
-              ${STATUS_ORDER.map(k=>`<option value="${k}" ${st.statusFilter===k?'selected':''}>${STATUS_LABELS[k]}</option>`).join('')}
-            </select>
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
-            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||review>0||skuPending>0?'disabled':''}>確認して商品を登録（保留は除外）</button>
+            <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||registerBlocked?'disabled':''}>確認して商品を登録（保留は除外）</button>
           </div>
           ${st.makerLookup&&st.makerLookup.scope==='row'?makerLookupPanelHtml(st,{forRowNo:st.makerLookup.rowNo}):''}
-          ${tableHtml(st)}`):''
+          ${sourceRowsPanelHtml(st)}`):''
     dlg.innerHTML=`<div class="dialoghead"><h2>${esc(title)}</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
         <p class="merge-lead">${lead}</p>
@@ -2182,7 +2551,8 @@
     st.selectedCodes={}
     st.expandedCodes={}
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
-    st.sectionPages={individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1}
+    st.expandedUnified={}
     st.skuQ='';st.skuReasonFilter='';st.skuPage=1
     st.page=1
     st.history=null
@@ -2511,10 +2881,9 @@
           ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
             if(skuDecision(st,g.code).decision==='merge')applyAuxDefaultsForMerge(st,g.code,g)
           })
-          // サイズ差の自動まとめ行は要確認に出さない。真の要確認だけ絞り込む。
-          if(st.preview.reviewCount>0)st.statusFilter='needs_review'
-          else if(st.preview.skuDecisionPending>0)st.statusFilter=''
-          else st.statusFilter=''
+          // 元行一覧は詳細確認用。既定はすべて表示（確認作業は統合リスト側）
+          st.statusFilter=''
+          if(st.sectionOpen)st.sectionOpen.sourceRows=false
           st.page=1
         }
         if(st.preview.previousImports&&!st.history){
@@ -2562,7 +2931,17 @@
         if(!st.sectionOpen)st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
         // 開閉は選択・編集を消さない（skuDecisions / selectedCodes はそのまま）
         st.sectionOpen[key]=!st.sectionOpen[key]
+        if(key==='unified')st.sectionOpen.individual=st.sectionOpen.unified
+        if(key==='individual')st.sectionOpen.unified=st.sectionOpen.individual
         paintDialog()
+      }
+    })
+    document.querySelectorAll('[data-pl-unified-expand]').forEach(el=>{
+      el.onclick=()=>{
+        const id=el.getAttribute('data-pl-unified-expand')
+        if(!st.expandedUnified)st.expandedUnified={}
+        st.expandedUnified[id]=!st.expandedUnified[id]
+        paintDialog({anchorCode:id})
       }
     })
     document.querySelectorAll('[data-pl-section-page]').forEach(el=>{
@@ -2578,8 +2957,11 @@
     if(selPage)selPage.onclick=()=>{
       const part=partitionJudgmentGroups(st)
       const pick=[]
-      if(st.sectionOpen&&st.sectionOpen.individual){
-        pageSlice(st,'individual',part.individual.filter(g=>matchesSkuFilters(st,g))).pageItems.forEach(g=>pick.push(g))
+      const unifiedOpen=st.sectionOpen&&(st.sectionOpen.unified!=null?st.sectionOpen.unified:st.sectionOpen.individual)
+      if(unifiedOpen){
+        pageSlice(st,'unified',buildUnifiedReviewItems(st).filter(it=>matchesUnifiedFilters(st,it))).pageItems.forEach(it=>{
+          if(it.kind==='sku'&&it.code)pick.push({code:it.code})
+        })
       }
       if(st.sectionOpen&&st.sectionOpen.bulk){
         pageSlice(st,'bulk',part.bulkUnapproved.filter(g=>matchesSkuFilters(st,g))).pageItems.forEach(g=>pick.push(g))
@@ -2624,13 +3006,13 @@
     })
     const bulkApprove=$('#plSkuBulkApproveSection')
     if(bulkApprove)bulkApprove.onclick=()=>{
-      // 一括承認は「一括承認候補」区分の未承認のみ。個別確認が必要は絶対に含めない。
+      // 一括承認は「一括承認候補」区分の未承認のみ。確認リスト（旧・個別確認が必要）は絶対に含めない。
       // 折りたたみ状態でも承認可能。開閉だけでは decision を変えない。
       const part=partitionJudgmentGroups(st)
       const bulk=part.bulkUnapproved.slice()
       if(!bulk.length){st.toast('未承認の一括承認候補がありません。');return}
       if(part.individual.length){
-        // 個別確認は対象外であることを明示（混入防止）
+        // 確認リスト側の未解決は対象外であることを明示（混入防止）
       }
       const pages=Math.max(1,Math.ceil(bulk.length/SKU_PAGE_SIZE))
       const lines=bulk.slice(0,15).map(g=>{
@@ -2639,10 +3021,11 @@
         return `・${g.code}: ${name} / 通常仕入先 ${sup}`
       })
       const more=bulk.length>15?`\n…他 ${bulk.length-15} 品番`:''
-      const msg=`【承認対象スコープ】一括承認候補の未承認 ${bulk.length} 件すべて（${pages}ページ分）\n個別確認が必要 ${part.individual.length} 件は含めません。\n品番ごとに予定の代表名・通常仕入先を使います（他品番の仕入先は割り当てません）。\n承認後は「承認済み（未登録）」として確認できます（折りたたみだけでは承認されません。最終登録までは未登録です）。\n\n${lines.join('\n')}${more}\n\nよろしいですか？`
+      const jc=judgmentStatusCounts(st)
+      const msg=`【承認対象スコープ】一括承認候補の未承認 ${bulk.length} 件すべて（${pages}ページ分）\n確認リストの未解決 ${jc.unresolved} 件は含めません。\n品番ごとに予定の代表名・通常仕入先を使います（他品番の仕入先は割り当てません）。\n承認後は「承認済み（未登録）」として確認できます（折りたたみだけでは承認されません。最終登録までは未登録です）。\n\n${lines.join('\n')}${more}\n\nよろしいですか？`
       if(!confirm(msg))return
       bulk.forEach(g=>applyMergeDefaults(st,g.code,g))
-      st.toast(`一括承認候補 ${bulk.length} 件を承認済み（未登録）にしました（個別確認 ${part.individual.length} 件は対象外）`)
+      st.toast(`一括承認候補 ${bulk.length} 件を承認済み（未登録）にしました（確認リスト未解決 ${jc.unresolved} 件は対象外）`)
       paintDialog()
     }
     const bulkHold=$('#plSkuBulkHold')
@@ -2993,12 +3376,12 @@
         if(!st.basisDate){st.toast('在庫基準日を指定してください。');return}
         try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }else{
-        if((st.preview.reviewCount||0)>0||(st.preview.skuDecisionPending||0)>0){
-          st.toast('要確認または品番比較の未決定が残っています。先に解決してください。');return
+        if(productsRegisterBlocked(st)){
+          st.toast('確認リストの未解決、または一括承認候補の未承認が残っています。先に解決してください。');return
         }
         const p=st.preview.plannedCounts||{}
         const jc=judgmentStatusCounts(st)
-        const statusBlock=`\n\n【判断区分の件数】未解決 ${jc.unresolved} / 未承認 ${jc.unapproved} / 承認済み（未登録） ${jc.approved} / 自動決定済み（未登録） ${jc.autoDecided} / 保留 ${jc.hold}${jc.excluded?` / 対象外 ${jc.excluded}`:''}`
+        const statusBlock=`\n\n【判断区分の件数】未解決 ${jc.unresolved}（確認事項 ${jc.issueCount}） / 未承認 ${jc.unapproved} / 承認済み（未登録） ${jc.approved} / 自動決定済み（未登録） ${jc.autoDecided} / 保留 ${jc.hold}${jc.excluded?` / 対象外 ${jc.excluded}`:''}`
         const deferList=(p.deferredReasons||[]).slice(0,12).map(d=>
           `・行${d.rowNo} 品番${d.code||'—'} ${d.reason||'保留'}`
         )
@@ -3058,6 +3441,11 @@
     __test:{
       partitionJudgmentGroups,
       judgmentStatusCounts,
+      buildUnifiedReviewItems,
+      unifiedReviewCounts,
+      productsRegisterBlocked,
+      collectRowIssues,
+      unifiedTargetMetaForRow,
       effectiveDecision,
       decisionLabel,
       SECTION_DEFAULTS,

@@ -51,10 +51,13 @@ class JudgmentListOverflowSourceTest(unittest.TestCase):
     def test_keep_scroll_and_sections(self):
         js = JS.read_text(encoding='utf-8')
         self.assertIn('captureVisibleSkuAnchor', js)
-        self.assertIn('SECTION_DEFAULTS={individual:true,bulk:false,auto:false,hold:false}', js)
-        self.assertIn('個別確認が必要', js)
+        self.assertIn('unified:true', js)
+        self.assertIn('individual:true', js)
+        self.assertIn('bulk:false', js)
+        self.assertIn('確認リスト', js)
         self.assertIn('一括承認候補', js)
         self.assertIn('自動決定済み', js)
+        self.assertIn('元行一覧（詳細確認用）', js)
 
 
 if __name__ == '__main__':
