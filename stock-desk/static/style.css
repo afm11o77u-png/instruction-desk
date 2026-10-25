@@ -763,7 +763,8 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 .sku-preregister-banner{margin:0 0 6px;padding:6px 8px}
 .sku-plan-fields{display:flex;flex-direction:column;gap:3px;min-width:0}
 .sku-plan-summary{font-size:11.5px;color:#3d5a48;margin:0 0 2px}
-.sku-plan-summary.is-unsettled{color:#7a4a12;font-weight:700}
+/* 未確定見出し・値: 薄い茶 → 濃い青＋太字（白／ベージュ上で判読しやすい） */
+.sku-plan-summary.is-unsettled{color:#0c4a8c;font-weight:700}
 .sku-plan-field{
   display:grid;
   grid-template-columns:4.6em minmax(0,1fr);
@@ -773,27 +774,40 @@ table.merge-compare thead th.is-keep{box-shadow:inset 0 -2px 0 #3a6b55}
 }
 .sku-plan-label{color:#4a5550;font-size:11.5px}
 .sku-plan-main{min-width:0;overflow-wrap:anywhere}
-.sku-plan-value{font-weight:600}
+.sku-plan-value{font-weight:600;color:#17211b}
 .sku-plan-status{
   display:inline;
   margin-left:2px;
   font-size:11.5px;
   font-weight:700;
-  color:#2f4a3a;
+  color:#17211b;
+  text-decoration:none;
 }
 .sku-plan-hint{margin-left:2px;font-size:11px;color:#5a6560}
-.sku-plan-edit-hint{display:block;margin-top:1px;font-size:11px;color:#5a4a32}
-.sku-plan-field.is-unsettled .sku-plan-value{font-weight:700}
+.sku-plan-edit-hint{display:block;margin-top:1px;font-size:11px;color:#5a6560}
+.sku-plan-field.is-unsettled .sku-plan-value{color:#0c4a8c;font-weight:700}
+/* 仮／選択が必要／未設定: 薄い青背景＋濃い青文字のラベル（リンク風にしない） */
 .sku-plan-field.is-need-choice .sku-plan-status,
 .sku-plan-field.is-provisional .sku-plan-status,
-.sku-plan-field.is-unset .sku-plan-status{color:#6a3d08}
-.sku-plan-field.is-need-choice .sku-plan-value,
-.sku-plan-field.is-unset .sku-plan-value{color:#6a3d08}
-.sku-plan-field.is-provisional .sku-plan-value{color:#5a4a20}
+.sku-plan-field.is-unset .sku-plan-status{
+  display:inline-block;
+  padding:0 4px;
+  margin-left:3px;
+  border-radius:3px;
+  background:#e8f2fc;
+  color:#0c4a8c;
+  font-weight:700;
+  line-height:1.35;
+  text-decoration:none;
+  cursor:default;
+}
 .sku-plan-field.is-auto .sku-plan-status,
-.sku-plan-field.is-manual .sku-plan-status{color:#2f4a3a;font-weight:600}
+.sku-plan-field.is-manual .sku-plan-status{color:#17211b;font-weight:600}
+.sku-plan-field.is-auto .sku-plan-value,
+.sku-plan-field.is-manual .sku-plan-value{color:#17211b;font-weight:600}
+/* 該当なしは未確定強調しない */
 .sku-plan-field.is-na .sku-plan-value,
-.sku-plan-field.is-na .sku-plan-status{color:#8a9390;font-weight:500}
+.sku-plan-field.is-na .sku-plan-status{color:#8a9390;font-weight:500;background:transparent;padding:0}
 .unified-row-detail-card{
   margin:0 0 8px;padding:6px 8px;border:1px solid #d5ddd7;background:#fff;
 }
