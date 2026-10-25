@@ -89,23 +89,27 @@ class JudgmentListSectionsUiSourceTest(unittest.TestCase):
     def test_three_sections_and_bulk_approve_wiring(self):
         js = JS.read_text(encoding='utf-8')
         css = CSS.read_text(encoding='utf-8')
-        self.assertIn('個別確認が必要', js)
+        self.assertIn('確認リスト', js)
+        self.assertIn('buildUnifiedReviewItems', js)
         self.assertIn('一括承認候補', js)
         self.assertIn('自動決定済み', js)
         self.assertIn('plSkuBulkApproveSection', js)
         self.assertIn('一括承認候補${part.bulkUnapproved.length}件を承認', js)
         self.assertIn('data-pl-section-toggle', js)
         self.assertIn('SECTION_DEFAULTS', js)
+        self.assertIn('unified:true', js)
         self.assertIn('individual:true', js)
         self.assertIn('bulk:false', js)
         self.assertIn('auto:false', js)
+        self.assertIn('sourceRows:false', js)
         self.assertIn('partitionJudgmentGroups', js)
         self.assertIn('judgmentStatusCounts', js)
         self.assertIn('承認済み（未登録）', js)
         self.assertIn('未解決', js)
+        self.assertIn('確認事項', js)
         self.assertIn('未承認', js)
         self.assertIn('【承認対象スコープ】', js)
-        self.assertIn('個別確認が必要', js)
+        self.assertIn('元行一覧（詳細確認用）', js)
         self.assertIn('reviewTier', js)
         self.assertIn('needsDecision', js)
         # 色ではなく state で分類するコメント／実装
@@ -122,8 +126,10 @@ class JudgmentListSectionsUiSourceTest(unittest.TestCase):
         # CSS
         self.assertIn('sku-judgment-section', css)
         self.assertIn('sku-section-individual', css)
+        self.assertIn('sku-section-unified', css)
         self.assertIn('sku-section-bulk', css)
         self.assertIn('sku-section-auto', css)
+        self.assertIn('sku-section-source-rows', css)
 
     def test_commit_confirm_lists_section_counts(self):
         js = JS.read_text(encoding='utf-8')
@@ -227,9 +233,9 @@ class JudgmentListSectionsPartitionTest(unittest.TestCase):
 
     def test_bulk_approve_scope_excludes_individual_in_source(self):
         js = JS.read_text(encoding='utf-8')
-        # ハンドラが bulkUnapproved のみを対象にし、individual を混ぜない
+        # ハンドラが bulkUnapproved のみを対象にし、確認リスト未解決を混ぜない
         self.assertIn('const bulk=part.bulkUnapproved.slice()', js)
-        self.assertIn('個別確認が必要', js)
+        self.assertIn('確認リストの未解決', js)
         self.assertIn('は含めません', js)
         idx = js.find('plSkuBulkApproveSection')
         self.assertGreater(idx, 0)

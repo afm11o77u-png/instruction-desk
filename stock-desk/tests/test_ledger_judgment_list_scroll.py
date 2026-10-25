@@ -47,13 +47,16 @@ class JudgmentListScrollLayoutSourceTest(unittest.TestCase):
 
     def test_section_defaults_unchanged(self):
         js = JS.read_text(encoding='utf-8')
-        self.assertIn('SECTION_DEFAULTS={individual:true,bulk:false,auto:false,hold:false}', js)
-        # ページャは表の上（操作到達性）— indivBody 内の並び
-        start = js.find('const indivBody=')
+        self.assertIn('unified:true', js)
+        self.assertIn('individual:true', js)
+        self.assertIn('bulk:false', js)
+        self.assertIn('sourceRows:false', js)
+        # ページャは表の上（操作到達性）— unifiedBody 内の並び
+        start = js.find('const unifiedBody=')
         self.assertGreater(start, 0)
-        chunk = js[start:start + 700]
-        pager = chunk.find("sectionPagerHtml('individual'")
-        table = chunk.find('skuCompareTableHtml(st,indivSlice.pageItems')
+        chunk = js[start:start + 900]
+        pager = chunk.find("sectionPagerHtml('unified'")
+        table = chunk.find('unifiedCompareTableHtml(st,unifiedSlice.pageItems')
         self.assertGreater(pager, 0)
         self.assertGreater(table, 0)
         self.assertLess(pager, table)
