@@ -396,6 +396,16 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                         or payload.get('original_title')
                         or ''
                     ),
+                    maker_color_code=(
+                        payload.get('makerColorCode')
+                        or payload.get('maker_color_code')
+                        or ''
+                    ),
+                    base_sku_override=(
+                        payload.get('baseSku')
+                        or payload.get('base_sku')
+                        or ''
+                    ),
                 )
                 c.commit()
         except ValueError as e:

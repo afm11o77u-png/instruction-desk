@@ -2469,7 +2469,8 @@
             ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
             ${c.fromSaved?' <span class="badge">保存済み</span>':''}
             ${c.preferred?' <span class="sub">優先候補</span>':''}
-            ${c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':''}
+            ${c.makerColorCode?`　メーカー色番 ${esc(c.makerColorCode)}`:''}
+            ${c.skuMatchEvidence?` <span class="sub">${esc(c.skuMatchEvidence)}</span>`:(c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':'')}
           </div>
         </div>
         ${missing.length?`<div class="excelhint">不足項目: ${missing.map(esc).join('、')}</div>`:''}
@@ -2644,6 +2645,8 @@
                 <div class="excelhint">元掲載名: ${esc(originalTitle||'—')}</div>
                 <strong>整理後: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${supp?`　補足 ${esc(supp)}`:''}
                 ${plannedSku?`　品番 ${esc(plannedSku)}`:''}
+                ${c.makerColorCode?`　色番 ${esc(c.makerColorCode)}`:''}
+                ${c.skuMatchEvidence?` <span class="sub">${esc(c.skuMatchEvidence)}</span>`:''}
                 ${urls.length?` ${urls.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">参照URL</a>`).join(' ')}`:''}
               </span>
             </label>
@@ -2882,7 +2885,9 @@
       sourceUrl:cand.sourceUrl||'',
       sourceSku:srcSku,
       usageNote:note,
-      originalTitle:cand.originalTitle||cand.title||''
+      originalTitle:cand.originalTitle||cand.title||'',
+      makerColorCode:cand.makerColorCode||'',
+      baseSku:cand.baseSku||''
     })
     const classPatch={
       plannedName:cleaned,
