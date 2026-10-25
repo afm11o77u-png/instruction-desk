@@ -80,7 +80,7 @@ class BodySkuMatchHelpersTest(unittest.TestCase):
         )
         self.assertIn('／', colorway['color'])
         self.assertEqual(colorway['size'], '')
-        self.assertIn('黒', colorway['color'])
+        self.assertIn('ブラック', colorway['color'])
         self.assertIn('ワイン', colorway['color'])
 
     def test_halfwidth_kana_and_no_space_parens(self):
