@@ -86,10 +86,31 @@ class ProcessingServiceUnitTest(unittest.TestCase):
     def test_sleeve_hem_snapper_shared(self):
         self.assertEqual(ps.unify_processing_service_name('袖加工'), '袖加工')
         self.assertEqual(ps.unify_processing_service_name('丈加工'), '丈加工')
+        self.assertEqual(ps.unify_processing_service_name('丈直し'), '丈直し')
+        self.assertEqual(ps.unify_processing_service_name('裾直し'), '裾直し')
         self.assertEqual(ps.unify_processing_service_name('スナッパー'), 'スナッパー加工')
-        # 原文にない具体化（袖→七分袖）はしない
+        # 原文にない具体化（袖→七分袖）はしない。丈直し→丈詰め等も推測しない
         self.assertEqual(ps.unify_processing_service_name('袖加工'), '袖加工')
         self.assertNotEqual(ps.unify_processing_service_name('袖加工'), '七分袖加工')
+        self.assertEqual(ps.unify_processing_service_name('丈直し'), '丈直し')
+        self.assertNotEqual(ps.unify_processing_service_name('丈直し'), '丈加工')
+        self.assertNotEqual(ps.unify_processing_service_name('丈直し'), '裾直し')
+
+    def test_take_naoshi_classified_as_service(self):
+        """『丈直し』単独は加工サービス。丈詰め等へ置き換えない。"""
+        r = ps.classify_processing_service_row(
+            supplier='K2スタッフ工房', product_name='丈直し', code='',
+        )
+        self.assertTrue(r['identifiable'])
+        self.assertTrue(r['isProcessingService'])
+        self.assertFalse(r['needsConfirm'])
+        self.assertEqual(r['serviceName'], '丈直し')
+        self.assertEqual(r['displayName'], '丈直し')
+        self.assertEqual(r['vendorName'], 'K2スタッフ工房')
+        self.assertEqual(
+            ps.service_dedupe_key('丈直し', 'K2スタッフ工房'),
+            ps.service_dedupe_key('丈直し', 'K2スタッフ工房'),
+        )
 
     def test_customer_specific_uwagi_kept(self):
         name = 'わらく堂用上衣加工（衿・裾・袖）'
@@ -336,6 +357,113 @@ class ProcessingServiceImportTest(unittest.TestCase):
             )
             # 丈加工サービス名も統一対象
             self.assertEqual(ps.unify_processing_service_name('丈加工'), '丈加工')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_take_naoshi_k2_auto_no_manual_across_customers(self):
+        """丈直し／K2 は手入力なしで加工サービス自動登録。同業者は1件・顧客別照合は保持。"""
+        folder, path, c = newdb()
+        try:
+            text = ledger(
+                '㈱ダイイチ,某メーカー,D-1,パンツ,M',
+                '㈱ダイイチ,K2スタッフ工房,D-1,丈直し,M',
+                '㈱ニチレイ,某メーカー,N-1,パンツ,L',
+                '㈱ニチレイ,K2スタッフ工房,N-1,丈直し,L',
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'take-naoshi.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans), 1, msg=plans)
+            self.assertEqual(plans[0]['serviceName'], '丈直し')
+            self.assertEqual(plans[0]['displayName'], '丈直し')
+            self.assertEqual(plans[0]['vendorName'], 'K2スタッフ工房')
+
+            take_rows = []
+            for row in preview.get('rows') or []:
+                csv = row.get('csv') or {}
+                if (csv.get('productName') or '') != '丈直し':
+                    continue
+                take_rows.append(row)
+                reasons = ' '.join(row.get('reasons') or [])
+                self.assertNotIn('加工名を特定できません', reasons)
+                self.assertNotIn('加工名不足', reasons)
+                self.assertFalse(row.get('processingServiceNeedsConfirm'))
+                ps_info = row.get('processingService') or {}
+                self.assertTrue(ps_info.get('identifiable'))
+                self.assertEqual(ps_info.get('serviceName'), '丈直し')
+                self.assertEqual(ps_info.get('displayName'), '丈直し')
+            self.assertEqual(len(take_rows), 2)
+
+            # パンツ本体の一般『丈加工』無視とは別経路（丈直しはサービスとして残る）
+            self.assertEqual(ps.unify_processing_service_name('丈加工'), '丈加工')
+            self.assertEqual(ps.unify_processing_service_name('裾直し'), '裾直し')
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'take-naoshi.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'ps-take-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['counts'].get('failed', 0), 0)
+            services = list(c.execute(
+                "SELECT id,name,code,category FROM products WHERE name=? AND category=?",
+                ('丈直し', stock.CATEGORY_PARTS),
+            ))
+            self.assertEqual(len(services), 1)
+            self.assertEqual(services[0]['code'], '')
+
+            # 顧客ごとの行マップが残る（初期在庫照合で混同しない）
+            maps = list(c.execute(
+                "SELECT csv_customer,csv_product_code,csv_product_name,spec_json,product_id "
+                "FROM product_ledger_row_maps WHERE csv_product_name=?",
+                ('丈直し',),
+            ))
+            self.assertEqual(len(maps), 2)
+            customers = {m['csv_customer'] for m in maps}
+            self.assertEqual(customers, {'㈱ダイイチ', '㈱ニチレイ'})
+            codes = {m['csv_product_code'] for m in maps}
+            self.assertEqual(codes, {'D-1', 'N-1'})
+            # 行マップは対象衣服側。加工サービス情報は spec に保持
+            for m in maps:
+                self.assertNotEqual(m['product_id'], services[0]['id'])
+                spec = json.loads(m['spec_json'] or '{}')
+                self.assertEqual(spec.get('processingServiceName'), '丈直し')
+                self.assertEqual(spec.get('processingVendor'), 'K2スタッフ工房')
+                self.assertEqual(spec.get('processingDisplayName'), '丈直し')
+            # 顧客×対象品番が別なら別取扱（混同しない）
+            cust_code = {(m['csv_customer'], m['csv_product_code']) for m in maps}
+            self.assertEqual(
+                cust_code,
+                {('㈱ダイイチ', 'D-1'), ('㈱ニチレイ', 'N-1')},
+            )
+            self.assertEqual(len({m['product_id'] for m in maps}), 2)
+
+            # 再照合でも同一サービスを再利用
+            preview2 = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'take-naoshi.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans2 = [p for p in (preview2.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans2), 1)
+            self.assertEqual(plans2[0].get('action'), 'reuse')
+            pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'take-naoshi.csv',
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'ps-take-2',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE name=? AND category=?",
+                ('丈直し', stock.CATEGORY_PARTS),
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
         finally:
             c.close()
             folder.cleanup()
