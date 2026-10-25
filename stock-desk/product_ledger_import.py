@@ -23,6 +23,7 @@ import legacy_csv_bulk_import as bulk
 import legacy_csv_import as legacy
 import maker_sku_lookup
 import product_ledger_paren as paren_classify
+import product_ledger_position as position_sku
 import product_ledger_processing_service as proc_svc
 import product_ledger_scoped_color as scoped_color
 import stock
@@ -807,16 +808,45 @@ def _supplier_names_match(a, b):
 
 
 def _aux_row_matches_candidate(aux_item, *, code, supplier, product_name, customers):
-    """台帳側の仕入先候補へ、品番＋仕入先＋商品名（＋顧客）で紐づける。品番だけでは結びつけない。"""
+    """台帳側の仕入先候補へ、品番＋仕入先＋商品名（＋顧客）で紐づける。品番だけでは結びつけない。
+
+    品番の上下表記ゆれ（VEH30B / VEH30B 下 / VEH30B下）は、商品名側の上下と矛盾しないときだけ許容。
+    上下が特定できない基礎品番だけでは上・下のどちらへも自動振り分けしない。
+    """
     aux_code = stock.text(aux_item.get('商品コード'))
-    # 品番は文字列のまま（先頭ゼロ保持。「8」と「00008」は同一視しない）
-    if aux_code != stock.text(code):
+    ledger_code = stock.text(code)
+    aux_name = stock.text(aux_item.get('商品名'))
+    if not aux_code or not ledger_code:
         return False
-    if legacy.is_custom_order_code(aux_code) or not stock_product_merge.is_normal_product_code(aux_code):
+    aux_pos_info = position_sku.resolve_garment_position(code=aux_code, product_name=aux_name)
+    led_pos_info = position_sku.resolve_garment_position(code=ledger_code, product_name=product_name)
+    aux_reg = stock.text(aux_pos_info.get('registeredCode') or aux_code)
+    led_reg = stock.text(led_pos_info.get('registeredCode') or ledger_code)
+    aux_base = stock.text(aux_pos_info.get('baseCode') or aux_code)
+    led_base = stock.text(led_pos_info.get('baseCode') or ledger_code)
+    aux_pos = stock.text(aux_pos_info.get('position') or '')
+    led_pos = stock.text(led_pos_info.get('position') or '')
+    code_ok = False
+    if aux_code == ledger_code or aux_reg == led_reg:
+        code_ok = True
+    elif aux_base and aux_base == led_base:
+        # 基礎一致時は上下が両方特定でき一致するときだけ
+        if aux_pos and led_pos and aux_pos == led_pos:
+            code_ok = True
+        elif not aux_pos and not led_pos:
+            code_ok = True
+        else:
+            code_ok = False
+    if not code_ok:
+        return False
+    check_code = aux_reg or aux_code
+    if legacy.is_custom_order_code(check_code) or not stock_product_merge.is_normal_product_code(
+        aux_base or check_code
+    ):
         return False
     if not _supplier_names_match(aux_item.get('仕入先'), supplier):
         return False
-    if product_name_core_key(aux_item.get('商品名')) != product_name_core_key(product_name):
+    if product_name_core_key(aux_name) != product_name_core_key(product_name):
         return False
     aux_customer = stock.text(aux_item.get('顧客'))
     ledger_customers = [stock.text(x) for x in (customers or []) if stock.text(x)]
@@ -830,14 +860,47 @@ def _aux_row_matches_candidate(aux_item, *, code, supplier, product_name, custom
 
 
 def build_aux_row_index(aux_rows):
-    """品番文字列で束ねた補助索引（在庫数量は判定時に読む）。"""
+    """品番文字列で束ねた補助索引（在庫数量は判定時に読む）。
+
+    原文・密着・スペース付き・基礎品番の各キーへ同じ行を載せる（上下照合は行マッチ側）。
+    """
     by_code = defaultdict(list)
     for row_no, item in aux_rows or []:
         code = stock.text(item.get('商品コード'))
         if not code:
             continue
-        by_code[code].append((row_no, item))
+        seen_keys = set()
+        for key in position_sku.sku_code_variants(code):
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            by_code[key].append((row_no, item))
+        base, _pos = position_sku.strip_sku_position_suffix(code)
+        if base and base not in seen_keys:
+            by_code[base].append((row_no, item))
     return by_code
+
+
+def _aux_rows_for_code(aux_index, code):
+    """品番表記ゆれを吸収して補助行を返す（行番号で一意化）。"""
+    if not aux_index:
+        return []
+    out = []
+    seen = set()
+    for key in position_sku.sku_code_variants(code):
+        for row_no, item in aux_index.get(key, []):
+            if row_no in seen:
+                continue
+            seen.add(row_no)
+            out.append((row_no, item))
+    base, _pos = position_sku.strip_sku_position_suffix(code)
+    if base:
+        for row_no, item in aux_index.get(base, []):
+            if row_no in seen:
+                continue
+            seen.add(row_no)
+            out.append((row_no, item))
+    return out
 
 
 def _collect_supplier_candidates(group):
@@ -885,7 +948,7 @@ def _judge_aux_for_supplier(aux_index, *, code, candidate):
     customers = candidate.get('customers') or []
     matched = []
     if names:
-        for row_no, item in aux_index.get(stock.text(code), []):
+        for row_no, item in _aux_rows_for_code(aux_index, code):
             for name in names:
                 if _aux_row_matches_candidate(
                     item, code=code, supplier=supplier, product_name=name, customers=customers,
@@ -1902,7 +1965,7 @@ def suggest_main_candidate_from_aux(group, aux_index):
             name_candidates.append(display_name)
         # 補助CSV行は行番号で一意化（複数別名が同じ行に当たっても1回だけ）
         matched_by_row = {}
-        for row_no, item in aux_index.get(code, []):
+        for row_no, item in _aux_rows_for_code(aux_index, code):
             if row_no in matched_by_row:
                 continue
             for name in names:
@@ -3879,7 +3942,15 @@ def upsert_row_map(
     csv_info = row.get('csv') or {}
     customer = stock.text(csv_info.get('customer'))
     supplier = stock.text(csv_info.get('supplier'))
-    code = stock.text(csv_info.get('code'))
+    # マップの品番キーは原文（初期在庫の旧表記照合用）。登録予定品番は spec_json へ。
+    code = stock.text(csv_info.get('sourceCode') or csv_info.get('code'))
+    registered_code = stock.text(
+        csv_info.get('registeredCode')
+        or csv_info.get('plannedRegisteredSku')
+        or (row.get('product') or {}).get('codeOverride')
+        or csv_info.get('code')
+        or code
+    )
     product_name = stock.text(csv_info.get('productName'))
     size = stock.text(csv_info.get('size'))
     provenance = row.get('specProvenance') if isinstance(row.get('specProvenance'), dict) else {}
@@ -3920,6 +3991,29 @@ def upsert_row_map(
             provenance.get('supplement')
             or pc.get('supplement')
             or (row.get('product') or {}).get('officialSupplement')
+            or ''
+        ),
+        'position': stock.text(
+            provenance.get('position')
+            or pc.get('position')
+            or csv_info.get('position')
+            or (row.get('product') or {}).get('position')
+            or ''
+        ),
+        'baseCode': stock.text(
+            provenance.get('baseCode')
+            or csv_info.get('baseCode')
+            or ''
+        ),
+        'registeredCode': stock.text(
+            provenance.get('registeredCode')
+            or registered_code
+            or ''
+        ),
+        'sourceCode': stock.text(
+            provenance.get('sourceCode')
+            or csv_info.get('sourceCode')
+            or code
             or ''
         ),
         'plannedName': planned_name,
@@ -4374,6 +4468,16 @@ def build_paren_classification(product_name, override=None):
         supplement = stock.text(raw.get('supplement') or '')
     else:
         supplement = stock.text(base.get('supplement') or '')
+    # 上下区分は品番末尾へ移す。補足欄へは残さない（胸当など他補足は維持）
+    position = stock.text(raw.get('position') or '')
+    if position not in position_sku.POSITION_TOKENS:
+        if supplement in position_sku.POSITION_TOKENS:
+            position = supplement
+            supplement = ''
+        else:
+            position = ''
+    elif supplement in position_sku.POSITION_TOKENS:
+        supplement = ''
     # 未分類の手編集はリストで受けてもよい
     if 'unclassified' in raw:
         unc = raw.get('unclassified')
@@ -4419,6 +4523,10 @@ def build_paren_classification(product_name, override=None):
         'processing': processing,
         'material': material,
         'supplement': supplement,
+        'position': position,
+        'plannedRegisteredSku': stock.text(
+            raw.get('plannedRegisteredSku') or raw.get('registeredCode') or ''
+        ),
         'unclassified': unclassified,
         'needsConfirm': needs,
         'confirmReasons': reasons,
@@ -4631,17 +4739,39 @@ def classify_row(
 ):
     customer_name = stock.text(item.get('顧客'))
     supplier_name = stock.text(item.get('仕入先'))
-    code = stock.text(item.get('商品コード'))
+    code_raw = stock.text(item.get('商品コード'))
     product_name = stock.text(item.get('商品名'))
     size_raw = item.get('サイズ')
     size = size_raw if isinstance(size_raw, str) else ('' if size_raw is None else str(size_raw))
     size_label = size.strip()
+    raw_override = paren_override if isinstance(paren_override, dict) else {}
+    maker_pos = ''
+    if stock.text(raw_override.get('position') or '') in position_sku.POSITION_TOKENS:
+        maker_pos = stock.text(raw_override.get('position'))
+    elif stock.text(raw_override.get('supplement') or '') in position_sku.POSITION_TOKENS:
+        # 旧UI互換: 補足に残った上下は品番側へ移す
+        maker_pos = stock.text(raw_override.get('supplement'))
+    pos_info = position_sku.resolve_garment_position(
+        code=code_raw,
+        product_name=product_name,
+        maker_position=maker_pos,
+        override_position=stock.text(raw_override.get('position') or ''),
+        override_registered_code=stock.text(
+            raw_override.get('plannedRegisteredSku')
+            or raw_override.get('registeredCode')
+            or ''
+        ),
+    )
+    code = stock.text(pos_info.get('registeredCode') or code_raw)
+    source_code = stock.text(pos_info.get('sourceCode') or code_raw)
+    base_code = stock.text(pos_info.get('baseCode') or code)
+    position = stock.text(pos_info.get('position') or '')
     group_key = match_group_key(
         customer=customer_name, code=code, product_name=product_name, supplier=supplier_name,
     )
     reasons = []
 
-    if not customer_name and not product_name and not code:
+    if not customer_name and not product_name and not code_raw:
         return _excluded_row(row_no, item, reason=f'{row_no}行目：顧客・商品名・品番が空です。')
 
     if not customer_name:
@@ -4661,22 +4791,33 @@ def classify_row(
             'reasons': [f'{row_no}行目：仕入先が空です（未設定のまま登録できます）。'],
         }
 
+    # マップは原文品番＋商品名で探す（上下を名で区別した行を取り違えない）
     mapped = lookup_row_map(
-        c, customer=customer_name, code=code, product_name=product_name,
+        c, customer=customer_name, code=source_code, product_name=product_name,
         size=size_label, supplier=supplier_name,
     )
+    if not mapped and source_code != code:
+        mapped = lookup_row_map(
+            c, customer=customer_name, code=code, product_name=product_name,
+            size=size_label, supplier=supplier_name,
+        )
     mapped_product_id = None
     mapped_handle_id = None
     if mapped:
         mapped_product_id = mapped['product_id']
         mapped_handle_id = mapped['customer_product_id']
     else:
-        pm = lookup_product_map(c, customer=customer_name, code=code, product_name=product_name)
+        pm = lookup_product_map(c, customer=customer_name, code=source_code, product_name=product_name)
+        if not pm and source_code != code:
+            pm = lookup_product_map(c, customer=customer_name, code=code, product_name=product_name)
         if pm:
             mapped_product_id = pm['product_id']
 
+    # 既存商品照合は登録予定品番（VEH30B下）で行う
+    item_for_product = dict(item) if isinstance(item, dict) else {'商品コード': code}
+    item_for_product['商品コード'] = code
     product = _product_preview(
-        c, item, supp, row_no,
+        c, item_for_product, supp, row_no,
         customer_name=customer_name,
         customer_id=cust.get('id'),
         selected_category=selected_category,
@@ -4684,6 +4825,20 @@ def classify_row(
         selected_product_id=selected_product_id,
         force_create=force_create_product,
     )
+    if code and code != source_code:
+        product['code'] = code
+        product['codeOverride'] = code
+        product['sourceCode'] = source_code
+        product['baseCode'] = base_code
+        product['position'] = position
+        product['codeDisplay'] = stock.product_code_display(code, product.get('category') or '')
+    if pos_info.get('conflict') or pos_info.get('needsConfirm'):
+        product['action'] = 'review'
+        product.setdefault('reasons', []).append(
+            f'{row_no}行目：上下区分（上／下）の判断材料が矛盾しています。'
+            '推測では付与せず、確認してください。'
+        )
+        reasons.append(product['reasons'][-1])
 
     handle = {'action': 'defer', 'id': None, 'candidates': [], 'reasons': [], 'embroidery': PENDING_EMBROIDERY}
     if cust.get('action') == 'review' or product.get('action') in ('review', 'excluded', 'missing'):
@@ -4736,7 +4891,8 @@ def classify_row(
                 c, cust.get('id'), product.get('id'), row_no,
                 csv_source={
                     'sourceRowNo': row_no, 'productCode': code, 'productName': product_name,
-                    'supplier': supplier_name, 'customer': customer_name,
+                    'sourceProductCode': source_code, 'supplier': supplier_name,
+                    'customer': customer_name,
                     'usedMarker': used_marker_possible(product_name),
                 },
             )
@@ -4745,7 +4901,8 @@ def classify_row(
             c, cust.get('id'), product.get('id'), row_no,
             csv_source={
                 'sourceRowNo': row_no, 'productCode': code, 'productName': product_name,
-                'supplier': supplier_name, 'customer': customer_name,
+                'sourceProductCode': source_code, 'supplier': supplier_name,
+                'customer': customer_name,
                 'usedMarker': used_marker_possible(product_name),
             },
         )
@@ -4805,6 +4962,11 @@ def classify_row(
             'customer': customer_name,
             'supplier': supplier_name,
             'code': code,
+            'sourceCode': source_code,
+            'baseCode': base_code,
+            'position': position,
+            'registeredCode': code,
+            'plannedRegisteredSku': code,
             'codeDisplay': product.get('codeDisplay') or stock.product_code_display(code, product.get('category') or ''),
             'productName': product_name,
             'size': size_label,
@@ -4819,7 +4981,14 @@ def classify_row(
         'canCommit': can_commit,
         'fromImportMap': bool(product.get('fromImportMap')),
     }
-    return attach_paren_classification(row, paren_override)
+    # メーカー採用で上下が補足に残っていれば品番側へ移し補足から除く
+    override_for_paren = dict(raw_override) if raw_override else None
+    if override_for_paren is not None and position:
+        override_for_paren.setdefault('position', position)
+        override_for_paren.setdefault('plannedRegisteredSku', code)
+        if stock.text(override_for_paren.get('supplement') or '') in position_sku.POSITION_TOKENS:
+            override_for_paren['supplement'] = ''
+    return attach_paren_classification(row, override_for_paren)
 
 
 def _row_variant(row):
@@ -6761,9 +6930,14 @@ def _apply_official_name(c, product_id, official_name, color=None, csv_name=None
 
 
 def _registration_name_with_supplement(official_name, supplement):
-    """補足専用カラムが無いため、既存の商品名構造（括弧）へ載せる。"""
+    """補足専用カラムが無いため、既存の商品名構造（括弧）へ載せる。
+
+    上下区分（上／下）は品番末尾へ移す方針のため、補足としては載せず名にも付けない。
+    """
     name = stock.text(official_name or '')
     supp = stock.text(supplement or '')
+    if supp in position_sku.POSITION_TOKENS:
+        return name
     if not supp:
         return name
     if not name:
@@ -6771,6 +6945,23 @@ def _registration_name_with_supplement(official_name, supplement):
     if supp in name:
         return name
     return f'{name}（{supp}）'
+
+
+def _row_registered_code(row) -> str:
+    """行の登録予定品番（上下末尾付きを優先）。"""
+    csv_info = row.get('csv') if isinstance(row, dict) else {}
+    prod = row.get('product') if isinstance(row, dict) else {}
+    if not isinstance(csv_info, dict):
+        csv_info = {}
+    if not isinstance(prod, dict):
+        prod = {}
+    if prod.get('codeOverride') is not None and stock.text(prod.get('codeOverride')):
+        return stock.text(prod.get('codeOverride'))
+    for key in ('registeredCode', 'plannedRegisteredSku', 'code'):
+        val = stock.text(csv_info.get(key) or '')
+        if val:
+            return val
+    return stock.text(prod.get('code') or '')
 
 
 def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None, force_create=False):

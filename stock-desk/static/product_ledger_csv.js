@@ -1227,17 +1227,23 @@
     const list=cands.map((c,i)=>{
       const diff=c.diff||{}
       const missing=(c.missingFields||[]).filter(Boolean)
+      const plannedSku=c.plannedRegisteredSku||''
+      const currentSku=diff.currentSku||panel.currentSku||panel.makerSku||''
+      // 上下は品番末尾へ移すため、補足に上／下が残っていれば表示しない
+      const suppDisp=(c.supplement==='上'||c.supplement==='下')?'':(c.supplement||'')
       return `<li class="pl-maker-cand">
-        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${c.supplement?`　補足 ${esc(c.supplement)}`:''}
-          ${c.makerSku?`　品番 ${esc(c.makerSku)}`:''}
+        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${suppDisp?`　補足 ${esc(suppDisp)}`:''}
+          ${plannedSku?`　登録予定品番 <strong>${esc(plannedSku)}</strong>`:(c.makerSku?`　品番 ${esc(c.makerSku)}`:'')}
+          ${c.position?`　上下 ${esc(c.position)}`:''}
           ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
           ${c.fromSaved?' <span class="badge">保存済み</span>':''}
           ${c.preferred?' <span class="sub">優先候補</span>':''}
           ${c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':''}
         </div>
         ${missing.length?`<div class="excelhint">不足項目: ${missing.map(esc).join('、')}</div>`:''}
-        <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')} / 補足 ${esc(diff.currentSupplement||'（空）')}</div>
-        <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'} / 補足 ${diff.supplementChanged?'変わる':'同じ'}</div>
+        <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')} / 品番 ${esc(currentSku||'—')} / 補足 ${esc(diff.currentSupplement||'（空）')}</div>
+        <div class="excelhint">採用後の予定: 名 ${esc(c.name||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||currentSku||'—')} / 補足 ${esc(suppDisp||'（空）')}</div>
+        <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'} / 品番 ${diff.skuChanged||(plannedSku&&plannedSku!==currentSku)?'変わる':'同じ'} / 補足 ${diff.supplementChanged?'変わる':'同じ'}</div>
         ${c.sourceUrl?`<div class="excelhint"><a href="${esc(c.sourceUrl)}" target="_blank" rel="noopener">参考URL</a></div>`:''}
         <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy||!c.name?'disabled':''}>採用</button>
       </li>`
@@ -1268,7 +1274,7 @@
       ${matchedList}
       ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:(searching?'':`<p class="excelhint">採用できる候補はありません。</p>`)}
       ${ref?`<p class="excelhint"><a href="${esc(ref)}" target="_blank" rel="noopener">参考ページを開く</a>（開いただけでは補正完了になりません）</p>`:''}
-      <p class="excelhint">「採用」はプレビューの予定名／色／補足だけを更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
+      <p class="excelhint">「採用」はプレビューの予定名／色／登録予定品番（上下は品番末尾）を更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
     </div>`
   }
 
@@ -2329,10 +2335,11 @@
         const currentName=edit.plannedName!=null?edit.plannedName:(pc.plannedName||(row.product&&row.product.officialName)||sourceName||'')
         const currentColor=edit.color!=null?edit.color:(pc.color||(row.product&&row.product.officialColor)||'')
         const currentSupplement=edit.supplement!=null?edit.supplement:(pc.supplement||'')
+        const currentSku=(row.csv&&(row.csv.registeredCode||row.csv.plannedRegisteredSku||row.csv.code))||mk.makerSku||''
         st.busy=true
         st.makerLookup={
           scope:'row',rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
-          supplier:(row.csv&&row.csv.supplier)||'',sourceName,
+          supplier:(row.csv&&row.csv.supplier)||'',sourceName,currentSku,
           statusLabel:'検索中…',result:null,error:''
         }
         paintDialog()
@@ -2341,13 +2348,14 @@
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
             makerSku:mk.makerSku,
-            currentName,currentColor,currentSupplement,
+            currentName,currentColor,currentSupplement,currentSku,
             sourceName,
             supplier:(row.csv&&row.csv.supplier)||''
           })
           st.makerLookup=Object.assign({},st.makerLookup,{
             result,
             manufacturer:result.manufacturer||mk.manufacturer||'',
+            currentSku:result.plannedRegisteredSku||currentSku,
             statusLabel:result.statusLabel||result.status||'',error:''
           })
         }catch(e){
@@ -2378,6 +2386,7 @@
         const currentName=d.officialName||(group.plannedOfficialName)||(group.namePlan&&group.namePlan.officialName)||sourceName||''
         const currentColor=d.color||group.plannedRegisteredColor||group.plannedColor||''
         const currentSupplement=''
+        const currentSku=(firstRow&&firstRow.csv&&(firstRow.csv.registeredCode||firstRow.csv.plannedRegisteredSku||firstRow.csv.code))||code||mk.makerSku||''
         st.busy=true
         // 結果を品番の直下に出すため、検索中も展開しておく
         st.expandedCodes[code]=true
@@ -2385,7 +2394,7 @@
           scope:'sku',skuCode:code,rowNos,rowNo:firstRow?firstRow.rowNo:null,
           makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
           supplier:mk.supplier||(firstRow&&firstRow.csv&&firstRow.csv.supplier)||'',
-          sourceName,statusLabel:'検索中…',result:null,error:''
+          sourceName,currentSku,statusLabel:'検索中…',result:null,error:''
         }
         paintDialog()
         scrollMakerLookupIntoView()
@@ -2393,13 +2402,14 @@
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
             makerSku:mk.makerSku,
-            currentName,currentColor,currentSupplement,
+            currentName,currentColor,currentSupplement,currentSku,
             sourceName,
             supplier:mk.supplier||(firstRow&&firstRow.csv&&firstRow.csv.supplier)||''
           })
           st.makerLookup=Object.assign({},st.makerLookup,{
             result,
             manufacturer:result.manufacturer||mk.manufacturer||'',
+            currentSku:result.plannedRegisteredSku||currentSku,
             statusLabel:result.statusLabel||result.status||'',error:''
           })
         }catch(e){
@@ -2445,18 +2455,28 @@
         st.busy=true
         paintDialog()
         try{
+          const plannedSku=cand.plannedRegisteredSku||''
+          const position=cand.position||''
+          // 上下は品番末尾へ。補足に上／下が残っていれば落とす（他補足は維持）
+          let supplement=cand.supplement||''
+          if(supplement==='上'||supplement==='下')supplement=''
           await st.api('/api/product-ledger-csv/maker-lookup/adopt',{
             manufacturer:cand.manufacturer||panel.manufacturer||panel.result.manufacturer||'',
             makerSku:panel.makerSku,
             name:cand.name||'',
             color:cand.color||'',
-            supplement:cand.supplement||'',
+            supplement,
+            position,
+            plannedRegisteredSku:plannedSku,
             sourceUrl:cand.sourceUrl||''
           })
           const classPatch={
             plannedName:cand.name||'',
             color:cand.color||'',
-            supplement:cand.supplement||'',
+            supplement,
+            position,
+            plannedRegisteredSku:plannedSku,
+            registeredCode:plannedSku,
             unclassified:[],
             userEdited:true,
             confirmed:true,
@@ -2474,6 +2494,8 @@
               decision:'merge',
               officialName:cand.name||'',
               color:cand.color||'',
+              plannedRegisteredSku:plannedSku,
+              position,
               makerAdopted:true,
               makerSourceUrl:cand.sourceUrl||'',
               makerManufacturer:cand.manufacturer||panel.manufacturer||''
@@ -2484,6 +2506,8 @@
               decision:'merge',
               officialName:cand.name||'',
               color:cand.color||'',
+              plannedRegisteredSku:plannedSku,
+              position,
               makerAdopted:true,
               makerSourceUrl:cand.sourceUrl||'',
               makerManufacturer:cand.manufacturer||panel.manufacturer||''

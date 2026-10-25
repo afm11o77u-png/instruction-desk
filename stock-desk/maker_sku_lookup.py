@@ -3,6 +3,7 @@
 - 有料AI／検索APIは使わない（urllib による無料の公開ページ取得のみ）
 - 仕入先 ≠ メーカー（無条件同一視しない）。明示メーカー or 仕入先名に含まれる既知ブランドのみヒント
 - メーカー品番に加え、旧商品名から「上／下」や独立した色語を検索補助に使う
+- 上下区分は補足ではなく登録予定品番末尾（例: VEH30B下）へ連結する
 - 採用内容は SQLite に永続化し、次回取込で再利用（再検索で手動確定を上書きしない）
 - 類似度だけでは候補にしない。メーカー・品番（全半角吸収・型番一部一致は同一視しない）・上下の区別が必要
 """
@@ -18,6 +19,7 @@ import urllib.request
 
 import legacy_csv_import as legacy
 import product_ledger_paren as paren_classify
+import product_ledger_position as position_sku
 import stock
 import stock_product_merge
 
@@ -50,7 +52,7 @@ _SUPPLIER_BRAND_MARKERS = (
     ('KAZEN', 'KAZEN'),
 )
 
-_POSITION_TOKENS = ('上', '下')
+_POSITION_TOKENS = position_sku.POSITION_TOKENS
 
 # 掲載名の「色／サイズ」判定用（配色 黒／ワイン と区別）。CSVサイズは上書きしない。
 _SIZE_TERMS = (
@@ -220,19 +222,41 @@ def is_valid_maker_sku(sku: str) -> bool:
 
 
 def effective_maker_sku_from_row(row: dict) -> str:
+    """検索用のメーカー品番（上下区分を除いた基礎品番）。"""
     prod = row.get('product') if isinstance(row.get('product'), dict) else {}
     csv = row.get('csv') if isinstance(row.get('csv'), dict) else {}
     explicit = stock.text(
-        prod.get('makerCode') or csv.get('makerCode') or ''
+        prod.get('makerCode') or csv.get('makerCode') or csv.get('baseCode') or ''
     )
     if explicit:
-        return explicit if is_valid_maker_sku(explicit) else ''
-    code = stock.text(csv.get('code') or prod.get('code') or '')
+        base, _pos = position_sku.strip_sku_position_suffix(explicit)
+        code = base or explicit
+        return code if is_valid_maker_sku(code) else ''
+    code = stock.text(
+        csv.get('baseCode')
+        or csv.get('sourceCode')
+        or csv.get('code')
+        or prod.get('code')
+        or ''
+    )
     if prod.get('colorSplit') and not explicit:
         return ''
+    base, _pos = position_sku.strip_sku_position_suffix(code)
+    code = base or code
     if not stock_product_merge.is_normal_product_code(code):
         return ''
     return code if is_valid_maker_sku(code) else ''
+
+
+def planned_registered_sku(*, maker_sku: str, position: str = '', source_code: str = '') -> str:
+    """登録予定品番（上下を末尾密着）。"""
+    raw = stock.text(source_code) or stock.text(maker_sku)
+    base, pos_from_code = position_sku.strip_sku_position_suffix(raw)
+    pos = stock.text(position) or pos_from_code
+    base = base or stock.text(maker_sku) or raw
+    if pos in _POSITION_TOKENS:
+        return position_sku.attach_sku_position_suffix(base, pos)
+    return base
 
 
 def manufacturer_hint_from_supplier(supplier: str) -> str:
@@ -365,9 +389,10 @@ def extract_name_search_hints(old_name: str) -> dict:
 
     例: 「白下 ブルー」→ positions=['下'], colors=['ブルー']
     「白下」内の「白」は検索色にしない（必ず色条件にしない）。
+    「裾上げ」「上下セット」「上衣」等からは上下を採らない。
     """
     unified = paren_classify.unify_import_notation(stock.text(old_name) or '')
-    positions = [p for p in _POSITION_TOKENS if p in unified]
+    positions = position_sku.extract_positions_for_search(old_name)
     colors = []
     tokens = [t for t in re.split(r'[\s\u3000]+', unified) if t]
     color_keys = {paren_classify.color_match_key(t): t for t in paren_classify.COLOR_TERMS}
@@ -402,10 +427,14 @@ def extract_name_search_hints(old_name: str) -> dict:
 
 
 def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict) -> list[str]:
-    """段階的な検索語。保存品番は書き換えず、クエリ文字列だけ拡張する。"""
-    sku = stock.text(maker_sku)
+    """段階的な検索語。基礎品番＋上下の表記差（スペース／密着）を試す。"""
+    raw_sku = stock.text(maker_sku)
+    base, pos_from_sku = position_sku.strip_sku_position_suffix(raw_sku)
+    sku = base or raw_sku
     mfr = stock.text(manufacturer)
     positions = list(hints.get('positions') or [])
+    if pos_from_sku and pos_from_sku not in positions:
+        positions = [pos_from_sku] + positions
     colors = list(hints.get('colors') or [])
     stages = []
 
@@ -424,13 +453,15 @@ def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict)
     for pos in positions:
         add([mfr, sku, pos])
         add([sku, pos])
-        # カタログによっては密着語も試す（保存SKUは変えない）
+        # 密着表記（登録予定品番と同じ形）も検索
         add([mfr, f'{sku}{pos}'])
         add([f'{sku}{pos}'])
     for pos in positions:
         for col in colors:
             add([mfr, sku, pos, col])
             add([sku, pos, col])
+            add([mfr, f'{sku}{pos}', col])
+            add([f'{sku}{pos}', col])
     for col in colors:
         add([mfr, sku, col])
         add([sku, col])
@@ -864,31 +895,41 @@ def parse_maker_listing_title(
     *,
     sku_verified: bool = False,
 ) -> dict | None:
-    """掲載名から 商品名／色／サイズ／補足（上・下）を分解。
+    """掲載名から 商品名／色／サイズ／上下区分を分解。
 
     - 既定: 見出しに完全品番が必要（従来）
     - sku_verified=True: 本文の商品コード等で品番一致済みなら、見出しが
       モデル茎のみ（APK499…）でも分解する
     - 「ホワイト／フリー」は色+サイズ。「黒／ワイン」は配色1色
     - （無地）など非色・非サイズの括弧は商品名に残す
+    - 単独トークンの「上」「下」は品番末尾用の position（補足にはしない）
     """
     unified = paren_classify.unify_import_notation(stock.text(title) or '')
     if not unified:
         return None
-    sk = sku_match_key(maker_sku)
+    base_sku, _ = position_sku.strip_sku_position_suffix(maker_sku)
+    base_sku = base_sku or stock.text(maker_sku)
+    sk = sku_match_key(base_sku)
     # 見出しに完全品番があるか（茎だけの APK499 は完全一致にしない）
-    title_has_full = bool(sk) and _text_contains_full_sku(unified, maker_sku)
-    stem = _model_stem(maker_sku)
+    # VEH30B下 / VEH30B 下 も基礎品番一致として認める
+    title_has_full = bool(sk) and (
+        _text_contains_full_sku(unified, base_sku)
+        or _text_contains_full_sku(unified, maker_sku)
+    )
+    stem = _model_stem(base_sku)
     # 本文商品コード等で品番確認済みなら、見出しに完全品番が無くても分解する
     if not title_has_full and not sku_verified:
         return None
 
     # ECサイトの「｜店名」サフィックスは商品名から外す
     heading = re.split(r'[｜|]', unified, maxsplit=1)[0].strip()
-    working = _strip_sku_prefixes(heading, maker_sku)
+    working = _strip_sku_prefixes(heading, base_sku)
+    # 見出し内の「VEH30B下」「VEH30B 下」も品番として落とす
+    for variant in position_sku.sku_code_variants(maker_sku) + position_sku.sku_code_variants(base_sku):
+        working = _strip_sku_prefixes(working, variant)
     color = ''
     size = ''
-    supplement = ''
+    position = ''
     kept_parens = []
 
     def _consume_paren(content: str) -> str:
@@ -930,10 +971,17 @@ def parse_maker_listing_title(
     for tok in re.split(r'[\s\u3000]+', residual):
         if not tok:
             continue
-        if skus_equal(tok, maker_sku) or (stem and skus_equal(tok, stem)):
+        if skus_equal(tok, base_sku) or skus_equal(tok, maker_sku) or (
+            stem and skus_equal(tok, stem)
+        ):
+            continue
+        # 品番＋上下が密着したトークン
+        tok_base, tok_pos = position_sku.strip_sku_position_suffix(tok)
+        if tok_pos and skus_equal(tok_base, base_sku):
+            position = tok_pos
             continue
         if tok in _POSITION_TOKENS:
-            supplement = tok
+            position = tok
             continue
         # トークン自体が ホワイト／フリー
         slash_info = _classify_slash_pair(tok) if any(ch in tok for ch in '/／') else None
@@ -982,11 +1030,15 @@ def parse_maker_listing_title(
     name = paren_classify.unify_import_notation(name) or name
     if not name:
         return None
+    planned_sku = planned_registered_sku(maker_sku=base_sku, position=position)
     return {
         'name': name,
         'color': color,
         'size': size,
-        'supplement': supplement,
+        # 上下は品番末尾へ移す。補足欄へは載せない（他補足と混同しない）
+        'position': position,
+        'supplement': '',
+        'plannedRegisteredSku': planned_sku,
         'title': unified,
         'skuInTitle': bool(title_has_full),
         'missingFields': [
@@ -999,10 +1051,15 @@ def _candidate_passes_hints(parsed: dict, hints: dict) -> bool:
     """上下・色のヒントがあるときは区別を一致させる。類似度だけでは通さない。"""
     positions = list(hints.get('positions') or [])
     colors = list(hints.get('colors') or [])
-    supp = stock.text(parsed.get('supplement') or '')
+    pos = stock.text(parsed.get('position') or '')
+    if not pos:
+        # 旧データ互換: supplement に上／下が残っている場合
+        supp = stock.text(parsed.get('supplement') or '')
+        if supp in _POSITION_TOKENS:
+            pos = supp
     col = stock.text(parsed.get('color') or '')
     if positions:
-        if supp not in positions:
+        if pos not in positions:
             return False
     if colors:
         # ヒント色があるとき、候補色が取れていれば一致必須。取れなければ却下
@@ -1130,6 +1187,7 @@ def _build_candidate_from_hit(
     current_name: str,
     current_color: str,
     current_supplement: str = '',
+    current_sku: str = '',
 ) -> dict:
     """候補化の結果を返す。
 
@@ -1155,8 +1213,12 @@ def _build_candidate_from_hit(
             },
         }
 
+    base_sku, _ = position_sku.strip_sku_position_suffix(maker_sku)
+    base_sku = base_sku or stock.text(maker_sku)
     heading = page_title or title or _extract_h1(page_html)
-    sku_info = page_sku_match(page_html, heading, maker_sku)
+    sku_info = page_sku_match(page_html, heading, base_sku)
+    if sku_info.get('match') == 'none':
+        sku_info = page_sku_match(page_html, heading, maker_sku)
     if sku_info.get('match') == 'none':
         return {
             'candidate': None,
@@ -1170,17 +1232,17 @@ def _build_candidate_from_hit(
 
     sku_verified = sku_info.get('match') == 'structured'
     parsed = parse_maker_listing_title(
-        heading, maker_sku, sku_verified=sku_verified,
+        heading, base_sku, sku_verified=sku_verified,
     )
     if not parsed and heading != title:
         parsed = parse_maker_listing_title(
-            title, maker_sku, sku_verified=sku_verified,
+            title, base_sku, sku_verified=sku_verified,
         )
     if not parsed:
         h1 = _extract_h1(page_html)
         if h1:
             parsed = parse_maker_listing_title(
-                h1, maker_sku, sku_verified=sku_verified,
+                h1, base_sku, sku_verified=sku_verified,
             )
     if not parsed or not stock.text(parsed.get('name') or ''):
         missing = ['name']
@@ -1208,15 +1270,29 @@ def _build_candidate_from_hit(
             },
         }
 
+    # ヒントの上下があれば登録予定品番へ反映（掲載に無い場合の補完はしない＝矛盾防止）
+    position = stock.text(parsed.get('position') or '')
+    hint_positions = list(hints.get('positions') or [])
+    if not position and len(hint_positions) == 1:
+        position = hint_positions[0]
+    planned_sku = planned_registered_sku(maker_sku=base_sku, position=position)
+    # 上下を補足へ重複表示しない。上下以外の補足のみ残す
+    supplement = stock.text(parsed.get('supplement') or '')
+    if supplement in _POSITION_TOKENS:
+        supplement = ''
+
     hit_mfr = stock.text(hit.get('manufacturer') or manufacturer or '')
     missing = list(parsed.get('missingFields') or [])
+    current_sku_t = stock.text(current_sku) or base_sku
     # 色が空でも名が取れれば候補にはする（不足は表示用）
     cand = {
         'name': parsed['name'],
         'color': parsed.get('color') or '',
         'size': parsed.get('size') or '',
-        'supplement': parsed.get('supplement') or '',
-        'makerSku': stock.text(maker_sku),
+        'position': position,
+        'supplement': supplement,
+        'makerSku': base_sku,
+        'plannedRegisteredSku': planned_sku,
         'manufacturer': hit_mfr,
         'sourceUrl': url,
         'title': parsed.get('title') or page_title,
@@ -1227,13 +1303,80 @@ def _build_candidate_from_hit(
         'diff': {
             'nameChanged': stock.text(parsed['name']) != stock.text(current_name),
             'colorChanged': stock.text(parsed.get('color') or '') != stock.text(current_color),
-            'supplementChanged': stock.text(parsed.get('supplement') or '') != stock.text(current_supplement),
+            'supplementChanged': supplement != stock.text(current_supplement),
+            'skuChanged': planned_sku != current_sku_t,
             'currentName': stock.text(current_name),
             'currentColor': stock.text(current_color),
             'currentSupplement': stock.text(current_supplement),
+            'currentSku': current_sku_t,
+            'plannedRegisteredSku': planned_sku,
         },
     }
     return {'candidate': cand, 'rejection': None, 'detail': None}
+
+
+def _lookup_saved_for_position(c, *, manufacturer: str, base_sku: str, position: str):
+    """上下を区別して保存済み補正を取る。基礎品番だけで上下を取り違えない。"""
+    planned = planned_registered_sku(maker_sku=base_sku, position=position)
+    # 1) 登録予定品番キー（VEH30B下）
+    if planned and planned != base_sku:
+        hit = lookup_saved_correction(c, manufacturer=manufacturer, maker_sku=planned)
+        if hit:
+            return hit, planned
+    # 2) 基礎＋ adopted_json.position 一致
+    if position in _POSITION_TOKENS:
+        ensure_schema(c)
+        mk = manufacturer_key(manufacturer)
+        sk = maker_sku_key(base_sku)
+        rows = []
+        if mk and sk:
+            rows = c.execute(
+                '''SELECT * FROM maker_sku_corrections
+                   WHERE manufacturer_key=? AND (
+                     maker_sku_key=? OR maker_sku_key=?
+                   )
+                   ORDER BY id DESC''',
+                (mk, sk, maker_sku_key(planned)),
+            ).fetchall()
+        for row in rows or []:
+            extra = {}
+            try:
+                extra = json.loads(row['adopted_json'] or '{}')
+            except (TypeError, ValueError, json.JSONDecodeError):
+                extra = {}
+            row_pos = stock.text(extra.get('position') or '')
+            if not row_pos:
+                # 旧保存: supplement に上下
+                supp = stock.text(extra.get('supplement') or '')
+                if supp in _POSITION_TOKENS:
+                    row_pos = supp
+            saved_sku = stock.text(row['maker_sku'] or '')
+            _b, saved_pos = position_sku.strip_sku_position_suffix(saved_sku)
+            if not row_pos:
+                row_pos = saved_pos
+            if row_pos == position:
+                return dict(row), planned
+        return None, planned
+    # 3) 区分なし → 基礎キー（区分付き保存は使わない）
+    hit = lookup_saved_correction(c, manufacturer=manufacturer, maker_sku=base_sku)
+    if hit:
+        extra = {}
+        try:
+            extra = json.loads(hit.get('adopted_json') or '{}')
+        except (TypeError, ValueError, json.JSONDecodeError):
+            extra = {}
+        row_pos = stock.text(extra.get('position') or '')
+        if not row_pos:
+            supp = stock.text(extra.get('supplement') or '')
+            if supp in _POSITION_TOKENS:
+                row_pos = supp
+        _b, saved_pos = position_sku.strip_sku_position_suffix(hit.get('maker_sku') or '')
+        if not row_pos:
+            row_pos = saved_pos
+        # 基礎検索時に上下付き保存を誤適用しない
+        if row_pos in _POSITION_TOKENS:
+            return None, base_sku
+    return hit, base_sku
 
 
 def search_maker_product(
@@ -1243,6 +1386,7 @@ def search_maker_product(
     current_name: str = '',
     current_color: str = '',
     current_supplement: str = '',
+    current_sku: str = '',
     source_name: str = '',
     supplier: str = '',
 ) -> dict:
@@ -1253,18 +1397,30 @@ def search_maker_product(
       sku_mismatch / parse_incomplete / no_match / invalid_sku
     """
     ensure_schema(c)
-    sku = stock.text(maker_sku)
+    raw_sku = stock.text(maker_sku)
+    base_sku, pos_from_sku = position_sku.strip_sku_position_suffix(raw_sku)
+    sku = base_sku or raw_sku
     supplier_t = stock.text(supplier)
     mfr = resolve_manufacturer(manufacturer=manufacturer, supplier=supplier_t)
     # 旧商品名を検索補助の主とし、予定名は補助
     hint_source = stock.text(source_name) or stock.text(current_name)
     hints = extract_name_search_hints(hint_source)
+    if pos_from_sku and pos_from_sku not in (hints.get('positions') or []):
+        hints = dict(hints)
+        hints['positions'] = [pos_from_sku] + list(hints.get('positions') or [])
+    hint_positions = list(hints.get('positions') or [])
+    position = hint_positions[0] if len(hint_positions) == 1 else (pos_from_sku or '')
+    current_sku_t = (
+        stock.text(current_sku)
+        or planned_registered_sku(maker_sku=sku, position=position, source_code=raw_sku)
+    )
 
     if not is_valid_maker_sku(sku):
         return {
             'status': 'invalid_sku',
             'statusLabel': 'メーカー品番が対象外です',
             'makerSku': sku,
+            'plannedRegisteredSku': current_sku_t,
             'manufacturer': mfr,
             'candidates': [],
             'saved': None,
@@ -1276,7 +1432,9 @@ def search_maker_product(
             'matchedPages': [],
         }
 
-    saved = lookup_saved_correction(c, manufacturer=mfr, maker_sku=sku)
+    saved, saved_key = _lookup_saved_for_position(
+        c, manufacturer=mfr, base_sku=sku, position=position,
+    )
     saved_payload = None
     if saved:
         extra = {}
@@ -1284,16 +1442,30 @@ def search_maker_product(
             extra = json.loads(saved.get('adopted_json') or '{}')
         except (TypeError, ValueError, json.JSONDecodeError):
             extra = {}
+        saved_pos = stock.text(extra.get('position') or '')
+        saved_supp = stock.text(extra.get('supplement') or '')
+        if not saved_pos and saved_supp in _POSITION_TOKENS:
+            saved_pos = saved_supp
+            saved_supp = ''
+        _sb, _sp = position_sku.strip_sku_position_suffix(saved.get('maker_sku') or '')
+        if not saved_pos:
+            saved_pos = _sp
+        planned = planned_registered_sku(
+            maker_sku=sku, position=saved_pos or position, source_code=saved.get('maker_sku') or '',
+        )
         saved_payload = {
             'manufacturer': saved.get('manufacturer') or mfr,
-            'makerSku': saved.get('maker_sku') or sku,
+            'makerSku': sku,
+            'plannedRegisteredSku': planned,
+            'position': saved_pos,
             'name': saved.get('adopted_name') or '',
             'color': saved.get('adopted_color') or '',
             'size': stock.text(extra.get('size') or ''),
-            'supplement': stock.text(extra.get('supplement') or ''),
+            'supplement': saved_supp if saved_supp not in _POSITION_TOKENS else '',
             'sourceUrl': saved.get('source_url') or '',
             'manuallyConfirmed': bool(int(saved.get('manually_confirmed') or 0)),
             'fromSaved': True,
+            'savedKey': saved_key,
         }
 
     reference = reference_search_url(manufacturer=mfr, maker_sku=sku, hints=hints)
@@ -1375,6 +1547,7 @@ def search_maker_product(
                 current_name=current_name,
                 current_color=current_color,
                 current_supplement=current_supplement,
+                current_sku=current_sku_t,
             )
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             page_errors += 1
@@ -1397,6 +1570,8 @@ def search_maker_product(
         key = (
             maker_sku_key(cand['name']),
             paren_classify.color_match_key(cand.get('color') or ''),
+            cand.get('position') or '',
+            cand.get('plannedRegisteredSku') or '',
             cand.get('supplement') or '',
             stock.text(cand.get('size') or ''),
         )
@@ -1404,6 +1579,8 @@ def search_maker_product(
             (
                 maker_sku_key(x['name']),
                 paren_classify.color_match_key(x.get('color') or ''),
+                x.get('position') or '',
+                x.get('plannedRegisteredSku') or '',
                 x.get('supplement') or '',
                 stock.text(x.get('size') or ''),
             ) == key
@@ -1422,12 +1599,15 @@ def search_maker_product(
     def _with_saved(cands):
         if not (saved_payload and saved_payload.get('name')):
             return list(cands)
+        planned = saved_payload.get('plannedRegisteredSku') or current_sku_t
         front = {
             'name': saved_payload['name'],
             'color': saved_payload.get('color') or '',
             'size': saved_payload.get('size') or '',
+            'position': saved_payload.get('position') or position,
             'supplement': saved_payload.get('supplement') or '',
             'makerSku': sku,
+            'plannedRegisteredSku': planned,
             'manufacturer': saved_payload.get('manufacturer') or mfr,
             'sourceUrl': saved_payload.get('sourceUrl') or '',
             'title': saved_payload['name'],
@@ -1442,15 +1622,19 @@ def search_maker_product(
                     stock.text(saved_payload.get('supplement') or '')
                     != stock.text(current_supplement)
                 ),
+                'skuChanged': stock.text(planned) != stock.text(current_sku_t),
                 'currentName': stock.text(current_name),
                 'currentColor': stock.text(current_color),
                 'currentSupplement': stock.text(current_supplement),
+                'currentSku': stock.text(current_sku_t),
+                'plannedRegisteredSku': planned,
             },
         }
         return [front] + [
             x for x in cands
             if not (
                 maker_sku_key(x.get('name')) == maker_sku_key(front['name'])
+                and stock.text(x.get('plannedRegisteredSku')) == stock.text(front.get('plannedRegisteredSku'))
                 and stock.text(x.get('sourceUrl')) == stock.text(front.get('sourceUrl'))
             )
         ]
@@ -1508,6 +1692,7 @@ def search_maker_product(
             'status': status,
             'statusLabel': label,
             'makerSku': sku,
+            'plannedRegisteredSku': current_sku_t,
             'manufacturer': mfr,
             'candidates': [],
             'saved': saved_payload,
@@ -1529,6 +1714,10 @@ def search_maker_product(
         'status': status,
         'statusLabel': status_label,
         'makerSku': sku,
+        'plannedRegisteredSku': (
+            (candidates[0].get('plannedRegisteredSku') if candidates else '')
+            or current_sku_t
+        ),
         'manufacturer': mfr or (saved_payload or {}).get('manufacturer') or '',
         'candidates': candidates,
         'saved': saved_payload,
@@ -1536,7 +1725,7 @@ def search_maker_product(
         'note': (
             '採用するまで登録予定は変わりません。'
             '仕入先はメーカーではないため、ブランド名が含まれる場合のみメーカーヒントに使います。'
-            'メーカー品番の保存値は書き換えません。'
+            '上下区分がある場合は登録予定品番末尾へ連結します（例: VEH30B下）。'
             '取得サイズは照合・表示用で、旧CSVのサイズ割当は上書きしません。'
         ),
         'supplierIgnored': supplier_t,
@@ -1553,20 +1742,45 @@ def adopt_maker_correction(
     name: str,
     color: str = '',
     supplement: str = '',
+    position: str = '',
+    planned_registered_sku: str = '',
     source_url: str = '',
 ) -> dict:
-    if not is_valid_maker_sku(maker_sku):
+    raw_sku = stock.text(maker_sku)
+    base_sku, pos_from_sku = position_sku.strip_sku_position_suffix(raw_sku)
+    base_sku = base_sku or raw_sku
+    if not is_valid_maker_sku(base_sku):
         raise ValueError('メーカー品番が対象外です。')
     if not stock.text(name):
         raise ValueError('採用する商品名が空です。')
+    pos = stock.text(position) or pos_from_sku
+    if pos not in _POSITION_TOKENS:
+        pos = ''
+    # 補足に残った上下は品番側へ移し、補足へは重複しない
+    supp = stock.text(supplement)
+    if not pos and supp in _POSITION_TOKENS:
+        pos = supp
+        supp = ''
+    elif supp in _POSITION_TOKENS:
+        supp = ''
+    planned = stock.text(planned_registered_sku)
+    if not planned:
+        planned = position_sku.attach_sku_position_suffix(base_sku, pos) if pos else base_sku
+    # 保存キーは上下を含む登録予定品番（上と下を別補正として保持）
+    save_sku = planned if pos else base_sku
     row, changed = save_adopted_correction(
         c,
         manufacturer=manufacturer,
-        maker_sku=maker_sku,
+        maker_sku=save_sku,
         adopted_name=name,
         adopted_color=color,
         source_url=source_url,
-        adopted_extra={'supplement': stock.text(supplement)},
+        adopted_extra={
+            'supplement': supp,
+            'position': pos,
+            'baseMakerSku': base_sku,
+            'plannedRegisteredSku': planned,
+        },
         overwrite_manual=True,
     )
     extra = {}
@@ -1578,9 +1792,11 @@ def adopt_maker_correction(
         'saved': True,
         'changed': changed,
         'manufacturer': row.get('manufacturer') or manufacturer,
-        'makerSku': row.get('maker_sku') or maker_sku,
+        'makerSku': base_sku,
+        'plannedRegisteredSku': stock.text(extra.get('plannedRegisteredSku') or planned),
+        'position': stock.text(extra.get('position') or pos),
         'name': row.get('adopted_name') or name,
         'color': row.get('adopted_color') or color,
-        'supplement': stock.text(extra.get('supplement') or supplement),
+        'supplement': stock.text(extra.get('supplement') or supp),
         'sourceUrl': row.get('source_url') or source_url,
     }

@@ -15,6 +15,7 @@ import time
 from collections import defaultdict
 
 import legacy_csv_import as legacy
+import product_ledger_position as position_sku
 import stock
 
 BULK_OPENING_NOTE = '旧CSV一括取り込み（初期在庫）'
@@ -847,16 +848,22 @@ def _spec_signature(color, processing, material):
 
 
 def _map_row_spec_full(map_row):
-    """色・加工・素材に加え、加工サービス分離メタを返す。"""
+    """色・加工・素材に加え、加工サービス分離・上下品番メタを返す。"""
     color = ''
     processing = ''
     material = ''
     row_kind = ''
     processing_product_id = None
+    position = ''
+    registered_code = ''
+    base_code = ''
+    source_code = ''
     if map_row is None:
         return {
             'color': color, 'processing': processing, 'material': material,
             'rowKind': row_kind, 'processingProductId': processing_product_id,
+            'position': position, 'registeredCode': registered_code,
+            'baseCode': base_code, 'sourceCode': source_code,
         }
     keys = map_row.keys() if hasattr(map_row, 'keys') else []
     if 'csv_color' in keys:
@@ -888,9 +895,20 @@ def _map_row_spec_full(map_row):
                 processing_product_id = int(pid)
             except (TypeError, ValueError):
                 processing_product_id = None
+        position = stock.text(spec.get('position') or '')
+        registered_code = stock.text(spec.get('registeredCode') or '')
+        base_code = stock.text(spec.get('baseCode') or '')
+        source_code = stock.text(spec.get('sourceCode') or '')
+        # 旧保存: 補足に上下だけ残っている場合
+        if not position:
+            supp = stock.text(spec.get('supplement') or '')
+            if supp in position_sku.POSITION_TOKENS:
+                position = supp
     return {
         'color': color, 'processing': processing, 'material': material,
         'rowKind': row_kind, 'processingProductId': processing_product_id,
+        'position': position, 'registeredCode': registered_code,
+        'baseCode': base_code, 'sourceCode': source_code,
     }
 
 
@@ -899,17 +917,83 @@ def _map_row_spec(map_row):
     return full['color'], full['processing'], full['material']
 
 
+def _map_row_position_meta(map_row):
+    """マップ行の上下・登録品番メタ。"""
+    code = stock.text(map_row['csv_product_code'] or '')
+    name = stock.text(map_row['csv_product_name'] or '')
+    full = _map_row_spec_full(map_row)
+    pos = stock.text(full.get('position') or '')
+    registered = stock.text(full.get('registeredCode') or '')
+    base = stock.text(full.get('baseCode') or '')
+    source = stock.text(full.get('sourceCode') or '') or code
+    if not pos or not registered or not base:
+        resolved = position_sku.resolve_garment_position(
+            code=code, product_name=name, maker_position=pos,
+            override_registered_code=registered,
+        )
+        pos = pos or stock.text(resolved.get('position') or '')
+        registered = registered or stock.text(resolved.get('registeredCode') or code)
+        base = base or stock.text(resolved.get('baseCode') or code)
+        source = source or stock.text(resolved.get('sourceCode') or code)
+    return {
+        'position': pos,
+        'registeredCode': registered,
+        'baseCode': base,
+        'sourceCode': source,
+        'color': full.get('color') or '',
+        'processing': full.get('processing') or '',
+        'material': full.get('material') or '',
+        'rowKind': full.get('rowKind') or '',
+        'processingProductId': full.get('processingProductId'),
+    }
+
+
 def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, supplier):
-    """原文キーで対応（改名後の公式名では探さない）。行番号は使わない。"""
-    if stock.text(map_row['csv_product_code'] or '') != stock.text(code):
+    """原文キーで対応（改名後の公式名では探さない）。行番号は使わない。
+
+    品番は VEH30B / VEH30B 下 / VEH30B下 の表記差を、上下矛盾がないときだけ許容。
+    上下未特定の基礎品番だけでは上・下へ自動振り分けしない。
+    """
+    map_code = stock.text(map_row['csv_product_code'] or '')
+    aux_code = stock.text(code)
+    map_name = stock.text(map_row['csv_product_name'] or '')
+    meta = _map_row_position_meta(map_row)
+    aux_info = position_sku.resolve_garment_position(code=aux_code, product_name=product_name)
+    aux_pos = stock.text(aux_info.get('position') or '')
+    map_pos = stock.text(meta.get('position') or '')
+    aux_reg = stock.text(aux_info.get('registeredCode') or aux_code)
+    map_reg = stock.text(meta.get('registeredCode') or map_code)
+    aux_base = stock.text(aux_info.get('baseCode') or aux_code)
+    map_base = stock.text(meta.get('baseCode') or map_code)
+
+    code_ok = False
+    if map_code == aux_code or map_reg == aux_reg:
+        code_ok = True
+    elif aux_code in position_sku.sku_code_variants(map_code) or map_code in position_sku.sku_code_variants(aux_code):
+        code_ok = True
+    elif map_base and map_base == aux_base:
+        if map_pos and aux_pos:
+            code_ok = map_pos == aux_pos
+        elif not map_pos and not aux_pos:
+            code_ok = True
+        else:
+            # 片方だけ上下あり → 名コア一致と合わせて後段で判定（ここでは基礎だけでは OK にしない）
+            code_ok = False
+    if not code_ok:
+        # 基礎一致＋商品名から同じ上下が取れるときだけ許可
+        if map_base and map_base == aux_base and map_pos and aux_pos and map_pos == aux_pos:
+            code_ok = True
+    if not code_ok:
         return False
+    if map_pos in position_sku.POSITION_TOKENS and aux_pos in position_sku.POSITION_TOKENS:
+        if map_pos != aux_pos:
+            return False
     if supplier and stock.text(map_row['csv_supplier'] or ''):
         if not _person_names_match(supplier, map_row['csv_supplier']):
             return False
     if customer and stock.text(map_row['csv_customer'] or ''):
         if not _person_names_match(customer, map_row['csv_customer']):
             return False
-    map_name = stock.text(map_row['csv_product_name'] or '')
     if not _names_equivalent_core(map_name, product_name):
         return False
     map_size = stock.text(map_row['csv_size'] or '')
@@ -933,12 +1017,42 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             'reason': '商品コードが空のため、商品登録マップから登録先を特定できません。',
             'matches': [],
         }
-    rows = c.execute(
-        '''SELECT * FROM product_ledger_row_maps
-           WHERE csv_product_code=? AND product_id IS NOT NULL
-           ORDER BY id DESC''',
-        (code_t,),
-    ).fetchall()
+    variants = position_sku.sku_code_variants(code_t)
+    base, _pos = position_sku.strip_sku_position_suffix(code_t)
+    # 原文・密着・スペース付き・基礎（基礎は後で上下で絞る）
+    code_candidates = list(dict.fromkeys([code_t, *variants, base]))
+    rows = []
+    seen_ids = set()
+    for cand in code_candidates:
+        if not cand:
+            continue
+        for row in c.execute(
+            '''SELECT * FROM product_ledger_row_maps
+               WHERE csv_product_code=? AND product_id IS NOT NULL
+               ORDER BY id DESC''',
+            (cand,),
+        ).fetchall():
+            if row['id'] in seen_ids:
+                continue
+            seen_ids.add(row['id'])
+            rows.append(row)
+    # registeredCode が JSON 内だけ、の旧マップも拾う（件数制限付き）
+    if base and base != code_t:
+        for row in c.execute(
+            '''SELECT * FROM product_ledger_row_maps
+               WHERE product_id IS NOT NULL
+                 AND (spec_json LIKE ? OR spec_json LIKE ?)
+               ORDER BY id DESC LIMIT 200''',
+            (f'%{base}%', f'%{code_t}%'),
+        ).fetchall():
+            if row['id'] in seen_ids:
+                continue
+            meta = _map_row_position_meta(row)
+            if stock.text(meta.get('baseCode') or '') == base or stock.text(
+                meta.get('registeredCode') or ''
+            ) in variants:
+                seen_ids.add(row['id'])
+                rows.append(row)
     matches = []
     seen = set()
     for row in rows:
@@ -999,11 +1113,33 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
 
     # 同一別名でも仕様（色・加工・素材）や登録先が食い違うときは曖昧
     # 色分割後: 初期在庫CSVの商品名から明示色が取れ、マップ色と一意に一致すれば絞る
+    # 上下: 初期在庫側で区分が取れ、マップの上下／登録品番と一意一致すれば絞る（未特定では振り分けない）
     dest_keys = {
         (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
         for m in matches
     }
     if len(dest_keys) > 1:
+        aux_info = position_sku.resolve_garment_position(code=code_t, product_name=product_name)
+        aux_pos = stock.text(aux_info.get('position') or '')
+        if aux_pos in position_sku.POSITION_TOKENS:
+            narrowed_pos = []
+            for m in matches:
+                # matches 時点の row メタは再取得
+                map_row = next((r for r in rows if r['id'] == m.get('mapId')), None)
+                if map_row is None:
+                    continue
+                meta = _map_row_position_meta(map_row)
+                map_pos = stock.text(meta.get('position') or '')
+                map_reg = stock.text(meta.get('registeredCode') or '')
+                if map_pos == aux_pos or map_reg == stock.text(aux_info.get('registeredCode') or ''):
+                    narrowed_pos.append(m)
+            narrow_pos_keys = {
+                (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
+                for m in narrowed_pos
+            }
+            if len(narrow_pos_keys) == 1:
+                matches = narrowed_pos
+                dest_keys = narrow_pos_keys
         try:
             import product_ledger_paren as paren_classify
             extracted = paren_classify.extract_explicit_color_from_name(product_name)
@@ -1027,7 +1163,7 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             return {
                 'status': 'ambiguous',
                 'reason': (
-                    '同じ原文キーに複数の登録先（色分割・別仕様・別商品／取扱）が残っています。'
+                    '同じ原文キーに複数の登録先（色分割・上下区分・別仕様・別商品／取扱）が残っています。'
                     '推測で一方へ寄せず、確認してください（在庫数量の二重登録もしません）。'
                 ),
                 'matches': matches,

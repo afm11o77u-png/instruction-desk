@@ -75,7 +75,9 @@ class NameHintHelpersTest(unittest.TestCase):
         )
         self.assertEqual(ok['name'], '男女共用 スラックス')
         self.assertEqual(ok['color'], 'ブルー')
-        self.assertEqual(ok['supplement'], '下')
+        self.assertEqual(ok['position'], '下')
+        self.assertEqual(ok['plannedRegisteredSku'], 'VEH30B下')
+        self.assertEqual(ok.get('supplement') or '', '')
         # 型番一部一致は同一視しない
         self.assertIsNone(msl.parse_maker_listing_title(
             '男女共用　スラックス　ＶＥＨ３０Ｇ　下　グリーン', 'VEH30B',
@@ -141,10 +143,13 @@ class MakerLookupVeh30bTest(unittest.TestCase):
 
             self.assertEqual(cand['name'], '男女共用 スラックス')
             self.assertEqual(cand['color'], 'ブルー')
-            self.assertEqual(cand['supplement'], '下')
+            self.assertEqual(cand['position'], '下')
+            self.assertEqual(cand['plannedRegisteredSku'], 'VEH30B下')
+            self.assertEqual(cand.get('supplement') or '', '')
             self.assertEqual(live.get('manufacturer'), 'ミドリ安全')
-            # 保存SKUは書き換えない
+            # 検索用メーカー品番は基礎のまま。登録予定は末尾付き
             self.assertEqual(live.get('makerSku'), 'VEH30B')
+            self.assertEqual(live.get('plannedRegisteredSku') or cand['plannedRegisteredSku'], 'VEH30B下')
         finally:
             c.close()
             folder.cleanup()
@@ -207,7 +212,7 @@ class MakerLookupVeh30bTest(unittest.TestCase):
             reasons = ' '.join(pc.get('confirmReasons') or row.get('reasons') or [])
             self.assertTrue('白' in reasons or 'ブルー' in reasons or pc.get('needsConfirm'))
 
-            # メーカー採用相当の手編集
+            # メーカー採用相当の手編集（上下は品番末尾、補足へは載せない）
             preview2 = pli.build_preview(c, {
                 'importMode': 'products',
                 'file': b64(text), 'name': 'veh.csv',
@@ -215,7 +220,9 @@ class MakerLookupVeh30bTest(unittest.TestCase):
                     str(row['rowNo']): {
                         'plannedName': '男女共用 スラックス',
                         'color': 'ブルー',
-                        'supplement': '下',
+                        'supplement': '',
+                        'position': '下',
+                        'plannedRegisteredSku': 'VEH30B下',
                         'unclassified': [],
                         'userEdited': True,
                         'confirmed': True,
@@ -229,7 +236,8 @@ class MakerLookupVeh30bTest(unittest.TestCase):
             pc2 = row2.get('parenClassification') or {}
             self.assertEqual(pc2.get('plannedName'), '男女共用 スラックス')
             self.assertEqual(pc2.get('color'), 'ブルー')
-            self.assertEqual(pc2.get('supplement'), '下')
+            self.assertNotEqual(pc2.get('supplement'), '下')
+            self.assertEqual((row2.get('csv') or {}).get('code'), 'VEH30B下')
             self.assertFalse(pc2.get('needsConfirm'), pc2)
             # サイズ等は残る
             self.assertEqual((row2.get('csv') or {}).get('size'), 'M')
@@ -250,13 +258,14 @@ class MakerLookupVeh30bTest(unittest.TestCase):
                 maker_sku='VEH30B',
                 name='男女共用 スラックス',
                 color='ブルー',
-                supplement='下',
+                position='下',
+                planned_registered_sku='VEH30B下',
                 source_url='https://ec.midori-anzen.com/shop/g/g31131914/',
             )
             saved, changed = msl.save_adopted_correction(
                 c,
                 manufacturer='ミドリ安全',
-                maker_sku='VEH30B',
+                maker_sku='VEH30B下',
                 adopted_name='勝手な上書き',
                 adopted_color='赤',
                 overwrite_manual=False,
@@ -274,9 +283,10 @@ class MakerLookupUiSourceTest(unittest.TestCase):
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
         self.assertIn('sourceName', js)
         self.assertIn('currentSupplement', js)
-        self.assertIn('supplement:cand.supplement', js)
+        self.assertIn('plannedRegisteredSku', js)
         self.assertIn('source_name', server)
         self.assertIn('supplement=', server)
+        self.assertIn('planned_registered_sku', server)
 
 
 if __name__ == '__main__':

@@ -321,6 +321,12 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                         or payload.get('current_supplement')
                         or ''
                     ),
+                    current_sku=(
+                        payload.get('currentSku')
+                        or payload.get('current_sku')
+                        or payload.get('plannedRegisteredSku')
+                        or ''
+                    ),
                     source_name=payload.get('sourceName') or payload.get('source_name') or '',
                     supplier=payload.get('supplier') or '',
                 )
@@ -342,6 +348,12 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                     name=payload.get('name') or '',
                     color=payload.get('color') or '',
                     supplement=payload.get('supplement') or '',
+                    position=payload.get('position') or '',
+                    planned_registered_sku=(
+                        payload.get('plannedRegisteredSku')
+                        or payload.get('planned_registered_sku')
+                        or ''
+                    ),
                     source_url=payload.get('sourceUrl') or payload.get('source_url') or '',
                 )
                 c.commit()
