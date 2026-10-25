@@ -3942,9 +3942,21 @@ def upsert_row_map(
         'processingServiceName': stock.text(
             provenance.get('processingServiceName') or ps.get('serviceName') or ''
         ),
+        'processingDisplayName': stock.text(
+            provenance.get('processingDisplayName')
+            or provenance.get('processingServiceName')
+            or ps.get('displayName')
+            or ps.get('serviceName')
+            or ''
+        ),
         'targetGarmentCode': stock.text(
             provenance.get('targetGarmentCode') or csv_info.get('code') or ''
         ),
+        'targetCustomer': stock.text(
+            provenance.get('targetCustomer') or customer or ''
+        ),
+        'csvSize': stock.text(provenance.get('csvSize') or size or ''),
+        'customerSpecific': stock.text(provenance.get('customerSpecific') or ''),
         'processingProductId': provenance.get('processingProductId'),
         'rowSpecs': provenance.get('rowSpecs') or ps.get('rowSpecs') or {},
     }, ensure_ascii=False)
@@ -5123,8 +5135,11 @@ def attach_processing_service_detection(classified):
 def _processing_service_plan_payload(info, *, source_row_nos=None, garment_codes=None):
     name = stock.text(info.get('serviceName') or '')
     vendor = stock.text(info.get('vendorName') or '')
+    display = stock.text(info.get('displayName') or name)
     return {
         'serviceName': name,
+        # 登録時表示名＝加工名（予定名との二重入力不要）
+        'displayName': display or name,
         'vendorName': vendor,
         'dedupeKey': proc_svc.service_dedupe_key(name, vendor),
         'category': stock.CATEGORY_PARTS,
@@ -5328,12 +5343,14 @@ def apply_processing_service_split(c, classified, sku_groups):
                     **{k: specs.get(k) for k in (
                         'originalName', 'position', 'dimensions',
                         'composition', 'customerSpecific', 'parenProcessing',
+                        'customerUse', 'parenSpecs',
                     )},
                 })
 
             # 本体があるとき: この行の商品は本体へ寄せ、仕入先は加工業者のまま provenance に残す
             prod = dict(row.get('product') or {})
             handle = dict(row.get('handle') or {})
+            service_display = stock.text(info.get('displayName') or info.get('serviceName') or '')
             if group and group.get('garmentBodyKnown'):
                 body_name = stock.text(
                     group.get('plannedGarmentName')
@@ -5364,7 +5381,7 @@ def apply_processing_service_split(c, classified, sku_groups):
                     prod['action'] = 'reuse'
                 row['product'] = prod
                 # 取扱の加工仕様 = 統一加工名（個別仕様は provenance）
-                emb = stock.text(info.get('serviceName') or '')
+                emb = service_display
                 # 寸法・位置は取扱キーへ足さず provenance に残す（共通サービスと分離）
                 if emb:
                     handle['proposedEmbroidery'] = emb
@@ -5373,6 +5390,12 @@ def apply_processing_service_split(c, classified, sku_groups):
                     handle['pendingEmbroiderySort'] = False
                     handle['fromProcessingServiceSplit'] = True
                 row['handle'] = handle
+                # 括弧分類欄: 加工サービス行は加工名＝表示名に同期（色・生地の迷いを減らす）
+                pc = dict(row.get('parenClassification') or {})
+                pc['processing'] = emb
+                pc['plannedName'] = emb
+                pc['processingServiceView'] = True
+                row['parenClassification'] = pc
                 # ステータス: 本体寄せができていればコミット可
                 if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD) and not info.get('needsConfirm'):
                     if prod.get('action') in ('create', 'reuse') and (
@@ -5397,7 +5420,8 @@ def apply_processing_service_split(c, classified, sku_groups):
                 prod['code'] = ''
                 prod['codeOverride'] = ''
                 prod['blankSku'] = True
-                prod['officialName'] = info['serviceName']
+                # 登録時表示名＝加工名
+                prod['officialName'] = service_display or info['serviceName']
                 prod['applyOfficialName'] = True
                 prod['primarySupplierName'] = info['vendorName']
                 prod['processingServiceProduct'] = True
@@ -5413,6 +5437,11 @@ def apply_processing_service_split(c, classified, sku_groups):
                     'embroidery': '', 'embroideryLabel': '',
                     'skipForProcessingService': True,
                 }
+                pc = dict(row.get('parenClassification') or {})
+                pc['processing'] = service_display or info.get('serviceName') or ''
+                pc['plannedName'] = service_display or info.get('serviceName') or pc.get('plannedName') or ''
+                pc['processingServiceView'] = True
+                row['parenClassification'] = pc
                 if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD) and not info.get('needsConfirm'):
                     row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
                     row['statusLabel'] = STATUS_LABELS[row['status']]
@@ -5420,25 +5449,39 @@ def apply_processing_service_split(c, classified, sku_groups):
                     row['skuDecisionNeeded'] = False
                 prov_kind = 'processing_service'
 
-            # 内部照合用 provenance
+            # 内部照合用 provenance（初期在庫で旧名称→商品・加工仕様へ）
             prov = dict(row.get('specProvenance') or {})
+            row_specs = info.get('rowSpecs') or {}
             prov.update({
                 'originalName': csv.get('productName') or '',
                 'originalSupplier': csv.get('supplier') or '',
                 'processing': info.get('serviceName') or '',
                 'processingVendor': info.get('vendorName') or '',
                 'processingServiceName': info.get('serviceName') or '',
+                'processingDisplayName': service_display or info.get('serviceName') or '',
                 'rowKind': prov_kind,
                 'targetGarmentCode': code,
+                'targetCustomer': csv.get('customer') or '',
+                'csvSize': csv.get('size') or '',
                 'isMainCandidate': True,
-                'rowSpecs': info.get('rowSpecs') or {},
+                'rowSpecs': row_specs,
+                'customerSpecific': stock.text(row_specs.get('customerSpecific') or ''),
             })
             row['specProvenance'] = prov
             row['processingServicePlanKey'] = key
+            row['processingServiceView'] = True
 
         elif info.get('isProcessingVendor') and info.get('needsConfirm'):
             # 既に attach_processing_service_detection で要確認化済み
-            pass
+            # 画面は加工サービス向け欄へ（色・生地と加工名の迷いを減らす）
+            row['processingServiceView'] = True
+            pc = dict(row.get('parenClassification') or {})
+            pc['processingServiceView'] = True
+            pc['processingVendor'] = info.get('vendorName') or (row.get('csv') or {}).get('supplier') or ''
+            missing = info.get('missingFields') or []
+            if missing:
+                pc['processingMissingHint'] = '・'.join(str(x) for x in missing)
+            row['parenClassification'] = pc
 
     # 分離後に自動まとめになった品番は、全行の SKU ゲートを下ろす
     for group in sku_groups or []:
@@ -5461,19 +5504,24 @@ def apply_processing_service_split(c, classified, sku_groups):
 
 
 def _ensure_processing_service_product(c, plan):
-    """加工サービスを部品・資材として確保（本体品番は流用しない）。"""
-    name = stock.text(plan.get('serviceName') or '')
+    """加工サービスを部品・資材として確保（本体品番は流用しない）。
+
+    登録時表示名は加工名と同じ。加工サービスに衣服数量は付けない。
+    """
+    name = stock.text(plan.get('serviceName') or plan.get('displayName') or '')
     vendor = stock.text(plan.get('vendorName') or '')
     if not name or not vendor:
         raise ValueError('加工サービス名と業者が必要です。')
     existing = proc_svc.find_existing_processing_service(c, name, vendor)
     if existing:
         return existing['id'], False
+    # 別名表記（取り付け等）でも同じキーで再利用できるよう正規化名で保存
+    display = stock.text(plan.get('displayName') or name)
     sup_id, _ = _ensure_person(c, 'suppliers', stock.save_supplier, vendor, create=True)
     # 品番なし・部品・資材。管理品番に対象衣服品番を載せない
     saved = stock.save_product(c, {
         'code': '',
-        'name': name,
+        'name': display or name,
         'color': '',
         'material': '',
         'category': stock.CATEGORY_PARTS,

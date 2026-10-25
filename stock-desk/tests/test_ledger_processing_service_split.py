@@ -59,6 +59,52 @@ class ProcessingServiceUnitTest(unittest.TestCase):
             '七分袖加工',
         )
 
+    def test_pocket_attach_without_kako_char(self):
+        """『加工』文字がなくてもポケット取付は認識。表記差は同一名へ。"""
+        for raw in (
+            'ポケット取付', 'ポケット取り付け', 'ポケット取付け',
+            'ポケット縫付', 'ポケット縫い付け',
+        ):
+            self.assertEqual(
+                ps.unify_processing_service_name(raw), 'ポケット取付', msg=raw,
+            )
+            r = ps.classify_processing_service_row(
+                supplier='K2スタッフ工房', product_name=raw, code='',
+            )
+            self.assertTrue(r['identifiable'], msg=raw)
+            self.assertTrue(r['isProcessingService'], msg=raw)
+            self.assertFalse(r['needsConfirm'], msg=raw)
+            self.assertEqual(r['serviceName'], 'ポケット取付')
+            self.assertEqual(r['displayName'], 'ポケット取付')
+            self.assertEqual(r['vendorName'], 'K2スタッフ工房')
+        # 表記差でも同一 dedupe キー
+        self.assertEqual(
+            ps.service_dedupe_key('ポケット取り付け', 'K2スタッフ工房'),
+            ps.service_dedupe_key('ポケット取付', 'K2スタッフ工房'),
+        )
+
+    def test_sleeve_hem_snapper_shared(self):
+        self.assertEqual(ps.unify_processing_service_name('袖加工'), '袖加工')
+        self.assertEqual(ps.unify_processing_service_name('丈加工'), '丈加工')
+        self.assertEqual(ps.unify_processing_service_name('スナッパー'), 'スナッパー加工')
+        # 原文にない具体化（袖→七分袖）はしない
+        self.assertEqual(ps.unify_processing_service_name('袖加工'), '袖加工')
+        self.assertNotEqual(ps.unify_processing_service_name('袖加工'), '七分袖加工')
+
+    def test_customer_specific_uwagi_kept(self):
+        name = 'わらく堂用上衣加工（衿・裾・袖）'
+        self.assertEqual(ps.unify_processing_service_name(name), '上衣加工')
+        specs = ps.extract_row_specific_specs(name)
+        self.assertEqual(specs['customerUse'], 'わらく堂用')
+        self.assertIn('衿', specs['parenSpecs'])
+        self.assertIn('わらく堂用', specs['customerSpecific'])
+        r = ps.classify_processing_service_row(
+            supplier='K2スタッフ工房', product_name=name, code='W-1',
+        )
+        self.assertTrue(r['identifiable'])
+        self.assertEqual(r['serviceName'], '上衣加工')
+        self.assertIn('衿', r['rowSpecs'].get('customerSpecific') or '')
+
     def test_k2_and_elm_vendors(self):
         self.assertTrue(ps.is_processing_vendor('K2スタッフ工房'))
         self.assertTrue(ps.is_processing_vendor('(有)エルムスコーポレーション'))
@@ -78,6 +124,9 @@ class ProcessingServiceUnitTest(unittest.TestCase):
         )
         self.assertTrue(r['needsConfirm'])
         self.assertFalse(r['identifiable'])
+        # 業者名だけで架空加工を作らない
+        self.assertFalse(r['isProcessingService'])
+        self.assertTrue(any('加工名' in x for x in r['confirmReasons']))
 
     def test_composition_kept(self):
         name = '半袖加工＋リフレクター＋マジックテープ付け'
@@ -287,6 +336,114 @@ class ProcessingServiceImportTest(unittest.TestCase):
             )
             # 丈加工サービス名も統一対象
             self.assertEqual(ps.unify_processing_service_name('丈加工'), '丈加工')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_pocket_attach_k2_auto_no_manual(self):
+        """ポケット取付／K2 は手入力なしで加工サービス自動登録。表記差は重複しない。"""
+        folder, path, c = newdb()
+        try:
+            text = ledger(
+                '顧客A,某メーカー,P-1,シャツ,M',
+                '顧客A,K2スタッフ工房,P-1,ポケット取付,M',
+                '顧客B,K2スタッフ工房,,ポケット取り付け,',
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'pocket.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans), 1, msg=plans)
+            self.assertEqual(plans[0]['serviceName'], 'ポケット取付')
+            self.assertEqual(plans[0]['displayName'], 'ポケット取付')
+            self.assertEqual(plans[0]['vendorName'], 'K2スタッフ工房')
+
+            # 確認理由に「加工名を特定できません」が残らない
+            for row in preview.get('rows') or []:
+                csv = row.get('csv') or {}
+                if 'ポケット' in (csv.get('productName') or ''):
+                    reasons = ' '.join(row.get('reasons') or [])
+                    self.assertNotIn('加工名を特定できません', reasons)
+                    self.assertFalse(row.get('processingServiceNeedsConfirm'))
+                    ps_info = row.get('processingService') or {}
+                    self.assertTrue(ps_info.get('identifiable'))
+                    self.assertEqual(ps_info.get('serviceName'), 'ポケット取付')
+
+            # K2 は本体仕入先候補に混ざらない
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'P-1')
+            self.assertNotIn('K2スタッフ工房', g.get('supplierCandidates') or [])
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'pocket.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'ps-pocket-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertEqual(result['counts'].get('failed', 0), 0)
+            services = list(c.execute(
+                "SELECT id,name,code,category FROM products WHERE name=? AND category=?",
+                ('ポケット取付', stock.CATEGORY_PARTS),
+            ))
+            self.assertEqual(len(services), 1)
+            self.assertEqual(services[0]['code'], '')
+
+            # 再照合でも同一サービス・確認理由なし
+            preview2 = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'pocket.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans2 = [p for p in (preview2.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans2), 1)
+            self.assertEqual(plans2[0].get('action'), 'reuse')
+            pli.commit_preview(c, {
+                'file': csv_b64(text), 'name': 'pocket.csv',
+                'previewFingerprint': preview2['previewFingerprint'],
+                'previewAt': preview2['previewAt'],
+                'token': 'ps-pocket-2',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM products WHERE name=? AND category=?",
+                ('ポケット取付', stock.CATEGORY_PARTS),
+            ).fetchone()['n']
+            self.assertEqual(n, 1)
+
+            # 行マップに個別仕様・対象品番が残る
+            maps = list(c.execute(
+                "SELECT csv_product_name,spec_json,product_id FROM product_ledger_row_maps"
+            ))
+            pocket_maps = [m for m in maps if 'ポケット' in (m['csv_product_name'] or '')]
+            self.assertTrue(pocket_maps)
+            spec = json.loads(pocket_maps[0]['spec_json'] or '{}')
+            self.assertEqual(spec.get('processingServiceName'), 'ポケット取付')
+            self.assertEqual(spec.get('processingVendor'), 'K2スタッフ工房')
+            self.assertEqual(spec.get('processingDisplayName'), 'ポケット取付')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_waraku_specs_not_replaced(self):
+        folder, path, c = newdb()
+        try:
+            text = ledger(
+                'わらく堂,K2スタッフ工房,W-9,わらく堂用上衣加工（衿・裾・袖）,L',
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64(text), 'name': 'waraku.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
+            self.assertEqual(len(plans), 1)
+            self.assertEqual(plans[0]['serviceName'], '上衣加工')
+            samples = plans[0].get('rowSpecsSamples') or []
+            self.assertTrue(samples)
+            self.assertIn('衿', samples[0].get('customerSpecific') or samples[0].get('parenSpecs') or '')
+            # 勝手に別加工へ置き換えない
+            self.assertNotEqual(plans[0]['serviceName'], '七分袖加工')
         finally:
             c.close()
             folder.cleanup()
