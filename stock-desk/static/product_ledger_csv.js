@@ -24,6 +24,7 @@
   // rowExcluded=登録しない項目（今回の取り込みだけの行除外）
   const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,rowExcluded:false,sourceRows:false}
   const USER_ROW_EXCLUDE_REASON='この行を登録しない（今回の取り込み）'
+  const K2_AUTO_EXCLUDE_REASON='K2スタッフ工房の加工行ですが、加工内容を特定できないため登録対象外'
   // 一覧テーブル列数。展開詳細行の colspan は必ずこれと一致させる（不一致だと table-layout:fixed で列が縮む）
   const SKU_COMPARE_COL_COUNT=8
   const UNIFIED_REVIEW_COL_COUNT=5
@@ -100,6 +101,7 @@
     st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
     st.history=null;st.historyError='';st.preview=null;st.previewError='';st.result=null
     st.selections={};st.skuDecisions={};st.rowClassifications={};st.rowExclusions={}
+    st.rowExcludeSnapshots={}
     st.selectedCodes={};st.expandedCodes={};st.openingSelections={}
     st.makerLookup=null;st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
@@ -120,17 +122,48 @@
   }
   function isRowExcluded(st,r){
     if(!r)return false
-    if(r.userRowExcluded)return true
+    if(r.userRowExcluded||r.autoRowExcluded)return true
     const key=stableRowKeyFromRow(r)
     const ent=st.rowExclusions&&st.rowExclusions[key]
     return !!(ent&&ent.excluded!==false)
   }
-  function setRowExcluded(st,r,excluded){
+  function rowExclusionReason(st,r){
+    if(!r)return ''
+    if(r.deferReason)return r.deferReason
+    if(r.autoRowExcluded)return K2_AUTO_EXCLUDE_REASON
+    if(r.userRowExcluded)return USER_ROW_EXCLUDE_REASON
+    const key=stableRowKeyFromRow(r)
+    const ent=st.rowExclusions&&st.rowExclusions[key]
+    return (ent&&ent.reason)||USER_ROW_EXCLUDE_REASON
+  }
+  function snapshotRowBeforeExclude(st,r){
     if(!r)return
+    if(!st.rowExcludeSnapshots)st.rowExcludeSnapshots={}
+    const key=stableRowKeyFromRow(r)
+    if(st.rowExcludeSnapshots[key])return
+    st.rowExcludeSnapshots[key]={
+      status:r.status,
+      statusLabel:r.statusLabel,
+      canCommit:r.canCommit,
+      reasons:(r.reasons||[]).slice(),
+      userRowExcluded:!!r.userRowExcluded,
+      autoRowExcluded:!!r.autoRowExcluded,
+      exclusionKind:r.exclusionKind||'',
+      deferReason:r.deferReason||'',
+      processingServiceNeedsConfirm:!!r.processingServiceNeedsConfirm,
+      skuDecisionNeeded:!!r.skuDecisionNeeded,
+      skuGroupCode:((r.csv||{}).code)||''
+    }
+  }
+  function setRowExcluded(st,r,excluded,opts){
+    if(!r)return
+    opts=opts||{}
     const csv=r.csv||{}
     const key=stableRowKeyFromRow(r)
     if(!st.rowExclusions)st.rowExclusions={}
     if(excluded){
+      const reason=opts.reason||USER_ROW_EXCLUDE_REASON
+      const kind=opts.kind||'manual'
       st.rowExclusions[key]={
         excluded:true,
         rowNo:r.rowNo,
@@ -139,11 +172,132 @@
         productName:csv.productName||'',
         size:csv.size||'',
         supplier:csv.supplier||'',
-        reason:USER_ROW_EXCLUDE_REASON
+        reason,
+        exclusionKind:kind
       }
     }else{
       delete st.rowExclusions[key]
     }
+  }
+  /** 品番グループの除外後同期（全行除外なら未決定から外す。他対象は維持）。 */
+  function syncSkuGroupAfterLocalExclude(st,code){
+    if(!code||!st.preview)return
+    const groups=st.preview.skuGroups||[]
+    const group=groups.find(g=>String(g.code)===String(code))
+    if(!group)return
+    const grow=((st.preview.rows)||[]).filter(r=>String((r.csv||{}).code||'')===String(code))
+    if(!grow.length)return
+    const active=grow.filter(r=>!isRowExcluded(st,r))
+    group.userExcludedRowNos=grow.filter(r=>isRowExcluded(st,r)).map(r=>r.rowNo)
+    group.activeRowNos=active.map(r=>r.rowNo)
+    if(!active.length&&group.needsDecision){
+      const sample=grow.find(r=>r.userRowExcluded)||grow.find(r=>r.autoRowExcluded)||grow[0]
+      group.needsDecision=false
+      group.userAllRowsExcluded=true
+      group.decision={
+        decision:'hold',
+        deferReason:rowExclusionReason(st,sample),
+        userRowExcluded:!!(sample&&sample.userRowExcluded),
+        autoRowExcluded:!!(sample&&sample.autoRowExcluded),
+        exclusionKind:(sample&&sample.exclusionKind)||'manual'
+      }
+    }else if(active.length&&group.userAllRowsExcluded){
+      // 一部復帰: 未決定へ戻す（詳細は再照合で再評価）
+      group.needsDecision=true
+      group.userAllRowsExcluded=false
+      if(group.decision&&(group.decision.userRowExcluded||group.decision.autoRowExcluded)){
+        delete group.decision
+      }
+    }
+  }
+  /**
+   * 除外／復帰をローカル反映。全件再照合・CSV再読込・busy はしない。
+   * 入力中の加工名・補足・チェック・詳細開閉・スクロールは harvest＋paintDialog で保持。
+   */
+  function applyLocalRowExclude(st,row,excluded,opts){
+    opts=opts||{}
+    if(!row||!st.preview)return false
+    harvestFormEdits(st)
+    const code=((row.csv||{}).code)||''
+    if(excluded){
+      snapshotRowBeforeExclude(st,row)
+      setRowExcluded(st,row,true,{reason:opts.reason||USER_ROW_EXCLUDE_REASON,kind:opts.kind||'manual'})
+      row.status='hold'
+      row.statusLabel='保留'
+      row.canCommit=false
+      row.userRowExcluded=true
+      row.autoRowExcluded=false
+      row.exclusionKind='manual'
+      row.skuDecisionNeeded=false
+      row.processingServiceNeedsConfirm=false
+      row.deferReason=USER_ROW_EXCLUDE_REASON
+      const drop=[USER_ROW_EXCLUDE_REASON,K2_AUTO_EXCLUDE_REASON]
+      row.reasons=(row.reasons||[]).filter(x=>!drop.some(t=>String(x).includes(t)))
+      row.reasons.push(USER_ROW_EXCLUDE_REASON)
+    }else{
+      setRowExcluded(st,row,false)
+      const key=stableRowKeyFromRow(row)
+      const snap=(st.rowExcludeSnapshots&&st.rowExcludeSnapshots[key])||null
+      const restoreProc=opts.processingName!=null?String(opts.processingName).trim():''
+      if(restoreProc){
+        setRowClassification(st,row.rowNo,{
+          processing:restoreProc,
+          plannedName:restoreProc,
+          userEdited:true,
+          userRestoredFromAutoExclude:true,
+          confirmed:true,
+          acceptProposal:true
+        })
+      }else if(row.autoRowExcluded||(row.exclusionKind==='auto')){
+        setRowClassification(st,row.rowNo,{userRestoredFromAutoExclude:true})
+      }
+      if(snap){
+        row.status=snap.status
+        row.statusLabel=snap.statusLabel
+        row.canCommit=snap.canCommit
+        row.reasons=(snap.reasons||[]).slice()
+        row.skuDecisionNeeded=snap.skuDecisionNeeded
+        row.processingServiceNeedsConfirm=snap.processingServiceNeedsConfirm
+        delete st.rowExcludeSnapshots[key]
+      }else{
+        row.status='needs_review'
+        row.statusLabel='要確認'
+        row.canCommit=false
+        row.skuDecisionNeeded=false
+        row.processingServiceNeedsConfirm=!!restoreProc
+        const drop=[USER_ROW_EXCLUDE_REASON,K2_AUTO_EXCLUDE_REASON]
+        row.reasons=(row.reasons||[]).filter(x=>!drop.some(t=>String(x).includes(t)))
+      }
+      row.userRowExcluded=false
+      row.autoRowExcluded=false
+      row.exclusionKind=''
+      row.deferReason=''
+      if(restoreProc){
+        const ps=Object.assign({},row.processingService||{})
+        ps.serviceName=restoreProc
+        ps.displayName=restoreProc
+        ps.identifiable=true
+        ps.needsConfirm=false
+        ps.k2AutoExclude=false
+        ps.autoExcludeReason=''
+        ps.userRestoredFromAutoExclude=true
+        row.processingService=ps
+        const pc=Object.assign({},row.parenClassification||{})
+        pc.processing=restoreProc
+        pc.plannedName=restoreProc
+        pc.userEdited=true
+        pc.userRestoredFromAutoExclude=true
+        row.parenClassification=pc
+        row.processingServiceNeedsConfirm=false
+        row.status='create'
+        row.statusLabel='新規'
+        row.canCommit=true
+      }
+    }
+    syncSkuGroupAfterLocalExclude(st,code)
+    // 集計・登録可否・所属セクションを描画し直す（サーバ往復なし）
+    paintDialog({preserveScroll:true})
+    return true
   }
   /**
    * 同じ内容の複数行キー。サイズ違いの同一商品はまとめる。
@@ -180,7 +334,15 @@
     Object.keys(st.rowExclusions||{}).forEach(k=>{
       const ent=st.rowExclusions[k]
       if(!ent||ent.excluded===false||byKey[k])return
-      byKey[k]={rowNo:ent.rowNo,csv:ent,userRowExcluded:true,status:'hold',statusLabel:'登録しない',reasons:[ent.reason||USER_ROW_EXCLUDE_REASON]}
+      const auto=ent.exclusionKind==='auto'
+      byKey[k]={
+        rowNo:ent.rowNo,csv:ent,
+        userRowExcluded:!auto,autoRowExcluded:auto,
+        exclusionKind:ent.exclusionKind||(auto?'auto':'manual'),
+        deferReason:ent.reason||(auto?K2_AUTO_EXCLUDE_REASON:USER_ROW_EXCLUDE_REASON),
+        status:'hold',statusLabel:'登録しない',
+        reasons:[ent.reason||(auto?K2_AUTO_EXCLUDE_REASON:USER_ROW_EXCLUDE_REASON)]
+      }
     })
     return Object.keys(byKey).map(k=>byKey[k]).sort((a,b)=>(Number(a.rowNo)||0)-(Number(b.rowNo)||0))
   }
@@ -1620,22 +1782,29 @@
           ${sectionToggleBtn(st,'rowExcluded')}
         </header>
         ${rowExOpen?`<div class="sku-section-body">
-          <p class="excelhint">今回の取り込みだけ商品登録対象から外した元CSV行です（削除ではありません。恒久除外ルールにはしません）。「登録対象に戻す」と現在の入力内容で確認事項を再判定します。</p>
+          <p class="excelhint">今回の取り込みだけ商品登録対象から外した元CSV行です（削除ではありません。恒久除外ルールにはしません）。手動除外と自動除外の理由を区別して表示します。加工名不明の自動除外は加工名を入れて「登録対象に戻す」と再照合でも勝手に除外しません。</p>
           ${sectionPagerHtml('rowExcluded',rowExSlice,excludedRowList.length)}
           <div class="legacy-csv-table-wrap"><table class="legacy-csv-table product-ledger-table">
-            <thead><tr><th>行</th><th>顧客</th><th>仕入先</th><th>品番</th><th>原文名</th><th>サイズ</th><th>操作</th></tr></thead>
+            <thead><tr><th>行</th><th>顧客</th><th>仕入先</th><th>品番</th><th>原文名</th><th>サイズ</th><th>理由</th><th>操作</th></tr></thead>
             <tbody>${(rowExSlice.pageItems||[]).map(r=>{
               const csv=r.csv||{}
-              return `<tr class="legacy-status-hold">
+              const reason=rowExclusionReason(st,r)
+              const auto=!!(r.autoRowExcluded||(r.exclusionKind==='auto'))
+              const kindLabel=auto?'自動除外':'手動除外'
+              return `<tr class="legacy-status-hold" data-pl-excl-kind="${auto?'auto':'manual'}">
                 <td>${r.rowNo||'—'}</td>
                 <td>${esc(csv.customer||'')}</td>
                 <td>${esc(csv.supplier||'')}</td>
                 <td>${esc(csv.codeDisplay||csv.code||'')}</td>
                 <td>${esc(csv.productName||'')}</td>
                 <td>${esc(csv.size||'')}</td>
-                <td><button type="button" class="quiet" data-pl-row-include="${r.rowNo}" data-pl-row-include-key="${esc(stableRowKeyFromRow(r))}" ${st.busy?'disabled':''}>登録対象に戻す</button></td>
+                <td><span class="badge">${esc(kindLabel)}</span> ${esc(reason)}</td>
+                <td>
+                  ${auto?`<label class="excelhint">加工名<input data-pl-row-restore-proc="${r.rowNo}" data-pl-row-restore-key="${esc(stableRowKeyFromRow(r))}" value="${esc(((st.rowClassifications||{})[String(r.rowNo)]||{}).processing||'')}" ${st.busy?'disabled':''} placeholder="例: ほつれ補修"></label>`:''}
+                  <button type="button" class="quiet" data-pl-row-include="${r.rowNo}" data-pl-row-include-key="${esc(stableRowKeyFromRow(r))}" data-pl-row-include-auto="${auto?'1':''}" ${st.busy?'disabled':''}>登録対象に戻す</button>
+                </td>
               </tr>`
-            }).join('')||'<tr><td colspan="7">登録しない行はありません。</td></tr>'}
+            }).join('')||'<tr><td colspan="8">登録しない行はありません。</td></tr>'}
           </tbody></table></div>
         </div>`:`<p class="excelhint sku-section-collapsed-hint">折りたたみ中。登録しない ${excludedRowList.length} 行（開いても他の選択・入力は消えません）。</p>`}
       </section>
@@ -1646,9 +1815,12 @@
     if(!r||isOpeningMode(st))return ''
     const excluded=isRowExcluded(st,r)
     if(excluded){
+      const reason=rowExclusionReason(st,r)
+      const auto=!!(r.autoRowExcluded||(r.exclusionKind==='auto'))
       return `<div class="pl-row-exclude-actions" data-pl-row-exclude-box="${r.rowNo}">
-        <p class="excelhint">この行は今回の商品登録対象から外しています（削除ではありません）。</p>
-        <button type="button" class="quiet" data-pl-row-include="${r.rowNo}" ${st.busy?'disabled':''}>登録対象に戻す</button>
+        <p class="excelhint">この行は今回の商品登録対象から外しています（削除ではありません）。${esc(reason)}</p>
+        ${auto?`<label class="excelhint">加工名<input data-pl-row-restore-proc="${r.rowNo}" value="${esc(((st.rowClassifications||{})[String(r.rowNo)]||{}).processing||'')}" ${st.busy?'disabled':''} placeholder="例: ほつれ補修"></label>`:''}
+        <button type="button" class="quiet" data-pl-row-include="${r.rowNo}" data-pl-row-include-auto="${auto?'1':''}" ${st.busy?'disabled':''}>登録対象に戻す</button>
       </div>`
     }
     const peers=sameContentRows(st,r).filter(x=>!isRowExcluded(st,x))
@@ -2531,6 +2703,58 @@
     return null
   }
 
+  /**
+   * 画面上の入力・チェックを state へ吸い上げ（再照合・除外ローカル反映の前に呼ぶ）。
+   * 加工名・補足・確認チェック・品番編集などを保持する。
+   */
+  function harvestFormEdits(st){
+    if(!st)return
+    document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
+      setSkuDecision(st,el.getAttribute('data-pl-official-name-edit'),{officialName:el.value})
+    })
+    document.querySelectorAll('[data-pl-official-color]').forEach(el=>{
+      setSkuDecision(st,el.getAttribute('data-pl-official-color'),{color:el.value})
+    })
+    document.querySelectorAll('[data-pl-defer-reason]').forEach(el=>{
+      setSkuDecision(st,el.getAttribute('data-pl-defer-reason'),{deferReason:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-color]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
+      const rowNo=el.getAttribute('data-pl-paren-proc')
+      const patch={processing:el.value}
+      if(el.getAttribute('data-pl-processing-name-sync')){
+        patch.plannedName=el.value
+      }
+      setRowClassification(st,rowNo,patch)
+    })
+    document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-supp]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-paren-supp'),{supplement:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
+      const v=el.value.trim()
+      setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]})
+    })
+    document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
+    })
+    document.querySelectorAll('[data-pl-sep-code]').forEach(el=>{
+      const code=el.getAttribute('data-pl-sep-code')
+      const key=el.getAttribute('data-pl-sep-key')
+      const d=skuDecision(st,code)
+      const plans={...(d.plans||{})}
+      plans[key]={...(plans[key]||{}),newCode:el.value}
+      setSkuDecision(st,code,{plans})
+    })
+  }
+
   /** paintDialog の innerHTML 全描画で消えるスクロールを退避する */
   function captureLedgerScroll(dlg){
     const wraps={}
@@ -2751,6 +2975,7 @@
     st.skuDecisions={}
     st.rowClassifications={}
     st.rowExclusions={}
+    st.rowExcludeSnapshots={}
     st.makerLookup=null
     st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
@@ -2960,53 +3185,8 @@
             return
           }
         }
-        // フォーム値を skuDecisions へ吸い上げ
-        document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
-          setSkuDecision(st,el.getAttribute('data-pl-official-name-edit'),{officialName:el.value})
-        })
-        document.querySelectorAll('[data-pl-official-color]').forEach(el=>{
-          setSkuDecision(st,el.getAttribute('data-pl-official-color'),{color:el.value})
-        })
-        document.querySelectorAll('[data-pl-defer-reason]').forEach(el=>{
-          setSkuDecision(st,el.getAttribute('data-pl-defer-reason'),{deferReason:el.value})
-        })
-        // 括弧分類の編集は再照合・詳細開閉でも保持
-        document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
-          setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
-        })
-        document.querySelectorAll('[data-pl-paren-color]').forEach(el=>{
-          setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
-        })
-        document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
-          const rowNo=el.getAttribute('data-pl-paren-proc')
-          const patch={processing:el.value}
-          // 加工サービス行: 加工名を表示・登録・重複判定の唯一の入力元として同期
-          if(el.getAttribute('data-pl-processing-name-sync')){
-            patch.plannedName=el.value
-          }
-          setRowClassification(st,rowNo,patch)
-        })
-        document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
-          setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
-        })
-        document.querySelectorAll('[data-pl-paren-supp]').forEach(el=>{
-          setRowClassification(st,el.getAttribute('data-pl-paren-supp'),{supplement:el.value})
-        })
-        document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
-          const v=el.value.trim()
-          setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]})
-        })
-        document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
-          setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
-        })
-        document.querySelectorAll('[data-pl-sep-code]').forEach(el=>{
-          const code=el.getAttribute('data-pl-sep-code')
-          const key=el.getAttribute('data-pl-sep-key')
-          const d=skuDecision(st,code)
-          const plans={...(d.plans||{})}
-          plans[key]={...(plans[key]||{}),newCode:el.value}
-          setSkuDecision(st,code,{plans})
-        })
+        // フォーム値を吸い上げ（除外ローカル反映と同じ経路）
+        harvestFormEdits(st)
         // 色分割フォーム → skuDecisions.colorPlans / rowDestinations
         ;(()=>{
           const byCode={}
@@ -3573,14 +3753,14 @@
       }
     })
     const findPreviewRowByNo=(rowNo)=>((st.preview&&st.preview.rows)||[]).find(r=>Number(r.rowNo)===Number(rowNo))
+    // 除外／復帰はローカル反映のみ（全件再照合・CSV再読込は「選択を反映して再照合」へ）
     document.querySelectorAll('[data-pl-row-exclude]').forEach(el=>{
       el.onclick=()=>{
         if(st.busy)return
         const row=findPreviewRowByNo(el.getAttribute('data-pl-row-exclude'))
         if(!row){st.toast('対象行が見つかりません。');return}
-        setRowExcluded(st,row,true)
+        applyLocalRowExclude(st,row,true)
         st.toast(`行 ${row.rowNo} を今回の登録対象から外しました（削除ではありません）`)
-        runPreview()
       }
     })
     document.querySelectorAll('[data-pl-row-exclude-same]').forEach(el=>{
@@ -3600,9 +3780,26 @@
           `個別の「この行を登録しない」とは別操作です。\n\n${lines.join('\n')}${more}\n\nよろしいですか？`
         )
         if(!ok)return
-        peers.forEach(p=>setRowExcluded(st,p,true))
+        harvestFormEdits(st)
+        peers.forEach(p=>{
+          snapshotRowBeforeExclude(st,p)
+          setRowExcluded(st,p,true)
+          p.status='hold'
+          p.statusLabel='保留'
+          p.canCommit=false
+          p.userRowExcluded=true
+          p.autoRowExcluded=false
+          p.exclusionKind='manual'
+          p.skuDecisionNeeded=false
+          p.processingServiceNeedsConfirm=false
+          p.deferReason=USER_ROW_EXCLUDE_REASON
+          const drop=[USER_ROW_EXCLUDE_REASON,K2_AUTO_EXCLUDE_REASON]
+          p.reasons=(p.reasons||[]).filter(x=>!drop.some(t=>String(x).includes(t)))
+          p.reasons.push(USER_ROW_EXCLUDE_REASON)
+          syncSkuGroupAfterLocalExclude(st,((p.csv||{}).code)||'')
+        })
+        paintDialog({preserveScroll:true})
         st.toast(`同じ内容の ${peers.length} 行を登録対象から外しました`)
-        runPreview()
       }
     })
     document.querySelectorAll('[data-pl-row-include]').forEach(el=>{
@@ -3610,21 +3807,34 @@
         if(st.busy)return
         const rowNo=el.getAttribute('data-pl-row-include')
         const keyAttr=el.getAttribute('data-pl-row-include-key')
+        const needProc=el.getAttribute('data-pl-row-include-auto')==='1'
         let row=findPreviewRowByNo(rowNo)
-        if(!row&&keyAttr&&st.rowExclusions[keyAttr]){
+        if(!row&&keyAttr&&st.rowExclusions&&st.rowExclusions[keyAttr]){
           const ent=st.rowExclusions[keyAttr]
-          row={rowNo:ent.rowNo,csv:ent}
+          row={rowNo:ent.rowNo,csv:ent,autoRowExcluded:ent.exclusionKind==='auto',exclusionKind:ent.exclusionKind||'manual',deferReason:ent.reason||''}
+        }
+        let procName=''
+        if(needProc||(row&&(row.autoRowExcluded||row.exclusionKind==='auto'))){
+          const inp=document.querySelector(`[data-pl-row-restore-proc="${CSS.escape(String(rowNo))}"]`)
+            ||(keyAttr&&document.querySelector(`[data-pl-row-restore-key="${CSS.escape(String(keyAttr))}"]`))
+          procName=((inp&&inp.value)||'').trim()
+          if(!procName){
+            st.toast('自動除外を戻すには加工名を入力してください。')
+            if(inp&&typeof inp.focus==='function')inp.focus()
+            return
+          }
         }
         if(!row&&keyAttr){
           delete st.rowExclusions[keyAttr]
           st.toast('登録対象に戻しました')
-          runPreview()
+          paintDialog({preserveScroll:true})
           return
         }
         if(!row){st.toast('対象行が見つかりません。');return}
-        setRowExcluded(st,row,false)
-        st.toast(`行 ${row.rowNo} を登録対象に戻しました（確認事項を再判定します）`)
-        runPreview()
+        applyLocalRowExclude(st,row,false,{processingName:procName})
+        st.toast(procName
+          ?`行 ${row.rowNo} を加工名「${procName}」で登録対象に戻しました（再照合でも勝手に除外しません）`
+          :`行 ${row.rowNo} を登録対象に戻しました`)
       }
     })
     const commit=$('#plCommit')
@@ -3724,6 +3934,7 @@
       MODE_OPENING,
       AUX_JUDGMENT_ONLY_COPY,
       USER_ROW_EXCLUDE_REASON,
+      K2_AUTO_EXCLUDE_REASON,
       previewPayload,
       selectedCodeList,
       syncSkuSelectionUi,
@@ -3732,6 +3943,11 @@
       stableRowKeyFromRow,
       isRowExcluded,
       setRowExcluded,
+      rowExclusionReason,
+      applyLocalRowExclude,
+      harvestFormEdits,
+      snapshotRowBeforeExclude,
+      syncSkuGroupAfterLocalExclude,
       sameContentKey,
       sameContentRows,
       listExcludedRows,

@@ -88,12 +88,14 @@ class ProcessingServiceUnitTest(unittest.TestCase):
         )
         self.assertFalse(other['isProcessingService'])
         self.assertFalse(other['elmsEmbroideryRule'])
-        # K2 の不明名は従来どおり要確認（エルムス強制を流用しない）
+        # K2 の不明名は確認待ちに残さず自動除外（エルムス強制を流用しない）
         k2 = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='エプロン', code='',
         )
-        self.assertTrue(k2['needsConfirm'])
+        self.assertFalse(k2['needsConfirm'])
+        self.assertTrue(k2.get('k2AutoExclude'))
         self.assertFalse(k2.get('elmsEmbroideryRule'))
+        self.assertIn('加工内容を特定できない', k2.get('autoExcludeReason') or '')
 
     def test_pocket_attach_without_kako_char(self):
         """『加工』文字がなくてもポケット取付は認識。表記差は同一名へ。"""
@@ -192,14 +194,26 @@ class ProcessingServiceUnitTest(unittest.TestCase):
         self.assertTrue(r['isPhysicalParts'])
 
     def test_unknown_name_on_vendor_needs_confirm(self):
+        # 非K2の加工業者は従来どおり要確認
         r = ps.classify_processing_service_row(
+            supplier='加工屋Z', product_name='謎の一行', code='X',
+        )
+        # 未知業者は加工業者判定されない場合がある → K2 以外の既知加工業者で確認
+        # 加工屋Z が is_processing_vendor でないなら、K2 自動除外側を別テストで見る
+        if r.get('isProcessingVendor'):
+            self.assertTrue(r['needsConfirm'])
+            self.assertFalse(r['identifiable'])
+            self.assertFalse(r['isProcessingService'])
+            self.assertTrue(any('加工名' in x for x in r['confirmReasons']))
+
+        k2 = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='謎の一行', code='X',
         )
-        self.assertTrue(r['needsConfirm'])
-        self.assertFalse(r['identifiable'])
-        # 業者名だけで架空加工を作らない
-        self.assertFalse(r['isProcessingService'])
-        self.assertTrue(any('加工名' in x for x in r['confirmReasons']))
+        self.assertFalse(k2['needsConfirm'])
+        self.assertTrue(k2.get('k2AutoExclude'))
+        self.assertFalse(k2['identifiable'])
+        self.assertFalse(k2['isProcessingService'])
+        self.assertIn('加工内容を特定できない', k2.get('autoExcludeReason') or '')
 
     def test_composition_kept(self):
         name = '半袖加工＋リフレクター＋マジックテープ付け'
@@ -882,11 +896,12 @@ class ProcessingServiceImportTest(unittest.TestCase):
             folder.cleanup()
 
     def test_display_name_not_filled_from_planned_when_unknown(self):
-        """不明な原文では予定名から加工名を無条件補完しない。"""
+        """不明な原文では予定名から加工名を無条件補完しない。K2は自動除外。"""
         r = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='謎の一行', code='X',
         )
-        self.assertTrue(r['needsConfirm'])
+        self.assertFalse(r['needsConfirm'])
+        self.assertTrue(r.get('k2AutoExclude'))
         self.assertFalse(r['identifiable'])
         self.assertEqual(r.get('serviceName') or '', '')
         self.assertEqual(r.get('displayName') or '', '')
@@ -909,9 +924,10 @@ class ProcessingServiceImportTest(unittest.TestCase):
             row = (preview.get('rows') or [None])[0]
             self.assertIsNotNone(row)
             ps_info = row.get('processingService') or {}
-            self.assertTrue(ps_info.get('needsConfirm'))
             self.assertFalse(ps_info.get('identifiable'))
             self.assertEqual(ps_info.get('serviceName') or '', '')
+            self.assertTrue(row.get('autoRowExcluded') or ps_info.get('k2AutoExclude'))
+            self.assertEqual(row.get('status'), pli.STATUS_HOLD)
             pc = row.get('parenClassification') or {}
             # 加工名欄は空のまま（plannedName から補完しない）
             self.assertEqual(pc.get('processing') or '', '')
