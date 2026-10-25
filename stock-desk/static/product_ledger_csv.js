@@ -2455,23 +2455,29 @@
       const missing=(c.missingFields||[]).filter(Boolean)
       const plannedSku=c.plannedRegisteredSku||''
       const currentSku=diff.currentSku||panel.currentSku||panel.makerSku||''
+      const cleaned=c.cleanedName||c.name||''
+      const originalTitle=c.originalTitle||c.title||''
       // 上下は品番末尾へ移すため、補足に上／下が残っていれば表示しない
       const suppDisp=(c.supplement==='上'||c.supplement==='下')?'':(c.supplement||'')
+      const urls=(Array.isArray(c.sourceUrls)&&c.sourceUrls.length?c.sourceUrls:(c.sourceUrl?[c.sourceUrl]:[]))
       return `<li class="pl-maker-cand">
-        <div><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${suppDisp?`　補足 ${esc(suppDisp)}`:''}
-          ${plannedSku?`　登録予定品番 <strong>${esc(plannedSku)}</strong>`:(c.makerSku?`　品番 ${esc(c.makerSku)}`:'')}
-          ${c.position?`　上下 ${esc(c.position)}`:''}
-          ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
-          ${c.fromSaved?' <span class="badge">保存済み</span>':''}
-          ${c.preferred?' <span class="sub">優先候補</span>':''}
-          ${c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':''}
+        <div>
+          <div class="excelhint">元掲載名: ${esc(originalTitle||'—')}</div>
+          <div><strong>整理後商品名: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${suppDisp?`　補足 ${esc(suppDisp)}`:''}
+            ${plannedSku?`　品番 <strong>${esc(plannedSku)}</strong>`:(c.makerSku?`　品番 ${esc(c.makerSku)}`:'')}
+            ${c.position?`　上下 ${esc(c.position)}`:''}
+            ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
+            ${c.fromSaved?' <span class="badge">保存済み</span>':''}
+            ${c.preferred?' <span class="sub">優先候補</span>':''}
+            ${c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':''}
+          </div>
         </div>
         ${missing.length?`<div class="excelhint">不足項目: ${missing.map(esc).join('、')}</div>`:''}
         <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')} / 品番 ${esc(currentSku||'—')} / 補足 ${esc(diff.currentSupplement||'（空）')}</div>
-        <div class="excelhint">採用後の予定: 名 ${esc(c.name||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||currentSku||'—')} / 補足 ${esc(suppDisp||'（空）')}</div>
+        <div class="excelhint">採用後の予定: 名 ${esc(cleaned||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||currentSku||'—')} / 補足 ${esc(suppDisp||'（空）')}</div>
         <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'} / 品番 ${diff.skuChanged||(plannedSku&&plannedSku!==currentSku)?'変わる':'同じ'} / 補足 ${diff.supplementChanged?'変わる':'同じ'}</div>
-        ${c.sourceUrl?`<div class="excelhint"><a href="${esc(c.sourceUrl)}" target="_blank" rel="noopener">参考URL</a></div>`:''}
-        <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy||!c.name?'disabled':''}>採用</button>
+        ${urls.length?`<div class="excelhint">参照URL: ${urls.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join('　')}</div>`:''}
+        <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy||!cleaned?'disabled':''}>採用</button>
       </li>`
     }).join('')
     const matchedList=matchedPages.length
@@ -2501,7 +2507,9 @@
     return `<div class="notice pl-maker-lookup-panel" role="region" aria-label="メーカー情報で補正" data-pl-maker-panel="${esc(panel.scope||'')}">
       <div class="bar">
         <strong>メーカー情報で補正</strong>
-        <span class="sub">${scopeLabel}　メーカー品番 ${esc(panel.makerSku||'')}
+        <span class="sub">${scopeLabel}　検索品番 ${esc(panel.makerSku||res.searchMakerSku||'')}
+          ${(res.sourceSku&&res.sourceSku!==(panel.makerSku||res.searchMakerSku))?`　元品番 ${esc(res.sourceSku)}`:''}
+          ${res.usageNote?`　注記 ${esc(res.usageNote)}`:''}
           ${panel.manufacturer?`　メーカー ${esc(panel.manufacturer)}`:''}
           ${panel.supplier?`　仕入先（検索キー外） ${esc(panel.supplier)}`:''}
         </span>
@@ -2626,16 +2634,21 @@
           const plannedSku=c.plannedRegisteredSku||r.plannedRegisteredSku||''
           const supp=(c.supplement==='上'||c.supplement==='下')?'':(c.supplement||'')
           const disabled=!!panel.running||!!r.adopted||st.busy
+          const cleaned=c.cleanedName||c.name||''
+          const originalTitle=c.originalTitle||c.title||''
+          const urls=(Array.isArray(c.sourceUrls)&&c.sourceUrls.length?c.sourceUrls:(c.sourceUrl?[c.sourceUrl]:[]))
           return `<li>
             <label class="pl-bulk-maker-cand-pick">
               <input type="checkbox" data-pl-bulk-maker-pick="${esc(key)}" data-result-idx="${ri}" data-cand-idx="${ci}" ${checked?'checked':''} ${disabled?'disabled':''}>
-              <span><strong>${esc(c.name||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${supp?`　補足 ${esc(supp)}`:''}
-                ${plannedSku?`　登録予定品番 ${esc(plannedSku)}`:''}
-                ${c.sourceUrl?` <a href="${esc(c.sourceUrl)}" target="_blank" rel="noopener">参照URL</a>`:''}
+              <span>
+                <div class="excelhint">元掲載名: ${esc(originalTitle||'—')}</div>
+                <strong>整理後: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${supp?`　補足 ${esc(supp)}`:''}
+                ${plannedSku?`　品番 ${esc(plannedSku)}`:''}
+                ${urls.length?` ${urls.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">参照URL</a>`).join(' ')}`:''}
               </span>
             </label>
             <div class="excelhint">変更前: 名 ${esc(r.currentName||'—')} / 色 ${esc(r.currentColor||'（空）')} / 品番 ${esc(r.currentSku||'—')}</div>
-            <div class="excelhint">変更後: 名 ${esc(c.name||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||r.currentSku||'—')}</div>
+            <div class="excelhint">変更後: 名 ${esc(cleaned||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||r.currentSku||'—')}</div>
           </li>`
         }).join('')}</ul>`
       }else if(r.referenceUrl){
@@ -2848,23 +2861,31 @@
     return !!(row.processingServiceView||pc.processingServiceView||ps.isProcessingService||ps.isProcessingVendor)
   }
 
-  async function applyMakerCandidateToPreview(st,{scope,skuCode,rowNos,rowNo,cand,manufacturer,makerSku}){
+  async function applyMakerCandidateToPreview(st,{scope,skuCode,rowNos,rowNo,cand,manufacturer,makerSku,sourceSku,usageNote}){
     const plannedSku=cand.plannedRegisteredSku||''
     const position=cand.position||''
+    const cleaned=cand.cleanedName||cand.name||''
     let supplement=cand.supplement||''
     if(supplement==='上'||supplement==='下')supplement=''
+    const panel=st.makerLookup||st.bulkMakerLookup||{}
+    const res=(panel&&panel.result)||{}
+    const srcSku=sourceSku||res.sourceSku||''
+    const note=usageNote||res.usageNote||''
     await st.api('/api/product-ledger-csv/maker-lookup/adopt',{
       manufacturer:cand.manufacturer||manufacturer||'',
       makerSku:makerSku,
-      name:cand.name||'',
+      name:cleaned,
       color:cand.color||'',
       supplement,
       position,
       plannedRegisteredSku:plannedSku,
-      sourceUrl:cand.sourceUrl||''
+      sourceUrl:cand.sourceUrl||'',
+      sourceSku:srcSku,
+      usageNote:note,
+      originalTitle:cand.originalTitle||cand.title||''
     })
     const classPatch={
-      plannedName:cand.name||'',
+      plannedName:cleaned,
       color:cand.color||'',
       supplement,
       position,
@@ -2876,7 +2897,12 @@
       acceptProposal:true,
       makerAdopted:true,
       makerSourceUrl:cand.sourceUrl||'',
-      makerManufacturer:cand.manufacturer||manufacturer||''
+      makerManufacturer:cand.manufacturer||manufacturer||'',
+      sourceSku:srcSku,
+      searchMakerSku:makerSku||'',
+      usageNote:note,
+      originalTitle:cand.originalTitle||cand.title||'',
+      cleanedName:cleaned
     }
     if(scope==='sku'){
       // 加工サービス行へメーカー商品名を表示名として流し込まない（加工名を唯一の表示元に保つ）
@@ -2891,24 +2917,34 @@
       }
       setSkuDecision(st,skuCode,{
         decision:'merge',
-        officialName:cand.name||'',
+        officialName:cleaned,
         color:cand.color||'',
         plannedRegisteredSku:plannedSku,
         position,
         makerAdopted:true,
         makerSourceUrl:cand.sourceUrl||'',
-        makerManufacturer:cand.manufacturer||manufacturer||''
+        makerManufacturer:cand.manufacturer||manufacturer||'',
+        sourceSku:srcSku,
+        searchMakerSku:makerSku||'',
+        usageNote:note,
+        originalTitle:cand.originalTitle||cand.title||'',
+        cleanedName:cleaned
       })
       if(group)applyMergeDefaults(st,skuCode,group)
       setSkuDecision(st,skuCode,{
         decision:'merge',
-        officialName:cand.name||'',
+        officialName:cleaned,
         color:cand.color||'',
         plannedRegisteredSku:plannedSku,
         position,
         makerAdopted:true,
         makerSourceUrl:cand.sourceUrl||'',
-        makerManufacturer:cand.manufacturer||manufacturer||''
+        makerManufacturer:cand.manufacturer||manufacturer||'',
+        sourceSku:srcSku,
+        searchMakerSku:makerSku||'',
+        usageNote:note,
+        originalTitle:cand.originalTitle||cand.title||'',
+        cleanedName:cleaned
       })
     }else if(rowNo!=null){
       if(!isProcessingServicePreviewRow(st,rowNo)){

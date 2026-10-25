@@ -3482,6 +3482,13 @@ def _soften_after_maker_adopt(group, raw):
     if adopted_name:
         group['plannedOfficialName'] = adopted_name
         group['plannedRegisteredName'] = adopted_name
+    # 元品番・注記と補正後の対応（初期在庫照合用。表示名は触らない）
+    if stock.text(raw.get('usageNote') or ''):
+        group['makerUsageNote'] = stock.text(raw.get('usageNote') or '')
+    if stock.text(raw.get('sourceSku') or ''):
+        group['makerSourceSku'] = stock.text(raw.get('sourceSku') or '')
+    if stock.text(raw.get('searchMakerSku') or ''):
+        group['makerSearchSku'] = stock.text(raw.get('searchMakerSku') or '')
     if adopted_color:
         group['plannedRegisteredColor'] = adopted_color
         group['plannedColor'] = adopted_color
@@ -4447,6 +4454,18 @@ def upsert_row_map(
             provenance.get('sourceCode')
             or csv_info.get('sourceCode')
             or code
+            or ''
+        ),
+        # メーカー補正: 元品番・注記と検索／登録先の対応（初期在庫照合用）
+        'searchMakerSku': stock.text(
+            provenance.get('searchMakerSku')
+            or (row.get('makerCorrection') or {}).get('searchMakerSku')
+            or (row.get('makerCorrection') or {}).get('makerSku')
+            or ''
+        ),
+        'usageNote': stock.text(
+            provenance.get('usageNote')
+            or (row.get('makerCorrection') or {}).get('usageNote')
             or ''
         ),
         'plannedName': planned_name,
@@ -7458,7 +7477,43 @@ def build_preview(c, body):
     processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
     # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
     for row in classified:
-        row['makerCorrection'] = maker_sku_lookup.row_maker_correction_meta(row)
+        mk = maker_sku_lookup.row_maker_correction_meta(row)
+        # 採用時に渡した元品番・注記を保持（初期在庫照合用）
+        ov = (
+            row_classifications.get(str(row.get('rowNo')))
+            or row_classifications.get(row.get('rowNo'))
+            or {}
+        )
+        code_t = stock.text((row.get('csv') or {}).get('code') or '')
+        sku_ov = sku_decisions.get(code_t) or sku_decisions.get(str(code_t)) or {}
+        if not isinstance(ov, dict):
+            ov = {}
+        if not isinstance(sku_ov, dict):
+            sku_ov = {}
+        for key in ('sourceSku', 'searchMakerSku', 'usageNote', 'originalTitle', 'cleanedName'):
+            val = stock.text(ov.get(key) or sku_ov.get(key) or '')
+            if val:
+                mk[key] = val
+        # 注記分離だけの再計算結果より、採用時の明示値を優先
+        if not mk.get('usageNote'):
+            note_meta = maker_sku_lookup.row_source_sku_and_note(row)
+            if note_meta.get('usageNote'):
+                mk['usageNote'] = note_meta['usageNote']
+            if note_meta.get('sourceSku') and not mk.get('sourceSku'):
+                mk['sourceSku'] = note_meta['sourceSku']
+        row['makerCorrection'] = mk
+        if mk.get('usageNote') or mk.get('sourceSku') or mk.get('searchMakerSku'):
+            prov = dict(row.get('specProvenance') or {})
+            if mk.get('usageNote'):
+                prov['usageNote'] = mk['usageNote']
+            if mk.get('sourceSku'):
+                prov['sourceSku'] = mk['sourceSku']
+                # マップキー用の原文品番は注記込みのまま
+                if not stock.text(prov.get('sourceCode') or ''):
+                    prov['sourceCode'] = mk['sourceSku']
+            if mk.get('searchMakerSku'):
+                prov['searchMakerSku'] = mk['searchMakerSku']
+            row['specProvenance'] = prov
     # 品番比較一覧用: 確認待ち＋有効メーカー品番があるグループにボタンメタ
     rows_by_no = {r.get('rowNo'): r for r in classified}
     for g in sku_groups:

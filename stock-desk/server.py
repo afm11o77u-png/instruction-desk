@@ -389,6 +389,13 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                         or ''
                     ),
                     source_url=payload.get('sourceUrl') or payload.get('source_url') or '',
+                    source_sku=payload.get('sourceSku') or payload.get('source_sku') or '',
+                    usage_note=payload.get('usageNote') or payload.get('usage_note') or '',
+                    original_title=(
+                        payload.get('originalTitle')
+                        or payload.get('original_title')
+                        or ''
+                    ),
                 )
                 c.commit()
         except ValueError as e:
