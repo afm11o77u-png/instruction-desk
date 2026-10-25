@@ -591,6 +591,38 @@
     return Object.keys(st.selectedCodes||{}).filter(c=>st.selectedCodes[c])
   }
 
+  /**
+   * 品番チェック変更用の軽量更新。paintDialog（一覧・詳細の再生成）はしない。
+   * - 内部 selectedCodes は呼び出し側で更新済みであること
+   * - 「選択中○品番」表示・一括操作ボタンの有効／無効
+   * - 同一品番のチェック欄が複数あっても checked を同期
+   * スクロール・フォーカス・開いている詳細・編集中の値は触らない。busy にはしない。
+   */
+  function syncSkuSelectionUi(st){
+    st=st||ensureState()
+    if(!st.selectedCodes)st.selectedCodes={}
+    const selected=selectedCodeList(st)
+    const n=selected.length
+    const countEl=document.getElementById('plSkuSelCount')
+    if(countEl)countEl.textContent=`選択中 ${n} 品番（開いている区分の表示ページ／個別チェック）`
+    const busy=!!st.busy
+    const none=!n
+    const clearSel=document.getElementById('plSkuClearSel')
+    if(clearSel)clearSel.disabled=busy||none
+    const bulkHold=document.getElementById('plSkuBulkHold')
+    if(bulkHold)bulkHold.disabled=busy||none
+    const bulkMaker=document.getElementById('plBulkMakerFetch')
+    if(bulkMaker){
+      const running=!!(st.bulkMakerLookup&&st.bulkMakerLookup.running)
+      bulkMaker.disabled=busy||none||running
+    }
+    document.querySelectorAll('[data-pl-sku-check]').forEach(el=>{
+      const code=el.getAttribute('data-pl-sku-check')
+      const want=!!st.selectedCodes[code]
+      if(el.checked!==want)el.checked=want
+    })
+  }
+
   function colorSplitSummaryForGroup(g){
     const split=g.colorSplitPlans||{}
     if(split.summaryLabel)return split.summaryLabel
@@ -1036,7 +1068,7 @@
         <button type="button" id="plSkuClearSel" class="quiet" ${st.busy||!selected.length?'disabled':''}>選択解除</button>
         <button type="button" id="plSkuBulkHold" ${st.busy||!selected.length?'disabled':''}>選択を今回は保留する</button>
         <button type="button" id="plBulkMakerFetch" class="quiet" ${st.busy||!selected.length||(st.bulkMakerLookup&&st.bulkMakerLookup.running)?'disabled':''}>選択した商品のメーカー情報を取得</button>
-        <span class="excelhint">選択中 ${selected.length} 品番（開いている区分の表示ページ／個別チェック）</span>
+        <span class="excelhint" id="plSkuSelCount">選択中 ${selected.length} 品番（開いている区分の表示ページ／個別チェック）</span>
       </div>
       ${bulkMakerPanelHtml(st)}
 
@@ -2556,10 +2588,11 @@
       st.toast(pick.length
         ?`開いている区分の表示ページ ${pick.length} 品番を選択しました`
         :'開いている区分に選択できる品番がありません')
-      paintDialog()
+      // 一覧・詳細は作り直さない（選択状態・件数・ボタンのみ）
+      syncSkuSelectionUi(st)
     }
     const clearSel=$('#plSkuClearSel')
-    if(clearSel)clearSel.onclick=()=>{st.selectedCodes={};paintDialog()}
+    if(clearSel)clearSel.onclick=()=>{st.selectedCodes={};syncSkuSelectionUi(st)}
     const bulkMakerFetch=$('#plBulkMakerFetch')
     if(bulkMakerFetch)bulkMakerFetch.onclick=()=>startBulkMakerLookup(st)
     const bulkMakerCancel=$('#plBulkMakerCancel')
@@ -2632,7 +2665,8 @@
       el.onchange=()=>{
         const code=el.getAttribute('data-pl-sku-check')
         st.selectedCodes[code]=!!el.checked
-        paintDialog({anchorCode:code})
+        // チェックだけでは検索・再照合・承認・登録を開始しない。画面全体も再描画しない。
+        syncSkuSelectionUi(st)
       }
     })
     document.querySelectorAll('[data-pl-sku-expand]').forEach(el=>{
@@ -3032,7 +3066,10 @@
       MODE_PRODUCTS,
       MODE_OPENING,
       AUX_JUDGMENT_ONLY_COPY,
-      previewPayload
+      previewPayload,
+      selectedCodeList,
+      syncSkuSelectionUi,
+      ensureState
     }
   }
 })()
