@@ -42,12 +42,14 @@ _jobs_lock = threading.Lock()
 
 
 def bulk_lookup_dedupe_key(*, manufacturer: str, maker_sku: str, position: str = '') -> str:
-    """同一処理内の重複検索キー（メーカー＋基礎品番＋上下）。"""
+    """同一処理内の重複検索キー（メーカー＋基礎品番＋上下）。
+
+    用途注記付き品番も検索用品番へ揃える（単品・URL指定と同じ）。
+    """
     mfr = stock.text(manufacturer) or ''
-    raw = stock.text(maker_sku) or ''
-    base, pos_from_sku = position_sku.strip_sku_position_suffix(raw)
-    base = base or raw
-    pos = stock.text(position) or pos_from_sku or ''
+    norm = msl.normalize_search_maker_sku(maker_sku)
+    base = norm.get('baseSku') or norm.get('searchSku') or stock.text(maker_sku) or ''
+    pos = stock.text(position) or norm.get('position') or ''
     if pos not in position_sku.POSITION_TOKENS:
         pos = ''
     return f'{msl.sku_match_key(mfr)}|{msl.sku_match_key(base)}|{pos}'
