@@ -208,9 +208,11 @@ class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
                 # 通常商品・個別確認（色差）→ 109-PCT 相当の開閉＋colspan
                 '顧客A,仕入A,109-PCT,パンツ黒,M',
                 '顧客A,仕入A,109-PCT,パンツ紺,L',
-                # 加工名未定×2業者（現象の2件）。末尾「加工」だと自動確定されるため読めない名にする
+                # エルムスは専用ルールで「刺繍」自動確定（要確認リストに出さない）
                 '顧客A,(有)エルムスコーポレーション,,謎の加工行,1',
+                # 加工名未定×2（K2・別の読めない名）。末尾「加工」だと自動確定されるため読めない名にする
                 '顧客A,K2スタッフ工房,,不明XYZ,1',
+                '顧客A,K2スタッフ工房,,別の不明行,1',
                 # 品番なし部品（要確認になるよう括弧色など）
                 '顧客A,仕入B,,ボタン（赤・青）,1',
             ])
@@ -259,9 +261,25 @@ class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
             self.assertNotIn('\0', out['keyEmptyNameElm'])
             self.assertNotIn('\0', out['keyEmptyNameK2'])
 
-            # 加工名未定2業者が統合リストに出る（プレビューが needs_review のとき）
+            # エルムス「謎の加工行」は刺繍へ自動確定（確認リスト外・プランに載る）
+            elms_row = next(
+                r for r in (preview.get('rows') or [])
+                if 'エルムス' in ((r.get('csv') or {}).get('supplier') or '')
+            )
+            elms_ps = elms_row.get('processingService') or {}
+            self.assertTrue(elms_ps.get('elmsEmbroideryRule'))
+            self.assertEqual(elms_ps.get('serviceName'), '刺繍')
+            self.assertFalse(elms_row.get('processingServiceNeedsConfirm'))
+            elms_plans = [
+                p for p in (preview.get('processingServicePlans') or [])
+                if p.get('elmsEmbroideryRule')
+            ]
+            self.assertEqual(len(elms_plans), 1)
+            self.assertEqual(elms_plans[0].get('serviceName'), '刺繍')
+
+            # 加工名未定の K2 行が統合リストに出る（同業者の未定名は1行に集約）
             proc_labs = out['procLabels']
-            self.assertGreaterEqual(len(out['procIds']), 2, {
+            self.assertGreaterEqual(len(out['procIds']), 1, {
                 'kinds': list(zip(out['itemKinds'], out['itemLabels'])),
                 'rows': [
                     {
@@ -278,7 +296,8 @@ class UnifiedReviewDetailExpandFixTest(unittest.TestCase):
             self.assertTrue(out['procExpandVisible'], {
                 'procIds': out['procIds'], 'labels': proc_labs,
             })
-            self.assertTrue(any('エルムス' in lab for lab in proc_labs), proc_labs)
+            # エルムス自動確定分は要確認ラベルに出さない
+            self.assertFalse(any('エルムス' in lab for lab in proc_labs), proc_labs)
             self.assertTrue(any('K2' in lab for lab in proc_labs), proc_labs)
 
             self.assertTrue(out['allDetailColspan5'], out['detailColspans'])

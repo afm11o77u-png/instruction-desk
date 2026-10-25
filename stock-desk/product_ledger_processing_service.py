@@ -21,6 +21,24 @@ _PROCESSING_VENDOR_DISPLAY = {
     'エルムス': '(有)エルムスコーポレーション',
 }
 
+# エルムスコーポレーション専用: 仕入先行は品番・商品名にかかわらず「刺繍」1サービスへ。
+ELMS_VENDOR_DISPLAY = '(有)エルムスコーポレーション'
+ELMS_EMBROIDERY_SERVICE_NAME = '刺繍'
+# 同一サービスとみなす加工名（表示は常に「刺繍」。旧「刺繍加工」等は再利用対象）
+_ELMS_EMBROIDERY_ALIASES = (
+    '刺繍',
+    '刺繍入れ',
+    '刺繍加工',
+    'ししゅう',
+    'ししゅういれ',
+    'ししゅう加工',
+)
+_ELMS_VENDOR_KEYS = frozenset({
+    'エルムスコーポレーション',
+    'エルムス',
+    '有エルムスコーポレーション',
+})
+
 # 実物部品・資材（加工サービスと区別）
 _PHYSICAL_PARTS_MARKERS = (
     '生地', 'ボタン', '釦', '糸', '芯地', '裏地', 'ファスナー', 'チャック',
@@ -129,6 +147,41 @@ def normalize_service_key(value: str) -> str:
     return t.casefold()
 
 
+def is_elms_corporation_vendor(supplier_name: str) -> bool:
+    """エルムスコーポレーション（表記差含む）か。無関係な業者には False。"""
+    key = normalize_vendor_key(supplier_name)
+    if not key:
+        return False
+    if key in _ELMS_VENDOR_KEYS:
+        return True
+    if 'エルムスコーポレーション' in key:
+        return True
+    # 表示マップ上のエルムス系キー（正規化後）
+    for map_key, disp in _PROCESSING_VENDOR_DISPLAY.items():
+        if 'エルムス' not in map_key and 'エルムス' not in normalize_vendor_key(disp):
+            continue
+        mk = normalize_vendor_key(map_key)
+        if key == mk:
+            return True
+    return False
+
+
+def is_elms_embroidery_alias(service_name: str) -> bool:
+    """刺繍／刺繍入れ／刺繍加工など同一サービス別名か。"""
+    sk = normalize_service_key(service_name)
+    if not sk:
+        return False
+    return sk in {normalize_service_key(a) for a in _ELMS_EMBROIDERY_ALIASES}
+
+
+def elms_embroidery_canonical_name(service_name: str = '') -> str:
+    """エルムス刺繍サービスの統一表示名。別名でも常に「刺繍」。"""
+    if service_name and not is_elms_embroidery_alias(service_name):
+        # 呼び出し側が別名以外を渡してもエルムス強制時は刺繍へ
+        pass
+    return ELMS_EMBROIDERY_SERVICE_NAME
+
+
 def is_processing_vendor(supplier_name: str) -> bool:
     key = normalize_vendor_key(supplier_name)
     if not key:
@@ -138,7 +191,7 @@ def is_processing_vendor(supplier_name: str) -> bool:
     # K2 を含む業者名は加工業者
     if 'k2' in key and 'スタッフ' in key:
         return True
-    if 'エルムス' in key:
+    if is_elms_corporation_vendor(supplier_name):
         return True
     return False
 
@@ -146,6 +199,8 @@ def is_processing_vendor(supplier_name: str) -> bool:
 def canonical_processing_vendor(supplier_name: str) -> str:
     """表示用の加工業者名。未知でも原文を返す（判定済みのとき）。"""
     raw = stock.text(supplier_name)
+    if is_elms_corporation_vendor(raw):
+        return ELMS_VENDOR_DISPLAY
     key = normalize_vendor_key(raw)
     if key in _PROCESSING_VENDOR_DISPLAY:
         return _PROCESSING_VENDOR_DISPLAY[key]
@@ -401,7 +456,15 @@ def extract_row_specific_specs(product_name: str, paren_processing: str = '') ->
 
 
 def service_dedupe_key(service_name: str, vendor_name: str) -> str:
-    return f'{normalize_service_key(service_name)}|{normalize_vendor_key(vendor_name)}'
+    name = stock.text(service_name)
+    vendor = stock.text(vendor_name)
+    # エルムス行は加工名を「刺繍」へ寄せるため、業者ごとに1サービスへ集約
+    if is_elms_corporation_vendor(vendor):
+        return (
+            f'{normalize_service_key(ELMS_EMBROIDERY_SERVICE_NAME)}|'
+            f'{normalize_vendor_key(ELMS_VENDOR_DISPLAY)}'
+        )
+    return f'{normalize_service_key(name)}|{normalize_vendor_key(vendor)}'
 
 
 def classify_processing_service_row(
@@ -423,6 +486,7 @@ def classify_processing_service_row(
     code_t = stock.text(code)
     vendor = is_processing_vendor(supplier_t)
     physical = is_physical_parts_name(name_t)
+    elms = is_elms_corporation_vendor(supplier_t)
     result = {
         'isProcessingVendor': vendor,
         'isPhysicalParts': physical,
@@ -435,7 +499,31 @@ def classify_processing_service_row(
         'targetGarmentCode': code_t if code_t else '',
         'identifiable': False,
         'excludeFromGarmentSuppliers': vendor,
+        'elmsEmbroideryRule': False,
     }
+    # エルムスコーポレーション: 品番・商品名・実物部品らしさにかかわらず「刺繍」へ確定
+    # （エプロン／ポロシャツ袖／サンプル／ワッペン作製／空欄／刺繍入れ も同じ）
+    if elms:
+        service = ELMS_EMBROIDERY_SERVICE_NAME
+        result['isProcessingVendor'] = True
+        result['isPhysicalParts'] = False
+        result['isProcessingService'] = True
+        result['serviceName'] = service
+        result['displayName'] = service
+        result['vendorName'] = ELMS_VENDOR_DISPLAY
+        result['identifiable'] = True
+        result['needsConfirm'] = False
+        result['confirmReasons'] = []
+        result['missingFields'] = []
+        result['excludeFromGarmentSuppliers'] = True
+        result['elmsEmbroideryRule'] = True
+        # 元品番が衣服SKUっぽくても、加工サービス共通名は刺繍のまま。
+        # 品番「刺繍」「刺繍入れ」も対象コードとして保持（初期在庫照合用）
+        result['rowSpecs'] = extract_row_specific_specs(name_t, paren_processing)
+        result['rowSpecs']['originalCode'] = code_t
+        result['rowSpecs']['forcedServiceRule'] = 'elms_embroidery'
+        return result
+
     if physical:
         return result
     if not vendor:
@@ -538,49 +626,154 @@ def garment_body_name_from_variants(names, *, service_name=''):
     return scored[0][2]
 
 
+def _as_product_dict(m):
+    if m is None:
+        return None
+    if isinstance(m, dict):
+        return m
+    try:
+        return dict(m)
+    except (TypeError, ValueError):
+        return m
+
+
+def _product_field(m, key):
+    if m is None:
+        return ''
+    if isinstance(m, dict):
+        return m.get(key) or ''
+    try:
+        return m[key] if key in m.keys() else ''
+    except (TypeError, KeyError, IndexError):
+        return ''
+
+
+def embroidery_alias_lookup_names(service_name: str):
+    """既存照合用の名前候補（刺繍系は別名をすべて含める）。"""
+    name = stock.text(service_name)
+    names = []
+    if name:
+        names.append(name)
+    if is_elms_embroidery_alias(name) or name == ELMS_EMBROIDERY_SERVICE_NAME:
+        for alias in _ELMS_EMBROIDERY_ALIASES:
+            if alias not in names:
+                names.append(alias)
+    # 重複除去（順序維持）
+    out = []
+    seen = set()
+    for n in names:
+        k = normalize_service_key(n)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(n)
+    return out
+
+
+def find_existing_processing_services(c, service_name: str, vendor_name: str):
+    """同業者の部品・資材（加工）を別名込みで列挙。複数件あり得る。"""
+    name = stock.text(service_name)
+    vendor = stock.text(vendor_name)
+    if not name or not vendor:
+        return []
+    import legacy_csv_import as legacy
+
+    vendor_ids = []
+    key = normalize_vendor_key(vendor)
+    elms = is_elms_corporation_vendor(vendor)
+    for row in c.execute('SELECT id, name FROM suppliers WHERE active=1'):
+        rk = normalize_vendor_key(row['name'])
+        if rk == key or (elms and is_elms_corporation_vendor(row['name'])):
+            vendor_ids.append(row['id'])
+    if not vendor_ids:
+        return []
+
+    lookup_names = embroidery_alias_lookup_names(name)
+    if elms:
+        # エルムスは常に刺繍サービスとして別名も探す
+        lookup_names = embroidery_alias_lookup_names(ELMS_EMBROIDERY_SERVICE_NAME)
+
+    by_id = {}
+    for vid in vendor_ids:
+        for n in lookup_names:
+            for m in legacy.find_blank_sku_products(c, n, vid):
+                mid = _product_field(m, 'id')
+                if mid in (None, ''):
+                    continue
+                by_id[int(mid)] = _as_product_dict(m)
+    matches = list(by_id.values())
+    parts = [
+        m for m in matches
+        if stock.text(_product_field(m, 'category')) == stock.CATEGORY_PARTS
+    ]
+    return parts or matches
+
+
 def find_existing_processing_service(c, service_name: str, vendor_name: str):
-    """同名＋同業者の部品・資材（加工）を探す。"""
+    """同名＋同業者の部品・資材（加工）を探す。
+
+    刺繍系別名（刺繍／刺繍入れ／刺繍加工）は同一サービスとして再利用する。
+    同一業者で別名の加工サービスが複数ある場合は、正規名「刺繍」を優先し、
+    なければ最初の1件を返す（実データの削除・統合はしない。呼び出し側で重複報告可）。
+    """
     name = stock.text(service_name)
     vendor = stock.text(vendor_name)
     if not name or not vendor:
         return None
-    # 品番なし＋名前＋仕入先
-    import legacy_csv_import as legacy
-
-    vendor_id = None
-    key = normalize_vendor_key(vendor)
-    for row in c.execute('SELECT id, name FROM suppliers WHERE active=1'):
-        if normalize_vendor_key(row['name']) == key:
-            vendor_id = row['id']
-            break
-    if vendor_id is None:
+    pool = find_existing_processing_services(c, name, vendor)
+    if not pool:
         return None
-    matches = legacy.find_blank_sku_products(c, name, vendor_id)
-
-    def _field(m, key):
-        if m is None:
-            return ''
-        if isinstance(m, dict):
-            return m.get(key) or ''
-        try:
-            return m[key] if key in m.keys() else ''
-        except (TypeError, KeyError, IndexError):
-            return ''
-
-    # カテゴリ部品・資材を優先
-    parts = [
-        m for m in matches
-        if stock.text(_field(m, 'category')) == stock.CATEGORY_PARTS
-    ]
-    pool = parts or matches
     if len(pool) == 1:
-        return dict(pool[0]) if not isinstance(pool[0], dict) else pool[0]
-    # 名前キー一致で絞る
-    name_key = normalize_service_key(name)
-    tight = [
-        m for m in pool
-        if normalize_service_key(_field(m, 'name')) == name_key
-    ]
-    if len(tight) == 1:
-        return dict(tight[0]) if not isinstance(tight[0], dict) else tight[0]
-    return None
+        return pool[0]
+
+    # 複数: 正規名一致を優先、次に刺繍加工、それ以外は id 昇順の先頭
+    preferred_order = [ELMS_EMBROIDERY_SERVICE_NAME, '刺繍加工', '刺繍入れ']
+    for pref in preferred_order:
+        pref_key = normalize_service_key(pref)
+        hits = [
+            m for m in pool
+            if normalize_service_key(_product_field(m, 'name')) == pref_key
+        ]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            hits.sort(key=lambda m: int(_product_field(m, 'id') or 0))
+            return hits[0]
+    pool_sorted = sorted(pool, key=lambda m: int(_product_field(m, 'id') or 0))
+    return pool_sorted[0]
+
+
+def describe_processing_service_duplicates(c, service_name: str, vendor_name: str):
+    """重複候補の報告用（実データは変更しない）。"""
+    pool = find_existing_processing_services(c, service_name, vendor_name)
+    if len(pool) <= 1:
+        return {
+            'hasDuplicates': False,
+            'count': len(pool),
+            'products': [],
+            'suggestedKeepId': (pool[0].get('id') if pool else None),
+            'consolidationHint': '',
+        }
+    prefer = find_existing_processing_service(c, service_name, vendor_name)
+    products = []
+    for m in pool:
+        products.append({
+            'id': _product_field(m, 'id'),
+            'name': _product_field(m, 'name'),
+            'code': _product_field(m, 'code'),
+            'category': _product_field(m, 'category'),
+            'supplierId': _product_field(m, 'supplier_id'),
+        })
+    keep_id = prefer.get('id') if prefer else None
+    return {
+        'hasDuplicates': True,
+        'count': len(pool),
+        'products': products,
+        'suggestedKeepId': keep_id,
+        'consolidationHint': (
+            f'同一業者の刺繍系加工サービスが {len(pool)} 件あります。'
+            f'参照（customer_products / product_ledger_row_maps / 在庫ロット）を'
+            f' suggestedKeepId={keep_id} へ付け替えたうえで、他方を停止または統合してください。'
+            f'自動削除は行いません。'
+        ),
+    }

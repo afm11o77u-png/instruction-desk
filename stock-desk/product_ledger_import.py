@@ -5733,8 +5733,34 @@ def apply_processing_service_split(c, classified, sku_groups):
                 # 行の skuDecisionNeeded を後で落とすためフラグ
                 group['skuDecisionNeeded'] = False
 
+        # エルムス刺繍のみ（本体行なし）: 本体確認待ちにしない。加工サービス1件へ集約
+        elms_only = bool(proc_rows) and not garment_rows and all(
+            (r.get('processingService') or {}).get('elmsEmbroideryRule')
+            for r in proc_rows
+        )
+        if elms_only:
+            group['garmentBodyKnown'] = False
+            group['garmentBodyReviewOnly'] = False
+            group['elmsEmbroideryOnly'] = True
+            group['needsDecision'] = False
+            group['plannedSingleProduct'] = True
+            group['status'] = 'auto'
+            group['reviewTier'] = REVIEW_TIER_AUTO
+            group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_AUTO]
+            group['reviewReasons'] = [{
+                'code': 'elms_embroidery',
+                'label': 'エルムスコーポレーション行を加工サービス「刺繍」として自動整理',
+                'values': [code] if code else ['（品番なし）'],
+            }]
+            group['processingServiceAutoSplit'] = True
+            group['skuDecisionNeeded'] = False
+            group['productPlan'] = {
+                **dict(group.get('productPlan') or {}),
+                'skipGarmentBody': True,
+                'processingServiceOnly': True,
+            }
         # 本体不明: 本体側だけ確認。加工サービスは別途自動
-        if not group.get('garmentBodyKnown'):
+        elif not group.get('garmentBodyKnown'):
             group['needsDecision'] = True
             group['plannedSingleProduct'] = False
             group['status'] = 'needs_decision'
@@ -5787,12 +5813,22 @@ def apply_processing_service_split(c, classified, sku_groups):
                 existing_svc = proc_svc.find_existing_processing_service(
                     c, info['serviceName'], info['vendorName'],
                 )
+                dup_info = proc_svc.describe_processing_service_duplicates(
+                    c, info['serviceName'], info['vendorName'],
+                )
+                if dup_info.get('hasDuplicates'):
+                    plan['duplicateServices'] = dup_info
                 if existing_svc:
                     plan['action'] = 'reuse'
                     plan['productId'] = existing_svc['id']
                     plan['autoRegister'] = True
+                    # 表示は正規名。既存が「刺繍加工」等でも計画上は「刺繍」
+                    if info.get('elmsEmbroideryRule'):
+                        plan['reuseName'] = stock.text(existing_svc.get('name') or '')
                 else:
                     plan['action'] = 'create'
+                if info.get('elmsEmbroideryRule'):
+                    plan['elmsEmbroideryRule'] = True
                 service_plans[key] = plan
             else:
                 if row['rowNo'] not in plan['sourceRowNos']:
@@ -5804,10 +5840,14 @@ def apply_processing_service_split(c, classified, sku_groups):
                 plan.setdefault('rowSpecsSamples', []).append({
                     'rowNo': row['rowNo'],
                     **{k: specs.get(k) for k in (
-                        'originalName', 'position', 'dimensions',
+                        'originalName', 'originalCode', 'position', 'dimensions',
                         'composition', 'customerSpecific', 'parenProcessing',
-                        'customerUse', 'parenSpecs',
+                        'customerUse', 'parenSpecs', 'forcedServiceRule',
                     )},
+                    'customer': csv.get('customer') or '',
+                    'size': csv.get('size') or '',
+                    'qty': csv.get('qty') or csv.get('quantity') or '',
+                    'unitPrice': csv.get('unitPrice') or csv.get('unitCost') or '',
                 })
 
             # 本体があるとき: この行の商品は本体へ寄せ、仕入先は加工業者のまま provenance に残す
@@ -5917,10 +5957,12 @@ def apply_processing_service_split(c, classified, sku_groups):
                 prov_kind = 'processing_service'
 
             # 内部照合用 provenance（初期在庫で旧名称→商品・加工仕様へ）
+            # 通常画面の表示は加工名「刺繍」等。旧商品名は別名一覧へ出さず詳細確認用に保持。
             prov = dict(row.get('specProvenance') or {})
             row_specs = info.get('rowSpecs') or {}
             prov.update({
                 'originalName': csv.get('productName') or '',
+                'originalCode': code,
                 'originalSupplier': csv.get('supplier') or '',
                 'processing': info.get('serviceName') or '',
                 'processingVendor': info.get('vendorName') or '',
@@ -5930,13 +5972,27 @@ def apply_processing_service_split(c, classified, sku_groups):
                 'targetGarmentCode': code,
                 'targetCustomer': csv.get('customer') or '',
                 'csvSize': csv.get('size') or '',
+                'csvQty': csv.get('qty') or csv.get('quantity') or '',
+                'csvUnitPrice': csv.get('unitPrice') or csv.get('unitCost') or '',
                 'isMainCandidate': True,
                 'rowSpecs': row_specs,
                 'customerSpecific': stock.text(row_specs.get('customerSpecific') or ''),
+                'elmsEmbroideryRule': bool(info.get('elmsEmbroideryRule')),
+                'hideOriginalNameAsAlias': bool(info.get('elmsEmbroideryRule')),
             })
             row['specProvenance'] = prov
             row['processingServicePlanKey'] = key
             row['processingServiceView'] = True
+            if info.get('elmsEmbroideryRule'):
+                # エルムス行は加工名不足などの確認待ちにしない
+                row['processingServiceNeedsConfirm'] = False
+                if row.get('status') == STATUS_REVIEW and row.get('canCommit') is False:
+                    # 確認理由が加工名不足のみなら解除（他理由は後段で再評価）
+                    reasons = [
+                        r for r in (row.get('reasons') or [])
+                        if '加工名' not in str(r) and '架空の加工' not in str(r)
+                    ]
+                    row['reasons'] = reasons
 
         elif info.get('isPhysicalParts'):
             # 実物の部品・資材: 加工サービス欄ではなく名称・仕入先・仕様
@@ -5985,6 +6041,8 @@ def _ensure_processing_service_product(c, plan):
     """加工サービスを部品・資材として確保（本体品番は流用しない）。
 
     登録名・一覧表示は加工名のみ。別表示名は使わない。加工に衣服数量は付けない。
+    エルムス刺繍は既存の「刺繍加工」等があれば再利用し、表示名を「刺繍」へ揃える
+    （旧名称は別名一覧へ追加しない）。複数件ある場合も削除せず1件を再利用。
     """
     name = stock.text(plan.get('serviceName') or '')
     vendor = stock.text(plan.get('vendorName') or '')
@@ -5992,7 +6050,20 @@ def _ensure_processing_service_product(c, plan):
         raise ValueError('加工サービス名と業者が必要です。')
     existing = proc_svc.find_existing_processing_service(c, name, vendor)
     if existing:
-        return existing['id'], False
+        pid = int(existing['id'])
+        # エルムス規則: 表示は「刺繍」。旧「刺繍加工」等の別名登録はしない
+        if plan.get('elmsEmbroideryRule') or (
+            proc_svc.is_elms_corporation_vendor(vendor)
+            and proc_svc.is_elms_embroidery_alias(name)
+        ):
+            canon = proc_svc.ELMS_EMBROIDERY_SERVICE_NAME
+            cur = stock.text(existing.get('name') or '')
+            if cur != canon:
+                c.execute(
+                    'UPDATE products SET name=?, updated_at=? WHERE id=?',
+                    (canon, stock.stamp(), pid),
+                )
+        return pid, False
     # 別名表記（取り付け等）でも同じキーで再利用できるよう正規化名で保存
     # 表示名は加工名からのみ（plan.displayName の古い値を優先しない）
     plan['displayName'] = name
@@ -6011,6 +6082,15 @@ def _ensure_processing_service_product(c, plan):
         'active': True,
     })
     pid = saved['id'] if isinstance(saved, dict) else int(saved)
+    # エルムス規則: 対象衣服の旧商品名を別名一覧へ出さない。品番メモのみ（空品番はスキップ）
+    if plan.get('elmsEmbroideryRule'):
+        for gcode in plan.get('targetGarmentCodes') or []:
+            gcode = stock.text(gcode)
+            if not gcode or gcode in ('刺繍', '刺繍入れ'):
+                continue
+            note = f'加工対象品番:{gcode}'
+            stock_product_merge.ensure_name_alias(c, pid, note)
+        return pid, True
     # 対象品番は別名メモとして残す（品番カラムは空のまま）
     for gcode in plan.get('targetGarmentCodes') or []:
         note = f'加工対象品番:{stock.text(gcode)}'
