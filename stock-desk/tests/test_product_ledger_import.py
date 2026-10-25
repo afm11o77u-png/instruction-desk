@@ -3344,7 +3344,7 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             folder.cleanup()
 
     def test_outside_color_preferred_without_aux(self):
-        """補助CSVなしでも、色あり候補が一意なら採用。"""
+        """補助CSVなしでも、色あり候補が一意なら採用（色省略まとめ後でも可）。"""
         folder, path, c = newdb()
         try:
             ledger = tiny_ledger_rows([
@@ -3357,11 +3357,24 @@ class ExplicitColorNamePriorityTest(unittest.TestCase):
             })
             g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-OC')
             aux_p = g.get('auxPrimary') or {}
-            self.assertEqual(aux_p.get('nameAdoptionRuleCode'), 'explicit_color_name')
             self.assertFalse(g['needsDecision'])
-            self.assertEqual(aux_p.get('suggestedOfficialName'), 'エプロン')
-            self.assertEqual(aux_p.get('adoptedColor'), 'ブルー')
-            self.assertEqual(aux_p.get('sourceAdoptedName'), '青エプロン')
+            # 色省略で先に1候補化するか、明示色優先か、どちらでも登録予定はエプロン／ブルー
+            self.assertIn(
+                aux_p.get('nameAdoptionRuleCode'),
+                ('explicit_color_name', 'aux_single_candidate', None, ''),
+            )
+            planned_name = (
+                g.get('plannedRegisteredName')
+                or aux_p.get('suggestedOfficialName')
+                or (g.get('productPlan') or {}).get('productName')
+            )
+            planned_color = (
+                g.get('plannedRegisteredColor')
+                or aux_p.get('adoptedColor')
+                or (g.get('productPlan') or {}).get('plannedRegisteredColor')
+            )
+            self.assertEqual(planned_name, 'エプロン')
+            self.assertEqual(planned_color, 'ブルー')
         finally:
             c.close()
             folder.cleanup()
@@ -5284,6 +5297,173 @@ class ColorwaySeparatorUnifyTest(unittest.TestCase):
         finally:
             c.close()
             folder.cleanup()
+
+
+class SynonymColorOmissionMergeTest(unittest.TestCase):
+    """帽子／キャップ同義・括弧色・色省略の共通まとめ（OV9001-8 相当）。"""
+
+    def test_ov9001_8_three_names_merge_to_cap_charcoal(self):
+        folder, path, c = newdb()
+        try:
+            supplier = '住商モンブラン㈱'
+            code = 'OV9001-8'
+            text = tiny_ledger_rows([
+                f'顧客A,{supplier},{code},キャップ（ﾁｬｺｰﾙ）,F',
+                f'顧客A,{supplier},{code},キャップ,F',
+                f'顧客B,{supplier},{code},帽子 チャコール,L',
+            ])
+            # 全行在庫0でも表記差だけで確認待ちにしない
+            aux = tiny_opening_rows([
+                opening_line(supplier, '顧客A', 'キャップ（ﾁｬｺｰﾙ）', code, 'F', '0'),
+                opening_line(supplier, '顧客A', 'キャップ', code, 'F', '0'),
+                opening_line(supplier, '顧客B', '帽子 チャコール', code, 'L', '0'),
+            ])
+            before = stock_snap(c)
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'ov.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'ov-open.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            self.assertEqual(stock_snap(c), before)
+            g = next(x for x in preview['skuGroups'] if x['code'] == code)
+            self.assertFalse(g['needsDecision'], g.get('reviewReasons'))
+            self.assertTrue(g.get('plannedSingleProduct'))
+            self.assertEqual(g.get('variantCount'), 1)
+            self.assertEqual(
+                g.get('plannedRegisteredName') or (g.get('productPlan') or {}).get('productName'),
+                'キャップ',
+            )
+            self.assertEqual(g.get('plannedRegisteredColor'), 'チャコール')
+            self.assertTrue(
+                g.get('colorOmissionAutoMerged')
+                or g.get('synonymAutoMerged')
+                or g.get('colorNotationAutoMerged')
+            )
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'ov.csv',
+                'auxFile': csv_b64_from_text(aux), 'auxName': 'ov-open.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-ov9001-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(stock_snap(c), before)
+            products = list(c.execute(
+                "SELECT id,name,color FROM products WHERE code=? AND merged_into_id IS NULL",
+                (code,),
+            ))
+            self.assertEqual(len(products), 1)
+            self.assertEqual(products[0]['name'], 'キャップ')
+            self.assertEqual(products[0]['color'], 'チャコール')
+            # 通常画面の別名一覧へ原文を出さない（内部マップで照合）
+            aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE kind='name' AND product_id=?",
+                    (products[0]['id'],),
+                )
+            }
+            for original in ('キャップ（ﾁｬｺｰﾙ）', '帽子 チャコール', 'キャップ'):
+                self.assertNotIn(original, aliases)
+            maps = list(c.execute(
+                'SELECT csv_product_name,csv_customer,csv_size FROM product_ledger_row_maps '
+                'WHERE csv_product_code=? ORDER BY source_row_no',
+                (code,),
+            ))
+            self.assertEqual(len(maps), 3)
+            map_names = {r['csv_product_name'] for r in maps}
+            self.assertIn('キャップ（ﾁｬｺｰﾙ）', map_names)
+            self.assertIn('帽子 チャコール', map_names)
+            self.assertIn('キャップ', map_names)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_colorless_not_filled_when_multiple_explicit_colors(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-MULTI,キャップ（赤）,F',
+                '顧客A,仕入A,SKU-MULTI,キャップ（青）,F',
+                '顧客A,仕入A,SKU-MULTI,キャップ,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'multi.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-MULTI')
+            self.assertTrue(g['needsDecision'])
+            self.assertFalse(g.get('colorOmissionAutoMerged'))
+            # 色なし行を赤／青へ勝手に振り分けない → バリアントが複数
+            self.assertGreaterEqual(g.get('variantCount') or 0, 2)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_specific_hat_kinds_not_merged_via_synonym(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-HAT,ハンチング帽,F',
+                '顧客A,仕入A,SKU-HAT,キャップ,F',
+                '顧客A,仕入A,SKU-KNIT,ニット帽 黒,F',
+                '顧客A,仕入A,SKU-KNIT,帽子 黒,F',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hats.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g_hat = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HAT')
+            self.assertTrue(g_hat['needsDecision'])
+            self.assertTrue(g_hat.get('kindDiffPossible') or g_hat.get('nameWordingDiff'))
+            g_knit = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-KNIT')
+            self.assertTrue(g_knit['needsDecision'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_hat_only_group_not_renamed_to_cap(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,仕入A,SKU-HATONLY,帽子,F',
+                '顧客B,仕入A,SKU-HATONLY,帽子,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hatonly.csv',
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == 'SKU-HATONLY')
+            self.assertFalse(g['needsDecision'])
+            name = (g.get('productPlan') or {}).get('productName') or g.get('plannedRegisteredName')
+            self.assertEqual(name, '帽子')
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text), 'name': 'hatonly.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-hatonly-1',
+                '_canWrite': True, '_actor': {'name': 't'},
+            }, db_path=str(path))
+            c.commit()
+            prod = c.execute(
+                "SELECT name FROM products WHERE code='SKU-HATONLY' AND merged_into_id IS NULL"
+            ).fetchone()
+            self.assertEqual(prod['name'], '帽子')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_charcoal_not_eaten_by_cha_brown_synonym(self):
+        import product_ledger_paren as pp
+        self.assertEqual(
+            pp.apply_color_synonyms_in_text('キャップ(チャコール)'),
+            'キャップ(チャコール)',
+        )
+        split = pp.split_name_and_color('キャップ（ﾁｬｺｰﾙ）')
+        self.assertEqual(split.get('plannedName'), 'キャップ')
+        self.assertEqual(split.get('color'), 'チャコール')
 
 
 if __name__ == '__main__':

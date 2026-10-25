@@ -228,22 +228,40 @@ def apply_color_synonyms_in_text(value: str) -> str:
     """文字列中の明示色別名だけを代表表記へ置換（長い語優先）。
 
     ミストの機械除去はしない。白衣・赤外線・白下など禁止区間に重なる文字は置換しない。
+    辞書の代表色語（チャコール等）も短別名（チャ→ブラウン）から保護する。
     """
     t = value or ''
     if not t:
         return ''
-    # 禁止区間をプレースホルダで保護（白→ホワイトが白衣／白下を壊さない）
-    # 長い区間を優先して非重複に選び、後ろから置換して位置ずれを避ける。
+    # 禁止区間＋代表色語をプレースホルダで保護（白→ホワイトが白衣を壊さない／
+    # チャ→ブラウンがチャコールを壊さない）。長い区間を優先して非重複に選ぶ。
     occupied = []
     chosen = []
+
+    def _try_occupy(start, end):
+        if start < 0 or end <= start or end > len(t):
+            return
+        if any(start < b and end > a for a, b in occupied):
+            return
+        occupied.append((start, end))
+        chosen.append((start, end))
+
     for start, end in sorted(
         _blocked_spans(t),
         key=lambda s: (-(s[1] - s[0]), s[0]),
     ):
-        if any(start < b and end > a for a, b in occupied):
+        _try_occupy(start, end)
+    # 代表色語を先に保護（短い「チャ」→ブラウンが「チャコール」を壊さない）
+    for term in sorted(COLOR_TERMS or (), key=len, reverse=True):
+        if not term:
             continue
-        occupied.append((start, end))
-        chosen.append((start, end))
+        start = 0
+        while True:
+            idx = t.find(term, start)
+            if idx < 0:
+                break
+            _try_occupy(idx, idx + len(term))
+            start = idx + 1
     placeholders = {}
     for i, (start, end) in enumerate(sorted(chosen, key=lambda s: s[0], reverse=True)):
         token = f'\ufffcC{i}\ufffc'

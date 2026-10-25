@@ -222,24 +222,55 @@ def strip_used_marker(name):
     return t, False
 
 
-# 明示シノニム（類似度判定はしない）。照合キー上だけ同一視し、原文表記は保持する。
-NAME_SYNONYM_GROUPS = (
+# 部分文字列置換してよい明示シノニム（類似度判定はしない）。
+NAME_SYNONYM_SUBSTRING_GROUPS = (
     frozenset({'パンツ', 'スラックス'}),
+)
+# 色除去後の商品名がグループ内のいずれかと完全一致するときだけ代表へ寄せる。
+# ハンチング帽・ニット帽など具体種はここに入れず、無条件改名もしない。
+# 代表は preferred（例: 帽子／キャップ → キャップ）。照合キー用。
+NAME_SYNONYM_EXACT_GROUPS = (
+    (frozenset({'帽子', 'キャップ'}), 'キャップ'),
+)
+# 後方互換: 部分＋完全一致グループの frozenset 一覧
+NAME_SYNONYM_GROUPS = (
+    *NAME_SYNONYM_SUBSTRING_GROUPS,
+    *(group for group, _canon in NAME_SYNONYM_EXACT_GROUPS),
 )
 
 
-def apply_name_synonyms(text):
-    """明示シノニムを代表表記へ置換する（文字列類似度は使わない）。"""
+def preferred_name_synonym(text):
+    """完全一致シノニムの代表表記。該当しなければ原文。"""
     t = stock.text(text)
     if not t:
         return t
-    for group in NAME_SYNONYM_GROUPS:
+    for group, canon in NAME_SYNONYM_EXACT_GROUPS:
+        if t in group:
+            return canon
+    return t
+
+
+def apply_name_synonyms(text):
+    """明示シノニムを代表表記へ置換する（文字列類似度は使わない）。
+
+    - パンツ／スラックス: 従来どおり部分一致置換
+    - 帽子／キャップ: 色除去後の名がちょうどその語のときだけ代表へ
+      （ハンチング帽・ニット帽などは置換しない）
+    """
+    t = stock.text(text)
+    if not t:
+        return t
+    for group in NAME_SYNONYM_SUBSTRING_GROUPS:
         if len(group) < 2:
             continue
         canon = sorted(group)[0]
         for syn in sorted(group, key=len, reverse=True):
             if syn != canon and syn in t:
                 t = t.replace(syn, canon)
+    # 完全一致グループは「名全体」がメンバーのときだけ
+    preferred = preferred_name_synonym(t)
+    if preferred != t:
+        return preferred
     return t
 
 
@@ -248,38 +279,95 @@ def synonym_canonical_token(token):
     t = stock.text(token)
     if not t:
         return t
-    for group in NAME_SYNONYM_GROUPS:
+    preferred = preferred_name_synonym(t)
+    if preferred != t:
+        return preferred
+    for group in NAME_SYNONYM_SUBSTRING_GROUPS:
         if t in group:
             return sorted(group)[0]
     return t
 
 
+def product_name_base_and_color(name):
+    """照合用に商品名本体キーと明示色キーへ分ける。
+
+    括弧内外の色を抽出し、本体へ名シノニム・丈加工除去・配色区切りを適用する。
+    戻り値: (base_key, color_key, base_display, color_display)
+    """
+    core, _ = strip_used_marker(name)
+    core = stock.text(core)
+    if not core:
+        return '', '', '', ''
+    base_display = core
+    color_display = ''
+    color_key = ''
+    try:
+        import product_ledger_paren as paren_classify
+        split = paren_classify.split_name_and_color(core)
+        base_display = stock.text(split.get('plannedName') or '') or paren_classify.unify_import_notation(core) or core
+        color_display = stock.text(split.get('color') or '')
+        if color_display:
+            color_key = paren_classify.color_match_key(color_display) or identity_match_key(color_display)
+        base_display = paren_classify.strip_pants_hem_processing(base_display) or base_display
+    except Exception:
+        base_display = unicodedata.normalize('NFKC', core)
+    base_display = apply_name_synonyms(base_display)
+    if base_display:
+        try:
+            import product_ledger_paren as paren_classify
+            base_display = paren_classify.unify_known_colorway_seps_in_text(base_display)
+            base_display = paren_classify.apply_color_synonyms_in_text(base_display)
+            base_display = paren_classify.unify_import_notation(base_display) or base_display
+        except Exception:
+            base_display = unicodedata.normalize('NFKC', stock.text(base_display))
+    return identity_match_key(base_display), color_key, stock.text(base_display), color_display
+
+
+def _name_processing_match_key(name):
+    """括弧から取り出した加工の照合キー。パンツ一般『丈加工』は空。"""
+    raw = stock.text(name)
+    if not raw:
+        return ''
+    try:
+        import product_ledger_paren as paren_classify
+        split = paren_classify.split_name_and_color(raw)
+        proc = stock.text(split.get('processing') or '')
+        if not proc:
+            return ''
+        # 丈加工だけなら差にしない
+        hemmed = paren_classify.strip_pants_hem_processing(f'（{proc}）')
+        if not stock.text(hemmed).strip('（）()'):
+            return ''
+        return identity_match_key(proc)
+    except Exception:
+        return ''
+
+
 def product_name_core_key(name):
     """通常品番の商品名照合キー。
 
-    先頭中古標記・空白種類・全角半角（NFKC）・パンツ一般『丈加工』・
-    明示名シノニム・配色区切り（/／×✕*＊→×、色要素確認時のみ）・
-    明示色辞書（別名→代表）だけを吸収する。
+    先頭中古標記・空白種類・括弧／括弧外の明示色の位置差・
+    パンツ一般『丈加工』・明示名シノニム・配色区切り・色辞書を吸収する。
+    色ありと色なしはキー上は別（色省略のまとめは呼び出し側の共通処理）。
+    刺繍などの実加工差はキーに残す（丈加工は除く）。
     類似度だけでは寄せない。原文の表記は保存側で保持する（キーは照合専用）。
     """
-    core, _ = strip_used_marker(name)
-    core = unicodedata.normalize('NFKC', stock.text(core))
-    try:
-        import product_ledger_paren as paren_classify
-        # パンツ系の『丈加工』有無だけでは別商品にしない（股下寸法などは残す）
-        core = paren_classify.strip_pants_hem_processing(core)
-    except Exception:
-        pass
-    core = apply_name_synonyms(core)
-    if core:
-        try:
-            import product_ledger_paren as paren_classify
-            # 共有規則: 配色区切り統一（色+サイズ等は触らない）＋色辞書
-            core = paren_classify.unify_known_colorway_seps_in_text(core)
-            core = paren_classify.apply_color_synonyms_in_text(core)
-        except Exception:
-            pass
-    return identity_match_key(core)
+    base_key, color_key, _base, _color = product_name_base_and_color(name)
+    if not base_key:
+        return ''
+    proc_key = _name_processing_match_key(name)
+    parts = [base_key]
+    if color_key:
+        parts.append(color_key)
+    if proc_key:
+        parts.append(f'p:{proc_key}')
+    return '|'.join(parts)
+
+
+def product_name_base_key(name):
+    """色を除いた商品名本体の照合キー。"""
+    base_key, _ck, _bd, _cd = product_name_base_and_color(name)
+    return base_key
 
 
 def prefer_unmarked_product_name(names):

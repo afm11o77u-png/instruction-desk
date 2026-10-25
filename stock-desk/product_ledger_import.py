@@ -92,8 +92,13 @@ _PROCESSING_HINT_RE = re.compile(
     r'(加工|刺繍|プリント|ネーム|スナッパー|マジックテープ|反射|コーティング|'
     r'アイロン|ワッペン|カット|縫製)'
 )
+# 具体的な帽子種は一般の「帽子／キャップ」同義より先に取る（誤統合防止）
+_KIND_SPECIFIC_HAT_RE = re.compile(
+    r'(ハンチング帽|ニット帽|キャスケット|ベレー帽|ワークキャップ|ヘルメット)'
+)
 _KIND_HINT_RE = re.compile(
-    r'(帽子|キャップ|ヘルメット|ベスト|パンツ|ズボン|スラックス|シャツ|ブラウス|'
+    r'(ハンチング帽|ニット帽|キャスケット|ベレー帽|ワークキャップ|'
+    r'帽子|キャップ|ヘルメット|ベスト|パンツ|ズボン|スラックス|シャツ|ブラウス|'
     r'ブルゾン|ジャケット|コート|スカート|エプロン|手袋|グローブ|靴|シューズ|安全靴|'
     r'つなぎ|カバーオール|白衣|スクラブ|レインウェア|ポロシャツ)'
 )
@@ -119,8 +124,21 @@ def _hint_tokens(text, pattern):
 
 
 def _kind_tokens(text):
-    """商品種ヒント。明示シノニム（パンツ／スラックス等）は代表トークンへそろえる。"""
-    return {legacy.synonym_canonical_token(t) for t in _hint_tokens(text, _KIND_HINT_RE)}
+    """商品種ヒント。明示シノニム（パンツ／スラックス・帽子／キャップ等）は代表へそろえる。
+
+    ハンチング帽・ニット帽など具体種があるときは一般の帽子／キャップ同義へ落とさない。
+    """
+    raw = stock.text(text) or ''
+    specific = _hint_tokens(raw, _KIND_SPECIFIC_HAT_RE)
+    if specific:
+        # 具体種が取れたら一般帽子トークンは混ぜない
+        other = {
+            legacy.synonym_canonical_token(t)
+            for t in _hint_tokens(raw, _KIND_HINT_RE)
+            if t not in ('帽子', 'キャップ') and t not in specific
+        }
+        return set(specific) | other
+    return {legacy.synonym_canonical_token(t) for t in _hint_tokens(raw, _KIND_HINT_RE)}
 
 
 def _gender_sides(tokens):
@@ -177,12 +195,14 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
         if s and s not in suppliers and not proc_svc.is_processing_vendor(s):
             suppliers.append(s)
 
-    cores = {product_name_core_key(n) for n in names if n}
-    name_wording_diff = len(cores) > 1
+    # 名差は本体キー（色除去＋シノニム後）。色の有無・括弧位置だけでは言い回し差にしない。
+    base_cores = {legacy.product_name_base_key(n) for n in names if n}
+    name_wording_diff = len(base_cores) > 1
     supplier_diff = len(suppliers) > 1
 
     # 先頭「＊/*」だけの差は同一候補。色・男女などのヒント判定では標記を剥がして
-    # コアごとに1名だけ使う（＊白衣／白衣を色差の証拠に並べない）。
+    # 本体＋色キーごとに1名使う（＊白衣／白衣を色差の証拠に並べない）。
+    # 色違い（青パンツ／赤スラックス）は別ヒントとして残し、色差検出する。
     # パンツ一般『丈加工』もヒント名から除き、加工差の誤検出を防ぐ。
     hint_names = []
     seen_hint_cores = set()
@@ -560,14 +580,44 @@ def match_group_key(*, customer, code, product_name, supplier):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def sku_variant_key(*, product_name, color='', supplier=''):
+def _name_processing_key(product_name):
+    """括弧分類で取り出した加工の照合キー（丈加工は除く）。"""
+    raw = stock.text(product_name)
+    if not raw:
+        return ''
+    try:
+        split = paren_classify.split_name_and_color(raw)
+        proc = stock.text(split.get('processing') or '')
+        if not proc:
+            return ''
+        # パンツ一般『丈加工』だけの差はバリアントにしない
+        hem = paren_classify.strip_pants_hem_processing(f'（{proc}）')
+        if not stock.text(hem).strip('（）()'):
+            return ''
+        return identity_match_key(proc)
+    except Exception:
+        return ''
+
+
+def sku_variant_key(*, product_name, color='', supplier='', processing=''):
     """CSV内の商品内容バリアント（サイズ・顧客は含めない）。
 
-    通常品番の商品名は先頭中古標記「＊/*」だけ無視して同一視する。
+    商品名は本体キー＋明示色キー＋加工キーで同一視
+    （括弧内外・半角全角・名シノニムを吸収。刺繍など実加工差は別バリアント）。
+    color / processing は呼び出し側で既に抽出済みのときだけ渡し、空なら名から取る。
     """
+    base_key, color_key, _bd, _cd = legacy.product_name_base_and_color(product_name)
+    color_t = stock.text(color)
+    if color_t:
+        try:
+            color_key = paren_classify.color_match_key(color_t) or identity_match_key(color_t)
+        except Exception:
+            color_key = identity_match_key(color_t)
+    proc_key = identity_match_key(processing) if stock.text(processing) else _name_processing_key(product_name)
     return '|'.join([
-        product_name_core_key(product_name),
-        identity_match_key(color),
+        base_key or product_name_core_key(product_name),
+        color_key or '',
+        proc_key or '',
         identity_match_key(supplier),
     ])
 
@@ -1177,7 +1227,11 @@ def _unique_display_name(names):
 
 
 def _collect_name_supplier_candidates(group):
-    """同一商品候補内の 商品名+仕入先 ペア（バリアント単位）。別候補の名と仕入先を混ぜない。"""
+    """同一商品候補内の 商品名+仕入先 ペア（バリアント単位）。別候補の名と仕入先を混ぜない。
+
+    バリアントキー（本体・色・加工・仕入先）で一意化する。
+    刺繍あり／なしなど加工差を core 名だけで潰さない。
+    """
     out = []
     seen = set()
     for v in group.get('variants') or []:
@@ -1190,14 +1244,13 @@ def _collect_name_supplier_candidates(group):
         if not names:
             continue
         display_name = prefer_unmarked_product_name(names) or names[0]
-        key = (product_name_core_key(display_name), identity_match_key(supplier))
+        # バリアントキー優先（加工差を含む）。無ければ従来の名コア＋仕入先。
+        key = stock.text(v.get('key') or '') or (
+            f'{product_name_core_key(display_name)}|{identity_match_key(supplier)}'
+        )
         if key in seen:
-            # 同一コア名＋仕入先は名前を統合
             for slot in out:
-                if (
-                    product_name_core_key(slot['productName']) == key[0]
-                    and identity_match_key(slot['supplier']) == key[1]
-                ):
+                if stock.text(slot.get('variantKey') or '') == key:
                     for n in names:
                         if n not in slot['ledgerNames']:
                             slot['ledgerNames'].append(n)
@@ -1217,7 +1270,9 @@ def _collect_name_supplier_candidates(group):
             'ledgerNames': list(names),
             'sizes': list(v.get('sizes') or []),
             'customers': list(v.get('customers') or []),
-            'variantKey': v.get('key') or '',
+            'variantKey': key,
+            'processing': stock.text(v.get('processing') or ''),
+            'color': stock.text(v.get('color') or ''),
         })
     return out
 
@@ -1438,7 +1493,11 @@ def _ledger_source_rows_for_votes(group):
 
 
 def _count_ledger_name_votes(group):
-    """正規化名ごとの票数（商品台帳行のみ。初期在庫行・在庫数は混ぜない）。"""
+    """正規化名ごとの票数（商品台帳行のみ。初期在庫行・在庫数は混ぜない）。
+
+    色省略の寄せはバリアントまとめ側で行い、票カウントでは色なし行を
+    推測で色付き票へ振り分けない（明示色が複数あるSKUの票を守る）。
+    """
     buckets = {}
     order = []
     for row in _ledger_source_rows_for_votes(group):
@@ -1825,11 +1884,12 @@ def _try_explicit_color_adoption(
             adopted['nameCandidates'] = name_candidates
         return adopted
 
-    # 同じ色が複数候補 → 色は決まっても名・仕入先パッケージが未決なら要確認
+    # 同じ色が複数候補 → 色は決まっても名・加工・仕入先パッケージが未決なら要確認
     cores = {
-        (
+        stock.text(a['cand'].get('variantKey') or '') or (
             product_name_core_key(a['cand'].get('productName') or ''),
             identity_match_key(a['cand'].get('supplier') or ''),
+            identity_match_key(a['cand'].get('processing') or ''),
         )
         for a in colored
     }
@@ -1837,7 +1897,7 @@ def _try_explicit_color_adoption(
     if len(cores) > 1:
         reasons.append(
             f'色「{color_display}」は候補間で一致していますが、'
-            '商品名（または仕入先）が未確定のため要確認。色のみ先に設定候補とします。'
+            '商品名・加工（または仕入先）が未確定のため要確認。色のみ先に設定候補とします。'
         )
         change_summary = f"商品名から色『{color_display}』を設定します"
         return _undecided_pair_result(
@@ -3322,13 +3382,24 @@ def normalize_ledger_name_for_vote(name):
     - 先頭中古標記「＊/*」は比較から除外（表示用原文は別保持）
     - 半角カタカナ → 全角カタカナ（濁点・半濁点を正しく合成）
     - 全角/半角空白 → 半角空白、連続を1つに、trim
+    - 括弧内外の明示色を本体＋色キーへそろえる（位置差で票を割らない）
+    - 明示名シノニム（帽子／キャップ等）を代表へ
     - 配色つなぎの /／×✕*＊ → ×（色要素確認時のみ。先頭中古標記の * と区別）
     - 色辞書の別名・誤記 → 代表色（共有 normalize。類似度では寄せない）
     - その他の記号は無条件に消さない
     - 品番・メーカー品番には使わない（先頭ゼロ維持）
     - 文字列全体への NFKC はしない（SKU・先頭ゼロを守る）
     """
-    return paren_classify.normalize_name_for_color_compare(stock.text(name))
+    raw = stock.text(name)
+    if not raw:
+        return ''
+    base_key, color_key, base_disp, color_disp = legacy.product_name_base_and_color(raw)
+    if base_key:
+        # 票キーは本体＋色。色なしは本体のみ（色省略の合算は上位で扱う）
+        if color_key:
+            return f'{base_disp or base_key} {color_disp or color_key}'.strip()
+        return paren_classify.normalize_name_for_color_compare(base_disp or raw)
+    return paren_classify.normalize_name_for_color_compare(raw)
 
 
 def format_ledger_adopted_name(name):
@@ -5004,22 +5075,158 @@ def classify_row(
 def _row_variant(row):
     csv = row.get('csv') or {}
     name = csv.get('productName') or ''
+    _bk, color_key, base_display, color_display = legacy.product_name_base_and_color(name)
+    proc_key = _name_processing_key(name)
+    processing = ''
+    try:
+        split = paren_classify.split_name_and_color(name)
+        processing = stock.text(split.get('processing') or '')
+        if proc_key == '':
+            processing = ''
+    except Exception:
+        processing = ''
     return {
         'key': sku_variant_key(
             product_name=name,
-            color='',
+            color=color_display,
             supplier=csv.get('supplier') or '',
+            processing=processing,
         ),
         'productName': name,
         'productNameCore': prefer_unmarked_product_name([name]) or name,
+        'productNameBase': base_display or name,
         'supplier': csv.get('supplier') or '',
-        'color': '',
+        'color': color_display or '',
+        'colorKey': color_key or '',
+        'processing': processing or '',
         'rowNos': [],
         'sizes': [],
         'customers': [],
         'csvNames': [],
         'sourceRows': [],
     }
+
+
+def _display_base_without_substring_synonym(name):
+    """表示用本体名。色は除去するが、パンツ→スラックス等の部分置換はしない。"""
+    raw = stock.text(name)
+    if not raw:
+        return ''
+    try:
+        split = paren_classify.split_name_and_color(raw)
+        base = stock.text(split.get('plannedName') or '') or raw
+        base = paren_classify.strip_pants_hem_processing(base) or base
+        base = paren_classify.unify_import_notation(base) or base
+    except Exception:
+        base = raw
+    # 完全一致シノニム（帽子／キャップ）だけ表示に反映。部分置換は照合キー側のみ。
+    return legacy.preferred_name_synonym(base) or base
+
+
+def prefer_synonym_display_name(names):
+    """同一グループ内の表示名。帽子／キャップが共存すればキャップを優先。
+
+    帽子だけのグループは帽子のまま（無条件改名しない）。
+    パンツ／スラックスの部分置換は表示名へは適用しない（照合キーのみ）。
+    """
+    cleaned = [stock.text(n) for n in (names or []) if stock.text(n)]
+    if not cleaned:
+        return ''
+    raw_bases = [_display_base_without_substring_synonym(n) for n in cleaned]
+    has_hat_raw = any(b == '帽子' for b in raw_bases)
+    has_cap_raw = any(b == 'キャップ' for b in raw_bases)
+    if has_cap_raw and has_hat_raw:
+        return 'キャップ'
+    unmarked = prefer_unmarked_product_name(cleaned) or cleaned[0]
+    base_disp = _display_base_without_substring_synonym(unmarked)
+    if has_cap_raw and not has_hat_raw:
+        return base_disp or 'キャップ'
+    if has_hat_raw and not has_cap_raw:
+        return '帽子'
+    return base_disp or unmarked
+
+
+def merge_color_omission_variants(variants):
+    """同じ仕入先・同じ本体名で明示色が1種類だけのとき、色なし候補をその色へまとめる。
+
+    明示色が複数／メーカー色番・加工などの矛盾は呼び出し側の差分検出に残す。
+    戻り値: (merged_variants, color_omission_auto)
+    """
+    variants = list(variants or [])
+    if len(variants) < 2:
+        return variants, False
+
+    def _slot_base(v):
+        return identity_match_key(
+            v.get('productNameBase')
+            or legacy.product_name_base_and_color(v.get('productName') or '')[2]
+            or v.get('productName')
+            or ''
+        )
+
+    def _slot_supplier(v):
+        return identity_match_key(v.get('supplier') or '')
+
+    def _slot_processing(v):
+        return identity_match_key(v.get('processing') or '')
+
+    by_group = defaultdict(list)
+    for v in variants:
+        # 加工差がある候補は色省略でまとめない
+        by_group[(_slot_supplier(v), _slot_base(v), _slot_processing(v))].append(v)
+
+    merged = []
+    color_omission_auto = False
+    for (_sup, _base, _proc), slots in by_group.items():
+        if len(slots) < 2:
+            merged.extend(slots)
+            continue
+        color_keys = [(stock.text(s.get('colorKey') or ''), s) for s in slots]
+        nonempty = [ck for ck, _s in color_keys if ck]
+        unique_colors = set(nonempty)
+        if len(unique_colors) != 1:
+            # 色なし同士／明示色が複数 → まとめない
+            merged.extend(slots)
+            continue
+        only_key = next(iter(unique_colors))
+        target = next(s for ck, s in color_keys if ck == only_key)
+        colorless = [s for ck, s in color_keys if not ck]
+        if not colorless:
+            merged.extend(slots)
+            continue
+        # 色なしを明示色スロットへ吸収
+        color_omission_auto = True
+        for s in colorless:
+            for rn in s.get('rowNos') or []:
+                if rn not in target['rowNos']:
+                    target['rowNos'].append(rn)
+            for n in s.get('csvNames') or []:
+                if n and n not in target['csvNames']:
+                    target['csvNames'].append(n)
+            for sr in s.get('sourceRows') or []:
+                target.setdefault('sourceRows', []).append(sr)
+            for size in s.get('sizes') or []:
+                if size and size not in target['sizes']:
+                    target['sizes'].append(size)
+            for cust in s.get('customers') or []:
+                if cust and cust not in target['customers']:
+                    target['customers'].append(cust)
+        # 代表名はシノニム優先の本体（色は color 欄）
+        target['productName'] = prefer_synonym_display_name(
+            target.get('csvNames') or [target.get('productName')]
+        ) or target.get('productNameBase') or target.get('productName')
+        target['productNameBase'] = target.get('productNameBase') or target['productName']
+        target['key'] = sku_variant_key(
+            product_name=target.get('productName') or '',
+            color=target.get('color') or '',
+            supplier=target.get('supplier') or '',
+        )
+        merged.append(target)
+        # 同色の他スロット（理論上1つ）も残す必要なし
+        for ck, s in color_keys:
+            if ck == only_key and s is not target:
+                merged.append(s)
+    return merged, color_omission_auto
 
 
 def _sku_product_plan(group):
@@ -5039,16 +5246,20 @@ def _sku_product_plan(group):
             if n and n not in all_csv_names:
                 all_csv_names.append(n)
     primary = variants[0] if variants else {}
-    official = prefer_unmarked_product_name(all_csv_names) or (primary.get('productName') or '')
+    official = prefer_synonym_display_name(all_csv_names) or prefer_unmarked_product_name(all_csv_names) or (primary.get('productName') or '')
     # 既存1件で標記差だけのときは、標記なし公式名を優先（既存が標記付きなら書き換え候補）
     if group.get('existingCount') == 1 and not group.get('needsDecision'):
         existing_name = (group.get('existingProducts') or [{}])[0].get('name') or ''
-        official = prefer_unmarked_product_name([*all_csv_names, existing_name]) or official
+        official = prefer_synonym_display_name([*all_csv_names, existing_name]) or prefer_unmarked_product_name([*all_csv_names, existing_name]) or official
     else:
-        # 新規まとめではパンツ一般『丈加工』を代表名に残さない
-        stripped = paren_classify.strip_pants_hem_processing(official)
-        if stripped:
-            official = stripped
+        # 新規まとめではパンツ一般『丈加工』を代表名に残さない／色は color 欄へ
+        # （部分シノニムのパンツ→スラックスは表示名へ適用しない）
+        if official and not group.get('needsDecision'):
+            official = _display_base_without_substring_synonym(official) or official
+        else:
+            stripped = paren_classify.strip_pants_hem_processing(official)
+            if stripped:
+                official = stripped
     if group.get('existingCount') == 1 and not group.get('needsDecision'):
         plan_kind = 'reuse'
         plan_label = '既存商品を使用'
@@ -5078,6 +5289,9 @@ def _sku_product_plan(group):
         'synonymAutoMerged': bool(group.get('synonymAutoMerged')),
         'whitespaceAutoMerged': bool(group.get('whitespaceAutoMerged')),
         'pantsHemAutoMerged': bool(group.get('pantsHemAutoMerged')),
+        'colorOmissionAutoMerged': bool(group.get('colorOmissionAutoMerged')),
+        'colorNotationAutoMerged': bool(group.get('colorNotationAutoMerged')),
+        'plannedRegisteredColor': stock.text(group.get('plannedRegisteredColor') or ''),
         'autoMergeReason': (
             ((group.get('reviewReasons') or [{}])[0].get('label') or '')
             if group.get('plannedSingleProduct') else ''
@@ -5136,13 +5350,28 @@ def build_sku_groups(c, classified):
 
         variants = list(variants_map.values())
         for v in variants:
-            v['productName'] = prefer_unmarked_product_name(v.get('csvNames') or [v.get('productName')]) or v.get('productName') or ''
+            # 代表表示はシノニム優先の本体名（色は color 欄）
+            disp = prefer_synonym_display_name(v.get('csvNames') or [v.get('productName')])
+            if disp:
+                v['productName'] = disp
+                v['productNameBase'] = disp
+            else:
+                v['productName'] = prefer_unmarked_product_name(
+                    v.get('csvNames') or [v.get('productName')]
+                ) or v.get('productName') or ''
+        # 候補作成・在庫比較より前: 色省略（明示色が1種類）をまとめる
+        variants, color_omission_auto = merge_color_omission_variants(variants)
         existing = stock_product_merge.find_live_products_by_code(c, code)
         existing_cards = [_product_candidate(m, c) for m in existing]
-        existing_cores = {product_name_core_key(m['name']) for m in existing}
-        csv_cores = {product_name_core_key(n) for v in variants for n in (v.get('csvNames') or [v.get('productName') or '']) if n}
-        # コア名が既存と一致しないときだけ名差（標記だけの差は一致扱い）
-        name_mismatch = bool(existing) and bool(csv_cores - existing_cores)
+        existing_bases = {legacy.product_name_base_key(m['name']) for m in existing}
+        csv_bases = {
+            legacy.product_name_base_key(n)
+            for v in variants
+            for n in (v.get('csvNames') or [v.get('productName') or ''])
+            if n
+        }
+        # 本体名が既存と一致しないときだけ名差（色の名内／名外や標記だけの差は一致扱い）
+        name_mismatch = bool(existing) and bool(csv_bases - existing_bases)
         # 別名ヒットのみでも公式名差として扱う（中古標記だけの差は除外）
         for row in rows:
             if row.get('product', {}).get('nameDiff'):
@@ -5160,18 +5389,19 @@ def build_sku_groups(c, classified):
                 if n and n not in all_csv_names:
                     all_csv_names.append(n)
         cores = {product_name_core_key(n) for n in all_csv_names if n}
+        base_keys = {legacy.product_name_base_key(n) for n in all_csv_names if n}
         raw_names = {stock.text(n) for n in all_csv_names if stock.text(n)}
         if len(cores) == 1 and any(used_marker_possible(n) for n in all_csv_names):
             used_marker_auto = len(raw_names) > 1 or any(
                 used_marker_possible(n) for n in all_csv_names
             )
-        if len(cores) == 1 and len(raw_names) > 1:
-            # 標記以外の表記ゆれ（空白・丈加工・シノニム・色表記）を区別
-            # product_name_core_key と同じ順: NFKC → 丈加工除去 → 名シノニム → 色
+        if (len(cores) == 1 or (len(base_keys) == 1 and color_omission_auto)) and len(raw_names) > 1:
+            # 標記以外の表記ゆれ（空白・丈加工・シノニム・色表記・色省略）を区別
             import unicodedata
             cores_nfkc = set()
             cores_after_hem = set()
             cores_after_syn = set()
+            cores_after_color_split = set()
             for n in all_csv_names:
                 if not stock.text(n):
                     continue
@@ -5183,6 +5413,7 @@ def build_sku_groups(c, classified):
                 cores_after_syn.add(
                     identity_match_key(legacy.apply_name_synonyms(hemmed))
                 )
+                cores_after_color_split.add(product_name_core_key(n))
             if len(cores_nfkc) == 1:
                 unmarked_set = {
                     stock.text(legacy.strip_used_marker(n)[0]) for n in all_csv_names if stock.text(n)
@@ -5190,16 +5421,28 @@ def build_sku_groups(c, classified):
                 if len(unmarked_set) > 1:
                     whitespace_auto = True
             elif len(cores_after_hem) == 1:
-                # パンツ一般『丈加工』有無だけの差
                 pants_hem_auto = True
-            elif len(cores_after_syn) == 1:
-                # 名シノニム（パンツ／スラックス）だけで同一化
+            elif len(cores_after_syn) == 1 and not color_omission_auto:
                 synonym_auto = True
+            elif color_omission_auto or len(cores_after_color_split) == 1:
+                # 括弧内外の色・半角カナ・色省略・名シノニムの組み合わせ
+                color_notation_auto = True
+                # 色除去後・シノニム適用前の本体に帽子とキャップが混在していれば同義
+                raw_bases = set()
+                for n in all_csv_names:
+                    if not stock.text(n):
+                        continue
+                    try:
+                        split = paren_classify.split_name_and_color(n)
+                        raw_bases.add(stock.text(split.get('plannedName') or '') or '')
+                    except Exception:
+                        raw_bases.add(stock.text(n))
+                if '帽子' in raw_bases and 'キャップ' in raw_bases:
+                    synonym_auto = True
             else:
-                # 色辞書・配色区切りで同一化した（共有 normalize）
                 color_notation_auto = True
 
-        # サイズ・顧客・中古標記・空白/全角半角・明示シノニム・色表記・丈加工だけの差はバリアントに出ない
+        # サイズ・顧客・中古標記・空白/全角半角・明示シノニム・色表記・色省略・丈加工だけの差はバリアントに出ない
         needs_decision = (
             len(variants) > 1
             or len(existing) > 1
@@ -5218,11 +5461,22 @@ def build_sku_groups(c, classified):
             if pants_hem_auto:
                 auto_bits.append('パンツの一般「丈加工」')
             if synonym_auto:
-                auto_bits.append('明示シノニム（例: パンツ／スラックス）')
+                auto_bits.append('明示シノニム（帽子／キャップ・パンツ／スラックス等）')
+            if color_omission_auto:
+                auto_bits.append('色省略（明示色が1種類のため補完）')
             if color_notation_auto:
-                auto_bits.append('色表記の統一（半角カナ・配色区切り・色辞書）')
+                auto_bits.append('色表記の統一（括弧・半角カナ・配色区切り・色辞書）')
             if whitespace_auto:
                 auto_bits.append('空白・全角半角の表記差')
+            # 登録予定の統一名／色
+            planned_name = prefer_synonym_display_name(all_csv_names) or (
+                variants[0].get('productName') if variants else ''
+            )
+            planned_color = ''
+            for v in variants:
+                if stock.text(v.get('color') or ''):
+                    planned_color = stock.text(v.get('color') or '')
+                    break
             diff_meta = {
                 'reviewTier': REVIEW_TIER_AUTO,
                 'reviewTierLabel': REVIEW_TIER_LABELS[REVIEW_TIER_AUTO],
@@ -5247,6 +5501,8 @@ def build_sku_groups(c, classified):
                 'genderConflictPossible': False,
                 'fabricDiffPossible': False,
                 'bulkApprovable': False,
+                'plannedRegisteredName': planned_name,
+                'plannedRegisteredColor': planned_color,
             }
 
         reason_labels = [r.get('label') or '' for r in (diff_meta.get('reviewReasons') or []) if r.get('label')]
@@ -5255,7 +5511,8 @@ def build_sku_groups(c, classified):
             f'（候補名 {len(diff_meta.get("nameCandidates") or [])} / '
             f'仕入先候補 {len(diff_meta.get("supplierCandidates") or [])} / '
             f'登録済 {len(existing)} 件）。'
-            f'サイズ・顧客・先頭「＊/*」・空白/全角半角・明示シノニムだけの差は同じ商品へまとめます。'
+            f'サイズ・顧客・先頭「＊/*」・空白/全角半角・明示シノニム・'
+            f'括弧色／色省略だけの差は同じ商品へまとめます。'
             f'加工仕様の違いは取扱として別管理し、商品を勝手に1つへ潰しません。'
         )
         if reason_labels:
@@ -5276,6 +5533,8 @@ def build_sku_groups(c, classified):
             'synonymAutoMerged': bool(synonym_auto and planned_single),
             'whitespaceAutoMerged': bool(whitespace_auto and planned_single),
             'pantsHemAutoMerged': bool(pants_hem_auto and planned_single),
+            'colorOmissionAutoMerged': bool(color_omission_auto and planned_single),
+            'colorNotationAutoMerged': bool(color_notation_auto and planned_single),
             'applyScope': apply_scope,
             'decision': None,
             'status': 'needs_decision' if needs_decision else 'auto',
@@ -5759,6 +6018,28 @@ def _ensure_processing_service_product(c, plan):
     return pid, True
 
 
+def _notation_auto_merged(group_or_row):
+    """自動まとめ全般（公式名適用の判定用）。"""
+    g = group_or_row or {}
+    return bool(
+        g.get('synonymAutoMerged')
+        or g.get('colorOmissionAutoMerged')
+        or g.get('colorNotationAutoMerged')
+        or g.get('whitespaceAutoMerged')
+        or g.get('pantsHemAutoMerged')
+        or g.get('usedMarkerAutoMerged')
+    )
+
+
+def _skip_display_name_aliases(group_or_row):
+    """同義・色省略のまとめだけ、通常画面の別名一覧へ原文を出さない。
+
+    中古標記・空白・丈加工・配色区切りなどの従来まとめは別名を残す。
+    """
+    g = group_or_row or {}
+    return bool(g.get('synonymAutoMerged') or g.get('colorOmissionAutoMerged'))
+
+
 def _attach_product_plans(classified, sku_groups):
     """各行に商品計画（品番単位のまとめ先）を付け、行トレースを残す。"""
     by_code = {g['code']: g for g in sku_groups}
@@ -5774,11 +6055,17 @@ def _attach_product_plans(classified, sku_groups):
         row['synonymAutoMerged'] = bool(group.get('synonymAutoMerged'))
         row['whitespaceAutoMerged'] = bool(group.get('whitespaceAutoMerged'))
         row['pantsHemAutoMerged'] = bool(group.get('pantsHemAutoMerged'))
+        row['colorOmissionAutoMerged'] = bool(group.get('colorOmissionAutoMerged'))
+        row['colorNotationAutoMerged'] = bool(group.get('colorNotationAutoMerged'))
         row['skuRowNos'] = list(group.get('rowNos') or [])
 
 
 def _apply_auto_merge_official_names(classified, sku_groups):
-    """自動まとめ品番に公式名（標記なし優先）を付け、CSV原文を別名登録できるようにする。"""
+    """自動まとめ品番に公式名（標記なし優先）と色を付ける。
+
+    同義・色表記・色省略のまとめでは、原文は通常画面の別名一覧へ出さず
+    product_ledger_row_maps 側の内部照合に残す。
+    """
     by_code = {g['code']: g for g in sku_groups}
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code'))
@@ -5786,17 +6073,31 @@ def _apply_auto_merge_official_names(classified, sku_groups):
         if not group or not group.get('plannedSingleProduct'):
             continue
         plan = group.get('productPlan') or {}
-        official = stock.text(plan.get('productName') or '')
+        official = stock.text(
+            group.get('plannedRegisteredName')
+            or plan.get('productName')
+            or ''
+        )
         if not official:
             continue
         prod = dict(row.get('product') or {})
         prod['officialName'] = official
+        planned_color = stock.text(
+            group.get('plannedRegisteredColor')
+            or plan.get('plannedRegisteredColor')
+            or ''
+        )
+        if not planned_color:
+            for v in group.get('variants') or []:
+                if stock.text(v.get('color') or ''):
+                    planned_color = stock.text(v.get('color') or '')
+                    break
+        if planned_color and not prod.get('officialColor'):
+            prod['officialColor'] = planned_color
+            prod['proposedColor'] = planned_color
         csv_name = stock.text((row.get('csv') or {}).get('productName') or '')
         if (
-            group.get('usedMarkerAutoMerged')
-            or group.get('synonymAutoMerged')
-            or group.get('whitespaceAutoMerged')
-            or group.get('pantsHemAutoMerged')
+            _notation_auto_merged(group)
             or used_marker_possible(csv_name)
             or (
                 prod.get('id')
@@ -5810,6 +6111,9 @@ def _apply_auto_merge_official_names(classified, sku_groups):
             )
         ):
             prod['applyOfficialName'] = True
+        # 同義・色省略まとめ: 通常画面の別名一覧へ原文を載せない（row_maps で照合）
+        if _skip_display_name_aliases(group):
+            prod['skipDisplayNameAliases'] = True
         row['product'] = prod
 
 
@@ -5852,7 +6156,9 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
         decision = stock.text(raw.get('decision'))
         group['decision'] = raw if decision else None
 
-        if not group['needsDecision']:
+        # 自動まとめ済みでも、利用者が色別登録を選んだときはその決定を行へ反映する
+        # （色省略の背景まとめが色別の未割当行を潰さない）
+        if not group['needsDecision'] and decision != SKU_DECISION_COLOR_SPLIT:
             continue
 
         if not decision:
@@ -6939,15 +7245,23 @@ def _apply_primary_supplier_change(c, product_id, primary_supplier_id, *, confir
     return True
 
 
-def _apply_official_name(c, product_id, official_name, color=None, csv_name=None, material=None):
-    """公式名を確定し、CSV名・旧名を別名に残す。"""
+def _apply_official_name(
+    c, product_id, official_name, color=None, csv_name=None, material=None,
+    *, skip_display_name_aliases=False,
+):
+    """公式名を確定し、CSV名・旧名を別名に残す。
+
+    skip_display_name_aliases=True のときは通常画面の別名一覧へ出さない
+    （同義・色省略などの表記ゆれ。内部照合は row_maps 側）。
+    """
     if not product_id or not official_name:
         return False
     current = stock.product_row(c, product_id)
-    if stock.text(current['name']) != stock.text(official_name):
-        stock_product_merge.ensure_name_alias(c, product_id, current['name'])
-    if csv_name and stock.text(csv_name) != stock.text(official_name):
-        stock_product_merge.ensure_name_alias(c, product_id, csv_name)
+    if not skip_display_name_aliases:
+        if stock.text(current['name']) != stock.text(official_name):
+            stock_product_merge.ensure_name_alias(c, product_id, current['name'])
+        if csv_name and stock.text(csv_name) != stock.text(official_name):
+            stock_product_merge.ensure_name_alias(c, product_id, csv_name)
     new_color = current['color'] if color is None else stock.text(color)
     new_material = current.get('material') or '' if material is None else stock.text(material)
     if (
@@ -7076,17 +7390,20 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
                     'officialMaterial' in product_info or 'proposedMaterial' in product_info
                 ) else None,
                 csv_name=csv_name,
+                skip_display_name_aliases=bool(product_info.get('skipDisplayNameAliases')),
             )
         else:
             # 再利用時は CSV 名・対応表の原文を別名に残す（公式名は変えない）
-            if stock.text(csv_name) and stock_product_merge.is_normal_product_code(product_info.get('code')):
-                prod = _load_product(c, pid)
-                if prod and stock.text(prod['name']) != stock.text(csv_name):
-                    stock_product_merge.ensure_name_alias(c, pid, csv_name)
-            for mapping in product_info.get('nameMappings') or []:
-                orig = stock.text(mapping.get('originalName') or '')
-                if orig:
-                    stock_product_merge.ensure_name_alias(c, pid, orig)
+            # 表記ゆれ自動まとめは通常画面別名へ出さず、row_maps で内部照合する
+            if not product_info.get('skipDisplayNameAliases'):
+                if stock.text(csv_name) and stock_product_merge.is_normal_product_code(product_info.get('code')):
+                    prod = _load_product(c, pid)
+                    if prod and stock.text(prod['name']) != stock.text(csv_name):
+                        stock_product_merge.ensure_name_alias(c, pid, csv_name)
+                for mapping in product_info.get('nameMappings') or []:
+                    orig = stock.text(mapping.get('originalName') or '')
+                    if orig:
+                        stock_product_merge.ensure_name_alias(c, pid, orig)
         size_added = False
         if product_info.get('sizeAction') == 'add':
             size_added = _save_product_sizes_only(c, pid, product_info.get('size'))
@@ -7142,7 +7459,10 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
                 )
             if len(matches) == 1:
                 pid = matches[0]['id']
-                if stock.text(matches[0]['name']) != stock.text(csv_name):
+                if (
+                    not product_info.get('skipDisplayNameAliases')
+                    and stock.text(matches[0]['name']) != stock.text(csv_name)
+                ):
                     stock_product_merge.ensure_name_alias(c, pid, csv_name)
                 if (product_info.get('skuMerge') or product_info.get('applyOfficialName')) and official_name:
                     _apply_official_name(
@@ -7154,6 +7474,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
                             'officialMaterial' in product_info or 'proposedMaterial' in product_info
                         ) else None,
                         csv_name=csv_name,
+                        skip_display_name_aliases=bool(product_info.get('skipDisplayNameAliases')),
                     )
                 size_added = _save_product_sizes_only(c, pid, product_info.get('size'))
                 sub_added = False
@@ -7203,16 +7524,18 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     if maker_code:
         save_body['makerCode'] = maker_code
     saved = stock.save_product(c, save_body)
-    # 原文名は照合用別名（初期在庫CSVなどの後続解決用）
-    if csv_name and stock.text(csv_name) != stock.text(name):
-        stock_product_merge.ensure_name_alias(c, saved['id'], csv_name)
-    orig_csv = stock.text(product_info.get('csvOriginalName') or '')
-    if orig_csv and stock.text(orig_csv) != stock.text(name):
-        stock_product_merge.ensure_name_alias(c, saved['id'], orig_csv)
-    for mapping in product_info.get('nameMappings') or []:
-        orig = stock.text(mapping.get('originalName') or '')
-        if orig and stock.text(orig) != stock.text(name):
-            stock_product_merge.ensure_name_alias(c, saved['id'], orig)
+    # 原文名は照合用別名（初期在庫CSVなどの後続解決用）。
+    # 同義・色省略などの表記ゆれ自動まとめは通常画面別名へ出さず、row_maps で照合する。
+    if not product_info.get('skipDisplayNameAliases'):
+        if csv_name and stock.text(csv_name) != stock.text(name):
+            stock_product_merge.ensure_name_alias(c, saved['id'], csv_name)
+        orig_csv = stock.text(product_info.get('csvOriginalName') or '')
+        if orig_csv and stock.text(orig_csv) != stock.text(name):
+            stock_product_merge.ensure_name_alias(c, saved['id'], orig_csv)
+        for mapping in product_info.get('nameMappings') or []:
+            orig = stock.text(mapping.get('originalName') or '')
+            if orig and stock.text(orig) != stock.text(name):
+                stock_product_merge.ensure_name_alias(c, saved['id'], orig)
     if primary_name:
         stock_product_merge.ensure_supplier_alias(c, saved['id'], primary_name)
     sub_added = False
