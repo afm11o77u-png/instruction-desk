@@ -386,7 +386,7 @@
     const items=plans.map(p=>{
       const codes=(p.targetGarmentCodes||[]).slice(0,6).map(esc).join('、')
       const more=(p.targetGarmentCodes||[]).length>6?` …他${(p.targetGarmentCodes||[]).length-6}`:''
-      const display=p.displayName||p.serviceName||'加工'
+      const serviceName=p.serviceName||p.displayName||'加工'
       const samples=(p.rowSpecsSamples||[]).slice(0,3).map(s=>{
         const bits=[
           s.originalName||'',
@@ -398,14 +398,14 @@
         return `<li>行${esc(s.rowNo)}: ${esc(bits.join(' / ')||'—')}</li>`
       }).join('')
       return `<article class="sku-auto-plan sku-auto-processing" data-sku-section="auto-processing">
-        <strong>${esc(display)} <span class="badge">加工サービス（自動）</span></strong>
+        <strong>${esc(serviceName)} <span class="badge">加工サービス（自動）</span></strong>
         <ul class="sku-processing-fields">
           <li>加工名: <strong>${esc(p.serviceName||'—')}</strong></li>
           <li>加工業者: <strong>${esc(p.vendorName||'—')}</strong></li>
-          <li>登録時表示名: <strong>${esc(display)}</strong>（加工名と同じ）</li>
+          <li>補足／個別仕様: 内部照合用（通常画面には別名一覧を出しません）</li>
           <li>区分: 部品・資材／加工　品番なし（対象品番 ${codes||'—'}${more}）</li>
         </ul>
-        <p class="excelhint">通常画面には統一後の加工名と業者のみを出します。元商品名の列挙はしません。個別仕様は内部照合用に保持します。</p>
+        <p class="excelhint">一覧・登録の表示名は加工名をそのまま使います。登録時表示名の別入力はありません。</p>
         ${samples?`<details class="sku-processing-specs"><summary>元行の補足・個別仕様（内部照合用）</summary><ul>${samples}</ul></details>`:''}
       </article>`
     }).join('')
@@ -1174,9 +1174,24 @@
         }))
       :''
     const disabled=st.busy?'disabled':''
-    // 加工業者行: 色・生地ではなく加工名・加工業者・補足が分かる表示
-    const processingView=!!(r.processingServiceView||pc.processingServiceView||ps.isProcessingVendor)
+    // 実物の部品・資材（生地・ボタン等）: 加工名と呼ばない。表示名の別欄も設けない
+    const physicalParts=!!(r.physicalPartsView||pc.physicalPartsView||ps.isPhysicalParts)
+    if(physicalParts){
+      const partName=edit.plannedName!=null?edit.plannedName:(planned||(r.csv&&r.csv.productName)||'')
+      const vendorName=(r.csv&&r.csv.supplier)||pc.processingVendor||''
+      const specText=edit.supplement!=null?edit.supplement:(supplement||'')
+      return `<div class="pl-paren-edit pl-physical-parts-edit">
+        <div class="excelhint">実物の部品・資材</div>
+        <label>名称<input data-pl-paren-name="${r.rowNo}" value="${esc(partName)}" ${disabled} placeholder="例: 生地・ボタン"></label>
+        <label>仕入先<input value="${esc(vendorName)}" readonly disabled></label>
+        <label>必要な仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="色・寸法・材質など"></label>
+        <p class="excelhint">加工サービスとは区別します。名称とは別の表示名欄はありません。</p>
+      </div>`
+    }
+    // 加工サービス: 加工名／加工業者／補足・個別仕様（登録時表示名の別入力なし）
+    const processingView=!!(r.processingServiceView||pc.processingServiceView||(ps.isProcessingVendor&&!physicalParts))
     if(processingView){
+      // 表示名（planned）から加工名を無条件補完しない。明確な加工名のみ
       const serviceName=ps.serviceName||processing||''
       const vendorName=ps.vendorName||pc.processingVendor||(r.csv&&r.csv.supplier)||''
       const specs=ps.rowSpecs||{}
@@ -1185,14 +1200,13 @@
       const autoOk=!!(ps.identifiable&&ps.isProcessingService&&!ps.needsConfirm)
       const flag=autoOk?'自動（加工サービス）':(ps.needsConfirm?'要確認（加工名不足）':'加工サービス')
       const missing=pc.processingMissingHint||((ps.missingFields||[]).join('・'))||''
-      return `<div class="pl-paren-edit pl-processing-service-edit">
+      return `<div class="pl-paren-edit pl-processing-service-edit" data-pl-processing-sync="${r.rowNo}">
         <div class="excelhint">${esc(flag)}</div>
         ${missing?`<div class="excelhint pl-paren-info">${esc(missing)}</div>`:''}
-        <label>加工名<input data-pl-paren-proc="${r.rowNo}" value="${esc(serviceName||processing)}" ${disabled||autoOk?'readonly':''} ${disabled} placeholder="例: ポケット取付"></label>
+        <label>加工名<input data-pl-paren-proc="${r.rowNo}" data-pl-processing-name-sync="1" value="${esc(serviceName)}" ${disabled||autoOk?'readonly':''} ${disabled} placeholder="例: サイズダウン"></label>
         <label>加工業者<input value="${esc(vendorName)}" readonly disabled></label>
-        <label>登録時表示名<input data-pl-paren-name="${r.rowNo}" value="${esc(serviceName||planned||processing)}" ${disabled||autoOk?'readonly':''} ${disabled} placeholder="加工名と同じ"></label>
-        <label>補足・個別仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="位置・寸法・顧客固有など"></label>
-        ${autoOk?`<p class="excelhint">加工名を登録時表示名に使います。色・生地欄は加工サービスでは使いません。</p>`:''}
+        <label>補足／個別仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="位置・寸法・顧客固有など"></label>
+        ${autoOk?`<p class="excelhint">一覧・登録の表示は加工名をそのまま使います。色・生地欄は使いません。</p>`:''}
         ${ps.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 加工名を確認した</label>`:''}
       </div>`
     }
@@ -1546,6 +1560,15 @@
     }
   }
 
+  function isProcessingServicePreviewRow(st,rowNo){
+    const row=((st.preview&&st.preview.rows)||[]).find(r=>Number(r.rowNo)===Number(rowNo))
+    if(!row)return false
+    const ps=row.processingService||{}
+    const pc=row.parenClassification||{}
+    if(ps.isPhysicalParts||row.physicalPartsView||pc.physicalPartsView)return false
+    return !!(row.processingServiceView||pc.processingServiceView||ps.isProcessingService||ps.isProcessingVendor)
+  }
+
   async function applyMakerCandidateToPreview(st,{scope,skuCode,rowNos,rowNo,cand,manufacturer,makerSku}){
     const plannedSku=cand.plannedRegisteredSku||''
     const position=cand.position||''
@@ -1577,7 +1600,11 @@
       makerManufacturer:cand.manufacturer||manufacturer||''
     }
     if(scope==='sku'){
-      ;(rowNos||[]).forEach(rn=>setRowClassification(st,rn,classPatch))
+      // 加工サービス行へメーカー商品名を表示名として流し込まない（加工名を唯一の表示元に保つ）
+      ;(rowNos||[]).forEach(rn=>{
+        if(isProcessingServicePreviewRow(st,rn))return
+        setRowClassification(st,rn,classPatch)
+      })
       const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(skuCode))
       const d=skuDecision(st,skuCode)
       if((d.decision||'')==='color_split'){
@@ -1605,7 +1632,9 @@
         makerManufacturer:cand.manufacturer||manufacturer||''
       })
     }else if(rowNo!=null){
-      setRowClassification(st,rowNo,classPatch)
+      if(!isProcessingServicePreviewRow(st,rowNo)){
+        setRowClassification(st,rowNo,classPatch)
+      }
     }
   }
 
@@ -2341,7 +2370,13 @@
           setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
         })
         document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
-          setRowClassification(st,el.getAttribute('data-pl-paren-proc'),{processing:el.value})
+          const rowNo=el.getAttribute('data-pl-paren-proc')
+          const patch={processing:el.value}
+          // 加工サービス行: 加工名を表示・登録・重複判定の唯一の入力元として同期
+          if(el.getAttribute('data-pl-processing-name-sync')){
+            patch.plannedName=el.value
+          }
+          setRowClassification(st,rowNo,patch)
         })
         document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
           setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
@@ -2724,7 +2759,14 @@
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-color'),{color:el.value})
     })
     document.querySelectorAll('[data-pl-paren-proc]').forEach(el=>{
-      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-proc'),{processing:el.value})
+      el.onchange=()=>{
+        const rowNo=el.getAttribute('data-pl-paren-proc')
+        const patch={processing:el.value}
+        if(el.getAttribute('data-pl-processing-name-sync')){
+          patch.plannedName=el.value
+        }
+        setRowClassification(st,rowNo,patch)
+      }
     })
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})

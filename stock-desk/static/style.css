@@ -452,6 +452,7 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .legacy-csv-table .pl-paren-edit input:not([type]){min-height:24px;padding:2px 6px;font-size:12px}
 .legacy-csv-table .pl-paren-confirm{flex-direction:row!important;align-items:center;gap:6px!important;margin-top:2px}
 .legacy-csv-table .pl-processing-service-edit{border-left:3px solid #6b7c5c;padding-left:6px;background:rgba(90,110,80,.05)}
+.legacy-csv-table .pl-physical-parts-edit{border-left:3px solid #8a7a5c;padding-left:6px;background:rgba(130,110,70,.05)}
 .sku-processing-fields{margin:4px 0 6px;padding-left:1.2em}
 .sku-processing-fields li{margin:2px 0}
 .legacy-csv-table .lc-handle{min-width:7rem;max-width:12rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}

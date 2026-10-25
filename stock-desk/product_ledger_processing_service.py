@@ -53,6 +53,8 @@ _SERVICE_NAME_ALIASES = {
     '丈直し': '丈直し',
     '裾上げ': '裾上げ',
     '裾直し': '裾直し',
+    # 「加工」接尾が無くても明確な加工サービス（原文のまま。推測で別語へ置き換えない）
+    'サイズダウン': 'サイズダウン',
     'マジックテープ': 'マジックテープ付け',
     'マジックテープ付け': 'マジックテープ付け',
     'リフレクター': 'リフレクター',
@@ -94,7 +96,7 @@ _SERVICE_NAME_CANDIDATES = sorted(
 
 # 明確な加工サービスを示す接尾（「加工」文字がなくても可）
 _SERVICE_SUFFIX_RE = re.compile(
-    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|裾上げ|裾直し|丈直し|付け)$'
+    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|裾上げ|裾直し|丈直し|サイズダウン|付け)$'
 )
 # 顧客固有の「〜用」接頭（わらく堂用上衣加工 など）
 _CUSTOMER_USE_RE = re.compile(r'^(.+?用)(.+)$')
@@ -448,7 +450,7 @@ def classify_processing_service_row(
     if service:
         result['isProcessingService'] = True
         result['serviceName'] = service
-        # 登録時表示名＝加工名（予定名と加工名の二重入力を不要に）
+        # 表示名の唯一の入力元は加工名（別項目を持たず常に同期）
         result['displayName'] = service
         result['identifiable'] = True
         # 構成があれば specs に残す
@@ -460,7 +462,9 @@ def classify_processing_service_row(
 
     # 業者は加工だが加工名が読めない → 架空加工を作らず確認
     # 業者名だけを根拠に不明な加工内容を推測しない
+    # 表示名（予定名）から無条件に加工名を補完しない
     result['needsConfirm'] = True
+    result['displayName'] = ''
     missing = []
     if not stock.text(name_t):
         missing.append('加工名（原文名が空）')
