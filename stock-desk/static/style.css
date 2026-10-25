@@ -487,6 +487,21 @@ dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780p
 .pl-maker-cand-list{margin:6px 0 0;padding-left:1.1em}
 .pl-maker-cand{margin:8px 0;padding:6px 0;border-top:1px solid rgba(0,0,0,.08)}
 .pl-maker-cand .primary{margin-top:4px}
+.pl-bulk-maker-panel{margin:10px 0 14px;padding:10px 12px}
+.pl-bulk-maker-results-wrap{
+  max-height:min(42vh,420px);overflow:auto;margin:8px 0;
+  border:1px solid rgba(0,0,0,.08);background:#fff
+}
+.pl-bulk-maker-results{width:100%;border-collapse:collapse;table-layout:fixed}
+.pl-bulk-maker-results th,.pl-bulk-maker-results td{
+  padding:6px 8px;border-bottom:1px solid rgba(0,0,0,.06);
+  vertical-align:top;overflow-wrap:anywhere
+}
+.pl-bulk-maker-results th:nth-child(1),.pl-bulk-maker-results td:nth-child(1){width:22%}
+.pl-bulk-maker-results th:nth-child(2),.pl-bulk-maker-results td:nth-child(2){width:16%}
+.pl-bulk-maker-cands{margin:6px 0 0;padding-left:0;list-style:none}
+.pl-bulk-maker-cands li{margin:6px 0;padding:6px 0;border-top:1px solid rgba(0,0,0,.06)}
+.pl-bulk-maker-cand-pick{display:flex;gap:8px;align-items:flex-start}
 
 /* 重複商品の整理 */
 .merge-entry{align-items:center;gap:12px;flex-wrap:wrap}

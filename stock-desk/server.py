@@ -363,6 +363,40 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             print(f'maker-lookup adopt failed: {type(e).__name__}: {e}', flush=True)
             return 400, {'error': '採用内容の保存に失敗しました。', 'code': 'maker_adopt_failed'}
         return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/bulk/start':
+        import maker_sku_bulk_lookup
+        try:
+            result = maker_sku_bulk_lookup.start_bulk_lookup_job(
+                db_path,
+                selected_codes=payload.get('selectedCodes') or payload.get('selected_codes') or [],
+                sku_groups=payload.get('skuGroups') or payload.get('sku_groups') or [],
+                rows=payload.get('rows') or [],
+                max_targets=payload.get('maxTargets') or payload.get('max_targets') or None,
+            )
+        except ValueError as e:
+            return 400, {'error': str(e) or '一括取得を開始できません。'}
+        except (OSError, sqlite3.Error, TypeError) as e:
+            print(f'maker-lookup bulk start failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {'error': '一括取得の開始に失敗しました。', 'code': 'maker_bulk_start_failed'}
+        return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/bulk/status':
+        import maker_sku_bulk_lookup
+        try:
+            result = maker_sku_bulk_lookup.get_bulk_lookup_job(
+                payload.get('jobId') or payload.get('job_id') or '',
+            )
+        except ValueError as e:
+            return 400, {'error': str(e) or '一括取得ジョブが見つかりません。'}
+        return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/bulk/cancel':
+        import maker_sku_bulk_lookup
+        try:
+            result = maker_sku_bulk_lookup.cancel_bulk_lookup_job(
+                payload.get('jobId') or payload.get('job_id') or '',
+            )
+        except ValueError as e:
+            return 400, {'error': str(e) or '一括取得ジョブが見つかりません。'}
+        return 200, result
     if path == '/api/products/merge/preview':
         import stock_product_merge
         try:

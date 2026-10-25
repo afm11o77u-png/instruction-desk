@@ -368,11 +368,14 @@ def sku_group_maker_correction_meta(group: dict, rows=None) -> dict:
             for n in (group.get('nameCandidates') or [])
             if stock.text(n)
         ]
-    eligible = bool(maker_sku) and is_valid_maker_sku(maker_sku) and color_diff
+    valid_sku = bool(maker_sku) and is_valid_maker_sku(maker_sku)
+    eligible = valid_sku and color_diff
     return {
         'eligible': eligible,
         'showButton': eligible,
-        'makerSku': maker_sku if (maker_sku and is_valid_maker_sku(maker_sku)) else '',
+        # 一括取得は色競合の有無に関わらず、有効メーカー品番があれば対象
+        'bulkEligible': valid_sku,
+        'makerSku': maker_sku if valid_sku else '',
         'manufacturer': manufacturer,
         'supplier': supplier,
         # 色競合時は色語を除いた名で検索し、一色ヒントで候補を落とさない
