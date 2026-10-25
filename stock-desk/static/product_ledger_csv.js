@@ -383,20 +383,32 @@
     const items=plans.map(p=>{
       const codes=(p.targetGarmentCodes||[]).slice(0,6).map(esc).join('、')
       const more=(p.targetGarmentCodes||[]).length>6?` …他${(p.targetGarmentCodes||[]).length-6}`:''
+      const display=p.displayName||p.serviceName||'加工'
       const samples=(p.rowSpecsSamples||[]).slice(0,3).map(s=>{
-        const bits=[s.originalName||'',s.position?`位置 ${s.position}`:'',s.dimensions?`寸法 ${s.dimensions}`:'',s.composition?`構成 ${s.composition}`:''].filter(Boolean)
+        const bits=[
+          s.originalName||'',
+          s.customerSpecific?`個別仕様 ${s.customerSpecific}`:'',
+          s.position?`位置 ${s.position}`:'',
+          s.dimensions?`寸法 ${s.dimensions}`:'',
+          s.composition?`構成 ${s.composition}`:''
+        ].filter(Boolean)
         return `<li>行${esc(s.rowNo)}: ${esc(bits.join(' / ')||'—')}</li>`
       }).join('')
       return `<article class="sku-auto-plan sku-auto-processing" data-sku-section="auto-processing">
-        <strong>${esc(p.serviceName||'加工')} <span class="badge">加工サービス（自動）</span></strong>
-        <span>業者 ${esc(p.vendorName||'—')}　部品・資材／加工　品番なし（対象品番 ${codes||'—'}${more}）</span>
-        <p class="excelhint">通常画面には統一後の加工名と業者のみを出します。元商品名の列挙はしません。</p>
-        ${samples?`<details class="sku-processing-specs"><summary>元行の個別仕様（内部照合用）</summary><ul>${samples}</ul></details>`:''}
+        <strong>${esc(display)} <span class="badge">加工サービス（自動）</span></strong>
+        <ul class="sku-processing-fields">
+          <li>加工名: <strong>${esc(p.serviceName||'—')}</strong></li>
+          <li>加工業者: <strong>${esc(p.vendorName||'—')}</strong></li>
+          <li>登録時表示名: <strong>${esc(display)}</strong>（加工名と同じ）</li>
+          <li>区分: 部品・資材／加工　品番なし（対象品番 ${codes||'—'}${more}）</li>
+        </ul>
+        <p class="excelhint">通常画面には統一後の加工名と業者のみを出します。元商品名の列挙はしません。個別仕様は内部照合用に保持します。</p>
+        ${samples?`<details class="sku-processing-specs"><summary>元行の補足・個別仕様（内部照合用）</summary><ul>${samples}</ul></details>`:''}
       </article>`
     }).join('')
     const sum=st.preview&&st.preview.processingServiceSummary||{}
     return `<div class="sku-processing-auto">
-      <p class="excelhint"><strong>加工サービスの自動整理</strong>（${sum.autoCount||plans.length} 件 / 新規予定 ${sum.createCount||0}・再利用 ${sum.reuseCount||0}）。確定まで未登録です。</p>
+      <p class="excelhint"><strong>加工サービスの自動整理</strong>（${sum.autoCount||plans.length} 件 / 新規予定 ${sum.createCount||0}・再利用 ${sum.reuseCount||0}）。確定まで未登録です。加工ごとの個別承認は不要です。</p>
       ${items}
     </div>`
   }
@@ -1133,6 +1145,7 @@
 
   function parenCell(st,r){
     const pc=r.parenClassification||{}
+    const ps=r.processingService||{}
     const edit=st.rowClassifications[String(r.rowNo)]||{}
     const planned=edit.plannedName!=null?edit.plannedName:(pc.plannedName||'')
     const color=edit.color!=null?edit.color:(pc.color||'')
@@ -1155,8 +1168,30 @@
           scopedColorCorrectionReason:r.product&&r.product.scopedColorCorrectionReason
         }))
       :''
-    const flag=pc.needsConfirm?'要確認':(pc.autoClassified||pc.scopedColorCorrection?'自動':'—')
     const disabled=st.busy?'disabled':''
+    // 加工業者行: 色・生地ではなく加工名・加工業者・補足が分かる表示
+    const processingView=!!(r.processingServiceView||pc.processingServiceView||ps.isProcessingVendor)
+    if(processingView){
+      const serviceName=ps.serviceName||processing||''
+      const vendorName=ps.vendorName||pc.processingVendor||(r.csv&&r.csv.supplier)||''
+      const specs=ps.rowSpecs||{}
+      const specBits=[specs.customerSpecific,specs.parenSpecs,specs.dimensions,specs.composition].filter(Boolean)
+      const specText=edit.supplement!=null?edit.supplement:(specBits.join('／')||supplement||'')
+      const autoOk=!!(ps.identifiable&&ps.isProcessingService&&!ps.needsConfirm)
+      const flag=autoOk?'自動（加工サービス）':(ps.needsConfirm?'要確認（加工名不足）':'加工サービス')
+      const missing=pc.processingMissingHint||((ps.missingFields||[]).join('・'))||''
+      return `<div class="pl-paren-edit pl-processing-service-edit">
+        <div class="excelhint">${esc(flag)}</div>
+        ${missing?`<div class="excelhint pl-paren-info">${esc(missing)}</div>`:''}
+        <label>加工名<input data-pl-paren-proc="${r.rowNo}" value="${esc(serviceName||processing)}" ${disabled||autoOk?'readonly':''} ${disabled} placeholder="例: ポケット取付"></label>
+        <label>加工業者<input value="${esc(vendorName)}" readonly disabled></label>
+        <label>登録時表示名<input data-pl-paren-name="${r.rowNo}" value="${esc(serviceName||planned||processing)}" ${disabled||autoOk?'readonly':''} ${disabled} placeholder="加工名と同じ"></label>
+        <label>補足・個別仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="位置・寸法・顧客固有など"></label>
+        ${autoOk?`<p class="excelhint">加工名を登録時表示名に使います。色・生地欄は加工サービスでは使いません。</p>`:''}
+        ${ps.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 加工名を確認した</label>`:''}
+      </div>`
+    }
+    const flag=pc.needsConfirm?'要確認':(pc.autoClassified||pc.scopedColorCorrection?'自動':'—')
     return `<div class="pl-paren-edit">
       <div class="excelhint">${esc(flag)}${pc.keptOriginal&&pc.needsConfirm?'（原文維持）':''}</div>
       ${noticeHtml}
@@ -1264,7 +1299,7 @@
       const pc=r.parenClassification||{}
       return `<tr class="legacy-status-${esc(r.status)}">
         <td class="lc-row">${r.rowNo}</td>
-        <td class="lc-status">${esc(r.statusLabel||'')}${pc.needsConfirm?' <span class="badge">括弧</span>':''}</td>
+        <td class="lc-status">${esc(r.statusLabel||'')}${pc.needsConfirm?' <span class="badge">括弧</span>':''}${(r.processingServiceView||(r.processingService&&r.processingService.isProcessingVendor))?' <span class="badge">加工</span>':''}</td>
         <td class="lc-customer">${esc(csv.customer||'')}</td>
         <td class="lc-customer">${esc(csv.supplier||'')}</td>
         <td class="lc-code">${esc(csv.codeDisplay||csv.code||'')}</td>

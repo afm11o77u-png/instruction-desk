@@ -28,7 +28,16 @@ _PHYSICAL_PARTS_MARKERS = (
     'ベルト部品', '芯', 'パッド',
 )
 
+# 取付・縫付などの表記ゆれ → 短い正規形（同一サービスへの名寄せ）
+_ATTACH_VERB_CANON = (
+    ('取り付け', '取付'),
+    ('取付け', '取付'),
+    ('縫い付け', '縫付'),
+    ('縫付け', '縫付'),
+)
+
 # 加工名の別名 → 統一表示名（対象衣服名を含めない）
+# paren の PROCESSING_TERMS（スナッパー・裾上げ等）とも揃える
 _SERVICE_NAME_ALIASES = {
     '刺繍': '刺繍加工',
     '刺繍入れ': '刺繍加工',
@@ -39,6 +48,7 @@ _SERVICE_NAME_ALIASES = {
     '七分袖': '七分袖加工',
     '半袖加工': '半袖加工',
     '長袖加工': '長袖加工',
+    '袖加工': '袖加工',
     '丈加工': '丈加工',
     '裾上げ': '裾上げ',
     '裾直し': '裾直し',
@@ -46,9 +56,27 @@ _SERVICE_NAME_ALIASES = {
     'マジックテープ付け': 'マジックテープ付け',
     'リフレクター': 'リフレクター',
     '反射': '反射加工',
+    '反射加工': '反射加工',
     'プリント': 'プリント加工',
+    'プリント加工': 'プリント加工',
     'ネーム': 'ネーム加工',
+    'ネーム加工': 'ネーム加工',
     'ワッペン': 'ワッペン付け',
+    'ワッペン付け': 'ワッペン付け',
+    'スナッパー': 'スナッパー加工',
+    'スナッパー加工': 'スナッパー加工',
+    'コーティング': 'コーティング',
+    'アイロン': 'アイロン',
+    'カット': 'カット',
+    '縫製': '縫製',
+    # ポケット取付系（「加工」文字なしでも明確な加工サービス）
+    'ポケット取付': 'ポケット取付',
+    'ポケット取り付け': 'ポケット取付',
+    'ポケット取付け': 'ポケット取付',
+    'ポケット縫付': 'ポケット取付',
+    'ポケット縫い付け': 'ポケット取付',
+    'ポケット縫付け': 'ポケット取付',
+    '上衣加工': '上衣加工',
 }
 
 # 商品名から加工サービス名を拾うときの候補（長い語優先）
@@ -62,6 +90,14 @@ _SERVICE_NAME_CANDIDATES = sorted(
     key=len,
     reverse=True,
 )
+
+# 明確な加工サービスを示す接尾（「加工」文字がなくても可）
+_SERVICE_SUFFIX_RE = re.compile(
+    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|裾上げ|裾直し|付け)$'
+)
+# 顧客固有の「〜用」接頭（わらく堂用上衣加工 など）
+_CUSTOMER_USE_RE = re.compile(r'^(.+?用)(.+)$')
+_PAREN_INNER_RE = re.compile(r'[（(]([^（）()]*)[）)]')
 
 _KIND_STRIP_RE = re.compile(
     r'(帽子|キャップ|ヘルメット|ベスト|パンツ|ズボン|スラックス|シャツ|ブラウス|'
@@ -85,8 +121,8 @@ def normalize_vendor_key(value: str) -> str:
 
 
 def normalize_service_key(value: str) -> str:
-    t = unicodedata.normalize('NFKC', stock.text(value) or '')
-    t = re.sub(r'[\s\u3000]+', '', t)
+    """照合用キー。取付／取り付け等の表記差も揃えて重複登録を防ぐ。"""
+    t = canonicalize_attach_verbs(value)
     return t.casefold()
 
 
@@ -151,12 +187,98 @@ def _canonical_from_term(term: str) -> str:
     return stock.text(term)
 
 
+def canonicalize_attach_verbs(value: str) -> str:
+    """取り付け／取付け → 取付、縫い付け → 縫付 など表記差を揃える。"""
+    t = unicodedata.normalize('NFKC', stock.text(value) or '')
+    t = re.sub(r'[\s\u3000]+', '', t)
+    for src, dst in _ATTACH_VERB_CANON:
+        t = t.replace(src, dst)
+    return t
+
+
+def _strip_parens_keep_inner(value: str):
+    """括弧を外した本体と、括弧内テキストのリスト。"""
+    nfkc = unicodedata.normalize('NFKC', stock.text(value) or '')
+    inners = [stock.text(m.group(1)) for m in _PAREN_INNER_RE.finditer(nfkc) if stock.text(m.group(1))]
+    base = _PAREN_INNER_RE.sub('', nfkc)
+    base = re.sub(r'[\s\u3000]+', '', base)
+    return base, inners
+
+
+def _strip_customer_use_prefix(value: str):
+    """『わらく堂用上衣加工』→ (『わらく堂用』, 『上衣加工』)。無ければ ('', value)。"""
+    t = stock.text(value) or ''
+    m = _CUSTOMER_USE_RE.match(t)
+    if not m:
+        return '', t
+    prefix, rest = stock.text(m.group(1)), stock.text(m.group(2))
+    if not rest or len(rest) < 2:
+        return '', t
+    return prefix, rest
+
+
+def _looks_like_service_core(core: str) -> bool:
+    """衣服種を除いた核が明確な加工サービス名か。業者名だけでは True にしない。"""
+    if not core or len(core) < 2:
+        return False
+    if re.search(r'[＋+]', core):
+        return False
+    if is_physical_parts_name(core):
+        return False
+    aliases = _alias_map()
+    sk = normalize_service_key(core)
+    if sk in aliases:
+        return True
+    if '刺繍' in core:
+        return True
+    if core.endswith('加工') and len(core) >= 3:
+        return True
+    if _SERVICE_SUFFIX_RE.search(core):
+        # 接尾だけの語（「取付」単体など）は対象物が無いので不可
+        stem = _SERVICE_SUFFIX_RE.sub('', core)
+        return bool(stem) and len(stem) >= 1
+    return False
+
+
+def _resolve_service_core(core: str) -> str:
+    """核テキストを統一加工名へ。不明なら空。原文にない具体化はしない。"""
+    aliases = _alias_map()
+    cleaned = canonicalize_attach_verbs(core)
+    sk = normalize_service_key(cleaned)
+    if sk in aliases:
+        return aliases[sk]
+    for term in _SERVICE_NAME_CANDIDATES:
+        tk = normalize_service_key(term)
+        if sk == tk or (tk and sk.endswith(tk) and _looks_like_service_core(
+            cleaned[-(len(term)):] if len(cleaned) >= len(term) else cleaned
+        )):
+            # endswith 候補は核全体が候補語で終わるときだけ採用
+            if sk == tk or sk.endswith(tk):
+                # 衣服種＋加工語（コックコート七分袖加工）→ 候補語側
+                return _canonical_from_term(term)
+    if '刺繍' in cleaned:
+        return '刺繍加工'
+    if cleaned.endswith('加工') and len(cleaned) >= 3:
+        return aliases.get(sk, cleaned)
+    if _SERVICE_SUFFIX_RE.search(cleaned) and _looks_like_service_core(cleaned):
+        return aliases.get(sk, cleaned)
+    return ''
+
+
 def unify_processing_service_name(raw_name: str) -> str:
-    """加工サービス表示名へ統一。衣服種は落とす。読めなければ空。"""
+    """加工サービス表示名へ統一。衣服種・顧客用接頭・括弧仕様は落とす。読めなければ空。
+
+    「ポケット取付」のように『加工』文字が無くても、取付／縫付等の明確な加工名は認識する。
+    「袖加工」を「七分袖加工」へ置き換えるなど原文にない具体化はしない。
+    """
     raw = stock.text(raw_name)
     if not raw:
         return ''
     aliases = _alias_map()
+    # 構成加工（半袖＋リフレクター＋…）は接尾マッチより先にまとめて保持
+    composed = _extract_composition_label(raw)
+    if composed:
+        return composed
     # スラッシュ区切りなら末尾側（加工側）を優先
     parts = [stock.text(p) for p in _SLASH_NAME_RE.split(raw) if stock.text(p)]
     candidates = list(reversed(parts)) if len(parts) > 1 else [raw]
@@ -164,31 +286,34 @@ def unify_processing_service_name(raw_name: str) -> str:
         candidates.append(raw)
 
     for cand in candidates:
-        key = normalize_service_key(cand)
+        key = normalize_service_key(canonicalize_attach_verbs(cand))
         if key in aliases:
             return aliases[key]
-        stripped = _KIND_STRIP_RE.sub('', cand)
-        stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', stripped))
-        sk = normalize_service_key(stripped)
-        if sk in aliases:
-            return aliases[sk]
-        for term in _SERVICE_NAME_CANDIDATES:
-            tk = normalize_service_key(term)
-            if sk == tk or (tk and sk.endswith(tk)):
-                return _canonical_from_term(term)
 
-    composed = _extract_composition_label(raw)
-    if composed:
-        return composed
+        base, _inners = _strip_parens_keep_inner(cand)
+        _cust, without_cust = _strip_customer_use_prefix(base)
+        for trial in (without_cust, base, cand):
+            stripped = _KIND_STRIP_RE.sub('', trial)
+            stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', stripped))
+            stripped = canonicalize_attach_verbs(stripped)
+            if not stripped:
+                continue
+            # 単一核に ＋ が残る場合は構成として扱う（勝手に1加工へ潰さない）
+            if re.search(r'[＋+]', stripped):
+                sub = _extract_composition_label(stripped)
+                if sub:
+                    return sub
+                continue
+            resolved = _resolve_service_core(stripped)
+            if resolved:
+                return resolved
+            # 衣服種を残したまま末尾だけ加工語のとき（コックコート七分袖加工）
+            for term in _SERVICE_NAME_CANDIDATES:
+                tk = normalize_service_key(term)
+                sk = normalize_service_key(stripped)
+                if tk and sk.endswith(tk):
+                    return _canonical_from_term(term)
 
-    nfkc = unicodedata.normalize('NFKC', raw)
-    for part in (list(reversed(parts)) if parts else [nfkc]):
-        cleaned = _KIND_STRIP_RE.sub('', part)
-        cleaned = re.sub(r'[\s\u3000]+', '', cleaned)
-        if cleaned.endswith('加工') and len(cleaned) >= 3:
-            return aliases.get(normalize_service_key(cleaned), cleaned)
-        if '刺繍' in cleaned:
-            return '刺繍加工'
     return ''
 
 
@@ -205,6 +330,7 @@ def _extract_composition_label(raw: str) -> str:
     for b in bits:
         cleaned = _KIND_STRIP_RE.sub('', b)
         cleaned = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', cleaned))
+        cleaned = canonicalize_attach_verbs(cleaned)
         if not cleaned:
             continue
         unified.append(alias_map.get(normalize_service_key(cleaned), cleaned))
@@ -214,7 +340,11 @@ def _extract_composition_label(raw: str) -> str:
 
 
 def extract_row_specific_specs(product_name: str, paren_processing: str = '') -> dict:
-    """共通加工名とは別に、位置・寸法・顧客固有仕様を保持する。"""
+    """共通加工名とは別に、位置・寸法・顧客固有仕様を保持する。
+
+    例: わらく堂用上衣加工（衿・裾・袖）
+      → customerUse=わらく堂用 / parenSpecs=衿・裾・袖 / 共通名は上衣加工
+    """
     raw = stock.text(product_name)
     specs = {
         'originalName': raw,
@@ -224,8 +354,16 @@ def extract_row_specific_specs(product_name: str, paren_processing: str = '') ->
         'embroideryText': '',
         'composition': '',
         'customerSpecific': '',
+        'customerUse': '',
+        'parenSpecs': '',
     }
     nfkc = unicodedata.normalize('NFKC', raw)
+    base, inners = _strip_parens_keep_inner(nfkc)
+    if inners:
+        specs['parenSpecs'] = '・'.join(dict.fromkeys(inners))
+    cust, _rest = _strip_customer_use_prefix(base)
+    if cust:
+        specs['customerUse'] = cust
     # 股下・仕上がり寸法
     dim_hits = re.findall(
         r'((?:股下|仕上がり丈|仕上り丈|裾丈|丈)\s*\d{2,3}(?:\.\d+)?(?:cm|㎝|センチ)?)',
@@ -234,9 +372,9 @@ def extract_row_specific_specs(product_name: str, paren_processing: str = '') ->
     )
     if dim_hits:
         specs['dimensions'] = '・'.join(dict.fromkeys(dim_hits))
-    # 位置っぽい語
+    # 位置っぽい語（括弧内仕様も位置候補に含めるが、顧客固有仕様を優先表示）
     pos_hits = re.findall(
-        r'((?:左胸|右胸|胸|背中|袖|襟|裾|前|後|左|右)(?:側)?(?:上|下|中央)?)',
+        r'((?:左胸|右胸|胸|背中|袖|襟|衿|裾|前|後|左|右)(?:側)?(?:上|下|中央)?)',
         nfkc,
     )
     if pos_hits:
@@ -244,11 +382,18 @@ def extract_row_specific_specs(product_name: str, paren_processing: str = '') ->
     composed = _extract_composition_label(raw)
     if composed:
         specs['composition'] = composed
-    # 括弧内の加工が残っていれば個別仕様の一部
-    if specs['parenProcessing'] and specs['parenProcessing'] not in (
+    # 個別仕様テキスト（勝手に別加工へ置き換えないための補足）
+    bits = []
+    if specs['customerUse']:
+        bits.append(specs['customerUse'])
+    if specs['parenSpecs']:
+        bits.append(specs['parenSpecs'])
+    elif specs['parenProcessing'] and specs['parenProcessing'] not in (
         specs['composition'], specs['dimensions'],
     ):
-        specs['customerSpecific'] = specs['parenProcessing']
+        bits.append(specs['parenProcessing'])
+    if bits:
+        specs['customerSpecific'] = '／'.join(bits)
     return specs
 
 
@@ -302,6 +447,8 @@ def classify_processing_service_row(
     if service:
         result['isProcessingService'] = True
         result['serviceName'] = service
+        # 登録時表示名＝加工名（予定名と加工名の二重入力を不要に）
+        result['displayName'] = service
         result['identifiable'] = True
         # 構成があれば specs に残す
         if result['rowSpecs'].get('composition') and result['rowSpecs']['composition'] != service:
@@ -311,11 +458,21 @@ def classify_processing_service_row(
         return result
 
     # 業者は加工だが加工名が読めない → 架空加工を作らず確認
+    # 業者名だけを根拠に不明な加工内容を推測しない
     result['needsConfirm'] = True
+    missing = []
+    if not stock.text(name_t):
+        missing.append('加工名（原文名が空）')
+    else:
+        missing.append(f'加工名（原文「{name_t}」から明確な加工内容を特定できない）')
+    if not result['vendorName'] and not supplier_t:
+        missing.append('加工業者')
     result['confirmReasons'] = [
-        f'加工業者「{result["vendorName"] or supplier_t}」行ですが、加工名を特定できません'
-        f'（原文「{name_t}」）。架空の加工サービスは自動作成しません。'
+        f'加工業者「{result["vendorName"] or supplier_t or "（不明）"}」行ですが、'
+        f'{"・".join(missing)}。架空の加工サービスは自動作成しません。'
+        f'加工名と加工業者が分かる場合のみ手入力してください。'
     ]
+    result['missingFields'] = missing
     return result
 
 
