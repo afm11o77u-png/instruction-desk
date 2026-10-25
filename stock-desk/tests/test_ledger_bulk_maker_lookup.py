@@ -24,16 +24,18 @@ def newdb():
     return folder, path, c
 
 
-def group(code, *, maker_sku='', manufacturer='', supplier='', row_nos=None, names=None, color_diff=False):
+def group(code, *, maker_sku='', manufacturer='', supplier='', row_nos=None, names=None, color_diff=False, needs_decision=True):
     valid = bool(maker_sku) and msl.is_valid_maker_sku(maker_sku)
+    show = valid and needs_decision
     return {
         'code': code,
         'rowNos': row_nos or [2],
         'nameCandidates': names or ['スクラブ'],
         'colorDiffPossible': color_diff,
+        'needsDecision': needs_decision,
         'makerCorrection': {
-            'eligible': valid and color_diff,
-            'showButton': valid and color_diff,
+            'eligible': show,
+            'showButton': show,
             'bulkEligible': valid,
             'makerSku': maker_sku if valid else '',
             'manufacturer': manufacturer,
@@ -109,7 +111,8 @@ class PrepareTargetsTest(unittest.TestCase):
     def test_bulk_eligible_without_color_diff(self):
         g = group('APK499', maker_sku='APK499', manufacturer='KAZEN', color_diff=False)
         self.assertTrue(g['makerCorrection']['bulkEligible'])
-        self.assertFalse(g['makerCorrection']['showButton'])
+        # 単品ボタンも確認待ち＋有効品番なら表示（色競合不要）
+        self.assertTrue(g['makerCorrection']['showButton'])
         prep = bulk.prepare_bulk_lookup_targets(
             selected_codes=['APK499'], sku_groups=[g], rows=[],
         )
@@ -299,6 +302,7 @@ class BulkMetaAndUiSourceTest(unittest.TestCase):
         meta = msl.sku_group_maker_correction_meta(
             {
                 'code': '72-1226',
+                'needsDecision': True,
                 'colorDiffPossible': False,
                 'rowNos': [2],
                 'nameCandidates': ['スクラブ'],
@@ -306,7 +310,19 @@ class BulkMetaAndUiSourceTest(unittest.TestCase):
             [],
         )
         self.assertTrue(meta['bulkEligible'])
-        self.assertFalse(meta['showButton'])
+        self.assertTrue(meta['showButton'])
+        meta_auto = msl.sku_group_maker_correction_meta(
+            {
+                'code': '72-1226',
+                'needsDecision': False,
+                'colorDiffPossible': False,
+                'rowNos': [2],
+                'nameCandidates': ['スクラブ'],
+            },
+            [],
+        )
+        self.assertTrue(meta_auto['bulkEligible'])
+        self.assertFalse(meta_auto['showButton'])
 
     def test_ui_wiring(self):
         js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')

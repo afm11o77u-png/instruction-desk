@@ -3018,17 +3018,18 @@ def _clear_kind_diff_flags(group):
 
 
 def _soften_after_maker_adopt(group, raw):
-    """メーカー情報で補正を採用した品番グループ: 解消した名・色競合だけ理由から外す。
+    """メーカー情報で補正を採用した品番グループ: 解消した名・商品種・色競合を理由から外す。
 
-    加工・種・男女など未解決の理由は残す。原文CSV名は照合用に維持（ここでは触らない）。
+    加工・男女など未解決の理由は残す。原文CSV名は照合用に維持（ここでは触らない）。
     """
     if not isinstance(raw, dict) or not raw.get('makerAdopted'):
         return
     if stock.text(raw.get('decision')) != SKU_DECISION_MERGE:
         return
-    drop_codes = {'color', 'name_wording'}
+    drop_codes = {'color', 'name_wording', 'kind'}
     group['colorDiffPossible'] = False
     group['nameWordingDiff'] = False
+    group['kindDiffPossible'] = False
     reasons = []
     for r in group.get('reviewReasons') or []:
         code = stock.text(r.get('code') or '')
@@ -3046,7 +3047,7 @@ def _soften_after_maker_adopt(group, raw):
     reasons.insert(0, {
         'code': 'maker_adopt',
         'label': (
-            f'メーカー情報で補正を採用し、商品名・色の競合を解消（{detail}）。'
+            f'メーカー情報で補正を採用し、商品名・商品種・色の競合を解消（{detail}）。'
             '原文名は照合用に残します。'
         ),
         'values': [adopted_name, adopted_color],
@@ -3064,7 +3065,7 @@ def _soften_after_maker_adopt(group, raw):
         group['plannedRegisteredColor'] = adopted_color
         group['plannedColor'] = adopted_color
     group['makerCorrectionAdopted'] = True
-    # ボタン再表示: 色競合が解消されたので showButton は後段メタ再計算で落ちる
+    # ボタン再表示: 採用済みフラグで showButton は後段メタ再計算で落ちる
 
 
 def _soften_spec_only_reasons(group):
@@ -6633,7 +6634,7 @@ def build_preview(c, body):
     # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
     for row in classified:
         row['makerCorrection'] = maker_sku_lookup.row_maker_correction_meta(row)
-    # 品番比較一覧用: 色競合＋有効メーカー品番があるグループにボタンメタ
+    # 品番比較一覧用: 確認待ち＋有効メーカー品番があるグループにボタンメタ
     rows_by_no = {r.get('rowNo'): r for r in classified}
     for g in sku_groups:
         group_rows = [

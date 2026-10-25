@@ -2788,7 +2788,7 @@
         const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(code))
         if(!group){st.toast('対象品番が見つかりません。');return}
         const mk=group.makerCorrection||{}
-        if(!mk.showButton||!mk.makerSku){st.toast('メーカー品番が対象外か、色競合がありません。');return}
+        if(!mk.showButton||!mk.makerSku){st.toast('メーカー品番が対象外か、確認待ちではありません。');return}
         const rowNos=Array.isArray(mk.rowNos)&&mk.rowNos.length?mk.rowNos:(group.rowNos||[])
         const firstRow=(st.preview.rows||[]).find(r=>rowNos.map(Number).includes(Number(r.rowNo)))
         const d=skuDecision(st,code)
