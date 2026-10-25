@@ -27,10 +27,14 @@ _FALSE_POSITIVE_FRAGMENTS = (
     '引き上げ', '引き下げ', '値上げ', '値下げ',
 )
 
-# 色語＋上下の密着（白下・黒上 等）だけ名からの区分を認める
+# 色語＋上下の密着（白下・黒上 等）だけ名からの区分を認める。
+# 代表色（COLOR_TERMS）に加え、日本語・読みカナ別名（COLOR_SYNONYMS）も頭部として認める。
 _COLOR_HEADS = frozenset(
     paren_classify.unify_import_notation(t) or t
-    for t in paren_classify.COLOR_TERMS
+    for t in (
+        *paren_classify.COLOR_TERMS,
+        *paren_classify.COLOR_SYNONYMS.keys(),
+    )
 )
 
 

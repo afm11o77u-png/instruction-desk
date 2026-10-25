@@ -207,10 +207,12 @@ class MakerLookupVeh30bTest(unittest.TestCase):
             })
             row = preview['rows'][0]
             pc = row.get('parenClassification') or {}
-            self.assertTrue(pc.get('needsConfirm') or row['status'] == 'needs_review')
-            # 白とブルーの競合が理由にある
+            # 「白下」は色＋上下の密着として色切り出ししない → 色はブルーのみ
+            self.assertFalse(pc.get('needsConfirm'), pc)
+            self.assertEqual(pc.get('plannedName'), '白下')
+            self.assertEqual(pc.get('color'), 'ブルー')
             reasons = ' '.join(pc.get('confirmReasons') or row.get('reasons') or [])
-            self.assertTrue('白' in reasons or 'ブルー' in reasons or pc.get('needsConfirm'))
+            self.assertNotIn('白', reasons)
 
             # メーカー採用相当の手編集（上下は品番末尾、補足へは載せない）
             preview2 = pli.build_preview(c, {
@@ -242,7 +244,7 @@ class MakerLookupVeh30bTest(unittest.TestCase):
             # サイズ等は残る
             self.assertEqual((row2.get('csv') or {}).get('size'), 'M')
             self.assertEqual((row2.get('csv') or {}).get('productName'), '白下 ブルー')
-            # メーカー採用後は白とブルーの競合理由を残さない
+            # メーカー採用後も白を色競合として残さない
             reasons2 = ' '.join(pc2.get('confirmReasons') or [])
             self.assertNotIn('白', reasons2)
         finally:

@@ -42,12 +42,12 @@ def opening_csv(rows):
 class ColorSplitHelpersTest(unittest.TestCase):
     def test_suggest_internal_keeps_leading_zeros(self):
         self.assertEqual(
-            pli.suggest_color_split_internal_code('00008', '赤'),
-            '00008-赤',
+            pli.suggest_color_split_internal_code('00008', 'レッド'),
+            '00008-レッド',
         )
         self.assertEqual(
-            pli.suggest_color_split_internal_code('ABC-100', '青'),
-            'ABC-100-青',
+            pli.suggest_color_split_internal_code('ABC-100', 'ブルー'),
+            'ABC-100-ブルー',
         )
 
     def test_green_and_fluorescent_are_distinct(self):
@@ -67,7 +67,7 @@ class ColorSplitHelpersTest(unittest.TestCase):
             ]
             plans = pli.build_color_split_plans(c, group, {'decision': 'color_split'}, classified=classified)
             colors = {p['color'] for p in plans['plans']}
-            self.assertIn('緑', colors)
+            self.assertIn('グリーン', colors)
             self.assertIn('蛍光グリーン', colors)
             self.assertEqual(len(plans['plans']), 2)
         finally:
@@ -128,7 +128,7 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
             split = group.get('colorSplitPlans') or {}
             self.assertTrue(split.get('complete'), split)
             colors = {p['color'] for p in split['plans']}
-            self.assertEqual(colors, {'赤', '青'})
+            self.assertEqual(colors, {'レッド', 'ブルー'})
             for p in split['plans']:
                 self.assertEqual(p['makerCode'], 'ABC-100')
                 self.assertEqual(p['internalCode'], f"ABC-100-{p['color']}")
@@ -151,17 +151,17 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
             ))
             self.assertEqual(len(rows), 2)
             by_color = {r['color']: r for r in rows}
-            self.assertEqual(by_color['赤']['code'], 'ABC-100-赤')
-            self.assertEqual(by_color['青']['code'], 'ABC-100-青')
-            self.assertEqual(by_color['赤']['maker_code'], 'ABC-100')
-            self.assertEqual(by_color['赤']['name'], 'ポロシャツ')
+            self.assertEqual(by_color['レッド']['code'], 'ABC-100-レッド')
+            self.assertEqual(by_color['ブルー']['code'], 'ABC-100-ブルー')
+            self.assertEqual(by_color['レッド']['maker_code'], 'ABC-100')
+            self.assertEqual(by_color['レッド']['name'], 'ポロシャツ')
             # マップはメーカー品番のまま
             maps = list(c.execute(
                 "SELECT csv_product_code,csv_color,product_id FROM product_ledger_row_maps ORDER BY id"
             ))
             self.assertEqual(len(maps), 2)
             self.assertTrue(all(m['csv_product_code'] == 'ABC-100' for m in maps))
-            self.assertEqual({m['csv_color'] for m in maps}, {'赤', '青'})
+            self.assertEqual({m['csv_color'] for m in maps}, {'レッド', 'ブルー'})
         finally:
             c.close()
             folder.cleanup()
@@ -200,7 +200,7 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
         folder, path, c = newdb()
         try:
             stock.save_product(c, {
-                'code': 'ABC-100-赤', 'name': '既存ポロ', 'color': '赤',
+                'code': 'ABC-100-レッド', 'name': '既存ポロ', 'color': 'レッド',
                 'sizes': ['L'], 'links': [], 'active': True,
             })
             ledger = ledger_csv([
@@ -217,7 +217,7 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
             }
             preview = pli.build_preview(c, body)
             group = next(g for g in preview['skuGroups'] if g['code'] == 'ABC-100')
-            red = next(p for p in group['colorSplitPlans']['plans'] if p['color'] == '赤')
+            red = next(p for p in group['colorSplitPlans']['plans'] if p['color'] == 'レッド')
             self.assertTrue(red['needsCollisionChoice'])
             self.assertTrue(red['existingProducts'])
 
@@ -228,8 +228,8 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
                     'decision': 'color_split',
                     'colorPlans': {
                         red['colorKey']: {
-                            'color': '赤',
-                            'internalCode': 'ABC-100-赤',
+                            'color': 'レッド',
+                            'internalCode': 'ABC-100-レッド',
                             'keepProductId': existing_id,
                             'collisionAction': 'reuse',
                             'productName': 'ポロシャツ',
@@ -239,7 +239,7 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
             }
             preview2 = pli.build_preview(c, body)
             group2 = next(g for g in preview2['skuGroups'] if g['code'] == 'ABC-100')
-            red2 = next(p for p in group2['colorSplitPlans']['plans'] if p['color'] == '赤')
+            red2 = next(p for p in group2['colorSplitPlans']['plans'] if p['color'] == 'レッド')
             self.assertFalse(red2['needsCollisionChoice'])
         finally:
             c.close()
@@ -308,8 +308,8 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
                     'previewFingerprint': preview['previewFingerprint'],
                 }, db_path=path)
 
-            red = c.execute("SELECT id FROM products WHERE code='ABC-100-赤'").fetchone()
-            blue = c.execute("SELECT id FROM products WHERE code='ABC-100-青'").fetchone()
+            red = c.execute("SELECT id FROM products WHERE code='ABC-100-レッド'").fetchone()
+            blue = c.execute("SELECT id FROM products WHERE code='ABC-100-ブルー'").fetchone()
             self.assertTrue(red and blue)
             # 取扱が顧客ごとに載る
             handles = list(c.execute('SELECT customer_id,product_id FROM customer_products'))
@@ -489,7 +489,7 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             }
             preview = pli.build_preview(c, body)
             group = next(g for g in preview['skuGroups'] if g['code'] == '109-PCT')
-            self.assertEqual(group.get('plannedOfficialName'), '色別登録：白・黒')
+            self.assertEqual(group.get('plannedOfficialName'), '色別登録：ブラック・ホワイト')
             self.assertIn('色別に分けて登録', group.get('nameAdoptionRule') or '')
             np = group.get('namePlan') or {}
             self.assertTrue(np.get('colorSplit'))
@@ -499,21 +499,21 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
                 self.assertFalse(m.get('unassigned'))
                 if '黒' in (m.get('originalName') or ''):
                     self.assertEqual(m.get('registrationName'), 'Tシャツ黒')
-                    self.assertEqual(m.get('color'), '黒')
+                    self.assertEqual(m.get('color'), 'ブラック')
                     self.assertNotEqual(m.get('registrationName'), 'Tシャツ白')
                 if '白' in (m.get('originalName') or ''):
                     self.assertEqual(m.get('registrationName'), 'Tシャツ白')
-                    self.assertEqual(m.get('color'), '白')
+                    self.assertEqual(m.get('color'), 'ホワイト')
             split = group['colorSplitPlans']
             self.assertTrue(split.get('complete'), split)
             by_color = {p['color']: p for p in split['plans']}
-            self.assertEqual(by_color['白']['productName'], 'Tシャツ白')
-            self.assertEqual(by_color['黒']['productName'], 'Tシャツ黒')
-            self.assertEqual(sorted(by_color['白']['rowNos']), [2, 3, 4, 5])
-            self.assertEqual(sorted(by_color['黒']['rowNos']), [6, 7, 8, 9])
-            self.assertEqual(by_color['白']['internalCode'], '109-PCT-白')
-            self.assertEqual(by_color['黒']['internalCode'], '109-PCT-黒')
-            self.assertEqual(by_color['白']['makerCode'], '109-PCT')
+            self.assertEqual(by_color['ホワイト']['productName'], 'Tシャツ白')
+            self.assertEqual(by_color['ブラック']['productName'], 'Tシャツ黒')
+            self.assertEqual(sorted(by_color['ホワイト']['rowNos']), [2, 3, 4, 5])
+            self.assertEqual(sorted(by_color['ブラック']['rowNos']), [6, 7, 8, 9])
+            self.assertEqual(by_color['ホワイト']['internalCode'], '109-PCT-ホワイト')
+            self.assertEqual(by_color['ブラック']['internalCode'], '109-PCT-ブラック')
+            self.assertEqual(by_color['ホワイト']['makerCode'], '109-PCT')
 
             # 行の登録予定も色別に一致
             for r in preview['rows']:
@@ -523,12 +523,12 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
                 orig = (r.get('csv') or {}).get('productName') or ''
                 if '白' in orig:
                     self.assertEqual(prod.get('officialName'), 'Tシャツ白')
-                    self.assertEqual(prod.get('officialColor'), '白')
-                    self.assertEqual(prod.get('code'), '109-PCT-白')
+                    self.assertEqual(prod.get('officialColor'), 'ホワイト')
+                    self.assertEqual(prod.get('code'), '109-PCT-ホワイト')
                 else:
                     self.assertEqual(prod.get('officialName'), 'Tシャツ黒')
-                    self.assertEqual(prod.get('officialColor'), '黒')
-                    self.assertEqual(prod.get('code'), '109-PCT-黒')
+                    self.assertEqual(prod.get('officialColor'), 'ブラック')
+                    self.assertEqual(prod.get('code'), '109-PCT-ブラック')
                 # 別色の nameMappings を載せない
                 for m in prod.get('nameMappings') or []:
                     self.assertEqual(m.get('color'), prod.get('officialColor'))
@@ -545,22 +545,22 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             ))
             self.assertEqual(len(rows), 2)
             by_c = {r['color']: r for r in rows}
-            self.assertEqual(by_c['白']['name'], 'Tシャツ白')
-            self.assertEqual(by_c['黒']['name'], 'Tシャツ黒')
-            self.assertEqual(by_c['白']['code'], '109-PCT-白')
-            self.assertEqual(by_c['黒']['code'], '109-PCT-黒')
+            self.assertEqual(by_c['ホワイト']['name'], 'Tシャツ白')
+            self.assertEqual(by_c['ブラック']['name'], 'Tシャツ黒')
+            self.assertEqual(by_c['ホワイト']['code'], '109-PCT-ホワイト')
+            self.assertEqual(by_c['ブラック']['code'], '109-PCT-ブラック')
 
             # 別名: 白商品に黒名が付いていない / 黒商品に白名が付いていない
             white_aliases = {
                 r['value'] for r in c.execute(
                     "SELECT value FROM product_match_aliases WHERE product_id=? AND kind='name'",
-                    (by_c['白']['id'],),
+                    (by_c['ホワイト']['id'],),
                 )
             }
             black_aliases = {
                 r['value'] for r in c.execute(
                     "SELECT value FROM product_match_aliases WHERE product_id=? AND kind='name'",
-                    (by_c['黒']['id'],),
+                    (by_c['ブラック']['id'],),
                 )
             }
             self.assertNotIn('Tシャツ黒', white_aliases)
@@ -579,8 +579,8 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             prev2 = pli.build_preview(c, stage2)
             plans = (prev2.get('openingStock') or {}).get('plans') or []
             by_name = {((p.get('csv') or {}).get('productName') or ''): p for p in plans}
-            self.assertEqual((by_name['Tシャツ白'].get('target') or {}).get('productId'), by_c['白']['id'])
-            self.assertEqual((by_name['Tシャツ黒'].get('target') or {}).get('productId'), by_c['黒']['id'])
+            self.assertEqual((by_name['Tシャツ白'].get('target') or {}).get('productId'), by_c['ホワイト']['id'])
+            self.assertEqual((by_name['Tシャツ黒'].get('target') or {}).get('productId'), by_c['ブラック']['id'])
             with mock.patch.object(stock, 'backup_sqlite', return_value=''):
                 r2 = pli.commit_preview(c, {
                     **stage2,
@@ -592,13 +592,13 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
                 '''SELECT SUM(l.qty_remaining) AS q FROM lots l
                    JOIN customer_products cp ON cp.id=l.customer_product_id
                    WHERE cp.product_id=?''',
-                (by_c['白']['id'],),
+                (by_c['ホワイト']['id'],),
             ).fetchone()['q']
             qty_black = c.execute(
                 '''SELECT SUM(l.qty_remaining) AS q FROM lots l
                    JOIN customer_products cp ON cp.id=l.customer_product_id
                    WHERE cp.product_id=?''',
-                (by_c['黒']['id'],),
+                (by_c['ブラック']['id'],),
             ).fetchone()['q']
             self.assertEqual(qty_white, 10)
             self.assertEqual(qty_black, 1)
