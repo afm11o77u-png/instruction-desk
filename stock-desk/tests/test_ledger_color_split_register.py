@@ -457,6 +457,186 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
             folder.cleanup()
 
 
+class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
+    """109-PCT / Tシャツ白・黒: 統合用 nameMappings を色別予定に混ぜない。"""
+
+    def test_outside_color_keeps_original_product_names(self):
+        folder, path, c = newdb()
+        try:
+            ledger = ledger_csv([
+                '顧客A,仕入先X,109-PCT,Tシャツ白,S',
+                '顧客A,仕入先X,109-PCT,Tシャツ白,M',
+                '顧客A,仕入先X,109-PCT,Tシャツ白,L',
+                '顧客A,仕入先X,109-PCT,Tシャツ白,LL',
+                '顧客A,仕入先X,109-PCT,Tシャツ黒,S',
+                '顧客A,仕入先X,109-PCT,Tシャツ黒,M',
+                '顧客A,仕入先X,109-PCT,Tシャツ黒,L',
+                '顧客A,仕入先X,109-PCT,Tシャツ黒,LL',
+            ])
+            opening = opening_csv([
+                '新品,仕入先X,顧客A,Tシャツ白,109-PCT,S,1000,0,0,10,本社,棚1,0',
+                '新品,仕入先X,顧客A,Tシャツ黒,109-PCT,S,1000,0,0,1,本社,棚1,0',
+            ])
+            body = {
+                'importMode': 'products',
+                'name': '台帳.csv',
+                'file': b64(ledger),
+                'auxName': '初期在庫.csv',
+                'auxFile': b64(opening),
+                'skuDecisions': {'109-PCT': {'decision': 'color_split'}},
+                '_canWrite': True,
+                '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            group = next(g for g in preview['skuGroups'] if g['code'] == '109-PCT')
+            self.assertEqual(group.get('plannedOfficialName'), '色別登録：白・黒')
+            self.assertIn('色別に分けて登録', group.get('nameAdoptionRule') or '')
+            np = group.get('namePlan') or {}
+            self.assertTrue(np.get('colorSplit'))
+            self.assertEqual(np.get('adoptionRuleCode'), 'color_split')
+            # 統合用の「黒→白（別名）」が出ないこと
+            for m in np.get('nameMappings') or []:
+                self.assertFalse(m.get('unassigned'))
+                if '黒' in (m.get('originalName') or ''):
+                    self.assertEqual(m.get('registrationName'), 'Tシャツ黒')
+                    self.assertEqual(m.get('color'), '黒')
+                    self.assertNotEqual(m.get('registrationName'), 'Tシャツ白')
+                if '白' in (m.get('originalName') or ''):
+                    self.assertEqual(m.get('registrationName'), 'Tシャツ白')
+                    self.assertEqual(m.get('color'), '白')
+            split = group['colorSplitPlans']
+            self.assertTrue(split.get('complete'), split)
+            by_color = {p['color']: p for p in split['plans']}
+            self.assertEqual(by_color['白']['productName'], 'Tシャツ白')
+            self.assertEqual(by_color['黒']['productName'], 'Tシャツ黒')
+            self.assertEqual(sorted(by_color['白']['rowNos']), [2, 3, 4, 5])
+            self.assertEqual(sorted(by_color['黒']['rowNos']), [6, 7, 8, 9])
+            self.assertEqual(by_color['白']['internalCode'], '109-PCT-白')
+            self.assertEqual(by_color['黒']['internalCode'], '109-PCT-黒')
+            self.assertEqual(by_color['白']['makerCode'], '109-PCT')
+
+            # 行の登録予定も色別に一致
+            for r in preview['rows']:
+                if (r.get('csv') or {}).get('code') != '109-PCT':
+                    continue
+                prod = r.get('product') or {}
+                orig = (r.get('csv') or {}).get('productName') or ''
+                if '白' in orig:
+                    self.assertEqual(prod.get('officialName'), 'Tシャツ白')
+                    self.assertEqual(prod.get('officialColor'), '白')
+                    self.assertEqual(prod.get('code'), '109-PCT-白')
+                else:
+                    self.assertEqual(prod.get('officialName'), 'Tシャツ黒')
+                    self.assertEqual(prod.get('officialColor'), '黒')
+                    self.assertEqual(prod.get('code'), '109-PCT-黒')
+                # 別色の nameMappings を載せない
+                for m in prod.get('nameMappings') or []:
+                    self.assertEqual(m.get('color'), prod.get('officialColor'))
+
+            with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+                result = pli.commit_preview(c, {
+                    **body,
+                    'commitToken': 'tok-109pct-1',
+                    'previewFingerprint': preview['previewFingerprint'],
+                }, db_path=path)
+            self.assertEqual(result['counts']['productsCreated'], 2)
+            rows = list(c.execute(
+                "SELECT id,code,maker_code,name,color FROM products WHERE maker_code='109-PCT' ORDER BY color"
+            ))
+            self.assertEqual(len(rows), 2)
+            by_c = {r['color']: r for r in rows}
+            self.assertEqual(by_c['白']['name'], 'Tシャツ白')
+            self.assertEqual(by_c['黒']['name'], 'Tシャツ黒')
+            self.assertEqual(by_c['白']['code'], '109-PCT-白')
+            self.assertEqual(by_c['黒']['code'], '109-PCT-黒')
+
+            # 別名: 白商品に黒名が付いていない / 黒商品に白名が付いていない
+            white_aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE product_id=? AND kind='name'",
+                    (by_c['白']['id'],),
+                )
+            }
+            black_aliases = {
+                r['value'] for r in c.execute(
+                    "SELECT value FROM product_match_aliases WHERE product_id=? AND kind='name'",
+                    (by_c['黒']['id'],),
+                )
+            }
+            self.assertNotIn('Tシャツ黒', white_aliases)
+            self.assertNotIn('Tシャツ白', black_aliases)
+
+            # 初期在庫: 旧名称から白→白・黒→黒。共通メーカー品番だけで片方へ寄せない
+            stage2 = {
+                'importMode': 'opening_stock',
+                'auxName': '初期在庫.csv',
+                'auxFile': b64(opening),
+                'basisDate': '2026-01-15',
+                'defaultSiteName': '未確認',
+                '_canWrite': True,
+                '_actor': {'name': 't'},
+            }
+            prev2 = pli.build_preview(c, stage2)
+            plans = (prev2.get('openingStock') or {}).get('plans') or []
+            by_name = {((p.get('csv') or {}).get('productName') or ''): p for p in plans}
+            self.assertEqual((by_name['Tシャツ白'].get('target') or {}).get('productId'), by_c['白']['id'])
+            self.assertEqual((by_name['Tシャツ黒'].get('target') or {}).get('productId'), by_c['黒']['id'])
+            with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+                r2 = pli.commit_preview(c, {
+                    **stage2,
+                    'commitToken': 'tok-109pct-open',
+                    'previewFingerprint': prev2['previewFingerprint'],
+                }, db_path=path)
+            self.assertGreaterEqual(r2['counts'].get('openingCreated', 0), 2)
+            qty_white = c.execute(
+                '''SELECT SUM(l.qty_remaining) AS q FROM lots l
+                   JOIN customer_products cp ON cp.id=l.customer_product_id
+                   WHERE cp.product_id=?''',
+                (by_c['白']['id'],),
+            ).fetchone()['q']
+            qty_black = c.execute(
+                '''SELECT SUM(l.qty_remaining) AS q FROM lots l
+                   JOIN customer_products cp ON cp.id=l.customer_product_id
+                   WHERE cp.product_id=?''',
+                (by_c['黒']['id'],),
+            ).fetchone()['q']
+            self.assertEqual(qty_white, 10)
+            self.assertEqual(qty_black, 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_merge_name_plan_restored_after_leaving_color_split(self):
+        folder, path, c = newdb()
+        try:
+            ledger = ledger_csv([
+                '顧客A,仕入先X,109-PCT,Tシャツ白,L',
+                '顧客A,仕入先X,109-PCT,Tシャツ黒,L',
+            ])
+            body = {
+                'importMode': 'products',
+                'name': '台帳.csv',
+                'file': b64(ledger),
+                'skuDecisions': {'109-PCT': {'decision': 'color_split'}},
+                '_canWrite': True,
+                '_actor': {'name': 't'},
+            }
+            preview = pli.build_preview(c, body)
+            group = next(g for g in preview['skuGroups'] if g['code'] == '109-PCT')
+            self.assertTrue((group.get('namePlan') or {}).get('colorSplit'))
+
+            body['skuDecisions'] = {'109-PCT': {'decision': 'merge'}}
+            preview2 = pli.build_preview(c, body)
+            group2 = next(g for g in preview2['skuGroups'] if g['code'] == '109-PCT')
+            np2 = group2.get('namePlan') or {}
+            self.assertFalse(np2.get('colorSplit'))
+            self.assertNotEqual(np2.get('adoptionRuleCode'), 'color_split')
+            self.assertNotIn('色別登録', group2.get('plannedOfficialName') or '')
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 class ColorSplitUiWiringTest(unittest.TestCase):
     def test_ui_has_color_split_controls(self):
         js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
@@ -465,6 +645,12 @@ class ColorSplitUiWiringTest(unittest.TestCase):
         self.assertIn('colorSplitFormHtml', js)
         self.assertIn('colorPlans', js)
         self.assertIn('社内管理品番', js)
+        self.assertIn('colorSplitSummaryForGroup', js)
+        self.assertIn('colorSplitNameMappings', js)
+        self.assertIn('色別登録：', js)
+        self.assertIn('行き先未定', js)
+        # 色別選択中は統合用 nameMappings をそのまま出さない
+        self.assertIn("isColorSplit?colorSplitNameMappings(g):(namePlan.nameMappings||[])", js)
 
 
 if __name__ == '__main__':

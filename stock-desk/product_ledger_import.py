@@ -3355,7 +3355,13 @@ def _row_color_extraction(row):
         or pc.get('plannedName')
         or name
     )
-    # 色が決まっているときだけ名から色を外した登録予定名を使う
+    color_source = stock.text(
+        provenance.get('colorSource')
+        or split.get('colorSource')
+        or extracted.get('colorSource')
+        or ''
+    )
+    # 色が決まっているときだけ名から色を外した登録予定名を使う（括弧内色向け）
     if color and planned_name:
         product_name = planned_name
     else:
@@ -3365,6 +3371,7 @@ def _row_color_extraction(row):
         'colorKey': paren_classify.color_match_key(color) if color else '',
         'colorCandidates': candidates,
         'needsConfirm': bool(needs or (not color and candidates)),
+        'colorSource': color_source if color else '',
         'productName': product_name,
         'originalName': name,
         'processing': stock.text(
@@ -3373,6 +3380,108 @@ def _row_color_extraction(row):
         'material': stock.text(
             provenance.get('material') or pc.get('material') or split.get('material') or ''
         ),
+    }
+
+
+def _color_split_preferred_product_name(info):
+    """色別登録の既定商品名。
+
+    括弧外の色（例: Tシャツ白）は原文を残す。括弧内色（例: ポロシャツ（赤））は色除去後の名。
+    """
+    info = info if isinstance(info, dict) else {}
+    orig = stock.text(info.get('originalName') or '')
+    stripped = stock.text(info.get('productName') or '')
+    if stock.text(info.get('colorSource') or '') == 'outside' and orig:
+        return orig
+    return stripped or orig
+
+
+def color_split_summary_label(plans):
+    """一覧用: 「色別登録：白・黒」"""
+    colors = []
+    for p in plans or []:
+        col = stock.text((p or {}).get('color') or '')
+        if col and col not in colors:
+            colors.append(col)
+    if not colors:
+        return '色別登録（色未確定）'
+    return '色別登録：' + '・'.join(colors)
+
+
+def build_color_split_name_mappings(plans, unassigned_rows=None, *, row_by_no=None):
+    """色別の登録予定から名称対応表を作る（統合用 namePlan は使わない）。"""
+    mappings = []
+    seen = set()
+    row_by_no = row_by_no if isinstance(row_by_no, dict) else {}
+    for plan in plans or []:
+        pname = stock.text(plan.get('productName') or '')
+        color = stock.text(plan.get('color') or '')
+        for rn in plan.get('rowNos') or []:
+            try:
+                row_no = int(rn)
+            except (TypeError, ValueError):
+                continue
+            key = (row_no, pname, color)
+            if key in seen:
+                continue
+            seen.add(key)
+            row = row_by_no.get(row_no) or {}
+            orig = stock.text((row.get('csv') or {}).get('productName') or '')
+            if not orig:
+                info = _row_color_extraction(row) if row else {}
+                orig = stock.text(info.get('originalName') or '') or pname
+            mappings.append({
+                'originalName': orig,
+                'sourceRowNo': row_no,
+                'registrationName': pname,
+                'isAlias': bool(orig and pname and stock.text(orig) != stock.text(pname)),
+                'color': color,
+            })
+    for u in unassigned_rows or []:
+        try:
+            row_no = int(u.get('rowNo'))
+        except (TypeError, ValueError):
+            continue
+        orig = stock.text(u.get('originalName') or '')
+        mappings.append({
+            'originalName': orig,
+            'sourceRowNo': row_no,
+            'registrationName': '',
+            'isAlias': False,
+            'color': '',
+            'unassigned': True,
+            'reason': stock.text(u.get('reason') or '行き先未定'),
+        })
+    return mappings
+
+
+def apply_color_split_name_plan_display(group):
+    """色別選択中は統合用の仮代表名・別名対応を有効予定として見せない。"""
+    split = group.get('colorSplitPlans') if isinstance(group.get('colorSplitPlans'), dict) else {}
+    plans = split.get('plans') or []
+    unassigned = split.get('unassignedRows') or []
+    summary = color_split_summary_label(plans)
+    mappings = list(split.get('nameMappings') or [])
+    if not mappings:
+        mappings = build_color_split_name_mappings(plans, unassigned)
+    group['plannedOfficialName'] = summary
+    group['nameAdoptionRule'] = '色別に分けて登録'
+    group['provisionalName'] = False
+    group['namePlan'] = {
+        'officialName': summary,
+        'provisional': False,
+        'provisionalTag': '',
+        'provisionalStatus': '',
+        'adoptionRule': '色別に分けて登録（統合用の仮代表名・別名対応は使いません）',
+        'adoptionRuleCode': 'color_split',
+        'nameMappings': mappings,
+        'nameCandidates': [
+            stock.text(p.get('productName') or '') for p in plans
+            if stock.text(p.get('productName') or '')
+        ],
+        'auxNameReasons': [],
+        'keepsExistingOfficialName': False,
+        'colorSplit': True,
     }
 
 
@@ -3447,26 +3556,29 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
                     'specProvenance': {},
                 })
 
+    row_info_by_no = {}
     for row in source_rows:
         row_no = int(row.get('rowNo') or 0)
         info = _row_color_extraction(row)
+        row_info_by_no[row_no] = info
+        preferred_name = _color_split_preferred_product_name(info)
         dest_key = stock.text(row_destinations.get(str(row_no)) or row_destinations.get(row_no) or '')
         if dest_key:
             # ユーザー指定の行き先（色キーまたは色表示）
-            bucket = _ensure_bucket(dest_key, info.get('productName') or info.get('originalName'))
+            bucket = _ensure_bucket(dest_key, preferred_name or info.get('originalName'))
             if bucket:
                 if row_no not in bucket['rowNos']:
                     bucket['rowNos'].append(row_no)
-                if not bucket['productName'] and info.get('productName'):
-                    bucket['productName'] = info['productName']
+                if not bucket['productName'] and preferred_name:
+                    bucket['productName'] = preferred_name
                 continue
         if info['color'] and not info['needsConfirm']:
-            bucket = _ensure_bucket(info['color'], info.get('productName') or info.get('originalName'))
+            bucket = _ensure_bucket(info['color'], preferred_name or info.get('originalName'))
             if bucket:
                 if row_no not in bucket['rowNos']:
                     bucket['rowNos'].append(row_no)
                 if not bucket['productName']:
-                    bucket['productName'] = info.get('productName') or info.get('originalName') or ''
+                    bucket['productName'] = preferred_name or info.get('originalName') or ''
                 continue
         unassigned_rows.append({
             'rowNo': row_no,
@@ -3532,24 +3644,37 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
         else:
             plan['needsCollisionChoice'] = False
         if not plan.get('productName'):
-            # フォールバック: グループの予定名
-            plan['productName'] = stock.text(
-                group.get('plannedRegisteredName')
-                or group.get('plannedOfficialName')
-                or ((group.get('nameCandidates') or [None])[0])
-                or maker_code
-            )
+            # フォールバック: 割当行の原文／除去後名（統合用仮代表名は使わない）
+            for rn in plan.get('rowNos') or []:
+                info = row_info_by_no.get(int(rn)) or {}
+                hint = _color_split_preferred_product_name(info)
+                if hint:
+                    plan['productName'] = hint
+                    break
+            if not plan.get('productName'):
+                plan['productName'] = stock.text(
+                    ((group.get('nameCandidates') or [None])[0])
+                    or maker_code
+                )
         plans.append(plan)
 
     complete = bool(plans) and not unassigned_rows and not any(p.get('needsCollisionChoice') for p in plans)
+    name_mappings = build_color_split_name_mappings(
+        plans,
+        unassigned_rows,
+        row_by_no={int(r.get('rowNo') or 0): r for r in source_rows if r.get('rowNo') is not None},
+    )
     return {
         'makerCode': maker_code,
         'plans': plans,
         'unassignedRows': unassigned_rows,
         'complete': complete,
+        'summaryLabel': color_split_summary_label(plans),
+        'nameMappings': name_mappings,
         'note': (
             '色ごとに別商品として登録予定です（まだ保存していません）。'
             '社内管理品番は編集できます。メーカー品番は元の品番のままです。'
+            '統合用の仮代表名・別名対応は使いません。'
         ),
     }
 
@@ -3575,6 +3700,7 @@ def attach_color_split_plans(c, sku_groups, sku_decisions, *, classified=None):
         group['colorSplitPlans'] = build_color_split_plans(
             c, group, raw, classified=classified,
         )
+        apply_color_split_name_plan_display(group)
 
 
 def ensure_schema(c):
@@ -4416,6 +4542,7 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
     ただしユーザー指定の公式名・既存維持は上書きしない。
     別注・品番なしは原文名を維持（顧客×原文名の区別を壊さない）。
     スコープ付き色名補正が付いた別注は登録予定名へ反映する。
+    色別に分けて登録の行は色別予定の商品名を優先し、括弧除去名で上書きしない。
     """
     by_code = {g['code']: g for g in sku_groups}
     for row in classified:
@@ -4431,6 +4558,15 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
         if not planned:
             continue
         code = stock.text((row.get('csv') or {}).get('code') or '')
+        group = by_code.get(code) or {}
+        prod = dict(row.get('product') or {})
+        # 色別登録の商品名（例: Tシャツ白）を括弧分類の除去後名（Tシャツ）で潰さない
+        if (
+            prod.get('colorSplit')
+            or group.get('colorSplit')
+            or stock.text((group.get('decision') or {}).get('decision') or '') == SKU_DECISION_COLOR_SPLIT
+        ):
+            continue
         keep_original_name = (
             (
                 legacy.is_custom_order_code(code)
@@ -4439,7 +4575,6 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
             )
             and not scoped
         )
-        prod = dict(row.get('product') or {})
         original = stock.text((row.get('csv') or {}).get('productName') or '')
         if not keep_original_name:
             # SKUまとめの officialName が原文のままなら置き換え
@@ -5431,6 +5566,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             )
             group['colorSplit'] = True
             group['excludeAuxStockAutoMerge'] = True
+            apply_color_split_name_plan_display(group)
         # メーカー情報で補正の採用 → 名・色競合理由だけ落とす（プレビュー）
         if isinstance(raw, dict) and raw.get('makerAdopted'):
             _soften_after_maker_adopt(group, raw)
@@ -5750,6 +5886,15 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             pname = stock.text(plan.get('productName') or '') or stock.text(
                 (row.get('csv') or {}).get('productName') or ''
             )
+            # 同色の原文だけを別名候補に（別色の旧名称を相互登録しない）
+            same_color_mappings = [
+                m for m in (split_info.get('nameMappings') or [])
+                if (
+                    stock.text(m.get('color') or '') == color
+                    and not m.get('unassigned')
+                    and stock.text(m.get('registrationName') or '') == pname
+                )
+            ]
             keep_id = plan.get('keepProductId')
             if keep_id and plan.get('collisionAction') in ('', 'reuse'):
                 row['product'] = dict(row.get('product') or {})
@@ -5763,6 +5908,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['applyOfficialName'] = True
                 row['product']['colorSplit'] = True
                 row['product']['skuMerge'] = False
+                row['product']['nameMappings'] = same_color_mappings
                 # メーカー品番は CSV 原文のまま（マップ・初期在庫照合用）。社内品番は codeOverride。
                 row['csv'] = dict(row.get('csv') or {})
                 row['csv']['makerCode'] = code
@@ -5785,9 +5931,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['applyOfficialName'] = True
                 row['product']['colorSplit'] = True
                 row['product']['skuMerge'] = False
+                row['product']['nameMappings'] = same_color_mappings
                 row['csv'] = dict(row.get('csv') or {})
                 row['csv']['makerCode'] = code
-                # 原文名は別名に残す
+                # 原文名は別名に残す（同色のみ。別色は載せない）
                 orig = stock.text((row.get('csv') or {}).get('productName') or '')
                 if orig and orig != pname:
                     row['product']['csvOriginalName'] = orig
@@ -6200,29 +6347,34 @@ def build_preview(c, body):
         raw = sku_decisions.get(g['code']) or sku_decisions.get(str(g['code'])) or {}
         if not isinstance(raw, dict):
             raw = {}
-        g['namePlan'] = plan_provisional_official_name(g, raw if stock.text(raw.get('decision')) else None)
-        # 在庫一意採用時は aux の代表名を優先表示（既存維持は namePlan 側で守る）
-        if g.get('auxStockPickAuto') and (g.get('auxPrimary') or {}).get('suggestedOfficialName'):
-            if not (g.get('namePlan') or {}).get('keepsExistingOfficialName'):
-                np = dict(g.get('namePlan') or {})
-                np['officialName'] = stock.text(
-                    (g.get('auxPrimary') or {}).get('suggestedOfficialName') or ''
-                ) or np.get('officialName')
-                np['provisional'] = False
-                np['adoptionRule'] = (
-                    g.get('auxStockPickReason')
-                    or stock.text((g.get('auxPrimary') or {}).get('pairAdoptionRule') or '')
-                    or np.get('adoptionRule')
-                )
-                np['adoptionRuleCode'] = stock.text(
-                    (g.get('auxPrimary') or {}).get('pairAdoptionRuleCode') or ''
-                ) or np.get('adoptionRuleCode')
-                g['namePlan'] = np
-        g['plannedOfficialName'] = (g.get('namePlan') or {}).get('officialName') or ''
-        g['nameAdoptionRule'] = (g.get('namePlan') or {}).get('adoptionRule') or ''
-        g['provisionalName'] = bool((g.get('namePlan') or {}).get('provisional'))
+        is_color_split = stock.text(raw.get('decision')) == SKU_DECISION_COLOR_SPLIT
+        if is_color_split and g.get('colorSplitPlans'):
+            # 色別選択中は統合用 namePlan を有効予定として載せない
+            apply_color_split_name_plan_display(g)
+        else:
+            g['namePlan'] = plan_provisional_official_name(g, raw if stock.text(raw.get('decision')) else None)
+            # 在庫一意採用時は aux の代表名を優先表示（既存維持は namePlan 側で守る）
+            if g.get('auxStockPickAuto') and (g.get('auxPrimary') or {}).get('suggestedOfficialName'):
+                if not (g.get('namePlan') or {}).get('keepsExistingOfficialName'):
+                    np = dict(g.get('namePlan') or {})
+                    np['officialName'] = stock.text(
+                        (g.get('auxPrimary') or {}).get('suggestedOfficialName') or ''
+                    ) or np.get('officialName')
+                    np['provisional'] = False
+                    np['adoptionRule'] = (
+                        g.get('auxStockPickReason')
+                        or stock.text((g.get('auxPrimary') or {}).get('pairAdoptionRule') or '')
+                        or np.get('adoptionRule')
+                    )
+                    np['adoptionRuleCode'] = stock.text(
+                        (g.get('auxPrimary') or {}).get('pairAdoptionRuleCode') or ''
+                    ) or np.get('adoptionRuleCode')
+                    g['namePlan'] = np
+            g['plannedOfficialName'] = (g.get('namePlan') or {}).get('officialName') or ''
+            g['nameAdoptionRule'] = (g.get('namePlan') or {}).get('adoptionRule') or ''
+            g['provisionalName'] = bool((g.get('namePlan') or {}).get('provisional'))
         # 自動まとめ品番は namePlan の代表名を商品計画へ反映（タグは埋め込まない）
-        if g.get('plannedSingleProduct') and g.get('namePlan'):
+        if g.get('plannedSingleProduct') and g.get('namePlan') and not is_color_split:
             plan = dict(g.get('productPlan') or {})
             if g['plannedOfficialName']:
                 plan['productName'] = g['plannedOfficialName']
