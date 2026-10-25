@@ -148,6 +148,148 @@ def skus_equal(a: str, b: str) -> bool:
     return bool(ka) and ka == kb
 
 
+
+# メーカー別: 基礎品番＋色番（末尾数字の無条件分離はしない）
+_AITOZ_SKU_RE = re.compile(
+    r'^(AZ)[-－]?(\d+)(?:[-－](\d{2,4}))?$',
+    re.I,
+)
+_AITOZ_GOODSNUMBER_RE = re.compile(
+    r'id=["\']goodsnumber["\'][^>]*>\s*([^<]+)',
+    re.I,
+)
+_AITOZ_GOODSNAME_RE = re.compile(
+    r'id=["\']goodsname["\'][^>]*>\s*([^<]+)',
+    re.I,
+)
+_AITOZ_MENU_CODE_RE = re.compile(
+    r'id=["\']lblMenuItemCode["\'][^>]*>\s*([^<]+)',
+    re.I,
+)
+_AITOZ_COLOR_BLOCK_RE = re.compile(
+    r'id=["\']itemDetailColor["\'][\s\S]*?</table>',
+    re.I,
+)
+_AITOZ_COLOR_ROW_RE = re.compile(
+    r'<th[^>]*>\s*(\d{2,4})\s*([^<]*?)\s*</th>',
+    re.I,
+)
+
+
+def maker_sku_rule_id(*, manufacturer: str = '', page_url: str = '') -> str:
+    """拡張可能なメーカー別品番ルール ID。未対応は空文字。"""
+    mfr = paren_classify.unify_import_notation(stock.text(manufacturer) or '')
+    mfr_u = mfr.upper()
+    if 'アイトス' in mfr or 'AITOZ' in mfr_u:
+        return 'aitoz'
+    url = (page_url or '').lower()
+    if 'aitoz' in url or 'aito-s' in url or 'azweb.aitoz' in url:
+        return 'aitoz'
+    return ''
+
+
+def aitoz_base_match_key(value: str) -> str:
+    """アイトス基礎品番の照合キー。AZ8960 ↔ AZ-8960 を同一視。色番の先頭ゼロは触らない。"""
+    t = sku_match_key(value)
+    if not t:
+        return ''
+    m = re.fullmatch(r'(AZ)[-－]?(\d+)', t, re.I)
+    if m:
+        return f'AZ{m.group(2)}'
+    return t.replace('-', '').replace('－', '')
+
+
+def aitoz_bases_equal(a: str, b: str) -> bool:
+    ka, kb = aitoz_base_match_key(a), aitoz_base_match_key(b)
+    return bool(ka) and ka == kb
+
+
+def split_maker_sku_parts(
+    maker_sku: str,
+    *,
+    manufacturer: str = '',
+    page_url: str = '',
+) -> dict:
+    """メーカー規則で完全品番を基礎＋色番へ分解する。
+
+    全メーカーで末尾数字を無条件分離しない。規則が無い／非対象は base=原文・colorCode=''。
+    """
+    raw = stock.text(maker_sku) or ''
+    rule = maker_sku_rule_id(manufacturer=manufacturer, page_url=page_url)
+    empty = {
+        'rule': rule or '',
+        'full': raw,
+        'base': raw,
+        'colorCode': '',
+        'hinban': '',
+    }
+    if not raw:
+        return empty
+    if rule == 'aitoz':
+        m = _AITOZ_SKU_RE.fullmatch(raw)
+        if not m:
+            base_only, _pos = position_sku.strip_sku_position_suffix(raw)
+            m = _AITOZ_SKU_RE.fullmatch(base_only or raw)
+        if not m:
+            return empty
+        prefix, digits, color = m.group(1), m.group(2), m.group(3) or ''
+        base = f'{prefix.upper()}-{digits}'
+        return {
+            'rule': 'aitoz',
+            'full': raw,
+            'base': base,
+            'colorCode': color,
+            'hinban': digits,
+        }
+    return empty
+
+
+def color_codes_equal(a: str, b: str) -> bool:
+    """色番比較。先頭ゼロを維持した文字列一致（018 ≠ 18）。"""
+    ca = unicodedata.normalize('NFKC', stock.text(a) or '')
+    cb = unicodedata.normalize('NFKC', stock.text(b) or '')
+    ca = re.sub(r'[\s\u3000]+', '', ca)
+    cb = re.sub(r'[\s\u3000]+', '', cb)
+    return bool(ca) and ca == cb
+
+
+def extract_aitoz_page_product(html: str) -> dict:
+    """アイトス商品詳細から基礎品番・商品名・カラーバリエーションだけを取る。
+
+    関連商品・ナビは itemDetailColor / goodsnumber の外なので拾わない。
+    """
+    raw = html or ''
+    base = ''
+    for cre in (_AITOZ_GOODSNUMBER_RE, _AITOZ_MENU_CODE_RE):
+        m = cre.search(raw)
+        if m:
+            base = stock.text(m.group(1)) or ''
+            if base:
+                break
+    name = ''
+    nm = _AITOZ_GOODSNAME_RE.search(raw)
+    if nm:
+        name = paren_classify.unify_import_notation(stock.text(nm.group(1)) or '') or ''
+    colors = []
+    seen = set()
+    block = _AITOZ_COLOR_BLOCK_RE.search(raw)
+    block_html = block.group(0) if block else ''
+    for m in _AITOZ_COLOR_ROW_RE.finditer(block_html):
+        code = unicodedata.normalize('NFKC', m.group(1) or '')
+        label = paren_classify.unify_import_notation(stock.text(m.group(2) or '') or '') or ''
+        if label and any(ch in label for ch in ('/', '／', '×', '✕')):
+            label = paren_classify.normalize_colorway_display(label) or label
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        colors.append({'code': code, 'name': label})
+    return {
+        'baseSku': base,
+        'name': name,
+        'colors': colors,
+    }
+
+
 def _looks_like_sku_value(value: str) -> bool:
     """品番らしい英数トークンか。表ヘッダの「品名」などを誤採用しない。"""
     v = stock.text(value) or ''
@@ -723,7 +865,10 @@ def extract_name_search_hints(old_name: str) -> dict:
 
 
 def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict) -> list[str]:
-    """段階的な検索語。基礎品番＋上下の表記差（スペース／密着）を試す。"""
+    """段階的な検索語。基礎品番＋上下の表記差（スペース／密着）を試す。
+
+    完全品番で見つからない場合に備え、メーカー規則の基礎品番でも検索する。
+    """
     raw_sku = stock.text(maker_sku)
     base, pos_from_sku = position_sku.strip_sku_position_suffix(raw_sku)
     sku = base or raw_sku
@@ -733,19 +878,35 @@ def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict)
         positions = [pos_from_sku] + positions
     colors = list(hints.get('colors') or [])
     stages = []
+    parts = split_maker_sku_parts(sku, manufacturer=mfr)
+    base_variants = []
+    if parts.get('rule') == 'aitoz' and parts.get('base'):
+        b = parts['base']
+        compact = aitoz_base_match_key(b)
+        for v in (b, compact, parts.get('hinban') or ''):
+            if v and v not in base_variants and v != sku:
+                base_variants.append(v)
 
-    def add(parts):
-        q = ' '.join(p for p in parts if p)
+    def add(parts_q):
+        q = ' '.join(p for p in parts_q if p)
         if q and q not in stages:
             stages.append(q)
 
     add([mfr, sku])
     add([sku])
+    for bv in base_variants:
+        add([mfr, bv])
+        add([bv])
     mfr_u = paren_classify.unify_import_notation(mfr).upper()
     if 'KAZEN' in mfr_u or 'カゼン' in (mfr or ''):
         add([sku, 'site:kazen-ec.com'])
         add([mfr, sku, 'site:kazen-ec.com'])
         add(['KAZEN', sku])
+    if parts.get('rule') == 'aitoz':
+        for qsku in [sku, *base_variants]:
+            add([qsku, 'site:azweb.aitoz.co.jp'])
+            add([mfr, qsku, 'site:azweb.aitoz.co.jp'])
+            add(['アイトス', qsku])
     for pos in positions:
         add([mfr, sku, pos])
         add([sku, pos])
@@ -761,6 +922,12 @@ def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict)
     for col in colors:
         add([mfr, sku, col])
         add([sku, col])
+        if parts.get('colorCode'):
+            add([mfr, sku, parts['colorCode']])
+            add([sku, parts['colorCode']])
+            for bv in base_variants:
+                add([mfr, bv, parts['colorCode']])
+                add([bv, parts['colorCode']])
     return stages
 
 
@@ -1363,19 +1530,57 @@ def site_management_confirms_maker_sku(
     }
 
 
-def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
+def _sku_match_evidence_label(*, match: str, color_code: str = '') -> str:
+    if match == 'base_color' and color_code:
+        return f'基礎品番一致＋色番{color_code}一致'
+    if match == 'base_only':
+        return '基礎品番一致・色番未確認'
+    if match == 'structured':
+        return '本文商品コード一致'
+    if match == 'title':
+        return '見出し品番一致'
+    return ''
+
+
+def page_sku_match(
+    html: str,
+    title: str,
+    maker_sku: str,
+    *,
+    manufacturer: str = '',
+    page_url: str = '',
+) -> dict:
     """品番一致の根拠を返す。
 
-    match: structured / title / none
+    match: structured / title / base_color / base_only / none
     本文にたまたま含まれるだけ・関連リンク内だけの一致は none。
+    メーカー別ルールで基礎＋色番照合（例: アイトス）を行う。
     """
     sk = sku_match_key(maker_sku)
     empty = {
-        'match': 'none', 'matchedValue': '', 'evidence': '',
+        'match': 'none',
+        'matchedValue': '',
+        'evidence': '',
+        'evidenceLabel': '',
         'siteCode': '',
+        'baseSku': '',
+        'colorCode': '',
+        'colorName': '',
+        'pageName': '',
+        'productName': '',
+        'brand': '',
     }
     if not sk:
         return empty
+
+    def _ok(payload: dict) -> dict:
+        out = dict(empty)
+        out.update(payload)
+        out['evidenceLabel'] = _sku_match_evidence_label(
+            match=out.get('match') or '',
+            color_code=out.get('colorCode') or '',
+        ) or out.get('evidenceLabel') or ''
+        return out
 
     info = extract_product_info_fields(html or '')
     # 商品情報表・JSON-LD のメーカー品番を最優先
@@ -1389,14 +1594,14 @@ def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
                 page_sku=info.get('sku') or val,
                 page_mpn=info.get('mpn') or '',
             )
-            return {
+            return _ok({
                 'match': 'structured',
                 'matchedValue': val,
                 'evidence': evidence,
                 'siteCode': conf.get('siteCode') or '',
                 'productName': info.get('name') or '',
                 'brand': info.get('brand') or '',
-            }
+            })
 
     for val in extract_structured_sku_values(html or ''):
         if skus_equal(val, maker_sku):
@@ -1406,14 +1611,14 @@ def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
                 page_mpn=info.get('mpn') or '',
                 html=html,
             )
-            return {
+            return _ok({
                 'match': 'structured',
                 'matchedValue': val,
                 'evidence': 'product_code_field',
                 'siteCode': conf.get('siteCode') or '',
                 'productName': info.get('name') or '',
                 'brand': info.get('brand') or '',
-            }
+            })
 
     title_u = paren_classify.unify_import_notation(stock.text(title) or '')
     h1 = _extract_h1(html or '')
@@ -1421,14 +1626,82 @@ def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
         if not text:
             continue
         if _text_contains_full_sku(text, maker_sku):
-            return {
+            return _ok({
                 'match': 'title',
                 'matchedValue': maker_sku,
                 'evidence': label,
-                'siteCode': '',
                 'productName': info.get('name') or '',
                 'brand': info.get('brand') or '',
-            }
+            })
+
+    parts = split_maker_sku_parts(
+        maker_sku, manufacturer=manufacturer, page_url=page_url,
+    )
+    if parts.get('rule') == 'aitoz' and parts.get('base'):
+        page = extract_aitoz_page_product(html or '')
+        page_base = page.get('baseSku') or ''
+        base_hit = False
+        matched_base = ''
+        if page_base and aitoz_bases_equal(page_base, parts['base']):
+            base_hit = True
+            matched_base = page_base
+        else:
+            for val in extract_structured_sku_values(html or ''):
+                if aitoz_bases_equal(val, parts['base']):
+                    base_hit = True
+                    matched_base = val
+                    break
+            if not base_hit:
+                for text in (title_u, h1, _extract_title(html or '')):
+                    if text and (
+                        _text_contains_full_sku(text, parts['base'])
+                        or _text_contains_full_sku(text, aitoz_base_match_key(parts['base']))
+                    ):
+                        base_hit = True
+                        matched_base = parts['base']
+                        break
+        if base_hit:
+            want_color = parts.get('colorCode') or ''
+            page_name = page.get('name') or info.get('name') or ''
+            if want_color:
+                color_name = ''
+                color_hit = False
+                for col in page.get('colors') or []:
+                    if color_codes_equal(col.get('code') or '', want_color):
+                        color_hit = True
+                        color_name = col.get('name') or ''
+                        break
+                if color_hit:
+                    return _ok({
+                        'match': 'base_color',
+                        'matchedValue': matched_base or parts['base'],
+                        'evidence': 'aitoz_base_and_color',
+                        'baseSku': matched_base or parts['base'],
+                        'colorCode': want_color,
+                        'colorName': color_name,
+                        'pageName': page_name,
+                        'productName': page_name,
+                        'brand': info.get('brand') or '',
+                    })
+                return _ok({
+                    'match': 'base_only',
+                    'matchedValue': matched_base or parts['base'],
+                    'evidence': 'aitoz_base_only',
+                    'baseSku': matched_base or parts['base'],
+                    'colorCode': want_color,
+                    'pageName': page_name,
+                    'productName': page_name,
+                    'brand': info.get('brand') or '',
+                })
+            return _ok({
+                'match': 'structured',
+                'matchedValue': matched_base or parts['base'],
+                'evidence': 'aitoz_base',
+                'baseSku': matched_base or parts['base'],
+                'pageName': page_name,
+                'productName': page_name,
+                'brand': info.get('brand') or '',
+            })
     return empty
 
 
@@ -1812,7 +2085,57 @@ def _unifice_ec_candidates(keyword: str, *, manufacturer: str = '', limit: int =
     return out
 
 
-def _catalog_searches_for(*, manufacturer: str, query: str) -> list[dict]:
+def _aitoz_sku_token_from_text(text: str) -> str:
+    """検索語やクエリから AZ 形品番トークンを1つ取る。"""
+    for tok in re.split(r'[\s\u3000]+', stock.text(text) or ''):
+        t = tok.strip().strip('「」『』()（）[]')
+        if t and _AITOZ_SKU_RE.fullmatch(t):
+            return t
+    return ''
+
+
+def _aitoz_direct_candidates(maker_sku: str, *, manufacturer: str = '') -> list[dict]:
+    """アイトス公式の無料商品詳細 URL を基礎品番から直接組み立てる（検索APIなし）。"""
+    raw = stock.text(maker_sku) or ''
+    token = raw if _AITOZ_SKU_RE.fullmatch(raw) else _aitoz_sku_token_from_text(raw)
+    if not token:
+        return []
+    parts = split_maker_sku_parts(token, manufacturer=manufacturer or 'アイトス')
+    if parts.get('rule') != 'aitoz' or not parts.get('hinban'):
+        return []
+    hinban = parts['hinban']
+    base = parts['base']
+    compact = aitoz_base_match_key(base)
+    urls = [
+        f'https://azweb.aitoz.co.jp/item/detail.aspx?hinban={hinban}',
+        f'https://azweb.aitoz.co.jp/item/detail.aspx?itemcode={urllib.parse.quote(base)}',
+    ]
+    if compact and compact != base:
+        urls.append(
+            f'https://azweb.aitoz.co.jp/item/detail.aspx?itemcode={urllib.parse.quote(compact)}'
+        )
+    out = []
+    seen = set()
+    for abs_url in urls:
+        if abs_url in seen:
+            continue
+        seen.add(abs_url)
+        out.append({
+            'title': f'{base} アイトス',
+            'url': abs_url,
+            'source': 'aitoz_direct',
+            'preferred': True,
+            'manufacturer': 'アイトス',
+        })
+    return out
+
+
+def _catalog_searches_for(
+    *,
+    manufacturer: str,
+    query: str,
+    maker_sku: str = '',
+) -> list[dict]:
     """メーカーに応じた無料カタログ検索。"""
     hits = []
     mfr = stock.text(manufacturer) or ''
@@ -1835,6 +2158,15 @@ def _catalog_searches_for(*, manufacturer: str, query: str) -> list[dict]:
             hits.extend(_unifice_ec_candidates(query, manufacturer=mfr or '住商モンブラン'))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             pass
+    if (not mfr) or ('アイトス' in mfr) or ('AITOZ' in mfr_u):
+        direct_sku = stock.text(maker_sku) or _aitoz_sku_token_from_text(query)
+        if direct_sku:
+            try:
+                hits.extend(
+                    _aitoz_direct_candidates(direct_sku, manufacturer=mfr or 'アイトス')
+                )
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+                pass
     return hits
 
 
@@ -1901,13 +2233,22 @@ def _build_candidate_from_hit(
     else:
         page_title = _extract_title(page_html) or title
 
-    base_sku, _ = position_sku.strip_sku_position_suffix(maker_sku)
-    base_sku = base_sku or stock.text(maker_sku)
+    pos_base, _ = position_sku.strip_sku_position_suffix(maker_sku)
+    pos_base = pos_base or stock.text(maker_sku)
+    # 登録予定は台帳の完全品番を維持（ページ基礎品番へ置き換えない）
+    ledger_sku = stock.text(current_sku) or pos_base
     heading = page_title or title or _extract_h1(page_html)
     info = extract_product_info_fields(page_html)
-    sku_info = page_sku_match(page_html, heading, base_sku)
-    if sku_info.get('match') == 'none':
-        sku_info = page_sku_match(page_html, heading, maker_sku)
+    mfr = stock.text(manufacturer) or stock.text(hit.get('manufacturer') or '')
+    sku_info = page_sku_match(
+        page_html, heading, pos_base,
+        manufacturer=mfr, page_url=url,
+    )
+    if sku_info.get('match') == 'none' and not skus_equal(pos_base, maker_sku):
+        sku_info = page_sku_match(
+            page_html, heading, maker_sku,
+            manufacturer=mfr, page_url=url,
+        )
     if sku_info.get('match') == 'none':
         return {
             'candidate': None,
@@ -1921,7 +2262,6 @@ def _build_candidate_from_hit(
         }
 
     page_brand = stock.text(sku_info.get('brand') or info.get('brand') or '')
-    mfr = stock.text(manufacturer) or stock.text(hit.get('manufacturer') or '')
     if require_manufacturer_match and mfr and page_brand and not _brand_matches_manufacturer(
         page_brand, mfr,
     ):
@@ -1940,11 +2280,43 @@ def _build_candidate_from_hit(
             },
         }
 
-    sku_verified = sku_info.get('match') == 'structured'
+    sku_parts = split_maker_sku_parts(
+        ledger_sku or pos_base, manufacturer=mfr, page_url=url,
+    )
+    sku_verified = sku_info.get('match') in (
+        'structured', 'base_color', 'base_only',
+    )
+    parsed = None
+    # アイトス公式は goodsname / カラー欄を優先
+    if sku_parts.get('rule') == 'aitoz' or str(sku_info.get('evidence') or '').startswith('aitoz'):
+        page_name = stock.text(sku_info.get('pageName') or sku_info.get('productName') or '')
+        if not page_name:
+            page_name = stock.text(extract_aitoz_page_product(page_html).get('name') or '')
+        if page_name:
+            color = ''
+            if sku_info.get('match') == 'base_color':
+                color = stock.text(sku_info.get('colorName') or '')
+            missing = []
+            if not color and sku_info.get('match') == 'base_only':
+                missing.append('color')
+            cleaned = clean_maker_product_name(page_name, maker_sku=pos_base)
+            cleaned_name = stock.text(cleaned.get('cleanedName') or page_name)
+            parsed = {
+                'name': cleaned_name,
+                'cleanedName': cleaned_name,
+                'color': color,
+                'size': '',
+                'position': '',
+                'supplement': '',
+                'title': heading,
+                'originalTitle': page_name,
+                'skuInTitle': False,
+                'missingFields': missing,
+            }
+
     # 商品情報表・構造化の品名を最優先（タイトルの店名・メーカー混入を避ける）
     field_name = stock.text(sku_info.get('productName') or info.get('name') or '')
     h1 = _extract_h1(page_html)
-    # タイトル／og は色情報を含むことが多い。h1 は短いことがある
     parse_sources = []
     for src in (field_name, heading, title, h1):
         s = stock.text(src) or ''
@@ -1954,18 +2326,16 @@ def _build_candidate_from_hit(
     parsed_list = []
     for src in parse_sources:
         p = parse_maker_listing_title(
-            src, base_sku, sku_verified=sku_verified or (src == field_name and bool(field_name)),
+            src, pos_base, sku_verified=sku_verified or (src == field_name and bool(field_name)),
         )
         if p and stock.text(p.get('name') or ''):
             parsed_list.append(p)
 
-    parsed = None
-    if field_name:
+    if not parsed and field_name:
         field_parsed = parse_maker_listing_title(
-            field_name, base_sku, sku_verified=True,
+            field_name, pos_base, sku_verified=True,
         )
         if field_parsed and stock.text(field_parsed.get('name') or ''):
-            # 表品名を採用。色が無ければタイトル等から補完（名は表を維持）
             if not stock.text(field_parsed.get('color') or ''):
                 for other in parsed_list:
                     if stock.text(other.get('color') or ''):
@@ -1981,13 +2351,25 @@ def _build_candidate_from_hit(
                         break
             parsed = field_parsed
     if not parsed and parsed_list:
-        # 名・色が揃う分解を優先（h1 だけの短い名で色を落とさない）
         parsed_list.sort(key=lambda p: (
             0 if (p.get('name') and p.get('color')) else 1,
             len(p.get('missingFields') or []),
             len(stock.text(p.get('name') or '')),
         ))
         parsed = parsed_list[0]
+
+    if parsed and sku_info.get('match') == 'base_color' and sku_info.get('colorName'):
+        parsed = dict(parsed)
+        parsed['color'] = stock.text(sku_info.get('colorName') or '')
+        miss = [f for f in (parsed.get('missingFields') or []) if f != 'color']
+        parsed['missingFields'] = miss
+    if parsed and sku_info.get('match') == 'base_only':
+        parsed = dict(parsed)
+        parsed['color'] = ''
+        miss = list(parsed.get('missingFields') or [])
+        if 'color' not in miss:
+            miss.append('color')
+        parsed['missingFields'] = miss
 
     if not parsed or not stock.text(parsed.get('name') or ''):
         missing = ['name']
@@ -2001,6 +2383,7 @@ def _build_candidate_from_hit(
                 'title': heading,
                 'reason': 'parse_incomplete',
                 'skuMatch': sku_info.get('match'),
+                'skuMatchEvidence': sku_info.get('evidenceLabel') or '',
                 'missingFields': missing,
                 'siteCode': sku_info.get('siteCode') or '',
             },
@@ -2021,7 +2404,8 @@ def _build_candidate_from_hit(
     hint_positions = list(hints.get('positions') or [])
     if not position and len(hint_positions) == 1:
         position = hint_positions[0]
-    planned_sku = planned_registered_sku(maker_sku=base_sku, position=position)
+    planned_src = ledger_sku or pos_base
+    planned_sku = planned_registered_sku(maker_sku=planned_src, position=position)
     # 上下を補足へ重複表示しない。上下以外の補足のみ残す
     supplement = stock.text(parsed.get('supplement') or '')
     if supplement in _POSITION_TOKENS:
@@ -2029,13 +2413,19 @@ def _build_candidate_from_hit(
 
     hit_mfr = mfr or page_brand
     missing = list(parsed.get('missingFields') or [])
-    current_sku_t = stock.text(current_sku) or base_sku
+    current_sku_t = stock.text(current_sku) or planned_src
     site_code = stock.text(sku_info.get('siteCode') or info.get('mpn') or '')
     cleaned_name = stock.text(parsed.get('cleanedName') or parsed.get('name') or '')
+    if cleaned_name and not parsed.get('cleanedName'):
+        cleaned = clean_maker_product_name(cleaned_name, maker_sku=pos_base)
+        cleaned_name = stock.text(cleaned.get('cleanedName') or cleaned_name)
     # 元掲載名は整理前の見出し／表品名。整理後名だけを name に載せる
     original_title = stock.text(
-        field_name or heading or page_title or title or parsed.get('originalTitle')
-        or parsed.get('title') or ''
+        parsed.get('originalTitle')
+        or field_name or heading or page_title or title or parsed.get('title') or ''
+    )
+    maker_color_code = stock.text(
+        sku_info.get('colorCode') or sku_parts.get('colorCode') or ''
     )
     # 色が空でも名が取れれば候補にはする（不足は表示用）
     cand = {
@@ -2046,16 +2436,19 @@ def _build_candidate_from_hit(
         'size': parsed.get('size') or '',
         'position': position,
         'supplement': supplement,
-        'makerSku': base_sku,
+        'makerSku': pos_base,
+        'baseSku': stock.text(sku_info.get('baseSku') or sku_parts.get('base') or '') or pos_base,
+        'makerColorCode': maker_color_code,
         'plannedRegisteredSku': planned_sku,
         'manufacturer': hit_mfr,
         'brand': page_brand,
-        'siteCode': site_code if site_code and not skus_equal(site_code, base_sku) else '',
+        'siteCode': site_code if site_code and not skus_equal(site_code, pos_base) else '',
         'sourceUrl': url,
         'title': original_title,
         'preferred': bool(hit.get('preferred')) or _host_preferred(url),
         'source': hit.get('source') or 'sales_page',
         'skuMatch': sku_info.get('match'),
+        'skuMatchEvidence': sku_info.get('evidenceLabel') or '',
         'missingFields': missing,
         'diff': {
             'nameChanged': cleaned_name != stock.text(current_name),
@@ -2249,6 +2642,14 @@ def search_maker_product(
         manufacturer_hint_from_supplier(supplier_t)
     ):
         reference = unifice_catalog_search_url(sku)
+    elif (
+        mfr == 'アイトス'
+        or manufacturer_hint_from_supplier(supplier_t) == 'アイトス'
+        or 'AITOZ' in paren_classify.unify_import_notation(mfr).upper()
+    ):
+        direct = _aitoz_direct_candidates(sku, manufacturer='アイトス')
+        if direct:
+            reference = direct[0]['url']
 
     stages = build_search_query_stages(manufacturer=mfr, maker_sku=sku, hints=hints)
     raw_hits = []
@@ -2265,7 +2666,9 @@ def search_maker_product(
         # 1) メーカー公式カタログ（無料）
         catalog_added = 0
         try:
-            for hit in _catalog_searches_for(manufacturer=mfr, query=query):
+            for hit in _catalog_searches_for(
+                manufacturer=mfr, query=query, maker_sku=sku,
+            ):
                 u = hit.get('url') or ''
                 if u in seen_urls:
                     continue
@@ -2276,7 +2679,7 @@ def search_maker_product(
             search_errors += 1
         # カタログで十分な候補があれば DDG を足さない（関連・販促ノイズを混入させない）
         has_catalog_hit = any(
-            hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice')
+            hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice', 'aitoz_direct')
             for hit in raw_hits
         )
         if not has_catalog_hit:
@@ -2294,10 +2697,10 @@ def search_maker_product(
         if has_catalog_hit and (
             catalog_added
             or any(
-                hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice')
+                hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice', 'aitoz_direct')
                 and (
                     sku_match_key(sku) in sku_match_key(hit.get('title') or '')
-                    or hit.get('source') == 'unifice'
+                    or hit.get('source') in ('unifice', 'aitoz_direct')
                 )
                 for hit in raw_hits
             )
@@ -2306,6 +2709,11 @@ def search_maker_product(
 
     sk_key = sku_match_key(sku)
     stem_key = sku_match_key(_model_stem(sku) or '')
+    sku_parts = split_maker_sku_parts(sku, manufacturer=mfr)
+    base_key = (
+        aitoz_base_match_key(sku_parts.get('base') or '')
+        if sku_parts.get('rule') == 'aitoz' else ''
+    )
     mfr_u = paren_classify.unify_import_notation(mfr).upper()
 
     def _hit_rank(h):
@@ -2313,6 +2721,10 @@ def search_maker_product(
         url_k = sku_match_key(h.get('url') or '')
         url = (h.get('url') or '').lower()
         exact = 0 if (sk_key and (sk_key in title_k or sk_key in url_k)) else 1
+        if exact and base_key and (
+            base_key in title_k.replace('-', '') or base_key in url_k.replace('-', '')
+        ):
+            exact = 0
         stem_hit = 0 if (stem_key and stem_key in title_k) else 1
         # メーカー公式ホストを仕入先カタログのノイズより優先
         host_boost = 1
@@ -2323,6 +2735,10 @@ def search_maker_product(
         elif is_montblanc_manufacturer(mfr) and 'unifice' in url:
             host_boost = 0
         elif h.get('source') == 'unifice':
+            host_boost = 0
+        elif ('アイトス' in mfr or 'AITOZ' in mfr_u) and 'aitoz' in url:
+            host_boost = 0
+        elif h.get('source') == 'aitoz_direct':
             host_boost = 0
         pref = 0 if h.get('preferred') else 1
         # タイトル/URLに品番 → 公式ホスト → 茎一致 → preferred
@@ -2410,7 +2826,8 @@ def search_maker_product(
     live_candidates.sort(key=lambda c: (
         0 if (c.get('name') and c.get('color')) else 1,
         0 if c.get('preferred') else 1,
-        0 if c.get('skuMatch') == 'structured' else 1,
+        0 if c.get('skuMatch') in ('structured', 'base_color') else 1,
+        0 if c.get('skuMatch') == 'base_only' else 1,
     ))
 
     def _with_saved(cands):
@@ -2802,6 +3219,8 @@ def adopt_maker_correction(
     source_sku: str = '',
     usage_note: str = '',
     original_title: str = '',
+    maker_color_code: str = '',
+    base_sku_override: str = '',
 ) -> dict:
     raw_sku = stock.text(maker_sku)
     sku_norm = normalize_search_maker_sku(raw_sku)
@@ -2826,8 +3245,19 @@ def adopt_maker_correction(
     planned = stock.text(planned_registered_sku)
     if not planned:
         planned = position_sku.attach_sku_position_suffix(base_sku, pos) if pos else base_sku
-    # 保存キーは上下を含む登録予定品番（上と下を別補正として保持）
+    parts = split_maker_sku_parts(
+        planned or base_sku, manufacturer=manufacturer, page_url=source_url,
+    )
+    product_base = (
+        stock.text(base_sku_override)
+        or stock.text(parts.get('base') or '')
+        or base_sku
+    )
+    color_code = stock.text(maker_color_code) or stock.text(parts.get('colorCode') or '')
+    # 保存キーは上下付き／色番付きの登録予定品番（色違い・上下を別補正として保持）
     save_sku = planned if pos else base_sku
+    if not pos and planned and planned != base_sku:
+        save_sku = planned
     cleaned = clean_maker_product_name(name, maker_sku=base_sku)
     adopted_name = cleaned.get('cleanedName') or stock.text(name)
     row, changed = save_adopted_correction(
@@ -2840,8 +3270,10 @@ def adopt_maker_correction(
         adopted_extra={
             'supplement': supp,
             'position': pos,
-            'baseMakerSku': base_sku,
+            'baseMakerSku': product_base,
             'plannedRegisteredSku': planned,
+            'makerColorCode': color_code,
+            'fullMakerSku': planned or base_sku,
             'sourceSku': source_sku_t,
             'usageNote': usage_note_t,
             'searchMakerSku': base_sku,
@@ -2860,6 +3292,8 @@ def adopt_maker_correction(
         'changed': changed,
         'manufacturer': row.get('manufacturer') or manufacturer,
         'makerSku': base_sku,
+        'baseSku': stock.text(extra.get('baseMakerSku') or product_base),
+        'makerColorCode': stock.text(extra.get('makerColorCode') or color_code),
         'searchMakerSku': base_sku,
         'sourceSku': stock.text(extra.get('sourceSku') or source_sku_t),
         'usageNote': stock.text(extra.get('usageNote') or usage_note_t),
