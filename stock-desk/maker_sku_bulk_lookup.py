@@ -27,9 +27,11 @@ _STATUS_LABELS = {
     'fetch_failed': '検索結果取得不可',
     'page_unavailable': '商品ページ取得不可',
     'sku_mismatch': '品番不一致',
+    'maker_mismatch': 'メーカー不一致',
     'parse_incomplete': '品番一致したが必要項目抽出不可',
     'no_match': '候補なし',
     'invalid_sku': 'メーカー品番が対象外',
+    'invalid_url': 'URLが対象外',
     'pending': '未処理',
     'cancelled': '未処理・中止',
     'error': '取得失敗',
@@ -263,7 +265,10 @@ def _bump_counts(counts: dict, status: str) -> None:
     elif status == 'multiple':
         counts['multiple'] += 1
         counts['needsConfirm'] += 1
-    elif status in ('parse_incomplete', 'sku_mismatch', 'invalid_sku'):
+    elif status in (
+        'parse_incomplete', 'sku_mismatch', 'maker_mismatch',
+        'invalid_sku', 'invalid_url',
+    ):
         counts['needsConfirm'] += 1
     elif status == 'fetch_failed':
         counts['fetchFailed'] += 1
@@ -301,7 +306,9 @@ def _result_row_from_search(*, target: dict, search_result: dict, status_overrid
         'supplier': target.get('supplier') or '',
         'currentName': target.get('currentName') or '',
         'currentColor': target.get('currentColor') or '',
+        'currentSupplement': target.get('currentSupplement') or '',
         'currentSku': target.get('currentSku') or '',
+        'sourceName': target.get('sourceName') or '',
         'plannedRegisteredSku': search_result.get('plannedRegisteredSku') or target.get('currentSku') or '',
         'status': status,
         'statusLabel': label,
@@ -309,6 +316,7 @@ def _result_row_from_search(*, target: dict, search_result: dict, status_overrid
         'referenceUrl': search_result.get('referenceUrl') or '',
         'candidates': cands,
         'matchedPages': list(search_result.get('matchedPages') or []),
+        'fromUrl': bool(search_result.get('fromUrl')),
         'adoptableSingle': status == 'ok' and len(cands) == 1 and bool((cands[0] or {}).get('name')),
     }
 

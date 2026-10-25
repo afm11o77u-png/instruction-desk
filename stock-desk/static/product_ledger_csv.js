@@ -2484,6 +2484,20 @@
           </li>`
         }).join('')}</ul>`
       :''
+    const resStatus=res.status||''
+    const showUrlForm=!searching&&(makerLookupNeedsUrlAssist(resStatus)||!cands.length||!!panel.urlFetchError)
+    const urlForm=showUrlForm
+      ?makerUrlFetchFormHtml({
+        scope:panel.scope||'',
+        inputId:'plMakerUrlInput',
+        btnId:'plMakerUrlFetch',
+        value:panel.urlInput||'',
+        disabled:!!st.busy
+      })
+      :''
+    const urlErr=panel.urlFetchError
+      ?`<p class="product-ledger-import-error" role="alert">${esc(panel.urlFetchError)}</p>`
+      :''
     return `<div class="notice pl-maker-lookup-panel" role="region" aria-label="メーカー情報で補正" data-pl-maker-panel="${esc(panel.scope||'')}">
       <div class="bar">
         <strong>メーカー情報で補正</strong>
@@ -2493,12 +2507,13 @@
         </span>
         <button type="button" class="quiet" id="plMakerLookupClose" ${st.busy?'disabled':''}>閉じる</button>
       </div>
-      <p>状態: <strong>${status}</strong>${searching?' <span class="sub">メーカーページを検索しています…</span>':''}</p>
+      <p>状態: <strong>${status}</strong>${searching?' <span class="sub">メーカーページを検索しています…</span>':''}${res.fromUrl?' <span class="sub">（URL指定）</span>':''}</p>
       ${note?`<p class="excelhint">${note}</p>`:''}
       ${skuScope?`<p class="excelhint">品番内の色表記ゆれをメーカー情報で揃え、1商品の登録予定へまとめます。メーカー側に複数色がある場合は候補から選んでください（自動では決めません）。</p>`:''}
       ${panel.error?`<p class="product-ledger-import-error" role="alert">${esc(panel.error)}</p>`:''}
       ${matchedList}
       ${cands.length?`<ul class="pl-maker-cand-list">${list}</ul>`:(searching?'':`<p class="excelhint">採用できる候補はありません。</p>`)}
+      ${urlErr}${urlForm}
       ${ref?`<p class="excelhint"><a href="${esc(ref)}" target="_blank" rel="noopener">参考ページを開く</a>（開いただけでは補正完了になりません）</p>`:''}
       <p class="excelhint">「採用」はプレビューの予定名／色／登録予定品番（上下は品番末尾）を更新します。台帳への登録は「確認して商品を登録」で行います。原文名は照合用に残します。</p>
     </div>`
@@ -2533,10 +2548,34 @@
     const map={
       ok:'一致候補1件',multiple:'候補複数',fetch_failed:'検索結果取得不可',
       page_unavailable:'商品ページ取得不可',sku_mismatch:'品番不一致',
+      maker_mismatch:'メーカー不一致',
       parse_incomplete:'品番一致したが必要項目抽出不可',no_match:'候補なし',
-      invalid_sku:'メーカー品番が対象外',pending:'未処理',cancelled:'未処理・中止',error:'取得失敗'
+      invalid_sku:'メーカー品番が対象外',invalid_url:'URLが対象外',
+      pending:'未処理',cancelled:'未処理・中止',error:'取得失敗'
     }
     return map[status]||status||'—'
+  }
+
+  function makerLookupNeedsUrlAssist(status){
+    return ['no_match','parse_incomplete','sku_mismatch','maker_mismatch',
+      'page_unavailable','fetch_failed','invalid_url','error'].includes(status||'')
+  }
+
+  function makerUrlFetchFormHtml(opts){
+    opts=opts||{}
+    const inputId=opts.inputId||'plMakerUrlInput'
+    const btnId=opts.btnId||'plMakerUrlFetch'
+    const resultKey=opts.resultKey||''
+    const disabled=opts.disabled?'disabled':''
+    const value=esc(opts.value||'')
+    return `<div class="pl-maker-url-fetch" data-pl-maker-url-scope="${esc(opts.scope||'')}" ${resultKey?`data-pl-maker-url-result="${esc(resultKey)}"`:''}>
+      <label class="pl-maker-url-label">商品ページURL
+        <input type="url" id="${esc(inputId)}" data-pl-maker-url-input value="${value}"
+          placeholder="https://…" autocomplete="off" ${disabled}>
+      </label>
+      <button type="button" class="quiet" id="${esc(btnId)}" data-pl-maker-url-fetch ${disabled}>このURLから商品情報を取得</button>
+      <p class="excelhint">公開の HTTP/HTTPS のみ。URL入力だけでは登録予定は変わりません。「採用」で反映します。</p>
+    </div>`
   }
 
   function bulkMakerAdoptSelectionKey(result,candIdx){
@@ -2559,7 +2598,8 @@
       }else if(r.status==='multiple'){
         const picked=Object.keys(adoptSel).some(k=>k.startsWith(`${r.searchKey}#`)&&adoptSel[k])
         if(!picked&&!r.adopted)remainingConfirm+=1
-      }else if(['parse_incomplete','sku_mismatch','page_unavailable','fetch_failed','error'].includes(r.status)){
+      }else if(['parse_incomplete','sku_mismatch','maker_mismatch','invalid_url',
+        'page_unavailable','fetch_failed','error'].includes(r.status)){
         remainingConfirm+=1
       }
     })
@@ -2601,10 +2641,23 @@
       }else if(r.referenceUrl){
         candHtml=`<p class="excelhint"><a href="${esc(r.referenceUrl)}" target="_blank" rel="noopener">参考ページ</a>（開いただけでは補正完了になりません）</p>`
       }
-      return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}">
+      const urlAssist=(!cands.length||makerLookupNeedsUrlAssist(status))&&!r.adopted&&!panel.running
+        ?makerUrlFetchFormHtml({
+          scope:'bulk',
+          inputId:`plBulkMakerUrl-${ri}`,
+          btnId:`plBulkMakerUrlFetch-${ri}`,
+          resultKey:String(ri),
+          value:(panel.urlInputs&&panel.urlInputs[r.searchKey||ri])||'',
+          disabled:!!st.busy||!!panel.running
+        })
+        :''
+      const urlErr=(panel.urlFetchErrors&&panel.urlFetchErrors[r.searchKey||ri])
+        ?`<p class="product-ledger-import-error" role="alert">${esc(panel.urlFetchErrors[r.searchKey||ri])}</p>`
+        :''
+      return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}" data-bulk-result-idx="${ri}">
         <td>${esc(codes)}</td>
         <td>${esc(r.makerSku||'—')}${r.position?`（${esc(r.position)}）`:''}</td>
-        <td><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}</td>
+        <td><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
       </tr>`
     }).join('')
     const resultTable=results.length
@@ -2672,8 +2725,25 @@
       delaySec:job.delaySec||0.8,
       error:job.error||'',
       adoptSelected,
-      adoptedCount:(prev&&prev.adoptedCount)||0
+      adoptedCount:(prev&&prev.adoptedCount)||0,
+      urlInputs:(prev&&prev.urlInputs)||{},
+      urlFetchErrors:(prev&&prev.urlFetchErrors)||{}
     }
+  }
+
+  async function fetchMakerFromUrlForPanel(st,panel,url){
+    const result=await st.api('/api/product-ledger-csv/maker-lookup/from-url',{
+      url,
+      manufacturer:panel.manufacturer||'',
+      makerSku:panel.makerSku,
+      currentName:panel.currentName||(panel.result&&panel.result.candidates&&panel.result.candidates[0]&&panel.result.candidates[0].diff&&panel.result.candidates[0].diff.currentName)||'',
+      currentColor:panel.currentColor||'',
+      currentSupplement:panel.currentSupplement||'',
+      currentSku:panel.currentSku||panel.makerSku||'',
+      sourceName:panel.sourceName||'',
+      supplier:panel.supplier||''
+    })
+    return result
   }
 
   async function startBulkMakerLookup(st){
@@ -4037,7 +4107,8 @@
         st.makerLookup={
           scope:'row',rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
           supplier:(row.csv&&row.csv.supplier)||'',sourceName,currentSku,
-          statusLabel:'検索中…',result:null,error:''
+          currentName,currentColor,currentSupplement,
+          statusLabel:'検索中…',result:null,error:'',urlInput:'',urlFetchError:''
         }
         paintDialog()
         scrollMakerLookupIntoView()
@@ -4091,7 +4162,8 @@
           scope:'sku',skuCode:code,rowNos,rowNo:firstRow?firstRow.rowNo:null,
           makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
           supplier:mk.supplier||(firstRow&&firstRow.csv&&firstRow.csv.supplier)||'',
-          sourceName,currentSku,statusLabel:'検索中…',result:null,error:''
+          sourceName,currentSku,currentName,currentColor,currentSupplement,
+          statusLabel:'検索中…',result:null,error:'',urlInput:'',urlFetchError:''
         }
         paintDialog()
         scrollMakerLookupIntoView()
@@ -4125,6 +4197,140 @@
     })
     const makerClose=$('#plMakerLookupClose')
     if(makerClose)makerClose.onclick=()=>{st.makerLookup=null;paintDialog()}
+    const makerUrlInput=$('#plMakerUrlInput')
+    if(makerUrlInput){
+      makerUrlInput.onchange=()=>{
+        if(st.makerLookup)st.makerLookup.urlInput=makerUrlInput.value||''
+      }
+      makerUrlInput.oninput=()=>{
+        if(st.makerLookup)st.makerLookup.urlInput=makerUrlInput.value||''
+      }
+    }
+    const makerUrlFetch=$('#plMakerUrlFetch')
+    if(makerUrlFetch){
+      makerUrlFetch.onclick=async()=>{
+        const panel=st.makerLookup
+        if(!panel||!panel.makerSku){st.toast('メーカー品番がありません。');return}
+        const url=(makerUrlInput&&makerUrlInput.value||panel.urlInput||'').trim()
+        if(!url){st.toast('商品ページURLを入力してください。');return}
+        st.busy=true
+        panel.urlInput=url
+        panel.urlFetchError=''
+        panel.statusLabel='URLから取得中…'
+        paintDialog()
+        scrollMakerLookupIntoView()
+        try{
+          const result=await fetchMakerFromUrlForPanel(st,panel,url)
+          const adoptable=(result.candidates||[]).some(c=>c&&c.name)
+          st.makerLookup=Object.assign({},panel,{
+            result,
+            manufacturer:result.manufacturer||panel.manufacturer||'',
+            currentSku:result.plannedRegisteredSku||panel.currentSku,
+            statusLabel:result.statusLabel||result.status||'',
+            error:'',
+            urlFetchError:adoptable?'':(result.note||result.statusLabel||'URLから候補を取得できませんでした。'),
+            urlInput:url
+          })
+          if(adoptable)st.toast('URLから候補を取得しました。内容を確認して「採用」してください。')
+          else st.toast(result.statusLabel||'URLから候補を取得できませんでした。',6000)
+        }catch(e){
+          st.makerLookup=Object.assign({},panel,{
+            urlFetchError:apiErrorMessage(e,'URLからの取得に失敗しました。'),
+            statusLabel:panel.statusLabel||'取得失敗'
+          })
+        }finally{
+          st.busy=false
+          paintDialog()
+          scrollMakerLookupIntoView()
+        }
+      }
+    }
+    document.querySelectorAll('[data-pl-maker-url-fetch]').forEach(el=>{
+      if(el.id==='plMakerUrlFetch')return
+      el.onclick=async()=>{
+        const panel=st.bulkMakerLookup
+        if(!panel||panel.running){st.toast('一括取得の完了後にURL指定できます。');return}
+        const wrap=el.closest('.pl-maker-url-fetch')
+        const idxAttr=wrap&&wrap.getAttribute('data-pl-maker-url-result')
+        const ri=Number(idxAttr)
+        const row=(panel.results||[])[ri]
+        if(!row){st.toast('対象行が見つかりません。');return}
+        const input=wrap&&wrap.querySelector('[data-pl-maker-url-input]')
+        const url=((input&&input.value)||'').trim()
+        const key=row.searchKey||String(ri)
+        panel.urlInputs=panel.urlInputs||{}
+        panel.urlFetchErrors=panel.urlFetchErrors||{}
+        panel.urlInputs[key]=url
+        if(!url){st.toast('商品ページURLを入力してください。');return}
+        st.busy=true
+        panel.urlFetchErrors[key]=''
+        paintDialog()
+        try{
+          const result=await st.api('/api/product-ledger-csv/maker-lookup/from-url',{
+            url,
+            manufacturer:row.manufacturer||'',
+            makerSku:row.makerSku||'',
+            currentName:row.currentName||'',
+            currentColor:row.currentColor||'',
+            currentSupplement:row.currentSupplement||'',
+            currentSku:row.currentSku||row.makerSku||'',
+            sourceName:row.sourceName||'',
+            supplier:row.supplier||''
+          })
+          const cands=result.candidates||[]
+          const next=Object.assign({},row,{
+            status:result.status,
+            statusLabel:result.statusLabel||bulkMakerStatusLabel(result.status),
+            note:result.note||'',
+            candidates:cands,
+            referenceUrl:result.referenceUrl||url,
+            plannedRegisteredSku:result.plannedRegisteredSku||row.plannedRegisteredSku,
+            fromUrl:true,
+            matchedPages:result.matchedPages||[],
+            adoptableSingle:result.status==='ok'&&cands.length===1&&!!(cands[0]&&cands[0].name)
+          })
+          const results=(panel.results||[]).slice()
+          results[ri]=next
+          // 件数の再集計（候補なしと失敗を混同しない）
+          const counts=Object.assign({},panel.counts||{})
+          const prevStatus=row.status||''
+          const dec=(k)=>{if(counts[k])counts[k]=Math.max(0,(counts[k]||0)-1)}
+          const statusKey={
+            ok:'ok',multiple:'multiple',no_match:'noMatch',
+            fetch_failed:'fetchFailed',page_unavailable:'pageUnavailable',
+            sku_mismatch:'needsConfirm',maker_mismatch:'needsConfirm',
+            parse_incomplete:'needsConfirm',error:'error',invalid_url:'needsConfirm'
+          }
+          if(statusKey[prevStatus])dec(statusKey[prevStatus]==='needsConfirm'?'needsConfirm':statusKey[prevStatus])
+          if(next.status==='ok')counts.ok=(counts.ok||0)+1
+          else if(next.status==='multiple')counts.multiple=(counts.multiple||0)+1
+          else if(next.status==='no_match')counts.noMatch=(counts.noMatch||0)+1
+          else if(next.status==='fetch_failed')counts.fetchFailed=(counts.fetchFailed||0)+1
+          else if(next.status==='page_unavailable')counts.pageUnavailable=(counts.pageUnavailable||0)+1
+          else if(next.status==='error')counts.error=(counts.error||0)+1
+          else counts.needsConfirm=(counts.needsConfirm||0)+1
+          if(next.adoptableSingle){
+            const pickKey=bulkMakerAdoptSelectionKey(next,0)
+            panel.adoptSelected=Object.assign({},panel.adoptSelected||{})
+            panel.adoptSelected[pickKey]=true
+          }
+          if(cands.length&&cands[0]&&cands[0].name){
+            panel.urlFetchErrors[key]=''
+            st.toast(`品番 ${row.makerSku||''}: URLから候補を取得しました`)
+          }else{
+            panel.urlFetchErrors[key]=result.note||result.statusLabel||'候補を取得できませんでした'
+          }
+          st.bulkMakerLookup=Object.assign({},panel,{results,counts})
+        }catch(e){
+          panel.urlFetchErrors[key]=apiErrorMessage(e,'URLからの取得に失敗しました。')
+          st.bulkMakerLookup=Object.assign({},panel)
+          st.toast(panel.urlFetchErrors[key],6000)
+        }finally{
+          st.busy=false
+          paintDialog()
+        }
+      }
+    })
     document.querySelectorAll('[data-pl-maker-adopt]').forEach(el=>{
       el.onclick=async()=>{
         const panel=st.makerLookup

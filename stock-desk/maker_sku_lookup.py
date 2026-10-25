@@ -37,7 +37,7 @@ _MANAGEMENT_SKUS = frozenset({
 _PREFERRED_HOST_HINTS = (
     'midori-anzen', 'midori', 'servo', 'montblanc', 'chitose', 'aitoz', 'aito-s',
     'bonmax', 'karsee', 'selery', 'faceblend', 'toms', 'kurodaruma',
-    'kazen-ec', 'kazen',
+    'kazen-ec', 'kazen', 'unifice',
 )
 
 # 仕入先名にブランドが含まれるときだけメーカーヒントにする（無条件同一視しない）
@@ -102,6 +102,25 @@ _JSON_LD_RE = re.compile(
     re.I | re.S,
 )
 _PAREN_CHUNK_RE = re.compile(r'[（(]([^（）()]*)[）)]')
+_SKU_VALUE_RE = re.compile(
+    r'^[A-Za-z0-9Ａ-Ｚａ-ｚ０-９][A-Za-z0-9Ａ-Ｚａ-ｚ０-９\-_＿－]*$'
+)
+# 商品情報表のラベル文言（sku_match_key 適用前の原文。値として誤採用しない）
+_FIELD_LABEL_RAW = (
+    '品番', '品名', 'ブランド', 'ブランド名', '商品コード', 'メーカー品番',
+    '品番コード', '型番', 'SKU', 'MPN', 'カラー', '色', 'サイズ', '商品名',
+)
+_NAME_NOISE_TOKENS = frozenset({
+    'KAZEN', 'カゼン', 'WLD', 'ミドリ安全', 'サーヴォ', 'モンブラン',
+    '住商モンブラン', 'MONTBLANC', 'チトセ', 'アイトス', '公式',
+    'オンラインストア', 'COOKING&SERVICE', 'COOKING＆SERVICE',
+    'ユニフォームのユニフィス', 'ユニフィス', '通販', '激安',
+})
+_PRIVATE_HOST_RE = re.compile(
+    r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|'
+    r'0\.0\.0\.0|::1|\[::1\])',
+    re.I,
+)
 _COLOR_TERMS_SORTED = sorted(
     {paren_classify.unify_import_notation(t) for t in paren_classify.COLOR_TERMS},
     key=len,
@@ -121,9 +140,24 @@ def sku_match_key(value: str) -> str:
     return t.upper()
 
 
+_FIELD_LABEL_KEYS = frozenset(sku_match_key(x) for x in _FIELD_LABEL_RAW)
+
+
 def skus_equal(a: str, b: str) -> bool:
     ka, kb = sku_match_key(a), sku_match_key(b)
     return bool(ka) and ka == kb
+
+
+def _looks_like_sku_value(value: str) -> bool:
+    """品番らしい英数トークンか。表ヘッダの「品名」などを誤採用しない。"""
+    v = stock.text(value) or ''
+    if not v or not _SKU_VALUE_RE.fullmatch(v):
+        return False
+    if sku_match_key(v) in _FIELD_LABEL_KEYS:
+        return False
+    if not re.search(r'[A-Za-z0-9Ａ-Ｚａ-ｚ０-９]', v):
+        return False
+    return True
 
 
 def _sku_boundary_char(ch: str) -> bool:
@@ -620,6 +654,33 @@ def kazen_catalog_search_url(keyword: str) -> str:
     )
 
 
+def unifice_catalog_search_url(keyword: str) -> str:
+    """ユニフィスの品番コード検索（無料公開ページ）。"""
+    return (
+        'https://www.unifice.com/UNIFICE/search.php?code='
+        + urllib.parse.quote(stock.text(keyword) or '')
+    )
+
+
+def unifice_detail_url(code: str) -> str:
+    return (
+        'https://www.unifice.com/U2/search.php?action=syousai&code='
+        + urllib.parse.quote(stock.text(code) or '')
+    )
+
+
+def is_montblanc_manufacturer(manufacturer: str) -> bool:
+    m = paren_classify.unify_import_notation(stock.text(manufacturer) or '')
+    if not m:
+        return False
+    u = m.upper()
+    return (
+        'モンブラン' in m
+        or 'MONTBLANC' in u
+        or '住商モンブラン' in m
+    )
+
+
 def _http_get(url: str, *, timeout: float = _FETCH_TIMEOUT_SEC) -> tuple[str, str]:
     req = urllib.request.Request(
         url,
@@ -815,11 +876,20 @@ def extract_structured_sku_values(html: str) -> list[str]:
         v = stock.text(val) or ''
         # サイズが付いた「APK499-10 M」などは先頭トークンだけ
         v = re.split(r'[\s\u3000]+', v, maxsplit=1)[0].strip()
+        if not _looks_like_sku_value(v):
+            return
         key = sku_match_key(v)
         if not key or key in seen:
             return
         seen.add(key)
         found.append(v)
+
+    info = extract_product_info_fields(html or '')
+    for key in ('sku', 'mpn', 'makerSku'):
+        if info.get(key):
+            add(info[key])
+    for extra in info.get('skuValues') or []:
+        add(extra)
 
     for m in _LABELED_SKU_RE.finditer(html or ''):
         add(m.group(1))
@@ -832,9 +902,12 @@ def extract_structured_sku_values(html: str) -> list[str]:
     }
     for i, ln in enumerate(lines):
         compact = sku_match_key(ln)
-        # 行全体がラベル、次行が値（KAZEN公式）
+        # 行全体がラベル、次行が値（KAZEN公式）。次行が別ラベルならスキップ
         if compact in labels and i + 1 < len(lines):
-            add(lines[i + 1])
+            nxt = lines[i + 1]
+            if sku_match_key(nxt) in _FIELD_LABEL_KEYS:
+                continue
+            add(nxt)
             continue
         # 同一行「商品コード APK499-10」
         m = _LABELED_SKU_RE.search(ln)
@@ -866,6 +939,180 @@ def extract_structured_sku_values(html: str) -> list[str]:
     return found
 
 
+def extract_product_info_fields(html: str) -> dict:
+    """商品情報表・見出し・JSON-LD から同一商品の品番／品名／ブランドを取る。
+
+    関連商品リンクやパンくずは混ぜない（表セルと Product 構造化データを優先）。
+    """
+    out = {
+        'sku': '',
+        'mpn': '',
+        'makerSku': '',
+        'name': '',
+        'brand': '',
+        'color': '',
+        'skuValues': [],
+        'source': '',
+    }
+    raw_html = html or ''
+
+    # 1) JSON-LD Product
+    for m in _JSON_LD_RE.finditer(raw_html):
+        raw = (m.group(1) or '').strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, list):
+                stack.extend(node)
+                continue
+            if not isinstance(node, dict):
+                continue
+            types = node.get('@type') or node.get('type') or ''
+            type_l = (
+                ' '.join(types) if isinstance(types, list) else str(types)
+            ).lower()
+            if 'product' in type_l:
+                sku = stock.text(str(node.get('sku') or ''))
+                mpn = stock.text(str(node.get('mpn') or ''))
+                name = stock.text(str(node.get('name') or ''))
+                color = stock.text(str(node.get('color') or ''))
+                brand = ''
+                b = node.get('brand')
+                if isinstance(b, dict):
+                    brand = stock.text(str(b.get('name') or ''))
+                elif b:
+                    brand = stock.text(str(b))
+                if not brand:
+                    mf = node.get('manufacturer')
+                    if isinstance(mf, dict):
+                        brand = stock.text(str(mf.get('name') or ''))
+                    elif mf:
+                        brand = stock.text(str(mf))
+                if sku and not out['sku']:
+                    out['sku'] = sku
+                if mpn and not out['mpn']:
+                    out['mpn'] = mpn
+                if name and not out['name']:
+                    out['name'] = name
+                if brand and not out['brand']:
+                    out['brand'] = brand
+                if color and not out['color']:
+                    out['color'] = color
+                if sku or mpn or name:
+                    out['source'] = out['source'] or 'json_ld'
+            for v in node.values():
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+
+    # 2) 商品情報表（品番／品名が並ぶ TH+TD）
+    # ユニフィス等: <TH>品番</TH><TH>品名</TH> … <TD>9-970</TD><TD>兼用キャスケット(ワイン)</TD>
+    table_chunks = re.findall(r'<table\b[^>]*>[\s\S]*?</table>', raw_html, flags=re.I)
+    for table in table_chunks:
+        headers = [
+            _strip_tags(h)
+            for h in re.findall(r'<th\b[^>]*>([\s\S]*?)</th>', table, flags=re.I)
+        ]
+        header_keys = [sku_match_key(h) for h in headers]
+        if not header_keys:
+            continue
+        sku_i = next(
+            (i for i, k in enumerate(header_keys) if k in {
+                sku_match_key('品番'), sku_match_key('商品コード'),
+                sku_match_key('型番'), sku_match_key('メーカー品番'),
+            }),
+            -1,
+        )
+        name_i = next(
+            (i for i, k in enumerate(header_keys) if k in {
+                sku_match_key('品名'), sku_match_key('商品名'),
+            }),
+            -1,
+        )
+        if sku_i < 0 and name_i < 0:
+            continue
+        # 最初のデータ行
+        row_m = re.search(r'<tr\b[^>]*>\s*(?:<td\b[\s\S]*?</td>\s*)+</tr>', table, flags=re.I)
+        if not row_m:
+            continue
+        cells = [
+            _strip_tags(td)
+            for td in re.findall(r'<td\b[^>]*>([\s\S]*?)</td>', row_m.group(0), flags=re.I)
+        ]
+        if sku_i >= 0 and sku_i < len(cells) and _looks_like_sku_value(cells[sku_i]):
+            if not out['sku']:
+                out['sku'] = cells[sku_i]
+                out['source'] = out['source'] or 'product_table'
+            out['makerSku'] = out['makerSku'] or cells[sku_i]
+        if name_i >= 0 and name_i < len(cells) and cells[name_i]:
+            if sku_match_key(cells[name_i]) not in _FIELD_LABEL_KEYS:
+                # 表の品名を優先（JSON-LD 名に品番・店名が混ざることがある）
+                out['name'] = cells[name_i]
+                out['source'] = 'product_table'
+
+    # ブランド名だけの小さな表
+    brand_m = re.search(
+        r'ブランド名[\s\S]{0,120}?</th>[\s\S]{0,80}?<td\b[^>]*>([\s\S]*?)</td>',
+        raw_html,
+        flags=re.I,
+    )
+    if brand_m and not out['brand']:
+        out['brand'] = _strip_tags(brand_m.group(1))
+
+    # サイト管理番号（mpn）とメーカー品番の対応メモ
+    values = []
+    for key in ('sku', 'mpn', 'makerSku'):
+        if out.get(key):
+            values.append(out[key])
+    out['skuValues'] = values
+    if out.get('sku') and not out.get('makerSku'):
+        out['makerSku'] = out['sku']
+    return out
+
+
+def site_management_confirms_maker_sku(
+    *,
+    maker_sku: str,
+    page_sku: str = '',
+    page_mpn: str = '',
+    html: str = '',
+) -> dict:
+    """サイト管理番号（例: MON9-970）がメーカー品番と対応するか。
+
+    MON を全品番から機械削除しない。ページ内でメーカー品番自体が
+    確認できるときだけ True。
+    """
+    sk = sku_match_key(maker_sku)
+    empty = {'confirmed': False, 'siteCode': '', 'makerSkuOnPage': ''}
+    if not sk:
+        return empty
+    page_sku_t = stock.text(page_sku) or ''
+    page_mpn_t = stock.text(page_mpn) or ''
+    if not page_sku_t and not page_mpn_t:
+        info = extract_product_info_fields(html or '')
+        page_sku_t = info.get('sku') or ''
+        page_mpn_t = info.get('mpn') or ''
+    if not skus_equal(page_sku_t, maker_sku):
+        return empty
+    # メーカー品番がページ上で確認できた。管理番号が別表記なら併記
+    site = ''
+    if page_mpn_t and not skus_equal(page_mpn_t, maker_sku):
+        mpn_k = sku_match_key(page_mpn_t)
+        if mpn_k.endswith(sk) and len(mpn_k) > len(sk):
+            # 接頭辞付き管理番号（MON9-970 等）。接頭辞はメーカー固有で機械削除しない
+            site = page_mpn_t
+    return {
+        'confirmed': True,
+        'siteCode': site,
+        'makerSkuOnPage': page_sku_t or maker_sku,
+    }
+
+
 def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
     """品番一致の根拠を返す。
 
@@ -875,16 +1122,47 @@ def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
     sk = sku_match_key(maker_sku)
     empty = {
         'match': 'none', 'matchedValue': '', 'evidence': '',
+        'siteCode': '',
     }
     if not sk:
         return empty
 
+    info = extract_product_info_fields(html or '')
+    # 商品情報表・JSON-LD のメーカー品番を最優先
+    for val, evidence in (
+        (info.get('sku') or '', 'product_sku_field'),
+        (info.get('makerSku') or '', 'product_table'),
+    ):
+        if val and skus_equal(val, maker_sku):
+            conf = site_management_confirms_maker_sku(
+                maker_sku=maker_sku,
+                page_sku=info.get('sku') or val,
+                page_mpn=info.get('mpn') or '',
+            )
+            return {
+                'match': 'structured',
+                'matchedValue': val,
+                'evidence': evidence,
+                'siteCode': conf.get('siteCode') or '',
+                'productName': info.get('name') or '',
+                'brand': info.get('brand') or '',
+            }
+
     for val in extract_structured_sku_values(html or ''):
         if skus_equal(val, maker_sku):
+            conf = site_management_confirms_maker_sku(
+                maker_sku=maker_sku,
+                page_sku=info.get('sku') or val,
+                page_mpn=info.get('mpn') or '',
+                html=html,
+            )
             return {
                 'match': 'structured',
                 'matchedValue': val,
                 'evidence': 'product_code_field',
+                'siteCode': conf.get('siteCode') or '',
+                'productName': info.get('name') or '',
+                'brand': info.get('brand') or '',
             }
 
     title_u = paren_classify.unify_import_notation(stock.text(title) or '')
@@ -897,6 +1175,9 @@ def page_sku_match(html: str, title: str, maker_sku: str) -> dict:
                 'match': 'title',
                 'matchedValue': maker_sku,
                 'evidence': label,
+                'siteCode': '',
+                'productName': info.get('name') or '',
+                'brand': info.get('brand') or '',
             }
     return empty
 
@@ -1022,20 +1303,33 @@ def parse_maker_listing_title(
             continue
         name_parts.append(tok)
 
-    # 見出しに混ざるメーカー／販社トークンは商品名から外す
-    _NAME_NOISE = {
-        'KAZEN', 'カゼン', 'WLD', 'ミドリ安全', 'サーヴォ', 'モンブラン',
-        'チトセ', 'アイトス', '公式', 'オンラインストア',
-    }
+    # 見出しに混ざるメーカー／販社・店名トークンは商品名から外す
+    noise_keys = {sku_match_key(n) for n in _NAME_NOISE_TOKENS}
     cleaned_parts = []
     for p in name_parts:
         key = sku_match_key(p)
-        if key and key in {sku_match_key(n) for n in _NAME_NOISE}:
+        if key and key in noise_keys:
             continue
-        if paren_classify.unify_import_notation(p) in _NAME_NOISE:
+        if paren_classify.unify_import_notation(p) in _NAME_NOISE_TOKENS:
+            continue
+        # 「の9-970」のような所有格＋品番
+        if p.startswith('の') and len(p) > 1 and (
+            skus_equal(p[1:], base_sku) or skus_equal(p[1:], maker_sku)
+            or (stem and skus_equal(p[1:], stem))
+        ):
             continue
         cleaned_parts.append(p)
     name = ' '.join(cleaned_parts).strip()
+    name = re.sub(r'[\s\u3000]+', ' ', name).strip()
+    # 店名・販促の【…】【】は商品名から外す（中身は仕様ではない）
+    name = re.sub(r'【[^】]*】', ' ', name)
+    # 末尾の「の品番」残渣
+    name = re.sub(
+        r'(?:の)?' + re.escape(base_sku) + r'\s*$',
+        '',
+        name,
+        flags=re.I,
+    )
     name = re.sub(r'[\s\u3000]+', ' ', name).strip()
     # 括弧直前の余分な空白を整える
     name = re.sub(r'\s+（', '（', name)
@@ -1170,6 +1464,97 @@ def _kazen_ec_candidates(keyword: str, *, limit: int = 12) -> list[dict]:
     return out
 
 
+def _unifice_page_looks_like_product(html: str, maker_sku: str) -> bool:
+    """ユニフィスの code= 応答が当該メーカー品番の商品詳細か。"""
+    if not html or not maker_sku:
+        return False
+    info = extract_product_info_fields(html)
+    if info.get('sku') and skus_equal(info['sku'], maker_sku):
+        return True
+    title = _extract_title(html) or ''
+    h1 = _extract_h1(html) or ''
+    if _text_contains_full_sku(title, maker_sku) or _text_contains_full_sku(h1, maker_sku):
+        # 検索一覧のノイズタイトルを避ける
+        if '品名から色や人気順' in title:
+            return False
+        return True
+    return False
+
+
+def _unifice_ec_candidates(keyword: str, *, manufacturer: str = '', limit: int = 6) -> list[dict]:
+    """ユニフィス（住商モンブラン等の販社カタログ）の無料品番検索。
+
+    code=メーカー品番 で詳細が返ることが多い。モンブラン向けにサイト管理番号
+    MON+品番も試すが、ページ内でメーカー品番が確認できた場合のみ採用する
+    （全品番から MON を機械削除しない）。
+    """
+    kw = re.sub(r'\bsite:\S+', '', stock.text(keyword) or '').strip()
+    # クエリにメーカー名が混ざる場合は末尾の品番トークンを使う
+    parts = [p for p in re.split(r'[\s\u3000]+', kw) if p]
+    sku_token = ''
+    for p in reversed(parts):
+        if _looks_like_sku_value(p):
+            sku_token = p
+            break
+    if not sku_token and parts:
+        sku_token = parts[-1]
+    if not sku_token:
+        return []
+
+    codes_to_try = [sku_token]
+    # モンブラン系のみサイト管理番号の候補を追加（接頭辞の機械削除ではない）
+    if is_montblanc_manufacturer(manufacturer) or not manufacturer:
+        mon = 'MON' + sku_token
+        if mon not in codes_to_try:
+            codes_to_try.append(mon)
+
+    out = []
+    seen = set()
+    for code in codes_to_try:
+        if len(out) >= limit:
+            break
+        for build_url in (unifice_catalog_search_url, unifice_detail_url):
+            url = build_url(code)
+            if url in seen:
+                continue
+            try:
+                final_url, html = _http_get(url)
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+                continue
+            seen.add(url)
+            seen.add(final_url)
+            if not _unifice_page_looks_like_product(html, sku_token):
+                continue
+            # MON 管理番号ページはメーカー品番確認済みのものだけ
+            info = extract_product_info_fields(html)
+            if code.upper().startswith('MON') and not skus_equal(code, sku_token):
+                conf = site_management_confirms_maker_sku(
+                    maker_sku=sku_token,
+                    page_sku=info.get('sku') or '',
+                    page_mpn=info.get('mpn') or code,
+                    html=html,
+                )
+                if not conf.get('confirmed'):
+                    continue
+            title = (
+                info.get('name')
+                or _extract_h1(html)
+                or _extract_title(html)
+                or f'{sku_token}'
+            )
+            out.append({
+                'title': title,
+                'url': final_url or url,
+                'source': 'unifice',
+                'preferred': True,
+                'manufacturer': stock.text(manufacturer) or '住商モンブラン',
+                'pageHtml': html,
+            })
+            if len(out) >= limit:
+                break
+    return out
+
+
 def _catalog_searches_for(*, manufacturer: str, query: str) -> list[dict]:
     """メーカーに応じた無料カタログ検索。"""
     hits = []
@@ -1188,7 +1573,36 @@ def _catalog_searches_for(*, manufacturer: str, query: str) -> list[dict]:
             hits.extend(_kazen_ec_candidates(kw))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             pass
+    if (not mfr) or is_montblanc_manufacturer(mfr):
+        try:
+            hits.extend(_unifice_ec_candidates(query, manufacturer=mfr or '住商モンブラン'))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            pass
     return hits
+
+
+def _brand_matches_manufacturer(brand: str, manufacturer: str) -> bool:
+    """ページ上のブランドと指定メーカーが矛盾しないか（空は未判定＝通す）。"""
+    b = paren_classify.unify_import_notation(stock.text(brand) or '')
+    m = paren_classify.unify_import_notation(stock.text(manufacturer) or '')
+    if not b or not m:
+        return True
+    bk, mk = sku_match_key(b), sku_match_key(m)
+    if not bk or not mk:
+        return True
+    if bk in mk or mk in bk:
+        return True
+    # 既知ブランドの別名（MONTBLANC ↔ 住商モンブラン）
+    aliases = (
+        ('MONTBLANC', 'モンブラン', '住商モンブラン'),
+        ('KAZEN', 'カゼン'),
+        ('ミドリ安全', 'MIDORI'),
+    )
+    for group in aliases:
+        keys = {sku_match_key(x) for x in group}
+        if any(k and k in bk for k in keys) and any(k and k in mk for k in keys):
+            return True
+    return False
 
 
 def _build_candidate_from_hit(
@@ -1200,34 +1614,40 @@ def _build_candidate_from_hit(
     current_color: str,
     current_supplement: str = '',
     current_sku: str = '',
+    require_manufacturer_match: bool = False,
 ) -> dict:
     """候補化の結果を返す。
 
     result:
       - candidate: 採用可能な候補 dict
-      - rejection: sku_mismatch / parse_incomplete / hint_reject / page_unavailable
+      - rejection: sku_mismatch / maker_mismatch / parse_incomplete /
+                   hint_reject / page_unavailable
     """
     title = hit.get('title') or ''
     url = hit.get('url') or ''
-    page_html = ''
+    page_html = hit.get('pageHtml') or ''
     page_title = title
-    try:
-        _final, page_html = _http_get(url)
+    if not page_html:
+        try:
+            _final, page_html = _http_get(url)
+            page_title = _extract_title(page_html) or title
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            return {
+                'candidate': None,
+                'rejection': 'page_unavailable',
+                'detail': {
+                    'sourceUrl': url,
+                    'title': title,
+                    'reason': 'page_unavailable',
+                },
+            }
+    else:
         page_title = _extract_title(page_html) or title
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
-        return {
-            'candidate': None,
-            'rejection': 'page_unavailable',
-            'detail': {
-                'sourceUrl': url,
-                'title': title,
-                'reason': 'page_unavailable',
-            },
-        }
 
     base_sku, _ = position_sku.strip_sku_position_suffix(maker_sku)
     base_sku = base_sku or stock.text(maker_sku)
     heading = page_title or title or _extract_h1(page_html)
+    info = extract_product_info_fields(page_html)
     sku_info = page_sku_match(page_html, heading, base_sku)
     if sku_info.get('match') == 'none':
         sku_info = page_sku_match(page_html, heading, maker_sku)
@@ -1239,23 +1659,79 @@ def _build_candidate_from_hit(
                 'sourceUrl': url,
                 'title': heading,
                 'reason': 'sku_mismatch',
+                'note': '商品情報表・構造化データ／見出しの完全品番が一致しませんでした。',
+            },
+        }
+
+    page_brand = stock.text(sku_info.get('brand') or info.get('brand') or '')
+    mfr = stock.text(manufacturer) or stock.text(hit.get('manufacturer') or '')
+    if require_manufacturer_match and mfr and page_brand and not _brand_matches_manufacturer(
+        page_brand, mfr,
+    ):
+        return {
+            'candidate': None,
+            'rejection': 'maker_mismatch',
+            'detail': {
+                'sourceUrl': url,
+                'title': heading,
+                'reason': 'maker_mismatch',
+                'brand': page_brand,
+                'manufacturer': mfr,
+                'note': (
+                    f'ページのブランド「{page_brand}」が指定メーカー「{mfr}」と一致しません。'
+                ),
             },
         }
 
     sku_verified = sku_info.get('match') == 'structured'
-    parsed = parse_maker_listing_title(
-        heading, base_sku, sku_verified=sku_verified,
-    )
-    if not parsed and heading != title:
-        parsed = parse_maker_listing_title(
-            title, base_sku, sku_verified=sku_verified,
+    # 商品情報表・構造化の品名を最優先（タイトルの店名・メーカー混入を避ける）
+    field_name = stock.text(sku_info.get('productName') or info.get('name') or '')
+    h1 = _extract_h1(page_html)
+    # タイトル／og は色情報を含むことが多い。h1 は短いことがある
+    parse_sources = []
+    for src in (field_name, heading, title, h1):
+        s = stock.text(src) or ''
+        if s and s not in parse_sources:
+            parse_sources.append(s)
+
+    parsed_list = []
+    for src in parse_sources:
+        p = parse_maker_listing_title(
+            src, base_sku, sku_verified=sku_verified or (src == field_name and bool(field_name)),
         )
-    if not parsed:
-        h1 = _extract_h1(page_html)
-        if h1:
-            parsed = parse_maker_listing_title(
-                h1, base_sku, sku_verified=sku_verified,
-            )
+        if p and stock.text(p.get('name') or ''):
+            parsed_list.append(p)
+
+    parsed = None
+    if field_name:
+        field_parsed = parse_maker_listing_title(
+            field_name, base_sku, sku_verified=True,
+        )
+        if field_parsed and stock.text(field_parsed.get('name') or ''):
+            # 表品名を採用。色が無ければタイトル等から補完（名は表を維持）
+            if not stock.text(field_parsed.get('color') or ''):
+                for other in parsed_list:
+                    if stock.text(other.get('color') or ''):
+                        field_parsed = dict(field_parsed)
+                        field_parsed['color'] = other.get('color') or ''
+                        if not field_parsed.get('size') and other.get('size'):
+                            field_parsed['size'] = other.get('size') or ''
+                        miss = [
+                            f for f in (field_parsed.get('missingFields') or [])
+                            if not (f == 'color' and field_parsed.get('color'))
+                        ]
+                        field_parsed['missingFields'] = miss
+                        break
+            parsed = field_parsed
+    if not parsed and parsed_list:
+        # 名・色が揃う分解を優先（h1 だけの短い名で色を落とさない）
+        parsed_list.sort(key=lambda p: (
+            0 if (p.get('name') and p.get('color')) else 1,
+            len(p.get('missingFields') or []),
+            len(stock.text(p.get('name') or '')),
+        ))
+        parsed = parsed_list[0]
+
     if not parsed or not stock.text(parsed.get('name') or ''):
         missing = ['name']
         if not (parsed and parsed.get('color')):
@@ -1269,6 +1745,7 @@ def _build_candidate_from_hit(
                 'reason': 'parse_incomplete',
                 'skuMatch': sku_info.get('match'),
                 'missingFields': missing,
+                'siteCode': sku_info.get('siteCode') or '',
             },
         }
     if not _candidate_passes_hints(parsed, hints):
@@ -1293,9 +1770,10 @@ def _build_candidate_from_hit(
     if supplement in _POSITION_TOKENS:
         supplement = ''
 
-    hit_mfr = stock.text(hit.get('manufacturer') or manufacturer or '')
+    hit_mfr = mfr or page_brand
     missing = list(parsed.get('missingFields') or [])
     current_sku_t = stock.text(current_sku) or base_sku
+    site_code = stock.text(sku_info.get('siteCode') or info.get('mpn') or '')
     # 色が空でも名が取れれば候補にはする（不足は表示用）
     cand = {
         'name': parsed['name'],
@@ -1306,6 +1784,8 @@ def _build_candidate_from_hit(
         'makerSku': base_sku,
         'plannedRegisteredSku': planned_sku,
         'manufacturer': hit_mfr,
+        'brand': page_brand,
+        'siteCode': site_code if site_code and not skus_equal(site_code, base_sku) else '',
         'sourceUrl': url,
         'title': parsed.get('title') or page_title,
         'preferred': bool(hit.get('preferred')) or _host_preferred(url),
@@ -1485,6 +1965,10 @@ def search_maker_product(
         reference = midori_catalog_search_url(sku)
     elif mfr == 'KAZEN' or manufacturer_hint_from_supplier(supplier_t) == 'KAZEN':
         reference = kazen_catalog_search_url(sku)
+    elif is_montblanc_manufacturer(mfr) or is_montblanc_manufacturer(
+        manufacturer_hint_from_supplier(supplier_t)
+    ):
+        reference = unifice_catalog_search_url(sku)
 
     stages = build_search_query_stages(manufacturer=mfr, maker_sku=sku, hints=hints)
     raw_hits = []
@@ -1492,12 +1976,14 @@ def search_maker_product(
     search_errors = 0
     page_errors = 0
     sku_mismatches = 0
+    maker_mismatches = 0
     parse_incomplete_pages = []
     seen_urls = set()
 
     for query in stages:
         queries_tried.append(query)
         # 1) メーカー公式カタログ（無料）
+        catalog_added = 0
         try:
             for hit in _catalog_searches_for(manufacturer=mfr, query=query):
                 u = hit.get('url') or ''
@@ -1505,23 +1991,36 @@ def search_maker_product(
                     continue
                 seen_urls.add(u)
                 raw_hits.append(hit)
+                catalog_added += 1
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             search_errors += 1
-        # 2) DuckDuckGo HTML（無料・ボット壁で空になり得る）
-        try:
-            for hit in _ddg_candidates(query, limit=6):
-                u = hit.get('url') or ''
-                if u in seen_urls:
-                    continue
-                seen_urls.add(u)
-                raw_hits.append(hit)
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
-            search_errors += 1
-        # カタログで品番一致候補が既にあれば打ち切り（無駄な段階を増やさない）
-        if any(
-            hit.get('source') in ('midori_ec', 'kazen_ec')
-            and sku_match_key(sku) in sku_match_key(hit.get('title') or '')
+        # カタログで十分な候補があれば DDG を足さない（関連・販促ノイズを混入させない）
+        has_catalog_hit = any(
+            hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice')
             for hit in raw_hits
+        )
+        if not has_catalog_hit:
+            # 2) DuckDuckGo HTML（無料・ボット壁で空になり得る）
+            try:
+                for hit in _ddg_candidates(query, limit=6):
+                    u = hit.get('url') or ''
+                    if u in seen_urls:
+                        continue
+                    seen_urls.add(u)
+                    raw_hits.append(hit)
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+                search_errors += 1
+        # カタログで品番一致候補が既にあれば打ち切り（無駄な段階を増やさない）
+        if has_catalog_hit and (
+            catalog_added
+            or any(
+                hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice')
+                and (
+                    sku_match_key(sku) in sku_match_key(hit.get('title') or '')
+                    or hit.get('source') == 'unifice'
+                )
+                for hit in raw_hits
+            )
         ):
             break
 
@@ -1540,6 +2039,10 @@ def search_maker_product(
         if 'KAZEN' in mfr_u and 'kazen-ec' in url:
             host_boost = 0
         elif 'ミドリ安全' in mfr and 'midori-anzen' in url:
+            host_boost = 0
+        elif is_montblanc_manufacturer(mfr) and 'unifice' in url:
+            host_boost = 0
+        elif h.get('source') == 'unifice':
             host_boost = 0
         pref = 0 if h.get('preferred') else 1
         # タイトル/URLに品番 → 公式ホスト → 茎一致 → preferred
@@ -1572,6 +2075,9 @@ def search_maker_product(
             continue
         if rejection == 'sku_mismatch':
             sku_mismatches += 1
+            continue
+        if rejection == 'maker_mismatch':
+            maker_mismatches += 1
             continue
         if rejection == 'parse_incomplete':
             if detail:
@@ -1687,17 +2193,25 @@ def search_maker_product(
                 '品番一致ページはありますが、名・色の抽出に失敗しました。'
                 + (f' 不足項目: {"、".join(miss)}。' if miss else '')
             )
+        elif maker_mismatches and not sku_mismatches and not parse_incomplete_pages:
+            status, label = 'maker_mismatch', 'メーカー不一致'
+            note = (
+                '品番は近いページがありましたが、ブランド／メーカーが指定と一致しませんでした。'
+                '商品ページURLを指定して再取得できます。'
+            )
         elif sku_mismatches and raw_hits:
             status, label = 'sku_mismatch', '品番不一致'
             note = (
                 '検索でページは見つかりましたが、商品コード／見出しの完全品番が一致しませんでした。'
                 '関連商品やナビ内の品番だけの一致は候補にしません。'
+                '見つかった公開ページのURLを指定して再取得できます。'
             )
         else:
             status, label = 'no_match', '候補なし'
             note = (
                 'メーカー品番と旧商品名ヒントに一致する商品情報を取れませんでした。'
-                '参考ページを開いて確認できます（開いただけでは補正完了になりません）。'
+                '参考ページを開くか、商品ページURLを指定して取得できます'
+                '（開いただけ・URL入力だけでは補正完了になりません）。'
             )
         # 通信失敗時は保存済みを candidates に混ぜず saved のみ返す（状態を曖昧にしない）
         return {
@@ -1744,6 +2258,210 @@ def search_maker_product(
         'searchHints': hints,
         'queriesTried': queries_tried,
         'matchedPages': [],
+    }
+
+
+def validate_public_http_url(url: str) -> dict:
+    """公開 HTTP/HTTPS のみ許可。内部NW・localhost・file 等は拒否。"""
+    raw = stock.text(url) or ''
+    if not raw:
+        return {'ok': False, 'reason': 'URLが空です。', 'normalized': ''}
+    parsed = urllib.parse.urlparse(raw)
+    scheme = (parsed.scheme or '').lower()
+    if scheme not in ('http', 'https'):
+        return {
+            'ok': False,
+            'reason': '公開の HTTP/HTTPS URL のみ指定できます（file や内部スキームは不可）。',
+            'normalized': '',
+        }
+    host = (parsed.hostname or '').strip().lower()
+    if not host:
+        return {'ok': False, 'reason': 'ホスト名がありません。', 'normalized': ''}
+    if _PRIVATE_HOST_RE.match(host) or host.endswith('.local') or host.endswith('.internal'):
+        return {
+            'ok': False,
+            'reason': '内部ネットワークやローカルホストの URL は使えません。',
+            'normalized': '',
+        }
+    # IPv6 ブラケットやユーザー情報付きは拒否（単純な公開URLに限定）
+    if parsed.username or parsed.password:
+        return {
+            'ok': False,
+            'reason': '認証情報付き URL は使えません。',
+            'normalized': '',
+        }
+    normalized = urllib.parse.urlunparse((
+        scheme,
+        parsed.netloc,
+        parsed.path or '',
+        parsed.params,
+        parsed.query,
+        '',  # fragment は送らない
+    ))
+    return {'ok': True, 'reason': '', 'normalized': normalized}
+
+
+def lookup_maker_product_from_url(
+    c, *,
+    url: str,
+    manufacturer: str,
+    maker_sku: str,
+    current_name: str = '',
+    current_color: str = '',
+    current_supplement: str = '',
+    current_sku: str = '',
+    source_name: str = '',
+    supplier: str = '',
+) -> dict:
+    """利用者が指定した商品ページURLから、検索と同じ照合・抽出で候補を返す。
+
+    入力だけでは登録予定を変えない（採用は別操作）。
+    """
+    ensure_schema(c)
+    raw_sku = stock.text(maker_sku)
+    base_sku, pos_from_sku = position_sku.strip_sku_position_suffix(raw_sku)
+    sku = base_sku or raw_sku
+    supplier_t = stock.text(supplier)
+    mfr = resolve_manufacturer(manufacturer=manufacturer, supplier=supplier_t)
+    hint_source = stock.text(source_name) or stock.text(current_name)
+    hints = extract_name_search_hints(hint_source)
+    if pos_from_sku and pos_from_sku not in (hints.get('positions') or []):
+        hints = dict(hints)
+        hints['positions'] = [pos_from_sku] + list(hints.get('positions') or [])
+    hint_positions = list(hints.get('positions') or [])
+    position = hint_positions[0] if len(hint_positions) == 1 else (pos_from_sku or '')
+    current_sku_t = (
+        stock.text(current_sku)
+        or planned_registered_sku(maker_sku=sku, position=position, source_code=raw_sku)
+    )
+
+    def _base(status, label, note, **extra):
+        return {
+            'status': status,
+            'statusLabel': label,
+            'makerSku': sku,
+            'plannedRegisteredSku': current_sku_t,
+            'manufacturer': mfr,
+            'candidates': [],
+            'saved': None,
+            'referenceUrl': stock.text(url) or '',
+            'note': note,
+            'supplierIgnored': supplier_t,
+            'searchHints': hints,
+            'queriesTried': [],
+            'matchedPages': [],
+            'fromUrl': True,
+            'sourceUrl': stock.text(url) or '',
+            **extra,
+        }
+
+    if not is_valid_maker_sku(sku):
+        return _base(
+            'invalid_sku', 'メーカー品番が対象外です',
+            '別注・品番なし・空の品番では補正できません。',
+        )
+
+    checked = validate_public_http_url(url)
+    if not checked.get('ok'):
+        return _base(
+            'invalid_url', 'URLが対象外',
+            checked.get('reason') or '公開の HTTP/HTTPS URL のみ指定できます。',
+        )
+    normalized = checked['normalized']
+
+    try:
+        final_url, page_html = _http_get(normalized)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+        return _base(
+            'page_unavailable', '商品ページ取得不可',
+            f'指定URLのページを取得できませんでした（{type(e).__name__}）。',
+            sourceUrl=normalized,
+            referenceUrl=normalized,
+        )
+
+    hit = {
+        'title': _extract_title(page_html) or '',
+        'url': final_url or normalized,
+        'source': 'url_specified',
+        'preferred': _host_preferred(final_url or normalized),
+        'manufacturer': mfr,
+        'pageHtml': page_html,
+    }
+    built = _build_candidate_from_hit(
+        hit,
+        maker_sku=sku,
+        manufacturer=mfr,
+        hints=hints,
+        current_name=current_name,
+        current_color=current_color,
+        current_supplement=current_supplement,
+        current_sku=current_sku_t,
+        require_manufacturer_match=bool(mfr),
+    )
+    rejection = built.get('rejection')
+    cand = built.get('candidate')
+    detail = built.get('detail') or {}
+
+    if rejection == 'page_unavailable':
+        return _base(
+            'page_unavailable', '商品ページ取得不可',
+            '指定URLのページを取得できませんでした。',
+            sourceUrl=normalized, referenceUrl=normalized,
+        )
+    if rejection == 'sku_mismatch':
+        return _base(
+            'sku_mismatch', '品番不一致',
+            detail.get('note') or (
+                '指定ページにメーカー品番の完全一致がありません。'
+                '関連商品・色違いリンクだけの一致は採用できません。'
+            ),
+            sourceUrl=final_url or normalized,
+            referenceUrl=final_url or normalized,
+            matchedPages=[detail] if detail else [],
+        )
+    if rejection == 'maker_mismatch':
+        return _base(
+            'maker_mismatch', 'メーカー不一致',
+            detail.get('note') or '指定ページのブランドがメーカーと一致しません。',
+            sourceUrl=final_url or normalized,
+            referenceUrl=final_url or normalized,
+            matchedPages=[detail] if detail else [],
+        )
+    if rejection == 'parse_incomplete':
+        return _base(
+            'parse_incomplete', '品番一致したが項目抽出不可',
+            '品番は一致しましたが商品名・色を抽出できませんでした。',
+            sourceUrl=final_url or normalized,
+            referenceUrl=final_url or normalized,
+            matchedPages=[detail] if detail else [],
+        )
+    if rejection == 'hint_reject' or not cand:
+        return _base(
+            'no_match', '候補なし',
+            '指定ページは取得できましたが、上下・色のヒントと一致する候補になりませんでした。',
+            sourceUrl=final_url or normalized,
+            referenceUrl=final_url or normalized,
+        )
+
+    return {
+        'status': 'ok',
+        'statusLabel': '補正候補取得できた',
+        'makerSku': sku,
+        'plannedRegisteredSku': cand.get('plannedRegisteredSku') or current_sku_t,
+        'manufacturer': mfr or cand.get('manufacturer') or '',
+        'candidates': [cand],
+        'saved': None,
+        'referenceUrl': cand.get('sourceUrl') or final_url or normalized,
+        'note': (
+            'URL指定で取得しました。採用するまで登録予定は変わりません。'
+            '検索由来と同じ照合・抽出です。'
+        ),
+        'supplierIgnored': supplier_t,
+        'searchHints': hints,
+        'queriesTried': [],
+        'matchedPages': [],
+        'fromUrl': True,
+        'sourceUrl': cand.get('sourceUrl') or final_url or normalized,
     }
 
 
