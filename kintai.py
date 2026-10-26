@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 import zipfile
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -878,20 +879,280 @@ def _unc_to_path(share_root: str) -> Path:
     return Path(root)
 
 
+def resolve_dir_with_normalized_segments(path: Path) -> Path | None:
+    """各パス区切りをスペース／全角差で正規化して実在フォルダを探す。見つからなければ None。"""
+    if not path or not path.parts:
+        return None
+    try:
+        if path.is_dir():
+            return path
+    except OSError:
+        pass
+    parts = list(path.parts)
+    path_s = str(path)
+    if not path.is_absolute():
+        acc = Path('.')
+        rest = parts
+    elif path_s.startswith('//') and not path_s.startswith('///') and len(parts) >= 3:
+        # UNC（\\server\share\... → //server/share/...）。server/share はそのまま、以降を正規化
+        acc = Path('//' + parts[1]) / parts[2]
+        rest = parts[3:]
+    elif parts[0] == '/':
+        acc = Path('/')
+        rest = parts[1:]
+    elif len(parts[0]) >= 2 and parts[0][1] == ':':
+        acc = Path(parts[0] + os.sep)
+        rest = parts[1:]
+    else:
+        acc = Path(parts[0])
+        rest = parts[1:]
+    try:
+        if rest and not acc.exists():
+            return None
+    except OSError:
+        return None
+    for seg in rest:
+        try:
+            if not acc.is_dir():
+                return None
+            children = [p for p in acc.iterdir() if p.is_dir()]
+        except OSError:
+            return None
+        exact = acc / seg
+        try:
+            if exact.is_dir():
+                acc = exact
+                continue
+        except OSError:
+            pass
+        key = normalize_filename_key(seg)
+        hits = [p for p in children if normalize_filename_key(p.name) == key]
+        if len(hits) == 1:
+            acc = hits[0]
+        else:
+            return None
+    try:
+        return acc if acc.is_dir() else None
+    except OSError:
+        return None
+
+
+def normalize_filename_key(name: str) -> str:
+    """ファイル名照合用キー。空白圧縮・NFKC（全角括弧等）・波ダッシュ類を揃える。"""
+    s = unicodedata.normalize('NFKC', (name or '').strip())
+    for ch in ('\u301c', '\uFF5E', '\u223c', '\u2053', '～', '〜'):
+        s = s.replace(ch, '~')
+    s = re.sub(r'[\s\u3000]+', ' ', s)
+    return s.casefold()
+
+
+def _is_attendance_xlsx(name: str) -> bool:
+    lower = name.lower()
+    if name.startswith('~$'):
+        return False
+    return lower.endswith('.xlsx') or lower.endswith('.xlsm')
+
+
+def list_share_xlsx(directory: Path, prefix: str = '', limit: int = 80) -> list[dict]:
+    """共有フォルダ直下の出勤簿候補（読取専用の名前一覧）。"""
+    if not directory or not directory.parts:
+        return []
+    try:
+        if not directory.is_dir():
+            return []
+        entries = list(directory.iterdir())
+    except OSError:
+        return []
+    pref = (prefix or '').strip()
+    pref_digits = re.sub(r'\D', '', pref)
+    pref_key = normalize_filename_key(pref) if pref else ''
+    out = []
+    for p in sorted(entries, key=lambda x: x.name):
+        if not p.is_file() or not _is_attendance_xlsx(p.name):
+            continue
+        if pref_key or pref_digits:
+            nk = normalize_filename_key(p.name)
+            head = re.match(r'^(\d+)', nk)
+            ok = False
+            if pref_digits and head and head.group(1) == pref_digits:
+                ok = True
+            if pref_key and (nk.startswith(pref_key) or pref_key in nk):
+                ok = True
+            if not ok:
+                continue
+        out.append({'name': p.name, 'path': str(p)})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def find_matching_share_file(
+    directory: Path,
+    wanted_name: str,
+    employee_code: str = '',
+) -> tuple[Path | None, list[str]]:
+    """正規化一致、または社員番号で一意な候補を探す。戻り値 (path, 候補名一覧)。"""
+    candidates_meta = list_share_xlsx(directory, prefix='', limit=200)
+    names = [c['name'] for c in candidates_meta]
+    if not names:
+        return None, []
+    want_key = normalize_filename_key(wanted_name)
+    norm_hits = [n for n in names if normalize_filename_key(n) == want_key]
+    if len(norm_hits) == 1:
+        return directory / norm_hits[0], names
+    if len(norm_hits) > 1:
+        return directory / norm_hits[0], names
+    code = (employee_code or '').strip()
+    if code:
+        code_key = normalize_filename_key(code)
+        code_hits = []
+        for n in names:
+            nk = normalize_filename_key(n)
+            head = re.match(r'^(\d+)', nk)
+            if head and head.group(1) == re.sub(r'\D', '', code_key):
+                code_hits.append(n)
+            elif nk.startswith(code_key + ' ') or nk.startswith(code_key + '_'):
+                code_hits.append(n)
+        if len(code_hits) == 1:
+            return directory / code_hits[0], names
+        # 絞り込み候補として社員番号一致だけ返す
+        if code_hits:
+            return None, code_hits
+    return None, names[:12]
+
+
+def _share_root_path(settings: dict) -> Path:
+    root = _unc_to_path(settings.get('shareRoot') or '')
+    if not root.parts:
+        return root
+    fuzzy = resolve_dir_with_normalized_segments(root)
+    return fuzzy if fuzzy is not None else root
+
+
 def resolve_person_file(person: dict, settings: dict) -> Path | None:
+    """設定上の読取元パス。存在しなくても結合結果を返す（未設定のみ None）。"""
     pid = str(person['id'])
     override = (settings.get('peopleFiles') or {}).get(pid) or (settings.get('peopleFiles') or {}).get(person['id'])
     name = (override or person.get('source_file') or '').strip()
     if not name:
         return None
     if name.startswith('\\\\') or name.startswith('//') or (len(name) > 2 and name[1] == ':'):
-        return _unc_to_path(name)
-    root = _unc_to_path(settings.get('shareRoot') or '')
+        full = _unc_to_path(name)
+        # フルパスでも親フォルダのスペース差を吸収してからファイル名照合
+        parent = resolve_dir_with_normalized_segments(full.parent) or full.parent
+        return parent / full.name
+    root = _share_root_path(settings)
     if not root.parts:
         # 相対指定のみ → DATA 配下の検証用ディレクトリを許可
         fixture_root = Path(DATA_DIR) / 'kintai-fixtures'
         return fixture_root / name
     return root / name
+
+
+def resolve_person_file_existing(person: dict, settings: dict) -> dict:
+    """実在ファイルを解決。kind: unset | ok | not_found | access。"""
+    configured = resolve_person_file(person, settings)
+    if configured is None:
+        return {
+            'ok': False,
+            'kind': 'unset',
+            'path': None,
+            'configuredPath': '',
+            'message': '読取元ファイルが未設定です。対象者の読取元を保存してください。',
+            'resolvedNote': '',
+            'candidates': [],
+        }
+    configured_s = str(configured)
+    try:
+        if configured.is_file():
+            return {
+                'ok': True,
+                'kind': 'ok',
+                'path': configured,
+                'configuredPath': configured_s,
+                'message': '',
+                'resolvedNote': '',
+                'candidates': [],
+            }
+    except OSError as e:
+        return {
+            'ok': False,
+            'kind': 'access',
+            'path': None,
+            'configuredPath': configured_s,
+            'message': f'パスにアクセスできません（{type(e).__name__}: {e}）。探索: {configured_s}',
+            'resolvedNote': '',
+            'candidates': [],
+        }
+
+    parent = configured.parent
+    wanted = configured.name
+    matched, candidates = find_matching_share_file(
+        parent, wanted, employee_code=str(person.get('employee_code') or ''),
+    )
+    if matched is not None:
+        try:
+            if matched.is_file():
+                return {
+                    'ok': True,
+                    'kind': 'ok',
+                    'path': matched,
+                    'configuredPath': configured_s,
+                    'message': '',
+                    'resolvedNote': f'ファイル名を正規化して一致: {matched.name}',
+                    'candidates': candidates[:8],
+                }
+        except OSError as e:
+            return {
+                'ok': False,
+                'kind': 'access',
+                'path': None,
+                'configuredPath': configured_s,
+                'message': f'候補ファイルにアクセスできません（{type(e).__name__}: {e}）: {matched}',
+                'resolvedNote': '',
+                'candidates': candidates[:8],
+            }
+
+    root = _share_root_path(settings)
+    root_ok = False
+    try:
+        root_ok = bool(root.parts) and root.is_dir()
+    except OSError:
+        root_ok = False
+    hint_parts = [f'探索パス: {configured_s}']
+    if not (settings.get('shareRoot') or '').strip():
+        is_abs = wanted.startswith('\\\\') or wanted.startswith('//') or (
+            len(configured_s) > 2 and configured_s[1] == ':'
+        )
+        if not is_abs:
+            hint_parts.append('共有ルート未設定（入力だけでは保存されません。「共有ルートとレイアウトを保存」が必要です）。')
+    elif not root_ok:
+        hint_parts.append(
+            f'共有ルートにフォルダとしてアクセスできません: {settings.get("shareRoot")}（UNC未接続・権限・パス誤り・フォルダ名のスペース差）。'
+        )
+    code = str(person.get('employee_code') or '').strip()
+    code_cands = []
+    if code:
+        ck = normalize_filename_key(code)
+        for n in candidates:
+            nk = normalize_filename_key(n)
+            head = re.match(r'^(\d+)', nk)
+            if (head and head.group(1) == re.sub(r'\D', '', ck)) or nk.startswith(ck):
+                code_cands.append(n)
+    show = code_cands or candidates[:8]
+    if show:
+        hint_parts.append('候補: ' + '／'.join(show[:8]))
+    elif root_ok:
+        hint_parts.append('フォルダ内に一致するxlsxが見つかりません。')
+    return {
+        'ok': False,
+        'kind': 'not_found',
+        'path': None,
+        'configuredPath': configured_s,
+        'message': 'ファイルが見つかりません。' + ' '.join(hint_parts),
+        'resolvedNote': '',
+        'candidates': show[:8],
+    }
 
 
 def _read_file_bytes(path: Path) -> tuple[bytes, str]:
@@ -914,6 +1175,7 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
         'SELECT * FROM kintai_people WHERE active=1 ORDER BY sort_order, id'
     )]
     person_results = []
+    share_root = (settings.get('shareRoot') or '').strip()
     for person in people:
         item = {
             'personId': person['id'],
@@ -922,22 +1184,39 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
             'employment': person['employment'],
             'status': '未取得',
             'error': '',
+            'errorKind': '',
             'monthsUpdated': 0,
+            'sourcePath': '',
+            'configuredPath': '',
+            'resolvedNote': '',
+            'candidates': [],
         }
-        path = resolve_person_file(person, settings)
-        if path is None:
+        resolved = resolve_person_file_existing(person, settings)
+        item['candidates'] = resolved.get('candidates') or []
+        item['configuredPath'] = resolved.get('configuredPath') or ''
+        item['resolvedNote'] = resolved.get('resolvedNote') or ''
+        item['sourcePath'] = str(resolved['path']) if resolved.get('path') else item['configuredPath']
+
+        if resolved['kind'] == 'unset':
             item['status'] = '未取得'
-            item['error'] = '読取元ファイルが未設定です。'
+            item['error'] = resolved['message']
+            item['errorKind'] = 'unset'
             _set_person_status(c, person['id'], item['status'], item['error'], '', '')
             person_results.append(item)
             continue
-        item['sourcePath'] = str(path)
+
+        if not resolved['ok']:
+            item['status'] = 'エラー'
+            item['error'] = resolved['message']
+            item['errorKind'] = resolved['kind']  # not_found | access
+            _set_person_status(c, person['id'], 'エラー', item['error'], item['sourcePath'], '')
+            person_results.append(item)
+            continue
+
+        path = resolved['path']
         try:
-            if not path.is_file():
-                raise FileNotFoundError(f'ファイルが見つかりません: {path.name}')
             blob, mtime = _read_file_bytes(path)
             parsed = parse_person_workbook(blob, months, layout, as_of=as_of)
-            # ファイル単位で検証後に保存
             now = datetime.now().isoformat(timespec='seconds')
             for (y, m), agg in parsed.items():
                 c.execute(
@@ -964,20 +1243,48 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
                     ),
                 )
             item['status'] = '成功'
+            item['errorKind'] = ''
             item['monthsUpdated'] = len(parsed)
             item['sourceMtime'] = mtime
+            item['sourcePath'] = str(path)
             _set_person_status(c, person['id'], '成功', '', str(path), mtime)
-        except Exception as e:
-            # 失敗時は前回正常データを保持（月次行は触らない）
+        except PermissionError as e:
             item['status'] = 'エラー'
-            item['error'] = str(e)[:500]
+            item['errorKind'] = 'permission'
+            item['error'] = f'読取権限がありません: {path}（{e}）'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except FileNotFoundError as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'not_found'
+            item['error'] = f'ファイルが見つかりません: {path}（{e}）'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except OSError as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'io'
+            item['error'] = f'ファイルを開けません（{type(e).__name__}）: {path} — {e}'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except ValueError as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'parse'
+            item['error'] = f'パース失敗: {e}'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except Exception as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'other'
+            item['error'] = f'{type(e).__name__}: {e}'[:500]
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         person_results.append(item)
     summary = {
         'fiscal': fiscal_label(fiscal_start_year),
         'layoutId': layout['id'],
-        'shareRootConfigured': bool((settings.get('shareRoot') or '').strip()),
+        'shareRoot': share_root,
+        'shareRootConfigured': bool(share_root),
         'people': person_results,
+        'counts': {
+            'ok': sum(1 for p in person_results if p['status'] == '成功'),
+            'error': sum(1 for p in person_results if p['status'] == 'エラー'),
+            'missing': sum(1 for p in person_results if p['status'] == '未取得'),
+        },
     }
     c.execute(
         'INSERT INTO kintai_import_runs(at,actor_id,actor,fiscal_label,summary_json) VALUES(datetime(\'now\',\'localtime\'),?,?,?,?)',
@@ -985,9 +1292,7 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
             user['id'] if user else None,
             f"{user['name']} ({user['login']})" if user else 'システム',
             summary['fiscal'],
-            json.dumps({'ok': sum(1 for p in person_results if p['status'] == '成功'),
-                        'error': sum(1 for p in person_results if p['status'] == 'エラー'),
-                        'missing': sum(1 for p in person_results if p['status'] == '未取得')}, ensure_ascii=False),
+            json.dumps(summary['counts'], ensure_ascii=False),
         ),
     )
     return summary
@@ -1178,21 +1483,50 @@ def probe_person(c, person_id: int) -> dict:
     if not person:
         raise ValueError('対象者が見つかりません。')
     settings = load_local_settings()
-    path = resolve_person_file(dict(person), settings)
-    if path is None:
-        raise ValueError('読取元ファイルが未設定です。共有ルート＋ファイル名、またはフルパスを設定してください。')
-    if not path.is_file():
-        raise FileNotFoundError(
-            f'ファイルにアクセスできません（UNC未接続の可能性）: {path}。'
-            'ローカルWindowsサーバー上で共有読取権限を確認するか、サンプルxlsxを添付してください。'
-        )
+    resolved = resolve_person_file_existing(dict(person), settings)
+    if resolved['kind'] == 'unset':
+        raise ValueError(resolved['message'])
+    if not resolved['ok']:
+        raise FileNotFoundError(resolved['message'])
+    path = resolved['path']
     blob, mtime = _read_file_bytes(path)
     probed = probe_workbook_bytes(blob)
     probed['sourcePath'] = str(path)
+    probed['configuredPath'] = resolved.get('configuredPath') or ''
+    probed['resolvedNote'] = resolved.get('resolvedNote') or ''
     probed['sourceMtime'] = mtime
     probed['personId'] = person_id
     probed['displayName'] = person['display_name']
     return probed
+
+
+def list_share_files_for_user(user, prefix: str = '') -> dict:
+    """権限者向け: 保存済み共有ルート直下のxlsx一覧。"""
+    if not user or not (user['role'] == 'owner' or user.get('manage')):
+        return {'error': '共有フォルダ一覧は利用者管理の権限が必要です。'}, 403
+    settings = load_local_settings()
+    root_s = (settings.get('shareRoot') or '').strip()
+    if not root_s:
+        raise ValueError(
+            '共有ルートが未設定です。入力後に「共有ルートとレイアウトを保存」を押してください。'
+        )
+    root = _share_root_path(settings)
+    try:
+        if not root.is_dir():
+            raise ValueError(
+                f'共有ルートにフォルダとしてアクセスできません: {root_s}（UNC未接続・権限・パス誤り・フォルダ名のスペース差）。'
+            )
+    except OSError as e:
+        raise ValueError(f'共有ルートを開けません（{type(e).__name__}: {e}）: {root_s}') from e
+    files = list_share_xlsx(root, prefix=prefix, limit=100)
+    return {
+        'shareRoot': root_s,
+        'resolvedShareRoot': str(root),
+        'prefix': prefix or '',
+        'count': len(files),
+        'files': files,
+        'note': 'フォルダ直下のxlsxのみ（読取専用）。サブフォルダは含みません。スペース・全角半角は正規化して照合します。',
+    }
 
 
 def _query_map(h) -> dict:
@@ -1275,6 +1609,25 @@ def handle_post(h, c, path: str, d: dict):
             raise ValueError(str(e)) from e
         except OSError as e:
             raise ValueError(f'ファイルを読めません: {e}') from e
+    if path == '/api/kintai/list-files':
+        if not (h.user['role'] == 'owner' or h.user['manage']):
+            return 403, {'error': '共有フォルダ一覧は利用者管理の権限が必要です。'}
+        prefix = d.get('prefix', '')
+        if prefix is None:
+            prefix = ''
+        if not isinstance(prefix, str) or len(prefix) > 80:
+            raise ValueError('絞り込みは80文字以内です。')
+        # 対象者の社員番号を自動で使う場合
+        if d.get('personId') and not prefix:
+            pid = d.get('personId')
+            if type(pid) is int:
+                row = c.execute('SELECT employee_code FROM kintai_people WHERE id=?', (pid,)).fetchone()
+                if row:
+                    prefix = row['employee_code'] or ''
+        result = list_share_files_for_user(h.user, prefix=prefix)
+        if isinstance(result, tuple):
+            return result[1], result[0]
+        return 200, result
     return 404, {'error': '操作が見つかりません。'}
 
 

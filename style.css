@@ -145,17 +145,27 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 @media(max-width:720px){#stocknav{display:flex;flex-direction:column;width:100%}#stocknav .stocknav-top{display:flex;width:100%}#stocknav .stocknav-top .nav{display:block;flex:1 1 0;margin:0}#stocknav .stocknav-secondary{padding-left:0;margin-top:4px}#stocknav .stocknav-secondary .nav,#stocknav .stocknav-period,#stocknav .stocknav-orders{display:block;width:100%;margin:0}}
 
 #kintaidesk{max-width:1200px}
-.kintailead{margin:0 0 12px;color:#000}
+.kintailead{margin:0 0 8px;color:#000}
+.kintaihow{margin:0 0 14px;padding:10px 12px 10px 28px;border:1px solid #cfe3cf;border-radius:8px;background:#f3faf3;line-height:1.55}
+.kintaihow li{margin:2px 0}
 .kintaifilters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:0 0 12px}
 .kintaifilters label{min-width:7rem}
 .kintaifilters select,.kintaifilters input{min-width:9rem}
 .kintaimeta{margin:4px 0;font-size:13px;color:#3d5344}
+.kintaimeta.kintai-warn,#kintaishare.kintai-warn{color:#8a3b00;font-weight:700}
+.kintai-warn-inline{color:#8a3b00;font-weight:700}
 .kintaisettings{margin:10px 0 14px;padding:10px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff}
-.kintaisettings label{margin-top:8px}
+.kintaisettings label{margin-top:8px;display:block}
 #kintaidesk .kintai-tablewrap{overflow:auto;max-height:min(74vh,920px);margin-top:8px}
-#kintaitable td small{display:block;margin-top:2px;font-weight:400;color:#5a6d5f}
+#kintaitable td small,.kintai-errdetail{display:block;margin-top:4px;font-weight:400;color:#5a3d2e;white-space:pre-wrap;word-break:break-all;line-height:1.35}
 #kintaistatus{font-weight:700;margin:8px 0}
-
+.kintaiimportresult{margin:12px 0;padding:10px 12px;border:1px solid #e0c4a8;border-radius:8px;background:#fff8f0}
+.kintaiimportresult h3{margin:0 0 8px;font-size:15px}
+.kintai-result-table{width:100%;border-collapse:collapse;font-size:13px}
+.kintai-result-table th,.kintai-result-table td{border:1px solid #e6d5c4;padding:6px 8px;vertical-align:top;text-align:left}
+.kintai-result-table tr.kintai-ok{background:#f3faf3}
+.kintai-result-table tr.kintai-ng{background:#fff1e8}
+.kintai-result-table tr.kintai-miss{background:#f5f5f5}
 .kintai-setting-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
 .kintaiprobe{max-height:240px;overflow:auto;background:#f4faf4;border:1px solid #d5ead4;padding:10px;font-size:12px;white-space:pre-wrap}
-#kintaishareinput,#kintaifileinput{min-width:min(100%,42rem)}
+#kintaishareinput,#kintaifileinput,#kintaifilepick{min-width:min(100%,42rem)}
