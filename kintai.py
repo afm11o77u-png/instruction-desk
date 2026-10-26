@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 import zipfile
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -24,14 +25,49 @@ PKG = '{http://schemas.openxmlformats.org/package/2006/relationships}'
 # 暦年・4月始まりではない。2026年度 = 2026-02〜2027-01
 DEFAULT_FISCAL_START = (2026, 2)
 LOCAL_SETTINGS_NAME = 'kintai-local.json'
-LOCAL_SETTINGS_KEYS = ('shareRoot', 'layoutId', 'peopleFiles')
+LOCAL_SETTINGS_KEYS = ('shareRoot', 'layoutId', 'peopleFiles', 'peopleLayouts')
 PATH_MAX = 1000
 # UI・ドキュメント用の例示のみ。自動設定や mark_kintai の推測ONには使わない。
-EXAMPLE_KATO_SHARE_ROOT = (
+# 共有ルートは「年度ルート」（出勤簿 2026年度版）まで。雇用区分フォルダは人ごとの相対パス。
+EXAMPLE_YEAR_SHARE_ROOT = (
     r'\\Desktop-iu7d38q\e\札幌発寒支店共有\札幌発寒支店\札幌発寒支店管理職以外閲覧禁止'
-    r'\※閲覧禁止※\出勤簿   2026年度版\①　正社員（営業手当無し）001～050'
+    r'\※閲覧禁止※\出勤簿   2026年度版'
 )
-EXAMPLE_KATO_FILE = '009  正社員（営業手当無し）出勤簿2026.2～.xlsx'
+# 後方互換エイリアス（旧UIキー）
+EXAMPLE_KATO_SHARE_ROOT = EXAMPLE_YEAR_SHARE_ROOT
+EXAMPLE_PATHS_BY_EMPLOYMENT = {
+    'regular': {
+        'label': '正社員（加藤）',
+        'employeeCode': '009',
+        'employment': 'regular',
+        'relative': (
+            r'①　正社員（営業手当無し）001～050'
+            r'\009  正社員（営業手当無し）出勤簿2026.2～.xlsx'
+        ),
+        'layoutId': 'shukkinbo-2026-seishain-v1',
+    },
+    'contract': {
+        'label': '契約社員（036）',
+        'employeeCode': '036',
+        'employment': 'contract',
+        'relative': (
+            r'③　契約社員（営業手当無し）001～100'
+            r'\036　契約社員（営業手当無し）出勤簿2026.2～.xlsx'
+        ),
+        'layoutId': 'shukkinbo-2026-seishain-v1',
+    },
+    'part': {
+        'label': 'パート（010）',
+        'employeeCode': '010',
+        'employment': 'part',
+        'relative': (
+            r'⑤　パート　001～300'
+            r'\010　パート用　出勤簿2026.2～.xlsx'
+        ),
+        'layoutId': 'shukkinbo-2026-seishain-v1',
+    },
+}
+EXAMPLE_KATO_FILE = EXAMPLE_PATHS_BY_EMPLOYMENT['regular']['relative']
 LAYOUT_SAMPLE_NEEDED = (
     '実出勤簿のシート名・セル番地は未確認のため集計できません。'
     'サンプルxlsx（個人情報を伏せたコピー可）または ImportShukkinbo.bas / live-sync を提供してください。'
@@ -42,7 +78,8 @@ LAYOUT_SAMPLE_NEEDED = (
 DEFAULT_PEOPLE = [
     {'employee_code': '009', 'employment': 'regular', 'display_name': '加藤 篤郎', 'sort_order': 1, 'file_hint': '01_加藤　篤郎'},
     {'employee_code': '031', 'employment': 'regular', 'display_name': '今城 卓也', 'sort_order': 2, 'file_hint': '02_今城　卓也'},
-    {'employee_code': '036', 'employment': 'regular', 'display_name': '伊藤 良子', 'sort_order': 3, 'file_hint': '03_伊藤　良子'},
+    # 036 は契約社員フォルダの出勤簿（ユーザー確認のパス例）
+    {'employee_code': '036', 'employment': 'contract', 'display_name': '伊藤 良子', 'sort_order': 3, 'file_hint': '03_伊藤　良子'},
     {'employee_code': '037', 'employment': 'contract', 'display_name': '須永 結香', 'sort_order': 4, 'file_hint': '04_須永　結香'},
     {'employee_code': '040', 'employment': 'part', 'display_name': '小川 春佳', 'sort_order': 5, 'file_hint': '05_小川　春佳'},
     {'employee_code': '010', 'employment': 'part', 'display_name': '菊池 敏子', 'sort_order': 6, 'file_hint': '06_菊池　敏子'},
@@ -445,8 +482,11 @@ def load_local_settings() -> dict:
     # 実サンプル確認済みの正社員2026レイアウトを既定にする（検証は layoutId=fixture-v1）
     data.setdefault('layoutId', 'shukkinbo-2026-seishain-v1')
     data.setdefault('peopleFiles', {})
+    data.setdefault('peopleLayouts', {})
     if not isinstance(data.get('peopleFiles'), dict):
         data['peopleFiles'] = {}
+    if not isinstance(data.get('peopleLayouts'), dict):
+        data['peopleLayouts'] = {}
     return data
 
 
@@ -484,6 +524,19 @@ def save_local_settings(patch: dict, actor_may_write: bool) -> dict:
                 raise ValueError('相対パスに .. は使えません。')
             clean[key] = v.strip()
         cur['peopleFiles'] = clean
+    if 'peopleLayouts' in patch:
+        pl = patch['peopleLayouts']
+        if not isinstance(pl, dict):
+            raise ValueError('対象者レイアウト設定が不正です。')
+        clean_l = {}
+        for k, v in pl.items():
+            key = str(k)
+            if v in (None, ''):
+                continue
+            if not isinstance(v, str) or v not in LAYOUTS:
+                raise ValueError(f'未対応のレイアウトです: {v}')
+            clean_l[key] = v
+        cur['peopleLayouts'] = clean_l
     path = local_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cur, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
@@ -498,6 +551,37 @@ def get_layout(layout_id: str | None = None) -> dict:
             f'レイアウト「{lid}」は未登録です。利用可: ' + '、'.join(LAYOUTS.keys()) + '。'
         )
     return layout
+
+
+def layout_id_for_person(person: dict, settings: dict | None = None) -> str:
+    settings = settings if settings is not None else load_local_settings()
+    pl = settings.get('peopleLayouts') or {}
+    pid = str(person.get('id') or '')
+    lid = (pl.get(pid) or settings.get('layoutId') or 'shukkinbo-2026-seishain-v1').strip()
+    return lid if lid in LAYOUTS else 'shukkinbo-2026-seishain-v1'
+
+
+def split_relative_parts(relative: str) -> list[str]:
+    """相対パスを区切り（\\ /）で分割。.. は拒否。"""
+    s = (relative or '').replace('\\', '/').strip()
+    parts = [p for p in s.split('/') if p and p != '.']
+    if any(p == '..' for p in parts):
+        raise ValueError('相対パスに .. は使えません。')
+    return parts
+
+
+def join_root_relative(root: Path, relative: str) -> Path:
+    """年度ルート＋（雇用区分フォルダ\\ファイル名）を結合。区切りは OS 非依存。"""
+    out = root
+    for part in split_relative_parts(relative):
+        out = out / part
+    return out
+
+
+def person_source_relative(person: dict, settings: dict) -> str:
+    pid = str(person['id'])
+    override = (settings.get('peopleFiles') or {}).get(pid) or (settings.get('peopleFiles') or {}).get(person['id'])
+    return (override or person.get('source_file') or '').strip()
 
 
 def _col_letters(n: int) -> str:
@@ -878,20 +962,307 @@ def _unc_to_path(share_root: str) -> Path:
     return Path(root)
 
 
+def resolve_dir_with_normalized_segments(path: Path) -> Path | None:
+    """各パス区切りをスペース／全角差で正規化して実在フォルダを探す。見つからなければ None。"""
+    if not path or not path.parts:
+        return None
+    try:
+        if path.is_dir():
+            return path
+    except OSError:
+        pass
+    parts = list(path.parts)
+    path_s = str(path)
+    if not path.is_absolute():
+        acc = Path('.')
+        rest = parts
+    elif path_s.startswith('//') and not path_s.startswith('///') and len(parts) >= 3:
+        # UNC（\\server\share\... → //server/share/...）。server/share はそのまま、以降を正規化
+        acc = Path('//' + parts[1]) / parts[2]
+        rest = parts[3:]
+    elif parts[0] == '/':
+        acc = Path('/')
+        rest = parts[1:]
+    elif len(parts[0]) >= 2 and parts[0][1] == ':':
+        acc = Path(parts[0] + os.sep)
+        rest = parts[1:]
+    else:
+        acc = Path(parts[0])
+        rest = parts[1:]
+    try:
+        if rest and not acc.exists():
+            return None
+    except OSError:
+        return None
+    for seg in rest:
+        try:
+            if not acc.is_dir():
+                return None
+            children = [p for p in acc.iterdir() if p.is_dir()]
+        except OSError:
+            return None
+        exact = acc / seg
+        try:
+            if exact.is_dir():
+                acc = exact
+                continue
+        except OSError:
+            pass
+        key = normalize_filename_key(seg)
+        hits = [p for p in children if normalize_filename_key(p.name) == key]
+        if len(hits) == 1:
+            acc = hits[0]
+        else:
+            return None
+    try:
+        return acc if acc.is_dir() else None
+    except OSError:
+        return None
+
+
+def normalize_filename_key(name: str) -> str:
+    """ファイル名照合用キー。空白圧縮・NFKC（全角括弧等）・波ダッシュ類を揃える。"""
+    s = unicodedata.normalize('NFKC', (name or '').strip())
+    for ch in ('\u301c', '\uFF5E', '\u223c', '\u2053', '～', '〜'):
+        s = s.replace(ch, '~')
+    s = re.sub(r'[\s\u3000]+', ' ', s)
+    return s.casefold()
+
+
+def _is_attendance_xlsx(name: str) -> bool:
+    lower = name.lower()
+    if name.startswith('~$'):
+        return False
+    return lower.endswith('.xlsx') or lower.endswith('.xlsm')
+
+
+def list_share_xlsx(directory: Path, prefix: str = '', limit: int = 80) -> list[dict]:
+    """共有フォルダ直下の出勤簿候補（読取専用の名前一覧）。"""
+    if not directory or not directory.parts:
+        return []
+    try:
+        if not directory.is_dir():
+            return []
+        entries = list(directory.iterdir())
+    except OSError:
+        return []
+    pref = (prefix or '').strip()
+    pref_digits = re.sub(r'\D', '', pref)
+    pref_key = normalize_filename_key(pref) if pref else ''
+    out = []
+    for p in sorted(entries, key=lambda x: x.name):
+        if not p.is_file() or not _is_attendance_xlsx(p.name):
+            continue
+        if pref_key or pref_digits:
+            nk = normalize_filename_key(p.name)
+            head = re.match(r'^(\d+)', nk)
+            ok = False
+            if pref_digits and head and head.group(1) == pref_digits:
+                ok = True
+            if pref_key and (nk.startswith(pref_key) or pref_key in nk):
+                ok = True
+            if not ok:
+                continue
+        out.append({'name': p.name, 'path': str(p)})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def find_matching_share_file(
+    directory: Path,
+    wanted_name: str,
+    employee_code: str = '',
+) -> tuple[Path | None, list[str]]:
+    """正規化一致、または社員番号で一意な候補を探す。戻り値 (path, 候補名一覧)。"""
+    candidates_meta = list_share_xlsx(directory, prefix='', limit=200)
+    names = [c['name'] for c in candidates_meta]
+    if not names:
+        return None, []
+    want_key = normalize_filename_key(wanted_name)
+    norm_hits = [n for n in names if normalize_filename_key(n) == want_key]
+    if len(norm_hits) == 1:
+        return directory / norm_hits[0], names
+    if len(norm_hits) > 1:
+        return directory / norm_hits[0], names
+    code = (employee_code or '').strip()
+    if code:
+        code_key = normalize_filename_key(code)
+        code_hits = []
+        for n in names:
+            nk = normalize_filename_key(n)
+            head = re.match(r'^(\d+)', nk)
+            if head and head.group(1) == re.sub(r'\D', '', code_key):
+                code_hits.append(n)
+            elif nk.startswith(code_key + ' ') or nk.startswith(code_key + '_'):
+                code_hits.append(n)
+        if len(code_hits) == 1:
+            return directory / code_hits[0], names
+        # 絞り込み候補として社員番号一致だけ返す
+        if code_hits:
+            return None, code_hits
+    return None, names[:12]
+
+
+def _share_root_path(settings: dict) -> Path:
+    root = _unc_to_path(settings.get('shareRoot') or '')
+    if not root.parts:
+        return root
+    fuzzy = resolve_dir_with_normalized_segments(root)
+    return fuzzy if fuzzy is not None else root
+
+
 def resolve_person_file(person: dict, settings: dict) -> Path | None:
-    pid = str(person['id'])
-    override = (settings.get('peopleFiles') or {}).get(pid) or (settings.get('peopleFiles') or {}).get(person['id'])
-    name = (override or person.get('source_file') or '').strip()
+    """設定上の読取元パス。存在しなくても結合結果を返す（未設定のみ None）。
+
+    読取元は次のいずれか:
+    - フルUNC / ドライブレター付き絶対パス
+    - 年度ルート（shareRoot）からの相対（雇用区分フォルダ\\ファイル名）
+    - ファイル名のみ（年度ルート直下、または旧運用の雇用区分ごとルート）
+    """
+    name = person_source_relative(person, settings)
     if not name:
         return None
     if name.startswith('\\\\') or name.startswith('//') or (len(name) > 2 and name[1] == ':'):
-        return _unc_to_path(name)
-    root = _unc_to_path(settings.get('shareRoot') or '')
+        full = _unc_to_path(name)
+        # フルパスでも親フォルダのスペース差を吸収してからファイル名照合
+        parent = resolve_dir_with_normalized_segments(full.parent) or full.parent
+        return parent / full.name
+    root = _share_root_path(settings)
     if not root.parts:
         # 相対指定のみ → DATA 配下の検証用ディレクトリを許可
         fixture_root = Path(DATA_DIR) / 'kintai-fixtures'
-        return fixture_root / name
-    return root / name
+        return join_root_relative(fixture_root, name)
+    # 相対パスの中間フォルダも正規化して辿る
+    parts = split_relative_parts(name)
+    if not parts:
+        return None
+    acc = root
+    for seg in parts[:-1]:
+        nxt = acc / seg
+        try:
+            if nxt.is_dir():
+                acc = nxt
+                continue
+        except OSError:
+            pass
+        fuzzy = None
+        try:
+            children = [p for p in acc.iterdir() if p.is_dir()]
+            key = normalize_filename_key(seg)
+            hits = [p for p in children if normalize_filename_key(p.name) == key]
+            if len(hits) == 1:
+                fuzzy = hits[0]
+        except OSError:
+            fuzzy = None
+        acc = fuzzy if fuzzy is not None else nxt
+    return acc / parts[-1]
+
+
+def resolve_person_file_existing(person: dict, settings: dict) -> dict:
+    """実在ファイルを解決。kind: unset | ok | not_found | access。"""
+    configured = resolve_person_file(person, settings)
+    if configured is None:
+        return {
+            'ok': False,
+            'kind': 'unset',
+            'path': None,
+            'configuredPath': '',
+            'message': '読取元ファイルが未設定です。対象者の読取元を保存してください。',
+            'resolvedNote': '',
+            'candidates': [],
+        }
+    configured_s = str(configured)
+    try:
+        if configured.is_file():
+            return {
+                'ok': True,
+                'kind': 'ok',
+                'path': configured,
+                'configuredPath': configured_s,
+                'message': '',
+                'resolvedNote': '',
+                'candidates': [],
+            }
+    except OSError as e:
+        return {
+            'ok': False,
+            'kind': 'access',
+            'path': None,
+            'configuredPath': configured_s,
+            'message': f'パスにアクセスできません（{type(e).__name__}: {e}）。探索: {configured_s}',
+            'resolvedNote': '',
+            'candidates': [],
+        }
+
+    parent = configured.parent
+    wanted = configured.name
+    matched, candidates = find_matching_share_file(
+        parent, wanted, employee_code=str(person.get('employee_code') or ''),
+    )
+    if matched is not None:
+        try:
+            if matched.is_file():
+                return {
+                    'ok': True,
+                    'kind': 'ok',
+                    'path': matched,
+                    'configuredPath': configured_s,
+                    'message': '',
+                    'resolvedNote': f'ファイル名を正規化して一致: {matched.name}',
+                    'candidates': candidates[:8],
+                }
+        except OSError as e:
+            return {
+                'ok': False,
+                'kind': 'access',
+                'path': None,
+                'configuredPath': configured_s,
+                'message': f'候補ファイルにアクセスできません（{type(e).__name__}: {e}）: {matched}',
+                'resolvedNote': '',
+                'candidates': candidates[:8],
+            }
+
+    root = _share_root_path(settings)
+    root_ok = False
+    try:
+        root_ok = bool(root.parts) and root.is_dir()
+    except OSError:
+        root_ok = False
+    hint_parts = [f'探索パス: {configured_s}']
+    if not (settings.get('shareRoot') or '').strip():
+        is_abs = wanted.startswith('\\\\') or wanted.startswith('//') or (
+            len(configured_s) > 2 and configured_s[1] == ':'
+        )
+        if not is_abs:
+            hint_parts.append('共有ルート未設定（入力だけでは保存されません。「共有ルートとレイアウトを保存」が必要です）。')
+    elif not root_ok:
+        hint_parts.append(
+            f'共有ルートにフォルダとしてアクセスできません: {settings.get("shareRoot")}（UNC未接続・権限・パス誤り・フォルダ名のスペース差）。'
+        )
+    code = str(person.get('employee_code') or '').strip()
+    code_cands = []
+    if code:
+        ck = normalize_filename_key(code)
+        for n in candidates:
+            nk = normalize_filename_key(n)
+            head = re.match(r'^(\d+)', nk)
+            if (head and head.group(1) == re.sub(r'\D', '', ck)) or nk.startswith(ck):
+                code_cands.append(n)
+    show = code_cands or candidates[:8]
+    if show:
+        hint_parts.append('候補: ' + '／'.join(show[:8]))
+    elif root_ok:
+        hint_parts.append('フォルダ内に一致するxlsxが見つかりません。')
+    return {
+        'ok': False,
+        'kind': 'not_found',
+        'path': None,
+        'configuredPath': configured_s,
+        'message': 'ファイルが見つかりません。' + ' '.join(hint_parts),
+        'resolvedNote': '',
+        'candidates': show[:8],
+    }
 
 
 def _read_file_bytes(path: Path) -> tuple[bytes, str]:
@@ -908,13 +1279,36 @@ def _read_file_bytes(path: Path) -> tuple[bytes, str]:
 
 def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> dict:
     settings = load_local_settings()
-    layout = get_layout(settings.get('layoutId'))
+    default_layout = get_layout(settings.get('layoutId'))
     months = fiscal_months(fiscal_start_year, DEFAULT_FISCAL_START[1])
     people = [dict(r) for r in c.execute(
         'SELECT * FROM kintai_people WHERE active=1 ORDER BY sort_order, id'
     )]
     person_results = []
+    share_root = (settings.get('shareRoot') or '').strip()
     for person in people:
+        layout_id = layout_id_for_person(person, settings)
+        try:
+            layout = get_layout(layout_id)
+        except ValueError as e:
+            item = {
+                'personId': person['id'],
+                'displayName': person['display_name'],
+                'employeeCode': person['employee_code'],
+                'employment': person['employment'],
+                'status': 'エラー',
+                'error': str(e),
+                'errorKind': 'layout',
+                'monthsUpdated': 0,
+                'sourcePath': '',
+                'configuredPath': '',
+                'resolvedNote': '',
+                'candidates': [],
+                'layoutId': layout_id,
+            }
+            _set_person_status(c, person['id'], 'エラー', item['error'], '', '')
+            person_results.append(item)
+            continue
         item = {
             'personId': person['id'],
             'displayName': person['display_name'],
@@ -922,22 +1316,40 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
             'employment': person['employment'],
             'status': '未取得',
             'error': '',
+            'errorKind': '',
             'monthsUpdated': 0,
+            'sourcePath': '',
+            'configuredPath': '',
+            'resolvedNote': '',
+            'candidates': [],
+            'layoutId': layout['id'],
         }
-        path = resolve_person_file(person, settings)
-        if path is None:
+        resolved = resolve_person_file_existing(person, settings)
+        item['candidates'] = resolved.get('candidates') or []
+        item['configuredPath'] = resolved.get('configuredPath') or ''
+        item['resolvedNote'] = resolved.get('resolvedNote') or ''
+        item['sourcePath'] = str(resolved['path']) if resolved.get('path') else item['configuredPath']
+
+        if resolved['kind'] == 'unset':
             item['status'] = '未取得'
-            item['error'] = '読取元ファイルが未設定です。'
+            item['error'] = resolved['message']
+            item['errorKind'] = 'unset'
             _set_person_status(c, person['id'], item['status'], item['error'], '', '')
             person_results.append(item)
             continue
-        item['sourcePath'] = str(path)
+
+        if not resolved['ok']:
+            item['status'] = 'エラー'
+            item['error'] = resolved['message']
+            item['errorKind'] = resolved['kind']  # not_found | access
+            _set_person_status(c, person['id'], 'エラー', item['error'], item['sourcePath'], '')
+            person_results.append(item)
+            continue
+
+        path = resolved['path']
         try:
-            if not path.is_file():
-                raise FileNotFoundError(f'ファイルが見つかりません: {path.name}')
             blob, mtime = _read_file_bytes(path)
             parsed = parse_person_workbook(blob, months, layout, as_of=as_of)
-            # ファイル単位で検証後に保存
             now = datetime.now().isoformat(timespec='seconds')
             for (y, m), agg in parsed.items():
                 c.execute(
@@ -964,20 +1376,48 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
                     ),
                 )
             item['status'] = '成功'
+            item['errorKind'] = ''
             item['monthsUpdated'] = len(parsed)
             item['sourceMtime'] = mtime
+            item['sourcePath'] = str(path)
             _set_person_status(c, person['id'], '成功', '', str(path), mtime)
-        except Exception as e:
-            # 失敗時は前回正常データを保持（月次行は触らない）
+        except PermissionError as e:
             item['status'] = 'エラー'
-            item['error'] = str(e)[:500]
+            item['errorKind'] = 'permission'
+            item['error'] = f'読取権限がありません: {path}（{e}）'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except FileNotFoundError as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'not_found'
+            item['error'] = f'ファイルが見つかりません: {path}（{e}）'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except OSError as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'io'
+            item['error'] = f'ファイルを開けません（{type(e).__name__}）: {path} — {e}'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except ValueError as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'parse'
+            item['error'] = f'パース失敗: {e}'[:500]
+            _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
+        except Exception as e:
+            item['status'] = 'エラー'
+            item['errorKind'] = 'other'
+            item['error'] = f'{type(e).__name__}: {e}'[:500]
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         person_results.append(item)
     summary = {
         'fiscal': fiscal_label(fiscal_start_year),
-        'layoutId': layout['id'],
-        'shareRootConfigured': bool((settings.get('shareRoot') or '').strip()),
+        'layoutId': default_layout['id'],
+        'shareRoot': share_root,
+        'shareRootConfigured': bool(share_root),
         'people': person_results,
+        'counts': {
+            'ok': sum(1 for p in person_results if p['status'] == '成功'),
+            'error': sum(1 for p in person_results if p['status'] == 'エラー'),
+            'missing': sum(1 for p in person_results if p['status'] == '未取得'),
+        },
     }
     c.execute(
         'INSERT INTO kintai_import_runs(at,actor_id,actor,fiscal_label,summary_json) VALUES(datetime(\'now\',\'localtime\'),?,?,?,?)',
@@ -985,9 +1425,7 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
             user['id'] if user else None,
             f"{user['name']} ({user['login']})" if user else 'システム',
             summary['fiscal'],
-            json.dumps({'ok': sum(1 for p in person_results if p['status'] == '成功'),
-                        'error': sum(1 for p in person_results if p['status'] == 'エラー'),
-                        'missing': sum(1 for p in person_results if p['status'] == '未取得')}, ensure_ascii=False),
+            json.dumps(summary['counts'], ensure_ascii=False),
         ),
     )
     return summary
@@ -1049,6 +1487,7 @@ def list_overview(
         'WHERE p.active=1 ORDER BY p.sort_order, p.id'
     )]
     pf = settings.get('peopleFiles') or {}
+    pl = settings.get('peopleLayouts') or {}
     rows = []
     if person_id:
         person = next((p for p in people if p['id'] == person_id), None)
@@ -1131,8 +1570,10 @@ def list_overview(
         'layoutNote': layout.get('note', ''),
         'realLayoutReady': layout['id'] != 'fixture-v1',
         'sampleNeeded': LAYOUT_SAMPLE_NEEDED if layout['id'] == 'fixture-v1' else '',
-        'exampleKatoShareRoot': EXAMPLE_KATO_SHARE_ROOT,
+        'exampleKatoShareRoot': EXAMPLE_YEAR_SHARE_ROOT,
+        'exampleYearShareRoot': EXAMPLE_YEAR_SHARE_ROOT,
         'exampleKatoFile': EXAMPLE_KATO_FILE,
+        'examplePathsByEmployment': EXAMPLE_PATHS_BY_EMPLOYMENT,
         'lastImport': dict(last_run) if last_run else None,
         'people': [
             {
@@ -1141,6 +1582,7 @@ def list_overview(
                 'employment': p['employment'],
                 'displayName': p['display_name'],
                 'sourceFile': (pf.get(str(p['id'])) or p['source_file'] or ''),
+                'layoutId': pl.get(str(p['id'])) or settings.get('layoutId') or 'shukkinbo-2026-seishain-v1',
                 'fileHint': next(
                     (d['file_hint'] for d in DEFAULT_PEOPLE
                      if d['employee_code'] == p['employee_code'] and d['employment'] == p['employment']),
@@ -1152,12 +1594,13 @@ def list_overview(
         'rows': rows,
         'opsNote': (
             'サーバー実行ユーザーに共有フォルダの読取権限が必要です。元出勤簿は変更しません。'
-            ' パスは共有ルート＋ファイル名、またはフルUNCのどちらでも設定できます。'
+            ' 年度ルート（出勤簿 2026年度版）を共有し、雇用区分フォルダ＋ファイル名は対象者ごとに設定します。'
+            ' フルUNCでも可。'
         ),
     }
 
 
-def update_person_file(c, person_id: int, source_file: str):
+def update_person_file(c, person_id: int, source_file: str, layout_id: str | None = None):
     if type(person_id) is not int:
         raise ValueError('対象者を選択してください。')
     if not isinstance(source_file, str) or len(source_file) > PATH_MAX:
@@ -1168,6 +1611,20 @@ def update_person_file(c, person_id: int, source_file: str):
     if not row:
         raise ValueError('対象者が見つかりません。')
     c.execute('UPDATE kintai_people SET source_file=? WHERE id=?', (source_file.strip(), person_id))
+    if layout_id is not None:
+        if layout_id == '':
+            # 個別指定を外して既定レイアウトへ
+            cur = load_local_settings()
+            pl = dict(cur.get('peopleLayouts') or {})
+            pl.pop(str(person_id), None)
+            save_local_settings({'peopleLayouts': pl}, True)
+        else:
+            if layout_id not in LAYOUTS:
+                raise ValueError('未対応のレイアウトです。')
+            save_local_settings(
+                {'peopleLayouts': {**(load_local_settings().get('peopleLayouts') or {}), str(person_id): layout_id}},
+                True,
+            )
 
 
 def probe_person(c, person_id: int) -> dict:
@@ -1178,21 +1635,94 @@ def probe_person(c, person_id: int) -> dict:
     if not person:
         raise ValueError('対象者が見つかりません。')
     settings = load_local_settings()
-    path = resolve_person_file(dict(person), settings)
-    if path is None:
-        raise ValueError('読取元ファイルが未設定です。共有ルート＋ファイル名、またはフルパスを設定してください。')
-    if not path.is_file():
-        raise FileNotFoundError(
-            f'ファイルにアクセスできません（UNC未接続の可能性）: {path}。'
-            'ローカルWindowsサーバー上で共有読取権限を確認するか、サンプルxlsxを添付してください。'
-        )
+    resolved = resolve_person_file_existing(dict(person), settings)
+    if resolved['kind'] == 'unset':
+        raise ValueError(resolved['message'])
+    if not resolved['ok']:
+        raise FileNotFoundError(resolved['message'])
+    path = resolved['path']
     blob, mtime = _read_file_bytes(path)
     probed = probe_workbook_bytes(blob)
     probed['sourcePath'] = str(path)
+    probed['configuredPath'] = resolved.get('configuredPath') or ''
+    probed['resolvedNote'] = resolved.get('resolvedNote') or ''
     probed['sourceMtime'] = mtime
     probed['personId'] = person_id
     probed['displayName'] = person['display_name']
     return probed
+
+
+def list_share_files_for_user(user, prefix: str = '', subdir: str = '', person: dict | None = None) -> dict:
+    """権限者向け: 年度ルート直下、または雇用区分サブフォルダのxlsx一覧。"""
+    if not user or not (user['role'] == 'owner' or user.get('manage')):
+        return {'error': '共有フォルダ一覧は利用者管理の権限が必要です。'}, 403
+    settings = load_local_settings()
+    root_s = (settings.get('shareRoot') or '').strip()
+    if not root_s:
+        raise ValueError(
+            '年度ルートが未設定です。入力後に「年度ルートとレイアウトを保存」を押してください。'
+        )
+    root = _share_root_path(settings)
+    try:
+        if not root.is_dir():
+            raise ValueError(
+                f'年度ルートにフォルダとしてアクセスできません: {root_s}（UNC未接続・権限・パス誤り・フォルダ名のスペース差）。'
+            )
+    except OSError as e:
+        raise ValueError(f'年度ルートを開けません（{type(e).__name__}: {e}）: {root_s}') from e
+
+    # 対象者の相対パスから雇用区分フォルダを推定
+    rel_subdir = (subdir or '').strip()
+    if not rel_subdir and person:
+        src = person_source_relative(person, settings)
+        if src and not (src.startswith('\\\\') or src.startswith('//') or (len(src) > 2 and src[1] == ':')):
+            parts = split_relative_parts(src)
+            if len(parts) >= 2:
+                rel_subdir = '\\'.join(parts[:-1])
+
+    target = join_root_relative(root, rel_subdir) if rel_subdir else root
+    # 中間フォルダの正規化
+    fuzzy_target = resolve_dir_with_normalized_segments(target)
+    if fuzzy_target is not None:
+        target = fuzzy_target
+    try:
+        if not target.is_dir():
+            raise ValueError(
+                f'一覧対象フォルダにアクセスできません: {target}（subdir={rel_subdir or "（年度ルート直下）"}）。'
+            )
+    except OSError as e:
+        raise ValueError(f'フォルダを開けません（{type(e).__name__}: {e}）: {target}') from e
+
+    files = list_share_xlsx(target, prefix=prefix, limit=100)
+    # 候補選択用に、年度ルートからの相対パスも返す
+    out_files = []
+    for f in files:
+        name = f['name']
+        rel = f'{rel_subdir}\\{name}' if rel_subdir else name
+        out_files.append({'name': name, 'path': f['path'], 'relative': rel.replace('/', '\\')})
+
+    subfolders = []
+    try:
+        for p in sorted(root.iterdir(), key=lambda x: x.name):
+            if p.is_dir() and not p.name.startswith('.'):
+                subfolders.append({'name': p.name, 'relative': p.name})
+    except OSError:
+        subfolders = []
+
+    return {
+        'shareRoot': root_s,
+        'resolvedShareRoot': str(root),
+        'subdir': rel_subdir,
+        'listPath': str(target),
+        'prefix': prefix or '',
+        'count': len(out_files),
+        'files': out_files,
+        'subfolders': subfolders,
+        'note': (
+            '年度ルート直下の雇用区分フォルダ、または指定サブフォルダ内のxlsx（読取専用）。'
+            ' 候補を選ぶと「雇用区分フォルダ\\ファイル名」の相対パスが入ります。'
+        ),
+    }
 
 
 def _query_map(h) -> dict:
@@ -1231,10 +1761,16 @@ def handle_get(h, c, path: str):
             'shareRoot': s.get('shareRoot') or '',
             'layoutId': s.get('layoutId') or 'shukkinbo-2026-seishain-v1',
             'layouts': [{'id': k, 'note': v.get('note', '')} for k, v in LAYOUTS.items()],
-            'exampleKatoShareRoot': EXAMPLE_KATO_SHARE_ROOT,
+            'exampleKatoShareRoot': EXAMPLE_YEAR_SHARE_ROOT,
+            'exampleYearShareRoot': EXAMPLE_YEAR_SHARE_ROOT,
             'exampleKatoFile': EXAMPLE_KATO_FILE,
+            'examplePathsByEmployment': EXAMPLE_PATHS_BY_EMPLOYMENT,
+            'peopleLayouts': s.get('peopleLayouts') or {},
             'sampleNeeded': LAYOUT_SAMPLE_NEEDED if (s.get('layoutId') or '') == 'fixture-v1' else '',
-            'opsNote': 'サーバー実行ユーザーに共有の読取権限が必要です。パスにパスワードを書かないでください。',
+            'opsNote': (
+                'サーバー実行ユーザーに共有の読取権限が必要です。パスにパスワードを書かないでください。'
+                ' 年度ルート＋人ごとの相対パス（雇用区分フォルダ\\ファイル名）、またはフルUNC。'
+            ),
         }
     return 404, {'error': '操作が見つかりません。'}
 
@@ -1259,9 +1795,10 @@ def handle_post(h, c, path: str, d: dict):
     if path == '/api/kintai/person-file':
         if not (h.user['role'] == 'owner' or h.user['manage']):
             return 403, {'error': '対象者の読取元設定は利用者管理の権限が必要です。'}
-        update_person_file(c, d.get('personId'), d.get('sourceFile', ''))
-        # あわせて local peopleFiles も更新（フルパス運用向け）
         pid = d.get('personId')
+        layout_id = d.get('layoutId') if 'layoutId' in d else None
+        update_person_file(c, pid, d.get('sourceFile', ''), layout_id=layout_id)
+        # あわせて local peopleFiles も更新（相対／フルUNC）
         if type(pid) is int:
             save_local_settings(
                 {'peopleFiles': {**(load_local_settings().get('peopleFiles') or {}), str(pid): str(d.get('sourceFile') or '').strip()}},
@@ -1275,6 +1812,30 @@ def handle_post(h, c, path: str, d: dict):
             raise ValueError(str(e)) from e
         except OSError as e:
             raise ValueError(f'ファイルを読めません: {e}') from e
+    if path == '/api/kintai/list-files':
+        if not (h.user['role'] == 'owner' or h.user['manage']):
+            return 403, {'error': '共有フォルダ一覧は利用者管理の権限が必要です。'}
+        prefix = d.get('prefix', '')
+        if prefix is None:
+            prefix = ''
+        if not isinstance(prefix, str) or len(prefix) > 80:
+            raise ValueError('絞り込みは80文字以内です。')
+        subdir = d.get('subdir', '') or ''
+        if not isinstance(subdir, str) or len(subdir) > PATH_MAX:
+            raise ValueError('サブフォルダ指定が長すぎます。')
+        if '..' in subdir.replace('\\', '/'):
+            raise ValueError('相対パスに .. は使えません。')
+        person = None
+        pid = d.get('personId')
+        if type(pid) is int:
+            person = c.execute('SELECT * FROM kintai_people WHERE id=?', (pid,)).fetchone()
+            if person and not prefix:
+                prefix = person['employee_code'] or ''
+            person = dict(person) if person else None
+        result = list_share_files_for_user(h.user, prefix=prefix, subdir=subdir, person=person)
+        if isinstance(result, tuple):
+            return result[1], result[0]
+        return 200, result
     return 404, {'error': '操作が見つかりません。'}
 
 
