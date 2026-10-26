@@ -1,4 +1,4 @@
-"""契約・パート出勤簿（月シート 2026.2 形式）の検出・自動レイアウト・未確認時の保留。"""
+"""契約・パート出勤簿（月シート 2026.2 形式）の検出・自動レイアウト。"""
 from __future__ import annotations
 
 import unittest
@@ -58,7 +58,7 @@ def _minimal_xlsx(sheet_names: list[str]) -> bytes:
 class MonthdotDetectTest(unittest.TestCase):
     def test_detect_monthdot_vs_seishain(self):
         self.assertEqual(
-            kintai.detect_sheet_pattern([f'2026.{m}' for m in range(2, 13)] + ['2027.1']),
+            kintai.detect_sheet_pattern([f'2026.{m}' for m in range(2, 13)] + ['2027.1', '集計']),
             'monthdot-yyyy-m',
         )
         self.assertEqual(
@@ -73,11 +73,11 @@ class MonthdotDetectTest(unittest.TestCase):
         )
         self.assertEqual(
             kintai.layout_id_for_person({'id': 2, 'employment': 'contract'}, {}),
-            'shukkinbo-2026-monthdot-pending',
+            'shukkinbo-2026-monthdot-v1',
         )
         self.assertEqual(
             kintai.layout_id_for_person({'id': 3, 'employment': 'part'}, {}),
-            'shukkinbo-2026-monthdot-pending',
+            'shukkinbo-2026-monthdot-part-v1',
         )
         # 個別上書きが優先
         self.assertEqual(
@@ -88,20 +88,19 @@ class MonthdotDetectTest(unittest.TestCase):
             'fixture-v1',
         )
 
-    def test_monthdot_parse_refuses_without_cells(self):
+    def test_monthdot_minimal_xlsx_missing_summary_fails_clearly(self):
         names = [f'2026.{m}' for m in range(2, 13)] + ['2027.1']
         blob = _minimal_xlsx(names)
-        layout = kintai.MONTHDOT_2026_LAYOUT
+        layout = kintai.MONTHDOT_2026_CONTRACT_LAYOUT
         with self.assertRaises(ValueError) as ctx:
             kintai.parse_person_workbook(
                 blob, kintai.fiscal_months(2026, 2), layout, as_of=date(2027, 1, 31)
             )
         msg = str(ctx.exception)
-        self.assertIn('セル番地', msg)
-        self.assertIn('2026.2', msg)
+        self.assertIn('集計', msg)
 
     def test_seishain_on_monthdot_file_explains(self):
-        names = [f'2026.{m}' for m in range(2, 13)] + ['2027.1']
+        names = [f'2026.{m}' for m in range(2, 13)] + ['2027.1', '集計']
         blob = _minimal_xlsx(names)
         with self.assertRaises(ValueError) as ctx:
             kintai.parse_person_workbook(
@@ -114,20 +113,26 @@ class MonthdotDetectTest(unittest.TestCase):
         self.assertIn('契約・パート', msg)
         self.assertIn('2026.2', msg)
 
-    def test_probe_suggests_monthdot_pending(self):
-        names = [f'2026.{m}' for m in range(2, 13)] + ['2027.1']
+    def test_probe_suggests_monthdot_v1(self):
+        names = [f'2026.{m}' for m in range(2, 13)] + ['2027.1', '集計']
         probed = kintai.probe_workbook_bytes(_minimal_xlsx(names))
         self.assertEqual(probed['sheetPattern'], 'monthdot-yyyy-m')
-        self.assertEqual(probed['suggestedLayoutId'], 'shukkinbo-2026-monthdot-pending')
-        self.assertTrue(probed['sampleNeeded'])
-        # 先頭行プレビュー（意味付けなし）
+        self.assertEqual(probed['suggestedLayoutId'], 'shukkinbo-2026-monthdot-v1')
+        self.assertFalse(probed['sampleNeeded'])
         self.assertTrue(any(s.get('preview') for s in probed['sheets']))
+
+    def test_pending_alias_still_registered(self):
+        self.assertIn('shukkinbo-2026-monthdot-pending', kintai.LAYOUTS)
+        self.assertEqual(
+            kintai.LAYOUTS['shukkinbo-2026-monthdot-pending']['kind'],
+            'summary-monthdot',
+        )
 
     def test_error_format_puts_reason_first(self):
         text = kintai._format_import_error(
             'パース失敗: x',
             path='\\\\server\\very\\long\\path\\file.xlsx',
-            layout_id='shukkinbo-2026-monthdot-pending',
+            layout_id='shukkinbo-2026-monthdot-v1',
             employment='contract',
             parse_hint=True,
         )

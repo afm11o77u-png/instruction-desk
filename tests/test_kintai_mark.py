@@ -155,7 +155,7 @@ class KintaiDbTest(unittest.TestCase):
         self.c.commit()
 
         # local settings: empty share root → fixtures dir。
-        # 契約・パートは既定が monthdot-pending なので、検証用に個別で fixture-v1 を指定。
+        # 契約・パートは既定が monthdot 実レイアウトなので、検証用に個別で fixture-v1 を指定。
         people_layouts = {str(p['id']): 'fixture-v1' for p in people}
         (self.data / 'kintai-local.json').write_text(
             json.dumps(

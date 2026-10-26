@@ -84,7 +84,7 @@ class PerPersonRelativePathTest(unittest.TestCase):
         )
         self.assertEqual(
             kintai.layout_id_for_person({'id': 9, 'employment': 'contract'}, settings),
-            'shukkinbo-2026-monthdot-pending',
+            'shukkinbo-2026-monthdot-v1',
         )
 
     def test_list_files_subdir(self):
