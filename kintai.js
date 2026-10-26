@@ -5,6 +5,7 @@
   let mode = 'month'; // month | person
   let selectedYm = '';
   let lastImportSummary = null;
+  let peopleFilter = 'all'; // all | active | retired
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -41,6 +42,67 @@
 
   function canManagePaths() {
     return !!currentUser && (currentUser.role === 'owner' || !!currentUser.manage);
+  }
+
+  function personFilterMode() {
+    const el = $('#kintaifilter');
+    if (el && el.value) peopleFilter = el.value;
+    return peopleFilter || 'all';
+  }
+
+  function passesPeopleFilter(retired) {
+    const f = personFilterMode();
+    if (f === 'active') return !retired;
+    if (f === 'retired') return !!retired;
+    return true;
+  }
+
+  function personOptionHtml(p) {
+    const tag = p.retired ? '退職' : (EMP[p.employment] || p.employment);
+    return `<option value="${p.id}">${esc(p.displayName)}（${esc(p.employeeCode)}・${esc(tag)}）</option>`;
+  }
+
+  function peopleSelectHtml(people, emptyLabel) {
+    const list = people || [];
+    const active = list.filter(p => !p.retired);
+    const retired = list.filter(p => p.retired);
+    let html = emptyLabel != null ? `<option value="">${emptyLabel}</option>` : '';
+    if (active.length) {
+      html += `<optgroup label="在職">${active.map(personOptionHtml).join('')}</optgroup>`;
+    }
+    if (retired.length) {
+      html += `<optgroup label="退職者">${retired.map(personOptionHtml).join('')}</optgroup>`;
+    }
+    if (!active.length && !retired.length && emptyLabel == null) {
+      html = '<option value="">（対象者なし）</option>';
+    }
+    return html;
+  }
+
+  function monthRowHtml(r) {
+    const m = r.month || {};
+    const err = r.lastError || m.error || '';
+    const retired = r.retired ? '<small class="kintai-retired-tag">退職</small>' : '';
+    return `<tr class="${r.retired ? 'kintai-retired-row' : ''}">
+      <td><b>${esc(r.displayName)}</b>${retired}</td>
+      <td>${esc(r.employeeCode)}</td>
+      <td>${esc(EMP[r.employment] || r.employment)}</td>
+      <td>${num(m.workDays)}</td>
+      <td>${num(m.holidayDays)}</td>
+      <td>${num(m.paidLeaveDays)}</td>
+      <td>${esc(m.ordinaryHm || '—')}</td>
+      <td>${esc(m.overtimeHm || '—')}</td>
+      <td>${esc(m.totalHm || '—')}</td>
+      <td>${esc(r.lastStatus || m.status || '未取得')}${err ? `<small class="kintai-errdetail">${esc(err)}</small>` : ''}${r.lastImportAt ? `<small>${esc(r.lastImportAt)}</small>` : ''}</td>
+    </tr>`;
+  }
+
+  function monthTableHtml(rows, heading) {
+    if (!rows.length) return '';
+    return `<h3 class="kintai-section">${esc(heading)}（${rows.length}）</h3>
+      <table><thead><tr><th>氏名</th><th>社員番号</th><th>区分</th><th>出勤日数</th><th>休日数</th><th>有給取得日数</th><th>普通勤務</th><th>残業</th><th>勤務時間計</th><th>取込結果</th></tr></thead><tbody>${
+        rows.map(monthRowHtml).join('')
+      }</tbody></table>`;
   }
 
   function shareInputUnsaved() {
@@ -140,23 +202,29 @@
       else if (pack.months && pack.months[0]) monthSel.value = pack.months[0].key;
       selectedYm = monthSel.value;
     }
+    const filterSel = $('#kintaifilter');
+    if (filterSel && !filterSel.dataset.bound) {
+      filterSel.value = peopleFilter;
+    }
     const personSel = $('#kintaiperson');
     if (personSel) {
       const keep = personSel.value;
-      personSel.innerHTML = '<option value="">（月別の全員比較）</option>' +
-        (pack.people || []).map(p =>
-          `<option value="${p.id}">${esc(p.displayName)}（${esc(p.employeeCode)}・${EMP[p.employment] || p.employment}）</option>`
-        ).join('');
+      const visiblePeople = (pack.people || []).filter(p => passesPeopleFilter(p.retired));
+      personSel.innerHTML = peopleSelectHtml(visiblePeople, '（月別の全員比較）');
       if (keep && [...personSel.options].some(o => o.value === keep)) personSel.value = keep;
     }
     const filePerson = $('#kintaifileperson');
     if (filePerson) {
       const keep = filePerson.value;
-      filePerson.innerHTML = (pack.people || []).map(p =>
-        `<option value="${p.id}">${esc(p.displayName)}（${esc(p.employeeCode)}）</option>`
-      ).join('');
+      filePerson.innerHTML = peopleSelectHtml(pack.people || [], null);
       if (keep && [...filePerson.options].some(o => o.value === keep)) filePerson.value = keep;
       syncFileInputFromPerson();
+    }
+    const pathsStatus = $('#kintaipathsstatus');
+    if (pathsStatus && !pathsStatus.dataset.locked) {
+      pathsStatus.textContent = pack.pathsListSaved
+        ? '出勤簿パス一覧: このPCに保存済み（再読込可）'
+        : '出勤簿パス一覧: 未取込';
     }
     const shareInput = $('#kintaishareinput');
     if (shareInput && !shareInput.dataset.touched) {
@@ -243,8 +311,9 @@
     mode = selectedPersonId() ? 'person' : 'month';
     if (mode === 'person' && pack.rows[0]?.months) {
       const p = pack.rows[0];
+      const empLabel = p.retired ? '退職' : (EMP[p.employment] || p.employment);
       if (status) {
-        status.textContent = `${p.displayName}（${p.employeeCode}・${EMP[p.employment] || p.employment}）／取込: ${p.lastStatus || '未取得'}`;
+        status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／取込: ${p.lastStatus || '未取得'}`;
       }
       body.innerHTML = `<table><thead><tr><th>対象年月</th><th>出勤日数</th><th>休日数</th><th>有給取得日数</th><th>普通勤務</th><th>残業</th><th>勤務時間計</th><th>取込</th></tr></thead><tbody>${
         p.months.map(m => `<tr>
@@ -264,25 +333,64 @@
       return;
     }
     const ymLabel = selectedYearMonth().replace('-', '年') + '月';
-    if (status) status.textContent = `${pack.fiscalLabel} ／ ${ymLabel} の対象者比較`;
-    body.innerHTML = `<table><thead><tr><th>氏名</th><th>社員番号</th><th>区分</th><th>出勤日数</th><th>休日数</th><th>有給取得日数</th><th>普通勤務</th><th>残業</th><th>勤務時間計</th><th>取込結果</th></tr></thead><tbody>${
-      (pack.rows || []).map(r => {
-        const m = r.month || {};
-        const err = r.lastError || m.error || '';
-        return `<tr>
-          <td><b>${esc(r.displayName)}</b></td>
-          <td>${esc(r.employeeCode)}</td>
-          <td>${esc(EMP[r.employment] || r.employment)}</td>
-          <td>${num(m.workDays)}</td>
-          <td>${num(m.holidayDays)}</td>
-          <td>${num(m.paidLeaveDays)}</td>
-          <td>${esc(m.ordinaryHm || '—')}</td>
-          <td>${esc(m.overtimeHm || '—')}</td>
-          <td>${esc(m.totalHm || '—')}</td>
-          <td>${esc(r.lastStatus || m.status || '未取得')}${err ? `<small class="kintai-errdetail">${esc(err)}</small>` : ''}${r.lastImportAt ? `<small>${esc(r.lastImportAt)}</small>` : ''}</td>
-        </tr>`;
-      }).join('')
-    }</tbody></table>`;
+    const visible = (pack.rows || []).filter(r => passesPeopleFilter(r.retired));
+    const activeRows = visible.filter(r => !r.retired);
+    const retiredRows = visible.filter(r => r.retired);
+    if (status) {
+      status.textContent = `${pack.fiscalLabel} ／ ${ymLabel} ／ 在職${activeRows.length}・退職${retiredRows.length}`;
+    }
+    body.innerHTML = monthTableHtml(activeRows, '在職') + monthTableHtml(retiredRows, '退職者')
+      || '<p class="kintaimeta">表示対象の人がいません。</p>';
+  }
+
+  function paintPathsImportResult(summary) {
+    const box = $('#kintaiimportresult');
+    const status = $('#kintaipathsstatus');
+    if (status) {
+      status.dataset.locked = '1';
+      const c = summary.counts || {};
+      status.textContent = `パス一覧取込: 更新${c.updated || 0}／追加${c.created || 0}／未照合${c.unmatched || 0}／一覧外保持${c.keptUnlisted || 0}`
+        + (summary.reloaded ? '（再読込）' : '');
+    }
+    if (!box) return;
+    const rows = (summary.people || []).map(p => `<tr class="${p.status === '未照合' || p.status === 'エラー' ? 'kintai-ng' : 'kintai-ok'}">
+      <td>${esc(p.displayName)}<br><small>${esc(p.employeeCode || '')}${p.retired ? '・退職' : ''}</small></td>
+      <td><strong>${esc(p.status)}</strong><div class="kintai-errdetail">${esc(p.detail || '')}</div>
+      ${p.path ? `<div class="kintai-errdetail">パス: ${esc(p.path)}</div>` : ''}</td>
+    </tr>`).join('');
+    const kept = (summary.keptUnlisted || []).map(p =>
+      `${esc(p.displayName)}（${esc(p.employeeCode)}）`
+    ).join(' ／ ');
+    box.hidden = false;
+    box.innerHTML = `<h3>出勤簿パス一覧の取込結果</h3>
+      <p>一覧に無い対象者は変更していません${kept ? `: ${kept}` : ''}。</p>
+      <table class="kintai-result-table"><thead><tr><th>氏名</th><th>結果</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  async function importPathsFile(file) {
+    if (!canManagePaths()) throw Error('出勤簿パス一覧の取込は利用者管理の権限が必要です。');
+    if (!file) return;
+    if (!/\.xlsx$/i.test(file.name) || file.name.startsWith('~$')) {
+      throw Error('Excelファイル（.xlsx）を選んでください。');
+    }
+    if (file.size > 2000000) throw Error('ファイルが大きすぎます。');
+    if (!confirm('出勤簿パス一覧を取り込みます。氏名に対応するフルパスを保存し、退職者を分けます。一覧に無い人は消しません。よろしいですか？')) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const summary = await api('/api/kintai/paths-import', { filename: file.name, data: btoa(binary) });
+    paintPathsImportResult(summary);
+    toast(`パス一覧を取り込みました（更新${summary.counts.updated}／追加${summary.counts.created}）`);
+    await loadKintai();
+  }
+
+  async function reloadPathsFile() {
+    if (!canManagePaths()) throw Error('出勤簿パス一覧の再読込は利用者管理の権限が必要です。');
+    if (!confirm('保存済みの出勤簿パス一覧を再読込します。よろしいですか？')) return;
+    const summary = await api('/api/kintai/paths-import', { reload: true });
+    paintPathsImportResult(summary);
+    toast(`パス一覧を再読込しました（更新${summary.counts.updated}／追加${summary.counts.created}）`);
+    await loadKintai();
   }
 
   async function importKintai() {
@@ -447,6 +555,11 @@
       loadKintai().catch(e => toast(e.message));
     };
     if (person) person.onchange = () => { mode = person.value ? 'person' : 'month'; loadKintai().catch(e => toast(e.message)); };
+    const filter = $('#kintaifilter');
+    if (filter) filter.onchange = () => {
+      peopleFilter = filter.value || 'all';
+      paintKintai();
+    };
     if (refresh) refresh.onclick = () => loadKintai().catch(e => toast(e.message));
     if (imp) imp.onclick = () => importKintai().catch(e => toast(e.message));
     if (saveShare) saveShare.onclick = () => saveShareRoot().catch(e => toast(e.message));
@@ -456,6 +569,18 @@
     if (fillPart) fillPart.onclick = () => { try { fillEmploymentExample('part'); } catch (e) { toast(e.message); } };
     if (listFiles) listFiles.onclick = () => listShareFiles().catch(e => toast(e.message));
     if (probe) probe.onclick = () => probeFile().catch(e => toast(e.message));
+    const pathsImportBtn = $('#kintaipathsimport');
+    const pathsReloadBtn = $('#kintaipathsreload');
+    const pathsFile = $('#kintaipathsfile');
+    if (pathsImportBtn && pathsFile) {
+      pathsImportBtn.onclick = () => { pathsFile.value = ''; pathsFile.click(); };
+      pathsFile.onchange = () => {
+        const file = pathsFile.files && pathsFile.files[0];
+        pathsFile.value = '';
+        importPathsFile(file).catch(e => toast(e.message));
+      };
+    }
+    if (pathsReloadBtn) pathsReloadBtn.onclick = () => reloadPathsFile().catch(e => toast(e.message));
     if (shareInput) shareInput.addEventListener('input', () => { shareInput.dataset.touched = '1'; paintShareStatus(); });
     if (fileInput) fileInput.addEventListener('input', () => { fileInput.dataset.touched = '1'; });
     if (filePerson) filePerson.onchange = () => { if (fileInput) delete fileInput.dataset.touched; syncFileInputFromPerson(); };

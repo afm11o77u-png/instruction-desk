@@ -170,5 +170,9 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintai-optional-root{margin:12px 0 4px;padding:8px 10px;border:1px dashed #c5d9c4;border-radius:6px;background:#fafdf9}
 .kintai-optional-root>summary{cursor:pointer;font-weight:600;color:#3d5344}
 .kintai-optional-root label{margin-top:8px;display:block}
+.kintai-paths-import{margin:8px 0 12px;padding:8px 10px;border:1px solid #d5ead4;border-radius:6px;background:#f7fbf7}
+.kintai-section{margin:16px 0 6px;font-size:15px;color:#2f4a38}
+.kintai-retired-tag{display:inline-block;margin-left:6px;padding:1px 6px;font-size:11px;font-weight:600;color:#6b3a1e;background:#f3e6d8;border-radius:3px}
+.kintai-retired-row{background:#faf7f3}
 .kintaiprobe{max-height:240px;overflow:auto;background:#f4faf4;border:1px solid #d5ead4;padding:10px;font-size:12px;white-space:pre-wrap}
 #kintaishareinput,#kintaifileinput,#kintaifilepick{min-width:min(100%,42rem)}

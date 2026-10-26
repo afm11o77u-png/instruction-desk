@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import base64
 import calendar
 import json
 import os
@@ -26,7 +27,17 @@ PKG = '{http://schemas.openxmlformats.org/package/2006/relationships}'
 DEFAULT_FISCAL_START = (2026, 2)
 LOCAL_SETTINGS_NAME = 'kintai-local.json'
 LOCAL_SETTINGS_KEYS = ('shareRoot', 'layoutId', 'peopleFiles', 'peopleLayouts')
+PATHS_LIST_NAME = 'kintai-paths.xlsx'  # 出勤簿パス一覧のローカルコピー（Git除外）
 PATH_MAX = 1000
+# Excel から貼った UNC 先頭に付くことがある双方向制御文字
+PATH_BIDI_MARKS = dict.fromkeys(map(ord, '\u202a\u202b\u202c\u202d\u202e\u200e\u200f\ufeff'))
+RETIREE_HEADING_RE = re.compile(r'^退職者')
+# 出勤簿パス.xlsx のセクション見出し（読み仮名が張り付いていても normalize 後に一致）
+EMPLOYMENT_SECTION_LABELS = {
+    '正社員': 'regular',
+    '契約社員': 'contract',
+    'パート': 'part',
+}
 # UI・ドキュメント用の例示のみ。自動設定や mark_kintai の推測ONには使わない。
 # 主運用は対象者ごとのフルパス。年度ルートは相対指定のときの任意補助。
 EXAMPLE_YEAR_SHARE_ROOT = (
@@ -93,8 +104,8 @@ LAYOUT_SAMPLE_NEEDED = (
 # 対象者マスタ（リンク用短い名前。共有上の実ファイル名は人が設定。推測で mark_kintai は付けない）
 DEFAULT_PEOPLE = [
     {'employee_code': '009', 'employment': 'regular', 'display_name': '加藤 篤郎', 'sort_order': 1, 'file_hint': '01_加藤　篤郎'},
-    {'employee_code': '031', 'employment': 'regular', 'display_name': '今城 卓也', 'sort_order': 2, 'file_hint': '02_今城　卓也'},
-    # 036 は契約社員フォルダの出勤簿（ユーザー確認のパス例）
+    # 出勤簿パス.xlsx の契約社員セクション（パスも契約フォルダ）
+    {'employee_code': '031', 'employment': 'contract', 'display_name': '今城 卓也', 'sort_order': 2, 'file_hint': '02_今城　卓也'},
     {'employee_code': '036', 'employment': 'contract', 'display_name': '伊藤 良子', 'sort_order': 3, 'file_hint': '03_伊藤　良子'},
     {'employee_code': '037', 'employment': 'contract', 'display_name': '須永 結香', 'sort_order': 4, 'file_hint': '04_須永　結香'},
     {'employee_code': '040', 'employment': 'part', 'display_name': '小川 春佳', 'sort_order': 5, 'file_hint': '05_小川　春佳'},
@@ -204,6 +215,9 @@ def schema(c):
             UNIQUE(employee_code, employment)
         )'''
     )
+    people_cols = {r['name'] for r in c.execute('PRAGMA table_info(kintai_people)')}
+    if 'retired' not in people_cols:
+        c.execute('ALTER TABLE kintai_people ADD COLUMN retired INTEGER NOT NULL DEFAULT 0')
     c.execute(
         '''CREATE TABLE IF NOT EXISTS kintai_monthly (
             person_id INTEGER NOT NULL,
@@ -1155,6 +1169,329 @@ def is_absolute_source_path(name: str) -> bool:
     return False
 
 
+def clean_source_path(value: str) -> str:
+    """パス先頭の U+202A など双方向制御文字を除去。"""
+    return (value or '').translate(PATH_BIDI_MARKS).strip()
+
+
+def normalize_person_name(raw: str) -> str:
+    """氏名の照合用。空白正規化＋末尾に張り付いたカタカナ読みを除去。"""
+    s = unicodedata.normalize('NFKC', raw or '')
+    s = s.replace('\u3000', ' ').replace('\xa0', ' ')
+    s = re.sub(r'\s+', ' ', s).strip()
+    # 例: 菊池 敏子キクチトシコ / 退職者タイショクシャ
+    m = re.match(r'^(.*[\u4e00-\u9fff々〆ヵヶ])([ァ-ヶー]+)$', s)
+    if m:
+        s = m.group(1).rstrip()
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def name_match_key(raw: str) -> str:
+    return re.sub(r'\s+', '', normalize_person_name(raw))
+
+
+def infer_employment_from_path(path: str) -> str | None:
+    """パス中の雇用区分フォルダ名から regular / contract / part を推定。"""
+    s = clean_source_path(path).replace('/', '\\')
+    if 'パート' in s:
+        return 'part'
+    if '契約' in s:
+        return 'contract'
+    if '正社員' in s:
+        return 'regular'
+    return None
+
+
+def infer_code_from_path(path: str) -> str:
+    """ファイル名先頭の社員番号（数字）を取る。"""
+    name = clean_source_path(path).replace('/', '\\').rsplit('\\', 1)[-1]
+    m = re.match(r'^(\d+)', name.strip())
+    return m.group(1) if m else ''
+
+
+def paths_list_path() -> Path:
+    return Path(DATA_DIR) / PATHS_LIST_NAME
+
+
+def parse_section_heading(name_s: str) -> tuple[str | None, bool | None]:
+    """見出し行なら (employment|None, retired|None)。通常の氏名行は (None, None)。
+
+    - 正社員 / 契約社員 / パート → 在職セクション（retired=False）
+    - 退職者 → 退職セクション（retired=True、雇用はパスから）
+    """
+    norm = normalize_person_name(name_s)
+    if RETIREE_HEADING_RE.match(norm) or RETIREE_HEADING_RE.match((name_s or '').strip()):
+        return None, True
+    emp = EMPLOYMENT_SECTION_LABELS.get(norm)
+    if emp:
+        return emp, False
+    return None, None
+
+
+def parse_paths_workbook(blob: bytes) -> list[dict]:
+    """出勤簿パス.xlsx（Sheet1）を読む。
+
+    見出し『正社員』『契約社員』『パート』『退職者』でセクション切替。
+    列A=氏名、列B=フルUNC。パス先頭の双方向制御文字は除去する。
+    """
+    sheets = read_xlsx_grid(blob)
+    # シート名は Sheet1 想定。1枚だけならそれ、複数なら Sheet1 優先
+    if 'Sheet1' in sheets:
+        grid = sheets['Sheet1']
+    elif len(sheets) == 1:
+        grid = next(iter(sheets.values()))
+    else:
+        raise ValueError('Sheet1 が見つかりません（出勤簿パス一覧）。')
+    max_row = max((r for r, _c in grid.keys()), default=0)
+    retired = False
+    section_employment: str | None = None
+    entries = []
+    for rn in range(1, max_row + 1):
+        name_raw = grid.get((rn, 1))
+        path_raw = grid.get((rn, 2))
+        name_s = '' if name_raw is None else str(name_raw).strip()
+        if not name_s:
+            continue
+        heading_emp, heading_retired = parse_section_heading(name_s)
+        if heading_retired is not None:
+            retired = heading_retired
+            section_employment = heading_emp  # 退職者見出しでは None
+            continue
+        path = clean_source_path('' if path_raw is None else str(path_raw))
+        if not path:
+            continue
+        code = infer_code_from_path(path)
+        path_emp = infer_employment_from_path(path)
+        # 在職セクションは見出しを優先。退職者はパスの雇用区分フォルダから。
+        employment = section_employment or path_emp
+        entries.append({
+            'displayName': normalize_person_name(name_s),
+            'nameKey': name_match_key(name_s),
+            'path': path,
+            'retired': retired,
+            'employeeCode': code,
+            'employment': employment,
+            'row': rn,
+        })
+    if not entries:
+        raise ValueError('出勤簿パス一覧に氏名とパスの行がありません。')
+    return entries
+
+
+def _match_person_for_path_entry(people: list[dict], entry: dict) -> dict | None:
+    """氏名キーで照合。同名が複数なら社員番号＋雇用区分で絞る（037混同防止）。"""
+    key = entry['nameKey']
+    hits = [p for p in people if name_match_key(p['display_name']) == key]
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0]
+    code = (entry.get('employeeCode') or '').strip()
+    emp = entry.get('employment')
+    if code and emp:
+        both = [p for p in hits if p['employee_code'] == code and p['employment'] == emp]
+        if len(both) == 1:
+            return both[0]
+    if code:
+        by_code = [p for p in hits if p['employee_code'] == code]
+        if len(by_code) == 1:
+            return by_code[0]
+    if emp:
+        by_emp = [p for p in hits if p['employment'] == emp]
+        if len(by_emp) == 1:
+            return by_emp[0]
+    return None
+
+
+def _insert_person_from_path_entry(c, entry: dict, sort_order: int) -> dict:
+    code = (entry.get('employeeCode') or '').strip()
+    emp = entry.get('employment')
+    if not code or not emp:
+        raise ValueError('社員番号または雇用区分がパスから取れません。')
+    exists = c.execute(
+        'SELECT id, display_name FROM kintai_people WHERE employee_code=? AND employment=?',
+        (code, emp),
+    ).fetchone()
+    if exists:
+        raise ValueError(
+            f'社員番号{code}（{emp}）は「{exists["display_name"]}」として登録済みです。'
+            '037混同を避けるため追加しませんでした。'
+        )
+    retired_flag = 1 if entry['retired'] else 0
+    c.execute(
+        '''INSERT INTO kintai_people(
+            employee_code,employment,display_name,source_file,active,sort_order,retired
+        ) VALUES(?,?,?,?,1,?,?)''',
+        (code, emp, entry['displayName'], entry['path'], sort_order, retired_flag),
+    )
+    pid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return {
+        'id': pid,
+        'employee_code': code,
+        'employment': emp,
+        'display_name': entry['displayName'],
+        'retired': retired_flag,
+        'source_file': entry['path'],
+    }
+
+
+def apply_paths_import(c, entries: list[dict]) -> dict:
+    """氏名→フルパスを一括反映。一覧に無い既存者は消さない・変更しない。
+
+    雇用区分見出し（正社員／契約／パート）と退職者見出しを反映。
+    未登録者は見出し＋パスから追加する。
+    """
+    people = [dict(r) for r in c.execute('SELECT * FROM kintai_people WHERE active=1')]
+    # 旧seedで今城が regular のまま残っている場合、氏名照合で拾えるようにする
+    pf = dict(load_local_settings().get('peopleFiles') or {})
+    results = []
+    updated = 0
+    created = 0
+    unmatched = 0
+    max_sort = max((int(p.get('sort_order') or 0) for p in people), default=0)
+
+    for entry in entries:
+        person = _match_person_for_path_entry(people, entry)
+        if person is None:
+            code = (entry.get('employeeCode') or '').strip()
+            emp = entry.get('employment')
+            if not (code and emp):
+                results.append({
+                    'displayName': entry['displayName'],
+                    'employeeCode': code,
+                    'employment': emp or '',
+                    'status': '未照合',
+                    'detail': '対象者マスタに氏名がなく、パスから社員番号・雇用区分も取れません。',
+                    'path': entry['path'],
+                    'retired': entry['retired'],
+                })
+                unmatched += 1
+                continue
+            try:
+                max_sort += 1
+                person = _insert_person_from_path_entry(c, entry, max_sort)
+            except ValueError as e:
+                results.append({
+                    'displayName': entry['displayName'],
+                    'employeeCode': code,
+                    'employment': emp,
+                    'status': 'エラー',
+                    'detail': str(e),
+                    'path': entry['path'],
+                    'retired': entry['retired'],
+                })
+                unmatched += 1
+                continue
+            pf[str(person['id'])] = entry['path']
+            people.append(person)
+            created += 1
+            results.append({
+                'personId': person['id'],
+                'displayName': entry['displayName'],
+                'employeeCode': code,
+                'employment': emp,
+                'status': '追加',
+                'detail': '退職者として登録' if entry['retired'] else '在職として登録',
+                'path': entry['path'],
+                'retired': entry['retired'],
+            })
+            continue
+
+        pid = person['id']
+        retired_flag = 1 if entry['retired'] else 0
+        new_emp = entry.get('employment')
+        # 見出しの雇用区分が既存と違う場合（例: 今城 regular→contract）は衝突がなければ更新
+        emp_note = ''
+        if new_emp and new_emp != person['employment']:
+            clash = c.execute(
+                'SELECT id FROM kintai_people WHERE employee_code=? AND employment=? AND id!=?',
+                (person['employee_code'], new_emp, pid),
+            ).fetchone()
+            if clash:
+                emp_note = f'／雇用区分は{person["employment"]}のまま（{new_emp}は別登録あり）'
+            else:
+                c.execute('UPDATE kintai_people SET employment=? WHERE id=?', (new_emp, pid))
+                person['employment'] = new_emp
+                emp_note = f'／雇用区分を{new_emp}に更新'
+        c.execute(
+            'UPDATE kintai_people SET source_file=?, retired=? WHERE id=?',
+            (entry['path'], retired_flag, pid),
+        )
+        pf[str(pid)] = entry['path']
+        person['source_file'] = entry['path']
+        person['retired'] = retired_flag
+        updated += 1
+        results.append({
+            'personId': pid,
+            'displayName': person['display_name'],
+            'employeeCode': person['employee_code'],
+            'employment': person['employment'],
+            'status': '更新',
+            'detail': ('退職者' if retired_flag else '在職') + emp_note,
+            'path': entry['path'],
+            'retired': bool(retired_flag),
+        })
+
+    save_local_settings({'peopleFiles': pf}, True)
+    # 加藤など一覧外は触らないことの確認用
+    kept = [
+        {
+            'personId': p['id'],
+            'displayName': p['display_name'],
+            'employeeCode': p['employee_code'],
+            'employment': p['employment'],
+            'retired': bool(p.get('retired') or 0),
+            'sourceFile': (pf.get(str(p['id'])) or p.get('source_file') or ''),
+        }
+        for p in people
+        if name_match_key(p['display_name']) not in {e['nameKey'] for e in entries}
+    ]
+    return {
+        'counts': {
+            'updated': updated,
+            'created': created,
+            'unmatched': unmatched,
+            'rows': len(entries),
+            'keptUnlisted': len(kept),
+        },
+        'people': results,
+        'keptUnlisted': kept,
+    }
+
+
+def import_paths_from_upload(c, filename: str, blob: bytes) -> dict:
+    if not filename or not str(filename).lower().endswith('.xlsx'):
+        raise ValueError('Excelファイル（.xlsx）を選んでください。')
+    if str(filename).startswith('~$'):
+        raise ValueError('Excelの一時ファイル（~$）は読みません。')
+    if len(blob) > 2_000_000:
+        raise ValueError('ファイルが大きすぎます。')
+    entries = parse_paths_workbook(blob)
+    # ローカルに保存して再読込できるようにする（Git除外）
+    dest = paths_list_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(blob)
+    summary = apply_paths_import(c, entries)
+    summary['savedAs'] = str(dest.name)
+    summary['filename'] = str(filename)
+    return summary
+
+
+def import_paths_from_saved(c) -> dict:
+    path = paths_list_path()
+    if not path.is_file():
+        raise ValueError(
+            '保存済みの出勤簿パス一覧がありません。先に「出勤簿パス.xlsx」を取り込んでください。'
+        )
+    blob = path.read_bytes()
+    entries = parse_paths_workbook(blob)
+    summary = apply_paths_import(c, entries)
+    summary['savedAs'] = path.name
+    summary['filename'] = path.name
+    summary['reloaded'] = True
+    return summary
+
+
 def resolve_person_file(person: dict, settings: dict) -> Path | None:
     """設定上の読取元パス。存在しなくても結合結果を返す（未設定のみ None）。
 
@@ -1529,7 +1866,7 @@ def list_overview(
         'SELECT p.*, s.last_import_at, s.last_status, s.last_error, s.source_path, s.source_mtime '
         'FROM kintai_people p '
         'LEFT JOIN kintai_person_status s ON s.person_id=p.id '
-        'WHERE p.active=1 ORDER BY p.sort_order, p.id'
+        'WHERE p.active=1 ORDER BY COALESCE(p.retired,0), p.sort_order, p.id'
     )]
     pf = settings.get('peopleFiles') or {}
     pl = settings.get('peopleLayouts') or {}
@@ -1556,6 +1893,7 @@ def list_overview(
             'employeeCode': person['employee_code'],
             'employment': person['employment'],
             'displayName': person['display_name'],
+            'retired': bool(person.get('retired') or 0),
             'lastStatus': person.get('last_status') or '未取得',
             'lastError': person.get('last_error') or '',
             'lastImportAt': person.get('last_import_at'),
@@ -1583,6 +1921,7 @@ def list_overview(
                 'employeeCode': person['employee_code'],
                 'employment': person['employment'],
                 'displayName': person['display_name'],
+                'retired': bool(person.get('retired') or 0),
                 'lastStatus': person.get('last_status') or '未取得',
                 'lastError': person.get('last_error') or '',
                 'lastImportAt': person.get('last_import_at'),
@@ -1626,6 +1965,7 @@ def list_overview(
                 'employeeCode': p['employee_code'],
                 'employment': p['employment'],
                 'displayName': p['display_name'],
+                'retired': bool(p.get('retired') or 0),
                 'sourceFile': (pf.get(str(p['id'])) or p['source_file'] or ''),
                 'layoutId': pl.get(str(p['id'])) or settings.get('layoutId') or 'shukkinbo-2026-seishain-v1',
                 'fileHint': next(
@@ -1637,10 +1977,11 @@ def list_overview(
             for p in people
         ],
         'rows': rows,
+        'pathsListSaved': paths_list_path().is_file(),
         'opsNote': (
-            '対象者ごとに出勤簿のフルパスを1本保存し、「出勤簿から更新」で自動読込します。'
-            '元出勤簿は変更しません。サーバー実行ユーザーに読取権限が必要です。'
-            '年度ルートは相対パス運用時の任意補助です。'
+            '出勤簿パス.xlsx で氏名→フルパスを一括取込できます（再読込可）。'
+            '退職者は在職と分けて表示します。一覧に無い人（加藤など）は消しません。'
+            '元出勤簿は変更しません。'
         ),
     }
 
@@ -1881,6 +2222,20 @@ def handle_post(h, c, path: str, d: dict):
         if isinstance(result, tuple):
             return result[1], result[0]
         return 200, result
+    if path == '/api/kintai/paths-import':
+        if not (h.user['role'] == 'owner' or h.user['manage']):
+            return 403, {'error': '出勤簿パス一覧の取込は利用者管理の権限が必要です。'}
+        if d.get('reload'):
+            return 200, import_paths_from_saved(c)
+        filename = d.get('filename') or ''
+        raw = d.get('data')
+        if not isinstance(raw, str) or not raw:
+            raise ValueError('出勤簿パス.xlsx の内容がありません。')
+        try:
+            blob = base64.b64decode(raw, validate=False)
+        except Exception as e:
+            raise ValueError('ファイルデータを読めません。') from e
+        return 200, import_paths_from_upload(c, str(filename), blob)
     return 404, {'error': '操作が見つかりません。'}
 
 
