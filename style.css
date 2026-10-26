@@ -161,8 +161,12 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #kintaistatus{font-weight:700;margin:8px 0}
 .kintaiimportresult{margin:12px 0;padding:10px 12px;border:1px solid #e0c4a8;border-radius:8px;background:#fff8f0}
 .kintaiimportresult h3{margin:0 0 8px;font-size:15px}
+.kintai-result-scroll{max-height:min(55vh,640px);overflow:auto;border:1px solid #e6d5c4;border-radius:6px;background:#fff}
 .kintai-result-table{width:100%;border-collapse:collapse;font-size:13px}
-.kintai-result-table th,.kintai-result-table td{border:1px solid #e6d5c4;padding:6px 8px;vertical-align:top;text-align:left}
+.kintai-result-table th,.kintai-result-table td{border:1px solid #e6d5c4;padding:6px 8px;vertical-align:top;text-align:left;overflow-wrap:anywhere;word-break:break-word}
+.kintai-err-expand{margin-top:4px}
+.kintai-err-expand>summary{cursor:pointer;color:#8a3b00;font-weight:600;list-style:revert}
+.kintai-err-full{margin:6px 0 0;padding:8px;background:#fff7ef;border:1px solid #e8d2bc;border-radius:4px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font-size:12px;line-height:1.4;max-height:none;overflow:visible}
 .kintai-result-table tr.kintai-ok{background:#f3faf3}
 .kintai-result-table tr.kintai-ng{background:#fff1e8}
 .kintai-result-table tr.kintai-miss{background:#f5f5f5}

@@ -6,6 +6,10 @@
   let selectedYm = '';
   let lastImportSummary = null;
   let peopleFilter = 'all'; // all | active | retired
+  try {
+    const raw = sessionStorage.getItem('kintaiLastImportSummary');
+    if (raw) lastImportSummary = JSON.parse(raw);
+  } catch (e) { lastImportSummary = null; }
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -79,6 +83,19 @@
     return html;
   }
 
+  function errorBlockHtml(err, compact) {
+    const text = (err || '').trim();
+    if (!text) return '';
+    if (!compact && text.length < 80 && !text.includes('\n')) {
+      return `<div class="kintai-errdetail">${esc(text)}</div>`;
+    }
+    const preview = text.split('\n')[0].slice(0, 72);
+    return `<details class="kintai-err-expand"${compact ? '' : ' open'}>
+      <summary>${esc(preview)}${text.length > preview.length ? '…' : ''}（全文）</summary>
+      <pre class="kintai-err-full">${esc(text)}</pre>
+    </details>`;
+  }
+
   function monthRowHtml(r) {
     const m = r.month || {};
     const err = r.lastError || m.error || '';
@@ -93,7 +110,7 @@
       <td>${esc(m.ordinaryHm || '—')}</td>
       <td>${esc(m.overtimeHm || '—')}</td>
       <td>${esc(m.totalHm || '—')}</td>
-      <td>${esc(r.lastStatus || m.status || '未取得')}${err ? `<small class="kintai-errdetail">${esc(err)}</small>` : ''}${r.lastImportAt ? `<small>${esc(r.lastImportAt)}</small>` : ''}</td>
+      <td><strong>${esc(r.lastStatus || m.status || '未取得')}</strong>${errorBlockHtml(err, true)}${r.lastImportAt ? `<small>${esc(r.lastImportAt)}</small>` : ''}</td>
     </tr>`;
   }
 
@@ -269,6 +286,7 @@
       box.innerHTML = '';
       return;
     }
+    try { sessionStorage.setItem('kintaiLastImportSummary', JSON.stringify(summary)); } catch (e) { /* ignore */ }
     const counts = summary.counts || {
       ok: summary.people.filter(p => p.status === '成功').length,
       error: summary.people.filter(p => p.status === 'エラー').length,
@@ -277,26 +295,29 @@
     const rows = summary.people.map(p => {
       const kind = p.errorKind ? `（${esc(p.errorKind)}）` : '';
       const path = p.sourcePath || p.configuredPath || '';
+      const layout = p.layoutId ? `<div class="kintai-errdetail">レイアウト: ${esc(p.layoutId)}</div>` : '';
+      const emp = p.employment ? `<div class="kintai-errdetail">雇用区分: ${esc(EMP[p.employment] || p.employment)}</div>` : '';
       const note = p.resolvedNote ? `<div class="kintai-errdetail">照合: ${esc(p.resolvedNote)}</div>` : '';
       const cands = (p.candidates && p.candidates.length)
         ? `<div class="kintai-errdetail">近い候補: ${p.candidates.map(esc).join(' ／ ')}</div>`
         : '';
-      const err = p.error
-        ? `<div class="kintai-errdetail">${esc(p.error)}</div>`
-        : '';
+      const err = errorBlockHtml(p.error, false);
       const pathLine = path
         ? `<div class="kintai-errdetail">パス: ${esc(path)}</div>`
         : '';
       return `<tr class="${p.status === '成功' ? 'kintai-ok' : (p.status === 'エラー' ? 'kintai-ng' : 'kintai-miss')}">
         <td>${esc(p.displayName)}<br><small>${esc(p.employeeCode)}</small></td>
-        <td><strong>${esc(p.status)}</strong>${kind}${err}${pathLine}${note}${cands}</td>
+        <td><strong>${esc(p.status)}</strong>${kind}${err}${layout}${emp}${pathLine}${note}${cands}</td>
       </tr>`;
     }).join('');
     box.hidden = false;
     box.innerHTML = `<h3>取込結果の詳細</h3>
       <p>成功${counts.ok}／エラー${counts.error}／未取得${counts.missing}
-      ${summary.shareRoot ? ` ／ 補助ルート: <code>${esc(summary.shareRoot)}</code>` : ''}</p>
-      <table class="kintai-result-table"><thead><tr><th>対象者</th><th>結果・理由</th></tr></thead><tbody>${rows}</tbody></table>`;
+      ${summary.shareRoot ? ` ／ 補助ルート: <code>${esc(summary.shareRoot)}</code>` : ''}
+      ／ 理由は下の「全文」を開いて確認（長いパスより先に原因を表示）</p>
+      <div class="kintai-result-scroll">
+      <table class="kintai-result-table"><thead><tr><th>対象者</th><th>結果・理由</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>`;
   }
 
   function paintKintai() {
@@ -328,7 +349,7 @@
         </tr>`).join('')
       }</tbody></table>`;
       if (p.lastError) {
-        status.innerHTML = `${esc(status.textContent)}<div class="kintai-errdetail">${esc(p.lastError)}</div>`;
+        status.innerHTML = `${esc(status.textContent)}${errorBlockHtml(p.lastError, false)}`;
       }
       return;
     }

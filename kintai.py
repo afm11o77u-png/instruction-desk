@@ -100,6 +100,10 @@ LAYOUT_SAMPLE_NEEDED = (
     'サンプルxlsx（個人情報を伏せたコピー可）または ImportShukkinbo.bas / live-sync を提供してください。'
     'クラウド開発環境から共有UNCには接続できないため、接続できたようには扱いません。'
 )
+LAYOUT_SAMPLE_NEEDED_MONTHDOT = (
+    '契約・パート出勤簿は月シート名が「2026.2」形式で、正社員の「26.2／集計／年間ｶﾚﾝﾀﾞｰ」とは別物です。'
+    '雇用区分の既定は shukkinbo-2026-monthdot-v1（契約）／shukkinbo-2026-monthdot-part-v1（パート）です。'
+)
 
 # 対象者マスタ（リンク用短い名前。共有上の実ファイル名は人が設定。推測で mark_kintai は付けない）
 DEFAULT_PEOPLE = [
@@ -132,6 +136,16 @@ FIXTURE_LAYOUT = {
     'first_data_row': 2,
 }
 
+# 契約／パート出勤簿 2026 — サンプルでセル確認済み（推測ではない）
+# 契約: internal/kintai-sample-031-imaki-keiyaku-2026.xlsx
+# パート: internal/kintai-sample-010-kikuchi-part-2026.xlsx
+# シート: 2026.2〜2027.1 + 集計（年間カレンダー無し）。集計行は正社員と同位置。
+MONTHDOT_2026_MONTH_SHEETS = {
+    (2026, 2): '2026.2', (2026, 3): '2026.3', (2026, 4): '2026.4', (2026, 5): '2026.5',
+    (2026, 6): '2026.6', (2026, 7): '2026.7', (2026, 8): '2026.8', (2026, 9): '2026.9',
+    (2026, 10): '2026.10', (2026, 11): '2026.11', (2026, 12): '2026.12', (2027, 1): '2027.1',
+}
+
 # 正社員（営業手当無し）出勤簿 2026 — サンプル
 # internal/kintai-sample-009-kato-2026.xlsx でセルを確認済み（推測ではない）
 SEISHAIN_2026_MONTH_SHEETS = {
@@ -139,7 +153,7 @@ SEISHAIN_2026_MONTH_SHEETS = {
     (2026, 6): '26.6', (2026, 7): '26.7', (2026, 8): '26.8', (2026, 9): '26.9',
     (2026, 10): '26.10', (2026, 11): '26.11', (2026, 12): '26.12', (2027, 1): '27.1',
 }
-# 集計シート B〜M = 2月度〜1月度
+# 集計シート B〜M = 2月度〜1月度（正社員・契約・パート共通）
 SEISHAIN_2026_SUMMARY_COLS = {
     (2026, 2): 2, (2026, 3): 3, (2026, 4): 4, (2026, 5): 5,
     (2026, 6): 6, (2026, 7): 7, (2026, 8): 8, (2026, 9): 9,
@@ -182,9 +196,77 @@ SEISHAIN_2026_LAYOUT = {
     'start_col': 5,            # E 始業
 }
 
+# 契約社員（営業手当無し）出勤簿 2026 — 今城サンプルで確認
+MONTHDOT_2026_CONTRACT_LAYOUT = {
+    'id': 'shukkinbo-2026-monthdot-v1',
+    'kind': 'summary-monthdot',
+    'note': (
+        '契約社員出勤簿2026（今城サンプル確認済み）。月シート 2026.2〜2027.1＋集計。'
+        '出勤=集計!行5／有給=行10／普通=法定内①行6／'
+        '残業=普通残業行13＋深夜残業行14＋早朝深夜勤務行18（負は0）／'
+        '勤務時間計=普通＋残業。行5=0の月は普通・残業を空白。'
+        '休日は月シート日付（A列・各42日）×休み(D)・始業(E)。年間カレンダー無し。'
+    ),
+    'summary_sheet': '集計',
+    'month_sheets': MONTHDOT_2026_MONTH_SHEETS,
+    'summary_cols': SEISHAIN_2026_SUMMARY_COLS,
+    'row_work_days': 5,
+    'row_ordinary_hours': 6,
+    'row_paid_leave': 10,
+    'row_overtime_hours_parts': (13, 14, 18),
+    'day_first_row': 5,
+    'day_last_row': 46,
+    'date_col': 1,   # A
+    'leave_col': 4,  # D 休み
+    'start_col': 5,  # E 始業時間（契約）
+}
+
+# パートタイマー出勤簿 2026 — 菊池サンプルで確認
+# 集計行は契約と同じ。月シートの始業は H 列（契約の E ではない。E は有休時間）
+MONTHDOT_2026_PART_LAYOUT = {
+    'id': 'shukkinbo-2026-monthdot-part-v1',
+    'kind': 'summary-monthdot',
+    'note': (
+        'パート出勤簿2026（菊池サンプル確認済み）。月シート 2026.2〜2027.1＋集計。'
+        '出勤=集計!行5／有給=行10／普通=法定内①行6／'
+        '残業=普通残業行13＋深夜残業行14＋早朝深夜勤務行18（負は0）／'
+        '勤務時間計=普通＋残業。行5=0の月は普通・残業を空白。'
+        '休日は月シート日付（A列・各42日）×休み(D)・始業(H)。年間カレンダー無し。'
+    ),
+    'summary_sheet': '集計',
+    'month_sheets': MONTHDOT_2026_MONTH_SHEETS,
+    'summary_cols': SEISHAIN_2026_SUMMARY_COLS,
+    'row_work_days': 5,
+    'row_ordinary_hours': 6,
+    'row_paid_leave': 10,
+    'row_overtime_hours_parts': (13, 14, 18),
+    'day_first_row': 5,
+    'day_last_row': 46,
+    'date_col': 1,   # A
+    'leave_col': 4,  # D 休み
+    'start_col': 8,  # H 始業時間（パート。Eは有休時間のため使わない）
+}
+
+# 旧 pending ID（設定に残っていても契約レイアウトとして読める）
+MONTHDOT_2026_LAYOUT = {
+    **MONTHDOT_2026_CONTRACT_LAYOUT,
+    'id': 'shukkinbo-2026-monthdot-pending',
+    'note': MONTHDOT_2026_CONTRACT_LAYOUT['note'] + '（旧IDエイリアス。新規は monthdot-v1／part-v1）',
+}
+
 LAYOUTS = {
     'fixture-v1': FIXTURE_LAYOUT,
     'shukkinbo-2026-seishain-v1': SEISHAIN_2026_LAYOUT,
+    'shukkinbo-2026-monthdot-v1': MONTHDOT_2026_CONTRACT_LAYOUT,
+    'shukkinbo-2026-monthdot-part-v1': MONTHDOT_2026_PART_LAYOUT,
+    'shukkinbo-2026-monthdot-pending': MONTHDOT_2026_LAYOUT,
+}
+
+# 雇用区分 → 既定レイアウト（peopleLayouts 個別指定が優先）
+DEFAULT_LAYOUT_BY_EMPLOYMENT = {
+    'regular': 'shukkinbo-2026-seishain-v1',
+    'contract': 'shukkinbo-2026-monthdot-v1',
+    'part': 'shukkinbo-2026-monthdot-part-v1',
 }
 
 PAID_LEAVE_RE = re.compile(r'(?P<num>\d+(?:\.\d+)?)\s*有休')
@@ -463,10 +545,13 @@ def _require_number(value, label: str) -> float:
         raise ValueError(f'{label}の値が不正です。')
     if isinstance(value, (int, float)):
         v = float(value)
-        if v < TINY_NEG and v > -1:
-            return 0.0
-        if v < 0:
+        # hours_to_minutes と同じ: 微小負数（Excel 誤差）は 0、大きな負のみエラー
+        if v < TINY_NEG:
+            if v > -1:
+                return 0.0
             raise ValueError(f'{label}が負です（{v}）。')
+        if v < 0:
+            return 0.0
         return v
     s = str(value).strip().replace(',', '')
     try:
@@ -587,11 +672,48 @@ def get_layout(layout_id: str | None = None) -> dict:
 
 
 def layout_id_for_person(person: dict, settings: dict | None = None) -> str:
+    """個別指定 → 雇用区分の既定 → 全体既定の順。契約・パートは monthdot（サンプル確認済み）。"""
     settings = settings if settings is not None else load_local_settings()
     pl = settings.get('peopleLayouts') or {}
     pid = str(person.get('id') or '')
-    lid = (pl.get(pid) or settings.get('layoutId') or 'shukkinbo-2026-seishain-v1').strip()
+    if pid and pl.get(pid):
+        lid = str(pl.get(pid)).strip()
+        return lid if lid in LAYOUTS else 'shukkinbo-2026-seishain-v1'
+    emp = str(person.get('employment') or '').strip()
+    by_emp = DEFAULT_LAYOUT_BY_EMPLOYMENT.get(emp)
+    if by_emp and by_emp in LAYOUTS:
+        return by_emp
+    # パスから雇用区分を推定（peopleFiles のフルUNC）
+    src = ''
+    try:
+        src = person_source_relative(person, settings)
+    except Exception:
+        src = ''
+    inferred = infer_employment_from_path(src) if src else None
+    if inferred and DEFAULT_LAYOUT_BY_EMPLOYMENT.get(inferred) in LAYOUTS:
+        return DEFAULT_LAYOUT_BY_EMPLOYMENT[inferred]
+    lid = (settings.get('layoutId') or 'shukkinbo-2026-seishain-v1').strip()
     return lid if lid in LAYOUTS else 'shukkinbo-2026-seishain-v1'
+
+
+def detect_sheet_pattern(sheet_names: list[str] | set[str]) -> str:
+    """シート名から構造ヒント。セル意味は判定しない。
+
+    戻り値: seishain-2026 | monthdot-yyyy-m | unknown
+    """
+    names = set(sheet_names or [])
+    if (
+        '集計' in names
+        and ('年間ｶﾚﾝﾀﾞｰ' in names or '年間カレンダー' in names)
+        and any(re.fullmatch(r'2[6-7]\.\d{1,2}', n or '') for n in names)
+    ):
+        return 'seishain-2026'
+    monthdot = [n for n in names if re.fullmatch(r'20\d{2}\.\d{1,2}', n or '')]
+    if len(monthdot) >= 6 and '集計' not in names:
+        return 'monthdot-yyyy-m'
+    if monthdot and not any(re.fullmatch(r'2[6-7]\.\d{1,2}', n or '') for n in names):
+        return 'monthdot-yyyy-m'
+    return 'unknown'
 
 
 def split_relative_parts(relative: str) -> list[str]:
@@ -844,6 +966,53 @@ def count_holidays_summary_shukkinbo(
     return holidays
 
 
+def count_holidays_from_month_sheet(
+    month_grid: dict,
+    year: int,
+    month: int,
+    layout: dict,
+    as_of: date | None = None,
+) -> float:
+    """月シートの日付列を正とし、休み・始業から休日数を数える（年間カレンダー無し用）。
+
+    契約・パート実サンプルは各月シートに42日分の日付がある。
+    ルールは正社員と同じ: as_of 以前・始業なし・有休でない → 休日。
+    """
+    as_of = as_of or date.today()
+    day_first = layout['day_first_row']
+    day_last = layout['day_last_row']
+    date_col = layout.get('date_col', 1)
+    leave_col = layout['leave_col']
+    start_col = layout['start_col']
+    holidays = 0.0
+    found_dates = 0
+    for row in range(day_first, day_last + 1):
+        raw = _cell(month_grid, row, date_col)
+        if isinstance(raw, dict) and raw.get('__missing_cache__'):
+            raise ValueError(
+                f'{year}-{month:02d} の月シート日付に計算結果がありません（数式の再計算はしません）。'
+            )
+        day_date = _excel_serial_to_date(raw)
+        if day_date is None:
+            continue
+        found_dates += 1
+        if day_date > as_of:
+            continue
+        leave = _cell(month_grid, row, leave_col)
+        start = _cell(month_grid, row, start_col)
+        try:
+            if _has_start_value(start):
+                continue
+        except ValueError as e:
+            raise ValueError(f'{year}-{month:02d} 日{day_date.isoformat()} の{e}') from e
+        if is_paid_leave_cell(leave):
+            continue
+        holidays += 1.0
+    if found_dates == 0:
+        raise ValueError(f'{year}-{month:02d} の月シートに日付がありません。')
+    return holidays
+
+
 def aggregate_month_from_summary(
     sheets: dict[str, dict],
     year: int,
@@ -851,12 +1020,12 @@ def aggregate_month_from_summary(
     layout: dict,
     as_of: date | None = None,
 ) -> dict:
-    """集計シート（出勤・有給・法定内①・残業内訳）＋カレンダー休日。
+    """集計シート（出勤・有給・法定内①・残業内訳）＋休日。
 
     管理表個人シート: J=行6、K=行13+14+18。行5=0の月は J/K 空白。
+    正社員は年間カレンダー休日、契約・パートは月シート日付で休日。
     """
     summary_name = layout['summary_sheet']
-    cal_name = layout['calendar_sheet']
     month_sheets = layout['month_sheets']
     summary_cols = layout['summary_cols']
     if (year, month) not in summary_cols or (year, month) not in month_sheets:
@@ -864,9 +1033,6 @@ def aggregate_month_from_summary(
     summary = sheets.get(summary_name)
     if summary is None:
         raise ValueError(f'「{summary_name}」シートがありません。')
-    cal = sheets.get(cal_name)
-    if cal is None:
-        raise ValueError(f'「{cal_name}」シートがありません。')
     month_name = month_sheets[(year, month)]
     month_grid = sheets.get(month_name)
     if month_grid is None:
@@ -895,9 +1061,18 @@ def aggregate_month_from_summary(
             ot_hours = 0.0  # 管理表 MAX(0, …)
         overtime = hours_to_minutes(ot_hours, f'{label} 残業（行{"+".join(str(r) for r in ot_parts)}）')
         total = ordinary + overtime
-    holiday_days = count_holidays_summary_shukkinbo(
-        cal, month_grid, year, month, layout, as_of=as_of
-    )
+    cal_name = layout.get('calendar_sheet')
+    if cal_name:
+        cal = sheets.get(cal_name)
+        if cal is None:
+            raise ValueError(f'「{cal_name}」シートがありません。')
+        holiday_days = count_holidays_summary_shukkinbo(
+            cal, month_grid, year, month, layout, as_of=as_of
+        )
+    else:
+        holiday_days = count_holidays_from_month_sheet(
+            month_grid, year, month, layout, as_of=as_of
+        )
     return {
         'work_days': work_days,
         'holiday_days': holiday_days,
@@ -908,10 +1083,42 @@ def aggregate_month_from_summary(
     }
 
 
+def _preview_sheet_cells(grid: dict, max_rows: int = 5, max_cols: int = 8) -> list[dict]:
+    """先頭付近の生セル（値のみ）。意味付けしない。"""
+    if not grid:
+        return []
+    cells = []
+    for (r, c), v in sorted(grid.items()):
+        if r > max_rows or c > max_cols:
+            continue
+        if isinstance(v, dict) and v.get('__missing_cache__'):
+            show = f"(数式キャッシュなし: {v.get('formula') or ''})"
+        else:
+            show = v
+        cells.append({'row': r, 'col': c, 'ref': f'{_col_letters(c)}{r}', 'value': show})
+    return cells
+
+
 def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: dict, as_of: date | None = None) -> dict[tuple[int, int], dict]:
     sheets = read_xlsx_grid(blob)
     kind = layout.get('kind') or 'fixture-days'
-    if kind == 'summary-shukkinbo':
+    pattern = detect_sheet_pattern(list(sheets.keys()))
+    found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
+
+    if kind in ('summary-shukkinbo', 'summary-monthdot'):
+        if kind == 'summary-shukkinbo' and pattern == 'monthdot-yyyy-m':
+            raise ValueError(
+                'このファイルは契約・パート形式（月シート 2026.2 …）です。'
+                '正社員用レイアウト（集計／年間ｶﾚﾝﾀﾞｰ）では読めません。'
+                '雇用区分の既定レイアウト（monthdot-v1／monthdot-part-v1）を使ってください。'
+                + f' ファイル内シート: {found}。'
+            )
+        if kind == 'summary-monthdot' and pattern == 'seishain-2026':
+            raise ValueError(
+                'このファイルは正社員形式（26.2／集計／年間ｶﾚﾝﾀﾞｰ）です。'
+                '契約・パート用レイアウトでは読めません。shukkinbo-2026-seishain-v1 を使ってください。'
+                + f' ファイル内シート: {found}。'
+            )
         results = {}
         errors = []
         for y, m in months:
@@ -920,7 +1127,6 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
             except ValueError as e:
                 errors.append(str(e))
         if errors and not results:
-            found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
             raise ValueError(
                 '出勤簿を集計できません: '
                 + '／'.join(errors[:4])
@@ -940,10 +1146,11 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
             continue
         results[(y, m)] = aggregate_month_from_grid(grid, y, m, layout, as_of=as_of)
     if missing and not results:
-        found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
         hint = ''
         if layout.get('id') == 'fixture-v1':
             hint = ' ' + LAYOUT_SAMPLE_NEEDED
+        elif pattern == 'monthdot-yyyy-m':
+            hint = ' ' + LAYOUT_SAMPLE_NEEDED_MONTHDOT
         raise ValueError(
             '対象月のシートが見つかりません（期待: '
             + '、'.join(missing[:6])
@@ -959,12 +1166,16 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
 
 
 def probe_workbook_bytes(blob: bytes) -> dict:
-    """読取専用の構造確認。シート名と各シートの使用セル範囲のみ。列意味は推測しない。"""
+    """読取専用の構造確認。シート名・範囲・先頭行の生値。列意味は推測しない。"""
     sheets = read_xlsx_grid(blob)
     out = []
     for name, grid in sheets.items():
         if not grid:
-            out.append({'name': name, 'cells': 0, 'rowMin': None, 'rowMax': None, 'colMin': None, 'colMax': None})
+            out.append({
+                'name': name, 'cells': 0,
+                'rowMin': None, 'rowMax': None, 'colMin': None, 'colMax': None,
+                'preview': [],
+            })
             continue
         rows = [r for r, _ in grid]
         cols = [c for _, c in grid]
@@ -975,22 +1186,31 @@ def probe_workbook_bytes(blob: bytes) -> dict:
             'rowMax': max(rows),
             'colMin': min(cols),
             'colMax': max(cols),
+            'preview': _preview_sheet_cells(grid),
         })
-    names = {s['name'] for s in out}
-    known = (
-        '集計' in names
-        and '年間ｶﾚﾝﾀﾞｰ' in names
-        and any(n.startswith('26.') or n.startswith('27.') for n in names)
-    )
-    note = 'シート名とセル範囲のみ返します（このAPIでは列の意味を判定しません）。'
-    if known:
-        note += ' 構造は正社員（営業手当無し）2026出勤簿に近いです。layoutId=shukkinbo-2026-seishain-v1 で集計できます。'
+    names = [s['name'] for s in out]
+    pattern = detect_sheet_pattern(names)
+    note = 'シート名とセル範囲・先頭行の生値のみ返します（列の意味は判定しません）。'
+    suggested = None
+    if pattern == 'seishain-2026':
+        note += ' 構造は正社員（営業手当無し）2026出勤簿に近いです。'
+        suggested = 'shukkinbo-2026-seishain-v1'
+    elif pattern == 'monthdot-yyyy-m':
+        note += (
+            ' 月シートが 2026.2 形式です（契約・パート系）。'
+            '契約は shukkinbo-2026-monthdot-v1、パートは shukkinbo-2026-monthdot-part-v1'
+            '（始業列が異なるため雇用区分で自動選択）。'
+        )
+        suggested = 'shukkinbo-2026-monthdot-v1'
     else:
         note += ' ' + LAYOUT_SAMPLE_NEEDED
     return {
         'sheetCount': len(out),
         'sheets': out,
+        'sheetPattern': pattern,
+        'suggestedLayoutId': suggested,
         'note': note,
+        'sampleNeeded': pattern not in ('seishain-2026', 'monthdot-yyyy-m'),
     }
 
 
@@ -1659,6 +1879,39 @@ def _read_file_bytes(path: Path) -> tuple[bytes, str]:
     return data, mtime
 
 
+ERROR_TEXT_MAX = 2000
+
+
+def _format_import_error(
+    reason: str,
+    *,
+    path: Path | str | None = None,
+    layout_id: str = '',
+    employment: str = '',
+    parse_hint: bool = False,
+) -> str:
+    """理由を先に書き、長いUNCは後ろへ。画面で切られても原因が残るようにする。"""
+    parts = [str(reason or '').strip()]
+    if layout_id:
+        parts.append(f'レイアウト: {layout_id}')
+    if employment:
+        emp_ja = {'regular': '正社員', 'contract': '契約', 'part': 'パート'}.get(employment, employment)
+        parts.append(f'雇用区分: {emp_ja}')
+    if parse_hint and employment and employment != 'regular' and (
+        not layout_id or layout_id == 'shukkinbo-2026-seishain-v1'
+    ):
+        parts.append(
+            '※契約は monthdot-v1、パートは monthdot-part-v1（始業列が異なる）を使ってください。'
+            'いまは正社員用レイアウトで読んでいます。'
+        )
+    if path:
+        parts.append(f'パス: {path}')
+    text = '\n'.join(p for p in parts if p)
+    if len(text) > ERROR_TEXT_MAX:
+        return text[: ERROR_TEXT_MAX - 1] + '…'
+    return text
+
+
 def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> dict:
     settings = load_local_settings()
     default_layout = get_layout(settings.get('layoutId'))
@@ -1766,27 +2019,40 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
         except PermissionError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'permission'
-            item['error'] = f'読取権限がありません: {path}（{e}）'[:500]
+            item['error'] = _format_import_error(
+                f'読取権限がありません（{e}）', path=path, layout_id=layout['id'], employment=person['employment']
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except FileNotFoundError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'not_found'
-            item['error'] = f'ファイルが見つかりません: {path}（{e}）'[:500]
+            item['error'] = _format_import_error(
+                f'ファイルが見つかりません（{e}）', path=path, layout_id=layout['id'], employment=person['employment']
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except OSError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'io'
-            item['error'] = f'ファイルを開けません（{type(e).__name__}）: {path} — {e}'[:500]
+            item['error'] = _format_import_error(
+                f'ファイルを開けません（{type(e).__name__}: {e}）',
+                path=path, layout_id=layout['id'], employment=person['employment'],
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except ValueError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'parse'
-            item['error'] = f'パース失敗: {e}'[:500]
+            item['error'] = _format_import_error(
+                f'パース失敗: {e}',
+                path=path, layout_id=layout['id'], employment=person['employment'],
+                parse_hint=True,
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except Exception as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'other'
-            item['error'] = f'{type(e).__name__}: {e}'[:500]
+            item['error'] = _format_import_error(
+                f'{type(e).__name__}: {e}', path=path, layout_id=layout['id'], employment=person['employment']
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         person_results.append(item)
     summary = {
@@ -1979,9 +2245,8 @@ def list_overview(
         'rows': rows,
         'pathsListSaved': paths_list_path().is_file(),
         'opsNote': (
-            '出勤簿パス.xlsx で氏名→フルパスを一括取込できます（再読込可）。'
-            '退職者は在職と分けて表示します。一覧に無い人（加藤など）は消しません。'
-            '元出勤簿は変更しません。'
+            '正社員・契約・パートとも集計可（契約 monthdot-v1／パート monthdot-part-v1。雇用区分で自動選択）'
+            '（サンプル提供後にレイアウト追加）。パス一覧の一括取込・退職者別表示あり。元出勤簿は変更しません。'
         ),
     }
 

@@ -154,9 +154,14 @@ class KintaiDbTest(unittest.TestCase):
             files[p['id']] = name
         self.c.commit()
 
-        # local settings: empty share root → fixtures dir
+        # local settings: empty share root → fixtures dir。
+        # 契約・パートは既定が monthdot 実レイアウトなので、検証用に個別で fixture-v1 を指定。
+        people_layouts = {str(p['id']): 'fixture-v1' for p in people}
         (self.data / 'kintai-local.json').write_text(
-            json.dumps({'shareRoot': '', 'layoutId': 'fixture-v1', 'peopleFiles': {}}, ensure_ascii=False),
+            json.dumps(
+                {'shareRoot': '', 'layoutId': 'fixture-v1', 'peopleFiles': {}, 'peopleLayouts': people_layouts},
+                ensure_ascii=False,
+            ),
             encoding='utf-8',
         )
         user = {'id': 1, 'name': '主', 'login': 'o@ex.com', 'role': 'owner', 'mark_kintai': 1}
