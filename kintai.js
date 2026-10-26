@@ -63,21 +63,33 @@
     const share = $('#kintaishare');
     if (!share) return;
     const saved = (pack && pack.shareRoot) || '';
-    const input = $('#kintaishareinput');
-    const current = input ? input.value.trim() : '';
     share.classList.remove('kintai-warn');
     if (shareInputUnsaved()) {
       share.classList.add('kintai-warn');
       share.textContent = saved
-        ? '共有ルート: 保存済みあり ／ 入力欄は未保存の変更です。「共有ルートとレイアウトを保存」を押してください（未保存のパスでは取込できません）'
-        : '共有ルート: 未保存の入力あり（まだサーバーに保存されていません。「共有ルートとレイアウトを保存」を押してください）';
+        ? '年度ルート: 保存済みあり ／ 入力欄は未保存の変更です。「年度ルートとレイアウトを保存」を押してください（未保存のパスでは取込できません）'
+        : '年度ルート: 未保存の入力あり（まだサーバーに保存されていません。「年度ルートとレイアウトを保存」を押してください）';
       return;
     }
     if (saved) {
-      share.textContent = '共有ルート設定あり（保存済み）';
+      share.textContent = '年度ルート設定あり（保存済み）。雇用区分フォルダは対象者ごとの読取元で指定';
       return;
     }
-    share.textContent = '共有ルート未設定（入力しただけでは未保存です。保存ボタンが必要です）';
+    share.textContent = '年度ルート未設定（入力しただけでは未保存です。保存ボタンが必要です）';
+  }
+
+  function syncPersonLayout() {
+    const filePerson = $('#kintaifileperson');
+    const layoutSel = $('#kintaipersonlayout');
+    if (!filePerson || !layoutSel || !pack) return;
+    const p = (pack.people || []).find(x => String(x.id) === String(filePerson.value));
+    const def = pack.layoutId || 'shukkinbo-2026-seishain-v1';
+    const want = (p && p.layoutId) || '';
+    // 空＝既定。people の layoutId が既定と同じなら空表示
+    layoutSel.value = want && want !== def ? want : (want || '');
+    if (want && ![...layoutSel.options].some(o => o.value === want)) {
+      layoutSel.value = '';
+    }
   }
 
   async function loadKintai() {
@@ -142,10 +154,11 @@
     const shareInput = $('#kintaishareinput');
     if (shareInput && !shareInput.dataset.touched) {
       shareInput.value = pack.shareRoot || '';
-      shareInput.placeholder = pack.exampleKatoShareRoot || shareInput.placeholder;
+      shareInput.placeholder = pack.exampleYearShareRoot || pack.exampleKatoShareRoot || shareInput.placeholder;
     }
     const layoutSel = $('#kintailayoutsel');
     if (layoutSel && pack.layoutId) layoutSel.value = pack.layoutId;
+    syncPersonLayout();
     paintShareStatus();
     const note = $('#kintainote');
     if (note) note.textContent = pack.opsNote || '';
@@ -170,6 +183,7 @@
     if (!filePerson || !fileInput || !pack) return;
     const p = (pack.people || []).find(x => String(x.id) === String(filePerson.value));
     if (!fileInput.dataset.touched) fileInput.value = (p && p.sourceFile) || '';
+    syncPersonLayout();
   }
 
   function paintImportResult(summary) {
@@ -268,7 +282,7 @@
   async function importKintai() {
     if (!canKintai()) throw Error('勤怠管理（マーク）の権限がありません。');
     if (shareInputUnsaved()) {
-      const go = confirm('共有ルートの入力が未保存です。未保存のパスは取込に使われません。このまま続けますか？（キャンセルして「共有ルートとレイアウトを保存」を先に押すことを推奨）');
+      const go = confirm('年度ルートの入力が未保存です。未保存のパスは取込に使われません。このまま続けますか？（キャンセルして「年度ルートとレイアウトを保存」を先に押すことを推奨）');
       if (!go) return;
     }
     if (fileInputUnsaved()) {
@@ -297,7 +311,7 @@
     if (layoutId) body.layoutId = layoutId;
     await api('/api/kintai/settings', body);
     if (input) delete input.dataset.touched;
-    toast('共有ルートとレイアウトを保存しました（このPCの data/kintai-local.json）。');
+    toast('年度ルートとレイアウトを保存しました（このPCの data/kintai-local.json）。');
     await loadKintai();
   }
 
@@ -305,55 +319,83 @@
     if (!canManagePaths()) throw Error('読取元設定は利用者管理の権限が必要です。');
     const personEl = $('#kintaifileperson');
     const fileEl = $('#kintaifileinput');
+    const layoutEl = $('#kintaipersonlayout');
     const personId = personEl ? Number(personEl.value) : 0;
     const sourceFile = fileEl ? fileEl.value.trim() : '';
     if (!personId) throw Error('対象者を選んでください。');
-    await api('/api/kintai/person-file', { personId, sourceFile });
+    const body = { personId, sourceFile, layoutId: layoutEl ? layoutEl.value : '' };
+    await api('/api/kintai/person-file', body);
     if (fileEl) delete fileEl.dataset.touched;
-    toast('読取元を保存しました。');
+    toast('読取元を保存しました（雇用区分フォルダは人ごとに違うので、他の人も同様に設定してください）。');
     await loadKintai();
   }
 
-  function fillKatoExample() {
+  function fillEmploymentExample(kind) {
     if (!pack) return;
+    const examples = pack.examplePathsByEmployment || {};
+    const ex = examples[kind];
+    if (!ex) throw Error('この雇用区分の例示がありません。');
     const shareInput = $('#kintaishareinput');
     const fileInput = $('#kintaifileinput');
     const filePerson = $('#kintaifileperson');
-    const kato = (pack.people || []).find(p => p.employeeCode === '009' && p.employment === 'regular');
-    if (filePerson && kato) filePerson.value = String(kato.id);
+    const layoutEl = $('#kintaipersonlayout');
+    const person = (pack.people || []).find(
+      p => p.employeeCode === ex.employeeCode && p.employment === ex.employment
+    ) || (pack.people || []).find(p => p.employeeCode === ex.employeeCode)
+      || (pack.people || []).find(p => p.employment === ex.employment);
+    if (filePerson && person) filePerson.value = String(person.id);
     if (shareInput) {
-      shareInput.value = pack.exampleKatoShareRoot || '';
+      shareInput.value = pack.exampleYearShareRoot || pack.exampleKatoShareRoot || '';
       shareInput.dataset.touched = '1';
     }
     if (fileInput) {
-      // 実ファイル名: 009のあと半角スペース2・全角括弧・全角チルダ～
-      fileInput.value = pack.exampleKatoFile || '009  正社員（営業手当無し）出勤簿2026.2～.xlsx';
+      fileInput.value = ex.relative || '';
       fileInput.dataset.touched = '1';
     }
+    if (layoutEl && ex.layoutId) layoutEl.value = ex.layoutId;
     paintShareStatus();
-    toast('加藤さんの例示パスを入力欄に入れました。必ず「保存」ボタンを2つ（共有ルート／読取元）押してください。');
+    toast(`${ex.label}の例を入れました。必ず「年度ルートを保存」と「この対象者の読取元を保存」を押してください。`);
   }
+
+  function fillKatoExample() { fillEmploymentExample('regular'); }
 
   async function listShareFiles() {
     if (!canManagePaths()) throw Error('共有フォルダ一覧は利用者管理の権限が必要です。');
     if (shareInputUnsaved()) {
-      throw Error('共有ルートが未保存です。先に「共有ルートとレイアウトを保存」を押してください。');
+      throw Error('年度ルートが未保存です。先に「年度ルートとレイアウトを保存」を押してください。');
     }
     const personEl = $('#kintaifileperson');
+    const subdirEl = $('#kintaisubdir');
     const personId = personEl ? Number(personEl.value) : 0;
-    const result = await api('/api/kintai/list-files', { personId: personId || undefined });
+    const subdir = subdirEl && subdirEl.value ? subdirEl.value : '';
+    const result = await api('/api/kintai/list-files', {
+      personId: personId || undefined,
+      subdir: subdir || undefined,
+    });
+    if (subdirEl && result.subfolders) {
+      const keep = subdirEl.value;
+      subdirEl.innerHTML = '<option value="">（年度ルート直下／対象者の相対から推定）</option>' +
+        (result.subfolders || []).map(s =>
+          `<option value="${esc(s.relative || s.name)}">${esc(s.name)}</option>`
+        ).join('');
+      if (keep && [...subdirEl.options].some(o => o.value === keep)) subdirEl.value = keep;
+      else if (result.subdir) subdirEl.value = result.subdir;
+    }
     const pick = $('#kintaifilepick');
     if (pick) {
       const files = result.files || [];
       pick.innerHTML = '<option value="">' + (files.length ? `候補 ${files.length} 件` : '（候補なし）') + '</option>' +
-        files.map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('');
+        files.map(f => {
+          const rel = f.relative || f.name;
+          return `<option value="${esc(rel)}">${esc(rel)}</option>`;
+        }).join('');
     }
     const box = $('#kintaiproberesult');
     if (box) {
       box.hidden = false;
       box.textContent = JSON.stringify(result, null, 2);
     }
-    toast(result.count ? `候補 ${result.count} 件を読みました。一覧から選ぶと読取元欄に入ります。` : '候補ファイルがありません（ルート・権限を確認）。');
+    toast(result.count ? `候補 ${result.count} 件を読みました。選ぶと相対パスが入ります。` : '候補ファイルがありません（年度ルート・雇用区分フォルダ・権限を確認）。');
   }
 
   async function probeFile() {
@@ -383,12 +425,15 @@
     const saveShare = $('#kintaisaveshare');
     const saveFile = $('#kintaifilesave');
     const fillKato = $('#kintaifilefill');
+    const fillContract = $('#kintaifilefill-contract');
+    const fillPart = $('#kintaifilefill-part');
     const listFiles = $('#kintailistfiles');
     const probe = $('#kintaiprobe');
     const shareInput = $('#kintaishareinput');
     const fileInput = $('#kintaifileinput');
     const filePerson = $('#kintaifileperson');
     const filePick = $('#kintaifilepick');
+    const subdirEl = $('#kintaisubdir');
     if (year) year.onchange = () => { selectedYm = ''; loadKintai().catch(e => toast(e.message)); };
     if (month) month.onchange = () => {
       mode = 'month';
@@ -401,17 +446,20 @@
     if (imp) imp.onclick = () => importKintai().catch(e => toast(e.message));
     if (saveShare) saveShare.onclick = () => saveShareRoot().catch(e => toast(e.message));
     if (saveFile) saveFile.onclick = () => savePersonFile().catch(e => toast(e.message));
-    if (fillKato) fillKato.onclick = () => fillKatoExample();
+    if (fillKato) fillKato.onclick = () => { try { fillKatoExample(); } catch (e) { toast(e.message); } };
+    if (fillContract) fillContract.onclick = () => { try { fillEmploymentExample('contract'); } catch (e) { toast(e.message); } };
+    if (fillPart) fillPart.onclick = () => { try { fillEmploymentExample('part'); } catch (e) { toast(e.message); } };
     if (listFiles) listFiles.onclick = () => listShareFiles().catch(e => toast(e.message));
     if (probe) probe.onclick = () => probeFile().catch(e => toast(e.message));
     if (shareInput) shareInput.addEventListener('input', () => { shareInput.dataset.touched = '1'; paintShareStatus(); });
     if (fileInput) fileInput.addEventListener('input', () => { fileInput.dataset.touched = '1'; });
     if (filePerson) filePerson.onchange = () => { if (fileInput) delete fileInput.dataset.touched; syncFileInputFromPerson(); };
+    if (subdirEl) subdirEl.onchange = () => listShareFiles().catch(e => toast(e.message));
     if (filePick) filePick.onchange = () => {
       if (!filePick.value || !fileInput) return;
       fileInput.value = filePick.value;
       fileInput.dataset.touched = '1';
-      toast('候補のファイル名を読取元欄に入れました。「この対象者の読取元を保存」を押してください。');
+      toast('候補の相対パスを読取元欄に入れました。「この対象者の読取元を保存」を押してください。');
     };
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindKintaiControls);

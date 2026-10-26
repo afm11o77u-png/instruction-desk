@@ -17,14 +17,16 @@ TYPED_NAME = '009 正社員(営業手当無し)出勤簿2026.2〜.xlsx'
 
 class NormalizeFilenameTest(unittest.TestCase):
     def test_example_kato_file_matches_real_chars(self):
-        f = kintai.EXAMPLE_KATO_FILE
-        self.assertEqual(f, REAL_NAME)
-        self.assertEqual(f[3:5], '  ')  # 009のあと半角スペース2
-        self.assertIn('（', f)
-        self.assertIn('）', f)
-        self.assertIn('～', f)
-        self.assertNotIn('(', f)
-        self.assertNotIn(')', f)
+        rel = kintai.EXAMPLE_PATHS_BY_EMPLOYMENT['regular']['relative']
+        self.assertTrue(rel.endswith(REAL_NAME))
+        self.assertIn('①', rel)
+        fname = rel.rsplit('\\', 1)[-1]
+        self.assertEqual(fname, REAL_NAME)
+        self.assertEqual(fname[3:5], '  ')  # 009のあと半角スペース2
+        self.assertIn('（', fname)
+        self.assertIn('～', fname)
+        self.assertTrue(kintai.EXAMPLE_YEAR_SHARE_ROOT.endswith('出勤簿   2026年度版'))
+        self.assertNotIn('①', kintai.EXAMPLE_YEAR_SHARE_ROOT)
 
     def test_normalize_equates_space_paren_tilde(self):
         self.assertEqual(
