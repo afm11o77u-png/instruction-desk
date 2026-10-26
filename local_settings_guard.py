@@ -6,11 +6,16 @@ import uuid
 
 
 def check(git, target=None):
-    tracked = git('ls-files', '--', 'network.json', 'tls').stdout.strip()
-    incoming = git('ls-tree', '-r', '--name-only', target, '--', 'network.json', 'tls').stdout.strip() if target else ''
+    tracked = git('ls-files', '--', 'network.json', 'tls', 'data/kintai-local.json').stdout.strip()
+    incoming = git('ls-tree', '-r', '--name-only', target, '--', 'network.json', 'tls', 'data/kintai-local.json').stdout.strip() if target else ''
     if tracked or incoming:
         raise RuntimeError('接続設定・証明書がGitの管理対象に含まれています。保護のため更新・送信を停止しました。')
-    for name in ('network.json', 'tls/server.key'):
+    for name in ('network.json', 'tls/server.key', 'data/kintai-local.json'):
+        # kintai-local は未作成でもよいが、ignore 規則自体は必須
+        if name == 'data/kintai-local.json':
+            if git('check-ignore', '-q', '--', name, check=False).returncode:
+                raise RuntimeError('勤怠共有設定の除外設定が不足しています。保護のため停止しました。')
+            continue
         if git('check-ignore', '-q', '--', name, check=False).returncode:
             raise RuntimeError('接続設定・証明書の除外設定が不足しています。保護のため停止しました。')
 

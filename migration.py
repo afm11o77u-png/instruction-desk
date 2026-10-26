@@ -361,7 +361,7 @@ def _list_public_users(db_path):
         if 'users' not in _table_names(c):
             return []
         cols = set(_column_names(c, 'users'))
-        want = [k for k in ('id', 'login', 'name', 'role', 'manage', 'overview', 'active') if k in cols]
+        want = [k for k in ('id', 'login', 'name', 'role', 'manage', 'overview', 'active', 'mark_kintai') if k in cols]
         if 'id' not in want:
             return []
         rows = []

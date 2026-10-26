@@ -39,7 +39,13 @@ def login_label(login):
 
 def public(u):
     if not u: return None
-    data={k:u[k] for k in ('id','login','name','role','manage','overview','active','must_change','version')}
+    keys=('id','login','name','role','manage','overview','active','must_change','version')
+    data={k:u[k] for k in keys}
+    # マーク管理（勤怠）: 初期OFF。列が無い旧DBでも公開形は 0
+    try:
+        data['mark_kintai']=int(bool(u['mark_kintai']))
+    except (KeyError, IndexError, TypeError):
+        data['mark_kintai']=0
     if is_name_only(data['login']):
         data['login']=''; data['nameOnly']=True
     return data
@@ -51,6 +57,8 @@ def schema(c):
         c.execute('ALTER TABLE users ADD COLUMN overview INTEGER NOT NULL DEFAULT 0')
     cols={r['name'] for r in c.execute('PRAGMA table_info(users)')}
     if 'gate' not in cols: c.execute('ALTER TABLE users ADD COLUMN gate TEXT')
+    if 'mark_kintai' not in cols:
+        c.execute('ALTER TABLE users ADD COLUMN mark_kintai INTEGER NOT NULL DEFAULT 0')
     c.execute('CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS login_gates (token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires REAL NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS auth_attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, until REAL NOT NULL)')
@@ -224,7 +232,8 @@ class AuthMixin:
                 if not name_only and raw_login=='': raise ValueError('メールアドレスが必要です。現場の作業者だけ空欄にできます。')
                 login=new_name_only_login() if name_only else login_value(raw_login)
                 temp=None if name_only else secrets.token_urlsafe(15)
-                try: uid=c.execute('INSERT INTO users(login,name,password,role,manage,overview,must_change) VALUES(?,?,?,?,?,?,?)',(login,name,password_hash(temp or secrets.token_urlsafe(18)),role,int(admin),int(admin),0 if name_only else 1)).lastrowid
+                # mark_kintai は初期OFF（推測でONにしない）
+                try: uid=c.execute('INSERT INTO users(login,name,password,role,manage,overview,must_change,mark_kintai) VALUES(?,?,?,?,?,?,?,0)',(login,name,password_hash(temp or secrets.token_urlsafe(18)),role,int(admin),int(admin),0 if name_only else 1)).lastrowid
                 except sqlite3.IntegrityError: raise ValueError('そのメールアドレスはすでに登録されています。')
                 log(c,u,('作業者を氏名だけ追加' if name_only else '利用者を追加')+('・管理者を付与' if admin else ''),name if name_only else login)
                 if name_only: return 200,{'nameOnly':True,'name':name,'login':''}
@@ -277,14 +286,22 @@ class AuthMixin:
                 if u['role']!='owner' and 'login' in d and str(d.get('login','')).strip().casefold()!=( '' if is_name_only(target['login']) else target['login'].casefold()): return 403,{'error':'ログインIDを変更できるのは主管理者だけです。'}
                 issued=secrets.token_urlsafe(15) if is_name_only(target['login']) and not is_name_only(login) else None
                 became_name_only=not is_name_only(target['login']) and is_name_only(login)
-                access_changed=role!=target['role'] or manage!=target['manage'] or overview!=target['overview'] or active!=target['active'] or login!=target['login']
+                # マーク管理は利用者管理権限者のみ変更可（この分岐に到達済み）。未送信時は現状維持
+                if 'mark_kintai' in d:
+                    mark_kintai=int(bool(d.get('mark_kintai')))
+                else:
+                    try: mark_kintai=int(bool(target['mark_kintai']))
+                    except (KeyError, IndexError, TypeError): mark_kintai=0
+                try: prev_mark=int(bool(target['mark_kintai']))
+                except (KeyError, IndexError, TypeError): prev_mark=0
+                access_changed=role!=target['role'] or manage!=target['manage'] or overview!=target['overview'] or active!=target['active'] or login!=target['login'] or mark_kintai!=prev_mark
                 try:
-                    if issued: c.execute('UPDATE users SET login=?,name=?,password=?,role=?,manage=?,overview=?,active=?,must_change=1,version=version+1 WHERE id=?',(login,name,password_hash(issued),role,manage,overview,active,target['id']))
-                    elif became_name_only: c.execute('UPDATE users SET login=?,name=?,password=?,role=?,manage=?,overview=?,active=?,must_change=0,version=version+1 WHERE id=?',(login,name,password_hash(secrets.token_urlsafe(18)),role,manage,overview,active,target['id']))
-                    else: c.execute('UPDATE users SET login=?,name=?,role=?,manage=?,overview=?,active=?,version=version+1 WHERE id=?',(login,name,role,manage,overview,active,target['id']))
+                    if issued: c.execute('UPDATE users SET login=?,name=?,password=?,role=?,manage=?,overview=?,active=?,mark_kintai=?,must_change=1,version=version+1 WHERE id=?',(login,name,password_hash(issued),role,manage,overview,active,mark_kintai,target['id']))
+                    elif became_name_only: c.execute('UPDATE users SET login=?,name=?,password=?,role=?,manage=?,overview=?,active=?,mark_kintai=?,must_change=0,version=version+1 WHERE id=?',(login,name,password_hash(secrets.token_urlsafe(18)),role,manage,overview,active,mark_kintai,target['id']))
+                    else: c.execute('UPDATE users SET login=?,name=?,role=?,manage=?,overview=?,active=?,mark_kintai=?,version=version+1 WHERE id=?',(login,name,role,manage,overview,active,mark_kintai,target['id']))
                 except sqlite3.IntegrityError: raise ValueError('そのメールアドレスはすでに登録されています。')
                 if access_changed or issued or became_name_only: c.execute('DELETE FROM sessions WHERE user_id=?',(target['id'],))
-                log(c,u,f"利用者設定を変更：ログインID {login_label(target['login'])} → {login_label(login)}、氏名 {target['name']} → {name}、業務 {target['role']} → {role}、管理者 {int(bool(target['manage'] or target['overview']))} → {admin}、有効 {target['active']} → {active}",login_label(login))
+                log(c,u,f"利用者設定を変更：ログインID {login_label(target['login'])} → {login_label(login)}、氏名 {target['name']} → {name}、業務 {target['role']} → {role}、管理者 {int(bool(target['manage'] or target['overview']))} → {admin}、マーク管理 {prev_mark} → {mark_kintai}、有効 {target['active']} → {active}",login_label(login))
                 if issued: return 200,{'ok':True,'name':name,'temporary':issued,'login':login}
                 return 200,{'ok':True,'name':name}
             return 404,{'error':'操作が見つかりません。'}
