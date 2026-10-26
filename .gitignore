@@ -63,6 +63,13 @@ tls/
 
 network.json
 
+# 勤怠（マーク）: 共有パス・端末固有設定・実データ／検証用出勤簿
+data/kintai-local.json
+data/kintai-fixtures/
+data/kintai-import/
+**/~$*.xlsx
+**/~$*.xlsm
+
 # Nested stock-desk (app source is committed; local data / secrets / caches are not)
 stock-desk/__pycache__/
 stock-desk/**/__pycache__/

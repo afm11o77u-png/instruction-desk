@@ -12,6 +12,7 @@ import shipping
 import names
 import display_modes
 import migration
+import kintai
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +63,8 @@ def initialize():
         display_modes.initialize(c)
         picking.initialize(c)
         picking.backfill_picking_flags(c)
+        kintai.bind(DATA)
+        kintai.schema(c)
         if not c.execute("SELECT 1 FROM settings WHERE key='seeded'").fetchone():
             customers = ['宮の沢明日佳病院', 'だるま食品銭函工場', '弁釜札幌', 'サザエ食品 店舗']
             for i in range(6):
@@ -977,6 +980,13 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 else: result=404, {'error':'見つかりません。'}
             if len(result)==3: return self.reply(result[0], result[1], result[2])
             return self.reply(*result)
+        if path=='/api/kintai' or path.startswith('/api/kintai/'):
+            try:
+                with connect() as c:
+                    result=kintai.handle_get(self, c, path)
+                return self.reply(*result)
+            except (ValueError, TypeError, KeyError) as e:
+                return self.reply(400, {'error': str(e)})
         if path.startswith('/api/history/'):
             try: oid=int(path.rsplit('/',1)[1])
             except ValueError: return self.reply(400,{'error':'番号が正しくありません。'})
@@ -985,7 +995,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if not order or not can_access(self.user,json.loads(order['payload'])): return self.reply(404,{'error':'指示書が見つかりません。'})
                 rows=[dict(r) for r in c.execute('SELECT at,action,actor,changes FROM history WHERE order_id=? ORDER BY id DESC',(oid,))]
             return self.reply(200,rows)
-        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
@@ -1156,6 +1166,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     result=names.restore(self, c, d)
+                return self.reply(*result)
+            if self.path=='/api/kintai/import' or self.path.startswith('/api/kintai/'):
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    result=kintai.handle_post(self, c, self.path.split('?')[0], d)
                 return self.reply(*result)
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
             payload=validate(d); now=datetime.now().isoformat(timespec='seconds')

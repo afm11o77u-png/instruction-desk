@@ -27,7 +27,7 @@ class DeskNavGroupsTest(unittest.TestCase):
             ('現場の作業・出荷', ['現場の作業一覧', 'ピッキングリスト', '出荷仕分け']),
             ('管理担当持込', ['入力', '出力']),
             ('印刷', ['宛名書き・管理票印刷']),
-            ('設定・管理', ['利用者管理', '管理・修正']),
+            ('設定・管理', ['利用者管理', '勤怠管理（マーク）', '管理・修正']),
         ]
         pos = 0
         for caption, items in expected:
@@ -69,6 +69,8 @@ class DeskNavGroupsTest(unittest.TestCase):
     def test_settings_stay_permissioned(self):
         self.assertIn("manageNav.hidden=!(currentUser.manage||role==='owner')", ACCOUNT)
         self.assertIn("repairNav.hidden=role!=='owner'", ACCOUNT)
+        self.assertIn('kintai-open', INDEX)
+        self.assertIn('mark_kintai', ACCOUNT)
         self.assertIn("openAccounts()", ACCOUNT)
         self.assertIn("openRepair()", ACCOUNT)
         # ログイン欄からは業務メニューへ移した
