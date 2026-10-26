@@ -259,7 +259,7 @@ const nameDeletedClose=$('#namedeletedclose');
  if(nameDeletedClose)nameDeletedClose.onclick=()=>$('#namedeleted').close();
 const nameDeletedDialog=$('#namedeleted');
  if(nameDeletedDialog)nameDeletedDialog.addEventListener('cancel',e=>{e.preventDefault();nameDeletedDialog.close()});
-syncNameDeletedButton();
+// account.js initializes login state later; loadNames updates the button.
 let nameEditing=null;
 function syncNameSize(){
  const kind=$('#nameformsize').value;
