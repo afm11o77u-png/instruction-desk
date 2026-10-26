@@ -8,12 +8,14 @@
 
   function fiscalStartYear() {
     const el = $('#kintaiyear');
-    return el ? Number(el.value) : 2026;
+    const n = el ? Number(el.value) : 0;
+    return n || 2026;
   }
 
   function selectedMonth() {
     const el = $('#kintaimonth');
-    return el ? Number(el.value) : 2;
+    const n = el ? Number(el.value) : 0;
+    return n || 2;
   }
 
   function selectedPersonId() {
@@ -167,7 +169,7 @@
   window.paintKintai = paintKintai;
   window.importKintai = importKintai;
 
-  document.addEventListener('DOMContentLoaded', () => {
+  function bindKintaiControls() {
     const year = $('#kintaiyear');
     const month = $('#kintaimonth');
     const person = $('#kintaiperson');
@@ -180,5 +182,7 @@
     if (refresh) refresh.onclick = () => loadKintai().catch(e => toast(e.message));
     if (imp) imp.onclick = () => importKintai().catch(e => toast(e.message));
     if (saveShare) saveShare.onclick = () => saveShareRoot().catch(e => toast(e.message));
-  });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindKintaiControls);
+  else bindKintaiControls();
 })();
