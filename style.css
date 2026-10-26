@@ -167,5 +167,8 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintai-result-table tr.kintai-ng{background:#fff1e8}
 .kintai-result-table tr.kintai-miss{background:#f5f5f5}
 .kintai-setting-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.kintai-optional-root{margin:12px 0 4px;padding:8px 10px;border:1px dashed #c5d9c4;border-radius:6px;background:#fafdf9}
+.kintai-optional-root>summary{cursor:pointer;font-weight:600;color:#3d5344}
+.kintai-optional-root label{margin-top:8px;display:block}
 .kintaiprobe{max-height:240px;overflow:auto;background:#f4faf4;border:1px solid #d5ead4;padding:10px;font-size:12px;white-space:pre-wrap}
 #kintaishareinput,#kintaifileinput,#kintaifilepick{min-width:min(100%,42rem)}

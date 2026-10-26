@@ -59,6 +59,15 @@
     return input.value.trim() !== saved;
   }
 
+  function looksAbsolutePath(s) {
+    const v = (s || '').trim();
+    if (!v) return false;
+    if (v.startsWith('\\\\') || v.startsWith('//')) return true;
+    if (v.length > 2 && v[1] === ':') return true;
+    if (v.startsWith('/')) return true;
+    return false;
+  }
+
   function paintShareStatus() {
     const share = $('#kintaishare');
     if (!share) return;
@@ -66,16 +75,14 @@
     share.classList.remove('kintai-warn');
     if (shareInputUnsaved()) {
       share.classList.add('kintai-warn');
-      share.textContent = saved
-        ? '年度ルート: 保存済みあり ／ 入力欄は未保存の変更です。「年度ルートとレイアウトを保存」を押してください（未保存のパスでは取込できません）'
-        : '年度ルート: 未保存の入力あり（まだサーバーに保存されていません。「年度ルートとレイアウトを保存」を押してください）';
+      share.textContent = '任意の年度ルート入力が未保存です（フルパス運用なら無視可）。相対パスを使うなら「年度ルートとレイアウトを保存」を押してください';
       return;
     }
     if (saved) {
-      share.textContent = '年度ルート設定あり（保存済み）。雇用区分フォルダは対象者ごとの読取元で指定';
+      share.textContent = '対象者ごとのフルパスが主設定。任意の年度ルートも保存済み（相対パス用）';
       return;
     }
-    share.textContent = '年度ルート未設定（入力しただけでは未保存です。保存ボタンが必要です）';
+    share.textContent = '対象者ごとに出勤簿フルパスを保存してください（年度ルートは任意）';
   }
 
   function syncPersonLayout() {
@@ -220,8 +227,7 @@
     box.hidden = false;
     box.innerHTML = `<h3>取込結果の詳細</h3>
       <p>成功${counts.ok}／エラー${counts.error}／未取得${counts.missing}
-      ${summary.shareRootConfigured ? '' : ' ／ <span class="kintai-warn-inline">共有ルート未保存の可能性</span>'}
-      ${summary.shareRoot ? ` ／ 使用ルート: <code>${esc(summary.shareRoot)}</code>` : ''}</p>
+      ${summary.shareRoot ? ` ／ 補助ルート: <code>${esc(summary.shareRoot)}</code>` : ''}</p>
       <table class="kintai-result-table"><thead><tr><th>対象者</th><th>結果・理由</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
@@ -281,13 +287,17 @@
 
   async function importKintai() {
     if (!canKintai()) throw Error('勤怠管理（マーク）の権限がありません。');
-    if (shareInputUnsaved()) {
-      const go = confirm('年度ルートの入力が未保存です。未保存のパスは取込に使われません。このまま続けますか？（キャンセルして「年度ルートとレイアウトを保存」を先に押すことを推奨）');
+    if (fileInputUnsaved()) {
+      const go = confirm('読取元ファイルの入力が未保存です。未保存のパスは取込に使われません。このまま続けますか？');
       if (!go) return;
     }
-    if (fileInputUnsaved()) {
-      const go = confirm('読取元ファイルの入力が未保存です。未保存のファイル名は取込に使われません。このまま続けますか？');
-      if (!go) return;
+    if (shareInputUnsaved()) {
+      const fileEl = $('#kintaifileinput');
+      const usingAbs = looksAbsolutePath(fileEl && fileEl.value);
+      if (!usingAbs) {
+        const go = confirm('任意の年度ルート入力が未保存です。相対パス運用なら先に保存してください。このまま続けますか？');
+        if (!go) return;
+      }
     }
     if (!confirm('出勤簿から集計を更新します。元ファイルは変更しません。よろしいですか？')) return;
     const summary = await api('/api/kintai/import', { year: fiscalStartYear() });
@@ -326,7 +336,7 @@
     const body = { personId, sourceFile, layoutId: layoutEl ? layoutEl.value : '' };
     await api('/api/kintai/person-file', body);
     if (fileEl) delete fileEl.dataset.touched;
-    toast('読取元を保存しました（雇用区分フォルダは人ごとに違うので、他の人も同様に設定してください）。');
+    toast('読取元を保存しました。他の対象者も同様にフルパスを設定してください。');
     await loadKintai();
   }
 
@@ -335,7 +345,6 @@
     const examples = pack.examplePathsByEmployment || {};
     const ex = examples[kind];
     if (!ex) throw Error('この雇用区分の例示がありません。');
-    const shareInput = $('#kintaishareinput');
     const fileInput = $('#kintaifileinput');
     const filePerson = $('#kintaifileperson');
     const layoutEl = $('#kintaipersonlayout');
@@ -344,17 +353,13 @@
     ) || (pack.people || []).find(p => p.employeeCode === ex.employeeCode)
       || (pack.people || []).find(p => p.employment === ex.employment);
     if (filePerson && person) filePerson.value = String(person.id);
-    if (shareInput) {
-      shareInput.value = pack.exampleYearShareRoot || pack.exampleKatoShareRoot || '';
-      shareInput.dataset.touched = '1';
-    }
     if (fileInput) {
-      fileInput.value = ex.relative || '';
+      fileInput.value = ex.fullPath || ex.relative || '';
       fileInput.dataset.touched = '1';
     }
     if (layoutEl && ex.layoutId) layoutEl.value = ex.layoutId;
     paintShareStatus();
-    toast(`${ex.label}の例を入れました。必ず「年度ルートを保存」と「この対象者の読取元を保存」を押してください。`);
+    toast(`${ex.label}のフルパス例を入れました。「この対象者の読取元を保存」を押してください。`);
   }
 
   function fillKatoExample() { fillEmploymentExample('regular'); }
