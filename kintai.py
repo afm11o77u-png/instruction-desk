@@ -12,7 +12,7 @@ import os
 import re
 import sqlite3
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -25,6 +25,18 @@ PKG = '{http://schemas.openxmlformats.org/package/2006/relationships}'
 DEFAULT_FISCAL_START = (2026, 2)
 LOCAL_SETTINGS_NAME = 'kintai-local.json'
 LOCAL_SETTINGS_KEYS = ('shareRoot', 'layoutId', 'peopleFiles')
+PATH_MAX = 1000
+# UI・ドキュメント用の例示のみ。自動設定や mark_kintai の推測ONには使わない。
+EXAMPLE_KATO_SHARE_ROOT = (
+    r'\\Desktop-iu7d38q\e\札幌発寒支店共有\札幌発寒支店\札幌発寒支店管理職以外閲覧禁止'
+    r'\※閲覧禁止※\出勤簿   2026年度版\①　正社員（営業手当無し）001～050'
+)
+EXAMPLE_KATO_FILE = '009  正社員（営業手当無し）出勤簿2026.2～.xlsx'
+LAYOUT_SAMPLE_NEEDED = (
+    '実出勤簿のシート名・セル番地は未確認のため集計できません。'
+    'サンプルxlsx（個人情報を伏せたコピー可）または ImportShukkinbo.bas / live-sync を提供してください。'
+    'クラウド開発環境から共有UNCには接続できないため、接続できたようには扱いません。'
+)
 
 # 対象者マスタ（リンク用短い名前。共有上の実ファイル名は人が設定。推測で mark_kintai は付けない）
 DEFAULT_PEOPLE = [
@@ -41,10 +53,11 @@ DEFAULT_PEOPLE = [
     {'employee_code': '037', 'employment': 'part', 'display_name': '南田 久美子', 'sort_order': 11, 'file_hint': '11_南田　久美子'},
 ]
 
-# fixture-v1: 検証用レイアウト（実出勤簿のセル番地ではない。未確認の実ファイル構造を推測しない）
+# fixture-v1: 検証用レイアウト（実出勤簿のセル番地ではない）
 FIXTURE_LAYOUT = {
     'id': 'fixture-v1',
-    'note': '検証用。実出勤簿のシート名・列位置は未確認のため本番レイアウトとしては使わない。',
+    'kind': 'fixture-days',
+    'note': '検証用。実出勤簿のシート名・列位置とは別物。',
     'sheet_name_format': '{yyyy}-{mm:02d}',  # 例 2026-02
     'header_row': 1,
     'day_col': 1,          # A
@@ -55,8 +68,56 @@ FIXTURE_LAYOUT = {
     'first_data_row': 2,
 }
 
+# 正社員（営業手当無し）出勤簿 2026 — サンプル
+# internal/kintai-sample-009-kato-2026.xlsx でセルを確認済み（推測ではない）
+SEISHAIN_2026_MONTH_SHEETS = {
+    (2026, 2): '26.2', (2026, 3): '26.3', (2026, 4): '26.4', (2026, 5): '26.5',
+    (2026, 6): '26.6', (2026, 7): '26.7', (2026, 8): '26.8', (2026, 9): '26.9',
+    (2026, 10): '26.10', (2026, 11): '26.11', (2026, 12): '26.12', (2027, 1): '27.1',
+}
+# 集計シート B〜M = 2月度〜1月度
+SEISHAIN_2026_SUMMARY_COLS = {
+    (2026, 2): 2, (2026, 3): 3, (2026, 4): 4, (2026, 5): 5,
+    (2026, 6): 6, (2026, 7): 7, (2026, 8): 8, (2026, 9): 9,
+    (2026, 10): 10, (2026, 11): 11, (2026, 12): 12, (2027, 1): 13,
+}
+# 年間ｶﾚﾝﾀﾞｰ row2 の各月度ヘッダ列（日付も同列）
+SEISHAIN_2026_CAL_COLS = {
+    (2026, 2): 2, (2026, 3): 8, (2026, 4): 14, (2026, 5): 20,
+    (2026, 6): 26, (2026, 7): 32, (2026, 8): 38, (2026, 9): 44,
+    (2026, 10): 50, (2026, 11): 56, (2026, 12): 62, (2027, 1): 68,
+}
+
+SEISHAIN_2026_LAYOUT = {
+    'id': 'shukkinbo-2026-seishain-v1',
+    'kind': 'summary-shukkinbo',
+    'note': (
+        '正社員（営業手当無し）出勤簿2026。集計シートの確認済み行を使用。'
+        '出勤=集計!行5／有給=行10／普通=法定内①行6／計=総労働時間行21／'
+        '残業=計−普通／休日=年間カレンダー日付×月シート休み・始業（行5–46）。'
+        '月シートA列の年は26.3以降ずれるため日付は年間カレンダーを正とする。'
+    ),
+    'summary_sheet': '集計',
+    'calendar_sheet': '年間ｶﾚﾝﾀﾞｰ',
+    'month_sheets': SEISHAIN_2026_MONTH_SHEETS,
+    'summary_cols': SEISHAIN_2026_SUMMARY_COLS,
+    'calendar_cols': SEISHAIN_2026_CAL_COLS,
+    'row_work_days': 5,
+    'row_ordinary_hours': 6,   # 法定内時間①（時間）
+    'row_paid_leave': 10,      # 有給日数
+    'row_total_hours': 21,     # 総労働時間（時間）
+    'calendar_first_row': 3,   # 年間ｶﾚﾝﾀﾞｰの日付開始行
+    'calendar_last_row': 49,
+    'day_first_row': 5,        # 月シートの日付行（カレンダー行+2）
+    'day_last_row': 46,
+    'date_col': 1,             # A（参照用。年ずれがあるため突合には使わない）
+    'leave_col': 4,            # D 休み
+    'start_col': 5,            # E 始業
+}
+
 LAYOUTS = {
     'fixture-v1': FIXTURE_LAYOUT,
+    'shukkinbo-2026-seishain-v1': SEISHAIN_2026_LAYOUT,
 }
 
 PAID_LEAVE_RE = re.compile(r'(?P<num>\d+(?:\.\d+)?)\s*有休')
@@ -175,6 +236,21 @@ def fiscal_label(start_year: int, start_month: int = 2) -> str:
     return f'{start_year}年{start_month}月〜{ey}年{em}月'
 
 
+def preferred_fiscal_start_year(today: date | None = None) -> int:
+    """2月始まり。1月は前年度（例: 2027-01 → 開始年 2026）。"""
+    today = today or date.today()
+    if today.month >= DEFAULT_FISCAL_START[1]:
+        return today.year
+    return today.year - 1
+
+
+def fiscal_year_choices(center: int | None = None) -> list[int]:
+    """選択候補。必ず DEFAULT（2026）を含み、表示は終了月まで明示する。"""
+    c = center if center is not None else preferred_fiscal_start_year()
+    years = {c - 1, c, c + 1, DEFAULT_FISCAL_START[0]}
+    return sorted(y for y in years if 2000 <= y <= 2100)
+
+
 def format_hm(minutes) -> str:
     if minutes is None:
         return ''
@@ -246,6 +322,105 @@ def _as_minutes(value, label: str) -> int:
         raise ValueError(f'{label}を読み取れません（{s}）。') from e
 
 
+def hours_to_minutes(value, label: str) -> int:
+    """集計シートの労働時間（小数時間）を整数分へ。常に時間として扱う（分との二重判定をしない）。"""
+    if value is None or value == '':
+        return 0
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        raise ValueError(f'{label}に計算結果がありません（数式の再計算はしません）。')
+    if isinstance(value, bool):
+        raise ValueError(f'{label}の値が不正です。')
+    if isinstance(value, (int, float)):
+        v = float(value)
+        if v < TINY_NEG:
+            if v > -1:
+                return 0
+            raise ValueError(f'{label}が大きな負数です（{v}）。')
+        if v < 0:
+            return 0
+        return int(round(v * 60))
+    s = str(value).strip()
+    if not s:
+        return 0
+    if re.fullmatch(r'\d+:\d{1,2}', s):
+        h, m = s.split(':')
+        total = int(h) * 60 + int(m)
+        if total < 0:
+            raise ValueError(f'{label}が負です。')
+        return total
+    try:
+        return hours_to_minutes(float(s.replace(',', '')), label)
+    except ValueError as e:
+        raise ValueError(f'{label}を読み取れません（{s}）。') from e
+
+
+def _excel_serial_to_date(value) -> date | None:
+    """xlsx キャッシュの日付（シリアルまたは文字列）を date へ。"""
+    if value is None or value == '':
+        return None
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        # Excel 1900 日付系（openpyxl/ECMA と同様 1899-12-30 起点）
+        try:
+            serial = float(value)
+        except (TypeError, ValueError):
+            return None
+        if serial <= 0:
+            return None
+        return (datetime(1899, 12, 30) + timedelta(days=int(serial))).date()
+    s = str(value).strip()
+    if not s:
+        return None
+    for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%Y年%m月%d日'):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _require_number(value, label: str) -> float:
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        raise ValueError(f'{label}に計算結果がありません（数式の再計算はしません）。')
+    if value is None or value == '':
+        return 0.0
+    if isinstance(value, bool):
+        raise ValueError(f'{label}の値が不正です。')
+    if isinstance(value, (int, float)):
+        v = float(value)
+        if v < TINY_NEG and v > -1:
+            return 0.0
+        if v < 0:
+            raise ValueError(f'{label}が負です（{v}）。')
+        return v
+    s = str(value).strip().replace(',', '')
+    try:
+        v = float(s)
+    except ValueError as e:
+        raise ValueError(f'{label}を読み取れません（{value}）。') from e
+    if v < 0:
+        raise ValueError(f'{label}が負です（{v}）。')
+    return v
+
+
+def _has_start_value(value) -> bool:
+    if value is None or value == '':
+        return False
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        raise ValueError('始業に計算結果がありません（数式の再計算はしません）。')
+    if isinstance(value, (int, float)):
+        # Excel 時刻シリアル（0〜1）や時間数。0 は未入力扱い
+        return abs(float(value)) > 1e-12
+    if isinstance(value, datetime):
+        return True
+    return bool(str(value).strip())
+
+
 def local_settings_path() -> Path:
     return Path(DATA_DIR) / LOCAL_SETTINGS_NAME
 
@@ -267,7 +442,8 @@ def load_local_settings() -> dict:
     if env_layout:
         data['layoutId'] = env_layout
     data.setdefault('shareRoot', '')
-    data.setdefault('layoutId', 'fixture-v1')
+    # 実サンプル確認済みの正社員2026レイアウトを既定にする（検証は layoutId=fixture-v1）
+    data.setdefault('layoutId', 'shukkinbo-2026-seishain-v1')
     data.setdefault('peopleFiles', {})
     if not isinstance(data.get('peopleFiles'), dict):
         data['peopleFiles'] = {}
@@ -280,8 +456,8 @@ def save_local_settings(patch: dict, actor_may_write: bool) -> dict:
     cur = load_local_settings()
     if 'shareRoot' in patch:
         root = patch['shareRoot']
-        if not isinstance(root, str) or len(root) > 500:
-            raise ValueError('共有ルートは500文字以内で入力してください。')
+        if not isinstance(root, str) or len(root) > PATH_MAX:
+            raise ValueError(f'共有ルートは{PATH_MAX}文字以内で入力してください。')
         # 資格情報を埋め込ませない（user:pass@ やパスワードっぽい断片）
         if '://' in root and '@' in root.split('://', 1)[1].split('/', 1)[0]:
             raise ValueError('共有パスに接続資格情報を含めないでください。')
@@ -289,7 +465,11 @@ def save_local_settings(patch: dict, actor_may_write: bool) -> dict:
     if 'layoutId' in patch:
         lid = patch['layoutId']
         if lid not in LAYOUTS:
-            raise ValueError('未対応のレイアウトです。実ファイル確認前は fixture-v1 のみです。')
+            raise ValueError(
+                '未対応のレイアウトです。利用可: '
+                + '、'.join(LAYOUTS.keys())
+                + '。'
+            )
         cur['layoutId'] = lid
     if 'peopleFiles' in patch:
         pf = patch['peopleFiles']
@@ -298,8 +478,8 @@ def save_local_settings(patch: dict, actor_may_write: bool) -> dict:
         clean = {}
         for k, v in pf.items():
             key = str(k)
-            if not isinstance(v, str) or len(v) > 400:
-                raise ValueError('ファイル名が長すぎます。')
+            if not isinstance(v, str) or len(v) > PATH_MAX:
+                raise ValueError(f'ファイルパスは{PATH_MAX}文字以内です。')
             if '..' in v.replace('\\', '/').split('/'):
                 raise ValueError('相対パスに .. は使えません。')
             clean[key] = v.strip()
@@ -311,12 +491,11 @@ def save_local_settings(patch: dict, actor_may_write: bool) -> dict:
 
 
 def get_layout(layout_id: str | None = None) -> dict:
-    lid = layout_id or load_local_settings().get('layoutId') or 'fixture-v1'
+    lid = layout_id or load_local_settings().get('layoutId') or 'shukkinbo-2026-seishain-v1'
     layout = LAYOUTS.get(lid)
     if not layout:
         raise ValueError(
-            f'レイアウト「{lid}」は未確認のため使用できません。'
-            '実出勤簿のセル／シートを確認するまで fixture-v1（検証用）のみ利用できます。'
+            f'レイアウト「{lid}」は未登録です。利用可: ' + '、'.join(LAYOUTS.keys()) + '。'
         )
     return layout
 
@@ -493,8 +672,137 @@ def aggregate_month_from_grid(grid, year: int, month: int, layout: dict, as_of: 
     }
 
 
+def count_holidays_summary_shukkinbo(
+    cal_grid: dict,
+    month_grid: dict,
+    year: int,
+    month: int,
+    layout: dict,
+    as_of: date | None = None,
+) -> float:
+    """年間カレンダーの月度日付を正とし、対応する月シート行の休み・始業から休日数を数える。
+
+    月シート A 列は 26.3 以降で年がずれることがあるため、日付の突合には使わない。
+    カレンダー行 r → 月シート行 r + (day_first_row - calendar_first_row)。
+    """
+    as_of = as_of or date.today()
+    cal_col = layout['calendar_cols'].get((year, month))
+    if cal_col is None:
+        raise ValueError(f'{year}-{month:02d} のカレンダー列がレイアウトにありません。')
+    cal_first = layout['calendar_first_row']
+    cal_last = layout.get('calendar_last_row', cal_first + 50)
+    day_first = layout['day_first_row']
+    row_offset = day_first - cal_first
+    leave_col = layout['leave_col']
+    start_col = layout['start_col']
+    holidays = 0.0
+    found_dates = 0
+    for cal_row in range(cal_first, cal_last + 1):
+        raw = _cell(cal_grid, cal_row, cal_col)
+        if isinstance(raw, dict) and raw.get('__missing_cache__'):
+            raise ValueError(
+                f'{year}-{month:02d} の年間カレンダー日付に計算結果がありません（数式の再計算はしません）。'
+            )
+        day_date = _excel_serial_to_date(raw)
+        if day_date is None:
+            continue
+        found_dates += 1
+        if day_date > as_of:
+            continue
+        month_row = cal_row + row_offset
+        if month_row < day_first or month_row > layout['day_last_row']:
+            continue
+        leave = _cell(month_grid, month_row, leave_col)
+        start = _cell(month_grid, month_row, start_col)
+        try:
+            if _has_start_value(start):
+                continue
+        except ValueError as e:
+            raise ValueError(f'{year}-{month:02d} 日{day_date.isoformat()} の{e}') from e
+        if is_paid_leave_cell(leave):
+            continue
+        holidays += 1.0
+    if found_dates == 0:
+        raise ValueError(f'{year}-{month:02d} の年間カレンダーに日付がありません。')
+    return holidays
+
+
+def aggregate_month_from_summary(
+    sheets: dict[str, dict],
+    year: int,
+    month: int,
+    layout: dict,
+    as_of: date | None = None,
+) -> dict:
+    """集計シート（出勤・有給・法定内①・総労働）＋カレンダー休日。"""
+    summary_name = layout['summary_sheet']
+    cal_name = layout['calendar_sheet']
+    month_sheets = layout['month_sheets']
+    summary_cols = layout['summary_cols']
+    if (year, month) not in summary_cols or (year, month) not in month_sheets:
+        raise ValueError(f'{year}-{month:02d} はこのレイアウトの対象外です。')
+    summary = sheets.get(summary_name)
+    if summary is None:
+        raise ValueError(f'「{summary_name}」シートがありません。')
+    cal = sheets.get(cal_name)
+    if cal is None:
+        raise ValueError(f'「{cal_name}」シートがありません。')
+    month_name = month_sheets[(year, month)]
+    month_grid = sheets.get(month_name)
+    if month_grid is None:
+        raise ValueError(f'月シート「{month_name}」がありません。')
+    col = summary_cols[(year, month)]
+    label = f'{year}-{month:02d}'
+    work_days = _require_number(_cell(summary, layout['row_work_days'], col), f'{label} 出勤日数')
+    paid_leave_days = _require_number(_cell(summary, layout['row_paid_leave'], col), f'{label} 有給日数')
+    ordinary = hours_to_minutes(
+        _cell(summary, layout['row_ordinary_hours'], col), f'{label} 法定内時間①'
+    )
+    total = hours_to_minutes(
+        _cell(summary, layout['row_total_hours'], col), f'{label} 総労働時間'
+    )
+    overtime = total - ordinary
+    if overtime < 0:
+        # 丸め誤差のみ許容
+        if overtime >= -1:
+            overtime = 0
+        else:
+            raise ValueError(f'{label} の残業が負です（総労働 {total} 分 − 普通 {ordinary} 分）。')
+    holiday_days = count_holidays_summary_shukkinbo(
+        cal, month_grid, year, month, layout, as_of=as_of
+    )
+    return {
+        'work_days': work_days,
+        'holiday_days': holiday_days,
+        'paid_leave_days': paid_leave_days,
+        'ordinary_minutes': ordinary,
+        'overtime_minutes': overtime,
+        'total_minutes': ordinary + overtime,
+    }
+
+
 def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: dict, as_of: date | None = None) -> dict[tuple[int, int], dict]:
     sheets = read_xlsx_grid(blob)
+    kind = layout.get('kind') or 'fixture-days'
+    if kind == 'summary-shukkinbo':
+        results = {}
+        errors = []
+        for y, m in months:
+            try:
+                results[(y, m)] = aggregate_month_from_summary(sheets, y, m, layout, as_of=as_of)
+            except ValueError as e:
+                errors.append(str(e))
+        if errors and not results:
+            found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
+            raise ValueError(
+                '出勤簿を集計できません: '
+                + '／'.join(errors[:4])
+                + f'（ファイル内シート: {found}）。'
+            )
+        if errors:
+            raise ValueError('一部の月を集計できません: ' + '／'.join(errors[:6]))
+        return results
+
     results = {}
     missing = []
     for y, m in months:
@@ -505,11 +813,58 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
             continue
         results[(y, m)] = aggregate_month_from_grid(grid, y, m, layout, as_of=as_of)
     if missing and not results:
-        raise ValueError('対象月のシートが見つかりません: ' + '、'.join(missing[:6]))
+        found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
+        hint = ''
+        if layout.get('id') == 'fixture-v1':
+            hint = ' ' + LAYOUT_SAMPLE_NEEDED
+        raise ValueError(
+            '対象月のシートが見つかりません（期待: '
+            + '、'.join(missing[:6])
+            + '／ファイル内: '
+            + found
+            + '）。'
+            + hint
+        )
     if missing:
         # 一部欠ける場合はファイル単位で失敗（不完全結果を混ぜない）
         raise ValueError('一部の月シートがありません: ' + '、'.join(missing))
     return results
+
+
+def probe_workbook_bytes(blob: bytes) -> dict:
+    """読取専用の構造確認。シート名と各シートの使用セル範囲のみ。列意味は推測しない。"""
+    sheets = read_xlsx_grid(blob)
+    out = []
+    for name, grid in sheets.items():
+        if not grid:
+            out.append({'name': name, 'cells': 0, 'rowMin': None, 'rowMax': None, 'colMin': None, 'colMax': None})
+            continue
+        rows = [r for r, _ in grid]
+        cols = [c for _, c in grid]
+        out.append({
+            'name': name,
+            'cells': len(grid),
+            'rowMin': min(rows),
+            'rowMax': max(rows),
+            'colMin': min(cols),
+            'colMax': max(cols),
+        })
+    names = {s['name'] for s in out}
+    known = (
+        '集計' in names
+        and '年間ｶﾚﾝﾀﾞｰ' in names
+        and any(n.startswith('26.') or n.startswith('27.') for n in names)
+    )
+    note = 'シート名とセル範囲のみ返します（このAPIでは列の意味を判定しません）。'
+    if known:
+        note += ' 構造は正社員（営業手当無し）2026出勤簿に近いです。layoutId=shukkinbo-2026-seishain-v1 で集計できます。'
+    else:
+        note += ' ' + LAYOUT_SAMPLE_NEEDED
+    return {
+        'sheetCount': len(out),
+        'sheets': out,
+        'note': note,
+    }
 
 
 def _unc_to_path(share_root: str) -> Path:
@@ -678,7 +1033,13 @@ def _month_public(row) -> dict:
     }
 
 
-def list_overview(c, fiscal_start_year: int, month: int | None = None, person_id: int | None = None) -> dict:
+def list_overview(
+    c,
+    fiscal_start_year: int,
+    month: int | None = None,
+    person_id: int | None = None,
+    year_month: tuple[int, int] | None = None,
+) -> dict:
     settings = load_local_settings()
     months = fiscal_months(fiscal_start_year, DEFAULT_FISCAL_START[1])
     people = [dict(r) for r in c.execute(
@@ -687,6 +1048,7 @@ def list_overview(c, fiscal_start_year: int, month: int | None = None, person_id
         'LEFT JOIN kintai_person_status s ON s.person_id=p.id '
         'WHERE p.active=1 ORDER BY p.sort_order, p.id'
     )]
+    pf = settings.get('peopleFiles') or {}
     rows = []
     if person_id:
         person = next((p for p in people if p['id'] == person_id), None)
@@ -716,11 +1078,16 @@ def list_overview(c, fiscal_start_year: int, month: int | None = None, person_id
             'months': month_rows,
         })
     else:
-        target_month = month or months[0][1]
-        # month alone is ambiguous across year boundary; pick the matching (y,m) in fiscal
-        ym = next(((y, m) for y, m in months if m == target_month), None)
-        if ym is None:
-            raise ValueError('対象月が年度の範囲外です。')
+        if year_month is not None:
+            ym = year_month
+            if ym not in months:
+                raise ValueError('対象月が年度の範囲外です。')
+        else:
+            target_month = month if month is not None else months[0][1]
+            # month alone is ambiguous across year boundary; pick the matching (y,m) in fiscal
+            ym = next(((y, m) for y, m in months if m == target_month), None)
+            if ym is None:
+                raise ValueError('対象月が年度の範囲外です。')
         y, m = ym
         for person in people:
             rec = c.execute(
@@ -748,15 +1115,24 @@ def list_overview(c, fiscal_start_year: int, month: int | None = None, person_id
     ).fetchone()
     # 権限のない利用者には共有パスを返さない（この関数は can_use 後のみ）
     share = settings.get('shareRoot') or ''
+    layout = get_layout(settings.get('layoutId'))
     return {
         'fiscalLabel': fiscal_label(fiscal_start_year),
         'fiscalStartYear': fiscal_start_year,
         'fiscalStartMonth': DEFAULT_FISCAL_START[1],
-        'months': [{'year': y, 'month': m} for y, m in months],
-        'layoutId': settings.get('layoutId') or 'fixture-v1',
+        'preferredFiscalStartYear': preferred_fiscal_start_year(),
+        'fiscalYearOptions': [
+            {'startYear': y, 'label': fiscal_label(y)} for y in fiscal_year_choices(fiscal_start_year)
+        ],
+        'months': [{'year': y, 'month': m, 'key': f'{y}-{m:02d}'} for y, m in months],
+        'layoutId': layout['id'],
         'shareRoot': share,
         'shareRootConfigured': bool(share.strip()),
-        'layoutNote': get_layout(settings.get('layoutId')).get('note', ''),
+        'layoutNote': layout.get('note', ''),
+        'realLayoutReady': layout['id'] != 'fixture-v1',
+        'sampleNeeded': LAYOUT_SAMPLE_NEEDED if layout['id'] == 'fixture-v1' else '',
+        'exampleKatoShareRoot': EXAMPLE_KATO_SHARE_ROOT,
+        'exampleKatoFile': EXAMPLE_KATO_FILE,
         'lastImport': dict(last_run) if last_run else None,
         'people': [
             {
@@ -764,20 +1140,28 @@ def list_overview(c, fiscal_start_year: int, month: int | None = None, person_id
                 'employeeCode': p['employee_code'],
                 'employment': p['employment'],
                 'displayName': p['display_name'],
-                'sourceFile': p['source_file'],
+                'sourceFile': (pf.get(str(p['id'])) or p['source_file'] or ''),
+                'fileHint': next(
+                    (d['file_hint'] for d in DEFAULT_PEOPLE
+                     if d['employee_code'] == p['employee_code'] and d['employment'] == p['employment']),
+                    '',
+                ),
             }
             for p in people
         ],
         'rows': rows,
-        'opsNote': 'サーバー実行ユーザーに共有フォルダの読取権限が必要です。元出勤簿は変更しません。',
+        'opsNote': (
+            'サーバー実行ユーザーに共有フォルダの読取権限が必要です。元出勤簿は変更しません。'
+            ' パスは共有ルート＋ファイル名、またはフルUNCのどちらでも設定できます。'
+        ),
     }
 
 
 def update_person_file(c, person_id: int, source_file: str):
     if type(person_id) is not int:
         raise ValueError('対象者を選択してください。')
-    if not isinstance(source_file, str) or len(source_file) > 400:
-        raise ValueError('ファイル名は400文字以内です。')
+    if not isinstance(source_file, str) or len(source_file) > PATH_MAX:
+        raise ValueError(f'ファイルパスは{PATH_MAX}文字以内です。')
     if '..' in source_file.replace('\\', '/'):
         raise ValueError('相対パスに .. は使えません。')
     row = c.execute('SELECT id FROM kintai_people WHERE id=?', (person_id,)).fetchone()
@@ -786,10 +1170,47 @@ def update_person_file(c, person_id: int, source_file: str):
     c.execute('UPDATE kintai_people SET source_file=? WHERE id=?', (source_file.strip(), person_id))
 
 
+def probe_person(c, person_id: int) -> dict:
+    """対象者ファイルを読取専用で開き、シート一覧のみ返す（集計しない）。"""
+    if type(person_id) is not int:
+        raise ValueError('対象者を選択してください。')
+    person = c.execute('SELECT * FROM kintai_people WHERE id=?', (person_id,)).fetchone()
+    if not person:
+        raise ValueError('対象者が見つかりません。')
+    settings = load_local_settings()
+    path = resolve_person_file(dict(person), settings)
+    if path is None:
+        raise ValueError('読取元ファイルが未設定です。共有ルート＋ファイル名、またはフルパスを設定してください。')
+    if not path.is_file():
+        raise FileNotFoundError(
+            f'ファイルにアクセスできません（UNC未接続の可能性）: {path}。'
+            'ローカルWindowsサーバー上で共有読取権限を確認するか、サンプルxlsxを添付してください。'
+        )
+    blob, mtime = _read_file_bytes(path)
+    probed = probe_workbook_bytes(blob)
+    probed['sourcePath'] = str(path)
+    probed['sourceMtime'] = mtime
+    probed['personId'] = person_id
+    probed['displayName'] = person['display_name']
+    return probed
+
+
 def _query_map(h) -> dict:
     from urllib.parse import urlparse, parse_qs
     qs = parse_qs(urlparse(getattr(h, 'path', '') or '').query)
     return {k: (v[0] if v else '') for k, v in qs.items()}
+
+
+def _parse_ym(value: str | None) -> tuple[int, int] | None:
+    if not value:
+        return None
+    m = re.fullmatch(r'(\d{4})-(\d{1,2})', str(value).strip())
+    if not m:
+        raise ValueError('対象月は YYYY-MM 形式で指定してください。')
+    y, mo = int(m.group(1)), int(m.group(2))
+    if not 1 <= mo <= 12:
+        raise ValueError('対象月が不正です。')
+    return y, mo
 
 
 def handle_get(h, c, path: str):
@@ -798,17 +1219,21 @@ def handle_get(h, c, path: str):
         return denied
     if path == '/api/kintai':
         q = _query_map(h)
-        year = int(q.get('year') or DEFAULT_FISCAL_START[0])
-        month = int(q['month']) if q.get('month') not in (None, '') else None
+        year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
         person_id = int(q['personId']) if q.get('personId') not in (None, '') else None
-        return 200, list_overview(c, year, month=month, person_id=person_id)
+        ym = _parse_ym(q.get('ym'))
+        month = int(q['month']) if q.get('month') not in (None, '') else None
+        return 200, list_overview(c, year, month=month, person_id=person_id, year_month=ym)
     if path == '/api/kintai/settings':
         # マーク権限者のみ。資格情報は含めない
         s = load_local_settings()
         return 200, {
             'shareRoot': s.get('shareRoot') or '',
-            'layoutId': s.get('layoutId') or 'fixture-v1',
+            'layoutId': s.get('layoutId') or 'shukkinbo-2026-seishain-v1',
             'layouts': [{'id': k, 'note': v.get('note', '')} for k, v in LAYOUTS.items()],
+            'exampleKatoShareRoot': EXAMPLE_KATO_SHARE_ROOT,
+            'exampleKatoFile': EXAMPLE_KATO_FILE,
+            'sampleNeeded': LAYOUT_SAMPLE_NEEDED if (s.get('layoutId') or '') == 'fixture-v1' else '',
             'opsNote': 'サーバー実行ユーザーに共有の読取権限が必要です。パスにパスワードを書かないでください。',
         }
     return 404, {'error': '操作が見つかりません。'}
@@ -819,7 +1244,7 @@ def handle_post(h, c, path: str, d: dict):
     if denied:
         return denied
     if path == '/api/kintai/import':
-        year = d.get('year', DEFAULT_FISCAL_START[0])
+        year = d.get('year', preferred_fiscal_start_year())
         if type(year) is not int or year < 2000 or year > 2100:
             raise ValueError('年度の開始年を確認してください。')
         summary = import_all(c, h.user, year)
@@ -835,7 +1260,21 @@ def handle_post(h, c, path: str, d: dict):
         if not (h.user['role'] == 'owner' or h.user['manage']):
             return 403, {'error': '対象者の読取元設定は利用者管理の権限が必要です。'}
         update_person_file(c, d.get('personId'), d.get('sourceFile', ''))
+        # あわせて local peopleFiles も更新（フルパス運用向け）
+        pid = d.get('personId')
+        if type(pid) is int:
+            save_local_settings(
+                {'peopleFiles': {**(load_local_settings().get('peopleFiles') or {}), str(pid): str(d.get('sourceFile') or '').strip()}},
+                True,
+            )
         return 200, {'ok': True}
+    if path == '/api/kintai/probe':
+        try:
+            return 200, probe_person(c, d.get('personId'))
+        except FileNotFoundError as e:
+            raise ValueError(str(e)) from e
+        except OSError as e:
+            raise ValueError(f'ファイルを読めません: {e}') from e
     return 404, {'error': '操作が見つかりません。'}
 
 

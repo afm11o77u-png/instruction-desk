@@ -155,3 +155,7 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #kintaidesk .kintai-tablewrap{overflow:auto;max-height:min(74vh,920px);margin-top:8px}
 #kintaitable td small{display:block;margin-top:2px;font-weight:400;color:#5a6d5f}
 #kintaistatus{font-weight:700;margin:8px 0}
+
+.kintai-setting-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.kintaiprobe{max-height:240px;overflow:auto;background:#f4faf4;border:1px solid #d5ead4;padding:10px;font-size:12px;white-space:pre-wrap}
+#kintaishareinput,#kintaifileinput{min-width:min(100%,42rem)}
