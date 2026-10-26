@@ -48,18 +48,20 @@ class LongPathSettingsTest(unittest.TestCase):
 
     def test_accepts_kato_unc_lengths(self):
         root = kintai.EXAMPLE_KATO_SHARE_ROOT
-        file = kintai.EXAMPLE_KATO_FILE
-        full = root + '\\' + file
+        relative = kintai.EXAMPLE_KATO_RELATIVE
+        full = kintai.EXAMPLE_KATO_FILE
+        self.assertTrue(full.startswith('\\\\'))
         self.assertLessEqual(len(full), kintai.PATH_MAX)
-        saved = kintai.save_local_settings({'shareRoot': root, 'peopleFiles': {'1': file}}, True)
+        saved = kintai.save_local_settings({'shareRoot': root, 'peopleFiles': {'1': relative}}, True)
         self.assertEqual(saved['shareRoot'], root)
-        self.assertEqual(saved['peopleFiles']['1'], file)
-        # フルパスも可
-        saved2 = kintai.save_local_settings({'peopleFiles': {'1': full}}, True)
+        self.assertEqual(saved['peopleFiles']['1'], relative)
+        # フルパス（主運用）も可・ルート不要
+        saved2 = kintai.save_local_settings({'shareRoot': '', 'peopleFiles': {'1': full}}, True)
         self.assertEqual(saved2['peopleFiles']['1'], full)
         person = {'id': 1, 'source_file': ''}
         path = kintai.resolve_person_file(person, kintai.load_local_settings())
         self.assertIsNotNone(path)
+        self.assertTrue(kintai.is_absolute_source_path(full))
 
     def test_fixture_mismatch_mentions_sample(self):
         # 実ファイル風にシート名が違う xlsx

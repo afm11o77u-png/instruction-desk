@@ -28,7 +28,7 @@ LOCAL_SETTINGS_NAME = 'kintai-local.json'
 LOCAL_SETTINGS_KEYS = ('shareRoot', 'layoutId', 'peopleFiles', 'peopleLayouts')
 PATH_MAX = 1000
 # UI・ドキュメント用の例示のみ。自動設定や mark_kintai の推測ONには使わない。
-# 共有ルートは「年度ルート」（出勤簿 2026年度版）まで。雇用区分フォルダは人ごとの相対パス。
+# 主運用は対象者ごとのフルパス。年度ルートは相対指定のときの任意補助。
 EXAMPLE_YEAR_SHARE_ROOT = (
     r'\\Desktop-iu7d38q\e\札幌発寒支店共有\札幌発寒支店\札幌発寒支店管理職以外閲覧禁止'
     r'\※閲覧禁止※\出勤簿   2026年度版'
@@ -44,6 +44,11 @@ EXAMPLE_PATHS_BY_EMPLOYMENT = {
             r'①　正社員（営業手当無し）001～050'
             r'\009  正社員（営業手当無し）出勤簿2026.2～.xlsx'
         ),
+        'fullPath': (
+            EXAMPLE_YEAR_SHARE_ROOT
+            + r'\①　正社員（営業手当無し）001～050'
+            + r'\009  正社員（営業手当無し）出勤簿2026.2～.xlsx'
+        ),
         'layoutId': 'shukkinbo-2026-seishain-v1',
     },
     'contract': {
@@ -53,6 +58,11 @@ EXAMPLE_PATHS_BY_EMPLOYMENT = {
         'relative': (
             r'③　契約社員（営業手当無し）001～100'
             r'\036　契約社員（営業手当無し）出勤簿2026.2～.xlsx'
+        ),
+        'fullPath': (
+            EXAMPLE_YEAR_SHARE_ROOT
+            + r'\③　契約社員（営業手当無し）001～100'
+            + r'\036　契約社員（営業手当無し）出勤簿2026.2～.xlsx'
         ),
         'layoutId': 'shukkinbo-2026-seishain-v1',
     },
@@ -64,10 +74,16 @@ EXAMPLE_PATHS_BY_EMPLOYMENT = {
             r'⑤　パート　001～300'
             r'\010　パート用　出勤簿2026.2～.xlsx'
         ),
+        'fullPath': (
+            EXAMPLE_YEAR_SHARE_ROOT
+            + r'\⑤　パート　001～300'
+            + r'\010　パート用　出勤簿2026.2～.xlsx'
+        ),
         'layoutId': 'shukkinbo-2026-seishain-v1',
     },
 }
-EXAMPLE_KATO_FILE = EXAMPLE_PATHS_BY_EMPLOYMENT['regular']['relative']
+EXAMPLE_KATO_FILE = EXAMPLE_PATHS_BY_EMPLOYMENT['regular']['fullPath']
+EXAMPLE_KATO_RELATIVE = EXAMPLE_PATHS_BY_EMPLOYMENT['regular']['relative']
 LAYOUT_SAMPLE_NEEDED = (
     '実出勤簿のシート名・セル番地は未確認のため集計できません。'
     'サンプルxlsx（個人情報を伏せたコピー可）または ImportShukkinbo.bas / live-sync を提供してください。'
@@ -129,9 +145,11 @@ SEISHAIN_2026_LAYOUT = {
     'id': 'shukkinbo-2026-seishain-v1',
     'kind': 'summary-shukkinbo',
     'note': (
-        '正社員（営業手当無し）出勤簿2026。集計シートの確認済み行を使用。'
-        '出勤=集計!行5／有給=行10／普通=法定内①行6／計=総労働時間行21／'
-        '残業=計−普通／休日=年間カレンダー日付×月シート休み・始業（行5–46）。'
+        '正社員（営業手当無し）出勤簿2026。管理表【マーク】2026の個人シート数式に合わせる。'
+        '出勤=集計!行5／有給=行10／普通(J)=法定内①行6／'
+        '残業(K)=普通残業行13＋深夜残業行14＋早朝深夜勤務行18（MAX0）／'
+        '勤務時間計(L)=普通＋残業。行5=0の月は普通・残業を空白。'
+        '休日(C)は管理表で集計非連動のため、WEBは年間カレンダー日付×月シート休み・始業。'
         '月シートA列の年は26.3以降ずれるため日付は年間カレンダーを正とする。'
     ),
     'summary_sheet': '集計',
@@ -140,9 +158,10 @@ SEISHAIN_2026_LAYOUT = {
     'summary_cols': SEISHAIN_2026_SUMMARY_COLS,
     'calendar_cols': SEISHAIN_2026_CAL_COLS,
     'row_work_days': 5,
-    'row_ordinary_hours': 6,   # 法定内時間①（時間）
+    'row_ordinary_hours': 6,   # 法定内時間① → 管理表 J
     'row_paid_leave': 10,      # 有給日数
-    'row_total_hours': 21,     # 総労働時間（時間）
+    # 管理表 K = 行13+14+18（総労働行21−法定内ではない）
+    'row_overtime_hours_parts': (13, 14, 18),
     'calendar_first_row': 3,   # 年間ｶﾚﾝﾀﾞｰの日付開始行
     'calendar_last_row': 49,
     'day_first_row': 5,        # 月シートの日付行（カレンダー行+2）
@@ -818,7 +837,10 @@ def aggregate_month_from_summary(
     layout: dict,
     as_of: date | None = None,
 ) -> dict:
-    """集計シート（出勤・有給・法定内①・総労働）＋カレンダー休日。"""
+    """集計シート（出勤・有給・法定内①・残業内訳）＋カレンダー休日。
+
+    管理表個人シート: J=行6、K=行13+14+18。行5=0の月は J/K 空白。
+    """
     summary_name = layout['summary_sheet']
     cal_name = layout['calendar_sheet']
     month_sheets = layout['month_sheets']
@@ -839,19 +861,26 @@ def aggregate_month_from_summary(
     label = f'{year}-{month:02d}'
     work_days = _require_number(_cell(summary, layout['row_work_days'], col), f'{label} 出勤日数')
     paid_leave_days = _require_number(_cell(summary, layout['row_paid_leave'], col), f'{label} 有給日数')
-    ordinary = hours_to_minutes(
-        _cell(summary, layout['row_ordinary_hours'], col), f'{label} 法定内時間①'
-    )
-    total = hours_to_minutes(
-        _cell(summary, layout['row_total_hours'], col), f'{label} 総労働時間'
-    )
-    overtime = total - ordinary
-    if overtime < 0:
-        # 丸め誤差のみ許容
-        if overtime >= -1:
-            overtime = 0
-        else:
-            raise ValueError(f'{label} の残業が負です（総労働 {total} 分 − 普通 {ordinary} 分）。')
+    # 管理表: IF(集計!行5=0,"", …) → 空月は普通・残業を空白
+    if work_days == 0:
+        ordinary = None
+        overtime = None
+        total = None
+    else:
+        ordinary = hours_to_minutes(
+            _cell(summary, layout['row_ordinary_hours'], col), f'{label} 法定内時間①'
+        )
+        ot_parts = layout.get('row_overtime_hours_parts') or ()
+        if not ot_parts:
+            raise ValueError(f'{label} の残業行（row_overtime_hours_parts）がレイアウトにありません。')
+        ot_hours = 0.0
+        for rn in ot_parts:
+            part = _require_number(_cell(summary, rn, col), f'{label} 残業内訳行{rn}')
+            ot_hours += float(part)
+        if ot_hours < 0:
+            ot_hours = 0.0  # 管理表 MAX(0, …)
+        overtime = hours_to_minutes(ot_hours, f'{label} 残業（行{"+".join(str(r) for r in ot_parts)}）')
+        total = ordinary + overtime
     holiday_days = count_holidays_summary_shukkinbo(
         cal, month_grid, year, month, layout, as_of=as_of
     )
@@ -861,7 +890,7 @@ def aggregate_month_from_summary(
         'paid_leave_days': paid_leave_days,
         'ordinary_minutes': ordinary,
         'overtime_minutes': overtime,
-        'total_minutes': ordinary + overtime,
+        'total_minutes': total,
     }
 
 
@@ -1112,18 +1141,32 @@ def _share_root_path(settings: dict) -> Path:
     return fuzzy if fuzzy is not None else root
 
 
+def is_absolute_source_path(name: str) -> bool:
+    """フルUNC・ドライブレター付き・POSIX絶対パスか。"""
+    s = (name or '').strip()
+    if not s:
+        return False
+    if s.startswith('\\\\') or s.startswith('//'):
+        return True
+    if len(s) > 2 and s[1] == ':':
+        return True
+    if s.startswith('/'):
+        return True
+    return False
+
+
 def resolve_person_file(person: dict, settings: dict) -> Path | None:
     """設定上の読取元パス。存在しなくても結合結果を返す（未設定のみ None）。
 
     読取元は次のいずれか:
-    - フルUNC / ドライブレター付き絶対パス
-    - 年度ルート（shareRoot）からの相対（雇用区分フォルダ\\ファイル名）
-    - ファイル名のみ（年度ルート直下、または旧運用の雇用区分ごとルート）
+    - フルUNC / ドライブレター付き絶対パス（推奨・主運用）
+    - 年度ルート（shareRoot）からの相対（任意補助）
+    - ファイル名のみ（年度ルート直下、または検証用 fixtures）
     """
     name = person_source_relative(person, settings)
     if not name:
         return None
-    if name.startswith('\\\\') or name.startswith('//') or (len(name) > 2 and name[1] == ':'):
+    if is_absolute_source_path(name):
         full = _unc_to_path(name)
         # フルパスでも親フォルダのスペース差を吸収してからファイル名照合
         parent = resolve_dir_with_normalized_segments(full.parent) or full.parent
@@ -1230,16 +1273,18 @@ def resolve_person_file_existing(person: dict, settings: dict) -> dict:
     except OSError:
         root_ok = False
     hint_parts = [f'探索パス: {configured_s}']
-    if not (settings.get('shareRoot') or '').strip():
-        is_abs = wanted.startswith('\\\\') or wanted.startswith('//') or (
-            len(configured_s) > 2 and configured_s[1] == ':'
-        )
-        if not is_abs:
-            hint_parts.append('共有ルート未設定（入力だけでは保存されません。「共有ルートとレイアウトを保存」が必要です）。')
-    elif not root_ok:
-        hint_parts.append(
-            f'共有ルートにフォルダとしてアクセスできません: {settings.get("shareRoot")}（UNC未接続・権限・パス誤り・フォルダ名のスペース差）。'
-        )
+    configured_name = person_source_relative(person, settings)
+    if not is_absolute_source_path(configured_name):
+        if not (settings.get('shareRoot') or '').strip():
+            hint_parts.append(
+                '相対パス指定ですが年度ルート未設定です。フルパスを人ごとに保存するか、'
+                '任意の年度ルートを保存してください。'
+            )
+        elif not root_ok:
+            hint_parts.append(
+                f'年度ルートにフォルダとしてアクセスできません: {settings.get("shareRoot")}'
+                '（UNC未接続・権限・パス誤り・フォルダ名のスペース差）。'
+            )
     code = str(person.get('employee_code') or '').strip()
     code_cands = []
     if code:
@@ -1593,9 +1638,9 @@ def list_overview(
         ],
         'rows': rows,
         'opsNote': (
-            'サーバー実行ユーザーに共有フォルダの読取権限が必要です。元出勤簿は変更しません。'
-            ' 年度ルート（出勤簿 2026年度版）を共有し、雇用区分フォルダ＋ファイル名は対象者ごとに設定します。'
-            ' フルUNCでも可。'
+            '対象者ごとに出勤簿のフルパスを1本保存し、「出勤簿から更新」で自動読込します。'
+            '元出勤簿は変更しません。サーバー実行ユーザーに読取権限が必要です。'
+            '年度ルートは相対パス運用時の任意補助です。'
         ),
     }
 
@@ -1768,8 +1813,8 @@ def handle_get(h, c, path: str):
             'peopleLayouts': s.get('peopleLayouts') or {},
             'sampleNeeded': LAYOUT_SAMPLE_NEEDED if (s.get('layoutId') or '') == 'fixture-v1' else '',
             'opsNote': (
-                'サーバー実行ユーザーに共有の読取権限が必要です。パスにパスワードを書かないでください。'
-                ' 年度ルート＋人ごとの相対パス（雇用区分フォルダ\\ファイル名）、またはフルUNC。'
+                '対象者ごとに出勤簿フルパスを1本保存します。パスにパスワードを書かないでください。'
+                ' 年度ルートは相対パス用の任意補助です。'
             ),
         }
     return 404, {'error': '操作が見つかりません。'}

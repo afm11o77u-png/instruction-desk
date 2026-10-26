@@ -65,7 +65,8 @@ class SeishainSampleParseTest(unittest.TestCase):
         self.assertEqual(may['paid_leave_days'], 0.5)
         self.assertEqual(may['holiday_days'], 22)
         self.assertEqual(may['ordinary_minutes'], 9253)
-        self.assertEqual(may['overtime_minutes'], 785)
+        # 管理表 K = 行13+14+18（総労働−法定内ではない）
+        self.assertEqual(may['overtime_minutes'], 545)
 
         aug = parsed[(2026, 8)]
         self.assertEqual(aug['work_days'], 19)
@@ -76,9 +77,15 @@ class SeishainSampleParseTest(unittest.TestCase):
         self.assertEqual(nov['work_days'], 0)
         self.assertEqual(nov['paid_leave_days'], 1)
         self.assertEqual(nov['holiday_days'], 41)
-        self.assertEqual(nov['ordinary_minutes'], 0)
-        self.assertEqual(nov['overtime_minutes'], 480)
-        self.assertEqual(nov['total_minutes'], 480)
+        # 管理表: 行5=0 の月は J/K 空白
+        self.assertIsNone(nov['ordinary_minutes'])
+        self.assertIsNone(nov['overtime_minutes'])
+        self.assertIsNone(nov['total_minutes'])
+
+    def test_layout_overtime_rows_match_kanrihyo(self):
+        parts = self.layout.get('row_overtime_hours_parts')
+        self.assertEqual(tuple(parts), (13, 14, 18))
+        self.assertNotIn('row_total_hours', self.layout)
 
     def test_source_file_not_written(self):
         before = self.sample.read_bytes()

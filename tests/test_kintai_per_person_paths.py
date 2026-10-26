@@ -96,6 +96,25 @@ class PerPersonRelativePathTest(unittest.TestCase):
         self.assertTrue(any('009' in f['relative'] for f in result['files']))
         self.assertTrue(any('①' in s['name'] or '正社員' in s['name'] for s in result['subfolders']))
 
+    def test_full_path_without_share_root(self):
+        target = self.reg / '009  正社員（営業手当無し）出勤簿2026.2～.xlsx'
+        settings = {
+            'shareRoot': '',
+            'peopleFiles': {'1': str(target)},
+            'layoutId': 'fixture-v1',
+            'peopleLayouts': {},
+        }
+        person = {'id': 1, 'employee_code': '009', 'source_file': ''}
+        resolved = kintai.resolve_person_file_existing(person, settings)
+        self.assertTrue(resolved['ok'], resolved)
+        self.assertEqual(resolved['path'], target)
+
+    def test_examples_expose_full_path(self):
+        for kind in ('regular', 'contract', 'part'):
+            ex = kintai.EXAMPLE_PATHS_BY_EMPLOYMENT[kind]
+            self.assertIn('fullPath', ex)
+            self.assertTrue(kintai.is_absolute_source_path(ex['fullPath']))
+
 
 if __name__ == '__main__':
     unittest.main()
