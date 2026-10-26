@@ -75,12 +75,16 @@ class PerPersonRelativePathTest(unittest.TestCase):
             'peopleLayouts': {'3': 'fixture-v1'},
         }
         self.assertEqual(
-            kintai.layout_id_for_person({'id': 3}, settings),
+            kintai.layout_id_for_person({'id': 3, 'employment': 'part'}, settings),
             'fixture-v1',
         )
         self.assertEqual(
-            kintai.layout_id_for_person({'id': 1}, settings),
+            kintai.layout_id_for_person({'id': 1, 'employment': 'regular'}, settings),
             'shukkinbo-2026-seishain-v1',
+        )
+        self.assertEqual(
+            kintai.layout_id_for_person({'id': 9, 'employment': 'contract'}, settings),
+            'shukkinbo-2026-monthdot-pending',
         )
 
     def test_list_files_subdir(self):

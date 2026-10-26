@@ -100,6 +100,12 @@ LAYOUT_SAMPLE_NEEDED = (
     'サンプルxlsx（個人情報を伏せたコピー可）または ImportShukkinbo.bas / live-sync を提供してください。'
     'クラウド開発環境から共有UNCには接続できないため、接続できたようには扱いません。'
 )
+LAYOUT_SAMPLE_NEEDED_MONTHDOT = (
+    '契約・パート出勤簿は月シート名が「2026.2」形式で、正社員の「26.2／集計／年間ｶﾚﾝﾀﾞｰ」とは別物です。'
+    'セル番地（始業・休み・普通・残業の列）は未確認のため推測して集計しません。'
+    '契約1冊・パート1冊のサンプルxlsx（個人情報を伏せたコピー可）を提供してください。'
+    '画面の「ファイル構造を確認」でシート名と先頭行の生セルを確認できます。'
+)
 
 # 対象者マスタ（リンク用短い名前。共有上の実ファイル名は人が設定。推測で mark_kintai は付けない）
 DEFAULT_PEOPLE = [
@@ -130,6 +136,19 @@ FIXTURE_LAYOUT = {
     'ordinary_col': 4,     # D 普通勤務（分）
     'overtime_col': 5,     # E 残業（分）
     'first_data_row': 2,
+}
+
+# 契約／パート出勤簿 2026 — シート名「2026.2」形式はユーザー取込エラーで確認済み。
+# 列位置・集計行はサンプル未着のため集計しない（kind=unconfirmed-monthdot）。
+MONTHDOT_2026_LAYOUT = {
+    'id': 'shukkinbo-2026-monthdot-pending',
+    'kind': 'unconfirmed-monthdot',
+    'note': (
+        '契約・パート出勤簿2026。月シート名は 2026.2〜2027.1 形式（確認済み）。'
+        '集計／年間カレンダーは正社員簿と異なり、セル番地は未確認のため取込集計は保留。'
+    ),
+    # ゼロ埋めなし（2026.2）。確認済みの命名のみ持つ
+    'sheet_name_format': '{yyyy}.{month}',
 }
 
 # 正社員（営業手当無し）出勤簿 2026 — サンプル
@@ -185,6 +204,14 @@ SEISHAIN_2026_LAYOUT = {
 LAYOUTS = {
     'fixture-v1': FIXTURE_LAYOUT,
     'shukkinbo-2026-seishain-v1': SEISHAIN_2026_LAYOUT,
+    'shukkinbo-2026-monthdot-pending': MONTHDOT_2026_LAYOUT,
+}
+
+# 雇用区分 → 既定レイアウト（peopleLayouts 個別指定が優先）
+DEFAULT_LAYOUT_BY_EMPLOYMENT = {
+    'regular': 'shukkinbo-2026-seishain-v1',
+    'contract': 'shukkinbo-2026-monthdot-pending',
+    'part': 'shukkinbo-2026-monthdot-pending',
 }
 
 PAID_LEAVE_RE = re.compile(r'(?P<num>\d+(?:\.\d+)?)\s*有休')
@@ -587,11 +614,48 @@ def get_layout(layout_id: str | None = None) -> dict:
 
 
 def layout_id_for_person(person: dict, settings: dict | None = None) -> str:
+    """個別指定 → 雇用区分の既定 → 全体既定の順。契約・パートは monthdot（セル未確認）。"""
     settings = settings if settings is not None else load_local_settings()
     pl = settings.get('peopleLayouts') or {}
     pid = str(person.get('id') or '')
-    lid = (pl.get(pid) or settings.get('layoutId') or 'shukkinbo-2026-seishain-v1').strip()
+    if pid and pl.get(pid):
+        lid = str(pl.get(pid)).strip()
+        return lid if lid in LAYOUTS else 'shukkinbo-2026-seishain-v1'
+    emp = str(person.get('employment') or '').strip()
+    by_emp = DEFAULT_LAYOUT_BY_EMPLOYMENT.get(emp)
+    if by_emp and by_emp in LAYOUTS:
+        return by_emp
+    # パスから雇用区分を推定（peopleFiles のフルUNC）
+    src = ''
+    try:
+        src = person_source_relative(person, settings)
+    except Exception:
+        src = ''
+    inferred = infer_employment_from_path(src) if src else None
+    if inferred and DEFAULT_LAYOUT_BY_EMPLOYMENT.get(inferred) in LAYOUTS:
+        return DEFAULT_LAYOUT_BY_EMPLOYMENT[inferred]
+    lid = (settings.get('layoutId') or 'shukkinbo-2026-seishain-v1').strip()
     return lid if lid in LAYOUTS else 'shukkinbo-2026-seishain-v1'
+
+
+def detect_sheet_pattern(sheet_names: list[str] | set[str]) -> str:
+    """シート名から構造ヒント。セル意味は判定しない。
+
+    戻り値: seishain-2026 | monthdot-yyyy-m | unknown
+    """
+    names = set(sheet_names or [])
+    if (
+        '集計' in names
+        and ('年間ｶﾚﾝﾀﾞｰ' in names or '年間カレンダー' in names)
+        and any(re.fullmatch(r'2[6-7]\.\d{1,2}', n or '') for n in names)
+    ):
+        return 'seishain-2026'
+    monthdot = [n for n in names if re.fullmatch(r'20\d{2}\.\d{1,2}', n or '')]
+    if len(monthdot) >= 6 and '集計' not in names:
+        return 'monthdot-yyyy-m'
+    if monthdot and not any(re.fullmatch(r'2[6-7]\.\d{1,2}', n or '') for n in names):
+        return 'monthdot-yyyy-m'
+    return 'unknown'
 
 
 def split_relative_parts(relative: str) -> list[str]:
@@ -908,10 +972,42 @@ def aggregate_month_from_summary(
     }
 
 
+def _preview_sheet_cells(grid: dict, max_rows: int = 5, max_cols: int = 8) -> list[dict]:
+    """先頭付近の生セル（値のみ）。意味付けしない。"""
+    if not grid:
+        return []
+    cells = []
+    for (r, c), v in sorted(grid.items()):
+        if r > max_rows or c > max_cols:
+            continue
+        if isinstance(v, dict) and v.get('__missing_cache__'):
+            show = f"(数式キャッシュなし: {v.get('formula') or ''})"
+        else:
+            show = v
+        cells.append({'row': r, 'col': c, 'ref': f'{_col_letters(c)}{r}', 'value': show})
+    return cells
+
+
 def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: dict, as_of: date | None = None) -> dict[tuple[int, int], dict]:
     sheets = read_xlsx_grid(blob)
     kind = layout.get('kind') or 'fixture-days'
+    pattern = detect_sheet_pattern(list(sheets.keys()))
+    found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
+
+    if kind == 'unconfirmed-monthdot':
+        raise ValueError(
+            LAYOUT_SAMPLE_NEEDED_MONTHDOT
+            + f' 検出パターン={pattern}／ファイル内シート: {found}。'
+        )
+
     if kind == 'summary-shukkinbo':
+        if pattern == 'monthdot-yyyy-m':
+            raise ValueError(
+                'このファイルは契約・パート形式（月シート 2026.2 …）です。'
+                '正社員用レイアウト（集計／年間ｶﾚﾝﾀﾞｰ）では読めません。'
+                + LAYOUT_SAMPLE_NEEDED_MONTHDOT
+                + f' ファイル内シート: {found}。'
+            )
         results = {}
         errors = []
         for y, m in months:
@@ -920,11 +1016,14 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
             except ValueError as e:
                 errors.append(str(e))
         if errors and not results:
-            found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
+            extra = ''
+            if pattern == 'monthdot-yyyy-m':
+                extra = ' ' + LAYOUT_SAMPLE_NEEDED_MONTHDOT
             raise ValueError(
                 '出勤簿を集計できません: '
                 + '／'.join(errors[:4])
                 + f'（ファイル内シート: {found}）。'
+                + extra
             )
         if errors:
             raise ValueError('一部の月を集計できません: ' + '／'.join(errors[:6]))
@@ -940,10 +1039,11 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
             continue
         results[(y, m)] = aggregate_month_from_grid(grid, y, m, layout, as_of=as_of)
     if missing and not results:
-        found = '、'.join(list(sheets.keys())[:12]) or '（なし）'
         hint = ''
         if layout.get('id') == 'fixture-v1':
             hint = ' ' + LAYOUT_SAMPLE_NEEDED
+        elif pattern == 'monthdot-yyyy-m':
+            hint = ' ' + LAYOUT_SAMPLE_NEEDED_MONTHDOT
         raise ValueError(
             '対象月のシートが見つかりません（期待: '
             + '、'.join(missing[:6])
@@ -959,12 +1059,16 @@ def parse_person_workbook(blob: bytes, months: list[tuple[int, int]], layout: di
 
 
 def probe_workbook_bytes(blob: bytes) -> dict:
-    """読取専用の構造確認。シート名と各シートの使用セル範囲のみ。列意味は推測しない。"""
+    """読取専用の構造確認。シート名・範囲・先頭行の生値。列意味は推測しない。"""
     sheets = read_xlsx_grid(blob)
     out = []
     for name, grid in sheets.items():
         if not grid:
-            out.append({'name': name, 'cells': 0, 'rowMin': None, 'rowMax': None, 'colMin': None, 'colMax': None})
+            out.append({
+                'name': name, 'cells': 0,
+                'rowMin': None, 'rowMax': None, 'colMin': None, 'colMax': None,
+                'preview': [],
+            })
             continue
         rows = [r for r, _ in grid]
         cols = [c for _, c in grid]
@@ -975,22 +1079,27 @@ def probe_workbook_bytes(blob: bytes) -> dict:
             'rowMax': max(rows),
             'colMin': min(cols),
             'colMax': max(cols),
+            'preview': _preview_sheet_cells(grid),
         })
-    names = {s['name'] for s in out}
-    known = (
-        '集計' in names
-        and '年間ｶﾚﾝﾀﾞｰ' in names
-        and any(n.startswith('26.') or n.startswith('27.') for n in names)
-    )
-    note = 'シート名とセル範囲のみ返します（このAPIでは列の意味を判定しません）。'
-    if known:
-        note += ' 構造は正社員（営業手当無し）2026出勤簿に近いです。layoutId=shukkinbo-2026-seishain-v1 で集計できます。'
+    names = [s['name'] for s in out]
+    pattern = detect_sheet_pattern(names)
+    note = 'シート名とセル範囲・先頭行の生値のみ返します（列の意味は判定しません）。'
+    suggested = None
+    if pattern == 'seishain-2026':
+        note += ' 構造は正社員（営業手当無し）2026出勤簿に近いです。'
+        suggested = 'shukkinbo-2026-seishain-v1'
+    elif pattern == 'monthdot-yyyy-m':
+        note += ' 月シートが 2026.2 形式です（契約・パート系）。' + LAYOUT_SAMPLE_NEEDED_MONTHDOT
+        suggested = 'shukkinbo-2026-monthdot-pending'
     else:
         note += ' ' + LAYOUT_SAMPLE_NEEDED
     return {
         'sheetCount': len(out),
         'sheets': out,
+        'sheetPattern': pattern,
+        'suggestedLayoutId': suggested,
         'note': note,
+        'sampleNeeded': pattern != 'seishain-2026',
     }
 
 
@@ -1659,6 +1768,39 @@ def _read_file_bytes(path: Path) -> tuple[bytes, str]:
     return data, mtime
 
 
+ERROR_TEXT_MAX = 2000
+
+
+def _format_import_error(
+    reason: str,
+    *,
+    path: Path | str | None = None,
+    layout_id: str = '',
+    employment: str = '',
+    parse_hint: bool = False,
+) -> str:
+    """理由を先に書き、長いUNCは後ろへ。画面で切られても原因が残るようにする。"""
+    parts = [str(reason or '').strip()]
+    if layout_id:
+        parts.append(f'レイアウト: {layout_id}')
+    if employment:
+        emp_ja = {'regular': '正社員', 'contract': '契約', 'part': 'パート'}.get(employment, employment)
+        parts.append(f'雇用区分: {emp_ja}')
+    if parse_hint and employment and employment != 'regular' and (
+        not layout_id or layout_id == 'shukkinbo-2026-seishain-v1'
+    ):
+        parts.append(
+            '※契約・パート出勤簿のセル配置は未確認です。'
+            'いまは正社員用レイアウトで読んでいます。サンプルxlsxがあればレイアウトを追加できます。'
+        )
+    if path:
+        parts.append(f'パス: {path}')
+    text = '\n'.join(p for p in parts if p)
+    if len(text) > ERROR_TEXT_MAX:
+        return text[: ERROR_TEXT_MAX - 1] + '…'
+    return text
+
+
 def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> dict:
     settings = load_local_settings()
     default_layout = get_layout(settings.get('layoutId'))
@@ -1766,27 +1908,40 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
         except PermissionError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'permission'
-            item['error'] = f'読取権限がありません: {path}（{e}）'[:500]
+            item['error'] = _format_import_error(
+                f'読取権限がありません（{e}）', path=path, layout_id=layout['id'], employment=person['employment']
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except FileNotFoundError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'not_found'
-            item['error'] = f'ファイルが見つかりません: {path}（{e}）'[:500]
+            item['error'] = _format_import_error(
+                f'ファイルが見つかりません（{e}）', path=path, layout_id=layout['id'], employment=person['employment']
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except OSError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'io'
-            item['error'] = f'ファイルを開けません（{type(e).__name__}）: {path} — {e}'[:500]
+            item['error'] = _format_import_error(
+                f'ファイルを開けません（{type(e).__name__}: {e}）',
+                path=path, layout_id=layout['id'], employment=person['employment'],
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except ValueError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'parse'
-            item['error'] = f'パース失敗: {e}'[:500]
+            item['error'] = _format_import_error(
+                f'パース失敗: {e}',
+                path=path, layout_id=layout['id'], employment=person['employment'],
+                parse_hint=True,
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         except Exception as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'other'
-            item['error'] = f'{type(e).__name__}: {e}'[:500]
+            item['error'] = _format_import_error(
+                f'{type(e).__name__}: {e}', path=path, layout_id=layout['id'], employment=person['employment']
+            )
             _set_person_status(c, person['id'], 'エラー', item['error'], str(path), '')
         person_results.append(item)
     summary = {
@@ -1979,9 +2134,8 @@ def list_overview(
         'rows': rows,
         'pathsListSaved': paths_list_path().is_file(),
         'opsNote': (
-            '出勤簿パス.xlsx で氏名→フルパスを一括取込できます（再読込可）。'
-            '退職者は在職と分けて表示します。一覧に無い人（加藤など）は消しません。'
-            '元出勤簿は変更しません。'
+            '正社員は集計シートで取込可。契約・パートは月シート「2026.2」形式でセル未確認のため保留'
+            '（サンプル提供後にレイアウト追加）。パス一覧の一括取込・退職者別表示あり。元出勤簿は変更しません。'
         ),
     }
 
