@@ -152,5 +152,6 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintaimeta{margin:4px 0;font-size:13px;color:#3d5344}
 .kintaisettings{margin:10px 0 14px;padding:10px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff}
 .kintaisettings label{margin-top:8px}
+#kintaidesk .kintai-tablewrap{overflow:auto;max-height:min(74vh,920px);margin-top:8px}
 #kintaitable td small{display:block;margin-top:2px;font-weight:400;color:#5a6d5f}
 #kintaistatus{font-weight:700;margin:8px 0}
