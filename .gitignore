@@ -67,6 +67,7 @@ network.json
 data/kintai-local.json
 data/kintai-fixtures/
 data/kintai-import/
+data/kintai-paths.xlsx
 **/~$*.xlsx
 **/~$*.xlsm
 
