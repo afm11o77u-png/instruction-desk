@@ -20,6 +20,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import kintai_shift
+import kintai_bihin
 
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
@@ -351,6 +352,7 @@ def schema(c):
         )'''
     )
     kintai_shift.schema(c)
+    kintai_bihin.schema(c)
     _seed_people(c)
     _ensure_shift_top_people(c)
 
@@ -2493,6 +2495,11 @@ def handle_get(h, c, path: str):
         return 200, kintai_shift.get_shift_sheet(c, q.get('year'), q.get('month'))
     if path == '/api/kintai/shift/default-order':
         return 200, kintai_shift.get_default_order(c)
+    if path == '/api/kintai/bihin':
+        q = _query_map(h)
+        return 200, kintai_bihin.get_sheet(c, q.get('year'), q.get('month'))
+    if path == '/api/kintai/bihin/items':
+        return 200, {'items': kintai_bihin.list_items(c, include_inactive=True)}
     return 404, {'error': '操作が見つかりません。'}
 
 
@@ -2577,6 +2584,12 @@ def handle_post(h, c, path: str, d: dict):
     if path == '/api/kintai/shift/default-order':
         # 未作成月の初期並びのみ。月シートの people/cells は触らない。
         return 200, kintai_shift.save_default_order(c, h.user, d or {})
+    if path == '/api/kintai/bihin':
+        # 備品棚卸。出勤簿・シフト・在庫デスク入出庫は変更しない。
+        return kintai_bihin.save_sheet(c, h.user, d or {})
+    if path == '/api/kintai/bihin/items':
+        # マスタのみ。保存済み月のスナップショットは書き換えない。
+        return 200, kintai_bihin.save_item(c, h.user, d or {})
     return 404, {'error': '操作が見つかりません。'}
 
 

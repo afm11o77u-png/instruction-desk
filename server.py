@@ -995,7 +995,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if not order or not can_access(self.user,json.loads(order['payload'])): return self.reply(404,{'error':'指示書が見つかりません。'})
                 rows=[dict(r) for r in c.execute('SELECT at,action,actor,changes FROM history WHERE order_id=? ORDER BY id DESC',(oid,))]
             return self.reply(200,rows)
-        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-shift.js':'kintai-shift.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
@@ -1182,6 +1182,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     logging.getLogger('instruction-desk').exception('kintai api error path=%s', kintai_path)
                     if kintai_path in ('/api/kintai/shift', '/api/kintai/shift/default-order'):
                         return self.reply(500, {'error': 'シフト表を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
+                    if kintai_path in ('/api/kintai/bihin', '/api/kintai/bihin/items'):
+                        return self.reply(500, {'error': '備品棚卸を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
                     return self.reply(500, {'error': '勤怠の処理に失敗しました。入力内容はそのまま残しています。しばらくして再度お試しください。'})
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
             payload=validate(d); now=datetime.now().isoformat(timespec='seconds')

@@ -68,8 +68,10 @@ class DeskNavGroupsTest(unittest.TestCase):
         kintai = aside[aside.index('id="kintainav"'):]
         self.assertIn('data-kintai-section="attendance"', kintai)
         self.assertIn('data-kintai-section="shift"', kintai)
+        self.assertIn('data-kintai-section="bihin"', kintai)
         self.assertIn('>出勤簿<', kintai)
         self.assertIn('>シフト表<', kintai)
+        self.assertIn('>備品棚卸<', kintai)
 
     def test_settings_stay_permissioned(self):
         self.assertIn("manageNav.hidden=!(currentUser.manage||role==='owner')", ACCOUNT)

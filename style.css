@@ -224,6 +224,39 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid td.shift-time .shift-time-main,.shift-grid td.shift-time .shift-time-until{display:inline}
 .shift-grid tr.shift-history .shift-name{background:#faf7f3}
 .shift-empty{text-align:left!important;padding:12px!important;color:#3d5344}
+/* 備品棚卸（勤怠内・シフトと同系の表組み。カードダッシュボードにしない） */
+.bihin-toolbar{margin:0 0 10px}
+.bihin-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:6px 0 4px}
+.bihin-notice{color:#8a3b00;font-weight:700}
+.bihin-grid-wrap{overflow:auto;max-height:min(72vh,900px);border:1px solid #c5d9c4;background:#fff;margin-top:8px}
+.bihin-grid{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%;width:100%}
+.bihin-grid th,.bihin-grid td{border:1px solid #cfd9cf;padding:4px 6px;vertical-align:middle;background:#fff}
+.bihin-grid thead th{position:sticky;top:0;z-index:2;background:#f3f7f3;font-weight:700;white-space:nowrap}
+.bihin-grid thead tr.bihin-head-groups th{top:0;z-index:3}
+.bihin-grid thead tr.bihin-head-fields th{top:1.7rem;z-index:2}
+.bihin-grid .bihin-cat,.bihin-grid .bihin-name{text-align:left;min-width:5rem}
+.bihin-grid .bihin-unit{text-align:center;min-width:2.5rem}
+.bihin-grid .bihin-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bihin-grid td.bihin-input{background:#fffef2}
+.bihin-grid td.bihin-calc{background:#eef5ef;color:#2f4a38}
+.bihin-grid td.bihin-warn{background:#fff1e8;color:#8a3b00;font-weight:700}
+.bihin-grid input.bihin-qty{width:5.2rem;max-width:100%;border:1px solid #c5d9c4;border-radius:4px;padding:3px 5px;font:inherit;text-align:right;background:#fff}
+.bihin-grid input.bihin-qty:focus{outline:2px solid #5d9a72;outline-offset:0;border-color:#5d9a72}
+.bihin-grid .bihin-empty-msg{text-align:left;padding:14px;color:#3d5344}
+.bihin-grid tfoot td{background:#f3f7f3;font-weight:700}
+.bihin-master-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));gap:8px 12px;margin:8px 0 12px;align-items:end}
+.bihin-master-form label{display:flex;flex-direction:column;gap:4px;font-size:13px}
+.bihin-master-actions{display:flex;flex-wrap:wrap;gap:8px;grid-column:1/-1}
+.bihin-master-list-wrap{overflow:auto;max-height:min(40vh,420px);border:1px solid #c5d9c4;background:#fff}
+.bihin-master-table{width:100%;border-collapse:collapse;font-size:13px}
+.bihin-master-table th,.bihin-master-table td{border:1px solid #cfd9cf;padding:5px 8px;text-align:left}
+.bihin-master-table th{background:#f3f7f3}
+.bihin-master-table td.bihin-num{text-align:right}
+#bihinmasterdialog,#bihinsavedialog{width:min(720px,96vw);border:0;border-radius:12px;padding:0}
+#bihinmasterdialog .dialoghead,#bihinsavedialog .dialoghead{display:flex;justify-content:space-between;align-items:center;padding:14px 18px 0}
+#bihinmasterdialog .dialoghead h2,#bihinsavedialog .dialoghead h2{margin:0;font-size:1.2rem}
+#bihinmasterdialog .dialogbody,#bihinsavedialog .dialogbody{padding:10px 18px 8px}
+#bihinsavedialog .dialogactions,#bihinmasterdialog .dialogactions{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #d5ead4}
 .shift-print-banner{display:none}
 .shift-print-modes{display:flex;flex-direction:column;gap:8px;margin:12px 0}
 .shift-print-mode{display:flex;align-items:center;gap:8px;font-weight:700;font-size:.95rem}
