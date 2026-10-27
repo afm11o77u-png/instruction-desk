@@ -263,6 +263,10 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('id="shiftgrid"', index)
         self.assertIn('id="shiftaddrow"', index)
         self.assertIn('id="shiftaddroster"', index)
+        self.assertIn('id="shiftsave"', index)
+        self.assertIn('id="shiftsavedialog"', index)
+        self.assertIn('保存して移動', index)
+        self.assertIn('破棄して移動', index)
         self.assertNotIn('id="kintai-open"', index)
         self.assertIn('kintai-shift.js', index)
         # 出勤簿はそのまま
@@ -321,6 +325,17 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('shift-name-print', js)
         self.assertIn('printing-shift', js)
         self.assertIn('afterprint', js)
+        # 手動上書き保存（編集ごとの自動保存はしない）
+        self.assertIn('confirmKintaiShiftLeave', js)
+        self.assertIn('未保存の変更', js)
+        self.assertIn('保存済み（', js)
+        self.assertIn("beforeunload", js)
+        self.assertIn('saving', js)
+        self.assertNotIn('scheduleSave', js)
+        self.assertNotIn('再試行します', js)
+        self.assertNotIn('setTimeout(() => {\n        saveTimer = null;\n        saveShift()', js)
+        place = (ROOT / 'placement.js').read_text(encoding='utf-8')
+        self.assertIn('confirmKintaiShiftLeave', place)
 
     def test_kintai_api_avoids_disk_space_error_copy(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
@@ -332,6 +347,8 @@ class ShiftUiContractTest(unittest.TestCase):
         js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
         self.assertIn('入力は画面に残しています', js)
         self.assertIn('if (e.conflict)', js)
+        # 自動再試行タイマーが復活していないこと
+        self.assertNotIn('再試行します', js)
 
 
 if __name__ == '__main__':

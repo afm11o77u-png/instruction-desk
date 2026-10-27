@@ -1,4 +1,5 @@
-/* 月別シフト表。権限は currentUser.mark_kintai（主管理者は常に可）。出勤簿実績には書き込まない。 */
+/* 月別シフト表。権限は currentUser.mark_kintai（主管理者は常に可）。出勤簿実績には書き込まない。
+   保存は「保存」押下時のみ（表示中年月を上書き）。編集ごとの自動保存はしない。 */
 (function () {
   let sheet = null;
   let cells = {}; // { personKey: { day: {kind,text} } }
@@ -8,12 +9,13 @@
   let version = 0;
   let editMode = 'off'; // normal | off | time | erase
   let undoStack = [];
-  let saveTimer = null;
   let saveState = 'idle'; // idle | dirty | saving | saved | failed
   let saveError = '';
   let shiftDirty = false;
+  let saving = false;
   let loading = false;
   let rosterList = []; // 出勤簿在籍（未掲載追加用）
+  let leaveDialogResolver = null;
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -61,7 +63,6 @@
   function markDirty() {
     shiftDirty = true;
     setSaveState('dirty');
-    scheduleSave();
   }
 
   function setCell(key, day, value, recordUndo) {
@@ -77,25 +78,30 @@
     markDirty();
   }
 
+  function formatSavedAt(iso) {
+    if (!iso) return '';
+    const s = String(iso).replace('T', ' ').trim();
+    return s.length > 19 ? s.slice(0, 19) : s;
+  }
+
   function setSaveState(state, err) {
     saveState = state;
     saveError = err || '';
     const el = $('#shiftsavestatus');
     if (!el) return;
     el.className = 'shift-save-status shift-save-' + state;
-    if (state === 'idle') el.textContent = '未編集';
-    else if (state === 'dirty') el.textContent = '未保存';
+    if (state === 'idle') el.textContent = '未保存';
+    else if (state === 'dirty') el.textContent = '未保存の変更';
     else if (state === 'saving') el.textContent = '保存中…';
-    else if (state === 'saved') el.textContent = '保存済み';
-    else if (state === 'failed') el.textContent = '保存失敗（再試行します）' + (saveError ? '：' + saveError : '');
-  }
-
-  function scheduleSave() {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      saveShift().catch(() => {});
-    }, 450);
+    else if (state === 'saved') {
+      const when = formatSavedAt(sheet && sheet.updatedAt);
+      el.textContent = when ? `保存済み（${when}）` : '保存済み';
+    } else if (state === 'failed') {
+      el.textContent = '保存失敗' + (saveError ? '：' + saveError : '');
+    }
+    const btn = $('#shiftsave');
+    // 未保存月の初回保存・失敗再試行・未保存の変更は押下可。保存済みで変更なしのときだけ無効
+    if (btn) btn.disabled = state === 'saving' || (state === 'saved' && !shiftDirty);
   }
 
   function applySheet(data) {
@@ -132,10 +138,10 @@
     });
     const hint = $('#shifthint');
     if (!hint) return;
-    if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名は左列で編集、行の追加・削除はその月だけに効きます。';
-    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力。右クリックでクリア。';
-    else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。';
-    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。氏名は直接編集できます。';
+    if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名は左列で編集、行の追加・削除はその月だけに効きます。「保存」でこの年月を上書きします。';
+    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力。右クリックでクリア。「保存」でこの年月を上書きします。';
+    else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。「保存」でこの年月を上書きします。';
+    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。氏名は直接編集できます。「保存」でこの年月を上書きします。';
   }
 
   function cellLabel(cell) {
@@ -252,7 +258,6 @@
       if (printName) printName.textContent = p.displayName;
       delete input.dataset.prevName;
       markDirty();
-      // 並び替えのため再描画はせず、タグだけ維持
     }
   }
 
@@ -321,7 +326,6 @@
     shiftDirty = true;
     setSaveState('dirty');
     paintShift();
-    scheduleSave();
   }
 
   async function shiftFetch(path, data) {
@@ -347,13 +351,75 @@
     return result;
   }
 
-  async function loadKintaiShift(forceYm) {
+  function resolveLeaveDialog(choice) {
+    const dlg = $('#shiftsavedialog');
+    if (dlg && dlg.open) dlg.close();
+    const fn = leaveDialogResolver;
+    leaveDialogResolver = null;
+    if (fn) fn(choice);
+  }
+
+  function askLeaveAction() {
+    return new Promise(resolve => {
+      const dlg = $('#shiftsavedialog');
+      if (!dlg || typeof dlg.showModal !== 'function') {
+        // フォールバック: 保存するか／破棄するかの二段確認
+        if (confirm('未保存の変更があります。保存して移動しますか？\n（キャンセル後に破棄を選べます）')) {
+          resolve('save');
+        } else if (confirm('変更を破棄して移動しますか？')) {
+          resolve('discard');
+        } else {
+          resolve('cancel');
+        }
+        return;
+      }
+      leaveDialogResolver = resolve;
+      if (!dlg.open) dlg.showModal();
+    });
+  }
+
+  /** 未保存があれば確認。true=続行可 / false=キャンセル */
+  async function confirmLeaveShift() {
+    if (!shiftDirty) return true;
+    const action = await askLeaveAction();
+    if (action === 'cancel') return false;
+    if (action === 'save') {
+      try {
+        await saveShift({ force: true });
+      } catch (_) { /* keep */ }
+      if (shiftDirty) {
+        toast('保存できなかったため移動を中止しました。');
+        return false;
+      }
+      return true;
+    }
+    // discard: 最終保存（または未保存月の初期表示）へ戻してから移動可にする
+    try {
+      await reloadCurrentMonth({ discard: true });
+    } catch (e) {
+      toast(e.message || '破棄に失敗しました。');
+      return false;
+    }
+    return true;
+  }
+
+  async function reloadCurrentMonth(opts) {
+    if (!year || !month) return;
+    const data = await api(`/api/kintai/shift?year=${year}&month=${month}`);
+    if (!data.year) data.year = year;
+    if (!data.month) data.month = month;
+    applySheet(data);
+    setSaveState(data.exists ? 'saved' : 'idle');
+    if (opts && opts.discard) toast('変更を破棄し、最後の保存内容に戻しました。');
+  }
+
+  async function loadKintaiShift(forceYm, opts) {
     if (!canKintai()) throw Error('勤怠管理の権限がありません。');
     if (loading) return;
-    if (shiftDirty) {
-      try { await saveShift(); } catch (_) { /* keep */ }
-      if (shiftDirty) {
-        toast('未保存のシフトがあるため月を切り替えできません。保存を確認してください。');
+    const skipGuard = opts && opts.skipGuard;
+    if (!skipGuard && shiftDirty) {
+      const ok = await confirmLeaveShift();
+      if (!ok) {
         const input = $('#shiftyearmonth');
         if (input && year && month) input.value = ymValue(year, month);
         return;
@@ -392,12 +458,14 @@
     }
   }
 
-  async function saveShift() {
+  async function saveShift(opts) {
     if (!canKintai()) return;
-    if (!shiftDirty && saveState !== 'failed') return;
+    const force = opts && opts.force;
+    if (saving) return;
+    if (!force && !shiftDirty && saveState !== 'failed') return;
     if (!year || !month) return;
+    saving = true;
     setSaveState('saving');
-    // sortOrder を現在の並びに合わせる
     people = people.map((p, i) => ({ ...p, sortOrder: i, displayName: (p.displayName || '').trim() || '（未入力）' }));
     const payload = { year, month, version, people, cells };
     try {
@@ -409,22 +477,21 @@
       undoStack = keepUndo;
       shiftDirty = false;
       setSaveState('saved');
+      toast(`${year}年${month}月のシフト表を保存しました。`);
     } catch (e) {
       if (e.conflict) {
-        // 競合時も画面の未保存入力は残す。自動再試行は止め、月切替時の警告対象に残す。
         shiftDirty = true;
         setSaveState('failed', e.message || 'ほかの画面で先に保存されています');
         toast((e.message || 'ほかの画面で先に保存されています') + '（入力は画面に残しています）');
-        return;
+        throw e;
       }
-      // 通信・サーバーエラー: 入力保持のまま再試行
       shiftDirty = true;
       setSaveState('failed', e.message || '保存に失敗しました');
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => {
-        saveTimer = null;
-        saveShift().catch(() => {});
-      }, 2000);
+      toast((e.message || '保存に失敗しました') + '（入力は画面に残しています）');
+      throw e;
+    } finally {
+      saving = false;
+      setSaveState(saveState); // refresh button disabled state
     }
   }
 
@@ -467,6 +534,12 @@
     setTimeout(() => window.print(), 50);
   }
 
+  function onBeforeUnload(e) {
+    if (!shiftDirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+  }
+
   function bindShiftControls() {
     if (!$('#kintaishift')) return;
     document.querySelectorAll('.shift-mode').forEach(b => {
@@ -499,6 +572,12 @@
     };
     const undo = $('#shiftundo');
     if (undo) undo.onclick = undoOnce;
+    const saveBtn = $('#shiftsave');
+    if (saveBtn) {
+      saveBtn.onclick = () => {
+        saveShift({ force: true }).catch(() => {});
+      };
+    }
     const pr = $('#shiftprint');
     if (pr) pr.onclick = printShift;
     const add = $('#shiftaddrow');
@@ -521,10 +600,36 @@
       wrap.addEventListener('change', onNameInput);
       wrap.addEventListener('focusout', onNameInput);
     }
+    const dlgSave = $('#shiftsavedialog-save');
+    const dlgDiscard = $('#shiftsavedialog-discard');
+    const dlgCancel = $('#shiftsavedialog-cancel');
+    if (dlgSave) dlgSave.onclick = () => resolveLeaveDialog('save');
+    if (dlgDiscard) dlgDiscard.onclick = () => resolveLeaveDialog('discard');
+    if (dlgCancel) dlgCancel.onclick = () => resolveLeaveDialog('cancel');
+    const dlg = $('#shiftsavedialog');
+    if (dlg) {
+      dlg.addEventListener('cancel', e => {
+        e.preventDefault();
+        resolveLeaveDialog('cancel');
+      });
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    setSaveState(saveState);
+  }
+
+  function isShiftSectionActive() {
+    const panel = $('#kintaishift');
+    return !!(panel && !panel.hidden && document.body.classList.contains('catalog-kintai'));
   }
 
   window.loadKintaiShift = loadKintaiShift;
   window.paintKintaiShift = paintShift;
+  window.saveKintaiShift = saveShift;
+  window.isKintaiShiftDirty = () => !!shiftDirty;
+  window.confirmKintaiShiftLeave = async () => {
+    if (!isShiftSectionActive() || !shiftDirty) return true;
+    return confirmLeaveShift();
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindShiftControls);
   else bindShiftControls();
