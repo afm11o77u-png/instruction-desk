@@ -19,6 +19,8 @@ from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+import kintai_shift
+
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
 PKG = '{http://schemas.openxmlformats.org/package/2006/relationships}'
@@ -337,6 +339,7 @@ def schema(c):
             source_mtime TEXT NOT NULL DEFAULT ''
         )'''
     )
+    kintai_shift.schema(c)
     _seed_people(c)
 
 
@@ -2423,6 +2426,9 @@ def handle_get(h, c, path: str):
                 ' 年度ルートは相対パス用の任意補助です。'
             ),
         }
+    if path == '/api/kintai/shift':
+        q = _query_map(h)
+        return 200, kintai_shift.get_shift_sheet(c, q.get('year'), q.get('month'))
     return 404, {'error': '操作が見つかりません。'}
 
 
@@ -2501,6 +2507,9 @@ def handle_post(h, c, path: str, d: dict):
         except Exception as e:
             raise ValueError('ファイルデータを読めません。') from e
         return 200, import_paths_from_upload(c, str(filename), blob)
+    if path == '/api/kintai/shift':
+        # シフトは予定のみ。kintai_monthly（出勤簿実績）は変更しない。
+        return kintai_shift.save_shift_sheet(c, h.user, d or {})
     return 404, {'error': '操作が見つかりません。'}
 
 

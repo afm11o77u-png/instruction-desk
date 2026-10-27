@@ -177,11 +177,79 @@ function tellStockFrame(section){
   if(!frame||!frame.contentWindow)return
   try{frame.contentWindow.postMessage({type:'stock-section',section:normalizeStockSection(section)},location.origin)}catch(_){}
 }
-function showCatalog(which){const stockAllowed=currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview;if(which==='stock'&&!stockAllowed)which='desk';const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理'};document.body.classList.toggle('catalog-info',which==='info');document.body.classList.toggle('catalog-stock',which==='stock');$('#brandtitle').textContent=titles[which]||titles.desk;document.title=$('#brandtitle').textContent;document.querySelectorAll('#modes .mode').forEach(b=>b.classList.toggle('on',b.dataset.catalog===which));$('#desknav').hidden=which!=='desk';$('#infonav').hidden=which!=='info';const stockNav=$('#stocknav');if(stockNav)stockNav.hidden=which!=='stock';const stock=$('#stockdesk');if(stock)stock.hidden=which!=='stock';if(which==='stock'){syncStockNav('list');const frame=$('#stockframe');const want='/inventory/?embed=1';if(frame&&frame.getAttribute('src')!==want){frame.src=want;frame.onload=()=>{tellStockFrame(stockSection);frame.onload=null}}else tellStockFrame(stockSection);return}const box=which==='info'?'#infonav':'#desknav';const current=document.querySelector(`${box} .nav.active:not([hidden])`)||document.querySelector(`${box} .nav:not([hidden])`);if(current)current.click()}
+let kintaiSection='attendance';
+function normalizeKintaiSection(section){return section==='shift'?'shift':'attendance'}
+function syncKintaiNav(section){
+  kintaiSection=normalizeKintaiSection(section);
+  document.querySelectorAll('#kintainav .nav').forEach(b=>b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection));
+  const att=$('#kintaiattendance');
+  const shift=$('#kintaishift');
+  if(att)att.hidden=kintaiSection!=='attendance';
+  if(shift)shift.hidden=kintaiSection!=='shift';
+}
+function showKintaiSection(section){
+  syncKintaiNav(section);
+  if(typeof listChrome==='function')listChrome();
+  if(kintaiSection==='shift'){
+    if(typeof loadKintaiShift==='function')loadKintaiShift().catch(e=>toast(e.message));
+  }else if(typeof loadKintai==='function'){
+    loadKintai().catch(e=>toast(e.message));
+  }
+}
+function showCatalog(which){
+  const stockAllowed=currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview;
+  const kintaiAllowed=currentUser?.role==='owner'||!!currentUser?.mark_kintai;
+  if(which==='stock'&&!stockAllowed)which='desk';
+  if(which==='kintai'&&!kintaiAllowed)which='desk';
+  const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理',kintai:'勤怠管理'};
+  document.body.classList.toggle('catalog-info',which==='info');
+  document.body.classList.toggle('catalog-stock',which==='stock');
+  document.body.classList.toggle('catalog-kintai',which==='kintai');
+  $('#brandtitle').textContent=titles[which]||titles.desk;
+  document.title=$('#brandtitle').textContent;
+  document.querySelectorAll('#modes .mode').forEach(b=>b.classList.toggle('on',b.dataset.catalog===which));
+  $('#desknav').hidden=which!=='desk';
+  $('#infonav').hidden=which!=='info';
+  const stockNav=$('#stocknav');if(stockNav)stockNav.hidden=which!=='stock';
+  const kintaiNav=$('#kintainav');if(kintaiNav)kintaiNav.hidden=which!=='kintai';
+  const stock=$('#stockdesk');if(stock)stock.hidden=which!=='stock';
+  if(which==='stock'){
+    syncStockNav('list');
+    const frame=$('#stockframe');
+    const want='/inventory/?embed=1';
+    if(frame&&frame.getAttribute('src')!==want){frame.src=want;frame.onload=()=>{tellStockFrame(stockSection);frame.onload=null}}
+    else tellStockFrame(stockSection);
+    return;
+  }
+  if(which==='kintai'){
+    view='kintai';
+    document.querySelectorAll('.nav[data-view]').forEach(n=>n.classList.remove('active'));
+    document.querySelectorAll('#manageusers,#repair-open').forEach(n=>n.classList.remove('active'));
+    showKintaiSection(kintaiSection||'attendance');
+    return;
+  }
+  if(view==='kintai'){
+    // 勤怠から他システムへ戻るときは指示書側の既定ナビへ
+    view='all';
+  }
+  const box=which==='info'?'#infonav':'#desknav';
+  const current=document.querySelector(`${box} .nav.active:not([hidden])`)||document.querySelector(`${box} .nav:not([hidden])`);
+  if(current)current.click();
+}
 function showDeskCatalog(){showCatalog('desk')}
 function showInfoCatalog(){showCatalog('info')}
 document.querySelectorAll('#modes .mode').forEach(b=>b.onclick=()=>showCatalog(b.dataset.catalog));
 document.querySelectorAll('#stocknav .nav').forEach(b=>b.onclick=()=>{if(b.dataset.stockSection===stockSection&&document.body.classList.contains('catalog-stock')){tellStockFrame(stockSection);return}syncStockNav(b.dataset.stockSection);if(!document.body.classList.contains('catalog-stock'))showCatalog('stock');else tellStockFrame(stockSection)});
+document.querySelectorAll('#kintainav .nav').forEach(b=>b.onclick=()=>{
+  if(b.dataset.kintaiSection===kintaiSection&&document.body.classList.contains('catalog-kintai')){
+    showKintaiSection(kintaiSection);
+    return;
+  }
+  if(!document.body.classList.contains('catalog-kintai')){
+    kintaiSection=normalizeKintaiSection(b.dataset.kintaiSection);
+    showCatalog('kintai');
+  }else showKintaiSection(b.dataset.kintaiSection);
+});
 window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='history'||e.data.section==='period'||e.data.section==='orders'))syncStockNav(normalizeStockSection(e.data.section))});
 
 const placementAllButton=document.createElement('button');
