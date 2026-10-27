@@ -297,9 +297,9 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift #kintaishift{display:block!important;max-width:none!important;width:100%!important;margin:0!important;padding:0!important}
   body.printing-shift .shift-print-banner{display:table-row!important}
   body.printing-shift .shift-print-banner>th{border:0!important;background:#fff!important;padding:0 0 5px!important;text-align:left}
-  /* 見本: 太い濃緑バー（#245c47）＋タイトルは濃グレー */
+  /* 見本: 太い濃緑バー（#245c47）＋タイトルは濃グレー・大きめ。凡例は小さめのまま */
   body.printing-shift .shift-print-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;border-bottom:2.8pt solid #245c47;padding:0 0 5px;margin:0 0 3px;page-break-after:avoid}
-  body.printing-shift .shift-print-title-text{font-size:13.5pt;font-weight:700;color:#464a4d;white-space:nowrap;letter-spacing:.02em}
+  body.printing-shift .shift-print-title-text{font-size:18pt;font-weight:700;color:#464a4d;white-space:nowrap;letter-spacing:.02em}
   body.printing-shift .shift-print-legend{font-size:8pt;font-weight:400;color:#555;white-space:nowrap}
   body.printing-shift .shift-grid-wrap{display:block!important;overflow:visible!important;max-height:none!important;border:0!important;width:100%!important}
   body.printing-shift .shift-grid{font-size:8.5pt;width:100%!important;max-width:100%!important;table-layout:fixed;border-collapse:collapse;font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}
@@ -316,10 +316,15 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid thead th.shift-day{
     background:#f0f5f2!important;font-weight:700;padding:5px 1px
   }
-  body.printing-shift .shift-grid .shift-name{width:12%;min-width:0;max-width:none;text-align:left;padding:5px 6px;overflow:visible;white-space:normal;word-break:keep-all;line-break:strict;overflow-wrap:normal;background:#f8faf8!important}
-  body.printing-shift .shift-grid .shift-name-edit{display:block}
+  /* 氏名は1行固定（姓／名のスペースで折り返さない）。日列をやや狭めて幅を確保。
+     colgroup 必須: thead 先頭の colspan バナーがあると fixed が全列均等になる。
+     9em ≒ 典型的なフルネーム（例:「齊藤 遼太」「長谷川 恵美子」）＋余白 */
+  body.printing-shift .shift-grid col.shift-col-name{width:9em}
+  body.printing-shift .shift-grid col.shift-col-day{width:auto}
+  body.printing-shift .shift-grid .shift-name{width:9em;min-width:9em;max-width:none;text-align:left;padding:5px 6px;overflow:visible;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto;background:#f8faf8!important}
+  body.printing-shift .shift-grid .shift-name-edit{display:block;white-space:nowrap}
   body.printing-shift .shift-grid .shift-name-input{display:none!important}
-  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:normal;word-break:keep-all;line-break:strict;overflow-wrap:normal}
+  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto}
   body.printing-shift .shift-grid .shift-day,
   body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:7.5pt;text-align:center}
   body.printing-shift .shift-grid .shift-daynum{display:block;font-weight:700;line-height:1.2}

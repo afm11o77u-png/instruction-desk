@@ -569,15 +569,37 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('body.printing-shift .shift-drag', css)
         self.assertIn('shift-print-banner', css)
         self.assertIn('shift-print-legend', css)
-        # 見本どおり: 濃緑バー・タイトル濃グレー・ゼブラ・×赤系・まで小さめ・薄い罫線
+        # 見本どおり: 濃緑バー・タイトル濃グレー大きめ・ゼブラ・×赤系・まで小さめ・薄い罫線
         self.assertIn('2.8pt solid #245c47', css)
         self.assertIn('color:#464a4d', css)
+        self.assertIn('font-size:18pt', css)
+        self.assertIn('shift-print-title-text{font-size:18pt;font-weight:700', css.replace('\n', '').replace(' ', ''))
+        # 凡例は見本どおり小さめ（タイトルより小さい）
+        self.assertIn('shift-print-legend{font-size:8pt;font-weight:400', css.replace('\n', '').replace(' ', ''))
         self.assertIn('tbody tr:nth-child(even)', css)
         self.assertIn('background:#f0f5f2!important', css)
         self.assertIn('color:#b85c4a!important', css)
         self.assertIn('shift-time-until', css)
         self.assertIn('font-size:5.5pt', css)
         self.assertIn('0.35pt solid #c5cbc7', css)
+        # 氏名は1行（nowrap・十分な min-width）。break-all / 強制折返しなし
+        # colgroup で氏名列幅を確保（colspan バナー対策）
+        self.assertIn('col.shift-col-name{width:9em}', css.replace('\n', '').replace(' ', ''))
+        self.assertIn('col.shift-col-day{width:auto}', css.replace('\n', '').replace(' ', ''))
+        name_rule_start = css.find('body.printing-shift .shift-grid .shift-name{')
+        self.assertGreater(name_rule_start, 0)
+        name_print_rules = css[name_rule_start:]
+        name_print_rules = name_print_rules[: name_print_rules.find('body.printing-shift .shift-grid .shift-day')]
+        self.assertIn('white-space:nowrap', name_print_rules)
+        self.assertIn('min-width:9em', name_print_rules)
+        self.assertIn('width:9em', name_print_rules)
+        self.assertNotIn('break-all', name_print_rules)
+        self.assertNotIn('white-space:normal', name_print_rules)
+        name_compact = name_print_rules.replace('\n', '').replace(' ', '')
+        self.assertIn('shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:nowrap', name_compact)
+        js_for_cols = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
+        self.assertIn('shift-col-name', js_for_cols)
+        self.assertIn('<colgroup>', js_for_cols)
         # 見本フッタ文言は印刷に出さない
         self.assertNotIn('確認用イメージ', css)
         self.assertNotIn('A4 横 / 1か月分', css)
@@ -693,6 +715,130 @@ class ShiftUiContractTest(unittest.TestCase):
             self.assertLess(pw, ph, msg=f'baseline should be portrait, got {pw}x{ph}')
             self.assertGreater(fw, fh, msg=f'forced PDF should be landscape, got {fw}x{fh}')
             self.assertAlmostEqual(fw / fh, 297 / 210, delta=0.05)
+
+    def test_shift_print_name_one_line_fixture_metrics(self):
+        """長い氏名（齊藤 遼太 等）が印刷CSSで1行のまま（高さ ≈ 1行）。"""
+        import html as html_lib
+        import json
+
+        chrome = _chrome_bin()
+        if not chrome:
+            self.skipTest('Chrome/Chromium not available')
+
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        # シフト表印刷ブロックだけ取り出し（共通 body>*{display:none} は含めない）
+        marker = '/* シフト表印刷:'
+        start = css.find(marker)
+        self.assertGreater(start, 0)
+        media = css.find('@media print{', start)
+        self.assertGreater(media, 0)
+        i = media + len('@media print{')
+        depth = 1
+        while i < len(css) and depth:
+            if css[i] == '{':
+                depth += 1
+            elif css[i] == '}':
+                depth -= 1
+            i += 1
+        print_css = css[media + len('@media print{'): i - 1]
+        # @page は計測に不要。display:none 系も落とす
+        print_css = re.sub(r'@page\s+shift-sheet\s*\{[^}]*\}', '', print_css)
+        print_css = re.sub(
+            r'body\.printing-shift[^\{]*\{[^}]*display:\s*none!important;?[^}]*\}',
+            '',
+            print_css,
+        )
+
+        names = ['齊藤 遼太', '斉藤 遼太', '今城 卓也', '長谷川 恵美子', '山田 太郎']
+        rows = ''.join(
+            f'<tr><th class="shift-name"><div class="shift-name-edit">'
+            f'<span class="shift-name-print">{n}</span></div></th>'
+            + ''.join('<td class="shift-cell">×</td>' for _ in range(31))
+            + '</tr>'
+            for n in names
+        )
+        days = ''.join(
+            f'<th class="shift-day"><span class="shift-daynum">{d}</span></th>'
+            for d in range(1, 32)
+        )
+        cols = '<colgroup><col class="shift-col-name">' + '<col class="shift-col-day">' * 31 + '</colgroup>'
+        html = f'''<!doctype html><html><head><meta charset="utf-8">
+<style>
+{print_css}
+html,body{{margin:0;background:#fff}}
+.shift-print-banner{{display:table-row!important}}
+.shift-grid-wrap{{width:281mm}}
+.shift-grid{{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8.5pt;
+  font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}}
+</style></head>
+<body class="printing-shift print-shift-color">
+<div class="shift-grid-wrap"><table class="shift-grid">
+{cols}
+<thead><tr class="shift-print-banner"><th colspan="32"><div class="shift-print-head">
+<span class="shift-print-title-text">2026年 10月 マーク シフト表</span>
+<span class="shift-print-legend">空欄：出勤　×：休み　時刻：退勤予定</span>
+</div></th></tr>
+<tr><th class="shift-corner">氏名</th>{days}</tr></thead>
+<tbody>{rows}</tbody>
+</table></div>
+<script>
+const marks = [...document.querySelectorAll('.shift-name-print')].map((el) => {{
+  const r = el.getBoundingClientRect();
+  const cs = getComputedStyle(el);
+  const th = el.closest('.shift-name');
+  const thr = th.getBoundingClientRect();
+  return {{
+    text: el.textContent,
+    h: r.height,
+    w: r.width,
+    colW: thr.width,
+    whiteSpace: cs.whiteSpace,
+    wordBreak: cs.wordBreak,
+  }};
+}});
+const title = document.querySelector('.shift-print-title-text');
+const tcs = getComputedStyle(title);
+const out = {{
+  marks,
+  titleFontSize: tcs.fontSize,
+  titleFontWeight: tcs.fontWeight,
+  legendFontSize: getComputedStyle(document.querySelector('.shift-print-legend')).fontSize,
+}};
+document.body.setAttribute('data-metrics', JSON.stringify(out));
+</script>
+</body></html>'''
+
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / 'name-one-line.html'
+            page.write_text(html, encoding='utf-8')
+            cmd = [
+                chrome,
+                '--headless=new',
+                '--disable-gpu',
+                '--virtual-time-budget=3000',
+                '--dump-dom',
+                page.resolve().as_uri(),
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, msg=r.stderr or r.stdout)
+            mm = re.search(r'data-metrics="([^"]+)"', r.stdout)
+            self.assertIsNotNone(mm, msg='metrics missing from dump-dom')
+            metrics = json.loads(html_lib.unescape(mm.group(1)))
+
+        for mark in metrics['marks']:
+            self.assertEqual(mark['whiteSpace'], 'nowrap', msg=mark)
+            self.assertNotEqual(mark['wordBreak'], 'break-all', msg=mark)
+            # 1行: 折り返しなら高さがおよそ2倍になる
+            self.assertLess(mark['h'], 28, msg=f'name wrapped? {mark}')
+            self.assertGreaterEqual(mark['colW'] + 0.5, mark['w'], msg=mark)
+            self.assertGreaterEqual(mark['colW'], 70, msg=f'name col too narrow: {mark}')
+
+        def px(v: str) -> float:
+            return float(v.replace('px', ''))
+
+        self.assertGreater(px(metrics['titleFontSize']), px(metrics['legendFontSize']) * 1.5)
+        self.assertAlmostEqual(px(metrics['titleFontSize']), 24.0, delta=1.0)
+        self.assertIn(str(metrics['titleFontWeight']), ('700', 'bold'))
 
 
 if __name__ == '__main__':
