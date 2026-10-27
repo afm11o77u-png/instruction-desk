@@ -263,31 +263,48 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift #kintaidesk,
   body.printing-shift #kintaishift{display:block!important;max-width:none!important;width:100%!important;margin:0!important;padding:0!important}
   body.printing-shift .shift-print-banner{display:table-row!important}
-  body.printing-shift .shift-print-banner>th{border:0!important;background:#fff!important;padding:0 0 4px!important;text-align:left}
-  body.printing-shift .shift-print-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;border-bottom:1.2pt solid #186438;padding:0 0 4px;margin:0 0 2px;page-break-after:avoid}
-  body.printing-shift .shift-print-title-text{font-size:13pt;font-weight:700;color:#000;white-space:nowrap}
-  body.printing-shift .shift-print-legend{font-size:8pt;font-weight:400;color:#333;white-space:nowrap}
+  body.printing-shift .shift-print-banner>th{border:0!important;background:#fff!important;padding:0 0 5px!important;text-align:left}
+  /* 見本: 太い濃緑バー（#245c47）＋タイトルは濃グレー */
+  body.printing-shift .shift-print-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;border-bottom:2.8pt solid #245c47;padding:0 0 5px;margin:0 0 3px;page-break-after:avoid}
+  body.printing-shift .shift-print-title-text{font-size:13.5pt;font-weight:700;color:#464a4d;white-space:nowrap;letter-spacing:.02em}
+  body.printing-shift .shift-print-legend{font-size:8pt;font-weight:400;color:#555;white-space:nowrap}
   body.printing-shift .shift-grid-wrap{display:block!important;overflow:visible!important;max-height:none!important;border:0!important;width:100%!important}
-  body.printing-shift .shift-grid{font-size:8.5pt;width:100%!important;max-width:100%!important;table-layout:fixed;border-collapse:collapse}
+  body.printing-shift .shift-grid{font-size:8.5pt;width:100%!important;max-width:100%!important;table-layout:fixed;border-collapse:collapse;font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}
   body.printing-shift .shift-grid thead{display:table-header-group}
   body.printing-shift .shift-grid tbody{display:table-row-group}
   body.printing-shift .shift-grid tr{break-inside:avoid;page-break-inside:avoid}
   body.printing-shift .shift-grid .shift-name,
   body.printing-shift .shift-grid thead th{position:static!important;top:auto!important;left:auto!important}
+  /* 薄い罫線・余白多め（見本のエアリーなセル） */
   body.printing-shift .shift-grid th,
-  body.printing-shift .shift-grid td{border:0.4pt solid #888;padding:2px 1px;background:#fff!important;color:#000;vertical-align:middle}
-  body.printing-shift .shift-grid .shift-name{width:11%;min-width:0;max-width:none;text-align:left;padding:2px 4px;overflow:visible;white-space:normal;word-break:break-all}
+  body.printing-shift .shift-grid td{border:0.35pt solid #c5cbc7;padding:4px 2px;background:#fff!important;color:#333;vertical-align:middle;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* 日付見出し行: 平日は薄い緑グレー。土日祝は後段のモード色が上書き */
+  body.printing-shift .shift-grid thead th.shift-corner,
+  body.printing-shift .shift-grid thead th.shift-day{
+    background:#f0f5f2!important;font-weight:700;padding:5px 1px
+  }
+  body.printing-shift .shift-grid .shift-name{width:12%;min-width:0;max-width:none;text-align:left;padding:5px 6px;overflow:visible;white-space:normal;word-break:keep-all;line-break:strict;overflow-wrap:normal;background:#f8faf8!important}
   body.printing-shift .shift-grid .shift-name-edit{display:block}
   body.printing-shift .shift-grid .shift-name-input{display:none!important}
-  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#000;white-space:normal;word-break:break-all}
+  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:normal;word-break:keep-all;line-break:strict;overflow-wrap:normal}
   body.printing-shift .shift-grid .shift-day,
   body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:7.5pt;text-align:center}
-  body.printing-shift .shift-grid .shift-wday{font-size:6.5pt}
-  body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#666!important;background-color:#fff!important;background-image:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#222!important;background-color:#fff!important;background-image:none!important;font-size:6.5pt;line-height:1.15;white-space:normal!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time .shift-time-main,
-  body.printing-shift .shift-grid td.shift-time .shift-time-until{display:block;text-align:center}
-  /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通 */
+  body.printing-shift .shift-grid .shift-daynum{display:block;font-weight:700;line-height:1.2}
+  body.printing-shift .shift-grid .shift-wday{display:block;font-size:6.5pt;font-weight:400;line-height:1.2;color:#4a5d50}
+  /* 偶数人員行のゼブラ（氏名＋平日セル。土日祝塗りは後段で優先） */
+  body.printing-shift .shift-grid tbody tr:nth-child(even) .shift-name{
+    background:#eef2f0!important
+  }
+  body.printing-shift .shift-grid tbody tr:nth-child(even) td.shift-cell:not(.shift-sat):not(.shift-sun){
+    background:#f3f6f4!important
+  }
+  /* ×／時刻: 既定は白黒寄り。カラー用は後段で赤系へ */
+  body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#333!important;background-color:#fff!important;background-image:none!important;font-size:7pt;line-height:1.2;white-space:normal!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time .shift-time-main{display:block;text-align:center;font-size:7pt;font-weight:700}
+  body.printing-shift .shift-grid td.shift-time .shift-time-until{display:block;text-align:center;font-size:5.5pt;font-weight:400;line-height:1.1}
+  /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通。×は見本どおり赤系 */
+  body.printing-shift.print-shift-color .shift-grid td.shift-off{color:#b85c4a!important}
   body.printing-shift.print-shift-color .shift-grid .shift-sat,
   body.printing-shift.print-shift-color .shift-grid th.shift-sat{
     background:#e8f2fb!important;
