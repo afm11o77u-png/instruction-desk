@@ -121,6 +121,7 @@
 </form>
 <div class="bihin-actions">
 <button type="button" class="primary" id="bihinsave">保存</button>
+<button type="button" id="bihinprint">棚卸用紙を印刷</button>
 <button type="button" id="bihinmaster">品目マスタ</button>
 <span id="bihinsavestatus" class="shift-save-status" aria-live="polite">未保存</span>
 </div>
@@ -133,6 +134,21 @@
 <p id="bihinmeta" class="kintaimeta"></p>
 </div>
 </section>
+<section id="bihincountsheet" class="bihin-count-sheet" aria-hidden="true"></section>
+<dialog id="bihinprintdialog">
+<div class="dialoghead"><div><h2>棚卸用紙を印刷</h2></div>
+<button type="button" class="quiet" id="bihinprintdialog-close">閉じる ×</button></div>
+<div class="dialogbody">
+<p class="duehint">表示中の年月の品目（品名・単位・単価・並び）で記入用紙を作ります。登録済みの数量・金額は印字しません。保存はしません。</p>
+<p class="kintaimeta shift-print-tips">ブラウザの印刷ダイアログで次を確認してください。<br>
+・用紙：A4・縦向き<br>
+・ヘッダー／フッター（日付・URL・ページ番号）をオフ</p>
+</div>
+<div class="dialogactions">
+<button type="button" class="primary" id="bihinprintdialog-go">印刷プレビューへ</button>
+<button type="button" class="quiet" id="bihinprintdialog-cancel">キャンセル</button>
+</div>
+</dialog>
 <dialog id="shiftprintdialog">
 <div class="dialoghead"><div><h2>シフト表を印刷</h2></div>
 <button type="button" class="quiet" id="shiftprintdialog-close">閉じる ×</button></div>
@@ -170,6 +186,7 @@
 <button type="button" class="quiet" id="bihinsavedialog-cancel">キャンセル</button>
 </div>
 </dialog>
+
 <dialog id="bihinmasterdialog">
 <div class="dialoghead"><div><h2>品目マスタ</h2></div>
 <button type="button" class="quiet" id="bihinmasterdialog-close">閉じる ×</button></div>

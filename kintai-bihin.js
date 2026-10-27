@@ -611,6 +611,228 @@
     }
   }
 
+  /* ---- 棚卸記入用紙（印刷専用。報告UI・保存データは変更しない） ---- */
+
+  /**
+   * HIQラベル（カラー）のみ。括弧の全角/半角・空白ゆれを吸収。
+   * HIQラベル（白）／（透明）など他色は対象外。
+   */
+  function isHiqColorLabel(name) {
+    const n = String(name == null ? '' : name)
+      .normalize('NFKC')
+      .replace(/[\s\u3000]+/g, '');
+    return n === 'HIQラベル(カラー)';
+  }
+
+  function formatPrintPrice(unitPrice) {
+    const p = Number(unitPrice);
+    if (!Number.isFinite(p)) return '単価 —';
+    return `単価 ${p.toLocaleString('ja-JP')}円`;
+  }
+
+  /** 表示中スナップショットから印刷行を組み立て。数量・金額は載せない。 */
+  function expandCountSheetRows(sourceRows) {
+    const out = [];
+    (sourceRows || []).forEach((r, idx) => {
+      const name = r && r.name != null ? String(r.name) : '';
+      const unit = r && r.unit != null ? String(r.unit) : '';
+      const unitPrice = r && r.unitPrice != null ? r.unitPrice : '';
+      const sortOrder = r && r.sortOrder != null ? r.sortOrder : idx;
+      if (isHiqColorLabel(name)) {
+        out.push({
+          kind: 'hiq',
+          name,
+          unit,
+          unitPrice,
+          sortOrder,
+          colors: ['赤', '緑', '青', '合計'],
+        });
+      } else {
+        out.push({
+          kind: 'single',
+          name,
+          unit,
+          unitPrice,
+          sortOrder,
+          color: '—',
+        });
+      }
+    });
+    return out;
+  }
+
+  function countSheetTitleYm(y, m) {
+    return `${y}年${m}月分`;
+  }
+
+  function buildCountSheetHtml(sourceRows, y, m) {
+    const blocks = expandCountSheetRows(sourceRows);
+    const ymText = countSheetTitleYm(y, m);
+    // 見本順: タイトル／年月 → 棚卸日・記入者 → 説明2行 → 列見出し。
+    // thead に置きページ送りで年月＋見出しが繰り返される。
+    const head = `<thead>
+      <tr class="bihin-count-banner">
+        <th colspan="5">
+          <div class="bihin-count-head">
+            <span class="bihin-count-title">備品棚卸 記入用紙</span>
+            <span class="bihin-count-ym">${esc(ymText)}</span>
+          </div>
+        </th>
+      </tr>
+      <tr class="bihin-count-meta">
+        <th colspan="5">
+          <div class="bihin-count-meta-row">
+            <span>棚卸日：　　年　　月　　日</span>
+            <span>記入者：</span>
+          </div>
+        </th>
+      </tr>
+      <tr class="bihin-count-instructions">
+        <th colspan="5">
+          <p>実際に数えた月末在庫を、数量欄へ記入してください。</p>
+          <p>HIQラベル（カラー）は赤・緑・青を数え、単価ごとに合計してください。</p>
+        </th>
+      </tr>
+      <tr class="bihin-count-cols">
+        <th class="bihin-count-col-name">品名・単価</th>
+        <th class="bihin-count-col-color">色</th>
+        <th class="bihin-count-col-unit">単位</th>
+        <th class="bihin-count-col-qty">棚卸数量（手書き）</th>
+        <th class="bihin-count-col-note">備考</th>
+      </tr>
+    </thead>`;
+
+    const bodies = blocks.map(block => {
+      if (block.kind === 'hiq') {
+        const nameCell = `<td class="bihin-count-name" rowspan="4">
+          <div class="bihin-count-name-text">${esc(block.name)}</div>
+          <div class="bihin-count-price">${esc(formatPrintPrice(block.unitPrice))}</div>
+        </td>`;
+        const rowsHtml = block.colors.map((color, i) => {
+          const isTotal = color === '合計';
+          const trClass = isTotal ? ' class="bihin-count-hiq-total"' : '';
+          const note = isTotal ? 'この合計を報告画面へ入力' : '';
+          const nameTd = i === 0 ? nameCell : '';
+          return `<tr${trClass}>${nameTd}
+            <td class="bihin-count-color${isTotal ? ' bihin-count-total-label' : ''}">${esc(color)}</td>
+            <td class="bihin-count-unit">${esc(block.unit || '')}</td>
+            <td class="bihin-count-qty"></td>
+            <td class="bihin-count-note">${esc(note)}</td>
+          </tr>`;
+        }).join('');
+        return `<tbody class="bihin-count-block bihin-count-hiq">${rowsHtml}</tbody>`;
+      }
+      return `<tbody class="bihin-count-block"><tr>
+        <td class="bihin-count-name">
+          <div class="bihin-count-name-text">${esc(block.name)}</div>
+          <div class="bihin-count-price">${esc(formatPrintPrice(block.unitPrice))}</div>
+        </td>
+        <td class="bihin-count-color">${esc(block.color)}</td>
+        <td class="bihin-count-unit">${esc(block.unit || '')}</td>
+        <td class="bihin-count-qty"></td>
+        <td class="bihin-count-note"></td>
+      </tr></tbody>`;
+    }).join('');
+
+    // メモ・脚注は table 外（tfoot だと毎ページ繰り返されるため）
+    const after = `<div class="bihin-count-after">
+      <div class="bihin-count-memo">
+        <div class="bihin-count-memo-label">連絡事項・メモ</div>
+        <div class="bihin-count-memo-box"></div>
+      </div>
+      <div class="bihin-count-footnotes">
+        <p>※ 単価は同名品を区別するための表示です。数量・金額の実績は印字しません。</p>
+        <p>※ 報告画面ではHIQラベルを色別に分けず、各単価の合計数量を入力します。</p>
+      </div>
+    </div>`;
+
+    return `<table class="bihin-count-table" aria-label="備品棚卸記入用紙">
+      <colgroup>
+        <col class="bihin-count-col-name">
+        <col class="bihin-count-col-color">
+        <col class="bihin-count-col-unit">
+        <col class="bihin-count-col-qty">
+        <col class="bihin-count-col-note">
+      </colgroup>
+      ${head}${bodies}
+    </table>${after}`;
+  }
+
+  function paintCountSheet() {
+    const el = $('#bihincountsheet');
+    if (!el) return;
+    el.innerHTML = buildCountSheetHtml(rows, year, month);
+  }
+
+  function closeBihinPrintDialog() {
+    const dlg = $('#bihinprintdialog');
+    if (dlg && typeof dlg.close === 'function') dlg.close();
+  }
+
+  function openBihinPrintDialog() {
+    const dlg = $('#bihinprintdialog');
+    if (!dlg || typeof dlg.showModal !== 'function') {
+      runBihinCountPrint();
+      return;
+    }
+    dlg.showModal();
+  }
+
+  /**
+   * Chromium は unnamed @page の向きを採用しやすい。既存の A4 縦を明示し、
+   * シフト印刷の横向き一時CSSが残っていても縦に戻す。印刷後に外す。
+   */
+  const BIHIN_PRINT_PAGE_CSS_ID = 'bihin-count-print-page-css';
+  const BIHIN_PRINT_PAGE_CSS = '@page{size:A4 portrait;margin:12mm}';
+
+  function ensureBihinPortraitPage() {
+    let el = document.getElementById(BIHIN_PRINT_PAGE_CSS_ID);
+    if (!el) {
+      el = document.createElement('style');
+      el.id = BIHIN_PRINT_PAGE_CSS_ID;
+      document.head.appendChild(el);
+    }
+    el.textContent = BIHIN_PRINT_PAGE_CSS;
+  }
+
+  function clearBihinPortraitPage() {
+    const el = document.getElementById(BIHIN_PRINT_PAGE_CSS_ID);
+    if (el) el.remove();
+  }
+
+  function runBihinCountPrint() {
+    // 印刷は表示中の live スナップショットのみ。保存データは書き換えない。save も呼ばない。
+    paintCountSheet();
+    document.body.classList.add('printing-bihin-count');
+    ensureBihinPortraitPage();
+    let cleaned = false;
+    const done = () => {
+      if (cleaned) return;
+      cleaned = true;
+      clearBihinPortraitPage();
+      document.body.classList.remove('printing-bihin-count');
+      window.removeEventListener('afterprint', done);
+      if (mql) {
+        if (mql.removeEventListener) mql.removeEventListener('change', onPrintChange);
+        else if (mql.removeListener) mql.removeListener(onPrintChange);
+      }
+    };
+    const onPrintChange = (e) => {
+      if (!e.matches) done();
+    };
+    const mql = window.matchMedia && window.matchMedia('print');
+    window.addEventListener('afterprint', done);
+    if (mql) {
+      if (mql.addEventListener) mql.addEventListener('change', onPrintChange);
+      else if (mql.addListener) mql.addListener(onPrintChange);
+    }
+    setTimeout(() => window.print(), 50);
+  }
+
+  function printBihinCountSheet() {
+    openBihinPrintDialog();
+  }
+
   function bindBihinControls() {
     if (!$('#kintaibihin')) return;
     const ym = $('#bihinyearmonth');
@@ -637,6 +859,26 @@
     const saveBtn = $('#bihinsave');
     if (saveBtn) {
       saveBtn.onclick = () => { saveBihin({ force: true }).catch(() => {}); };
+    }
+    const printBtn = $('#bihinprint');
+    if (printBtn) printBtn.onclick = () => printBihinCountSheet();
+    const printGo = $('#bihinprintdialog-go');
+    if (printGo) {
+      printGo.onclick = () => {
+        closeBihinPrintDialog();
+        runBihinCountPrint();
+      };
+    }
+    const printCancel = $('#bihinprintdialog-cancel');
+    if (printCancel) printCancel.onclick = () => closeBihinPrintDialog();
+    const printClose = $('#bihinprintdialog-close');
+    if (printClose) printClose.onclick = () => closeBihinPrintDialog();
+    const printDlg = $('#bihinprintdialog');
+    if (printDlg) {
+      printDlg.addEventListener('cancel', e => {
+        e.preventDefault();
+        closeBihinPrintDialog();
+      });
     }
     const masterBtn = $('#bihinmaster');
     if (masterBtn) masterBtn.onclick = () => openMasterDialog();
@@ -696,6 +938,13 @@
   };
   // 単体テスト／確認用に公開
   window._bihinMath = { moneyYen, usageQty, parseQtyInput };
+  window._bihinCountSheet = {
+    isHiqColorLabel,
+    expandCountSheetRows,
+    buildCountSheetHtml,
+    formatPrintPrice,
+    countSheetTitleYm,
+  };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindBihinControls);
   else bindBihinControls();
