@@ -304,16 +304,15 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('@mediaprint{body>*{display:none!important}', compact)
         self.assertIn('@page{size:A4;margin:12mm}', compact)
         self.assertEqual(css.count('A4 landscape'), 1)
-        # 印刷時のみ: 土曜＝斜線、日曜・祝＝網かけ（白黒でも相互区別）。画面色 #e8f2fb/#fdeceb は維持
-        self.assertIn('白黒印刷でも土曜', css)
-        self.assertIn('repeating-linear-gradient(-45deg', css)
-        self.assertIn('repeating-linear-gradient(0deg', css)
-        self.assertIn('repeating-linear-gradient(90deg', css)
+        # 印刷時のみ: 参考Excelに近い薄いソリッド（土 #d9d9d9 < 日祝 #bfbfbf）。ハッチなし。画面色は維持
+        self.assertIn('参考Excel', css)
+        self.assertIn('background:#d9d9d9!important', css)
+        self.assertIn('background:#bfbfbf!important', css)
+        print_block = css[css.find('body.printing-shift'):]
+        self.assertNotIn('repeating-linear-gradient', print_block)
         self.assertIn('.shift-grid .shift-sat,.shift-grid th.shift-sat{background:#e8f2fb}', css)
         self.assertIn('.shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}', css)
-        # ハッチは printing-shift 配下のみ（他印刷に波及しない）
         self.assertIn('body.printing-shift .shift-grid .shift-sat', css)
-        self.assertNotIn('@media print{\n  .shift-sat', css)
         index = (ROOT / 'index.html').read_text(encoding='utf-8')
         self.assertIn('id="shiftprinttitle"', index)
         self.assertIn('class="shift-toolbar no-print"', index)
