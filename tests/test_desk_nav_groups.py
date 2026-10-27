@@ -27,7 +27,7 @@ class DeskNavGroupsTest(unittest.TestCase):
             ('現場の作業・出荷', ['現場の作業一覧', 'ピッキングリスト', '出荷仕分け']),
             ('管理担当持込', ['入力', '出力']),
             ('印刷', ['宛名書き・管理票印刷']),
-            ('設定・管理', ['利用者管理', '勤怠管理（マーク）', '管理・修正']),
+            ('設定・管理', ['利用者管理', '管理・修正']),
         ]
         pos = 0
         for caption, items in expected:
@@ -62,15 +62,24 @@ class DeskNavGroupsTest(unittest.TestCase):
         self.assertIn('data-view="shipinfo"', info)
         self.assertIn('data-view="nameinfo"', info)
         self.assertNotIn('navgroup', info)
-        stock = aside[aside.index('id="stocknav"'):]
+        stock = aside[aside.index('id="stocknav"'):aside.index('id="kintainav"')]
         self.assertIn('data-stock-section="list"', stock)
         self.assertNotIn('navgroup', stock)
+        kintai = aside[aside.index('id="kintainav"'):]
+        self.assertIn('data-kintai-section="attendance"', kintai)
+        self.assertIn('data-kintai-section="shift"', kintai)
+        self.assertIn('>出勤簿<', kintai)
+        self.assertIn('>シフト表<', kintai)
 
     def test_settings_stay_permissioned(self):
         self.assertIn("manageNav.hidden=!(currentUser.manage||role==='owner')", ACCOUNT)
         self.assertIn("repairNav.hidden=role!=='owner'", ACCOUNT)
-        self.assertIn('kintai-open', INDEX)
+        self.assertIn('data-catalog="kintai"', INDEX)
+        self.assertIn('id="modekintai"', INDEX)
+        self.assertIn('id="kintainav"', INDEX)
+        self.assertNotIn('kintai-open', INDEX)
         self.assertIn('mark_kintai', ACCOUNT)
+        self.assertIn('data-catalog="kintai"', ACCOUNT)
         self.assertIn("openAccounts()", ACCOUNT)
         self.assertIn("openRepair()", ACCOUNT)
         # ログイン欄からは業務メニューへ移した
