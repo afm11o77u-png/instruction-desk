@@ -220,10 +220,21 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}
 .shift-grid td.shift-off{font-weight:800;color:#9d3434;background:#fff5f3}
 .shift-grid td.shift-time{font-weight:700;color:#1a4a7a;background:#f3f8ff;font-size:11px}
+.shift-grid td.shift-time .shift-time-main,.shift-grid td.shift-time .shift-time-until{display:inline}
 .shift-grid tr.shift-history .shift-name{background:#faf7f3}
 .shift-empty{text-align:left!important;padding:12px!important;color:#3d5344}
+.shift-print-banner{display:none}
+.shift-print-modes{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.shift-print-mode{display:flex;align-items:center;gap:8px;font-weight:700;font-size:.95rem}
+.shift-print-tips{margin:12px 0 0;line-height:1.55}
+#shiftprintdialog{width:min(520px,94vw);border:0;border-radius:12px;padding:0}
+#shiftprintdialog .dialoghead{display:flex;justify-content:space-between;align-items:center;padding:14px 18px 0}
+#shiftprintdialog .dialoghead h2{margin:0;font-size:1.2rem}
+#shiftprintdialog .dialogbody{padding:10px 18px 8px}
+#shiftprintdialog .dialogactions{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #d5ead4}
 /* シフト表印刷: 共通の body>*{display:none} を打ち消し、main 配下の表だけ出す。
-   @page は named page で横向きにし、指示書など通常印刷の A4 縦を壊さない。 */
+   @page は named page で横向きにし、指示書など通常印刷の A4 縦を壊さない。
+   カラー用／白黒用は同一ジオメトリ。土日祝の塗り色だけ切り替える（PR#228 の #d9d9d9/#bfbfbf を白黒用で再利用）。 */
 @media print{
   @page shift-sheet{size:A4 landscape;margin:8mm}
   body.printing-shift{background:#fff;page:shift-sheet}
@@ -241,11 +252,16 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .kintailead,
   body.printing-shift .shift-row-del,
   body.printing-shift .shift-drag,
-  body.printing-shift .shift-tag{display:none!important}
+  body.printing-shift .shift-tag,
+  body.printing-shift #shiftmeta,
+  body.printing-shift .shift-print-title{display:none!important}
   body.printing-shift #kintaidesk,
   body.printing-shift #kintaishift{display:block!important;max-width:none!important;width:100%!important;margin:0!important;padding:0!important}
-  body.printing-shift .shift-print-title{display:block!important;font-size:14pt;font-weight:700;margin:0 0 6px;color:#000;page-break-after:avoid}
-  body.printing-shift #shiftmeta{display:block!important;font-size:9pt;margin:0 0 8px;color:#000}
+  body.printing-shift .shift-print-banner{display:table-row!important}
+  body.printing-shift .shift-print-banner>th{border:0!important;background:#fff!important;padding:0 0 4px!important;text-align:left}
+  body.printing-shift .shift-print-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;border-bottom:1.2pt solid #186438;padding:0 0 4px;margin:0 0 2px;page-break-after:avoid}
+  body.printing-shift .shift-print-title-text{font-size:13pt;font-weight:700;color:#000;white-space:nowrap}
+  body.printing-shift .shift-print-legend{font-size:8pt;font-weight:400;color:#333;white-space:nowrap}
   body.printing-shift .shift-grid-wrap{display:block!important;overflow:visible!important;max-height:none!important;border:0!important;width:100%!important}
   body.printing-shift .shift-grid{font-size:8.5pt;width:100%!important;max-width:100%!important;table-layout:fixed;border-collapse:collapse}
   body.printing-shift .shift-grid thead{display:table-header-group}
@@ -254,37 +270,73 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid .shift-name,
   body.printing-shift .shift-grid thead th{position:static!important;top:auto!important;left:auto!important}
   body.printing-shift .shift-grid th,
-  body.printing-shift .shift-grid td{border:0.5pt solid #555;padding:2px 1px;background:#fff!important;color:#000;vertical-align:middle}
-  body.printing-shift .shift-grid .shift-name{width:14%;min-width:0;max-width:none;text-align:left;padding:2px 4px;overflow:visible;white-space:normal;word-break:break-all}
+  body.printing-shift .shift-grid td{border:0.4pt solid #888;padding:2px 1px;background:#fff!important;color:#000;vertical-align:middle}
+  body.printing-shift .shift-grid .shift-name{width:11%;min-width:0;max-width:none;text-align:left;padding:2px 4px;overflow:visible;white-space:normal;word-break:break-all}
   body.printing-shift .shift-grid .shift-name-edit{display:block}
   body.printing-shift .shift-grid .shift-name-input{display:none!important}
   body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#000;white-space:normal;word-break:break-all}
   body.printing-shift .shift-grid .shift-day,
-  body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:7.5pt}
+  body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:7.5pt;text-align:center}
   body.printing-shift .shift-grid .shift-wday{font-size:6.5pt}
-  /* 印刷の土日祝: 参考Excel（ソリッド薄グレー）に合わせる。ハッチなし。土 < 日祝の濃さで白黒区別 */
-  body.printing-shift .shift-grid .shift-sat,
-  body.printing-shift .shift-grid th.shift-sat{
+  body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#666!important;background-color:#fff!important;background-image:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#222!important;background-color:#fff!important;background-image:none!important;font-size:6.5pt;line-height:1.15;white-space:normal!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time .shift-time-main,
+  body.printing-shift .shift-grid td.shift-time .shift-time-until{display:block;text-align:center}
+  /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通 */
+  body.printing-shift.print-shift-color .shift-grid .shift-sat,
+  body.printing-shift.print-shift-color .shift-grid th.shift-sat{
+    background:#e8f2fb!important;
+    background-image:none!important;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact
+  }
+  body.printing-shift.print-shift-color .shift-grid .shift-sun,
+  body.printing-shift.print-shift-color .shift-grid th.shift-sun{
+    background:#fdeceb!important;
+    background-image:none!important;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact
+  }
+  body.printing-shift.print-shift-color .shift-grid th.shift-sat .shift-daynum,
+  body.printing-shift.print-shift-color .shift-grid th.shift-sat .shift-wday{color:#1a5a9a!important}
+  body.printing-shift.print-shift-color .shift-grid th.shift-sun .shift-daynum,
+  body.printing-shift.print-shift-color .shift-grid th.shift-sun .shift-wday{color:#9d3434!important}
+  body.printing-shift.print-shift-color .shift-grid td.shift-sat.shift-off,
+  body.printing-shift.print-shift-color .shift-grid td.shift-sat.shift-time{
+    background:#e8f2fb!important;
+    background-image:none!important
+  }
+  body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-off,
+  body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-time{
+    background:#fdeceb!important;
+    background-image:none!important
+  }
+  /* 白黒用: 参考Excelソリッド（土 #d9d9d9 < 日祝 #bfbfbf）。ハッチなし。既存PR#228の塗りを再利用 */
+  body.printing-shift.print-shift-bw .shift-grid .shift-sat,
+  body.printing-shift.print-shift-bw .shift-grid th.shift-sat,
+  body.printing-shift:not(.print-shift-color) .shift-grid .shift-sat,
+  body.printing-shift:not(.print-shift-color) .shift-grid th.shift-sat{
     background:#d9d9d9!important;
     background-image:none!important;
     -webkit-print-color-adjust:exact;print-color-adjust:exact
   }
-  body.printing-shift .shift-grid .shift-sun,
-  body.printing-shift .shift-grid th.shift-sun{
+  body.printing-shift.print-shift-bw .shift-grid .shift-sun,
+  body.printing-shift.print-shift-bw .shift-grid th.shift-sun,
+  body.printing-shift:not(.print-shift-color) .shift-grid .shift-sun,
+  body.printing-shift:not(.print-shift-color) .shift-grid th.shift-sun{
     background:#bfbfbf!important;
     background-image:none!important;
     -webkit-print-color-adjust:exact;print-color-adjust:exact
   }
-  body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#9d3434!important;background-color:#fff!important;background-image:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#1a4a7a!important;background-color:#fff!important;background-image:none!important;font-size:7pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  /* ×／時間指定でも土日祝の薄い塗りを維持 */
-  body.printing-shift .shift-grid td.shift-sat.shift-off,
-  body.printing-shift .shift-grid td.shift-sat.shift-time{
+  body.printing-shift.print-shift-bw .shift-grid td.shift-sat.shift-off,
+  body.printing-shift.print-shift-bw .shift-grid td.shift-sat.shift-time,
+  body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sat.shift-off,
+  body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sat.shift-time{
     background:#d9d9d9!important;
     background-image:none!important
   }
-  body.printing-shift .shift-grid td.shift-sun.shift-off,
-  body.printing-shift .shift-grid td.shift-sun.shift-time{
+  body.printing-shift.print-shift-bw .shift-grid td.shift-sun.shift-off,
+  body.printing-shift.print-shift-bw .shift-grid td.shift-sun.shift-time,
+  body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sun.shift-off,
+  body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sun.shift-time{
     background:#bfbfbf!important;
     background-image:none!important
   }

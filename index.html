@@ -109,6 +109,25 @@
 <p id="shiftmeta" class="kintaimeta"></p>
 </div>
 </section>
+<dialog id="shiftprintdialog">
+<div class="dialoghead"><div><h2>シフト表を印刷</h2></div>
+<button type="button" class="quiet" id="shiftprintdialog-close">閉じる ×</button></div>
+<div class="dialogbody">
+<p class="duehint">表の<strong>塗り分け（レイアウト色）</strong>を選んでください。プリンタドライバの「カラー／白黒」設定とは別です。配置・行高・列幅・文字サイズは同じで、土日祝の背景色だけが変わります。</p>
+<div class="shift-print-modes" role="radiogroup" aria-label="印刷の塗り分け">
+<label class="shift-print-mode"><input type="radio" name="shiftprintmode" value="color" checked> カラー用（土＝薄青・日祝＝薄赤）</label>
+<label class="shift-print-mode"><input type="radio" name="shiftprintmode" value="bw"> 白黒用（土＝薄い灰・日祝＝濃いめの灰）</label>
+</div>
+<p class="kintaimeta shift-print-tips">ブラウザの印刷ダイアログで次を確認してください。<br>
+・用紙：A4・横向き（プレビューが横になること）<br>
+・「背景のグラフィック」をオン（土日祝の塗りが出ます）<br>
+・ヘッダー／フッター（日付・URL・ページ番号）をオフ</p>
+</div>
+<div class="dialogactions">
+<button type="button" class="primary" id="shiftprintdialog-go">印刷プレビューへ</button>
+<button type="button" class="quiet" id="shiftprintdialog-cancel">キャンセル</button>
+</div>
+</dialog>
 <dialog id="shiftsavedialog">
 <div class="dialoghead"><div><h2>未保存の変更があります</h2></div></div>
 <div class="dialogbody"><p class="duehint">表示中のシフト表をどうしますか。保存するとこの年月の内容を上書きします。</p></div>
