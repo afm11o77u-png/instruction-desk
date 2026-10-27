@@ -16,6 +16,7 @@
   let loading = false;
   let rosterList = []; // 出勤簿在籍（未掲載追加用）
   let leaveDialogResolver = null;
+  let dragPersonKey = null; // 行ドラッグ中の person key
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -138,10 +139,10 @@
     });
     const hint = $('#shifthint');
     if (!hint) return;
-    if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名は左列で編集、行の追加・削除はその月だけに効きます。「保存」でこの年月を上書きします。';
-    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力。右クリックでクリア。「保存」でこの年月を上書きします。';
-    else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。「保存」でこの年月を上書きします。';
-    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。氏名は直接編集できます。「保存」でこの年月を上書きします。';
+    if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名左の≡で行入替、氏名編集・行追加削除はその月だけ。「保存」でこの年月を上書きします。';
+    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力。右クリックでクリア。≡で行入替。「保存」でこの年月を上書きします。';
+    else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。≡で行入替。「保存」でこの年月を上書きします。';
+    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。≡で行入替、氏名は直接編集。「保存」でこの年月を上書きします。';
   }
 
   function cellLabel(cell) {
@@ -184,6 +185,7 @@
       return `<tr class="${rowCls}" data-row-key="${esc(p.key)}">
         <th class="shift-name">
           <div class="shift-name-edit">
+            <span class="shift-drag no-print" draggable="true" data-drag-person="${esc(p.key)}" title="ドラッグで行を入替" aria-label="行を並べ替え" role="button">≡</span>
             <span class="shift-name-print">${esc(p.displayName || '')}</span>
             <input type="text" class="shift-name-input" maxlength="80" data-person="${esc(p.key)}" value="${esc(p.displayName || '')}" aria-label="氏名">
             ${sourceTag(p)}
@@ -194,6 +196,89 @@
     }).join('');
     const colSpan = days.length + 1;
     table.innerHTML = `<thead><tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
+  }
+
+  /** 人員行を fromKey → toKey の前（before）または後（after）へ移動。セルは person key 紐づけのまま。 */
+  function reorderPeople(fromKey, toKey, place) {
+    if (!fromKey || !toKey || fromKey === toKey) return false;
+    const fromIdx = people.findIndex(p => p.key === fromKey);
+    if (fromIdx < 0) return false;
+    pushUndo();
+    const [item] = people.splice(fromIdx, 1);
+    let insertAt = people.findIndex(p => p.key === toKey);
+    if (insertAt < 0) {
+      people.splice(fromIdx, 0, item); // 復元
+      undoStack.pop();
+      return false;
+    }
+    if (place === 'after') insertAt += 1;
+    people.splice(insertAt, 0, item);
+    people = people.map((p, i) => ({ ...p, sortOrder: i }));
+    markDirty();
+    paintShift();
+    return true;
+  }
+
+  function clearDragIndicators() {
+    const table = $('#shiftgrid');
+    if (!table) return;
+    table.querySelectorAll('tr.shift-drag-over, tr.shift-dragging').forEach(tr => {
+      tr.classList.remove('shift-drag-over', 'shift-dragging', 'shift-drop-before', 'shift-drop-after');
+    });
+  }
+
+  function onRowDragStart(e) {
+    const handle = e.target.closest && e.target.closest('[data-drag-person]');
+    if (!handle) return;
+    const key = handle.dataset.dragPerson;
+    if (!key) return;
+    dragPersonKey = key;
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', key); } catch (_) { /* IE ignore */ }
+    const tr = handle.closest('tr');
+    if (tr) tr.classList.add('shift-dragging');
+  }
+
+  function onRowDragEnd() {
+    dragPersonKey = null;
+    clearDragIndicators();
+  }
+
+  function dropPlaceForEvent(tr, e) {
+    const rect = tr.getBoundingClientRect();
+    const mid = rect.top + rect.height / 2;
+    return e.clientY < mid ? 'before' : 'after';
+  }
+
+  function onRowDragOver(e) {
+    if (!dragPersonKey) return;
+    const tr = e.target.closest && e.target.closest('tr[data-row-key]');
+    if (!tr) return;
+    const toKey = tr.dataset.rowKey;
+    if (!toKey || toKey === dragPersonKey) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    clearDragIndicators();
+    const place = dropPlaceForEvent(tr, e);
+    tr.classList.add('shift-drag-over', place === 'before' ? 'shift-drop-before' : 'shift-drop-after');
+    const fromTr = $('#shiftgrid') && $('#shiftgrid').querySelector(`tr[data-row-key="${CSS.escape(dragPersonKey)}"]`);
+    if (fromTr) fromTr.classList.add('shift-dragging');
+  }
+
+  function onRowDrop(e) {
+    if (!dragPersonKey) return;
+    const tr = e.target.closest && e.target.closest('tr[data-row-key]');
+    if (!tr) return;
+    const toKey = tr.dataset.rowKey;
+    if (!toKey || toKey === dragPersonKey) {
+      onRowDragEnd();
+      return;
+    }
+    e.preventDefault();
+    const place = dropPlaceForEvent(tr, e);
+    const fromKey = dragPersonKey;
+    onRowDragEnd();
+    reorderPeople(fromKey, toKey, place);
   }
 
   function applyClick(key, day, button) {
@@ -223,7 +308,7 @@
   }
 
   function onGridPointer(e) {
-    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-row-del'))) return;
+    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-row-del') || e.target.closest('.shift-drag'))) return;
     const td = e.target.closest && e.target.closest('td.shift-cell');
     if (!td) return;
     if (e.type === 'contextmenu') {
@@ -599,6 +684,14 @@
       wrap.addEventListener('focusin', onNameInput);
       wrap.addEventListener('change', onNameInput);
       wrap.addEventListener('focusout', onNameInput);
+      wrap.addEventListener('dragstart', onRowDragStart);
+      wrap.addEventListener('dragend', onRowDragEnd);
+      wrap.addEventListener('dragover', onRowDragOver);
+      wrap.addEventListener('drop', onRowDrop);
+      wrap.addEventListener('dragleave', e => {
+        // 子要素間移動では清消しすぎないよう、ラップ外へ出たときだけ
+        if (e.target === wrap) clearDragIndicators();
+      });
     }
     const dlgSave = $('#shiftsavedialog-save');
     const dlgDiscard = $('#shiftsavedialog-discard');
