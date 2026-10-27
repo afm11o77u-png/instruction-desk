@@ -2491,6 +2491,8 @@ def handle_get(h, c, path: str):
     if path == '/api/kintai/shift':
         q = _query_map(h)
         return 200, kintai_shift.get_shift_sheet(c, q.get('year'), q.get('month'))
+    if path == '/api/kintai/shift/default-order':
+        return 200, kintai_shift.get_default_order(c)
     return 404, {'error': '操作が見つかりません。'}
 
 
@@ -2572,6 +2574,9 @@ def handle_post(h, c, path: str, d: dict):
     if path == '/api/kintai/shift':
         # シフトは予定のみ。kintai_monthly（出勤簿実績）は変更しない。
         return kintai_shift.save_shift_sheet(c, h.user, d or {})
+    if path == '/api/kintai/shift/default-order':
+        # 未作成月の初期並びのみ。月シートの people/cells は触らない。
+        return 200, kintai_shift.save_default_order(c, h.user, d or {})
     return 404, {'error': '操作が見つかりません。'}
 
 

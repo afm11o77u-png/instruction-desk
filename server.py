@@ -1180,7 +1180,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     # 勤怠APIは汎用の容量案内に落とさず、入力保持を明示する（本文・氏名はログに出さない）
                     import logging
                     logging.getLogger('instruction-desk').exception('kintai api error path=%s', kintai_path)
-                    if kintai_path == '/api/kintai/shift':
+                    if kintai_path in ('/api/kintai/shift', '/api/kintai/shift/default-order'):
                         return self.reply(500, {'error': 'シフト表を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
                     return self.reply(500, {'error': '勤怠の処理に失敗しました。入力内容はそのまま残しています。しばらくして再度お試しください。'})
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
