@@ -294,6 +294,24 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('A4 landscape', css)
         self.assertIn('printing-shift', css)
         self.assertIn('shift-name-input', css)
+        self.assertIn('shift-name-print', css)
+        # 共通 body>*{display:none} を打ち消し、main を再表示する（白紙印刷の再発防止）
+        compact = css.replace(' ', '').replace('\n', '')
+        self.assertIn('body.printing-shift>main{display:block!important', compact)
+        self.assertIn('page:shift-sheet', compact)
+        self.assertIn('@pageshift-sheet{size:A4landscape', compact)
+        # 通常印刷の @page{size:A4} は残し、横向きは named page のみ
+        self.assertIn('@mediaprint{body>*{display:none!important}', compact)
+        self.assertIn('@page{size:A4;margin:12mm}', compact)
+        self.assertEqual(css.count('A4 landscape'), 1)
+        index = (ROOT / 'index.html').read_text(encoding='utf-8')
+        self.assertIn('id="shiftprinttitle"', index)
+        self.assertIn('class="shift-toolbar no-print"', index)
+        js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
+        self.assertIn('shiftprinttitle', js)
+        self.assertIn('shift-name-print', js)
+        self.assertIn('printing-shift', js)
+        self.assertIn('afterprint', js)
 
     def test_kintai_api_avoids_disk_space_error_copy(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8')

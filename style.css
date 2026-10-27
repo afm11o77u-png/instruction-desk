@@ -201,7 +201,7 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-corner{left:0;z-index:4;min-width:5.5rem;text-align:left}
 .shift-grid .shift-name{position:sticky;left:0;z-index:2;text-align:left;background:#fafcfa;font-weight:600;min-width:7.5rem;max-width:12rem;padding:2px 4px}
 .shift-grid .shift-name-edit{display:flex;align-items:center;gap:2px;min-width:0}
-.shift-grid .shift-name-input{flex:1 1 auto;min-width:0;width:100%;max-width:8.5rem;border:1px solid transparent;background:transparent;font:inherit;font-weight:600;padding:2px 4px;border-radius:4px}
+.shift-grid .shift-name-print{display:none}.shift-grid .shift-name-input{flex:1 1 auto;min-width:0;width:100%;max-width:8.5rem;border:1px solid transparent;background:transparent;font:inherit;font-weight:600;padding:2px 4px;border-radius:4px}
 .shift-grid .shift-name-input:hover,.shift-grid .shift-name-input:focus{border-color:#9dceae;background:#fff;outline:none}
 .shift-grid .shift-tag{display:inline-block;flex:0 0 auto;font-weight:400;color:#6b3a1e;font-size:10px;white-space:nowrap}
 .shift-grid .shift-row-del{flex:0 0 auto;padding:2px 6px;min-width:0;line-height:1;color:#9d3434}
@@ -217,25 +217,51 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid td.shift-time{font-weight:700;color:#1a4a7a;background:#f3f8ff;font-size:11px}
 .shift-grid tr.shift-history .shift-name{background:#faf7f3}
 .shift-empty{text-align:left!important;padding:12px!important;color:#3d5344}
+/* シフト表印刷: 共通の body>*{display:none} を打ち消し、main 配下の表だけ出す。
+   @page は named page で横向きにし、指示書など通常印刷の A4 縦を壊さない。 */
 @media print{
-  @page{size:A4 landscape;margin:8mm}
-  body.printing-shift aside,
-  body.printing-shift #authscreen,
+  @page shift-sheet{size:A4 landscape;margin:8mm}
+  body.printing-shift{background:#fff;page:shift-sheet}
+  /* 共通ルール body>*{display:none!important} の対象は body 直下のみ。main を再表示しないと内側の表も出ない */
+  body.printing-shift>main{display:block!important;margin:0!important;padding:0!important;max-width:none!important;width:auto!important}
+  body.printing-shift>aside,
+  body.printing-shift>#authscreen,
+  body.printing-shift>#printarea,
+  body.printing-shift>#previewbar,
+  body.printing-shift>#toast,
+  body.printing-shift>dialog{display:none!important}
+  body.printing-shift main>*:not(#kintaidesk),
   body.printing-shift .no-print,
-  body.printing-shift main>header,
   body.printing-shift #kintaiattendance,
-  body.printing-shift #kintainav,
-  body.printing-shift .modes,
-  body.printing-shift .asidebottom,
-  body.printing-shift #accountbar{display:none!important}
-  body.printing-shift{background:#fff}
-  body.printing-shift main{margin:0!important;padding:0!important;max-width:none!important}
+  body.printing-shift .kintailead,
+  body.printing-shift .shift-row-del,
+  body.printing-shift .shift-tag{display:none!important}
   body.printing-shift #kintaidesk,
-  body.printing-shift #kintaishift{display:block!important;max-width:none!important}
-  body.printing-shift .shift-grid-wrap{overflow:visible;max-height:none;border:0}
-  body.printing-shift .shift-grid{font-size:10px}
+  body.printing-shift #kintaishift{display:block!important;max-width:none!important;width:100%!important;margin:0!important;padding:0!important}
+  body.printing-shift .shift-print-title{display:block!important;font-size:14pt;font-weight:700;margin:0 0 6px;color:#000;page-break-after:avoid}
+  body.printing-shift #shiftmeta{display:block!important;font-size:9pt;margin:0 0 8px;color:#000}
+  body.printing-shift .shift-grid-wrap{display:block!important;overflow:visible!important;max-height:none!important;border:0!important;width:100%!important}
+  body.printing-shift .shift-grid{font-size:8.5pt;width:100%!important;max-width:100%!important;table-layout:fixed;border-collapse:collapse}
   body.printing-shift .shift-grid thead{display:table-header-group}
+  body.printing-shift .shift-grid tbody{display:table-row-group}
+  body.printing-shift .shift-grid tr{break-inside:avoid;page-break-inside:avoid}
   body.printing-shift .shift-grid .shift-name,
-  body.printing-shift .shift-grid thead th{position:static}
-  body.printing-shift .shift-grid .shift-cell{height:auto;min-width:1.4rem}
+  body.printing-shift .shift-grid thead th{position:static!important;top:auto!important;left:auto!important}
+  body.printing-shift .shift-grid th,
+  body.printing-shift .shift-grid td{border:0.5pt solid #555;padding:2px 1px;background:#fff!important;color:#000;vertical-align:middle}
+  body.printing-shift .shift-grid .shift-name{width:14%;min-width:0;max-width:none;text-align:left;padding:2px 4px;overflow:visible;white-space:normal;word-break:break-all}
+  body.printing-shift .shift-grid .shift-name-edit{display:block}
+  body.printing-shift .shift-grid .shift-name-input{display:none!important}
+  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#000;white-space:normal;word-break:break-all}
+  body.printing-shift .shift-grid .shift-day,
+  body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:7.5pt}
+  body.printing-shift .shift-grid .shift-wday{font-size:6.5pt}
+  body.printing-shift .shift-grid .shift-sat,
+  body.printing-shift .shift-grid th.shift-sat{background:#e8f2fb!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid .shift-sun,
+  body.printing-shift .shift-grid th.shift-sun{background:#fdeceb!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#9d3434!important;background:#fff5f3!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#1a4a7a!important;background:#f3f8ff!important;font-size:7pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
+.shift-print-title{display:none}
+

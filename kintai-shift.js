@@ -178,6 +178,7 @@
       return `<tr class="${rowCls}" data-row-key="${esc(p.key)}">
         <th class="shift-name">
           <div class="shift-name-edit">
+            <span class="shift-name-print">${esc(p.displayName || '')}</span>
             <input type="text" class="shift-name-input" maxlength="80" data-person="${esc(p.key)}" value="${esc(p.displayName || '')}" aria-label="氏名">
             ${sourceTag(p)}
             <button type="button" class="quiet shift-row-del no-print" data-del-person="${esc(p.key)}" title="この行を削除" aria-label="行を削除">×</button>
@@ -247,6 +248,8 @@
       pushUndo();
       p.displayName = next.trim() || '（未入力）';
       input.value = p.displayName;
+      const printName = input.parentElement && input.parentElement.querySelector('.shift-name-print');
+      if (printName) printName.textContent = p.displayName;
       delete input.dataset.prevName;
       markDirty();
       // 並び替えのため再描画はせず、タグだけ維持
@@ -436,9 +439,31 @@
   }
 
   function printShift() {
+    const title = $('#shiftprinttitle');
+    if (title && year && month) {
+      title.textContent = `シフト表 ${year}年${month}月`;
+    }
     document.body.classList.add('printing-shift');
-    const done = () => document.body.classList.remove('printing-shift');
-    window.addEventListener('afterprint', done, { once: true });
+    let cleaned = false;
+    const done = () => {
+      if (cleaned) return;
+      cleaned = true;
+      document.body.classList.remove('printing-shift');
+      window.removeEventListener('afterprint', done);
+      if (mql) {
+        if (mql.removeEventListener) mql.removeEventListener('change', onPrintChange);
+        else if (mql.removeListener) mql.removeListener(onPrintChange);
+      }
+    };
+    const onPrintChange = (e) => {
+      if (!e.matches) done();
+    };
+    const mql = window.matchMedia && window.matchMedia('print');
+    window.addEventListener('afterprint', done);
+    if (mql) {
+      if (mql.addEventListener) mql.addEventListener('change', onPrintChange);
+      else if (mql.addListener) mql.addListener(onPrintChange);
+    }
     setTimeout(() => window.print(), 50);
   }
 
