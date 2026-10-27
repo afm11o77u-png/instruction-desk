@@ -1,7 +1,10 @@
 """月別シフト表: 祝日・暦・保存・同時編集・出勤簿非影響・名簿マージ。"""
 from __future__ import annotations
 
+import re
+import shutil
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from datetime import date
@@ -11,6 +14,23 @@ import kintai
 import kintai_shift
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _chrome_bin() -> str | None:
+    for name in ('google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser'):
+        path = shutil.which(name)
+        if path:
+            return path
+    return None
+
+
+def _pdf_mediabox(pdf_path: Path) -> tuple[float, float]:
+    data = pdf_path.read_bytes()
+    m = re.search(rb'/MediaBox\s*\[\s*([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s*\]', data)
+    if not m:
+        raise AssertionError(f'no MediaBox in {pdf_path}')
+    x0, y0, x1, y1 = (float(m.group(i)) for i in range(1, 5))
+    return (x1 - x0, y1 - y0)
 
 
 class JapanHolidayTest(unittest.TestCase):
@@ -364,10 +384,14 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('body.printing-shift>main{display:block!important', compact)
         self.assertIn('page:shift-sheet', compact)
         self.assertIn('@pageshift-sheet{size:A4landscape', compact)
-        # 通常印刷の @page{size:A4} は残し、横向きは named page のみ
+        # 通常印刷の @page{size:A4} は残す。named page に加え main/#kintaishift へ page 割当
         self.assertIn('@mediaprint{body>*{display:none!important}', compact)
         self.assertIn('@page{size:A4;margin:12mm}', compact)
-        self.assertEqual(css.count('A4 landscape'), 1)
+        self.assertIn('body.printing-shift#kintaishift{page:shift-sheet}', compact)
+        # CSS の実 @page ルールは named shift-sheet のみ（unnamed landscape は JS 一時差し込み）
+        self.assertEqual(len(re.findall(r'@page\s+shift-sheet\s*\{[^}]*A4 landscape', css)), 1)
+        self.assertNotIn('@page{size:A4 landscape', css.replace(' ', ''))
+        # コメント以外に unnamed landscape ルールを直書きしていないこと（compact からコメント除去はしないので JS 側を契約）
         # 画面の土日祝色は維持。印刷はカラー用／白黒用で切替（白黒は PR#228 の #d9d9d9/#bfbfbf）
         self.assertIn('background:#d9d9d9!important', css)
         self.assertIn('background:#bfbfbf!important', css)
@@ -410,6 +434,13 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('空欄：出勤　×：休み　時刻：退勤予定', js)
         self.assertIn('shift-print-banner', js)
         self.assertIn('afterprint', js)
+        # Chromium 向け: unnamed @page landscape を一時差し込み（named page だけでは縦のまま）
+        self.assertIn('ensureShiftLandscapePage', js)
+        self.assertIn('clearShiftLandscapePage', js)
+        self.assertIn('shift-print-page-css', js)
+        self.assertIn("@page{size:A4 landscape;margin:8mm}", js)
+        self.assertIn('ensureShiftLandscapePage()', js)
+        self.assertIn('clearShiftLandscapePage()', js)
         # 印刷モードは保存データを書き換えない
         self.assertIn('保存データは書き換えない', js)
         # 手動上書き保存（編集ごとの自動保存はしない）
@@ -436,6 +467,62 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('if (e.conflict)', js)
         # 自動再試行タイマーが復活していないこと
         self.assertNotIn('再試行します', js)
+
+    def test_shift_print_unnamed_page_forces_landscape_pdf(self):
+        """Chromium: later unnamed @page landscape overrides global portrait (PDF MediaBox).
+
+        Interactive print preview uses the unnamed @page for default orientation; headless
+        may also honor named pages, so we prove the inject against a portrait-only baseline.
+        """
+        chrome = _chrome_bin()
+        if not chrome:
+            self.skipTest('Chrome/Chromium not available')
+
+        # Same cascade as the app: style/sheet @page{size:A4} then JS inject landscape.
+        html_portrait = (
+            '<!doctype html><html><head><meta charset="utf-8">'
+            '<style>@page{size:A4;margin:12mm}body{margin:0}.box{font:12pt sans-serif}</style>'
+            '</head><body><div class="box">portrait baseline</div></body></html>'
+        )
+        html_forced = (
+            '<!doctype html><html><head><meta charset="utf-8">'
+            '<style>@page{size:A4;margin:12mm}body{margin:0}.box{font:12pt sans-serif}</style>'
+            '<style id="shift-print-page-css">@page{size:A4 landscape;margin:8mm}</style>'
+            '</head><body class="printing-shift"><div class="box">shift forced</div></body></html>'
+        )
+        js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
+        self.assertIn("@page{size:A4 landscape;margin:8mm}", js)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            portrait_html = tmp_path / 'portrait.html'
+            forced_html = tmp_path / 'forced.html'
+            portrait_pdf = tmp_path / 'portrait.pdf'
+            forced_pdf = tmp_path / 'forced.pdf'
+            portrait_html.write_text(html_portrait, encoding='utf-8')
+            forced_html.write_text(html_forced, encoding='utf-8')
+
+            def print_pdf(src: Path, dest: Path) -> None:
+                cmd = [
+                    chrome,
+                    '--headless=new',
+                    '--disable-gpu',
+                    '--no-pdf-header-footer',
+                    f'--print-to-pdf={dest}',
+                    src.resolve().as_uri(),
+                ]
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 0, msg=r.stderr or r.stdout)
+                self.assertTrue(dest.is_file() and dest.stat().st_size > 100)
+
+            print_pdf(portrait_html, portrait_pdf)
+            print_pdf(forced_html, forced_pdf)
+
+            pw, ph = _pdf_mediabox(portrait_pdf)
+            fw, fh = _pdf_mediabox(forced_pdf)
+            self.assertLess(pw, ph, msg=f'baseline should be portrait, got {pw}x{ph}')
+            self.assertGreater(fw, fh, msg=f'forced PDF should be landscape, got {fw}x{fh}')
+            self.assertAlmostEqual(fw / fh, 297 / 210, delta=0.05)
 
 
 if __name__ == '__main__':

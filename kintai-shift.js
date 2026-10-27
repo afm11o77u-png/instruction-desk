@@ -633,16 +633,42 @@
     return checked && checked.value === 'bw' ? 'bw' : 'color';
   }
 
+  /**
+   * Chromium の印刷プレビューは unnamed @page の向きを採用し、named page
+   *（page: shift-sheet）を無視することがある。style.css / sheet.css の
+   * @page{size:A4}（縦）より後に unnamed landscape を差し込み、プレビュー既定を横にする。
+   * 印刷終了後に外すので指示書など通常の A4 縦は壊さない。
+   */
+  const SHIFT_PRINT_PAGE_CSS_ID = 'shift-print-page-css';
+  const SHIFT_PRINT_PAGE_CSS = '@page{size:A4 landscape;margin:8mm}';
+
+  function ensureShiftLandscapePage() {
+    let el = document.getElementById(SHIFT_PRINT_PAGE_CSS_ID);
+    if (!el) {
+      el = document.createElement('style');
+      el.id = SHIFT_PRINT_PAGE_CSS_ID;
+      document.head.appendChild(el);
+    }
+    el.textContent = SHIFT_PRINT_PAGE_CSS;
+  }
+
+  function clearShiftLandscapePage() {
+    const el = document.getElementById(SHIFT_PRINT_PAGE_CSS_ID);
+    if (el) el.remove();
+  }
+
   function runPrint(mode) {
     const title = $('#shiftprinttitle');
     if (title) title.textContent = printTitleText();
     // 印刷は表示中の live データのみ。保存データは書き換えない。
     document.body.classList.remove('print-shift-color', 'print-shift-bw');
     document.body.classList.add('printing-shift', mode === 'bw' ? 'print-shift-bw' : 'print-shift-color');
+    ensureShiftLandscapePage();
     let cleaned = false;
     const done = () => {
       if (cleaned) return;
       cleaned = true;
+      clearShiftLandscapePage();
       document.body.classList.remove('printing-shift', 'print-shift-color', 'print-shift-bw');
       window.removeEventListener('afterprint', done);
       if (mql) {
