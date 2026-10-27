@@ -439,13 +439,14 @@ def save_shift_sheet(c, user, payload: dict) -> tuple[int, dict]:
     people_json = json.dumps(people, ensure_ascii=False)
     cells_json = json.dumps(cells, ensure_ascii=False)
     if row:
-        c.execute(
+        # sqlite3.Connection に rowcount は無い。execute() が返す Cursor を見る。
+        cur = c.execute(
             '''UPDATE kintai_shift_sheets
                SET version=?, updated_at=?, updated_by=?, people_json=?, cells_json=?
                WHERE year=? AND month=? AND version=?''',
             (new_ver, now, actor, people_json, cells_json, y, m, current_ver),
         )
-        if c.rowcount != 1:
+        if cur.rowcount != 1:
             sheet = get_shift_sheet(c, y, m)
             return 409, {
                 'error': 'ほかの画面で先に保存されています。内容を確認してから再度保存してください。',
@@ -461,6 +462,7 @@ def save_shift_sheet(c, user, payload: dict) -> tuple[int, dict]:
                 (y, m, new_ver, now, actor, people_json, cells_json),
             )
         except Exception:
+            # 同時 INSERT など。ペイロード本文はログに出さない
             sheet = get_shift_sheet(c, y, m)
             return 409, {
                 'error': 'ほかの画面で先に保存されています。内容を確認してから再度保存してください。',

@@ -110,6 +110,31 @@ class ShiftSheetStoreTest(unittest.TestCase):
         self.assertEqual(again['version'], 1)
         self.assertEqual(again['cells']['regular:001']['5']['text'], '15:00まで')
 
+    def test_second_save_updates_without_connection_rowcount(self):
+        """再編集保存: Connection.rowcount 参照だと AttributeError→500 になる回帰を防ぐ。"""
+        import inspect
+        src = inspect.getsource(kintai_shift.save_shift_sheet)
+        self.assertNotIn('c.rowcount', src)
+        self.assertIn('cur.rowcount', src)
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        code1, s1 = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'], 'cells': {},
+        })
+        self.assertEqual(code1, 200)
+        self.assertEqual(s1['version'], 1)
+        code2, s2 = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 1,
+            'people': s1['people'],
+            'cells': {'regular:001': {'7': {'kind': 'off', 'text': '×'}}},
+        })
+        self.assertEqual(code2, 200)
+        self.assertEqual(s2['version'], 2)
+        self.assertEqual(s2['cells']['regular:001']['7']['kind'], 'off')
+        reloaded = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual(reloaded['version'], 2)
+        self.assertEqual(reloaded['cells']['regular:001']['7']['text'], '×')
+
     def test_conflict_does_not_overwrite(self):
         sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
         kintai_shift.save_shift_sheet(self.c, self.user, {
@@ -269,6 +294,17 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('A4 landscape', css)
         self.assertIn('printing-shift', css)
         self.assertIn('shift-name-input', css)
+
+    def test_kintai_api_avoids_disk_space_error_copy(self):
+        server = (ROOT / 'server.py').read_text(encoding='utf-8')
+        self.assertIn("kintai_path == '/api/kintai/shift'", server)
+        self.assertIn('シフト表を保存できませんでした。入力内容はそのまま残しています', server)
+        self.assertIn('勤怠の処理に失敗しました。入力内容はそのまま残しています', server)
+        # 勤怠API専用の reply 文言に容量案内を含めない
+        self.assertIn("return self.reply(500, {'error': 'シフト表を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})", server)
+        js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
+        self.assertIn('入力は画面に残しています', js)
+        self.assertIn('if (e.conflict)', js)
 
 
 if __name__ == '__main__':

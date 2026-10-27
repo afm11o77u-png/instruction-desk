@@ -407,14 +407,15 @@
       shiftDirty = false;
       setSaveState('saved');
     } catch (e) {
-      if (e.conflict && e.sheet) {
-        undoStack.push({ people: cloneData(people), cells: cloneData(cells) });
-        applySheet(e.sheet);
-        shiftDirty = false;
-        setSaveState('failed', e.message);
-        toast(e.message);
+      if (e.conflict) {
+        // 競合時も画面の未保存入力は残す。自動再試行は止め、月切替時の警告対象に残す。
+        shiftDirty = true;
+        setSaveState('failed', e.message || 'ほかの画面で先に保存されています');
+        toast((e.message || 'ほかの画面で先に保存されています') + '（入力は画面に残しています）');
         return;
       }
+      // 通信・サーバーエラー: 入力保持のまま再試行
+      shiftDirty = true;
       setSaveState('failed', e.message || '保存に失敗しました');
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
