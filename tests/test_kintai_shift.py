@@ -249,6 +249,58 @@ class ShiftSheetStoreTest(unittest.TestCase):
         self.assertEqual(before, after)
         self.assertFalse(any(p['key'] == 'shift:abc123' for p in saved['roster']))
 
+    def test_reorder_people_persists_with_cells(self):
+        """ドラッグ入替後の並びを保存し、セルは氏名キーに追従したまま戻る。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        by_key = {p['key']: dict(p) for p in sheet['people']}
+        # シフト専用を先頭、在籍を入れ替え（source 種別をまたぐ）
+        people = [
+            {
+                'key': 'shift:abc123',
+                'personId': None,
+                'employeeCode': 'abc123',
+                'employment': 'shift',
+                'displayName': '臨時スタッフ',
+                'sortOrder': 0,
+                'source': 'shift',
+            },
+            {**by_key['part:002'], 'sortOrder': 1},
+            {**by_key['regular:001'], 'sortOrder': 2},
+        ]
+        cells = {
+            'shift:abc123': {'1': {'kind': 'off', 'text': '×'}},
+            'part:002': {'2': {'kind': 'time', 'text': '15:00まで'}},
+            'regular:001': {'3': {'kind': 'off', 'text': '×'}},
+        }
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': people,
+            'cells': cells,
+        })
+        self.assertEqual(code, 200)
+        keys = [p['key'] for p in saved['people']]
+        self.assertEqual(keys, ['shift:abc123', 'part:002', 'regular:001'])
+        self.assertEqual([p['sortOrder'] for p in saved['people']], [0, 1, 2])
+        self.assertEqual(saved['cells']['shift:abc123']['1']['kind'], 'off')
+        self.assertEqual(saved['cells']['part:002']['2']['text'], '15:00まで')
+        self.assertEqual(saved['cells']['regular:001']['3']['kind'], 'off')
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual([p['key'] for p in again['people']], keys)
+        self.assertEqual(again['cells']['part:002']['2']['text'], '15:00まで')
+        # 再度入れ替えても version 付きで上書きできる
+        flipped = list(reversed(again['people']))
+        code2, saved2 = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': again['version'],
+            'people': flipped,
+            'cells': again['cells'],
+        })
+        self.assertEqual(code2, 200)
+        self.assertEqual(
+            [p['key'] for p in saved2['people']],
+            ['regular:001', 'part:002', 'shift:abc123'],
+        )
+        self.assertEqual(saved2['cells']['shift:abc123']['1']['text'], '×')
+
 
 class ShiftUiContractTest(unittest.TestCase):
     def test_top_nav_and_panels(self):
@@ -291,10 +343,18 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('addShiftRow', js)
         self.assertIn('deleteRow', js)
         self.assertIn('shift-name-input', js)
+        self.assertIn('reorderPeople', js)
+        self.assertIn('data-drag-person', js)
+        self.assertIn('shift-drag', js)
+        self.assertIn('onRowDragStart', js)
+        self.assertIn('pushUndo', js)
         self.assertIn('ひとつ戻す', (ROOT / 'index.html').read_text(encoding='utf-8'))
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn('shift-sat', css)
         self.assertIn('shift-sun', css)
+        self.assertIn('.shift-drag', css)
+        self.assertIn('shift-drop-before', css)
+        self.assertIn('cursor:grab', css)
         self.assertIn('A4 landscape', css)
         self.assertIn('printing-shift', css)
         self.assertIn('shift-name-input', css)
@@ -317,6 +377,7 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('.shift-grid .shift-sat,.shift-grid th.shift-sat{background:#e8f2fb}', css)
         self.assertIn('.shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}', css)
         self.assertIn('body.printing-shift .shift-grid .shift-sat', css)
+        self.assertIn('body.printing-shift .shift-drag', css)
         index = (ROOT / 'index.html').read_text(encoding='utf-8')
         self.assertIn('id="shiftprinttitle"', index)
         self.assertIn('class="shift-toolbar no-print"', index)

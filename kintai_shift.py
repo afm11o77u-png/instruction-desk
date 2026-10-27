@@ -174,8 +174,16 @@ def _orphan_person(key: str, display_name: str = '') -> dict:
     }
 
 
-def _sorted_people(by_key: dict) -> list[dict]:
+def _sorted_people(by_key: dict, *, by_sort_order_only: bool = False) -> list[dict]:
+    """未保存月は在籍種別→sortOrder。保存済み月はシート上の並び（sortOrder）を正とする。"""
     people = list(by_key.values())
+    if by_sort_order_only:
+        people.sort(key=lambda p: (
+            int(p.get('sortOrder') if p.get('sortOrder') is not None else 0),
+            p.get('displayName') or '',
+            p.get('key') or '',
+        ))
+        return people
     source_rank = {'roster': 0, 'shift': 1, 'history': 2, 'saved': 1}
     people.sort(key=lambda p: (
         source_rank.get(p.get('source'), 9),
@@ -269,12 +277,13 @@ def _normalize_cells(raw, days_in_month: int) -> dict:
 
 
 def _annotate_with_roster(people: list[dict], roster: list[dict]) -> list[dict]:
-    """出勤簿マスタとの紐づけを付与。シフト専用行はマスタへ書かない。"""
+    """出勤簿マスタとの紐づけを付与。シフト専用行はマスタへ書かない。
+    並びはペイロード配列順を正とし、sortOrder を 0..n-1 に振り直す。"""
     roster_by_key = {p['key']: p for p in roster}
     out = []
     for i, p in enumerate(people):
         q = dict(p)
-        q['sortOrder'] = int(q.get('sortOrder') if q.get('sortOrder') is not None else i)
+        q['sortOrder'] = i
         if _is_shift_key(q['key']) or q.get('source') == 'shift' or q.get('employment') == 'shift':
             q['source'] = 'shift'
             q['employment'] = 'shift'
@@ -340,7 +349,8 @@ def _compose_people(roster: list[dict], saved: list[dict], cells: dict, *, sheet
         if key not in by_key and PERSON_KEY_RE.match(str(key)):
             by_key[key] = _orphan_person(str(key))
 
-    return _sorted_people(by_key)
+    # 保存済みシートはユーザー並び替えを維持（source 種別で再グループしない）
+    return _sorted_people(by_key, by_sort_order_only=sheet_exists)
 
 
 def _row_public(
