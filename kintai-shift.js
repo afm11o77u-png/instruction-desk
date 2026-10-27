@@ -212,11 +212,13 @@
       </tr>`;
     }).join('');
     const colSpan = days.length + 1;
+    // colgroup で氏名列幅を固定（thead 先頭の colspan バナーがあると table-layout:fixed が全列均等幅になるため）
+    const cols = `<colgroup><col class="shift-col-name">${'<col class="shift-col-day">'.repeat(days.length)}</colgroup>`;
     // 印刷バナーを thead 先頭に置き、縦ページ送りでも年月＋凡例＋日付見出しが繰り返される
     const banner = `<tr class="shift-print-banner"><th colspan="${colSpan}"><div class="shift-print-head"><span class="shift-print-title-text">${esc(printTitleText())}</span><span class="shift-print-legend">空欄：出勤　×：休み　時刻：退勤予定</span></div></th></tr>`;
     const titleEl = $('#shiftprinttitle');
     if (titleEl) titleEl.textContent = printTitleText();
-    table.innerHTML = `<thead>${banner}<tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
+    table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
   }
 
   /** 人員行を fromKey → toKey の前（before）または後（after）へ移動。セルは person key 紐づけのまま。 */
