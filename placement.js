@@ -178,25 +178,36 @@ function tellStockFrame(section){
   try{frame.contentWindow.postMessage({type:'stock-section',section:normalizeStockSection(section)},location.origin)}catch(_){}
 }
 let kintaiSection='attendance';
-function normalizeKintaiSection(section){return section==='shift'?'shift':'attendance'}
+function normalizeKintaiSection(section){
+  if(section==='shift')return 'shift';
+  if(section==='bihin')return 'bihin';
+  return 'attendance';
+}
 function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
   document.querySelectorAll('#kintainav .nav').forEach(b=>b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection));
   const att=$('#kintaiattendance');
   const shift=$('#kintaishift');
+  const bihin=$('#kintaibihin');
   if(att)att.hidden=kintaiSection!=='attendance';
   if(shift)shift.hidden=kintaiSection!=='shift';
+  if(bihin)bihin.hidden=kintaiSection!=='bihin';
 }
 async function showKintaiSection(section){
   const next=normalizeKintaiSection(section);
-  // シフト表から出勤簿などへ移るとき、未保存確認
+  // シフト表／備品棚卸から他セクションへ移るとき、未保存確認
   if(kintaiSection==='shift'&&next!=='shift'&&typeof confirmKintaiShiftLeave==='function'){
     if(!(await confirmKintaiShiftLeave()))return;
+  }
+  if(kintaiSection==='bihin'&&next!=='bihin'&&typeof confirmKintaiBihinLeave==='function'){
+    if(!(await confirmKintaiBihinLeave()))return;
   }
   syncKintaiNav(next);
   if(typeof listChrome==='function')listChrome();
   if(kintaiSection==='shift'){
     if(typeof loadKintaiShift==='function')loadKintaiShift().catch(e=>toast(e.message));
+  }else if(kintaiSection==='bihin'){
+    if(typeof loadKintaiBihin==='function')loadKintaiBihin().catch(e=>toast(e.message));
   }else if(typeof loadKintai==='function'){
     loadKintai().catch(e=>toast(e.message));
   }
@@ -206,9 +217,14 @@ async function showCatalog(which){
   const kintaiAllowed=currentUser?.role==='owner'||!!currentUser?.mark_kintai;
   if(which==='stock'&&!stockAllowed)which='desk';
   if(which==='kintai'&&!kintaiAllowed)which='desk';
-  // シフト表表示中に他システムへ移るとき
-  if(document.body.classList.contains('catalog-kintai')&&which!=='kintai'&&typeof confirmKintaiShiftLeave==='function'){
-    if(!(await confirmKintaiShiftLeave()))return;
+  // シフト表／備品棚卸表示中に他システムへ移るとき
+  if(document.body.classList.contains('catalog-kintai')&&which!=='kintai'){
+    if(typeof confirmKintaiShiftLeave==='function'){
+      if(!(await confirmKintaiShiftLeave()))return;
+    }
+    if(typeof confirmKintaiBihinLeave==='function'){
+      if(!(await confirmKintaiBihinLeave()))return;
+    }
   }
   const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理',kintai:'勤怠管理'};
   document.body.classList.toggle('catalog-info',which==='info');
