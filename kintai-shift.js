@@ -151,6 +151,23 @@
     return cell.text || '';
   }
 
+  /** 印刷向けセルHTML。時間指定は「15:00」「まで」を2行に分けて見本レイアウトに合わせる。 */
+  function cellHtml(cell) {
+    if (!cell) return '';
+    if (cell.kind === 'off') return '×';
+    const t = String(cell.text || '');
+    const m = t.match(/^(\d{1,2}:\d{2})\s*(まで)$/);
+    if (m) {
+      return `<span class="shift-time-main">${esc(m[1])}</span><span class="shift-time-until">${esc(m[2])}</span>`;
+    }
+    return esc(t);
+  }
+
+  function printTitleText() {
+    if (!year || !month) return 'マーク シフト表';
+    return `${year}年 ${month}月 マーク シフト表`;
+  }
+
   function sourceTag(p) {
     if (p.source === 'shift') return '<small class="shift-tag">シフト</small>';
     if (p.source === 'history') return '<small class="shift-tag">過去</small>';
@@ -180,7 +197,7 @@
           cell && cell.kind === 'off' ? 'shift-off' : '',
           cell && cell.kind === 'time' ? 'shift-time' : '',
         ].filter(Boolean).join(' ');
-        return `<td class="${cls}" data-person="${esc(p.key)}" data-day="${d.day}" tabindex="0">${esc(cellLabel(cell))}</td>`;
+        return `<td class="${cls}" data-person="${esc(p.key)}" data-day="${d.day}" tabindex="0">${cellHtml(cell)}</td>`;
       }).join('');
       return `<tr class="${rowCls}" data-row-key="${esc(p.key)}">
         <th class="shift-name">
@@ -195,7 +212,11 @@
       </tr>`;
     }).join('');
     const colSpan = days.length + 1;
-    table.innerHTML = `<thead><tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
+    // 印刷バナーを thead 先頭に置き、縦ページ送りでも年月＋凡例＋日付見出しが繰り返される
+    const banner = `<tr class="shift-print-banner"><th colspan="${colSpan}"><div class="shift-print-head"><span class="shift-print-title-text">${esc(printTitleText())}</span><span class="shift-print-legend">空欄：出勤　×：休み　時刻：退勤予定</span></div></th></tr>`;
+    const titleEl = $('#shiftprinttitle');
+    if (titleEl) titleEl.textContent = printTitleText();
+    table.innerHTML = `<thead>${banner}<tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
   }
 
   /** 人員行を fromKey → toKey の前（before）または後（after）へ移動。セルは person key 紐づけのまま。 */
@@ -590,17 +611,39 @@
     loadKintaiShift({ year: y, month: m }).catch(e => toast(e.message));
   }
 
-  function printShift() {
-    const title = $('#shiftprinttitle');
-    if (title && year && month) {
-      title.textContent = `シフト表 ${year}年${month}月`;
+  function closePrintDialog() {
+    const dlg = $('#shiftprintdialog');
+    if (dlg && typeof dlg.close === 'function') dlg.close();
+  }
+
+  function openPrintDialog() {
+    const dlg = $('#shiftprintdialog');
+    if (!dlg || typeof dlg.showModal !== 'function') {
+      // 古い環境向け: ダイアログ無しでカラー用として印刷
+      runPrint('color');
+      return;
     }
-    document.body.classList.add('printing-shift');
+    const color = dlg.querySelector('input[name="shiftprintmode"][value="color"]');
+    if (color) color.checked = true;
+    dlg.showModal();
+  }
+
+  function selectedPrintMode() {
+    const checked = document.querySelector('input[name="shiftprintmode"]:checked');
+    return checked && checked.value === 'bw' ? 'bw' : 'color';
+  }
+
+  function runPrint(mode) {
+    const title = $('#shiftprinttitle');
+    if (title) title.textContent = printTitleText();
+    // 印刷は表示中の live データのみ。保存データは書き換えない。
+    document.body.classList.remove('print-shift-color', 'print-shift-bw');
+    document.body.classList.add('printing-shift', mode === 'bw' ? 'print-shift-bw' : 'print-shift-color');
     let cleaned = false;
     const done = () => {
       if (cleaned) return;
       cleaned = true;
-      document.body.classList.remove('printing-shift');
+      document.body.classList.remove('printing-shift', 'print-shift-color', 'print-shift-bw');
       window.removeEventListener('afterprint', done);
       if (mql) {
         if (mql.removeEventListener) mql.removeEventListener('change', onPrintChange);
@@ -617,6 +660,10 @@
       else if (mql.addListener) mql.addListener(onPrintChange);
     }
     setTimeout(() => window.print(), 50);
+  }
+
+  function printShift() {
+    openPrintDialog();
   }
 
   function onBeforeUnload(e) {
@@ -665,6 +712,25 @@
     }
     const pr = $('#shiftprint');
     if (pr) pr.onclick = printShift;
+    const printGo = $('#shiftprintdialog-go');
+    if (printGo) {
+      printGo.onclick = () => {
+        const mode = selectedPrintMode();
+        closePrintDialog();
+        runPrint(mode);
+      };
+    }
+    const printCancel = $('#shiftprintdialog-cancel');
+    if (printCancel) printCancel.onclick = () => closePrintDialog();
+    const printClose = $('#shiftprintdialog-close');
+    if (printClose) printClose.onclick = () => closePrintDialog();
+    const printDlg = $('#shiftprintdialog');
+    if (printDlg) {
+      printDlg.addEventListener('cancel', e => {
+        e.preventDefault();
+        closePrintDialog();
+      });
+    }
     const add = $('#shiftaddrow');
     if (add) add.onclick = () => addShiftRow();
     const addRoster = $('#shiftaddroster');
