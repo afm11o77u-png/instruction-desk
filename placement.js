@@ -187,8 +187,13 @@ function syncKintaiNav(section){
   if(att)att.hidden=kintaiSection!=='attendance';
   if(shift)shift.hidden=kintaiSection!=='shift';
 }
-function showKintaiSection(section){
-  syncKintaiNav(section);
+async function showKintaiSection(section){
+  const next=normalizeKintaiSection(section);
+  // シフト表から出勤簿などへ移るとき、未保存確認
+  if(kintaiSection==='shift'&&next!=='shift'&&typeof confirmKintaiShiftLeave==='function'){
+    if(!(await confirmKintaiShiftLeave()))return;
+  }
+  syncKintaiNav(next);
   if(typeof listChrome==='function')listChrome();
   if(kintaiSection==='shift'){
     if(typeof loadKintaiShift==='function')loadKintaiShift().catch(e=>toast(e.message));
@@ -196,11 +201,15 @@ function showKintaiSection(section){
     loadKintai().catch(e=>toast(e.message));
   }
 }
-function showCatalog(which){
+async function showCatalog(which){
   const stockAllowed=currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview;
   const kintaiAllowed=currentUser?.role==='owner'||!!currentUser?.mark_kintai;
   if(which==='stock'&&!stockAllowed)which='desk';
   if(which==='kintai'&&!kintaiAllowed)which='desk';
+  // シフト表表示中に他システムへ移るとき
+  if(document.body.classList.contains('catalog-kintai')&&which!=='kintai'&&typeof confirmKintaiShiftLeave==='function'){
+    if(!(await confirmKintaiShiftLeave()))return;
+  }
   const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理',kintai:'勤怠管理'};
   document.body.classList.toggle('catalog-info',which==='info');
   document.body.classList.toggle('catalog-stock',which==='stock');
@@ -225,7 +234,7 @@ function showCatalog(which){
     view='kintai';
     document.querySelectorAll('.nav[data-view]').forEach(n=>n.classList.remove('active'));
     document.querySelectorAll('#manageusers,#repair-open').forEach(n=>n.classList.remove('active'));
-    showKintaiSection(kintaiSection||'attendance');
+    await showKintaiSection(kintaiSection||'attendance');
     return;
   }
   if(view==='kintai'){
@@ -238,17 +247,17 @@ function showCatalog(which){
 }
 function showDeskCatalog(){showCatalog('desk')}
 function showInfoCatalog(){showCatalog('info')}
-document.querySelectorAll('#modes .mode').forEach(b=>b.onclick=()=>showCatalog(b.dataset.catalog));
+document.querySelectorAll('#modes .mode').forEach(b=>b.onclick=()=>{showCatalog(b.dataset.catalog)});
 document.querySelectorAll('#stocknav .nav').forEach(b=>b.onclick=()=>{if(b.dataset.stockSection===stockSection&&document.body.classList.contains('catalog-stock')){tellStockFrame(stockSection);return}syncStockNav(b.dataset.stockSection);if(!document.body.classList.contains('catalog-stock'))showCatalog('stock');else tellStockFrame(stockSection)});
-document.querySelectorAll('#kintainav .nav').forEach(b=>b.onclick=()=>{
+document.querySelectorAll('#kintainav .nav').forEach(b=>b.onclick=async()=>{
   if(b.dataset.kintaiSection===kintaiSection&&document.body.classList.contains('catalog-kintai')){
-    showKintaiSection(kintaiSection);
+    await showKintaiSection(kintaiSection);
     return;
   }
   if(!document.body.classList.contains('catalog-kintai')){
     kintaiSection=normalizeKintaiSection(b.dataset.kintaiSection);
-    showCatalog('kintai');
-  }else showKintaiSection(b.dataset.kintaiSection);
+    await showCatalog('kintai');
+  }else await showKintaiSection(b.dataset.kintaiSection);
 });
 window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='history'||e.data.section==='period'||e.data.section==='orders'))syncStockNav(normalizeStockSection(e.data.section))});
 
