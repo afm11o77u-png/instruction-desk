@@ -108,7 +108,16 @@ LAYOUT_SAMPLE_NEEDED_MONTHDOT = (
 )
 
 # 対象者マスタ（リンク用短い名前。共有上の実ファイル名は人が設定。推測で mark_kintai は付けない）
+# sort_order=0 はシフト表先頭固定。社員番号未確認の人は provisional code（パスは空・推測しない）
 DEFAULT_PEOPLE = [
+    {
+        'employee_code': 'pending',
+        'employment': 'regular',
+        'display_name': '齊藤 遼太',
+        'sort_order': 0,
+        'file_hint': '',
+        'provisional': True,
+    },
     {'employee_code': '009', 'employment': 'regular', 'display_name': '加藤 篤郎', 'sort_order': 1, 'file_hint': '01_加藤　篤郎'},
     # 出勤簿パス.xlsx の契約社員セクション（パスも契約フォルダ）
     {'employee_code': '031', 'employment': 'contract', 'display_name': '今城 卓也', 'sort_order': 2, 'file_hint': '02_今城　卓也'},
@@ -122,6 +131,8 @@ DEFAULT_PEOPLE = [
     {'employee_code': '028', 'employment': 'part', 'display_name': '小山 さとみ', 'sort_order': 10, 'file_hint': '10_小山　さとみ'},
     {'employee_code': '037', 'employment': 'part', 'display_name': '南田 久美子', 'sort_order': 11, 'file_hint': '11_南田　久美子'},
 ]
+# 既存DB向け: シフト表の先頭に固定する在籍者（出勤簿マスタと共有・二重名簿にしない）
+SHIFT_TOP_PEOPLE = [p for p in DEFAULT_PEOPLE if int(p.get('sort_order') or 0) == 0]
 
 # fixture-v1: 検証用レイアウト（実出勤簿のセル番地ではない）
 FIXTURE_LAYOUT = {
@@ -341,6 +352,7 @@ def schema(c):
     )
     kintai_shift.schema(c)
     _seed_people(c)
+    _ensure_shift_top_people(c)
 
 
 def _seed_people(c):
@@ -351,6 +363,42 @@ def _seed_people(c):
         c.execute(
             'INSERT INTO kintai_people(employee_code,employment,display_name,source_file,active,sort_order) VALUES(?,?,?,?,1,?)',
             (p['employee_code'], p['employment'], p['display_name'], '', p['sort_order']),
+        )
+
+
+def _ensure_shift_top_people(c):
+    """シフト先頭固定の在籍者を出勤簿マスタへ追加／先頭へ並べる。読取パスは推測しない。"""
+    existing = [dict(r) for r in c.execute('SELECT * FROM kintai_people')]
+    for want in SHIFT_TOP_PEOPLE:
+        want_key = name_match_key(want['display_name'])
+        row = next((p for p in existing if name_match_key(p['display_name']) == want_key), None)
+        sort_order = int(want.get('sort_order') or 0)
+        if row:
+            c.execute(
+                'UPDATE kintai_people SET active=1, retired=0, sort_order=?, display_name=? WHERE id=?',
+                (sort_order, want['display_name'], row['id']),
+            )
+            continue
+        code = str(want.get('employee_code') or 'pending')
+        emp = str(want.get('employment') or 'regular')
+        clash = c.execute(
+            'SELECT id, display_name FROM kintai_people WHERE employee_code=? AND employment=?',
+            (code, emp),
+        ).fetchone()
+        if clash:
+            # provisional コードが他者に使われている場合は氏名ベースの仮番号へ退避
+            code = f'pending-{want_key}'[:40]
+            clash2 = c.execute(
+                'SELECT id FROM kintai_people WHERE employee_code=? AND employment=?',
+                (code, emp),
+            ).fetchone()
+            if clash2:
+                continue
+        c.execute(
+            '''INSERT INTO kintai_people(
+                employee_code,employment,display_name,source_file,active,sort_order,retired
+            ) VALUES(?,?,?,?,1,?,0)''',
+            (code, emp, want['display_name'], '', sort_order),
         )
 
 
@@ -1623,6 +1671,7 @@ def apply_paths_import(c, entries: list[dict]) -> dict:
         pid = person['id']
         retired_flag = 1 if entry['retired'] else 0
         new_emp = entry.get('employment')
+        new_code = (entry.get('employeeCode') or '').strip()
         # 見出しの雇用区分が既存と違う場合（例: 今城 regular→contract）は衝突がなければ更新
         emp_note = ''
         if new_emp and new_emp != person['employment']:
@@ -1636,6 +1685,19 @@ def apply_paths_import(c, entries: list[dict]) -> dict:
                 c.execute('UPDATE kintai_people SET employment=? WHERE id=?', (new_emp, pid))
                 person['employment'] = new_emp
                 emp_note = f'／雇用区分を{new_emp}に更新'
+        # 仮社員番号（pending…）をパスから取れた実番号へ更新（衝突時は触らない）
+        code_note = ''
+        if new_code and new_code != person['employee_code']:
+            clash_code = c.execute(
+                'SELECT id FROM kintai_people WHERE employee_code=? AND employment=? AND id!=?',
+                (new_code, person['employment'], pid),
+            ).fetchone()
+            if clash_code:
+                code_note = f'／社員番号は{person["employee_code"]}のまま（{new_code}は別登録あり）'
+            else:
+                c.execute('UPDATE kintai_people SET employee_code=? WHERE id=?', (new_code, pid))
+                person['employee_code'] = new_code
+                code_note = f'／社員番号を{new_code}に更新'
         c.execute(
             'UPDATE kintai_people SET source_file=?, retired=? WHERE id=?',
             (entry['path'], retired_flag, pid),
@@ -1650,7 +1712,7 @@ def apply_paths_import(c, entries: list[dict]) -> dict:
             'employeeCode': person['employee_code'],
             'employment': person['employment'],
             'status': '更新',
-            'detail': ('退職者' if retired_flag else '在職') + emp_note,
+            'detail': ('退職者' if retired_flag else '在職') + emp_note + code_note,
             'path': entry['path'],
             'retired': bool(retired_flag),
         })
