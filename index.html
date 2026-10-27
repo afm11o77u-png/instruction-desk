@@ -93,11 +93,13 @@
 </div>
 <div class="shift-time-row">
 <label>時間指定の文言<input id="shifttimetext" maxlength="40" value="15:00まで" aria-label="時間指定の文言"></label>
+<button type="button" id="shiftaddrow">行を追加</button>
+<button type="button" id="shiftaddroster">未掲載の在籍者を追加</button>
 <button type="button" id="shiftundo">ひとつ戻す</button>
 <button type="button" id="shiftprint">印刷</button>
 <span id="shiftsavestatus" class="shift-save-status" aria-live="polite">未編集</span>
 </div>
-<p id="shifthint" class="kintaimeta">通常: 左クリックで×のON/OFF、右クリックでクリア。休み／時間指定／消去モードでは左クリックだけで入力できます（時間指定は連続入力可）。</p>
+<p id="shifthint" class="kintaimeta">通常: 左クリックで×のON/OFF、右クリックでクリア。氏名は直接編集、行の追加・削除はその月のシフト表だけに反映します（出勤簿マスタは変えません）。</p>
 </div>
 <div id="shiftgridwrap" class="shift-grid-wrap">
 <table id="shiftgrid" class="shift-grid" aria-label="月別シフト表"></table>

@@ -199,8 +199,13 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid th,.shift-grid td{border:1px solid #cfd9cf;padding:2px 4px;text-align:center;white-space:nowrap;background:#fff}
 .shift-grid thead th{position:sticky;top:0;z-index:3;background:#f3f7f3;font-weight:700}
 .shift-grid .shift-corner{left:0;z-index:4;min-width:5.5rem;text-align:left}
-.shift-grid .shift-name{position:sticky;left:0;z-index:2;text-align:left;background:#fafcfa;font-weight:600;min-width:5.5rem;max-width:9rem;overflow:hidden;text-overflow:ellipsis}
-.shift-grid .shift-name small{display:block;font-weight:400;color:#6b3a1e;font-size:10px}
+.shift-grid .shift-name{position:sticky;left:0;z-index:2;text-align:left;background:#fafcfa;font-weight:600;min-width:7.5rem;max-width:12rem;padding:2px 4px}
+.shift-grid .shift-name-edit{display:flex;align-items:center;gap:2px;min-width:0}
+.shift-grid .shift-name-input{flex:1 1 auto;min-width:0;width:100%;max-width:8.5rem;border:1px solid transparent;background:transparent;font:inherit;font-weight:600;padding:2px 4px;border-radius:4px}
+.shift-grid .shift-name-input:hover,.shift-grid .shift-name-input:focus{border-color:#9dceae;background:#fff;outline:none}
+.shift-grid .shift-tag{display:inline-block;flex:0 0 auto;font-weight:400;color:#6b3a1e;font-size:10px;white-space:nowrap}
+.shift-grid .shift-row-del{flex:0 0 auto;padding:2px 6px;min-width:0;line-height:1;color:#9d3434}
+.shift-grid tr.shift-only .shift-name{background:#f3f7fb}
 .shift-grid .shift-day{min-width:2.1rem;line-height:1.15}
 .shift-grid .shift-daynum{display:block}
 .shift-grid .shift-wday{display:block;font-size:10px;font-weight:400;color:#4a5d50}

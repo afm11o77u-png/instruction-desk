@@ -1168,10 +1168,21 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     result=names.restore(self, c, d)
                 return self.reply(*result)
             if self.path=='/api/kintai/import' or self.path.startswith('/api/kintai/'):
-                with connect() as c:
-                    c.execute('BEGIN IMMEDIATE')
-                    result=kintai.handle_post(self, c, self.path.split('?')[0], d)
-                return self.reply(*result)
+                kintai_path=self.path.split('?')[0]
+                try:
+                    with connect() as c:
+                        c.execute('BEGIN IMMEDIATE')
+                        result=kintai.handle_post(self, c, kintai_path, d)
+                    return self.reply(*result)
+                except (ValueError, TypeError, KeyError) as e:
+                    return self.reply(400, {'error': str(e)})
+                except Exception:
+                    # 勤怠APIは汎用の容量案内に落とさず、入力保持を明示する（本文・氏名はログに出さない）
+                    import logging
+                    logging.getLogger('instruction-desk').exception('kintai api error path=%s', kintai_path)
+                    if kintai_path == '/api/kintai/shift':
+                        return self.reply(500, {'error': 'シフト表を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
+                    return self.reply(500, {'error': '勤怠の処理に失敗しました。入力内容はそのまま残しています。しばらくして再度お試しください。'})
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
             payload=validate(d); now=datetime.now().isoformat(timespec='seconds')
             payload.pop('authorId',None); payload.pop('authorName',None)

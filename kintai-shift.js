@@ -13,6 +13,7 @@
   let saveError = '';
   let shiftDirty = false;
   let loading = false;
+  let rosterList = []; // 出勤簿在籍（未掲載追加用）
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -38,8 +39,12 @@
     return { year: y, month: mo };
   }
 
-  function cloneCells(src) {
-    return JSON.parse(JSON.stringify(src || {}));
+  function cloneData(src) {
+    return JSON.parse(JSON.stringify(src || (Array.isArray(src) ? [] : {})));
+  }
+
+  function newShiftKey() {
+    return 'shift:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
 
   function cellAt(key, day) {
@@ -48,11 +53,19 @@
     return row[String(day)] || row[day] || null;
   }
 
+  function pushUndo() {
+    undoStack.push({ people: cloneData(people), cells: cloneData(cells) });
+    if (undoStack.length > 100) undoStack.shift();
+  }
+
+  function markDirty() {
+    shiftDirty = true;
+    setSaveState('dirty');
+    scheduleSave();
+  }
+
   function setCell(key, day, value, recordUndo) {
-    if (recordUndo) {
-      undoStack.push(cloneCells(cells));
-      if (undoStack.length > 100) undoStack.shift();
-    }
+    if (recordUndo) pushUndo();
     if (!cells[key]) cells[key] = {};
     const k = String(day);
     if (!value) {
@@ -61,9 +74,7 @@
     } else {
       cells[key][k] = value;
     }
-    shiftDirty = true;
-    setSaveState('dirty');
-    scheduleSave();
+    markDirty();
   }
 
   function setSaveState(state, err) {
@@ -92,8 +103,9 @@
     year = data && data.year != null ? data.year : year;
     month = data && data.month != null ? data.month : month;
     version = data && data.version != null ? data.version : 0;
-    people = (data && data.people) || [];
-    cells = cloneCells((data && data.cells) || {});
+    people = cloneData((data && data.people) || []);
+    cells = cloneData((data && data.cells) || {});
+    rosterList = cloneData((data && data.roster) || []);
     shiftDirty = false;
     undoStack = [];
     const input = $('#shiftyearmonth');
@@ -103,9 +115,14 @@
     if (meta) {
       const when = data && data.updatedAt ? `最終保存 ${data.updatedAt}` : 'まだ保存がありません';
       const who = data && data.updatedBy ? `（${data.updatedBy}）` : '';
-      meta.textContent = `${year}年${month}月 ・ 在籍 ${people.filter(p => p.source === 'roster').length}人` +
-        (people.some(p => p.source === 'history') ? ` ／ 過去保持 ${people.filter(p => p.source === 'history').length}人` : '') +
-        ` ・ ${when}${who}`;
+      const nRoster = people.filter(p => p.source === 'roster').length;
+      const nShift = people.filter(p => p.source === 'shift').length;
+      const nHist = people.filter(p => p.source === 'history').length;
+      meta.textContent = `${year}年${month}月 ・ ${people.length}行` +
+        `（在籍${nRoster}` +
+        (nShift ? `／シフト専用${nShift}` : '') +
+        (nHist ? `／過去保持${nHist}` : '') +
+        `） ・ ${when}${who}`;
     }
   }
 
@@ -115,16 +132,22 @@
     });
     const hint = $('#shifthint');
     if (!hint) return;
-    if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×を入れます。もう一度で解除。時間指定のセルは×に置き換えます。';
-    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力できます。右クリックでクリア。';
+    if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名は左列で編集、行の追加・削除はその月だけに効きます。';
+    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力。右クリックでクリア。';
     else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。';
-    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。コンテキストメニュー抑止はセル内のみです。';
+    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。氏名は直接編集できます。';
   }
 
   function cellLabel(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
     return cell.text || '';
+  }
+
+  function sourceTag(p) {
+    if (p.source === 'shift') return '<small class="shift-tag">シフト</small>';
+    if (p.source === 'history') return '<small class="shift-tag">過去</small>';
+    return '';
   }
 
   function paintShift() {
@@ -137,7 +160,10 @@
       return `<th class="shift-day ${cls}"${title}><span class="shift-daynum">${d.day}</span><span class="shift-wday">${esc(d.weekdayLabel)}</span></th>`;
     }).join('');
     const body = people.map(p => {
-      const hist = p.source === 'history' ? ' shift-history' : '';
+      const rowCls = [
+        p.source === 'history' ? 'shift-history' : '',
+        p.source === 'shift' ? 'shift-only' : '',
+      ].filter(Boolean).join(' ');
       const tds = days.map(d => {
         const cell = cellAt(p.key, d.day);
         const cls = [
@@ -147,12 +173,20 @@
           cell && cell.kind === 'off' ? 'shift-off' : '',
           cell && cell.kind === 'time' ? 'shift-time' : '',
         ].filter(Boolean).join(' ');
-        const label = cellLabel(cell);
-        return `<td class="${cls}" data-person="${esc(p.key)}" data-day="${d.day}" tabindex="0">${esc(label)}</td>`;
+        return `<td class="${cls}" data-person="${esc(p.key)}" data-day="${d.day}" tabindex="0">${esc(cellLabel(cell))}</td>`;
       }).join('');
-      return `<tr class="${hist}"><th class="shift-name">${esc(p.displayName)}${p.source === 'history' ? '<small>過去</small>' : ''}</th>${tds}</tr>`;
+      return `<tr class="${rowCls}" data-row-key="${esc(p.key)}">
+        <th class="shift-name">
+          <div class="shift-name-edit">
+            <input type="text" class="shift-name-input" maxlength="80" data-person="${esc(p.key)}" value="${esc(p.displayName || '')}" aria-label="氏名">
+            ${sourceTag(p)}
+            <button type="button" class="quiet shift-row-del no-print" data-del-person="${esc(p.key)}" title="この行を削除" aria-label="行を削除">×</button>
+          </div>
+        </th>${tds}
+      </tr>`;
     }).join('');
-    table.innerHTML = `<thead><tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${days.length + 1}" class="shift-empty">在籍者がいません。出勤簿側の対象者を確認してください。</td></tr>`}</tbody>`;
+    const colSpan = days.length + 1;
+    table.innerHTML = `<thead><tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
   }
 
   function applyClick(key, day, button) {
@@ -175,7 +209,6 @@
       paintShift();
       return;
     }
-    // normal: toggle ×
     if (cur && cur.kind === 'off') setCell(key, day, null, true);
     else if (!cur) setCell(key, day, { kind: 'off', text: '×' }, true);
     else setCell(key, day, { kind: 'off', text: '×' }, true);
@@ -183,6 +216,7 @@
   }
 
   function onGridPointer(e) {
+    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-row-del'))) return;
     const td = e.target.closest && e.target.closest('td.shift-cell');
     if (!td) return;
     if (e.type === 'contextmenu') {
@@ -196,12 +230,91 @@
     }
   }
 
+  function onNameInput(e) {
+    const input = e.target.closest && e.target.closest('.shift-name-input');
+    if (!input) return;
+    const key = input.dataset.person;
+    const p = people.find(x => x.key === key);
+    if (!p) return;
+    const next = input.value.slice(0, 80);
+    if (p.displayName === next) return;
+    if (e.type === 'focus') {
+      input.dataset.prevName = p.displayName || '';
+      return;
+    }
+    if (e.type === 'change' || e.type === 'blur') {
+      if ((input.dataset.prevName || '') === next) return;
+      pushUndo();
+      p.displayName = next.trim() || '（未入力）';
+      input.value = p.displayName;
+      delete input.dataset.prevName;
+      markDirty();
+      // 並び替えのため再描画はせず、タグだけ維持
+    }
+  }
+
+  function deleteRow(key) {
+    const p = people.find(x => x.key === key);
+    if (!p) return;
+    if (!confirm(`「${p.displayName || key}」の行をこの月から削除しますか？\n（出勤簿の在籍マスタや他の月のシフトは消えません）`)) return;
+    pushUndo();
+    people = people.filter(x => x.key !== key).map((x, i) => ({ ...x, sortOrder: i }));
+    if (cells[key]) delete cells[key];
+    markDirty();
+    paintShift();
+  }
+
+  function addShiftRow() {
+    pushUndo();
+    const key = newShiftKey();
+    people.push({
+      key,
+      personId: null,
+      employeeCode: key.slice(6),
+      employment: 'shift',
+      displayName: '（未入力）',
+      sortOrder: people.length,
+      source: 'shift',
+    });
+    markDirty();
+    paintShift();
+    const input = document.querySelector(`.shift-name-input[data-person="${CSS.escape(key)}"]`);
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
+
+  function addMissingRoster() {
+    const have = new Set(people.map(p => p.key));
+    const add = (rosterList || []).filter(p => p && p.key && !have.has(p.key)).map((p, i) => ({
+      key: p.key,
+      personId: p.personId,
+      employeeCode: p.employeeCode,
+      employment: p.employment,
+      displayName: p.displayName,
+      sortOrder: people.length + i,
+      source: 'roster',
+    }));
+    if (!add.length) {
+      toast('追加できる在籍者はいません。');
+      return;
+    }
+    pushUndo();
+    people = people.concat(add);
+    markDirty();
+    paintShift();
+    toast(`${add.length}人をこの月の表に追加しました。`);
+  }
+
   function undoOnce() {
     if (!undoStack.length) {
       toast('戻す操作がありません。');
       return;
     }
-    cells = undoStack.pop();
+    const prev = undoStack.pop();
+    people = prev.people || [];
+    cells = prev.cells || {};
     shiftDirty = true;
     setSaveState('dirty');
     paintShift();
@@ -235,7 +348,7 @@
     if (!canKintai()) throw Error('勤怠管理の権限がありません。');
     if (loading) return;
     if (shiftDirty) {
-      try { await saveShift(); } catch (_) { /* 失敗時も切替は続行せず保持 */ }
+      try { await saveShift(); } catch (_) { /* keep */ }
       if (shiftDirty) {
         toast('未保存のシフトがあるため月を切り替えできません。保存を確認してください。');
         const input = $('#shiftyearmonth');
@@ -281,13 +394,9 @@
     if (!shiftDirty && saveState !== 'failed') return;
     if (!year || !month) return;
     setSaveState('saving');
-    const payload = {
-      year,
-      month,
-      version,
-      people,
-      cells,
-    };
+    // sortOrder を現在の並びに合わせる
+    people = people.map((p, i) => ({ ...p, sortOrder: i, displayName: (p.displayName || '').trim() || '（未入力）' }));
+    const payload = { year, month, version, people, cells };
     try {
       const data = await shiftFetch('/api/kintai/shift', payload);
       if (!data.year) data.year = year;
@@ -298,18 +407,15 @@
       shiftDirty = false;
       setSaveState('saved');
     } catch (e) {
-      if (e.conflict && e.sheet) {
-        // 同時編集: サーバー側を表示。ローカル未保存は保持しないと要件の「失敗時保持」と衝突し得るが、
-        // 上書き防止が優先。未保存内容は undo スタックに残し、シートはサーバー版へ。
-        const local = cloneCells(cells);
-        undoStack.push(local);
-        applySheet(e.sheet);
-        shiftDirty = false;
-        setSaveState('failed', e.message);
-        toast(e.message);
+      if (e.conflict) {
+        // 競合時も画面の未保存入力は残す。自動再試行は止め、月切替時の警告対象に残す。
+        shiftDirty = true;
+        setSaveState('failed', e.message || 'ほかの画面で先に保存されています');
+        toast((e.message || 'ほかの画面で先に保存されています') + '（入力は画面に残しています）');
         return;
       }
-      // 通信失敗など: 画面の入力は保持したまま再試行
+      // 通信・サーバーエラー: 入力保持のまま再試行
+      shiftDirty = true;
       setSaveState('failed', e.message || '保存に失敗しました');
       if (saveTimer) clearTimeout(saveTimer);
       saveTimer = setTimeout(() => {
@@ -370,10 +476,25 @@
     if (undo) undo.onclick = undoOnce;
     const pr = $('#shiftprint');
     if (pr) pr.onclick = printShift;
+    const add = $('#shiftaddrow');
+    if (add) add.onclick = () => addShiftRow();
+    const addRoster = $('#shiftaddroster');
+    if (addRoster) addRoster.onclick = () => { try { addMissingRoster(); } catch (e) { toast(e.message); } };
     const wrap = $('#shiftgridwrap');
     if (wrap) {
-      wrap.addEventListener('click', onGridPointer);
+      wrap.addEventListener('click', e => {
+        const del = e.target.closest && e.target.closest('[data-del-person]');
+        if (del) {
+          e.preventDefault();
+          deleteRow(del.dataset.delPerson);
+          return;
+        }
+        onGridPointer(e);
+      });
       wrap.addEventListener('contextmenu', onGridPointer);
+      wrap.addEventListener('focusin', onNameInput);
+      wrap.addEventListener('change', onNameInput);
+      wrap.addEventListener('focusout', onNameInput);
     }
   }
 

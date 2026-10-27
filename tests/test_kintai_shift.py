@@ -110,6 +110,31 @@ class ShiftSheetStoreTest(unittest.TestCase):
         self.assertEqual(again['version'], 1)
         self.assertEqual(again['cells']['regular:001']['5']['text'], '15:00まで')
 
+    def test_second_save_updates_without_connection_rowcount(self):
+        """再編集保存: Connection.rowcount 参照だと AttributeError→500 になる回帰を防ぐ。"""
+        import inspect
+        src = inspect.getsource(kintai_shift.save_shift_sheet)
+        self.assertNotIn('c.rowcount', src)
+        self.assertIn('cur.rowcount', src)
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        code1, s1 = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'], 'cells': {},
+        })
+        self.assertEqual(code1, 200)
+        self.assertEqual(s1['version'], 1)
+        code2, s2 = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 1,
+            'people': s1['people'],
+            'cells': {'regular:001': {'7': {'kind': 'off', 'text': '×'}}},
+        })
+        self.assertEqual(code2, 200)
+        self.assertEqual(s2['version'], 2)
+        self.assertEqual(s2['cells']['regular:001']['7']['kind'], 'off')
+        reloaded = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual(reloaded['version'], 2)
+        self.assertEqual(reloaded['cells']['regular:001']['7']['text'], '×')
+
     def test_conflict_does_not_overwrite(self):
         sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
         kintai_shift.save_shift_sheet(self.c, self.user, {
@@ -164,6 +189,66 @@ class ShiftSheetStoreTest(unittest.TestCase):
         self.assertEqual(before['work_days'], after['work_days'])
         self.assertEqual(before['status'], after['status'])
 
+    def test_remove_row_does_not_come_back(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        only = [p for p in sheet['people'] if p['key'] == 'regular:001']
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': only,
+            'cells': {'regular:001': {'1': {'kind': 'off', 'text': '×'}}},
+        })
+        self.assertEqual(code, 200)
+        keys = [p['key'] for p in saved['people']]
+        self.assertEqual(keys, ['regular:001'])
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual([p['key'] for p in again['people']], ['regular:001'])
+        # 在籍マスタ自体は残る
+        n = self.c.execute('SELECT COUNT(*) FROM kintai_people WHERE active=1').fetchone()[0]
+        self.assertEqual(n, 2)
+
+    def test_rename_keeps_snapshot_and_other_month_intact(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        people = [{**p, 'displayName': '山田（11月）' if p['key'] == 'regular:001' else p['displayName']} for p in sheet['people']]
+        kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0, 'people': people, 'cells': {},
+        })
+        nov = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual(next(p['displayName'] for p in nov['people'] if p['key'] == 'regular:001'), '山田（11月）')
+        # 別月は未保存→在籍マスタの氏名
+        dec = kintai_shift.get_shift_sheet(self.c, 2026, 12)
+        self.assertFalse(dec['exists'])
+        self.assertEqual(next(p['displayName'] for p in dec['people'] if p['key'] == 'regular:001'), '山田太郎')
+        # マスタ未変更
+        name = self.c.execute(
+            "SELECT display_name FROM kintai_people WHERE employee_code='001'"
+        ).fetchone()['display_name']
+        self.assertEqual(name, '山田太郎')
+
+    def test_shift_only_row_does_not_touch_people_master(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        before = self.c.execute('SELECT COUNT(*) FROM kintai_people').fetchone()[0]
+        people = list(sheet['people']) + [{
+            'key': 'shift:abc123',
+            'personId': None,
+            'employeeCode': 'abc123',
+            'employment': 'shift',
+            'displayName': '臨時スタッフ',
+            'sortOrder': 99,
+            'source': 'shift',
+        }]
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': people,
+            'cells': {'shift:abc123': {'2': {'kind': 'off', 'text': '×'}}},
+        })
+        self.assertEqual(code, 200)
+        shift_rows = [p for p in saved['people'] if p['source'] == 'shift']
+        self.assertEqual(len(shift_rows), 1)
+        self.assertEqual(shift_rows[0]['displayName'], '臨時スタッフ')
+        after = self.c.execute('SELECT COUNT(*) FROM kintai_people').fetchone()[0]
+        self.assertEqual(before, after)
+        self.assertFalse(any(p['key'] == 'shift:abc123' for p in saved['roster']))
+
 
 class ShiftUiContractTest(unittest.TestCase):
     def test_top_nav_and_panels(self):
@@ -176,6 +261,8 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('id="kintaiattendance"', index)
         self.assertIn('id="kintaishift"', index)
         self.assertIn('id="shiftgrid"', index)
+        self.assertIn('id="shiftaddrow"', index)
+        self.assertIn('id="shiftaddroster"', index)
         self.assertNotIn('id="kintai-open"', index)
         self.assertIn('kintai-shift.js', index)
         # 出勤簿はそのまま
@@ -197,12 +284,27 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('loadKintaiShift', js)
         self.assertIn('contextmenu', js)
         self.assertIn('shiftFetch', js)
+        self.assertIn('addShiftRow', js)
+        self.assertIn('deleteRow', js)
+        self.assertIn('shift-name-input', js)
         self.assertIn('ひとつ戻す', (ROOT / 'index.html').read_text(encoding='utf-8'))
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn('shift-sat', css)
         self.assertIn('shift-sun', css)
         self.assertIn('A4 landscape', css)
         self.assertIn('printing-shift', css)
+        self.assertIn('shift-name-input', css)
+
+    def test_kintai_api_avoids_disk_space_error_copy(self):
+        server = (ROOT / 'server.py').read_text(encoding='utf-8')
+        self.assertIn("kintai_path == '/api/kintai/shift'", server)
+        self.assertIn('シフト表を保存できませんでした。入力内容はそのまま残しています', server)
+        self.assertIn('勤怠の処理に失敗しました。入力内容はそのまま残しています', server)
+        # 勤怠API専用の reply 文言に容量案内を含めない
+        self.assertIn("return self.reply(500, {'error': 'シフト表を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})", server)
+        js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
+        self.assertIn('入力は画面に残しています', js)
+        self.assertIn('if (e.conflict)', js)
 
 
 if __name__ == '__main__':
