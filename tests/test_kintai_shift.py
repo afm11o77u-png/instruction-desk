@@ -321,6 +321,154 @@ class ShiftSheetStoreTest(unittest.TestCase):
         )
         self.assertEqual(saved2['cells']['shift:abc123']['1']['text'], '×')
 
+    def test_default_order_applies_to_uncreated_month(self):
+        """標準並び保存 → 未作成月を開くと並びが一致する。"""
+        empty = kintai_shift.get_default_order(self.c)
+        self.assertFalse(empty['exists'])
+        self.assertEqual(empty['keys'], [])
+        # 在籍マスタ順は 001, 002。標準並びは逆順
+        saved = kintai_shift.save_default_order(self.c, self.user, {
+            'keys': ['part:002', 'regular:001'],
+        })
+        self.assertTrue(saved['exists'])
+        self.assertEqual(saved['keys'], ['part:002', 'regular:001'])
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 12)
+        self.assertFalse(sheet['exists'])
+        self.assertEqual([p['key'] for p in sheet['people']], ['part:002', 'regular:001'])
+
+    def test_default_order_persists_on_reload(self):
+        kintai_shift.save_default_order(self.c, self.user, {
+            'keys': ['part:002', 'regular:001'],
+        })
+        again = kintai_shift.get_default_order(self.c)
+        self.assertEqual(again['keys'], ['part:002', 'regular:001'])
+        self.assertTrue(again['updatedAt'])
+        self.assertEqual(again['updatedBy'], '主')
+
+    def test_default_order_change_does_not_reorder_saved_month(self):
+        """標準並び変更後も、保存済み月の並び・セルは変わらない。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        people = [
+            {**sheet['people'][0], 'sortOrder': 0},  # regular:001
+            {**sheet['people'][1], 'sortOrder': 1},  # part:002
+        ]
+        cells = {
+            'regular:001': {'3': {'kind': 'off', 'text': '×'}},
+            'part:002': {'5': {'kind': 'time', 'text': '15:00まで'}},
+        }
+        code, nov = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': people, 'cells': cells,
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual([p['key'] for p in nov['people']], ['regular:001', 'part:002'])
+        # 標準並びを逆にしても保存済み11月は不変
+        kintai_shift.save_default_order(self.c, self.user, {
+            'keys': ['part:002', 'regular:001'],
+        })
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual([p['key'] for p in again['people']], ['regular:001', 'part:002'])
+        self.assertEqual(again['cells']['regular:001']['3']['kind'], 'off')
+        self.assertEqual(again['cells']['part:002']['5']['text'], '15:00まで')
+        self.assertEqual(again['version'], nov['version'])
+
+    def test_default_order_skips_inactive_appends_new(self):
+        kintai_shift.save_default_order(self.c, self.user, {
+            'keys': ['part:002', 'regular:001', 'regular:gone'],
+        })
+        self.c.execute(
+            'INSERT INTO kintai_people(employee_code,employment,display_name,source_file,active,sort_order,retired) '
+            'VALUES(?,?,?,?,1,3,0)',
+            ('003', 'regular', '新規次郎', ''),
+        )
+        self.c.execute('UPDATE kintai_people SET retired=1 WHERE employee_code=?', ('002',))
+        self.c.commit()
+        sheet = kintai_shift.get_shift_sheet(self.c, 2027, 1)
+        self.assertFalse(sheet['exists'])
+        keys = [p['key'] for p in sheet['people']]
+        # 退職した part:002 と存在しない gone は飛ばし、新規は末尾
+        self.assertEqual(keys, ['regular:001', 'regular:003'])
+
+    def test_default_order_save_does_not_clobber_month_sheet(self):
+        """月保存と標準並び保存は互いのデータを上書きしない。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        cells = {'regular:001': {'1': {'kind': 'off', 'text': '×'}}}
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'], 'cells': cells,
+        })
+        self.assertEqual(code, 200)
+        before_people = self.c.execute(
+            'SELECT people_json, cells_json, version FROM kintai_shift_sheets WHERE year=2026 AND month=11'
+        ).fetchone()
+        kintai_shift.save_default_order(self.c, self.user, {
+            'keys': ['part:002', 'regular:001'],
+        })
+        after_people = self.c.execute(
+            'SELECT people_json, cells_json, version FROM kintai_shift_sheets WHERE year=2026 AND month=11'
+        ).fetchone()
+        self.assertEqual(before_people['people_json'], after_people['people_json'])
+        self.assertEqual(before_people['cells_json'], after_people['cells_json'])
+        self.assertEqual(before_people['version'], after_people['version'])
+        # 逆に月保存しても標準並びは消えない
+        kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': saved['version'],
+            'people': list(reversed(saved['people'])),
+            'cells': cells,
+        })
+        self.assertEqual(
+            kintai_shift.get_default_order(self.c)['keys'],
+            ['part:002', 'regular:001'],
+        )
+
+    def test_default_order_stores_keys_not_names_or_cells(self):
+        """標準並びは identity key のみ。同姓同名・セル内容は含めない。"""
+        self.c.execute(
+            'INSERT INTO kintai_people(employee_code,employment,display_name,source_file,active,sort_order,retired) '
+            'VALUES(?,?,?,?,1,3,0)',
+            ('009', 'regular', '山田太郎', ''),  # 同姓同名
+        )
+        self.c.commit()
+        kintai_shift.save_default_order(self.c, self.user, {
+            'keys': [
+                {'key': 'regular:009', 'displayName': '山田太郎', 'cells': {'1': {'kind': 'off'}}},
+                'regular:001',
+            ],
+        })
+        order = kintai_shift.get_default_order(self.c)
+        self.assertEqual(order['keys'], ['regular:009', 'regular:001'])
+        raw = self.c.execute('SELECT keys_json FROM kintai_shift_default_order WHERE id=1').fetchone()['keys_json']
+        self.assertNotIn('山田', raw)
+        self.assertNotIn('off', raw)
+        self.assertNotIn('cells', raw)
+
+    def test_reorder_cells_stay_with_person_keys(self):
+        """並び替え後もセルは person key に紐づき、別人へずれない。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        flipped = list(reversed(sheet['people']))
+        cells = {
+            'regular:001': {'7': {'kind': 'off', 'text': '×'}},
+            'part:002': {'8': {'kind': 'time', 'text': '12:00まで'}},
+        }
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': flipped, 'cells': cells,
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual([p['key'] for p in saved['people']], ['part:002', 'regular:001'])
+        self.assertEqual(saved['cells']['regular:001']['7']['kind'], 'off')
+        self.assertEqual(saved['cells']['part:002']['8']['text'], '12:00まで')
+        # 標準並びを別順にしても保存月のセル所有者は不変
+        kintai_shift.save_default_order(self.c, self.user, {'keys': ['regular:001', 'part:002']})
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual(again['cells']['regular:001']['7']['text'], '×')
+        self.assertNotIn('7', again['cells'].get('part:002', {}))
+
+    def test_no_default_keeps_existing_initial_order(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertFalse(sheet['exists'])
+        self.assertEqual([p['key'] for p in sheet['people']], ['regular:001', 'part:002'])
+
 
 class ShiftUiContractTest(unittest.TestCase):
     def test_top_nav_and_panels(self):
@@ -336,6 +484,9 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('id="shiftaddrow"', index)
         self.assertIn('id="shiftaddroster"', index)
         self.assertIn('id="shiftsave"', index)
+        self.assertIn('id="shiftsavedefaultorder"', index)
+        self.assertIn('標準の並び順として保存', index)
+        self.assertIn('未作成の月に使用します。保存済みの月には反映しません', index)
         self.assertIn('id="shiftsavedialog"', index)
         self.assertIn('保存して移動', index)
         self.assertIn('破棄して移動', index)
@@ -344,6 +495,9 @@ class ShiftUiContractTest(unittest.TestCase):
         # 出勤簿はそのまま
         self.assertIn('出勤簿から更新', index)
         self.assertIn('id="kintaitable"', index)
+        # 保存済み月へ標準並びを適用する機能は置かない
+        self.assertNotIn('保存済みの月に適用', index)
+        self.assertNotIn('applyDefaultOrderToSaved', index)
 
     def test_scripts_and_server_route(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
@@ -368,6 +522,12 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('shift-drag', js)
         self.assertIn('onRowDragStart', js)
         self.assertIn('pushUndo', js)
+        self.assertIn('saveDefaultOrder', js)
+        self.assertIn('/api/kintai/shift/default-order', js)
+        self.assertIn('shiftsavedefaultorder', js)
+        # 標準並び保存は keys のみ（cells を送らない）
+        self.assertIn("shiftFetch('/api/kintai/shift/default-order', { keys })", js)
+        self.assertNotIn('applyDefaultToSaved', js)
         self.assertIn('ひとつ戻す', (ROOT / 'index.html').read_text(encoding='utf-8'))
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn('shift-sat', css)
@@ -457,7 +617,7 @@ class ShiftUiContractTest(unittest.TestCase):
 
     def test_kintai_api_avoids_disk_space_error_copy(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
-        self.assertIn("kintai_path == '/api/kintai/shift'", server)
+        self.assertIn("kintai_path in ('/api/kintai/shift', '/api/kintai/shift/default-order')", server)
         self.assertIn('シフト表を保存できませんでした。入力内容はそのまま残しています', server)
         self.assertIn('勤怠の処理に失敗しました。入力内容はそのまま残しています', server)
         # 勤怠API専用の reply 文言に容量案内を含めない

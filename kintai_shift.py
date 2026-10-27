@@ -34,6 +34,15 @@ def schema(c):
             PRIMARY KEY (year, month)
         )'''
     )
+    # 今後の未作成月の初期並び（identity key のみ）。月シート本体とは分離。
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS kintai_shift_default_order (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            keys_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TEXT NOT NULL DEFAULT '',
+            updated_by TEXT NOT NULL DEFAULT ''
+        )'''
+    )
 
 
 def person_key(employment: str, employee_code: str) -> str:
@@ -304,14 +313,114 @@ def _annotate_with_roster(people: list[dict], roster: list[dict]) -> list[dict]:
     return out
 
 
-def _compose_people(roster: list[dict], saved: list[dict], cells: dict, *, sheet_exists: bool) -> list[dict]:
-    """未保存月は在籍マスタ。保存済み月はシート名簿を正とし、削除した行は戻さない。"""
+def _normalize_default_keys(raw) -> list[str]:
+    """標準並びは identity key のみ（氏名・セルは保存しない）。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError('標準の並び順の形式が不正です。')
+    out: list[str] = []
+    seen = set()
+    for i, item in enumerate(raw):
+        if isinstance(item, dict):
+            key = str(item.get('key') or '').strip()
+        else:
+            key = str(item or '').strip()
+        if not key or not PERSON_KEY_RE.match(key):
+            raise ValueError(f'標準の並び順のキーが不正です（{i + 1}件目）。')
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(key)
+    return out
+
+
+def get_default_order(c) -> dict:
+    row = c.execute(
+        'SELECT keys_json, updated_at, updated_by FROM kintai_shift_default_order WHERE id=1'
+    ).fetchone()
+    keys: list[str] = []
+    updated_at = None
+    updated_by = ''
+    if row:
+        try:
+            raw = json.loads(row['keys_json'] or '[]')
+        except json.JSONDecodeError:
+            raw = []
+        if isinstance(raw, list):
+            keys = [str(k) for k in raw if isinstance(k, str) and PERSON_KEY_RE.match(k)]
+        updated_at = row['updated_at'] or None
+        updated_by = row['updated_by'] or ''
+    return {
+        'keys': keys,
+        'updatedAt': updated_at,
+        'updatedBy': updated_by,
+        'exists': bool(row) and bool(keys),
+    }
+
+
+def save_default_order(c, user, payload: dict) -> dict:
+    """今後の未作成月用の標準並びを保存。月シート（cells/people）は一切触らない。"""
+    keys = _normalize_default_keys((payload or {}).get('keys'))
+    now = datetime.now().replace(microsecond=0).isoformat(sep=' ')
+    actor = ''
+    if user:
+        try:
+            actor = str(user['name'] or user['login'] or '')[:80]
+        except (KeyError, IndexError, TypeError):
+            actor = ''
+    keys_json = json.dumps(keys, ensure_ascii=False)
+    c.execute(
+        '''INSERT INTO kintai_shift_default_order(id, keys_json, updated_at, updated_by)
+           VALUES (1, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             keys_json=excluded.keys_json,
+             updated_at=excluded.updated_at,
+             updated_by=excluded.updated_by''',
+        (keys_json, now, actor),
+    )
+    return get_default_order(c)
+
+
+def _roster_with_default_order(roster: list[dict], default_keys: list[str]) -> list[dict]:
+    """未作成月: 保存済み標準並びを在籍者に適用。非在籍は飛ばし、新規在籍は末尾。"""
+    if not default_keys:
+        return [dict(p) for p in roster]
+    by_key = {p['key']: dict(p) for p in roster}
+    out: list[dict] = []
+    seen: set[str] = set()
+    for key in default_keys:
+        key = str(key)
+        if key in by_key and key not in seen:
+            item = by_key[key]
+            item['sortOrder'] = len(out)
+            out.append(item)
+            seen.add(key)
+    for p in roster:
+        if p['key'] not in seen:
+            item = dict(p)
+            item['sortOrder'] = len(out)
+            out.append(item)
+            seen.add(p['key'])
+    return out
+
+
+def _compose_people(
+    roster: list[dict],
+    saved: list[dict],
+    cells: dict,
+    *,
+    sheet_exists: bool,
+    default_keys: list[str] | None = None,
+) -> list[dict]:
+    """未保存月は在籍マスタ（標準並びがあれば適用）。保存済み月はシート名簿を正とし、削除した行は戻さない。"""
     roster_by_key = {p['key']: p for p in roster}
     by_key: dict[str, dict] = {}
+    use_default = bool(not sheet_exists and default_keys)
 
     if not sheet_exists:
-        for p in roster:
-            by_key[p['key']] = dict(p)
+        for p in _roster_with_default_order(roster, default_keys or []):
+            by_key[p['key']] = p
     else:
         for i, p in enumerate(saved or []):
             if not isinstance(p, dict):
@@ -349,8 +458,8 @@ def _compose_people(roster: list[dict], saved: list[dict], cells: dict, *, sheet
         if key not in by_key and PERSON_KEY_RE.match(str(key)):
             by_key[key] = _orphan_person(str(key))
 
-    # 保存済みシートはユーザー並び替えを維持（source 種別で再グループしない）
-    return _sorted_people(by_key, by_sort_order_only=sheet_exists)
+    # 保存済み／標準並び適用時は配列順（sortOrder）を正とする
+    return _sorted_people(by_key, by_sort_order_only=sheet_exists or use_default)
 
 
 def _row_public(
@@ -400,7 +509,12 @@ def get_shift_sheet(c, year, month) -> dict:
         if not isinstance(cells, dict):
             cells = {}
     roster = _active_roster(c)
-    people = _compose_people(roster, saved_people, cells, sheet_exists=bool(row))
+    default_keys = get_default_order(c)['keys'] if not row else []
+    people = _compose_people(
+        roster, saved_people, cells,
+        sheet_exists=bool(row),
+        default_keys=default_keys,
+    )
     return _row_public(y, m, row, days, people, cells, roster=roster)
 
 

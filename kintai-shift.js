@@ -601,6 +601,28 @@
     }
   }
 
+  /** 画面上の現在並びを「今後の未作成月」の標準並びとして保存（セル・月シートは送らない）。 */
+  async function saveDefaultOrder() {
+    if (!canKintai()) return;
+    const keys = people.map(p => p && p.key).filter(Boolean);
+    if (!keys.length) {
+      toast('並び順として保存する行がありません。');
+      return;
+    }
+    const btn = $('#shiftsavedefaultorder');
+    if (btn) btn.disabled = true;
+    try {
+      const data = await shiftFetch('/api/kintai/shift/default-order', { keys });
+      const n = (data && data.keys && data.keys.length) || keys.length;
+      toast(`標準の並び順を保存しました（${n}人・未作成の月に使用）。`);
+    } catch (e) {
+      toast(e.message || '標準の並び順の保存に失敗しました。');
+      throw e;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function shiftBy(delta) {
     let y = year;
     let m = month + delta;
@@ -734,6 +756,12 @@
     if (saveBtn) {
       saveBtn.onclick = () => {
         saveShift({ force: true }).catch(() => {});
+      };
+    }
+    const defaultOrderBtn = $('#shiftsavedefaultorder');
+    if (defaultOrderBtn) {
+      defaultOrderBtn.onclick = () => {
+        saveDefaultOrder().catch(() => {});
       };
     }
     const pr = $('#shiftprint');

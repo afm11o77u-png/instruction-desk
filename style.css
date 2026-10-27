@@ -189,6 +189,7 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-mode.on{background:#163828;border-color:#163828;color:#fff}
 .shift-time-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:6px 0 4px}
 .shift-time-row label{min-width:12rem}
+.shift-default-order-help{margin:0 0 4px;font-size:12px;color:#5a6b5e}
 .shift-save-status{font-size:13px;font-weight:700;color:#3d5344;padding-bottom:8px}
 .shift-save-dirty{color:#8a3b00}
 .shift-save-saving{color:#3d5344}
