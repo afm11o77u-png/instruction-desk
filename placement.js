@@ -226,13 +226,14 @@ async function showCatalog(which){
       if(!(await confirmKintaiBihinLeave()))return;
     }
   }
-  const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理',kintai:'勤怠管理'};
+  const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理',kintai:'マーク管理'};
   document.body.classList.toggle('catalog-info',which==='info');
   document.body.classList.toggle('catalog-stock',which==='stock');
   document.body.classList.toggle('catalog-kintai',which==='kintai');
   $('#brandtitle').textContent=titles[which]||titles.desk;
   document.title=$('#brandtitle').textContent;
   document.querySelectorAll('#modes .mode').forEach(b=>b.classList.toggle('on',b.dataset.catalog===which));
+  const markBtn=$('#markmanage');if(markBtn)markBtn.classList.toggle('on',which==='kintai');
   $('#desknav').hidden=which!=='desk';
   $('#infonav').hidden=which!=='info';
   const stockNav=$('#stocknav');if(stockNav)stockNav.hidden=which!=='stock';
@@ -254,7 +255,7 @@ async function showCatalog(which){
     return;
   }
   if(view==='kintai'){
-    // 勤怠から他システムへ戻るときは指示書側の既定ナビへ
+    // マーク管理から他システムへ戻るときは指示書側の既定ナビへ
     view='all';
   }
   const box=which==='info'?'#infonav':'#desknav';

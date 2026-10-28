@@ -418,7 +418,7 @@ def can_use_kintai(user) -> bool:
 
 def require_kintai(user):
     if not can_use_kintai(user):
-        return 403, {'error': '勤怠管理（マーク）の権限がありません。'}
+        return 403, {'error': 'マーク管理の権限がありません。'}
     return None
 
 

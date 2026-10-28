@@ -250,8 +250,8 @@ class KintaiDbTest(unittest.TestCase):
 class KintaiNavWireTest(unittest.TestCase):
     def test_files_and_menu(self):
         index = (ROOT / 'index.html').read_text(encoding='utf-8')
-        self.assertIn('data-catalog="kintai"', index)
-        self.assertIn('>勤怠管理<', index)
+        self.assertNotIn('id="modekintai"', index)
+        self.assertNotIn('>勤怠管理<', index)
         self.assertIn('id="kintainav"', index)
         self.assertIn('kintai.js', index)
         self.assertIn('kintai-shift.js', index)
@@ -259,7 +259,9 @@ class KintaiNavWireTest(unittest.TestCase):
         self.assertNotIn('id="kintai-open"', index)
         account = (ROOT / 'account.js').read_text(encoding='utf-8')
         self.assertIn('mark_kintai', account)
-        self.assertIn('data-catalog="kintai"', account)
+        self.assertIn('id="markmanage"', account)
+        self.assertIn('>マーク管理<', account)
+        self.assertIn("showCatalog('kintai')", account)
         self.assertNotIn('kintai-open', account)
         auth = (ROOT / 'auth.py').read_text(encoding='utf-8')
         self.assertIn('mark_kintai', auth)
