@@ -101,6 +101,9 @@ class DeskNavGroupsTest(unittest.TestCase):
         self.assertIn('>マーク管理<', bar)
         self.assertLess(bar.index('markmanage'), bar.index('mypassword'))
         self.assertLess(bar.index('currentUser.name'), bar.index('markmanage'))
+        # ボタン風（quiet テキストリンクではなく枠付きコントロール）
+        self.assertIn('id="markmanage"', bar)
+        self.assertNotIn('id="markmanage" class="quiet"', bar)
         self.assertIn("role==='owner'||!!currentUser.mark_kintai", ACCOUNT)
         # navrow 内のボタンも空グループ判定に含める
         self.assertIn("g.querySelectorAll('.nav')", ACCOUNT)
