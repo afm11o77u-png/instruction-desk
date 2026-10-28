@@ -54,6 +54,14 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         import stock_product_merge
         with stock.connect(db_path) as c:
             return 200, stock_product_merge.list_duplicate_groups(c)
+    if path == '/api/products/process-service-migration/inventory':
+        # 読み取り専用: 部品・資材→加工サービス移行候補の列挙のみ（書込しない）
+        import product_ledger_processing_service as proc_svc
+        include_leave = (query.get('includeLeave', [''])[0] or '') in ('1', 'true', 'yes')
+        with stock.connect(db_path) as c:
+            return 200, proc_svc.inventory_process_service_migration(
+                c, include_leave=include_leave,
+            )
     if path == '/api/products/registry-wipe/preview':
         import product_registry_wipe
         try:

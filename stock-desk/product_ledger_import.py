@@ -6002,7 +6002,7 @@ def _processing_service_plan_payload(info, *, source_row_nos=None, garment_codes
         'displayName': name,
         'vendorName': vendor,
         'dedupeKey': proc_svc.service_dedupe_key(name, vendor),
-        'category': stock.CATEGORY_PARTS,
+        'category': stock.CATEGORY_PROCESS_SERVICE,
         'blankSku': True,
         'code': '',
         'internalKind': 'processing_service',
@@ -6317,8 +6317,8 @@ def apply_processing_service_split(c, classified, sku_groups):
                 # 本体SKUグループ側は確認対象のまま。特定できた加工は確認待ちにしない。
                 if group and group.get('garmentBodyReviewOnly'):
                     row['garmentBodyReviewOnly'] = True
-                prod['category'] = stock.CATEGORY_PARTS
-                prod['proposedCategory'] = stock.CATEGORY_PARTS
+                prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['code'] = ''
                 prod['codeOverride'] = ''
                 prod['blankSku'] = True
@@ -6446,11 +6446,13 @@ def apply_processing_service_split(c, classified, sku_groups):
 
 
 def _ensure_processing_service_product(c, plan):
-    """加工サービスを部品・資材として確保（本体品番は流用しない）。
+    """加工サービスを CATEGORY_PROCESS_SERVICE として確保（本体品番は流用しない）。
 
     登録名・一覧表示は加工名のみ。別表示名は使わない。加工に衣服数量は付けない。
     エルムス刺繍は既存の「刺繍加工」等があれば再利用し、表示名を「刺繍」へ揃える
     （旧名称は別名一覧へ追加しない）。複数件ある場合も削除せず1件を再利用。
+    既存が部品・資材のまま残っている場合も ID 再利用し、カテゴリは自動変更しない
+    （移行は inventory / 明示 apply でレビュー後に行う）。
     """
     name = stock.text(plan.get('serviceName') or '')
     vendor = stock.text(plan.get('vendorName') or '')
@@ -6476,13 +6478,13 @@ def _ensure_processing_service_product(c, plan):
     # 表示名は加工名からのみ（plan.displayName の古い値を優先しない）
     plan['displayName'] = name
     sup_id, _ = _ensure_person(c, 'suppliers', stock.save_supplier, vendor, create=True)
-    # 品番なし・部品・資材。管理品番に対象衣服品番を載せない
+    # 品番なし・加工サービス。管理品番に対象衣服品番を載せない
     saved = stock.save_product(c, {
         'code': '',
         'name': name,
         'color': '',
         'material': '',
-        'category': stock.CATEGORY_PARTS,
+        'category': stock.CATEGORY_PROCESS_SERVICE,
         'supplierId': sup_id,
         # サイズ必須制約回避。加工サービスに衣服サイズ在庫は付けない
         'sizes': ['—'],
@@ -7283,7 +7285,7 @@ def build_opening_stock_preview(c, body):
         'previewAt': stock.stamp(),
         'stockSnapshot': snap,
         'previousImports': previous_imports_for_file(c, aux_uploaded['fileSha256']),
-        'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
+        'categoryOptions': list(stock.PRODUCT_CATEGORY_OPTIONS),
         'progressLabels': {
             'parse': 'CSVを読み込み中',
             'judge': '商品を照合中',
@@ -7675,7 +7677,7 @@ def build_preview(c, body):
         'previewAt': stock.stamp(),
         'stockSnapshot': snap,
         'previousImports': previous_imports_for_file(c, uploaded['fileSha256']),
-        'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
+        'categoryOptions': list(stock.PRODUCT_CATEGORY_OPTIONS),
         'progressLabels': {
             'parse': 'CSVを読み込み中',
             'judge': '商品を照合中',
@@ -8624,7 +8626,7 @@ def commit_preview(c, body, *, db_path=None):
         # 同一通常品番の新規はコミット内で1商品にまとめる
         created_by_code = {}
         product_id_by_code = {}
-        # 加工サービス（部品・資材）は先に一意キーで確保し、本体コミットから再利用
+        # 加工サービスは先に一意キーで確保し、本体コミットから再利用
         processing_plans = list(preview.get('processingServicePlans') or [])
         processing_ids_by_key = {}
         result_counts['processingServicesCreated'] = 0
@@ -8689,7 +8691,7 @@ def commit_preview(c, body, *, db_path=None):
                     prod_info['code'] = ''
                     prod_info['codeOverride'] = ''
                     prod_info['blankSku'] = True
-                    prod_info['category'] = stock.CATEGORY_PARTS
+                    prod_info['category'] = stock.CATEGORY_PROCESS_SERVICE
                 code_t = stock.text(prod_info.get('codeOverride') if prod_info.get('codeOverride') is not None else row['csv']['code'])
                 if prod_info.get('processingServiceProduct'):
                     code_t = ''

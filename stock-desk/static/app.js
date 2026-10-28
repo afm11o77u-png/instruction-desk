@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',productSort:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',productCategoryFilter:'',productSort:'',data:null,stock:null,openings:null,filters:{group:'customer',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
 const CONDITION_OPTS=[['new','新品'],['used','中古']]
 function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
 function conditionQtyText(r){
@@ -475,6 +475,7 @@ async function setSetupTab(tab){
 }
 async function boot(){
   state.data=await api('/api/bootstrap')
+  loadProductCategoryFilter()
   if(!state.ready){
     const params=new URLSearchParams(location.search)
     if(params.get('section')==='move'){
@@ -605,6 +606,38 @@ function productSupplierControl(current){
     productSuppliersWithItems().map(s=>`<option value="${s.id}" ${String(current)===String(s.id)?'selected':''}>${esc(s.name)}</option>`)
   ).join('')
   return `<label class="supplier-filter">仕入先<select id="productSupplier" aria-label="仕入先で絞り込み">${options}</select></label>`
+}
+function productCategoryControl(current){
+  const options=[
+    ['','すべて'],
+    ['制服','制服'],
+    ['部品・資材','部品・資材'],
+    ['加工サービス','加工サービス'],
+    ['__empty__','（カテゴリなし）'],
+  ].map(([v,l])=>`<option value="${esc(v)}" ${String(current)===String(v)?'selected':''}>${esc(l)}</option>`).join('')
+  return `<label class="category-filter">カテゴリ<select id="productCategory" aria-label="カテゴリで絞り込み">${options}</select></label>`
+}
+function resolveProductCategoryFilter(){
+  const v=state.productCategoryFilter
+  if(v==null)return ''
+  return String(v)
+}
+function saveProductCategoryFilter(v){
+  state.productCategoryFilter=v==null?'':String(v)
+  try{localStorage.setItem('stockProductCategoryFilter',state.productCategoryFilter)}catch(_){}
+}
+function loadProductCategoryFilter(){
+  try{
+    const v=localStorage.getItem('stockProductCategoryFilter')
+    if(v!=null)state.productCategoryFilter=v
+  }catch(_){}
+  if(state.productCategoryFilter==null)state.productCategoryFilter=''
+}
+function productMatchesCategoryFilter(r,filter){
+  if(!filter)return true
+  const cat=r.category||''
+  if(filter==='__empty__')return !cat
+  return cat===filter
 }
 function productSortControl(){
   const current=resolveProductSort()
@@ -740,6 +773,7 @@ function suppliers(){
 }
 function products(){
   const supplierId=resolveProductSupplierFilter()
+  const categoryFilter=resolveProductCategoryFilter()
   const sortKey=resolveProductSort()
   const rows=sortProductRows(state.data.products.filter(r=>{
     if(r.mergedIntoId){
@@ -748,11 +782,12 @@ function products(){
       return false
     }
     if(supplierId&&!productMatchesSupplierFilter(r,supplierId))return false
+    if(!productMatchesCategoryFilter(r,categoryFilter))return false
     const subNames=(r.subSuppliers||[]).map(s=>s.name||'').join('')
     const text=`${r.code}${r.codeDisplay||''}${r.makerCode||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return text.includes(state.q)
   }),sortKey)
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工仕様は取扱で区別します。仕入先を選ぶと、その仕入先（通常・サブ）の商品だけを一覧できます。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productSortControl(),'新しく登録','products')}
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工仕様は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
     <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>（「表示」の左）から行います。</p>
     ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
@@ -781,6 +816,11 @@ function products(){
   if(supplierSelect)supplierSelect.onchange=()=>{
     state.productSupplierId=supplierSelect.value
     saveProductSupplierFilter(state.productSupplierId)
+    paint()
+  }
+  const categorySelect=$('#productCategory')
+  if(categorySelect)categorySelect.onchange=()=>{
+    saveProductCategoryFilter(categorySelect.value)
     paint()
   }
   const sortSelect=$('#productSort')
@@ -1004,7 +1044,7 @@ function productForm(r){
   }).join('')||'<span class="sub">仕入先台帳が空です</span>'
   const scheme=detectSizeScheme(r.sizes)
   const cat=r.category||''
-  const catOpts=[['','（なし）'],['制服','制服'],['部品・資材','部品・資材']].map(([v,l])=>`<option value="${esc(v)}" ${cat===v?'selected':''}>${esc(l)}</option>`).join('')
+  const catOpts=[['','（なし）'],['制服','制服'],['部品・資材','部品・資材'],['加工サービス','加工サービス']].map(([v,l])=>`<option value="${esc(v)}" ${cat===v?'selected':''}>${esc(l)}</option>`).join('')
   const aliases=(r.nameAliases||[]).filter(Boolean)
   const aliasBlock=aliases.length
     ?`<div class="name-aliases"><p class="excelhint"><strong>代表名:</strong> ${esc(r.name||'—')}</p><p class="excelhint"><strong>照合用別名:</strong> ${aliases.map(esc).join('、')}</p><p class="excelhint">代表名を変えても旧名は別名に残ります（後からのCSV照合用）。</p></div>`
@@ -1012,7 +1052,7 @@ function productForm(r){
   return `<div class="grid">${field('code','社内管理品番（空欄可）',r.code,false)}${field('makerCode','メーカー品番（空＝社内と同じ）',r.makerCode||'',false)}${field('name','商品名（代表名）',r.name,true)}${field('color','色',r.color)}${field('material','生地・素材',r.material||'')}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
     ${aliasBlock}
     <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierChecks">${subChecks}</div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
-    <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。色分割登録では社内管理品番とメーカー品番を分け、発注書にはメーカー品番＋色を出します。</p>
+    <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材／加工サービス）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。加工サービスは衣服在庫数量ではなく加工回数・単価の管理向けです。色分割登録では社内管理品番とメーカー品番を分け、発注書にはメーカー品番＋色を出します。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
       <span class="size-scheme-label">サイズ表記</span>
       <div class="seg" id="sizeScheme">

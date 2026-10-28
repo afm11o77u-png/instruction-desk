@@ -304,10 +304,17 @@ def initialize(c):
     ensure_unconfirmed_site(c)
 
 
-# 商品カテゴリ（空欄可。旧CSVの品番なし行で「制服」「部品・資材」を使う）
+# 商品カテゴリ（空欄可。旧CSVの品番なし行で「制服」「部品・資材」「加工サービス」を使う）
 CATEGORY_UNIFORM = '制服'
 CATEGORY_PARTS = '部品・資材'
-PRODUCT_CATEGORIES = frozenset({'', CATEGORY_UNIFORM, CATEGORY_PARTS})
+CATEGORY_PROCESS_SERVICE = '加工サービス'
+PRODUCT_CATEGORIES = frozenset({
+    '', CATEGORY_UNIFORM, CATEGORY_PARTS, CATEGORY_PROCESS_SERVICE,
+})
+# UI・プレビュー用の並び（空欄→制服→部品・資材→加工サービス）
+PRODUCT_CATEGORY_OPTIONS = (
+    '', CATEGORY_UNIFORM, CATEGORY_PARTS, CATEGORY_PROCESS_SERVICE,
+)
 BLANK_SKU_DISPLAY = '品番なし'
 BLANK_SKU_UNIFORM_DISPLAY = '品番なし（要確認）'
 
@@ -315,8 +322,16 @@ BLANK_SKU_UNIFORM_DISPLAY = '品番なし（要確認）'
 def normalize_category(value):
     t = text(value)
     if t not in PRODUCT_CATEGORIES:
-        raise ValueError('カテゴリは空欄・制服・部品・資材のいずれかです。')
+        raise ValueError('カテゴリは空欄・制服・部品・資材・加工サービスのいずれかです。')
     return t
+
+
+def is_process_service_category(value):
+    return text(value) == CATEGORY_PROCESS_SERVICE
+
+
+def is_physical_parts_category(value):
+    return text(value) == CATEGORY_PARTS
 
 
 def maker_code_of(row_or_code, maker_code=None):
@@ -1903,6 +1918,7 @@ def bootstrap(c):
     return {
         'customers': customers, 'suppliers': suppliers, 'products': products, 'locations': locations,
         'company': stock_orders.company_profile(c),
+        'categoryOptions': list(PRODUCT_CATEGORY_OPTIONS),
     }
 
 
