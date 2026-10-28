@@ -74,16 +74,20 @@ class SidebarLogoByLogoutTest(unittest.TestCase):
         self.assertIn("showCatalog('kintai')", ACCOUNT_JS)
 
     def test_mark_manage_button_chrome(self):
-        # パスワード変更など quiet テキストと区別し、上部モード切替と同系の枠付きボタン
+        # quiet テキストと区別する枠付きだが、リンク相当のコンパクトサイズ
         bar = ACCOUNT_JS.split('block.innerHTML', 1)[1].split('`;', 1)[0]
         self.assertIn('id="markmanage"', bar)
         self.assertNotIn('id="markmanage" class="quiet"', bar)
-        self.assertIn('#accountbar #markmanage{', ACCOUNT_CSS)
-        self.assertIn('border:1px solid #7eaa90', ACCOUNT_CSS)
-        self.assertIn('border-radius:8px', ACCOUNT_CSS[ACCOUNT_CSS.index('#accountbar #markmanage{'):])
+        rule = ACCOUNT_CSS[ACCOUNT_CSS.index('#accountbar #markmanage{'):ACCOUNT_CSS.index('#accountbar #markmanage:hover')]
+        self.assertIn('border:1px solid #7eaa90', rule)
+        self.assertIn('border-radius:5px', rule)
+        self.assertIn('display:inline-block', rule)
+        self.assertIn('width:auto', rule)
+        self.assertIn('padding:2px 6px', rule)
+        self.assertIn('font-size:.8rem', rule)
         self.assertIn('#accountbar #markmanage:hover', ACCOUNT_CSS)
         self.assertIn('#accountbar #markmanage.on{', ACCOUNT_CSS)
-        self.assertIn('#accountbar #markmanage{flex:1 1 100%', ACCOUNT_CSS)
+        self.assertIn('#accountbar #markmanage{flex:0 1 auto', ACCOUNT_CSS)
 
 
 if __name__ == '__main__':
