@@ -281,6 +281,7 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift>aside,
   body.printing-shift>#authscreen,
   body.printing-shift>#printarea,
+  body.printing-shift>#bihincountsheet,
   body.printing-shift>#previewbar,
   body.printing-shift>#toast,
   body.printing-shift>dialog{display:none!important}

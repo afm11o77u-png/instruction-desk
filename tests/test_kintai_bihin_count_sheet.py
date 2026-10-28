@@ -65,6 +65,15 @@ class BihinCountSheetUiContractTest(unittest.TestCase):
         self.assertIn('ヘッダー／フッター', INDEX)
         self.assertIn('A4・縦向き', INDEX)
         self.assertIn('保存はしません', INDEX)
+        # 印刷CSSは body>#bihincountsheet。main 配下だと blank になる（#printarea と同型）
+        self.assertRegex(
+            INDEX.replace('\n', ''),
+            r'</main>.*<section id="bihincountsheet"[^>]*></section>.*<div id="printarea">',
+        )
+        self.assertNotRegex(
+            INDEX.replace('\n', ''),
+            r'<main[^>]*>.*id="bihincountsheet".*</main>',
+        )
 
     def test_print_css_isolates_and_portrait(self):
         self.assertIn('printing-bihin-count', CSS)
