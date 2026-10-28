@@ -297,6 +297,191 @@ class BulkJobTest(unittest.TestCase):
             folder.cleanup()
 
 
+def _ok_result(code, *, maker_sku='', manufacturer='', position='', search_key='', adopted=False):
+    maker_sku = maker_sku or code
+    manufacturer = manufacturer or 'ミドリ安全'
+    key = search_key or bulk.bulk_lookup_dedupe_key(
+        manufacturer=manufacturer, maker_sku=maker_sku, position=position,
+    )
+    return {
+        'searchKey': key,
+        'skuCodes': [code],
+        'makerSku': maker_sku,
+        'position': position,
+        'manufacturer': manufacturer,
+        'searchCriteria': bulk.search_criteria_dict(
+            manufacturer=manufacturer, maker_sku=maker_sku, position=position,
+        ),
+        'status': 'ok',
+        'statusLabel': '一致候補1件',
+        'candidates': [{'name': 'スクラブ', 'color': 'ブルー', 'plannedRegisteredSku': code}],
+        'adoptableSingle': True,
+        'adopted': adopted,
+        'note': '',
+        'referenceUrl': '',
+    }
+
+
+class IncrementalBulkClassifyTest(unittest.TestCase):
+    def test_ab_then_cd_skips_fetched_only_new_searched(self):
+        """A+B 取得後に C+D を選んで再実行 → 新規は C+D のみ。"""
+        groups = [
+            group('SKU-A', maker_sku='SKU-A', manufacturer='ミドリ安全', row_nos=[2]),
+            group('SKU-B', maker_sku='SKU-B', manufacturer='ミドリ安全', row_nos=[3]),
+            group('SKU-C', maker_sku='SKU-C', manufacturer='サーヴォ', row_nos=[4]),
+            group('SKU-D', maker_sku='SKU-D', manufacturer='サーヴォ', row_nos=[5]),
+        ]
+        prior = [
+            _ok_result('SKU-A', manufacturer='ミドリ安全', adopted=True),
+            _ok_result('SKU-B', manufacturer='ミドリ安全', adopted=True),
+        ]
+        # 選択が A+B+C+D のままでも A+B は省略
+        plan = bulk.classify_incremental_bulk_selection(
+            selected_codes=['SKU-A', 'SKU-B', 'SKU-C', 'SKU-D'],
+            sku_groups=groups,
+            rows=[],
+            prior_results=prior,
+        )
+        self.assertEqual(plan['newFetchCount'], 2)
+        self.assertEqual(plan['skippedCachedCount'], 2)
+        self.assertEqual(sorted(plan['toFetchCodes']), ['SKU-C', 'SKU-D'])
+        self.assertEqual(plan['preflightLabel'], '新規取得2件／取得済みのため省略2件')
+        self.assertEqual(plan['criteriaChanged'], [])
+
+        # 実際のジョブは toFetch のみ渡す（検索コールが C+D だけ）
+        folder, path, c = newdb()
+        try:
+            msl.ensure_schema(c)
+            c.close()
+            calls = []
+
+            def fake_search(conn, **kwargs):
+                calls.append(kwargs.get('maker_sku') or '')
+                return {
+                    'status': 'ok',
+                    'statusLabel': '補正候補取得できた',
+                    'makerSku': kwargs.get('maker_sku') or '',
+                    'plannedRegisteredSku': kwargs.get('current_sku') or '',
+                    'manufacturer': kwargs.get('manufacturer') or '',
+                    'candidates': [{
+                        'name': 'パンツ',
+                        'color': 'ネイビー',
+                        'sourceUrl': 'https://example.invalid/y',
+                        'plannedRegisteredSku': kwargs.get('current_sku') or '',
+                    }],
+                    'matchedPages': [],
+                    'referenceUrl': '',
+                    'note': '',
+                }
+
+            job = bulk.start_bulk_lookup_job(
+                path,
+                selected_codes=plan['toFetchCodes'],
+                sku_groups=groups,
+                rows=[],
+                search_fn=fake_search,
+                sleep_fn=lambda _s: None,
+            )
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                job = bulk.get_bulk_lookup_job(job['jobId'])
+                if job.get('finished'):
+                    break
+                time.sleep(0.02)
+            self.assertEqual(job['status'], 'done')
+            self.assertEqual(job['total'], 2)
+            self.assertEqual(len(calls), 2)
+            called = {msl.sku_match_key(x) for x in calls}
+            self.assertEqual(called, {msl.sku_match_key('SKU-C'), msl.sku_match_key('SKU-D')})
+            merged = bulk.merge_bulk_result_rows(prior, job['results'], replace_sku_codes=plan['toFetchCodes'])
+            codes = sorted({c for r in merged for c in r.get('skuCodes') or []})
+            self.assertEqual(codes, ['SKU-A', 'SKU-B', 'SKU-C', 'SKU-D'])
+            self.assertTrue(any(r.get('adopted') and 'SKU-A' in (r.get('skuCodes') or []) for r in merged))
+            self.assertEqual(len(merged), 4)
+        finally:
+            folder.cleanup()
+
+    def test_no_reuse_by_sku_alone_when_maker_differs(self):
+        groups = [group('72-1226', maker_sku='72-1226', manufacturer='サーヴォ', row_nos=[2])]
+        prior = [_ok_result('72-1226', maker_sku='72-1226', manufacturer='ミドリ安全')]
+        plan = bulk.classify_incremental_bulk_selection(
+            selected_codes=['72-1226'],
+            sku_groups=groups,
+            rows=[],
+            prior_results=prior,
+        )
+        self.assertEqual(plan['newFetchCount'], 1)
+        self.assertEqual(plan['skippedCachedCount'], 0)
+        self.assertEqual(len(plan['criteriaChanged']), 1)
+        diff = plan['criteriaChanged'][0]
+        self.assertEqual(diff['previous']['manufacturer'], 'ミドリ安全')
+        self.assertEqual(diff['current']['manufacturer'], 'サーヴォ')
+
+    def test_position_difference_not_collapsed_by_sku(self):
+        groups = [
+            group('VEH30B上', maker_sku='VEH30B', manufacturer='サーヴォ', row_nos=[2]),
+        ]
+        prior = [_ok_result(
+            'VEH30B上', maker_sku='VEH30B', manufacturer='サーヴォ', position='下',
+        )]
+        # prior は下条件でキャッシュされているが、選択は上 → 条件差で再取得
+        plan = bulk.classify_incremental_bulk_selection(
+            selected_codes=['VEH30B上'],
+            sku_groups=groups,
+            rows=[],
+            prior_results=prior,
+        )
+        self.assertEqual(plan['newFetchCount'], 1)
+        self.assertEqual(plan['skippedCachedCount'], 0)
+        self.assertTrue(plan['criteriaChanged'])
+
+    def test_force_refetch_includes_no_match(self):
+        groups = [group('SKU-A', maker_sku='SKU-A', manufacturer='ミドリ安全')]
+        prior = [{
+            **_ok_result('SKU-A', manufacturer='ミドリ安全'),
+            'status': 'no_match',
+            'statusLabel': '候補なし',
+            'candidates': [],
+            'adoptableSingle': False,
+        }]
+        skip_plan = bulk.classify_incremental_bulk_selection(
+            selected_codes=['SKU-A'], sku_groups=groups, rows=[], prior_results=prior,
+        )
+        self.assertEqual(skip_plan['newFetchCount'], 0)
+        self.assertEqual(skip_plan['skippedCachedCount'], 1)
+        force_key = prior[0]['searchKey']
+        force_plan = bulk.classify_incremental_bulk_selection(
+            selected_codes=['SKU-A'],
+            sku_groups=groups,
+            rows=[],
+            prior_results=prior,
+            force_search_keys=[force_key],
+        )
+        self.assertEqual(force_plan['newFetchCount'], 1)
+        self.assertEqual(force_plan['skippedCachedCount'], 0)
+
+    def test_merge_results_no_duplicate_targets(self):
+        a = _ok_result('SKU-A', adopted=True)
+        b = _ok_result('SKU-B')
+        c = _ok_result('SKU-C')
+        c2 = dict(c)
+        c2['note'] = 'updated'
+        merged = bulk.merge_bulk_result_rows([a, b, c], [c2, _ok_result('SKU-D')], replace_sku_codes=['SKU-C'])
+        keys = [r['searchKey'] for r in merged]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(merged), 4)
+        self.assertTrue(any(r.get('adopted') for r in merged if 'SKU-A' in r['skuCodes']))
+        self.assertEqual(next(r for r in merged if 'SKU-C' in r['skuCodes'])['note'], 'updated')
+
+    def test_search_criteria_equal_requires_maker_and_position(self):
+        a = bulk.search_criteria_dict(manufacturer='ミドリ安全', maker_sku='X', position='')
+        b = bulk.search_criteria_dict(manufacturer='サーヴォ', maker_sku='X', position='')
+        c = bulk.search_criteria_dict(manufacturer='ミドリ安全', maker_sku='X', position='上')
+        self.assertFalse(bulk.search_criteria_equal(a, b))
+        self.assertFalse(bulk.search_criteria_equal(a, c))
+        self.assertTrue(bulk.search_criteria_equal(a, dict(a)))
+
+
 class BulkMetaAndUiSourceTest(unittest.TestCase):
     def test_sku_group_meta_exposes_bulk_eligible(self):
         meta = msl.sku_group_maker_correction_meta(
@@ -328,16 +513,35 @@ class BulkMetaAndUiSourceTest(unittest.TestCase):
         js = (ROOT / 'static' / 'product_ledger_csv.js').read_text(encoding='utf-8')
         self.assertIn('選択した商品のメーカー情報を取得', js)
         self.assertIn('選択した補正を採用', js)
+        self.assertIn('/api/product-ledger-csv/maker-lookup/bulk/plan', js)
         self.assertIn('/api/product-ledger-csv/maker-lookup/bulk/start', js)
         self.assertIn('/api/product-ledger-csv/maker-lookup/bulk/cancel', js)
         self.assertIn('plBulkMakerFetch', js)
         self.assertIn('applyMakerCandidateToPreview', js)
+        self.assertIn('data-pl-bulk-maker-refetch', js)
+        self.assertIn('再取得', js)
+        self.assertIn('新規取得', js)
+        self.assertIn('取得済みのため省略', js)
+        self.assertIn('mergeBulkMakerResultRows', js)
+        self.assertIn('_incrementalMerge', js)
+        # 採用後に選択解除
+        self.assertIn('st.selectedCodes[String(code)]=false', js)
         # 既存単品も維持
         self.assertIn('data-pl-sku-maker-correct', js)
         self.assertIn('data-pl-maker-correct', js)
+        # 取得開始で結果を全消ししない
+        start = js.split('async function startBulkMakerLookup(')[1].split(
+            'async function refetchBulkMakerResult('
+        )[0]
+        self.assertIn('priorBulkResultsPayload', start)
+        self.assertIn('keptResults', start)
+        self.assertNotIn('results:[]', start.replace(' ', ''))
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
+        self.assertIn("'/api/product-ledger-csv/maker-lookup/bulk/plan'", server)
         self.assertIn("'/api/product-ledger-csv/maker-lookup/bulk/start'", server)
         self.assertIn('maker_sku_bulk_lookup', server)
+        limits = (ROOT / 'upload_limits.py').read_text(encoding='utf-8')
+        self.assertIn("'/api/product-ledger-csv/maker-lookup/bulk/plan'", limits)
 
 
 if __name__ == '__main__':

@@ -427,6 +427,24 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             print(f'maker-lookup adopt failed: {type(e).__name__}: {e}', flush=True)
             return 400, {'error': '採用内容の保存に失敗しました。', 'code': 'maker_adopt_failed'}
         return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/bulk/plan':
+        import maker_sku_bulk_lookup
+        try:
+            result = maker_sku_bulk_lookup.classify_incremental_bulk_selection(
+                selected_codes=payload.get('selectedCodes') or payload.get('selected_codes') or [],
+                sku_groups=payload.get('skuGroups') or payload.get('sku_groups') or [],
+                rows=payload.get('rows') or [],
+                prior_results=payload.get('priorResults') or payload.get('prior_results') or [],
+                force_search_keys=(
+                    payload.get('forceSearchKeys') or payload.get('force_search_keys') or []
+                ),
+            )
+        except ValueError as e:
+            return 400, {'error': str(e) or '一括取得の事前確認に失敗しました。'}
+        except (OSError, sqlite3.Error, TypeError) as e:
+            print(f'maker-lookup bulk plan failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {'error': '一括取得の事前確認に失敗しました。', 'code': 'maker_bulk_plan_failed'}
+        return 200, result
     if path == '/api/product-ledger-csv/maker-lookup/bulk/start':
         import maker_sku_bulk_lookup
         try:

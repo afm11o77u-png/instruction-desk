@@ -3213,6 +3213,85 @@
     return `${result.searchKey||result.skuCodes&&result.skuCodes[0]||''}#${candIdx}`
   }
 
+  /** 一括結果の件数を結果一覧から再集計（追記マージ後の表示用）。 */
+  function recountBulkMakerCounts(results){
+    const counts={
+      ok:0,multiple:0,colorwayChoice:0,needsConfirm:0,fetchFailed:0,
+      pageUnavailable:0,noMatch:0,officialNoHit:0,cancelled:0,pending:0,error:0
+    }
+    ;(results||[]).forEach(r=>{
+      const status=(r&&r.status)||'error'
+      if(status==='ok')counts.ok+=1
+      else if(status==='multiple'){counts.multiple+=1;counts.needsConfirm+=1}
+      else if(status==='colorway_choice'){counts.colorwayChoice+=1;counts.needsConfirm+=1}
+      else if(['parse_incomplete','sku_mismatch','maker_mismatch','invalid_sku','invalid_url'].includes(status)){
+        counts.needsConfirm+=1
+      }else if(status==='fetch_failed')counts.fetchFailed+=1
+      else if(status==='page_unavailable')counts.pageUnavailable+=1
+      else if(status==='official_no_hit')counts.officialNoHit+=1
+      else if(status==='no_match')counts.noMatch+=1
+      else if(status==='cancelled')counts.cancelled+=1
+      else if(status==='pending')counts.pending+=1
+      else counts.error+=1
+    })
+    return counts
+  }
+
+  /**
+   * 結果一覧を追記・更新。同一 searchKey は重複させない。
+   * replaceCodes に含まれる品番の旧行は差し替え対象として除去する。
+   */
+  function mergeBulkMakerResultRows(priorResults,newResults,replaceCodes){
+    const replaceSet=new Set((replaceCodes||[]).map(String))
+    const incoming=(newResults||[]).filter(r=>r&&typeof r==='object')
+    const newKeys=new Set(incoming.map(r=>String(r.searchKey||'')).filter(Boolean))
+    const kept=(priorResults||[]).filter(r=>{
+      if(!r||typeof r!=='object')return false
+      const key=String(r.searchKey||'')
+      if(key&&newKeys.has(key))return false
+      const codes=(r.skuCodes||[]).map(String)
+      if(replaceSet.size&&codes.some(c=>replaceSet.has(c)))return false
+      return true
+    })
+    return kept.concat(incoming)
+  }
+
+  function priorBulkResultsPayload(panel){
+    return ((panel&&panel.results)||[]).map(r=>({
+      searchKey:r.searchKey||'',
+      skuCodes:listCopy(r.skuCodes),
+      status:r.status||'',
+      manufacturer:r.manufacturer||'',
+      makerSku:r.makerSku||'',
+      position:r.position||'',
+      searchCriteria:r.searchCriteria||null,
+      adopted:!!r.adopted
+    }))
+  }
+
+  function listCopy(arr){
+    return Array.isArray(arr)?arr.slice():[]
+  }
+
+  function formatBulkCriteriaDiffs(diffs){
+    if(!diffs||!diffs.length)return ''
+    return diffs.slice(0,8).map(d=>{
+      const prev=d.previous||{}
+      const cur=d.current||{}
+      const bits=[]
+      if(String(prev.manufacturer||'')!==String(cur.manufacturer||'')){
+        bits.push(`メーカー ${prev.manufacturer||'—'}→${cur.manufacturer||'—'}`)
+      }
+      if(String(prev.makerSku||'')!==String(cur.makerSku||'')){
+        bits.push(`品番 ${prev.makerSku||'—'}→${cur.makerSku||'—'}`)
+      }
+      if(String(prev.position||'')!==String(cur.position||'')){
+        bits.push(`上下 ${prev.position||'（なし）'}→${cur.position||'（なし）'}`)
+      }
+      return `${d.skuCode||''}: ${bits.join('／')||'条件変更'}`
+    }).join('；')+(diffs.length>8?` …他${diffs.length-8}`:'')
+  }
+
   /** 確認残り件数（採用メタ表示用）。 */
   function bulkMakerRemainingConfirmCount(panel){
     if(!panel)return 0
@@ -3391,8 +3470,14 @@
           })
         }
         st.bulkMakerLookup.adoptSelected[key]=!!el.checked
-        // チェックだけでは採用・再照合・登録しない。候補リストも作り直さない。
+        // チェックだけでは採用・再照合・登録しない。候補リストも作り直さない。スクロールも動かさない。
         syncBulkMakerAdoptSelectionUi(st)
+      }
+    })
+    document.querySelectorAll('[data-pl-bulk-maker-refetch]').forEach(el=>{
+      el.onclick=()=>{
+        const ri=Number(el.getAttribute('data-pl-bulk-maker-refetch'))
+        refetchBulkMakerResult(st,ri)
       }
     })
     document.querySelectorAll('.pl-bulk-maker-panel [data-pl-maker-url-input]').forEach(input=>{
@@ -3512,6 +3597,14 @@
     const dupNote=(panel.duplicateCollapsed||0)>0
       ?`<p class="excelhint">同じメーカー・品番・上下の重複検索を ${panel.duplicateCollapsed} 件まとめました（上下区分は区別します）。</p>`
       :''
+    const preflight=panel.preflight||null
+    const preflightNote=preflight
+      ?`<p class="excelhint" id="plBulkMakerPreflight">${esc(preflight.label||`新規取得${preflight.newFetch||0}件／取得済みのため省略${preflight.skipped||0}件`)}。進捗は新規取得のみ。失敗・候補なしのやり直しは各行の「再取得」から。</p>`
+      :''
+    const criteriaDiffNote=formatBulkCriteriaDiffs(panel.criteriaDiffs||[])
+    const criteriaNote=criteriaDiffNote
+      ?`<p class="excelhint" id="plBulkMakerCriteriaDiff">検索条件の変更（品番だけでは再利用しません）: ${esc(criteriaDiffNote)}</p>`
+      :''
     const rows=results.map((r,ri)=>{
       const codes=(r.skuCodes||[]).join('、')||'—'
       const cands=r.candidates||[]
@@ -3575,10 +3668,13 @@
       const urlErr=(panel.urlFetchErrors&&panel.urlFetchErrors[r.searchKey||ri])
         ?`<p class="product-ledger-import-error" role="alert">${esc(panel.urlFetchErrors[r.searchKey||ri])}</p>`
         :''
-      return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}" data-bulk-result-idx="${ri}">
+      const refetchBtn=(!panel.running)
+        ?`<button type="button" class="quiet" data-pl-bulk-maker-refetch="${ri}" ${st.busy?'disabled':''}>再取得</button>`
+        :''
+      return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}" data-bulk-result-idx="${ri}" data-bulk-search-key="${esc(r.searchKey||'')}">
         <td>${esc(codes)}</td>
         <td>${esc(r.makerSku||'—')}${r.position?`（${esc(r.position)}）`:''}</td>
-        <td><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
+        <td><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${refetchBtn}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
       </tr>`
     }).join('')
     const resultTable=results.length
@@ -3597,8 +3693,8 @@
         ${panel.finished?`<button type="button" class="quiet" id="plBulkMakerClose">結果を閉じる</button>`:''}
       </div>
       <p class="excelhint" id="plBulkMakerCounts">${esc(countLine)}</p>
-      ${exclNote}${dupNote}
-      <p class="excelhint">取得だけでは登録予定は変わりません。候補を確認してから「選択した補正を採用」してください（最終登録は既存の登録確定操作）。上限 ${panel.maxTargets||40} ユニーク検索／間隔 ${panel.delaySec||0.8} 秒。無料の公開ページのみ。</p>
+      ${preflightNote}${criteriaNote}${exclNote}${dupNote}
+      <p class="excelhint">取得だけでは登録予定は変わりません。候補を確認してから「選択した補正を採用」してください（最終登録は既存の登録確定操作）。再実行時は未取得の選択のみ検索し、取得済み結果・採用・手入力は保持します。上限 ${panel.maxTargets||40} ユニーク検索／間隔 ${panel.delaySec||0.8} 秒。無料の公開ページのみ。</p>
       ${resultTable}
       <div class="bar">
         <button type="button" class="primary" id="plBulkMakerAdopt" ${adoptDisabled?'disabled':''}>選択した補正を採用</button>
@@ -3607,37 +3703,56 @@
     </div>`
   }
 
-  function mergeBulkMakerJobIntoState(st,job,prev){
+  function mergeBulkMakerJobIntoState(st,job,prev,opts){
+    opts=opts||{}
     const prevAdopt=(prev&&prev.adoptSelected)||{}
     const prevResults=(prev&&prev.results)||[]
+    const replaceCodes=opts.replaceCodes||(prev&&prev._mergeReplaceCodes)||[]
+    const incremental=opts.incremental!=null?!!opts.incremental:!!(prev&&prev._incrementalMerge)
     const adoptedMap={}
     prevResults.forEach(r=>{
       if(r&&r.adopted)adoptedMap[r.searchKey||'']=true
     })
-    const results=(job.results||[]).map(r=>{
+    const jobResults=(job.results||[]).map(r=>{
       const copy=Object.assign({},r)
-      if(adoptedMap[copy.searchKey||''])copy.adopted=true
+      // 明示再取得で差し替えた行は採用済を引き継がない
+      const replaced=(replaceCodes||[]).some(c=>(copy.skuCodes||[]).map(String).includes(String(c)))
+      if(!replaced&&adoptedMap[copy.searchKey||''])copy.adopted=true
       return copy
     })
+    const results=incremental
+      ?mergeBulkMakerResultRows(prevResults,jobResults,replaceCodes)
+      :jobResults
     const adoptSelected=Object.assign({},prevAdopt)
-    // 一致候補1件は確認しやすいよう初期選択（複数は手動）
+    // 差し替え対象の旧 adopt キーは落とす
+    const replaceSet=new Set((replaceCodes||[]).map(String))
+    if(replaceSet.size){
+      Object.keys(adoptSelected).forEach(k=>{
+        const base=k.split('#')[0]
+        const hit=results.some(r=>String(r.searchKey||'')===base)
+        if(!hit)delete adoptSelected[k]
+      })
+    }
+    // 一致候補1件は確認しやすいよう初期選択（複数は手動）。取得済み行は触らない。
     results.forEach(r=>{
       if(r.adoptableSingle&&!r.adopted){
         const key=bulkMakerAdoptSelectionKey(r,0)
         if(adoptSelected[key]==null)adoptSelected[key]=true
       }
     })
+    const counts=recountBulkMakerCounts(results)
     st.bulkMakerLookup={
       jobId:job.jobId,
       running:!job.finished,
       finished:!!job.finished,
+      // 進捗は今回の新規取得のみ
       done:job.done||0,
       total:job.total||0,
       currentSku:job.currentSku||'',
       currentMakerSku:job.currentMakerSku||'',
-      counts:job.counts||{},
+      counts,
       results,
-      excluded:job.excluded||[],
+      excluded:job.excluded||(prev&&prev.excluded)||[],
       limitSkipped:job.limitSkipped||[],
       selectedCount:job.selectedCount||0,
       excludedCount:job.excludedCount||0,
@@ -3650,7 +3765,11 @@
       adoptedCount:(prev&&prev.adoptedCount)||0,
       urlInputs:(prev&&prev.urlInputs)||{},
       urlFetchErrors:(prev&&prev.urlFetchErrors)||{},
-      _completionToasted:(prev&&prev._completionToasted)||false
+      preflight:(prev&&prev.preflight)||null,
+      criteriaDiffs:(prev&&prev.criteriaDiffs)||[],
+      _completionToasted:(prev&&prev._completionToasted)||false,
+      _incrementalMerge:incremental,
+      _mergeReplaceCodes:replaceCodes
     }
   }
 
@@ -3669,43 +3788,106 @@
     return result
   }
 
-  async function startBulkMakerLookup(st){
-    const codes=selectedCodeList(st)
+  async function startBulkMakerLookup(st,opts){
+    opts=opts||{}
+    const forceSearchKeys=(opts.forceSearchKeys||[]).map(String).filter(Boolean)
+    const codes=(opts.codes&&opts.codes.length)?opts.codes.map(String):selectedCodeList(st)
     if(!codes.length){st.toast('品番を選択してください。');return}
     if(st.bulkMakerLookup&&st.bulkMakerLookup.running){st.toast('一括取得が進行中です。');return}
+    const prevPanel=st.bulkMakerLookup||null
     const codeSet=new Set(codes.map(String))
-    const groups=((st.preview&&st.preview.skuGroups)||[]).filter(g=>codeSet.has(String(g.code)))
-    const rowNoSet=new Set()
-    groups.forEach(g=>(g.rowNos||[]).forEach(n=>rowNoSet.add(Number(n))))
-    const rows=((st.preview&&st.preview.rows)||[]).filter(r=>rowNoSet.has(Number(r.rowNo)))
-    // 対象外の事前カウント（サーバーでも再計算）
-    let excludedHint=0
-    groups.forEach(g=>{
-      const mk=g.makerCorrection||{}
-      const sku=mk.makerSku||''
-      const ok=mk.bulkEligible!=null?!!mk.bulkEligible:!!sku
-      if(!ok)excludedHint+=1
+    // plan／start 用に選択＋取得済み結果のグループを渡す（条件比較・省略判定）
+    const priorCodes=new Set()
+    ;((prevPanel&&prevPanel.results)||[]).forEach(r=>{
+      ;(r.skuCodes||[]).forEach(c=>priorCodes.add(String(c)))
     })
+    const groups=((st.preview&&st.preview.skuGroups)||[]).filter(g=>{
+      const c=String(g.code)
+      return codeSet.has(c)||priorCodes.has(c)
+    })
+    const planGroups=groups.filter(g=>codeSet.has(String(g.code)))
+    const rowNoSet=new Set()
+    planGroups.forEach(g=>(g.rowNos||[]).forEach(n=>rowNoSet.add(Number(n))))
+    const rows=((st.preview&&st.preview.rows)||[]).filter(r=>rowNoSet.has(Number(r.rowNo)))
+    let plan
+    try{
+      plan=await st.api('/api/product-ledger-csv/maker-lookup/bulk/plan',{
+        selectedCodes:codes,
+        skuGroups:planGroups,
+        rows,
+        priorResults:priorBulkResultsPayload(prevPanel),
+        forceSearchKeys
+      })
+    }catch(e){
+      st.toast(apiErrorMessage(e,'一括取得の事前確認に失敗しました。'),6000)
+      return
+    }
+    const newCount=Number(plan.newFetchCount||0)
+    const skipCount=Number(plan.skippedCachedCount||0)
+    const preflightLabel=plan.preflightLabel||`新規取得${newCount}件／取得済みのため省略${skipCount}件`
+    const criteriaDiffs=plan.criteriaChanged||[]
+    const diffNote=formatBulkCriteriaDiffs(criteriaDiffs)
+    if(!newCount){
+      st.toast(
+        `${preflightLabel}。失敗・候補なしのやり直しは各行の「再取得」から。`+
+        (diffNote?` 条件差: ${diffNote}`:''),
+        7000
+      )
+      return
+    }
+    if(!opts.skipConfirm){
+      const ok=confirm(
+        `${preflightLabel}\n`+
+        (diffNote?`検索条件の変更: ${diffNote}\n`:'')+
+        `\n取得済みの結果・採用内容・手入力は保持します。\n新規分のみ検索します。続行しますか？`
+      )
+      if(!ok)return
+    }
+    const toFetch=(plan.toFetchCodes||[]).map(String)
+    const fetchSet=new Set(toFetch)
+    const fetchGroups=planGroups.filter(g=>fetchSet.has(String(g.code)))
+    const fetchRowNos=new Set()
+    fetchGroups.forEach(g=>(g.rowNos||[]).forEach(n=>fetchRowNos.add(Number(n))))
+    const fetchRows=((st.preview&&st.preview.rows)||[]).filter(r=>fetchRowNos.has(Number(r.rowNo)))
+    const keptResults=mergeBulkMakerResultRows(
+      (prevPanel&&prevPanel.results)||[],
+      [],
+      toFetch
+    )
     st.busy=true
     st.bulkMakerLookup={
       running:true,finished:false,done:0,total:0,currentSku:'',currentMakerSku:'',
-      counts:{},results:[],excluded:[],adoptSelected:{},adoptedCount:0,
-      excludedCount:excludedHint,maxTargets:40,delaySec:0.8
+      counts:recountBulkMakerCounts(keptResults),
+      results:keptResults,
+      excluded:[],
+      adoptSelected:Object.assign({},(prevPanel&&prevPanel.adoptSelected)||{}),
+      adoptedCount:(prevPanel&&prevPanel.adoptedCount)||0,
+      excludedCount:plan.excludedCount||0,
+      maxTargets:40,delaySec:0.8,
+      urlInputs:(prevPanel&&prevPanel.urlInputs)||{},
+      urlFetchErrors:(prevPanel&&prevPanel.urlFetchErrors)||{},
+      preflight:{newFetch:newCount,skipped:skipCount,label:preflightLabel},
+      criteriaDiffs,
+      _incrementalMerge:true,
+      _mergeReplaceCodes:toFetch,
+      _completionToasted:false
     }
     // 自動スクロールしない。開始は toast／進捗テキストのみ（「結果を見る」は任意）。
     paintDialog()
     try{
       const job=await st.api('/api/product-ledger-csv/maker-lookup/bulk/start',{
-        selectedCodes:codes,
-        skuGroups:groups,
-        rows
+        selectedCodes:toFetch,
+        skuGroups:fetchGroups,
+        rows:fetchRows
       })
-      mergeBulkMakerJobIntoState(st,job,st.bulkMakerLookup)
-      if(job.excludedCount){
-        st.toast(`対象外 ${job.excludedCount} 件を除外し、ユニーク検索 ${job.uniqueSearchCount||0} 件を開始しました。必要なら「結果を見る」でパネルへ移動できます。`)
-      }else{
-        st.toast(`メーカー情報の一括取得を開始（ユニーク検索 ${job.uniqueSearchCount||0} 件）。必要なら「結果を見る」でパネルへ移動できます。`)
-      }
+      mergeBulkMakerJobIntoState(st,job,st.bulkMakerLookup,{
+        incremental:true,
+        replaceCodes:toFetch
+      })
+      const excl=job.excludedCount?`（対象外 ${job.excludedCount} 件除外）`:''
+      st.toast(
+        `${preflightLabel}${excl}。ユニーク検索 ${job.uniqueSearchCount||0} 件を開始。必要なら「結果を見る」でパネルへ移動できます。`
+      )
       if(!job.finished)startBulkMakerPoll(st)
       else{
         stopBulkMakerPoll(st)
@@ -3724,6 +3906,22 @@
     }
   }
 
+  /** 結果行の明示「再取得」（失敗・候補なし含む。一括再実行では省略される分）。 */
+  async function refetchBulkMakerResult(st,resultIdx){
+    const panel=st.bulkMakerLookup
+    if(!panel||panel.running){st.toast('一括取得の完了後に再取得できます。');return}
+    const row=(panel.results||[])[Number(resultIdx)]
+    if(!row){st.toast('対象行が見つかりません。');return}
+    const codes=(row.skuCodes||[]).map(String).filter(Boolean)
+    if(!codes.length){st.toast('再取得する品番がありません。');return}
+    const key=row.searchKey||''
+    await startBulkMakerLookup(st,{
+      codes,
+      forceSearchKeys:key?[key]:[],
+      skipConfirm:true
+    })
+  }
+
   function startBulkMakerPoll(st){
     stopBulkMakerPoll(st)
     st._bulkMakerPoll=setInterval(()=>{pollBulkMakerLookup(st)},900)
@@ -3737,7 +3935,10 @@
     try{
       const prevSig=bulkMakerStructureSignature(panel)
       const job=await st.api('/api/product-ledger-csv/maker-lookup/bulk/status',{jobId:panel.jobId})
-      mergeBulkMakerJobIntoState(st,job,panel)
+      mergeBulkMakerJobIntoState(st,job,panel,{
+        incremental:!!panel._incrementalMerge,
+        replaceCodes:panel._mergeReplaceCodes||[]
+      })
       // 進捗更新でも外枠・候補リストのスクロール／チェック操作を乱さない
       const next=st.bulkMakerLookup
       const nextSig=bulkMakerStructureSignature(next)
@@ -3771,7 +3972,10 @@
     if(!panel||!panel.jobId)return
     try{
       const job=await st.api('/api/product-ledger-csv/maker-lookup/bulk/cancel',{jobId:panel.jobId})
-      mergeBulkMakerJobIntoState(st,job,panel)
+      mergeBulkMakerJobIntoState(st,job,panel,{
+        incremental:!!panel._incrementalMerge,
+        replaceCodes:panel._mergeReplaceCodes||[]
+      })
       st.toast('一括取得を中止しました（取得済み結果は保持）')
       paintDialog()
     }catch(e){
@@ -3939,18 +4143,24 @@
         p.result.adopted=true
         adoptSel[p.key]=false
         adopted+=1
+        // 採用成功した品番は一括取得の選択から外す（スクロールは chase しない）
+        ;(p.result.skuCodes||[]).forEach(code=>{
+          if(st.selectedCodes)st.selectedCodes[String(code)]=false
+        })
       }
       panel.adoptedCount=(panel.adoptedCount||0)+adopted
       const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
       st.preview=nextPreview
       st.previewError=''
       snapshotAppliedSkuDecisions(st)
+      // 初期在庫の選択・照合情報は preview 再取得でも openingSelections を消さない
       st.toast(`メーカー補正を ${adopted} 件採用しました（プレビュー反映のみ。台帳未登録）`)
     }catch(e){
       st.toast(apiErrorMessage(e,'一括採用に失敗しました。'),6000)
     }finally{
       st.busy=false
       paintDialog()
+      syncSkuSelectionUi(st)
     }
   }
 
@@ -5759,8 +5969,15 @@
       bulkMakerStructureSignature,
       bulkMakerProgressLine,
       bulkMakerCountLine,
+      recountBulkMakerCounts,
+      mergeBulkMakerResultRows,
+      priorBulkResultsPayload,
+      formatBulkCriteriaDiffs,
       patchBulkMakerProgressTexts,
       scrollMakerLookupIntoView,
+      startBulkMakerLookup,
+      refetchBulkMakerResult,
+      adoptBulkMakerSelections,
       scheduleLedgerScrollRestore,
       captureLedgerScroll,
       restoreLedgerScroll,
