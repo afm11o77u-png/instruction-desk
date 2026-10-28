@@ -56,8 +56,10 @@ _PHYSICAL_PARTS_MARKERS = (
     'ベルト部品', '芯', 'パッド',
 )
 
-# 取付・縫付などの表記ゆれ → 短い正規形（同一サービスへの名寄せ）
+# 取付・縫付・付替などの表記ゆれ → 短い正規形（同一サービスへの名寄せ）
 _ATTACH_VERB_CANON = (
+    ('付け替え', '付替'),
+    ('付替え', '付替'),
     ('取り付け', '取付'),
     ('取付け', '取付'),
     ('縫い付け', '縫付'),
@@ -107,7 +109,22 @@ _SERVICE_NAME_ALIASES = {
     'ポケット縫付': 'ポケット取付',
     'ポケット縫い付け': 'ポケット取付',
     'ポケット縫付け': 'ポケット取付',
+    # ポケット付替系（取付とは別サービス。付け替え／付替えは同一）
+    'ポケット付替': 'ポケット付替',
+    'ポケット付け替え': 'ポケット付替',
+    'ポケット付替え': 'ポケット付替',
     '上衣加工': '上衣加工',
+    # K2 実務で確認済みの加工名（衣服種だけの名称は対象外。帽子加工は「加工」へ落とさない）
+    '帽子加工': '帽子加工',
+    'パンツウエスト直し': 'パンツウエスト直し',
+    'ウエスト直し': 'パンツウエスト直し',
+    'パンツ丈上げ': 'パンツ丈上げ',
+    '丈上げ': 'パンツ丈上げ',
+    # 全角・半角空白差は normalize_service_key で吸収。表示は空白なし
+    'エプロンカン止': 'エプロンカン止',
+    'エプロン カン止': 'エプロンカン止',
+    'エプロン　カン止': 'エプロンカン止',
+    'カン止': 'エプロンカン止',
     # K2 実務で確認済み（「加工」接尾が無くても明確な加工内容）
     'ほつれ補修': 'ほつれ補修',
     'ホツレ補修': 'ほつれ補修',
@@ -135,7 +152,8 @@ _SERVICE_NAME_CANDIDATES = sorted(
 
 # 明確な加工サービスを示す接尾（「加工」文字がなくても可）
 _SERVICE_SUFFIX_RE = re.compile(
-    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|裾上げ|裾直し|丈直し|'
+    r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|付替|付け替え|付替え|'
+    r'裾上げ|裾直し|丈直し|丈上げ|ウエスト直し|カン止|'
     r'サイズダウン|付け|補修|外し|取り外し|取外し)$'
 )
 # 顧客固有の「〜用」接頭（わらく堂用上衣加工 など）
@@ -428,6 +446,9 @@ def unify_processing_service_name(raw_name: str) -> str:
         base, _inners = _strip_parens_keep_inner(cand)
         _cust, without_cust = _strip_customer_use_prefix(base)
         for trial in (without_cust, base, cand):
+            trial_compact = canonicalize_attach_verbs(
+                re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', trial or ''))
+            )
             stripped = _KIND_STRIP_RE.sub('', trial)
             stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', stripped))
             stripped = canonicalize_attach_verbs(stripped)
@@ -439,13 +460,15 @@ def unify_processing_service_name(raw_name: str) -> str:
                 if sub:
                     return sub
                 continue
-            resolved = _resolve_service_core(stripped)
+            # 帽子加工 → 衣服種除去で「加工」だけになる場合は原文を採用（bare「加工」へ落とさない）
+            resolve_target = trial_compact if stripped == '加工' and trial_compact != '加工' else stripped
+            resolved = _resolve_service_core(resolve_target)
             if resolved:
                 return resolved
             # 衣服種を残したまま末尾だけ加工語のとき（コックコート七分袖加工）
             for term in _SERVICE_NAME_CANDIDATES:
                 tk = normalize_service_key(term)
-                sk = normalize_service_key(stripped)
+                sk = normalize_service_key(resolve_target)
                 if tk and sk.endswith(tk):
                     return _canonical_from_term(term)
 
