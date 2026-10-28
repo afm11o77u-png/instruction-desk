@@ -854,10 +854,11 @@ def _spec_signature(color, processing, material):
 
 
 def _map_row_spec_full(map_row):
-    """色・加工・素材に加え、加工サービス分離・上下品番メタを返す。"""
+    """色・加工・素材に加え、加工サービス分離・上下品番・販売用途メタを返す。"""
     color = ''
     processing = ''
     material = ''
+    usage_kind = ''
     row_kind = ''
     processing_product_id = None
     position = ''
@@ -867,6 +868,7 @@ def _map_row_spec_full(map_row):
     if map_row is None:
         return {
             'color': color, 'processing': processing, 'material': material,
+            'usageKind': usage_kind,
             'rowKind': row_kind, 'processingProductId': processing_product_id,
             'position': position, 'registeredCode': registered_code,
             'baseCode': base_code, 'sourceCode': source_code,
@@ -894,6 +896,9 @@ def _map_row_spec_full(map_row):
             material = stock.text(spec.get('material') or material)
         if not processing:
             processing = stock.text(spec.get('processingServiceName') or '')
+        usage_kind = stock.text(
+            spec.get('usageKind') or spec.get('handlingType') or ''
+        )
         row_kind = stock.text(spec.get('rowKind') or '')
         pid = spec.get('processingProductId')
         if pid not in (None, ''):
@@ -910,12 +915,58 @@ def _map_row_spec_full(map_row):
             supp = stock.text(spec.get('supplement') or '')
             if supp in position_sku.POSITION_TOKENS:
                 position = supp
+    # 原文商品名に販売マーカーが残っている場合も用途ありとみなす
+    if not usage_kind and 'csv_product_name' in keys:
+        try:
+            import product_ledger_paren as paren_classify
+            has_sales, _ = paren_classify.detect_sales_usage_marker(
+                stock.text(map_row['csv_product_name'] or '')
+            )
+            if has_sales:
+                usage_kind = paren_classify.USAGE_KIND_SALES
+        except Exception:
+            pass
+    if not usage_kind and 'csv_customer' in keys:
+        try:
+            import product_ledger_paren as paren_classify
+            has_sales, _ = paren_classify.detect_sales_usage_marker(
+                stock.text(map_row['csv_customer'] or '')
+            )
+            if has_sales:
+                usage_kind = paren_classify.USAGE_KIND_SALES
+        except Exception:
+            pass
     return {
         'color': color, 'processing': processing, 'material': material,
+        'usageKind': usage_kind,
         'rowKind': row_kind, 'processingProductId': processing_product_id,
         'position': position, 'registeredCode': registered_code,
         'baseCode': base_code, 'sourceCode': source_code,
     }
+
+
+def _aux_row_usage_kind(*, product_name, customer):
+    """初期在庫CSV行の販売用途。マーカー無しは空（レンタルと断定しない）。"""
+    import product_ledger_paren as paren_classify
+    has_p, _ = paren_classify.detect_sales_usage_marker(product_name or '')
+    if has_p:
+        return paren_classify.USAGE_KIND_SALES
+    has_c, _ = paren_classify.detect_sales_usage_marker(customer or '')
+    if has_c:
+        return paren_classify.USAGE_KIND_SALES
+    return ''
+
+
+def _match_usage_kind(match):
+    """マップ候補の販売用途。usageKind または取扱の加工仕様から判定。"""
+    import product_ledger_paren as paren_classify
+    kind = stock.text((match or {}).get('usageKind') or '')
+    if kind == paren_classify.USAGE_KIND_SALES:
+        return paren_classify.USAGE_KIND_SALES
+    emb = stock.text((match or {}).get('embroidery') or '')
+    if paren_classify.handling_has_sales_usage(emb):
+        return paren_classify.USAGE_KIND_SALES
+    return ''
 
 
 def _map_row_spec(map_row):
@@ -1083,7 +1134,8 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
         cpid = row['customer_product_id']
         cid = row['customer_id']
         color, processing, material = full['color'], full['processing'], full['material']
-        key = (pid, cpid, cid, _spec_signature(color, processing, material))
+        usage_kind = stock.text(full.get('usageKind') or '')
+        key = (pid, cpid, cid, _spec_signature(color, processing, material), usage_kind)
         if key in seen:
             continue
         seen.add(key)
@@ -1099,6 +1151,7 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             'color': color,
             'processing': processing,
             'material': material,
+            'usageKind': usage_kind,
             'rowKind': full.get('rowKind') or '',
             'processingProductId': full.get('processingProductId'),
             'isMainCandidate': bool(row['is_main_candidate']) if 'is_main_candidate' in row.keys() else True,
@@ -1117,13 +1170,19 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             'matches': [],
         }
 
-    # 同一別名でも仕様（色・加工・素材）や登録先が食い違うときは曖昧
+    # 同一別名でも仕様（色・加工・素材・販売用途）や登録先が食い違うときは曖昧
     # 色分割後: 初期在庫CSVの商品名から明示色が取れ、マップ色と一意に一致すれば絞る
     # 上下: 初期在庫側で区分が取れ、マップの上下／登録品番と一意一致すれば絞る（未特定では振り分けない）
-    dest_keys = {
-        (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
-        for m in matches
-    }
+    # 販売用途: マーカー除去後に複数候補なら先頭自動採用しない。用途が一致すれば絞る
+    def _dest_key(m):
+        return (
+            m['productId'], m['customerProductId'],
+            _spec_signature(m['color'], m['processing'], m['material']),
+            _match_usage_kind(m),
+        )
+
+    dest_keys = {_dest_key(m) for m in matches}
+    aux_usage = _aux_row_usage_kind(product_name=product_name, customer=customer)
     if len(dest_keys) > 1:
         aux_info = position_sku.resolve_garment_position(code=code_t, product_name=product_name)
         aux_pos = stock.text(aux_info.get('position') or '')
@@ -1139,10 +1198,7 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
                 map_reg = stock.text(meta.get('registeredCode') or '')
                 if map_pos == aux_pos or map_reg == stock.text(aux_info.get('registeredCode') or ''):
                     narrowed_pos.append(m)
-            narrow_pos_keys = {
-                (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
-                for m in narrowed_pos
-            }
+            narrow_pos_keys = {_dest_key(m) for m in narrowed_pos}
             if len(narrow_pos_keys) == 1:
                 matches = narrowed_pos
                 dest_keys = narrow_pos_keys
@@ -1158,21 +1214,29 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
                 m for m in matches
                 if paren_classify.color_match_key(m.get('color') or '') == aux_key
             ]
-            narrow_keys = {
-                (m['productId'], m['customerProductId'], _spec_signature(m['color'], m['processing'], m['material']))
-                for m in narrowed
-            }
+            narrow_keys = {_dest_key(m) for m in narrowed}
             if len(narrow_keys) == 1:
                 matches = narrowed
                 dest_keys = narrow_keys
+        # 販売用途で絞る（マーカー無し＝販売以外を優先。レンタル断定はしない）
+        if len(dest_keys) > 1:
+            if aux_usage:
+                narrowed_u = [m for m in matches if _match_usage_kind(m)]
+            else:
+                narrowed_u = [m for m in matches if not _match_usage_kind(m)]
+            narrow_u_keys = {_dest_key(m) for m in narrowed_u}
+            if len(narrow_u_keys) == 1:
+                matches = narrowed_u
+                dest_keys = narrow_u_keys
         if len(dest_keys) > 1:
             return {
                 'status': 'ambiguous',
                 'reason': (
-                    '同じ原文キーに複数の登録先（色分割・上下区分・別仕様・別商品／取扱）が残っています。'
+                    '同じ原文キーに複数の登録先（色分割・上下区分・別仕様・販売用途・別商品／取扱）が残っています。'
                     '推測で一方へ寄せず、確認してください（在庫数量の二重登録もしません）。'
                 ),
                 'matches': matches,
+                'auxUsageKind': aux_usage,
             }
 
     chosen = matches[0]
@@ -1240,12 +1304,18 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
         chosen['customerId'] = handle['customer_id']
         chosen['embroidery'] = handle['embroidery']
         chosen['handleId'] = handle['id']
+        if not stock.text(chosen.get('usageKind') or ''):
+            import product_ledger_paren as paren_classify
+            chosen['usageKind'] = paren_classify.usage_kind_from_embroidery(
+                handle['embroidery'] or ''
+            )
 
     return {
         'status': 'ok',
         'reason': '',
         'matches': matches,
         'destination': chosen,
+        'auxUsageKind': aux_usage,
     }
 
 
@@ -1360,6 +1430,21 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
     customer_id = dest.get('customerId')
     embroidery = stock.text(dest.get('embroidery') or '') or legacy.PENDING_EMBROIDERY
     official_name = stock.text(dest.get('officialName') or '')
+    aux_usage = _aux_row_usage_kind(
+        product_name=payload['productName'], customer=payload['customer'],
+    )
+    map_usage = stock.text(dest.get('usageKind') or '') or _match_usage_kind(dest)
+    if not map_usage:
+        import product_ledger_paren as paren_classify
+        if paren_classify.handling_has_sales_usage(embroidery):
+            map_usage = paren_classify.USAGE_KIND_SALES
+    # 初期在庫の販売マーカーと商品登録で保存した用途が食い違うときは確認
+    usage_conflict = bool(aux_usage) != bool(map_usage)
+    if usage_conflict:
+        reasons.append(
+            f'{row_no}行目：初期在庫の販売用途表記と商品登録時の取扱種別「販売」が一致しません。'
+            '推測で寄せず確認してください。'
+        )
     cust_preview = legacy._person_preview(c, 'customers', '顧客', payload['customer'], row_no)
     if cust_preview.get('id'):
         customer_id = cust_preview['id']
@@ -1436,6 +1521,8 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
             'supplierAction': sup_preview.get('action'),
             'size': payload['size'],
             'embroidery': embroidery,
+            'usageKind': map_usage or aux_usage,
+            'handlingType': map_usage or aux_usage,
             'handleId': handle_id,
             'isMainSpec': bool(dest.get('isMainCandidate', True)),
             'color': dest.get('color') or '',
@@ -1443,6 +1530,9 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
             'material': dest.get('material') or '',
             'mapStatus': 'ok',
             'mapId': dest.get('mapId'),
+            'usageConflict': usage_conflict,
+            'auxUsageKind': aux_usage,
+            'mapUsageKind': map_usage,
         },
         'place': place,
         'stock': stock_info,
