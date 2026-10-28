@@ -26,8 +26,13 @@
   const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,rowExcluded:false,confirmed:true,sourceRows:false}
   const CONFIRMED_STATUS={pending:'反映待ち',confirmed:'確認済み'}
   const CONFIRMED_LIST_COL_COUNT=7
-  const USER_ROW_EXCLUDE_REASON='この行を登録しない（今回の取り込み）'
+  // 手動「今回登録しない／この行を登録しない」。自動除外理由と区別する（恒久ルールにはしない）
+  const USER_ROW_EXCLUDE_REASON='利用者が今回登録しないと指定'
+  const USER_ROW_EXCLUDE_REASON_LEGACY='この行を登録しない（今回の取り込み）'
   const K2_AUTO_EXCLUDE_REASON='K2スタッフ工房の加工行ですが、加工内容を特定できないため登録対象外'
+  function userExcludeReasonTokens(){
+    return [USER_ROW_EXCLUDE_REASON,USER_ROW_EXCLUDE_REASON_LEGACY,K2_AUTO_EXCLUDE_REASON]
+  }
   // 一覧テーブル列数。展開詳細行の colspan は必ずこれと一致させる（不一致だと table-layout:fixed で列が縮む）
   const SKU_COMPARE_COL_COUNT=8
   const UNIFIED_REVIEW_COL_COUNT=5
@@ -221,29 +226,29 @@
     }
   }
   /**
-   * 除外／復帰をローカル反映。全件再照合・CSV再読込・busy はしない。
-   * 入力中の加工名・補足・チェック・詳細開閉・スクロールは harvest＋paintDialog で保持。
+   * 1行の除外／復帰を state へ反映（描画なし）。rowExclusions を唯一の追跡にする。
+   * 保留（defer）とは別: 今回の商品登録スコープ外にするだけで削除・恒久除外にはしない。
    */
-  function applyLocalRowExclude(st,row,excluded,opts){
+  function markRowExcludedLocal(st,row,excluded,opts){
     opts=opts||{}
     if(!row||!st.preview)return false
-    harvestFormEdits(st)
     const code=((row.csv||{}).code)||''
+    const reason=opts.reason||USER_ROW_EXCLUDE_REASON
     if(excluded){
       snapshotRowBeforeExclude(st,row)
-      setRowExcluded(st,row,true,{reason:opts.reason||USER_ROW_EXCLUDE_REASON,kind:opts.kind||'manual'})
+      setRowExcluded(st,row,true,{reason,kind:opts.kind||'manual'})
       row.status='hold'
-      row.statusLabel='保留'
+      row.statusLabel='登録しない'
       row.canCommit=false
       row.userRowExcluded=true
       row.autoRowExcluded=false
       row.exclusionKind='manual'
       row.skuDecisionNeeded=false
       row.processingServiceNeedsConfirm=false
-      row.deferReason=USER_ROW_EXCLUDE_REASON
-      const drop=[USER_ROW_EXCLUDE_REASON,K2_AUTO_EXCLUDE_REASON]
+      row.deferReason=reason
+      const drop=userExcludeReasonTokens()
       row.reasons=(row.reasons||[]).filter(x=>!drop.some(t=>String(x).includes(t)))
-      row.reasons.push(USER_ROW_EXCLUDE_REASON)
+      row.reasons.push(reason)
     }else{
       setRowExcluded(st,row,false)
       const key=stableRowKeyFromRow(row)
@@ -275,7 +280,7 @@
         row.canCommit=false
         row.skuDecisionNeeded=false
         row.processingServiceNeedsConfirm=!!restoreProc
-        const drop=[USER_ROW_EXCLUDE_REASON,K2_AUTO_EXCLUDE_REASON]
+        const drop=userExcludeReasonTokens()
         row.reasons=(row.reasons||[]).filter(x=>!drop.some(t=>String(x).includes(t)))
       }
       row.userRowExcluded=false
@@ -305,9 +310,83 @@
       }
     }
     syncSkuGroupAfterLocalExclude(st,code)
-    // 集計・登録可否・所属セクションを描画し直す（サーバ往復なし）
+    return true
+  }
+  /**
+   * 除外／復帰をローカル反映。全件再照合・CSV再読込・busy はしない。
+   * 入力中の加工名・補足・チェック・詳細開閉・スクロールは harvest＋paintDialog で保持。
+   */
+  function applyLocalRowExclude(st,row,excluded,opts){
+    opts=opts||{}
+    if(!row||!st.preview)return false
+    harvestFormEdits(st)
+    markRowExcludedLocal(st,row,excluded,opts)
+    // 集計・登録可否・所属セクションを描画し直す（サーバ往復なし・chase スクロールなし）
     paintDialog({preserveScroll:true})
     return true
+  }
+  /** 確認リスト1対象の除外スコープ行。他対象は巻き込まない。 */
+  function rowsForSkipRegisterTarget(st,item){
+    if(!item||!st||!st.preview)return []
+    const previewRows=(st.preview.rows)||[]
+    if(item.kind==='sku'&&item.code){
+      // 品番グループ: その対象に属する元CSV行すべて
+      return previewRows.filter(r=>String((r.csv||{}).code||'')===String(item.code))
+    }
+    // 加工サービス等: この対象に実際に含まれている行だけ
+    return (item.rows||[]).slice()
+  }
+  function skipRegisterScopeLabel(item){
+    if(!item)return 'この対象の行'
+    if(item.kind==='sku')return '品番対象の全行'
+    if(item.kind==='processing')return 'この加工対象の行'
+    if(item.kind==='blank')return 'この部品・資材対象の行'
+    if(item.kind==='custom')return 'この別注対象の行'
+    if(item.kind==='unknown')return 'この不明品番対象の行'
+    return 'この対象の行'
+  }
+  function skipRegisterButtonMeta(st,item){
+    const all=rowsForSkipRegisterTarget(st,item)
+    const active=all.filter(r=>!isRowExcluded(st,r))
+    return {
+      scope:skipRegisterScopeLabel(item),
+      total:all.length,
+      active:active.length,
+      alreadyExcluded:Math.max(0,all.length-active.length),
+      rows:active
+    }
+  }
+  /**
+   * 確認リスト対象を「今回登録しない」。詳細を開かず、rowExclusions へ共有反映。
+   * 軽い UI 更新のみ（フル再照合なし）。保留とは別操作。
+   */
+  function applyLocalTargetSkipRegister(st,item,opts){
+    opts=opts||{}
+    if(!item||!st||!st.preview)return {excluded:0,total:0,alreadyExcluded:0}
+    harvestFormEdits(st)
+    const meta=skipRegisterButtonMeta(st,item)
+    const reason=opts.reason||USER_ROW_EXCLUDE_REASON
+    meta.rows.forEach(row=>{
+      markRowExcludedLocal(st,row,true,{reason,kind:'manual'})
+    })
+    if(opts.paint!==false)paintDialog({preserveScroll:true})
+    return {
+      excluded:meta.rows.length,
+      total:meta.total,
+      alreadyExcluded:meta.alreadyExcluded,
+      scope:meta.scope,
+      itemId:item.id,
+      targetLabel:item.targetLabel||''
+    }
+  }
+  function skipRegisterActionsHtml(st,item){
+    if(!item||isOpeningMode(st))return ''
+    const meta=skipRegisterButtonMeta(st,item)
+    if(!meta.active)return ''
+    return `<div class="pl-target-skip-actions">
+      <button type="button" class="quiet" data-pl-target-skip="${esc(item.id)}" ${st.busy?'disabled':''}>今回登録しない</button>
+      <span class="excelhint pl-skip-scope">${esc(meta.scope)} ${meta.active}行</span>
+    </div>`
   }
   /**
    * 同じ内容の複数行キー。サイズ違いの同一商品はまとめる。
@@ -2340,6 +2419,7 @@
               ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
               <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${skuExpanded?'詳細を閉じる':'詳細を開く'}</button>
             </div>
+            ${skipRegisterActionsHtml(st,item)}
           </td>
         </tr>${skuMakerLookupRowHtml(st,g.code,detailOpts)}${skuExpanded?skuRowDetailHtml(st,g,detailOpts):''}${skuExpanded?unifiedRowDetailHtml(st,item):''}`
       }
@@ -2357,6 +2437,7 @@
               ?`<button type="button" class="quiet" data-pl-maker-correct="${item.rows[0].rowNo}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
             <button type="button" class="quiet" data-pl-unified-expand="${esc(item.id)}">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
+          ${skipRegisterActionsHtml(st,item)}
         </td>
       </tr>${expanded?unifiedRowDetailHtml(st,item):''}`
     }).join('')
@@ -2726,7 +2807,7 @@
           ${sectionToggleBtn(st,'rowExcluded')}
         </header>
         ${rowExOpen?`<div class="sku-section-body">
-          <p class="excelhint">今回の取り込みだけ商品登録対象から外した元CSV行です（削除ではありません。恒久除外ルールにはしません）。手動除外と自動除外の理由を区別して表示します。加工名不明の自動除外は加工名を入れて「登録対象に戻す」と再照合でも勝手に除外しません。確認済み一覧には混ぜません。</p>
+          <p class="excelhint">今回の取り込みだけ商品登録対象から外した元CSV行です（削除ではありません。恒久除外ルールにはしません）。確認リストの「今回登録しない」と詳細の「この行を登録しない」は同じ除外状態を共有します。手動理由は「利用者が今回登録しないと指定」、自動除外は別理由です。加工名不明の自動除外は加工名を入れて「登録対象に戻す」と再照合でも勝手に除外しません。保留（後回し）とは別です。確認済み一覧には混ぜません。</p>
           ${sectionPagerHtml('rowExcluded',rowExSlice,excludedRowList.length)}
           <div class="legacy-csv-table-wrap"><table class="legacy-csv-table product-ledger-table">
             <thead><tr><th>行</th><th>顧客</th><th>仕入先</th><th>品番</th><th>原文名</th><th>サイズ</th><th>理由</th><th>操作</th></tr></thead>
@@ -5475,25 +5556,27 @@
         )
         if(!ok)return
         harvestFormEdits(st)
-        peers.forEach(p=>{
-          snapshotRowBeforeExclude(st,p)
-          setRowExcluded(st,p,true)
-          p.status='hold'
-          p.statusLabel='保留'
-          p.canCommit=false
-          p.userRowExcluded=true
-          p.autoRowExcluded=false
-          p.exclusionKind='manual'
-          p.skuDecisionNeeded=false
-          p.processingServiceNeedsConfirm=false
-          p.deferReason=USER_ROW_EXCLUDE_REASON
-          const drop=[USER_ROW_EXCLUDE_REASON,K2_AUTO_EXCLUDE_REASON]
-          p.reasons=(p.reasons||[]).filter(x=>!drop.some(t=>String(x).includes(t)))
-          p.reasons.push(USER_ROW_EXCLUDE_REASON)
-          syncSkuGroupAfterLocalExclude(st,((p.csv||{}).code)||'')
-        })
+        peers.forEach(p=>markRowExcludedLocal(st,p,true))
         paintDialog({preserveScroll:true})
         st.toast(`同じ内容の ${peers.length} 行を登録対象から外しました`)
+      }
+    })
+    document.querySelectorAll('[data-pl-target-skip]').forEach(el=>{
+      el.onclick=()=>{
+        if(st.busy)return
+        const id=el.getAttribute('data-pl-target-skip')
+        // 詳細を開かず対象スコープだけ除外（他対象は巻き込まない）
+        const item=buildUnifiedReviewItems(st).find(it=>String(it.id)===String(id))
+        if(!item){st.toast('対象が見つかりません。');return}
+        const result=applyLocalTargetSkipRegister(st,item)
+        if(!result.excluded){
+          st.toast('除外できる行がありません（既に登録しないか、対象行がありません）')
+          return
+        }
+        st.toast(
+          `「${result.targetLabel||'対象'}」の ${result.excluded} 行を今回登録しないにしました`+
+          `（${result.scope}・登録しない項目へ。保留とは別です。削除ではありません）`
+        )
       }
     })
     document.querySelectorAll('[data-pl-row-include]').forEach(el=>{
@@ -5664,7 +5747,9 @@
       MODE_OPENING,
       AUX_JUDGMENT_ONLY_COPY,
       USER_ROW_EXCLUDE_REASON,
+      USER_ROW_EXCLUDE_REASON_LEGACY,
       K2_AUTO_EXCLUDE_REASON,
+      userExcludeReasonTokens,
       previewPayload,
       selectedCodeList,
       syncSkuSelectionUi,
@@ -5687,7 +5772,13 @@
       isRowExcluded,
       setRowExcluded,
       rowExclusionReason,
+      markRowExcludedLocal,
       applyLocalRowExclude,
+      rowsForSkipRegisterTarget,
+      skipRegisterScopeLabel,
+      skipRegisterButtonMeta,
+      applyLocalTargetSkipRegister,
+      skipRegisterActionsHtml,
       harvestFormEdits,
       snapshotRowBeforeExclude,
       syncSkuGroupAfterLocalExclude,
