@@ -113,6 +113,57 @@ class ShiftSheetStoreTest(unittest.TestCase):
         keys = [p['key'] for p in sheet['people']]
         self.assertEqual(keys, ['regular:001', 'part:002'])
 
+    def test_new_month_seeds_sunday_offs(self):
+        """未作成月は全員の日曜を×で初期化する（2026-11-1/8/15/22/29）。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertFalse(sheet['exists'])
+        sundays = [d['day'] for d in sheet['days'] if d['weekday'] == 6]
+        self.assertEqual(sundays, [1, 8, 15, 22, 29])
+        for p in sheet['people']:
+            row = sheet['cells'].get(p['key'], {})
+            for day in sundays:
+                self.assertEqual(row[str(day)], {'kind': 'off', 'text': '×'}, msg=f'{p["key"]} day {day}')
+            # 日曜以外は初期化しない
+            self.assertNotIn('2', row)
+            self.assertNotIn('3', row)
+
+    def test_seed_sunday_does_not_overwrite_existing_cells(self):
+        people = [{'key': 'regular:001'}, {'key': 'part:002'}]
+        days = kintai_shift.month_calendar(2026, 11)
+        cells = {
+            'regular:001': {
+                '1': {'kind': 'time', 'text': '15:00まで'},  # 日曜・手入力
+                '8': {'kind': 'off', 'text': '×'},
+            },
+        }
+        seeded = kintai_shift.seed_sunday_offs(people, cells, days)
+        self.assertEqual(seeded['regular:001']['1']['kind'], 'time')
+        self.assertEqual(seeded['regular:001']['1']['text'], '15:00まで')
+        self.assertEqual(seeded['regular:001']['8']['kind'], 'off')
+        self.assertEqual(seeded['regular:001']['15'], {'kind': 'off', 'text': '×'})
+        self.assertEqual(seeded['part:002']['1'], {'kind': 'off', 'text': '×'})
+
+    def test_saved_month_reload_does_not_reseed_sundays(self):
+        """保存済み月はスナップショットのまま。空の日曜を再初期化しない。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        # 日曜を意図的に空（クリア）にして保存
+        cells = {
+            'regular:001': {'3': {'kind': 'off', 'text': '×'}},
+            'part:002': {'5': {'kind': 'time', 'text': '12:00まで'}},
+        }
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'], 'cells': cells,
+        })
+        self.assertEqual(code, 200)
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertTrue(again['exists'])
+        self.assertEqual(again['cells']['regular:001']['3']['kind'], 'off')
+        self.assertNotIn('1', again['cells'].get('regular:001', {}))
+        self.assertNotIn('8', again['cells'].get('regular:001', {}))
+        self.assertNotIn('1', again['cells'].get('part:002', {}))
+        self.assertEqual(again['cells']['part:002']['5']['text'], '12:00まで')
+
     def test_save_and_restore(self):
         sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
         cells = {
@@ -487,6 +538,16 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('id="shiftsavedefaultorder"', index)
         self.assertIn('標準の並び順として保存', index)
         self.assertIn('未作成の月に使用します。保存済みの月には反映しません', index)
+        self.assertIn('id="shiftbulkwday"', index)
+        self.assertIn('今月の指定曜日を全員×', index)
+        self.assertIn('id="shiftbulkweekday"', index)
+        self.assertIn('name="shiftbulkmode"', index)
+        self.assertIn('value="empty"', index)
+        self.assertIn('value="overwrite"', index)
+        self.assertIn('空欄のみ', index)
+        self.assertIn('すべて上書きして×', index)
+        self.assertIn('id="shiftbulkscope"', index)
+        self.assertIn('この日を全員×', index)
         self.assertIn('id="shiftsavedialog"', index)
         self.assertIn('保存して移動', index)
         self.assertIn('破棄して移動', index)
@@ -528,11 +589,24 @@ class ShiftUiContractTest(unittest.TestCase):
         # 標準並び保存は keys のみ（cells を送らない）
         self.assertIn("shiftFetch('/api/kintai/shift/default-order', { keys })", js)
         self.assertNotIn('applyDefaultToSaved', js)
+        # 一括×（日付見出し・指定曜日）と undo / 未保存
+        self.assertIn('bulkMarkOffDays', js)
+        self.assertIn('bulkMarkOneDay', js)
+        self.assertIn('bulkMarkWeekday', js)
+        self.assertIn('この日を全員×', js)
+        self.assertIn('data-bulk-day', js)
+        self.assertIn("mode === 'empty'", js)
+        self.assertIn('overwrite', js)
+        self.assertIn('visiblePeople', js)
+        self.assertIn('updateBulkScopeNote', js)
+        self.assertIn('seedSundaysForKeys', js)
         self.assertIn('ひとつ戻す', (ROOT / 'index.html').read_text(encoding='utf-8'))
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn('shift-sat', css)
         self.assertIn('shift-sun', css)
         self.assertIn('.shift-drag', css)
+        self.assertIn('.shift-day-bulk', css)
+        self.assertIn('.shift-bulk-row', css)
         self.assertIn('shift-drop-before', css)
         self.assertIn('cursor:grab', css)
         self.assertIn('A4 landscape', css)
@@ -642,6 +716,12 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn("beforeunload", js)
         self.assertIn('saving', js)
         self.assertNotIn('scheduleSave', js)
+        # 一括×後は markDirty → 未保存。undoOnce で戻す
+        self.assertIn('markDirty()', js)
+        self.assertIn('undoOnce', js)
+        py = (ROOT / 'kintai_shift.py').read_text(encoding='utf-8')
+        self.assertIn('def seed_sunday_offs', py)
+        self.assertIn('seed_sunday_offs(people, cells, days)', py)
         self.assertNotIn('再試行します', js)
         self.assertNotIn('setTimeout(() => {\n        saveTimer = null;\n        saveShift()', js)
         place = (ROOT / 'placement.js').read_text(encoding='utf-8')

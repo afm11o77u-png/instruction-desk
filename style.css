@@ -189,6 +189,13 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-mode.on{background:#163828;border-color:#163828;color:#fff}
 .shift-time-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:6px 0 4px}
 .shift-time-row label{min-width:12rem}
+.shift-bulk-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:4px 0 6px;padding:6px 0;border-top:1px dashed #c5d9c4}
+.shift-bulk-row label{display:inline-flex;align-items:center;gap:4px;font-size:13px}
+.shift-bulk-modes{display:inline-flex;flex-wrap:wrap;gap:8px;align-items:center}
+.shift-bulk-mode{font-size:13px;color:#3d5344}
+.shift-bulk-scope{margin:0;flex:1 1 100%;font-size:12px;color:#5a6b5e}
+.shift-grid .shift-day-bulk{display:block;margin:2px auto 0;padding:0 4px;font-size:10px;line-height:1.4;font-weight:400;color:#6b3a1e;background:transparent;border:1px solid #e0b8a8;border-radius:3px;cursor:pointer}
+.shift-grid .shift-day-bulk:hover{background:#fff5f3;border-color:#c47a5e}
 .shift-default-order-help{margin:0 0 4px;font-size:12px;color:#5a6b5e}
 .shift-save-status{font-size:13px;font-weight:700;color:#3d5344;padding-bottom:8px}
 .shift-save-dirty{color:#8a3b00}
@@ -291,6 +298,7 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .kintailead,
   body.printing-shift .shift-row-del,
   body.printing-shift .shift-drag,
+  body.printing-shift .shift-day-bulk,
   body.printing-shift .shift-tag,
   body.printing-shift #shiftmeta,
   body.printing-shift .shift-print-title{display:none!important}
