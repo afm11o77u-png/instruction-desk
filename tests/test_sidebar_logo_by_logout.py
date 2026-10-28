@@ -72,6 +72,10 @@ class SidebarLogoByLogoutTest(unittest.TestCase):
         self.assertIn('id="markmanage"', ACCOUNT_JS)
         self.assertIn('mark_kintai', ACCOUNT_JS)
         self.assertIn("showCatalog('kintai')", ACCOUNT_JS)
+        # 氏名・権限テキストより上
+        bar = ACCOUNT_JS.split('block.innerHTML', 1)[1].split('`;', 1)[0]
+        self.assertLess(bar.index('markmanage'), bar.index('currentUser.name'))
+        self.assertLess(bar.index('markmanage'), bar.index('roleNames'))
 
     def test_mark_manage_button_chrome(self):
         # 上部モード切替ピル（.modes .mode）と同サイズの枠付きボタン
