@@ -104,7 +104,7 @@ class JudgmentListSectionsUiSourceTest(unittest.TestCase):
         self.assertIn('sourceRows:false', js)
         self.assertIn('partitionJudgmentGroups', js)
         self.assertIn('judgmentStatusCounts', js)
-        self.assertIn('承認済み（未登録）', js)
+        self.assertIn('確認済み一覧', js)
         self.assertIn('未解決', js)
         self.assertIn('確認事項', js)
         self.assertIn('未承認', js)
@@ -129,6 +129,7 @@ class JudgmentListSectionsUiSourceTest(unittest.TestCase):
         self.assertIn('sku-section-unified', css)
         self.assertIn('sku-section-bulk', css)
         self.assertIn('sku-section-auto', css)
+        self.assertIn('sku-section-confirmed', css)
         self.assertIn('sku-section-source-rows', css)
 
     def test_commit_confirm_lists_section_counts(self):
@@ -206,19 +207,22 @@ class JudgmentListSectionsPartitionTest(unittest.TestCase):
             self.assertEqual(init['sectionDefaults']['individual'], True)
             self.assertEqual(init['sectionDefaults']['bulk'], False)
             self.assertEqual(init['sectionDefaults']['auto'], False)
-            self.assertEqual(init['labels']['merge'], '承認済み（未登録）')
+            self.assertEqual(init['labels']['merge'], 'まとめる')
             self.assertIn('I1', [g['code'] for g in init['partition']['individual']])
             self.assertIn('B2', [g['code'] for g in init['partition']['bulkUnapproved']])
             self.assertEqual(init['counts']['unresolved'], 1)
             self.assertEqual(init['counts']['unapproved'], 1)
             self.assertEqual(init['counts']['approved'], 0)
+            self.assertEqual(init['counts'].get('confirmed', 0), 0)
             self.assertGreaterEqual(init['counts']['autoDecided'], 1)
 
             ab = out['after_bulk']
             self.assertNotIn('B2', [g['code'] for g in ab['partition']['bulkUnapproved']])
             self.assertIn('B2', [g['code'] for g in ab['partition']['approved']])
+            self.assertIn('B2', [g['code'] for g in ab['partition']['confirmed']])
             self.assertEqual(ab['counts']['unapproved'], 0)
             self.assertEqual(ab['counts']['approved'], 1)
+            self.assertEqual(ab['counts']['confirmed'], 1)
             # 個別確認は一括承認後も未解決のまま
             self.assertIn('I1', [g['code'] for g in ab['partition']['individual']])
 
@@ -227,6 +231,8 @@ class JudgmentListSectionsPartitionTest(unittest.TestCase):
             self.assertIn('I1', [g['code'] for g in ai['partition']['hold']])
             self.assertEqual(ai['counts']['hold'], 1)
             self.assertEqual(ai['counts']['unresolved'], 0)
+            # 保留は確認済みに混ぜない
+            self.assertNotIn('I1', [g['code'] for g in ai['partition']['confirmed']])
         finally:
             c.close()
             folder.cleanup()
