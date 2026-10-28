@@ -475,6 +475,7 @@
   function chosenActionLabel(dec){
     if(dec==='merge')return 'まとめる'
     if(dec==='color_split')return '色別に分けて登録'
+    if(dec==='content_split')return '内容別に分けて登録'
     if(dec==='separate')return '別物のため個別に整理'
     if(dec==='hold')return '保留'
     return '未決定'
@@ -482,14 +483,14 @@
 
   /**
    * 方針選択後の必須入力が揃っているか。
-   * 再照合前（反映待ち）は方針そのものの選択で足りる（色別／個別の詳細は再照合後）。
-   * 再照合後は色別の完全性・個別整理の approach などを要求する。
+   * 再照合前（反映待ち）は方針そのものの選択で足りる（色別／内容別／個別の詳細は再照合後）。
+   * 再照合後は色別・内容別の完全性・個別整理の approach などを要求する。
    * 保留・自動決定は確認済みに入れない。
    */
   function userActionChoiceComplete(st,g){
     if(!g)return false
     const dec=effectiveDecision(st,g)
-    if(dec!=='merge'&&dec!=='color_split'&&dec!=='separate')return false
+    if(dec!=='merge'&&dec!=='color_split'&&dec!=='content_split'&&dec!=='separate')return false
     const pending=skuDecisionPendingRematch(st,g.code)
     if(dec==='merge'){
       if((g.existingCount||0)>1){
@@ -503,6 +504,12 @@
       const split=g.colorSplitPlans||{}
       return !!(split.complete&&(split.plans||[]).length&&!(split.unassignedRows||[]).length
         &&!(split.plans||[]).some(p=>p&&p.needsCollisionChoice))
+    }
+    if(dec==='content_split'){
+      if(pending)return true
+      const split=g.contentSplitPlans||{}
+      return !!(split.complete&&(split.plans||[]).length&&!(split.unassignedRows||[]).length
+        &&!(split.plans||[]).some(p=>p&&(p.needsCollisionChoice||p.needsFields)))
     }
     // separate
     if(pending)return true
@@ -524,7 +531,7 @@
   /** 再照合後も方針に穴が残る場合 → 確認リストへ戻す。 */
   function stillProblematicAfterRematch(st,g){
     const dec=effectiveDecision(st,g)
-    if(dec!=='merge'&&dec!=='color_split'&&dec!=='separate')return false
+    if(dec!=='merge'&&dec!=='color_split'&&dec!=='content_split'&&dec!=='separate')return false
     if(skuDecisionPendingRematch(st,g.code))return false
     return !userActionChoiceComplete(st,g)
   }
@@ -559,6 +566,24 @@
       ;(split.plans||[]).forEach(p=>{
         if(p&&p.needsCollisionChoice){
           out.push({type:'color_collision',label:`色「${p.color||''}」の品番衝突`,detail:'既存を使うか社内管理品番を編集してください',fieldKey:'sku',resolved:false})
+        }
+      })
+    }
+    if(dec==='content_split'&&!skuDecisionPendingRematch(st,g.code)){
+      const split=g.contentSplitPlans||{}
+      if(!(split.plans||[]).length){
+        out.push({type:'content_split',label:'内容別の登録先が未作成',detail:'商品名／加工名を確認してください',fieldKey:'name',resolved:false})
+      }
+      ;(split.unassignedRows||[]).forEach(u=>{
+        out.push({type:'content_dest',label:`行${u.rowNo}の行き先未定`,detail:u.reason||'',fieldKey:'name',resolved:false})
+      })
+      ;(split.plans||[]).forEach(p=>{
+        if(!p)return
+        if(p.needsFields){
+          out.push({type:'content_fields',label:`「${p.serviceName||p.productName||''}」の加工名・業者`,detail:'加工名と加工業者を入力してください',fieldKey:'name',resolved:false})
+        }
+        if(p.needsCollisionChoice||p.needsInternalCode){
+          out.push({type:'content_collision',label:`「${p.productName||''}」の社内管理品番`,detail:'社内管理品番を割り当てるか既存を選んでください（同一社内品番の重複新規はしません）',fieldKey:'sku',resolved:false})
         }
       })
     }
@@ -603,7 +628,7 @@
       const dec=effectiveDecision(st,g)
       const tier=g.reviewTier||'individual'
       if(dec==='hold'){hold.push(g);return}
-      if(dec==='merge'||dec==='color_split'||dec==='separate'){
+      if(dec==='merge'||dec==='color_split'||dec==='content_split'||dec==='separate'){
         if(userActionChoiceComplete(st,g)){confirmed.push(g);return}
         // 必須未完・再照合後の穴 → 確認リスト側に残し、選んだ対応＋残課題を出す
         individual.push(g)
@@ -612,10 +637,10 @@
       if(tier==='bulk'){bulkUnapproved.push(g);return}
       individual.push(g)
     })
-    // 互換: 旧 approved = 確認済みのうちまとめる／色別。separate = 確認済みの個別整理
+    // 互換: 旧 approved = 確認済みのうちまとめる／色別／内容別。separate = 確認済みの個別整理
     const approved=confirmed.filter(g=>{
       const d=effectiveDecision(st,g)
-      return d==='merge'||d==='color_split'
+      return d==='merge'||d==='color_split'||d==='content_split'
     })
     const separate=confirmed.filter(g=>effectiveDecision(st,g)==='separate')
     const autoPlans=((st&&st.preview&&st.preview.autoMergePlans)||[]).slice()
@@ -1280,6 +1305,7 @@
   function pendingDecisionLabel(dec){
     if(dec==='merge')return 'まとめるを選択中【未反映】'
     if(dec==='color_split')return '色別に分けて登録を選択中【未反映】'
+    if(dec==='content_split')return '内容別に分けて登録を選択中【未反映】'
     if(dec==='separate')return '個別に整理を選択中【未反映】'
     if(dec==='hold')return '保留を選択中【未反映】'
     return '選択中【未反映】'
@@ -1453,6 +1479,50 @@
     return '色別登録：'+uniq.join('・')
   }
 
+  function contentSplitPlannedCount(g){
+    const split=g&&g.contentSplitPlans
+    if(split&&(split.planCount!=null||(split.plans||[]).length)){
+      return Number(split.planCount!=null?split.planCount:(split.plans||[]).length)||0
+    }
+    if(g&&g.contentSplitEstimateCount!=null)return Number(g.contentSplitEstimateCount)||0
+    return (g&&g.variants&&g.variants.length)||0
+  }
+
+  function contentSplitSummaryForGroup(g){
+    const split=g.contentSplitPlans||{}
+    if(split.summaryLabel)return split.summaryLabel
+    const plans=split.plans||[]
+    if(!plans.length){
+      const n=contentSplitPlannedCount(g)
+      return n?`内容別登録（予定${n}件）`:'内容別登録（内容未確定）'
+    }
+    let nProc=0,nProd=0
+    plans.forEach(p=>{
+      if((p.kind||'')==='process_service')nProc+=1
+      else nProd+=1
+    })
+    const bits=[]
+    if(nProc)bits.push(`加工サービス${nProc}件`)
+    if(nProd)bits.push(`商品${nProd}件`)
+    return bits.join('・')||`登録先${plans.length}件`
+  }
+
+  function prefersContentSplit(st,g){
+    if(!g)return false
+    if(g.contentSplitPlans&&g.contentSplitPlans.preferForProcess)return true
+    const reasons=g.reviewReasons||[]
+    if(reasons.some(r=>r&&(r.code==='processing'||String(r.label||'').includes('加工'))))return true
+    return (g.variants||[]).some(v=>{
+      const det=detectedProcessServiceForVariant(st,g,v)
+      return !!(det&&det.serviceName)
+    })
+  }
+
+  function contentSplitButtonLabel(st,g){
+    const n=contentSplitPlannedCount(g)
+    return n?`内容別に分けて登録（${n}件）`:'内容別に分けて登録'
+  }
+
   function colorSplitNameMappings(g){
     const split=g.colorSplitPlans||{}
     if(Array.isArray(split.nameMappings)&&split.nameMappings.length)return split.nameMappings
@@ -1484,13 +1554,16 @@
 
   function plannedNameForGroup(st,g){
     const d=skuDecision(st,g.code)
-    // 現在の選択のみ見る（再照合前に残る g.colorSplit フラグでは統合表示へ戻さない）
+    // 現在の選択のみ見る（再照合前に残る g.colorSplit / contentSplit フラグでは統合表示へ戻さない）
     if((d.decision||'')==='color_split'){
       return colorSplitSummaryForGroup(g)
     }
+    if((d.decision||'')==='content_split'){
+      return contentSplitSummaryForGroup(g)
+    }
     if(d.officialName)return d.officialName
-    // 色別表示用に上書きされた namePlan は、まとめへ戻した直後は使わない
-    if(g.namePlan&&g.namePlan.colorSplit){
+    // 色別／内容別表示用に上書きされた namePlan は、まとめへ戻した直後は使わない
+    if(g.namePlan&&(g.namePlan.colorSplit||g.namePlan.contentSplit)){
       return g.plannedRegisteredName||(g.nameCandidates&&g.nameCandidates[0])||''
     }
     return (g.namePlan&&g.namePlan.officialName)||g.plannedOfficialName||''
@@ -1559,9 +1632,70 @@
     // 操作列の短い状態。確認済み一覧では chosenActionLabel + confirmedItemStatusLabel を使う
     if(dec==='merge')return 'まとめる'
     if(dec==='color_split')return '色別に分けて登録'
+    if(dec==='content_split')return '内容別に分けて登録'
     if(dec==='separate')return '別物のため個別に整理'
     if(dec==='hold')return '保留'
     return '未決定'
+  }
+
+  function contentSplitFormHtml(st,g,d){
+    const split=g.contentSplitPlans||{}
+    const plans=split.plans||[]
+    const unassigned=split.unassignedRows||[]
+    const pending=skuDecisionPendingRematch(st,g.code)
+    const hasPlans=!!plans.length
+    const planCards=plans.map(p=>{
+      const isProc=(p.kind||'')==='process_service'
+      const status=pending?'分割案・未反映':(p.statusLabel||'確認済み')
+      const existing=(p.existingProducts||[]).map(x=>
+        `<label class="check"><input type="radio" name="plContentKeep-${esc(g.code)}-${esc(p.contentKey)}" data-pl-content-keep="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${x.id}" ${Number(p.keepProductId)===Number(x.id)?'checked':''} ${st.busy?'disabled':''}>
+          既存を使う ID ${x.id}　${esc(x.name||'')}${x.supplierName?` / ${esc(x.supplierName)}`:''}</label>`
+      ).join('')
+      const collision=!isProc&&p.needsCollisionChoice
+        ?`<p class="notice">社内管理品番「${esc(p.internalCode||'（未設定）')}」の確認が必要です。既存を使うか、品番を編集してください（同じ社内品番の重複新規はしません）。</p>
+           <fieldset><legend>社内管理品番の解決</legend>
+             ${existing||'<span class="sub">既存候補なし（品番を編集）</span>'}
+             <label class="check"><input type="radio" name="plContentKeep-${esc(g.code)}-${esc(p.contentKey)}" data-pl-content-keep="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="" ${!p.keepProductId?'checked':''} ${st.busy?'disabled':''}>品番を編集して新規</label>
+           </fieldset>`
+        :(!isProc&&p.collision&&p.keepProductId?`<p class="excelhint">既存商品 ID ${esc(String(p.keepProductId))} を使用予定</p>`:'')
+      if(isProc){
+        return `<div class="sku-content-plan" data-content-key="${esc(p.contentKey)}" data-kind="process_service">
+          <strong>加工サービス: ${esc(p.serviceName||p.productName||'—')}</strong>
+          <span class="badge">${esc(status)}</span>
+          <span class="sub">業者 ${esc(p.vendorName||'—')}　CSV行 ${(p.rowNos||[]).join(',')||'—'}　メーカー／旧CSV品番 ${esc(p.makerCode||g.code)}　品番なし</span>
+          <label>加工名<input data-pl-content-service="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.serviceName||'')}" ${st.busy?'disabled':''}></label>
+          <label>加工業者<input data-pl-content-vendor="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.vendorName||'')}" ${st.busy?'disabled':''}></label>
+          <label>補足／個別仕様<input data-pl-content-notes="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.notes||'')}" ${st.busy?'disabled':''}></label>
+          <p class="excelhint">同名・同業者のみ再利用。別加工名は別名統合しません。仕入先・色・素材・仕様はソース行から継承（一括上書きしません）。</p>
+        </div>`
+      }
+      return `<div class="sku-content-plan" data-content-key="${esc(p.contentKey)}" data-kind="product">
+        <strong>商品: ${esc(p.productName||'—')}</strong>
+        <span class="badge">${esc(status)}</span>
+        <span class="sub">CSV行 ${(p.rowNos||[]).join(',')||'—'}　メーカー／旧CSV品番 ${esc(p.makerCode||g.code)}　色 ${esc(p.color||'（空）')}　仕入 ${esc(p.supplier||'—')}</span>
+        <label>社内管理品番<input data-pl-content-internal="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.internalCode||'')}" placeholder="${esc(p.suggestedInternalCode||'')}" ${st.busy?'disabled':''}></label>
+        <label>商品名<input data-pl-content-name="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.productName||'')}" ${st.busy?'disabled':''}></label>
+        <label>色<input data-pl-content-color="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.color||'')}" ${st.busy?'disabled':''}></label>
+        ${collision}
+      </div>`
+    }).join('')
+    const unCards=unassigned.map(u=>`<div class="sku-content-unassigned">
+      <span>行 ${u.rowNo}: ${esc(u.originalName||'')} — ${esc(u.reason||'')}</span>
+    </div>`).join('')
+    if(pending&&!hasPlans){
+      return `<div class="sku-content-split-form" data-plan-edit="content">
+        <p class="notice">内容別に分けて登録を選択中【未反映】。分割案の登録先は再照合後に設定できます（${esc(contentSplitButtonLabel(st,g))}）。</p>
+        <p class="excelhint">入力済みの内容別編集があれば保持します。方針切替では消しません。「選択を反映して再照合」で登録予定を更新してください。</p>
+      </div>`
+    }
+    return `<div class="sku-content-split-form" data-plan-edit="content">
+      <p class="excelhint">${esc(split.note||'内容ごとに別登録先として登録予定です。まだ保存していません。確認・編集のうえ最終登録してください。統合用の仮代表名は使いません。')}</p>
+      ${pending?'<p class="notice">内容別に分けて登録を選択中【未反映】。表示中の分割案は前回の再照合結果です。再照合で最新化してください。</p>':''}
+      <p class="excelhint">予定: ${esc(contentSplitSummaryForGroup(g))}。サイズだけの差は統合します。メーカー品番・旧CSV品番は元の「${esc(g.code)}」のままです。</p>
+      ${planCards||'<p class="notice">内容候補をまだ作れません。商品名／加工名を確認してください。再照合後に設定できます。</p>'}
+      ${unCards?`<div class="sku-content-unassigned-list"><h4>行き先未定の行</h4>${unCards}</div>`:''}
+      ${split.complete?'<p class="excelhint">予定は揃っています。再照合のあと「確認して商品を登録」で確定できます。</p>':'<p class="excelhint">未定の行き先・品番衝突・加工名／業者を解消してから再照合してください。</p>'}
+    </div>`
   }
 
   function colorSplitFormHtml(st,g,d){
@@ -1692,50 +1826,67 @@
     const rowNos=(g.rowNos||[]).join(', ')
     const namePlan=g.namePlan||{}
     const isColorSplit=decision==='color_split'
-    // 色別選択中は統合用 nameMappings / 仮代表名を有効予定として出さない
+    const isContentSplit=decision==='content_split'
+    const preferContent=prefersContentSplit(st,g)
+    // 色別／内容別選択中は統合用 nameMappings / 仮代表名を有効予定として出さない
     const mapSource=isColorSplit?colorSplitNameMappings(g):(namePlan.nameMappings||[])
     const mappings=mapSource.slice(0,24).map(m=>{
       if(m.unassigned||!m.registrationName){
         return `<li class="sku-name-map-missing">${esc(m.originalName||'（名なし）')}（行${m.sourceRowNo}）→ <strong>行き先未定</strong>${m.reason?`（${esc(m.reason)}）`:''}</li>`
       }
       const colorBit=m.color?`［色 ${esc(m.color)}］`:''
-      return `<li>${esc(m.originalName||'')}（行${m.sourceRowNo}）→ ${esc(m.registrationName||'')}${m.isAlias?'（別名）':''}${colorBit}</li>`
+      const kindBit=m.kind==='process_service'?'［加工サービス］':''
+      return `<li>${esc(m.originalName||'')}（行${m.sourceRowNo}）→ ${esc(m.registrationName||'')}${m.isAlias?'（別名）':''}${colorBit}${kindBit}</li>`
     }).join('')
     const split=g.colorSplitPlans||{}
+    const contentSplit=g.contentSplitPlans||{}
     const splitGaps=isColorSplit&&(!(split.plans||[]).length||(split.unassignedRows||[]).length||!split.complete)
       ?`<p class="notice">${!(split.plans||[]).length
           ?'色別の登録先がまだ作れません。商品名の色を確認するか、行き先を指定してください（統合用の名称対応表では代用しません）。'
           :'行き先未定の行や品番衝突があります。不足を解消してください（統合用の仮代表名・別名対応は使いません）。'}</p>`
       :''
+    const contentGaps=isContentSplit&&(!(contentSplit.plans||[]).length||(contentSplit.unassignedRows||[]).length||!contentSplit.complete)
+      ?`<p class="notice">${!(contentSplit.plans||[]).length
+          ?'内容別の登録先がまだ作れません。商品名／加工名を確認してください（統合用の名称対応表では代用しません）。'
+          :'行き先未定の行や品番衝突・加工名／業者があります。不足を解消してください。'}</p>`
+      :''
     const namePlanBlock=isColorSplit
       ?`${splitGaps}
         <p class="excelhint">名称採用: 色別に分けて登録（${esc(colorSplitSummaryForGroup(g))}）</p>
         ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`
-      :(namePlan.colorSplit
-        ?`<p class="excelhint">「同じ商品としてまとめる」に切り替えました。再照合すると統合用の名称予定が表示されます（色別の対応表は使いません）。${skuDecisionPendingRematch(st,g.code)?'【未反映】':''}</p>`
-        :`${namePlan.adoptionRule?`<p class="excelhint">名称採用ルール: ${esc(namePlan.adoptionRule)}${namePlan.provisional?`（ステータス「${esc(st.preview&&st.preview.provisionalNameTag||'名称未整理')}」※名前には埋め込みません）`:''}</p>`:''}
-        ${(namePlan.nameCandidates&&namePlan.nameCandidates.length>1)?`<p class="excelhint">名称候補: ${namePlan.nameCandidates.map(esc).join('／')}</p>`:''}
-        ${(namePlan.auxNameReasons&&namePlan.auxNameReasons.length)?`<p class="excelhint">${namePlan.auxNameReasons.map(esc).join(' ')}</p>`:''}
-        ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`)
+      :(isContentSplit
+        ?`${contentGaps}
+          <p class="excelhint">名称採用: 内容別に分けて登録（${esc(contentSplitSummaryForGroup(g))}）— 代表1件や別名統合テキストは使いません</p>
+          ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`
+        :(namePlan.colorSplit||namePlan.contentSplit
+          ?`<p class="excelhint">「同じ商品としてまとめる」に切り替えました。再照合すると統合用の名称予定が表示されます（色別／内容別の対応表は使いません）。${skuDecisionPendingRematch(st,g.code)?'【未反映】':''}</p>`
+          :`${namePlan.adoptionRule?`<p class="excelhint">名称採用ルール: ${esc(namePlan.adoptionRule)}${namePlan.provisional?`（ステータス「${esc(st.preview&&st.preview.provisionalNameTag||'名称未整理')}」※名前には埋め込みません）`:''}</p>`:''}
+          ${(namePlan.nameCandidates&&namePlan.nameCandidates.length>1)?`<p class="excelhint">名称候補: ${namePlan.nameCandidates.map(esc).join('／')}</p>`:''}
+          ${(namePlan.auxNameReasons&&namePlan.auxNameReasons.length)?`<p class="excelhint">${namePlan.auxNameReasons.map(esc).join(' ')}</p>`:''}
+          ${mappings?`<ul class="sku-name-map">${mappings}</ul>`:''}`))
     const auxPanel=auxSupplierPanelHtml(st,g,d)
     const colspan=Number(opts.colspan)||SKU_COMPARE_COL_COUNT
     const decisionPending=!!(decision&&skuDecisionPendingRematch(st,g.code))
+    const contentBtnClass=decision==='content_split'?'primary':(preferContent&&!decision?'primary':'')
+    const colorBtnClass=decision==='color_split'?'primary':(preferContent?'quiet':'')
     return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="${colspan}">
       <div class="sku-detail-body">
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
         ${decisionPending?`<p class="notice">${esc(pendingDecisionLabel(decision))} — 登録予定の再計算は「選択を反映して再照合」でまとめて行います。</p>`:''}
         ${namePlanBlock}
-        ${isColorSplit?'':auxPanel}
+        ${isColorSplit||isContentSplit?'':auxPanel}
         <div class="bar sku-decision-btns">
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':''}" ${st.busy?'disabled':''}>同じ商品としてまとめる</button>
-          <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':''}" ${st.busy?'disabled':''}>色別に分けて登録</button>
+          <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${colorBtnClass}" ${st.busy?'disabled':''}>色別に分けて登録</button>
+          <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="content_split" class="${contentBtnClass}" ${st.busy?'disabled':''}>${esc(contentSplitButtonLabel(st,g))}</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="separate" class="${decision==='separate'?'primary':''}" ${st.busy?'disabled':''}>別物のため個別に整理する</button>
           <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':''}" ${st.busy?'disabled':''}>今回は保留する</button>
           ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
         </div>
         ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
+        ${decision==='content_split'?contentSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
-          ${decisionPending&&(namePlan.colorSplit||!(namePlan.nameMappings||[]).length)?'<p class="excelhint">統合用の名称予定は再照合後に設定できます。代表名・色・通常仕入先は今すぐ編集できます（方針切替では消しません）。</p>':''}
+          ${decisionPending&&(namePlan.colorSplit||namePlan.contentSplit||!(namePlan.nameMappings||[]).length)?'<p class="excelhint">統合用の名称予定は再照合後に設定できます。代表名・色・通常仕入先は今すぐ編集できます（方針切替では消しません）。</p>':''}
           ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
           <label data-plan-edit="name">公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
           <label data-plan-edit="name">代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
@@ -1855,6 +2006,7 @@
           <div class="bar sku-mini-btns">
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめ</button>
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
+            <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="content_split" class="${decision==='content_split'?'primary':(prefersContentSplit(st,g)?'primary':'quiet')}" ${st.busy?'disabled':''}>${esc(contentSplitButtonLabel(st,g))}</button>
             <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" ${st.busy?'disabled':''}>保留</button>
             ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
             <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${expanded?'詳細を閉じる':'詳細を開く'}</button>
@@ -2423,6 +2575,7 @@
             <div class="bar sku-mini-btns">
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${decision==='merge'?'primary':'quiet'}" ${st.busy?'disabled':''}>まとめる</button>
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${decision==='color_split'?'primary':'quiet'}" ${st.busy?'disabled':''}>色別に分けて登録</button>
+              <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="content_split" class="${decision==='content_split'?'primary':(prefersContentSplit(st,g)?'primary':'quiet')}" ${st.busy?'disabled':''}>${esc(contentSplitButtonLabel(st,g))}</button>
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="separate" class="${decision==='separate'?'primary':'quiet'}" ${st.busy?'disabled':''}>別物のため個別に整理</button>
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" ${st.busy?'disabled':''}>保留</button>
               ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
@@ -2590,12 +2743,40 @@
     </div>`
   }
 
+  function contentSplitConfirmedDetailHtml(st,g){
+    const split=g.contentSplitPlans||{}
+    const plans=split.plans||[]
+    if(!plans.length)return ''
+    const rows=plans.map(p=>{
+      const isProc=(p.kind||'')==='process_service'
+      const status=skuDecisionPendingRematch(st,g.code)?'分割案・未反映':(p.statusLabel||'確認済み')
+      return `<tr>
+        <td>${esc(isProc?'加工サービス':'商品')}</td>
+        <td>${esc(isProc?(p.serviceName||p.productName||'—'):(p.internalCode||'—'))}</td>
+        <td>${esc(p.makerCode||g.code||'—')}</td>
+        <td>${esc(isProc?(p.serviceName||'—'):(p.productName||'—'))}</td>
+        <td>${esc(isProc?(p.vendorName||'—'):(p.supplier||'—'))}</td>
+        <td>${esc(p.color||'（空）')}</td>
+        <td>${esc(status)}</td>
+        <td>${esc((p.rowNos||[]).join(',')||'—')}</td>
+      </tr>`
+    }).join('')
+    return `<div class="confirmed-content-split-detail">
+      <p class="excelhint">内容別に分けた各登録先（代表1件や別名テキストではなく分割後の全件: ${esc(contentSplitSummaryForGroup(g))}）:</p>
+      <div class="legacy-csv-table-wrap"><table class="legacy-csv-table confirmed-split-table">
+        <thead><tr><th>区分</th><th>社内管理品番</th><th>メーカー／旧CSV</th><th>名称</th><th>業者／仕入</th><th>色</th><th>状態</th><th>CSV行</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`
+  }
+
   function confirmedDetailHtml(st,g){
     const dec=effectiveDecision(st,g)
     const expanded=!!(st.expandedConfirmed&&st.expandedConfirmed[g.code])
     if(!expanded)return ''
-    // skuRowDetailHtml が独立した <tr> を返すので、色別／加工サービスの各商品表だけ先に1行足す
+    // skuRowDetailHtml が独立した <tr> を返すので、色別／内容別／加工サービスの各商品表だけ先に1行足す
     const processIntro=dec==='separate'?separateProcessServiceConfirmedDetailHtml(st,g):''
+    const contentIntro=dec==='content_split'?contentSplitConfirmedDetailHtml(st,g):''
     const splitIntro=dec==='color_split'
       ?`<tr class="sku-detail-row confirmed-split-row" data-confirmed-detail="${esc(g.code)}"><td colspan="${CONFIRMED_LIST_COL_COUNT}">
           <div class="sku-detail-body confirmed-detail-body">
@@ -2603,13 +2784,20 @@
             ${colorSplitConfirmedDetailHtml(st,g)}
           </div>
         </td></tr>`
-      :`<tr class="sku-detail-row confirmed-split-row" data-confirmed-detail="${esc(g.code)}"><td colspan="${CONFIRMED_LIST_COL_COUNT}">
-          <div class="sku-detail-body confirmed-detail-body">
-            <p class="excelhint">登録予定の確認です。まだ台帳へ保存していません（確認済み ≠ 登録完了）。</p>
-            ${processIntro}
-          </div>
-        </td></tr>`
-    // 対応変更用に既存の詳細フォーム（方針ボタン・色別／個別フォーム）も続ける
+      :(dec==='content_split'
+        ?`<tr class="sku-detail-row confirmed-split-row" data-confirmed-detail="${esc(g.code)}"><td colspan="${CONFIRMED_LIST_COL_COUNT}">
+            <div class="sku-detail-body confirmed-detail-body">
+              <p class="excelhint">登録予定の確認です。まだ台帳へ保存していません（確認済み ≠ 登録完了）。</p>
+              ${contentIntro}
+            </div>
+          </td></tr>`
+        :`<tr class="sku-detail-row confirmed-split-row" data-confirmed-detail="${esc(g.code)}"><td colspan="${CONFIRMED_LIST_COL_COUNT}">
+            <div class="sku-detail-body confirmed-detail-body">
+              <p class="excelhint">登録予定の確認です。まだ台帳へ保存していません（確認済み ≠ 登録完了）。</p>
+              ${processIntro}
+            </div>
+          </td></tr>`)
+    // 対応変更用に既存の詳細フォーム（方針ボタン・色別／内容別／個別フォーム）も続ける
     return splitIntro+skuRowDetailHtml(st,g,{colspan:CONFIRMED_LIST_COL_COUNT})
   }
 
@@ -2625,25 +2813,35 @@
       const originals=originalNamesForGroup(g)
       const sepPlans=(skuDecision(st,g.code).plans)||{}
       const procVariants=(dec==='separate'?(g.variants||[]):[]).filter(v=>(sepPlans[v.key]||{}).approach==='as_process_service')
+      const contentPlans=((g.contentSplitPlans||{}).plans)||[]
+      const contentProc=contentPlans.filter(p=>(p.kind||'')==='process_service')
       const planName=dec==='color_split'
         ?colorSplitSummaryForGroup(g)
+        :(dec==='content_split'
+          ?contentSplitSummaryForGroup(g)
+          :(procVariants.length
+            ?procVariants.map(v=>{
+              const p=sepPlans[v.key]||{}
+              const det=detectedProcessServiceForVariant(st,g,v)
+              return p.serviceName||det.serviceName||v.productName||''
+            }).filter(Boolean).join('／')
+            :plannedNameForGroup(st,g)))
+      const planColor=dec==='color_split'
+        ?(((g.colorSplitPlans||{}).plans)||[]).map(p=>p.color).filter(Boolean).join('・')
+        :(dec==='content_split'
+          ?contentPlans.map(p=>p.color).filter(Boolean).join('・')
+          :(skuDecision(st,g.code).color||g.plannedRegisteredColor||g.plannedColor||''))
+      const planSup=dec==='content_split'
+        ?(contentProc.length
+          ?contentProc.map(p=>p.vendorName||'').filter(Boolean).join('／')||plannedSupplierDisplay(st,g)
+          :contentPlans.map(p=>p.supplier||'').filter(Boolean).join('／')||plannedSupplierDisplay(st,g))
         :(procVariants.length
           ?procVariants.map(v=>{
             const p=sepPlans[v.key]||{}
             const det=detectedProcessServiceForVariant(st,g,v)
-            return p.serviceName||det.serviceName||v.productName||''
-          }).filter(Boolean).join('／')
-          :plannedNameForGroup(st,g))
-      const planColor=dec==='color_split'
-        ?(((g.colorSplitPlans||{}).plans)||[]).map(p=>p.color).filter(Boolean).join('・')
-        :(skuDecision(st,g.code).color||g.plannedRegisteredColor||g.plannedColor||'')
-      const planSup=procVariants.length
-        ?procVariants.map(v=>{
-          const p=sepPlans[v.key]||{}
-          const det=detectedProcessServiceForVariant(st,g,v)
-          return p.vendorName||det.vendorName||v.supplier||''
-        }).filter(Boolean).join('／')||plannedSupplierDisplay(st,g)
-        :plannedSupplierDisplay(st,g)
+            return p.vendorName||det.vendorName||v.supplier||''
+          }).filter(Boolean).join('／')||plannedSupplierDisplay(st,g)
+          :plannedSupplierDisplay(st,g))
       return `<tr class="sku-list-row confirmed-list-row is-status-${esc(statusKey)}" data-sku-code="${esc(g.code)}" data-sku-section="confirmed" data-decision="${esc(dec||'')}" data-confirmed-status="${esc(statusKey)}">
         <td class="confirmed-sku" data-label="元の品番">${esc(g.codeDisplay||g.code||'—')}</td>
         <td class="confirmed-orig-name" data-label="元の商品名">${esc(originals.join('／')||'—')}</td>
@@ -2651,8 +2849,9 @@
         <td class="confirmed-plan" data-label="登録予定">
           <div>名: ${esc(planName||'—')}</div>
           <div>色: ${esc(planColor||'（空）')}</div>
-          <div>${procVariants.length?'加工業者':'通常仕入先'}: ${esc(planSup)}</div>
+          <div>${(procVariants.length||contentProc.length)?'加工業者':'通常仕入先'}: ${esc(planSup)}</div>
           ${procVariants.length?`<div class="sub">区分: 加工サービス（${procVariants.length} 件・詳細で名・業者を表示）</div>`:''}
+          ${dec==='content_split'?`<div class="sub">${esc(contentSplitSummaryForGroup(g))}（詳細で各登録先を表示・代表1件表示にしない）</div>`:''}
           ${dec==='color_split'?`<div class="sub">分割 ${(((g.colorSplitPlans||{}).plans)||[]).length||0} 色（詳細で各商品を表示）</div>`:''}
         </td>
         <td class="confirmed-status" data-label="状態"><span class="badge confirmed-status-badge is-${esc(statusKey)}">${esc(status)}</span></td>
@@ -4776,6 +4975,51 @@
         })
       })
     })()
+    // 内容別登録先は方針切替でも消さない
+    ;(()=>{
+      const byCode={}
+      const ensure=(code)=>{
+        if(!byCode[code])byCode[code]={contentPlans:{...(skuDecision(st,code).contentPlans||{})}}
+        return byCode[code]
+      }
+      const patch=(code,key,fields)=>{
+        const slot=ensure(code)
+        slot.contentPlans[key]={...(slot.contentPlans[key]||{}),contentKey:key,...fields}
+      }
+      document.querySelectorAll('[data-pl-content-internal]').forEach(el=>{
+        patch(el.getAttribute('data-pl-content-internal'),el.getAttribute('data-pl-content-key'),{internalCode:el.value})
+      })
+      document.querySelectorAll('[data-pl-content-name]').forEach(el=>{
+        patch(el.getAttribute('data-pl-content-name'),el.getAttribute('data-pl-content-key'),{productName:el.value,kind:'product'})
+      })
+      document.querySelectorAll('[data-pl-content-color]').forEach(el=>{
+        patch(el.getAttribute('data-pl-content-color'),el.getAttribute('data-pl-content-key'),{color:el.value})
+      })
+      document.querySelectorAll('[data-pl-content-service]').forEach(el=>{
+        patch(el.getAttribute('data-pl-content-service'),el.getAttribute('data-pl-content-key'),{serviceName:el.value,productName:el.value,kind:'process_service'})
+      })
+      document.querySelectorAll('[data-pl-content-vendor]').forEach(el=>{
+        patch(el.getAttribute('data-pl-content-vendor'),el.getAttribute('data-pl-content-key'),{vendorName:el.value,kind:'process_service'})
+      })
+      document.querySelectorAll('[data-pl-content-notes]').forEach(el=>{
+        patch(el.getAttribute('data-pl-content-notes'),el.getAttribute('data-pl-content-key'),{notes:el.value})
+      })
+      document.querySelectorAll('[data-pl-content-keep]:checked').forEach(el=>{
+        const vid=el.value
+        patch(el.getAttribute('data-pl-content-keep'),el.getAttribute('data-pl-content-key'),{
+          keepProductId:vid?Number(vid):null,
+          collisionAction:vid?'reuse':'edit'
+        })
+      })
+      Object.keys(byCode).forEach(code=>{
+        const prev=skuDecision(st,code)
+        const merged={...(prev.contentPlans||{})}
+        Object.keys(byCode[code].contentPlans).forEach(k=>{
+          merged[k]={...(prev.contentPlans&&prev.contentPlans[k]||{}),...byCode[code].contentPlans[k]}
+        })
+        setSkuDecision(st,code,{contentPlans:merged})
+      })
+    })()
   }
 
   /** paintDialog の innerHTML 全描画で消えるスクロールを退避する（外枠・内側・メーカー候補の V/H） */
@@ -5550,10 +5794,16 @@
               :'まとめるを選択しました【未反映】。残課題がある間は確認リストに残します。')
           }
         }else if(dec==='color_split'){
-          // 色別の colorPlans / 個別整理 plans 等は方針切替で消さない
+          // 色別の colorPlans / 内容別 contentPlans / 個別整理 plans 等は方針切替で消さない
           setSkuDecision(st,code,{decision:'color_split'})
           st.expandedCodes[code]=true
           st.toast('色別に分けて登録を選択しました【反映待ち】。確認済み一覧へ移しました。登録予定は再照合後に設定できます。')
+        }else if(dec==='content_split'){
+          // 方針選択は編集状態へ保存するだけ。全件再照合・CSV再読込・メーカー検索はしない。
+          setSkuDecision(st,code,{decision:'content_split'})
+          st.expandedCodes[code]=true
+          const n=contentSplitPlannedCount(group||{code})
+          st.toast(`内容別に分けて登録（${n||'?'}件）を選択しました【反映待ち】。分割案・未反映として確認済み一覧へ移しました。登録予定は再照合後に設定できます。`)
         }else{
           setSkuDecision(st,code,{decision:dec})
           if(dec==='separate'||dec==='hold')st.expandedCodes[code]=true
@@ -6112,6 +6362,12 @@
       confirmedCompareTableHtml,
       matchesConfirmedFilters,
       colorSplitConfirmedDetailHtml,
+      contentSplitConfirmedDetailHtml,
+      contentSplitSummaryForGroup,
+      contentSplitPlannedCount,
+      contentSplitButtonLabel,
+      prefersContentSplit,
+      contentSplitFormHtml,
       separateProcessServiceConfirmedDetailHtml,
       detectedProcessServiceForVariant,
       initSeparateProcessServicePlan,
