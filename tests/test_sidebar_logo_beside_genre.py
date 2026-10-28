@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,25 @@ class SidebarLogoBesideGenreTest(unittest.TestCase):
         self.assertNotIn('logo.jpg', start)
         self.assertNotIn('mascots.png', start)
         self.assertIn("$('#logout').onclick=logout", ACCOUNT_JS)
+        # #252 left a stray "}" on its own line after deleting placeLogoutBrand
+        logout_to_start = ACCOUNT_JS.split('async function logout()', 1)[1].split(
+            'async function startAuth()', 1
+        )[0]
+        self.assertNotRegex(
+            logout_to_start,
+            r'\}\n\s*\}',
+            'stray closing brace between logout and startAuth breaks account.js parse',
+        )
+
+    def test_account_js_parses(self):
+        """account.js syntax error hides aside/main (body:not(.authenticated)) → blank page."""
+        proc = subprocess.run(
+            ['node', '--check', str(ROOT / 'account.js')],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
 
     def test_layout_css_keeps_sidebar_width_and_row_brand(self):
         self.assertRegex(STYLE, r'aside\{[^}]*width:248px')
