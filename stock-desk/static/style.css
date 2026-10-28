@@ -453,6 +453,14 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
 .legacy-csv-table .pl-paren-confirm{flex-direction:row!important;align-items:center;gap:6px!important;margin-top:2px}
 .legacy-csv-table .pl-processing-service-edit{border-left:3px solid #6b7c5c;padding-left:6px;background:rgba(90,110,80,.05)}
 .legacy-csv-table .pl-physical-parts-edit{border-left:3px solid #8a7a5c;padding-left:6px;background:rgba(130,110,70,.05)}
+.legacy-csv-table .pl-product-edit{border-left:3px solid #5c7a8a;padding-left:6px;background:rgba(70,110,130,.04)}
+.legacy-csv-table .pl-register-kind-head{margin-bottom:4px}
+.legacy-csv-table .pl-register-kind-head select{min-height:26px;font-size:12px}
+.legacy-csv-table .pl-register-after-preview{margin-top:6px;padding:4px 6px;background:rgba(0,0,0,.03);border-radius:4px}
+.legacy-csv-table .pl-register-after-list{margin:2px 0 0;padding-left:1.1em}
+.legacy-csv-table .pl-unclassified-block{margin-top:4px;padding:4px 6px;border:1px dashed #a09070;border-radius:4px}
+.legacy-csv-table .pl-unc-move{flex-direction:row!important;align-items:center;gap:6px!important}
+.legacy-csv-table .pl-unused-fields{color:#5a6560}
 .sku-processing-fields{margin:4px 0 6px;padding-left:1.2em}
 .sku-processing-fields li{margin:2px 0}
 .legacy-csv-table .lc-handle{min-width:7rem;max-width:12rem;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
