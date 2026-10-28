@@ -3595,6 +3595,9 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
         )
         # 行自身の括弧分類（原文）を provenance に残す
         pc = row.get('parenClassification') or {}
+        usage_kind = stock.text(pc.get('usageKind') or '')
+        if usage_kind != paren_classify.USAGE_KIND_SALES:
+            usage_kind = ''
         provenance = {
             'originalName': csv_name,
             'originalSupplier': csv_supplier,
@@ -3602,6 +3605,8 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
             'sourceColor': stock.text(pc.get('sourceColor') or ''),
             'processing': stock.text(pc.get('processing') or ''),
             'material': stock.text(pc.get('material') or ''),
+            'usageKind': usage_kind,
+            'usageFromCustomerName': bool(pc.get('usageFromCustomerName')),
             'plannedName': stock.text(pc.get('plannedName') or '') or csv_name,
             'isMainCandidate': bool(is_main),
         }
@@ -3643,30 +3648,46 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
 
         # 取扱の加工: メイン候補のみ反映。非メインの加工は provenance / row_map に残し、
         # 取扱を増やして後続の初期在庫取込を止めない（メイン仕様へも書き換えない）。
+        # 販売用途は行ごとの取扱キーへ残す（同一商品でも販売／他は合算しない）。
         handle = dict(row.get('handle') or {})
         if is_main:
             main_processing = stock.text(package.get('processing') or '')
             row_processing = stock.text(pc.get('processing') or '')
             use_processing = row_processing or main_processing
-            if use_processing:
-                handle['proposedEmbroidery'] = use_processing
+            composed = paren_classify.compose_handling_embroidery(use_processing, usage_kind)
+            if composed:
+                handle['proposedEmbroidery'] = composed
+                handle['usageKind'] = usage_kind
                 if handle.get('action') == 'create' or handle.get('embroidery') in (
                     '', None, PENDING_EMBROIDERY,
                 ):
-                    handle['embroidery'] = use_processing
-                    handle['embroideryLabel'] = use_processing
+                    handle['embroidery'] = composed
+                    handle['embroideryLabel'] = composed
                     handle['pendingEmbroiderySort'] = False
                     handle['fromParenClassification'] = True
         else:
             # 非メイン行の括弧加工は商品取扱へ載せず、原文仕様マッピング側に保持
+            # ただし販売用途の取扱分離は行ごとに残す
             row_proc = stock.text(pc.get('processing') or '')
-            handle['provenanceEmbroidery'] = row_proc
-            handle['fromParenClassification'] = False
-            if row_proc and stock.text(handle.get('embroidery') or '') == row_proc:
-                handle['embroidery'] = PENDING_EMBROIDERY
-                handle['embroideryLabel'] = PENDING_EMBROIDERY
-                handle['pendingEmbroiderySort'] = True
-                handle.pop('proposedEmbroidery', None)
+            composed = paren_classify.compose_handling_embroidery(row_proc, usage_kind)
+            handle['provenanceEmbroidery'] = composed or row_proc
+            handle['usageKind'] = usage_kind
+            if usage_kind == paren_classify.USAGE_KIND_SALES and composed:
+                handle['proposedEmbroidery'] = composed
+                if handle.get('action') == 'create' or handle.get('embroidery') in (
+                    '', None, PENDING_EMBROIDERY,
+                ):
+                    handle['embroidery'] = composed
+                    handle['embroideryLabel'] = composed
+                    handle['pendingEmbroiderySort'] = False
+                    handle['fromParenClassification'] = True
+            else:
+                handle['fromParenClassification'] = False
+                if row_proc and stock.text(handle.get('embroidery') or '') == row_proc:
+                    handle['embroidery'] = PENDING_EMBROIDERY
+                    handle['embroideryLabel'] = PENDING_EMBROIDERY
+                    handle['pendingEmbroiderySort'] = True
+                    handle.pop('proposedEmbroidery', None)
         row['handle'] = handle
 
         # 自動まとめ扱い
@@ -4473,6 +4494,23 @@ def upsert_row_map(
         'isMainCandidate': bool(is_main),
         'auxStockPickAuto': bool(row.get('auxStockPickAuto')),
         'auxStockPickReason': stock.text(row.get('auxStockPickReason') or ''),
+        # 販売用途（取扱種別）。商品名からは除去済みでも原文と対応を残す
+        'usageKind': stock.text(
+            provenance.get('usageKind')
+            or pc.get('usageKind')
+            or (row.get('handle') or {}).get('usageKind')
+            or ''
+        ),
+        'usageFromCustomerName': bool(
+            provenance.get('usageFromCustomerName')
+            or pc.get('usageFromCustomerName')
+        ),
+        'handlingType': stock.text(
+            provenance.get('usageKind')
+            or pc.get('usageKind')
+            or (row.get('handle') or {}).get('usageKind')
+            or ''
+        ),
         'scopedColorCorrection': bool(
             pc.get('scopedColorCorrection')
             or (row.get('product') or {}).get('scopedColorCorrection')
@@ -4939,6 +4977,21 @@ def build_paren_classification(product_name, override=None):
     else:
         unclassified = list(base.get('unclassified') or [])
 
+    if 'usageKind' in raw:
+        usage_kind = stock.text(raw.get('usageKind') or '')
+    else:
+        usage_kind = stock.text(base.get('usageKind') or '')
+    if usage_kind != paren_classify.USAGE_KIND_SALES:
+        # 予定名にマーカーが残っていれば再検知（手編集で消した場合は usageKind 明示優先）
+        if 'usageKind' not in raw:
+            _cleaned, detected = paren_classify.strip_sales_usage_markers(planned or base.get('plannedName') or '')
+            if detected:
+                usage_kind = detected
+                if _cleaned and not user_touched:
+                    planned = _cleaned
+            else:
+                usage_kind = ''
+
     needs = bool(base.get('needsConfirm'))
     reasons = list(base.get('confirmReasons') or [])
     if user_touched:
@@ -4953,11 +5006,16 @@ def build_paren_classification(product_name, override=None):
     auto = bool(base.get('autoClassified')) and not needs and not user_touched
     if user_touched and not needs:
         auto = False  # 手動
+    # 販売用途除去だけでも予定名を採用
+    if usage_kind == paren_classify.USAGE_KIND_SALES and not needs and not user_touched:
+        auto = True
 
     decision = 'needs_review' if needs else ('auto' if (auto or user_touched) else 'passthrough')
     change_summary = stock.text(base.get('changeSummary') or '')
     if color and not change_summary:
         change_summary = f"商品名から色『{color}』を設定します"
+    if usage_kind == paren_classify.USAGE_KIND_SALES and not change_summary:
+        change_summary = '販売用途表記を除き、取扱種別「販売」へ引き継ぎます'
     info_notices = list(base.get('infoNotices') or [])
     if color and not user_touched:
         color = paren_classify.normalize_color_value(color) or color
@@ -4973,6 +5031,7 @@ def build_paren_classification(product_name, override=None):
         'sourceColor': source_color,
         'processing': processing,
         'material': material,
+        'usageKind': usage_kind,
         'supplement': supplement,
         'position': position,
         'plannedRegisteredSku': stock.text(
@@ -5076,16 +5135,38 @@ def attach_paren_classification(row, override=None):
         row['plannedRegisteredSupplement'] = prod['plannedRegisteredSupplement']
         row['changeSummary'] = plan.get('changeSummary') or scoped_color.SCOPED_REASON
 
+    # 販売用途: 商品名マーカー、または顧客名の識別可能マーカー（顧客マスタはリネームしない）
+    usage_kind = stock.text(plan.get('usageKind') or '')
+    cust_name = stock.text(csv.get('customer') or '')
+    cust_has_sales, _cust_markers = paren_classify.detect_sales_usage_marker(cust_name)
+    if cust_has_sales:
+        usage_kind = paren_classify.USAGE_KIND_SALES
+        plan['usageKind'] = usage_kind
+        plan['usageFromCustomerName'] = True
+        notice = '顧客名の販売用途表記から取扱種別「販売」を引き継ぎます（顧客名は変更しません）'
+        notices = list(plan.get('infoNotices') or [])
+        if notice not in notices:
+            notices.append(notice)
+        plan['infoNotices'] = notices
+        row['parenClassification'] = plan
+
     # 顧客別加工 → 取扱の加工仕様（不明時は「加工なし」へ強制しない）
-    if plan.get('processing'):
-        handle['proposedEmbroidery'] = plan['processing']
+    # 販売用途は取扱キーへ載せる（在庫同一性。レンタルはマーカー無し＝既存／手選択を優先）
+    composed = paren_classify.compose_handling_embroidery(
+        plan.get('processing') or '',
+        usage_kind,
+    )
+    if plan.get('processing') or usage_kind == paren_classify.USAGE_KIND_SALES:
+        handle['proposedEmbroidery'] = composed or plan.get('processing') or ''
+        handle['usageKind'] = usage_kind
         if handle.get('action') == 'create' or handle.get('embroidery') in (
             '', None, PENDING_EMBROIDERY,
         ):
-            handle['embroidery'] = plan['processing']
-            handle['embroideryLabel'] = plan['processing']
-            handle['pendingEmbroiderySort'] = False
-            handle['fromParenClassification'] = True
+            if composed:
+                handle['embroidery'] = composed
+                handle['embroideryLabel'] = composed
+                handle['pendingEmbroiderySort'] = False
+                handle['fromParenClassification'] = True
 
     if plan.get('needsConfirm'):
         row['reasons'] = list(row.get('reasons') or []) + list(plan.get('confirmReasons') or [])

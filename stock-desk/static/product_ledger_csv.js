@@ -57,7 +57,7 @@
         file:null,fileB64:'',fileName:'',fileSize:0,
         auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
         basisDate:'',defaultSiteName:'未確認',
-        openingSelections:{},
+        openingSelections:{},openingUsageFilter:'',
         history:null,historyError:'',previewError:'',preview:null,result:null,
         q:'',statusFilter:'needs_review',page:1,
         skuQ:'',skuReasonFilter:'',skuPage:1,
@@ -79,6 +79,7 @@
     if(!ui.rowExclusions)ui.rowExclusions={}
     if(!ui.appliedSkuDecisions)ui.appliedSkuDecisions={}
     if(!ui.openingSelections)ui.openingSelections={}
+    if(ui.openingUsageFilter==null)ui.openingUsageFilter=''
     if(ui.makerLookup===undefined)ui.makerLookup=null
     if(ui.bulkMakerLookup===undefined)ui.bulkMakerLookup=null
     if(!ui.sectionOpen)ui.sectionOpen=Object.assign({},SECTION_DEFAULTS)
@@ -3836,13 +3837,35 @@
     if((masters.suppliers||[]).length)masterBits.push(`仕入先新規予定: ${masters.suppliers.slice(0,8).map(esc).join('、')}${(masters.suppliers.length>8?` …他${masters.suppliers.length-8}`:'')}`)
     if((masters.sites||[]).length)masterBits.push(`拠点新規予定: ${masters.sites.map(esc).join('、')}`)
     if((masters.shelves||[]).length)masterBits.push(`棚新規予定: ${masters.shelves.slice(0,8).map(esc).join('、')}`)
-    const plans=(os.plans||[]).slice(0,60)
+    const usageFilter=st.openingUsageFilter||''
+    const allPlans=os.plans||[]
+    const filteredPlans=usageFilter==='販売'
+      ?allPlans.filter(p=>{
+        const t=p.target||{}
+        const u=t.usageKind||t.handlingType||''
+        const emb=t.embroidery||''
+        return u==='販売'||emb==='販売'||String(emb).endsWith('｜販売')
+      })
+      :usageFilter==='other'
+        ?allPlans.filter(p=>{
+          const t=p.target||{}
+          const u=t.usageKind||t.handlingType||''
+          const emb=t.embroidery||''
+          return !(u==='販売'||emb==='販売'||String(emb).endsWith('｜販売'))
+        })
+        :allPlans
+    const plans=filteredPlans.slice(0,60)
     const rows=plans.map(p=>{
       const t=p.target||{}
       const csv=p.csv||{}
       const place=p.place||{}
       const stock=p.stock||{}
       const sel=st.openingSelections[String(p.rowNo)]||{}
+      const usage=t.usageKind||t.handlingType||''
+      const emb=t.embroidery||''
+      const usageLabel=usage==='販売'||emb==='販売'||String(emb).endsWith('｜販売')
+        ?(emb&&emb!=='販売'?emb:'販売')
+        :(emb||'—')
       const qtyCheck=p.status==='qty_diff'
         ?`<label class="check"><input type="checkbox" data-pl-open-qty="${p.rowNo}" ${sel.updateQty?'checked':''}>CSV数量へ更新</label>`
         :''
@@ -3850,6 +3873,7 @@
         <td>${p.rowNo}</td>
         <td>${esc(p.statusLabel||p.status)}</td>
         <td>${esc(t.officialName||t.productName||'')}<div class="excelhint">元: ${esc(csv.productName||'')}</div></td>
+        <td>${esc(usageLabel)}${t.usageConflict?' <span class="badge">用途要確認</span>':''}</td>
         <td>${esc(t.size||csv.size||'')}</td>
         <td>${esc(p.conditionLabel||'')}</td>
         <td class="num">${p.qty!=null?esc(String(p.qty)):'—'}</td>
@@ -3859,7 +3883,7 @@
         <td>${esc((p.reasons||[]).join(' '))}${p.productRegistrationExcluded?` <span class="badge">${esc(p.productRegistrationExcludedLabel||'商品登録時に除外した項目')}</span>`:''}${qtyCheck}</td>
       </tr>`
     }).join('')
-    const more=(os.plans||[]).length>60?`<p class="excelhint">先頭60件を表示（全 ${(os.plans||[]).length} 件）。絞り込みは今後拡張予定。</p>`:''
+    const more=filteredPlans.length>60?`<p class="excelhint">先頭60件を表示（絞込後 ${filteredPlans.length} / 全 ${allPlans.length} 件）。</p>`:''
     const exclHint=((os.plans||[]).some(p=>p.productRegistrationExcluded))
       ?'<p class="excelhint">「商品登録時に除外した項目」は表示のみです。初期在庫数量を自動では外しません。登録先が無い行は確認対象のままです。</p>'
       :''
@@ -3868,10 +3892,18 @@
       <p class="notice">${esc(os.note||sum.note||'確認後に初期在庫を登録します。数量・新品中古・拠点・単価を確認してください。')}</p>
       ${exclHint}
       <p><strong>${esc(countLine)}</strong></p>
+      <div class="bar">
+        <label>取扱種別<select id="plOpenUsageFilter" ${st.busy?'disabled':''}>
+          <option value="" ${!usageFilter?'selected':''}>すべて</option>
+          <option value="販売" ${usageFilter==='販売'?'selected':''}>販売</option>
+          <option value="other" ${usageFilter==='other'?'selected':''}>販売以外</option>
+        </select></label>
+        <span class="excelhint">表示 ${filteredPlans.length} / ${allPlans.length} 件（在庫一覧の加工仕様フィルタでも「販売」を選べます）</span>
+      </div>
       ${masterBits.length?`<p class="excelhint">${masterBits.join('　')}</p>`:''}
       <div class="legacy-csv-table-wrap"><table class="data sku-compare-table">
-        <thead><tr><th>行</th><th>判定</th><th>登録先商品</th><th>サイズ</th><th>新品中古</th><th>数量</th><th>拠点/棚</th><th>単価</th><th>既存在庫</th><th>理由</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="10">該当行なし</td></tr>'}</tbody>
+        <thead><tr><th>行</th><th>判定</th><th>登録先商品</th><th>取扱</th><th>サイズ</th><th>新品中古</th><th>数量</th><th>拠点/棚</th><th>単価</th><th>既存在庫</th><th>理由</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="11">該当行なし</td></tr>'}</tbody>
       </table></div>
       ${more}
     </section>`
@@ -4584,6 +4616,11 @@
     if(basis)basis.onchange=()=>{st.basisDate=basis.value;st.preview=null}
     const site=$('#plDefaultSite')
     if(site)site.onchange=()=>{st.defaultSiteName=site.value;st.preview=null}
+    const usageFilter=$('#plOpenUsageFilter')
+    if(usageFilter)usageFilter.onchange=()=>{
+      st.openingUsageFilter=usageFilter.value||''
+      paintDialog({preserveScroll:true})
+    }
     document.querySelectorAll('[data-pl-open-qty]').forEach(el=>{
       el.onchange=()=>{
         const rowNo=el.getAttribute('data-pl-open-qty')

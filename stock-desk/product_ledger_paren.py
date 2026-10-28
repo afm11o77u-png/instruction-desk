@@ -102,6 +102,15 @@ PROCESSING_TERMS = (
     '反射', 'カット', '縫製', '加工',
 )
 
+# 販売用途マーカー（取扱種別「販売」へ引き継ぐ。商品名からは除去する）
+# 部分一致で「天寿会販売」「販売単位」などを消さない。括弧／【】付きの識別可能な表記だけ。
+USAGE_KIND_SALES = '販売'
+USAGE_SALES_TOKENS = (
+    '販売用', '販売分', '販売品', '販売',
+)
+# 取扱キー合成（加工仕様｜販売）。表示・フィルタは加工仕様欄を流用。
+USAGE_HANDLING_SEP = '｜'
+
 # 加工は「DHC刺繍あり」「背中プリント」のように語を含む複合も可（完全一致優先）。
 PROCESSING_COMPOUND_OK = True
 
@@ -124,6 +133,12 @@ MATERIAL_TERMS = (
 _SEGMENT_SPLIT_RE = re.compile(r'[・･、,，&＆]+')
 _SLASH_SPLIT_RE = re.compile(r'[/／]+')
 _PAREN_PAIR_RE = re.compile(r'[（(]([^（）()]*)[）)]')
+# 販売用途マーカー（丸括弧・隅付き括弧）。トークンは長い語優先。
+_SALES_MARKER_WRAPPER_RE = re.compile(
+    r'[（(【]\s*('
+    + '|'.join(re.escape(t) for t in sorted(USAGE_SALES_TOKENS, key=len, reverse=True))
+    + r')\s*[）)】]'
+)
 # 配色のつなぎ（サックス×グレー、黒／ワイン、ネイビー*グレー）。
 # ・は複数色分割のまま。先頭の中古標記 ＊/* は bridge 判定の対象外（色ヒット間だけ見る）。
 _COLORWAY_JOIN_CHARS = '×✕ｘxX*＊/／'
@@ -148,6 +163,85 @@ def _norm_token(value: str) -> str:
     t = _nfkc(value)
     t = re.sub(r'[\s\u3000]+', '', t)
     return t
+
+
+_USAGE_TOKEN_KEYS = {_norm_token(t) for t in USAGE_SALES_TOKENS}
+
+
+def is_sales_usage_token(segment: str) -> bool:
+    """括弧内などが販売用途トークンか（完全一致のみ）。"""
+    key = _norm_token(segment)
+    return bool(key) and key in _USAGE_TOKEN_KEYS
+
+
+def detect_sales_usage_marker(text: str):
+    """識別可能な販売用途マーカーの有無。
+
+    戻り値: (has_sales: bool, markers: list[str])
+    顧客名・商品名のどちらでも使える。顧客マスタの自動リネームは呼び出し側でしない。
+    「天寿会販売」「販売単位」などラッパー無しの部分一致は対象外。
+    """
+    raw = text if text is not None else ''
+    unified = unify_import_notation(raw) if raw else ''
+    markers = []
+    for m in _SALES_MARKER_WRAPPER_RE.finditer(unified or raw or ''):
+        tok = (m.group(1) or '').strip()
+        if tok and tok not in markers:
+            markers.append(tok)
+    return bool(markers), markers
+
+
+def strip_sales_usage_markers(text: str):
+    """商品名から販売用途マーカーを除去する。
+
+    戻り値: (cleaned_name, usage_kind)
+    usage_kind はマーカーがあれば USAGE_KIND_SALES、なければ空文字。
+    原文のリネーム強制はしない（呼び出し側が plannedName に使う）。
+    """
+    original = (text or '').strip()
+    if not original:
+        return '', ''
+    unified = unify_import_notation(original) or original
+    has_sales, _markers = detect_sales_usage_marker(unified)
+    if not has_sales:
+        return unified, ''
+    cleaned = _SALES_MARKER_WRAPPER_RE.sub('', unified)
+    cleaned = re.sub(r'[\s\u3000]{2,}', ' ', cleaned)
+    cleaned = re.sub(r'[\s\u3000]+([（(【])', r'\1', cleaned)
+    cleaned = cleaned.strip()
+    cleaned = unify_import_notation(cleaned) or cleaned
+    return (cleaned or unified), (USAGE_KIND_SALES if has_sales else '')
+
+
+def compose_handling_embroidery(processing: str, usage_kind: str) -> str:
+    """取扱キー用の加工仕様。販売用途は｜販売 を付与（販売のみなら『販売』）。"""
+    proc = (processing or '').strip()
+    usage = (usage_kind or '').strip()
+    if usage == USAGE_KIND_SALES:
+        if not proc:
+            return USAGE_KIND_SALES
+        if proc == USAGE_KIND_SALES or proc.endswith(f'{USAGE_HANDLING_SEP}{USAGE_KIND_SALES}'):
+            return proc
+        return f'{proc}{USAGE_HANDLING_SEP}{USAGE_KIND_SALES}'
+    return proc
+
+
+def handling_has_sales_usage(embroidery: str) -> bool:
+    """取扱の加工仕様が販売用途を含むか。"""
+    emb = (embroidery or '').strip()
+    if not emb:
+        return False
+    if emb == USAGE_KIND_SALES:
+        return True
+    if emb.endswith(f'{USAGE_HANDLING_SEP}{USAGE_KIND_SALES}'):
+        return True
+    # 旧・手入力で括弧付きの場合も検知
+    has, _ = detect_sales_usage_marker(emb)
+    return has
+
+
+def usage_kind_from_embroidery(embroidery: str) -> str:
+    return USAGE_KIND_SALES if handling_has_sales_usage(embroidery) else ''
 
 
 def _sorted_terms(terms):
@@ -713,6 +807,15 @@ def classify_paren_segment(segment: str, *, pants: bool = False):
             'matched': _norm_token(HEM_PROCESSING_LITERAL),
             'original': source,
         }
+    # 販売用途（取扱種別へ引き継ぎ、商品名からは除去）。加工より先に完全一致で拾う。
+    if is_sales_usage_token(raw) or is_sales_usage_token(key):
+        return {
+            'kind': 'usage',
+            'value': USAGE_KIND_SALES,
+            'matched': key,
+            'original': source,
+            'usageKind': USAGE_KIND_SALES,
+        }
     proc_key, proc_val = _processing_match(key, raw)
     if proc_key:
         # 複合「丈加工・刺繍」は分割後に来る。単体複合で丈加工だけのときも無視
@@ -797,6 +900,7 @@ def _paren_inner_to_keep(content: str, part_hits: list):
     if not hits:
         raw = (content or '').strip()
         return raw if raw else (content if content is not None else None)
+    # usage / hem_ignore は商品名から除去（classified 扱い）
     unclassified = [h for h in hits if h.get('kind') == 'unknown']
     classified = [h for h in hits if h.get('kind') != 'unknown']
     if classified and not unclassified:
@@ -857,6 +961,7 @@ def classify_product_name(product_name: str):
         'color': '',
         'processing': '',
         'material': '',
+        'usageKind': '',
         'unclassified': [],
         'needsConfirm': False,
         'confirmReasons': [],
@@ -873,29 +978,51 @@ def classify_product_name(product_name: str):
         # 括弧壊れでもパンツの括弧外『丈加工』は除去を試みる（構造は触らない）
         planned_broken = strip_pants_hem_processing(unified or original) if pants else (unified or original)
         planned_broken = unify_import_notation(planned_broken) or planned_broken
+        # 壊れ括弧でも【販売】系は除去を試みる（用途だけ引き継ぐ）
+        cleaned_b, usage_b = strip_sales_usage_markers(planned_broken or unified or original)
         return {
             **empty,
             'needsConfirm': True,
             'confirmReasons': ['括弧の対応が取れていないため原文のまま要確認'],
-            'plannedName': planned_broken or unified or original,
+            'plannedName': cleaned_b or planned_broken or unified or original,
+            'usageKind': usage_b,
             'keptOriginal': True,
         }
 
     # 以降の位置・分割はすべて unified 上（半角カナ変換後）で行う
     contents = extract_paren_segments(unified)
     if not contents:
+        planned_out = unified
+        usage_out = ''
+        auto_out = False
+        # 【販売】など丸括弧無しの販売用途マーカー
+        cleaned_sq, usage_sq = strip_sales_usage_markers(planned_out)
+        if usage_sq:
+            usage_out = usage_sq
+            planned_out = cleaned_sq or planned_out
+            auto_out = True
         # 括弧なしでもパンツの外側『丈加工』を予定名から落とす
         if pants:
-            planned_out = strip_pants_hem_processing(unified)
-            planned_out = unify_import_notation(planned_out) or planned_out or unified
-            if planned_out != unified:
-                return {
-                    **empty,
-                    'plannedName': planned_out,
-                    'baseName': planned_out,
-                    'autoClassified': True,
-                    'keptOriginal': planned_out == original,
-                }
+            hemmed = strip_pants_hem_processing(planned_out)
+            hemmed = unify_import_notation(hemmed) or hemmed or planned_out
+            if hemmed != planned_out:
+                planned_out = hemmed
+                auto_out = True
+        if auto_out or planned_out != unified:
+            notices = []
+            if usage_out:
+                notices.append(
+                    '販売用途表記を商品名から除き、取扱種別「販売」として初期在庫へ引き継ぎます'
+                )
+            return {
+                **empty,
+                'plannedName': planned_out,
+                'baseName': planned_out,
+                'usageKind': usage_out,
+                'autoClassified': True,
+                'infoNotices': notices,
+                'keptOriginal': planned_out == original,
+            }
         return empty
 
     colors = []
@@ -906,6 +1033,7 @@ def classify_product_name(product_name: str):
     paren_hits = []  # 括弧ごとの part hit リスト
     colorway_notices = []
     hem_ignored = False
+    usage_kind = ''
     for content in contents:
         hits_for_paren = _classify_paren_parts(content, pants=pants)
         if not hits_for_paren:
@@ -936,6 +1064,8 @@ def classify_product_name(product_name: str):
             elif kind == 'material':
                 if hit['value'] not in materials:
                     materials.append(hit['value'])
+            elif kind == 'usage':
+                usage_kind = USAGE_KIND_SALES
             elif kind == 'hem_ignore':
                 hem_ignored = True
             else:
@@ -993,6 +1123,23 @@ def classify_product_name(product_name: str):
         else:
             kept = planned == original
 
+    # 【販売】など丸括弧分類の外にある販売用途マーカーも除去（用途種別だけ引き継ぐ）
+    if not needs:
+        cleaned_sq, sq_usage = strip_sales_usage_markers(planned)
+        if sq_usage:
+            usage_kind = USAGE_KIND_SALES
+            if cleaned_sq and cleaned_sq != planned:
+                planned = cleaned_sq
+                kept = planned == original
+                base_sq, _ = strip_sales_usage_markers(base or '')
+                if base_sq:
+                    base = base_sq
+
+    if usage_kind == USAGE_KIND_SALES:
+        notice = '販売用途表記を商品名から除き、取扱種別「販売」として初期在庫へ引き継ぎます'
+        if notice not in info_notices:
+            info_notices.append(notice)
+
     # パンツ: 括弧外に残った『丈加工』も予定名から除去（加工欄には載せない）
     if pants and not needs:
         stripped = strip_pants_hem_processing(planned)
@@ -1006,8 +1153,10 @@ def classify_product_name(product_name: str):
             base = unify_import_notation(base) or base
 
     # 分類抽出できた、または未分類を名に残して確定できるとき自動
+    # 販売用途マーカー除去だけでも予定名を採用する（要確認にはしない）
     auto = (not needs) and bool(
         colors or processings or materials or unclassified or hem_ignored
+        or usage_kind
     )
 
     return {
@@ -1017,6 +1166,7 @@ def classify_product_name(product_name: str):
         'color': color,
         'processing': processing,
         'material': material,
+        'usageKind': usage_kind,
         'unclassified': list(unclassified),
         'needsConfirm': needs,
         'confirmReasons': reasons,
@@ -1479,6 +1629,19 @@ def split_name_and_color(product_name: str):
         if notice not in info_notices:
             info_notices.append(notice)
 
+    usage_kind = stock_text_usage_kind(paren)
+    # 表記統一後の planned にまだ販売マーカーが残る場合（括弧外色除去後など）
+    if not usage_kind:
+        cleaned_final, usage_final = strip_sales_usage_markers(final_planned)
+        if usage_final:
+            usage_kind = usage_final
+            if cleaned_final:
+                final_planned = cleaned_final
+            notice = '販売用途表記を商品名から除き、取扱種別「販売」として初期在庫へ引き継ぎます'
+            if notice not in info_notices:
+                info_notices.append(notice)
+            auto = True
+
     return {
         'originalName': original,
         'sourceName': original,
@@ -1490,6 +1653,7 @@ def split_name_and_color(product_name: str):
         'sourceColor': source_color,
         'processing': paren.get('processing') or '',
         'material': paren.get('material') or '',
+        'usageKind': usage_kind,
         'unclassified': list(paren.get('unclassified') or []),
         'needsConfirm': needs,
         'confirmReasons': reasons,
@@ -1505,6 +1669,16 @@ def split_name_and_color(product_name: str):
         'changeSummary': change_summary,
         'outsideHits': list(extracted.get('outsideHits') or []),
     }
+
+
+def stock_text_usage_kind(paren_result) -> str:
+    """classify / split 結果から usageKind を取る。"""
+    if not isinstance(paren_result, dict):
+        return ''
+    kind = (paren_result.get('usageKind') or '').strip()
+    if kind == USAGE_KIND_SALES:
+        return USAGE_KIND_SALES
+    return ''
 
 
 def extend_color_terms(extra):
