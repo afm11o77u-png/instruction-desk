@@ -66,6 +66,7 @@ SKU_DECISION_MERGE = 'merge'
 SKU_DECISION_SEPARATE = 'separate'
 SKU_DECISION_HOLD = 'hold'
 SKU_DECISION_COLOR_SPLIT = 'color_split'
+SKU_DECISION_CONTENT_SPLIT = 'content_split'
 
 # 品番比較の判断ティア（自動まとめは needsDecision=False）
 REVIEW_TIER_AUTO = 'auto'
@@ -3156,6 +3157,9 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
             if stock.text(raw.get('decision')) == SKU_DECISION_COLOR_SPLIT:
                 group['excludeAuxStockAutoMerge'] = True
                 group['colorSplit'] = True
+            if stock.text(raw.get('decision')) == SKU_DECISION_CONTENT_SPLIT:
+                group['excludeAuxStockAutoMerge'] = True
+                group['contentSplit'] = True
             continue
         if package.get('parenNeedsConfirm'):
             # メイン候補は在庫で決定済み。色・括弧の振り分けだけが未確定 → 「候補未決定」とはしない
@@ -4326,6 +4330,656 @@ def attach_color_split_plans(c, sku_groups, sku_decisions, *, classified=None):
         apply_color_split_name_plan_display(group)
 
 
+def suggest_content_split_internal_code(maker_code, content_label):
+    """商品向け社内管理品番の提案: メーカー品番 + '-' + 内容ラベル（先頭ゼロ維持）。"""
+    maker = stock.text(maker_code)
+    label = stock.text(content_label)
+    if not maker or not label:
+        return ''
+    safe = (
+        label.replace('|', '-')
+        .replace('/', '-')
+        .replace('\\', '-')
+        .strip()
+    )
+    if len(safe) > 40:
+        safe = safe[:40].rstrip('-')
+    return f'{maker}-{safe}' if safe else ''
+
+
+def _inherit_content_field(plan, key, value):
+    """ソース行の値を継承。空欄だけ埋める（一括上書きしない）。"""
+    if value is None:
+        return
+    text_v = stock.text(value) if not isinstance(value, (list, dict, bool, int, float)) else value
+    if text_v == '' or text_v is None:
+        return
+    cur = plan.get(key)
+    if cur is None or cur == '':
+        plan[key] = text_v
+
+
+def _row_content_split_info(row, user_plan=None):
+    """カテゴリ＋編集済み商品名／名称／加工名から内容キーを作る。サイズは含めない。"""
+    csv = row.get('csv') or {}
+    pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+    ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    prov = row.get('specProvenance') if isinstance(row.get('specProvenance'), dict) else {}
+    prod = row.get('product') if isinstance(row.get('product'), dict) else {}
+    user = user_plan if isinstance(user_plan, dict) else {}
+
+    supplier = stock.text(user.get('supplier') or csv.get('supplier') or '')
+    color = stock.text(
+        user.get('color') or prov.get('color') or pc.get('color') or ''
+    )
+    material = stock.text(
+        user.get('material') or prov.get('material') or pc.get('material') or ''
+    )
+    notes = stock.text(
+        user.get('notes')
+        or user.get('supplement')
+        or pc.get('supplement')
+        or ''
+    )
+    product_name = stock.text(
+        user.get('productName')
+        or user.get('officialName')
+        or pc.get('plannedName')
+        or csv.get('productName')
+        or ''
+    )
+    service_name = stock.text(
+        user.get('serviceName')
+        or user.get('processing')
+        or ps.get('serviceName')
+        or pc.get('processing')
+        or ''
+    )
+    vendor = stock.text(
+        user.get('vendorName')
+        or user.get('processingVendor')
+        or ps.get('vendorName')
+        or pc.get('processingVendor')
+        or supplier
+    )
+    category = stock.text(
+        user.get('category')
+        or prod.get('category')
+        or prod.get('proposedCategory')
+        or ''
+    )
+
+    classified = {}
+    try:
+        classified = proc_svc.classify_processing_service_row(
+            supplier=vendor or supplier,
+            product_name=product_name,
+            code=csv.get('code') or '',
+            paren_processing=service_name or pc.get('processing') or '',
+        ) or {}
+    except Exception:
+        classified = {}
+
+    user_kind = stock.text(user.get('kind') or user.get('targetKind') or '')
+    is_proc = bool(
+        stock.is_process_service_category(category)
+        or user_kind == 'process_service'
+        or ps.get('isProcessingService')
+        or row.get('processingServiceView')
+        or classified.get('isProcessingService')
+    )
+
+    if is_proc:
+        raw_svc = (
+            service_name
+            or classified.get('serviceName')
+            or proc_svc.unify_processing_service_name(product_name)
+            or product_name
+        )
+        unified = proc_svc.unify_processing_service_name(raw_svc) or stock.text(raw_svc)
+        vend = stock.text(classified.get('vendorName') or vendor or supplier)
+        if unified and vend:
+            dedupe = proc_svc.service_dedupe_key(unified, vend)
+            return {
+                'kind': 'process_service',
+                'contentKey': f'ps|{dedupe}',
+                'dedupeKey': dedupe,
+                'category': stock.CATEGORY_PROCESS_SERVICE,
+                'serviceName': unified,
+                'vendorName': vend,
+                'productName': unified,
+                'supplier': vend,
+                'color': color,
+                'material': material,
+                'notes': notes,
+                'processing': unified,
+                'blankSku': True,
+                'identifiable': True,
+                'originalName': stock.text(csv.get('productName') or product_name),
+            }
+
+    processing = stock.text(service_name or pc.get('processing') or '')
+    name_core = product_name_core_key(product_name) or identity_match_key(product_name)
+    color_key = ''
+    if color:
+        try:
+            color_key = paren_classify.color_match_key(color) or identity_match_key(color)
+        except Exception:
+            color_key = identity_match_key(color)
+    elif product_name:
+        try:
+            _bk, color_key, _bd, color_disp = legacy.product_name_base_and_color(product_name)
+            if color_disp and not color:
+                color = color_disp
+        except Exception:
+            color_key = ''
+    proc_key = (
+        identity_match_key(processing) if processing else _name_processing_key(product_name)
+    )
+    content_key = '|'.join([
+        'prod',
+        name_core or '',
+        color_key or '',
+        proc_key or '',
+        identity_match_key(supplier),
+    ])
+    return {
+        'kind': 'product',
+        'contentKey': content_key,
+        'dedupeKey': content_key,
+        'category': category or '',
+        'productName': product_name,
+        'supplier': supplier,
+        'vendorName': '',
+        'serviceName': '',
+        'color': color,
+        'material': material,
+        'notes': notes,
+        'processing': processing,
+        'blankSku': False,
+        'identifiable': bool(product_name),
+        'originalName': stock.text(csv.get('productName') or product_name),
+    }
+
+
+def content_split_summary_label(plans):
+    """一覧用: 「加工サービス2件」／「商品2件」／混在。"""
+    plans = list(plans or [])
+    if not plans:
+        return '内容別登録（内容未確定）'
+    n_proc = sum(1 for p in plans if stock.text(p.get('kind') or '') == 'process_service')
+    n_prod = sum(1 for p in plans if stock.text(p.get('kind') or '') != 'process_service')
+    bits = []
+    if n_proc:
+        bits.append(f'加工サービス{n_proc}件')
+    if n_prod:
+        bits.append(f'商品{n_prod}件')
+    if not bits:
+        bits.append(f'登録先{len(plans)}件')
+    return '・'.join(bits)
+
+
+def estimate_content_split_count(group):
+    """選択前の件数見積り。variants はサイズのみ差を既に統合済み。"""
+    variants = list(group.get('variants') or [])
+    if variants:
+        return len(variants)
+    row_nos = group.get('rowNos') or []
+    return len(row_nos) if row_nos else 0
+
+
+def build_content_split_name_mappings(plans, unassigned_rows=None, *, row_by_no=None):
+    """内容別の登録予定から名称対応表を作る（統合用 namePlan は使わない）。"""
+    mappings = []
+    seen = set()
+    row_by_no = row_by_no if isinstance(row_by_no, dict) else {}
+    for plan in plans or []:
+        pname = stock.text(plan.get('productName') or plan.get('serviceName') or '')
+        kind = stock.text(plan.get('kind') or '')
+        for rn in plan.get('rowNos') or []:
+            try:
+                row_no = int(rn)
+            except (TypeError, ValueError):
+                continue
+            key = (row_no, pname, kind, stock.text(plan.get('contentKey') or ''))
+            if key in seen:
+                continue
+            seen.add(key)
+            row = row_by_no.get(row_no) or {}
+            orig = stock.text((row.get('csv') or {}).get('productName') or '')
+            if not orig:
+                orig = stock.text(plan.get('originalName') or '') or pname
+            mappings.append({
+                'originalName': orig,
+                'sourceRowNo': row_no,
+                'registrationName': pname,
+                'isAlias': bool(orig and pname and stock.text(orig) != stock.text(pname)),
+                'kind': kind,
+                'splitTargetId': stock.text(plan.get('splitTargetId') or ''),
+                'contentKey': stock.text(plan.get('contentKey') or ''),
+            })
+    for u in unassigned_rows or []:
+        try:
+            row_no = int(u.get('rowNo'))
+        except (TypeError, ValueError):
+            continue
+        mappings.append({
+            'originalName': stock.text(u.get('originalName') or ''),
+            'sourceRowNo': row_no,
+            'registrationName': '',
+            'isAlias': False,
+            'kind': '',
+            'unassigned': True,
+            'reason': stock.text(u.get('reason') or '行き先未定'),
+        })
+    return mappings
+
+
+def apply_content_split_name_plan_display(group):
+    """内容別選択中は統合用の仮代表名・別名対応を有効予定として見せない。"""
+    split = group.get('contentSplitPlans') if isinstance(group.get('contentSplitPlans'), dict) else {}
+    plans = split.get('plans') or []
+    unassigned = split.get('unassignedRows') or []
+    summary = content_split_summary_label(plans)
+    mappings = list(split.get('nameMappings') or [])
+    if not mappings:
+        mappings = build_content_split_name_mappings(plans, unassigned)
+    group['plannedOfficialName'] = summary
+    group['nameAdoptionRule'] = '内容別に分けて登録'
+    group['provisionalName'] = False
+    group['namePlan'] = {
+        'officialName': summary,
+        'provisional': False,
+        'provisionalTag': '',
+        'provisionalStatus': '',
+        'adoptionRule': '内容別に分けて登録（統合用の仮代表名・別名対応は使いません）',
+        'adoptionRuleCode': 'content_split',
+        'nameMappings': mappings,
+        'nameCandidates': [
+            stock.text(p.get('productName') or p.get('serviceName') or '')
+            for p in plans
+            if stock.text(p.get('productName') or p.get('serviceName') or '')
+        ],
+        'auxNameReasons': [],
+        'keepsExistingOfficialName': False,
+        'contentSplit': True,
+        'colorSplit': False,
+    }
+
+
+def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
+    """同一メーカー品番を内容（カテゴリ＋名／加工名）ごとに別登録先へ分ける予定。
+
+    - サイズだけの差では増やさない（正規化キーで統合）
+    - 真の重複はマージ。加工名・仕様差は残す
+    - 加工サービスは 加工名+業者 で再利用キー。商品は社内管理品番の割当／確認
+    - 仕入先／業者／色／素材／補足はソース行から継承（一括上書きしない）
+    - クリック時点では保存しない（プレビューのみ）
+    """
+    raw = decision_raw if isinstance(decision_raw, dict) else {}
+    maker_code = stock.text(group.get('code') or '')
+    user_plans = raw.get('contentPlans') if isinstance(raw.get('contentPlans'), dict) else {}
+    row_destinations = (
+        raw.get('contentRowDestinations')
+        if isinstance(raw.get('contentRowDestinations'), dict)
+        else {}
+    )
+
+    row_by_no = {}
+    for row in (classified or []):
+        try:
+            row_by_no[int(row.get('rowNo'))] = row
+        except (TypeError, ValueError):
+            continue
+
+    buckets = {}  # contentKey -> plan draft
+    unassigned_rows = []
+
+    def _ensure_bucket(info, user=None):
+        key = stock.text((info or {}).get('contentKey') or '')
+        if not key:
+            return None
+        user = user if isinstance(user, dict) else {}
+        if key not in buckets:
+            kind = stock.text(user.get('kind') or info.get('kind') or 'product')
+            pname = stock.text(
+                user.get('productName')
+                or user.get('serviceName')
+                or info.get('productName')
+                or info.get('serviceName')
+                or ''
+            )
+            suggested = ''
+            if kind != 'process_service':
+                suggested = suggest_content_split_internal_code(maker_code, pname)
+            internal = stock.text(user.get('internalCode') or user.get('code') or '') or suggested
+            split_target_id = stock.text(
+                user.get('splitTargetId') or f'{maker_code}::{key}'
+            )
+            buckets[key] = {
+                'contentKey': key,
+                'splitTargetId': split_target_id,
+                'kind': kind,
+                'category': stock.text(
+                    user.get('category') or info.get('category') or ''
+                ),
+                'makerCode': maker_code,
+                'csvProductCode': maker_code,
+                'internalCode': '' if kind == 'process_service' else internal,
+                'suggestedInternalCode': '' if kind == 'process_service' else suggested,
+                'blankSku': kind == 'process_service',
+                'productName': pname,
+                'serviceName': stock.text(
+                    user.get('serviceName') or info.get('serviceName') or ''
+                ),
+                'vendorName': stock.text(
+                    user.get('vendorName') or info.get('vendorName') or ''
+                ),
+                'supplier': stock.text(user.get('supplier') or info.get('supplier') or ''),
+                'color': stock.text(user.get('color') or info.get('color') or ''),
+                'material': stock.text(user.get('material') or info.get('material') or ''),
+                'notes': stock.text(user.get('notes') or info.get('notes') or ''),
+                'processing': stock.text(
+                    user.get('processing') or info.get('processing') or ''
+                ),
+                'dedupeKey': stock.text(
+                    user.get('dedupeKey') or info.get('dedupeKey') or key
+                ),
+                'originalName': stock.text(info.get('originalName') or ''),
+                'rowNos': [],
+                'customers': [],
+                'sizes': [],
+                'rowSpecsSamples': [],
+                'keepProductId': user.get('keepProductId') or user.get('productId'),
+                'collisionAction': stock.text(user.get('collisionAction') or ''),
+                'existingProducts': [],
+                'collision': False,
+                'needsCollisionChoice': False,
+                'needsInternalCode': kind != 'process_service',
+                'statusLabel': '分割案・未反映',
+            }
+        return buckets[key]
+
+    source_rows = []
+    for rn in (group.get('rowNos') or []):
+        row = row_by_no.get(int(rn))
+        if row:
+            source_rows.append(row)
+    if not source_rows:
+        for v in (group.get('variants') or []):
+            for rn in (v.get('rowNos') or []):
+                source_rows.append({
+                    'rowNo': rn,
+                    'csv': {
+                        'code': maker_code,
+                        'productName': v.get('productName') or (v.get('csvNames') or [''])[0],
+                        'supplier': v.get('supplier') or '',
+                        'size': '',
+                        'customer': '',
+                    },
+                    'parenClassification': {
+                        'processing': v.get('processing') or '',
+                        'color': v.get('color') or '',
+                    },
+                    'processingService': {},
+                    'specProvenance': {},
+                    'product': {},
+                })
+
+    for row in source_rows:
+        row_no = int(row.get('rowNo') or 0)
+        dest_key = stock.text(
+            row_destinations.get(str(row_no)) or row_destinations.get(row_no) or ''
+        )
+        user_for_row = {}
+        if dest_key and dest_key in user_plans and isinstance(user_plans.get(dest_key), dict):
+            user_for_row = user_plans[dest_key]
+        elif dest_key:
+            # 行き先キーだけ指定された場合
+            user_for_row = {'contentKey': dest_key}
+        info = _row_content_split_info(row, user_for_row if user_for_row else None)
+        if dest_key and not info.get('contentKey'):
+            info['contentKey'] = dest_key
+        # ユーザー上書き（contentPlans）をキー単位で優先
+        user = user_plans.get(info.get('contentKey') or '') or user_plans.get(dest_key) or {}
+        if not isinstance(user, dict):
+            user = {}
+        if user:
+            # 編集値を info に反映（空で消さない）
+            for field in (
+                'kind', 'productName', 'serviceName', 'vendorName', 'supplier',
+                'color', 'material', 'notes', 'processing', 'category', 'internalCode',
+            ):
+                if stock.text(user.get(field) or '') or field in ('internalCode',):
+                    if field in user and user.get(field) is not None:
+                        if field == 'internalCode' or stock.text(user.get(field) or ''):
+                            info[field] = user.get(field)
+            if stock.text(user.get('kind') or ''):
+                info['kind'] = stock.text(user.get('kind'))
+            if stock.text(user.get('contentKey') or ''):
+                info['contentKey'] = stock.text(user.get('contentKey'))
+
+        if not info.get('identifiable') or not info.get('contentKey'):
+            unassigned_rows.append({
+                'rowNo': row_no,
+                'originalName': stock.text((row.get('csv') or {}).get('productName') or ''),
+                'reason': '内容（商品名／加工名）が特定できないため自動割当しません',
+            })
+            continue
+
+        bucket = _ensure_bucket(info, user)
+        if not bucket:
+            unassigned_rows.append({
+                'rowNo': row_no,
+                'originalName': stock.text((row.get('csv') or {}).get('productName') or ''),
+                'reason': '内容キーを作れません',
+            })
+            continue
+        if row_no not in bucket['rowNos']:
+            bucket['rowNos'].append(row_no)
+        # ソース行から継承（空欄のみ）
+        csv = row.get('csv') or {}
+        _inherit_content_field(bucket, 'supplier', csv.get('supplier') or info.get('supplier'))
+        _inherit_content_field(bucket, 'vendorName', info.get('vendorName'))
+        _inherit_content_field(bucket, 'color', info.get('color'))
+        _inherit_content_field(bucket, 'material', info.get('material'))
+        _inherit_content_field(bucket, 'notes', info.get('notes'))
+        _inherit_content_field(bucket, 'processing', info.get('processing'))
+        _inherit_content_field(bucket, 'productName', info.get('productName'))
+        _inherit_content_field(bucket, 'serviceName', info.get('serviceName'))
+        _inherit_content_field(bucket, 'originalName', info.get('originalName'))
+        cust = stock.text(csv.get('customer') or '')
+        if cust and cust not in bucket['customers']:
+            bucket['customers'].append(cust)
+        size = stock.text(csv.get('size') or '')
+        if size and size not in bucket['sizes']:
+            bucket['sizes'].append(size)
+        sample = {
+            'rowNo': row_no,
+            'originalName': csv.get('productName') or '',
+            'originalCode': maker_code,
+            'customer': cust,
+            'size': size,
+            'supplier': csv.get('supplier') or '',
+            'color': info.get('color') or '',
+            'material': info.get('material') or '',
+            'notes': info.get('notes') or '',
+            'processing': info.get('processing') or '',
+            'splitTargetId': bucket['splitTargetId'],
+        }
+        samples = list(bucket.get('rowSpecsSamples') or [])
+        if not any(int(s.get('rowNo') or 0) == row_no for s in samples):
+            samples.append(sample)
+            bucket['rowSpecsSamples'] = samples[:12]
+
+    # ユーザーが contentPlans だけ追加した場合も残す
+    for uk, user in user_plans.items():
+        if not isinstance(user, dict):
+            continue
+        key = stock.text(user.get('contentKey') or uk)
+        if not key:
+            continue
+        info = {
+            'contentKey': key,
+            'kind': stock.text(user.get('kind') or 'product'),
+            'productName': stock.text(user.get('productName') or user.get('serviceName') or ''),
+            'serviceName': stock.text(user.get('serviceName') or ''),
+            'vendorName': stock.text(user.get('vendorName') or ''),
+            'supplier': stock.text(user.get('supplier') or ''),
+            'category': stock.text(user.get('category') or ''),
+            'dedupeKey': stock.text(user.get('dedupeKey') or key),
+            'color': stock.text(user.get('color') or ''),
+            'material': stock.text(user.get('material') or ''),
+            'notes': stock.text(user.get('notes') or ''),
+            'processing': stock.text(user.get('processing') or ''),
+            'identifiable': True,
+            'originalName': stock.text(user.get('originalName') or ''),
+        }
+        bucket = _ensure_bucket(info, user)
+        if bucket and stock.text(user.get('internalCode') or '') and bucket.get('kind') != 'process_service':
+            bucket['internalCode'] = stock.text(user.get('internalCode'))
+
+    # 衝突検査（商品のみ。加工サービスは品番なし）
+    seen_internal = {}
+    plans = []
+    for key in sorted(buckets.keys()):
+        plan = buckets[key]
+        if plan.get('kind') == 'process_service':
+            plan['blankSku'] = True
+            plan['internalCode'] = ''
+            plan['needsInternalCode'] = False
+            plan['needsCollisionChoice'] = False
+            plan['collision'] = False
+            # 加工名＋業者必須
+            if not stock.text(plan.get('serviceName') or '') or not stock.text(plan.get('vendorName') or ''):
+                plan['needsFields'] = True
+            else:
+                plan['needsFields'] = False
+                existing_svc = proc_svc.find_existing_processing_service(
+                    c,
+                    plan.get('serviceName') or '',
+                    plan.get('vendorName') or '',
+                )
+                if existing_svc:
+                    plan['keepProductId'] = existing_svc['id']
+                    plan['action'] = 'reuse'
+                    plan['existingProducts'] = [{
+                        'id': existing_svc['id'],
+                        'code': existing_svc.get('code') or '',
+                        'name': existing_svc.get('name') or '',
+                        'supplierName': plan.get('vendorName') or '',
+                    }]
+                else:
+                    plan['action'] = 'create'
+            plans.append(plan)
+            continue
+
+        internal = stock.text(plan.get('internalCode') or '')
+        existing = []
+        if internal and stock_product_merge.is_normal_product_code(internal):
+            existing = [
+                {
+                    'id': r['id'],
+                    'code': r['code'],
+                    'name': r['name'],
+                    'color': r['color'] or '',
+                    'supplierName': r['supplier_name'] or '',
+                }
+                for r in stock_product_merge.find_live_products_by_code(c, internal)
+            ]
+        plan['existingProducts'] = existing
+        collision = bool(existing)
+        if internal and internal in seen_internal:
+            collision = True
+            plan['collidesWithPlan'] = seen_internal[internal]
+        else:
+            plan['collidesWithPlan'] = ''
+        if internal:
+            seen_internal[internal] = plan.get('productName') or key
+        plan['collision'] = collision
+        keep_id = plan.get('keepProductId')
+        action = stock.text(plan.get('collisionAction') or '')
+        if not internal:
+            plan['needsInternalCode'] = True
+            plan['needsCollisionChoice'] = True
+        elif collision:
+            if keep_id and any(int(p['id']) == int(keep_id) for p in existing):
+                plan['needsCollisionChoice'] = False
+                plan['collisionAction'] = action or 'reuse'
+                plan['action'] = 'reuse'
+            elif action == 'edit' and internal and internal != plan.get('suggestedInternalCode'):
+                plan['needsCollisionChoice'] = bool(existing) or bool(plan.get('collidesWithPlan'))
+                plan['action'] = 'create'
+            else:
+                plan['needsCollisionChoice'] = True
+                plan['action'] = 'create'
+        else:
+            plan['needsCollisionChoice'] = False
+            plan['action'] = 'create'
+        if not plan.get('productName'):
+            plan['productName'] = stock.text(
+                ((group.get('nameCandidates') or [None])[0]) or maker_code
+            )
+        plans.append(plan)
+
+    complete = (
+        bool(plans)
+        and not unassigned_rows
+        and not any(
+            p.get('needsCollisionChoice') or p.get('needsFields')
+            for p in plans
+        )
+    )
+    name_mappings = build_content_split_name_mappings(
+        plans,
+        unassigned_rows,
+        row_by_no={int(r.get('rowNo') or 0): r for r in source_rows if r.get('rowNo') is not None},
+    )
+    return {
+        'makerCode': maker_code,
+        'plans': plans,
+        'unassignedRows': unassigned_rows,
+        'complete': complete,
+        'planCount': len(plans),
+        'summaryLabel': content_split_summary_label(plans),
+        'nameMappings': name_mappings,
+        'preferForProcess': any(
+            stock.text(p.get('kind') or '') == 'process_service' for p in plans
+        ),
+        'note': (
+            '内容（商品名／加工名など）ごとに別登録先として登録予定です（まだ保存していません）。'
+            'サイズだけの差は統合します。加工サービスは加工名＋業者で再利用し、'
+            '別加工名は別名統合しません。メーカー品番・旧CSV品番は元のままです。'
+            '統合用の仮代表名・別名対応は使いません。'
+        ),
+    }
+
+
+def attach_content_split_plans(c, sku_groups, sku_decisions, *, classified=None):
+    """内容分割を選んだ品番に予定を付与。在庫自動まとめ対象外。"""
+    decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
+    for group in sku_groups:
+        code = stock.text(group.get('code') or '')
+        # 選択前でも件数見積りを載せる（ボタン表示用）
+        group['contentSplitEstimateCount'] = estimate_content_split_count(group)
+        raw = decisions.get(code) or decisions.get(str(code)) or {}
+        if not isinstance(raw, dict):
+            continue
+        if stock.text(raw.get('decision')) != SKU_DECISION_CONTENT_SPLIT:
+            continue
+        group['contentSplit'] = True
+        group['excludeAuxStockAutoMerge'] = True
+        if group.get('auxStockPickAuto'):
+            group['auxStockPickAuto'] = False
+            group['needsDecision'] = True
+            group['plannedSingleProduct'] = False
+            group['status'] = 'needs_decision'
+        group['contentSplitPlans'] = build_content_split_plans(
+            c, group, raw, classified=classified,
+        )
+        apply_content_split_name_plan_display(group)
+
+
 def ensure_schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS product_ledger_import_runs (
       id INTEGER PRIMARY KEY,
@@ -5355,11 +6009,16 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
         code = stock.text((row.get('csv') or {}).get('code') or '')
         group = by_code.get(code) or {}
         prod = dict(row.get('product') or {})
-        # 色別登録の商品名（例: Tシャツ白）を括弧分類の除去後名（Tシャツ）で潰さない
+        # 色別／内容別登録の商品名を括弧分類の除去後名で潰さない
         if (
             prod.get('colorSplit')
+            or prod.get('contentSplit')
             or group.get('colorSplit')
-            or stock.text((group.get('decision') or {}).get('decision') or '') == SKU_DECISION_COLOR_SPLIT
+            or group.get('contentSplit')
+            or stock.text((group.get('decision') or {}).get('decision') or '') in (
+                SKU_DECISION_COLOR_SPLIT,
+                SKU_DECISION_CONTENT_SPLIT,
+            )
         ):
             continue
         keep_original_name = (
@@ -7090,6 +7749,265 @@ def apply_separate_as_process_service_plans(c, classified, sku_groups, sku_decis
     return meta
 
 
+def apply_content_split_as_process_service_plans(
+    c, classified, sku_groups, sku_decisions, processing_split_meta,
+):
+    """内容別に分けて登録のうち加工サービス先を自動分離のあとに適用。
+
+    - 加工名＋業者キーで再利用。別加工名は別名統合しない
+      （例: 同一旧品番の ライン加工 と スナッパー加工 → 独立2件）
+    - CSV行↔splitTargetId・顧客・仕様を provenance に残す
+    - メーカー品番／旧CSV品番は元のまま（加工SKUに流用しない）
+    """
+    decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
+    meta = dict(processing_split_meta or {})
+    plans_by_key = {}
+    for p in (meta.get('processingServicePlans') or []):
+        if not isinstance(p, dict):
+            continue
+        key = stock.text(p.get('dedupeKey') or '')
+        if key:
+            plans_by_key[key] = dict(p)
+    group_by_code = {g['code']: g for g in (sku_groups or [])}
+    owned_row_nos = set()
+
+    for row in classified or []:
+        code = stock.text((row.get('csv') or {}).get('code') or '')
+        if not stock_product_merge.is_normal_product_code(code):
+            continue
+        group = group_by_code.get(code)
+        if not group:
+            continue
+        raw = decisions.get(code) or decisions.get(str(code)) or {}
+        if not isinstance(raw, dict):
+            continue
+        if stock.text(raw.get('decision')) != SKU_DECISION_CONTENT_SPLIT:
+            continue
+        split_info = group.get('contentSplitPlans') or {}
+        if not split_info:
+            split_info = build_content_split_plans(
+                c, group, raw, classified=classified,
+            )
+            group['contentSplitPlans'] = split_info
+        plan_by_row = {}
+        for plan in (split_info.get('plans') or []):
+            for rn in (plan.get('rowNos') or []):
+                plan_by_row[int(rn)] = plan
+        row_no = int(row.get('rowNo') or 0)
+        plan = plan_by_row.get(row_no)
+        if not plan or stock.text(plan.get('kind') or '') != 'process_service':
+            continue
+        owned_row_nos.add(row_no)
+
+        service_name = stock.text(plan.get('serviceName') or plan.get('productName') or '')
+        vendor_name = stock.text(plan.get('vendorName') or plan.get('supplier') or '')
+        notes = stock.text(plan.get('notes') or '')
+        if not service_name or not vendor_name:
+            row['status'] = STATUS_REVIEW
+            row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+            row['canCommit'] = False
+            row['reasons'] = list(row.get('reasons') or []) + [
+                f'品番「{code}」の内容別登録（加工サービス）は加工名と加工業者が必要です。'
+            ]
+            continue
+
+        csv_row = dict(row.get('csv') or {})
+        info = {
+            'serviceName': service_name,
+            'vendorName': vendor_name,
+            'displayName': service_name,
+            'identifiable': True,
+            'isProcessingService': True,
+        }
+        key = proc_svc.service_dedupe_key(service_name, vendor_name)
+        pplan = plans_by_key.get(key)
+        if not pplan:
+            pplan = _processing_service_plan_payload(
+                info,
+                source_row_nos=[row_no],
+                garment_codes=[code] if code else [],
+            )
+            existing_svc = proc_svc.find_existing_processing_service(
+                c, service_name, vendor_name,
+            )
+            if existing_svc:
+                pplan['action'] = 'reuse'
+                pplan['productId'] = existing_svc['id']
+            else:
+                pplan['action'] = 'create'
+            pplan['autoRegister'] = True
+            pplan['fromContentSplit'] = True
+            pplan['splitTargetId'] = stock.text(plan.get('splitTargetId') or '')
+            plans_by_key[key] = pplan
+        else:
+            if row_no not in (pplan.get('sourceRowNos') or []):
+                pplan.setdefault('sourceRowNos', []).append(row_no)
+            if code and code not in (pplan.get('targetGarmentCodes') or []):
+                pplan.setdefault('targetGarmentCodes', []).append(code)
+            pplan['autoRegister'] = True
+            pplan['fromContentSplit'] = True
+            pplan['serviceName'] = service_name
+            pplan['displayName'] = service_name
+            pplan['vendorName'] = vendor_name
+            pplan['splitTargetId'] = stock.text(
+                plan.get('splitTargetId') or pplan.get('splitTargetId') or ''
+            )
+
+        sample = {
+            'rowNo': row_no,
+            'originalName': csv_row.get('productName') or '',
+            'originalCode': code,
+            'customer': csv_row.get('customer') or '',
+            'size': csv_row.get('size') or '',
+            'qty': csv_row.get('qty') or csv_row.get('quantity') or '',
+            'unitPrice': csv_row.get('unitPrice') or csv_row.get('unitCost') or '',
+            'customerSpecific': notes,
+            'splitTargetId': stock.text(plan.get('splitTargetId') or ''),
+            'color': stock.text(plan.get('color') or ''),
+            'material': stock.text(plan.get('material') or ''),
+        }
+        samples = list(pplan.get('rowSpecsSamples') or [])
+        if not any(int(s.get('rowNo') or 0) == row_no for s in samples):
+            samples.append(sample)
+            pplan['rowSpecsSamples'] = samples[:12]
+
+        prod = dict(row.get('product') or {})
+        prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+        prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+        prod['code'] = ''
+        prod['codeOverride'] = ''
+        prod['blankSku'] = True
+        prod['officialName'] = service_name
+        prod['applyOfficialName'] = True
+        prod['primarySupplierName'] = vendor_name
+        prod['processingServiceProduct'] = True
+        prod['ignoreSkuDecisionGate'] = True
+        prod['contentSplit'] = True
+        prod['makerCode'] = code
+        if pplan.get('productId'):
+            prod['id'] = pplan['productId']
+            prod['action'] = 'reuse'
+        else:
+            prod['id'] = None
+            prod['action'] = 'create'
+        row['product'] = prod
+        row['handle'] = {
+            'action': 'excluded', 'id': None, 'candidates': [], 'reasons': [],
+            'embroidery': '', 'embroideryLabel': '',
+            'skipForProcessingService': True,
+        }
+        pc = dict(row.get('parenClassification') or {})
+        pc['processing'] = service_name
+        pc['plannedName'] = service_name
+        pc['processingVendor'] = vendor_name
+        pc['processingServiceView'] = True
+        pc['physicalPartsView'] = False
+        if notes:
+            pc['supplement'] = notes
+        if stock.text(plan.get('color') or ''):
+            _inherit_content_field(pc, 'color', plan.get('color'))
+        if stock.text(plan.get('material') or ''):
+            _inherit_content_field(pc, 'material', plan.get('material'))
+        row['parenClassification'] = pc
+
+        ps = dict(row.get('processingService') or {})
+        ps.update({
+            'serviceName': service_name,
+            'vendorName': vendor_name,
+            'displayName': service_name,
+            'isProcessingService': True,
+            'isProcessingVendor': True,
+            'identifiable': True,
+            'needsConfirm': False,
+            'fromContentSplit': True,
+            'splitTargetId': stock.text(plan.get('splitTargetId') or ''),
+        })
+        row['processingService'] = ps
+
+        prov = dict(row.get('specProvenance') or {})
+        row_specs = dict(ps.get('rowSpecs') or {})
+        if notes:
+            row_specs['customerSpecific'] = notes
+        if stock.text(plan.get('material') or ''):
+            row_specs['material'] = plan.get('material')
+        if stock.text(plan.get('color') or ''):
+            row_specs['color'] = plan.get('color')
+        prov.update({
+            'originalName': csv_row.get('productName') or '',
+            'originalCode': code,
+            'originalSupplier': csv_row.get('supplier') or '',
+            'processing': service_name,
+            'processingVendor': vendor_name,
+            'processingServiceName': service_name,
+            'processingDisplayName': service_name,
+            'rowKind': 'processing_service',
+            'targetGarmentCode': code,
+            'targetCustomer': csv_row.get('customer') or '',
+            'csvSize': csv_row.get('size') or '',
+            'csvQty': csv_row.get('qty') or csv_row.get('quantity') or '',
+            'csvUnitPrice': csv_row.get('unitPrice') or csv_row.get('unitCost') or '',
+            'isMainCandidate': True,
+            'rowSpecs': row_specs,
+            'customerSpecific': stock.text(row_specs.get('customerSpecific') or ''),
+            'contentSplitTargetId': stock.text(plan.get('splitTargetId') or ''),
+            'contentSplitContentKey': stock.text(plan.get('contentKey') or ''),
+            'fromContentSplit': True,
+            'hideOriginalNameAsAlias': False,
+        })
+        row['specProvenance'] = prov
+        row['processingServicePlanKey'] = key
+        row['processingServiceView'] = True
+        row['contentSplitTargetId'] = stock.text(plan.get('splitTargetId') or '')
+        row['pendingContentSplitProcessService'] = False
+        row['skuDecisionNeeded'] = False
+        row['csv'] = dict(csv_row)
+        row['csv']['makerCode'] = code
+        if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD):
+            row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+            row['statusLabel'] = STATUS_LABELS[row['status']]
+            row['canCommit'] = True
+
+        group.setdefault('contentProcessServicePlans', [])
+        group['contentProcessServicePlans'] = [
+            p for p in (group.get('contentProcessServicePlans') or [])
+            if stock.text(p.get('dedupeKey') or '') != key
+        ]
+        group['contentProcessServicePlans'].append({
+            'contentKey': stock.text(plan.get('contentKey') or ''),
+            'splitTargetId': stock.text(plan.get('splitTargetId') or ''),
+            'serviceName': service_name,
+            'vendorName': vendor_name,
+            'category': stock.CATEGORY_PROCESS_SERVICE,
+            'dedupeKey': key,
+            'action': pplan.get('action') or 'create',
+            'productId': pplan.get('productId'),
+            'sourceRowNos': list(pplan.get('sourceRowNos') or []),
+            'originalCode': code,
+            'statusLabel': '確認済み',
+        })
+
+    if owned_row_nos:
+        for key, pplan in list(plans_by_key.items()):
+            if pplan.get('fromContentSplit') or pplan.get('fromSeparateOrganize'):
+                continue
+            src = [
+                rn for rn in (pplan.get('sourceRowNos') or [])
+                if int(rn) not in owned_row_nos
+            ]
+            if not src:
+                plans_by_key.pop(key, None)
+                continue
+            pplan['sourceRowNos'] = src
+
+    plans = list(plans_by_key.values())
+    plans.sort(key=lambda p: (p.get('vendorName') or '', p.get('serviceName') or ''))
+    meta['processingServicePlans'] = plans
+    meta['autoCount'] = sum(1 for p in plans if p.get('autoRegister'))
+    meta['reuseCount'] = sum(1 for p in plans if p.get('action') == 'reuse')
+    meta['createCount'] = sum(1 for p in plans if p.get('action') == 'create')
+    return meta
+
+
 def _notation_auto_merged(group_or_row):
     """自動まとめ全般（公式名適用の判定用）。"""
     g = group_or_row or {}
@@ -7200,7 +8118,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
     hold_count = 0
     pending_decision = 0
 
-    # 色分割予定は品番単位で一度だけ組み立てる
+    # 色分割・内容分割予定は品番単位で一度だけ組み立てる
     for group in sku_groups:
         code = stock.text(group.get('code') or '')
         raw = decisions.get(code) or decisions.get(str(code)) or {}
@@ -7211,6 +8129,13 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             group['colorSplit'] = True
             group['excludeAuxStockAutoMerge'] = True
             apply_color_split_name_plan_display(group)
+        if isinstance(raw, dict) and stock.text(raw.get('decision')) == SKU_DECISION_CONTENT_SPLIT:
+            group['contentSplitPlans'] = build_content_split_plans(
+                c, group, raw, classified=classified,
+            )
+            group['contentSplit'] = True
+            group['excludeAuxStockAutoMerge'] = True
+            apply_content_split_name_plan_display(group)
         # メーカー情報で補正の採用 → 名・色競合理由だけ落とす（プレビュー）
         if isinstance(raw, dict) and raw.get('makerAdopted'):
             _soften_after_maker_adopt(group, raw)
@@ -7228,9 +8153,12 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
         decision = stock.text(raw.get('decision'))
         group['decision'] = raw if decision else None
 
-        # 自動まとめ済みでも、利用者が色別登録を選んだときはその決定を行へ反映する
+        # 自動まとめ済みでも、利用者が色別／内容別登録を選んだときはその決定を行へ反映する
         # （色省略の背景まとめが色別の未割当行を潰さない）
-        if not group['needsDecision'] and decision != SKU_DECISION_COLOR_SPLIT:
+        if (
+            not group['needsDecision']
+            and decision not in (SKU_DECISION_COLOR_SPLIT, SKU_DECISION_CONTENT_SPLIT)
+        ):
             continue
 
         if not decision:
@@ -7240,7 +8168,8 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             row['skuDecisionNeeded'] = True
             row['reasons'] = list(row.get('reasons') or []) + [
                 f'品番「{code}」の比較で【同じ商品としてまとめる】'
-                f'【色別に分けて登録】【別物のため個別に整理する】【今回は保留する】のいずれかを選んでください。'
+                f'【色別に分けて登録】【内容別に分けて登録】'
+                f'【別物のため個別に整理する】【今回は保留する】のいずれかを選んでください。'
             ]
             continue
 
@@ -7671,6 +8600,156 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             row['specProvenance'] = provenance
             continue
 
+        if decision == SKU_DECISION_CONTENT_SPLIT:
+            split_info = group.get('contentSplitPlans') or {}
+            plans = split_info.get('plans') or []
+            unassigned = {
+                int(u.get('rowNo')): u for u in (split_info.get('unassignedRows') or [])
+            }
+            plan_by_row = {}
+            for plan in plans:
+                for rn in (plan.get('rowNos') or []):
+                    plan_by_row[int(rn)] = plan
+
+            row_no = int(row.get('rowNo') or 0)
+            if row_no in unassigned or row_no not in plan_by_row:
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                why = (unassigned.get(row_no) or {}).get('reason') or (
+                    '内容別登録の行き先が未定です。商品名／加工名を確認してください。'
+                )
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の内容別登録: {why}'
+                ]
+                pending_decision += 1
+                continue
+
+            plan = plan_by_row[row_no]
+            row['contentSplitTargetId'] = stock.text(plan.get('splitTargetId') or '')
+            row['contentSplitContentKey'] = stock.text(plan.get('contentKey') or '')
+            if stock.text(plan.get('kind') or '') == 'process_service':
+                # 加工サービス行の確定は apply_content_split_as_process_service_plans で行う
+                if plan.get('needsFields'):
+                    row['status'] = STATUS_REVIEW
+                    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                    row['canCommit'] = False
+                    row['reasons'] = list(row.get('reasons') or []) + [
+                        f'品番「{code}」の内容別登録（加工サービス）: 加工名と加工業者が必要です。'
+                    ]
+                    pending_decision += 1
+                else:
+                    row['pendingContentSplitProcessService'] = True
+                    row['product'] = dict(row.get('product') or {})
+                    row['product']['category'] = stock.CATEGORY_PROCESS_SERVICE
+                    row['product']['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                    row['product']['code'] = ''
+                    row['product']['codeOverride'] = ''
+                    row['product']['blankSku'] = True
+                    row['product']['officialName'] = stock.text(
+                        plan.get('serviceName') or plan.get('productName') or ''
+                    )
+                    row['product']['applyOfficialName'] = True
+                    row['product']['primarySupplierName'] = stock.text(
+                        plan.get('vendorName') or ''
+                    )
+                    row['product']['processingServiceProduct'] = True
+                    row['product']['contentSplit'] = True
+                    row['product']['makerCode'] = code
+                    row['csv'] = dict(row.get('csv') or {})
+                    row['csv']['makerCode'] = code
+                    row['status'] = STATUS_CREATE
+                    row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
+                    row['canCommit'] = True
+                continue
+
+            if plan.get('needsCollisionChoice') or plan.get('needsInternalCode'):
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+                existing_ids = ', '.join(
+                    str(p['id']) for p in (plan.get('existingProducts') or [])[:5]
+                )
+                row['reasons'] = list(row.get('reasons') or []) + [
+                    f'品番「{code}」の内容「{plan.get("productName") or ""}」の社内管理品番'
+                    f'「{plan.get("internalCode") or "（未設定）"}」を確認してください'
+                    f'（既存 ID {existing_ids or "—"}／衝突時は既存利用か品番編集。'
+                    f'同じ社内品番の重複新規はしません）。'
+                ]
+                pending_decision += 1
+                continue
+
+            internal = stock.text(plan.get('internalCode') or '')
+            pname = stock.text(plan.get('productName') or '') or stock.text(
+                (row.get('csv') or {}).get('productName') or ''
+            )
+            color = stock.text(plan.get('color') or '')
+            keep_id = plan.get('keepProductId')
+            if keep_id and plan.get('collisionAction') in ('', 'reuse'):
+                row['product'] = dict(row.get('product') or {})
+                row['product']['id'] = int(keep_id)
+                row['product']['action'] = 'reuse'
+                row['product']['code'] = internal
+                row['product']['codeOverride'] = internal
+                row['product']['makerCode'] = code
+                row['product']['officialName'] = pname
+                row['product']['officialColor'] = color
+                row['product']['applyOfficialName'] = True
+                row['product']['contentSplit'] = True
+                row['product']['skuMerge'] = False
+                if stock.text(plan.get('material') or ''):
+                    row['product']['material'] = plan.get('material')
+                if stock.text(plan.get('supplier') or ''):
+                    row['product']['primarySupplierName'] = plan.get('supplier')
+                row['csv'] = dict(row.get('csv') or {})
+                row['csv']['makerCode'] = code
+                if row.get('product', {}).get('sizeAction') == 'add':
+                    row['status'] = STATUS_SIZE_ADD
+                    row['statusLabel'] = STATUS_LABELS[STATUS_SIZE_ADD]
+                else:
+                    row['status'] = STATUS_REUSE
+                    row['statusLabel'] = STATUS_LABELS[STATUS_REUSE]
+                row['canCommit'] = True
+            else:
+                row['product'] = dict(row.get('product') or {})
+                row['product']['id'] = None
+                row['product']['action'] = 'create'
+                row['product']['code'] = internal
+                row['product']['codeOverride'] = internal
+                row['product']['makerCode'] = code
+                row['product']['officialName'] = pname
+                row['product']['officialColor'] = color
+                row['product']['applyOfficialName'] = True
+                row['product']['contentSplit'] = True
+                row['product']['skuMerge'] = False
+                if stock.text(plan.get('material') or ''):
+                    row['product']['material'] = plan.get('material')
+                if stock.text(plan.get('supplier') or ''):
+                    row['product']['primarySupplierName'] = plan.get('supplier')
+                row['csv'] = dict(row.get('csv') or {})
+                row['csv']['makerCode'] = code
+                orig = stock.text((row.get('csv') or {}).get('productName') or '')
+                if orig and orig != pname:
+                    row['product']['csvOriginalName'] = orig
+                row['status'] = STATUS_CREATE
+                row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
+                row['canCommit'] = True
+            provenance = dict(row.get('specProvenance') or {})
+            provenance['color'] = color
+            provenance['plannedName'] = pname
+            provenance['material'] = stock.text(plan.get('material') or '')
+            provenance['processing'] = stock.text(plan.get('processing') or '')
+            provenance['originalName'] = stock.text(
+                provenance.get('originalName')
+                or (row.get('csv') or {}).get('productName')
+                or ''
+            )
+            provenance['originalCode'] = code
+            provenance['contentSplitTargetId'] = stock.text(plan.get('splitTargetId') or '')
+            provenance['isMainCandidate'] = True
+            row['specProvenance'] = provenance
+            continue
+
         # 不明な decision
         row['status'] = STATUS_REVIEW
         row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
@@ -8060,15 +9139,20 @@ def build_preview(c, body):
     apply_aux_full_package_adoption(sku_groups, sku_decisions)
     # 色別に分けて登録: 選択を再照合でも保持し、在庫自動まとめ対象外の予定を付与
     attach_color_split_plans(c, sku_groups, sku_decisions, classified=classified)
+    # 内容別に分けて登録: 色別とは独立。件数見積りは常時、予定は選択時
+    attach_content_split_plans(c, sku_groups, sku_decisions, classified=classified)
     # 補助CSV判定後に仮代表名の予定を更新（決定前の画面表示用）
     for g in sku_groups:
         raw = sku_decisions.get(g['code']) or sku_decisions.get(str(g['code'])) or {}
         if not isinstance(raw, dict):
             raw = {}
         is_color_split = stock.text(raw.get('decision')) == SKU_DECISION_COLOR_SPLIT
+        is_content_split = stock.text(raw.get('decision')) == SKU_DECISION_CONTENT_SPLIT
         if is_color_split and g.get('colorSplitPlans'):
             # 色別選択中は統合用 namePlan を有効予定として載せない
             apply_color_split_name_plan_display(g)
+        elif is_content_split and g.get('contentSplitPlans'):
+            apply_content_split_name_plan_display(g)
         else:
             g['namePlan'] = plan_provisional_official_name(g, raw if stock.text(raw.get('decision')) else None)
             # 在庫一意採用時は aux の代表名を優先表示（既存維持は namePlan 側で守る）
@@ -8117,7 +9201,12 @@ def build_preview(c, body):
             ):
                 g['plannedRegisteredName'] = np.get('officialName') or ''
         # 自動まとめ品番は namePlan の代表名を商品計画へ反映（タグは埋め込まない）
-        if g.get('plannedSingleProduct') and g.get('namePlan') and not is_color_split:
+        if (
+            g.get('plannedSingleProduct')
+            and g.get('namePlan')
+            and not is_color_split
+            and not is_content_split
+        ):
             plan = dict(g.get('productPlan') or {})
             if g['plannedOfficialName']:
                 plan['productName'] = g['plannedOfficialName']
@@ -8169,6 +9258,10 @@ def build_preview(c, body):
     processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
     # 個別整理「加工サービスとして整理」は自動分離のあとに適用（編集した加工名・業者を優先）
     processing_split_meta = apply_separate_as_process_service_plans(
+        c, classified, sku_groups, sku_decisions, processing_split_meta,
+    )
+    # 内容別に分けて登録の加工サービス先（ライン／スナッパー等を独立登録）
+    processing_split_meta = apply_content_split_as_process_service_plans(
         c, classified, sku_groups, sku_decisions, processing_split_meta,
     )
     # 手動登録区分は最後に再適用（自動分離・個別整理のあとでも手動が勝つ）
