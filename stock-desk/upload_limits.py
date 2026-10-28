@@ -25,6 +25,7 @@ LARGE_BODY_PATHS = frozenset({
     '/api/product-ledger-csv/maker-lookup',
     '/api/product-ledger-csv/maker-lookup/from-url',
     '/api/product-ledger-csv/maker-lookup/adopt',
+    '/api/product-ledger-csv/maker-lookup/bulk/plan',
     '/api/product-ledger-csv/maker-lookup/bulk/start',
     '/api/product-ledger-csv/maker-lookup/bulk/status',
     '/api/product-ledger-csv/maker-lookup/bulk/cancel',

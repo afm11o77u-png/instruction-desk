@@ -295,6 +295,178 @@ def _bump_counts(counts: dict, status: str) -> None:
         counts['error'] += 1
 
 
+def search_criteria_dict(*, manufacturer: str = '', maker_sku: str = '', position: str = '') -> dict:
+    """検索条件の比較用（品番だけでは再利用しない）。"""
+    return {
+        'manufacturer': stock.text(manufacturer) or '',
+        'makerSku': stock.text(maker_sku) or '',
+        'position': stock.text(position) or '',
+    }
+
+
+def search_criteria_equal(a: dict | None, b: dict | None) -> bool:
+    """メーカー・メーカー品番・上下が一致するか（SKU単独一致では真にしない）。"""
+    left = a if isinstance(a, dict) else {}
+    right = b if isinstance(b, dict) else {}
+    return (
+        msl.sku_match_key(left.get('manufacturer') or '')
+        == msl.sku_match_key(right.get('manufacturer') or '')
+        and msl.sku_match_key(left.get('makerSku') or '')
+        == msl.sku_match_key(right.get('makerSku') or '')
+        and (stock.text(left.get('position') or '') or '')
+        == (stock.text(right.get('position') or '') or '')
+    )
+
+
+def is_fetched_bulk_status(status: str) -> bool:
+    """一括取得で「取得済み」とみなし省略する状態（pending/cancelled は未取得）。"""
+    st = stock.text(status) or ''
+    return bool(st) and st not in ('pending', 'cancelled')
+
+
+def criteria_from_result_row(row: dict | None) -> dict:
+    row = row if isinstance(row, dict) else {}
+    sc = row.get('searchCriteria') if isinstance(row.get('searchCriteria'), dict) else None
+    if sc:
+        return search_criteria_dict(
+            manufacturer=sc.get('manufacturer') or '',
+            maker_sku=sc.get('makerSku') or '',
+            position=sc.get('position') or '',
+        )
+    return search_criteria_dict(
+        manufacturer=row.get('manufacturer') or '',
+        maker_sku=row.get('makerSku') or '',
+        position=row.get('position') or '',
+    )
+
+
+def classify_incremental_bulk_selection(
+    *,
+    selected_codes: list,
+    sku_groups: list,
+    rows: list = None,
+    prior_results: list = None,
+    force_search_keys: list = None,
+) -> dict:
+    """再実行時の新規取得／取得済み省略を分類する。
+
+    - 取得済み（同一メーカー・品番・上下）は省略
+    - 条件が変わった場合は新規取得扱いにし、差分を返す
+    - force_search_keys は明示的「再取得」
+    - pending/cancelled は未取得として再検索対象
+    """
+    prepared = prepare_bulk_lookup_targets(
+        selected_codes=selected_codes,
+        sku_groups=sku_groups,
+        rows=rows,
+        max_targets=10_000,
+    )
+    force = {
+        stock.text(k) for k in (force_search_keys or []) if stock.text(k)
+    }
+    prior = [r for r in (prior_results or []) if isinstance(r, dict)]
+    by_code: dict[str, dict] = {}
+    for row in prior:
+        if not is_fetched_bulk_status(row.get('status') or ''):
+            continue
+        for code in row.get('skuCodes') or []:
+            c = stock.text(code)
+            if c and c not in by_code:
+                by_code[c] = row
+
+    to_fetch_codes: list[str] = []
+    skipped: list[dict] = []
+    criteria_changed: list[dict] = []
+    seen_fetch = set()
+    seen_skip = set()
+
+    for target in prepared['targets']:
+        search_key = stock.text(target.get('searchKey') or '')
+        current_criteria = search_criteria_dict(
+            manufacturer=target.get('manufacturer') or '',
+            maker_sku=target.get('makerSku') or '',
+            position=target.get('position') or '',
+        )
+        for code in target.get('skuCodes') or []:
+            c = stock.text(code)
+            if not c:
+                continue
+            cached = by_code.get(c)
+            forced = bool(search_key and search_key in force)
+            if cached and not forced:
+                prev_criteria = criteria_from_result_row(cached)
+                if search_criteria_equal(current_criteria, prev_criteria):
+                    if c not in seen_skip:
+                        seen_skip.add(c)
+                        skipped.append({
+                            'skuCode': c,
+                            'searchKey': cached.get('searchKey') or search_key,
+                            'status': cached.get('status') or '',
+                            'reason': '取得済みのため省略',
+                        })
+                    continue
+                if c not in seen_fetch:
+                    criteria_changed.append({
+                        'skuCode': c,
+                        'previous': prev_criteria,
+                        'current': current_criteria,
+                        'previousSearchKey': cached.get('searchKey') or '',
+                        'currentSearchKey': search_key,
+                    })
+            if c not in seen_fetch:
+                seen_fetch.add(c)
+                to_fetch_codes.append(c)
+
+    # 上限超過分など targets 外の selected は prepare 側 excluded/limitSkipped に任せる
+    return {
+        'toFetchCodes': to_fetch_codes,
+        'skipped': skipped,
+        'criteriaChanged': criteria_changed,
+        'newFetchCount': len(to_fetch_codes),
+        'skippedCachedCount': len(skipped),
+        'preflightLabel': (
+            f'新規取得{len(to_fetch_codes)}件／取得済みのため省略{len(skipped)}件'
+        ),
+        'excluded': prepared['excluded'],
+        'excludedCount': prepared['excludedCount'],
+    }
+
+
+def merge_bulk_result_rows(
+    prior_results: list,
+    new_results: list,
+    *,
+    replace_sku_codes: list = None,
+) -> list:
+    """結果一覧を追記・更新（同一 searchKey は重複させない）。"""
+    replace_codes = {
+        stock.text(c) for c in (replace_sku_codes or []) if stock.text(c)
+    }
+    new_rows = [r for r in (new_results or []) if isinstance(r, dict)]
+    new_keys = {stock.text(r.get('searchKey') or '') for r in new_rows}
+    new_keys.discard('')
+    kept = []
+    for row in prior_results or []:
+        if not isinstance(row, dict):
+            continue
+        key = stock.text(row.get('searchKey') or '')
+        if key and key in new_keys:
+            continue
+        codes = [stock.text(c) for c in (row.get('skuCodes') or [])]
+        if replace_codes and any(c in replace_codes for c in codes if c):
+            continue
+        kept.append(row)
+    return kept + new_rows
+
+
+def recount_bulk_result_counts(results: list) -> dict:
+    counts = _empty_counts()
+    for row in results or []:
+        if isinstance(row, dict):
+            _bump_counts(counts, stock.text(row.get('status') or 'error') or 'error')
+    return counts
+
+
 def _result_row_from_search(*, target: dict, search_result: dict, status_override: str = '') -> dict:
     status = status_override or stock.text(search_result.get('status') or 'error') or 'error'
     label = (
@@ -303,16 +475,22 @@ def _result_row_from_search(*, target: dict, search_result: dict, status_overrid
         or status
     )
     cands = list(search_result.get('candidates') or [])
+    manufacturer = (
+        search_result.get('manufacturer')
+        or target.get('manufacturer')
+        or ''
+    )
+    maker_sku = target.get('makerSku') or search_result.get('makerSku') or ''
+    position = target.get('position') or ''
     return {
         'searchKey': target.get('searchKey') or '',
         'skuCodes': list(target.get('skuCodes') or []),
         'rowNosBySku': dict(target.get('rowNosBySku') or {}),
-        'makerSku': target.get('makerSku') or search_result.get('makerSku') or '',
-        'position': target.get('position') or '',
-        'manufacturer': (
-            search_result.get('manufacturer')
-            or target.get('manufacturer')
-            or ''
+        'makerSku': maker_sku,
+        'position': position,
+        'manufacturer': manufacturer,
+        'searchCriteria': search_criteria_dict(
+            manufacturer=manufacturer, maker_sku=maker_sku, position=position,
         ),
         'supplier': target.get('supplier') or '',
         'currentName': target.get('currentName') or '',
