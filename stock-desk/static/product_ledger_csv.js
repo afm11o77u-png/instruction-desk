@@ -2922,6 +2922,7 @@
           ${panel.manufacturer?`　メーカー ${esc(panel.manufacturer)}`:''}
           ${panel.supplier?`　仕入先（検索キー外） ${esc(panel.supplier)}`:''}
         </span>
+        <button type="button" class="quiet" id="plMakerViewResults" ${st.busy?'disabled':''}>結果を見る</button>
         <button type="button" class="quiet" id="plMakerLookupClose" ${st.busy?'disabled':''}>閉じる</button>
       </div>
       <p>状態: <strong>${status}</strong>${searching?' <span class="sub">メーカーページを検索しています…</span>':''}${res.fromUrl?' <span class="sub">（URL指定）</span>':''}</p>
@@ -2944,6 +2945,10 @@
     return `<tr class="sku-maker-lookup-row" data-sku-maker-lookup="${esc(code)}"><td colspan="${colspan}">${makerLookupPanelHtml(st,{forSkuCode:code})}</td></tr>`
   }
 
+  /**
+   * メーカー結果パネルへスクロール（ユーザーが「結果を見る」を押したときだけ）。
+   * 取得開始・完了・候補更新では自動呼び出ししない。
+   */
   function scrollMakerLookupIntoView(){
     const dlg=document.getElementById('productLedgerCsvDialog')||document.querySelector('dialog.product-ledger-csv-dialog')||document.getElementById('dialog')
     const root=dlg||document
@@ -2951,6 +2956,13 @@
     if(el&&typeof el.scrollIntoView==='function'){
       try{el.scrollIntoView({block:'nearest',inline:'nearest'})}catch(_){el.scrollIntoView(false)}
     }
+  }
+
+  function bindMakerViewResultsButtons(){
+    const bulkView=document.getElementById('plBulkMakerViewResults')
+    if(bulkView)bulkView.onclick=()=>scrollMakerLookupIntoView()
+    const singleView=document.getElementById('plMakerViewResults')
+    if(singleView)singleView.onclick=()=>scrollMakerLookupIntoView()
   }
 
   function stopBulkMakerPoll(st){
@@ -3154,6 +3166,7 @@
   /** 一括メーカーパネル内の操作（候補チェック・採用・中止・URL取得）。 */
   function bindBulkMakerPanelHandlers(){
     const st=ensureState()
+    bindMakerViewResultsButtons()
     const bulkMakerCancel=$('#plBulkMakerCancel')
     if(bulkMakerCancel)bulkMakerCancel.onclick=()=>cancelBulkMakerLookup(st)
     const bulkMakerClose=$('#plBulkMakerClose')
@@ -3380,6 +3393,7 @@
         <strong>選択した商品のメーカー情報</strong>
         <span class="sub" id="plBulkMakerProgress">${esc(progressLine)}</span>
         ${running?`<button type="button" class="quiet" id="plBulkMakerCancel">中止</button>`:''}
+        <button type="button" class="quiet" id="plBulkMakerViewResults">結果を見る</button>
         ${panel.finished?`<button type="button" class="quiet" id="plBulkMakerClose">結果を閉じる</button>`:''}
       </div>
       <p class="excelhint" id="plBulkMakerCounts">${esc(countLine)}</p>
@@ -3435,7 +3449,8 @@
       adoptSelected,
       adoptedCount:(prev&&prev.adoptedCount)||0,
       urlInputs:(prev&&prev.urlInputs)||{},
-      urlFetchErrors:(prev&&prev.urlFetchErrors)||{}
+      urlFetchErrors:(prev&&prev.urlFetchErrors)||{},
+      _completionToasted:(prev&&prev._completionToasted)||false
     }
   }
 
@@ -3477,8 +3492,8 @@
       counts:{},results:[],excluded:[],adoptSelected:{},adoptedCount:0,
       excludedCount:excludedHint,maxTargets:40,delaySec:0.8
     }
+    // 自動スクロールしない。開始は toast／進捗テキストのみ（「結果を見る」は任意）。
     paintDialog()
-    scrollMakerLookupIntoView()
     try{
       const job=await st.api('/api/product-ledger-csv/maker-lookup/bulk/start',{
         selectedCodes:codes,
@@ -3487,12 +3502,16 @@
       })
       mergeBulkMakerJobIntoState(st,job,st.bulkMakerLookup)
       if(job.excludedCount){
-        st.toast(`対象外 ${job.excludedCount} 件を除外し、ユニーク検索 ${job.uniqueSearchCount||0} 件を開始しました`)
+        st.toast(`対象外 ${job.excludedCount} 件を除外し、ユニーク検索 ${job.uniqueSearchCount||0} 件を開始しました。必要なら「結果を見る」でパネルへ移動できます。`)
       }else{
-        st.toast(`メーカー情報の一括取得を開始（ユニーク検索 ${job.uniqueSearchCount||0} 件）`)
+        st.toast(`メーカー情報の一括取得を開始（ユニーク検索 ${job.uniqueSearchCount||0} 件）。必要なら「結果を見る」でパネルへ移動できます。`)
       }
       if(!job.finished)startBulkMakerPoll(st)
-      else stopBulkMakerPoll(st)
+      else{
+        stopBulkMakerPoll(st)
+        if(st.bulkMakerLookup)st.bulkMakerLookup._completionToasted=true
+        st.toast('メーカー情報の一括取得が完了しました。必要なら「結果を見る」でパネルへ移動できます。')
+      }
     }catch(e){
       st.bulkMakerLookup=Object.assign({},st.bulkMakerLookup,{
         running:false,finished:true,error:apiErrorMessage(e,'一括取得を開始できませんでした。')
@@ -3502,7 +3521,6 @@
     }finally{
       st.busy=false
       paintDialog()
-      scrollMakerLookupIntoView()
     }
   }
 
@@ -3528,7 +3546,14 @@
       }else{
         refreshBulkMakerPanelUi(st)
       }
-      if(job.finished)stopBulkMakerPoll(st)
+      if(job.finished){
+        stopBulkMakerPoll(st)
+        // 完了は toast／進捗のみ。自動スクロールしない。
+        if(st.bulkMakerLookup&&!st.bulkMakerLookup._completionToasted){
+          st.bulkMakerLookup._completionToasted=true
+          st.toast('メーカー情報の一括取得が完了しました。必要なら「結果を見る」でパネルへ移動できます。')
+        }
+      }
     }catch(e){
       // 一時失敗は次の poll で再試行
       if(panel.running){
@@ -3932,29 +3957,86 @@
     return {top:el?el.scrollTop:0,left:el?el.scrollLeft:0}
   }
 
+  /** 内容が短くなったときもはみ出さないようクランプして復元 */
   function applyScrollPos(el,pos){
     if(!el||!pos)return
-    el.scrollTop=pos.top||0
-    el.scrollLeft=pos.left||0
+    const maxTop=Math.max(0,(el.scrollHeight||0)-(el.clientHeight||0))
+    const maxLeft=Math.max(0,(el.scrollWidth||0)-(el.clientWidth||0))
+    const top=Math.min(Math.max(0,pos.top||0),maxTop)
+    const left=Math.min(Math.max(0,pos.left||0),maxLeft)
+    el.scrollTop=top
+    el.scrollLeft=left
   }
 
   function ledgerBodyEl(dlg){
     return dlg?dlg.querySelector('.legacy-csv-detail-body'):null
   }
 
-  /** 縦スクロール本体（モーダル）内で見えている先頭 SKU と相対位置 */
+  /** フォーカス復元用キー（preventScroll とセットで使う） */
+  function captureFocusKey(dlg){
+    const el=typeof document!=='undefined'?document.activeElement:null
+    if(!el||!dlg||(typeof dlg.contains==='function'&&!dlg.contains(el)))return null
+    if(el.id)return {type:'id',value:el.id}
+    const attrs=[
+      'data-pl-sku-check','data-pl-bulk-maker-pick','data-pl-unified-expand',
+      'data-pl-sku-expand','data-pl-confirmed-expand','data-pl-sku-dec',
+      'data-pl-maker-url-input','data-pl-official-name-edit','data-pl-official-color'
+    ]
+    for(let i=0;i<attrs.length;i++){
+      const a=attrs[i]
+      const v=el.getAttribute&&el.getAttribute(a)
+      if(v!=null&&v!=='')return {type:'attr',attr:a,value:v}
+    }
+    return null
+  }
+
+  function restoreFocusKey(dlg,key){
+    if(!key||!dlg)return
+    let el=null
+    if(key.type==='id')el=document.getElementById(key.value)
+    else if(key.type==='attr'&&key.attr){
+      el=dlg.querySelector(`[${key.attr}="${CSS.escape(String(key.value))}"]`)
+    }
+    if(el&&typeof el.focus==='function'){
+      try{el.focus({preventScroll:true})}catch(_){try{el.focus()}catch(__){}}
+    }
+  }
+
+  // 連続 paint 時に古い復元が後から走らないよう、共有ポリシーは1系統だけ
+  let _ledgerScrollRestoreToken=0
+
+  /**
+   * 共有スクロール維持ポリシー（外枠・内側一覧・メーカー候補の V/H）。
+   * 操作行への追従・先頭ジャンプはしない。最新の1回だけ適用。
+   */
+  function scheduleLedgerScrollRestore(dlg,saved,opts,focusKey){
+    if(!saved&&!focusKey)return
+    const token=++_ledgerScrollRestoreToken
+    const apply=()=>{
+      if(token!==_ledgerScrollRestoreToken){
+        scrollLog('restore-superseded',token,_ledgerScrollRestoreToken)
+        return
+      }
+      if(saved)restoreLedgerScroll(dlg,saved,opts||{})
+      if(focusKey)restoreFocusKey(dlg,focusKey)
+    }
+    // 1系統のみ。連続 paint は token で古い復元を捨てる（二重 restore を積まない）。
+    apply()
+  }
+
+  /** 縦スクロール本体（モーダル）内で見えている先頭行と相対位置（追従用ではなく復元用） */
   function captureVisibleSkuAnchor(dlg){
     const body=ledgerBodyEl(dlg)
     if(!body)return null
     const br=body.getBoundingClientRect()
-    const rows=dlg.querySelectorAll('tr.sku-list-row[data-sku-code]')
+    const rows=dlg.querySelectorAll('tr.sku-list-row[data-sku-code],tr.sku-list-row[data-unified-id]')
     for(let i=0;i<rows.length;i++){
       const row=rows[i]
       const rr=row.getBoundingClientRect()
       if(rr.bottom<=br.top+4)continue
       if(rr.top>=br.bottom-4)break
       return {
-        code:row.getAttribute('data-sku-code')||'',
+        code:row.getAttribute('data-sku-code')||row.getAttribute('data-unified-id')||'',
         offset:rr.top-br.top,
         section:row.getAttribute('data-sku-section')||''
       }
@@ -4074,11 +4156,15 @@
     })()
   }
 
-  /** paintDialog の innerHTML 全描画で消えるスクロールを退避する */
+  /** paintDialog の innerHTML 全描画で消えるスクロールを退避する（外枠・内側・メーカー候補の V/H） */
   function captureLedgerScroll(dlg){
     const wraps={}
     dlg.querySelectorAll('.sku-compare-wrap').forEach((el,i)=>{
       wraps[el.closest('[data-sku-section-block]')?.getAttribute('data-sku-section-block')||`wrap${i}`]=readScrollPos(el)
+    })
+    const tables={}
+    dlg.querySelectorAll('.legacy-csv-table-wrap').forEach((el,i)=>{
+      tables[el.closest('[data-sku-section-block]')?.getAttribute('data-sku-section-block')||`table${i}`]=readScrollPos(el)
     })
     const body=ledgerBodyEl(dlg)
     const visibleAnchor=captureVisibleSkuAnchor(dlg)
@@ -4088,6 +4174,7 @@
       wraps,
       sections:readScrollPos(dlg.querySelector('.sku-judgment-sections')),
       table:readScrollPos(dlg.querySelector('.legacy-csv-table-wrap')),
+      tables,
       makerResults:readScrollPos(dlg.querySelector('.pl-bulk-maker-results-wrap')),
       visibleAnchor
     }
@@ -4096,22 +4183,29 @@
   }
 
   /**
-   * 操作した品番行をモーダル縦スクロール内の同じ相対位置へ。
+   * 表示中だった行を同じ相対オフセットへ（ビューポート維持用）。
+   * section 指定時はその区分内だけ探す（確認済みへ移った行を追わない）。
    * 縦の主スクローラーは .legacy-csv-detail-body（一覧 wrap は横専用）。
    */
   function ensureSkuRowInView(dlg,code,opts){
     opts=opts||{}
     if(!code)return false
     const key=CSS.escape(String(code))
-    // 統合リストの加工・品番なし等は data-unified-id、品番行は data-sku-code
-    const row=dlg.querySelector(`tr.sku-list-row[data-sku-code="${key}"]`)
-      ||dlg.querySelector(`tr.sku-list-row[data-unified-id="${key}"]`)
+    const sec=opts.section!=null&&opts.section!==''?CSS.escape(String(opts.section)):''
+    let row=null
+    if(sec){
+      // 同じ区分に残っているときだけ。別区分（確認済み等）への chase はしない。
+      row=dlg.querySelector(`tr.sku-list-row[data-sku-section="${sec}"][data-sku-code="${key}"]`)
+        ||dlg.querySelector(`tr.sku-list-row[data-sku-section="${sec}"][data-unified-id="${key}"]`)
+    }else{
+      row=dlg.querySelector(`tr.sku-list-row[data-sku-code="${key}"]`)
+        ||dlg.querySelector(`tr.sku-list-row[data-unified-id="${key}"]`)
+    }
     if(!row){
-      scrollLog('anchor-missing',code)
+      scrollLog('anchor-missing',code,opts.section||'')
       return false
     }
     const body=ledgerBodyEl(dlg)
-    const wrap=row.closest('.sku-compare-wrap')
     if(body){
       const br=body.getBoundingClientRect()
       const rr=row.getBoundingClientRect()
@@ -4119,16 +4213,11 @@
       const delta=rr.top-br.top-preferred
       if(Math.abs(delta)>2)body.scrollTop+=delta
     }
-    if(wrap){
-      const wr=wrap.getBoundingClientRect()
-      const rr=row.getBoundingClientRect()
-      if(rr.left<wr.left+4)wrap.scrollLeft-=(wr.left-rr.left)+8
-      else if(rr.right>wr.right-4)wrap.scrollLeft+=(rr.right-wr.right)+8
-    }
+    // 横は capture/restore の scrollLeft で維持。ここでは chase しない。
     return true
   }
 
-  /** 操作行が区分移動で消えたとき、同区分の近傍行を同じオフセットへ */
+  /** 表示行が区分移動・削除で消えたとき、同区分→全体の近傍行を同じオフセットへ */
   function restoreNearbySkuInView(dlg,saved,movedCode){
     if(!saved||!saved.visibleAnchor)return
     const body=ledgerBodyEl(dlg)
@@ -4137,22 +4226,37 @@
     const offset=saved.visibleAnchor.offset
     const sel=sec
       ?`tr.sku-list-row[data-sku-section="${CSS.escape(sec)}"]`
-      :'tr.sku-list-row[data-sku-code]'
-    const rows=[].slice.call(dlg.querySelectorAll(sel))
-    if(!rows.length)return
+      :'tr.sku-list-row[data-sku-code],tr.sku-list-row[data-unified-id]'
+    let rows=[].slice.call(dlg.querySelectorAll(sel))
+    if(!rows.length){
+      rows=[].slice.call(dlg.querySelectorAll('tr.sku-list-row[data-sku-code],tr.sku-list-row[data-unified-id]'))
+    }
+    if(!rows.length){
+      // 行が無く内容が短いときは退避位置をクランプするだけ
+      if(saved.body)applyScrollPos(body,saved.body)
+      return
+    }
     const br=body.getBoundingClientRect()
     let best=null
     let bestDist=Infinity
     rows.forEach(r=>{
-      const c=r.getAttribute('data-sku-code')
+      const c=r.getAttribute('data-sku-code')||r.getAttribute('data-unified-id')
       if(movedCode&&c===movedCode)return
       const dist=Math.abs((r.getBoundingClientRect().top-br.top)-(offset!=null?offset:80))
       if(dist<bestDist){bestDist=dist;best=r}
     })
     const pick=best||rows[0]
-    if(pick)ensureSkuRowInView(dlg,pick.getAttribute('data-sku-code'),{offset})
+    if(pick){
+      const pickCode=pick.getAttribute('data-sku-code')||pick.getAttribute('data-unified-id')
+      const pickSec=pick.getAttribute('data-sku-section')||''
+      ensureSkuRowInView(dlg,pickCode,{offset,section:pickSec})
+    }
   }
 
+  /**
+   * 共有スクロール復元。操作行（opts.anchorCode）への追従はしない。
+   * ビューに見えていた行＋各スクロール領域の V/H のみ復元。
+   */
   function restoreLedgerScroll(dlg,saved,opts){
     if(!saved)return
     opts=opts||{}
@@ -4185,34 +4289,42 @@
         if(w&&saved.wrap)applyScrollPos(w,{top:0,left:saved.wrap.left||0})
       }
     }
-    const table=dlg.querySelector('.legacy-csv-table-wrap')
+    const tableEls=dlg.querySelectorAll('.legacy-csv-table-wrap')
     if(opts.resetTableScroll){
-      if(table){table.scrollTop=0;table.scrollLeft=0}
+      tableEls.forEach(table=>{table.scrollTop=0;table.scrollLeft=0})
+    }else if(saved.tables){
+      tableEls.forEach((el,i)=>{
+        const key=el.closest('[data-sku-section-block]')?.getAttribute('data-sku-section-block')||`table${i}`
+        applyScrollPos(el,saved.tables[key]||saved.table)
+      })
     }else{
-      applyScrollPos(table,saved.table)
+      applyScrollPos(dlg.querySelector('.legacy-csv-table-wrap'),saved.table)
     }
     // メーカー候補リスト（内側スクロール）の縦横も復元
     if(!opts.resetListScroll){
       applyScrollPos(dlg.querySelector('.pl-bulk-maker-results-wrap'),saved.makerResults)
     }
-    if(!opts.resetListScroll){
-      const anchorCode=opts.anchorCode||(saved.visibleAnchor&&saved.visibleAnchor.code)||''
-      const offset=saved.visibleAnchor?saved.visibleAnchor.offset:undefined
-      if(anchorCode){
-        if(!ensureSkuRowInView(dlg,anchorCode,{offset})){
-          restoreNearbySkuInView(dlg,saved,anchorCode)
+    // 操作行 chase 禁止。見えていた区分の行だけ維持。区分移動（確認済み等）なら近傍。
+    if(!opts.resetListScroll&&saved.visibleAnchor){
+      const viewCode=saved.visibleAnchor.code||''
+      const viewSec=saved.visibleAnchor.section||''
+      const offset=saved.visibleAnchor.offset
+      if(viewCode){
+        if(!ensureSkuRowInView(dlg,viewCode,{offset,section:viewSec})){
+          restoreNearbySkuInView(dlg,saved,viewCode)
         }
-      }else if(saved.visibleAnchor){
+      }else{
         restoreNearbySkuInView(dlg,saved,'')
       }
     }
-    scrollLog('restore',{opts,body:readScrollPos(body),anchor:opts.anchorCode||(saved.visibleAnchor&&saved.visibleAnchor.code)})
+    scrollLog('restore',{opts,body:readScrollPos(body),anchor:saved.visibleAnchor&&saved.visibleAnchor.code})
   }
 
   /**
-   * @param {{preserveScroll?:boolean,resetListScroll?:boolean,resetTableScroll?:boolean,anchorCode?:string}} [opts]
+   * @param {{preserveScroll?:boolean,resetListScroll?:boolean,resetTableScroll?:boolean}} [opts]
    * preserveScroll 既定 true（初回描画・明示 false 以外は V/H を復元）。
    * ページ切替・検索変更時は resetListScroll / resetTableScroll で一覧だけ先頭へ。
+   * 操作行への scroll chase（旧 anchorCode）は行わない。
    */
   function paintDialog(opts){
     opts=opts||{}
@@ -4221,6 +4333,7 @@
     if(!dlg||!st.open)return
     const hadBody=!!dlg.querySelector('.legacy-csv-detail-body')
     const saved=(opts.preserveScroll!==false&&hadBody)?captureLedgerScroll(dlg):null
+    const focusKey=(opts.preserveScroll!==false&&hadBody)?captureFocusKey(dlg):null
     const review=(st.preview&&st.preview.reviewCount)||0
     const skuPending=(st.preview&&st.preview.skuDecisionPending)||0
     const statusCounts=st.preview?judgmentStatusCounts(st):null
@@ -4281,9 +4394,10 @@
       </div>`
     if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
     bindDialog()
-    restoreLedgerScroll(dlg,saved,opts)
-    // Preview errors sit under「読み込み・照合」; ensure they are not left below the fold.
-    if(st.previewError){
+    // 共有ポリシー1回のみ（操作行 chase / メーカー自動 scroll はしない）
+    scheduleLedgerScrollRestore(dlg,saved,opts,focusKey)
+    // 読み込み失敗メッセージは先頭へ戻す描画（preserveScroll:false）のときだけ見える位置へ。
+    if(st.previewError&&!saved){
       const errEl=dlg.querySelector('.product-ledger-import-error')
       if(errEl&&typeof errEl.scrollIntoView==='function'){
         try{errEl.scrollIntoView({block:'nearest',inline:'nearest'})}catch(_){errEl.scrollIntoView(false)}
@@ -4480,12 +4594,10 @@
       previewOpts=previewOpts&&typeof previewOpts==='object'?previewOpts:{}
       // 既にプレビュー表示中の再照合はスクロール維持。初回照合のみ先頭へ。
       const keepScroll=!!st.preview
-      const anchorCode=previewOpts.anchorCode||''
       const reqId=(st.previewReqSeq=(st.previewReqSeq||0)+1)
       const paintPreview=(extra)=>{
         const o=Object.assign({},extra||{})
         if(!keepScroll)o.preserveScroll=false
-        if(anchorCode&&o.anchorCode==null)o.anchorCode=anchorCode
         paintDialog(o)
       }
       if(isOpeningMode(st)){
@@ -4671,7 +4783,7 @@
         const id=el.getAttribute('data-pl-unified-expand')
         if(!st.expandedUnified)st.expandedUnified={}
         st.expandedUnified[id]=!st.expandedUnified[id]
-        paintDialog({anchorCode:id})
+        paintDialog()
       }
     })
     document.querySelectorAll('[data-pl-section-page]').forEach(el=>{
@@ -4768,7 +4880,7 @@
       el.onclick=()=>{
         const code=el.getAttribute('data-pl-sku-expand')
         st.expandedCodes[code]=!st.expandedCodes[code]
-        paintDialog({anchorCode:code})
+        paintDialog()
       }
     })
     document.querySelectorAll('[data-pl-confirmed-expand]').forEach(el=>{
@@ -4776,7 +4888,7 @@
         const code=el.getAttribute('data-pl-confirmed-expand')
         if(!st.expandedConfirmed)st.expandedConfirmed={}
         st.expandedConfirmed[code]=!st.expandedConfirmed[code]
-        paintDialog({anchorCode:code})
+        paintDialog()
       }
     })
     document.querySelectorAll('[data-pl-confirmed-change]').forEach(el=>{
@@ -4787,7 +4899,7 @@
         if(!st.sectionOpen)st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
         st.sectionOpen.confirmed=true
         st.toast('詳細で対応を選び直せます。必須が揃うまで確認リストへ戻ります。')
-        paintDialog({anchorCode:code})
+        paintDialog()
       }
     })
 
@@ -4822,8 +4934,8 @@
               :'個別に整理を選択しました【反映待ち】。確認済み一覧へ移しました。再照合で登録予定へ反映します。')
           }
         }
-        // 軽いUI更新のみ（サーバ再照合・全画面データ再生成はしない）。スクロール位置は維持。
-        paintDialog({anchorCode:code})
+        // 軽いUI更新のみ。確認済み移動でも操作行 chase せず、ビューポートを維持。
+        paintDialog()
       }
     })
     document.querySelectorAll('[data-pl-keep]').forEach(el=>{
@@ -4946,7 +5058,6 @@
           statusLabel:'検索中…',result:null,error:'',urlInput:'',urlFetchError:''
         }
         paintDialog()
-        scrollMakerLookupIntoView()
         try{
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
@@ -4961,6 +5072,7 @@
             currentSku:result.plannedRegisteredSku||currentSku,
             statusLabel:result.statusLabel||result.status||'',error:''
           })
+          st.toast('メーカー情報の取得が完了しました。必要なら「結果を見る」でパネルへ移動できます。')
         }catch(e){
           st.makerLookup=Object.assign({},st.makerLookup,{
             result:{status:'fetch_failed',statusLabel:'検索結果取得不可',candidates:[],
@@ -4968,10 +5080,10 @@
             statusLabel:'検索結果取得不可',
             error:apiErrorMessage(e,'メーカー情報を取得できませんでした。')
           })
+          st.toast(apiErrorMessage(e,'メーカー情報を取得できませんでした。'),6000)
         }finally{
           st.busy=false
           paintDialog()
-          scrollMakerLookupIntoView()
         }
       }
     })
@@ -5001,7 +5113,6 @@
           statusLabel:'検索中…',result:null,error:'',urlInput:'',urlFetchError:''
         }
         paintDialog()
-        scrollMakerLookupIntoView()
         try{
           const result=await st.api('/api/product-ledger-csv/maker-lookup',{
             manufacturer:mk.manufacturer||'',
@@ -5016,6 +5127,7 @@
             currentSku:result.plannedRegisteredSku||currentSku,
             statusLabel:result.statusLabel||result.status||'',error:''
           })
+          st.toast('メーカー情報の取得が完了しました。必要なら「結果を見る」でパネルへ移動できます。')
         }catch(e){
           st.makerLookup=Object.assign({},st.makerLookup,{
             result:{status:'fetch_failed',statusLabel:'検索結果取得不可',candidates:[],
@@ -5023,13 +5135,14 @@
             statusLabel:'検索結果取得不可',
             error:apiErrorMessage(e,'メーカー情報を取得できませんでした。')
           })
+          st.toast(apiErrorMessage(e,'メーカー情報を取得できませんでした。'),6000)
         }finally{
           st.busy=false
           paintDialog()
-          scrollMakerLookupIntoView()
         }
       }
     })
+    bindMakerViewResultsButtons()
     const makerClose=$('#plMakerLookupClose')
     if(makerClose)makerClose.onclick=()=>{st.makerLookup=null;paintDialog()}
     const makerUrlInput=$('#plMakerUrlInput')
@@ -5053,7 +5166,6 @@
         panel.urlFetchError=''
         panel.statusLabel='URLから取得中…'
         paintDialog()
-        scrollMakerLookupIntoView()
         try{
           const result=await fetchMakerFromUrlForPanel(st,panel,url)
           const adoptable=(result.candidates||[]).some(c=>c&&c.name)
@@ -5076,7 +5188,6 @@
         }finally{
           st.busy=false
           paintDialog()
-          scrollMakerLookupIntoView()
         }
       }
     }
@@ -5217,7 +5328,7 @@
           procName=((inp&&inp.value)||'').trim()
           if(!procName){
             st.toast('自動除外を戻すには加工名を入力してください。')
-            if(inp&&typeof inp.focus==='function')inp.focus()
+            if(inp&&typeof inp.focus==='function'){try{inp.focus({preventScroll:true})}catch(_){try{inp.focus()}catch(__){}}}
             return
           }
         }
@@ -5375,6 +5486,12 @@
       bulkMakerProgressLine,
       bulkMakerCountLine,
       patchBulkMakerProgressTexts,
+      scrollMakerLookupIntoView,
+      scheduleLedgerScrollRestore,
+      captureLedgerScroll,
+      restoreLedgerScroll,
+      applyScrollPos,
+      readScrollPos,
       ensureState,
       stableRowKeyFromCsv,
       stableRowKeyFromRow,

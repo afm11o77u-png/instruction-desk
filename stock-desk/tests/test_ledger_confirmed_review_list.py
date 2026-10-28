@@ -190,8 +190,9 @@ class ConfirmedReviewListSourceTest(unittest.TestCase):
         self.assertNotIn('個別整理済み（未登録）', js)
         # 自動決定は確認済みに含めないコメント
         self.assertIn('自動決定は含めない', js)
-        # スクロール維持（方針移動で resetListScroll を付けない）
-        self.assertIn('軽いUI更新のみ（サーバ再照合・全画面データ再生成はしない）。スクロール位置は維持。', js)
+        # スクロール維持（方針移動で resetListScroll／操作行 chase を付けない）
+        self.assertIn('確認済み移動でも操作行 chase せず、ビューポートを維持', js)
+        self.assertNotIn('paintDialog({anchorCode:', js)
 
 
 class ConfirmedReviewListLogicTest(unittest.TestCase):
