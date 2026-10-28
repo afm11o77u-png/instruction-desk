@@ -682,8 +682,8 @@
       <tr class="bihin-count-meta">
         <th colspan="5">
           <div class="bihin-count-meta-row">
-            <span>棚卸日：　　年　　月　　日</span>
-            <span>記入者：</span>
+            <span class="bihin-count-date">棚卸日：　　　年　　月　　日</span>
+            <span class="bihin-count-writer">記入者：<span class="bihin-count-writer-line" aria-hidden="true"></span></span>
           </div>
         </th>
       </tr>
