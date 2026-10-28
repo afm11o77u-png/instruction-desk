@@ -27,7 +27,6 @@ class DeskNavGroupsTest(unittest.TestCase):
             ('現場の作業・出荷', ['現場の作業一覧', 'ピッキングリスト', '出荷仕分け']),
             ('管理担当持込', ['入力', '出力']),
             ('印刷', ['宛名書き・管理票印刷']),
-            ('設定・管理', ['利用者管理', '管理・修正']),
         ]
         pos = 0
         for caption, items in expected:
@@ -41,8 +40,16 @@ class DeskNavGroupsTest(unittest.TestCase):
         self.assertIn('data-view="labels"', nav)
         self.assertIn('>宛名書き・管理票印刷<', nav)
         self.assertNotIn('>宛名書き<', nav)
-        self.assertIn('id="manageusers"', nav)
-        self.assertIn('id="repair-open"', nav)
+        # 利用者管理・管理・修正は区切り線下の desksettings（desknav外）
+        self.assertNotIn('id="manageusers"', nav)
+        self.assertNotIn('id="repair-open"', nav)
+        self.assertNotIn('設定・管理', nav)
+        aside = INDEX[INDEX.index('<aside>'):INDEX.index('</aside>')]
+        footer = aside[aside.index('id="sidebarfooter"'):]
+        self.assertIn('id="desksettings"', footer)
+        self.assertIn('id="manageusers"', footer)
+        self.assertIn('id="repair-open"', footer)
+        self.assertLess(footer.index('manageusers'), footer.index('repair-open'))
         self.assertNotIn('管理担当者の処理', nav)
         self.assertNotIn('管理担当持込(入力)', nav)
         self.assertNotIn('管理担当持込(出力)', nav)
@@ -76,17 +83,25 @@ class DeskNavGroupsTest(unittest.TestCase):
     def test_settings_stay_permissioned(self):
         self.assertIn("manageNav.hidden=!(currentUser.manage||role==='owner')", ACCOUNT)
         self.assertIn("repairNav.hidden=role!=='owner'", ACCOUNT)
-        self.assertIn('data-catalog="kintai"', INDEX)
-        self.assertIn('id="modekintai"', INDEX)
+        self.assertNotIn('id="modekintai"', INDEX)
+        self.assertNotIn('>勤怠管理<', INDEX)
+        self.assertNotIn('data-catalog="kintai"', INDEX.split('id="modes"')[1].split('id="desknav"')[0])
         self.assertIn('id="kintainav"', INDEX)
         self.assertNotIn('kintai-open', INDEX)
         self.assertIn('mark_kintai', ACCOUNT)
-        self.assertIn('data-catalog="kintai"', ACCOUNT)
+        self.assertIn('id="markmanage"', ACCOUNT)
+        self.assertIn("showCatalog('kintai')", ACCOUNT)
         self.assertIn("openAccounts()", ACCOUNT)
         self.assertIn("openRepair()", ACCOUNT)
-        # ログイン欄からは業務メニューへ移した
+        # ログイン欄からは業務メニューへ移した（利用者管理・管理・修正は desksettings のまま）
         self.assertNotIn('利用者管理</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
         self.assertNotIn('管理・修正</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
+        # マーク管理はログイン者ブロック内（氏名・権限の次、パスワード変更の前）
+        bar = ACCOUNT.split('block.innerHTML')[1].split('`;')[0]
+        self.assertIn('>マーク管理<', bar)
+        self.assertLess(bar.index('markmanage'), bar.index('mypassword'))
+        self.assertLess(bar.index('currentUser.name'), bar.index('markmanage'))
+        self.assertIn("role==='owner'||!!currentUser.mark_kintai", ACCOUNT)
         # navrow 内のボタンも空グループ判定に含める
         self.assertIn("g.querySelectorAll('.nav')", ACCOUNT)
         self.assertNotIn(":scope > .nav", ACCOUNT)

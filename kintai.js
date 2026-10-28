@@ -1,4 +1,4 @@
-/* 勤怠管理（マーク）画面。権限は currentUser.mark_kintai（主管理者は常に可）。 */
+/* マーク管理画面。権限は currentUser.mark_kintai（主管理者は常に可）。 */
 (function () {
   const EMP = { regular: '社員', contract: '契約', part: 'パート' };
   let pack = null;
@@ -415,7 +415,7 @@
   }
 
   async function importKintai() {
-    if (!canKintai()) throw Error('勤怠管理（マーク）の権限がありません。');
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
     if (fileInputUnsaved()) {
       const go = confirm('読取元ファイルの入力が未保存です。未保存のパスは取込に使われません。このまま続けますか？');
       if (!go) return;
@@ -533,7 +533,7 @@
   }
 
   async function probeFile() {
-    if (!canKintai()) throw Error('勤怠管理（マーク）の権限がありません。');
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
     const personEl = $('#kintaifileperson');
     const personId = personEl ? Number(personEl.value) : 0;
     if (!personId) throw Error('対象者を選んでください。');

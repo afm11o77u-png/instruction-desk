@@ -351,7 +351,7 @@
   }
 
   async function loadKintaiBihin(forceYm, opts) {
-    if (!canKintai()) throw Error('勤怠管理の権限がありません。');
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
     if (loading) return;
     const skipGuard = opts && opts.skipGuard;
     if (!skipGuard && bihinDirty) {
