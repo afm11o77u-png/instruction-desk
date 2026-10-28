@@ -96,11 +96,11 @@ class DeskNavGroupsTest(unittest.TestCase):
         # ログイン欄からは業務メニューへ移した（利用者管理・管理・修正は desksettings のまま）
         self.assertNotIn('利用者管理</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
         self.assertNotIn('管理・修正</button>', ACCOUNT.split('block.innerHTML')[1].split('`;')[0])
-        # マーク管理はログイン者ブロック内（氏名・権限の次、パスワード変更の前）
+        # マーク管理はログイン者ブロック内（氏名・権限の上、パスワード変更の前）
         bar = ACCOUNT.split('block.innerHTML')[1].split('`;')[0]
         self.assertIn('>マーク管理<', bar)
         self.assertLess(bar.index('markmanage'), bar.index('mypassword'))
-        self.assertLess(bar.index('currentUser.name'), bar.index('markmanage'))
+        self.assertLess(bar.index('markmanage'), bar.index('currentUser.name'))
         # ボタン風（quiet テキストリンクではなく枠付きコントロール）
         self.assertIn('id="markmanage"', bar)
         self.assertNotIn('id="markmanage" class="quiet"', bar)
