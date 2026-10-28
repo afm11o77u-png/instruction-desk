@@ -174,6 +174,106 @@
     return '';
   }
 
+  /** 表示中の表の人員。将来の検索／絞り込みがあればここで狭める。 */
+  function visiblePeople() {
+    return people.slice();
+  }
+
+  function updateBulkScopeNote() {
+    const el = $('#shiftbulkscope');
+    if (!el) return;
+    const n = visiblePeople().length;
+    const total = people.length;
+    if (n < total) {
+      el.textContent = `対象: 絞り込み中の ${n}人（表全体 ${total}人のうち）`;
+    } else {
+      el.textContent = `対象: 表示中の表の全員（${n}人）`;
+    }
+  }
+
+  function bulkFillMode() {
+    const checked = document.querySelector('input[name="shiftbulkmode"]:checked');
+    return checked && checked.value === 'overwrite' ? 'overwrite' : 'empty';
+  }
+
+  /**
+   * 指定日を対象者へ×。mode=empty は空欄のみ、overwrite は既存も×へ。
+   * 変更があれば undo 1段・未保存表示。日曜の個別編集はそのまま可能。
+   */
+  function bulkMarkOffDays(dayNums, mode, label) {
+    const days = (dayNums || []).map(Number).filter(d => d >= 1);
+    const targets = visiblePeople();
+    if (!days.length) {
+      toast('対象の日付がありません。');
+      return;
+    }
+    if (!targets.length) {
+      toast('対象者がいません。');
+      return;
+    }
+    pushUndo();
+    const off = { kind: 'off', text: '×' };
+    let changed = 0;
+    for (const p of targets) {
+      if (!p || !p.key) continue;
+      for (const day of days) {
+        const cur = cellAt(p.key, day);
+        if (mode === 'empty') {
+          if (cur) continue;
+        } else if (cur && cur.kind === 'off') {
+          continue;
+        }
+        if (!cells[p.key]) cells[p.key] = {};
+        cells[p.key][String(day)] = { kind: off.kind, text: off.text };
+        changed += 1;
+      }
+    }
+    if (!changed) {
+      undoStack.pop();
+      toast(mode === 'empty' ? '空欄がありませんでした。' : '変更するセルがありませんでした。');
+      return;
+    }
+    markDirty();
+    paintShift();
+    const who = targets.length === people.length
+      ? `表示中の全員（${targets.length}人）`
+      : `絞り込み中の ${targets.length}人`;
+    toast(`${label || '一括×'}: ${changed}件（${who}・${mode === 'empty' ? '空欄のみ' : '上書き'}）。「ひとつ戻す」で取り消せます。`);
+  }
+
+  function bulkMarkOneDay(day) {
+    bulkMarkOffDays([day], bulkFillMode(), `${day}日を全員×`);
+  }
+
+  function bulkMarkWeekday() {
+    const sel = $('#shiftbulkweekday');
+    const wd = sel ? Number(sel.value) : 6;
+    if (!sheet || !sheet.days) return;
+    const days = (sheet.days || []).filter(d => Number(d.weekday) === wd).map(d => d.day);
+    const optLabel = sel && sel.selectedOptions && sel.selectedOptions[0]
+      ? `今月の${sel.selectedOptions[0].textContent}曜を全員×`
+      : '今月の指定曜日を全員×';
+    bulkMarkOffDays(days, bulkFillMode(), optLabel);
+  }
+
+  /** 未保存月で行を追加したとき、空の日曜だけ×（保存済み・既存セルは触らない）。 */
+  function seedSundaysForKeys(keys, recordUndo) {
+    if (!sheet || sheet.exists) return;
+    const sundayDays = (sheet.days || []).filter(d => Number(d.weekday) === 6).map(d => d.day);
+    if (!sundayDays.length || !(keys || []).length) return;
+    let changed = false;
+    if (recordUndo) pushUndo();
+    for (const key of keys) {
+      for (const day of sundayDays) {
+        if (cellAt(key, day)) continue;
+        if (!cells[key]) cells[key] = {};
+        cells[key][String(day)] = { kind: 'off', text: '×' };
+        changed = true;
+      }
+    }
+    if (recordUndo && !changed) undoStack.pop();
+  }
+
   function paintShift() {
     const table = $('#shiftgrid');
     if (!table || !sheet) return;
@@ -181,7 +281,7 @@
     const headDays = days.map(d => {
       const cls = d.kind === 'sat' ? 'shift-sat' : (d.kind === 'sun' || d.kind === 'holiday' ? 'shift-sun' : '');
       const title = d.holidayName ? ` title="${esc(d.holidayName)}"` : '';
-      return `<th class="shift-day ${cls}"${title}><span class="shift-daynum">${d.day}</span><span class="shift-wday">${esc(d.weekdayLabel)}</span></th>`;
+      return `<th class="shift-day ${cls}"${title}><span class="shift-daynum">${d.day}</span><span class="shift-wday">${esc(d.weekdayLabel)}</span><button type="button" class="shift-day-bulk no-print" data-bulk-day="${d.day}" title="${d.day}日を表示中の全員×">この日を全員×</button></th>`;
     }).join('');
     const body = people.map(p => {
       const rowCls = [
@@ -219,6 +319,7 @@
     const titleEl = $('#shiftprinttitle');
     if (titleEl) titleEl.textContent = printTitleText();
     table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
+    updateBulkScopeNote();
   }
 
   /** 人員行を fromKey → toKey の前（before）または後（after）へ移動。セルは person key 紐づけのまま。 */
@@ -331,7 +432,7 @@
   }
 
   function onGridPointer(e) {
-    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-row-del') || e.target.closest('.shift-drag'))) return;
+    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-row-del') || e.target.closest('.shift-drag') || e.target.closest('.shift-day-bulk'))) return;
     const td = e.target.closest && e.target.closest('td.shift-cell');
     if (!td) return;
     if (e.type === 'contextmenu') {
@@ -392,6 +493,7 @@
       sortOrder: people.length,
       source: 'shift',
     });
+    seedSundaysForKeys([key], false);
     markDirty();
     paintShift();
     const input = document.querySelector(`.shift-name-input[data-person="${CSS.escape(key)}"]`);
@@ -418,6 +520,7 @@
     }
     pushUndo();
     people = people.concat(add);
+    seedSundaysForKeys(add.map(p => p.key), false);
     markDirty();
     paintShift();
     toast(`${add.length}人をこの月の表に追加しました。`);
@@ -791,9 +894,21 @@
     if (add) add.onclick = () => addShiftRow();
     const addRoster = $('#shiftaddroster');
     if (addRoster) addRoster.onclick = () => { try { addMissingRoster(); } catch (e) { toast(e.message); } };
+    const bulkWday = $('#shiftbulkwday');
+    if (bulkWday) bulkWday.onclick = () => bulkMarkWeekday();
+    document.querySelectorAll('input[name="shiftbulkmode"]').forEach(r => {
+      r.onchange = updateBulkScopeNote;
+    });
+    updateBulkScopeNote();
     const wrap = $('#shiftgridwrap');
     if (wrap) {
       wrap.addEventListener('click', e => {
+        const bulkDay = e.target.closest && e.target.closest('[data-bulk-day]');
+        if (bulkDay) {
+          e.preventDefault();
+          bulkMarkOneDay(Number(bulkDay.dataset.bulkDay));
+          return;
+        }
         const del = e.target.closest && e.target.closest('[data-del-person]');
         if (del) {
           e.preventDefault();

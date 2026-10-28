@@ -486,6 +486,35 @@ def _row_public(
     }
 
 
+def seed_sunday_offs(people: list[dict], cells: dict, days: list[dict]) -> dict:
+    """未保存月の初期表示用。日曜で空のセルだけ×にする。既存・手入力は上書きしない。"""
+    sunday_days = [int(d['day']) for d in (days or []) if int(d.get('weekday', -1)) == 6]
+    if not sunday_days or not people:
+        return cells if isinstance(cells, dict) else {}
+    out: dict = {}
+    for key, by_day in (cells or {}).items():
+        if isinstance(by_day, dict):
+            out[str(key)] = dict(by_day)
+    for p in people:
+        if not isinstance(p, dict):
+            continue
+        key = str(p.get('key') or '').strip()
+        if not key or not PERSON_KEY_RE.match(key):
+            continue
+        row = dict(out.get(key) or {})
+        changed = False
+        for day in sunday_days:
+            ds = str(day)
+            cur = row.get(ds)
+            if cur:
+                continue
+            row[ds] = {'kind': 'off', 'text': '×'}
+            changed = True
+        if changed:
+            out[key] = row
+    return out
+
+
 def get_shift_sheet(c, year, month) -> dict:
     y, m = _parse_year_month(year, month)
     days = month_calendar(y, m)
@@ -515,6 +544,9 @@ def get_shift_sheet(c, year, month) -> dict:
         sheet_exists=bool(row),
         default_keys=default_keys,
     )
+    # 未保存月のみ日曜を×で初期化。保存済みはスナップショットをそのまま返す。
+    if not row:
+        cells = seed_sunday_offs(people, cells, days)
     return _row_public(y, m, row, days, people, cells, roster=roster)
 
 
