@@ -13,4 +13,4 @@ body:not(.authenticated)>aside,body:not(.authenticated)>main{display:none}#auths
 #accounts td input[type=checkbox]{display:block;width:20px;height:20px;min-height:20px;margin:0 auto;padding:0}
 #accounts td:last-child button{display:block;max-width:100%;white-space:normal;margin:5px 0;text-align:left}
 
-#sidebarfooter{margin-top:auto;border-top:1px solid #6d9a80;padding-top:10px}#sidebarfooter #accountbar{margin-top:0;border-top:0}
+#sidebarfooter{margin-top:auto;border-top:1px solid #6d9a80;padding-top:10px;display:flex;flex-direction:column;gap:6px;min-width:0}#sidebarfooter #accountbar{margin-top:0;border-top:0;padding:8px 10px 0;min-width:0}#sidebarfooter #logoutrow{padding:0 10px 6px;box-sizing:border-box}#logoutrow #logout{color:#f4faf6;text-align:left;padding:6px 0;font-size:.8rem;background:transparent;border-color:transparent}#logoutrow #logout:hover{background:#275844;color:#fff}
