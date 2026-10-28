@@ -434,6 +434,10 @@
       const p=plans[v.key]||{}
       if(!p.approach)return false
       if(p.approach==='change_code'&&!String(p.newCode||'').trim())return false
+      if(p.approach==='as_process_service'){
+        if(!String(p.serviceName||'').trim())return false
+        if(!String(p.vendorName||'').trim())return false
+      }
       return true
     })
   }
@@ -484,9 +488,16 @@
       ;(g.variants||[]).forEach(v=>{
         const p=plans[v.key]||{}
         if(!p.approach){
-          out.push({type:'separate_approach',label:'「'+(v.productName||'（名なし）')+'」の整理方法',detail:'品番修正・部品・品番なし・保留のいずれかを選んでください',fieldKey:'name',resolved:false})
+          out.push({type:'separate_approach',label:'「'+(v.productName||'（名なし）')+'」の整理方法',detail:'品番修正・部品・加工サービス・品番なし・保留のいずれかを選んでください',fieldKey:'name',resolved:false})
         }else if(p.approach==='change_code'&&!String(p.newCode||'').trim()){
           out.push({type:'separate_code',label:'「'+(v.productName||'（名なし）')+'」の修正品番',detail:'修正品番を入力してください',fieldKey:'sku',resolved:false})
+        }else if(p.approach==='as_process_service'){
+          if(!String(p.serviceName||'').trim()){
+            out.push({type:'separate_process_name',label:'「'+(v.productName||'（名なし）')+'」の加工名',detail:'加工名（登録・表示名）を入力してください',fieldKey:'name',resolved:false})
+          }
+          if(!String(p.vendorName||'').trim()){
+            out.push({type:'separate_process_vendor',label:'「'+(v.productName||'（名なし）')+'」の加工業者',detail:'加工業者を入力してください',fieldKey:'supplier',resolved:false})
+          }
         }
       })
     }
@@ -1561,6 +1572,18 @@
     const variantPlans=(g.variants||[]).map(v=>{
       const plans=(d.plans&&typeof d.plans==='object')?d.plans:{}
       const plan=plans[v.key]||{}
+      const detected=detectedProcessServiceForVariant(st,g,v)
+      const isProc=plan.approach==='as_process_service'
+      const serviceName=plan.serviceName!=null?plan.serviceName:(detected.serviceName||'')
+      const vendorName=plan.vendorName!=null?plan.vendorName:(detected.vendorName||'')
+      const supplement=plan.supplement!=null?plan.supplement:(detected.supplement||'')
+      const procFields=isProc?`
+        <div class="sku-sep-process-fields">
+          <label>加工名<input data-pl-sep-service="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(serviceName)}" placeholder="例: ライン加工" ${st.busy||decision!=='separate'?'disabled':''}></label>
+          <label>加工業者<input data-pl-sep-vendor="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(vendorName)}" placeholder="CSV仕入先" ${st.busy||decision!=='separate'?'disabled':''}></label>
+          <label>補足／個別仕様<input data-pl-sep-supp="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(supplement)}" placeholder="位置・寸法・顧客固有など" ${st.busy||decision!=='separate'?'disabled':''}></label>
+          <p class="excelhint">加工名が登録・表示名です（別の表示名欄はありません）。衣服品番は加工SKUに使いません。同名・同業者のみ再利用し、別加工名は別名統合しません。</p>
+        </div>`:''
       return `<div class="sku-variant-plan" data-variant-key="${esc(v.key)}">
         <strong>${esc(v.productName||'（名なし）')}</strong>
         <span class="sub">仕入 ${esc(v.supplier||'未設定')}　サイズ ${(v.sizes||[]).map(esc).join('、')||'—'}　顧客 ${(v.customers||[]).slice(0,3).map(esc).join('、')}${(v.customers||[]).length>3?'…':''}　CSV行 ${(v.rowNos||[]).join(',')||'—'}</span>
@@ -1568,10 +1591,12 @@
           <option value="">選択…</option>
           <option value="change_code" ${plan.approach==='change_code'?'selected':''}>品番を修正して登録</option>
           <option value="as_parts" ${plan.approach==='as_parts'?'selected':''}>部品・資材として整理</option>
+          <option value="as_process_service" ${plan.approach==='as_process_service'?'selected':''}>加工サービスとして整理</option>
           <option value="as_blank" ${plan.approach==='as_blank'?'selected':''}>品番なしとして整理</option>
           <option value="defer" ${plan.approach==='defer'?'selected':''}>この内容は保留</option>
         </select></label>
         <label>修正品番<input data-pl-sep-code="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(plan.newCode||'')}" placeholder="別の品番" ${st.busy||decision!=='separate'||plan.approach!=='change_code'?'disabled':''}></label>
+        ${procFields}
       </div>`
     }).join('')
     const customers=[...new Set((g.variants||[]).flatMap(v=>v.customers||[]))]
@@ -1635,7 +1660,7 @@
           <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。既存の公式名は仮名では上書きしません。サイズの LL≡2L 同一化はしません。</p>
         </div>`:''}
         ${decision==='separate'?`<div class="sku-separate-form">
-          <p class="excelhint">同じ通常品番のまま別商品として新規登録はできません。品番修正・部品扱い・保留のいずれかを内容ごとに選んでください。</p>
+          <p class="excelhint">同じ通常品番のまま別商品として新規登録はできません。品番修正・部品・資材・加工サービス・品番なし・保留のいずれかを内容ごとに選んでください。</p>
           ${decisionPending?'<p class="excelhint">個別整理の内容は保持します。登録予定への反映は再照合後です。</p>':''}
           ${variantPlans}
         </div>`:''}
@@ -1656,6 +1681,52 @@
     }
     setSkuDecision(st,code,patch)
     applyAuxDefaultsForMerge(st,code,group)
+  }
+
+  /** 個別整理「加工サービス」欄の初期値（検出加工名＋CSV仕入先）。編集状態のみ。 */
+  function detectedProcessServiceForVariant(st,g,v){
+    const rowNos=new Set((v&&v.rowNos||[]).map(Number))
+    const rows=((st&&st.preview&&st.preview.rows)||[]).filter(r=>rowNos.has(Number(r.rowNo)))
+    let serviceName=''
+    let vendorName=''
+    let supplement=''
+    rows.forEach(r=>{
+      const ps=r.processingService||{}
+      const pc=r.parenClassification||{}
+      const csv=r.csv||{}
+      if(!serviceName){
+        serviceName=ps.serviceName||pc.processing||v.processing||''
+      }
+      if(!vendorName){
+        vendorName=ps.vendorName||pc.processingVendor||csv.supplier||v.supplier||''
+      }
+      if(!supplement){
+        const specs=ps.rowSpecs||{}
+        const bits=[specs.customerSpecific,specs.parenSpecs,specs.dimensions,specs.composition].filter(Boolean)
+        supplement=bits.join('／')||pc.supplement||''
+      }
+    })
+    if(!serviceName)serviceName=(v&&v.processing)||(v&&v.productName)||''
+    if(!vendorName)vendorName=(v&&v.supplier)||''
+    return {serviceName,vendorName,supplement}
+  }
+
+  /** 整理方法を加工サービスにしたとき、空欄だけ検出値で埋める（既存編集は消さない）。 */
+  function initSeparateProcessServicePlan(st,code,key){
+    const g=((st.preview&&st.preview.skuGroups)||[]).find(x=>x&&x.code===code)
+    const v=((g&&g.variants)||[]).find(x=>x&&x.key===key)||{key}
+    const d=skuDecision(st,code)
+    const plans={...(d.plans||{})}
+    const prev=plans[key]||{}
+    const detected=detectedProcessServiceForVariant(st,g,v)
+    plans[key]={
+      ...prev,
+      approach:'as_process_service',
+      serviceName:String(prev.serviceName||'').trim()?prev.serviceName:detected.serviceName,
+      vendorName:String(prev.vendorName||'').trim()?prev.vendorName:detected.vendorName,
+      supplement:prev.supplement!=null?prev.supplement:detected.supplement
+    }
+    setSkuDecision(st,code,{plans})
   }
 
   function skuListRowsHtml(st,groups,opts){
@@ -2399,11 +2470,42 @@
     </div>`
   }
 
+  function separateProcessServiceConfirmedDetailHtml(st,g){
+    const plans=(skuDecision(st,g.code).plans)||{}
+    const remote=g.separateProcessServicePlans||[]
+    const rows=(g.variants||[]).map(v=>{
+      const p=plans[v.key]||{}
+      if(p.approach!=='as_process_service')return ''
+      const detected=detectedProcessServiceForVariant(st,g,v)
+      const remoteHit=remote.find(r=>String(r.variantKey||'')===String(v.key||''))||{}
+      const name=p.serviceName||remoteHit.serviceName||detected.serviceName||'—'
+      const vendor=p.vendorName||remoteHit.vendorName||detected.vendorName||'—'
+      const cat=remoteHit.category||'加工サービス'
+      const action=remoteHit.action==='reuse'?'再利用':'新規'
+      return `<tr>
+        <td>${esc(v.productName||'—')}</td>
+        <td>${esc(name)}</td>
+        <td>${esc(vendor)}</td>
+        <td>${esc(cat)}</td>
+        <td>${esc(action)}</td>
+      </tr>`
+    }).filter(Boolean).join('')
+    if(!rows)return ''
+    return `<div class="confirmed-process-service-detail">
+      <p class="excelhint">加工サービスとして整理する登録予定（名・業者・区分）:</p>
+      <div class="legacy-csv-table-wrap"><table class="legacy-csv-table confirmed-split-table">
+        <thead><tr><th>CSV内容</th><th>加工名（登録・表示）</th><th>加工業者</th><th>区分</th><th>予定</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`
+  }
+
   function confirmedDetailHtml(st,g){
     const dec=effectiveDecision(st,g)
     const expanded=!!(st.expandedConfirmed&&st.expandedConfirmed[g.code])
     if(!expanded)return ''
-    // skuRowDetailHtml が独立した <tr> を返すので、色別の各商品表だけ先に1行足す
+    // skuRowDetailHtml が独立した <tr> を返すので、色別／加工サービスの各商品表だけ先に1行足す
+    const processIntro=dec==='separate'?separateProcessServiceConfirmedDetailHtml(st,g):''
     const splitIntro=dec==='color_split'
       ?`<tr class="sku-detail-row confirmed-split-row" data-confirmed-detail="${esc(g.code)}"><td colspan="${CONFIRMED_LIST_COL_COUNT}">
           <div class="sku-detail-body confirmed-detail-body">
@@ -2414,6 +2516,7 @@
       :`<tr class="sku-detail-row confirmed-split-row" data-confirmed-detail="${esc(g.code)}"><td colspan="${CONFIRMED_LIST_COL_COUNT}">
           <div class="sku-detail-body confirmed-detail-body">
             <p class="excelhint">登録予定の確認です。まだ台帳へ保存していません（確認済み ≠ 登録完了）。</p>
+            ${processIntro}
           </div>
         </td></tr>`
     // 対応変更用に既存の詳細フォーム（方針ボタン・色別／個別フォーム）も続ける
@@ -2430,13 +2533,27 @@
       const status=CONFIRMED_STATUS[statusKey]
       const expanded=!!(st.expandedConfirmed&&st.expandedConfirmed[g.code])
       const originals=originalNamesForGroup(g)
+      const sepPlans=(skuDecision(st,g.code).plans)||{}
+      const procVariants=(dec==='separate'?(g.variants||[]):[]).filter(v=>(sepPlans[v.key]||{}).approach==='as_process_service')
       const planName=dec==='color_split'
         ?colorSplitSummaryForGroup(g)
-        :plannedNameForGroup(st,g)
+        :(procVariants.length
+          ?procVariants.map(v=>{
+            const p=sepPlans[v.key]||{}
+            const det=detectedProcessServiceForVariant(st,g,v)
+            return p.serviceName||det.serviceName||v.productName||''
+          }).filter(Boolean).join('／')
+          :plannedNameForGroup(st,g))
       const planColor=dec==='color_split'
         ?(((g.colorSplitPlans||{}).plans)||[]).map(p=>p.color).filter(Boolean).join('・')
         :(skuDecision(st,g.code).color||g.plannedRegisteredColor||g.plannedColor||'')
-      const planSup=plannedSupplierDisplay(st,g)
+      const planSup=procVariants.length
+        ?procVariants.map(v=>{
+          const p=sepPlans[v.key]||{}
+          const det=detectedProcessServiceForVariant(st,g,v)
+          return p.vendorName||det.vendorName||v.supplier||''
+        }).filter(Boolean).join('／')||plannedSupplierDisplay(st,g)
+        :plannedSupplierDisplay(st,g)
       return `<tr class="sku-list-row confirmed-list-row is-status-${esc(statusKey)}" data-sku-code="${esc(g.code)}" data-sku-section="confirmed" data-decision="${esc(dec||'')}" data-confirmed-status="${esc(statusKey)}">
         <td class="confirmed-sku" data-label="元の品番">${esc(g.codeDisplay||g.code||'—')}</td>
         <td class="confirmed-orig-name" data-label="元の商品名">${esc(originals.join('／')||'—')}</td>
@@ -2444,7 +2561,8 @@
         <td class="confirmed-plan" data-label="登録予定">
           <div>名: ${esc(planName||'—')}</div>
           <div>色: ${esc(planColor||'（空）')}</div>
-          <div>通常仕入先: ${esc(planSup)}</div>
+          <div>${procVariants.length?'加工業者':'通常仕入先'}: ${esc(planSup)}</div>
+          ${procVariants.length?`<div class="sub">区分: 加工サービス（${procVariants.length} 件・詳細で名・業者を表示）</div>`:''}
           ${dec==='color_split'?`<div class="sub">分割 ${(((g.colorSplitPlans||{}).plans)||[]).length||0} 色（詳細で各商品を表示）</div>`:''}
         </td>
         <td class="confirmed-status" data-label="状態"><span class="badge confirmed-status-badge is-${esc(statusKey)}">${esc(status)}</span></td>
@@ -4126,6 +4244,30 @@
       plans[key]={...(plans[key]||{}),newCode:el.value}
       setSkuDecision(st,code,{plans})
     })
+    document.querySelectorAll('[data-pl-sep-service]').forEach(el=>{
+      const code=el.getAttribute('data-pl-sep-service')
+      const key=el.getAttribute('data-pl-sep-key')
+      const d=skuDecision(st,code)
+      const plans={...(d.plans||{})}
+      plans[key]={...(plans[key]||{}),serviceName:el.value}
+      setSkuDecision(st,code,{plans})
+    })
+    document.querySelectorAll('[data-pl-sep-vendor]').forEach(el=>{
+      const code=el.getAttribute('data-pl-sep-vendor')
+      const key=el.getAttribute('data-pl-sep-key')
+      const d=skuDecision(st,code)
+      const plans={...(d.plans||{})}
+      plans[key]={...(plans[key]||{}),vendorName:el.value}
+      setSkuDecision(st,code,{plans})
+    })
+    document.querySelectorAll('[data-pl-sep-supp]').forEach(el=>{
+      const code=el.getAttribute('data-pl-sep-supp')
+      const key=el.getAttribute('data-pl-sep-key')
+      const d=skuDecision(st,code)
+      const plans={...(d.plans||{})}
+      plans[key]={...(plans[key]||{}),supplement:el.value}
+      setSkuDecision(st,code,{plans})
+    })
     document.querySelectorAll('[data-pl-sep-approach]').forEach(el=>{
       const code=el.getAttribute('data-pl-sep-approach')
       const key=el.getAttribute('data-pl-sep-key')
@@ -5009,12 +5151,19 @@
     })
     document.querySelectorAll('[data-pl-sep-approach]').forEach(el=>{
       el.onchange=()=>{
+        // 方針・整理方法の選択は編集状態のみ。再照合は「選択を反映して再照合」
+        harvestFormEdits(st)
         const code=el.getAttribute('data-pl-sep-approach')
         const key=el.getAttribute('data-pl-sep-key')
-        const d=skuDecision(st,code)
-        const plans={...(d.plans||{})}
-        plans[key]={...(plans[key]||{}),approach:el.value}
-        setSkuDecision(st,code,{plans})
+        if(el.value==='as_process_service'){
+          initSeparateProcessServicePlan(st,code,key)
+        }else{
+          const d=skuDecision(st,code)
+          const plans={...(d.plans||{})}
+          plans[key]={...(plans[key]||{}),approach:el.value}
+          setSkuDecision(st,code,{plans})
+        }
+        // スクロール chase なし（方針選択と同じく paintDialog() のみ）
         paintDialog()
       }
     })
@@ -5492,6 +5641,9 @@
       confirmedCompareTableHtml,
       matchesConfirmedFilters,
       colorSplitConfirmedDetailHtml,
+      separateProcessServiceConfirmedDetailHtml,
+      detectedProcessServiceForVariant,
+      initSeparateProcessServicePlan,
       originalNamesForGroup,
       CONFIRMED_STATUS,
       CONFIRMED_LIST_COL_COUNT,
