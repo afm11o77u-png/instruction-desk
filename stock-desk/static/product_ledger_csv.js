@@ -2999,17 +2999,12 @@
     return `${result.searchKey||result.skuCodes&&result.skuCodes[0]||''}#${candIdx}`
   }
 
-  function bulkMakerPanelHtml(st){
-    const panel=st.bulkMakerLookup
-    if(!panel)return ''
-    const running=!!panel.running&&!panel.finished
-    const counts=panel.counts||{}
-    const results=panel.results||[]
-    const excluded=panel.excluded||[]
+  /** 確認残り件数（採用メタ表示用）。 */
+  function bulkMakerRemainingConfirmCount(panel){
+    if(!panel)return 0
     const adoptSel=panel.adoptSelected||{}
-    const adoptedCount=panel.adoptedCount||0
     let remainingConfirm=0
-    results.forEach(r=>{
+    ;(panel.results||[]).forEach(r=>{
       if(r.status==='ok'&&r.adoptableSingle){
         if(!adoptSel[bulkMakerAdoptSelectionKey(r,0)]&&!r.adopted)remainingConfirm+=1
       }else if(r.status==='multiple'){
@@ -3020,11 +3015,278 @@
         remainingConfirm+=1
       }
     })
-    const progressLine=running
-      ?`処理中 ${panel.done||0}／${panel.total||0}`
-        +(panel.currentMakerSku||panel.currentSku?`　現在: ${esc(panel.currentMakerSku||panel.currentSku)}`:'')
-      :(panel.finished?`完了 ${panel.done||0}／${panel.total||0}`:`準備中`)
-    const countLine=`候補1件 ${counts.ok||0}　複数 ${counts.multiple||0}　要確認 ${counts.needsConfirm||0}　取得失敗 ${(counts.fetchFailed||0)+(counts.pageUnavailable||0)+(counts.error||0)}　候補なし ${counts.noMatch||0}　未処理・中止 ${(counts.cancelled||0)+(counts.pending||0)}`
+    return remainingConfirm
+  }
+
+  function bulkMakerProgressLine(panel){
+    if(!panel)return ''
+    const running=!!panel.running&&!panel.finished
+    if(running){
+      return `処理中 ${panel.done||0}／${panel.total||0}`
+        +(panel.currentMakerSku||panel.currentSku?`　現在: ${panel.currentMakerSku||panel.currentSku}`:'')
+    }
+    if(panel.finished)return `完了 ${panel.done||0}／${panel.total||0}`
+    return '準備中'
+  }
+
+  function bulkMakerCountLine(panel){
+    const counts=(panel&&panel.counts)||{}
+    return `候補1件 ${counts.ok||0}　複数 ${counts.multiple||0}　要確認 ${counts.needsConfirm||0}　取得失敗 ${(counts.fetchFailed||0)+(counts.pageUnavailable||0)+(counts.error||0)}　候補なし ${counts.noMatch||0}　未処理・中止 ${(counts.cancelled||0)+(counts.pending||0)}`
+  }
+
+  /**
+   * 候補チェック変更用の軽量更新。paintDialog（一覧・候補リストの再生成）はしない。
+   * - 内部 adoptSelected は呼び出し側で更新済みであること
+   * - 同一商品の他候補チェック同期・採用ボタン有効／無効・採用済／確認残り
+   * スクロール・フォーカス・他の編集中の値は触らない。採用・再照合・登録は開始しない。
+   */
+  function syncBulkMakerAdoptSelectionUi(st){
+    st=st||ensureState()
+    const panel=st.bulkMakerLookup
+    if(!panel)return
+    if(!panel.adoptSelected)panel.adoptSelected={}
+    const adoptSel=panel.adoptSelected
+    document.querySelectorAll('[data-pl-bulk-maker-pick]').forEach(el=>{
+      const key=el.getAttribute('data-pl-bulk-maker-pick')
+      const want=!!adoptSel[key]
+      if(el.checked!==want)el.checked=want
+    })
+    const running=!!panel.running&&!panel.finished
+    const anySelected=Object.keys(adoptSel).some(k=>adoptSel[k])
+    const adoptBtn=document.getElementById('plBulkMakerAdopt')
+    if(adoptBtn)adoptBtn.disabled=!!st.busy||running||!anySelected
+    const meta=document.getElementById('plBulkMakerAdoptMeta')
+    if(meta){
+      meta.textContent=`採用済 ${panel.adoptedCount||0}　確認残り ${bulkMakerRemainingConfirmCount(panel)}`
+    }
+  }
+
+  /** 結果テーブル構造が変わったか（進捗数字だけの変化は含めない）。 */
+  function bulkMakerStructureSignature(panel){
+    if(!panel)return ''
+    const results=panel.results||[]
+    return [
+      panel.running?'1':'0',
+      panel.finished?'1':'0',
+      panel.error||'',
+      (panel.excluded||[]).length,
+      results.length,
+      results.map(r=>[
+        r.searchKey||'',
+        r.status||'',
+        (r.candidates||[]).length,
+        r.adopted?'1':'0',
+        r.fromUrl?'1':'0',
+        (r.note||'').length
+      ].join(':')).join('|')
+    ].join('::')
+  }
+
+  function harvestBulkMakerUrlInputs(st){
+    const panel=st&&st.bulkMakerLookup
+    if(!panel)return
+    panel.urlInputs=panel.urlInputs||{}
+    document.querySelectorAll('.pl-bulk-maker-panel [data-pl-maker-url-input]').forEach(input=>{
+      const wrap=input.closest('.pl-maker-url-fetch')
+      const idxAttr=wrap&&wrap.getAttribute('data-pl-maker-url-result')
+      const ri=Number(idxAttr)
+      const row=(panel.results||[])[ri]
+      const key=(row&&row.searchKey)||String(ri)
+      panel.urlInputs[key]=input.value||''
+    })
+  }
+
+  /** 進捗テキストだけ更新（候補リストDOMは触らない）。 */
+  function patchBulkMakerProgressTexts(st){
+    const panel=st&&st.bulkMakerLookup
+    if(!panel)return
+    const prog=document.getElementById('plBulkMakerProgress')
+    if(prog)prog.textContent=bulkMakerProgressLine(panel)
+    const counts=document.getElementById('plBulkMakerCounts')
+    if(counts)counts.textContent=bulkMakerCountLine(panel)
+    const meta=document.getElementById('plBulkMakerAdoptMeta')
+    if(meta){
+      meta.textContent=`採用済 ${panel.adoptedCount||0}　確認残り ${bulkMakerRemainingConfirmCount(panel)}`
+    }
+  }
+
+  /**
+   * 一括メーカーパネルだけ差し替え。外枠ダイアログと候補リストの縦横スクロールを保持。
+   * フォーカス復元は preventScroll（focusIntoView 相当の自動スクロールを避ける）。
+   */
+  function refreshBulkMakerPanelUi(st){
+    st=st||ensureState()
+    const dlg=document.getElementById('dialog')
+    if(!dlg||!st.open)return
+    const existing=dlg.querySelector('.pl-bulk-maker-panel')
+    if(!existing||!st.bulkMakerLookup){
+      paintDialog()
+      return
+    }
+    harvestBulkMakerUrlInputs(st)
+    const body=ledgerBodyEl(dlg)
+    const bodyScroll=readScrollPos(body)
+    const wrapScroll=readScrollPos(existing.querySelector('.pl-bulk-maker-results-wrap'))
+    const active=document.activeElement
+    const activePick=active&&active.getAttribute?active.getAttribute('data-pl-bulk-maker-pick'):''
+    const activeUrlId=active&&active.id&&String(active.id).indexOf('plBulkMakerUrl')===0?active.id:''
+    const tmp=document.createElement('div')
+    tmp.innerHTML=bulkMakerPanelHtml(st)
+    const next=tmp.firstElementChild
+    if(!next)return
+    existing.replaceWith(next)
+    applyScrollPos(body,bodyScroll)
+    applyScrollPos(next.querySelector('.pl-bulk-maker-results-wrap'),wrapScroll)
+    bindBulkMakerPanelHandlers()
+    let focusEl=null
+    if(activePick){
+      focusEl=next.querySelector(`[data-pl-bulk-maker-pick="${CSS.escape(activePick)}"]`)
+    }else if(activeUrlId){
+      focusEl=document.getElementById(activeUrlId)
+    }
+    if(focusEl&&typeof focusEl.focus==='function'){
+      try{focusEl.focus({preventScroll:true})}catch(_){try{focusEl.focus()}catch(__){}}
+    }
+  }
+
+  /** 一括メーカーパネル内の操作（候補チェック・採用・中止・URL取得）。 */
+  function bindBulkMakerPanelHandlers(){
+    const st=ensureState()
+    const bulkMakerCancel=$('#plBulkMakerCancel')
+    if(bulkMakerCancel)bulkMakerCancel.onclick=()=>cancelBulkMakerLookup(st)
+    const bulkMakerClose=$('#plBulkMakerClose')
+    if(bulkMakerClose)bulkMakerClose.onclick=()=>{
+      stopBulkMakerPoll(st)
+      st.bulkMakerLookup=null
+      paintDialog()
+    }
+    const bulkMakerAdopt=$('#plBulkMakerAdopt')
+    if(bulkMakerAdopt)bulkMakerAdopt.onclick=()=>adoptBulkMakerSelections(st)
+    document.querySelectorAll('[data-pl-bulk-maker-pick]').forEach(el=>{
+      el.onchange=()=>{
+        if(!st.bulkMakerLookup)return
+        const key=el.getAttribute('data-pl-bulk-maker-pick')
+        const ri=Number(el.getAttribute('data-result-idx'))
+        const result=(st.bulkMakerLookup.results||[])[ri]
+        if(!st.bulkMakerLookup.adoptSelected)st.bulkMakerLookup.adoptSelected={}
+        // 同一結果の候補は単一選択（複数候補から1つ）
+        if(result&&result.searchKey){
+          Object.keys(st.bulkMakerLookup.adoptSelected).forEach(k=>{
+            if(k.startsWith(`${result.searchKey}#`)&&k!==key)st.bulkMakerLookup.adoptSelected[k]=false
+          })
+        }
+        st.bulkMakerLookup.adoptSelected[key]=!!el.checked
+        // チェックだけでは採用・再照合・登録しない。候補リストも作り直さない。
+        syncBulkMakerAdoptSelectionUi(st)
+      }
+    })
+    document.querySelectorAll('.pl-bulk-maker-panel [data-pl-maker-url-input]').forEach(input=>{
+      const sync=()=>{
+        if(!st.bulkMakerLookup)return
+        harvestBulkMakerUrlInputs(st)
+      }
+      input.oninput=sync
+      input.onchange=sync
+    })
+    document.querySelectorAll('[data-pl-maker-url-fetch]').forEach(el=>{
+      if(el.id==='plMakerUrlFetch')return
+      el.onclick=async()=>{
+        const panel=st.bulkMakerLookup
+        if(!panel||panel.running){st.toast('一括取得の完了後にURL指定できます。');return}
+        const wrap=el.closest('.pl-maker-url-fetch')
+        const idxAttr=wrap&&wrap.getAttribute('data-pl-maker-url-result')
+        const ri=Number(idxAttr)
+        const row=(panel.results||[])[ri]
+        if(!row){st.toast('対象行が見つかりません。');return}
+        const input=wrap&&wrap.querySelector('[data-pl-maker-url-input]')
+        const url=((input&&input.value)||'').trim()
+        const key=row.searchKey||String(ri)
+        panel.urlInputs=panel.urlInputs||{}
+        panel.urlFetchErrors=panel.urlFetchErrors||{}
+        panel.urlInputs[key]=url
+        if(!url){st.toast('商品ページURLを入力してください。');return}
+        st.busy=true
+        panel.urlFetchErrors[key]=''
+        paintDialog()
+        try{
+          const result=await st.api('/api/product-ledger-csv/maker-lookup/from-url',{
+            url,
+            manufacturer:row.manufacturer||'',
+            makerSku:row.makerSku||'',
+            currentName:row.currentName||'',
+            currentColor:row.currentColor||'',
+            currentSupplement:row.currentSupplement||'',
+            currentSku:row.currentSku||row.makerSku||'',
+            sourceName:row.sourceName||'',
+            supplier:row.supplier||''
+          })
+          const cands=result.candidates||[]
+          const next=Object.assign({},row,{
+            status:result.status,
+            statusLabel:result.statusLabel||bulkMakerStatusLabel(result.status),
+            note:result.note||'',
+            candidates:cands,
+            referenceUrl:result.referenceUrl||url,
+            plannedRegisteredSku:result.plannedRegisteredSku||row.plannedRegisteredSku,
+            fromUrl:true,
+            matchedPages:result.matchedPages||[],
+            adoptableSingle:result.status==='ok'&&cands.length===1&&!!(cands[0]&&cands[0].name)
+          })
+          const results=(panel.results||[]).slice()
+          results[ri]=next
+          // 件数の再集計（候補なしと失敗を混同しない）
+          const counts=Object.assign({},panel.counts||{})
+          const prevStatus=row.status||''
+          const dec=(k)=>{if(counts[k])counts[k]=Math.max(0,(counts[k]||0)-1)}
+          const statusKey={
+            ok:'ok',multiple:'multiple',no_match:'noMatch',
+            fetch_failed:'fetchFailed',page_unavailable:'pageUnavailable',
+            sku_mismatch:'needsConfirm',maker_mismatch:'needsConfirm',
+            parse_incomplete:'needsConfirm',error:'error',invalid_url:'needsConfirm'
+          }
+          if(statusKey[prevStatus])dec(statusKey[prevStatus]==='needsConfirm'?'needsConfirm':statusKey[prevStatus])
+          if(next.status==='ok')counts.ok=(counts.ok||0)+1
+          else if(next.status==='multiple')counts.multiple=(counts.multiple||0)+1
+          else if(next.status==='no_match')counts.noMatch=(counts.noMatch||0)+1
+          else if(next.status==='fetch_failed')counts.fetchFailed=(counts.fetchFailed||0)+1
+          else if(next.status==='page_unavailable')counts.pageUnavailable=(counts.pageUnavailable||0)+1
+          else if(next.status==='error')counts.error=(counts.error||0)+1
+          else counts.needsConfirm=(counts.needsConfirm||0)+1
+          if(next.adoptableSingle){
+            const pickKey=bulkMakerAdoptSelectionKey(next,0)
+            panel.adoptSelected=Object.assign({},panel.adoptSelected||{})
+            panel.adoptSelected[pickKey]=true
+          }
+          if(cands.length&&cands[0]&&cands[0].name){
+            panel.urlFetchErrors[key]=''
+            st.toast(`品番 ${row.makerSku||''}: URLから候補を取得しました`)
+          }else{
+            panel.urlFetchErrors[key]=result.note||result.statusLabel||'候補を取得できませんでした'
+          }
+          st.bulkMakerLookup=Object.assign({},panel,{results,counts})
+        }catch(e){
+          panel.urlFetchErrors[key]=apiErrorMessage(e,'URLからの取得に失敗しました。')
+          st.bulkMakerLookup=Object.assign({},panel)
+          st.toast(panel.urlFetchErrors[key],6000)
+        }finally{
+          st.busy=false
+          paintDialog()
+        }
+      }
+    })
+  }
+
+  function bulkMakerPanelHtml(st){
+    const panel=st.bulkMakerLookup
+    if(!panel)return ''
+    const running=!!panel.running&&!panel.finished
+    const results=panel.results||[]
+    const excluded=panel.excluded||[]
+    const adoptSel=panel.adoptSelected||{}
+    const adoptedCount=panel.adoptedCount||0
+    const remainingConfirm=bulkMakerRemainingConfirmCount(panel)
+    const progressLine=bulkMakerProgressLine(panel)
+    const countLine=bulkMakerCountLine(panel)
     const exclNote=excluded.length
       ?`<p class="excelhint">メーカー品番が対象外のため除外 ${excluded.length} 件（別注・品番なし・空欄など）: ${excluded.slice(0,12).map(e=>esc(e.skuCode||'')).join('、')}${excluded.length>12?` …他${excluded.length-12}`:''}</p>`
       :''
@@ -3110,17 +3372,17 @@
     return `<div class="notice pl-bulk-maker-panel" role="region" aria-label="選択した商品のメーカー情報" data-pl-bulk-maker-panel>
       <div class="bar">
         <strong>選択した商品のメーカー情報</strong>
-        <span class="sub">${esc(progressLine)}</span>
+        <span class="sub" id="plBulkMakerProgress">${esc(progressLine)}</span>
         ${running?`<button type="button" class="quiet" id="plBulkMakerCancel">中止</button>`:''}
         ${panel.finished?`<button type="button" class="quiet" id="plBulkMakerClose">結果を閉じる</button>`:''}
       </div>
-      <p class="excelhint">${esc(countLine)}</p>
+      <p class="excelhint" id="plBulkMakerCounts">${esc(countLine)}</p>
       ${exclNote}${dupNote}
       <p class="excelhint">取得だけでは登録予定は変わりません。候補を確認してから「選択した補正を採用」してください（最終登録は既存の登録確定操作）。上限 ${panel.maxTargets||40} ユニーク検索／間隔 ${panel.delaySec||0.8} 秒。無料の公開ページのみ。</p>
       ${resultTable}
       <div class="bar">
         <button type="button" class="primary" id="plBulkMakerAdopt" ${adoptDisabled?'disabled':''}>選択した補正を採用</button>
-        <span class="excelhint">採用済 ${adoptedCount}　確認残り ${remainingConfirm}</span>
+        <span class="excelhint" id="plBulkMakerAdoptMeta">採用済 ${adoptedCount}　確認残り ${remainingConfirm}</span>
       </div>
     </div>`
   }
@@ -3249,10 +3511,17 @@
     if(panel._polling)return
     panel._polling=true
     try{
+      const prevSig=bulkMakerStructureSignature(panel)
       const job=await st.api('/api/product-ledger-csv/maker-lookup/bulk/status',{jobId:panel.jobId})
       mergeBulkMakerJobIntoState(st,job,panel)
-      // 進捗再描画でも一覧スクロールを先頭へ戻さない
-      paintDialog()
+      // 進捗更新でも外枠・候補リストのスクロール／チェック操作を乱さない
+      const next=st.bulkMakerLookup
+      const nextSig=bulkMakerStructureSignature(next)
+      if(prevSig===nextSig&&document.querySelector('.pl-bulk-maker-panel')){
+        patchBulkMakerProgressTexts(st)
+      }else{
+        refreshBulkMakerPanelUi(st)
+      }
       if(job.finished)stopBulkMakerPoll(st)
     }catch(e){
       // 一時失敗は次の poll で再試行
@@ -3813,6 +4082,7 @@
       wraps,
       sections:readScrollPos(dlg.querySelector('.sku-judgment-sections')),
       table:readScrollPos(dlg.querySelector('.legacy-csv-table-wrap')),
+      makerResults:readScrollPos(dlg.querySelector('.pl-bulk-maker-results-wrap')),
       visibleAnchor
     }
     scrollLog('capture',snap)
@@ -3914,6 +4184,10 @@
       if(table){table.scrollTop=0;table.scrollLeft=0}
     }else{
       applyScrollPos(table,saved.table)
+    }
+    // メーカー候補リスト（内側スクロール）の縦横も復元
+    if(!opts.resetListScroll){
+      applyScrollPos(dlg.querySelector('.pl-bulk-maker-results-wrap'),saved.makerResults)
     }
     if(!opts.resetListScroll){
       const anchorCode=opts.anchorCode||(saved.visibleAnchor&&saved.visibleAnchor.code)||''
@@ -4427,33 +4701,7 @@
     if(clearSel)clearSel.onclick=()=>{st.selectedCodes={};syncSkuSelectionUi(st)}
     const bulkMakerFetch=$('#plBulkMakerFetch')
     if(bulkMakerFetch)bulkMakerFetch.onclick=()=>startBulkMakerLookup(st)
-    const bulkMakerCancel=$('#plBulkMakerCancel')
-    if(bulkMakerCancel)bulkMakerCancel.onclick=()=>cancelBulkMakerLookup(st)
-    const bulkMakerClose=$('#plBulkMakerClose')
-    if(bulkMakerClose)bulkMakerClose.onclick=()=>{
-      stopBulkMakerPoll(st)
-      st.bulkMakerLookup=null
-      paintDialog()
-    }
-    const bulkMakerAdopt=$('#plBulkMakerAdopt')
-    if(bulkMakerAdopt)bulkMakerAdopt.onclick=()=>adoptBulkMakerSelections(st)
-    document.querySelectorAll('[data-pl-bulk-maker-pick]').forEach(el=>{
-      el.onchange=()=>{
-        if(!st.bulkMakerLookup)return
-        const key=el.getAttribute('data-pl-bulk-maker-pick')
-        const ri=Number(el.getAttribute('data-result-idx'))
-        const result=(st.bulkMakerLookup.results||[])[ri]
-        if(!st.bulkMakerLookup.adoptSelected)st.bulkMakerLookup.adoptSelected={}
-        // 同一結果の候補は単一選択（複数候補から1つ）
-        if(result&&result.searchKey){
-          Object.keys(st.bulkMakerLookup.adoptSelected).forEach(k=>{
-            if(k.startsWith(`${result.searchKey}#`)&&k!==key)st.bulkMakerLookup.adoptSelected[k]=false
-          })
-        }
-        st.bulkMakerLookup.adoptSelected[key]=!!el.checked
-        paintDialog()
-      }
-    })
+    bindBulkMakerPanelHandlers()
     const bulkApprove=$('#plSkuBulkApproveSection')
     if(bulkApprove)bulkApprove.onclick=()=>{
       // 一括承認は「一括承認候補」区分の未承認のみ。確認リスト（旧・個別確認が必要）は絶対に含めない。
@@ -4826,92 +5074,7 @@
         }
       }
     }
-    document.querySelectorAll('[data-pl-maker-url-fetch]').forEach(el=>{
-      if(el.id==='plMakerUrlFetch')return
-      el.onclick=async()=>{
-        const panel=st.bulkMakerLookup
-        if(!panel||panel.running){st.toast('一括取得の完了後にURL指定できます。');return}
-        const wrap=el.closest('.pl-maker-url-fetch')
-        const idxAttr=wrap&&wrap.getAttribute('data-pl-maker-url-result')
-        const ri=Number(idxAttr)
-        const row=(panel.results||[])[ri]
-        if(!row){st.toast('対象行が見つかりません。');return}
-        const input=wrap&&wrap.querySelector('[data-pl-maker-url-input]')
-        const url=((input&&input.value)||'').trim()
-        const key=row.searchKey||String(ri)
-        panel.urlInputs=panel.urlInputs||{}
-        panel.urlFetchErrors=panel.urlFetchErrors||{}
-        panel.urlInputs[key]=url
-        if(!url){st.toast('商品ページURLを入力してください。');return}
-        st.busy=true
-        panel.urlFetchErrors[key]=''
-        paintDialog()
-        try{
-          const result=await st.api('/api/product-ledger-csv/maker-lookup/from-url',{
-            url,
-            manufacturer:row.manufacturer||'',
-            makerSku:row.makerSku||'',
-            currentName:row.currentName||'',
-            currentColor:row.currentColor||'',
-            currentSupplement:row.currentSupplement||'',
-            currentSku:row.currentSku||row.makerSku||'',
-            sourceName:row.sourceName||'',
-            supplier:row.supplier||''
-          })
-          const cands=result.candidates||[]
-          const next=Object.assign({},row,{
-            status:result.status,
-            statusLabel:result.statusLabel||bulkMakerStatusLabel(result.status),
-            note:result.note||'',
-            candidates:cands,
-            referenceUrl:result.referenceUrl||url,
-            plannedRegisteredSku:result.plannedRegisteredSku||row.plannedRegisteredSku,
-            fromUrl:true,
-            matchedPages:result.matchedPages||[],
-            adoptableSingle:result.status==='ok'&&cands.length===1&&!!(cands[0]&&cands[0].name)
-          })
-          const results=(panel.results||[]).slice()
-          results[ri]=next
-          // 件数の再集計（候補なしと失敗を混同しない）
-          const counts=Object.assign({},panel.counts||{})
-          const prevStatus=row.status||''
-          const dec=(k)=>{if(counts[k])counts[k]=Math.max(0,(counts[k]||0)-1)}
-          const statusKey={
-            ok:'ok',multiple:'multiple',no_match:'noMatch',
-            fetch_failed:'fetchFailed',page_unavailable:'pageUnavailable',
-            sku_mismatch:'needsConfirm',maker_mismatch:'needsConfirm',
-            parse_incomplete:'needsConfirm',error:'error',invalid_url:'needsConfirm'
-          }
-          if(statusKey[prevStatus])dec(statusKey[prevStatus]==='needsConfirm'?'needsConfirm':statusKey[prevStatus])
-          if(next.status==='ok')counts.ok=(counts.ok||0)+1
-          else if(next.status==='multiple')counts.multiple=(counts.multiple||0)+1
-          else if(next.status==='no_match')counts.noMatch=(counts.noMatch||0)+1
-          else if(next.status==='fetch_failed')counts.fetchFailed=(counts.fetchFailed||0)+1
-          else if(next.status==='page_unavailable')counts.pageUnavailable=(counts.pageUnavailable||0)+1
-          else if(next.status==='error')counts.error=(counts.error||0)+1
-          else counts.needsConfirm=(counts.needsConfirm||0)+1
-          if(next.adoptableSingle){
-            const pickKey=bulkMakerAdoptSelectionKey(next,0)
-            panel.adoptSelected=Object.assign({},panel.adoptSelected||{})
-            panel.adoptSelected[pickKey]=true
-          }
-          if(cands.length&&cands[0]&&cands[0].name){
-            panel.urlFetchErrors[key]=''
-            st.toast(`品番 ${row.makerSku||''}: URLから候補を取得しました`)
-          }else{
-            panel.urlFetchErrors[key]=result.note||result.statusLabel||'候補を取得できませんでした'
-          }
-          st.bulkMakerLookup=Object.assign({},panel,{results,counts})
-        }catch(e){
-          panel.urlFetchErrors[key]=apiErrorMessage(e,'URLからの取得に失敗しました。')
-          st.bulkMakerLookup=Object.assign({},panel)
-          st.toast(panel.urlFetchErrors[key],6000)
-        }finally{
-          st.busy=false
-          paintDialog()
-        }
-      }
-    })
+    // 一括メーカーの URL 取得ハンドラは bindBulkMakerPanelHandlers 側
     document.querySelectorAll('[data-pl-maker-adopt]').forEach(el=>{
       el.onclick=async()=>{
         const panel=st.makerLookup
@@ -5199,6 +5362,13 @@
       previewPayload,
       selectedCodeList,
       syncSkuSelectionUi,
+      syncBulkMakerAdoptSelectionUi,
+      bulkMakerAdoptSelectionKey,
+      bulkMakerRemainingConfirmCount,
+      bulkMakerStructureSignature,
+      bulkMakerProgressLine,
+      bulkMakerCountLine,
+      patchBulkMakerProgressTexts,
       ensureState,
       stableRowKeyFromCsv,
       stableRowKeyFromRow,
