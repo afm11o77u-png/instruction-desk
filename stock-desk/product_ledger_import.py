@@ -6589,6 +6589,290 @@ def _ensure_processing_service_product(c, plan):
     return pid, True
 
 
+def _resolve_separate_process_service_fields(row, plan, variant):
+    """個別整理の加工サービス欄。利用者入力 → 検出値 → CSV仕入先／商品名。"""
+    plan = plan if isinstance(plan, dict) else {}
+    variant = variant if isinstance(variant, dict) else {}
+    csv_row = row.get('csv') or {}
+    ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+    service_name = stock.text(plan.get('serviceName') or '')
+    vendor_name = stock.text(plan.get('vendorName') or '')
+    supplement = stock.text(plan.get('supplement') or '')
+    if not service_name:
+        service_name = stock.text(
+            ps.get('serviceName')
+            or pc.get('processing')
+            or variant.get('processing')
+            or ''
+        )
+        if not service_name:
+            guessed = proc_svc.unify_processing_service_name(csv_row.get('productName') or '')
+            service_name = stock.text(guessed or '')
+        if not service_name:
+            service_name = stock.text(csv_row.get('productName') or '')
+    if not vendor_name:
+        vendor_name = stock.text(
+            ps.get('vendorName')
+            or csv_row.get('supplier')
+            or variant.get('supplier')
+            or ''
+        )
+    if not supplement:
+        specs = ps.get('rowSpecs') if isinstance(ps.get('rowSpecs'), dict) else {}
+        bits = [
+            stock.text(specs.get(k) or '')
+            for k in ('customerSpecific', 'parenSpecs', 'dimensions', 'composition')
+        ]
+        supplement = '／'.join(b for b in bits if b) or stock.text(pc.get('supplement') or '')
+    return service_name, vendor_name, supplement
+
+
+def apply_separate_as_process_service_plans(c, classified, sku_groups, sku_decisions, processing_split_meta):
+    """個別整理「加工サービスとして整理」を自動分離のあとに適用。
+
+    - 登録名＝表示名＝加工名（別の表示名欄なし）
+    - CATEGORY_PROCESS_SERVICE・品番なし。衣服SKUを加工SKUにしない
+    - 同名・同業者のみ再利用。異なる加工名は別名統合しない
+      （例: 同一SKUグループ内の ライン加工 と スナッパー加工）
+    - CSV行・元品番・顧客・仕様は provenance に残し初期在庫照合へ
+    """
+    decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
+    meta = dict(processing_split_meta or {})
+    plans_by_key = {}
+    for p in (meta.get('processingServicePlans') or []):
+        if not isinstance(p, dict):
+            continue
+        key = stock.text(p.get('dedupeKey') or '')
+        if key:
+            plans_by_key[key] = dict(p)
+    group_by_code = {g['code']: g for g in (sku_groups or [])}
+    # 個別整理で取り込む行番号（自動計画から外して二重登録しない）
+    separate_owned_row_nos = set()
+
+    for row in classified or []:
+        code = stock.text((row.get('csv') or {}).get('code') or '')
+        if not stock_product_merge.is_normal_product_code(code):
+            continue
+        group = group_by_code.get(code)
+        if not group:
+            continue
+        raw = decisions.get(code) or decisions.get(str(code)) or {}
+        if not isinstance(raw, dict):
+            continue
+        if stock.text(raw.get('decision')) != SKU_DECISION_SEPARATE:
+            continue
+        sep_plans = raw.get('plans') if isinstance(raw.get('plans'), dict) else {}
+        variant = _row_variant(row)
+        plan = (
+            sep_plans.get(variant['key'])
+            or sep_plans.get((row.get('csv') or {}).get('productName'))
+            or {}
+        )
+        if stock.text(plan.get('approach') or '') != 'as_process_service':
+            continue
+        separate_owned_row_nos.add(int(row['rowNo']))
+
+        csv_row = dict(row.get('csv') or {})
+        service_name, vendor_name, supplement = _resolve_separate_process_service_fields(
+            row, plan, variant,
+        )
+        if not service_name or not vendor_name:
+            row['status'] = STATUS_REVIEW
+            row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+            row['canCommit'] = False
+            row['reasons'] = list(row.get('reasons') or []) + [
+                f'品番「{code}」を加工サービスとして整理する場合は、'
+                f'加工名と加工業者を入力してください。'
+            ]
+            row['pendingSeparateProcessService'] = True
+            continue
+
+        # 表示名は加工名のみ。エルムス以外で別名へ寄せない
+        info = {
+            'serviceName': service_name,
+            'vendorName': vendor_name,
+            'displayName': service_name,
+            'identifiable': True,
+            'isProcessingService': True,
+        }
+        key = proc_svc.service_dedupe_key(service_name, vendor_name)
+        pplan = plans_by_key.get(key)
+        if not pplan:
+            pplan = _processing_service_plan_payload(
+                info,
+                source_row_nos=[row['rowNo']],
+                garment_codes=[code] if code else [],
+            )
+            existing_svc = proc_svc.find_existing_processing_service(
+                c, service_name, vendor_name,
+            )
+            if existing_svc:
+                pplan['action'] = 'reuse'
+                pplan['productId'] = existing_svc['id']
+            else:
+                pplan['action'] = 'create'
+            pplan['autoRegister'] = True
+            pplan['fromSeparateOrganize'] = True
+            plans_by_key[key] = pplan
+        else:
+            if row['rowNo'] not in (pplan.get('sourceRowNos') or []):
+                pplan.setdefault('sourceRowNos', []).append(row['rowNo'])
+            if code and code not in (pplan.get('targetGarmentCodes') or []):
+                pplan.setdefault('targetGarmentCodes', []).append(code)
+            pplan['autoRegister'] = True
+            pplan['fromSeparateOrganize'] = True
+            # 個別整理の明示名を優先（自動検出の別名へ戻さない）
+            pplan['serviceName'] = service_name
+            pplan['displayName'] = service_name
+            pplan['vendorName'] = vendor_name
+
+        sample = {
+            'rowNo': row['rowNo'],
+            'originalName': csv_row.get('productName') or '',
+            'originalCode': code,
+            'customer': csv_row.get('customer') or '',
+            'size': csv_row.get('size') or '',
+            'qty': csv_row.get('qty') or csv_row.get('quantity') or '',
+            'unitPrice': csv_row.get('unitPrice') or csv_row.get('unitCost') or '',
+            'customerSpecific': supplement,
+        }
+        samples = list(pplan.get('rowSpecsSamples') or [])
+        if not any(int(s.get('rowNo') or 0) == int(row['rowNo']) for s in samples):
+            samples.append(sample)
+            pplan['rowSpecsSamples'] = samples[:12]
+
+        prod = dict(row.get('product') or {})
+        prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+        prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+        # 衣服SKUを加工サービスの品番にしない
+        prod['code'] = ''
+        prod['codeOverride'] = ''
+        prod['blankSku'] = True
+        prod['officialName'] = service_name
+        prod['applyOfficialName'] = True
+        prod['primarySupplierName'] = vendor_name
+        prod['processingServiceProduct'] = True
+        prod['ignoreSkuDecisionGate'] = True
+        if pplan.get('productId'):
+            prod['id'] = pplan['productId']
+            prod['action'] = 'reuse'
+        else:
+            prod['id'] = None
+            prod['action'] = 'create'
+        row['product'] = prod
+        row['handle'] = {
+            'action': 'excluded', 'id': None, 'candidates': [], 'reasons': [],
+            'embroidery': '', 'embroideryLabel': '',
+            'skipForProcessingService': True,
+        }
+        pc = dict(row.get('parenClassification') or {})
+        pc['processing'] = service_name
+        pc['plannedName'] = service_name
+        pc['processingVendor'] = vendor_name
+        pc['processingServiceView'] = True
+        pc['physicalPartsView'] = False
+        if supplement:
+            pc['supplement'] = supplement
+        row['parenClassification'] = pc
+
+        ps = dict(row.get('processingService') or {})
+        ps.update({
+            'serviceName': service_name,
+            'vendorName': vendor_name,
+            'displayName': service_name,
+            'isProcessingService': True,
+            'isProcessingVendor': True,
+            'identifiable': True,
+            'needsConfirm': False,
+            'fromSeparateOrganize': True,
+        })
+        if supplement:
+            specs = dict(ps.get('rowSpecs') or {})
+            specs['customerSpecific'] = supplement
+            ps['rowSpecs'] = specs
+        row['processingService'] = ps
+
+        # 初期在庫照合用: 元のCSV品番・顧客・仕様を保持（登録品番は空のまま）
+        prov = dict(row.get('specProvenance') or {})
+        row_specs = dict(ps.get('rowSpecs') or {})
+        if supplement:
+            row_specs['customerSpecific'] = supplement
+        prov.update({
+            'originalName': csv_row.get('productName') or '',
+            'originalCode': code,
+            'originalSupplier': csv_row.get('supplier') or '',
+            'processing': service_name,
+            'processingVendor': vendor_name,
+            'processingServiceName': service_name,
+            'processingDisplayName': service_name,
+            'rowKind': 'processing_service',
+            'targetGarmentCode': code,
+            'targetCustomer': csv_row.get('customer') or '',
+            'csvSize': csv_row.get('size') or '',
+            'csvQty': csv_row.get('qty') or csv_row.get('quantity') or '',
+            'csvUnitPrice': csv_row.get('unitPrice') or csv_row.get('unitCost') or '',
+            'isMainCandidate': True,
+            'rowSpecs': row_specs,
+            'customerSpecific': stock.text(row_specs.get('customerSpecific') or ''),
+            'fromSeparateOrganize': True,
+            'hideOriginalNameAsAlias': False,
+        })
+        row['specProvenance'] = prov
+        row['processingServicePlanKey'] = key
+        row['processingServiceView'] = True
+        row['physicalPartsView'] = False
+        row['separateAsProcessService'] = True
+        row['pendingSeparateProcessService'] = False
+        row['skuDecisionNeeded'] = False
+        if row.get('status') not in (STATUS_EXCLUDED, STATUS_HOLD):
+            row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+            row['statusLabel'] = STATUS_LABELS[row['status']]
+            row['canCommit'] = True
+
+        # グループ表示用（確認済み詳細）
+        group.setdefault('separateProcessServicePlans', [])
+        group['separateProcessServicePlans'] = [
+            p for p in (group.get('separateProcessServicePlans') or [])
+            if stock.text(p.get('dedupeKey') or '') != key
+        ]
+        group['separateProcessServicePlans'].append({
+            'variantKey': variant.get('key') or '',
+            'serviceName': service_name,
+            'vendorName': vendor_name,
+            'category': stock.CATEGORY_PROCESS_SERVICE,
+            'dedupeKey': key,
+            'action': pplan.get('action') or 'create',
+            'productId': pplan.get('productId'),
+            'supplement': supplement,
+            'sourceRowNos': list(pplan.get('sourceRowNos') or []),
+            'originalCode': code,
+        })
+
+    # 個別整理が取り込んだ行を、自動検出計画の sourceRowNos から外す
+    # （加工名編集で dedupeKey が変わったときの二重確保を防ぐ）
+    if separate_owned_row_nos:
+        for key, pplan in list(plans_by_key.items()):
+            if pplan.get('fromSeparateOrganize'):
+                continue
+            src = [
+                rn for rn in (pplan.get('sourceRowNos') or [])
+                if int(rn) not in separate_owned_row_nos
+            ]
+            if not src:
+                plans_by_key.pop(key, None)
+                continue
+            pplan['sourceRowNos'] = src
+
+    plans = list(plans_by_key.values())
+    plans.sort(key=lambda p: (p.get('vendorName') or '', p.get('serviceName') or ''))
+    meta['processingServicePlans'] = plans
+    meta['autoCount'] = sum(1 for p in plans if p.get('autoRegister'))
+    meta['reuseCount'] = sum(1 for p in plans if p.get('action') == 'reuse')
+    meta['createCount'] = sum(1 for p in plans if p.get('action') == 'create')
+    return meta
+
+
 def _notation_auto_merged(group_or_row):
     """自動まとめ全般（公式名適用の判定用）。"""
     g = group_or_row or {}
@@ -6962,6 +7246,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                     row['canCommit'] = True
             elif approach in ('as_parts', 'as_blank'):
                 # 部品・資材 / 品番なしとして整理（通常品番の重複新規はしない）
+                # 実物資材向け。加工サービスは as_process_service を使う
                 row['product'] = dict(row.get('product') or {})
                 if approach == 'as_blank':
                     row['product']['code'] = ''
@@ -6973,12 +7258,66 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['status'] = STATUS_CREATE
                 row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
                 row['canCommit'] = True
+            elif approach == 'as_process_service':
+                # 加工サービスとして整理。確定は apply_separate_as_process_service_plans で行う
+                # （自動分離のあとで利用者の加工名・業者を優先する）
+                service_name = stock.text(plan.get('serviceName') or '')
+                vendor_name = stock.text(plan.get('vendorName') or '')
+                ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+                csv_row = row.get('csv') or {}
+                if not service_name:
+                    service_name = stock.text(
+                        ps.get('serviceName')
+                        or (row.get('parenClassification') or {}).get('processing')
+                        or variant.get('processing')
+                        or ''
+                    )
+                    if not service_name:
+                        guessed = proc_svc.unify_processing_service_name(
+                            csv_row.get('productName') or ''
+                        )
+                        service_name = stock.text(guessed or '')
+                    if not service_name:
+                        service_name = stock.text(csv_row.get('productName') or '')
+                if not vendor_name:
+                    vendor_name = stock.text(
+                        ps.get('vendorName')
+                        or csv_row.get('supplier')
+                        or variant.get('supplier')
+                        or ''
+                    )
+                if not service_name or not vendor_name:
+                    row['status'] = STATUS_REVIEW
+                    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                    row['canCommit'] = False
+                    row['reasons'] = list(row.get('reasons') or []) + [
+                        f'品番「{code}」を加工サービスとして整理する場合は、'
+                        f'加工名と加工業者を入力してください。'
+                    ]
+                    pending_decision += 1
+                else:
+                    row['product'] = dict(row.get('product') or {})
+                    row['product']['category'] = stock.CATEGORY_PROCESS_SERVICE
+                    row['product']['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                    row['product']['code'] = ''
+                    row['product']['codeOverride'] = ''
+                    row['product']['blankSku'] = True
+                    row['product']['officialName'] = service_name
+                    row['product']['applyOfficialName'] = True
+                    row['product']['primarySupplierName'] = vendor_name
+                    row['product']['processingServiceProduct'] = True
+                    row['product']['action'] = 'create'
+                    row['product']['id'] = None
+                    row['pendingSeparateProcessService'] = True
+                    row['status'] = STATUS_CREATE
+                    row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
+                    row['canCommit'] = True
             else:
                 row['status'] = STATUS_REVIEW
                 row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
                 row['canCommit'] = False
                 row['reasons'] = list(row.get('reasons') or []) + [
-                    f'品番「{code}」の整理方法（品番修正 / 部品・資材 / 品番なし / 保留）を選んでください。'
+                    f'品番「{code}」の整理方法（品番修正 / 部品・資材 / 加工サービス / 品番なし / 保留）を選んでください。'
                     f'同じ通常品番のまま別商品として新規登録することはできません。'
                 ]
                 pending_decision += 1
@@ -7558,6 +7897,10 @@ def build_preview(c, body):
     stamp_aux_adopted_package_on_rows(classified, sku_groups)
     # 補助CSV・SKU決定のあとでも加工分離を再適用（provenance / 仕入先除外を守る）
     processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
+    # 個別整理「加工サービスとして整理」は自動分離のあとに適用（編集した加工名・業者を優先）
+    processing_split_meta = apply_separate_as_process_service_plans(
+        c, classified, sku_groups, sku_decisions, processing_split_meta,
+    )
     # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
     for row in classified:
         mk = maker_sku_lookup.row_maker_correction_meta(row)
