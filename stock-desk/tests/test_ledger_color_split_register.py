@@ -458,24 +458,24 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
 
 
 class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
-    """109-PCT / Tシャツ白・黒: 統合用 nameMappings を色別予定に混ぜない。"""
+    """109-PCT / Tシャツ白・黒 → Tシャツ/ホワイト・Tシャツ/ブラック（石屋商事）。"""
 
-    def test_outside_color_keeps_original_product_names(self):
+    def test_outside_color_splits_to_name_slash_color(self):
         folder, path, c = newdb()
         try:
             ledger = ledger_csv([
-                '顧客A,仕入先X,109-PCT,Tシャツ白,S',
-                '顧客A,仕入先X,109-PCT,Tシャツ白,M',
-                '顧客A,仕入先X,109-PCT,Tシャツ白,L',
-                '顧客A,仕入先X,109-PCT,Tシャツ白,LL',
-                '顧客A,仕入先X,109-PCT,Tシャツ黒,S',
-                '顧客A,仕入先X,109-PCT,Tシャツ黒,M',
-                '顧客A,仕入先X,109-PCT,Tシャツ黒,L',
-                '顧客A,仕入先X,109-PCT,Tシャツ黒,LL',
+                '顧客A,石屋商事,109-PCT,Tシャツ白,S',
+                '顧客A,石屋商事,109-PCT,Tシャツ白,M',
+                '顧客A,石屋商事,109-PCT,Tシャツ白,L',
+                '顧客A,石屋商事,109-PCT,Tシャツ白,LL',
+                '顧客A,石屋商事,109-PCT,Tシャツ黒,S',
+                '顧客A,石屋商事,109-PCT,Tシャツ黒,M',
+                '顧客A,石屋商事,109-PCT,Tシャツ黒,L',
+                '顧客A,石屋商事,109-PCT,Tシャツ黒,LL',
             ])
             opening = opening_csv([
-                '新品,仕入先X,顧客A,Tシャツ白,109-PCT,S,1000,0,0,10,本社,棚1,0',
-                '新品,仕入先X,顧客A,Tシャツ黒,109-PCT,S,1000,0,0,1,本社,棚1,0',
+                '新品,石屋商事,顧客A,Tシャツ白,109-PCT,S,1000,0,0,10,本社,棚1,0',
+                '新品,石屋商事,顧客A,Tシャツ黒,109-PCT,S,1000,0,0,1,本社,棚1,0',
             ])
             body = {
                 'importMode': 'products',
@@ -489,6 +489,7 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             }
             preview = pli.build_preview(c, body)
             group = next(g for g in preview['skuGroups'] if g['code'] == '109-PCT')
+            self.assertTrue(group.get('colorOnlySplitRecommended') or group.get('colorDiffPossible'))
             self.assertEqual(group.get('plannedOfficialName'), '色別登録：ブラック・ホワイト')
             self.assertIn('色別に分けて登録', group.get('nameAdoptionRule') or '')
             np = group.get('namePlan') or {}
@@ -497,18 +498,25 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             # 統合用の「黒→白（別名）」が出ないこと
             for m in np.get('nameMappings') or []:
                 self.assertFalse(m.get('unassigned'))
+                self.assertFalse(m.get('isAlias'))
                 if '黒' in (m.get('originalName') or ''):
-                    self.assertEqual(m.get('registrationName'), 'Tシャツ黒')
+                    self.assertEqual(m.get('registrationName'), 'Tシャツ')
                     self.assertEqual(m.get('color'), 'ブラック')
                     self.assertNotEqual(m.get('registrationName'), 'Tシャツ白')
                 if '白' in (m.get('originalName') or ''):
-                    self.assertEqual(m.get('registrationName'), 'Tシャツ白')
+                    self.assertEqual(m.get('registrationName'), 'Tシャツ')
                     self.assertEqual(m.get('color'), 'ホワイト')
             split = group['colorSplitPlans']
             self.assertTrue(split.get('complete'), split)
             by_color = {p['color']: p for p in split['plans']}
-            self.assertEqual(by_color['ホワイト']['productName'], 'Tシャツ白')
-            self.assertEqual(by_color['ブラック']['productName'], 'Tシャツ黒')
+            self.assertEqual(by_color['ホワイト']['productName'], 'Tシャツ')
+            self.assertEqual(by_color['ブラック']['productName'], 'Tシャツ')
+            self.assertEqual(by_color['ホワイト']['displayLabel'], 'Tシャツ/ホワイト')
+            self.assertEqual(by_color['ブラック']['displayLabel'], 'Tシャツ/ブラック')
+            self.assertEqual(by_color['ホワイト']['supplier'], '石屋商事')
+            self.assertEqual(by_color['ブラック']['supplier'], '石屋商事')
+            self.assertEqual(sorted(by_color['ホワイト']['sizes']), ['L', 'LL', 'M', 'S'])
+            self.assertEqual(sorted(by_color['ブラック']['sizes']), ['L', 'LL', 'M', 'S'])
             self.assertEqual(sorted(by_color['ホワイト']['rowNos']), [2, 3, 4, 5])
             self.assertEqual(sorted(by_color['ブラック']['rowNos']), [6, 7, 8, 9])
             self.assertEqual(by_color['ホワイト']['internalCode'], '109-PCT-ホワイト')
@@ -522,11 +530,11 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
                 prod = r.get('product') or {}
                 orig = (r.get('csv') or {}).get('productName') or ''
                 if '白' in orig:
-                    self.assertEqual(prod.get('officialName'), 'Tシャツ白')
+                    self.assertEqual(prod.get('officialName'), 'Tシャツ')
                     self.assertEqual(prod.get('officialColor'), 'ホワイト')
                     self.assertEqual(prod.get('code'), '109-PCT-ホワイト')
                 else:
-                    self.assertEqual(prod.get('officialName'), 'Tシャツ黒')
+                    self.assertEqual(prod.get('officialName'), 'Tシャツ')
                     self.assertEqual(prod.get('officialColor'), 'ブラック')
                     self.assertEqual(prod.get('code'), '109-PCT-ブラック')
                 # 別色の nameMappings を載せない
@@ -545,12 +553,12 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             ))
             self.assertEqual(len(rows), 2)
             by_c = {r['color']: r for r in rows}
-            self.assertEqual(by_c['ホワイト']['name'], 'Tシャツ白')
-            self.assertEqual(by_c['ブラック']['name'], 'Tシャツ黒')
+            self.assertEqual(by_c['ホワイト']['name'], 'Tシャツ')
+            self.assertEqual(by_c['ブラック']['name'], 'Tシャツ')
             self.assertEqual(by_c['ホワイト']['code'], '109-PCT-ホワイト')
             self.assertEqual(by_c['ブラック']['code'], '109-PCT-ブラック')
 
-            # 別名: 白商品に黒名が付いていない / 黒商品に白名が付いていない
+            # 別名: 白商品に黒名が付いていない / 黒商品に白名が付いていない（黒↔白エイリアスなし）
             white_aliases = {
                 r['value'] for r in c.execute(
                     "SELECT value FROM product_match_aliases WHERE product_id=? AND kind='name'",
@@ -565,6 +573,9 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
             }
             self.assertNotIn('Tシャツ黒', white_aliases)
             self.assertNotIn('Tシャツ白', black_aliases)
+            # 初期在庫照合用に原文は残す
+            self.assertIn('Tシャツ白', white_aliases)
+            self.assertIn('Tシャツ黒', black_aliases)
 
             # 初期在庫: 旧名称から白→白・黒→黒。共通メーカー品番だけで片方へ寄せない
             stage2 = {
@@ -610,8 +621,8 @@ class ColorSplitNameMapAndOutsideColorTest(unittest.TestCase):
         folder, path, c = newdb()
         try:
             ledger = ledger_csv([
-                '顧客A,仕入先X,109-PCT,Tシャツ白,L',
-                '顧客A,仕入先X,109-PCT,Tシャツ黒,L',
+                '顧客A,石屋商事,109-PCT,Tシャツ白,L',
+                '顧客A,石屋商事,109-PCT,Tシャツ黒,L',
             ])
             body = {
                 'importMode': 'products',
@@ -647,6 +658,11 @@ class ColorSplitUiWiringTest(unittest.TestCase):
         self.assertIn('社内管理品番', js)
         self.assertIn('colorSplitSummaryForGroup', js)
         self.assertIn('colorSplitNameMappings', js)
+        self.assertIn('色別分割案・未反映', js)
+        self.assertIn('今回は色別分割が適しています', js)
+        self.assertIn('確認して一括登録（保留・登録しない項目を除く）', js)
+        self.assertIn('prefersColorSplit', js)
+        self.assertNotIn("paintDialog({anchorCode:", js)
         self.assertIn('色別登録：', js)
         self.assertIn('行き先未定', js)
         # 色別選択中は統合用 nameMappings をそのまま出さない

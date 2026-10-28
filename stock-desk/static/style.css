@@ -932,7 +932,25 @@ button.linkish{
   border:1px solid #c5d0c8;border-radius:4px;background:#f7faf8;
 }
 .sku-group-card header{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;margin-bottom:6px}
-.sku-decision-btns{flex-wrap:wrap;gap:6px;margin:8px 0}
+.sku-decision-btns{flex-wrap:wrap;gap:6px;margin:8px 0;align-items:stretch}
+.sku-decision-btns button{
+  display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  text-align:left;line-height:1.3;max-width:16rem;
+}
+.sku-decision-btns .sku-dec-blurb{font-size:11.5px;font-weight:400;opacity:.85}
+.sku-decision-btns .sku-dec-rec{
+  display:inline-block;margin-left:6px;padding:0 5px;border-radius:3px;
+  font-size:11px;font-weight:700;background:#e7f2ea;color:#14532d;
+}
+.sku-dec-hint{margin:2px 0 8px}
+.sku-decision-btns-inline{margin-top:6px}
+.confirmed-reselect-panel{
+  margin-top:8px;padding:8px 10px;border:1px solid #c5d0c8;border-radius:4px;background:#f4f7f5;
+}
+.confirmed-list-row.is-reselecting td{background:#eef6f0}
+.split-prerematch-targets{margin:6px 0}
+.split-prerematch-targets ul{margin:4px 0 4px 1.2em;padding:0}
+.notice-inline{color:#7a3b00;font-size:12px}
 .sku-merge-form,.sku-separate-form,.sku-hold-form,.sku-color-split-form,.sku-content-split-form{margin-top:8px}
 .sku-color-plan,.sku-content-plan{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;display:grid;gap:6px}
 .sku-content-plan .badge{justify-self:start}
