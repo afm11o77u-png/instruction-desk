@@ -12,3 +12,5 @@ body:not(.authenticated)>aside,body:not(.authenticated)>main{display:none}#auths
 #accounts td select{box-sizing:border-box;width:100%;min-width:0}
 #accounts td input[type=checkbox]{display:block;width:20px;height:20px;min-height:20px;margin:0 auto;padding:0}
 #accounts td:last-child button{display:block;max-width:100%;white-space:normal;margin:5px 0;text-align:left}
+
+#sidebarfooter{margin-top:auto;border-top:1px solid #6d9a80;padding-top:10px}#sidebarfooter #accountbar{margin-top:0;border-top:0}
