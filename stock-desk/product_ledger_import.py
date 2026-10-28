@@ -5052,6 +5052,10 @@ def build_paren_classification(product_name, override=None):
     color = stock.text(raw.get('color')) if 'color' in raw else base['color']
     processing = stock.text(raw.get('processing')) if 'processing' in raw else base['processing']
     material = stock.text(raw.get('material')) if 'material' in raw else base['material']
+    if 'partsUsage' in raw:
+        parts_usage = stock.text(raw.get('partsUsage') or '')
+    else:
+        parts_usage = stock.text(base.get('partsUsage') or '')
     if 'supplement' in raw:
         supplement = stock.text(raw.get('supplement') or '')
     else:
@@ -5075,6 +5079,17 @@ def build_paren_classification(product_name, override=None):
             unclassified = [stock.text(unc)] if stock.text(unc) else []
     else:
         unclassified = list(base.get('unclassified') or [])
+    # 分類できなかった原文の行き先（黙って落とさない）
+    unc_move = stock.text(raw.get('unclassifiedMove') or '')
+    if unclassified and unc_move == 'to_purpose':
+        joined = '・'.join(unclassified)
+        parts_usage = f'{parts_usage}・{joined}'.strip('・') if parts_usage else joined
+        unclassified = []
+    elif unclassified and unc_move == 'to_supplement':
+        joined = '・'.join(unclassified)
+        supplement = f'{supplement}／{joined}'.strip('／') if supplement else joined
+        unclassified = []
+    # keep_in_name / 未指定: unclassified を名に残す（後段 attach で planned 再構成）
 
     if 'usageKind' in raw:
         usage_kind = stock.text(raw.get('usageKind') or '')
@@ -5115,12 +5130,18 @@ def build_paren_classification(product_name, override=None):
         change_summary = f"商品名から色『{color}』を設定します"
     if usage_kind == paren_classify.USAGE_KIND_SALES and not change_summary:
         change_summary = '販売用途表記を除き、取扱種別「販売」へ引き継ぎます'
+    if parts_usage and not change_summary:
+        change_summary = f"用途『{parts_usage}』を部品・資材の用途へ"
     info_notices = list(base.get('infoNotices') or [])
     if color and not user_touched:
         color = paren_classify.normalize_color_value(color) or color
     source_color = stock.text(base.get('sourceColor') or '')
     if user_touched and 'sourceColor' in raw:
         source_color = stock.text(raw.get('sourceColor') or '') or source_color
+    # 手動登録区分（商品／部品・資材／加工サービス）。入力だけでは自動切替しない
+    register_kind = stock.text(raw.get('registerKind') or '')
+    if register_kind not in ('商品', '部品・資材', '加工サービス'):
+        register_kind = ''
     return {
         'originalName': base['originalName'],
         'plannedName': planned or base['originalName'],
@@ -5130,13 +5151,16 @@ def build_paren_classification(product_name, override=None):
         'sourceColor': source_color,
         'processing': processing,
         'material': material,
+        'partsUsage': parts_usage,
         'usageKind': usage_kind,
         'supplement': supplement,
         'position': position,
+        'registerKind': register_kind,
         'plannedRegisteredSku': stock.text(
             raw.get('plannedRegisteredSku') or raw.get('registeredCode') or ''
         ),
         'unclassified': unclassified,
+        'unclassifiedMove': unc_move,
         'needsConfirm': needs,
         'confirmReasons': reasons,
         'infoNotices': info_notices,
@@ -5217,11 +5241,21 @@ def attach_paren_classification(row, override=None):
     if plan.get('material'):
         prod['proposedMaterial'] = plan['material']
         prod['officialMaterial'] = plan['material']
-    if plan.get('supplement'):
+    # 部品用途は補足へ載せて登録時に名へ括弧付与（専用カラム無し）
+    # 補足が既にあれば用途／補足の順で結合（黙って落とさない）
+    parts_usage = stock.text(plan.get('partsUsage') or '')
+    supplement = stock.text(plan.get('supplement') or '')
+    if parts_usage and parts_usage not in supplement:
+        supplement = f'{parts_usage}／{supplement}'.strip('／') if supplement else parts_usage
+        plan['supplement'] = supplement
+        row['parenClassification'] = plan
+    if supplement:
         # 専用カラムが無いため、既存の括弧分類構造（supplement）と
         # 商品側の公式補足として保持。コミット時は名に括弧で載せる。
-        prod['officialSupplement'] = plan['supplement']
-        prod['proposedSupplement'] = plan['supplement']
+        prod['officialSupplement'] = supplement
+        prod['proposedSupplement'] = supplement
+    if parts_usage:
+        prod['partsUsage'] = parts_usage
 
     if scoped:
         prod['plannedRegisteredName'] = plan.get('plannedName') or ''
@@ -6107,6 +6141,83 @@ def build_sku_groups(c, classified):
     return groups
 
 
+def apply_manual_register_kind(classified, row_classifications=None):
+    """手動の登録区分を優先（加工／素材の入力だけでは区分を切り替えない）。
+
+    registerKind: 商品 / 部品・資材 / 加工サービス
+    区分変更でも入力値は消さない（未使用欄は保持し、画面で案内）。
+    """
+    overrides = row_classifications if isinstance(row_classifications, dict) else {}
+    for row in classified or []:
+        pc = dict(row.get('parenClassification') or {})
+        ov = (
+            overrides.get(str(row.get('rowNo')))
+            or overrides.get(row.get('rowNo'))
+            or {}
+        )
+        kind = stock.text(
+            (ov.get('registerKind') if isinstance(ov, dict) else '')
+            or pc.get('registerKind')
+            or ''
+        )
+        auto_kind = '商品'
+        ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+        if row.get('physicalPartsView') or pc.get('physicalPartsView') or ps.get('isPhysicalParts'):
+            auto_kind = '部品・資材'
+        elif (
+            row.get('processingServiceView')
+            or pc.get('processingServiceView')
+            or (ps.get('isProcessingVendor') and not ps.get('isPhysicalParts'))
+        ):
+            auto_kind = '加工サービス'
+        pc['autoRegisterKind'] = auto_kind
+        if kind not in ('商品', '部品・資材', '加工サービス'):
+            kind = auto_kind
+            pc['registerKindManual'] = False
+        else:
+            pc['registerKindManual'] = bool(
+                isinstance(ov, dict) and stock.text(ov.get('registerKind') or '')
+            )
+        pc['registerKind'] = kind
+        # 手動が勝つ。入力欄の値は消さない
+        if kind == '部品・資材':
+            row['physicalPartsView'] = True
+            row['processingServiceView'] = False
+            pc['physicalPartsView'] = True
+            pc['processingServiceView'] = False
+            prod = dict(row.get('product') or {})
+            if prod.get('blankSku') or not stock.text((row.get('csv') or {}).get('code') or ''):
+                prod['category'] = stock.CATEGORY_PARTS
+                prod['proposedCategory'] = stock.CATEGORY_PARTS
+                row['product'] = prod
+        elif kind == '加工サービス':
+            row['physicalPartsView'] = False
+            row['processingServiceView'] = True
+            pc['physicalPartsView'] = False
+            pc['processingServiceView'] = True
+            prod = dict(row.get('product') or {})
+            prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+            prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+            # 加工名が空で予定名がある場合でも、無条件にはコピーしない（既存方針）
+            row['product'] = prod
+        else:
+            # 商品: 加工サービス／部品ビューを外す（フィールド値は保持）
+            row['physicalPartsView'] = False
+            row['processingServiceView'] = False
+            pc['physicalPartsView'] = False
+            pc['processingServiceView'] = False
+            prod = dict(row.get('product') or {})
+            # 品番なしで商品を選んだ場合は空カテゴリ（部品へ強制しない）
+            if prod.get('blankSku') and prod.get('category') in (
+                stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE,
+            ):
+                if pc.get('registerKindManual'):
+                    prod['category'] = ''
+                    prod['proposedCategory'] = ''
+                    row['product'] = prod
+        row['parenClassification'] = pc
+
+
 def attach_processing_service_detection(classified):
     """各行へ加工サービス判定を付与（DBは変えない）。
 
@@ -6572,11 +6683,18 @@ def apply_processing_service_split(c, classified, sku_groups):
                     row['reasons'] = reasons
 
         elif info.get('isPhysicalParts'):
-            # 実物の部品・資材: 加工サービス欄ではなく名称・仕入先・仕様
+            # 実物の部品・資材: 加工サービス欄ではなく名称・仕入先・用途
+            # 『袖／裾加工用』は用途（partsUsage）。加工サービスは作らない
             row['physicalPartsView'] = True
             pc = dict(row.get('parenClassification') or {})
             pc['physicalPartsView'] = True
             pc['processingServiceView'] = False
+            # 誤って加工欄に残った用途は用途へ戻す
+            usage = stock.text(pc.get('partsUsage') or '')
+            proc = stock.text(pc.get('processing') or '')
+            if not usage and proc and paren_classify.is_parts_usage_token(proc):
+                pc['partsUsage'] = proc
+                pc['processing'] = ''
             row['parenClassification'] = pc
         elif info.get('k2AutoExclude'):
             # 後段 _apply_k2_auto_exclusions で登録しないへ。確認待ち欄は出さない
@@ -7930,6 +8048,7 @@ def build_preview(c, body):
     attach_processing_service_detection(classified)
     sku_groups = build_sku_groups(c, classified)
     processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
+    apply_manual_register_kind(classified, row_classifications)
     register_opening = register_opening_stock_requested(body, aux_uploaded)
     # products モードでは初期在庫準備を絶対に走らせない（判定補助のみ）
     if mode == IMPORT_MODE_PRODUCTS:
@@ -8052,6 +8171,8 @@ def build_preview(c, body):
     processing_split_meta = apply_separate_as_process_service_plans(
         c, classified, sku_groups, sku_decisions, processing_split_meta,
     )
+    # 手動登録区分は最後に再適用（自動分離・個別整理のあとでも手動が勝つ）
+    apply_manual_register_kind(classified, row_classifications)
     # 色分割などで makerCode が付いたあと、ボタン表示用メタを再計算
     for row in classified:
         mk = maker_sku_lookup.row_maker_correction_meta(row)

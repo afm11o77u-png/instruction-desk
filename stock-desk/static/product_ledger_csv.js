@@ -952,7 +952,16 @@
     const cur=Object.assign({},st.rowClassifications[key]||{})
     Object.assign(cur,patch||{})
     cur.userEdited=true
+    // 軽編集は再照合しない。予定反映は最終の再照合まで未反映
+    if(!(patch&&patch.pendingRematch===false))cur.pendingRematch=true
     st.rowClassifications[key]=cur
+  }
+
+  function clearRowClassificationPending(st){
+    Object.keys(st.rowClassifications||{}).forEach(k=>{
+      const cur=st.rowClassifications[k]
+      if(cur&&typeof cur==='object')cur.pendingRematch=false
+    })
   }
 
   function applyAuxDefaultsForMerge(st,code,group){
@@ -2274,7 +2283,7 @@
       'name',
       name||(nameNeed?(uniqueNonEmpty(pc.nameCandidates||[csv.productName]).join('／')):''),
       edit.plannedName!=null?PLAN_STATUS.MANUAL:(nameNeed?PLAN_STATUS.NEED_CHOICE:(name?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
-      {editHint:'詳細の予定名'}
+      {editHint:'詳細の商品名／名称／加工名'}
     ))
     if(colorNeed||color||colorCands.length){
       fields.push(makePlanField(
@@ -2942,6 +2951,89 @@
     return bits.join(' / ')||'—'
   }
 
+  const REGISTER_KINDS=['商品','部品・資材','加工サービス']
+
+  /** 自動検出の登録区分（手動が無ければこれ）。加工／素材の入力だけでは切り替えない。 */
+  function autoRegisterKindForRow(r){
+    const pc=r&&r.parenClassification||{}
+    const ps=r&&r.processingService||{}
+    if(pc.autoRegisterKind&&REGISTER_KINDS.includes(pc.autoRegisterKind))return pc.autoRegisterKind
+    const physicalParts=!!(r&&(r.physicalPartsView||pc.physicalPartsView||ps.isPhysicalParts))
+    if(physicalParts)return '部品・資材'
+    const processingView=!!(r&&(r.processingServiceView||pc.processingServiceView||(ps.isProcessingVendor&&!physicalParts)))
+    if(processingView)return '加工サービス'
+    return '商品'
+  }
+
+  /** 表示・編集に使う登録区分。手動 registerKind が勝つ。 */
+  function effectiveRegisterKind(st,r){
+    const edit=(st&&st.rowClassifications&&st.rowClassifications[String(r&&r.rowNo)])||{}
+    const pc=r&&r.parenClassification||{}
+    if(REGISTER_KINDS.includes(edit.registerKind))return edit.registerKind
+    if(pc.registerKindManual&&REGISTER_KINDS.includes(pc.registerKind))return pc.registerKind
+    return autoRegisterKindForRow(r)
+  }
+
+  function finalNameWithSupplement(name,supplement){
+    const n=String(name||'').trim()
+    const s=String(supplement||'').trim()
+    if(!s)return n
+    if(!n)return `（${s}）`
+    if(n.includes(s))return n
+    return `${n}（${s}）`
+  }
+
+  function registerAfterPreviewHtml(st,r,kind,fields){
+    const edit=(st.rowClassifications&&st.rowClassifications[String(r.rowNo)])||{}
+    const pending=!!edit.pendingRematch
+    const pendingBit=pending?' <span class="badge">未反映</span>':''
+    const rows=[
+      ['登録区分',kind],
+      ['最終名',fields.finalName||'—'],
+      ['色',fields.color||'—'],
+      [fields.supplierLabel||'仕入先',fields.supplier||'—'],
+      ['素材',fields.material||'—'],
+      ['必要な加工・仕様',fields.processSpec||'—'],
+      ['用途',fields.purpose||'—'],
+      ['補足',fields.supplement||'—']
+    ]
+    return `<div class="pl-register-after-preview">
+      <p class="excelhint"><strong>登録後の内容</strong>${pendingBit}${pending?'（再照合で予定へ反映）':''}</p>
+      <ul class="excelhint pl-register-after-list">${rows.map(([lab,val])=>
+        `<li>${esc(lab)}: <strong>${esc(val||'—')}</strong></li>`
+      ).join('')}</ul>
+      ${fields.suppNote||''}
+    </div>`
+  }
+
+  function unclassifiedBlockHtml(st,r,uncText,disabled){
+    if(!uncText)return ''
+    const edit=st.rowClassifications[String(r.rowNo)]||{}
+    const move=edit.unclassifiedMove||'keep_in_name'
+    return `<div class="pl-unclassified-block">
+      <label>分類できなかった原文<input data-pl-paren-unc="${r.rowNo}" value="${esc(uncText)}" ${disabled}></label>
+      <p class="excelhint">黙って消しません。行き先を選んでください。</p>
+      <label class="pl-unc-move"><input type="radio" name="pl-unc-move-${r.rowNo}" data-pl-unc-move="${r.rowNo}" value="keep_in_name" ${move==='keep_in_name'?'checked':''} ${disabled}> 名称に残す</label>
+      <label class="pl-unc-move"><input type="radio" name="pl-unc-move-${r.rowNo}" data-pl-unc-move="${r.rowNo}" value="to_purpose" ${move==='to_purpose'?'checked':''} ${disabled}> 用途へ移す</label>
+      <label class="pl-unc-move"><input type="radio" name="pl-unc-move-${r.rowNo}" data-pl-unc-move="${r.rowNo}" value="to_supplement" ${move==='to_supplement'?'checked':''} ${disabled}> 補足へ移す</label>
+    </div>`
+  }
+
+  function unusedFieldsNoteHtml(kind,edit,pc){
+    const kept=[]
+    if(kind==='商品'){
+      if((edit.partsUsage!=null?edit.partsUsage:pc.partsUsage)||'')kept.push('用途（部品用）は未使用・保持')
+    }else if(kind==='部品・資材'){
+      if((edit.processing!=null?edit.processing:pc.processing)||'')kept.push('必要な加工・仕様は未使用・保持（商品の加工仕様とは別）')
+    }else if(kind==='加工サービス'){
+      if((edit.color!=null?edit.color:pc.color)||'')kept.push('色は未使用・保持')
+      if((edit.material!=null?edit.material:pc.material)||'')kept.push('素材は未使用・保持')
+      if((edit.partsUsage!=null?edit.partsUsage:pc.partsUsage)||'')kept.push('用途は未使用・保持')
+    }
+    if(!kept.length)return ''
+    return `<p class="excelhint pl-unused-fields">区分変更でも入力は消しません。${esc(kept.join('／'))}。</p>`
+  }
+
   function parenCell(st,r){
     const pc=r.parenClassification||{}
     const ps=r.processingService||{}
@@ -2950,6 +3042,7 @@
     const color=edit.color!=null?edit.color:(pc.color||'')
     const processing=edit.processing!=null?edit.processing:(pc.processing||'')
     const material=edit.material!=null?edit.material:(pc.material||'')
+    const partsUsage=edit.partsUsage!=null?edit.partsUsage:(pc.partsUsage||'')
     const supplement=edit.supplement!=null?edit.supplement:(pc.supplement||r.plannedRegisteredSupplement||'')
     const unc=(edit.unclassified!=null?edit.unclassified:(pc.unclassified||[]))
     const uncText=Array.isArray(unc)?unc.join('、'):String(unc||'')
@@ -2968,25 +3061,55 @@
         }))
       :''
     const disabled=st.busy?'disabled':''
-    // 実物の部品・資材（生地・ボタン等）: 加工名と呼ばない。表示名の別欄も設けない
-    const physicalParts=!!(r.physicalPartsView||pc.physicalPartsView||ps.isPhysicalParts)
-    if(physicalParts){
+    const autoKind=autoRegisterKindForRow(r)
+    const kind=effectiveRegisterKind(st,r)
+    const manual=!!(edit.registerKind||pc.registerKindManual)
+    const kindOpts=REGISTER_KINDS.map(k=>
+      `<option value="${esc(k)}" ${kind===k?'selected':''}>${esc(k)}</option>`
+    ).join('')
+    const kindHead=`<div class="pl-register-kind-head">
+      <label>登録区分<select data-pl-register-kind="${r.rowNo}" ${disabled}>${kindOpts}</select></label>
+      <span class="excelhint">${manual?'手動（自動より優先）':`自動検出: ${esc(autoKind)}`}</span>
+      <p class="excelhint">加工・素材欄への入力だけでは区分は切り替わりません。</p>
+    </div>`
+    const unusedNote=unusedFieldsNoteHtml(kind,edit,pc)
+    const uncBlock=unclassifiedBlockHtml(st,r,uncText,disabled)
+    const suppAppendNote=`<p class="excelhint">補足は登録時に名称へ括弧付きで付きます（例: 名称（補足））。</p>`
+
+    if(kind==='部品・資材'){
       const partName=edit.plannedName!=null?edit.plannedName:(planned||(r.csv&&r.csv.productName)||'')
       const vendorName=(r.csv&&r.csv.supplier)||pc.processingVendor||''
-      const specText=edit.supplement!=null?edit.supplement:(supplement||'')
+      const purpose=partsUsage||''
+      // 用途が補足へ二重に載らないよう、表示用補足から用途を除く
+      let suppOnly=supplement||''
+      if(purpose&&suppOnly===purpose)suppOnly=''
+      else if(purpose&&suppOnly.startsWith(purpose+'／'))suppOnly=suppOnly.slice(purpose.length+1)
+      const finalName=finalNameWithSupplement(partName,suppOnly||purpose)
+      const preview=registerAfterPreviewHtml(st,r,kind,{
+        finalName,color,supplier:vendorName,supplierLabel:'仕入先',
+        material,processSpec:'',purpose,supplement:suppOnly,
+        suppNote:suppAppendNote
+      })
       return `<div class="pl-paren-edit pl-physical-parts-edit">
-        <div class="excelhint">実物の部品・資材</div>
-        <label>名称<input data-pl-paren-name="${r.rowNo}" value="${esc(partName)}" ${disabled} placeholder="例: 生地・ボタン"></label>
+        ${kindHead}
+        ${noticeHtml}
+        <label>名称<input data-pl-paren-name="${r.rowNo}" value="${esc(partName)}" ${disabled} placeholder="例: DCP515用生地"></label>
         <label>仕入先<input value="${esc(vendorName)}" readonly disabled></label>
-        <label>必要な仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="色・寸法・材質など"></label>
-        <p class="excelhint">加工サービスとは区別します。名称とは別の表示名欄はありません。</p>
+        <label>色（任意）<input data-pl-paren-color="${r.rowNo}" value="${esc(color)}" ${disabled}></label>
+        <label>素材（任意）<input data-pl-paren-mat="${r.rowNo}" value="${esc(material)}" ${disabled} placeholder="生地そのものは名称側（部品）"></label>
+        <p class="excelhint">素材は生地の材質など。生地自体は部品・資材の名称です。</p>
+        <label>用途（任意）<input data-pl-paren-purpose="${r.rowNo}" value="${esc(purpose)}" ${disabled} placeholder="例: 袖／裾加工用"></label>
+        <p class="excelhint">「袖／裾加工用」は用途です。加工サービス名にはしません。</p>
+        <label>補足<input data-pl-paren-supp="${r.rowNo}" value="${esc(suppOnly)}" ${disabled} placeholder="色・寸法など"></label>
+        ${suppAppendNote}
+        ${uncBlock}
+        ${unusedNote}
+        ${preview}
       </div>`
     }
-    // 加工サービス: 加工名／加工業者／補足・個別仕様（登録時表示名の別入力なし）
-    const processingView=!!(r.processingServiceView||pc.processingServiceView||(ps.isProcessingVendor&&!physicalParts))
-    if(processingView){
-      // 表示名（planned）から加工名を無条件補完しない。明確な加工名のみ
-      const serviceName=ps.serviceName||processing||''
+
+    if(kind==='加工サービス'){
+      const serviceName=edit.processing!=null?edit.processing:(ps.serviceName||processing||'')
       const vendorName=ps.vendorName||pc.processingVendor||(r.csv&&r.csv.supplier)||''
       const specs=ps.rowSpecs||{}
       const specBits=[specs.customerSpecific,specs.parenSpecs,specs.dimensions,specs.composition].filter(Boolean)
@@ -2994,27 +3117,52 @@
       const autoOk=!!(ps.identifiable&&ps.isProcessingService&&!ps.needsConfirm)
       const flag=autoOk?'自動（加工サービス）':(ps.needsConfirm?'要確認（加工名不足）':'加工サービス')
       const missing=pc.processingMissingHint||((ps.missingFields||[]).join('・'))||''
+      const preview=registerAfterPreviewHtml(st,r,kind,{
+        finalName:serviceName,color:'',supplier:vendorName,supplierLabel:'加工業者',
+        material:'',processSpec:'',purpose:'',supplement:specText,
+        suppNote:`<p class="excelhint">加工名＝登録・表示名です（登録時表示名の別欄はありません）。商品の「必要な加工・仕様」とは別です。</p>`
+      })
       return `<div class="pl-paren-edit pl-processing-service-edit" data-pl-processing-sync="${r.rowNo}">
+        ${kindHead}
         <div class="excelhint">${esc(flag)}</div>
         ${missing?`<div class="excelhint pl-paren-info">${esc(missing)}</div>`:''}
+        ${noticeHtml}
         <label>加工名<input data-pl-paren-proc="${r.rowNo}" data-pl-processing-name-sync="1" value="${esc(serviceName)}" ${disabled||autoOk?'readonly':''} ${disabled} placeholder="例: サイズダウン"></label>
         <label>加工業者<input value="${esc(vendorName)}" readonly disabled></label>
-        <label>補足／個別仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="位置・寸法・顧客固有など"></label>
-        ${autoOk?`<p class="excelhint">一覧・登録の表示は加工名をそのまま使います。色・生地欄は使いません。</p>`:''}
+        <label>補足・個別仕様<input data-pl-paren-supp="${r.rowNo}" value="${esc(specText)}" ${disabled} placeholder="位置・寸法・顧客固有など"></label>
+        ${autoOk?`<p class="excelhint">一覧・登録の表示は加工名をそのまま使います。</p>`:''}
         ${ps.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 加工名を確認した</label>`:''}
+        ${uncBlock}
+        ${unusedNote}
+        ${preview}
       </div>`
     }
+
+    // 商品
     const flag=pc.needsConfirm?'要確認':(pc.autoClassified||pc.scopedColorCorrection?'自動':'—')
-    return `<div class="pl-paren-edit">
+    const supplier=(r.csv&&r.csv.supplier)||''
+    const finalName=finalNameWithSupplement(planned,supplement)
+    const preview=registerAfterPreviewHtml(st,r,kind,{
+      finalName,color,supplier,supplierLabel:'仕入先',
+      material,processSpec:processing,purpose:'',supplement,
+      suppNote:suppAppendNote
+    })
+    return `<div class="pl-paren-edit pl-product-edit">
+      ${kindHead}
       <div class="excelhint">${esc(flag)}${pc.keptOriginal&&pc.needsConfirm?'（原文維持）':''}</div>
       ${noticeHtml}
       ${scopedPreview}
-      <label>予定名<input data-pl-paren-name="${r.rowNo}" value="${esc(planned)}" ${disabled}></label>
+      <label>商品名<input data-pl-paren-name="${r.rowNo}" value="${esc(planned)}" ${disabled}></label>
       <label>色<input data-pl-paren-color="${r.rowNo}" value="${esc(color)}" ${disabled}></label>
+      <label>仕入先<input value="${esc(supplier)}" readonly disabled></label>
+      <label>必要な加工・仕様<input data-pl-paren-proc="${r.rowNo}" value="${esc(processing)}" ${disabled} placeholder="商品に付く加工仕様（加工サービス名ではない）"></label>
+      <label>素材<input data-pl-paren-mat="${r.rowNo}" value="${esc(material)}" ${disabled} placeholder="材質・生地の種類など"></label>
+      <p class="excelhint">素材は材質のヒントです。生地そのものの在庫は部品・資材区分で登録します。</p>
       <label>補足<input data-pl-paren-supp="${r.rowNo}" value="${esc(supplement)}" ${disabled}></label>
-      <label>加工<input data-pl-paren-proc="${r.rowNo}" value="${esc(processing)}" ${disabled}></label>
-      <label>生地<input data-pl-paren-mat="${r.rowNo}" value="${esc(material)}" ${disabled}></label>
-      <label>未分類<input data-pl-paren-unc="${r.rowNo}" value="${esc(uncText)}" ${disabled}></label>
+      ${suppAppendNote}
+      ${uncBlock}
+      ${unusedNote}
+      ${preview}
       ${pc.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 分類を確認した</label>`:''}
     </div>`
   }
@@ -4517,12 +4665,21 @@
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
     })
+    document.querySelectorAll('[data-pl-paren-purpose]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-paren-purpose'),{partsUsage:el.value})
+    })
     document.querySelectorAll('[data-pl-paren-supp]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-supp'),{supplement:el.value})
     })
     document.querySelectorAll('[data-pl-paren-unc]').forEach(el=>{
       const v=el.value.trim()
       setRowClassification(st,el.getAttribute('data-pl-paren-unc'),{unclassified:v?v.split(/[、,]/).map(s=>s.trim()).filter(Boolean):[]})
+    })
+    document.querySelectorAll('[data-pl-unc-move]:checked').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-unc-move'),{unclassifiedMove:el.value})
+    })
+    document.querySelectorAll('[data-pl-register-kind]').forEach(el=>{
+      setRowClassification(st,el.getAttribute('data-pl-register-kind'),{registerKind:el.value})
     })
     document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
@@ -5183,12 +5340,14 @@
           })
           // 成功時のみ未反映を解消（失敗時は appliedSkuDecisions を触らない）
           snapshotAppliedSkuDecisions(st)
+          clearRowClassificationPending(st)
           // 元行一覧は詳細確認用。既定はすべて表示（確認作業は統合リスト側）
           st.statusFilter=''
           if(st.sectionOpen)st.sectionOpen.sourceRows=false
           st.page=1
         }else{
           snapshotAppliedSkuDecisions(st)
+          clearRowClassificationPending(st)
         }
         if(st.preview.previousImports&&!st.history){
           st.history={previousImports:st.preview.previousImports}
@@ -5504,14 +5663,33 @@
         if(el.getAttribute('data-pl-processing-name-sync')){
           patch.plannedName=el.value
         }
+        // 加工欄の入力だけでは登録区分を切り替えない（再照合もしない）
         setRowClassification(st,rowNo,patch)
       }
     })
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
+      // 素材欄の入力だけでは登録区分を切り替えない
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
+    })
+    document.querySelectorAll('[data-pl-paren-purpose]').forEach(el=>{
+      el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-purpose'),{partsUsage:el.value})
     })
     document.querySelectorAll('[data-pl-paren-supp]').forEach(el=>{
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-supp'),{supplement:el.value})
+    })
+    document.querySelectorAll('[data-pl-register-kind]').forEach(el=>{
+      el.onchange=()=>{
+        // 区分変更は編集状態のみ（再照合なし・chase-scrollなし）。入力値は消さない
+        setRowClassification(st,el.getAttribute('data-pl-register-kind'),{registerKind:el.value})
+        paintDialog({preserveScroll:true})
+      }
+    })
+    document.querySelectorAll('[data-pl-unc-move]').forEach(el=>{
+      el.onchange=()=>{
+        if(!el.checked)return
+        setRowClassification(st,el.getAttribute('data-pl-unc-move'),{unclassifiedMove:el.value})
+        paintDialog({preserveScroll:true})
+      }
     })
     document.querySelectorAll('[data-pl-maker-correct]').forEach(el=>{
       el.onclick=async()=>{
@@ -6005,7 +6183,14 @@
       rebindExclusionsAfterPreview,
       rowExcludeActionsHtml,
       skuGroupsHtml,
-      judgmentStatusBarHtml
+      judgmentStatusBarHtml,
+      parenCell,
+      autoRegisterKindForRow,
+      effectiveRegisterKind,
+      setRowClassification,
+      clearRowClassificationPending,
+      finalNameWithSupplement,
+      REGISTER_KINDS
     }
   }
 })()

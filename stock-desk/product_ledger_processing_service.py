@@ -311,11 +311,16 @@ def _resolve_service_name_from_row_fields(
 
 
 def is_physical_parts_name(product_name: str) -> bool:
-    """生地・ボタン等の実物部品・資材（加工サービスではない）。"""
-    core = normalize_service_key(product_name)
+    """生地・ボタン等の実物部品・資材（加工サービスではない）。
+
+    括弧内の用途（例: 袖／裾加工用）は本体判定から外す。
+    『DCP515用生地（袖／裾加工用）』は生地＝部品・資材。
+    """
+    base, _inners = _strip_parens_keep_inner(product_name)
+    core = normalize_service_key(base) or normalize_service_key(product_name)
     if not core:
         return False
-    # 加工語が主なら部品扱いしない
+    # 本体側に加工サービス語があるときだけ部品扱いしない（括弧用途の『加工用』は見ない）
     if any(normalize_service_key(a) in core for a in ('加工', '刺繍', 'プリント', '縫製')):
         return False
     for marker in _PHYSICAL_PARTS_MARKERS:

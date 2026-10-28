@@ -174,6 +174,22 @@ def is_sales_usage_token(segment: str) -> bool:
     return bool(key) and key in _USAGE_TOKEN_KEYS
 
 
+def is_parts_usage_token(segment: str) -> bool:
+    """部品・資材の用途表記か（加工サービス名ではない）。
+
+    例: 『袖／裾加工用』『裾加工用』『袖加工用』。
+    末尾が『加工用』のとき用途扱い。販売用途（販売用など）は除外。
+    """
+    raw = unify_import_notation(segment if segment is not None else '')
+    key = _norm_token(raw)
+    if not key:
+        return False
+    if is_sales_usage_token(raw) or is_sales_usage_token(key):
+        return False
+    # 『〜加工用』は用途。『袖加工』などサービス名（用なし）は対象外
+    return key.endswith('加工用')
+
+
 def detect_sales_usage_marker(text: str):
     """識別可能な販売用途マーカーの有無。
 
@@ -816,6 +832,14 @@ def classify_paren_segment(segment: str, *, pants: bool = False):
             'original': source,
             'usageKind': USAGE_KIND_SALES,
         }
+    # 部品用途（袖／裾加工用 等）。『加工』部分一致で加工サービス扱いにしない
+    if is_parts_usage_token(raw) or is_parts_usage_token(key):
+        return {
+            'kind': 'parts_usage',
+            'value': raw,
+            'matched': key,
+            'original': source,
+        }
     proc_key, proc_val = _processing_match(key, raw)
     if proc_key:
         # 複合「丈加工・刺繍」は分割後に来る。単体複合で丈加工だけのときも無視
@@ -961,6 +985,7 @@ def classify_product_name(product_name: str):
         'color': '',
         'processing': '',
         'material': '',
+        'partsUsage': '',
         'usageKind': '',
         'unclassified': [],
         'needsConfirm': False,
@@ -1028,6 +1053,7 @@ def classify_product_name(product_name: str):
     colors = []
     processings = []
     materials = []
+    parts_usages = []
     unclassified = []
     segments = []
     paren_hits = []  # 括弧ごとの part hit リスト
@@ -1064,6 +1090,9 @@ def classify_product_name(product_name: str):
             elif kind == 'material':
                 if hit['value'] not in materials:
                     materials.append(hit['value'])
+            elif kind == 'parts_usage':
+                if hit['value'] not in parts_usages:
+                    parts_usages.append(hit['value'])
             elif kind == 'usage':
                 usage_kind = USAGE_KIND_SALES
             elif kind == 'hem_ignore':
@@ -1084,6 +1113,7 @@ def classify_product_name(product_name: str):
     color = colors[0] if len(colors) == 1 else ''
     material = materials[0] if len(materials) == 1 else ''
     processing = '・'.join(processings) if processings else ''
+    parts_usage = '・'.join(parts_usages) if parts_usages else ''
     multi_color = len(colors) > 1
     multi_material = len(materials) > 1
 
@@ -1096,11 +1126,20 @@ def classify_product_name(product_name: str):
         reasons.append('括弧内の生地・素材が複数あるため要確認: ' + '、'.join(materials))
         material = ''
 
-    # 未分類は商品名に残して登録（単独ではブロックしない）
+    # 部品用途は名から外し用途欄へ（落とさない）
+    if parts_usage:
+        notice = f"用途『{parts_usage}』は名称から外し、部品・資材の用途へ移します"
+        if notice not in info_notices:
+            info_notices.append(notice)
+
+    # 未分類は商品名に残して登録（単独ではブロックしない）。黙って落とさない
     if unclassified:
         for u in unclassified:
             label = str(u).strip() or u
-            notice = f"未分類の『{label}』は商品名に残して登録します"
+            notice = (
+                f"分類できなかった原文『{label}』は商品名に残して登録します"
+                f"（用途／補足へ移す場合は詳細で指定）"
+            )
             if notice not in info_notices:
                 info_notices.append(notice)
 
@@ -1155,8 +1194,8 @@ def classify_product_name(product_name: str):
     # 分類抽出できた、または未分類を名に残して確定できるとき自動
     # 販売用途マーカー除去だけでも予定名を採用する（要確認にはしない）
     auto = (not needs) and bool(
-        colors or processings or materials or unclassified or hem_ignored
-        or usage_kind
+        colors or processings or materials or parts_usages or unclassified
+        or hem_ignored or usage_kind
     )
 
     return {
@@ -1166,6 +1205,7 @@ def classify_product_name(product_name: str):
         'color': color,
         'processing': processing,
         'material': material,
+        'partsUsage': parts_usage,
         'usageKind': usage_kind,
         'unclassified': list(unclassified),
         'needsConfirm': needs,
@@ -1179,6 +1219,7 @@ def classify_product_name(product_name: str):
         'colorCandidates': list(colors),
         'processingCandidates': list(processings),
         'materialCandidates': list(materials),
+        'partsUsageCandidates': list(parts_usages),
     }
 
 
@@ -1653,6 +1694,7 @@ def split_name_and_color(product_name: str):
         'sourceColor': source_color,
         'processing': paren.get('processing') or '',
         'material': paren.get('material') or '',
+        'partsUsage': paren.get('partsUsage') or '',
         'usageKind': usage_kind,
         'unclassified': list(paren.get('unclassified') or []),
         'needsConfirm': needs,
@@ -1665,6 +1707,7 @@ def split_name_and_color(product_name: str):
         'colorCandidates': list(extracted.get('colorCandidates') or paren.get('colorCandidates') or []),
         'processingCandidates': list(paren.get('processingCandidates') or []),
         'materialCandidates': list(paren.get('materialCandidates') or []),
+        'partsUsageCandidates': list(paren.get('partsUsageCandidates') or []),
         'hasExplicitColor': bool(color),
         'changeSummary': change_summary,
         'outsideHits': list(extracted.get('outsideHits') or []),
