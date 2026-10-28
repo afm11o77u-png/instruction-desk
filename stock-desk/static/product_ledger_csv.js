@@ -2555,10 +2555,25 @@
       // 上下は品番末尾へ移すため、補足に上／下が残っていれば表示しない
       const suppDisp=(c.supplement==='上'||c.supplement==='下')?'':(c.supplement||'')
       const urls=(Array.isArray(c.sourceUrls)&&c.sourceUrls.length?c.sourceUrls:(c.sourceUrl?[c.sourceUrl]:[]))
+      const fs=c.fieldSources||{}
+      const colorUnavailable=!!(c.colorUnavailable||(!c.color&&(missing.includes('color')||(fs.color&&fs.color.unavailable))))
+      const keepColor=(!c.color&&(diff.currentColor||''))?diff.currentColor:''
+      const adoptColorDisp=c.color||(keepColor?`${keepColor}（既存維持）`:'（色未取得・空上書きなし）')
+      const fieldSrcLine=(label,key,fallbackVal)=>{
+        const f=fs[key]||{}
+        const val=f.value||fallbackVal||''
+        const srcLabel=f.sourceLabel||(key==='color'&&colorUnavailable?'色未取得':'')
+        const srcUrl=f.sourceUrl||''
+        const unavail=key==='color'&&(f.unavailable||colorUnavailable)&&!val
+        return `<div class="excelhint">${esc(label)}: <strong>${esc(unavail?'取得できませんでした':(val||'—'))}</strong>`+
+          `${srcLabel?`　出典 ${esc(srcLabel)}`:''}`+
+          `${srcUrl?`　<a href="${esc(srcUrl)}" target="_blank" rel="noopener">URL</a>`:''}`+
+          `${f.complemented?' <span class="sub">（同一品番ページから補完）</span>':''}</div>`
+      }
       return `<li class="pl-maker-cand">
         <div>
           <div class="excelhint">元掲載名: ${esc(originalTitle||'—')}</div>
-          <div><strong>整理後商品名: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${suppDisp?`　補足 ${esc(suppDisp)}`:''}
+          <div><strong>整理後商品名: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:(colorUnavailable?'　<span class="sub">色未取得</span>':'')}${c.size?`　サイズ ${esc(c.size)} <span class="sub">（表示・照合用／CSVサイズは変更しません）</span>`:''}${suppDisp?`　補足 ${esc(suppDisp)}`:''}
             ${plannedSku?`　品番 <strong>${esc(plannedSku)}</strong>`:(c.makerSku?`　品番 ${esc(c.makerSku)}`:'')}
             ${c.position?`　上下 ${esc(c.position)}`:''}
             ${c.manufacturer?`　メーカー ${esc(c.manufacturer)}`:''}
@@ -2566,11 +2581,16 @@
             ${c.preferred?' <span class="sub">優先候補</span>':''}
             ${c.makerColorCode?`　メーカー色番 ${esc(c.makerColorCode)}`:''}
             ${c.skuMatchEvidence?` <span class="sub">${esc(c.skuMatchEvidence)}</span>`:(c.skuMatch==='structured'?' <span class="sub">本文商品コード一致</span>':'')}
+            ${colorUnavailable?' <span class="badge">色補正未完了</span>':''}
           </div>
         </div>
+        ${fieldSrcLine('商品名','name',cleaned)}
+        ${fieldSrcLine('色','color',c.color||'')}
+        ${fieldSrcLine('品番','sku',plannedSku||c.makerSku||'')}
         ${missing.length?`<div class="excelhint">不足項目: ${missing.map(esc).join('、')}</div>`:''}
+        ${colorUnavailable?`<div class="excelhint">色は取得できませんでした。名のみの候補を色補正完了とは扱いません。既存・手動の色は空では上書きしません。</div>`:''}
         <div class="excelhint">現在の予定: 名 ${esc(diff.currentName||'—')} / 色 ${esc(diff.currentColor||'（空）')} / 品番 ${esc(currentSku||'—')} / 補足 ${esc(diff.currentSupplement||'（空）')}</div>
-        <div class="excelhint">採用後の予定: 名 ${esc(cleaned||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||currentSku||'—')} / 補足 ${esc(suppDisp||'（空）')}</div>
+        <div class="excelhint">採用後の予定: 名 ${esc(cleaned||'—')} / 色 ${esc(adoptColorDisp)} / 品番 ${esc(plannedSku||currentSku||'—')} / 補足 ${esc(suppDisp||'（空）')}</div>
         <div class="excelhint">差分: 名 ${diff.nameChanged?'変わる':'同じ'} / 色 ${diff.colorChanged?'変わる':'同じ'} / 品番 ${diff.skuChanged||(plannedSku&&plannedSku!==currentSku)?'変わる':'同じ'} / 補足 ${diff.supplementChanged?'変わる':'同じ'}</div>
         ${urls.length?`<div class="excelhint">参照URL: ${urls.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join('　')}</div>`:''}
         <button type="button" class="primary" data-pl-maker-adopt="${i}" ${st.busy||!cleaned?'disabled':''}>採用</button>
@@ -2587,7 +2607,8 @@
         }).join('')}</ul>`
       :''
     const resStatus=res.status||''
-    const showUrlForm=!searching&&(makerLookupNeedsUrlAssist(resStatus)||!cands.length||!!panel.urlFetchError)
+    const colorMissing=cands.some(c=>!!(c.colorUnavailable||(!(c.color||'').trim()&&(c.missingFields||[]).includes('color'))))
+    const showUrlForm=!searching&&(makerLookupNeedsUrlAssist(resStatus)||!cands.length||colorMissing||!!panel.urlFetchError)
     const urlForm=showUrlForm
       ?makerUrlFetchFormHtml({
         scope:panel.scope||'',
@@ -2733,26 +2754,42 @@
           const cleaned=c.cleanedName||c.name||''
           const originalTitle=c.originalTitle||c.title||''
           const urls=(Array.isArray(c.sourceUrls)&&c.sourceUrls.length?c.sourceUrls:(c.sourceUrl?[c.sourceUrl]:[]))
+          const fs=c.fieldSources||{}
+          const colorUnavailable=!!(c.colorUnavailable||(!c.color&&((c.missingFields||[]).includes('color'))))
+          const keepColor=(!c.color&&(r.currentColor||''))?r.currentColor:''
+          const adoptColorDisp=c.color||(keepColor?`${keepColor}（既存維持）`:'（色未取得・空上書きなし）')
+          const srcBit=(key,fallback)=>{
+            const f=fs[key]||{}
+            const val=f.value||fallback||''
+            const unavail=key==='color'&&(f.unavailable||colorUnavailable)&&!c.color
+            return `${esc(key==='name'?'名':key==='color'?'色':'品番')} ${esc(unavail?'未取得':(val||'—'))}`+
+              `${f.sourceLabel?`（${esc(f.sourceLabel)}）`:''}`+
+              `${f.sourceUrl?` <a href="${esc(f.sourceUrl)}" target="_blank" rel="noopener">URL</a>`:''}`
+          }
           return `<li>
             <label class="pl-bulk-maker-cand-pick">
               <input type="checkbox" data-pl-bulk-maker-pick="${esc(key)}" data-result-idx="${ri}" data-cand-idx="${ci}" ${checked?'checked':''} ${disabled?'disabled':''}>
               <span>
                 <div class="excelhint">元掲載名: ${esc(originalTitle||'—')}</div>
-                <strong>整理後: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:''}${supp?`　補足 ${esc(supp)}`:''}
+                <strong>整理後: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:(colorUnavailable?'　<span class="sub">色未取得</span>':'')}${supp?`　補足 ${esc(supp)}`:''}
                 ${plannedSku?`　品番 ${esc(plannedSku)}`:''}
                 ${c.makerColorCode?`　色番 ${esc(c.makerColorCode)}`:''}
                 ${c.skuMatchEvidence?` <span class="sub">${esc(c.skuMatchEvidence)}</span>`:''}
+                ${colorUnavailable?' <span class="badge">色補正未完了</span>':''}
                 ${urls.length?` ${urls.map(u=>`<a href="${esc(u)}" target="_blank" rel="noopener">参照URL</a>`).join(' ')}`:''}
               </span>
             </label>
+            <div class="excelhint">採用前確認: ${srcBit('name',cleaned)} ／ ${srcBit('color',c.color||'')} ／ ${srcBit('sku',plannedSku||'')}</div>
+            ${colorUnavailable?`<div class="excelhint">色は取得できませんでした。名のみを色補正完了とはしません。既存色は空では上書きしません。</div>`:''}
             <div class="excelhint">変更前: 名 ${esc(r.currentName||'—')} / 色 ${esc(r.currentColor||'（空）')} / 品番 ${esc(r.currentSku||'—')}</div>
-            <div class="excelhint">変更後: 名 ${esc(cleaned||'—')} / 色 ${esc(c.color||'（空）')} / 品番 ${esc(plannedSku||r.currentSku||'—')}</div>
+            <div class="excelhint">変更後: 名 ${esc(cleaned||'—')} / 色 ${esc(adoptColorDisp)} / 品番 ${esc(plannedSku||r.currentSku||'—')}</div>
           </li>`
         }).join('')}</ul>`
       }else if(r.referenceUrl){
         candHtml=`<p class="excelhint"><a href="${esc(r.referenceUrl)}" target="_blank" rel="noopener">参考ページ</a>（開いただけでは補正完了になりません）</p>`
       }
-      const urlAssist=(!cands.length||makerLookupNeedsUrlAssist(status))&&!r.adopted&&!panel.running
+      const colorMissing=cands.some(c=>!!(c.colorUnavailable||(!(c.color||'').trim()&&(c.missingFields||[]).includes('color'))))
+      const urlAssist=(!cands.length||makerLookupNeedsUrlAssist(status)||colorMissing)&&!r.adopted&&!panel.running
         ?makerUrlFetchFormHtml({
           scope:'bulk',
           inputId:`plBulkMakerUrl-${ri}`,
@@ -2969,11 +3006,16 @@
     const res=(panel&&panel.result)||{}
     const srcSku=sourceSku||res.sourceSku||''
     const note=usageNote||res.usageNote||''
+    const diff=(cand&&cand.diff)||{}
+    const currentColor=diff.currentColor||(panel&&panel.currentColor)||''
+    // 空の色で既存・手動色を消さない
+    const adoptColor=(cand.color||'').trim()?cand.color:(currentColor||'')
     await st.api('/api/product-ledger-csv/maker-lookup/adopt',{
       manufacturer:cand.manufacturer||manufacturer||'',
       makerSku:makerSku,
       name:cleaned,
       color:cand.color||'',
+      currentColor,
       supplement,
       position,
       plannedRegisteredSku:plannedSku,
@@ -2986,7 +3028,7 @@
     })
     const classPatch={
       plannedName:cleaned,
-      color:cand.color||'',
+      color:adoptColor,
       supplement,
       position,
       plannedRegisteredSku:plannedSku,
@@ -3002,7 +3044,8 @@
       searchMakerSku:makerSku||'',
       usageNote:note,
       originalTitle:cand.originalTitle||cand.title||'',
-      cleanedName:cleaned
+      cleanedName:cleaned,
+      makerColorUnavailable:!(cand.color||'').trim()
     }
     if(scope==='sku'){
       // 加工サービス行へメーカー商品名を表示名として流し込まない（加工名を唯一の表示元に保つ）
@@ -3018,7 +3061,7 @@
       setSkuDecision(st,skuCode,{
         decision:'merge',
         officialName:cleaned,
-        color:cand.color||'',
+        color:adoptColor,
         plannedRegisteredSku:plannedSku,
         position,
         makerAdopted:true,
@@ -3028,13 +3071,14 @@
         searchMakerSku:makerSku||'',
         usageNote:note,
         originalTitle:cand.originalTitle||cand.title||'',
-        cleanedName:cleaned
+        cleanedName:cleaned,
+        makerColorUnavailable:!(cand.color||'').trim()
       })
       if(group)applyMergeDefaults(st,skuCode,group)
       setSkuDecision(st,skuCode,{
         decision:'merge',
         officialName:cleaned,
-        color:cand.color||'',
+        color:adoptColor,
         plannedRegisteredSku:plannedSku,
         position,
         makerAdopted:true,
@@ -3044,7 +3088,8 @@
         searchMakerSku:makerSku||'',
         usageNote:note,
         originalTitle:cand.originalTitle||cand.title||'',
-        cleanedName:cleaned
+        cleanedName:cleaned,
+        makerColorUnavailable:!(cand.color||'').trim()
       })
     }else if(rowNo!=null){
       if(!isProcessingServicePreviewRow(st,rowNo)){
