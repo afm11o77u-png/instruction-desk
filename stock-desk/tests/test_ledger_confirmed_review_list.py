@@ -182,8 +182,13 @@ class ConfirmedReviewListSourceTest(unittest.TestCase):
         self.assertIn('plConfirmedQ', js)
         self.assertIn('data-pl-confirmed-expand', js)
         self.assertIn('data-pl-confirmed-change', js)
+        self.assertIn('reselectCodes', js)
+        self.assertIn('対応の再選択モード', js)
+        self.assertIn('confirmed-reselect-panel', js)
         self.assertIn('確認済み ≠ 登録完了', js)
+        self.assertIn('確認して一括登録（保留・登録しない項目を除く）', js)
         self.assertIn('sku-section-confirmed', css)
+        self.assertIn('confirmed-reselect-panel', css)
         # 二重追跡を避ける: 一括側の「承認済み」サブリストを出さない
         self.assertIn('承認済みの品番は「承認済み（未登録）」としてここに残さず', js)
         self.assertNotIn('<h4>承認済み（未登録） ${part.approved.length} 件</h4>', js)
@@ -216,7 +221,16 @@ class ConfirmedReviewListLogicTest(unittest.TestCase):
                 const holdCodes = part.hold.map(g=>g.code);
                 const autoCount = part.autoCount;
                 const htmlPending = api.confirmedListRowsHtml(st, part.confirmed);
+                // 対応を変更する → 行内再選択（詳細を開くだけではボタンを出さない）
+                st.reselectCodes = { M1: true };
+                const htmlReselect = api.confirmedListRowsHtml(st, part.confirmed);
+                // 再選択で別方針 → 反映待ちのまま編集保持
+                api.setSkuDecision(st, 'M1', {decision:'color_split'});
+                st.reselectCodes = { M1: false };
+                const m1Pending = api.skuDecisionPendingRematch(st, 'M1');
+                const m1Status = api.confirmedItemStatusKey(st, part.confirmed.find(g=>g.code==='M1')||st.preview.skuGroups.find(g=>g.code==='M1'));
                 // 再照合成功スナップショット → 問題なければ確認済み。個別整理は approach 未入力なら確認リストへ戻る
+                api.setSkuDecision(st, 'M1', {decision:'merge'});
                 api.snapshotAppliedSkuDecisions(st);
                 part = api.partitionJudgmentGroups(st);
                 counts = api.judgmentStatusCounts(st);
@@ -248,9 +262,15 @@ class ConfirmedReviewListLogicTest(unittest.TestCase):
                   separateBack,
                   htmlHasPending: htmlPending.includes('反映待ち'),
                   htmlHasAction: htmlPending.includes('まとめる') && htmlPending.includes('色別に分けて登録'),
+                  reselectHasPanel: htmlReselect.includes('対応の再選択モード') && htmlReselect.includes('confirmed-reselect-panel'),
+                  reselectHasBtns: htmlReselect.includes('data-pl-sku-dec="M1"') && htmlReselect.includes('data-dec="color_split"'),
+                  reselectHasBlurbs: htmlReselect.includes('登録先は1件') || htmlReselect.includes('色ごとに分けて'),
+                  m1PendingAfterReselect: m1Pending,
+                  m1StatusAfterReselect: m1Status,
                   splitHasInternal: splitHtml.includes('C1-緑') && splitHtml.includes('C1-蛍光グリーン'),
                   splitHasMaker: splitHtml.includes('メーカー品番') || splitHtml.includes('C1'),
                   sectionHasConfirmed: sectionHtml.includes('確認済み一覧'),
+                  sectionHasBulkLabel: sectionHtml.includes('確認して一括登録（保留・登録しない項目を除く）'),
                   sectionNoApprovedSub: !sectionHtml.includes('承認済み（未登録） ${'),
                   backToList, leftoverLabels: leftover.map(x=>x.label),
                   excl, confirmedNoHold: !partAfterEx.confirmed.some(g=>g.code==='H1'),
@@ -259,6 +279,7 @@ class ConfirmedReviewListLogicTest(unittest.TestCase):
                     merge: api.chosenActionLabel('merge'),
                     pending: api.CONFIRMED_STATUS.pending,
                     confirmed: api.CONFIRMED_STATUS.confirmed,
+                    colorPending: api.pendingDecisionLabel('color_split'),
                   },
                   defaults: api.SECTION_DEFAULTS.confirmed,
                 };
@@ -273,6 +294,11 @@ class ConfirmedReviewListLogicTest(unittest.TestCase):
         self.assertEqual(out['autoCount'], 1)
         self.assertTrue(out['htmlHasPending'])
         self.assertTrue(out['htmlHasAction'])
+        self.assertTrue(out['reselectHasPanel'])
+        self.assertTrue(out['reselectHasBtns'])
+        self.assertTrue(out['reselectHasBlurbs'])
+        self.assertTrue(out['m1PendingAfterReselect'])
+        self.assertEqual(out['m1StatusAfterReselect'], 'pending')
         self.assertEqual(out['afterStatuses']['M1'], 'confirmed')
         self.assertEqual(out['afterStatuses']['C1'], 'confirmed')
         self.assertEqual(out['afterStatuses']['B1'], 'confirmed')
@@ -281,6 +307,7 @@ class ConfirmedReviewListLogicTest(unittest.TestCase):
         self.assertNotIn('S1', out['afterStatuses'])
         self.assertTrue(out['splitHasInternal'])
         self.assertTrue(out['sectionHasConfirmed'])
+        self.assertTrue(out['sectionHasBulkLabel'])
         self.assertIn('C1', out['backToList'])
         self.assertTrue(any('行き先' in x or '未作成' in x for x in out['leftoverLabels']))
         self.assertEqual(out['excl'], 1)
@@ -289,6 +316,7 @@ class ConfirmedReviewListLogicTest(unittest.TestCase):
         self.assertEqual(out['labels']['merge'], 'まとめる')
         self.assertEqual(out['labels']['pending'], '反映待ち')
         self.assertEqual(out['labels']['confirmed'], '確認済み')
+        self.assertEqual(out['labels']['colorPending'], '色別分割案・未反映')
         self.assertTrue(out['defaults'])
 
 

@@ -137,8 +137,12 @@ class ContentSplitUiWiringTest(unittest.TestCase):
         self.assertIn('contentSplitFormHtml', js)
         self.assertIn('contentSplitButtonLabel', js)
         self.assertIn('contentSplitSummaryForGroup', js)
-        self.assertIn('分割案・未反映', js)
+        self.assertIn('内容別分割案・未反映', js)
         self.assertIn('加工サービス', js)
+        self.assertIn('DECISION_BLURBS', js)
+        self.assertIn('登録先は1件にまとめます', js)
+        self.assertIn('色ごとに分けて登録します', js)
+        self.assertIn('商品／加工の内容ごとに分けて登録します', js)
         # 選択は編集状態のみ・スクロール chase なし・選択時フル再照合なし
         self.assertIn('方針選択は編集状態へ保存するだけ', js)
         self.assertIn('全件再照合・CSV再読込・メーカー検索はしない', js)
@@ -162,15 +166,18 @@ class ContentSplitUiFlowTest(unittest.TestCase):
                   && api.confirmedItemStatusKey(st, part.confirmed.find(x=>x.code==='帽子'))==='pending';
                 const pendingLabel = api.pendingDecisionLabel('content_split');
                 const label = api.chosenActionLabel('content_split');
+                const blurbs = api.DECISION_BLURBS;
                 // 再照合成功相当（サーバ予定を模す）
                 g.contentSplitPlans = {
                   complete: true, planCount: 2, summaryLabel: '加工サービス2件',
                   plans: [
                     { kind:'process_service', contentKey:'ps|line', splitTargetId:'帽子::ps|line',
-                      serviceName:'ライン加工', vendorName:'K2スタッフ工房', productName:'ライン加工',
+                      category:'加工サービス', serviceName:'ライン加工', vendorName:'K2スタッフ工房',
+                      productName:'ライン加工', notes:'位置A', sizes:['—'],
                       rowNos:[2], statusLabel:'確認済み' },
                     { kind:'process_service', contentKey:'ps|snap', splitTargetId:'帽子::ps|snap',
-                      serviceName:'スナッパー加工', vendorName:'K2スタッフ工房', productName:'スナッパー加工',
+                      category:'加工サービス', serviceName:'スナッパー加工', vendorName:'K2スタッフ工房',
+                      productName:'スナッパー加工', notes:'位置B', sizes:['—'],
                       rowNos:[3], statusLabel:'確認済み' },
                   ],
                   unassignedRows: [],
@@ -188,10 +195,13 @@ class ContentSplitUiFlowTest(unittest.TestCase):
                 const undone = api.skuDecisionPendingRematch(st, '帽子');
                 return {
                   prefer, btn, pendingOk, pendingLabel, label, confirmed, status, summary,
+                  blurbContent: blurbs.content_split,
                   listHasProc2: listHtml.includes('加工サービス2件'),
                   detailHasLine: detail.includes('ライン加工'),
                   detailHasSnap: detail.includes('スナッパー加工'),
-                  detailNotSingleAlias: !detail.includes('別名統合'),
+                  detailHasK2: detail.includes('K2スタッフ工房'),
+                  detailHasNotes: detail.includes('位置A') && detail.includes('位置B'),
+                  detailNotSingleAlias: !detail.includes('別名統合') && !detail.includes('（別名）'),
                   undone,
                 };
               }
@@ -201,14 +211,17 @@ class ContentSplitUiFlowTest(unittest.TestCase):
         self.assertTrue(out['prefer'])
         self.assertIn('内容別に分けて登録（2件）', out['btn'])
         self.assertTrue(out['pendingOk'])
-        self.assertIn('【未反映】', out['pendingLabel'])
+        self.assertEqual(out['pendingLabel'], '内容別分割案・未反映')
         self.assertEqual(out['label'], '内容別に分けて登録')
+        self.assertIn('内容ごと', out['blurbContent'])
         self.assertTrue(out['confirmed'])
         self.assertEqual(out['status'], 'confirmed')
         self.assertEqual(out['summary'], '加工サービス2件')
         self.assertTrue(out['listHasProc2'])
         self.assertTrue(out['detailHasLine'])
         self.assertTrue(out['detailHasSnap'])
+        self.assertTrue(out['detailHasK2'])
+        self.assertTrue(out['detailHasNotes'])
         self.assertTrue(out['detailNotSingleAlias'])
         self.assertTrue(out['undone'])
 

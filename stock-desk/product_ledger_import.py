@@ -4013,14 +4013,68 @@ def _row_color_extraction(row):
 def _color_split_preferred_product_name(info):
     """色別登録の既定商品名。
 
-    括弧外の色（例: Tシャツ白）は原文を残す。括弧内色（例: ポロシャツ（赤））は色除去後の名。
+    色が抽出できていれば色除去後の名（例: Tシャツ白 → Tシャツ、ポロシャツ（赤）→ ポロシャツ）。
+    色不明時は原文。表示は名/色（例: Tシャツ/ホワイト）。
     """
     info = info if isinstance(info, dict) else {}
     orig = stock.text(info.get('originalName') or '')
     stripped = stock.text(info.get('productName') or '')
-    if stock.text(info.get('colorSource') or '') == 'outside' and orig:
-        return orig
+    color = stock.text(info.get('color') or '')
+    if color and stripped:
+        return stripped
     return stripped or orig
+
+
+def color_split_target_display_label(product_name, color):
+    """色別登録先の表示ラベル（名/色）。"""
+    name = stock.text(product_name or '')
+    col = stock.text(color or '')
+    if name and col:
+        return f'{name}/{col}'
+    return name or col or ''
+
+
+def estimate_color_split_count(group):
+    """選択前の色候補件数。確定予定ではなく候補数として扱う。"""
+    colors = []
+    for v in (group.get('variants') or []):
+        col = stock.text(v.get('color') or '')
+        if not col:
+            split = paren_classify.split_name_and_color(stock.text(v.get('productName') or ''))
+            col = stock.text(split.get('color') or '')
+        key = paren_classify.color_match_key(col) if col else ''
+        if key and key not in colors:
+            colors.append(key)
+    if colors:
+        return len(colors)
+    # variants に色が無いときは商品名候補から推定
+    for name in (group.get('nameCandidates') or []):
+        split = paren_classify.split_name_and_color(stock.text(name or ''))
+        col = stock.text(split.get('color') or '')
+        key = paren_classify.color_match_key(col) if col else ''
+        if key and key not in colors:
+            colors.append(key)
+    return len(colors)
+
+
+def color_only_split_recommended(group):
+    """色差のみで加工／内容差が無いとき色別分割を推奨（自動切替はしない。UI向け）。"""
+    if not group or not group.get('colorDiffPossible'):
+        return False
+    reasons = group.get('reviewReasons') or []
+    for r in reasons:
+        code = stock.text((r or {}).get('code') or '')
+        label = stock.text((r or {}).get('label') or '')
+        if code in ('processing', 'content') or '加工' in label:
+            return False
+    # 加工サービス検出がある variants は内容別向き
+    for v in (group.get('variants') or []):
+        if stock.text(v.get('processing') or ''):
+            return False
+        ps = v.get('processingService') if isinstance(v.get('processingService'), dict) else {}
+        if stock.text(ps.get('serviceName') or ''):
+            return False
+    return True
 
 
 def color_split_summary_label(plans):
@@ -4145,19 +4199,32 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
             if not isinstance(user, dict):
                 user = {}
             internal = stock.text(user.get('internalCode') or user.get('code') or '') or suggested
+            pname = stock.text(user.get('productName') or product_name_hint or '')
+            color_val = stock.text(user.get('color') or color_display)
             color_buckets[key] = {
                 'colorKey': key,
-                'color': stock.text(user.get('color') or color_display),
+                'color': color_val,
                 'makerCode': maker_code,
+                'csvProductCode': maker_code,
                 'internalCode': internal,
                 'suggestedInternalCode': suggested,
-                'productName': stock.text(user.get('productName') or product_name_hint or ''),
+                'productName': pname,
+                'displayLabel': color_split_target_display_label(pname, color_val),
+                'category': stock.text(user.get('category') or '商品'),
+                'supplier': stock.text(user.get('supplier') or ''),
+                'material': stock.text(user.get('material') or ''),
+                'notes': stock.text(user.get('notes') or ''),
+                'processing': stock.text(user.get('processing') or ''),
                 'rowNos': [],
+                'sizes': [],
+                'customers': [],
+                'rowSpecsSamples': [],
                 'keepProductId': user.get('keepProductId') or user.get('productId'),
                 'collisionAction': stock.text(user.get('collisionAction') or ''),
                 'existingProducts': [],
                 'collision': False,
                 'needsCollisionChoice': False,
+                'statusLabel': '色別分割案・未反映',
             }
         return color_buckets[key]
 
@@ -4183,6 +4250,51 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
                     'specProvenance': {},
                 })
 
+    def _inherit_color_row(bucket, row, info, preferred_name):
+        """ソース行から仕入・サイズ・仕様を継承（空欄のみ埋め、一括上書きしない）。"""
+        if not bucket:
+            return
+        row_no = int(row.get('rowNo') or 0)
+        if row_no and row_no not in bucket['rowNos']:
+            bucket['rowNos'].append(row_no)
+        if preferred_name and not bucket.get('productName'):
+            bucket['productName'] = preferred_name
+        csv = row.get('csv') or {}
+        for field, val in (
+            ('supplier', csv.get('supplier') or ''),
+            ('material', info.get('material') or ''),
+            ('notes', info.get('processing') or ''),
+            ('processing', info.get('processing') or ''),
+        ):
+            if stock.text(val) and not stock.text(bucket.get(field) or ''):
+                bucket[field] = stock.text(val)
+        cust = stock.text(csv.get('customer') or '')
+        if cust and cust not in bucket['customers']:
+            bucket['customers'].append(cust)
+        size = stock.text(csv.get('size') or '')
+        if size and size not in bucket['sizes']:
+            bucket['sizes'].append(size)
+        bucket['displayLabel'] = color_split_target_display_label(
+            bucket.get('productName'), bucket.get('color'),
+        )
+        sample = {
+            'rowNo': row_no,
+            'originalName': csv.get('productName') or '',
+            'originalCode': maker_code,
+            'customer': cust,
+            'size': size,
+            'supplier': csv.get('supplier') or '',
+            'color': bucket.get('color') or '',
+            'material': bucket.get('material') or '',
+            'notes': bucket.get('notes') or '',
+            'processing': bucket.get('processing') or '',
+            'splitTargetId': f"{maker_code}::{bucket.get('colorKey') or bucket.get('color') or ''}",
+        }
+        samples = list(bucket.get('rowSpecsSamples') or [])
+        if row_no and not any(int(s.get('rowNo') or 0) == row_no for s in samples):
+            samples.append(sample)
+            bucket['rowSpecsSamples'] = samples[:12]
+
     row_info_by_no = {}
     for row in source_rows:
         row_no = int(row.get('rowNo') or 0)
@@ -4194,18 +4306,12 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
             # ユーザー指定の行き先（色キーまたは色表示）
             bucket = _ensure_bucket(dest_key, preferred_name or info.get('originalName'))
             if bucket:
-                if row_no not in bucket['rowNos']:
-                    bucket['rowNos'].append(row_no)
-                if not bucket['productName'] and preferred_name:
-                    bucket['productName'] = preferred_name
+                _inherit_color_row(bucket, row, info, preferred_name)
                 continue
         if info['color'] and not info['needsConfirm']:
             bucket = _ensure_bucket(info['color'], preferred_name or info.get('originalName'))
             if bucket:
-                if row_no not in bucket['rowNos']:
-                    bucket['rowNos'].append(row_no)
-                if not bucket['productName']:
-                    bucket['productName'] = preferred_name or info.get('originalName') or ''
+                _inherit_color_row(bucket, row, info, preferred_name)
                 continue
         unassigned_rows.append({
             'rowNo': row_no,
@@ -4283,6 +4389,19 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
                     ((group.get('nameCandidates') or [None])[0])
                     or maker_code
                 )
+        plan['displayLabel'] = color_split_target_display_label(
+            plan.get('productName'), plan.get('color'),
+        )
+        plan['statusLabel'] = (
+            '確認済み'
+            if (
+                plan.get('rowNos')
+                and not plan.get('needsCollisionChoice')
+                and stock.text(plan.get('internalCode') or '')
+                and stock.text(plan.get('productName') or '')
+            )
+            else '色別分割案・未反映'
+        )
         plans.append(plan)
 
     complete = bool(plans) and not unassigned_rows and not any(p.get('needsCollisionChoice') for p in plans)
@@ -4294,6 +4413,7 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
     return {
         'makerCode': maker_code,
         'plans': plans,
+        'planCount': len(plans),
         'unassignedRows': unassigned_rows,
         'complete': complete,
         'summaryLabel': color_split_summary_label(plans),
@@ -4311,6 +4431,9 @@ def attach_color_split_plans(c, sku_groups, sku_decisions, *, classified=None):
     decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
     for group in sku_groups:
         code = stock.text(group.get('code') or '')
+        # 候補件数は方針未選択でも見積もる（確定予定ではない）
+        group['colorSplitEstimateCount'] = estimate_color_split_count(group)
+        group['colorOnlySplitRecommended'] = color_only_split_recommended(group)
         raw = decisions.get(code) or decisions.get(str(code)) or {}
         if not isinstance(raw, dict):
             continue
@@ -4696,7 +4819,7 @@ def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
                 'collision': False,
                 'needsCollisionChoice': False,
                 'needsInternalCode': kind != 'process_service',
-                'statusLabel': '分割案・未反映',
+                'statusLabel': '内容別分割案・未反映',
             }
         return buckets[key]
 
@@ -4919,6 +5042,29 @@ def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
         if not plan.get('productName'):
             plan['productName'] = stock.text(
                 ((group.get('nameCandidates') or [None])[0]) or maker_code
+            )
+        if plan.get('kind') == 'process_service':
+            plan['statusLabel'] = (
+                '確認済み'
+                if (
+                    plan.get('rowNos')
+                    and stock.text(plan.get('serviceName') or '')
+                    and stock.text(plan.get('vendorName') or '')
+                    and not plan.get('needsFields')
+                )
+                else '内容別分割案・未反映'
+            )
+        else:
+            plan['statusLabel'] = (
+                '確認済み'
+                if (
+                    plan.get('rowNos')
+                    and not plan.get('needsCollisionChoice')
+                    and not plan.get('needsFields')
+                    and stock.text(plan.get('internalCode') or '')
+                    and stock.text(plan.get('productName') or '')
+                )
+                else '内容別分割案・未反映'
             )
         plans.append(plan)
 
