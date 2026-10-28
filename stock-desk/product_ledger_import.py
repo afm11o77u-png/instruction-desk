@@ -638,11 +638,16 @@ def row_map_key(*, customer, code, product_name, size, supplier):
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-# 今回の取り込みだけ「この行を登録しない」。恒久ルールにはしない。
-USER_ROW_EXCLUDE_REASON = 'この行を登録しない（今回の取り込み）'
+# 今回の取り込みだけ「今回登録しない」。恒久ルールにはしない。
+USER_ROW_EXCLUDE_REASON = '利用者が今回登録しないと指定'
+USER_ROW_EXCLUDE_REASON_LEGACY = 'この行を登録しない（今回の取り込み）'
 # 自動除外（K2 加工内容不明など）。手動除外と理由を区別する。
 K2_AUTO_EXCLUDE_REASON = proc_svc.K2_AUTO_EXCLUDE_REASON
 PRODUCT_REGISTRATION_EXCLUDED_LABEL = '商品登録時に除外した項目'
+
+
+def user_exclude_reason_tokens():
+    return (USER_ROW_EXCLUDE_REASON, USER_ROW_EXCLUDE_REASON_LEGACY, K2_AUTO_EXCLUDE_REASON)
 
 
 def csv_row_identity(csv_or_row):
@@ -734,7 +739,7 @@ def _mark_row_excluded_from_registration(
         row['userRowExcluded'] = True
         row['autoRowExcluded'] = False
         row['exclusionKind'] = 'manual'
-    drop_tokens = (USER_ROW_EXCLUDE_REASON, K2_AUTO_EXCLUDE_REASON)
+    drop_tokens = user_exclude_reason_tokens()
     reasons = [
         r for r in (row.get('reasons') or [])
         if not any(tok in stock.text(r) for tok in drop_tokens)
