@@ -86,6 +86,15 @@ class BihinCountSheetUiContractTest(unittest.TestCase):
         self.assertIn('bihin-count-hiq-total', CSS)
         self.assertIn('break-inside:avoid', CSS)
         self.assertIn('page-break-inside:avoid', CSS)
+        # レイアウト見本: 内余白・記入者下線・手書き行高・表↔メモ間隔
+        # compact は空白除去済み（"0 3.5mm" → "03.5mm"）
+        self.assertIn('padding:03.5mm!important', compact)
+        self.assertIn('width:55mm', compact)
+        self.assertIn('bihin-count-writer-line', CSS)
+        self.assertIn('min-height:9mm', compact)
+        self.assertIn('padding:003mm', compact)  # タイトル下の区切り余白
+        self.assertIn('margin-top:4.5mm', compact)  # 表↔メモ
+        self.assertIn('padding:2mm2.5mm', compact)  # セル内余白
         # シフト印刷クラスと混線しない
         self.assertNotIn('printing-bihin-count .shift-grid', CSS)
 
@@ -246,6 +255,9 @@ const need = [
   '2026年10月分',
   '棚卸日：',
   '記入者：',
+  'bihin-count-writer-line',
+  'bihin-count-date',
+  'bihin-count-writer',
   '実際に数えた月末在庫を、数量欄へ記入してください。',
   'HIQラベル（カラー）は赤・緑・青を数え、単価ごとに合計してください。',
   '品名・単価',

@@ -414,7 +414,8 @@ body.catalog-kintai main>header .headactions{display:none}
 
 /* 見本PNG照合: タイトル左／年月右／緑区切り／HIQ rowspan4／連絡メモ／脚注2。
    A4縦。共通 body>*{display:none} を打ち消し、#bihincountsheet だけ出す。
-   Chromium 向けに kintai-bihin.js が unnamed @page A4 portrait を一時差し込み。 */
+   Chromium 向けに kintai-bihin.js が unnamed @page A4 portrait を一時差し込み。
+   レイアウト: 内余白3–4mm／記入者左寄せ+55mm下線／説明↔表・表↔メモの間隔。 */
 @media print{
   @page bihin-count-sheet{size:A4 portrait;margin:12mm}
   body.printing-bihin-count{background:#fff;page:bihin-count-sheet}
@@ -422,7 +423,8 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-bihin-count>#bihincountsheet{
     display:block!important;
     margin:0!important;
-    padding:0!important;
+    padding:0 3.5mm!important;
+    box-sizing:border-box!important;
     max-width:none!important;
     width:100%!important;
     background:#fff!important;
@@ -441,9 +443,17 @@ body.catalog-kintai main>header .headactions{display:none}
     border-collapse:collapse;
     table-layout:fixed;
     font-size:10pt;
-    color:#222
+    color:#222;
+    box-sizing:border-box
   }
   body.printing-bihin-count .bihin-count-table thead{display:table-header-group}
+  /* 共通 th の sticky / inset box-shadow(#9dceae) が棚卸日下に薄い緑線を出すため無効化 */
+  body.printing-bihin-count .bihin-count-table th,
+  body.printing-bihin-count .bihin-count-table td{
+    position:static!important;
+    top:auto!important;
+    box-shadow:none!important
+  }
   body.printing-bihin-count .bihin-count-block{
     break-inside:avoid;
     page-break-inside:avoid
@@ -460,7 +470,7 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-bihin-count .bihin-count-banner>th{
     border:0!important;
     background:#fff!important;
-    padding:0 0 4px!important
+    padding:0!important
   }
   body.printing-bihin-count .bihin-count-head{
     display:flex;
@@ -469,7 +479,7 @@ body.catalog-kintai main>header .headactions{display:none}
     gap:12px;
     width:100%;
     border-bottom:2.6pt solid #355c4c;
-    padding:0 0 6px;
+    padding:0 0 3mm;
     margin:0;
     page-break-after:avoid;
     -webkit-print-color-adjust:exact;
@@ -488,21 +498,52 @@ body.catalog-kintai main>header .headactions{display:none}
     color:#222;
     white-space:nowrap
   }
-  body.printing-bihin-count .bihin-count-meta>th,
+  body.printing-bihin-count .bihin-count-meta>th{
+    border:0!important;
+    background:#fff!important;
+    padding:2.5mm 0 1.5mm!important;
+    text-align:left;
+    font-weight:400;
+    page-break-after:avoid
+  }
   body.printing-bihin-count .bihin-count-instructions>th{
     border:0!important;
     background:#fff!important;
-    padding:8px 0 4px!important;
+    padding:1.5mm 0 3.5mm!important;
     text-align:left;
     font-weight:400;
     page-break-after:avoid
   }
   body.printing-bihin-count .bihin-count-meta-row{
     display:flex;
-    justify-content:space-between;
-    gap:24px;
+    justify-content:flex-start;
+    align-items:flex-end;
+    gap:10mm;
+    min-height:9mm;
     font-size:11pt;
-    padding:2px 0 4px
+    line-height:1.6;
+    padding:1mm 0 1.5mm;
+    box-sizing:border-box
+  }
+  body.printing-bihin-count .bihin-count-date{
+    flex:0 0 auto;
+    white-space:nowrap;
+    letter-spacing:.02em
+  }
+  body.printing-bihin-count .bihin-count-writer{
+    margin-left:auto;
+    flex:0 0 auto;
+    white-space:nowrap;
+    display:inline-flex;
+    align-items:flex-end
+  }
+  body.printing-bihin-count .bihin-count-writer-line{
+    display:inline-block;
+    width:55mm;
+    height:0;
+    margin-left:2px;
+    border-bottom:0.6pt solid #222;
+    vertical-align:baseline
   }
   body.printing-bihin-count .bihin-count-instructions p{
     margin:0 0 2px;
@@ -513,7 +554,7 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-bihin-count .bihin-count-cols th{
     background:#edf2ef!important;
     border:0.4pt solid #b8c4bc;
-    padding:6px 5px;
+    padding:2mm 2.5mm;
     font-size:9.5pt;
     font-weight:700;
     text-align:center;
@@ -523,7 +564,7 @@ body.catalog-kintai main>header .headactions{display:none}
   }
   body.printing-bihin-count .bihin-count-table td{
     border:0.4pt solid #b8c4bc;
-    padding:7px 6px;
+    padding:2mm 2.5mm;
     vertical-align:middle;
     background:#fff;
     color:#222;
@@ -551,8 +592,8 @@ body.catalog-kintai main>header .headactions{display:none}
     white-space:nowrap
   }
   body.printing-bihin-count .bihin-count-qty{
-    min-height:1.6em;
-    height:1.85em
+    min-height:8mm;
+    height:8mm
   }
   body.printing-bihin-count .bihin-count-note{
     font-size:8.5pt;
@@ -566,22 +607,30 @@ body.catalog-kintai main>header .headactions{display:none}
   }
   body.printing-bihin-count .bihin-count-total-label{font-weight:700}
   body.printing-bihin-count .bihin-count-after{
-    margin-top:12px;
+    margin-top:4.5mm;
+    width:100%;
+    box-sizing:border-box;
     break-inside:avoid;
     page-break-inside:avoid
+  }
+  body.printing-bihin-count .bihin-count-memo{
+    width:100%;
+    box-sizing:border-box
   }
   body.printing-bihin-count .bihin-count-memo-label{
     font-size:10pt;
     font-weight:700;
-    margin:0 0 4px
+    margin:0 0 1.5mm
   }
   body.printing-bihin-count .bihin-count-memo-box{
     border:0.6pt solid #7a8a80;
     min-height:28mm;
+    width:100%;
+    box-sizing:border-box;
     background:#fff
   }
   body.printing-bihin-count .bihin-count-footnotes{
-    margin-top:8px;
+    margin-top:2.5mm;
     text-align:left
   }
   body.printing-bihin-count .bihin-count-footnotes p{
