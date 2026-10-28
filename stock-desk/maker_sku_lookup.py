@@ -35,21 +35,29 @@ _MANAGEMENT_SKUS = frozenset({
 
 # 公式・販社っぽいホスト（優先）
 _PREFERRED_HOST_HINTS = (
-    'midori-anzen', 'midori', 'servo', 'montblanc', 'chitose', 'aitoz', 'aito-s',
-    'bonmax', 'karsee', 'selery', 'faceblend', 'toms', 'kurodaruma',
-    'kazen-ec', 'kazen', 'unifice',
+    'midori-anzen', 'midori', 'servo', 'style-ist', 'montblanc', 'chitose',
+    'aitoz', 'aito-s', 'bonmax', 'karsee', 'selery', 'faceblend', 'toms',
+    'kurodaruma', 'kazen-ec', 'kazen', 'unifice', 'nagaileben',
+    'season-shizuoka',
 )
 
 # 仕入先名にブランドが含まれるときだけメーカーヒントにする（無条件同一視しない）
 _SUPPLIER_BRAND_MARKERS = (
     ('ミドリ安全', 'ミドリ安全'),
     ('サーヴォ', 'サーヴォ'),
+    ('スタイルイスト', 'サーヴォ'),
+    ('Style-ist', 'サーヴォ'),
+    ('STYLE-IST', 'サーヴォ'),
     ('住商モンブラン', '住商モンブラン'),
     ('モンブラン', 'モンブラン'),
     ('チトセ', 'チトセ'),
     ('アイトス', 'アイトス'),
     ('カゼン', 'KAZEN'),
     ('KAZEN', 'KAZEN'),
+    ('ナガイレーベン', 'ナガイレーベン'),
+    ('NAGAILEBEN', 'ナガイレーベン'),
+    ('シーズン', 'シーズン'),
+    ('SEASON', 'シーズン'),
 )
 
 _POSITION_TOKENS = position_sku.POSITION_TOKENS
@@ -115,7 +123,31 @@ _NAME_NOISE_TOKENS = frozenset({
     '住商モンブラン', 'MONTBLANC', 'チトセ', 'アイトス', '公式',
     'オンラインストア', 'COOKING&SERVICE', 'COOKING＆SERVICE',
     'ユニフォームのユニフィス', 'ユニフィス', '通販', '激安',
+    'ナガイレーベン', 'NAGAILEBEN', 'スタイルイスト', 'Style-ist',
+    'シーズン', 'SEASON', '食品工場白衣', '工場白衣', '食品作業着',
+    '食品工場ユニフォーム', '食品工場用作業着', '衛生白衣',
 })
+_FEATURE_BRACKET_RE = re.compile(r'[［\[][^］\]]*[］\]]')
+_SEASON_SALES_NOISE_RE = re.compile(
+    r'(?:食品工場白衣|工場白衣|食品作業着|食品工場ユニフォーム|'
+    r'食品工場用作業着|衛生白衣|ユニフォーム通販)'
+)
+_STYLEIST_ITEM_RE = re.compile(
+    r'href="((?:https://www\.style-ist\.jp)?/item/[^"]+\.html)"',
+    re.I,
+)
+_NAGAI_ITEM_HREF_RE = re.compile(
+    r'href=["\']((?:https://www\.nagaileben\.net)?/i/[^"\']+)["\']',
+    re.I,
+)
+_NAGAI_COLORWAY_RE = re.compile(
+    r'([ぁ-んァ-ヶー一-龥A-Za-z0-9]+(?:[＋+×✕*＊/／][ぁ-んァ-ヶー一-龥A-Za-z0-9]+)+)'
+    r'\s*[（(]\s*(\d{2,3})\s*[）)]',
+)
+_KAZEN_CODE_SIZE_RE = re.compile(
+    r'^([A-Za-z0-9Ａ-Ｚａ-ｚ０-９][A-Za-z0-9Ａ-Ｚａ-ｚ０-９\-_＿－]*)'
+    r'[\s\u3000]+([A-Za-z0-9Ａ-Ｚａ-ｚ０-９]{1,4})$',
+)
 _PRIVATE_HOST_RE = re.compile(
     r'^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[0-1])\.|'
     r'0\.0\.0\.0|::1|\[::1\])',
@@ -596,6 +628,16 @@ def clean_maker_product_name(
         removed_enum = True
         working = nxt
 
+    # ［制電］［抗菌］など仕様タグは商品名から外し features へ
+    features = []
+    for m in _FEATURE_BRACKET_RE.finditer(working):
+        feat = (m.group(0) or '').strip('［］[]')
+        feat = paren_classify.unify_import_notation(feat) or feat
+        if feat and feat not in features:
+            features.append(feat)
+    working = _FEATURE_BRACKET_RE.sub(' ', working)
+    working = _SEASON_SALES_NOISE_RE.sub(' ', working)
+
     # メーカー品番の残渣
     base = stock.text(maker_sku) or ''
     if base:
@@ -615,8 +657,12 @@ def clean_maker_product_name(
             continue
         if paren_classify.unify_import_notation(tok) in _NAME_NOISE_TOKENS:
             continue
+        # 販促キーワード連結トークン
+        if _SEASON_SALES_NOISE_RE.search(tok):
+            continue
         kept.append(tok)
     working = ' '.join(kept)
+    # 【ブルー】など色括弧は呼び出し側で色へ移す想定。残り【販促】は落とす
     working = re.sub(r'【[^】]*】', ' ', working)
     # 半角括弧を全角へ（登録・表示の表記を揃える）
     working = working.replace('(', '（').replace(')', '）')
@@ -629,6 +675,7 @@ def clean_maker_product_name(
         'removedOrderUnit': removed_order,
         'removedPrice': removed_price,
         'removedDigitEnum': removed_enum,
+        'features': features,
     }
 
 
@@ -917,6 +964,21 @@ def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict)
         add([sku, 'site:kazen-ec.com'])
         add([mfr, sku, 'site:kazen-ec.com'])
         add(['KAZEN', sku])
+    if is_servo_manufacturer(mfr):
+        add([sku, 'site:style-ist.jp'])
+        add([mfr, sku, 'site:style-ist.jp'])
+        add(['サーヴォ', sku])
+    if is_nagaileben_manufacturer(mfr):
+        add([sku, 'site:nagaileben.net'])
+        add([mfr, sku, 'site:nagaileben.net'])
+        add(['ナガイレーベン', sku])
+    if is_season_manufacturer(mfr):
+        add([sku, 'site:shop.season-shizuoka.jp'])
+        add([mfr, sku, 'site:shop.season-shizuoka.jp'])
+        add(['シーズン', sku])
+        base_season = _season_base_sku(sku)
+        if base_season and base_season != sku:
+            add([base_season, 'site:shop.season-shizuoka.jp'])
     if parts.get('rule') == 'aitoz':
         for qsku in [sku, *base_variants]:
             add([qsku, 'site:azweb.aitoz.co.jp'])
@@ -1086,6 +1148,102 @@ def kazen_catalog_search_url(keyword: str) -> str:
     )
 
 
+def styleist_catalog_search_url(keyword: str) -> str:
+    return (
+        'https://www.style-ist.jp/item_list.html?siborikomi_clear=1&keyword='
+        + urllib.parse.quote(stock.text(keyword) or '')
+    )
+
+
+def styleist_item_url_from_sku(maker_sku: str) -> str:
+    """Style-ist の品番→詳細パス（ハイフンを _ にした公開URL）。"""
+    raw = stock.text(maker_sku) or ''
+    if not raw:
+        return ''
+    code = raw.replace('-', '_').replace('－', '_')
+    return f'https://www.style-ist.jp/item/{code}.html'
+
+
+def nagaileben_catalog_search_url(keyword: str) -> str:
+    return (
+        'https://www.nagaileben.net/is?q='
+        + urllib.parse.quote(stock.text(keyword) or '')
+    )
+
+
+def nagaileben_item_url_from_sku(maker_sku: str) -> str:
+    raw = stock.text(maker_sku) or ''
+    if not raw:
+        return ''
+    return f'https://www.nagaileben.net/i/{urllib.parse.quote(raw)}'
+
+
+def season_product_json_url(handle_or_sku: str) -> str:
+    """Shopify 公開 products/{{handle}}.js（無料・認証不要）。"""
+    handle = (stock.text(handle_or_sku) or '').strip().lower()
+    handle = re.sub(r'[^a-z0-9\-]+', '', handle)
+    if not handle:
+        return ''
+    return f'https://shop.season-shizuoka.jp/products/{handle}.js'
+
+
+def season_product_page_url(handle: str) -> str:
+    h = (stock.text(handle) or '').strip().lower()
+    if not h:
+        return ''
+    return f'https://shop.season-shizuoka.jp/products/{h}'
+
+
+def is_servo_manufacturer(manufacturer: str) -> bool:
+    m = paren_classify.unify_import_notation(stock.text(manufacturer) or '')
+    if not m:
+        return False
+    mu = m.upper()
+    return (
+        'サーヴォ' in m
+        or 'スタイルイスト' in m
+        or 'STYLE-IST' in mu
+        or 'SERVO' in mu
+    )
+
+
+def is_nagaileben_manufacturer(manufacturer: str) -> bool:
+    m = paren_classify.unify_import_notation(stock.text(manufacturer) or '')
+    if not m:
+        return False
+    return 'ナガイレーベン' in m or 'NAGAILEBEN' in m.upper()
+
+
+def is_season_manufacturer(manufacturer: str) -> bool:
+    m = paren_classify.unify_import_notation(stock.text(manufacturer) or '')
+    if not m:
+        return False
+    return 'シーズン' in m or 'SEASON' in m.upper()
+
+
+def manufacturer_has_official_catalog(manufacturer: str) -> bool:
+    """明示メーカー（または仕入先ヒント済み）があるときだけ公式カタログを叩く。"""
+    mfr = stock.text(manufacturer) or ''
+    if not mfr:
+        return False
+    mfr_u = paren_classify.unify_import_notation(mfr).upper()
+    if 'ミドリ安全' in mfr:
+        return True
+    if 'KAZEN' in mfr_u or 'カゼン' in mfr:
+        return True
+    if is_montblanc_manufacturer(mfr):
+        return True
+    if 'アイトス' in mfr or 'AITOZ' in mfr_u:
+        return True
+    if is_servo_manufacturer(mfr):
+        return True
+    if is_nagaileben_manufacturer(mfr):
+        return True
+    if is_season_manufacturer(mfr):
+        return True
+    return False
+
+
 def unifice_catalog_search_url(keyword: str) -> str:
     """ユニフィスの品番コード検索（無料公開ページ）。"""
     return (
@@ -1243,11 +1401,15 @@ def _strip_sku_prefixes(text: str, maker_sku: str) -> str:
 
 
 def _classify_slash_pair(content: str) -> dict:
-    """括弧内や断片の A／B を 色+サイズ / 配色 / その他 に分ける。"""
+    """括弧内や断片の A／B を 色+サイズ / 配色 / その他 に分ける。
+
+    区切りは /／ に加え *＊（Style-ist）と ＋+（ナガイ等）。サイズ結合は /／ のみ。
+    """
     raw = paren_classify.unify_import_notation(stock.text(content) or '')
     if not raw:
         return {'kind': 'other', 'raw': ''}
-    if not any(ch in raw for ch in '/／'):
+    seps = '/／*＊＋+'
+    if not any(ch in raw for ch in seps):
         col = _token_is_color(raw)
         if col:
             return {'kind': 'color', 'color': col, 'size': '', 'raw': raw}
@@ -1255,22 +1417,67 @@ def _classify_slash_pair(content: str) -> dict:
         if sz:
             return {'kind': 'size', 'color': '', 'size': sz, 'raw': raw}
         return {'kind': 'other', 'raw': raw}
-    parts = [p for p in re.split(r'[/／]+', raw) if p.strip()]
-    parts = [paren_classify.unify_import_notation(p) for p in parts]
-    if len(parts) == 2:
-        a, b = parts[0], parts[1]
-        ca, cb = _token_is_color(a), _token_is_color(b)
-        sa, sb = _token_is_size(a), _token_is_size(b)
-        if ca and sb and not sa and not cb:
-            return {'kind': 'color_size', 'color': ca, 'size': sb, 'raw': raw}
-        if cb and sa and not sb and not ca:
-            return {'kind': 'color_size', 'color': cb, 'size': sa, 'raw': raw}
-        if ca and cb and not sa and not sb:
-            # 黒／ワイン = 1商品配色
+    # 色+サイズ判定は /／ のみ（* や ＋ は配色）
+    if any(ch in raw for ch in '/／'):
+        slash_parts = [p for p in re.split(r'[/／]+', raw) if p.strip()]
+        slash_parts = [paren_classify.unify_import_notation(p) for p in slash_parts]
+        if len(slash_parts) == 2:
+            a, b = slash_parts[0], slash_parts[1]
+            ca, cb = _token_is_color(a), _token_is_color(b)
+            sa, sb = _token_is_size(a), _token_is_size(b)
+            if ca and sb and not sa and not cb:
+                return {'kind': 'color_size', 'color': ca, 'size': sb, 'raw': raw}
+            if cb and sa and not sb and not ca:
+                return {'kind': 'color_size', 'color': cb, 'size': sa, 'raw': raw}
+            if ca and cb and not sa and not sb:
+                way = paren_classify.normalize_colorway_display(raw) or raw
+                return {'kind': 'colorway', 'color': way, 'size': '', 'raw': raw}
+        if (
+            slash_parts
+            and all(_token_is_color(p) for p in slash_parts)
+            and not any(_token_is_size(p) for p in slash_parts)
+        ):
             way = paren_classify.normalize_colorway_display(raw) or raw
             return {'kind': 'colorway', 'color': way, 'size': '', 'raw': raw}
-    # 3色以上のスラッシュ配色など
-    if parts and all(_token_is_color(p) for p in parts) and not any(_token_is_size(p) for p in parts):
+    # *＊＋+ 配色（ロイヤルブルーなど辞書外の複合色名も含める）
+    parts = [p for p in re.split(r'[*＊＋+]+', raw) if p.strip()]
+    parts = [paren_classify.unify_import_notation(p) for p in parts]
+
+    def _soft_color_part(p: str) -> str:
+        col = _token_is_color(p)
+        if col:
+            return col
+        norm = paren_classify.normalize_color_value(p) or ''
+        if norm and _token_is_color(norm):
+            return norm
+        # 複合色名（ロイヤルブルー等）: サイズでなく短い和名なら配色要素として残す
+        if (
+            norm
+            and not _token_is_size(norm)
+            and 1 <= len(norm) <= 20
+            and not re.search(r'[0-9A-Za-z]{3,}', norm)
+        ):
+            return norm
+        if (
+            p
+            and not _token_is_size(p)
+            and 1 <= len(p) <= 20
+            and re.search(r'[ぁ-んァ-ヶ一-龥]', p)
+            and not re.search(r'[0-9]', p)
+        ):
+            return p
+        return ''
+
+    soft = [_soft_color_part(p) for p in parts]
+    if (
+        len(parts) >= 2
+        and all(soft)
+        and not any(_token_is_size(p) for p in parts)
+    ):
+        joined = '×'.join(soft)
+        way = paren_classify.normalize_colorway_display(joined) or joined
+        return {'kind': 'colorway', 'color': way, 'size': '', 'raw': raw}
+    if paren_classify.looks_like_colorway_text(raw):
         way = paren_classify.normalize_colorway_display(raw) or raw
         return {'kind': 'colorway', 'color': way, 'size': '', 'raw': raw}
     return {'kind': 'other', 'raw': raw}
@@ -1374,8 +1581,8 @@ def extract_structured_sku_values(html: str) -> list[str]:
 def normalize_maker_page_color(value: str) -> str:
     """商品情報表の色セルを登録用に正規化する。
 
-    「ワイン／ネイビー」など配色は1色（ワイン×ネイビー）として扱う。
-    長文・Q&A・ページ横断の色一覧は空を返す。
+    「ワイン／ネイビー」「ホワイト*ブラウン」「ネイビー＋ロイヤルブルー」など
+    配色は1色（× 区切り）として扱う。長文・Q&A・ページ横断の色一覧は空を返す。
     """
     raw = stock.text(value) or ''
     if not raw:
@@ -1385,10 +1592,15 @@ def normalize_maker_page_color(value: str) -> str:
         return ''
     if re.search(r'[。．？?！!]|または|もしくは|\bor\b', raw, flags=re.I):
         return ''
+    # ナガイ等の ＋ 配色を × へ寄せてから既存ポリシーへ
+    if any(ch in raw for ch in '＋+') and not any(ch in raw for ch in '/／'):
+        slash = _classify_slash_pair(raw)
+        if slash.get('kind') == 'colorway':
+            return stock.text(slash.get('color') or '') or ''
     if paren_classify.looks_like_colorway_text(raw):
         return paren_classify.normalize_colorway_display(raw) or ''
-    if any(ch in raw for ch in '/／×✕*＊'):
-        # 区切りがあるが配色と判定できない（色+サイズ等）→ 色欄としては不採用
+    if any(ch in raw for ch in '/／×✕*＊＋+'):
+        # 区切りがあるが配色と判定できない（色+サイズ等）→ 色欄としては色のみ採用可
         slash = _classify_slash_pair(raw)
         if slash.get('kind') in ('color', 'colorway'):
             return stock.text(slash.get('color') or '') or ''
@@ -1413,11 +1625,30 @@ def _apply_product_info_label_value(out: dict, label: str, value: str, *, source
         return
     if lab in _FIELD_LABEL_KEYS and sku_match_key(val) in _FIELD_LABEL_KEYS:
         return
-    if lab in _SKU_FIELD_LABEL_KEYS and _looks_like_sku_value(val):
-        if not out.get('sku'):
-            out['sku'] = val
-            out['source'] = out.get('source') or source
-        out['makerSku'] = out.get('makerSku') or val
+    if lab in _SKU_FIELD_LABEL_KEYS:
+        # KAZEN 等: 「KZN715-28 SS」→ 品番と閲覧サイズを分離（サイズは上書き用にしない）
+        size_from_code = ''
+        m_code = _KAZEN_CODE_SIZE_RE.match(val)
+        if m_code and _token_is_size(m_code.group(2)):
+            sku_tok = m_code.group(1)
+            size_from_code = _token_is_size(m_code.group(2)) or m_code.group(2)
+        else:
+            # 表セルに代替コードが併記される場合は先頭の完全品番だけ取る
+            sku_tok = ''
+            for tok in re.split(r'[\s\u3000]+', val):
+                t = tok.strip()
+                if _looks_like_sku_value(t):
+                    sku_tok = t
+                    break
+            if not sku_tok and _looks_like_sku_value(val):
+                sku_tok = val
+        if sku_tok and _looks_like_sku_value(sku_tok):
+            if not out.get('sku'):
+                out['sku'] = sku_tok
+                out['source'] = out.get('source') or source
+            out['makerSku'] = out.get('makerSku') or sku_tok
+            if size_from_code and not out.get('size'):
+                out['size'] = size_from_code
         return
     if lab in _NAME_FIELD_LABEL_KEYS:
         if sku_match_key(val) not in _FIELD_LABEL_KEYS:
@@ -1427,6 +1658,15 @@ def _apply_product_info_label_value(out: dict, label: str, value: str, *, source
         return
     if lab in _COLOR_FIELD_LABEL_KEYS:
         color = normalize_maker_page_color(val)
+        # カラー名欄の辞書外短文（例: ベージュ白）は表の明示値として採用
+        if not color:
+            raw_c = paren_classify.unify_import_notation(val) or val
+            if (
+                1 <= len(raw_c) <= 20
+                and not re.search(r'[0-9]', raw_c)
+                and not re.search(r'[。．？?！!]', raw_c)
+            ):
+                color = raw_c
         if color and not out.get('color'):
             out['color'] = color
             out['colorSource'] = source
@@ -1449,10 +1689,13 @@ def extract_product_info_fields(html: str) -> dict:
         'brand': '',
         'color': '',
         'colorSource': '',
+        'size': '',
         'skuValues': [],
         'source': '',
+        'features': [],
     }
-    raw_html = html or ''
+    # コメント内の雛形行（Style-ist の商品名プレースホルダ等）を除外
+    raw_html = re.sub(r'<!--.*?-->', '', html or '', flags=re.S)
 
     # 1) JSON-LD Product
     for m in _JSON_LD_RE.finditer(raw_html):
@@ -1870,7 +2113,40 @@ def parse_maker_listing_title(
     color = ''
     size = ''
     position = ''
+    features = []
     kept_parens = []
+    # 【ブルー】［制電］など: 色は color へ、仕様タグは features へ（商品名へ混ぜない）
+    rebuilt = []
+    last = 0
+    for m in re.finditer(r'【([^】]*)】', working):
+        rebuilt.append(working[last:m.start()])
+        inner = paren_classify.unify_import_notation(m.group(1) or '') or (m.group(1) or '')
+        # 【】は辞書色／配色だけ色へ。シリーズ名（ヒッコリー等）は商品名側
+        col = _token_is_color(inner) or ''
+        if not col and paren_classify.looks_like_colorway_text(inner):
+            col = paren_classify.normalize_colorway_display(inner) or ''
+        if not col:
+            # normalize が色語へ寄せられる場合のみ（短い非色語は落とさない）
+            maybe = paren_classify.normalize_color_value(inner) or ''
+            if maybe and _token_is_color(maybe):
+                col = maybe
+        if col and not color:
+            color = col
+            rebuilt.append(' ')
+        else:
+            # 非色の【ヒッコリー】は中身を商品名へ残す
+            rebuilt.append(inner)
+        last = m.end()
+    rebuilt.append(working[last:])
+    working = re.sub(r'[\s\u3000]+', ' ', ''.join(rebuilt)).strip()
+    for m in _FEATURE_BRACKET_RE.finditer(working):
+        feat = paren_classify.unify_import_notation(
+            (m.group(0) or '').strip('［］[]')
+        ) or (m.group(0) or '').strip('［］[]')
+        if feat and feat not in features:
+            features.append(feat)
+    working = _FEATURE_BRACKET_RE.sub(' ', working)
+    working = re.sub(r'[\s\u3000]+', ' ', working).strip()
 
     def _consume_paren(content: str) -> str:
         nonlocal color, size
@@ -1986,6 +2262,9 @@ def parse_maker_listing_title(
     # 注文単位・価格・色番一覧など販売情報を除去（七分袖等は保持）
     cleaned = clean_maker_product_name(name, maker_sku=base_sku)
     name = cleaned.get('cleanedName') or name
+    for feat in cleaned.get('features') or []:
+        if feat and feat not in features:
+            features.append(feat)
     if not name:
         return None
     planned_sku = planned_registered_sku(maker_sku=base_sku, position=position)
@@ -1996,6 +2275,7 @@ def parse_maker_listing_title(
         # 上下は品番末尾へ移す。補足欄へは載せない（他補足と混同しない）
         'position': position,
         'supplement': '',
+        'features': features,
         'plannedRegisteredSku': planned_sku,
         'title': unified,
         'originalTitle': unified,
@@ -2254,35 +2534,302 @@ def _aitoz_direct_candidates(maker_sku: str, *, manufacturer: str = '') -> list[
     return out
 
 
+def _styleist_ec_candidates(keyword: str, *, maker_sku: str = '', limit: int = 8) -> list[dict]:
+    """サーヴォ公式 Style-ist の無料品番検索。"""
+    sku = stock.text(maker_sku) or stock.text(keyword) or ''
+    kw = re.sub(r'\bsite:\S+', '', stock.text(keyword) or '').strip() or sku
+    out = []
+    seen = set()
+    # 直接詳細 URL（ハイフン→アンダースコア）を先に候補化
+    direct = styleist_item_url_from_sku(sku)
+    if direct:
+        out.append({
+            'title': sku,
+            'url': direct,
+            'source': 'styleist_ec',
+            'preferred': True,
+            'manufacturer': 'サーヴォ',
+        })
+        seen.add(direct)
+    url = styleist_catalog_search_url(kw)
+    _final, html = _http_get(url)
+    for m in _STYLEIST_ITEM_RE.finditer(html or ''):
+        path = m.group(1)
+        abs_url = urllib.parse.urljoin('https://www.style-ist.jp/', path)
+        if abs_url in seen:
+            continue
+        seen.add(abs_url)
+        # パスに品番茎が無い関連枠は落とす
+        path_k = sku_match_key(path.replace('_', '-'))
+        stem_k = sku_match_key(_model_stem(sku) or sku)
+        if stem_k and stem_k not in path_k and sku_match_key(sku) not in path_k:
+            continue
+        out.append({
+            'title': sku or path,
+            'url': abs_url,
+            'source': 'styleist_ec',
+            'preferred': True,
+            'manufacturer': 'サーヴォ',
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _nagaileben_search_api_html(keyword: str) -> str:
+    """ナガイ公式 /is と同じ無料検索API（HTML断片）。"""
+    kw = stock.text(keyword) or ''
+    body = {
+        'config': {
+            'p': 1, 'limit': 20, 'result_type': 2, 'path': '/is', 'view_type': 1,
+        },
+        'condition': {
+            'p': 1, 'limit': 20, 'sort': 0, 'q': kw,
+            'price_range_start': '', 'price_range_end': '', 'category': '',
+            'search_reserve_flag': 0, 'reserve_year': '', 'reserve_month': '',
+            'reserve_day': '', 'rental_start_date': '', 'and_or': 0,
+            'color': [], 'color_search_type': 1, 'item_category_nos_per_group_no': [],
+        },
+    }
+    data = json.dumps(body, ensure_ascii=False).encode('utf-8')
+    req = urllib.request.Request(
+        'https://www.nagaileben.net/api/front/item/search/search',
+        data=data,
+        headers={
+            'User-Agent': _USER_AGENT,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json, text/javascript, */*; q=0.01',
+            'Origin': 'https://www.nagaileben.net',
+            'Referer': nagaileben_catalog_search_url(kw),
+            'X-Requested-With': 'XMLHttpRequest',
+        },
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT_SEC) as resp:
+        raw = resp.read(500_000)
+    return raw.decode('utf-8', 'ignore')
+
+
+def _nagaileben_ec_candidates(keyword: str, *, maker_sku: str = '', limit: int = 8) -> list[dict]:
+    """ナガイレーベン公式ネットショップの無料品番検索。"""
+    sku = stock.text(maker_sku) or stock.text(keyword) or ''
+    kw = re.sub(r'\bsite:\S+', '', stock.text(keyword) or '').strip() or sku
+    out = []
+    seen = set()
+    direct = nagaileben_item_url_from_sku(sku)
+    if direct:
+        out.append({
+            'title': f'{sku} / ナガイレーベン',
+            'url': direct,
+            'source': 'nagaileben_ec',
+            'preferred': True,
+            'manufacturer': 'ナガイレーベン',
+        })
+        seen.add(direct)
+    try:
+        html = _nagaileben_search_api_html(kw)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        html = ''
+    if not html:
+        try:
+            _final, html = _http_get(nagaileben_catalog_search_url(kw))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            html = ''
+    for m in _NAGAI_ITEM_HREF_RE.finditer(html or ''):
+        abs_url = urllib.parse.urljoin('https://www.nagaileben.net/', m.group(1))
+        if abs_url in seen:
+            continue
+        seen.add(abs_url)
+        item_id = ''
+        id_m = re.search(r'/i/([^/?#]+)', abs_url)
+        if id_m:
+            item_id = urllib.parse.unquote(id_m.group(1))
+        # 検索語と無関係なリンクを落とす
+        if sku and item_id and not skus_equal(item_id, sku):
+            stem = _model_stem(sku)
+            if stem and not skus_equal(item_id, stem) and sku_match_key(stem) not in sku_match_key(item_id):
+                continue
+        title = item_id or sku
+        alt_m = re.search(
+            r'href=["\']' + re.escape(m.group(1)) + r'["\'][^>]*>[\s\S]{0,400}?alt=["\']([^"\']+)["\']',
+            html or '',
+            flags=re.I,
+        )
+        if alt_m:
+            title = _strip_tags(alt_m.group(1)) or title
+        out.append({
+            'title': title,
+            'url': abs_url,
+            'source': 'nagaileben_ec',
+            'preferred': True,
+            'manufacturer': 'ナガイレーベン',
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _season_base_sku(maker_sku: str) -> str:
+    """シーズン品番。サイズ付き variant SKU（FT5313S）から基礎へ戻す。
+
+    末尾1文字の機械削除はしない。公開 variant SKU の既知サイズ接尾のみ外す。
+    """
+    raw = stock.text(maker_sku) or ''
+    if not raw:
+        return ''
+    unified = paren_classify.unify_import_notation(raw) or raw
+    # 明示サイズ接尾（S/M/L/LL/3L…）だけ。全商品への末尾英字ストリップはしない
+    for suf in ('5L', '4L', '3L', 'LL', 'XXL', 'XL', 'SS', 'XS', 'EL', 'S', 'M', 'L', 'F'):
+        if len(unified) > len(suf) and unified.upper().endswith(suf):
+            head = unified[: -len(suf)]
+            if re.search(r'[A-Za-z0-9]$', head):
+                return head
+    return unified
+
+
+def _season_shop_candidates(keyword: str, *, maker_sku: str = '', limit: int = 6) -> list[dict]:
+    """シーズン静岡公式ショップ（Shopify）の無料 SKU→商品発見。
+
+    ページHTMLだけでは足りないため products/{{handle}}.js と products.json を使う。
+    """
+    sku = stock.text(maker_sku) or stock.text(keyword) or ''
+    base = _season_base_sku(sku) or sku
+    out = []
+    seen = set()
+
+    def add_hit(title: str, handle: str, page_json: dict | None = None):
+        page_url = season_product_page_url(handle)
+        if not page_url or page_url in seen:
+            return
+        seen.add(page_url)
+        hit = {
+            'title': title or handle,
+            'url': page_url,
+            'source': 'season_shop',
+            'preferred': True,
+            'manufacturer': 'シーズン',
+            'handle': handle,
+        }
+        if page_json:
+            hit['pageJson'] = page_json
+        out.append(hit)
+
+    # 1) handle 直叩き（小文字化。サイズ接尾は外した基礎）
+    for cand in (base, sku):
+        js_url = season_product_json_url(cand)
+        if not js_url:
+            continue
+        try:
+            _final, body = _http_get(js_url)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            continue
+        try:
+            data = json.loads(body)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict) or not data.get('handle'):
+            continue
+        add_hit(stock.text(data.get('title') or ''), data.get('handle') or '', data)
+        if len(out) >= limit:
+            return out
+
+    # 2) products.json をページ送りで SKU/タイトル照合（無料公開）
+    base_k = sku_match_key(base)
+    sku_k = sku_match_key(sku)
+    for page in range(1, 6):
+        if len(out) >= limit:
+            break
+        list_url = (
+            'https://shop.season-shizuoka.jp/products.json?limit=250&page='
+            + str(page)
+        )
+        try:
+            _final, body = _http_get(list_url)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            break
+        try:
+            payload = json.loads(body)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            break
+        products = payload.get('products') if isinstance(payload, dict) else None
+        if not products:
+            break
+        for prod in products:
+            if not isinstance(prod, dict):
+                continue
+            handle = stock.text(prod.get('handle') or '')
+            title = stock.text(prod.get('title') or '')
+            variants = prod.get('variants') or []
+            skus = [stock.text(v.get('sku') or '') for v in variants if isinstance(v, dict)]
+            blob_k = sku_match_key(' '.join([title, handle] + skus))
+            if not blob_k:
+                continue
+            matched = False
+            if base_k and (base_k in blob_k or any(sku_match_key(s) == base_k for s in skus)):
+                matched = True
+            if sku_k and any(sku_match_key(s) == sku_k for s in skus):
+                matched = True
+            if not matched:
+                continue
+            # products.json には色情報が薄いので .js を取りにいく
+            js_url = season_product_json_url(handle)
+            page_json = None
+            if js_url:
+                try:
+                    _f, js_body = _http_get(js_url)
+                    page_json = json.loads(js_body)
+                except (
+                    urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
+                    TypeError, ValueError, json.JSONDecodeError,
+                ):
+                    page_json = prod
+            add_hit(title, handle, page_json if isinstance(page_json, dict) else prod)
+            if len(out) >= limit:
+                break
+    return out
+
+
+_CATALOG_SOURCES = frozenset({
+    'midori_ec', 'kazen_ec', 'unifice', 'aitoz_direct',
+    'styleist_ec', 'nagaileben_ec', 'season_shop',
+})
+_PREFERRED_HIT_SOURCES = _CATALOG_SOURCES | frozenset({'adopted_url'})
+
+
 def _catalog_searches_for(
     *,
     manufacturer: str,
     query: str,
     maker_sku: str = '',
 ) -> list[dict]:
-    """メーカーに応じた無料カタログ検索。"""
+    """メーカーに応じた無料カタログ検索。
+
+    メーカー未確定（空）のときは全カタログへ推測ファンアウトしない。
+    """
     hits = []
     mfr = stock.text(manufacturer) or ''
     mfr_u = paren_classify.unify_import_notation(mfr).upper()
+    if not manufacturer_has_official_catalog(mfr):
+        return hits
     # ミドリ安全（仕入先ヒントまたは明示）
-    if (not mfr) or ('ミドリ安全' in mfr):
+    if 'ミドリ安全' in mfr:
         try:
             hits.extend(_midori_ec_candidates(query))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             pass
-    if (not mfr) or ('KAZEN' in mfr_u) or ('カゼン' in mfr):
+    if ('KAZEN' in mfr_u) or ('カゼン' in mfr):
         # site: 付きクエリは公式サイト検索語から外す
         kw = re.sub(r'\bsite:\S+', '', query or '').strip() or query
         try:
             hits.extend(_kazen_ec_candidates(kw))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             pass
-    if (not mfr) or is_montblanc_manufacturer(mfr):
+    if is_montblanc_manufacturer(mfr):
         try:
             hits.extend(_unifice_ec_candidates(query, manufacturer=mfr or '住商モンブラン'))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             pass
-    if (not mfr) or ('アイトス' in mfr) or ('AITOZ' in mfr_u):
+    if ('アイトス' in mfr) or ('AITOZ' in mfr_u):
         direct_sku = stock.text(maker_sku) or _aitoz_sku_token_from_text(query)
         if direct_sku:
             try:
@@ -2291,6 +2838,30 @@ def _catalog_searches_for(
                 )
             except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
                 pass
+    if is_servo_manufacturer(mfr):
+        kw = re.sub(r'\bsite:\S+', '', query or '').strip() or query
+        try:
+            hits.extend(
+                _styleist_ec_candidates(kw, maker_sku=stock.text(maker_sku) or kw)
+            )
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            pass
+    if is_nagaileben_manufacturer(mfr):
+        kw = re.sub(r'\bsite:\S+', '', query or '').strip() or query
+        try:
+            hits.extend(
+                _nagaileben_ec_candidates(kw, maker_sku=stock.text(maker_sku) or kw)
+            )
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            pass
+    if is_season_manufacturer(mfr):
+        kw = re.sub(r'\bsite:\S+', '', query or '').strip() or query
+        try:
+            hits.extend(
+                _season_shop_candidates(kw, maker_sku=stock.text(maker_sku) or kw)
+            )
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            pass
     return hits
 
 
@@ -2310,12 +2881,146 @@ def _brand_matches_manufacturer(brand: str, manufacturer: str) -> bool:
         ('MONTBLANC', 'モンブラン', '住商モンブラン'),
         ('KAZEN', 'カゼン'),
         ('ミドリ安全', 'MIDORI'),
+        ('サーヴォ', 'スタイルイスト', 'SERVO', 'STYLE-IST'),
+        ('ナガイレーベン', 'NAGAILEBEN'),
+        ('シーズン', 'SEASON'),
     )
     for group in aliases:
         keys = {sku_match_key(x) for x in group}
         if any(k and k in bk for k in keys) and any(k and k in mk for k in keys):
             return True
     return False
+
+
+def extract_nagaileben_colorways(html: str) -> list[dict]:
+    """ナガイ商品ページの配色（例: ネイビー＋ロイヤルブルー(94)）。
+
+    画像altやカラーボックスから取る。SKUだけでは色を決めない。
+    """
+    out = []
+    seen = set()
+    text = html or ''
+    for m in _NAGAI_COLORWAY_RE.finditer(text):
+        label = paren_classify.unify_import_notation(m.group(1) or '') or m.group(1)
+        code = stock.text(m.group(2) or '')
+        slash = _classify_slash_pair(label)
+        color = (
+            stock.text(slash.get('color') or '')
+            if slash.get('kind') == 'colorway'
+            else (normalize_maker_page_color(label) or '')
+        )
+        if not color:
+            color = re.sub(r'[＋+]', '×', label)
+        key = (_colorway_match_key(color), code)
+        if not color or key in seen:
+            continue
+        seen.add(key)
+        out.append({'color': color, 'colorCode': code, 'label': label})
+    # alt のみ（コード無し）
+    for m in re.finditer(r"alt=['\"]([^'\"]+)['\"]", text, flags=re.I):
+        alt = _strip_tags(m.group(1) or '')
+        if not alt or alt.lower() in ('back style', 'side style', 'front style'):
+            continue
+        if not any(ch in alt for ch in '＋+×✕*＊/／'):
+            continue
+        slash = _classify_slash_pair(alt)
+        color = (
+            stock.text(slash.get('color') or '')
+            if slash.get('kind') == 'colorway'
+            else (normalize_maker_page_color(alt) or '')
+        )
+        if not color:
+            color = re.sub(r'[＋+]', '×', alt)
+        key = (_colorway_match_key(color), '')
+        if not color or key in seen:
+            continue
+        # 既にコード付き同色があればスキップ
+        if any(_colorway_match_key(x['color']) == key[0] for x in out):
+            continue
+        seen.add(key)
+        out.append({'color': color, 'colorCode': '', 'label': alt})
+    return out
+
+
+def _colorway_match_key(value: str) -> str:
+    """配色照合用。＋/+ を × へ寄せてから既存 color_match_key を使う。"""
+    raw = stock.text(value) or ''
+    if not raw:
+        return ''
+    norm = normalize_maker_page_color(raw) or raw
+    norm = re.sub(r'[＋+]', '×', norm)
+    return paren_classify.color_match_key(norm)
+
+
+def _match_colorway_to_current(colorways: list[dict], current_color: str) -> dict | None:
+    cur = stock.text(current_color) or ''
+    if not cur or not colorways:
+        return None
+    cur_k = _colorway_match_key(cur)
+    if not cur_k:
+        return None
+    hits = []
+    for cw in colorways:
+        ck = _colorway_match_key(cw.get('color') or '')
+        lk = _colorway_match_key(cw.get('label') or '')
+        if ck == cur_k or lk == cur_k:
+            hits.append(cw)
+            continue
+        # 片方が他方を含む（補正履歴の短縮表記）
+        if ck and (ck in cur_k or cur_k in ck):
+            hits.append(cw)
+    # 複数ヒットしたら曖昧（SKUだけでは決めない）
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def _season_fields_from_product_json(data: dict, *, maker_sku: str) -> dict:
+    """Shopify product JSON から名・色・features・SKU照合情報を取る。"""
+    title = stock.text(data.get('title') or '')
+    handle = stock.text(data.get('handle') or '')
+    variants = data.get('variants') or []
+    skus = [stock.text(v.get('sku') or '') for v in variants if isinstance(v, dict)]
+    base = _season_base_sku(maker_sku) or maker_sku
+    matched = False
+    matched_sku = ''
+    for s in skus:
+        if skus_equal(s, maker_sku) or skus_equal(s, base) or skus_equal(
+            _season_base_sku(s), base,
+        ):
+            matched = True
+            matched_sku = s
+            break
+    if not matched and handle and (
+        sku_match_key(handle) == sku_match_key(base)
+        or sku_match_key(handle) == sku_match_key(maker_sku)
+    ):
+        matched = True
+        matched_sku = base
+    if not matched and title and sku_match_key(base) in sku_match_key(title):
+        matched = True
+        matched_sku = base
+    parsed = parse_maker_listing_title(title, base or maker_sku, sku_verified=True) or {}
+    tags = data.get('tags') or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(',') if t.strip()]
+    features = list(parsed.get('features') or [])
+    for t in tags:
+        tt = paren_classify.unify_import_notation(stock.text(t) or '') or stock.text(t)
+        if tt and tt not in features and tt not in ('男性用', '女性用'):
+            # 販促タグは features、性別は無視
+            if tt in ('制電', '抗菌', '厚手') or _FEATURE_BRACKET_RE.fullmatch(f'［{tt}］'):
+                features.append(tt)
+    return {
+        'matched': matched,
+        'matchedSku': matched_sku or base,
+        'name': stock.text(parsed.get('name') or '') or '',
+        'color': stock.text(parsed.get('color') or '') or '',
+        'features': features,
+        'title': title,
+        'handle': handle,
+        'variantSkus': skus,
+    }
 
 
 def _build_candidate_from_hit(
@@ -2333,13 +3038,44 @@ def _build_candidate_from_hit(
 
     result:
       - candidate: 採用可能な候補 dict
+      - candidates: 配色選択肢など複数（任意）
       - rejection: sku_mismatch / maker_mismatch / parse_incomplete /
                    hint_reject / page_unavailable
     """
     title = hit.get('title') or ''
     url = hit.get('url') or ''
     page_html = hit.get('pageHtml') or ''
+    page_json = hit.get('pageJson') if isinstance(hit.get('pageJson'), dict) else None
     page_title = title
+    # シーズン: .js JSON があれば HTML 取得前に使う（ページスクレイプだけでは不足）
+    if page_json is None and hit.get('source') == 'season_shop' and url:
+        js_url = ''
+        handle = stock.text(hit.get('handle') or '')
+        if handle:
+            js_url = season_product_json_url(handle)
+        if not js_url and '/products/' in url:
+            path = urllib.parse.urlparse(url).path.rstrip('/')
+            handle = path.split('/')[-1]
+            js_url = season_product_json_url(handle)
+        if js_url:
+            try:
+                _final, body = _http_get(js_url)
+                page_json = json.loads(body)
+            except (
+                urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
+                TypeError, ValueError, json.JSONDecodeError,
+            ):
+                page_json = None
+    if page_json and not page_html:
+        # JSON から最小 HTML 相当の見出しを合成（共通 extract 経路へ載せる）
+        syn_title = stock.text(page_json.get('title') or title)
+        page_html = (
+            f'<html><head><title>{html_lib.escape(syn_title)}</title></head>'
+            f'<body><h1>{html_lib.escape(syn_title)}</h1>'
+            f'<div>品番 {html_lib.escape(stock.text(maker_sku))}</div></body></html>'
+        )
+        page_title = syn_title
+        title = syn_title or title
     if not page_html:
         try:
             _final, page_html = _http_get(url)
@@ -2359,31 +3095,81 @@ def _build_candidate_from_hit(
 
     pos_base, _ = position_sku.strip_sku_position_suffix(maker_sku)
     pos_base = pos_base or stock.text(maker_sku)
+    # シーズン: サイズ付き variant SKU でも基礎品番で照合（末尾英字の一括削除はしない）
+    season_base = ''
+    if hit.get('source') == 'season_shop' or is_season_manufacturer(
+        stock.text(manufacturer) or stock.text(hit.get('manufacturer') or '')
+    ):
+        season_base = _season_base_sku(pos_base) or pos_base
     # 登録予定は台帳の完全品番を維持（ページ基礎品番へ置き換えない）
     ledger_sku = stock.text(current_sku) or pos_base
     heading = page_title or title or _extract_h1(page_html)
     info = extract_product_info_fields(page_html)
     mfr = stock.text(manufacturer) or stock.text(hit.get('manufacturer') or '')
-    sku_info = page_sku_match(
-        page_html, heading, pos_base,
-        manufacturer=mfr, page_url=url,
-    )
-    if sku_info.get('match') == 'none' and not skus_equal(pos_base, maker_sku):
+    if page_json:
+        season_info = _season_fields_from_product_json(page_json, maker_sku=pos_base)
+        if season_info.get('matched'):
+            info = dict(info)
+            if season_info.get('name') and not info.get('name'):
+                info['name'] = season_info['name']
+            if season_info.get('color') and not info.get('color'):
+                info['color'] = season_info['color']
+            info['features'] = list(season_info.get('features') or [])
+            info['sku'] = info.get('sku') or season_info.get('matchedSku') or season_base or pos_base
+            heading = season_info.get('title') or heading
+            sku_info = {
+                'match': 'structured',
+                'matchedValue': season_info.get('matchedSku') or pos_base,
+                'evidenceLabel': '公式ショップSKU/handle一致',
+                'brand': 'シーズン',
+                'productName': season_info.get('name') or '',
+                'siteCode': '',
+            }
+        else:
+            return {
+                'candidate': None,
+                'rejection': 'sku_mismatch',
+                'detail': {
+                    'sourceUrl': url,
+                    'title': heading,
+                    'reason': 'sku_mismatch',
+                    'note': 'シーズン商品JSONのSKU/handleが一致しませんでした。',
+                },
+            }
+    else:
+        match_sku = season_base or pos_base
         sku_info = page_sku_match(
-            page_html, heading, maker_sku,
+            page_html, heading, match_sku,
             manufacturer=mfr, page_url=url,
         )
-    if sku_info.get('match') == 'none':
-        return {
-            'candidate': None,
-            'rejection': 'sku_mismatch',
-            'detail': {
-                'sourceUrl': url,
-                'title': heading,
-                'reason': 'sku_mismatch',
-                'note': '商品情報表・構造化データ／見出しの完全品番が一致しませんでした。',
-            },
-        }
+        if sku_info.get('match') == 'none' and not skus_equal(match_sku, maker_sku):
+            sku_info = page_sku_match(
+                page_html, heading, maker_sku,
+                manufacturer=mfr, page_url=url,
+            )
+        # 商品情報表のサイズ併記コード（KZN715-28 SS）は structured として認める
+        if sku_info.get('match') == 'none' and info.get('sku') and skus_equal(
+            info.get('sku'), match_sku,
+        ):
+            sku_info = {
+                'match': 'structured',
+                'matchedValue': info.get('sku'),
+                'evidenceLabel': '商品情報表の品番一致',
+                'brand': info.get('brand') or '',
+                'productName': info.get('name') or '',
+                'siteCode': '',
+            }
+        if sku_info.get('match') == 'none':
+            return {
+                'candidate': None,
+                'rejection': 'sku_mismatch',
+                'detail': {
+                    'sourceUrl': url,
+                    'title': heading,
+                    'reason': 'sku_mismatch',
+                    'note': '商品情報表・構造化データ／見出しの完全品番が一致しませんでした。',
+                },
+            }
 
     page_brand = stock.text(sku_info.get('brand') or info.get('brand') or '')
     if require_manufacturer_match and mfr and page_brand and not _brand_matches_manufacturer(
@@ -2490,6 +3276,11 @@ def _build_candidate_from_hit(
     # 商品情報表・JSON-LD の色を、見出し分解で取れなかったときだけ補う
     # （ページ横断の色一覧は extract 側で除外済み）
     table_color = normalize_maker_page_color(info.get('color') or '')
+    # カラー名欄の辞書外短文（ベージュ白等）は extract 済み値を維持
+    if not table_color and info.get('color') and (
+        info.get('colorSource') or ''
+    ).startswith('product'):
+        table_color = stock.text(info.get('color') or '')
     color_from_table = False
     if parsed and not stock.text(parsed.get('color') or '') and table_color:
         if sku_info.get('match') != 'base_only':
@@ -2604,15 +3395,22 @@ def _build_candidate_from_hit(
             'sourceLabel': sku_source_label,
         },
     }
+    # 表示用サイズ（旧CSVサイズは上書きしない）。表の併記 SS 等も含められる
+    display_size = (
+        stock.text(parsed.get('size') or '')
+        or stock.text(info.get('size') or '')
+    )
+    features = list(parsed.get('features') or []) or list(info.get('features') or [])
     # 色が空でも名が取れれば候補にはする（不足は表示用。色補正完了とはしない）
     cand = {
         'name': cleaned_name,
         'cleanedName': cleaned_name,
         'originalTitle': original_title,
         'color': cand_color,
-        'size': parsed.get('size') or '',
+        'size': display_size,
         'position': position,
         'supplement': supplement,
+        'features': features,
         'makerSku': pos_base,
         'baseSku': stock.text(sku_info.get('baseSku') or sku_parts.get('base') or '') or pos_base,
         'makerColorCode': maker_color_code,
@@ -2643,7 +3441,65 @@ def _build_candidate_from_hit(
             'plannedRegisteredSku': planned_sku,
         },
     }
-    return {'candidate': cand, 'rejection': None, 'detail': None}
+    # ナガイ等: 同一SKUに複数配色があるときは SKU だけでは決めず選択肢を返す
+    colorways = []
+    if hit.get('source') == 'nagaileben_ec' or is_nagaileben_manufacturer(mfr):
+        colorways = extract_nagaileben_colorways(page_html)
+    if len(colorways) >= 2:
+        matched_cw = _match_colorway_to_current(colorways, current_color)
+        if matched_cw:
+            cand = dict(cand)
+            cand['color'] = matched_cw.get('color') or cand.get('color') or ''
+            cand['makerColorCode'] = matched_cw.get('colorCode') or ''
+            cand['colorUnavailable'] = not bool(cand['color'])
+            cand['missingFields'] = [
+                f for f in (cand.get('missingFields') or []) if f != 'color'
+            ] if cand['color'] else list(cand.get('missingFields') or [])
+            fs = dict(cand.get('fieldSources') or {})
+            fs['color'] = {
+                'value': cand['color'],
+                'sourceUrl': url,
+                'sourceLabel': '配色（旧CSV色と一致）',
+                'unavailable': False,
+            }
+            cand['fieldSources'] = fs
+            cand['diff'] = dict(cand.get('diff') or {})
+            cand['diff']['colorChanged'] = (
+                bool(cand['color']) and cand['color'] != stock.text(current_color)
+            )
+            return {'candidate': cand, 'candidates': [cand], 'rejection': None, 'detail': None}
+        expanded = []
+        for cw in colorways:
+            one = dict(cand)
+            one['color'] = cw.get('color') or ''
+            one['makerColorCode'] = cw.get('colorCode') or ''
+            one['colorUnavailable'] = not bool(one['color'])
+            one['missingFields'] = (
+                [f for f in (cand.get('missingFields') or []) if f != 'color']
+                if one['color'] else list(cand.get('missingFields') or [])
+            )
+            fs = dict(cand.get('fieldSources') or {})
+            fs['color'] = {
+                'value': one['color'],
+                'sourceUrl': url,
+                'sourceLabel': '配色選択肢',
+                'unavailable': not bool(one['color']),
+            }
+            one['fieldSources'] = fs
+            one['diff'] = dict(cand.get('diff') or {})
+            one['diff']['colorChanged'] = (
+                bool(one['color']) and one['color'] != stock.text(current_color)
+            )
+            one['colorwayChoice'] = True
+            expanded.append(one)
+        return {
+            'candidate': expanded[0],
+            'candidates': expanded,
+            'rejection': None,
+            'detail': None,
+            'colorwayChoice': True,
+        }
+    return {'candidate': cand, 'candidates': [cand], 'rejection': None, 'detail': None}
 
 
 def _candidate_identity_key(cand: dict) -> tuple:
@@ -2770,6 +3626,13 @@ def _lookup_status_for_candidates(candidates: list[dict]) -> tuple[str, str, str
     if not candidates:
         return 'no_match', '候補なし', ''
     if len(candidates) > 1:
+        if any(c.get('colorwayChoice') for c in candidates):
+            return (
+                'colorway_choice',
+                '配色の選択が必要',
+                '同一品番に複数の配色があります。旧CSVの色／補正履歴と一致するものを選んでください'
+                '（SKUだけでは自動決定しません）。',
+            )
         any_color = any(stock.text(c.get('color') or '') for c in candidates)
         if not any_color:
             return (
@@ -2868,9 +3731,16 @@ def search_maker_product(
 ) -> dict:
     """メーカー＋メーカー品番（＋旧名ヒント）で候補を無料取得する。
 
+    検索順:
+      1) 以前採用した URL（maker+SKU を再照合）
+      2) メーカー公式／公式ショップの品番検索
+      3) 一般検索（DDG）
+      4) 未解決時は手動URL（別API）
+
     status:
-      ok / multiple / fetch_failed / page_unavailable /
-      sku_mismatch / parse_incomplete / no_match / invalid_sku
+      ok / multiple / colorway_choice / fetch_failed / page_unavailable /
+      sku_mismatch / parse_incomplete / official_no_hit / no_match /
+      maker_mismatch / invalid_sku
     """
     ensure_schema(c)
     raw_sku = stock.text(maker_sku)
@@ -2960,22 +3830,27 @@ def search_maker_product(
         }
 
     reference = reference_search_url(manufacturer=mfr, maker_sku=sku, hints=hints)
-    if mfr == 'ミドリ安全' or manufacturer_hint_from_supplier(supplier_t) == 'ミドリ安全':
+    hint_mfr = manufacturer_hint_from_supplier(supplier_t)
+    if mfr == 'ミドリ安全' or hint_mfr == 'ミドリ安全':
         reference = midori_catalog_search_url(sku)
-    elif mfr == 'KAZEN' or manufacturer_hint_from_supplier(supplier_t) == 'KAZEN':
+    elif mfr == 'KAZEN' or hint_mfr == 'KAZEN':
         reference = kazen_catalog_search_url(sku)
-    elif is_montblanc_manufacturer(mfr) or is_montblanc_manufacturer(
-        manufacturer_hint_from_supplier(supplier_t)
-    ):
+    elif is_montblanc_manufacturer(mfr) or is_montblanc_manufacturer(hint_mfr):
         reference = unifice_catalog_search_url(sku)
     elif (
         mfr == 'アイトス'
-        or manufacturer_hint_from_supplier(supplier_t) == 'アイトス'
+        or hint_mfr == 'アイトス'
         or 'AITOZ' in paren_classify.unify_import_notation(mfr).upper()
     ):
         direct = _aitoz_direct_candidates(sku, manufacturer='アイトス')
         if direct:
             reference = direct[0]['url']
+    elif is_servo_manufacturer(mfr) or is_servo_manufacturer(hint_mfr):
+        reference = styleist_catalog_search_url(sku)
+    elif is_nagaileben_manufacturer(mfr) or is_nagaileben_manufacturer(hint_mfr):
+        reference = nagaileben_catalog_search_url(sku)
+    elif is_season_manufacturer(mfr) or is_season_manufacturer(hint_mfr):
+        reference = season_product_page_url(_season_base_sku(sku) or sku) or reference
 
     stages = build_search_query_stages(manufacturer=mfr, maker_sku=sku, hints=hints)
     raw_hits = []
@@ -2986,31 +3861,57 @@ def search_maker_product(
     maker_mismatches = 0
     parse_incomplete_pages = []
     seen_urls = set()
+    official_catalog_tried = False
+    official_catalog_empty = False
+    colorway_choice_needed = False
+
+    # 1) 以前採用した URL を再取得して maker+SKU を再照合（保存名の盲信はしない）
+    if saved_payload and stock.text(saved_payload.get('sourceUrl') or ''):
+        adopted_url = stock.text(saved_payload.get('sourceUrl') or '')
+        if adopted_url not in seen_urls:
+            seen_urls.add(adopted_url)
+            raw_hits.append({
+                'title': saved_payload.get('originalTitle') or saved_payload.get('name') or sku,
+                'url': adopted_url,
+                'source': 'adopted_url',
+                'preferred': True,
+                'manufacturer': mfr or saved_payload.get('manufacturer') or '',
+            })
 
     for query in stages:
         queries_tried.append(query)
-        # 1) メーカー公式カタログ（無料）
+        # 2) メーカー公式カタログ（無料）。
+        # _catalog_searches_for 側でメーカー未確定時のファンアウトを抑止する。
         catalog_added = 0
         try:
-            for hit in _catalog_searches_for(
+            if manufacturer_has_official_catalog(mfr):
+                official_catalog_tried = True
+            catalog_hits = _catalog_searches_for(
                 manufacturer=mfr, query=query, maker_sku=sku,
-            ):
+            )
+            if manufacturer_has_official_catalog(mfr) and not catalog_hits:
+                official_catalog_empty = True
+            for hit in catalog_hits:
                 u = hit.get('url') or ''
                 if u in seen_urls:
                     continue
                 seen_urls.add(u)
                 raw_hits.append(hit)
                 catalog_added += 1
+                official_catalog_empty = False
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             search_errors += 1
-        # カタログで十分な候補があれば DDG を足さない（関連・販促ノイズを混入させない）
+            if manufacturer_has_official_catalog(mfr):
+                official_catalog_tried = True
+        # 公式カタログで十分な候補があれば DDG を足さない（関連・販促ノイズを混入させない）
+        # ※採用済みURLだけでは DDG を止めない（再照合失敗時の一般検索を残す）
         # ※色がカタログに無い場合は後段で同一品番の補完検索を行う
         has_catalog_hit = any(
-            hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice', 'aitoz_direct')
+            hit.get('source') in _CATALOG_SOURCES
             for hit in raw_hits
         )
         if not has_catalog_hit:
-            # 2) DuckDuckGo HTML（無料・ボット壁で空になり得る）
+            # 3) DuckDuckGo HTML（無料・ボット壁で空になり得る）
             try:
                 for hit in _ddg_candidates(query, limit=6):
                     u = hit.get('url') or ''
@@ -3024,10 +3925,13 @@ def search_maker_product(
         if has_catalog_hit and (
             catalog_added
             or any(
-                hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice', 'aitoz_direct')
+                hit.get('source') in _PREFERRED_HIT_SOURCES
                 and (
                     sku_match_key(sku) in sku_match_key(hit.get('title') or '')
-                    or hit.get('source') in ('unifice', 'aitoz_direct')
+                    or hit.get('source') in (
+                        'unifice', 'aitoz_direct', 'styleist_ec',
+                        'nagaileben_ec', 'season_shop', 'adopted_url',
+                    )
                 )
                 for hit in raw_hits
             )
@@ -3067,6 +3971,14 @@ def search_maker_product(
             host_boost = 0
         elif h.get('source') == 'aitoz_direct':
             host_boost = 0
+        elif is_servo_manufacturer(mfr) and ('style-ist' in url or 'servo' in url):
+            host_boost = 0
+        elif h.get('source') in ('styleist_ec', 'nagaileben_ec', 'season_shop', 'adopted_url'):
+            host_boost = 0
+        elif is_nagaileben_manufacturer(mfr) and 'nagaileben' in url:
+            host_boost = 0
+        elif is_season_manufacturer(mfr) and 'season-shizuoka' in url:
+            host_boost = 0
         pref = 0 if h.get('preferred') else 1
         # タイトル/URLに品番 → 公式ホスト → 茎一致 → preferred
         return (exact, host_boost, stem_hit, pref)
@@ -3091,7 +4003,6 @@ def search_maker_product(
             page_errors += 1
             continue
         rejection = built.get('rejection')
-        cand = built.get('candidate')
         detail = built.get('detail')
         if rejection == 'page_unavailable':
             page_errors += 1
@@ -3106,25 +4017,31 @@ def search_maker_product(
             if detail:
                 parse_incomplete_pages.append(detail)
             continue
-        if rejection == 'hint_reject' or not cand:
+        built_cands = list(built.get('candidates') or [])
+        if built.get('candidate') and not built_cands:
+            built_cands = [built['candidate']]
+        if rejection == 'hint_reject' or not built_cands:
             continue
+        if built.get('colorwayChoice') or any(c.get('colorwayChoice') for c in built_cands):
+            colorway_choice_needed = True
         # 整理後名・色・品番が同じ候補は出典URLを残してまとめる（名一致だけでは色違いを統合しない）
-        key = _candidate_identity_key(cand)
-        merged = False
-        for existing in live_candidates:
-            if _candidate_identity_key(existing) != key:
+        for cand in built_cands:
+            key = _candidate_identity_key(cand)
+            merged = False
+            for existing in live_candidates:
+                if _candidate_identity_key(existing) != key:
+                    continue
+                _merge_candidate_urls(existing, cand)
+                merged = True
+                break
+            if merged:
                 continue
-            _merge_candidate_urls(existing, cand)
-            merged = True
-            break
-        if merged:
-            continue
-        cand = dict(cand)
-        if cand.get('sourceUrl'):
-            cand['sourceUrls'] = [cand['sourceUrl']]
-        else:
-            cand['sourceUrls'] = []
-        live_candidates.append(cand)
+            cand = dict(cand)
+            if cand.get('sourceUrl'):
+                cand['sourceUrls'] = [cand['sourceUrl']]
+            else:
+                cand['sourceUrls'] = []
+            live_candidates.append(cand)
 
     # カタログで名は取れたが色が無いとき、同一品番の公開ページから色だけ補完する
     needs_color_complement = any(
@@ -3258,8 +4175,20 @@ def search_maker_product(
                 '（検索ページを開いただけでは補正完了になりません）。'
             )
         elif raw_hits and page_errors >= max(1, min(len(raw_hits), 10)) and not parse_incomplete_pages:
-            status, label = 'page_unavailable', '商品ページ取得不可'
-            note = '検索ヒットはありましたが商品ページを取得できませんでした。'
+            only_adopted = all(
+                (h.get('source') or '') == 'adopted_url' for h in raw_hits
+            )
+            if only_adopted and search_errors:
+                # 採用URL再取得失敗＋公式/一般検索も不通 → 検索結果取得不可
+                status, label = 'fetch_failed', '検索結果取得不可'
+                note = (
+                    '以前の採用URLを再取得できず、無料の公開検索へも届きませんでした。'
+                    '参考ページを開いて確認できます'
+                    '（検索ページを開いただけでは補正完了になりません）。'
+                )
+            else:
+                status, label = 'page_unavailable', '商品ページ取得不可'
+                note = '検索ヒットはありましたが商品ページを取得できませんでした。'
         elif page_errors and not raw_hits:
             status, label = 'page_unavailable', '商品ページ取得不可'
             note = '候補ページを取得できませんでした。参考ページを開いて確認できます。'
@@ -3298,6 +4227,15 @@ def search_maker_product(
                 '検索でページは見つかりましたが、商品コード／見出しの完全品番が一致しませんでした。'
                 '関連商品やナビ内の品番だけの一致は候補にしません。'
                 '見つかった公開ページのURLを指定して再取得できます。'
+            )
+        elif official_catalog_tried and official_catalog_empty and not any(
+            h.get('source') not in _CATALOG_SOURCES and h.get('source') != 'adopted_url'
+            for h in raw_hits
+        ):
+            status, label = 'official_no_hit', '公式サイトに該当なし'
+            note = (
+                'メーカー公式／公式ショップの品番検索では該当商品が見つかりませんでした。'
+                '一般検索でも採用できる候補はありません。商品ページURLを指定して取得できます。'
             )
         else:
             status, label = 'no_match', '候補なし'

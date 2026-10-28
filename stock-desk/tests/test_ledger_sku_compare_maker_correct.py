@@ -449,7 +449,8 @@ class SkuCompareMakerPreviewTest(unittest.TestCase):
                     c, manufacturer='ミドリ安全', maker_sku='72-1226',
                     source_name='スクラブ',
                 )
-            self.assertEqual(none['status'], 'no_match')
+            self.assertEqual(none['status'], 'official_no_hit')
+            self.assertEqual(none['statusLabel'], '公式サイトに該当なし')
 
             with mock.patch.object(msl, '_ddg_candidates', side_effect=OSError('down')), \
                     mock.patch.object(msl, '_catalog_searches_for', side_effect=OSError('down')), \

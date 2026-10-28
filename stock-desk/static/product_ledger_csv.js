@@ -2963,10 +2963,12 @@
 
   function bulkMakerStatusLabel(status){
     const map={
-      ok:'一致候補1件',multiple:'候補複数',fetch_failed:'検索結果取得不可',
+      ok:'一致候補1件',multiple:'候補複数',colorway_choice:'配色の選択が必要',
+      fetch_failed:'検索結果取得不可',
       page_unavailable:'商品ページ取得不可',sku_mismatch:'品番不一致',
       maker_mismatch:'メーカー不一致',
-      parse_incomplete:'品番一致したが必要項目抽出不可',no_match:'候補なし',
+      parse_incomplete:'品番一致したが必要項目抽出不可',
+      official_no_hit:'公式サイトに該当なし',no_match:'候補なし',
       invalid_sku:'メーカー品番が対象外',invalid_url:'URLが対象外',
       pending:'未処理',cancelled:'未処理・中止',error:'取得失敗'
     }
@@ -2974,7 +2976,7 @@
   }
 
   function makerLookupNeedsUrlAssist(status){
-    return ['no_match','parse_incomplete','sku_mismatch','maker_mismatch',
+    return ['no_match','official_no_hit','parse_incomplete','sku_mismatch','maker_mismatch',
       'page_unavailable','fetch_failed','invalid_url','error'].includes(status||'')
   }
 
@@ -3007,11 +3009,11 @@
     ;(panel.results||[]).forEach(r=>{
       if(r.status==='ok'&&r.adoptableSingle){
         if(!adoptSel[bulkMakerAdoptSelectionKey(r,0)]&&!r.adopted)remainingConfirm+=1
-      }else if(r.status==='multiple'){
+      }else if(r.status==='multiple'||r.status==='colorway_choice'){
         const picked=Object.keys(adoptSel).some(k=>k.startsWith(`${r.searchKey}#`)&&adoptSel[k])
         if(!picked&&!r.adopted)remainingConfirm+=1
       }else if(['parse_incomplete','sku_mismatch','maker_mismatch','invalid_url',
-        'page_unavailable','fetch_failed','error'].includes(r.status)){
+        'page_unavailable','fetch_failed','error','official_no_hit'].includes(r.status)){
         remainingConfirm+=1
       }
     })
@@ -3031,7 +3033,7 @@
 
   function bulkMakerCountLine(panel){
     const counts=(panel&&panel.counts)||{}
-    return `候補1件 ${counts.ok||0}　複数 ${counts.multiple||0}　要確認 ${counts.needsConfirm||0}　取得失敗 ${(counts.fetchFailed||0)+(counts.pageUnavailable||0)+(counts.error||0)}　候補なし ${counts.noMatch||0}　未処理・中止 ${(counts.cancelled||0)+(counts.pending||0)}`
+    return `候補1件 ${counts.ok||0}　複数 ${(counts.multiple||0)+(counts.colorwayChoice||0)}　要確認 ${counts.needsConfirm||0}　取得失敗 ${(counts.fetchFailed||0)+(counts.pageUnavailable||0)+(counts.error||0)}　候補なし ${(counts.noMatch||0)+(counts.officialNoHit||0)}　未処理・中止 ${(counts.cancelled||0)+(counts.pending||0)}`
   }
 
   /**
@@ -3207,7 +3209,7 @@
         if(!url){st.toast('商品ページURLを入力してください。');return}
         st.busy=true
         panel.urlFetchErrors[key]=''
-        paintDialog()
+        refreshBulkMakerPanelUi(st)
         try{
           const result=await st.api('/api/product-ledger-csv/maker-lookup/from-url',{
             url,
@@ -3239,7 +3241,8 @@
           const prevStatus=row.status||''
           const dec=(k)=>{if(counts[k])counts[k]=Math.max(0,(counts[k]||0)-1)}
           const statusKey={
-            ok:'ok',multiple:'multiple',no_match:'noMatch',
+            ok:'ok',multiple:'multiple',colorway_choice:'colorwayChoice',
+            no_match:'noMatch',official_no_hit:'officialNoHit',
             fetch_failed:'fetchFailed',page_unavailable:'pageUnavailable',
             sku_mismatch:'needsConfirm',maker_mismatch:'needsConfirm',
             parse_incomplete:'needsConfirm',error:'error',invalid_url:'needsConfirm'
@@ -3247,7 +3250,9 @@
           if(statusKey[prevStatus])dec(statusKey[prevStatus]==='needsConfirm'?'needsConfirm':statusKey[prevStatus])
           if(next.status==='ok')counts.ok=(counts.ok||0)+1
           else if(next.status==='multiple')counts.multiple=(counts.multiple||0)+1
+          else if(next.status==='colorway_choice')counts.colorwayChoice=(counts.colorwayChoice||0)+1
           else if(next.status==='no_match')counts.noMatch=(counts.noMatch||0)+1
+          else if(next.status==='official_no_hit')counts.officialNoHit=(counts.officialNoHit||0)+1
           else if(next.status==='fetch_failed')counts.fetchFailed=(counts.fetchFailed||0)+1
           else if(next.status==='page_unavailable')counts.pageUnavailable=(counts.pageUnavailable||0)+1
           else if(next.status==='error')counts.error=(counts.error||0)+1
@@ -3270,7 +3275,8 @@
           st.toast(panel.urlFetchErrors[key],6000)
         }finally{
           st.busy=false
-          paintDialog()
+          // URL取得後は候補リスト構造が変わるのでパネル差し替え（外枠・内部スクロール保持）
+          refreshBulkMakerPanelUi(st)
         }
       }
     })

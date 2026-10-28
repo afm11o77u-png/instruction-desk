@@ -24,11 +24,13 @@ BULK_LOOKUP_JOB_TTL_SEC = 60 * 60
 _STATUS_LABELS = {
     'ok': '一致候補1件',
     'multiple': '候補複数',
+    'colorway_choice': '配色の選択が必要',
     'fetch_failed': '検索結果取得不可',
     'page_unavailable': '商品ページ取得不可',
     'sku_mismatch': '品番不一致',
     'maker_mismatch': 'メーカー不一致',
     'parse_incomplete': '品番一致したが必要項目抽出不可',
+    'official_no_hit': '公式サイトに該当なし',
     'no_match': '候補なし',
     'invalid_sku': 'メーカー品番が対象外',
     'invalid_url': 'URLが対象外',
@@ -251,10 +253,12 @@ def _empty_counts() -> dict:
     return {
         'ok': 0,
         'multiple': 0,
+        'colorwayChoice': 0,
         'needsConfirm': 0,  # multiple + parse_incomplete + sku_mismatch 等の要確認系
         'fetchFailed': 0,
         'pageUnavailable': 0,
         'noMatch': 0,
+        'officialNoHit': 0,
         'cancelled': 0,
         'pending': 0,
         'error': 0,
@@ -267,6 +271,9 @@ def _bump_counts(counts: dict, status: str) -> None:
     elif status == 'multiple':
         counts['multiple'] += 1
         counts['needsConfirm'] += 1
+    elif status == 'colorway_choice':
+        counts['colorwayChoice'] += 1
+        counts['needsConfirm'] += 1
     elif status in (
         'parse_incomplete', 'sku_mismatch', 'maker_mismatch',
         'invalid_sku', 'invalid_url',
@@ -276,6 +283,8 @@ def _bump_counts(counts: dict, status: str) -> None:
         counts['fetchFailed'] += 1
     elif status == 'page_unavailable':
         counts['pageUnavailable'] += 1
+    elif status == 'official_no_hit':
+        counts['officialNoHit'] += 1
     elif status == 'no_match':
         counts['noMatch'] += 1
     elif status == 'cancelled':

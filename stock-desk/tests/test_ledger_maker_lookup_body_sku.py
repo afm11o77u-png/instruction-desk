@@ -234,7 +234,9 @@ class KazenLookupSearchTest(unittest.TestCase):
                 none = msl.search_maker_product(
                     c, manufacturer='KAZEN', maker_sku='APK499-10',
                 )
-            self.assertEqual(none['status'], 'no_match')
+            # 公式カタログを試して空 → 「候補なし」ではなく公式ヒットなし
+            self.assertEqual(none['status'], 'official_no_hit')
+            self.assertEqual(none['statusLabel'], '公式サイトに該当なし')
         finally:
             c.close()
             folder.cleanup()
