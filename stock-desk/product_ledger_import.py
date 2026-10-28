@@ -174,6 +174,79 @@ def format_provisional_official_name(base_name):
     return stock.text(cleaned) or base
 
 
+def apply_representative_name_color_split(
+    chosen_name,
+    *,
+    existing_color='',
+    lock_name=False,
+    lock_color=False,
+):
+    """代表名決定後の共有色抽出＋商品名分離。
+
+    括弧内・括弧外とも product_ledger_paren.split_name_and_color を使う。
+    色が明確なときだけ color を立て、その色だけ名から除去する。
+    要確認・複数色は色を立てず名もいじらない。
+    lock_name: 既存公式名など名を変えない。
+    lock_color: 手動／メーカー採用色を上書きしない。
+    白衣の「白」・「2枚入」「七分袖」等は共有辞書／規則のまま残す。
+    """
+    name = stock.text(chosen_name)
+    color = stock.text(existing_color)
+    empty = {
+        'plannedName': name,
+        'color': color,
+        'didSplit': False,
+        'colorSource': '',
+        'changeSummary': '',
+        'needsConfirm': False,
+    }
+    if not name:
+        return empty
+    try:
+        split = paren_classify.split_name_and_color(name)
+    except Exception:
+        return empty
+    if split.get('needsConfirm'):
+        return {
+            **empty,
+            'needsConfirm': True,
+            'changeSummary': stock.text(split.get('changeSummary') or ''),
+        }
+    extracted = stock.text(split.get('color') or '')
+    planned = stock.text(split.get('plannedName') or '') or name
+    out_name = name
+    out_color = color
+    did_split = False
+    if lock_color and color:
+        # 手動／メーカー色は維持。名に同じ色が残っていれば除去だけする
+        if (
+            not lock_name
+            and extracted
+            and paren_classify.colors_equivalent(extracted, color)
+            and planned
+            and planned != name
+        ):
+            out_name = planned
+            did_split = True
+    elif extracted:
+        if not lock_color:
+            out_color = extracted
+        if not lock_name and planned and planned != name:
+            out_name = planned
+            did_split = True
+    if lock_name:
+        out_name = name
+        did_split = False
+    return {
+        'plannedName': out_name,
+        'color': out_color,
+        'didSplit': did_split,
+        'colorSource': stock.text(split.get('colorSource') or ''),
+        'changeSummary': stock.text(split.get('changeSummary') or ''),
+        'needsConfirm': False,
+    }
+
+
 def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False):
     """品番グループの差分を具体値つきで整理し、判断ティアを返す。
 
@@ -511,7 +584,24 @@ def plan_provisional_official_name(group, raw_decision=None):
             chosen = stripped
     chosen = format_provisional_official_name(chosen) or chosen
 
-    # 原文 → 登録先（代表名）の対応
+    # 代表名決定後: 共有色抽出＋名分離（括弧内外）。
+    # 既存公式名は維持。手動／メーカーが明示した色は上書きしない。
+    raw_color = stock.text(raw.get('color') or '')
+    aux_color = stock.text(aux.get('plannedRegisteredColor') or aux.get('adoptedColor') or '')
+    lock_name = rule_code == 'existing'
+    lock_color = bool(raw_color)
+    seed_color = raw_color or aux_color
+    split_res = apply_representative_name_color_split(
+        chosen,
+        existing_color=seed_color,
+        lock_name=lock_name,
+        lock_color=lock_color,
+    )
+    if not lock_name:
+        chosen = stock.text(split_res.get('plannedName') or '') or chosen
+    plan_color = stock.text(split_res.get('color') or '') or seed_color
+
+    # 原文 → 登録先（代表名）の対応（原文名・色は初期在庫照合用に残す）
     mappings = []
     seen = set()
     for item in name_row_map:
@@ -529,6 +619,10 @@ def plan_provisional_official_name(group, raw_decision=None):
 
     return {
         'officialName': chosen,
+        'color': plan_color,
+        'colorSource': stock.text(split_res.get('colorSource') or ''),
+        'colorNameSplit': bool(split_res.get('didSplit') or plan_color),
+        'changeSummary': stock.text(split_res.get('changeSummary') or ''),
         'provisional': provisional,
         'provisionalTag': PROVISIONAL_NAME_TAG if provisional else '',
         'provisionalStatus': PROVISIONAL_NAME_TAG if provisional else '',
@@ -7048,7 +7142,6 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             # 既存が1件だけのときは残す商品を省略しても再利用（再取込の二重新規を防ぐ）
             if not keep_id and group.get('existingCount') == 1:
                 keep_id = (group.get('existingProducts') or [{}])[0].get('id')
-            color = stock.text(raw.get('color') or '')
             primary_supplier, primary_source, primary_conflict, auto_primary, auto_reason = (
                 _resolve_effective_primary_supplier(group, raw)
             )
@@ -7057,6 +7150,8 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             name_plan = plan_provisional_official_name(group, {**raw, 'keepProductId': keep_id})
             group['namePlan'] = name_plan
             official_name = stock.text(name_plan.get('officialName') or '')
+            # 手動色を優先。空なら代表名から分離した色を使う
+            color = stock.text(raw.get('color') or '') or stock.text(name_plan.get('color') or '')
             provisional = bool(name_plan.get('provisional'))
             merge_source_ids = raw.get('mergeSourceIds') or []
             if isinstance(merge_source_ids, list):
@@ -7084,6 +7179,12 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 'primaryChangeConfirmed': confirm_primary,
             }
             group['plannedOfficialName'] = official_name
+            group['plannedRegisteredName'] = official_name
+            group['plannedRegisteredColor'] = color
+            group['plannedColor'] = color
+            if name_plan.get('changeSummary'):
+                group['changeSummary'] = name_plan.get('changeSummary') or ''
+            group['colorNameSplit'] = bool(name_plan.get('colorNameSplit') or color)
             group['plannedPrimarySupplier'] = primary_supplier
             group['plannedPrimarySupplierReason'] = (
                 auto_reason if primary_source in ('auto', 'single') and primary_supplier else ''
@@ -7091,6 +7192,15 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             group['plannedPrimarySupplierSource'] = primary_source
             group['provisionalName'] = provisional
             group['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
+            # 確認済み／詳細／保存で同じ名・色になるよう productPlan も揃える
+            merge_plan = dict(group.get('productPlan') or {})
+            merge_plan['productName'] = official_name
+            merge_plan['color'] = color
+            merge_plan['plannedRegisteredName'] = official_name
+            merge_plan['plannedRegisteredColor'] = color
+            merge_plan['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
+            merge_plan['provisional'] = provisional
+            group['productPlan'] = merge_plan
 
             if group['existingCount'] > 1 and not keep_id:
                 row['status'] = STATUS_REVIEW
@@ -7849,6 +7959,13 @@ def build_preview(c, body):
                     np['officialName'] = stock.text(
                         (g.get('auxPrimary') or {}).get('suggestedOfficialName') or ''
                     ) or np.get('officialName')
+                    aux_col = stock.text(
+                        (g.get('auxPrimary') or {}).get('plannedRegisteredColor')
+                        or (g.get('auxPrimary') or {}).get('adoptedColor')
+                        or ''
+                    )
+                    if aux_col and not stock.text(raw.get('color') or ''):
+                        np['color'] = aux_col
                     np['provisional'] = False
                     np['adoptionRule'] = (
                         g.get('auxStockPickReason')
@@ -7859,9 +7976,27 @@ def build_preview(c, body):
                         (g.get('auxPrimary') or {}).get('pairAdoptionRuleCode') or ''
                     ) or np.get('adoptionRuleCode')
                     g['namePlan'] = np
-            g['plannedOfficialName'] = (g.get('namePlan') or {}).get('officialName') or ''
-            g['nameAdoptionRule'] = (g.get('namePlan') or {}).get('adoptionRule') or ''
-            g['provisionalName'] = bool((g.get('namePlan') or {}).get('provisional'))
+            np = g.get('namePlan') or {}
+            g['plannedOfficialName'] = np.get('officialName') or ''
+            g['nameAdoptionRule'] = np.get('adoptionRule') or ''
+            g['provisionalName'] = bool(np.get('provisional'))
+            # 代表名分離色を予定へ載せる（手動色優先。aux 自動採用済みの色は維持）
+            plan_color = (
+                stock.text(raw.get('color') or '')
+                or stock.text(np.get('color') or '')
+                or stock.text(g.get('plannedRegisteredColor') or '')
+                or stock.text(g.get('plannedColor') or '')
+            )
+            if plan_color:
+                if not stock.text(g.get('plannedRegisteredColor') or ''):
+                    g['plannedRegisteredColor'] = plan_color
+                if not stock.text(g.get('plannedColor') or ''):
+                    g['plannedColor'] = plan_color
+            if (
+                stock.text(np.get('officialName') or '')
+                and not stock.text(g.get('plannedRegisteredName') or '')
+            ):
+                g['plannedRegisteredName'] = np.get('officialName') or ''
         # 自動まとめ品番は namePlan の代表名を商品計画へ反映（タグは埋め込まない）
         if g.get('plannedSingleProduct') and g.get('namePlan') and not is_color_split:
             plan = dict(g.get('productPlan') or {})
@@ -7869,6 +8004,17 @@ def build_preview(c, body):
                 plan['productName'] = g['plannedOfficialName']
             plan['nameAdoptionRule'] = g['nameAdoptionRule']
             plan['provisional'] = g['provisionalName']
+            plan_color = (
+                stock.text(g.get('plannedColor') or '')
+                or stock.text(g.get('plannedRegisteredColor') or '')
+                or stock.text((g.get('namePlan') or {}).get('color') or '')
+                or stock.text(plan.get('color') or '')
+            )
+            if plan_color:
+                plan['color'] = plan_color
+                plan['plannedRegisteredColor'] = plan_color
+            if g.get('plannedOfficialName'):
+                plan['plannedRegisteredName'] = g['plannedOfficialName']
             if g.get('auxStockPickAuto'):
                 plan['auxStockPickAuto'] = True
                 plan['auxStockPickReason'] = g.get('auxStockPickReason') or ''
