@@ -108,7 +108,7 @@ _SKU_VALUE_RE = re.compile(
 # 商品情報表のラベル文言（sku_match_key 適用前の原文。値として誤採用しない）
 _FIELD_LABEL_RAW = (
     '品番', '品名', 'ブランド', 'ブランド名', '商品コード', 'メーカー品番',
-    '品番コード', '型番', 'SKU', 'MPN', 'カラー', '色', 'サイズ', '商品名',
+    '品番コード', '型番', '商品番号', 'SKU', 'MPN', 'カラー', '色', 'サイズ', '商品名',
 )
 _NAME_NOISE_TOKENS = frozenset({
     'KAZEN', 'カゼン', 'WLD', 'ミドリ安全', 'サーヴォ', 'モンブラン',
@@ -141,6 +141,21 @@ def sku_match_key(value: str) -> str:
 
 
 _FIELD_LABEL_KEYS = frozenset(sku_match_key(x) for x in _FIELD_LABEL_RAW)
+# 商品情報表の色ラベル（ページ横断の色一覧・関連商品は対象外）
+_COLOR_FIELD_LABEL_KEYS = frozenset(
+    sku_match_key(x) for x in ('色', 'カラー', 'カラー名', '色名', '配色')
+)
+_SKU_FIELD_LABEL_KEYS = frozenset(
+    sku_match_key(x) for x in (
+        '品番', '商品コード', '型番', 'メーカー品番', '品番コード', '商品番号', 'SKU', 'MPN',
+    )
+)
+_NAME_FIELD_LABEL_KEYS = frozenset(
+    sku_match_key(x) for x in ('品名', '商品名')
+)
+_BRAND_FIELD_LABEL_KEYS = frozenset(
+    sku_match_key(x) for x in ('ブランド', 'ブランド名', 'メーカー')
+)
 
 
 def skus_equal(a: str, b: str) -> bool:
@@ -1356,10 +1371,75 @@ def extract_structured_sku_values(html: str) -> list[str]:
     return found
 
 
-def extract_product_info_fields(html: str) -> dict:
-    """商品情報表・見出し・JSON-LD から同一商品の品番／品名／ブランドを取る。
+def normalize_maker_page_color(value: str) -> str:
+    """商品情報表の色セルを登録用に正規化する。
 
-    関連商品リンクやパンくずは混ぜない（表セルと Product 構造化データを優先）。
+    「ワイン／ネイビー」など配色は1色（ワイン×ネイビー）として扱う。
+    長文・Q&A・ページ横断の色一覧は空を返す。
+    """
+    raw = stock.text(value) or ''
+    if not raw:
+        return ''
+    # セル想定の短い値のみ（関連文・説明文を落とす）
+    if len(raw) > 40:
+        return ''
+    if re.search(r'[。．？?！!]|または|もしくは|\bor\b', raw, flags=re.I):
+        return ''
+    if paren_classify.looks_like_colorway_text(raw):
+        return paren_classify.normalize_colorway_display(raw) or ''
+    if any(ch in raw for ch in '/／×✕*＊'):
+        # 区切りがあるが配色と判定できない（色+サイズ等）→ 色欄としては不採用
+        slash = _classify_slash_pair(raw)
+        if slash.get('kind') in ('color', 'colorway'):
+            return stock.text(slash.get('color') or '') or ''
+        if slash.get('kind') == 'color_size':
+            return stock.text(slash.get('color') or '') or ''
+        return ''
+    col = _token_is_color(raw)
+    if col:
+        return paren_classify.normalize_color_value(col) or col
+    # 辞書外でも normalize が色語へ寄せられる場合のみ
+    norm = paren_classify.normalize_color_value(raw)
+    if norm and (_token_is_color(norm) or paren_classify.looks_like_colorway_text(norm)):
+        return norm
+    return ''
+
+
+def _apply_product_info_label_value(out: dict, label: str, value: str, *, source: str) -> None:
+    """商品情報のラベル／値を out へ反映（関連商品リストは呼ばない前提）。"""
+    lab = sku_match_key(label)
+    val = stock.text(value) or ''
+    if not lab or not val:
+        return
+    if lab in _FIELD_LABEL_KEYS and sku_match_key(val) in _FIELD_LABEL_KEYS:
+        return
+    if lab in _SKU_FIELD_LABEL_KEYS and _looks_like_sku_value(val):
+        if not out.get('sku'):
+            out['sku'] = val
+            out['source'] = out.get('source') or source
+        out['makerSku'] = out.get('makerSku') or val
+        return
+    if lab in _NAME_FIELD_LABEL_KEYS:
+        if sku_match_key(val) not in _FIELD_LABEL_KEYS:
+            # 表の品名を優先（JSON-LD 名に品番・店名が混ざることがある）
+            out['name'] = val
+            out['source'] = source
+        return
+    if lab in _COLOR_FIELD_LABEL_KEYS:
+        color = normalize_maker_page_color(val)
+        if color and not out.get('color'):
+            out['color'] = color
+            out['colorSource'] = source
+        return
+    if lab in _BRAND_FIELD_LABEL_KEYS and not out.get('brand'):
+        out['brand'] = val
+
+
+def extract_product_info_fields(html: str) -> dict:
+    """商品情報表・見出し・JSON-LD から同一商品の品番／品名／ブランド／色を取る。
+
+    関連商品リンクやパンくず・ページ横断の色一覧は混ぜない
+    （表セル・dl と Product 構造化データを優先）。
     """
     out = {
         'sku': '',
@@ -1368,6 +1448,7 @@ def extract_product_info_fields(html: str) -> dict:
         'name': '',
         'brand': '',
         'color': '',
+        'colorSource': '',
         'skuValues': [],
         'source': '',
     }
@@ -1398,7 +1479,7 @@ def extract_product_info_fields(html: str) -> dict:
                 sku = stock.text(str(node.get('sku') or ''))
                 mpn = stock.text(str(node.get('mpn') or ''))
                 name = stock.text(str(node.get('name') or ''))
-                color = stock.text(str(node.get('color') or ''))
+                color = normalize_maker_page_color(str(node.get('color') or ''))
                 brand = ''
                 b = node.get('brand')
                 if isinstance(b, dict):
@@ -1421,14 +1502,16 @@ def extract_product_info_fields(html: str) -> dict:
                     out['brand'] = brand
                 if color and not out['color']:
                     out['color'] = color
+                    out['colorSource'] = 'json_ld'
                 if sku or mpn or name:
                     out['source'] = out['source'] or 'json_ld'
             for v in node.values():
                 if isinstance(v, (dict, list)):
                     stack.append(v)
 
-    # 2) 商品情報表（品番／品名が並ぶ TH+TD）
-    # ユニフィス等: <TH>品番</TH><TH>品名</TH> … <TD>9-970</TD><TD>兼用キャスケット(ワイン)</TD>
+    # 2) 商品情報表
+    # 横並び: <TH>品番</TH><TH>品名</TH><TH>色</TH> … <TD>…</TD>
+    # 縦並び: <tr><th>色</th><td>ワイン／ネイビー</td></tr>（uniform1 等）
     table_chunks = re.findall(r'<table\b[^>]*>[\s\S]*?</table>', raw_html, flags=re.I)
     for table in table_chunks:
         headers = [
@@ -1436,43 +1519,84 @@ def extract_product_info_fields(html: str) -> dict:
             for h in re.findall(r'<th\b[^>]*>([\s\S]*?)</th>', table, flags=re.I)
         ]
         header_keys = [sku_match_key(h) for h in headers]
+        # 縦型: 行ごとに th + td
+        for row_html in re.findall(r'<tr\b[^>]*>[\s\S]*?</tr>', table, flags=re.I):
+            ths = [
+                _strip_tags(h)
+                for h in re.findall(r'<th\b[^>]*>([\s\S]*?)</th>', row_html, flags=re.I)
+            ]
+            tds = [
+                _strip_tags(td)
+                for td in re.findall(r'<td\b[^>]*>([\s\S]*?)</td>', row_html, flags=re.I)
+            ]
+            if len(ths) == 1 and len(tds) == 1:
+                _apply_product_info_label_value(
+                    out, ths[0], tds[0], source='product_table',
+                )
+
         if not header_keys:
             continue
         sku_i = next(
-            (i for i, k in enumerate(header_keys) if k in {
-                sku_match_key('品番'), sku_match_key('商品コード'),
-                sku_match_key('型番'), sku_match_key('メーカー品番'),
-            }),
+            (i for i, k in enumerate(header_keys) if k in _SKU_FIELD_LABEL_KEYS),
             -1,
         )
         name_i = next(
-            (i for i, k in enumerate(header_keys) if k in {
-                sku_match_key('品名'), sku_match_key('商品名'),
-            }),
+            (i for i, k in enumerate(header_keys) if k in _NAME_FIELD_LABEL_KEYS),
             -1,
         )
-        if sku_i < 0 and name_i < 0:
+        color_i = next(
+            (i for i, k in enumerate(header_keys) if k in _COLOR_FIELD_LABEL_KEYS),
+            -1,
+        )
+        brand_i = next(
+            (i for i, k in enumerate(header_keys) if k in _BRAND_FIELD_LABEL_KEYS),
+            -1,
+        )
+        if sku_i < 0 and name_i < 0 and color_i < 0:
             continue
-        # 最初のデータ行
-        row_m = re.search(r'<tr\b[^>]*>\s*(?:<td\b[\s\S]*?</td>\s*)+</tr>', table, flags=re.I)
-        if not row_m:
-            continue
-        cells = [
-            _strip_tags(td)
-            for td in re.findall(r'<td\b[^>]*>([\s\S]*?)</td>', row_m.group(0), flags=re.I)
-        ]
-        if sku_i >= 0 and sku_i < len(cells) and _looks_like_sku_value(cells[sku_i]):
-            if not out['sku']:
-                out['sku'] = cells[sku_i]
-                out['source'] = out['source'] or 'product_table'
-            out['makerSku'] = out['makerSku'] or cells[sku_i]
-        if name_i >= 0 and name_i < len(cells) and cells[name_i]:
-            if sku_match_key(cells[name_i]) not in _FIELD_LABEL_KEYS:
-                # 表の品名を優先（JSON-LD 名に品番・店名が混ざることがある）
-                out['name'] = cells[name_i]
-                out['source'] = 'product_table'
+        # ヘッダ行以外の最初のデータ行
+        for row_html in re.findall(r'<tr\b[^>]*>[\s\S]*?</tr>', table, flags=re.I):
+            if re.search(r'<th\b', row_html, flags=re.I) and not re.search(
+                r'<td\b', row_html, flags=re.I,
+            ):
+                continue
+            cells = [
+                _strip_tags(td)
+                for td in re.findall(r'<td\b[^>]*>([\s\S]*?)</td>', row_html, flags=re.I)
+            ]
+            if not cells:
+                continue
+            if sku_i >= 0 and sku_i < len(cells):
+                _apply_product_info_label_value(
+                    out, headers[sku_i], cells[sku_i], source='product_table',
+                )
+            if name_i >= 0 and name_i < len(cells):
+                _apply_product_info_label_value(
+                    out, headers[name_i], cells[name_i], source='product_table',
+                )
+            if color_i >= 0 and color_i < len(cells):
+                _apply_product_info_label_value(
+                    out, headers[color_i], cells[color_i], source='product_table',
+                )
+            if brand_i >= 0 and brand_i < len(cells) and not out.get('brand'):
+                _apply_product_info_label_value(
+                    out, headers[brand_i], cells[brand_i], source='product_table',
+                )
+            # 横並び表は先頭データ行だけ（関連行を混ぜない）
+            if sku_i >= 0 or name_i >= 0:
+                break
 
-    # ブランド名だけの小さな表
+    # 3) dl/dt/dd の商品情報（空のカラー欄は無視）
+    for m in re.finditer(
+        r'<dt\b[^>]*>([\s\S]*?)</dt>\s*<dd\b[^>]*>([\s\S]*?)</dd>',
+        raw_html,
+        flags=re.I,
+    ):
+        _apply_product_info_label_value(
+            out, _strip_tags(m.group(1)), _strip_tags(m.group(2)), source='product_dl',
+        )
+
+    # ブランド名だけの小さな表（従来フォールバック）
     brand_m = re.search(
         r'ブランド名[\s\S]{0,120}?</th>[\s\S]{0,80}?<td\b[^>]*>([\s\S]*?)</td>',
         raw_html,
@@ -2363,6 +2487,20 @@ def _build_candidate_from_hit(
         parsed['color'] = stock.text(sku_info.get('colorName') or '')
         miss = [f for f in (parsed.get('missingFields') or []) if f != 'color']
         parsed['missingFields'] = miss
+    # 商品情報表・JSON-LD の色を、見出し分解で取れなかったときだけ補う
+    # （ページ横断の色一覧は extract 側で除外済み）
+    table_color = normalize_maker_page_color(info.get('color') or '')
+    color_from_table = False
+    if parsed and not stock.text(parsed.get('color') or '') and table_color:
+        if sku_info.get('match') != 'base_only':
+            parsed = dict(parsed)
+            parsed['color'] = table_color
+            color_from_table = True
+            miss = [
+                f for f in (parsed.get('missingFields') or [])
+                if not (f == 'color' and parsed.get('color'))
+            ]
+            parsed['missingFields'] = miss
     if parsed and sku_info.get('match') == 'base_only':
         parsed = dict(parsed)
         parsed['color'] = ''
@@ -2413,6 +2551,11 @@ def _build_candidate_from_hit(
 
     hit_mfr = mfr or page_brand
     missing = list(parsed.get('missingFields') or [])
+    cand_color = stock.text(parsed.get('color') or '')
+    if not cand_color and 'color' not in missing:
+        missing.append('color')
+    if cand_color:
+        missing = [f for f in missing if f != 'color']
     current_sku_t = stock.text(current_sku) or planned_src
     site_code = stock.text(sku_info.get('siteCode') or info.get('mpn') or '')
     cleaned_name = stock.text(parsed.get('cleanedName') or parsed.get('name') or '')
@@ -2427,12 +2570,46 @@ def _build_candidate_from_hit(
     maker_color_code = stock.text(
         sku_info.get('colorCode') or sku_parts.get('colorCode') or ''
     )
-    # 色が空でも名が取れれば候補にはする（不足は表示用）
+    name_source_label = (
+        '商品情報表' if (field_name and cleaned_name) else
+        ('構造化データ' if info.get('source') == 'json_ld' else '見出し')
+    )
+    if color_from_table:
+        color_source_label = (
+            '商品情報表' if (info.get('colorSource') or '').startswith('product')
+            else '構造化データ'
+        )
+    elif cand_color and sku_info.get('match') == 'base_color':
+        color_source_label = 'メーカー色番'
+    elif cand_color:
+        color_source_label = '掲載名'
+    else:
+        color_source_label = '色未取得'
+    sku_source_label = sku_info.get('evidenceLabel') or '品番照合'
+    field_sources = {
+        'name': {
+            'value': cleaned_name,
+            'sourceUrl': url,
+            'sourceLabel': name_source_label,
+        },
+        'color': {
+            'value': cand_color,
+            'sourceUrl': url if cand_color else '',
+            'sourceLabel': color_source_label if cand_color else '色未取得',
+            'unavailable': not bool(cand_color),
+        },
+        'sku': {
+            'value': planned_sku,
+            'sourceUrl': url,
+            'sourceLabel': sku_source_label,
+        },
+    }
+    # 色が空でも名が取れれば候補にはする（不足は表示用。色補正完了とはしない）
     cand = {
         'name': cleaned_name,
         'cleanedName': cleaned_name,
         'originalTitle': original_title,
-        'color': parsed.get('color') or '',
+        'color': cand_color,
         'size': parsed.get('size') or '',
         'position': position,
         'supplement': supplement,
@@ -2450,9 +2627,13 @@ def _build_candidate_from_hit(
         'skuMatch': sku_info.get('match'),
         'skuMatchEvidence': sku_info.get('evidenceLabel') or '',
         'missingFields': missing,
+        'colorUnavailable': not bool(cand_color),
+        'fieldSources': field_sources,
         'diff': {
             'nameChanged': cleaned_name != stock.text(current_name),
-            'colorChanged': stock.text(parsed.get('color') or '') != stock.text(current_color),
+            'colorChanged': (
+                bool(cand_color) and cand_color != stock.text(current_color)
+            ),
             'supplementChanged': supplement != stock.text(current_supplement),
             'skuChanged': planned_sku != current_sku_t,
             'currentName': stock.text(current_name),
@@ -2463,6 +2644,151 @@ def _build_candidate_from_hit(
         },
     }
     return {'candidate': cand, 'rejection': None, 'detail': None}
+
+
+def _candidate_identity_key(cand: dict) -> tuple:
+    return (
+        maker_sku_key(cand.get('name') or ''),
+        paren_classify.color_match_key(cand.get('color') or ''),
+        cand.get('position') or '',
+        cand.get('plannedRegisteredSku') or '',
+        cand.get('supplement') or '',
+        stock.text(cand.get('size') or ''),
+    )
+
+
+def _same_product_sku_key(cand: dict) -> tuple:
+    """同一メーカー品番（上下付き登録予定）のキー。別品番の色は混ぜない。"""
+    return (
+        maker_sku_key(cand.get('plannedRegisteredSku') or cand.get('makerSku') or ''),
+        cand.get('position') or '',
+    )
+
+
+def _merge_candidate_urls(existing: dict, cand: dict) -> None:
+    urls = list(existing.get('sourceUrls') or [])
+    src = stock.text(cand.get('sourceUrl') or '')
+    if src and src not in urls:
+        urls.append(src)
+    existing_src = stock.text(existing.get('sourceUrl') or '')
+    if existing_src and existing_src not in urls:
+        urls.insert(0, existing_src)
+    existing['sourceUrls'] = urls
+    if not existing.get('originalTitle') and cand.get('originalTitle'):
+        existing['originalTitle'] = cand.get('originalTitle')
+
+
+def complement_color_from_same_product_pages(candidates: list[dict]) -> list[dict]:
+    """同一メーカー品番ページ間で、名あり・色なしへ色だけを補完する。
+
+    別品番・関連商品の色は混ぜない。配色は1色のまま（分割しない）。
+    """
+    if not candidates:
+        return []
+    # 同一品番グループ内の利用可能な色（先に色付きを優先）
+    color_by_sku: dict[tuple, dict] = {}
+    for cand in candidates:
+        color = stock.text(cand.get('color') or '')
+        if not color:
+            continue
+        key = _same_product_sku_key(cand)
+        prev = color_by_sku.get(key)
+        # preferred / 商品情報表由来を優先
+        fs = (cand.get('fieldSources') or {}).get('color') or {}
+        score = (
+            0 if (fs.get('sourceLabel') == '商品情報表') else 1,
+            0 if cand.get('preferred') else 1,
+        )
+        if prev is None or score < prev['score']:
+            color_by_sku[key] = {
+                'color': color,
+                'sourceUrl': stock.text(cand.get('sourceUrl') or ''),
+                'sourceLabel': stock.text(fs.get('sourceLabel') or '同一品番ページ'),
+                'score': score,
+                'fieldSources': cand.get('fieldSources') or {},
+            }
+
+    out = []
+    for cand in candidates:
+        item = dict(cand)
+        color = stock.text(item.get('color') or '')
+        if not color:
+            donor = color_by_sku.get(_same_product_sku_key(item))
+            if donor:
+                item['color'] = donor['color']
+                item['colorUnavailable'] = False
+                miss = [f for f in (item.get('missingFields') or []) if f != 'color']
+                item['missingFields'] = miss
+                fs = dict(item.get('fieldSources') or {})
+                fs['color'] = {
+                    'value': donor['color'],
+                    'sourceUrl': donor['sourceUrl'],
+                    'sourceLabel': donor['sourceLabel'] or '同一品番ページ',
+                    'unavailable': False,
+                    'complemented': True,
+                }
+                item['fieldSources'] = fs
+                # 色出典URLを参照に残す
+                urls = list(item.get('sourceUrls') or [])
+                if item.get('sourceUrl') and item['sourceUrl'] not in urls:
+                    urls.insert(0, item['sourceUrl'])
+                if donor['sourceUrl'] and donor['sourceUrl'] not in urls:
+                    urls.append(donor['sourceUrl'])
+                item['sourceUrls'] = urls
+                diff = dict(item.get('diff') or {})
+                current_color = stock.text(diff.get('currentColor') or '')
+                diff['colorChanged'] = bool(item['color']) and item['color'] != current_color
+                item['diff'] = diff
+        out.append(item)
+
+    # 補完後に名・色・品番が同じ候補をまとめる
+    merged: list[dict] = []
+    for cand in out:
+        key = _candidate_identity_key(cand)
+        found = False
+        for existing in merged:
+            if _candidate_identity_key(existing) != key:
+                continue
+            _merge_candidate_urls(existing, cand)
+            # より詳しい fieldSources を残す
+            if cand.get('color') and not existing.get('color'):
+                existing['color'] = cand['color']
+                existing['colorUnavailable'] = False
+                existing['fieldSources'] = cand.get('fieldSources') or existing.get('fieldSources')
+            found = True
+            break
+        if not found:
+            item = dict(cand)
+            if item.get('sourceUrl') and not item.get('sourceUrls'):
+                item['sourceUrls'] = [item['sourceUrl']]
+            merged.append(item)
+    return merged
+
+
+def _lookup_status_for_candidates(candidates: list[dict]) -> tuple[str, str, str]:
+    """候補一覧から状態ラベルを決める。名のみを色補正完了扱いにしない。"""
+    if not candidates:
+        return 'no_match', '候補なし', ''
+    if len(candidates) > 1:
+        any_color = any(stock.text(c.get('color') or '') for c in candidates)
+        if not any_color:
+            return (
+                'multiple',
+                '複数候補（色は未取得）',
+                '商品名候補はありますが色を取得できませんでした。色補正完了ではありません。'
+                '既存・手動の色は空では上書きしません。',
+            )
+        return 'multiple', '複数候補', ''
+    cand = candidates[0]
+    if stock.text(cand.get('color') or ''):
+        return 'ok', '補正候補取得できた', ''
+    return (
+        'ok',
+        '商品名取得・色未取得',
+        '商品名は取得できましたが色は取得できませんでした。色補正完了ではありません。'
+        '同一品番の別ページURLを指定するか、既存・手動の色を維持してください'
+        '（空の色では上書きしません）。',
+    )
 
 
 def _lookup_saved_for_position(c, *, manufacturer: str, base_sku: str, position: str):
@@ -2678,6 +3004,7 @@ def search_maker_product(
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
             search_errors += 1
         # カタログで十分な候補があれば DDG を足さない（関連・販促ノイズを混入させない）
+        # ※色がカタログに無い場合は後段で同一品番の補完検索を行う
         has_catalog_hit = any(
             hit.get('source') in ('midori_ec', 'kazen_ec', 'unifice', 'aitoz_direct')
             for hit in raw_hits
@@ -2782,35 +3109,12 @@ def search_maker_product(
         if rejection == 'hint_reject' or not cand:
             continue
         # 整理後名・色・品番が同じ候補は出典URLを残してまとめる（名一致だけでは色違いを統合しない）
-        key = (
-            maker_sku_key(cand['name']),
-            paren_classify.color_match_key(cand.get('color') or ''),
-            cand.get('position') or '',
-            cand.get('plannedRegisteredSku') or '',
-            cand.get('supplement') or '',
-            stock.text(cand.get('size') or ''),
-        )
+        key = _candidate_identity_key(cand)
         merged = False
         for existing in live_candidates:
-            existing_key = (
-                maker_sku_key(existing['name']),
-                paren_classify.color_match_key(existing.get('color') or ''),
-                existing.get('position') or '',
-                existing.get('plannedRegisteredSku') or '',
-                existing.get('supplement') or '',
-                stock.text(existing.get('size') or ''),
-            )
-            if existing_key != key:
+            if _candidate_identity_key(existing) != key:
                 continue
-            urls = list(existing.get('sourceUrls') or [])
-            src = stock.text(cand.get('sourceUrl') or '')
-            if src and src not in urls:
-                urls.append(src)
-            if stock.text(existing.get('sourceUrl') or '') and stock.text(existing.get('sourceUrl')) not in urls:
-                urls.insert(0, stock.text(existing.get('sourceUrl')))
-            existing['sourceUrls'] = urls
-            if not existing.get('originalTitle') and cand.get('originalTitle'):
-                existing['originalTitle'] = cand.get('originalTitle')
+            _merge_candidate_urls(existing, cand)
             merged = True
             break
         if merged:
@@ -2821,6 +3125,71 @@ def search_maker_product(
         else:
             cand['sourceUrls'] = []
         live_candidates.append(cand)
+
+    # カタログで名は取れたが色が無いとき、同一品番の公開ページから色だけ補完する
+    needs_color_complement = any(
+        stock.text(c.get('name') or '') and not stock.text(c.get('color') or '')
+        for c in live_candidates
+    ) and not any(
+        stock.text(c.get('name') or '') and stock.text(c.get('color') or '')
+        for c in live_candidates
+    )
+    if needs_color_complement:
+        complement_query = ' '.join(
+            p for p in (stock.text(mfr), stock.text(sku)) if p
+        ) or stock.text(sku)
+        try:
+            for hit in _ddg_candidates(complement_query, limit=8):
+                u = hit.get('url') or ''
+                if not u or u in seen_urls:
+                    continue
+                seen_urls.add(u)
+                raw_hits.append(hit)
+                try:
+                    built = _build_candidate_from_hit(
+                        hit,
+                        maker_sku=sku,
+                        manufacturer=mfr,
+                        hints=hints,
+                        current_name=current_name,
+                        current_color=current_color,
+                        current_supplement=current_supplement,
+                        current_sku=current_sku_t,
+                    )
+                except (
+                    urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError,
+                ):
+                    page_errors += 1
+                    continue
+                if built.get('rejection') or not built.get('candidate'):
+                    if built.get('rejection') == 'page_unavailable':
+                        page_errors += 1
+                    elif built.get('rejection') == 'sku_mismatch':
+                        sku_mismatches += 1
+                    continue
+                cand = dict(built['candidate'])
+                # 色補完用途: 色が取れた同一品番ページだけ追加
+                if not stock.text(cand.get('color') or ''):
+                    continue
+                key = _candidate_identity_key(cand)
+                merged = False
+                for existing in live_candidates:
+                    if _candidate_identity_key(existing) != key:
+                        continue
+                    _merge_candidate_urls(existing, cand)
+                    merged = True
+                    break
+                if merged:
+                    continue
+                if cand.get('sourceUrl'):
+                    cand['sourceUrls'] = [cand['sourceUrl']]
+                else:
+                    cand['sourceUrls'] = []
+                live_candidates.append(cand)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            search_errors += 1
+
+    live_candidates = complement_color_from_same_product_pages(live_candidates)
 
     # 名・色が揃った公式寄りの候補を先に見せる（自動採用はしない）
     live_candidates.sort(key=lambda c: (
@@ -2955,10 +3324,11 @@ def search_maker_product(
         }
 
     candidates = _with_saved(live_candidates)
-    if len(candidates) == 1:
-        status, status_label = 'ok', '補正候補取得できた'
-    else:
-        status, status_label = 'multiple', '複数候補'
+    # 保存済みを先頭に足したあとでも同一品番の色補完を再適用
+    candidates = complement_color_from_same_product_pages(candidates)
+    status, status_label, status_note = _lookup_status_for_candidates(
+        [c for c in candidates if not c.get('fromSaved')] or candidates
+    )
 
     return {
         'status': status,
@@ -2973,7 +3343,8 @@ def search_maker_product(
         'saved': saved_payload,
         'referenceUrl': reference,
         'note': (
-            '採用するまで登録予定は変わりません。'
+            (status_note + ' ' if status_note else '')
+            + '採用するまで登録予定は変わりません。'
             '仕入先はメーカーではないため、ブランド名が含まれる場合のみメーカーヒントに使います。'
             '上下区分がある場合は登録予定品番末尾へ連結します（例: VEH30B下）。'
             '取得サイズは照合・表示用で、旧CSVのサイズ割当は上書きしません。'
@@ -3177,20 +3548,75 @@ def lookup_maker_product_from_url(
             referenceUrl=final_url or normalized,
         )
 
+    cand = dict(cand)
+    if cand.get('sourceUrl'):
+        cand['sourceUrls'] = [cand['sourceUrl']]
+    else:
+        cand['sourceUrls'] = []
+    live = [cand]
+
+    # 指定ページで名・色のどちらかが欠けていれば、同一メーカー品番のカタログページから補完
+    need_name = not stock.text(cand.get('name') or '')
+    need_color = not stock.text(cand.get('color') or '')
+    if need_color or need_name:
+        try:
+            for hit in _catalog_searches_for(
+                manufacturer=mfr, query=sku, maker_sku=sku,
+            ):
+                u = hit.get('url') or ''
+                if not u or u == (final_url or normalized):
+                    continue
+                built2 = _build_candidate_from_hit(
+                    hit,
+                    maker_sku=sku,
+                    manufacturer=mfr,
+                    hints=hints,
+                    current_name=current_name,
+                    current_color=current_color,
+                    current_supplement=current_supplement,
+                    current_sku=current_sku_t,
+                )
+                other = built2.get('candidate')
+                if built2.get('rejection') or not other:
+                    continue
+                # 同一品番のみ（別製品ページは除外済み）
+                live.append(dict(other))
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+            pass
+        live = complement_color_from_same_product_pages(live)
+        # 指定URLの候補を先頭に保ちつつ、補完後の最良を選ぶ
+        live.sort(key=lambda c: (
+            0 if (c.get('sourceUrl') == (final_url or normalized)) else 1,
+            0 if (c.get('name') and c.get('color')) else 1,
+            0 if c.get('preferred') else 1,
+        ))
+        # 同一品番で名・色が揃った1件へまとめる（別色は残す）
+        primary = None
+        for c in live:
+            if stock.text(c.get('name') or '') and stock.text(c.get('color') or ''):
+                primary = c
+                break
+        if primary is None:
+            primary = live[0] if live else cand
+        live = [primary]
+
+    status, status_label, status_note = _lookup_status_for_candidates(live)
+    primary_cand = live[0]
     return {
-        'status': 'ok',
-        'statusLabel': '補正候補取得できた',
+        'status': status,
+        'statusLabel': status_label,
         'makerSku': sku,
         'searchMakerSku': sku,
         'sourceSku': source_sku,
         'usageNote': usage_note,
-        'plannedRegisteredSku': cand.get('plannedRegisteredSku') or current_sku_t,
-        'manufacturer': mfr or cand.get('manufacturer') or '',
-        'candidates': [cand],
+        'plannedRegisteredSku': primary_cand.get('plannedRegisteredSku') or current_sku_t,
+        'manufacturer': mfr or primary_cand.get('manufacturer') or '',
+        'candidates': live,
         'saved': None,
-        'referenceUrl': cand.get('sourceUrl') or final_url or normalized,
+        'referenceUrl': primary_cand.get('sourceUrl') or final_url or normalized,
         'note': (
-            'URL指定で取得しました。採用するまで登録予定は変わりません。'
+            (status_note + ' ' if status_note else '')
+            + 'URL指定で取得しました。採用するまで登録予定は変わりません。'
             '検索由来と同じ照合・抽出です。'
             + (
                 f' 元品番の注記「{usage_note}」は検索から外し、照合用に保持します。'
@@ -3202,7 +3628,7 @@ def lookup_maker_product_from_url(
         'queriesTried': [],
         'matchedPages': [],
         'fromUrl': True,
-        'sourceUrl': cand.get('sourceUrl') or final_url or normalized,
+        'sourceUrl': primary_cand.get('sourceUrl') or final_url or normalized,
     }
 
 
@@ -3221,6 +3647,7 @@ def adopt_maker_correction(
     original_title: str = '',
     maker_color_code: str = '',
     base_sku_override: str = '',
+    current_color: str = '',
 ) -> dict:
     raw_sku = stock.text(maker_sku)
     sku_norm = normalize_search_maker_sku(raw_sku)
@@ -3260,12 +3687,27 @@ def adopt_maker_correction(
         save_sku = planned
     cleaned = clean_maker_product_name(name, maker_sku=base_sku)
     adopted_name = cleaned.get('cleanedName') or stock.text(name)
+    # 空の色で既存・手動色を消さない
+    adopt_color = stock.text(color) or ''
+    if not adopt_color:
+        existing_row = lookup_saved_correction(
+            c, manufacturer=manufacturer, maker_sku=save_sku,
+        )
+        if not existing_row and save_sku != base_sku:
+            existing_row = lookup_saved_correction(
+                c, manufacturer=manufacturer, maker_sku=base_sku,
+            )
+        keep = stock.text((existing_row or {}).get('adopted_color') or '') or stock.text(
+            current_color
+        )
+        if keep:
+            adopt_color = keep
     row, changed = save_adopted_correction(
         c,
         manufacturer=manufacturer,
         maker_sku=save_sku,
         adopted_name=adopted_name,
-        adopted_color=color,
+        adopted_color=adopt_color,
         source_url=source_url,
         adopted_extra={
             'supplement': supp,
@@ -3302,7 +3744,8 @@ def adopt_maker_correction(
         'name': row.get('adopted_name') or adopted_name,
         'cleanedName': stock.text(extra.get('cleanedName') or adopted_name),
         'originalTitle': stock.text(extra.get('originalTitle') or ''),
-        'color': row.get('adopted_color') or color,
+        'color': row.get('adopted_color') or adopt_color,
+        'colorUnavailable': not bool(stock.text(row.get('adopted_color') or adopt_color)),
         'supplement': stock.text(extra.get('supplement') or supp),
         'sourceUrl': row.get('source_url') or source_url,
     }

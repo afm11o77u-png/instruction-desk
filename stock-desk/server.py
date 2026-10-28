@@ -406,6 +406,11 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                         or payload.get('base_sku')
                         or ''
                     ),
+                    current_color=(
+                        payload.get('currentColor')
+                        or payload.get('current_color')
+                        or ''
+                    ),
                 )
                 c.commit()
         except ValueError as e:
