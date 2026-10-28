@@ -237,7 +237,7 @@ async function openProductMerge(deps){
         <div class="grid merge-confirm-grid">
           ${choiceSelect('mergeName',p.nameChoices,p.name,true)}
           ${choiceSelect('mergeColor',p.colorChoices,p.color,true)}
-          <label>カテゴリ<select id="mergeCategory">${(p.categoryChoices||['','制服','部品・資材']).map(v=>`<option value="${esc(v)}" ${String(v)===String(p.category)?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>
+          <label>カテゴリ<select id="mergeCategory">${(p.categoryChoices||['','制服','部品・資材','加工サービス']).map(v=>`<option value="${esc(v)}" ${String(v)===String(p.category)?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>
           <label>残す商品ID<select id="mergeKeepId">${(p.productIds||[]).map(id=>`<option value="${id}" ${Number(id)===Number(p.keepProductId)?'selected':''}>${id}</option>`).join('')}</select></label>
           <label>通常の仕入先<select id="mergeSupplier"><option value="">未設定</option>${supplierOpts}</select></label>
         </div>

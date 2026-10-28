@@ -1,7 +1,8 @@
-"""旧CSV: 加工サービス（部品・資材／加工）の判定・名寄せ・本体分離。
+"""旧CSV: 加工サービス（CATEGORY_PROCESS_SERVICE）の判定・名寄せ・本体分離。
 
 表示の基本情報は「加工名＋加工業者」。対象衣服名は加工表示名に含めない。
 プレビュー／再照合 alone では DB を変えない（呼び出し側の commit まで）。
+既存の部品・資材へ誤登録された加工は inventory で候補列挙のみ（自動移行しない）。
 """
 from __future__ import annotations
 
@@ -784,8 +785,18 @@ def embroidery_alias_lookup_names(service_name: str):
     return out
 
 
+def _processing_service_category_rank(category: str) -> int:
+    """再利用優先度。加工サービス > 旧・部品・資材 > その他。"""
+    cat = stock.text(category)
+    if cat == stock.CATEGORY_PROCESS_SERVICE:
+        return 0
+    if cat == stock.CATEGORY_PARTS:
+        return 1
+    return 2
+
+
 def find_existing_processing_services(c, service_name: str, vendor_name: str):
-    """同業者の部品・資材（加工）を別名込みで列挙。複数件あり得る。"""
+    """同業者の加工サービス（＋移行前の部品・資材）を別名込みで列挙。複数件あり得る。"""
     name = stock.text(service_name)
     vendor = stock.text(vendor_name)
     if not name or not vendor:
@@ -816,19 +827,29 @@ def find_existing_processing_services(c, service_name: str, vendor_name: str):
                     continue
                 by_id[int(mid)] = _as_product_dict(m)
     matches = list(by_id.values())
-    parts = [
+    preferred = [
         m for m in matches
-        if stock.text(_product_field(m, 'category')) == stock.CATEGORY_PARTS
+        if stock.text(_product_field(m, 'category')) in (
+            stock.CATEGORY_PROCESS_SERVICE, stock.CATEGORY_PARTS,
+        )
     ]
-    return parts or matches
+    pool = preferred or matches
+    pool.sort(
+        key=lambda m: (
+            _processing_service_category_rank(_product_field(m, 'category')),
+            int(_product_field(m, 'id') or 0),
+        )
+    )
+    return pool
 
 
 def find_existing_processing_service(c, service_name: str, vendor_name: str):
-    """同名＋同業者の部品・資材（加工）を探す。
+    """同名＋同業者の加工サービスを探す（旧・部品・資材登録も含む）。
 
     刺繍系別名（刺繍／刺繍入れ／刺繍加工）は同一サービスとして再利用する。
     同一業者で別名の加工サービスが複数ある場合は、正規名「刺繍」を優先し、
     なければ最初の1件を返す（実データの削除・統合はしない。呼び出し側で重複報告可）。
+    カテゴリは加工サービスを部品・資材より優先（移行途中の重複回避）。
     """
     name = stock.text(service_name)
     vendor = stock.text(vendor_name)
@@ -840,19 +861,28 @@ def find_existing_processing_service(c, service_name: str, vendor_name: str):
     if len(pool) == 1:
         return pool[0]
 
-    # 複数: 正規名一致を優先、次に刺繍加工、それ以外は id 昇順の先頭
+    # 複数: カテゴリ優先のあと、正規名一致 → 刺繍加工 → id 昇順
     preferred_order = [ELMS_EMBROIDERY_SERVICE_NAME, '刺繍加工', '刺繍入れ']
-    for pref in preferred_order:
-        pref_key = normalize_service_key(pref)
-        hits = [
+    for cat_rank in (0, 1, 2):
+        ranked = [
             m for m in pool
-            if normalize_service_key(_product_field(m, 'name')) == pref_key
+            if _processing_service_category_rank(_product_field(m, 'category')) == cat_rank
         ]
-        if len(hits) == 1:
-            return hits[0]
-        if hits:
-            hits.sort(key=lambda m: int(_product_field(m, 'id') or 0))
-            return hits[0]
+        if not ranked:
+            continue
+        for pref in preferred_order:
+            pref_key = normalize_service_key(pref)
+            hits = [
+                m for m in ranked
+                if normalize_service_key(_product_field(m, 'name')) == pref_key
+            ]
+            if len(hits) == 1:
+                return hits[0]
+            if hits:
+                hits.sort(key=lambda m: int(_product_field(m, 'id') or 0))
+                return hits[0]
+        ranked.sort(key=lambda m: int(_product_field(m, 'id') or 0))
+        return ranked[0]
     pool_sorted = sorted(pool, key=lambda m: int(_product_field(m, 'id') or 0))
     return pool_sorted[0]
 
@@ -890,4 +920,257 @@ def describe_processing_service_duplicates(c, service_name: str, vendor_name: st
             f' suggestedKeepId={keep_id} へ付け替えたうえで、他方を停止または統合してください。'
             f'自動削除は行いません。'
         ),
+    }
+
+
+def _product_lot_qty(c, product_id: int) -> int:
+    """衣服在庫の残数量合計。加工サービス移行の曖昧判定用（書込なし）。"""
+    row = c.execute(
+        '''SELECT COALESCE(SUM(l.qty_remaining), 0) AS n
+           FROM lots l
+           JOIN customer_products cp ON cp.id=l.customer_product_id
+           WHERE cp.product_id=?''',
+        (int(product_id),),
+    ).fetchone()
+    return int(row['n'] if row else 0)
+
+
+def classify_parts_product_for_process_migration(c, product_row) -> dict:
+    """部品・資材1件を加工サービス移行の観点で分類する（書込なし）。
+
+    bucket:
+      - candidate: 明確に加工サービス（業者 or 明確な加工名）
+      - ambiguous: 判断が分かれうる（人手確認）
+      - leave: 実物部品・資材のまま残す
+    """
+    pid = int(_product_field(product_row, 'id') or 0)
+    name = stock.text(_product_field(product_row, 'name') or '')
+    code = stock.text(_product_field(product_row, 'code') or '')
+    category = stock.text(_product_field(product_row, 'category') or '')
+    supplier_id = _product_field(product_row, 'supplier_id')
+    supplier_name = ''
+    if supplier_id not in (None, ''):
+        srow = c.execute(
+            'SELECT name FROM suppliers WHERE id=?', (int(supplier_id),)
+        ).fetchone()
+        supplier_name = stock.text(srow['name'] if srow else '')
+
+    base = {
+        'id': pid,
+        'name': name,
+        'code': code,
+        'category': category,
+        'supplierId': supplier_id,
+        'supplierName': supplier_name,
+        'lotQty': _product_lot_qty(c, pid) if pid else 0,
+        'active': bool(_product_field(product_row, 'active')),
+    }
+
+    if category != stock.CATEGORY_PARTS:
+        return {
+            **base,
+            'bucket': 'leave',
+            'reason': '部品・資材以外のため対象外',
+            'suggestedServiceName': '',
+        }
+
+    if is_physical_parts_name(name):
+        return {
+            **base,
+            'bucket': 'leave',
+            'reason': '実物の部品・資材名（生地・ボタン等）',
+            'suggestedServiceName': '',
+        }
+
+    vendor = is_processing_vendor(supplier_name)
+    unified = ''
+    if vendor and is_elms_corporation_vendor(supplier_name):
+        unified = ELMS_EMBROIDERY_SERVICE_NAME
+    else:
+        unified = unify_processing_service_name(name) or ''
+
+    identifiable = bool(unified) and (
+        vendor or _looks_like_service_core(canonicalize_attach_verbs(name))
+    )
+
+    if identifiable and vendor and not code:
+        reason = (
+            f'加工業者「{supplier_name}」＋明確な加工名「{unified}」（品番なし）'
+        )
+        if base['lotQty'] > 0:
+            return {
+                **base,
+                'bucket': 'ambiguous',
+                'reason': reason + '／衣服在庫数量あり（数量扱いの確認が必要）',
+                'suggestedServiceName': unified,
+            }
+        return {
+            **base,
+            'bucket': 'candidate',
+            'reason': reason,
+            'suggestedServiceName': unified,
+        }
+
+    if identifiable and vendor and code:
+        return {
+            **base,
+            'bucket': 'ambiguous',
+            'reason': (
+                f'加工業者＋加工名「{unified}」だが品番「{code}」あり'
+                '（本体SKU混在の可能性）'
+            ),
+            'suggestedServiceName': unified,
+        }
+
+    if identifiable and not vendor and not code:
+        return {
+            **base,
+            'bucket': 'ambiguous',
+            'reason': (
+                f'加工名「{unified}」に見えるが仕入先が加工業者ではない'
+                f'（{supplier_name or "未設定"}）'
+            ),
+            'suggestedServiceName': unified,
+        }
+
+    if vendor and not identifiable and not code:
+        return {
+            **base,
+            'bucket': 'ambiguous',
+            'reason': (
+                f'加工業者「{supplier_name}」だが加工内容を特定できない'
+                f'（名称「{name or "（空）"}」）'
+            ),
+            'suggestedServiceName': '',
+        }
+
+    return {
+        **base,
+        'bucket': 'leave',
+        'reason': '加工サービスと特定できない部品・資材',
+        'suggestedServiceName': '',
+    }
+
+
+def inventory_process_service_migration(c, *, include_leave: bool = False) -> dict:
+    """既存の部品・資材から加工サービス移行候補を列挙する（DB書込なし）。
+
+    - candidate: 移行してよい明確な加工登録（ID維持・カテゴリ更新のみ想定）
+    - ambiguous: 人手レビュー
+    - leave: そのまま部品・資材（既定では件数のみ）
+    本番適用は別途レビュー後。この関数は一覧のみ。
+    """
+    candidates = []
+    ambiguous = []
+    leave = []
+    leave_count = 0
+    for row in c.execute(
+        '''SELECT id, code, name, category, supplier_id, active
+           FROM products
+           WHERE category=? AND COALESCE(merged_into_id, 0)=0
+           ORDER BY id''',
+        (stock.CATEGORY_PARTS,),
+    ):
+        item = classify_parts_product_for_process_migration(c, row)
+        bucket = item['bucket']
+        if bucket == 'candidate':
+            candidates.append(item)
+        elif bucket == 'ambiguous':
+            ambiguous.append(item)
+        else:
+            leave_count += 1
+            if include_leave:
+                leave.append(item)
+
+    already_row = c.execute(
+        '''SELECT COUNT(*) AS n FROM products
+           WHERE category=? AND COALESCE(merged_into_id, 0)=0''',
+        (stock.CATEGORY_PROCESS_SERVICE,),
+    ).fetchone()
+    already_n = int(already_row['n'] if already_row else 0)
+
+    return {
+        'method': (
+            '部品・資材のうち、(1) 仕入先が加工業者かつ品番なしかつ明確な加工名'
+            ' → candidate。(2) 加工名のみ／品番あり／在庫数量あり／業者のみ'
+            ' → ambiguous。(3) 実物部品マーカーや特定不能 → leave。'
+            ' 適用時は products.category を加工サービスへ UPDATE し、'
+            ' id・仕入先・価格・履歴・参照は維持（削除再作成しない）。'
+            ' この inventory は書込しない。'
+        ),
+        'alreadyProcessServiceCount': already_n,
+        'partsScanned': len(candidates) + len(ambiguous) + leave_count,
+        'candidateCount': len(candidates),
+        'ambiguousCount': len(ambiguous),
+        'leaveCount': leave_count,
+        'candidates': candidates,
+        'ambiguous': ambiguous,
+        'leave': leave if include_leave else [],
+        'applySqlPreview': (
+            "UPDATE products SET category='加工サービス', updated_at=? "
+            "WHERE id=? AND category='部品・資材'"
+        ),
+        'writes': False,
+    }
+
+
+def apply_process_service_migration(c, product_ids, *, dry_run: bool = True) -> dict:
+    """候補 ID のカテゴリを加工サービスへ更新する。既定は dry_run（書込なし）。
+
+    本番適用は dry_run=False かつ明示呼び出しのみ。自動実行しない。
+    """
+    ids = []
+    for raw in product_ids or []:
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if pid > 0 and pid not in ids:
+            ids.append(pid)
+    planned = []
+    skipped = []
+    for pid in ids:
+        row = c.execute(
+            '''SELECT id, code, name, category, supplier_id, active
+               FROM products WHERE id=?''',
+            (pid,),
+        ).fetchone()
+        if not row:
+            skipped.append({'id': pid, 'reason': '商品がありません'})
+            continue
+        item = classify_parts_product_for_process_migration(c, row)
+        if item['bucket'] != 'candidate':
+            skipped.append({
+                'id': pid,
+                'reason': f"bucket={item['bucket']}: {item.get('reason') or ''}",
+                'bucket': item['bucket'],
+            })
+            continue
+        planned.append(item)
+    applied = []
+    if not dry_run:
+        stamp = stock.stamp()
+        for item in planned:
+            c.execute(
+                '''UPDATE products SET category=?, updated_at=?
+                   WHERE id=? AND category=?''',
+                (
+                    stock.CATEGORY_PROCESS_SERVICE, stamp, int(item['id']),
+                    stock.CATEGORY_PARTS,
+                ),
+            )
+            if c.total_changes:
+                applied.append({**item, 'category': stock.CATEGORY_PROCESS_SERVICE})
+            else:
+                skipped.append({
+                    'id': item['id'],
+                    'reason': '更新対象外（カテゴリが変わった可能性）',
+                })
+    return {
+        'dryRun': bool(dry_run),
+        'requested': ids,
+        'planned': planned,
+        'applied': applied,
+        'skipped': skipped,
+        'writes': (not dry_run) and bool(applied),
     }

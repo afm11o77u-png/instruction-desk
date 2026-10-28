@@ -273,7 +273,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertGreaterEqual(result['counts'].get('processingServicesCreated', 0), 1)
             services = list(c.execute(
                 "SELECT id,code,name,category,supplier_id FROM products WHERE category=? AND name=?",
-                (stock.CATEGORY_PARTS, '刺繍'),
+                (stock.CATEGORY_PROCESS_SERVICE, '刺繍'),
             ))
             self.assertEqual(len(services), 1)
             self.assertEqual(services[0]['code'], '')
@@ -292,14 +292,14 @@ class ProcessingServiceImportTest(unittest.TestCase):
             c.commit()
             services2 = list(c.execute(
                 "SELECT id FROM products WHERE category=? AND name=?",
-                (stock.CATEGORY_PARTS, '刺繍'),
+                (stock.CATEGORY_PROCESS_SERVICE, '刺繍'),
             ))
             self.assertEqual(len(services2), 1)
             # 旧名称「刺繍加工」の残骸も増やさない
             self.assertEqual(
                 c.execute(
                     "SELECT COUNT(*) AS n FROM products WHERE category=? AND name=?",
-                    (stock.CATEGORY_PARTS, '刺繍加工'),
+                    (stock.CATEGORY_PROCESS_SERVICE, '刺繍加工'),
                 ).fetchone()['n'],
                 0,
             )
@@ -354,7 +354,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
 
             svc = c.execute(
                 "SELECT id,code,name FROM products WHERE name=? AND category=?",
-                ('七分袖加工', stock.CATEGORY_PARTS),
+                ('七分袖加工', stock.CATEGORY_PROCESS_SERVICE),
             ).fetchone()
             self.assertIsNotNone(svc)
             self.assertEqual(svc['code'], '')
@@ -415,12 +415,12 @@ class ProcessingServiceImportTest(unittest.TestCase):
             c.commit()
             n = c.execute(
                 "SELECT COUNT(*) AS n FROM products WHERE category=?",
-                (stock.CATEGORY_PARTS,),
+                (stock.CATEGORY_PROCESS_SERVICE,),
             ).fetchone()['n']
             self.assertEqual(n, 2)
             elms_prod = c.execute(
                 "SELECT name FROM products WHERE category=? AND name=?",
-                (stock.CATEGORY_PARTS, '刺繍'),
+                (stock.CATEGORY_PROCESS_SERVICE, '刺繍'),
             ).fetchone()
             self.assertIsNotNone(elms_prod)
         finally:
@@ -487,7 +487,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertEqual(result['counts'].get('failed', 0), 0)
             services = list(c.execute(
                 "SELECT id,name,code FROM products WHERE category=? AND name=?",
-                (stock.CATEGORY_PARTS, '刺繍'),
+                (stock.CATEGORY_PROCESS_SERVICE, '刺繍'),
             ))
             self.assertEqual(len(services), 1)
             # マップに元名・顧客が残る
@@ -640,7 +640,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertEqual(result['counts'].get('failed', 0), 0)
             services = list(c.execute(
                 "SELECT id,name,code,category FROM products WHERE name=? AND category=?",
-                ('丈直し', stock.CATEGORY_PARTS),
+                ('丈直し', stock.CATEGORY_PROCESS_SERVICE),
             ))
             self.assertEqual(len(services), 1)
             self.assertEqual(services[0]['code'], '')
@@ -689,7 +689,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             c.commit()
             n = c.execute(
                 "SELECT COUNT(*) AS n FROM products WHERE name=? AND category=?",
-                ('丈直し', stock.CATEGORY_PARTS),
+                ('丈直し', stock.CATEGORY_PROCESS_SERVICE),
             ).fetchone()['n']
             self.assertEqual(n, 1)
         finally:
@@ -741,7 +741,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertEqual(result['counts'].get('failed', 0), 0)
             services = list(c.execute(
                 "SELECT id,name,code,category FROM products WHERE name=? AND category=?",
-                ('ポケット取付', stock.CATEGORY_PARTS),
+                ('ポケット取付', stock.CATEGORY_PROCESS_SERVICE),
             ))
             self.assertEqual(len(services), 1)
             self.assertEqual(services[0]['code'], '')
@@ -764,7 +764,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             c.commit()
             n = c.execute(
                 "SELECT COUNT(*) AS n FROM products WHERE name=? AND category=?",
-                ('ポケット取付', stock.CATEGORY_PARTS),
+                ('ポケット取付', stock.CATEGORY_PROCESS_SERVICE),
             ).fetchone()['n']
             self.assertEqual(n, 1)
 
@@ -852,7 +852,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             self.assertEqual(result['counts'].get('failed', 0), 0)
             services = list(c.execute(
                 "SELECT id,name,code,category FROM products WHERE name=? AND category=?",
-                ('サイズダウン', stock.CATEGORY_PARTS),
+                ('サイズダウン', stock.CATEGORY_PROCESS_SERVICE),
             ))
             self.assertEqual(len(services), 1)
             self.assertEqual(services[0]['code'], '')
@@ -876,7 +876,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             c.commit()
             n = c.execute(
                 "SELECT COUNT(*) AS n FROM products WHERE name=? AND category=?",
-                ('サイズダウン', stock.CATEGORY_PARTS),
+                ('サイズダウン', stock.CATEGORY_PROCESS_SERVICE),
             ).fetchone()['n']
             self.assertEqual(n, 1)
 
@@ -1013,7 +1013,7 @@ class ProcessingServiceImportTest(unittest.TestCase):
             ).fetchone()
             svc = c.execute(
                 "SELECT id FROM products WHERE name='七分袖加工' AND category=?",
-                (stock.CATEGORY_PARTS,),
+                (stock.CATEGORY_PROCESS_SERVICE,),
             ).fetchone()
             self.assertIsNotNone(body)
             self.assertIsNotNone(svc)

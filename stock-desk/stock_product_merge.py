@@ -586,7 +586,10 @@ def preview_merge(c, body):
     # 属性候補
     name_choices = sorted({cards[pid]['name'] for pid in product_ids})
     color_choices = sorted({cards[pid]['color'] or '' for pid in product_ids})
-    category_choices = sorted({cards[pid].get('category') or '' for pid in product_ids})
+    category_choices = list(stock.PRODUCT_CATEGORY_OPTIONS)
+    for cat in sorted({cards[pid].get('category') or '' for pid in product_ids}):
+        if cat not in category_choices:
+            category_choices.append(cat)
     size_union = []
     for pid in product_ids:
         for label in cards[pid]['sizes']:

@@ -1479,7 +1479,7 @@ def build_preview(c, body):
         'previousImports': previous_imports_for_file(c, uploaded['fileSha256']),
         'rows': classified,
         'ignoredColumns': list(IGNORED_QTY_COLUMNS),
-        'categoryOptions': ['', stock.CATEGORY_UNIFORM, stock.CATEGORY_PARTS],
+        'categoryOptions': list(stock.PRODUCT_CATEGORY_OPTIONS),
     }
 
 

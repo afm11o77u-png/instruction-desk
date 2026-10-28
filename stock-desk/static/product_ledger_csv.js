@@ -1048,7 +1048,7 @@
           <li>加工名: <strong>${esc(p.serviceName||'—')}</strong></li>
           <li>加工業者: <strong>${esc(p.vendorName||'—')}</strong></li>
           <li>補足／個別仕様: 内部照合用（通常画面には別名一覧を出しません）</li>
-          <li>区分: 部品・資材／加工　品番なし（対象品番 ${codes||'—'}${more}）</li>
+          <li>区分: 加工サービス　品番なし（対象品番 ${codes||'—'}${more}）</li>
         </ul>
         <p class="excelhint">一覧・登録の表示名は加工名をそのまま使います。登録時表示名の別入力はありません。</p>
         ${samples?`<details class="sku-processing-specs"><summary>元行の補足・個別仕様（内部照合用）</summary><ul>${samples}</ul></details>`:''}
@@ -2696,7 +2696,7 @@
     }
     if(r.product&&r.product.blankSku){
       const cur=sel.category!=null?sel.category:(r.product.category||'')
-      const opts=(st.preview&&st.preview.categoryOptions)||['','制服','部品・資材']
+      const opts=(st.preview&&st.preview.categoryOptions)||['','制服','部品・資材','加工サービス']
       bits.push(`<label>区分<select data-pl-cat="${r.rowNo}" ${st.busy?'disabled':''}>${opts.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>`)
     }
     // メーカー情報で補正: 要確認かつ具体的なメーカー品番がある行だけ
