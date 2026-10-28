@@ -44,6 +44,10 @@ class JudgmentListScrollLayoutSourceTest(unittest.TestCase):
         # 診断ログはクエリでゲート
         self.assertIn('ledgerScrollDebug', js)
         self.assertIn('ledgerScrollDebug=1', js)
+        # 操作行 chase 禁止・共有復元ポリシー
+        self.assertIn('scheduleLedgerScrollRestore', js)
+        self.assertIn('操作行 chase', js)
+        self.assertNotIn('paintDialog({anchorCode:', js)
 
     def test_section_defaults_unchanged(self):
         js = JS.read_text(encoding='utf-8')
