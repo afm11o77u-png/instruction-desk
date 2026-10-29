@@ -776,8 +776,8 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('max-height:1.7rem', memo_css)
         self.assertIn('white-space:normal', memo_css)  # nowrap を上書きして折返し
         self.assertIn('overflow:hidden', memo_css)
-        self.assertIn('font-size:9px', memo_css)
-        self.assertIn('line-height:1.15', memo_css)
+        # 読みやすさのため 11px（line-height 1.1 で 2行が ~1.7rem 内に収まる）
+        self.assertIn('font-size:11px;font-weight:400;line-height:1.1;', memo_css)
         self.assertIn('white-space:pre-wrap', memo_css)
         self.assertIn('resize:none', memo_css)
         self.assertIn('min-width:1.72rem', css)
