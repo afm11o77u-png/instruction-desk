@@ -306,10 +306,12 @@ body.catalog-kintai main>header .headactions{display:none}
 /* シフト表印刷: 共通の body>*{display:none} を打ち消し、main 配下の表だけ出す。
    named @page shift-sheet は対応エンジン向け。Chromium は unnamed @page 向きを優先するため、
    印刷時は kintai-shift.js が一時的に @page{size:A4 landscape} を差し込む（指示書の縦は印刷後に復元）。
-   カラー用／白黒用は同一ジオメトリ。土日祝の塗り色だけ切り替える（PR#228 の #d9d9d9/#bfbfbf を白黒用で再利用）。 */
+   カラー用／白黒用は同一ジオメトリ。土日祝の塗り色だけ切り替える（PR#228 の #d9d9d9/#bfbfbf を白黒用で再利用）。
+   Excel印刷プレビュー相当の表アスペクト（幅:高さ ≒ 1.65:1）へ寄せるため、印刷専用で行高・字号を大きくする。
+   画面の狭列・小フォントは流用しない。transform/scale では拡げない（字形歪み防止）。人数が多いときは縮小せず改ページ（thead 繰返し）。 */
 @media print{
-  @page shift-sheet{size:A4 landscape;margin:8mm}
-  body.printing-shift{background:#fff;page:shift-sheet}
+  @page shift-sheet{size:A4 landscape;margin:6mm}
+  body.printing-shift{background:#fff;page:shift-sheet;zoom:1;-webkit-text-size-adjust:100%}
   body.printing-shift>main,
   body.printing-shift #kintaidesk,
   body.printing-shift #kintaishift{page:shift-sheet}
@@ -342,43 +344,49 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-print-banner{display:table-row!important}
   body.printing-shift .shift-print-banner>th{border:0!important;background:#fff!important;padding:0 0 5px!important;text-align:left}
   /* 見本: 太い濃緑バー（#245c47）＋タイトルは濃グレー・大きめ。凡例は小さめのまま */
-  body.printing-shift .shift-print-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;border-bottom:2.8pt solid #245c47;padding:0 0 5px;margin:0 0 3px;page-break-after:avoid}
-  body.printing-shift .shift-print-title-text{font-size:18pt;font-weight:700;color:#464a4d;white-space:nowrap;letter-spacing:.02em}
-  body.printing-shift .shift-print-legend{font-size:8pt;font-weight:400;color:#555;white-space:nowrap}
-  body.printing-shift .shift-grid-wrap{display:block!important;overflow:visible!important;max-height:none!important;border:0!important;width:100%!important}
-  body.printing-shift .shift-grid{font-size:8.5pt;width:100%!important;max-width:100%!important;table-layout:fixed;border-collapse:collapse;font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}
+  body.printing-shift .shift-print-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;width:100%;border-bottom:2.8pt solid #245c47;padding:0 0 5px;margin:0 0 3px;page-break-after:avoid;break-after:avoid}
+  body.printing-shift .shift-print-title-text{font-size:19pt;font-weight:700;color:#464a4d;white-space:nowrap;letter-spacing:.02em}
+  body.printing-shift .shift-print-legend{font-size:8.5pt;font-weight:400;color:#555;white-space:nowrap}
+  body.printing-shift .shift-grid-wrap{display:block!important;overflow:visible!important;max-height:none!important;border:0!important;width:100%!important;max-width:none!important}
+  /* 印刷専用サイズ（画面の 1.72rem 狭列・10px 級は使わない）。幅いっぱいで最終日まで表示。
+     現行人数（≈14）は1頁・表アスペクト ≈1.65:1。多人数は縮小せず thead（年月＋曜日）繰返しで改ページ。 */
+  body.printing-shift .shift-grid{font-size:10.5pt;width:100%!important;max-width:none!important;table-layout:fixed;border-collapse:collapse;font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;transform:none!important;zoom:1}
   body.printing-shift .shift-grid thead{display:table-header-group}
   body.printing-shift .shift-grid tbody{display:table-row-group}
   body.printing-shift .shift-grid tr{break-inside:avoid;page-break-inside:avoid}
   body.printing-shift .shift-grid .shift-name,
   body.printing-shift .shift-grid .shift-memo,
   body.printing-shift .shift-grid thead th{position:static!important;top:auto!important;left:auto!important}
-  /* 薄い罫線・余白多め（見本のエアリーなセル） */
+  /* 薄い罫線・行を高く（Excelプレビュー相当）。字号は pt の等方指定（transform:scale 禁止） */
   body.printing-shift .shift-grid th,
   body.printing-shift .shift-grid td{border:0.35pt solid #c5cbc7;padding:4px 2px;background:#fff!important;color:#333;vertical-align:middle;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  /* 人員行の高さ: Excelプレビューの表比(幅:高さ≈1.65)に寄せる。14人前後は1頁に収める */
+  body.printing-shift .shift-grid tbody tr{height:9.3mm}
+  body.printing-shift .shift-grid tbody th.shift-name,
+  body.printing-shift .shift-grid tbody td.shift-cell{height:9.3mm;max-height:9.3mm;padding:3px 2px}
   /* 日付見出し行: 平日は薄い緑グレー。土日祝は後段のモード色が上書き */
   body.printing-shift .shift-grid thead th.shift-corner,
   body.printing-shift .shift-grid thead th.shift-day{
     background:#f0f5f2!important;font-weight:700;padding:5px 1px
   }
-  /* 氏名は1行固定（姓／名のスペースで折り返さない）。日列をやや狭めて幅を確保。
+  /* 氏名は1行固定（姓／名のスペースで折り返さない）。日列は残り幅を均等配分（31日でも最終日をクリップしない）。
      colgroup 必須: thead 先頭の colspan バナーがあると fixed が全列均等になる。
-     9em ≒ 典型的なフルネーム（例:「齊藤 遼太」「長谷川 恵美子」）＋余白
+     9.5em ≒ 大きめ字号でもフルネーム（例:「齊藤 遼太」「長谷川 恵美子」）が1行
      勤務メモ列・区分色は印刷に出さない（空白列も残さない） */
   body.printing-shift .shift-grid col.shift-col-memo{width:0!important;max-width:0!important}
-  body.printing-shift .shift-grid col.shift-col-name{width:9em}
+  body.printing-shift .shift-grid col.shift-col-name{width:9.5em}
   body.printing-shift .shift-grid col.shift-col-day{width:auto}
-  body.printing-shift .shift-grid .shift-name{width:9em;min-width:9em;max-width:none;text-align:left;padding:5px 6px;overflow:visible;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto;background:#f8faf8!important}
+  body.printing-shift .shift-grid .shift-name{width:9.5em;min-width:9.5em;max-width:none;text-align:left;padding:6px 7px;overflow:visible;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto;font-size:10.5pt;background:#f8faf8!important}
   body.printing-shift .shift-grid .shift-name.shift-emp-regular,
   body.printing-shift .shift-grid .shift-name.shift-emp-contract,
   body.printing-shift .shift-grid .shift-name.shift-emp-part{background:#f8faf8!important}
   body.printing-shift .shift-grid .shift-name-edit{display:block;white-space:nowrap}
   body.printing-shift .shift-grid .shift-name-input{display:none!important}
-  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto}
+  body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-size:10.5pt;font-weight:700;color:#333;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto}
   body.printing-shift .shift-grid .shift-day,
-  body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:7.5pt;text-align:center}
-  body.printing-shift .shift-grid .shift-daynum{display:block;font-weight:700;line-height:1.2}
-  body.printing-shift .shift-grid .shift-wday{display:block;font-size:6.5pt;font-weight:400;line-height:1.2;color:#4a5d50}
+  body.printing-shift .shift-grid .shift-cell{min-width:0!important;width:auto;height:auto!important;overflow:hidden;white-space:nowrap;font-size:9.5pt;text-align:center}
+  body.printing-shift .shift-grid .shift-daynum{display:block;font-size:9.5pt;font-weight:700;line-height:1.2}
+  body.printing-shift .shift-grid .shift-wday{display:block;font-size:7.5pt;font-weight:400;line-height:1.2;color:#4a5d50}
   /* 偶数人員行のゼブラ（氏名＋平日セル。土日祝塗りは後段で優先） */
   body.printing-shift .shift-grid tbody tr:nth-child(even) .shift-name{
     background:#eef2f0!important
@@ -386,10 +394,10 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid tbody tr:nth-child(even) td.shift-cell:not(.shift-sat):not(.shift-sun){
     background:#f3f6f4!important
   }
-  /* ×／時刻: 既定は白黒寄り。カラー用は後段で赤系へ。時刻は「15:00」1行（まで無し） */
-  body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#333!important;background-color:#fff!important;background-image:none!important;font-size:7pt;line-height:1.15;white-space:nowrap!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time .shift-time-main{display:inline;text-align:center;font-size:7pt;font-weight:700}
+  /* ×／時刻: 既定は白黒寄り。カラー用は後段で赤系へ。時刻は「15:00」1行（まで無し）。字号拡大は pt（scale変形なし） */
+  body.printing-shift .shift-grid td.shift-off{font-size:11pt;font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#333!important;background-color:#fff!important;background-image:none!important;font-size:8.5pt;line-height:1.15;white-space:nowrap!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time .shift-time-main{display:inline;text-align:center;font-size:8.5pt;font-weight:700}
   body.printing-shift .shift-grid td.shift-time .shift-time-until{display:none!important}
   /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通。×は見本どおり赤系 */
   body.printing-shift.print-shift-color .shift-grid td.shift-off{color:#b85c4a!important}

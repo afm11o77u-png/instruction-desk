@@ -966,7 +966,7 @@
    * 印刷終了後に外すので指示書など通常の A4 縦は壊さない。
    */
   const SHIFT_PRINT_PAGE_CSS_ID = 'shift-print-page-css';
-  const SHIFT_PRINT_PAGE_CSS = '@page{size:A4 landscape;margin:8mm}';
+  const SHIFT_PRINT_PAGE_CSS = '@page{size:A4 landscape;margin:6mm}';
 
   function ensureShiftLandscapePage() {
     let el = document.getElementById(SHIFT_PRINT_PAGE_CSS_ID);
