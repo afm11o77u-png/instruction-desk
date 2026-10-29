@@ -410,6 +410,48 @@ class BihinStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             kintai_bihin.restore_item(self.c, self.user, {})
 
+    def test_sheet_row_delete_persists_empty_and_does_not_revive_from_master(self):
+        """表示中月の行削除→保存後はマスタから自動復活しない。空シートも空のまま。"""
+        a = self._add_item('コピー用紙', 500)
+        b = self._add_item('コピー用紙', 480)  # 同名別単価
+        self._add_item('マーカー', 90)
+        sheet = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertEqual(len(sheet['rows']), 3)
+        # 単価500だけ残す（品名では消さない）
+        keep = [dict(r) for r in sheet['rows'] if r['itemId'] == a['id']]
+        keep[0].update({'openingQty': 1, 'purchaseQty': 0, 'closingQty': 1})
+        code, saved = kintai_bihin.save_sheet(self.c, self.user, {
+            'year': 2026, 'month': 10, 'version': 0, 'rows': keep,
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(len(saved['rows']), 1)
+        self.assertEqual(saved['rows'][0]['itemId'], a['id'])
+        self.assertEqual(saved['rows'][0]['unitPrice'], 500)
+        again = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertTrue(again['exists'])
+        self.assertEqual([r['itemId'] for r in again['rows']], [a['id']])
+        # マスタは3件のまま
+        self.assertEqual(len(kintai_bihin.list_items(self.c)), 3)
+        # 他月（未作成）はマスタ全件
+        nov = kintai_bihin.get_sheet(self.c, 2026, 11)
+        self.assertFalse(nov['exists'])
+        self.assertEqual(len(nov['rows']), 3)
+        # 全行削除して空シート保存
+        code2, empty = kintai_bihin.save_sheet(self.c, self.user, {
+            'year': 2026, 'month': 10, 'version': again['version'], 'rows': [],
+        })
+        self.assertEqual(code2, 200)
+        self.assertEqual(empty['rows'], [])
+        self.assertEqual(empty['totals']['openingAmount'], None)
+        reloaded = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertTrue(reloaded['exists'])
+        self.assertEqual(reloaded['rows'], [])
+        # マスタ・他月は影響なし
+        self.assertEqual(len(kintai_bihin.list_items(self.c)), 3)
+        nov2 = kintai_bihin.get_sheet(self.c, 2026, 11)
+        self.assertEqual(len(nov2['rows']), 3)
+        self.assertIn(b['id'], [r['itemId'] for r in nov2['rows']])
+
 
 class BihinUiContractTest(unittest.TestCase):
     def test_nav_and_panel(self):
@@ -419,6 +461,8 @@ class BihinUiContractTest(unittest.TestCase):
         self.assertIn('id="kintaibihin"', index)
         self.assertIn('id="bihingrid"', index)
         self.assertIn('id="bihinsave"', index)
+        self.assertIn('id="bihinrowdelete"', index)
+        self.assertIn('選択した行を削除', index)
         self.assertIn('id="bihinsavedialog"', index)
         self.assertIn('id="bihinmasterdialog"', index)
         self.assertIn('id="bihinmasterdeletedbody"', index)
@@ -452,6 +496,11 @@ class BihinUiContractTest(unittest.TestCase):
         self.assertIn('data-delete-item', js)
         self.assertIn('data-restore-item', js)
         self.assertIn('今後の棚卸・発注の候補から外します。保存済みの棚卸・発注履歴は残ります。', js)
+        self.assertIn('deleteSelectedRows', js)
+        self.assertIn('bihin-row-check', js)
+        self.assertIn('bihinrowdelete', js)
+        self.assertIn('表示中の月の棚卸行だけを消します', js)
+        self.assertIn('（単価 ', js)
         self.assertIn('moneyYen', js)
         self.assertNotIn('scheduleSave', js)
         # 在庫デスク API を呼ばない
@@ -466,6 +515,8 @@ class BihinUiContractTest(unittest.TestCase):
         self.assertIn('.bihin-input', css)
         self.assertIn('.bihin-calc', css)
         self.assertIn('.bihin-grid', css)
+        self.assertIn('.bihin-row-check', css)
+        self.assertIn('#bihinrowdelete', css)
 
     def test_desk_nav_groups_mentions_bihin(self):
         index = (ROOT / 'index.html').read_text(encoding='utf-8')

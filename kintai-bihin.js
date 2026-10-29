@@ -17,6 +17,8 @@
   let orderVendors = [];
   let orderPrepKey = '';
   let orderBusy = false;
+  /** 表示中月シートの選択行（rowKey）。保存はせず、削除は画面上の行だけ。 */
+  let selectedRowKeys = new Set();
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -159,6 +161,7 @@
     version = data && data.version != null ? data.version : 0;
     rows = cloneData((data && data.rows) || []).map(enrichRow);
     masterItems = cloneData((data && data.items) || []);
+    selectedRowKeys = new Set();
     bihinDirty = false;
     const input = $('#bihinyearmonth');
     if (input && year && month) input.value = ymValue(year, month);
@@ -170,6 +173,27 @@
       const who = data && data.updatedBy ? `（${data.updatedBy}）` : '';
       meta.textContent = `${year}年${month}月 ・ ${rows.length}行 ・ ${when}${who}`;
     }
+  }
+
+  function rowKeyOf(r, i) {
+    if (r && r.rowKey != null && r.rowKey !== '') return String(r.rowKey);
+    if (r && r.itemId != null && r.itemId !== '') return 'item:' + r.itemId;
+    return 'idx:' + i;
+  }
+
+  function updateRowDeleteButton() {
+    const btn = $('#bihinrowdelete');
+    if (!btn) return;
+    btn.disabled = selectedRowKeys.size === 0;
+  }
+
+  function syncHeaderCheck() {
+    const head = $('#bihinselectall');
+    if (!head) return;
+    const n = rows.length;
+    const sel = selectedRowKeys.size;
+    head.checked = n > 0 && sel === n;
+    head.indeterminate = sel > 0 && sel < n;
   }
 
   function paintNotices(data) {
@@ -217,13 +241,20 @@
     const table = $('#bihingrid');
     if (!table) return;
     if (!rows.length) {
-      table.innerHTML = `<tbody><tr><td class="bihin-empty-msg" colspan="12">
+      selectedRowKeys = new Set();
+      table.innerHTML = `<tbody><tr><td class="bihin-empty-msg" colspan="13">
         表示する品目がありません。右上の「品目マスタ」から科目・品名・単位・単価を登録してください（カタログの推測登録はしません）。
       </td></tr></tbody>`;
+      updateRowDeleteButton();
       return;
     }
+    const validKeys = new Set(rows.map((r, i) => rowKeyOf(r, i)));
+    selectedRowKeys = new Set([...selectedRowKeys].filter(k => validKeys.has(k)));
     const head = `<thead>
       <tr class="bihin-head-groups">
+        <th rowspan="2" class="bihin-row-check-col no-print">
+          <input type="checkbox" id="bihinselectall" class="bihin-row-check no-print" aria-label="すべての行を選択">
+        </th>
         <th rowspan="2">科目</th>
         <th rowspan="2">品名</th>
         <th rowspan="2">単位</th>
@@ -244,7 +275,10 @@
       const warn = r.negativeUsage ? ' bihin-warn' : '';
       const usageQtyText = r.usageIncomplete ? '—' : formatNum(r.usageQty);
       const usageAmtText = r.usageIncomplete ? '—' : formatYen(r.usageAmount);
-      return `<tr data-row-index="${i}">
+      const key = rowKeyOf(r, i);
+      const checked = selectedRowKeys.has(key) ? ' checked' : '';
+      return `<tr data-row-index="${i}" data-row-key="${esc(key)}">
+        <td class="bihin-row-check-col no-print"><input type="checkbox" class="bihin-row-check no-print" data-row-key="${esc(key)}" aria-label="${esc(r.name || '行')}を選択"${checked}></td>
         <td class="bihin-cat bihin-calc">${esc(r.category)}</td>
         <td class="bihin-name bihin-calc">${esc(r.name)}</td>
         <td class="bihin-unit bihin-calc">${esc(r.unit)}</td>
@@ -261,13 +295,51 @@
     }).join('') + '</tbody>';
     const t = totalsFromRows();
     const foot = `<tfoot><tr>
-      <td colspan="4">金額合計（数量は単位が異なるため合計しません）</td>
+      <td colspan="5">金額合計（数量は単位が異なるため合計しません）</td>
       <td class="bihin-calc"></td><td class="bihin-num bihin-calc">${formatYen(t.openingAmount)}</td>
       <td class="bihin-calc"></td><td class="bihin-num bihin-calc">${formatYen(t.purchaseAmount)}</td>
       <td class="bihin-calc"></td><td class="bihin-num bihin-calc">${formatYen(t.closingAmount)}</td>
       <td class="bihin-calc"></td><td class="bihin-num bihin-calc">${formatYen(t.usageAmount)}</td>
     </tr></tfoot>`;
     table.innerHTML = head + body + foot;
+    syncHeaderCheck();
+    updateRowDeleteButton();
+  }
+
+  function deleteSelectedRows() {
+    if (!selectedRowKeys.size) return;
+    const doomed = [];
+    rows.forEach((r, i) => {
+      const key = rowKeyOf(r, i);
+      if (selectedRowKeys.has(key)) doomed.push({ key, row: r, index: i });
+    });
+    if (!doomed.length) return;
+    const ym = `${year}年${month}月`;
+    const lines = doomed.map(d => {
+      const name = d.row.name || '（無題）';
+      const price = formatYen(d.row.unitPrice);
+      return `・${name}（単価 ${price}）`;
+    }).join('\n');
+    const ok = confirm(
+      `${ym}の次の行を削除しますか？\n\n${lines}\n\n` +
+      '表示中の月の棚卸行だけを消します。品目マスタ・他の月・発注履歴は変わりません。\n' +
+      '保存するまで確定しません（未保存の変更になります）。'
+    );
+    if (!ok) return;
+    const drop = new Set(doomed.map(d => d.key));
+    rows = rows
+      .filter((r, i) => !drop.has(rowKeyOf(r, i)))
+      .map(enrichRow);
+    selectedRowKeys = new Set();
+    markDirty();
+    paintBihin();
+    const meta = $('#bihinmeta');
+    if (meta) {
+      const when = sheet && sheet.updatedAt ? `最終保存 ${sheet.updatedAt}` : 'まだ保存がありません';
+      const who = sheet && sheet.updatedBy ? `（${sheet.updatedBy}）` : '';
+      meta.textContent = `${year}年${month}月 ・ ${rows.length}行 ・ ${when}${who}`;
+    }
+    toast(`${doomed.length}行を削除しました（未保存）。保存で確定します。`);
   }
 
   async function api(url, body) {
@@ -482,29 +554,49 @@
     const tr = el.closest('tr');
     if (!tr) return;
     const cells = tr.querySelectorAll('td');
-    // 0科目 1品名 2単位 3単価 4月初数 5月初金 6購入数 7購入金 8月末数 9月末金 10使用数 11使用金
+    // 0選択 1科目 2品名 3単位 4単価 5月初数 6月初金 7購入数 8購入金 9月末数 10月末金 11使用数 12使用金
     const r = rows[i];
-    if (cells[5]) cells[5].textContent = formatYen(r.openingAmount);
-    if (cells[7]) cells[7].textContent = formatYen(r.purchaseAmount);
-    if (cells[9]) cells[9].textContent = formatYen(r.closingAmount);
-    if (cells[10]) {
-      cells[10].textContent = r.usageIncomplete ? '—' : formatNum(r.usageQty);
-      cells[10].classList.toggle('bihin-warn', !!r.negativeUsage);
-    }
+    if (cells[6]) cells[6].textContent = formatYen(r.openingAmount);
+    if (cells[8]) cells[8].textContent = formatYen(r.purchaseAmount);
+    if (cells[10]) cells[10].textContent = formatYen(r.closingAmount);
     if (cells[11]) {
-      cells[11].textContent = r.usageIncomplete ? '—' : formatYen(r.usageAmount);
+      cells[11].textContent = r.usageIncomplete ? '—' : formatNum(r.usageQty);
       cells[11].classList.toggle('bihin-warn', !!r.negativeUsage);
+    }
+    if (cells[12]) {
+      cells[12].textContent = r.usageIncomplete ? '—' : formatYen(r.usageAmount);
+      cells[12].classList.toggle('bihin-warn', !!r.negativeUsage);
     }
     const foot = $('#bihingrid tfoot tr');
     if (foot) {
       const t = totalsFromRows();
       const fcells = foot.querySelectorAll('td');
-      // colspan4 + empty + openAmt + empty + purchAmt + empty + closeAmt + empty + usageAmt
+      // colspan5 + empty + openAmt + empty + purchAmt + empty + closeAmt + empty + usageAmt
       if (fcells[2]) fcells[2].textContent = formatYen(t.openingAmount);
       if (fcells[4]) fcells[4].textContent = formatYen(t.purchaseAmount);
       if (fcells[6]) fcells[6].textContent = formatYen(t.closingAmount);
       if (fcells[8]) fcells[8].textContent = formatYen(t.usageAmount);
     }
+  }
+
+  function onRowCheckChange(e) {
+    const el = e.target;
+    if (!el || !el.classList || !el.classList.contains('bihin-row-check')) return;
+    if (el.id === 'bihinselectall') {
+      if (el.checked) {
+        selectedRowKeys = new Set(rows.map((r, i) => rowKeyOf(r, i)));
+      } else {
+        selectedRowKeys = new Set();
+      }
+      paintBihin();
+      return;
+    }
+    const key = el.dataset.rowKey;
+    if (!key) return;
+    if (el.checked) selectedRowKeys.add(key);
+    else selectedRowKeys.delete(key);
+    syncHeaderCheck();
+    updateRowDeleteButton();
   }
 
   function onBeforeUnload(e) {
@@ -1265,6 +1357,8 @@
     if (saveBtn) {
       saveBtn.onclick = () => { saveBihin({ force: true }).catch(() => {}); };
     }
+    const rowDelBtn = $('#bihinrowdelete');
+    if (rowDelBtn) rowDelBtn.onclick = () => deleteSelectedRows();
     const printBtn = $('#bihinprint');
     if (printBtn) printBtn.onclick = () => printBihinCountSheet();
     const printGo = $('#bihinprintdialog-go');
@@ -1345,7 +1439,13 @@
     const wrap = $('#bihingridwrap');
     if (wrap) {
       wrap.addEventListener('input', onQtyInput);
-      wrap.addEventListener('change', onQtyInput);
+      wrap.addEventListener('change', e => {
+        if (e.target && e.target.classList && e.target.classList.contains('bihin-row-check')) {
+          onRowCheckChange(e);
+          return;
+        }
+        onQtyInput(e);
+      });
     }
 
     const dlgSave = $('#bihinsavedialog-save');
