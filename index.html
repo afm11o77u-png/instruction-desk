@@ -80,56 +80,53 @@
 <h2 class="shift-print-title" id="shiftprinttitle">シフト表</h2>
 <p class="kintailead">月別の勤務予定です。出勤簿の実績には反映しません。空欄＝出勤、×＝休み、ピ＝ピッキング、バ＝バーコード発行、貼＝シール貼り。</p>
 <div class="shift-toolbar no-print">
-<form id="shiftfilters" class="kintaifilters" onsubmit="return false">
+<div class="shift-tool-group" data-shift-group="ym">
+<span class="shift-tool-caption">年月</span>
+<form id="shiftfilters" class="shift-tool-row shift-ym-row" onsubmit="return false">
 <label>年月<input id="shiftyearmonth" type="month" aria-label="シフト表の年月"></label>
 <button type="button" id="shiftprev">前月</button>
 <button type="button" id="shiftnext">翌月</button>
 <button type="button" id="shiftthismonth">当月</button>
 </form>
-<div class="shift-modes" role="group" aria-label="入力モード">
-<button type="button" class="shift-mode on" data-shift-mode="off">休み（×）</button>
-<button type="button" class="shift-mode" data-shift-mode="task">作業（ピ・バ・貼）</button>
-<button type="button" class="shift-mode" data-shift-mode="time">時間指定</button>
-<button type="button" class="shift-mode" data-shift-mode="erase">消去</button>
-<button type="button" class="shift-mode" data-shift-mode="normal">通常（クリック切替）</button>
 </div>
-<div class="shift-time-row">
-<label>作業記号<select id="shifttaskmark" aria-label="作業記号（ピ・バ・貼）">
-<option value="ピ" selected>ピ（ピッキング）</option>
-<option value="バ">バ（バーコード発行）</option>
-<option value="貼">貼（シール貼り）</option>
+<div class="shift-tool-group" data-shift-group="input">
+<span class="shift-tool-caption">入力内容 <span id="shiftmodeactive" class="shift-mode-active" aria-live="polite">休み×</span></span>
+<div class="shift-tool-row shift-modes" role="group" aria-label="入力モード">
+<button type="button" class="shift-mode on" data-shift-mode="off" aria-pressed="true">休み×</button>
+<button type="button" class="shift-mode" data-shift-mode="task" aria-pressed="false">作業</button>
+<label class="shift-inline-field">記号<select id="shifttaskmark" aria-label="作業記号（ピ・バ・貼）">
+<option value="ピ" selected>ピ</option>
+<option value="バ">バ</option>
+<option value="貼">貼</option>
 </select></label>
-<label>時間指定の文言<input id="shifttimetext" maxlength="40" value="15:00" aria-label="時間指定の文言" placeholder="15:00"></label>
+<button type="button" class="shift-mode" data-shift-mode="time" aria-pressed="false">時間指定</button>
+<label class="shift-inline-field">時刻<input id="shifttimetext" maxlength="40" value="15:00" aria-label="時間指定の文言" placeholder="15:00"></label>
+<button type="button" class="shift-mode" data-shift-mode="erase" aria-pressed="false">消去</button>
+<button type="button" class="shift-mode" data-shift-mode="normal" aria-pressed="false">通常</button>
+</div>
+</div>
+<div class="shift-tool-group" data-shift-group="rows">
+<span class="shift-tool-caption">行・並び順</span>
+<div class="shift-tool-row">
 <button type="button" id="shiftaddrow">行を追加</button>
 <button type="button" id="shiftaddroster">未掲載の在籍者を追加</button>
-<button type="button" id="shiftundo">ひとつ戻す</button>
-<button type="button" class="primary" id="shiftsave">保存</button>
-<button type="button" id="shiftsavememos">勤務メモを保存</button>
 <button type="button" id="shiftsavedefaultorder">標準の並び順として保存</button>
-<button type="button" id="shiftprint">印刷</button>
-<span id="shiftsavestatus" class="shift-save-status" aria-live="polite">未保存</span>
-<span id="shiftmemostatus" class="shift-save-status shift-memo-status" aria-live="polite">メモ未保存</span>
-</div>
-<p class="kintaimeta shift-emp-legend no-print" id="shiftemplegend" aria-label="出勤簿区分の色">氏名の背景色：<span class="shift-emp-swatch shift-emp-regular">社員</span><span class="shift-emp-swatch shift-emp-contract">契約社員</span><span class="shift-emp-swatch shift-emp-part">パート</span>（未設定・シフト専用は通常色。印刷には出ません）</p>
-<div class="shift-bulk-row" aria-label="一括で休み（×）">
-<label>指定曜日<select id="shiftbulkweekday" aria-label="一括×する曜日">
-<option value="6" selected>日</option>
-<option value="0">月</option>
-<option value="1">火</option>
-<option value="2">水</option>
-<option value="3">木</option>
-<option value="4">金</option>
-<option value="5">土</option>
-</select></label>
-<button type="button" id="shiftbulkwday">今月の指定曜日を全員×</button>
-<span class="shift-bulk-modes" role="group" aria-label="一括×の入れ方">
-<label class="shift-bulk-mode"><input type="radio" name="shiftbulkmode" value="empty" checked> 空欄のみ</label>
-<label class="shift-bulk-mode"><input type="radio" name="shiftbulkmode" value="overwrite"> すべて上書きして×</label>
-</span>
-<p id="shiftbulkscope" class="kintaimeta shift-bulk-scope">対象: 表示中の表の全員</p>
 </div>
 <p class="kintaimeta shift-default-order-help">未作成の月に使用します。保存済みの月には反映しません</p>
-<p id="shifthint" class="kintaimeta">通常: 左クリックで空欄→×→ピ→バ→貼→空欄、右クリックでクリア。作業モードは上の記号を連続入力。日付見出しの「ALL」（この日を全員×）や指定曜日の一括×も使えます。氏名は直接編集、行の追加・削除はその月だけに効きます。「保存」で表示中の年月を上書きします（自動保存しません。出勤簿マスタは変えません）。</p>
+</div>
+<div class="shift-tool-group" data-shift-group="save">
+<span class="shift-tool-caption">保存・印刷</span>
+<div class="shift-tool-row shift-save-row">
+<button type="button" class="primary" id="shiftsave">保存</button>
+<span id="shiftsavestatus" class="shift-save-status" aria-live="polite">未保存</span>
+<button type="button" id="shiftsavememos">勤務メモを保存</button>
+<span id="shiftmemostatus" class="shift-save-status shift-memo-status" aria-live="polite">メモ未保存</span>
+<button type="button" id="shiftundo">ひとつ戻す</button>
+<button type="button" id="shiftprint">印刷</button>
+</div>
+</div>
+<p class="kintaimeta shift-emp-legend no-print" id="shiftemplegend" aria-label="出勤簿区分の色">氏名の背景色：<span class="shift-emp-swatch shift-emp-regular">社員</span><span class="shift-emp-swatch shift-emp-contract">契約社員</span><span class="shift-emp-swatch shift-emp-part">パート</span>（未設定・シフト専用は通常色。印刷には出ません）</p>
+<p id="shifthint" class="kintaimeta">休み×・作業・時間指定・消去・通常を切替えてセルをクリック。通常は空欄→×→ピ→バ→貼→空欄、右クリックでクリア。日付見出しの「ALL」でその日を全員×／解除。氏名は直接編集、≡で行入替。「保存」で表示中の年月を上書き（自動保存しません。出勤簿マスタは変えません）。</p>
 </div>
 <div id="shiftgridwrap" class="shift-grid-wrap">
 <table id="shiftgrid" class="shift-grid" aria-label="月別シフト表"></table>
