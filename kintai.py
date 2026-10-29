@@ -2495,6 +2495,17 @@ def handle_get(h, c, path: str):
         return 200, kintai_shift.get_shift_sheet(c, q.get('year'), q.get('month'))
     if path == '/api/kintai/shift/default-order':
         return 200, kintai_shift.get_default_order(c)
+    if path == '/api/kintai/shift/work-memos':
+        # 勤務メモは月シートと独立。GET はシフト読込の workMemos でも足りるが、明示取得用。
+        q = _query_map(h)
+        sheet = kintai_shift.get_shift_sheet(c, q.get('year'), q.get('month'))
+        return 200, {
+            'workMemos': sheet.get('workMemos') or {},
+            'people': [
+                {'key': p.get('key'), 'personId': p.get('personId'), 'employment': p.get('employment')}
+                for p in (sheet.get('people') or [])
+            ],
+        }
     if path == '/api/kintai/bihin':
         q = _query_map(h)
         return 200, kintai_bihin.get_sheet(c, q.get('year'), q.get('month'))
@@ -2579,11 +2590,14 @@ def handle_post(h, c, path: str, d: dict):
             raise ValueError('ファイルデータを読めません。') from e
         return 200, import_paths_from_upload(c, str(filename), blob)
     if path == '/api/kintai/shift':
-        # シフトは予定のみ。kintai_monthly（出勤簿実績）は変更しない。
+        # シフトは予定のみ。kintai_monthly（出勤簿実績）は変更しない。勤務メモも触らない。
         return kintai_shift.save_shift_sheet(c, h.user, d or {})
     if path == '/api/kintai/shift/default-order':
         # 未作成月の初期並びのみ。月シートの people/cells は触らない。
         return 200, kintai_shift.save_default_order(c, h.user, d or {})
+    if path == '/api/kintai/shift/work-memos':
+        # 勤務メモのみ。月シート（cells/people/version）は触らない。
+        return 200, kintai_shift.save_work_memos(c, h.user, d or {})
     if path == '/api/kintai/bihin':
         # 備品棚卸。出勤簿・シフト・在庫デスク入出庫は変更しない。
         return kintai_bihin.save_sheet(c, h.user, d or {})

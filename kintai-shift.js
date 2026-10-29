@@ -15,8 +15,12 @@
   let saving = false;
   let loading = false;
   let rosterList = []; // 出勤簿在籍（未掲載追加用）
+  let workMemos = {}; // { personKey: text } 人ごと・月横断（personId 優先でサーバ保存）
+  let memoDirty = false;
+  let memoSaving = false;
   let leaveDialogResolver = null;
   let dragPersonKey = null; // 行ドラッグ中の person key
+  const EMP_LABEL = { regular: '社員', contract: '契約社員', part: 'パート' };
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -105,7 +109,7 @@
     if (btn) btn.disabled = state === 'saving' || (state === 'saved' && !shiftDirty);
   }
 
-  function applySheet(data) {
+  function applySheet(data, opts) {
     sheet = data || null;
     year = data && data.year != null ? data.year : year;
     month = data && data.month != null ? data.month : month;
@@ -113,6 +117,12 @@
     people = cloneData((data && data.people) || []);
     cells = cloneData((data && data.cells) || {});
     rosterList = cloneData((data && data.roster) || []);
+    // 勤務メモは月シートと独立。月保存の応答ではローカル編集を潰さない。
+    if (!(opts && opts.keepLocalMemos) && data && data.workMemos && typeof data.workMemos === 'object') {
+      workMemos = cloneData(data.workMemos);
+      memoDirty = false;
+      setMemoSaveState(Object.keys(workMemos).some(k => workMemos[k]) ? 'saved' : 'idle');
+    }
     shiftDirty = false;
     undoStack = [];
     const input = $('#shiftyearmonth');
@@ -133,6 +143,37 @@
     }
   }
 
+  function setMemoSaveState(state, err) {
+    const el = $('#shiftmemostatus');
+    if (!el) return;
+    el.className = 'shift-save-status shift-memo-status shift-save-' + state;
+    if (state === 'idle') el.textContent = 'メモ未保存';
+    else if (state === 'dirty') el.textContent = 'メモ未保存の変更';
+    else if (state === 'saving') el.textContent = 'メモ保存中…';
+    else if (state === 'saved') el.textContent = 'メモ保存済み';
+    else if (state === 'failed') el.textContent = 'メモ保存失敗' + (err ? '：' + err : '');
+    const btn = $('#shiftsavememos');
+    if (btn) btn.disabled = state === 'saving' || (state === 'saved' && !memoDirty) || (state === 'idle' && !memoDirty);
+  }
+
+  function markMemoDirty() {
+    memoDirty = true;
+    setMemoSaveState('dirty');
+  }
+
+  function empNameClass(p) {
+    const e = p && p.employment;
+    if (e === 'regular' || e === 'contract' || e === 'part') return 'shift-emp-' + e;
+    return '';
+  }
+
+  /** 表示用: 「15:00まで」→「15:00」。保存データは書き換えない。非時刻メモはそのまま。 */
+  function displayTimeText(text) {
+    const t = String(text || '');
+    const m = t.match(/^(\d{1,2}:\d{2})\s*まで$/);
+    return m ? m[1] : t;
+  }
+
   function paintModeButtons() {
     document.querySelectorAll('.shift-mode').forEach(b => {
       b.classList.toggle('on', b.dataset.shiftMode === editMode);
@@ -140,7 +181,7 @@
     const hint = $('#shifthint');
     if (!hint) return;
     if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名左の≡で行入替、氏名編集・行追加削除はその月だけ。「保存」でこの年月を上書きします。';
-    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の文言を連続入力。右クリックでクリア。≡で行入替。「保存」でこの年月を上書きします。';
+    else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の時刻（例: 15:00）を連続入力。表示は「まで」なし。「保存」でこの年月を上書きします（勤務メモは別保存）。';
     else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。≡で行入替。「保存」でこの年月を上書きします。';
     else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。≡で行入替、氏名は直接編集。「保存」でこの年月を上書きします。';
   }
@@ -148,19 +189,19 @@
   function cellLabel(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
-    return cell.text || '';
+    return displayTimeText(cell.text || '');
   }
 
-  /** 印刷向けセルHTML。時間指定は「15:00」「まで」を2行に分けて見本レイアウトに合わせる。 */
+  /** セル表示。時刻＋「まで」は「15:00」のみ（保存値は変更しない）。自由メモはそのまま。 */
   function cellHtml(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
-    const t = String(cell.text || '');
-    const m = t.match(/^(\d{1,2}:\d{2})\s*(まで)$/);
-    if (m) {
-      return `<span class="shift-time-main">${esc(m[1])}</span><span class="shift-time-until">${esc(m[2])}</span>`;
+    const raw = String(cell.text || '');
+    const shown = displayTimeText(raw);
+    if (/^\d{1,2}:\d{2}$/.test(String(shown).trim())) {
+      return `<span class="shift-time-main">${esc(shown)}</span>`;
     }
-    return esc(t);
+    return esc(shown);
   }
 
   function printTitleText() {
@@ -348,6 +389,8 @@
         p.source === 'history' ? 'shift-history' : '',
         p.source === 'shift' ? 'shift-only' : '',
       ].filter(Boolean).join(' ');
+      const empCls = empNameClass(p);
+      const memoVal = workMemos[p.key] || '';
       const tds = days.map(d => {
         const cell = cellAt(p.key, d.day);
         const cls = [
@@ -359,8 +402,12 @@
         ].filter(Boolean).join(' ');
         return `<td class="${cls}" data-person="${esc(p.key)}" data-day="${d.day}" tabindex="0">${cellHtml(cell)}</td>`;
       }).join('');
+      const empTitle = EMP_LABEL[p.employment] ? ` title="出勤簿区分: ${EMP_LABEL[p.employment]}"` : '';
       return `<tr class="${rowCls}" data-row-key="${esc(p.key)}">
-        <th class="shift-name">
+        <td class="shift-memo">
+          <input type="text" class="shift-memo-input" maxlength="80" data-memo-person="${esc(p.key)}" value="${esc(memoVal)}" placeholder="例: 週5" aria-label="勤務メモ ${esc(p.displayName || '')}">
+        </td>
+        <th class="shift-name ${empCls}"${empTitle}>
           <div class="shift-name-edit">
             <span class="shift-drag no-print" draggable="true" data-drag-person="${esc(p.key)}" title="ドラッグで行を入替" aria-label="行を並べ替え" role="button">≡</span>
             <span class="shift-name-print">${esc(p.displayName || '')}</span>
@@ -371,14 +418,13 @@
         </th>${tds}
       </tr>`;
     }).join('');
-    const colSpan = days.length + 1;
-    // colgroup で氏名列幅を固定（thead 先頭の colspan バナーがあると table-layout:fixed が全列均等幅になるため）
-    const cols = `<colgroup><col class="shift-col-name">${'<col class="shift-col-day">'.repeat(days.length)}</colgroup>`;
-    // 印刷バナーを thead 先頭に置き、縦ページ送りでも年月＋凡例＋日付見出しが繰り返される
+    // 画面: メモ＋氏名＋日付。印刷ではメモ列を CSS で除外（空白列を残さない）
+    const colSpan = days.length + 2;
+    const cols = `<colgroup><col class="shift-col-memo"><col class="shift-col-name">${'<col class="shift-col-day">'.repeat(days.length)}</colgroup>`;
     const banner = `<tr class="shift-print-banner"><th colspan="${colSpan}"><div class="shift-print-head"><span class="shift-print-title-text">${esc(printTitleText())}</span><span class="shift-print-legend">空欄：出勤　×：休み　時刻：退勤予定</span></div></th></tr>`;
     const titleEl = $('#shiftprinttitle');
     if (titleEl) titleEl.textContent = printTitleText();
-    table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
+    table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner shift-corner-memo no-print">勤務メモ</th><th class="shift-corner shift-corner-name">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
     updateBulkScopeNote();
   }
 
@@ -480,7 +526,7 @@
       return;
     }
     if (editMode === 'time') {
-      const text = (($('#shifttimetext') && $('#shifttimetext').value) || '').trim() || '15:00まで';
+      const text = (($('#shifttimetext') && $('#shifttimetext').value) || '').trim() || '15:00';
       setCell(key, day, { kind: 'time', text }, true);
       paintShift();
       return;
@@ -492,7 +538,7 @@
   }
 
   function onGridPointer(e) {
-    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-row-del') || e.target.closest('.shift-drag') || e.target.closest('.shift-day-bulk'))) return;
+    if (e.target.closest && (e.target.closest('.shift-name-input') || e.target.closest('.shift-memo-input') || e.target.closest('.shift-row-del') || e.target.closest('.shift-drag') || e.target.closest('.shift-day-bulk'))) return;
     const td = e.target.closest && e.target.closest('td.shift-cell');
     if (!td) return;
     if (e.type === 'contextmenu') {
@@ -527,6 +573,30 @@
       if (printName) printName.textContent = p.displayName;
       delete input.dataset.prevName;
       markDirty();
+    }
+  }
+
+  function onMemoInput(e) {
+    const input = e.target.closest && e.target.closest('.shift-memo-input');
+    if (!input) return;
+    const key = input.dataset.memoPerson;
+    if (!key) return;
+    if (e.type === 'focus') {
+      input.dataset.prevMemo = workMemos[key] || '';
+      return;
+    }
+    if (e.type === 'input') {
+      const next = input.value.slice(0, 80);
+      if ((workMemos[key] || '') === next) return;
+      workMemos[key] = next;
+      markMemoDirty();
+      return;
+    }
+    if (e.type === 'change' || e.type === 'blur') {
+      const next = input.value.slice(0, 80);
+      workMemos[key] = next;
+      if ((input.dataset.prevMemo || '') !== next) markMemoDirty();
+      delete input.dataset.prevMemo;
     }
   }
 
@@ -649,29 +719,57 @@
     });
   }
 
-  /** 未保存があれば確認。true=続行可 / false=キャンセル */
-  async function confirmLeaveShift() {
-    if (!shiftDirty) return true;
-    const action = await askLeaveAction();
-    if (action === 'cancel') return false;
-    if (action === 'save') {
+  async function confirmLeaveMemos() {
+    if (!memoDirty) return true;
+    if (confirm('勤務メモに未保存の変更があります。保存しますか？\n（キャンセルで破棄して移動）')) {
       try {
-        await saveShift({ force: true });
+        await saveWorkMemos();
       } catch (_) { /* keep */ }
-      if (shiftDirty) {
-        toast('保存できなかったため移動を中止しました。');
+      if (memoDirty) {
+        toast('勤務メモを保存できなかったため移動を中止しました。');
         return false;
       }
       return true;
     }
-    // discard: 最終保存（または未保存月の初期表示）へ戻してから移動可にする
+    // 破棄: サーバのメモへ戻す（月シートは触らない）
     try {
-      await reloadCurrentMonth({ discard: true });
+      const data = await api(`/api/kintai/shift?year=${year}&month=${month}`);
+      workMemos = cloneData((data && data.workMemos) || {});
+      memoDirty = false;
+      setMemoSaveState(Object.keys(workMemos).some(k => workMemos[k]) ? 'saved' : 'idle');
+      paintShift();
     } catch (e) {
-      toast(e.message || '破棄に失敗しました。');
+      toast(e.message || '勤務メモの破棄に失敗しました。');
       return false;
     }
     return true;
+  }
+
+  /** 未保存があれば確認。true=続行可 / false=キャンセル */
+  async function confirmLeaveShift() {
+    if (!shiftDirty && !memoDirty) return true;
+    if (shiftDirty) {
+      const action = await askLeaveAction();
+      if (action === 'cancel') return false;
+      if (action === 'save') {
+        try {
+          await saveShift({ force: true });
+        } catch (_) { /* keep */ }
+        if (shiftDirty) {
+          toast('保存できなかったため移動を中止しました。');
+          return false;
+        }
+      } else {
+        // discard: 最終保存（または未保存月の初期表示）へ戻してから移動可にする
+        try {
+          await reloadCurrentMonth({ discard: true });
+        } catch (e) {
+          toast(e.message || '破棄に失敗しました。');
+          return false;
+        }
+      }
+    }
+    return confirmLeaveMemos();
   }
 
   async function reloadCurrentMonth(opts) {
@@ -679,7 +777,13 @@
     const data = await api(`/api/kintai/shift?year=${year}&month=${month}`);
     if (!data.year) data.year = year;
     if (!data.month) data.month = month;
-    applySheet(data);
+    // 月の破棄では勤務メモのローカル編集を残す（メモは別保存）
+    applySheet(data, { keepLocalMemos: !(opts && opts.reloadMemos) && memoDirty });
+    if (opts && opts.reloadMemos) {
+      workMemos = cloneData((data && data.workMemos) || {});
+      memoDirty = false;
+      setMemoSaveState(Object.keys(workMemos).some(k => workMemos[k]) ? 'saved' : 'idle');
+    }
     setSaveState(data.exists ? 'saved' : 'idle');
     if (opts && opts.discard) toast('変更を破棄し、最後の保存内容に戻しました。');
   }
@@ -744,7 +848,8 @@
       if (!data.year) data.year = year;
       if (!data.month) data.month = month;
       const keepUndo = undoStack;
-      applySheet(data);
+      // 月保存は勤務メモを送らない・上書きしない
+      applySheet(data, { keepLocalMemos: true });
       undoStack = keepUndo;
       shiftDirty = false;
       setSaveState('saved');
@@ -763,6 +868,40 @@
     } finally {
       saving = false;
       setSaveState(saveState); // refresh button disabled state
+    }
+  }
+
+  /** 勤務メモのみ保存（月シートの version / cells / 並びは送らない・変更しない）。 */
+  async function saveWorkMemos() {
+    if (!canKintai()) return;
+    if (memoSaving) return;
+    memoSaving = true;
+    setMemoSaveState('saving');
+    const memos = people.map(p => ({
+      key: p.key,
+      personId: typeof p.personId === 'number' ? p.personId : null,
+      memo: (workMemos[p.key] != null ? workMemos[p.key] : '').slice(0, 80),
+    }));
+    try {
+      const data = await shiftFetch('/api/kintai/shift/work-memos', { memos });
+      const next = (data && data.workMemos) || {};
+      // 画面上の全行キーを反映（空メモも消す）
+      const merged = {};
+      for (const p of people) {
+        merged[p.key] = next[p.key] != null ? next[p.key] : '';
+      }
+      workMemos = merged;
+      memoDirty = false;
+      setMemoSaveState('saved');
+      toast('勤務メモを保存しました（月のシフト表は変更していません）。');
+    } catch (e) {
+      memoDirty = true;
+      setMemoSaveState('failed', e.message || '保存に失敗しました');
+      toast((e.message || '勤務メモの保存に失敗しました') + '（入力は画面に残しています）');
+      throw e;
+    } finally {
+      memoSaving = false;
+      setMemoSaveState(memoDirty ? 'dirty' : 'saved');
     }
   }
 
@@ -880,7 +1019,7 @@
   }
 
   function onBeforeUnload(e) {
-    if (!shiftDirty) return;
+    if (!shiftDirty && !memoDirty) return;
     e.preventDefault();
     e.returnValue = '';
   }
@@ -923,6 +1062,13 @@
         saveShift({ force: true }).catch(() => {});
       };
     }
+    const memoBtn = $('#shiftsavememos');
+    if (memoBtn) {
+      memoBtn.onclick = () => {
+        saveWorkMemos().catch(() => {});
+      };
+    }
+    setMemoSaveState(memoDirty ? 'dirty' : 'idle');
     const defaultOrderBtn = $('#shiftsavedefaultorder');
     if (defaultOrderBtn) {
       defaultOrderBtn.onclick = () => {
@@ -978,9 +1124,10 @@
         onGridPointer(e);
       });
       wrap.addEventListener('contextmenu', onGridPointer);
-      wrap.addEventListener('focusin', onNameInput);
-      wrap.addEventListener('change', onNameInput);
-      wrap.addEventListener('focusout', onNameInput);
+      wrap.addEventListener('focusin', e => { onNameInput(e); onMemoInput(e); });
+      wrap.addEventListener('input', onMemoInput);
+      wrap.addEventListener('change', e => { onNameInput(e); onMemoInput(e); });
+      wrap.addEventListener('focusout', e => { onNameInput(e); onMemoInput(e); });
       wrap.addEventListener('dragstart', onRowDragStart);
       wrap.addEventListener('dragend', onRowDragEnd);
       wrap.addEventListener('dragover', onRowDragOver);
@@ -1015,9 +1162,10 @@
   window.loadKintaiShift = loadKintaiShift;
   window.paintKintaiShift = paintShift;
   window.saveKintaiShift = saveShift;
-  window.isKintaiShiftDirty = () => !!shiftDirty;
+  window.saveKintaiShiftWorkMemos = saveWorkMemos;
+  window.isKintaiShiftDirty = () => !!(shiftDirty || memoDirty);
   window.confirmKintaiShiftLeave = async () => {
-    if (!isShiftSectionActive() || !shiftDirty) return true;
+    if (!isShiftSectionActive() || (!shiftDirty && !memoDirty)) return true;
     return confirmLeaveShift();
   };
 

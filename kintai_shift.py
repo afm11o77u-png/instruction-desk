@@ -43,6 +43,15 @@ def schema(c):
             updated_by TEXT NOT NULL DEFAULT ''
         )'''
     )
+    # 勤務メモ（人ごと・月をまたぐ）。月シートとは分離。氏名ではなく personId／key で紐づけ。
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS kintai_shift_work_memos (
+            bind_key TEXT PRIMARY KEY,
+            memo TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT '',
+            updated_by TEXT NOT NULL DEFAULT ''
+        )'''
+    )
 
 
 def person_key(employment: str, employee_code: str) -> str:
@@ -51,6 +60,120 @@ def person_key(employment: str, employee_code: str) -> str:
 
 def new_shift_row_key() -> str:
     return f'shift:{secrets.token_hex(6)}'
+
+
+MEMO_MAX_LEN = 80
+# bind_key: pid:<int> （在籍） / key:<personKey> （シフト専用・personIdなし）
+MEMO_BIND_RE = re.compile(r'^(?:pid:[1-9]\d*|key:[a-z]+:.{1,80})$')
+
+
+def memo_bind_key(person: dict) -> str | None:
+    """勤務メモの紐づけキー。personId 優先（氏名変更・月切替でぶれない）。"""
+    if not isinstance(person, dict):
+        return None
+    pid = person.get('personId')
+    if isinstance(pid, int) and pid > 0:
+        return f'pid:{pid}'
+    key = str(person.get('key') or '').strip()
+    if key and PERSON_KEY_RE.match(key):
+        return f'key:{key}'
+    return None
+
+
+def _actor_name(user) -> str:
+    if not user:
+        return ''
+    try:
+        return str(user['name'] or user['login'] or '')[:80]
+    except (KeyError, IndexError, TypeError):
+        return ''
+
+
+def _load_memo_map(c) -> dict[str, str]:
+    rows = c.execute('SELECT bind_key, memo FROM kintai_shift_work_memos').fetchall()
+    out: dict[str, str] = {}
+    for r in rows:
+        bk = str(r['bind_key'] or '')
+        if not bk:
+            continue
+        out[bk] = str(r['memo'] or '')
+    return out
+
+
+def work_memos_for_people(c, people: list[dict]) -> dict[str, str]:
+    """画面用: { personKey: memo }。保存は bind_key（personId 優先）。"""
+    stored = _load_memo_map(c)
+    out: dict[str, str] = {}
+    for p in people or []:
+        if not isinstance(p, dict):
+            continue
+        key = str(p.get('key') or '').strip()
+        if not key:
+            continue
+        bk = memo_bind_key(p)
+        if not bk:
+            continue
+        text = stored.get(bk)
+        if text:
+            out[key] = text
+    return out
+
+
+def save_work_memos(c, user, payload: dict) -> dict:
+    """勤務メモだけ保存。月シート（people/cells/version）は一切触らない。"""
+    raw = (payload or {}).get('memos')
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ValueError('勤務メモの形式が不正です。')
+    now = datetime.now().replace(microsecond=0).isoformat(sep=' ')
+    actor = _actor_name(user)
+    saved: dict[str, str] = {}
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f'勤務メモの形式が不正です（{i + 1}件目）。')
+        person = {
+            'personId': item.get('personId') if isinstance(item.get('personId'), int) else None,
+            'key': str(item.get('key') or '').strip(),
+        }
+        bk = memo_bind_key(person)
+        if not bk or not MEMO_BIND_RE.match(bk):
+            raise ValueError(f'勤務メモの対象が不正です（{i + 1}件目）。')
+        memo = str(item.get('memo') or '').strip()[:MEMO_MAX_LEN]
+        if memo:
+            c.execute(
+                '''INSERT INTO kintai_shift_work_memos(bind_key, memo, updated_at, updated_by)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(bind_key) DO UPDATE SET
+                     memo=excluded.memo,
+                     updated_at=excluded.updated_at,
+                     updated_by=excluded.updated_by''',
+                (bk, memo, now, actor),
+            )
+            saved[bk] = memo
+        else:
+            c.execute('DELETE FROM kintai_shift_work_memos WHERE bind_key=?', (bk,))
+    # 応答はリクエストの person key で返す（画面の再描画用）
+    by_person_key: dict[str, str] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get('key') or '').strip()
+        if not key:
+            continue
+        bk = memo_bind_key({
+            'personId': item.get('personId') if isinstance(item.get('personId'), int) else None,
+            'key': key,
+        })
+        if bk and bk in saved:
+            by_person_key[key] = saved[bk]
+        elif key:
+            by_person_key.setdefault(key, '')
+    return {
+        'workMemos': by_person_key,
+        'updatedAt': now,
+        'updatedBy': actor,
+    }
 
 
 def _parse_year_month(year, month) -> tuple[int, int]:
@@ -470,6 +593,7 @@ def _row_public(
     people: list[dict],
     cells: dict,
     roster: list[dict] | None = None,
+    work_memos: dict | None = None,
 ) -> dict:
     return {
         'year': year,
@@ -483,6 +607,8 @@ def _row_public(
         'exists': bool(row),
         # 出勤簿在籍（シフト表への「未掲載追加」用）。シフト専用行は含まない。
         'roster': roster or [],
+        # 勤務メモ（人ごと・月横断）。月シート保存とは独立。
+        'workMemos': work_memos if isinstance(work_memos, dict) else {},
     }
 
 
@@ -547,7 +673,8 @@ def get_shift_sheet(c, year, month) -> dict:
     # 未保存月のみ日曜を×で初期化。保存済みはスナップショットをそのまま返す。
     if not row:
         cells = seed_sunday_offs(people, cells, days)
-    return _row_public(y, m, row, days, people, cells, roster=roster)
+    memos = work_memos_for_people(c, people)
+    return _row_public(y, m, row, days, people, cells, roster=roster, work_memos=memos)
 
 
 def save_shift_sheet(c, user, payload: dict) -> tuple[int, dict]:

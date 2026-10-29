@@ -736,7 +736,7 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('body.printing-shift .shift-drag', css)
         self.assertIn('shift-print-banner', css)
         self.assertIn('shift-print-legend', css)
-        # 見本どおり: 濃緑バー・タイトル濃グレー大きめ・ゼブラ・×赤系・まで小さめ・薄い罫線
+        # 見本どおり: 濃緑バー・タイトル濃グレー大きめ・ゼブラ・×赤系・薄い罫線
         self.assertIn('2.8pt solid #245c47', css)
         self.assertIn('color:#464a4d', css)
         self.assertIn('font-size:18pt', css)
@@ -746,9 +746,22 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('tbody tr:nth-child(even)', css)
         self.assertIn('background:#f0f5f2!important', css)
         self.assertIn('color:#b85c4a!important', css)
-        self.assertIn('shift-time-until', css)
-        self.assertIn('font-size:5.5pt', css)
+        # 印刷の時刻は「15:00」1行。「まで」行は出さない
+        self.assertIn('shift-time-until{display:none!important}', css.replace('\n', '').replace(' ', ''))
         self.assertIn('0.35pt solid #c5cbc7', css)
+        # 画面: 区分色・勤務メモ・日付列狭め。印刷からメモ列・凡例・区分色を除外
+        self.assertIn('shift-emp-regular', css)
+        self.assertIn('shift-emp-contract', css)
+        self.assertIn('shift-emp-part', css)
+        self.assertIn('background:#e6f2ea', css)
+        self.assertIn('background:#eef3f8', css)
+        self.assertIn('background:#f7f0e8', css)
+        self.assertIn('shift-col-memo', css)
+        self.assertIn('shift-memo-input', css)
+        self.assertIn('min-width:1.72rem', css)
+        self.assertIn('body.printing-shift .shift-memo', css)
+        self.assertIn('body.printing-shift .shift-emp-legend', css)
+        self.assertIn('body.printing-shift .shift-corner-memo', css)
         # 氏名は1行（nowrap・十分な min-width）。break-all / 強制折返しなし
         # colgroup で氏名列幅を確保（colspan バナー対策）
         self.assertIn('col.shift-col-name{width:9em}', css.replace('\n', '').replace(' ', ''))
@@ -793,6 +806,19 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('空欄：出勤　×：休み　時刻：退勤予定', js)
         self.assertIn('shift-print-banner', js)
         self.assertIn('afterprint', js)
+        # 勤務メモ・区分色・時刻表示正規化
+        self.assertIn('displayTimeText', js)
+        self.assertIn('saveWorkMemos', js)
+        self.assertIn('/api/kintai/shift/work-memos', js)
+        self.assertIn('keepLocalMemos', js)
+        self.assertIn('empNameClass', js)
+        self.assertIn('shift-emp-', js)
+        self.assertIn('shift-memo-input', js)
+        self.assertIn("'15:00'", js)
+        self.assertNotIn("'15:00まで'", js)
+        self.assertIn('id="shiftsavememos"', index)
+        self.assertIn('value="15:00"', index)
+        self.assertIn('shiftemplegend', index)
         # Chromium 向け: unnamed @page landscape を一時差し込み（named page だけでは縦のまま）
         self.assertIn('ensureShiftLandscapePage', js)
         self.assertIn('clearShiftLandscapePage', js)
@@ -822,7 +848,9 @@ class ShiftUiContractTest(unittest.TestCase):
 
     def test_kintai_api_avoids_disk_space_error_copy(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
-        self.assertIn("kintai_path in ('/api/kintai/shift', '/api/kintai/shift/default-order')", server)
+        self.assertIn("'/api/kintai/shift/work-memos'", server)
+        self.assertIn("'/api/kintai/shift/default-order'", server)
+        self.assertIn("'/api/kintai/shift'", server)
         self.assertIn('シフト表を保存できませんでした。入力内容はそのまま残しています', server)
         self.assertIn('勤怠の処理に失敗しました。入力内容はそのまま残しています', server)
         # 勤怠API専用の reply 文言に容量案内を含めない
@@ -1012,6 +1040,121 @@ document.body.setAttribute('data-metrics', JSON.stringify(out));
         self.assertGreater(px(metrics['titleFontSize']), px(metrics['legendFontSize']) * 1.5)
         self.assertAlmostEqual(px(metrics['titleFontSize']), 24.0, delta=1.0)
         self.assertIn(str(metrics['titleFontWeight']), ('700', 'bold'))
+
+
+class ShiftWorkMemoTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / 't.sqlite3'
+        self.c = sqlite3.connect(self.db)
+        self.c.row_factory = sqlite3.Row
+        self.c.execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, login TEXT, name TEXT, password TEXT, "
+            "role TEXT, manage INTEGER, overview INTEGER, active INTEGER, must_change INTEGER, "
+            "version INTEGER, mark_kintai INTEGER DEFAULT 0)"
+        )
+        kintai.bind(Path(self.tmp.name))
+        kintai.schema(self.c)
+        self.c.execute('DELETE FROM kintai_people')
+        self.c.execute(
+            'INSERT INTO kintai_people(employee_code,employment,display_name,source_file,active,sort_order,retired) '
+            'VALUES(?,?,?,?,1,1,0)',
+            ('001', 'regular', '山田太郎', ''),
+        )
+        self.c.execute(
+            'INSERT INTO kintai_people(employee_code,employment,display_name,source_file,active,sort_order,retired) '
+            'VALUES(?,?,?,?,1,2,0)',
+            ('002', 'part', '佐藤花子', ''),
+        )
+        self.c.commit()
+        self.user = {'id': 1, 'name': '主', 'login': 'o@ex.com', 'role': 'owner', 'mark_kintai': 1}
+
+    def tearDown(self):
+        self.c.close()
+        self.tmp.cleanup()
+
+    def test_memo_bind_prefers_person_id(self):
+        self.assertEqual(
+            kintai_shift.memo_bind_key({'personId': 7, 'key': 'regular:001'}),
+            'pid:7',
+        )
+        self.assertEqual(
+            kintai_shift.memo_bind_key({'personId': None, 'key': 'shift:abc'}),
+            'key:shift:abc',
+        )
+
+    def test_work_memo_persists_across_months_by_person_id(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        p = next(x for x in sheet['people'] if x['key'] == 'regular:001')
+        self.assertIsInstance(p['personId'], int)
+        saved = kintai_shift.save_work_memos(self.c, self.user, {
+            'memos': [{'key': p['key'], 'personId': p['personId'], 'memo': '週5'}],
+        })
+        self.assertEqual(saved['workMemos']['regular:001'], '週5')
+        # 月シートは未作成のまま
+        nov = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertFalse(nov['exists'])
+        self.assertEqual(nov['workMemos'].get('regular:001'), '週5')
+        # 別月でも同じ personId で見える
+        dec = kintai_shift.get_shift_sheet(self.c, 2026, 12)
+        self.assertEqual(dec['workMemos'].get('regular:001'), '週5')
+        # 氏名を変えてもメモは残る
+        people = [{**x, 'displayName': '山田（別名）' if x['key'] == 'regular:001' else x['displayName']}
+                  for x in sheet['people']]
+        code, _ = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0, 'people': people, 'cells': {},
+        })
+        self.assertEqual(code, 200)
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertEqual(again['workMemos'].get('regular:001'), '週5')
+        # 月保存でメモテーブル件数が消えない
+        n = self.c.execute('SELECT COUNT(*) AS n FROM kintai_shift_work_memos').fetchone()['n']
+        self.assertEqual(n, 1)
+
+    def test_save_shift_does_not_write_memos(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        kintai_shift.save_work_memos(self.c, self.user, {
+            'memos': [{'key': 'part:002', 'personId': sheet['people'][1]['personId'], 'memo': '午前'}],
+        })
+        # ペイロードにメモを混ぜても月保存は無視（APIは cells/people のみ）
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'],
+            'cells': {'regular:001': {'3': {'kind': 'off', 'text': '×'}}},
+            'workMemos': {'regular:001': 'should-not-apply'},
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(saved['cells']['regular:001']['3']['kind'], 'off')
+        self.assertEqual(saved['workMemos'].get('part:002'), '午前')
+        self.assertNotIn('regular:001', saved['workMemos'])
+
+    def test_existing_time_until_not_bulk_destroyed(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'],
+            'cells': {
+                'regular:001': {
+                    '5': {'kind': 'time', 'text': '15:00まで'},
+                    '6': {'kind': 'time', 'text': '早退予定'},
+                },
+            },
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(saved['cells']['regular:001']['5']['text'], '15:00まで')
+        self.assertEqual(saved['cells']['regular:001']['6']['text'], '早退予定')
+        # 表示正規化は JS。サーバは保存値を維持
+        js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
+        self.assertIn(r'^(\d{1,2}:\d{2})\s*まで$', js)
+
+    def test_employment_on_people_not_duplicated_field(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        by_key = {p['key']: p for p in sheet['people']}
+        self.assertEqual(by_key['regular:001']['employment'], 'regular')
+        self.assertEqual(by_key['part:002']['employment'], 'part')
+        # 区分は在籍 identity から。別名フィールドを増やしていない
+        self.assertNotIn('employmentColor', by_key['regular:001'])
+        self.assertNotIn('kintaiKubun', by_key['regular:001'])
 
 
 if __name__ == '__main__':
