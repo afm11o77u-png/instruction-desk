@@ -2276,6 +2276,7 @@ def _try_explicit_color_adoption(
     pair_candidates,
     reasons,
     empty,
+    allow_supplier_auto=True,
 ):
     """在庫で決まらないとき、明示色がある候補を優先する。
 
@@ -2283,6 +2284,7 @@ def _try_explicit_color_adoption(
     - 色あり同士で色キーが異なる → 自動確定しない
     - 色ありが一意（他は色なし）→ その候補を採用し名／色を振り分け
     - 同じ色が複数名・仕入先に付く → 色は提案、名は要確認
+    - allow_supplier_auto=False（補助CSVなしの色のみ）かつ複社 → 名／色は採用、通常仕入先は手動
     """
     if not pool:
         return None
@@ -2323,7 +2325,7 @@ def _try_explicit_color_adoption(
 
     color_key = next(iter(unique_keys))
     color_display = colored[0]['package'].get('color') or color_key
-    # プール内で色あり候補が一意 → 採用
+    # プール内で色あり候補が一意 → 名・色は採用。仕入先は複社なら手動。
     if len(colored) == 1:
         hit = colored[0]['cand']
         pkg = colored[0]['package']
@@ -2343,6 +2345,22 @@ def _try_explicit_color_adoption(
             adopted['pairCandidates'] = pair_candidates
         if name_candidates:
             adopted['nameCandidates'] = name_candidates
+        supplier_keys = {
+            identity_match_key(a['cand'].get('supplier') or '')
+            for a in annotated
+            if stock.text(a['cand'].get('supplier') or '')
+            and not proc_svc.is_processing_vendor(a['cand'].get('supplier') or '')
+        }
+        if (not allow_supplier_auto) and len(supplier_keys) > 1:
+            # 補助CSVなしの色のみ: 名／色は採用、通常仕入先は複社のまま手動
+            adopted['suggestedPrimarySupplier'] = ''
+            adopted['pairNeedsChoice'] = True
+            adopted['nameDecidedSupplierUndecided'] = True
+            if isinstance(adopted.get('adoptedPackage'), dict):
+                adopted['adoptedPackage'] = dict(adopted['adoptedPackage'])
+            adopted['nameReasons'] = list(adopted.get('nameReasons') or []) + [
+                '色でメイン候補名は決まりましたが、仕入先が複数あるため通常仕入先は手動で選んでください。'
+            ]
         return adopted
 
     # 同じ色が複数候補 → 色は決まっても名・加工・仕入先パッケージが未決なら要確認
@@ -2463,6 +2481,7 @@ def suggest_main_candidate_from_aux(group, aux_index):
             pair_candidates=pair_candidates,
             reasons=[],
             empty=empty,
+            allow_supplier_auto=False,
         )
         if color_hit is not None:
             return color_hit
@@ -2835,11 +2854,13 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
         pair_from_aux = suggest_main_candidate_from_aux(group, aux_index)
         pair_supplier = stock.text(pair_from_aux.get('suggestedPrimarySupplier') or '')
         pair_code = stock.text(pair_from_aux.get('pairAdoptionRuleCode') or '')
-        # 在庫採用（最多／非ゼロ一意／候補1組）で決まったときは、その仕入先を通常に
-        # （別候補の名と混ぜない）。候補1社の自動（#154）は維持し、理由を上書きしない。
+        # 通常仕入先の自動は「仕入先まで決まった」パッケージだけ。
+        # 補助CSVなしの明示色で複社から1社へ勝手に決めない（nameDecidedSupplierUndecided）。
+        name_supplier_undecided = bool(pair_from_aux.get('nameDecidedSupplierUndecided'))
         if (
             pair_supplier
             and not pair_from_aux.get('pairNeedsChoice')
+            and not name_supplier_undecided
             and decision_kind != 'single_candidate'
         ):
             auto_primary = pair_supplier
@@ -2849,7 +2870,11 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
                 else (
                     '全候補の在庫が0のため、商品台帳で最多の名称を採用'
                     if pair_code == 'ledger_max_name_zero_stock'
-                    else '在庫が0以外の候補が1組のため、この候補をメインに採用'
+                    else (
+                        '商品名の明示色でメイン候補を採用'
+                        if pair_code == 'explicit_color_name'
+                        else '在庫が0以外の候補が1組のため、この候補をメインに採用'
+                    )
                 )
             )
             needs_manual = False
@@ -2858,10 +2883,21 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
         elif (
             pair_supplier
             and not pair_from_aux.get('pairNeedsChoice')
+            and not name_supplier_undecided
             and decision_kind == 'single_candidate'
             and not auto_primary
         ):
             auto_primary = pair_supplier
+        elif name_supplier_undecided or (
+            len(candidates) >= 2
+            and not auto_primary
+            and decision_kind == 'manual_needed'
+        ):
+            # 名・色パッケージは提案してよいが、通常仕入先は手動
+            needs_manual = True
+            if not manual_reason:
+                manual_reason = '通常仕入先を選んでください。'
+            decision_kind = 'manual_needed'
 
         _apply_planned_roles(judgments, auto_primary)
 
@@ -3133,17 +3169,21 @@ def apply_aux_full_package_adoption(sku_groups, sku_decisions=None):
         rule_code = stock.text(
             aux.get('pairAdoptionRuleCode') or aux.get('nameAdoptionRuleCode') or ''
         )
-        # 名称は最多票で決定・仕入先だけ未決 → 名差だけでは要確認に残さない
+        # 名称（色／台帳最多）は決定・仕入先だけ未決 → 名差だけでは要確認に残さない
         if (
-            rule_code == 'ledger_max_name_zero_stock'
-            and aux.get('nameDecidedSupplierUndecided')
+            aux.get('nameDecidedSupplierUndecided')
             and not aux.get('officialNameNeedsChoice')
+            and rule_code in ('ledger_max_name_zero_stock', 'explicit_color_name')
         ):
             _soften_name_diff_after_ledger_vote(group, aux)
             continue
         if rule_code not in stock_adopt_codes:
             continue
         if aux.get('pairNeedsChoice') or aux.get('officialNameNeedsChoice'):
+            continue
+        # 複社で通常仕入先が未決のままフル自動まとめしない（表示と登録ゲートの不一致防止）
+        if aux.get('needsManualPrimary') and not stock.text(aux.get('autoPrimarySupplier') or ''):
+            _soften_name_diff_after_ledger_vote(group, aux)
             continue
         package = aux.get('adoptedPackage')
         if not isinstance(package, dict) or not package.get('productName'):
@@ -3492,11 +3532,24 @@ def _soften_name_diff_after_ledger_vote(group, aux):
         ],
     })
     if aux.get('needsManualPrimary') or group.get('supplierDiff'):
+        name_hint = '名称は決定済み'
+        if stock.text(aux.get('pairAdoptionRuleCode') or '') == 'ledger_max_name_zero_stock':
+            name_hint = '名称は商品台帳の最多で決定済み'
+        elif stock.text(aux.get('pairAdoptionRuleCode') or '') == 'explicit_color_name':
+            name_hint = '名称・色は決定済み'
         cleaned.append({
             'code': 'supplier',
-            'label': '通常仕入先を選んでください（名称は商品台帳の最多で決定済み）',
+            'label': f'通常仕入先を選んでください（{name_hint}）',
             'values': list(group.get('supplierCandidates') or [])[:6],
         })
+        group['supplierDiff'] = True
+        # 通常仕入先未決は一括承認せず個別確認へ（ピッカーで選ばせる）
+        group['needsDecision'] = True
+        group['plannedSingleProduct'] = False
+        group['status'] = 'needs_decision'
+        group['reviewTier'] = REVIEW_TIER_INDIVIDUAL
+        group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_INDIVIDUAL]
+        group['bulkApprovable'] = False
     group['reviewReasons'] = cleaned
     group['plannedOfficialName'] = registered_name or group.get('plannedOfficialName') or ''
     plan = dict(group.get('productPlan') or {})
@@ -6211,6 +6264,31 @@ def _apply_paren_names_after_sku_plans(classified, sku_groups):
                 group['plannedOfficialName'] = planned
 
 
+def looks_like_maker_sku_token(text_value):
+    """メーカー品番らしい（英数・ハイフン中心）か。自動入替はしない判定用。"""
+    t = stock.text(text_value)
+    if not t or len(t) > 40:
+        return False
+    if re.search(r'[一-龥ぁ-んァ-ン]', t):
+        return False
+    return bool(re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z\-./]*[0-9A-Za-z]', t)) or bool(
+        re.fullmatch(r'[0-9]+(?:-[0-9A-Za-z]+)+', t)
+    )
+
+
+def looks_like_garment_name_token(text_value):
+    """衣服の商品名らしい（日本語を含む）か。自動入替はしない判定用。"""
+    t = stock.text(text_value)
+    if not t:
+        return False
+    return bool(re.search(r'[一-龥ぁ-んァ-ン]', t))
+
+
+def code_name_columns_look_swapped(code, product_name):
+    """商品コード列が日本語商品名、商品名列が品番らしいとき True（入替はしない）。"""
+    return looks_like_garment_name_token(code) and looks_like_maker_sku_token(product_name)
+
+
 def classify_row(
     c, row_no, item, *,
     selected_product_id=None, selected_handle_id=None, selected_category=None,
@@ -6250,6 +6328,14 @@ def classify_row(
         customer=customer_name, code=code, product_name=product_name, supplier=supplier_name,
     )
     reasons = []
+    # 見出し「商品コード／商品名」は列名で対応（位置推測で入替しない）。
+    # 値が逆に見えるときだけ案内し、黙って入れ替えない。
+    if code_name_columns_look_swapped(code_raw, product_name):
+        reasons.append(
+            f'{row_no}行目：商品コード「{code_raw}」が商品名のようで、'
+            f'商品名「{product_name}」が品番のようです。'
+            f'CSVの列対応を確認してください（自動では入れ替えません）。'
+        )
 
     if not customer_name and not product_name and not code_raw:
         return _excluded_row(row_no, item, reason=f'{row_no}行目：顧客・商品名・品番が空です。')
@@ -8414,12 +8500,33 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 pending_decision += 1
                 continue
 
+            # 加工業者は本体の通常仕入先候補に混ぜない（表示・ゲート共通）
             suppliers_in_group = {
                 stock.text(v.get('supplier') or '')
                 for v in (group.get('variants') or [])
                 if stock.text(v.get('supplier') or '')
+                and not proc_svc.is_processing_vendor(v.get('supplier') or '')
             }
-            if len(suppliers_in_group) > 1 and not primary_supplier:
+            primary_undecided = (
+                (len(suppliers_in_group) > 1 and not primary_supplier)
+                or (
+                    bool(aux.get('needsManualPrimary'))
+                    and not primary_supplier
+                    and len(suppliers_in_group) >= 1
+                )
+            )
+            if primary_undecided:
+                # 加工サービス行のチェックリストへ本体の通常仕入先未定を載せない
+                ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+                is_proc_row = bool(
+                    row.get('processingServiceView')
+                    or (ps.get('isProcessingService') and ps.get('identifiable'))
+                    or (ps.get('isProcessingVendor') and not ps.get('isPhysicalParts'))
+                )
+                if is_proc_row:
+                    # 本体側の未決は残すが、この加工行自体は仕入先ゲートで止めない
+                    row['skuPrimarySupplierPendingOnGarment'] = True
+                    continue
                 row['status'] = STATUS_REVIEW
                 row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
                 row['canCommit'] = False

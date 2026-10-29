@@ -495,10 +495,10 @@
     if(dec!=='merge'&&dec!=='color_split'&&dec!=='content_split'&&dec!=='separate')return false
     const pending=skuDecisionPendingRematch(st,g.code)
     if(dec==='merge'){
-      if((g.existingCount||0)>1){
-        const d=skuDecision(st,g.code)
-        return !!d.keepProductId
-      }
+      const d=skuDecision(st,g.code)
+      if((g.existingCount||0)>1&&!d.keepProductId)return false
+      // 通常仕入先が未決のまま確認済みへ進めない（表示と登録ゲートを揃える）
+      if(primarySupplierNeedsChoice(st,g)&&!effectivePrimarySupplier(st,g))return false
       return true
     }
     if(dec==='color_split'){
@@ -556,6 +556,18 @@
       if(!d.keepProductId){
         out.push({type:'merge_keep',label:'残す商品の選択',detail:'登録済が複数あるため残す商品を選んでください',fieldKey:'name',resolved:false})
       }
+    }
+    if(primarySupplierNeedsChoice(st,g)&&!effectivePrimarySupplier(st,g)){
+      const pending=skuSupplierPendingRematch(st,g.code)
+      out.push({
+        type:'primary_supplier',
+        label:pending?pendingSupplierLabel():'通常仕入先が未定',
+        detail:pending
+          ?'選択を反映して再照合すると登録予定へ反映します'
+          :'詳細の通常仕入先から候補を選んでください（CSV行の仕入先は行ごと／サブとして残します）',
+        fieldKey:'supplier',
+        resolved:false
+      })
     }
     if(dec==='color_split'&&!skuDecisionPendingRematch(st,g.code)){
       const split=g.colorSplitPlans||{}
@@ -996,9 +1008,11 @@
     const aux=group&&group.auxPrimary
     if(!aux)return
     const patch={}
-    // 候補1社の自動設定・補助CSV自動判定のどちらも適用（手動選択は上書きしない）
+    // 信頼できる自動結果だけ適用（複社の色提案などは入れない。手動選択は上書きしない）
     if(!d.primarySupplierManual){
-      const auto=aux.autoPrimarySupplier||group.plannedPrimarySupplier||''
+      const auto=(auxAutoPrimaryTrusted(group)&&aux.autoPrimarySupplier)
+        ||((group.plannedPrimarySupplierSource==='auto'||group.plannedPrimarySupplierSource==='single')&&group.plannedPrimarySupplier)
+        ||''
       if(auto){
         patch.primarySupplier=auto
         patch.primarySupplierManual=false
@@ -1277,16 +1291,37 @@
         if(remote&&typeof remote==='object')dec=remote.decision||''
         else if(typeof remote==='string')dec=remote
       }
-      snap[code]={decision:dec||''}
+      snap[code]={
+        decision:dec||'',
+        primarySupplier:local.primarySupplier||'',
+        primarySupplierManual:!!local.primarySupplierManual
+      }
     })
     st.appliedSkuDecisions=snap
+  }
+
+  function skuSupplierPendingRematch(st,code){
+    if(!code||!st||!st.preview)return false
+    const d=skuDecision(st,code)
+    if(!d.primarySupplierManual)return false
+    const snap=st.appliedSkuDecisions&&st.appliedSkuDecisions[code]
+    if(snap&&Object.prototype.hasOwnProperty.call(snap,'primarySupplier')){
+      return (d.primarySupplier||'')!==(snap.primarySupplier||'')
+        ||!!d.primarySupplierManual!==!!snap.primarySupplierManual
+    }
+    const g=((st.preview&&st.preview.skuGroups)||[]).find(x=>x&&x.code===code)
+    const applied=g&&(g.plannedPrimarySupplierSource==='manual')
+      ?(g.plannedPrimarySupplier||'')
+      :''
+    return (d.primarySupplier||'')!==applied
   }
 
   function skuDecisionPendingRematch(st,code){
     if(!code||!st||!st.preview)return false
     const cur=skuDecision(st,code).decision||''
     const applied=appliedDecisionForCode(st,code)
-    return cur!==applied
+    if(cur!==applied)return true
+    return skuSupplierPendingRematch(st,code)
   }
 
   function pendingRematchCodes(st){
@@ -1311,6 +1346,10 @@
     if(dec==='separate')return '個別に整理を選択中【未反映】'
     if(dec==='hold')return '保留を選択中【未反映】'
     return '選択中【未反映】'
+  }
+
+  function pendingSupplierLabel(){
+    return '手動選択・未反映'
   }
 
   const DECISION_BLURBS={
@@ -1696,30 +1735,106 @@
     return (g.namePlan&&g.namePlan.officialName)||g.plannedOfficialName||''
   }
 
-  function plannedSupplierForGroup(st,g){
+  function supplierCandidateList(g){
+    return uniqueNonEmpty([
+      ...(g.supplierCandidates||[]),
+      ...((g.variants||[]).map(v=>v.supplier).filter(s=>s&&!(g.auxPrimary&&false)))
+    ].filter(Boolean))
+  }
+
+  function primarySupplierNeedsChoice(st,g){
+    if(!g)return false
+    const aux=g.auxPrimary||{}
+    const resolved=g.primarySupplierResolved||{}
+    if(resolved.primarySupplier)return false
+    if(aux.needsManualPrimary)return true
+    if(g.supplierDiff||hasReasonCode(g,'supplier'))return true
+    const cands=supplierCandidateList(g)
+    if(cands.length>1&&!effectivePrimarySupplier(st,g))return true
+    return false
+  }
+
+  function effectivePrimarySupplier(st,g){
     const d=skuDecision(st,g.code)
+    if(d.primarySupplierManual&&d.primarySupplier)return d.primarySupplier
     if(d.primarySupplier)return d.primarySupplier
-    return g.plannedPrimarySupplier||(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier)||''
+    const resolved=(g.primarySupplierResolved&&g.primarySupplierResolved.primarySupplier)||''
+    if(resolved)return resolved
+    // 自動決定済みと表示する値は「登録ゲートと同じ決定結果」だけ。productPlan 先頭行は使わない
+    if(g.plannedPrimarySupplierSource==='none')return ''
+    if(g.plannedPrimarySupplier)return g.plannedPrimarySupplier
+    if(auxAutoPrimaryTrusted(g))return (g.auxPrimary&&g.auxPrimary.autoPrimarySupplier)||''
+    return ''
+  }
+
+  function auxAutoPrimaryTrusted(g){
+    const aux=g.auxPrimary||{}
+    if(!aux.autoPrimarySupplier)return false
+    if(aux.needsManualPrimary)return false
+    if(aux.nameDecidedSupplierUndecided)return false
+    // 複社で明示色だけの提案仕入先は信頼しない
+    if(g.supplierDiff&&aux.decisionKind==='manual_needed')return false
+    return true
+  }
+
+  function plannedSupplierForGroup(st,g){
+    return effectivePrimarySupplier(st,g)
   }
 
   function plannedSupplierReasonForGroup(st,g){
     const d=skuDecision(st,g.code)
-    if(d.primarySupplierManual&&d.primarySupplier)return '手動選択'
+    if(d.primarySupplierManual&&d.primarySupplier){
+      return skuSupplierPendingRematch(st,g.code)?pendingSupplierLabel():'手動選択'
+    }
+    if(primarySupplierNeedsChoice(st,g)&&!effectivePrimarySupplier(st,g))return ''
     if(d.primarySupplier&&!(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier&&d.primarySupplier===g.auxPrimary.autoPrimarySupplier)){
       // 明示選択だが manual フラグなし（旧UI互換）→理由なし
       if(!g.plannedPrimarySupplierReason)return ''
     }
+    if(!auxAutoPrimaryTrusted(g)&&!(g.plannedPrimarySupplierSource in {auto:1,single:1,manual:1,user:1})){
+      return ''
+    }
     return g.plannedPrimarySupplierReason
       ||(g.primarySupplierResolved&&g.primarySupplierResolved.autoReason)
-      ||(g.auxPrimary&&g.auxPrimary.autoReason)
+      ||(auxAutoPrimaryTrusted(g)&&(g.auxPrimary&&g.auxPrimary.autoReason))
       ||''
   }
 
   function plannedSupplierDisplay(st,g){
     const sup=plannedSupplierForGroup(st,g)
-    if(!sup)return '未設定'
+    if(!sup)return primarySupplierNeedsChoice(st,g)?'未定':'未設定'
     const reason=plannedSupplierReasonForGroup(st,g)
     return reason?`${sup}（${reason}）`:sup
+  }
+
+  function normalSupplierPickerHtml(st,g,d){
+    d=d||{}
+    const dec=d.decision||''
+    const needs=primarySupplierNeedsChoice(st,g)
+    const cands=supplierCandidateList(g)
+    // 未決なら方針未選択でも出す。まとめる／色別／内容別でも変更可。個別整理・保留では未決時のみ
+    if(dec==='separate'||dec==='hold'){
+      if(!needs)return ''
+    }else if(!needs&&dec&&dec!=='merge'&&dec!=='color_split'&&dec!=='content_split'&&!d.primarySupplierManual){
+      return ''
+    }else if(!needs&&!dec&&!d.primarySupplierManual&&cands.length<=1){
+      return ''
+    }
+    if(!cands.length&&!needs&&!d.primarySupplier)return ''
+    const chosen=d.primarySupplier||(needs?'':effectivePrimarySupplier(st,g))||''
+    const pending=skuSupplierPendingRematch(st,g.code)
+    const opts=['<option value="">選択してください</option>']
+      .concat(cands.map(s=>`<option value="${esc(s)}" ${chosen===s?'selected':''}>${esc(s)}</option>`))
+    const note=d.primarySupplierManual
+      ?(pending
+        ?`<p class="notice">${esc(pendingSupplierLabel())} — 「選択を反映して再照合」で登録予定へ反映します。自動判定では上書きしません。</p>`
+        :'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>')
+      :`<p class="excelhint">ここは品番単位の通常仕入先です。CSV各行の仕入先は行ごと／サブとして残します（先頭行の仕入先を自動では通常にしません）。</p>`
+    return `<div class="sku-primary-supplier-pick" data-plan-edit="supplier">
+      <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}>${opts.join('')}</select></label>
+      ${note}
+      ${needs&&!chosen?`<p class="notice">通常仕入先が未定です。候補から選んでください。</p>`:''}
+    </div>`
   }
 
   function candidatesCell(values,details){
@@ -1913,10 +2028,7 @@
     const d=skuDecision(st,g.code)
     const decision=d.decision||''
     const names=[...new Set([...(g.nameCandidates||[]),...(g.variants||[]).map(v=>v.productName).filter(Boolean)])]
-    const suppliers=[...new Set([...(g.supplierCandidates||[]),...(g.variants||[]).map(v=>v.supplier).filter(Boolean)])]
     const nameOpts=names.map(n=>`<option value="${esc(n)}" ${d.officialName===n?'selected':''}>${esc(n)}</option>`).join('')
-    const effectivePrimary=plannedSupplierForGroup(st,g)
-    const supOpts=suppliers.map(s=>`<option value="${esc(s)}" ${effectivePrimary===s?'selected':''}>${esc(s)}</option>`).join('')
     const existing=(g.existingProducts||[]).map(p=>{
       return `<label class="check"><input type="radio" name="plKeep-${esc(g.code)}" data-pl-keep="${esc(g.code)}" value="${p.id}" ${Number(d.keepProductId)===Number(p.id)?'checked':''} ${st.busy?'disabled':''}>
         ID ${p.id}　${esc(p.name||'')}${p.color?` / ${esc(p.color)}`:''}${p.supplierName?`　仕入 ${esc(p.supplierName)}`:''}</label>`
@@ -2013,10 +2125,11 @@
     return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="${colspan}">
       <div class="sku-detail-body">
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
-        ${decisionPending?`<p class="notice">${esc(pendingDecisionLabel(decision))} — 登録予定の再計算は「選択を反映して再照合」でまとめて行います（選択だけでは登録・全件再計算しません）。</p>`:''}
+        ${decisionPending?`<p class="notice">${esc((skuSupplierPendingRematch(st,g.code)&&appliedDecisionForCode(st,g.code)===(decision||''))?pendingSupplierLabel():pendingDecisionLabel(decision))} — 登録予定の再計算は「選択を反映して再照合」でまとめて行います（選択だけでは登録・全件再計算しません）。</p>`:''}
         ${namePlanBlock}
         ${isColorSplit||isContentSplit?'':auxPanel}
         ${hideDecisionBtns?'':skuDecisionButtonsHtml(st,g)}
+        ${normalSupplierPickerHtml(st,g,d)}
         ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
         ${decision==='content_split'?contentSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
@@ -2025,8 +2138,6 @@
           <label data-plan-edit="name">公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
           <label data-plan-edit="name">代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
           <label data-plan-edit="color">色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}" ${st.busy?'disabled':''}></label>
-          <label data-plan-edit="supplier">通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">未指定</option>${supOpts}</select></label>
-          ${d.primarySupplierManual?'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>':(g.auxPrimary&&g.auxPrimary.autoPrimarySupplier?`<p class="excelhint">通常仕入先は自動設定: ${esc(plannedSupplierDisplay(st,g))}</p>`:'')}
           <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定色: ${esc(d.color||g.plannedRegisteredColor||g.plannedColor||'（空）')}　予定通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</p>
           <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
           ${g.existingCount>1?`<fieldset><legend>統合する商品（残す以外）</legend>${mergeSources||'<span class="sub">残す商品を先に選んでください</span>'}</fieldset>`:''}
@@ -2389,36 +2500,44 @@
 
   function skuSupplierPlanField(st,g,d){
     const aux=g.auxPrimary||{}
-    const value=plannedSupplierForGroup(st,g)
+    const value=effectivePrimarySupplier(st,g)
     const reason=plannedSupplierReasonForGroup(st,g)
+    const pendingManual=!!(d.primarySupplierManual&&d.primarySupplier&&skuSupplierPendingRematch(st,g.code))
     if(d.primarySupplierManual&&d.primarySupplier){
-      return makePlanField('supplier',d.primarySupplier,PLAN_STATUS.MANUAL,{
-        hint:'手動選択',
+      return makePlanField('supplier',d.primarySupplier,pendingManual?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.MANUAL,{
+        hint:pendingManual?pendingSupplierLabel():'手動選択',
         editHint:'詳細の通常仕入先'
       })
     }
-    if(g.supplierDiff||hasReasonCode(g,'supplier')||aux.needsManualPrimary){
-      const cands=uniqueNonEmpty(g.supplierCandidates||[]).join('／')
-      return makePlanField('supplier',value||cands||'',value?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.NEED_CHOICE,{
-        hint:aux.manualReason||(cands?'候補から選択':''),
+    // 未決なら候補を並べても「自動決定済み」にしない（登録ゲートと同じ）
+    if(primarySupplierNeedsChoice(st,g)&&!value){
+      const cands=supplierCandidateList(g).join('／')
+      return makePlanField('supplier',cands||'',PLAN_STATUS.NEED_CHOICE,{
+        hint:aux.manualReason||(cands?'候補から選択':'通常仕入先が未定'),
         editHint:'詳細の通常仕入先'
       })
     }
     if(value){
       const auto=!!(
-        aux.singleCandidateAuto
-        ||aux.autoPrimarySupplier
-        ||g.auxStockPickAuto
-        ||reason
+        (g.plannedPrimarySupplierSource==='auto'||g.plannedPrimarySupplierSource==='single')
+        ||(auxAutoPrimaryTrusted(g)&&(aux.singleCandidateAuto||aux.autoPrimarySupplier))
       )
+      // 未決フラグが残っているのに値がある＝表示だけの仮値 → 選択が必要
+      if(primarySupplierNeedsChoice(st,g)){
+        return makePlanField('supplier',value,PLAN_STATUS.NEED_CHOICE,{
+          hint:aux.manualReason||'候補から選択',
+          editHint:'詳細の通常仕入先'
+        })
+      }
       return makePlanField('supplier',value,auto?PLAN_STATUS.AUTO:PLAN_STATUS.MANUAL,{
-        hint:reason||aux.autoReason||'',
+        hint:reason||(auto?(aux.autoReason||''):''),
         editHint:'詳細の通常仕入先'
       })
     }
-    const cands=uniqueNonEmpty(g.supplierCandidates||[])
+    const cands=supplierCandidateList(g)
     if(cands.length){
       return makePlanField('supplier',cands.join('／'),PLAN_STATUS.NEED_CHOICE,{
+        hint:'通常仕入先が未定',
         editHint:'詳細の通常仕入先'
       })
     }
@@ -6073,6 +6192,9 @@
           confirmPrimaryChange:false,
           auxPrimaryConflict:false
         })
+        if(el.value){
+          st.toast(`${pendingSupplierLabel()}。「選択を反映して再照合」で登録予定へ反映します。`)
+        }
         paintDialog()
       }
     })
@@ -6578,6 +6700,12 @@
       buildPlannedStatusFields,
       plannedNameForGroup,
       plannedSupplierForGroup,
+      plannedSupplierDisplay,
+      effectivePrimarySupplier,
+      primarySupplierNeedsChoice,
+      normalSupplierPickerHtml,
+      pendingSupplierLabel,
+      skuSupplierPendingRematch,
       PLAN_STATUS,
       skuRowDetailHtml,
       effectiveDecision,
