@@ -97,6 +97,60 @@ class MultiSupplierColorDoesNotAutoPrimaryTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def test_sapporo_hakui_inner_net_process_checklist_separate(self):
+        """whitelist外でも加工名だけの行は加工サービス側へ。本体の未定を引き継がない。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,アイトス㈱,6801-014,コックコート,L',
+                '顧客A,㈱セブンユニフォーム,6801-014,コックコート,M',
+                '顧客A,㈱札幌白衣,6801-014,インナーネット付け,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': '6801.csv',
+                'importMode': 'products',
+                'skuDecisions': {'6801-014': {'decision': 'merge'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            g = next(x for x in preview['skuGroups'] if x['code'] == '6801-014')
+            self.assertEqual(
+                sorted(g.get('supplierCandidates') or []),
+                ['アイトス㈱', '㈱セブンユニフォーム'],
+            )
+            self.assertNotIn('㈱札幌白衣', g.get('supplierCandidates') or [])
+            proc_rows = [
+                r for r in preview['rows']
+                if (r.get('csv') or {}).get('productName') == 'インナーネット付け'
+            ]
+            self.assertEqual(len(proc_rows), 1)
+            ps = proc_rows[0].get('processingService') or {}
+            self.assertTrue(ps.get('isProcessingService'))
+            self.assertEqual(ps.get('serviceName'), 'インナーネット付け')
+            self.assertEqual(ps.get('vendorName'), '㈱札幌白衣')
+            self.assertTrue(proc_rows[0].get('processingServiceView'))
+            self.assertFalse(
+                any('通常仕入先が未定' in str(x) for x in (proc_rows[0].get('reasons') or [])),
+                proc_rows[0].get('reasons'),
+            )
+            garment_und = [
+                r for r in preview['rows']
+                if (r.get('csv') or {}).get('productName') == 'コックコート'
+                and any('通常仕入先が未定' in str(x) for x in (r.get('reasons') or []))
+            ]
+            self.assertGreaterEqual(len(garment_und), 1)
+            plans = preview.get('processingServicePlans') or []
+            self.assertTrue(
+                any(
+                    (p.get('serviceName') == 'インナーネット付け'
+                     and p.get('vendorName') == '㈱札幌白衣')
+                    for p in plans
+                ),
+                plans,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_manual_pick_clears_undecided_after_rematch(self):
         folder, path, c = newdb()
         try:
@@ -228,8 +282,19 @@ for (const [name, st] of Object.entries(cases)) {
     ? api.skuRowDetailHtml(st, sku.group, { colspan: 5 })
     : '';
   const planHtml = sku ? api.unifiedPlanHtml(st, sku) : '';
+  const skuRow = items.find(i => i.kind === 'sku_row') || null;
+  let skuRowFields = [];
+  let skuRowFmap = {};
+  let skuRowPlanHtml = '';
+  if (skuRow) {
+    skuRowFields = api.buildPlannedStatusFields(st, skuRow);
+    skuRowFields.forEach(f => { skuRowFmap[f.key] = f; });
+    skuRowPlanHtml = api.unifiedPlanHtml(st, skuRow);
+  }
+  const procItem = items.find(i => i.kind === 'processing') || null;
   out[name] = {
     unresolved: items.length,
+    kinds: items.map(i => i.kind + ':' + (i.targetLabel || i.code || '')),
     tier: sku && sku.group && sku.group.reviewTier,
     supplierStatus: fmap.supplier && fmap.supplier.status,
     supplierValue: fmap.supplier && fmap.supplier.value,
@@ -243,6 +308,16 @@ for (const [name, st] of Object.entries(cases)) {
     hasPicker: /data-pl-primary-sup/.test(detail) && /選択してください/.test(detail),
     planSaysAligned: /予定は揃っています/.test(planHtml),
     needsChoice: !!(sku && sku.group && api.primarySupplierNeedsChoice(st, sku.group)),
+    skuRowSupplierStatus: skuRowFmap.supplier && skuRowFmap.supplier.status,
+    skuRowHasAutoWhileUndecided: !!(skuRowFmap.supplier
+      && skuRowFmap.supplier.status === api.PLAN_STATUS.AUTO
+      && (skuRow.issues || []).some(i => /通常仕入先が未定|通常仕入先を選んで/.test(i.label || ''))),
+    skuRowPlanSaysAligned: /予定は揃っています/.test(skuRowPlanHtml),
+    procHasSupplierUndecided: !!(procItem && (procItem.issues || []).some(
+      i => /通常仕入先が未定|通常仕入先を選んで/.test(i.label || '')
+    )),
+    procKind: procItem && procItem.kind,
+    procLabel: procItem && procItem.targetLabel,
   };
 }
 process.stdout.write(JSON.stringify(out));
@@ -320,6 +395,102 @@ class SupplierPickUiDisplayTest(unittest.TestCase):
         self.assertIn('primarySupplierNeedsChoice', js)
         self.assertIn('skuSupplierPendingRematch', js)
         self.assertIn('CSV各行の仕入先は行ごと', js)
+
+    def test_sku_row_plan_not_auto_while_undecided(self):
+        """行バケットでも CSV仕入先を自動決定済みにしない（ゲート未定と一致）。"""
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,アイトス㈱,6801-014,コックコート（白）,L',
+                '顧客A,㈱セブンユニフォーム,6801-014,コックコート,M',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': '6801.csv',
+                'importMode': 'products',
+                'skuDecisions': {'6801-014': {'decision': 'merge'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            # 確認リストから外した状態を模して行バケット経路を直接検証
+            g = next(x for x in preview['skuGroups'] if x['code'] == '6801-014')
+            g = dict(g)
+            g['needsDecision'] = False
+            g['reviewTier'] = 'auto'
+            und_rows = [
+                r for r in (preview.get('rows') or [])
+                if any('通常仕入先が未定' in str(x) for x in (r.get('reasons') or []))
+            ]
+            self.assertTrue(und_rows, 'gate should leave undecided reasons on rows')
+            st = {
+                'preview': {
+                    'skuGroups': [g],
+                    'rows': preview.get('rows') or [],
+                    'autoMergePlans': [],
+                    'plannedCounts': {},
+                    'outcomeSummary': {},
+                    'reviewCount': preview.get('reviewCount') or 0,
+                },
+                'skuDecisions': {'6801-014': {'decision': 'merge'}},
+                'appliedSkuDecisions': {'6801-014': {'decision': 'merge'}},
+                'rowClassifications': {},
+                'selections': {},
+                'selectedCodes': {},
+                'expandedCodes': {},
+                'expandedUnified': {},
+                'sectionOpen': {'unified': True},
+                'busy': False,
+            }
+            out = self._run({'sku_row': st})
+            u = out['sku_row']
+            self.assertFalse(u['skuRowHasAutoWhileUndecided'], u)
+            self.assertFalse(u['skuRowPlanSaysAligned'], u)
+            if u.get('skuRowSupplierStatus'):
+                self.assertNotEqual(u['skuRowSupplierStatus'], '自動決定済み', u)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_process_service_item_omits_parent_supplier_undecided(self):
+        folder, path, c = newdb()
+        try:
+            text = tiny_ledger_rows([
+                '顧客A,アイトス㈱,6801-014,コックコート,L',
+                '顧客A,㈱セブンユニフォーム,6801-014,コックコート,M',
+                '顧客A,㈱札幌白衣,6801-014,インナーネット付け,L',
+            ])
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text), 'name': '6801.csv',
+                'importMode': 'products',
+                'skuDecisions': {'6801-014': {'decision': 'merge'}},
+                '_canWrite': True, '_actor': {'name': 't'},
+            })
+            st = {
+                'preview': {
+                    'skuGroups': preview.get('skuGroups') or [],
+                    'rows': preview.get('rows') or [],
+                    'autoMergePlans': preview.get('autoMergePlans') or [],
+                    'plannedCounts': preview.get('plannedCounts') or {},
+                    'outcomeSummary': preview.get('outcomeSummary') or {},
+                    'reviewCount': preview.get('reviewCount') or 0,
+                    'processingServicePlans': preview.get('processingServicePlans') or [],
+                },
+                'skuDecisions': {'6801-014': {'decision': 'merge'}},
+                'appliedSkuDecisions': {},
+                'rowClassifications': {},
+                'selections': {},
+                'selectedCodes': {},
+                'expandedCodes': {'6801-014': True},
+                'expandedUnified': {},
+                'sectionOpen': {'unified': True},
+                'busy': False,
+            }
+            out = self._run({'proc': st})
+            u = out['proc']
+            self.assertFalse(u['procHasSupplierUndecided'], u)
+            self.assertFalse(u['hasAutoWhileUndecided'], u)
+            self.assertFalse(u['planSaysAligned'], u)
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 class UiSourceWiringTest(unittest.TestCase):

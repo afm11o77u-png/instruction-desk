@@ -260,8 +260,17 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
     names = []
     suppliers = []
     for v in variants or []:
+        # 商品名全体が加工サービスだけのバリアントは本体の名差・仕入先差に混ぜない
+        variant_names = []
         for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
             n = stock.text(n)
+            if n:
+                variant_names.append(n)
+        if variant_names and all(
+            proc_svc.is_standalone_processing_service_name(n) for n in variant_names
+        ):
+            continue
+        for n in variant_names:
             if n and n not in names:
                 names.append(n)
         s = stock.text(v.get('supplier') or '')
@@ -1425,6 +1434,13 @@ def _collect_supplier_candidates(group):
         if not sup:
             continue
         if proc_svc.is_processing_vendor(sup):
+            continue
+        # 加工サービス名だけのバリアントの仕入先は通常仕入先候補にしない
+        pname = stock.text(v.get('productName') or '')
+        if pname and proc_svc.is_standalone_processing_service_name(pname):
+            continue
+        csv_names = [stock.text(n) for n in (v.get('csvNames') or []) if stock.text(n)]
+        if csv_names and all(proc_svc.is_standalone_processing_service_name(n) for n in csv_names):
             continue
         slot = by_sup.get(sup)
         if not slot:
@@ -7255,12 +7271,25 @@ def apply_processing_service_split(c, classified, sku_groups):
         group['supplierCandidates'] = proc_svc.filter_garment_supplier_names(
             group.get('supplierCandidates') or []
         )
-        # 加工業者バリアントを本体比較から外す（名差・仕入先差・加工／種の疑い）
+        # 加工業者／加工サービス名だけのバリアントを本体比較から外す
         garment_variants = []
         for v in group.get('variants') or []:
             if proc_svc.is_processing_vendor(v.get('supplier') or ''):
                 continue
+            pname = stock.text(v.get('productName') or '')
+            if pname and proc_svc.is_standalone_processing_service_name(pname):
+                continue
+            csv_names = [stock.text(n) for n in (v.get('csvNames') or []) if stock.text(n)]
+            if csv_names and all(proc_svc.is_standalone_processing_service_name(n) for n in csv_names):
+                continue
             garment_variants.append(v)
+        # 本体候補の仕入先だけを残す（whitelist外の加工サービス業者も落とす）
+        garment_suppliers = []
+        for v in garment_variants:
+            s = stock.text(v.get('supplier') or '')
+            if s and s not in garment_suppliers:
+                garment_suppliers.append(s)
+        group['supplierCandidates'] = garment_suppliers
         garment_names = []
         for v in garment_variants:
             for n in v.get('csvNames') or ([v.get('productName')] if v.get('productName') else []):
@@ -7280,6 +7309,10 @@ def apply_processing_service_split(c, classified, sku_groups):
                 if code_r in ('processing', 'kind', 'fabric', 'color'):
                     # 加工行由来の疑い。本体側に実差が残るかは garment_variants で見る
                     continue
+                if code_r == 'compare':
+                    # 加工行を除くと本体1候補なのに残る汎用「内容確認」は分離後に落とす
+                    if len(garment_variants) <= 1:
+                        continue
                 if code_r == 'supplier':
                     if len(group.get('supplierCandidates') or []) <= 1:
                         continue
@@ -8500,13 +8533,21 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 pending_decision += 1
                 continue
 
-            # 加工業者は本体の通常仕入先候補に混ぜない（表示・ゲート共通）
-            suppliers_in_group = {
-                stock.text(v.get('supplier') or '')
-                for v in (group.get('variants') or [])
-                if stock.text(v.get('supplier') or '')
-                and not proc_svc.is_processing_vendor(v.get('supplier') or '')
-            }
+            # 加工業者／加工サービス名だけの行は本体の通常仕入先候補に混ぜない
+            suppliers_in_group = set()
+            for v in (group.get('variants') or []):
+                s = stock.text(v.get('supplier') or '')
+                if not s or proc_svc.is_processing_vendor(s):
+                    continue
+                pname = stock.text(v.get('productName') or '')
+                if pname and proc_svc.is_standalone_processing_service_name(pname):
+                    continue
+                csv_names = [stock.text(n) for n in (v.get('csvNames') or []) if stock.text(n)]
+                if csv_names and all(
+                    proc_svc.is_standalone_processing_service_name(n) for n in csv_names
+                ):
+                    continue
+                suppliers_in_group.add(s)
             primary_undecided = (
                 (len(suppliers_in_group) > 1 and not primary_supplier)
                 or (

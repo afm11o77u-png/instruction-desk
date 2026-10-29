@@ -848,6 +848,16 @@
       const ps=sample.processingService||{}
       const pc=sample.parenClassification||{}
       const edit=(st.rowClassifications&&st.rowClassifications[String(sample.rowNo)])||{}
+      const bucketCode=b.meta.code||csv.code||''
+      const linkedGroup=(b.meta.kind==='sku_row'&&bucketCode)
+        ?((((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(bucketCode)))||null)
+        :null
+      // 加工サービス対象のチェックリストへ本体の通常仕入先未定を載せない
+      if(b.meta.kind==='processing'){
+        issues=issues.filter(i=>!/通常仕入先が未定|通常仕入先を選んで/.test(String(i.label||'')))
+        open=issues.filter(i=>!i.resolved)
+        if(!open.length)return
+      }
       items.push({
         id:b.meta.key,
         kind:b.meta.kind,
@@ -858,10 +868,10 @@
         plannedColor:edit.color!=null?edit.color:(pc.color||''),
         issues,
         unresolvedIssueCount:open.length,
-        group:null,
+        group:linkedGroup,
         rows:b.rows,
         rowNos:b.rows.map(x=>x.rowNo),
-        code:b.meta.code||csv.code||'',
+        code:bucketCode,
         matchGroupKey:b.meta.matchGroupKey||sample.matchGroupKey||''
       })
     })
@@ -1744,6 +1754,8 @@
 
   function primarySupplierNeedsChoice(st,g){
     if(!g)return false
+    // 内容別は各登録先の仕入／加工業者を使う（品番単位の通常仕入先未定は出さない）
+    if(effectiveDecision(st,g)==='content_split')return false
     const aux=g.auxPrimary||{}
     const resolved=g.primarySupplierResolved||{}
     if(resolved.primarySupplier)return false
@@ -2708,6 +2720,16 @@
     ]
   }
 
+  function skuGroupForCode(st,code){
+    const c=String(code||'')
+    if(!c)return null
+    return (((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===c))||null
+  }
+
+  function rowHasPrimarySupplierUndecidedIssue(item){
+    return (item.issues||[]).some(i=>!i.resolved&&/通常仕入先が未定|通常仕入先を選んで/.test(String(i.label||'')))
+  }
+
   function rowPlannedStatusFields(st,item){
     const rows=item.rows||[]
     const sample=rows[0]||{}
@@ -2717,7 +2739,7 @@
     const code=item.code||csv.code||''
     const name=edit.plannedName!=null?edit.plannedName:(pc.plannedName||csv.productName||item.plannedName||'')
     const color=edit.color!=null?edit.color:(pc.color||item.plannedColor||'')
-    const supplier=csv.supplier||item.plannedSupplier||''
+    const csvSupplier=csv.supplier||item.plannedSupplier||''
     const nameNeed=!!(pc.needsConfirm||sample.parenNeedsConfirm||(item.issues||[]).some(i=>!i.resolved&&(i.type==='paren_confirm'||i.type==='product_pick')))
     const colorCands=uniqueNonEmpty(pc.colorCandidates||[])
     const colorNeed=colorCands.length>1||!!(pc.needsConfirm&&!color&&colorCands.length)
@@ -2741,12 +2763,30 @@
     }else{
       fields.push(makePlanField('color','',PLAN_STATUS.NA))
     }
-    fields.push(makePlanField(
-      'supplier',
-      supplier,
-      supplier?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET,
-      {hint:supplier?'':'仕入先情報が不足'}
-    ))
+    // 通常品番の行バケットは CSV行仕入先を「通常仕入先の自動決定」にしない。
+    // 品番単位の決定状態（またはゲート理由）に揃える。
+    const g=item.group||skuGroupForCode(st,code)
+    if(g&&isNormalLedgerCode(String(g.code||code||''))){
+      const d=skuDecision(st,g.code)
+      fields.push(skuSupplierPlanField(st,g,d))
+    }else if(rowHasPrimarySupplierUndecidedIssue(item)){
+      fields.push(makePlanField(
+        'supplier',
+        csvSupplier||'',
+        PLAN_STATUS.NEED_CHOICE,
+        {
+          hint:'通常仕入先が未定（CSV行の仕入先は行ごと／サブ）',
+          editHint:'詳細の通常仕入先'
+        }
+      ))
+    }else{
+      fields.push(makePlanField(
+        'supplier',
+        csvSupplier,
+        csvSupplier?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET,
+        {hint:csvSupplier?'CSV行の仕入先':'仕入先情報が不足'}
+      ))
+    }
     fields.push(makePlanField('processing','',PLAN_STATUS.NA))
     return fields
   }
@@ -2880,22 +2920,27 @@
         </tr>${skuMakerLookupRowHtml(st,g.code,detailOpts)}${skuExpanded?skuRowDetailHtml(st,g,detailOpts):''}${skuExpanded?unifiedRowDetailHtml(st,item):''}`
       }
       const kindLabel={processing:'加工サービス',blank:'品番なし・部品資材',custom:'別注',unknown:'不明',sku_row:'行要確認',row:'行要確認'}[item.kind]||'要確認'
-      return `<tr class="sku-list-row unified-list-row unified-kind-${esc(item.kind)}" data-unified-id="${esc(item.id)}" data-sku-section="unified">
+      // 行要確認でも通常品番＋通常仕入先未定なら品番詳細のピッカーを出す
+      const linkedGroup=(item.kind==='sku_row'&&item.code)?(item.group||skuGroupForCode(st,item.code)):null
+      const showSkuPicker=!!(linkedGroup&&primarySupplierNeedsChoice(st,linkedGroup))
+      const skuExpanded=!!(showSkuPicker&&st.expandedCodes&&st.expandedCodes[linkedGroup.code])
+      return `<tr class="sku-list-row unified-list-row unified-kind-${esc(item.kind)}" data-unified-id="${esc(item.id)}" data-sku-section="unified"${linkedGroup?` data-sku-code="${esc(linkedGroup.code)}"`:''}>
         <td class="sku-check" data-label="選択"><span class="sub">—</span></td>
         <td class="sku-code" data-label="対象"><button type="button" class="linkish" data-pl-unified-expand="${esc(item.id)}">${esc(item.targetLabel)}</button>
           <div class="sub">${esc(kindLabel)}</div></td>
-        <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(st,item)}</td>
+        <td class="sku-plan" data-label="登録予定">${unifiedPlanHtml(st,Object.assign({},item,{group:item.group||linkedGroup||null}))}</td>
         <td class="sku-why" data-label="残っている確認事項">${unifiedIssuesHtml(item)}</td>
         <td class="sku-action" data-label="操作">
           <div class="sku-action-label">要確認</div>
           <div class="bar sku-mini-btns">
             ${item.rows&&item.rows[0]&&(item.rows[0].makerCorrection||{}).eligible&&(item.rows[0].makerCorrection||{}).makerSku
               ?`<button type="button" class="quiet" data-pl-maker-correct="${item.rows[0].rowNo}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
+            ${showSkuPicker?`<button type="button" class="quiet" data-pl-sku-expand="${esc(linkedGroup.code)}">${skuExpanded?'品番詳細を閉じる':'通常仕入先を選ぶ'}</button>`:''}
             <button type="button" class="quiet" data-pl-unified-expand="${esc(item.id)}">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
           ${skipRegisterActionsHtml(st,item)}
         </td>
-      </tr>${expanded?unifiedRowDetailHtml(st,item):''}`
+      </tr>${showSkuPicker&&skuExpanded?skuRowDetailHtml(st,linkedGroup,detailOpts):''}${expanded?unifiedRowDetailHtml(st,item):''}`
     }).join('')
   }
 

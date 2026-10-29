@@ -136,6 +136,10 @@ _SERVICE_NAME_ALIASES = {
     'インナー取り付け': 'インナー取付',
     'インナー取付け': 'インナー取付',
     'インナー付け': 'インナー取付',
+    # ネット付けは取付とは別サービス（原文を保持）
+    'インナーネット付け': 'インナーネット付け',
+    'インナーネット取付': 'インナーネット付け',
+    'インナーネット取り付け': 'インナーネット付け',
 }
 
 # 商品名から加工サービス名を拾うときの候補（長い語優先）
@@ -423,6 +427,31 @@ def _resolve_service_core(core: str) -> str:
     return ''
 
 
+def is_standalone_processing_service_name(product_name: str) -> bool:
+    """商品名全体が加工サービス名だけで、衣服種を含まないとき True。
+
+    例: 「インナーネット付け」→ True / 「コックコート（インナーネット付け）」→ False
+    （括弧付き本体は unify が空になり、本体行の括弧加工を加工SKUへ誤分離しない）。
+    """
+    t = stock.text(product_name)
+    if not t or is_physical_parts_name(t):
+        return False
+    unified = unify_processing_service_name(t)
+    if not unified:
+        return False
+    # 衣服種を除いた核が空＝衣服種だけの名。加工サービス単独ではない
+    stripped = _KIND_STRIP_RE.sub('', canonicalize_attach_verbs(t))
+    stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', stripped or ''))
+    # 括弧を除いた本体側でも判定（括弧仕様付き加工名は可）
+    base, _inners = _strip_parens_keep_inner(t)
+    base_stripped = _KIND_STRIP_RE.sub('', canonicalize_attach_verbs(base))
+    base_stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', base_stripped or ''))
+    core = base_stripped or stripped
+    if not core:
+        return False
+    return _looks_like_service_core(core) or normalize_service_key(core) == normalize_service_key(unified)
+
+
 def unify_processing_service_name(raw_name: str) -> str:
     """加工サービス表示名へ統一。衣服種・顧客用接頭・括弧仕様は落とす。読めなければ空。
 
@@ -638,8 +667,32 @@ def classify_processing_service_row(
     if physical:
         return result
     if not vendor:
-        # 仕入先が加工業者でなくても、名が明確な加工のみ＋既知パターンはサービス候補にしない
-        # （本体行の括弧加工は取扱へ。ここでは業者行のみサービス化する）
+        # whitelist外でも「商品名全体が明確な加工サービス名だけ」の行は加工サービス化する。
+        # 本体行の括弧内加工（例: コックコート（裾上げ））は unify が空のため対象外。
+        # 加工欄・品番欄からの推定は業者確定後に限る（誤分離防止）。
+        service_only, source_only = _resolve_service_name_from_row_fields(
+            product_name=name_t, paren_processing='', code='',
+        )
+        if service_only and source_only == 'name' and is_standalone_processing_service_name(name_t):
+            result['isProcessingVendor'] = True
+            result['isProcessingService'] = True
+            result['serviceName'] = service_only
+            result['displayName'] = service_only
+            result['vendorName'] = stock.text(supplier_t)
+            result['identifiable'] = bool(service_only and supplier_t)
+            result['excludeFromGarmentSuppliers'] = True
+            result['serviceNameSource'] = source_only
+            result['clearServiceNameRow'] = True
+            if not supplier_t:
+                result['identifiable'] = False
+                result['needsConfirm'] = True
+                result['confirmReasons'] = [
+                    f'加工サービス名「{service_only}」ですが加工業者が空です。'
+                    f'業者を入力してください。'
+                ]
+                result['missingFields'] = ['加工業者']
+            return result
+        # それ以外の whitelist 外は本体／取扱側（括弧加工など）
         return result
 
     # 加工業者行: 当該行の商品名・加工欄・品番欄のみから加工名を取る（別行は見ない）
