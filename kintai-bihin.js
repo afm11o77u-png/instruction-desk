@@ -1,4 +1,4 @@
-/* 月別備品棚卸。権限は currentUser.mark_kintai（主管理者は常に可）。
+/* 月別備品棚卸。権限は mark_kintai、または管理者チェック（manage/overview）。主管理者は常に可。
    在庫デスク入出庫・出勤簿実績・シフト表には書き込まない。
    保存は「保存」押下時のみ（表示中年月を上書き）。自動保存しない。 */
 (function () {
@@ -18,7 +18,7 @@
   function $(sel, root) { return (root || document).querySelector(sel); }
 
   function canKintai() {
-    return !!currentUser && (currentUser.role === 'owner' || !!currentUser.mark_kintai);
+    return !!currentUser && (currentUser.role === 'owner' || !!currentUser.manage || !!currentUser.overview || !!currentUser.mark_kintai);
   }
 
   function todayYm() {
