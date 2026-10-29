@@ -1030,19 +1030,26 @@
     return data;
   }
 
-  /** 数量と単位を空白区切り。単位が空なら数量のみ（連結しない）。 */
-  function formatOrderQtyUnit(qty, unit) {
-    const q = qty == null || qty === '' ? '' : String(qty);
-    const u = String(unit || '').trim();
-    if (!u) return q;
-    if (!q) return u;
-    return `${q} ${u}`;
-  }
-
   /** 発注単位が数字だけか（半角・全角）。要確認フラグ用。自動書き換えしない。 */
   function isDigitsOnlyOrderUnit(unit) {
     const s = String(unit || '').trim();
     return s !== '' && /^[0-9０-９]+$/.test(s);
+  }
+
+  /** 表示用単位。空／数字のみは出さない（保存値は書き換えない）。 */
+  function displayOrderUnit(unit) {
+    const u = String(unit || '').trim();
+    if (!u || isDigitsOnlyOrderUnit(u)) return '';
+    return u;
+  }
+
+  /** 数量と単位を空白区切り。単位が空／数字のみなら数量のみ（「1 1」「11」にしない）。 */
+  function formatOrderQtyUnit(qty, unit) {
+    const q = qty == null || qty === '' ? '' : String(qty);
+    const u = displayOrderUnit(unit);
+    if (!u) return q;
+    if (!q) return u;
+    return `${q} ${u}`;
   }
 
   function paintOrderForm() {

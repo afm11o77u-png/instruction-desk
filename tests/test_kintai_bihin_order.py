@@ -72,16 +72,20 @@ class BihinOrderHelpersTest(unittest.TestCase):
         self.assertNotIn('数量：20', single)
 
     def test_qty_unit_not_concatenated(self):
-        """数量と単位を連結しない。「1」+「1」→「11」にしない。「1ロット」も同様。"""
-        # 再現: 単位が数字「1」のとき qty=1 で「数量：11」になっていた
+        """数字のみ単位は本文から除外。「1」+「1」→「数量：1」（「1 1」「11」にしない）。"""
+        # 再現: 単位が数字「1」のとき qty=1 で「数量：11」→#277で「1 1」→本修正で「1」
         bad_unit = kintai_bihin_order._format_order_content_block([{
             'orderProductName': 'CP2610HMES-TA／白ラベル',
             'orderQty': 1,
             'orderUnit': '1',
         }])
-        self.assertEqual(bad_unit, 'CP2610HMES-TA／白ラベル\n数量：1 1')
+        self.assertEqual(bad_unit, 'CP2610HMES-TA／白ラベル\n数量：1')
         self.assertNotIn('数量：11', bad_unit)
-        # 単位が「1ロット」でも先頭数字と数量をくっつけない
+        self.assertNotIn('数量：1 1', bad_unit)
+        # 全角数字のみも除外
+        zenkaku = kintai_bihin_order._format_qty_with_unit(2, '２')
+        self.assertEqual(zenkaku, '2')
+        # 単位が「1ロット」は本物の単位として空白区切り（除外しない）
         lot = kintai_bihin_order._format_order_content_block([{
             'orderProductName': 'ロット品',
             'orderQty': 1,
@@ -98,16 +102,23 @@ class BihinOrderHelpersTest(unittest.TestCase):
         self.assertTrue(kintai_bihin_order.is_digits_only_unit('２'))
         self.assertFalse(kintai_bihin_order.is_digits_only_unit('1ロット'))
         self.assertFalse(kintai_bihin_order.is_digits_only_unit('箱'))
-        # qty 1 / 2 / 10
+        self.assertEqual(kintai_bihin_order._display_order_unit('1'), '')
+        self.assertEqual(kintai_bihin_order._display_order_unit('箱'), '箱')
+        # qty 1 / 2 / 10 — 本物の単位は空白付き、数字のみ単位は数量のみ
         for q in (1, 2, 10):
             text = kintai_bihin_order._format_order_content_block([{
                 'orderProductName': 'X', 'orderQty': q, 'orderUnit': '箱',
             }])
             self.assertEqual(text, f'X\n数量：{q} 箱')
             self.assertNotIn(f'数量：{q}箱', text)  # 空白なし連結は不可
+            digits = kintai_bihin_order._format_order_content_block([{
+                'orderProductName': 'Y', 'orderQty': q, 'orderUnit': '1',
+            }])
+            self.assertEqual(digits, f'Y\n数量：{q}')
+            self.assertNotIn(f'数量：{q} 1', digits)
 
     def test_fill_keeps_qty_and_unit_in_separate_cells(self):
-        """Excel 注文書は数量列と単位列を分離。qty 1/2/10 と数字単位でも連結しない。"""
+        """Excel 注文書は D=数量。数字のみ単位は E を空にし、本物の単位だけ書く。"""
         path, _ = kintai_bihin_order.resolve_template_path()
         lines = [
             {'orderProductName': 'CP2610HMES-TA／白ラベル', 'orderQty': 1, 'orderUnit': '1'},
@@ -119,11 +130,16 @@ class BihinOrderHelpersTest(unittest.TestCase):
         )
         with ZipFile(BytesIO(blob)) as z:
             sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
-            # D=数量（数値）、E=単位（文字列）。「11」にならない
+            # D=数量（数値）。「11」にならない
             self.assertRegex(sheet, r'<c r="D19"[^>]*>\s*<v>1</v>')
             self.assertRegex(sheet, r'<c r="D20"[^>]*>\s*<v>2</v>')
             self.assertRegex(sheet, r'<c r="D21"[^>]*>\s*<v>10</v>')
-            self.assertRegex(sheet, r'<c r="E19"[^>]*t="inlineStr"[^>]*>.*?>1</t>')
+            # E19: 数字のみ単位は空（「1」を単位として書かない）
+            self.assertNotRegex(sheet, r'<c r="E19"[^>]*t="inlineStr"[^>]*>.*?>1</t>')
+            e19 = re.search(r'<c r="E19"[^>]*(?:/>|>(.*?)</c>)', sheet, re.DOTALL)
+            self.assertIsNotNone(e19)
+            e19_inner = e19.group(1) or ''
+            self.assertNotIn('>1<', e19_inner)
             self.assertRegex(sheet, r'<c r="E20"[^>]*t="inlineStr"[^>]*>.*?>箱</t>')
             self.assertRegex(sheet, r'<c r="E21"[^>]*t="inlineStr"[^>]*>.*?>1ロット</t>')
             self.assertNotRegex(sheet, r'<c r="D19"[^>]*>\s*<v>11</v>')
@@ -505,7 +521,7 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertEqual(sheet['rows'][0]['purchaseQty'], 3)
 
     def test_digits_only_unit_flag_and_records_not_concatenated(self):
-        """単位「1」でも orderQty は 1 のまま保存。表示は空白区切り。購入は入数換算。自動書き換えなし。"""
+        """単位「1」でも orderQty/orderUnit は分離保存。本文は「数量：1」。購入は入数換算。自動書き換えなし。"""
         v = self._vendor(mode='body')
         it = self._item(
             '白ラベル', 120, unit='枚',
@@ -539,7 +555,8 @@ class BihinOrderStoreTest(unittest.TestCase):
             open_mail=True, skip_mail=True,
         )
         body = result['orders'][0]['body']
-        self.assertIn('数量：1 1', body)
+        self.assertIn('数量：1', body)
+        self.assertNotIn('数量：1 1', body)
         self.assertNotIn('数量：11', body)
         # 履歴レコードは qty/unit 分離（表示バグであって保存値の連結ではない）
         flat = kintai_bihin_order.history_flat(self.c)
@@ -811,6 +828,7 @@ class BihinOrderUiContractTest(unittest.TestCase):
         self.assertIn('{注文内容}', js)
         self.assertIn('orderSpec', js)
         self.assertIn('formatOrderQtyUnit', js)
+        self.assertIn('displayOrderUnit', js)
         self.assertIn('isDigitsOnlyOrderUnit', js)
         self.assertIn('orderUnitNeedsReview', js)
         self.assertNotIn('送信済み', js)
