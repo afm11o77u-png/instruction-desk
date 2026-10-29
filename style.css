@@ -197,17 +197,32 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-day-bulk{display:block;margin:2px auto 0;padding:0 4px;font-size:10px;line-height:1.4;font-weight:400;color:#6b3a1e;background:transparent;border:1px solid #e0b8a8;border-radius:3px;cursor:pointer}
 .shift-grid .shift-day-bulk:hover{background:#fff5f3;border-color:#c47a5e}
 .shift-default-order-help{margin:0 0 4px;font-size:12px;color:#5a6b5e}
+.shift-emp-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:4px 0 6px;font-size:12px;color:#3d5344}
+.shift-emp-swatch{display:inline-block;padding:2px 8px;border:1px solid #c5d9c4;border-radius:3px;font-weight:700}
+.shift-emp-swatch.shift-emp-regular{background:#e6f2ea}
+.shift-emp-swatch.shift-emp-contract{background:#eef3f8}
+.shift-emp-swatch.shift-emp-part{background:#f7f0e8}
 .shift-save-status{font-size:13px;font-weight:700;color:#3d5344;padding-bottom:8px}
+.shift-memo-status{margin-left:4px}
 .shift-save-dirty{color:#8a3b00}
 .shift-save-saving{color:#3d5344}
 .shift-save-saved{color:#186438}
 .shift-save-failed{color:#9d3434}
 .shift-grid-wrap{overflow:auto;max-height:min(72vh,900px);border:1px solid #c5d9c4;background:#fff;margin-top:8px}
-.shift-grid{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%}
+.shift-grid{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%;table-layout:fixed}
 .shift-grid th,.shift-grid td{border:1px solid #cfd9cf;padding:2px 4px;text-align:center;white-space:nowrap;background:#fff}
 .shift-grid thead th{position:sticky;top:0;z-index:3;background:#f3f7f3;font-weight:700}
-.shift-grid .shift-corner{left:0;z-index:4;min-width:5.5rem;text-align:left}
-.shift-grid .shift-name{position:sticky;left:0;z-index:2;text-align:left;background:#fafcfa;font-weight:600;min-width:7.5rem;max-width:12rem;padding:2px 4px}
+.shift-grid col.shift-col-memo{width:4.8rem}
+.shift-grid col.shift-col-name{width:8.2rem}
+/* 画面のみ日付列を約80–85%に（印刷は別指定）。sticky 列と重ならない幅 */
+.shift-grid col.shift-col-day{width:1.72rem}
+.shift-grid .shift-corner{z-index:5;text-align:left;background:#f3f7f3}
+.shift-grid .shift-corner-memo{position:sticky;left:0;min-width:4.8rem;width:4.8rem;max-width:4.8rem;font-size:11px;font-weight:700;padding:2px 3px}
+.shift-grid .shift-corner-name{position:sticky;left:4.8rem;min-width:7.5rem;z-index:5}
+.shift-grid .shift-memo{position:sticky;left:0;z-index:2;width:4.8rem;min-width:4.8rem;max-width:4.8rem;padding:1px 2px;background:#fafcfa;text-align:left}
+.shift-grid .shift-memo-input{display:block;width:100%;min-width:0;box-sizing:border-box;border:1px solid transparent;background:transparent;font:inherit;font-size:11px;font-weight:400;padding:2px 3px;border-radius:3px}
+.shift-grid .shift-memo-input:hover,.shift-grid .shift-memo-input:focus{border-color:#9dceae;background:#fff;outline:none}
+.shift-grid .shift-name{position:sticky;left:4.8rem;z-index:2;text-align:left;background:#fafcfa;font-weight:600;min-width:7.5rem;max-width:12rem;padding:2px 4px}
 .shift-grid .shift-name-edit{display:flex;align-items:center;gap:2px;min-width:0}
 .shift-grid .shift-drag{flex:0 0 auto;cursor:grab;color:#6a7d70;font-size:14px;line-height:1;padding:2px 3px;user-select:none;-webkit-user-select:none}
 .shift-grid .shift-drag:active{cursor:grabbing}
@@ -215,21 +230,34 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-name-input:hover,.shift-grid .shift-name-input:focus{border-color:#9dceae;background:#fff;outline:none}
 .shift-grid .shift-tag{display:inline-block;flex:0 0 auto;font-weight:400;color:#6b3a1e;font-size:10px;white-space:nowrap}
 .shift-grid .shift-row-del{flex:0 0 auto;padding:2px 6px;min-width:0;line-height:1;color:#9d3434}
-.shift-grid tr.shift-only .shift-name{background:#f3f7fb}
+.shift-grid tr.shift-only .shift-name:not(.shift-emp-regular):not(.shift-emp-contract):not(.shift-emp-part){background:#f3f7fb}
 .shift-grid tr.shift-dragging{opacity:.45}
+.shift-grid tr.shift-drop-before .shift-memo,
 .shift-grid tr.shift-drop-before .shift-name{box-shadow:inset 0 2px 0 #3d7a54}
+.shift-grid tr.shift-drop-after .shift-memo,
 .shift-grid tr.shift-drop-after .shift-name{box-shadow:inset 0 -2px 0 #3d7a54}
-.shift-grid .shift-day{min-width:2.1rem;line-height:1.15}
+/* 出勤簿区分色（画面のみ・氏名セル）。土日祝の日付セル色は維持 */
+.shift-grid .shift-name.shift-emp-regular,
+.shift-grid tr.shift-history .shift-name.shift-emp-regular,
+.shift-grid tr.shift-only .shift-name.shift-emp-regular{background:#e6f2ea}
+.shift-grid .shift-name.shift-emp-contract,
+.shift-grid tr.shift-history .shift-name.shift-emp-contract,
+.shift-grid tr.shift-only .shift-name.shift-emp-contract{background:#eef3f8}
+.shift-grid .shift-name.shift-emp-part,
+.shift-grid tr.shift-history .shift-name.shift-emp-part,
+.shift-grid tr.shift-only .shift-name.shift-emp-part{background:#f7f0e8}
+.shift-grid .shift-day{min-width:1.72rem;line-height:1.15;padding:2px 1px}
 .shift-grid .shift-daynum{display:block}
 .shift-grid .shift-wday{display:block;font-size:10px;font-weight:400;color:#4a5d50}
-.shift-grid .shift-cell{cursor:pointer;min-width:2.1rem;height:1.7rem;user-select:none}
+.shift-grid .shift-cell{cursor:pointer;min-width:1.72rem;height:1.7rem;user-select:none;padding:2px 1px}
 .shift-grid .shift-cell:hover{outline:2px solid #5d9a72;outline-offset:-2px}
 .shift-grid .shift-sat,.shift-grid th.shift-sat{background:#e8f2fb}
 .shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}
 .shift-grid td.shift-off{font-weight:800;color:#9d3434;background:#fff5f3}
-.shift-grid td.shift-time{font-weight:700;color:#1a4a7a;background:#f3f8ff;font-size:11px}
-.shift-grid td.shift-time .shift-time-main,.shift-grid td.shift-time .shift-time-until{display:inline}
-.shift-grid tr.shift-history .shift-name{background:#faf7f3}
+.shift-grid td.shift-time{font-weight:700;color:#1a4a7a;background:#f3f8ff;font-size:10px}
+.shift-grid td.shift-time .shift-time-main{display:inline;font-size:10px}
+.shift-grid td.shift-time .shift-time-until{display:none}
+.shift-grid tr.shift-history .shift-name:not(.shift-emp-regular):not(.shift-emp-contract):not(.shift-emp-part){background:#faf7f3}
 .shift-empty{text-align:left!important;padding:12px!important;color:#3d5344}
 /* 備品棚卸（勤怠内・シフトと同系の表組み。カードダッシュボードにしない） */
 .bihin-toolbar{margin:0 0 10px}
@@ -300,7 +328,12 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-drag,
   body.printing-shift .shift-day-bulk,
   body.printing-shift .shift-tag,
+  body.printing-shift .shift-emp-legend,
+  body.printing-shift .shift-memo,
+  body.printing-shift .shift-corner-memo,
+  body.printing-shift .shift-col-memo,
   body.printing-shift #shiftmeta,
+  body.printing-shift #shiftmemostatus,
   body.printing-shift .shift-print-title{display:none!important}
   body.printing-shift #kintaidesk,
   body.printing-shift #kintaishift{display:block!important;max-width:none!important;width:100%!important;margin:0!important;padding:0!important}
@@ -316,6 +349,7 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid tbody{display:table-row-group}
   body.printing-shift .shift-grid tr{break-inside:avoid;page-break-inside:avoid}
   body.printing-shift .shift-grid .shift-name,
+  body.printing-shift .shift-grid .shift-memo,
   body.printing-shift .shift-grid thead th{position:static!important;top:auto!important;left:auto!important}
   /* 薄い罫線・余白多め（見本のエアリーなセル） */
   body.printing-shift .shift-grid th,
@@ -327,10 +361,15 @@ body.catalog-kintai main>header .headactions{display:none}
   }
   /* 氏名は1行固定（姓／名のスペースで折り返さない）。日列をやや狭めて幅を確保。
      colgroup 必須: thead 先頭の colspan バナーがあると fixed が全列均等になる。
-     9em ≒ 典型的なフルネーム（例:「齊藤 遼太」「長谷川 恵美子」）＋余白 */
+     9em ≒ 典型的なフルネーム（例:「齊藤 遼太」「長谷川 恵美子」）＋余白
+     勤務メモ列・区分色は印刷に出さない（空白列も残さない） */
+  body.printing-shift .shift-grid col.shift-col-memo{width:0!important;max-width:0!important}
   body.printing-shift .shift-grid col.shift-col-name{width:9em}
   body.printing-shift .shift-grid col.shift-col-day{width:auto}
   body.printing-shift .shift-grid .shift-name{width:9em;min-width:9em;max-width:none;text-align:left;padding:5px 6px;overflow:visible;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto;background:#f8faf8!important}
+  body.printing-shift .shift-grid .shift-name.shift-emp-regular,
+  body.printing-shift .shift-grid .shift-name.shift-emp-contract,
+  body.printing-shift .shift-grid .shift-name.shift-emp-part{background:#f8faf8!important}
   body.printing-shift .shift-grid .shift-name-edit{display:block;white-space:nowrap}
   body.printing-shift .shift-grid .shift-name-input{display:none!important}
   body.printing-shift .shift-grid .shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:nowrap;word-break:normal;overflow-wrap:normal;line-break:auto}
@@ -345,11 +384,11 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid tbody tr:nth-child(even) td.shift-cell:not(.shift-sat):not(.shift-sun){
     background:#f3f6f4!important
   }
-  /* ×／時刻: 既定は白黒寄り。カラー用は後段で赤系へ */
+  /* ×／時刻: 既定は白黒寄り。カラー用は後段で赤系へ。時刻は「15:00」1行（まで無し） */
   body.printing-shift .shift-grid td.shift-off{font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#333!important;background-color:#fff!important;background-image:none!important;font-size:7pt;line-height:1.2;white-space:normal!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-time .shift-time-main{display:block;text-align:center;font-size:7pt;font-weight:700}
-  body.printing-shift .shift-grid td.shift-time .shift-time-until{display:block;text-align:center;font-size:5.5pt;font-weight:400;line-height:1.1}
+  body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#333!important;background-color:#fff!important;background-image:none!important;font-size:7pt;line-height:1.15;white-space:nowrap!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-time .shift-time-main{display:inline;text-align:center;font-size:7pt;font-weight:700}
+  body.printing-shift .shift-grid td.shift-time .shift-time-until{display:none!important}
   /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通。×は見本どおり赤系 */
   body.printing-shift.print-shift-color .shift-grid td.shift-off{color:#b85c4a!important}
   body.printing-shift.print-shift-color .shift-grid .shift-sat,

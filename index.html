@@ -93,15 +93,18 @@
 <button type="button" class="shift-mode" data-shift-mode="normal">通常（クリック切替）</button>
 </div>
 <div class="shift-time-row">
-<label>時間指定の文言<input id="shifttimetext" maxlength="40" value="15:00まで" aria-label="時間指定の文言"></label>
+<label>時間指定の文言<input id="shifttimetext" maxlength="40" value="15:00" aria-label="時間指定の文言" placeholder="15:00"></label>
 <button type="button" id="shiftaddrow">行を追加</button>
 <button type="button" id="shiftaddroster">未掲載の在籍者を追加</button>
 <button type="button" id="shiftundo">ひとつ戻す</button>
 <button type="button" class="primary" id="shiftsave">保存</button>
+<button type="button" id="shiftsavememos">勤務メモを保存</button>
 <button type="button" id="shiftsavedefaultorder">標準の並び順として保存</button>
 <button type="button" id="shiftprint">印刷</button>
 <span id="shiftsavestatus" class="shift-save-status" aria-live="polite">未保存</span>
+<span id="shiftmemostatus" class="shift-save-status shift-memo-status" aria-live="polite">メモ未保存</span>
 </div>
+<p class="kintaimeta shift-emp-legend no-print" id="shiftemplegend" aria-label="出勤簿区分の色">氏名の背景色：<span class="shift-emp-swatch shift-emp-regular">社員</span><span class="shift-emp-swatch shift-emp-contract">契約社員</span><span class="shift-emp-swatch shift-emp-part">パート</span>（未設定・シフト専用は通常色。印刷には出ません）</p>
 <div class="shift-bulk-row" aria-label="一括で休み（×）">
 <label>指定曜日<select id="shiftbulkweekday" aria-label="一括×する曜日">
 <option value="6" selected>日</option>
