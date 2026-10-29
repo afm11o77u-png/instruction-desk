@@ -405,7 +405,7 @@
       const empTitle = EMP_LABEL[p.employment] ? ` title="出勤簿区分: ${EMP_LABEL[p.employment]}"` : '';
       return `<tr class="${rowCls}" data-row-key="${esc(p.key)}">
         <td class="shift-memo">
-          <input type="text" class="shift-memo-input" maxlength="80" data-memo-person="${esc(p.key)}" value="${esc(memoVal)}" placeholder="例: 週5" aria-label="勤務メモ ${esc(p.displayName || '')}">
+          <textarea class="shift-memo-input" rows="2" maxlength="80" data-memo-person="${esc(p.key)}" placeholder="例: 週5" aria-label="勤務メモ ${esc(p.displayName || '')}">${esc(memoVal)}</textarea>
         </td>
         <th class="shift-name ${empCls}"${empTitle}>
           <div class="shift-name-edit">
