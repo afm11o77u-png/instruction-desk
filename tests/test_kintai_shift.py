@@ -832,7 +832,14 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('openPrintDialog', js)
         self.assertIn('runPrint', js)
         self.assertIn('マーク シフト表', js)
-        self.assertIn('空欄：出勤　×：休み　時刻：退勤予定', js)
+        self.assertIn('空欄：出勤　×：休み　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定', js)
+        self.assertIn("kind: 'task'", js)
+        self.assertIn('nextNormalCell', js)
+        self.assertIn('selectedTaskMark', js)
+        self.assertIn("data-shift-mode=\"task\"", (ROOT / 'index.html').read_text(encoding='utf-8'))
+        self.assertIn('id="shifttaskmark"', (ROOT / 'index.html').read_text(encoding='utf-8'))
+        self.assertIn('td.shift-task', (ROOT / 'style.css').read_text(encoding='utf-8'))
+        self.assertIn('shift-task-mark', (ROOT / 'style.css').read_text(encoding='utf-8'))
         self.assertIn('shift-print-banner', js)
         self.assertIn('afterprint', js)
         # 勤務メモ・区分色・時刻表示正規化
@@ -1007,7 +1014,7 @@ html,body{{margin:0;background:#fff}}
 {cols}
 <thead><tr class="shift-print-banner"><th colspan="32"><div class="shift-print-head">
 <span class="shift-print-title-text">2026年 10月 マーク シフト表</span>
-<span class="shift-print-legend">空欄：出勤　×：休み　時刻：退勤予定</span>
+<span class="shift-print-legend">空欄：出勤　×：休み　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定</span>
 </div></th></tr>
 <tr><th class="shift-corner">氏名</th>{days}</tr></thead>
 <tbody>{rows}</tbody>
@@ -1186,6 +1193,108 @@ class ShiftWorkMemoTest(unittest.TestCase):
         # 区分は在籍 identity から。別名フィールドを増やしていない
         self.assertNotIn('employmentColor', by_key['regular:001'])
         self.assertNotIn('kintaiKubun', by_key['regular:001'])
+
+    def test_task_marks_save_load_and_coexist_with_off_time(self):
+        """ピ／バ／貼は通常のシフト記号。×・時刻と同居でき、再読込でも消えない。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'],
+            'cells': {
+                'regular:001': {
+                    '3': {'kind': 'off', 'text': '×'},
+                    '4': {'kind': 'task', 'text': 'ピ'},
+                    '5': {'kind': 'task', 'text': 'バ'},
+                    '6': {'kind': 'task', 'text': '貼'},
+                    '7': {'kind': 'time', 'text': '15:00まで'},
+                },
+            },
+        })
+        self.assertEqual(code, 200)
+        row = saved['cells']['regular:001']
+        self.assertEqual(row['3'], {'kind': 'off', 'text': '×'})
+        self.assertEqual(row['4'], {'kind': 'task', 'text': 'ピ'})
+        self.assertEqual(row['5'], {'kind': 'task', 'text': 'バ'})
+        self.assertEqual(row['6'], {'kind': 'task', 'text': '貼'})
+        self.assertEqual(row['7'], {'kind': 'time', 'text': '15:00まで'})
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertTrue(again['exists'])
+        again_row = again['cells']['regular:001']
+        self.assertEqual(again_row['3']['kind'], 'off')
+        self.assertEqual(again_row['4'], {'kind': 'task', 'text': 'ピ'})
+        self.assertEqual(again_row['5'], {'kind': 'task', 'text': 'バ'})
+        self.assertEqual(again_row['6'], {'kind': 'task', 'text': '貼'})
+        self.assertEqual(again_row['7']['text'], '15:00まで')
+
+    def test_task_mark_invalid_text_rejected(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        with self.assertRaises(ValueError):
+            kintai_shift.save_shift_sheet(self.c, self.user, {
+                'year': 2026, 'month': 11, 'version': 0,
+                'people': sheet['people'],
+                'cells': {'regular:001': {'2': {'kind': 'task', 'text': '検'}}},
+            })
+
+    def test_task_kind_constant_allows_three_marks(self):
+        self.assertIn('task', kintai_shift.CELL_KINDS)
+        self.assertEqual(kintai_shift.TASK_TEXTS, frozenset({'ピ', 'バ', '貼'}))
+
+    def test_seed_sunday_does_not_overwrite_task(self):
+        people = [{'key': 'regular:001'}, {'key': 'part:002'}]
+        days = kintai_shift.month_calendar(2026, 11)
+        sunday_days = [d['day'] for d in days if d['weekday'] == 6]
+        self.assertTrue(sunday_days)
+        first_sun = str(sunday_days[0])
+        cells = {
+            'regular:001': {first_sun: {'kind': 'task', 'text': 'ピ'}},
+        }
+        seeded = kintai_shift.seed_sunday_offs(people, cells, days)
+        self.assertEqual(seeded['regular:001'][first_sun], {'kind': 'task', 'text': 'ピ'})
+        self.assertEqual(seeded['part:002'][first_sun], {'kind': 'off', 'text': '×'})
+
+
+class ShiftTaskMarkCycleTest(unittest.TestCase):
+    """通常モード循環（空→×→ピ→バ→貼→空）の決定表。kintai-shift.js nextNormalCell と対応。"""
+
+    TASKS = ('ピ', 'バ', '貼')
+
+    @classmethod
+    def next_normal(cls, cur):
+        if not cur:
+            return {'kind': 'off', 'text': '×'}
+        if cur.get('kind') == 'off':
+            return {'kind': 'task', 'text': 'ピ'}
+        if cur.get('kind') == 'task':
+            try:
+                i = cls.TASKS.index(cur.get('text'))
+            except ValueError:
+                return {'kind': 'off', 'text': '×'}
+            if i == 0:
+                return {'kind': 'task', 'text': 'バ'}
+            if i == 1:
+                return {'kind': 'task', 'text': '貼'}
+            return None
+        return {'kind': 'off', 'text': '×'}
+
+    def test_cycle_empty_to_off_to_tasks_to_empty(self):
+        cur = None
+        cur = self.next_normal(cur)
+        self.assertEqual(cur, {'kind': 'off', 'text': '×'})
+        cur = self.next_normal(cur)
+        self.assertEqual(cur, {'kind': 'task', 'text': 'ピ'})
+        cur = self.next_normal(cur)
+        self.assertEqual(cur, {'kind': 'task', 'text': 'バ'})
+        cur = self.next_normal(cur)
+        self.assertEqual(cur, {'kind': 'task', 'text': '貼'})
+        cur = self.next_normal(cur)
+        self.assertIsNone(cur)
+
+    def test_time_becomes_off_not_destroyed_path(self):
+        # 通常クリックは時刻を×へ（時間指定モードは別）。保存経路では時刻を壊さない。
+        self.assertEqual(
+            self.next_normal({'kind': 'time', 'text': '15:00まで'}),
+            {'kind': 'off', 'text': '×'},
+        )
 
 
 if __name__ == '__main__':
