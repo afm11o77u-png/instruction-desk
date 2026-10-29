@@ -241,8 +241,68 @@
     toast(`${label || '一括×'}: ${changed}件（${who}・${mode === 'empty' ? '空欄のみ' : '上書き'}）。「ひとつ戻す」で取り消せます。`);
   }
 
+  /** 対象者のうち、その日に×が1人でもいれば true。 */
+  function dayHasAnyOff(day, targets) {
+    const list = targets || visiblePeople();
+    for (const p of list) {
+      if (!p || !p.key) continue;
+      const cur = cellAt(p.key, day);
+      if (cur && cur.kind === 'off') return true;
+    }
+    return false;
+  }
+
+  /**
+   * 指定日のセルを対象者全員ブランクへ。undo 1段・未保存表示は一括×と同じ。
+   */
+  function bulkClearOneDay(day, label) {
+    const d = Number(day);
+    const targets = visiblePeople();
+    if (!(d >= 1)) {
+      toast('対象の日付がありません。');
+      return;
+    }
+    if (!targets.length) {
+      toast('対象者がいません。');
+      return;
+    }
+    pushUndo();
+    let changed = 0;
+    for (const p of targets) {
+      if (!p || !p.key) continue;
+      const cur = cellAt(p.key, d);
+      if (!cur) continue;
+      const k = String(d);
+      delete cells[p.key][k];
+      if (!Object.keys(cells[p.key]).length) delete cells[p.key];
+      changed += 1;
+    }
+    if (!changed) {
+      undoStack.pop();
+      toast('消すセルがありませんでした。');
+      return;
+    }
+    markDirty();
+    paintShift();
+    const who = targets.length === people.length
+      ? `表示中の全員（${targets.length}人）`
+      : `絞り込み中の ${targets.length}人`;
+    toast(`${label || '一括クリア'}: ${changed}件を空欄に（${who}）。「ひとつ戻す」で取り消せます。`);
+  }
+
+  /**
+   * 日付見出し「この日を全員×」のトグル:
+   * その日に×が1人でもあれば全員を空欄へ。なければ既存の一括×（空欄のみ／上書き）。
+   */
   function bulkMarkOneDay(day) {
-    bulkMarkOffDays([day], bulkFillMode(), `${day}日を全員×`);
+    const d = Number(day);
+    const targets = visiblePeople();
+    const label = `${d}日を全員×`;
+    if (dayHasAnyOff(d, targets)) {
+      bulkClearOneDay(d, label);
+      return;
+    }
+    bulkMarkOffDays([d], bulkFillMode(), label);
   }
 
   function bulkMarkWeekday() {
