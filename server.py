@@ -1189,6 +1189,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     if kintai_path in (
                         '/api/kintai/bihin',
                         '/api/kintai/bihin/items',
+                        '/api/kintai/bihin/items/delete',
+                        '/api/kintai/bihin/items/restore',
                         '/api/kintai/bihin/vendors',
                         '/api/kintai/bihin/order/settings',
                         '/api/kintai/bihin/order/prepare',

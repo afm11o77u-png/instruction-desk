@@ -310,6 +310,39 @@ class BihinOrderStoreTest(unittest.TestCase):
         compose = ' '.join(opened[0])
         self.assertIn('attachment=', compose)
 
+    def test_soft_deleted_item_hidden_from_order_keeps_history(self):
+        v = self._vendor()
+        it = self._item(
+            '付箋', 30, vendorId=v['id'], orderUnit='冊', packingQty=1,
+            orderProductName='ポストイット',
+        )
+        prepared = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'soft-del', 'orderDate': '2026-10-15',
+             'lines': [{'itemId': it['id'], 'orderQty': 4}]},
+            open_mail=True, skip_mail=True,
+        )
+        self.assertEqual(kintai_bihin.get_sheet(self.c, 2026, 10)['rows'][0]['purchaseQty'], 4)
+        kintai_bihin.soft_delete_item(self.c, self.user, {'id': it['id']})
+        # 発注候補からは拒否
+        with self.assertRaises(ValueError) as ctx:
+            kintai_bihin_order.prepare_orders(
+                self.c, self.user,
+                {'prepKey': 'soft-del-2', 'orderDate': '2026-10-16',
+                 'lines': [{'itemId': it['id'], 'orderQty': 1}]},
+                open_mail=True, skip_mail=True,
+            )
+        self.assertIn('品目', str(ctx.exception))
+        # 履歴は残る・購入加算も残る
+        hist = kintai_bihin_order.history_flat(self.c)
+        self.assertTrue(any(h['orderId'] == prepared['orders'][0]['id'] for h in hist))
+        self.assertEqual(kintai_bihin.get_sheet(self.c, 2026, 10)['rows'][0]['purchaseQty'], 4)
+        # 設定バンドルの items には inactive 含む（UI がフィルタ）
+        bundle = kintai_bihin_order.settings_bundle(self.c)
+        found = [x for x in bundle['items'] if x['id'] == it['id']]
+        self.assertEqual(len(found), 1)
+        self.assertFalse(found[0]['active'])
+
 
 class BihinOrderUiContractTest(unittest.TestCase):
     def test_ui_hooks(self):
