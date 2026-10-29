@@ -105,6 +105,11 @@ class KintaiDbTest(unittest.TestCase):
         self.assertFalse(kintai.can_use_kintai(u))
         owner = dict(id=1, role='owner', mark_kintai=0)
         self.assertTrue(kintai.can_use_kintai(owner))
+        # 管理者チェック（manage/overview）でも可。mark_kintai は不要。
+        admin = dict(id=2, role='sales', mark_kintai=0, manage=1, overview=1)
+        self.assertTrue(kintai.can_use_kintai(admin))
+        flagged = dict(id=3, role='floor', mark_kintai=1, manage=0, overview=0)
+        self.assertTrue(kintai.can_use_kintai(flagged))
 
     def test_import_upsert_and_failure_keeps_previous(self):
         fixtures = self.data / 'kintai-fixtures'
@@ -215,10 +220,17 @@ class KintaiDbTest(unittest.TestCase):
 
     def test_api_denied_without_flag(self):
         class H:
-            user = {'id': 2, 'role': 'sales', 'mark_kintai': 0, 'manage': 0}
+            user = {'id': 2, 'role': 'sales', 'mark_kintai': 0, 'manage': 0, 'overview': 0}
             path = '/api/kintai'
         code, body = kintai.handle_get(H(), self.c, '/api/kintai')
         self.assertEqual(code, 403)
+
+    def test_api_allowed_with_admin_checkbox(self):
+        class H:
+            user = {'id': 3, 'role': 'sales', 'mark_kintai': 0, 'manage': 1, 'overview': 1}
+            path = '/api/kintai'
+        code, body = kintai.handle_get(H(), self.c, '/api/kintai')
+        self.assertEqual(code, 200)
 
     def test_source_file_not_mutated(self):
         fixtures = self.data / 'kintai-fixtures'
@@ -262,6 +274,15 @@ class KintaiNavWireTest(unittest.TestCase):
         self.assertIn('id="markmanage"', account)
         self.assertIn('>マーク管理<', account)
         self.assertIn("showCatalog('kintai')", account)
+        self.assertIn(
+            "role==='owner'||!!currentUser.manage||!!currentUser.overview||!!currentUser.mark_kintai",
+            account,
+        )
+        place = (ROOT / 'placement.js').read_text(encoding='utf-8')
+        self.assertIn(
+            "role==='owner'||!!currentUser?.manage||!!currentUser?.overview||!!currentUser?.mark_kintai",
+            place,
+        )
         self.assertNotIn('kintai-open', account)
         auth = (ROOT / 'auth.py').read_text(encoding='utf-8')
         self.assertIn('mark_kintai', auth)

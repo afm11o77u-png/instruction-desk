@@ -407,9 +407,15 @@ def _ensure_shift_top_people(c):
 def can_use_kintai(user) -> bool:
     if not user:
         return False
-    # 主管理者は運用設定のため常に可。一般利用者は mark_kintai（初期OFF）のみ。
+    # 主管理者は運用設定のため常に可。管理者チェック（manage/overview）も可。
+    # 一般利用者は mark_kintai（初期OFF・推測ONしない）。
     if user['role'] == 'owner':
         return True
+    try:
+        if user['manage'] or user['overview']:
+            return True
+    except (KeyError, IndexError, TypeError):
+        pass
     try:
         return bool(user['mark_kintai'])
     except (KeyError, IndexError, TypeError):

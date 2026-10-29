@@ -1,4 +1,4 @@
-/* マーク管理画面。権限は currentUser.mark_kintai（主管理者は常に可）。 */
+/* マーク管理画面。権限は mark_kintai、または管理者チェック（manage/overview）。主管理者は常に可。 */
 (function () {
   const EMP = { regular: '社員', contract: '契約', part: 'パート' };
   let pack = null;
@@ -41,7 +41,7 @@
   }
 
   function canKintai() {
-    return !!currentUser && (currentUser.role === 'owner' || !!currentUser.mark_kintai);
+    return !!currentUser && (currentUser.role === 'owner' || !!currentUser.manage || !!currentUser.overview || !!currentUser.mark_kintai);
   }
 
   function canManagePaths() {

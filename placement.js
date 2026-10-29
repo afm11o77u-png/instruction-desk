@@ -214,7 +214,7 @@ async function showKintaiSection(section){
 }
 async function showCatalog(which){
   const stockAllowed=currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview;
-  const kintaiAllowed=currentUser?.role==='owner'||!!currentUser?.mark_kintai;
+  const kintaiAllowed=currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview||!!currentUser?.mark_kintai;
   if(which==='stock'&&!stockAllowed)which='desk';
   if(which==='kintai'&&!kintaiAllowed)which='desk';
   // シフト表／備品棚卸表示中に他システムへ移るとき
