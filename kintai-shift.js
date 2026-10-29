@@ -183,9 +183,14 @@
   }
 
   function paintModeButtons() {
+    const labels = { off: '休み×', task: '作業', time: '時間指定', erase: '消去', normal: '通常' };
     document.querySelectorAll('.shift-mode').forEach(b => {
-      b.classList.toggle('on', b.dataset.shiftMode === editMode);
+      const on = b.dataset.shiftMode === editMode;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
+    const active = $('#shiftmodeactive');
+    if (active) active.textContent = labels[editMode] || '通常';
     const hint = $('#shifthint');
     if (!hint) return;
     if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名左の≡で行入替、氏名編集・行追加削除はその月だけ。「保存」でこの年月を上書きします。';
@@ -247,26 +252,10 @@
     return people.slice();
   }
 
-  function updateBulkScopeNote() {
-    const el = $('#shiftbulkscope');
-    if (!el) return;
-    const n = visiblePeople().length;
-    const total = people.length;
-    if (n < total) {
-      el.textContent = `対象: 絞り込み中の ${n}人（表全体 ${total}人のうち）`;
-    } else {
-      el.textContent = `対象: 表示中の表の全員（${n}人）`;
-    }
-  }
-
-  function bulkFillMode() {
-    const checked = document.querySelector('input[name="shiftbulkmode"]:checked');
-    return checked && checked.value === 'overwrite' ? 'overwrite' : 'empty';
-  }
-
   /**
    * 指定日を対象者へ×。mode=empty は空欄のみ、overwrite は既存も×へ。
    * 変更があれば undo 1段・未保存表示。日曜の個別編集はそのまま可能。
+   * （日付 ALL は空欄のみ。曜日一括 UI は廃止）
    */
   function bulkMarkOffDays(dayNums, mode, label) {
     const days = (dayNums || []).map(Number).filter(d => d >= 1);
@@ -360,7 +349,7 @@
 
   /**
    * 日付見出し「この日を全員×」のトグル:
-   * その日に×が1人でもあれば全員を空欄へ。なければ既存の一括×（空欄のみ／上書き）。
+   * その日に×が1人でもあれば全員を空欄へ。なければ空欄のみ一括×。
    */
   function bulkMarkOneDay(day) {
     const d = Number(day);
@@ -370,18 +359,7 @@
       bulkClearOneDay(d, label);
       return;
     }
-    bulkMarkOffDays([d], bulkFillMode(), label);
-  }
-
-  function bulkMarkWeekday() {
-    const sel = $('#shiftbulkweekday');
-    const wd = sel ? Number(sel.value) : 6;
-    if (!sheet || !sheet.days) return;
-    const days = (sheet.days || []).filter(d => Number(d.weekday) === wd).map(d => d.day);
-    const optLabel = sel && sel.selectedOptions && sel.selectedOptions[0]
-      ? `今月の${sel.selectedOptions[0].textContent}曜を全員×`
-      : '今月の指定曜日を全員×';
-    bulkMarkOffDays(days, bulkFillMode(), optLabel);
+    bulkMarkOffDays([d], 'empty', label);
   }
 
   /** 未保存月で行を追加したとき、空の日曜だけ×（保存済み・既存セルは触らない）。 */
@@ -453,7 +431,6 @@
     const titleEl = $('#shiftprinttitle');
     if (titleEl) titleEl.textContent = printTitleText();
     table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner shift-corner-memo no-print">勤務メモ</th><th class="shift-corner shift-corner-name">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
-    updateBulkScopeNote();
   }
 
   /** 人員行を fromKey → toKey の前（before）または後（after）へ移動。セルは person key 紐づけのまま。 */
@@ -1133,12 +1110,6 @@
     if (add) add.onclick = () => addShiftRow();
     const addRoster = $('#shiftaddroster');
     if (addRoster) addRoster.onclick = () => { try { addMissingRoster(); } catch (e) { toast(e.message); } };
-    const bulkWday = $('#shiftbulkwday');
-    if (bulkWday) bulkWday.onclick = () => bulkMarkWeekday();
-    document.querySelectorAll('input[name="shiftbulkmode"]').forEach(r => {
-      r.onchange = updateBulkScopeNote;
-    });
-    updateBulkScopeNote();
     const wrap = $('#shiftgridwrap');
     if (wrap) {
       wrap.addEventListener('click', e => {

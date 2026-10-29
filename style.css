@@ -184,27 +184,31 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 #kintainav .nav{margin:0}
 #kintaidesk{width:100%}
 body.catalog-kintai main>header .headactions{display:none}
-.shift-toolbar{margin:0 0 10px}
-.shift-modes{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.shift-toolbar{display:flex;flex-direction:column;gap:6px;margin:0 0 8px;min-width:0}
+.shift-tool-group{display:flex;flex-direction:column;gap:2px;min-width:0;padding:4px 0;border-bottom:1px solid #dce8dc}
+.shift-tool-group:last-of-type{border-bottom:0;padding-bottom:0}
+.shift-tool-caption{margin:0;font-size:11px;font-weight:700;line-height:1.2;color:#5a6b5e;letter-spacing:.02em}
+.shift-mode-active{font-weight:700;color:#163828;margin-left:.35em}
+.shift-tool-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0;margin:0}
+.shift-ym-row label{display:inline-flex;align-items:center;gap:4px;font-size:13px;min-width:0}
+.shift-ym-row input[type="month"]{min-width:9rem;max-width:100%}
+.shift-modes{margin:0}
+.shift-modes .shift-mode{padding:6px 10px;font-size:13px;line-height:1.2}
 .shift-mode.on{background:#163828;border-color:#163828;color:#fff}
-.shift-time-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:6px 0 4px}
-.shift-time-row label{min-width:12rem}
-.shift-bulk-row{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:4px 0 6px;padding:6px 0;border-top:1px dashed #c5d9c4}
-.shift-bulk-row label{display:inline-flex;align-items:center;gap:4px;font-size:13px}
-.shift-bulk-modes{display:inline-flex;flex-wrap:wrap;gap:8px;align-items:center}
-.shift-bulk-mode{font-size:13px;color:#3d5344}
-.shift-bulk-scope{margin:0;flex:1 1 100%;font-size:12px;color:#5a6b5e}
+.shift-inline-field{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#3d5344;min-width:0}
+.shift-inline-field select,.shift-inline-field input{min-width:4.5rem;max-width:7.5rem;padding:4px 6px;font-size:13px}
+.shift-save-row .shift-save-status{padding:0;white-space:nowrap}
 /* 日付列幅(1.72rem)は維持。「ALL」を中央寄せ・切れなし（印刷は .no-print / print 規則で非表示） */
 .shift-grid .shift-day-bulk{display:block;box-sizing:border-box;width:100%;max-width:100%;margin:2px 0 0;padding:0;font-size:9px;line-height:1.2;font-weight:700;letter-spacing:.02em;text-align:center;white-space:nowrap;overflow:visible;color:#6b3a1e;background:transparent;border:1px solid #e0b8a8;border-radius:3px;cursor:pointer}
 .shift-grid .shift-day-bulk:hover{background:#fff5f3;border-color:#c47a5e}
-.shift-default-order-help{margin:0 0 4px;font-size:12px;color:#5a6b5e}
-.shift-emp-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:4px 0 6px;font-size:12px;color:#3d5344}
+.shift-default-order-help{margin:0;font-size:11px;color:#5a6b5e;line-height:1.3}
+.shift-emp-legend{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:2px 0 4px;font-size:12px;color:#3d5344}
 .shift-emp-swatch{display:inline-block;padding:2px 8px;border:1px solid #c5d9c4;border-radius:3px;font-weight:700}
 .shift-emp-swatch.shift-emp-regular{background:#e6f2ea}
 .shift-emp-swatch.shift-emp-contract{background:#eef3f8}
 .shift-emp-swatch.shift-emp-part{background:#f7f0e8}
-.shift-save-status{font-size:13px;font-weight:700;color:#3d5344;padding-bottom:8px}
-.shift-memo-status{margin-left:4px}
+.shift-save-status{font-size:12px;font-weight:700;color:#3d5344}
+.shift-memo-status{margin-left:0}
 .shift-save-dirty{color:#8a3b00}
 .shift-save-saving{color:#3d5344}
 .shift-save-saved{color:#186438}
