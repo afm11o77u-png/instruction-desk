@@ -260,6 +260,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-sat,.shift-grid th.shift-sat{background:#e8f2fb}
 .shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}
 .shift-grid td.shift-off{font-weight:800;color:#9d3434;background:#fff5f3}
+.shift-grid td.shift-unknown{font-weight:800;color:#6a5a2a;background:#faf6ea;font-size:12px}
+.shift-grid td.shift-unknown .shift-unknown-mark{display:inline;font-size:12px;font-weight:800}
 .shift-grid td.shift-task{font-weight:800;color:#1f5c45;background:#eef7f1;font-size:12px}
 .shift-grid td.shift-task .shift-task-mark{display:inline;font-size:12px;font-weight:800}
 .shift-grid td.shift-time{font-weight:700;color:#1a4a7a;background:#f3f8ff;font-size:10px}
@@ -420,15 +422,18 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid tbody tr:nth-child(even) td.shift-cell:not(.shift-sat):not(.shift-sun){
     background:#f3f6f4!important
   }
-  /* ×／作業／時刻: 既定は白黒寄り。カラー用は後段で赤系・緑系へ。時刻は「15:00」1行（まで無し）。字号拡大は pt（scale変形なし） */
+  /* ×／不明／作業／時刻: 既定は白黒寄り。カラー用は後段で赤系・緑系へ。時刻は「15:00」1行（まで無し）。字号拡大は pt（scale変形なし） */
   body.printing-shift .shift-grid td.shift-off{font-size:11pt;font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-unknown{font-size:11pt;font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;line-height:1.15;white-space:nowrap!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-unknown .shift-unknown-mark{display:inline;font-size:11pt;font-weight:800;text-align:center}
   body.printing-shift .shift-grid td.shift-task{font-size:11pt;font-weight:800;color:#333!important;background-color:#fff!important;background-image:none!important;text-align:center;line-height:1.15;white-space:nowrap!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body.printing-shift .shift-grid td.shift-task .shift-task-mark{display:inline;font-size:11pt;font-weight:800;text-align:center}
   body.printing-shift .shift-grid td.shift-time{font-weight:700;color:#333!important;background-color:#fff!important;background-image:none!important;font-size:8.5pt;line-height:1.15;white-space:nowrap!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body.printing-shift .shift-grid td.shift-time .shift-time-main{display:inline;text-align:center;font-size:8.5pt;font-weight:700}
   body.printing-shift .shift-grid td.shift-time .shift-time-until{display:none!important}
-  /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通。×は見本どおり赤系、作業は緑系 */
+  /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通。×は見本どおり赤系、作業は緑系、不明は茶系 */
   body.printing-shift.print-shift-color .shift-grid td.shift-off{color:#b85c4a!important}
+  body.printing-shift.print-shift-color .shift-grid td.shift-unknown{color:#6a5a2a!important}
   body.printing-shift.print-shift-color .shift-grid td.shift-task{color:#1f5c45!important}
   body.printing-shift.print-shift-color .shift-grid .shift-sat,
   body.printing-shift.print-shift-color .shift-grid th.shift-sat{
@@ -447,12 +452,14 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift.print-shift-color .shift-grid th.shift-sun .shift-daynum,
   body.printing-shift.print-shift-color .shift-grid th.shift-sun .shift-wday{color:#9d3434!important}
   body.printing-shift.print-shift-color .shift-grid td.shift-sat.shift-off,
+  body.printing-shift.print-shift-color .shift-grid td.shift-sat.shift-unknown,
   body.printing-shift.print-shift-color .shift-grid td.shift-sat.shift-time,
   body.printing-shift.print-shift-color .shift-grid td.shift-sat.shift-task{
     background:#e8f2fb!important;
     background-image:none!important
   }
   body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-off,
+  body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-unknown,
   body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-time,
   body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-task{
     background:#fdeceb!important;
@@ -476,18 +483,22 @@ body.catalog-kintai main>header .headactions{display:none}
     -webkit-print-color-adjust:exact;print-color-adjust:exact
   }
   body.printing-shift.print-shift-bw .shift-grid td.shift-sat.shift-off,
+  body.printing-shift.print-shift-bw .shift-grid td.shift-sat.shift-unknown,
   body.printing-shift.print-shift-bw .shift-grid td.shift-sat.shift-time,
   body.printing-shift.print-shift-bw .shift-grid td.shift-sat.shift-task,
   body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sat.shift-off,
+  body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sat.shift-unknown,
   body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sat.shift-time,
   body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sat.shift-task{
     background:#d9d9d9!important;
     background-image:none!important
   }
   body.printing-shift.print-shift-bw .shift-grid td.shift-sun.shift-off,
+  body.printing-shift.print-shift-bw .shift-grid td.shift-sun.shift-unknown,
   body.printing-shift.print-shift-bw .shift-grid td.shift-sun.shift-time,
   body.printing-shift.print-shift-bw .shift-grid td.shift-sun.shift-task,
   body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sun.shift-off,
+  body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sun.shift-unknown,
   body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sun.shift-time,
   body.printing-shift:not(.print-shift-color) .shift-grid td.shift-sun.shift-task{
     background:#bfbfbf!important;

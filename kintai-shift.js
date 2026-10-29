@@ -7,7 +7,7 @@
   let year = 0;
   let month = 0;
   let version = 0;
-  let editMode = 'off'; // normal | off | task | time | erase
+  let editMode = 'off'; // normal | off | unknown | task | time | erase
   let undoStack = [];
   let saveState = 'idle'; // idle | dirty | saving | saved | failed
   let saveError = '';
@@ -22,7 +22,8 @@
   let dragPersonKey = null; // 行ドラッグ中の person key
   const EMP_LABEL = { regular: '社員', contract: '契約社員', part: 'パート' };
   const TASK_MARKS = ['ピ', 'バ', '貼'];
-  const PRINT_LEGEND = '空欄：出勤　×：休み　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定';
+  const UNKNOWN_MARK = '？';
+  const PRINT_LEGEND = '空欄：出勤　×：休み　？：不明　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定';
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -183,7 +184,7 @@
   }
 
   function paintModeButtons() {
-    const labels = { off: '休み×', task: '作業', time: '時間指定', erase: '消去', normal: '通常' };
+    const labels = { off: '休み×', unknown: '不明？', task: '作業', time: '時間指定', erase: '消去', normal: '通常' };
     document.querySelectorAll('.shift-mode').forEach(b => {
       const on = b.dataset.shiftMode === editMode;
       b.classList.toggle('on', on);
@@ -194,6 +195,7 @@
     const hint = $('#shifthint');
     if (!hint) return;
     if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名左の≡で行入替、氏名編集・行追加削除はその月だけ。「保存」でこの年月を上書きします。';
+    else if (editMode === 'unknown') hint.textContent = '不明モード: 左クリックで？（予定未定）。休みでも確定出勤でもありません。もう一度で解除。「保存」でこの年月を上書きします。';
     else if (editMode === 'task') hint.textContent = '作業モード: 左クリックで上の記号（ピ＝ピッキング／バ＝バーコード発行／貼＝シール貼り）を連続入力。同じ記号をもう一度で解除。「保存」でこの年月を上書きします。';
     else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の時刻（例: 15:00）を連続入力。表示は「まで」なし。「保存」でこの年月を上書きします（勤務メモは別保存）。';
     else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。≡で行入替。「保存」でこの年月を上書きします。';
@@ -203,14 +205,16 @@
   function cellLabel(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
+    if (cell.kind === 'unknown') return UNKNOWN_MARK;
     if (cell.kind === 'task') return TASK_MARKS.includes(cell.text) ? cell.text : '';
     return displayTimeText(cell.text || '');
   }
 
-  /** セル表示。時刻＋「まで」は「15:00」のみ（保存値は変更しない）。作業記号・自由メモはそのまま。 */
+  /** セル表示。時刻＋「まで」は「15:00」のみ（保存値は変更しない）。作業記号・不明・自由メモはそのまま。 */
   function cellHtml(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
+    if (cell.kind === 'unknown') return `<span class="shift-unknown-mark">${esc(UNKNOWN_MARK)}</span>`;
     if (cell.kind === 'task') {
       const mark = TASK_MARKS.includes(cell.text) ? cell.text : '';
       return mark ? `<span class="shift-task-mark">${esc(mark)}</span>` : '';
@@ -223,7 +227,7 @@
     return esc(shown);
   }
 
-  /** 通常モードの循環: 空→×→ピ→バ→貼→空。時刻セルは従来どおり×へ上書き（時刻入力は時間指定モード）。 */
+  /** 通常モードの循環: 空→×→ピ→バ→貼→空。時刻／不明セルは従来どおり×へ上書き（専用モードで入力）。 */
   function nextNormalCell(cur) {
     if (!cur) return { kind: 'off', text: '×' };
     if (cur.kind === 'off') return { kind: 'task', text: 'ピ' };
@@ -403,6 +407,7 @@
           d.kind === 'sat' ? 'shift-sat' : '',
           (d.kind === 'sun' || d.kind === 'holiday') ? 'shift-sun' : '',
           cell && cell.kind === 'off' ? 'shift-off' : '',
+          cell && cell.kind === 'unknown' ? 'shift-unknown' : '',
           cell && cell.kind === 'time' ? 'shift-time' : '',
           cell && cell.kind === 'task' ? 'shift-task' : '',
         ].filter(Boolean).join(' ');
@@ -527,6 +532,12 @@
     if (editMode === 'off') {
       if (cur && cur.kind === 'off') setCell(key, day, null, true);
       else setCell(key, day, { kind: 'off', text: '×' }, true);
+      paintShift();
+      return;
+    }
+    if (editMode === 'unknown') {
+      if (cur && cur.kind === 'unknown') setCell(key, day, null, true);
+      else setCell(key, day, { kind: 'unknown', text: UNKNOWN_MARK }, true);
       paintShift();
       return;
     }

@@ -14,9 +14,11 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 
 WEEKDAY_JA = ('月', '火', '水', '木', '金', '土', '日')
-CELL_KINDS = frozenset({'off', 'time', 'task'})
+CELL_KINDS = frozenset({'off', 'time', 'task', 'unknown'})
 # ピ＝ピッキング、バ＝バーコード発行、貼＝シール貼り（×・時刻と同じく通常のシフト記号）
 TASK_TEXTS = frozenset({'ピ', 'バ', '貼'})
+# ？＝予定未定（休みでも確定出勤でもない）
+UNKNOWN_TEXT = '？'
 TIME_TEXT_RE = re.compile(r'^.{1,40}$')
 # roster: regular:009 / シフト専用: shift:xxxx
 PERSON_KEY_RE = re.compile(r'^[a-z]+:.{1,80}$')
@@ -401,6 +403,8 @@ def _normalize_cells(raw, days_in_month: int) -> dict:
             text = str(cell.get('text') or '').strip()
             if kind == 'off':
                 person_cells[str(day)] = {'kind': 'off', 'text': '×'}
+            elif kind == 'unknown':
+                person_cells[str(day)] = {'kind': 'unknown', 'text': UNKNOWN_TEXT}
             elif kind == 'task':
                 if text not in TASK_TEXTS:
                     raise ValueError('作業記号は ピ・バ・貼 のいずれかを指定してください。')

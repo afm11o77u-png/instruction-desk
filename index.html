@@ -78,7 +78,7 @@
 </div>
 <div id="kintaishift" hidden>
 <h2 class="shift-print-title" id="shiftprinttitle">シフト表</h2>
-<p class="kintailead">月別の勤務予定です。出勤簿の実績には反映しません。空欄＝出勤、×＝休み、ピ＝ピッキング、バ＝バーコード発行、貼＝シール貼り。</p>
+<p class="kintailead">月別の勤務予定です。出勤簿の実績には反映しません。空欄＝出勤、×＝休み、？＝不明、ピ＝ピッキング、バ＝バーコード発行、貼＝シール貼り。</p>
 <div class="shift-toolbar no-print">
 <div class="shift-tool-group" data-shift-group="ym">
 <span class="shift-tool-caption">年月</span>
@@ -93,6 +93,7 @@
 <span class="shift-tool-caption">入力内容 <span id="shiftmodeactive" class="shift-mode-active" aria-live="polite">休み×</span></span>
 <div class="shift-tool-row shift-modes" role="group" aria-label="入力モード">
 <button type="button" class="shift-mode on" data-shift-mode="off" aria-pressed="true">休み×</button>
+<button type="button" class="shift-mode" data-shift-mode="unknown" aria-pressed="false">不明？</button>
 <button type="button" class="shift-mode" data-shift-mode="task" aria-pressed="false">作業</button>
 <label class="shift-inline-field">記号<select id="shifttaskmark" aria-label="作業記号（ピ・バ・貼）">
 <option value="ピ" selected>ピ</option>
@@ -126,7 +127,7 @@
 </div>
 </div>
 <p class="kintaimeta shift-emp-legend no-print" id="shiftemplegend" aria-label="出勤簿区分の色">氏名の背景色：<span class="shift-emp-swatch shift-emp-regular">社員</span><span class="shift-emp-swatch shift-emp-contract">契約社員</span><span class="shift-emp-swatch shift-emp-part">パート</span>（未設定・シフト専用は通常色。印刷には出ません）</p>
-<p id="shifthint" class="kintaimeta">休み×・作業・時間指定・消去・通常を切替えてセルをクリック。通常は空欄→×→ピ→バ→貼→空欄、右クリックでクリア。日付見出しの「ALL」でその日を全員×／解除。氏名は直接編集、≡で行入替。「保存」で表示中の年月を上書き（自動保存しません。出勤簿マスタは変えません）。</p>
+<p id="shifthint" class="kintaimeta">休み×・不明？・作業・時間指定・消去・通常を切替えてセルをクリック。通常は空欄→×→ピ→バ→貼→空欄、右クリックでクリア。日付見出しの「ALL」でその日を全員×／解除。氏名は直接編集、≡で行入替。「保存」で表示中の年月を上書き（自動保存しません。出勤簿マスタは変えません）。</p>
 </div>
 <div id="shiftgridwrap" class="shift-grid-wrap">
 <table id="shiftgrid" class="shift-grid" aria-label="月別シフト表"></table>
