@@ -13,6 +13,7 @@ data/.migration-work/
 data/.migration-rollback-*/
 data/startup.log
 data/mail-out/
+data/bihin-order-out/
 
 # Node.js
 node_modules/

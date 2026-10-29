@@ -43,6 +43,9 @@ def schema(c):
             PRIMARY KEY (year, month)
         )'''
     )
+    # 発注（仕入先・履歴・品目の発注列）。シフト／出勤簿は触らない。
+    import kintai_bihin_order
+    kintai_bihin_order.schema(c)
 
 
 def _parse_year_month(year, month) -> tuple[int, int]:
@@ -169,7 +172,7 @@ def list_items(c, *, include_inactive: bool = False) -> list[dict]:
 
 def _item_public(r) -> dict:
     price = _price(r['unit_price'] if r['unit_price'] not in (None, '') else '0', field='単価')
-    return {
+    base = {
         'id': int(r['id']),
         'category': r['category'] or '',
         'name': r['name'] or '',
@@ -180,6 +183,8 @@ def _item_public(r) -> dict:
         'createdAt': r['created_at'] or None,
         'updatedAt': r['updated_at'] or None,
     }
+    import kintai_bihin_order
+    return kintai_bihin_order.enrich_item_public(base, r)
 
 
 def save_item(c, user, payload: dict) -> dict:
@@ -208,6 +213,9 @@ def save_item(c, user, payload: dict) -> dict:
             (category, name, unit, price_s, sort_order, active, now, now),
         )
         new_id = int(cur.lastrowid)
+        # 発注設定（仕入先・発注品名・発注単位・入数）
+        import kintai_bihin_order
+        kintai_bihin_order.apply_item_order_fields(c, new_id, payload)
         row = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (new_id,)).fetchone()
         return _item_public(row)
 
@@ -224,6 +232,9 @@ def save_item(c, user, payload: dict) -> dict:
            WHERE id=?''',
         (category, name, unit, price_s, sort_order, active, now, iid),
     )
+    if any(k in payload for k in ('vendorId', 'orderProductName', 'orderUnit', 'packingQty')):
+        import kintai_bihin_order
+        kintai_bihin_order.apply_item_order_fields(c, iid, payload)
     row = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()
     return _item_public(row)
 

@@ -14,6 +14,9 @@
   let loading = false;
   let leaveDialogResolver = null;
   let masterItems = [];
+  let orderVendors = [];
+  let orderPrepKey = '';
+  let orderBusy = false;
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -833,6 +836,331 @@
     openBihinPrintDialog();
   }
 
+  /* ---- 発注（注文・設定・履歴） ---- */
+  function newPrepKey() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return 'prep-' + Date.now().toString(16) + '-' + Math.random().toString(16).slice(2);
+  }
+
+  function vendorNameById(id) {
+    const v = orderVendors.find(x => Number(x.id) === Number(id));
+    return v ? (v.name || '') : '';
+  }
+
+  async function loadOrderSettingsBundle() {
+    const data = await api('/api/kintai/bihin/order/settings');
+    orderVendors = (data && data.vendors) || [];
+    masterItems = (data && data.items) || masterItems;
+    const note = $('#bihinordertemplatenote');
+    if (note) {
+      const src = data && data.templateSource;
+      const path = data && data.templatePath;
+      if (path) note.textContent = `注文書テンプレート: ${path}（${src || '—'}）。原本は上書きしません。`;
+      else note.textContent = String(src || '注文書テンプレートが見つかりません。');
+    }
+    return data;
+  }
+
+  function paintOrderForm() {
+    const body = $('#bihinorderbody');
+    if (!body) return;
+    const items = (masterItems || []).filter(it => it.active !== false);
+    if (!items.length) {
+      body.innerHTML = '<tr><td colspan="6">品目がありません。先に品目マスタと発注設定を登録してください。</td></tr>';
+      return;
+    }
+    body.innerHTML = items.map(it => {
+      const ready = it.vendorId && it.orderUnit && it.packingQty != null && it.packingQty !== '';
+      const hint = ready ? '' : '（発注設定不足）';
+      return `<tr data-item-id="${it.id}">
+        <td>${esc(it.name)}${hint ? ` <span class="kintaimeta">${hint}</span>` : ''}</td>
+        <td>${esc(it.orderProductName || it.name || '')}</td>
+        <td>${esc(vendorNameById(it.vendorId) || '—')}</td>
+        <td>${esc(it.orderUnit || '—')}</td>
+        <td class="bihin-num">${it.packingQty == null || it.packingQty === '' ? '—' : esc(it.packingQty)}</td>
+        <td><input class="bihin-order-qty" data-item-id="${it.id}" inputmode="decimal" value="" aria-label="${esc(it.name)}の発注数量"></td>
+      </tr>`;
+    }).join('');
+  }
+
+  async function openOrderDialog() {
+    const dlg = $('#bihinorderdialog');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+    const err = $('#bihinordererror');
+    if (err) err.textContent = '';
+    orderPrepKey = newPrepKey();
+    const dateEl = $('#bihinorderdate');
+    if (dateEl && !dateEl.value) {
+      const t = new Date();
+      dateEl.value = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+    }
+    try {
+      await loadOrderSettingsBundle();
+      paintOrderForm();
+      if (!dlg.open) dlg.showModal();
+    } catch (e) {
+      toast(e.message || '発注画面を開けませんでした。');
+    }
+  }
+
+  function closeOrderDialog() {
+    const dlg = $('#bihinorderdialog');
+    if (dlg && dlg.open) dlg.close();
+  }
+
+  async function submitOrder() {
+    const err = $('#bihinordererror');
+    if (err) err.textContent = '';
+    if (orderBusy) return;
+    const lines = [];
+    const inputs = document.querySelectorAll('#bihinorderbody .bihin-order-qty');
+    for (const inp of inputs) {
+      const parsed = parseQtyInput(inp.value);
+      if (!parsed.ok) {
+        inp.setCustomValidity(parsed.error);
+        inp.reportValidity();
+        if (err) err.textContent = parsed.error;
+        return;
+      }
+      inp.setCustomValidity('');
+      if (parsed.value == null || parsed.value === 0) continue;
+      if (parsed.value < 0) {
+        if (err) err.textContent = '負の数量は使えません。';
+        return;
+      }
+      lines.push({ itemId: Number(inp.dataset.itemId), orderQty: parsed.value });
+    }
+    if (!lines.length) {
+      if (err) err.textContent = '発注数量を1つ以上入力してください。';
+      return;
+    }
+    if (!confirm('仕入先ごとにメール作成画面を開きます。送信はご自身で行ってください（自動送信しません）。よろしいですか？')) return;
+    orderBusy = true;
+    const go = $('#bihinordergo');
+    if (go) go.disabled = true;
+    try {
+      if (!orderPrepKey) orderPrepKey = newPrepKey();
+      const payload = {
+        prepKey: orderPrepKey,
+        orderDate: ($('#bihinorderdate') && $('#bihinorderdate').value) || '',
+        lines,
+      };
+      const result = await api('/api/kintai/bihin/order/prepare', payload);
+      toast((result && result.message) || '発注準備が完了しました。');
+      closeOrderDialog();
+      // 発注日の月が表示中なら再読込（購入加算を反映）。表示中が別月なら触らない。
+      const od = (result && result.year && result.month) ? { year: result.year, month: result.month } : null;
+      if (od && od.year === year && od.month === month && !bihinDirty) {
+        await reloadCurrentMonth({});
+      }
+    } catch (e) {
+      if (err) err.textContent = e.message || '発注準備に失敗しました。当月購入は加算していません。';
+      // 失敗時は同じ prepKey のまま再試行可（サーバ側で未作成なら再実行）
+      throw e;
+    } finally {
+      orderBusy = false;
+      if (go) go.disabled = false;
+    }
+  }
+
+  function paintVendorList() {
+    const body = $('#bihinvendorbodylist');
+    if (!body) return;
+    const rows = orderVendors.filter(v => v.active !== false);
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="4">仕入先がありません。上の欄から登録してください。</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(v => `<tr>
+      <td>${esc(v.name)}</td>
+      <td>${esc(v.email)}</td>
+      <td>${esc(v.modeLabel || v.mode)}</td>
+      <td><button type="button" data-edit-vendor="${v.id}">編集</button></td>
+    </tr>`).join('');
+  }
+
+  function clearVendorForm() {
+    const id = $('#bihinvendorid');
+    if (id) id.value = '';
+    ['bihinvendorname', 'bihinvendoremail', 'bihinvendorsubject', 'bihinvendorbody'].forEach(k => {
+      const el = $('#' + k);
+      if (el) el.value = '';
+    });
+    const mode = $('#bihinvendormode');
+    if (mode) mode.value = 'excel';
+  }
+
+  function fillVendorForm(v) {
+    $('#bihinvendorid').value = v.id;
+    $('#bihinvendorname').value = v.name || '';
+    $('#bihinvendoremail').value = v.email || '';
+    $('#bihinvendormode').value = v.mode === 'body' ? 'body' : 'excel';
+    $('#bihinvendorsubject').value = v.subjectTemplate || '';
+    $('#bihinvendorbody').value = v.bodyTemplate || '';
+  }
+
+  function paintItemOrderSelects() {
+    const sel = $('#bihinitemorderselect');
+    const vend = $('#bihinitemordervendor');
+    if (vend) {
+      vend.innerHTML = '<option value="">（未設定）</option>' + orderVendors
+        .filter(v => v.active !== false)
+        .map(v => `<option value="${v.id}">${esc(v.name)}</option>`).join('');
+    }
+    if (sel) {
+      const items = (masterItems || []).filter(it => it.active !== false);
+      sel.innerHTML = '<option value="">選んでください</option>' + items
+        .map(it => `<option value="${it.id}">${esc(it.category ? it.category + ' / ' : '')}${esc(it.name)}</option>`).join('');
+    }
+  }
+
+  function fillItemOrderForm(it) {
+    if (!it) return;
+    const sel = $('#bihinitemorderselect');
+    if (sel) sel.value = String(it.id);
+    const vend = $('#bihinitemordervendor');
+    if (vend) vend.value = it.vendorId != null ? String(it.vendorId) : '';
+    const name = $('#bihinitemordername');
+    if (name) name.value = it.orderProductName || '';
+    const unit = $('#bihinitemorderunit');
+    if (unit) unit.value = it.orderUnit || '';
+    const pack = $('#bihinitemorderpacking');
+    if (pack) pack.value = it.packingQty == null ? '' : it.packingQty;
+  }
+
+  async function openOrderSettingsDialog() {
+    const dlg = $('#bihinordersettingsdialog');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+    const err = $('#bihinordersettingserror');
+    if (err) err.textContent = '';
+    try {
+      await loadOrderSettingsBundle();
+      paintVendorList();
+      paintItemOrderSelects();
+      clearVendorForm();
+      if (!dlg.open) dlg.showModal();
+    } catch (e) {
+      toast(e.message || '発注設定を開けませんでした。');
+    }
+  }
+
+  function closeOrderSettingsDialog() {
+    const dlg = $('#bihinordersettingsdialog');
+    if (dlg && dlg.open) dlg.close();
+  }
+
+  async function saveVendorFromForm() {
+    const err = $('#bihinordersettingserror');
+    if (err) err.textContent = '';
+    const name = ($('#bihinvendorname') && $('#bihinvendorname').value || '').trim();
+    if (!name) {
+      if (err) err.textContent = '仕入先名を入力してください。';
+      return;
+    }
+    const payload = {
+      name,
+      email: ($('#bihinvendoremail') && $('#bihinvendoremail').value || '').trim(),
+      mode: ($('#bihinvendormode') && $('#bihinvendormode').value) || 'excel',
+      subjectTemplate: ($('#bihinvendorsubject') && $('#bihinvendorsubject').value) || '',
+      bodyTemplate: ($('#bihinvendorbody') && $('#bihinvendorbody').value) || '',
+      active: true,
+    };
+    const idRaw = ($('#bihinvendorid') && $('#bihinvendorid').value) || '';
+    if (idRaw) payload.id = Number(idRaw);
+    await api('/api/kintai/bihin/vendors', payload);
+    toast('仕入先を保存しました。');
+    clearVendorForm();
+    await loadOrderSettingsBundle();
+    paintVendorList();
+    paintItemOrderSelects();
+  }
+
+  async function saveItemOrderFromForm() {
+    const err = $('#bihinordersettingserror');
+    if (err) err.textContent = '';
+    const id = Number($('#bihinitemorderselect') && $('#bihinitemorderselect').value);
+    if (!id) {
+      if (err) err.textContent = '品目を選んでください。';
+      return;
+    }
+    const it = masterItems.find(x => x.id === id);
+    if (!it) {
+      if (err) err.textContent = '品目が見つかりません。';
+      return;
+    }
+    const vendRaw = ($('#bihinitemordervendor') && $('#bihinitemordervendor').value) || '';
+    const packingRaw = ($('#bihinitemorderpacking') && $('#bihinitemorderpacking').value) || '';
+    const payload = {
+      id,
+      category: it.category || '',
+      name: it.name || '',
+      unit: it.unit || '',
+      unitPrice: it.unitPrice,
+      active: true,
+      vendorId: vendRaw === '' ? null : Number(vendRaw),
+      orderProductName: ($('#bihinitemordername') && $('#bihinitemordername').value || '').trim(),
+      orderUnit: ($('#bihinitemorderunit') && $('#bihinitemorderunit').value || '').trim(),
+      packingQty: packingRaw === '' ? '' : Number(packingRaw),
+    };
+    await api('/api/kintai/bihin/items', payload);
+    toast('品目の発注設定を保存しました（保存済み月の数量は書き換えません）。');
+    await loadOrderSettingsBundle();
+    paintItemOrderSelects();
+    const again = masterItems.find(x => x.id === id);
+    if (again) fillItemOrderForm(again);
+  }
+
+  async function openOrderHistoryDialog() {
+    const dlg = $('#bihinorderhistorydialog');
+    if (!dlg || typeof dlg.showModal !== 'function') return;
+    const err = $('#bihinorderhistoryerror');
+    if (err) err.textContent = '';
+    try {
+      const data = await api('/api/kintai/bihin/orders');
+      const body = $('#bihinorderhistorybody');
+      const hist = (data && data.history) || [];
+      if (!body) return;
+      if (!hist.length) {
+        body.innerHTML = '<tr><td colspan="8">発注履歴はまだありません。</td></tr>';
+      } else {
+        body.innerHTML = hist.map(h => {
+          const qty = `${h.orderQty == null ? '' : h.orderQty}${h.orderUnit || ''}`;
+          const ym = `${h.year}年${h.month}月`;
+          const cancelled = h.cancelled ? '取消済み' : '—';
+          const btn = h.cancelled
+            ? ''
+            : `<button type="button" data-cancel-order="${h.orderId}">取消</button>`;
+          return `<tr>
+            <td>${esc(h.datetime || '')}</td>
+            <td>${esc(h.vendor || '')}</td>
+            <td>${esc(h.item || '')}</td>
+            <td class="bihin-num">${esc(qty)}</td>
+            <td>${esc(ym)}</td>
+            <td>${esc(h.modeLabel || h.mode || '')}</td>
+            <td>${esc(cancelled)}</td>
+            <td>${btn}</td>
+          </tr>`;
+        }).join('');
+      }
+      if (!dlg.open) dlg.showModal();
+    } catch (e) {
+      toast(e.message || '発注履歴を開けませんでした。');
+    }
+  }
+
+  function closeOrderHistoryDialog() {
+    const dlg = $('#bihinorderhistorydialog');
+    if (dlg && dlg.open) dlg.close();
+  }
+
+  async function cancelOrderById(id) {
+    if (!confirm('この発注を取消しますか？この発注分の当月購入加算のみ戻します。')) return;
+    const result = await api('/api/kintai/bihin/order/cancel', { id: Number(id) });
+    toast((result && result.message) || '取消しました。');
+    await openOrderHistoryDialog();
+    if (!bihinDirty) await reloadCurrentMonth({});
+  }
+
   function bindBihinControls() {
     if (!$('#kintaibihin')) return;
     const ym = $('#bihinyearmonth');
@@ -882,6 +1210,60 @@
     }
     const masterBtn = $('#bihinmaster');
     if (masterBtn) masterBtn.onclick = () => openMasterDialog();
+    const orderBtn = $('#bihinorder');
+    if (orderBtn) orderBtn.onclick = () => { openOrderDialog().catch(e => toast(e.message)); };
+    const orderGo = $('#bihinordergo');
+    if (orderGo) orderGo.onclick = () => { submitOrder().catch(() => {}); };
+    const orderCancel = $('#bihinordercancel');
+    if (orderCancel) orderCancel.onclick = () => closeOrderDialog();
+    const orderClose = $('#bihinorderdialog-close');
+    if (orderClose) orderClose.onclick = () => closeOrderDialog();
+    const settingsBtn = $('#bihinordersettings');
+    if (settingsBtn) settingsBtn.onclick = () => { openOrderSettingsDialog().catch(e => toast(e.message)); };
+    const settingsClose = $('#bihinordersettingsdialog-close');
+    if (settingsClose) settingsClose.onclick = () => closeOrderSettingsDialog();
+    const vSave = $('#bihinvendorsave');
+    if (vSave) vSave.onclick = () => { saveVendorFromForm().catch(e => {
+      const err = $('#bihinordersettingserror');
+      if (err) err.textContent = e.message || '保存に失敗しました。';
+    }); };
+    const vNew = $('#bihinvendornew');
+    if (vNew) vNew.onclick = () => clearVendorForm();
+    const vList = $('#bihinvendorbodylist');
+    if (vList) {
+      vList.addEventListener('click', e => {
+        const btn = e.target.closest && e.target.closest('[data-edit-vendor]');
+        if (!btn) return;
+        const id = Number(btn.dataset.editVendor);
+        const v = orderVendors.find(x => x.id === id);
+        if (v) fillVendorForm(v);
+      });
+    }
+    const itemSel = $('#bihinitemorderselect');
+    if (itemSel) {
+      itemSel.onchange = () => {
+        const id = Number(itemSel.value);
+        const it = masterItems.find(x => x.id === id);
+        if (it) fillItemOrderForm(it);
+      };
+    }
+    const itemSave = $('#bihinitemordersave');
+    if (itemSave) itemSave.onclick = () => { saveItemOrderFromForm().catch(e => {
+      const err = $('#bihinordersettingserror');
+      if (err) err.textContent = e.message || '保存に失敗しました。';
+    }); };
+    const histBtn = $('#bihinorderhistory');
+    if (histBtn) histBtn.onclick = () => { openOrderHistoryDialog().catch(e => toast(e.message)); };
+    const histClose = $('#bihinorderhistorydialog-close');
+    if (histClose) histClose.onclick = () => closeOrderHistoryDialog();
+    const histBody = $('#bihinorderhistorybody');
+    if (histBody) {
+      histBody.addEventListener('click', e => {
+        const btn = e.target.closest && e.target.closest('[data-cancel-order]');
+        if (!btn) return;
+        cancelOrderById(btn.dataset.cancelOrder).catch(err => toast(err.message));
+      });
+    }
 
     const wrap = $('#bihingridwrap');
     if (wrap) {

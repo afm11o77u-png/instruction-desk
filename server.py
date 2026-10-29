@@ -1186,7 +1186,15 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         '/api/kintai/shift/work-memos',
                     ):
                         return self.reply(500, {'error': 'シフト表を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
-                    if kintai_path in ('/api/kintai/bihin', '/api/kintai/bihin/items'):
+                    if kintai_path in (
+                        '/api/kintai/bihin',
+                        '/api/kintai/bihin/items',
+                        '/api/kintai/bihin/vendors',
+                        '/api/kintai/bihin/order/settings',
+                        '/api/kintai/bihin/order/prepare',
+                        '/api/kintai/bihin/order/cancel',
+                        '/api/kintai/bihin/orders',
+                    ):
                         return self.reply(500, {'error': '備品棚卸を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
                     return self.reply(500, {'error': '勤怠の処理に失敗しました。入力内容はそのまま残しています。しばらくして再度お試しください。'})
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
