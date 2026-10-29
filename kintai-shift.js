@@ -7,7 +7,7 @@
   let year = 0;
   let month = 0;
   let version = 0;
-  let editMode = 'off'; // normal | off | time | erase
+  let editMode = 'off'; // normal | off | task | time | erase
   let undoStack = [];
   let saveState = 'idle'; // idle | dirty | saving | saved | failed
   let saveError = '';
@@ -21,6 +21,8 @@
   let leaveDialogResolver = null;
   let dragPersonKey = null; // 行ドラッグ中の person key
   const EMP_LABEL = { regular: '社員', contract: '契約社員', part: 'パート' };
+  const TASK_MARKS = ['ピ', 'バ', '貼'];
+  const PRINT_LEGEND = '空欄：出勤　×：休み　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定';
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -174,6 +176,12 @@
     return m ? m[1] : t;
   }
 
+  function selectedTaskMark() {
+    const sel = $('#shifttaskmark');
+    const v = sel ? String(sel.value || '').trim() : '';
+    return TASK_MARKS.includes(v) ? v : 'ピ';
+  }
+
   function paintModeButtons() {
     document.querySelectorAll('.shift-mode').forEach(b => {
       b.classList.toggle('on', b.dataset.shiftMode === editMode);
@@ -181,27 +189,46 @@
     const hint = $('#shifthint');
     if (!hint) return;
     if (editMode === 'off') hint.textContent = '休みモード: 左クリックで×。氏名左の≡で行入替、氏名編集・行追加削除はその月だけ。「保存」でこの年月を上書きします。';
+    else if (editMode === 'task') hint.textContent = '作業モード: 左クリックで上の記号（ピ＝ピッキング／バ＝バーコード発行／貼＝シール貼り）を連続入力。同じ記号をもう一度で解除。「保存」でこの年月を上書きします。';
     else if (editMode === 'time') hint.textContent = '時間指定モード: 左クリックで上の時刻（例: 15:00）を連続入力。表示は「まで」なし。「保存」でこの年月を上書きします（勤務メモは別保存）。';
     else if (editMode === 'erase') hint.textContent = '消去モード: 左クリックでセルを空（出勤）にします。≡で行入替。「保存」でこの年月を上書きします。';
-    else hint.textContent = '通常: 左クリックで×のON/OFF、右クリックでクリア。≡で行入替、氏名は直接編集。「保存」でこの年月を上書きします。';
+    else hint.textContent = '通常: 左クリックで空欄→×→ピ→バ→貼→空欄。右クリックでクリア。≡で行入替、氏名は直接編集。「保存」でこの年月を上書きします。';
   }
 
   function cellLabel(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
+    if (cell.kind === 'task') return TASK_MARKS.includes(cell.text) ? cell.text : '';
     return displayTimeText(cell.text || '');
   }
 
-  /** セル表示。時刻＋「まで」は「15:00」のみ（保存値は変更しない）。自由メモはそのまま。 */
+  /** セル表示。時刻＋「まで」は「15:00」のみ（保存値は変更しない）。作業記号・自由メモはそのまま。 */
   function cellHtml(cell) {
     if (!cell) return '';
     if (cell.kind === 'off') return '×';
+    if (cell.kind === 'task') {
+      const mark = TASK_MARKS.includes(cell.text) ? cell.text : '';
+      return mark ? `<span class="shift-task-mark">${esc(mark)}</span>` : '';
+    }
     const raw = String(cell.text || '');
     const shown = displayTimeText(raw);
     if (/^\d{1,2}:\d{2}$/.test(String(shown).trim())) {
       return `<span class="shift-time-main">${esc(shown)}</span>`;
     }
     return esc(shown);
+  }
+
+  /** 通常モードの循環: 空→×→ピ→バ→貼→空。時刻セルは従来どおり×へ上書き（時刻入力は時間指定モード）。 */
+  function nextNormalCell(cur) {
+    if (!cur) return { kind: 'off', text: '×' };
+    if (cur.kind === 'off') return { kind: 'task', text: 'ピ' };
+    if (cur.kind === 'task') {
+      const i = TASK_MARKS.indexOf(cur.text);
+      if (i === 0) return { kind: 'task', text: 'バ' };
+      if (i === 1) return { kind: 'task', text: '貼' };
+      return null;
+    }
+    return { kind: 'off', text: '×' };
   }
 
   function printTitleText() {
@@ -399,6 +426,7 @@
           (d.kind === 'sun' || d.kind === 'holiday') ? 'shift-sun' : '',
           cell && cell.kind === 'off' ? 'shift-off' : '',
           cell && cell.kind === 'time' ? 'shift-time' : '',
+          cell && cell.kind === 'task' ? 'shift-task' : '',
         ].filter(Boolean).join(' ');
         return `<td class="${cls}" data-person="${esc(p.key)}" data-day="${d.day}" tabindex="0">${cellHtml(cell)}</td>`;
       }).join('');
@@ -421,7 +449,7 @@
     // 画面: メモ＋氏名＋日付。印刷ではメモ列を CSS で除外（空白列を残さない）
     const colSpan = days.length + 2;
     const cols = `<colgroup><col class="shift-col-memo"><col class="shift-col-name">${'<col class="shift-col-day">'.repeat(days.length)}</colgroup>`;
-    const banner = `<tr class="shift-print-banner"><th colspan="${colSpan}"><div class="shift-print-head"><span class="shift-print-title-text">${esc(printTitleText())}</span><span class="shift-print-legend">空欄：出勤　×：休み　時刻：退勤予定</span></div></th></tr>`;
+    const banner = `<tr class="shift-print-banner"><th colspan="${colSpan}"><div class="shift-print-head"><span class="shift-print-title-text">${esc(printTitleText())}</span><span class="shift-print-legend">${esc(PRINT_LEGEND)}</span></div></th></tr>`;
     const titleEl = $('#shiftprinttitle');
     if (titleEl) titleEl.textContent = printTitleText();
     table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner shift-corner-memo no-print">勤務メモ</th><th class="shift-corner shift-corner-name">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
@@ -525,15 +553,20 @@
       paintShift();
       return;
     }
+    if (editMode === 'task') {
+      const mark = selectedTaskMark();
+      if (cur && cur.kind === 'task' && cur.text === mark) setCell(key, day, null, true);
+      else setCell(key, day, { kind: 'task', text: mark }, true);
+      paintShift();
+      return;
+    }
     if (editMode === 'time') {
       const text = (($('#shifttimetext') && $('#shifttimetext').value) || '').trim() || '15:00';
       setCell(key, day, { kind: 'time', text }, true);
       paintShift();
       return;
     }
-    if (cur && cur.kind === 'off') setCell(key, day, null, true);
-    else if (!cur) setCell(key, day, { kind: 'off', text: '×' }, true);
-    else setCell(key, day, { kind: 'off', text: '×' }, true);
+    setCell(key, day, nextNormalCell(cur), true);
     paintShift();
   }
 
