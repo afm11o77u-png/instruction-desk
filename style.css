@@ -219,9 +219,9 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-corner{z-index:5;text-align:left;background:#f3f7f3}
 .shift-grid .shift-corner-memo{position:sticky;left:0;min-width:4.8rem;width:4.8rem;max-width:4.8rem;font-size:10px;font-weight:700;padding:1px 2px;line-height:1.15}
 .shift-grid .shift-corner-name{position:sticky;left:4.8rem;min-width:7.5rem;z-index:5}
-/* 勤務メモ: 2行折返し。日付セルと同高(1.7rem)を超えず、はみ出しはクリップ */
+/* 勤務メモ: 2行折返し・11px。日付セルと同高(1.7rem)を超えず、はみ出しはクリップ */
 .shift-grid .shift-memo{position:sticky;left:0;z-index:2;width:4.8rem;min-width:4.8rem;max-width:4.8rem;height:1.7rem;max-height:1.7rem;padding:0 1px;background:#fafcfa;text-align:left;vertical-align:middle;white-space:normal;overflow:hidden;box-sizing:border-box}
-.shift-grid .shift-memo-input{display:block;width:100%;min-width:0;height:100%;max-height:1.7rem;box-sizing:border-box;border:1px solid transparent;background:transparent;font:inherit;font-size:9px;font-weight:400;line-height:1.15;padding:1px 2px;border-radius:3px;resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+.shift-grid .shift-memo-input{display:block;width:100%;min-width:0;height:100%;max-height:1.7rem;box-sizing:border-box;border:1px solid transparent;background:transparent;font:inherit;font-size:11px;font-weight:400;line-height:1.1;padding:1px 2px;border-radius:3px;resize:none;overflow:hidden;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
 .shift-grid .shift-memo-input:hover,.shift-grid .shift-memo-input:focus{border-color:#9dceae;background:#fff;outline:none}
 .shift-grid .shift-name{position:sticky;left:4.8rem;z-index:2;text-align:left;background:#fafcfa;font-weight:600;min-width:7.5rem;max-width:12rem;padding:2px 4px}
 .shift-grid .shift-name-edit{display:flex;align-items:center;gap:2px;min-width:0}
