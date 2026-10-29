@@ -521,6 +521,85 @@ class ShiftSheetStoreTest(unittest.TestCase):
         self.assertEqual([p['key'] for p in sheet['people']], ['regular:001', 'part:002'])
 
 
+class ShiftDayXToggleFixtureTest(unittest.TestCase):
+    """日付見出し「この日を全員×」トグルの決定表（kintai-shift.js bulkMarkOneDay と対応）。"""
+
+    OFF = {'kind': 'off', 'text': '×'}
+    TIME = {'kind': 'time', 'text': '15:00まで'}
+
+    @staticmethod
+    def day_has_any_off(cells_by_person, day):
+        d = str(day)
+        for row in cells_by_person.values():
+            cur = (row or {}).get(d)
+            if cur and cur.get('kind') == 'off':
+                return True
+        return False
+
+    @classmethod
+    def apply_toggle(cls, cells_by_person, day, mode='empty'):
+        """1クリック後の cells と動作種別（clear / fill）を返す。"""
+        d = str(day)
+        out = {k: dict(v or {}) for k, v in cells_by_person.items()}
+        if cls.day_has_any_off(out, day):
+            for key in list(out):
+                out[key].pop(d, None)
+            return out, 'clear'
+        off = dict(cls.OFF)
+        for key in list(out):
+            cur = out[key].get(d)
+            if mode == 'empty':
+                if cur:
+                    continue
+            elif cur and cur.get('kind') == 'off':
+                continue
+            out[key][d] = dict(off)
+        return out, 'fill'
+
+    def test_no_off_fills_empty_only(self):
+        before = {
+            'a': {},
+            'b': {'3': dict(self.TIME)},
+            'c': {},
+        }
+        after, action = self.apply_toggle(before, 3, mode='empty')
+        self.assertEqual(action, 'fill')
+        self.assertEqual(after['a']['3'], self.OFF)
+        self.assertEqual(after['b']['3'], self.TIME)  # 空欄のみなので時間は残す
+        self.assertEqual(after['c']['3'], self.OFF)
+
+    def test_no_off_overwrite_sets_all(self):
+        before = {
+            'a': {},
+            'b': {'5': dict(self.TIME)},
+        }
+        after, action = self.apply_toggle(before, 5, mode='overwrite')
+        self.assertEqual(action, 'fill')
+        self.assertEqual(after['a']['5'], self.OFF)
+        self.assertEqual(after['b']['5'], self.OFF)
+
+    def test_any_off_clears_everyone_including_time(self):
+        before = {
+            'a': {'7': dict(self.OFF)},
+            'b': {'7': dict(self.TIME)},
+            'c': {},
+        }
+        after, action = self.apply_toggle(before, 7, mode='empty')
+        self.assertEqual(action, 'clear')
+        self.assertNotIn('7', after['a'])
+        self.assertNotIn('7', after['b'])
+        self.assertNotIn('7', after['c'])
+
+    def test_second_click_clears_after_fill(self):
+        before = {'a': {}, 'b': {}}
+        filled, action1 = self.apply_toggle(before, 1, mode='empty')
+        self.assertEqual(action1, 'fill')
+        cleared, action2 = self.apply_toggle(filled, 1, mode='empty')
+        self.assertEqual(action2, 'clear')
+        self.assertNotIn('1', cleared['a'])
+        self.assertNotIn('1', cleared['b'])
+
+
 class ShiftUiContractTest(unittest.TestCase):
     def test_top_nav_and_panels(self):
         index = (ROOT / 'index.html').read_text(encoding='utf-8')
@@ -600,6 +679,20 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('visiblePeople', js)
         self.assertIn('updateBulkScopeNote', js)
         self.assertIn('seedSundaysForKeys', js)
+        # 日付見出し「この日を全員×」はトグル（×あり→全員空欄／なし→既存一括×）
+        self.assertIn('dayHasAnyOff', js)
+        self.assertIn('bulkClearOneDay', js)
+        self.assertIn("cur.kind === 'off'", js)
+        self.assertIn('dayHasAnyOff(d, targets)', js)
+        self.assertIn('bulkClearOneDay(d, label)', js)
+        self.assertIn('bulkMarkOffDays([d], bulkFillMode(), label)', js)
+        self.assertIn('pushUndo()', js)
+        self.assertIn('markDirty()', js)
+        # 曜日一括はトグルせず従来の一括×のみ
+        weekday_fn = js[js.find('function bulkMarkWeekday'):js.find('function seedSundaysForKeys')]
+        self.assertIn('bulkMarkOffDays(days, bulkFillMode()', weekday_fn)
+        self.assertNotIn('bulkClearOneDay', weekday_fn)
+        self.assertNotIn('dayHasAnyOff', weekday_fn)
         self.assertIn('ひとつ戻す', (ROOT / 'index.html').read_text(encoding='utf-8'))
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn('shift-sat', css)
