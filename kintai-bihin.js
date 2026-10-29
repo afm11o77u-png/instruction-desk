@@ -547,19 +547,96 @@
 
   function paintMasterList() {
     const body = $('#bihinmasterbody');
+    const deletedBody = $('#bihinmasterdeletedbody');
     if (!body) return;
     const active = masterItems.filter(it => it.active !== false);
+    const deleted = masterItems.filter(it => it.active === false);
     if (!active.length) {
       body.innerHTML = '<tr><td colspan="5">まだ品目がありません。上の欄から登録してください。</td></tr>';
+    } else {
+      body.innerHTML = active.map(it => `<tr>
+        <td>${esc(it.category)}</td>
+        <td>${esc(it.name)}</td>
+        <td>${esc(it.unit)}</td>
+        <td class="bihin-num">${formatYen(it.unitPrice)}</td>
+        <td class="bihin-master-row-actions">
+          <button type="button" data-edit-item="${it.id}">編集</button>
+          <button type="button" class="danger" data-delete-item="${it.id}">削除</button>
+        </td>
+      </tr>`).join('');
+    }
+    if (deletedBody) {
+      if (!deleted.length) {
+        deletedBody.innerHTML = '<tr><td colspan="5">削除済みはありません。</td></tr>';
+      } else {
+        deletedBody.innerHTML = deleted.map(it => `<tr class="bihin-master-deleted-row">
+          <td>${esc(it.category)}</td>
+          <td>${esc(it.name)}</td>
+          <td>${esc(it.unit)}</td>
+          <td class="bihin-num">${formatYen(it.unitPrice)}</td>
+          <td><button type="button" data-restore-item="${it.id}">復元</button></td>
+        </tr>`).join('');
+      }
+    }
+  }
+
+  async function softDeleteMasterItem(id) {
+    const it = masterItems.find(x => x.id === id);
+    if (!it) {
+      toast('品目が見つかりません。');
       return;
     }
-    body.innerHTML = active.map(it => `<tr>
-      <td>${esc(it.category)}</td>
-      <td>${esc(it.name)}</td>
-      <td>${esc(it.unit)}</td>
-      <td class="bihin-num">${formatYen(it.unitPrice)}</td>
-      <td><button type="button" data-edit-item="${it.id}">編集</button></td>
-    </tr>`).join('');
+    const name = it.name || '（無題）';
+    const ok = confirm(
+      `「${name}」を削除しますか？\n\n今後の棚卸・発注の候補から外します。保存済みの棚卸・発注履歴は残ります。`
+    );
+    if (!ok) return;
+    const err = $('#bihinmastererror');
+    if (err) err.textContent = '';
+    try {
+      await api('/api/kintai/bihin/items/delete', { id });
+      toast(`「${name}」を削除しました（復元できます）。`);
+      const editing = $('#bihinmasterid');
+      if (editing && Number(editing.value) === id) clearMasterForm();
+      await loadMasterList();
+      // 未保存月を表示中なら候補から外すため再読込（dirty なら確認のみ）
+      if (sheet && !sheet.exists) {
+        if (!bihinDirty) {
+          await loadKintaiBihin({ year, month }, { skipGuard: true });
+        } else {
+          toast('表示中の未保存の変更があるため、マスタ反映の再読込はしていません。保存または破棄後に再表示してください。');
+        }
+      }
+    } catch (e) {
+      if (err) err.textContent = e.message || '削除に失敗しました。';
+      throw e;
+    }
+  }
+
+  async function restoreMasterItem(id) {
+    const it = masterItems.find(x => x.id === id);
+    if (!it) {
+      toast('品目が見つかりません。');
+      return;
+    }
+    const name = it.name || '（無題）';
+    const err = $('#bihinmastererror');
+    if (err) err.textContent = '';
+    try {
+      await api('/api/kintai/bihin/items/restore', { id });
+      toast(`「${name}」を復元しました（過去の棚卸は書き換えません）。`);
+      await loadMasterList();
+      if (sheet && !sheet.exists) {
+        if (!bihinDirty) {
+          await loadKintaiBihin({ year, month }, { skipGuard: true });
+        } else {
+          toast('表示中の未保存の変更があるため、マスタ反映の再読込はしていません。保存または破棄後に再表示してください。');
+        }
+      }
+    } catch (e) {
+      if (err) err.textContent = e.message || '復元に失敗しました。';
+      throw e;
+    }
   }
 
   function fillMasterForm(it) {
@@ -1294,11 +1371,25 @@
     const mBody = $('#bihinmasterbody');
     if (mBody) {
       mBody.addEventListener('click', e => {
-        const btn = e.target.closest && e.target.closest('[data-edit-item]');
+        const editBtn = e.target.closest && e.target.closest('[data-edit-item]');
+        if (editBtn) {
+          const id = Number(editBtn.dataset.editItem);
+          const it = masterItems.find(x => x.id === id);
+          if (it) fillMasterForm(it);
+          return;
+        }
+        const delBtn = e.target.closest && e.target.closest('[data-delete-item]');
+        if (delBtn) {
+          softDeleteMasterItem(Number(delBtn.dataset.deleteItem)).catch(() => {});
+        }
+      });
+    }
+    const mDeleted = $('#bihinmasterdeletedbody');
+    if (mDeleted) {
+      mDeleted.addEventListener('click', e => {
+        const btn = e.target.closest && e.target.closest('[data-restore-item]');
         if (!btn) return;
-        const id = Number(btn.dataset.editItem);
-        const it = masterItems.find(x => x.id === id);
-        if (it) fillMasterForm(it);
+        restoreMasterItem(Number(btn.dataset.restoreItem)).catch(() => {});
       });
     }
 

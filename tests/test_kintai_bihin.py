@@ -318,6 +318,98 @@ class BihinStoreTest(unittest.TestCase):
         ksrc = inspect.getsource(kintai.schema)
         self.assertIn('kintai_bihin.schema', ksrc)
 
+    def test_soft_delete_by_id_keeps_saved_month_and_hides_new(self):
+        a = self._add_item('コピー用紙', 500)
+        b = self._add_item('コピー用紙', 480)  # 同名別単価＝別 ID
+        sheet = kintai_bihin.get_sheet(self.c, 2026, 10)
+        rows = []
+        for r in sheet['rows']:
+            q = dict(r)
+            q.update({'openingQty': 2, 'purchaseQty': 1, 'closingQty': 2})
+            rows.append(q)
+        code, saved = kintai_bihin.save_sheet(self.c, self.user, {
+            'year': 2026, 'month': 10, 'version': 0, 'rows': rows,
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(len(saved['rows']), 2)
+
+        deleted = kintai_bihin.soft_delete_item(self.c, self.user, {'id': a['id']})
+        self.assertFalse(deleted['active'])
+        self.assertEqual(deleted['id'], a['id'])
+
+        # マスタ一覧（有効のみ）から消え、同名の別 ID は残る
+        active = kintai_bihin.list_items(self.c, include_inactive=False)
+        self.assertEqual([it['id'] for it in active], [b['id']])
+        all_items = kintai_bihin.list_items(self.c, include_inactive=True)
+        self.assertEqual(len(all_items), 2)
+        inactive = [it for it in all_items if not it['active']]
+        self.assertEqual([it['id'] for it in inactive], [a['id']])
+
+        # 保存済み月は両行・金額・数量とも残る（マスタ削除で落ちない）
+        again = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertEqual(len(again['rows']), 2)
+        by_id = {r['itemId']: r for r in again['rows']}
+        self.assertEqual(by_id[a['id']]['name'], 'コピー用紙')
+        self.assertEqual(by_id[a['id']]['unitPrice'], 500)
+        self.assertEqual(by_id[a['id']]['openingQty'], 2)
+        self.assertEqual(by_id[a['id']]['purchaseQty'], 1)
+        self.assertEqual(by_id[a['id']]['closingQty'], 2)
+        self.assertEqual(by_id[a['id']]['openingAmount'], 1000)
+        self.assertEqual(by_id[a['id']]['usageQty'], 1)
+
+        # 再保存しても削除済み行が落ちない
+        code2, saved2 = kintai_bihin.save_sheet(self.c, self.user, {
+            'year': 2026, 'month': 10, 'version': again['version'],
+            'rows': [dict(r) for r in again['rows']],
+        })
+        self.assertEqual(code2, 200)
+        self.assertEqual(len(saved2['rows']), 2)
+        self.assertEqual({r['itemId'] for r in saved2['rows']}, {a['id'], b['id']})
+
+        # 未作成月には削除済みが出ない
+        fresh = kintai_bihin.get_sheet(self.c, 2026, 11)
+        self.assertFalse(fresh['exists'])
+        self.assertEqual([r['itemId'] for r in fresh['rows']], [b['id']])
+        # 繰越は残った ID のみ（削除済み a の月末は持ち込まない）
+        self.assertEqual(fresh['rows'][0]['openingQty'], 2)
+
+    def test_restore_does_not_rewrite_past_or_duplicate(self):
+        it = self._add_item('ボールペン', 120, unit='本')
+        sheet = kintai_bihin.get_sheet(self.c, 2026, 9)
+        row = dict(sheet['rows'][0])
+        row.update({'openingQty': 5, 'purchaseQty': 0, 'closingQty': 3})
+        kintai_bihin.save_sheet(self.c, self.user, {
+            'year': 2026, 'month': 9, 'version': 0, 'rows': [row],
+        })
+        kintai_bihin.soft_delete_item(self.c, self.user, {'id': it['id']})
+        # 削除後にマスタ名を変えずに復元
+        restored = kintai_bihin.restore_item(self.c, self.user, {'id': it['id']})
+        self.assertTrue(restored['active'])
+        self.assertEqual(restored['id'], it['id'])
+        # 重複行ができない
+        items = kintai_bihin.list_items(self.c, include_inactive=True)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['id'], it['id'])
+        # 過去月はスナップショットのまま（名前・数量）
+        past = kintai_bihin.get_sheet(self.c, 2026, 9)
+        self.assertEqual(len(past['rows']), 1)
+        self.assertEqual(past['rows'][0]['name'], 'ボールペン')
+        self.assertEqual(past['rows'][0]['closingQty'], 3)
+        self.assertEqual(past['rows'][0]['itemId'], it['id'])
+        # 未作成月に再び候補として出る（繰越あり）
+        nxt = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertEqual(len(nxt['rows']), 1)
+        self.assertEqual(nxt['rows'][0]['itemId'], it['id'])
+        self.assertEqual(nxt['rows'][0]['openingQty'], 3)
+
+    def test_soft_delete_rejects_missing_id(self):
+        with self.assertRaises(ValueError):
+            kintai_bihin.soft_delete_item(self.c, self.user, {'id': 'x'})
+        with self.assertRaises(ValueError):
+            kintai_bihin.soft_delete_item(self.c, self.user, {'id': 99999})
+        with self.assertRaises(ValueError):
+            kintai_bihin.restore_item(self.c, self.user, {})
+
 
 class BihinUiContractTest(unittest.TestCase):
     def test_nav_and_panel(self):
@@ -329,6 +421,8 @@ class BihinUiContractTest(unittest.TestCase):
         self.assertIn('id="bihinsave"', index)
         self.assertIn('id="bihinsavedialog"', index)
         self.assertIn('id="bihinmasterdialog"', index)
+        self.assertIn('id="bihinmasterdeletedbody"', index)
+        self.assertIn('削除済み品目', index)
         self.assertIn('保存して移動', index)
         self.assertIn('破棄して移動', index)
         self.assertIn('kintai-bihin.js', index)
@@ -353,11 +447,21 @@ class BihinUiContractTest(unittest.TestCase):
         self.assertIn('未保存の変更があります', js)
         self.assertIn('beforeunload', js)
         self.assertIn('/api/kintai/bihin', js)
+        self.assertIn('/api/kintai/bihin/items/delete', js)
+        self.assertIn('/api/kintai/bihin/items/restore', js)
+        self.assertIn('data-delete-item', js)
+        self.assertIn('data-restore-item', js)
+        self.assertIn('今後の棚卸・発注の候補から外します。保存済みの棚卸・発注履歴は残ります。', js)
         self.assertIn('moneyYen', js)
         self.assertNotIn('scheduleSave', js)
         # 在庫デスク API を呼ばない
         self.assertNotIn('/inventory/', js)
         self.assertNotIn('/api/stock', js)
+        ksrc = (ROOT / 'kintai.py').read_text(encoding='utf-8')
+        self.assertIn("/api/kintai/bihin/items/delete", ksrc)
+        self.assertIn("/api/kintai/bihin/items/restore", ksrc)
+        self.assertIn('soft_delete_item', ksrc)
+        self.assertIn('restore_item', ksrc)
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn('.bihin-input', css)
         self.assertIn('.bihin-calc', css)

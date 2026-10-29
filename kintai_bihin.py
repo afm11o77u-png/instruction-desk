@@ -239,6 +239,53 @@ def save_item(c, user, payload: dict) -> dict:
     return _item_public(row)
 
 
+def soft_delete_item(c, user, payload: dict) -> dict:
+    """品目を ID で論理削除（active=0）。保存済み月・発注履歴は書き換えない。
+
+    品名では消さない（同名別単価の取り違え防止）。未作成月・発注候補から外れる。
+    """
+    _ = user  # 権限は API 層。save_item とシグネチャを揃える
+    payload = payload or {}
+    try:
+        iid = int(payload.get('id'))
+    except (TypeError, ValueError) as e:
+        raise ValueError('品目 ID を確認してください。') from e
+    existing = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()
+    if not existing:
+        raise ValueError('品目が見つかりません。')
+    if not existing['active']:
+        return _item_public(existing)
+    now = _now()
+    c.execute(
+        'UPDATE kintai_bihin_items SET active=0, updated_at=? WHERE id=?',
+        (now, iid),
+    )
+    row = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()
+    return _item_public(row)
+
+
+def restore_item(c, user, payload: dict) -> dict:
+    """論理削除した品目を ID で復元（active=1）。過去月の行は書き換えず、重複行も作らない。"""
+    _ = user
+    payload = payload or {}
+    try:
+        iid = int(payload.get('id'))
+    except (TypeError, ValueError) as e:
+        raise ValueError('品目 ID を確認してください。') from e
+    existing = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()
+    if not existing:
+        raise ValueError('品目が見つかりません。')
+    if existing['active']:
+        return _item_public(existing)
+    now = _now()
+    c.execute(
+        'UPDATE kintai_bihin_items SET active=1, updated_at=? WHERE id=?',
+        (now, iid),
+    )
+    row = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()
+    return _item_public(row)
+
+
 def _load_sheet_row(c, year: int, month: int):
     return c.execute(
         'SELECT * FROM kintai_bihin_sheets WHERE year=? AND month=?',

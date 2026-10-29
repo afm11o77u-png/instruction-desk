@@ -2623,6 +2623,12 @@ def handle_post(h, c, path: str, d: dict):
     if path == '/api/kintai/bihin/items':
         # マスタのみ。保存済み月のスナップショットは書き換えない。
         return 200, kintai_bihin.save_item(c, h.user, d or {})
+    if path == '/api/kintai/bihin/items/delete':
+        # 論理削除（active=0）。ID 指定。保存済み月・発注履歴は触らない。
+        return 200, {'item': kintai_bihin.soft_delete_item(c, h.user, d or {})}
+    if path == '/api/kintai/bihin/items/restore':
+        # 復元（active=1）。過去月の書き換え・重複行作成はしない。
+        return 200, {'item': kintai_bihin.restore_item(c, h.user, d or {})}
     if path == '/api/kintai/bihin/vendors':
         import kintai_bihin_order
         return 200, {'vendor': kintai_bihin_order.save_vendor(c, h.user, d or {})}
