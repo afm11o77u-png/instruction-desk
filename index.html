@@ -144,8 +144,11 @@
 </form>
 <div class="bihin-actions">
 <button type="button" class="primary" id="bihinsave">保存</button>
+<button type="button" id="bihinorder">注文</button>
 <button type="button" id="bihinprint">棚卸用紙を印刷</button>
 <button type="button" id="bihinmaster">品目マスタ</button>
+<button type="button" id="bihinordersettings">発注設定</button>
+<button type="button" id="bihinorderhistory">発注履歴</button>
 <span id="bihinsavestatus" class="shift-save-status" aria-live="polite">未保存</span>
 </div>
 <p id="bihinhint" class="kintaimeta">薄い背景のセルが入力欄、緑系のセルは自動計算です。「保存」で表示中の年月を上書きします（自動保存しません）。</p>
@@ -213,7 +216,7 @@
 <div class="dialoghead"><div><h2>品目マスタ</h2></div>
 <button type="button" class="quiet" id="bihinmasterdialog-close">閉じる ×</button></div>
 <div class="dialogbody">
-<p class="duehint">科目・品名・単位・単価を登録します。同じ品名でも単価が違えば別行です。保存済みの月のスナップショットは書き換えません。</p>
+<p class="duehint">科目・品名・単位・単価を登録します。同じ品名でも単価が違えば別行です。保存済みの月のスナップショットは書き換えません。発注用の仕入先・発注品名・発注単位・入数は「発注設定」で行います。</p>
 <p id="bihinmastererror" role="alert"></p>
 <form id="bihinmasterform" class="bihin-master-form" onsubmit="return false">
 <input type="hidden" id="bihinmasterid" value="">
@@ -230,6 +233,78 @@
 <table class="bihin-master-table" aria-label="品目マスタ一覧">
 <thead><tr><th>科目</th><th>品名</th><th>単位</th><th>単価</th><th></th></tr></thead>
 <tbody id="bihinmasterbody"></tbody>
+</table>
+</div>
+</div>
+</dialog>
+<dialog id="bihinorderdialog">
+<div class="dialoghead"><div><h2>備品を注文</h2></div>
+<button type="button" class="quiet" id="bihinorderdialog-close">閉じる ×</button></div>
+<div class="dialogbody">
+<p class="duehint">数量を入れて「注文」すると、仕入先ごとにメール作成画面を開きます。送信はご自身で確認してから行ってください（自動送信しません）。成功した準備だけ、発注日の年月の当月購入へ加算します。</p>
+<p id="bihinordererror" role="alert"></p>
+<label class="bihin-order-date">発注日<input id="bihinorderdate" type="date" aria-label="発注日"></label>
+<div class="bihin-order-list-wrap">
+<table class="bihin-master-table" aria-label="発注明細">
+<thead><tr><th>品名</th><th>発注品名</th><th>仕入先</th><th>発注単位</th><th>入数</th><th>数量</th></tr></thead>
+<tbody id="bihinorderbody"></tbody>
+</table>
+</div>
+</div>
+<div class="dialogactions">
+<button type="button" class="primary" id="bihinordergo">注文</button>
+<button type="button" class="quiet" id="bihinordercancel">キャンセル</button>
+</div>
+</dialog>
+<dialog id="bihinordersettingsdialog">
+<div class="dialoghead"><div><h2>発注設定</h2></div>
+<button type="button" class="quiet" id="bihinordersettingsdialog-close">閉じる ×</button></div>
+<div class="dialogbody">
+<p class="duehint">仕入先（宛先・件名／本文テンプレ・Excel添付／本文に記載）と、品目ごとの発注品名・発注単位・入数を設定します。入数は発注1単位あたりの棚卸数量です。未設定のままでは換算・発注できません。</p>
+<p id="bihinordersettingserror" role="alert"></p>
+<p id="bihinordertemplatenote" class="kintaimeta"></p>
+<h3 class="bihin-order-h">仕入先</h3>
+<form id="bihinvendorform" class="bihin-master-form" onsubmit="return false">
+<input type="hidden" id="bihinvendorid" value="">
+<label>仕入先名<input id="bihinvendorname" maxlength="120" autocomplete="off"></label>
+<label>メール<input id="bihinvendoremail" type="email" maxlength="120" autocomplete="off"></label>
+<label>モード<select id="bihinvendormode"><option value="excel">Excel添付</option><option value="body">本文に記載</option></select></label>
+<label class="bihin-span2">件名テンプレ<input id="bihinvendorsubject" maxlength="500" placeholder="【備品発注】{date}／{vendor}" autocomplete="off"></label>
+<label class="bihin-span2">本文テンプレ<textarea id="bihinvendorbody" rows="4" maxlength="4000" placeholder="{vendor} ご担当者様… {lines}"></textarea></label>
+<div class="bihin-master-actions">
+<button type="button" class="primary" id="bihinvendorsave">仕入先を保存</button>
+<button type="button" id="bihinvendornew">新規クリア</button>
+</div>
+</form>
+<div class="bihin-master-list-wrap">
+<table class="bihin-master-table" aria-label="仕入先一覧">
+<thead><tr><th>仕入先</th><th>メール</th><th>モード</th><th></th></tr></thead>
+<tbody id="bihinvendorbodylist"></tbody>
+</table>
+</div>
+<h3 class="bihin-order-h">品目の発注設定</h3>
+<form id="bihinitemorderform" class="bihin-master-form" onsubmit="return false">
+<label class="bihin-span2">品目<select id="bihinitemorderselect"></select></label>
+<label>仕入先<select id="bihinitemordervendor"></select></label>
+<label>発注品名<input id="bihinitemordername" maxlength="120" autocomplete="off"></label>
+<label>発注単位<input id="bihinitemorderunit" maxlength="40" autocomplete="off"></label>
+<label>入数（棚卸換算）<input id="bihinitemorderpacking" type="number" min="0" step="any" title="発注1単位あたりの棚卸数量"></label>
+<div class="bihin-master-actions">
+<button type="button" class="primary" id="bihinitemordersave">品目の発注設定を保存</button>
+</div>
+</form>
+</div>
+</dialog>
+<dialog id="bihinorderhistorydialog">
+<div class="dialoghead"><div><h2>発注履歴</h2></div>
+<button type="button" class="quiet" id="bihinorderhistorydialog-close">閉じる ×</button></div>
+<div class="dialogbody">
+<p class="duehint">日時・仕入先・品目・数量・対象月・モード・取消を記録します。メール作成画面を開いただけであり、「送信済み」とは表示しません。</p>
+<p id="bihinorderhistoryerror" role="alert"></p>
+<div class="bihin-master-list-wrap">
+<table class="bihin-master-table" aria-label="発注履歴">
+<thead><tr><th>日時</th><th>仕入先</th><th>品目</th><th>数量</th><th>対象月</th><th>モード</th><th>取消</th><th></th></tr></thead>
+<tbody id="bihinorderhistorybody"></tbody>
 </table>
 </div>
 </div>

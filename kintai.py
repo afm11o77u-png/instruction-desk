@@ -2517,6 +2517,19 @@ def handle_get(h, c, path: str):
         return 200, kintai_bihin.get_sheet(c, q.get('year'), q.get('month'))
     if path == '/api/kintai/bihin/items':
         return 200, {'items': kintai_bihin.list_items(c, include_inactive=True)}
+    if path == '/api/kintai/bihin/vendors':
+        import kintai_bihin_order
+        return 200, {'vendors': kintai_bihin_order.list_vendors(c, include_inactive=True)}
+    if path == '/api/kintai/bihin/order/settings':
+        import kintai_bihin_order
+        return 200, kintai_bihin_order.settings_bundle(c)
+    if path == '/api/kintai/bihin/orders':
+        import kintai_bihin_order
+        q = _query_map(h)
+        return 200, {
+            'orders': kintai_bihin_order.list_order_history(c, limit=q.get('limit') or 100),
+            'history': kintai_bihin_order.history_flat(c, limit=q.get('limit') or 200),
+        }
     return 404, {'error': '操作が見つかりません。'}
 
 
@@ -2610,6 +2623,23 @@ def handle_post(h, c, path: str, d: dict):
     if path == '/api/kintai/bihin/items':
         # マスタのみ。保存済み月のスナップショットは書き換えない。
         return 200, kintai_bihin.save_item(c, h.user, d or {})
+    if path == '/api/kintai/bihin/vendors':
+        import kintai_bihin_order
+        return 200, {'vendor': kintai_bihin_order.save_vendor(c, h.user, d or {})}
+    if path == '/api/kintai/bihin/order/prepare':
+        # Thunderbird で作成画面を開くだけ。自動送信しない。成功時のみ当月購入へ加算。
+        import kintai_bihin_order
+        import sys
+        skip = bool((d or {}).get('skipMail')) or sys.platform != 'win32'
+        # 本番 Windows では skipMail を無視（テスト用フラグの誤送信防止はローカルのみ）
+        if sys.platform == 'win32':
+            skip = False
+        return 200, kintai_bihin_order.prepare_orders(
+            c, h.user, d or {}, open_mail=True, skip_mail=skip,
+        )
+    if path == '/api/kintai/bihin/order/cancel':
+        import kintai_bihin_order
+        return 200, kintai_bihin_order.cancel_order(c, h.user, d or {})
     return 404, {'error': '操作が見つかりません。'}
 
 
