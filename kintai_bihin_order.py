@@ -757,8 +757,36 @@ def _validate_and_build_groups(c, lines_in: list) -> list[dict]:
     return list(groups.values())
 
 
+def _ensure_sheet_row_for_item(c, rows: list[dict], by_item: dict, item_id: int) -> dict:
+    """表示中月シートに品目行が無いときだけマスタから1行追加（発注による復元）。
+    過去発注数量は再加算しない。削除済み行の自動復活は発注時のみ。"""
+    row = by_item.get(item_id)
+    if row:
+        return row
+    item = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (item_id,)).fetchone()
+    if not item:
+        raise ValueError('品目が見つかりません。')
+    price = kintai_bihin._price(item['unit_price'] or '0', field='単価')
+    row = {
+        'rowKey': kintai_bihin._new_row_key(),
+        'itemId': item_id,
+        'category': item['category'] or '',
+        'name': item['name'] or '',
+        'unit': item['unit'] or '',
+        'unitPrice': kintai_bihin._dec_to_json(price),
+        'sortOrder': len(rows),
+        'openingQty': None,
+        'purchaseQty': None,
+        'closingQty': None,
+    }
+    rows.append(row)
+    by_item[item_id] = row
+    return row
+
+
 def _add_purchase_for_lines(c, user, year: int, month: int, lines: list[dict]) -> dict:
-    """Add inventory qty to purchaseQty for each line. Does not overwrite; adds to existing."""
+    """Add inventory qty to purchaseQty for each line. Does not overwrite; adds to existing.
+    行が削除済みならマスタから復元して今回分だけ加算（過去発注の二重加算なし）。"""
     sheet = kintai_bihin.get_sheet(c, year, month)
     rows = [dict(r) for r in sheet['rows']]
     by_item = {r.get('itemId'): r for r in rows if r.get('itemId') is not None}
@@ -766,27 +794,7 @@ def _add_purchase_for_lines(c, user, year: int, month: int, lines: list[dict]) -
         iid = ln['itemId']
         add = kintai_bihin._qty(ln['inventoryQty'], field='購入加算')
         assert add is not None
-        row = by_item.get(iid)
-        if not row:
-            # sheet may be unsaved without this item if inactive — append from master
-            item = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()
-            if not item:
-                raise ValueError('品目が見つかりません。')
-            price = kintai_bihin._price(item['unit_price'] or '0', field='単価')
-            row = {
-                'rowKey': kintai_bihin._new_row_key(),
-                'itemId': iid,
-                'category': item['category'] or '',
-                'name': item['name'] or '',
-                'unit': item['unit'] or '',
-                'unitPrice': kintai_bihin._dec_to_json(price),
-                'sortOrder': len(rows),
-                'openingQty': None,
-                'purchaseQty': None,
-                'closingQty': None,
-            }
-            rows.append(row)
-            by_item[iid] = row
+        row = _ensure_sheet_row_for_item(c, rows, by_item, iid)
         cur = kintai_bihin._qty(row.get('purchaseQty'), field='購入数量')
         base = cur if cur is not None else Decimal('0')
         row['purchaseQty'] = kintai_bihin._dec_to_json(base + add)
@@ -797,7 +805,7 @@ def _add_purchase_for_lines(c, user, year: int, month: int, lines: list[dict]) -
         'rows': rows,
     })
     if code == 409:
-        # one retry with fresh version
+        # one retry with fresh version（削除済み行も同様に復元）
         sheet2 = kintai_bihin.get_sheet(c, year, month)
         rows2 = [dict(r) for r in sheet2['rows']]
         by2 = {r.get('itemId'): r for r in rows2 if r.get('itemId') is not None}
@@ -805,9 +813,7 @@ def _add_purchase_for_lines(c, user, year: int, month: int, lines: list[dict]) -
             iid = ln['itemId']
             add = kintai_bihin._qty(ln['inventoryQty'], field='購入加算')
             assert add is not None
-            row = by2.get(iid)
-            if not row:
-                raise ValueError('棚卸月の行が見つかりません。品目マスタと月シートを確認してください。')
+            row = _ensure_sheet_row_for_item(c, rows2, by2, iid)
             cur = kintai_bihin._qty(row.get('purchaseQty'), field='購入数量')
             base = cur if cur is not None else Decimal('0')
             row['purchaseQty'] = kintai_bihin._dec_to_json(base + add)

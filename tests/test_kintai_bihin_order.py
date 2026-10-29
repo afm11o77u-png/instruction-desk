@@ -457,6 +457,51 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertFalse(found[0]['active'])
 
+    def test_order_after_sheet_row_delete_restores_without_double_count(self):
+        """月シート行削除≠発注取消。再発注は行を復元し今回分だけ加算（過去分は二重にしない）。"""
+        v = self._vendor()
+        it = self._item(
+            'ラベル再登', 50, vendorId=v['id'], orderUnit='箱', packingQty=10,
+            orderProductName='再登ラベル',
+        )
+        first = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'row-del-1', 'orderDate': '2026-10-05',
+             'lines': [{'itemId': it['id'], 'orderQty': 2}]},
+            open_mail=True, skip_mail=True,
+        )
+        sheet = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertEqual(sheet['rows'][0]['purchaseQty'], 20)  # 2*10
+        # 表示中月の行だけ全削除して保存（マスタ・履歴は触らない）
+        code, emptied = kintai_bihin.save_sheet(self.c, self.user, {
+            'year': 2026, 'month': 10, 'version': sheet['version'], 'rows': [],
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(emptied['rows'], [])
+        hist_before = kintai_bihin_order.history_flat(self.c)
+        self.assertTrue(any(h['orderId'] == first['orders'][0]['id'] for h in hist_before))
+        self.assertFalse(any(
+            h.get('cancelled') for h in hist_before if h['orderId'] == first['orders'][0]['id']
+        ))
+        # 同月で再発注 → 行復元＋今回分のみ（過去20は再加算しない）
+        second = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'row-del-2', 'orderDate': '2026-10-20',
+             'lines': [{'itemId': it['id'], 'orderQty': 1}]},
+            open_mail=True, skip_mail=True,
+        )
+        again = kintai_bihin.get_sheet(self.c, 2026, 10)
+        self.assertEqual(len(again['rows']), 1)
+        self.assertEqual(again['rows'][0]['itemId'], it['id'])
+        self.assertEqual(again['rows'][0]['purchaseQty'], 10)  # 1*10 only
+        hist = kintai_bihin_order.history_flat(self.c)
+        ids = {h['orderId'] for h in hist}
+        self.assertIn(first['orders'][0]['id'], ids)
+        self.assertIn(second['orders'][0]['id'], ids)
+        # マスタは有効のまま
+        items = kintai_bihin.list_items(self.c)
+        self.assertTrue(any(x['id'] == it['id'] and x['active'] for x in items))
+
 
 class BihinOrderUiContractTest(unittest.TestCase):
     def test_ui_hooks(self):

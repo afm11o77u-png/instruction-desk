@@ -280,6 +280,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .bihin-grid .bihin-cat,.bihin-grid .bihin-name{text-align:left;min-width:5rem}
 .bihin-grid .bihin-unit{text-align:center;min-width:2.5rem}
 .bihin-grid .bihin-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.bihin-grid .bihin-row-check-col{width:2.2rem;min-width:2.2rem;text-align:center;padding:4px 2px}
+.bihin-grid .bihin-row-check{width:1rem;height:1rem;margin:0;vertical-align:middle;accent-color:#186438}
 .bihin-grid td.bihin-input{background:#fffef2}
 .bihin-grid td.bihin-calc{background:#eef5ef;color:#2f4a38}
 .bihin-grid td.bihin-warn{background:#fff1e8;color:#8a3b00;font-weight:700}
@@ -287,6 +289,12 @@ body.catalog-kintai main>header .headactions{display:none}
 .bihin-grid input.bihin-qty:focus{outline:2px solid #5d9a72;outline-offset:0;border-color:#5d9a72}
 .bihin-grid .bihin-empty-msg{text-align:left;padding:14px;color:#3d5344}
 .bihin-grid tfoot td{background:#f3f7f3;font-weight:700}
+/* 棚卸用紙印刷・ブラウザ印刷時は選択UIを出さない（既存の記入用紙レイアウトは変更しない） */
+@media print{
+  .bihin-row-check-col,
+  .bihin-row-check,
+  #bihinrowdelete{display:none!important}
+}
 .bihin-master-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(10rem,1fr));gap:8px 12px;margin:8px 0 12px;align-items:end}
 .bihin-master-form label{display:flex;flex-direction:column;gap:4px;font-size:13px}
 .bihin-master-actions{display:flex;flex-wrap:wrap;gap:8px;grid-column:1/-1}
