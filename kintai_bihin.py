@@ -233,7 +233,7 @@ def save_item(c, user, payload: dict) -> dict:
         (category, name, unit, price_s, sort_order, active, now, iid),
     )
     if any(k in payload for k in (
-        'vendorId', 'orderProductName', 'orderUnit', 'packingQty', 'orderSpec',
+        'vendorId', 'orderProductName', 'orderUnit', 'packingQty', 'orderSpec', 'orderQtyCell',
     )):
         import kintai_bihin_order
         kintai_bihin_order.apply_item_order_fields(c, iid, payload)

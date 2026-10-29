@@ -50,7 +50,8 @@ DESKTOP_TEMPLATE = Path(r'C:\Users\zfm11\Desktop\注文書_エンパイア発寒
 REPO_FIXTURE_TEMPLATE = Path(__file__).resolve().parent / 'assets' / 'bihin-order' / '注文書_エンパイア発寒支店.xlsx'
 
 # Empire CT Planning order form layout (注文書_エンパイア発寒支店.xlsx).
-# Fill only these cells; never invent a simple replacement sheet.
+# Yellow input cells are qty column D19–D31. Product names are pre-printed in B;
+# never invent a simple replacement sheet, never fill by yellow-color scan alone.
 ORDER_SHEET_NAME = '注文書'
 ORDER_SHEET_DATE_CELL = 'H3'
 ORDER_SHEET_HEADER_MARKERS = ('品', '名')  # B18 header contains 品……名
@@ -61,9 +62,87 @@ ORDER_SHEET_NAME_COL = 'B'
 ORDER_SHEET_QTY_COL = 'D'
 ORDER_SHEET_UNIT_COL = 'E'
 ORDER_SHEET_NOTE_COL = 'H'
-# Sample unit-price / amount columns — clear when rewriting lines so stale sample
-# numbers do not remain; formulas G32:G34 are left untouched.
-ORDER_SHEET_CLEAR_COLS = ('F', 'G')
+# Qty cells to clear when unordered (sample/previous qty). Do NOT blanket-clear
+# F/G prices, E units, H notes, or formulas G32:G34.
+ORDER_SHEET_QTY_ROWS = tuple(range(ORDER_SHEET_DATA_START_ROW, ORDER_SHEET_DATA_END_ROW + 1))
+
+# Pre-printed catalog on the real Empire / シーティープランニング form.
+# match_all: every token must appear in name/spec/color haystack (normalized).
+# match_any: at least one token (used with match_all for color disambiguation).
+EMPIRE_CT_CATALOG = (
+    {
+        'row': 19,
+        'qty_cell': 'D19',
+        'sheet_label': 'コンビテックス 白　幅50mm　50巻2本',
+        # テンプレに白のみ1行。色トークン無しでもコンビテックス単体で照合可。
+        'match_all': ('コンビテックス',),
+        'match_any': (),
+        'aliases': ('コンビテックス白', 'コンビテックス 白'),
+    },
+    {
+        'row': 20,
+        'qty_cell': 'D20',
+        'sheet_label': 'HIQラベル(カラー)赤　幅50mm　50巻2本',
+        'match_all': ('hiq', '赤'),
+        'match_any': (),
+        'aliases': ('hiqラベル(カラー)赤', 'hiqラベル赤', 'hiq赤'),
+    },
+    {
+        'row': 21,
+        'qty_cell': 'D21',
+        'sheet_label': 'HIQラベル(カラー)青　幅50mm　50巻2本',
+        'match_all': ('hiq', '青'),
+        'match_any': (),
+        'aliases': ('hiqラベル(カラー)青', 'hiqラベル青', 'hiq青'),
+    },
+    {
+        'row': 22,
+        'qty_cell': 'D22',
+        'sheet_label': 'HIQラベル(カラー)緑　幅50mm　50巻2本',
+        'match_all': ('hiq', '緑'),
+        'match_any': (),
+        'aliases': ('hiqラベル(カラー)緑', 'hiqラベル緑', 'hiq緑'),
+    },
+    {
+        'row': 23,
+        'qty_cell': 'D23',
+        'sheet_label': '裾上げテープ',
+        'match_all': ('裾上', 'テープ'),
+        'match_any': (),
+        'aliases': ('裾上げテープ', '裾上テープ'),
+    },
+    {
+        'row': 24,
+        'qty_cell': 'D24',
+        'sheet_label': 'カッター刃(上刃)',
+        'match_all': ('カッター刃', '上刃'),
+        'match_any': (),
+        'aliases': ('カッター刃(上刃)', '上刃'),
+    },
+    {
+        'row': 25,
+        'qty_cell': 'D25',
+        'sheet_label': 'カッター刃(下刃)',
+        'match_all': ('カッター刃', '下刃'),
+        'match_any': (),
+        'aliases': ('カッター刃(下刃)', '下刃'),
+    },
+    {
+        'row': 26,
+        'qty_cell': 'D26',
+        'sheet_label': 'カッター刃のバネ',
+        'match_all': ('カッター', 'バネ'),
+        'match_any': (),
+        'aliases': ('カッター刃のバネ', 'カッターバネ'),
+    },
+)
+EMPIRE_CT_QTY_CELLS = frozenset(e['qty_cell'] for e in EMPIRE_CT_CATALOG) | frozenset(
+    f'{ORDER_SHEET_QTY_COL}{r}' for r in ORDER_SHEET_QTY_ROWS
+)
+# Optional durable overrides: bihin item id → qty cell (e.g. {12: 'D20'}).
+# Prefer name/spec/color match; use this when WEB name differs but itemId is known.
+EMPIRE_CT_ITEM_ID_TO_QTY_CELL: dict[int, str] = {}
+CT_PLANNING_VENDOR_MARKERS = ('シーティープランニング', 'ctplanning', 'ｃｔｐｌａｎｎｉｎｇ')
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 # 発注単位が数字のみ（「1」「２」など）のとき設定画面で案内する。自動書き換えはしない。
@@ -149,6 +228,7 @@ def schema(c):
         ('order_unit', "TEXT NOT NULL DEFAULT ''"),
         ('packing_qty', "TEXT NOT NULL DEFAULT ''"),
         ('order_spec', "TEXT NOT NULL DEFAULT ''"),  # 規格・補足（任意）
+        ('order_qty_cell', "TEXT NOT NULL DEFAULT ''"),  # Empire D19 等（任意・itemId対応）
     ]
     for name, decl in alters:
         if name not in cols:
@@ -295,6 +375,7 @@ def _item_order_fields(r) -> dict:
         except (TypeError, ValueError):
             vendor_id = None
     order_unit = (r['order_unit'] if 'order_unit' in r.keys() else '') or ''
+    qty_cell = (r['order_qty_cell'] if 'order_qty_cell' in r.keys() else '') or ''
     return {
         'vendorId': vendor_id,
         'orderProductName': (r['order_product_name'] if 'order_product_name' in r.keys() else '') or '',
@@ -303,6 +384,7 @@ def _item_order_fields(r) -> dict:
         'orderUnitNeedsReview': is_digits_only_unit(order_unit),
         'packingQty': packing,
         'orderSpec': (r['order_spec'] if 'order_spec' in r.keys() else '') or '',
+        'orderQtyCell': str(qty_cell).strip().upper(),
     }
 
 
@@ -328,15 +410,22 @@ def apply_item_order_fields(c, item_id: int, payload: dict):
     order_name = str(payload.get('orderProductName') or '').strip()[:120]
     order_unit = str(payload.get('orderUnit') or '').strip()[:40]
     order_spec = str(payload.get('orderSpec') or '').strip()[:200]
+    qty_cell = str(payload.get('orderQtyCell') or '').strip().upper()[:8]
+    if qty_cell and qty_cell not in EMPIRE_CT_QTY_CELLS:
+        raise ValueError(
+            f'注文書の数量セル「{qty_cell}」は使えません。'
+            f' D{ORDER_SHEET_DATA_START_ROW}〜D{ORDER_SHEET_DATA_END_ROW} を指定してください。'
+        )
     packing_raw = payload.get('packingQty')
     packing_s = ''
     if packing_raw not in (None, ''):
         packing_s = format(_parse_packing(packing_raw, required=True), 'f')
     c.execute(
         '''UPDATE kintai_bihin_items
-           SET vendor_id=?, order_product_name=?, order_unit=?, packing_qty=?, order_spec=?
+           SET vendor_id=?, order_product_name=?, order_unit=?, packing_qty=?, order_spec=?,
+               order_qty_cell=?
            WHERE id=?''',
-        (vendor_id, order_name, order_unit, packing_s, order_spec, item_id),
+        (vendor_id, order_name, order_unit, packing_s, order_spec, qty_cell, item_id),
     )
 
 
@@ -551,6 +640,150 @@ def _find_cell_xml(sheet_xml: str, ref: str) -> str | None:
     return m.group(0) if m else None
 
 
+def _normalize_match_text(value) -> str:
+    """Normalize product/spec/color text for catalog matching (not for display)."""
+    import unicodedata
+    s = unicodedata.normalize('NFKC', str(value or ''))
+    s = s.replace('\u3000', ' ').replace('\xa0', ' ')
+    s = re.sub(r'\s+', '', s)
+    return s.casefold()
+
+
+def is_ct_planning_vendor(name) -> bool:
+    n = _normalize_match_text(name)
+    if not n:
+        return False
+    return any(_normalize_match_text(m) in n for m in CT_PLANNING_VENDOR_MARKERS)
+
+
+def empire_ct_cell_map() -> list[dict]:
+    """Public cell map for docs / settings (row, qty cell, sheet label)."""
+    return [
+        {
+            'row': e['row'],
+            'qtyCell': e['qty_cell'],
+            'nameCell': f"{ORDER_SHEET_NAME_COL}{e['row']}",
+            'sheetLabel': e['sheet_label'],
+            'matchAll': list(e['match_all']),
+            'aliases': list(e.get('aliases') or ()),
+        }
+        for e in EMPIRE_CT_CATALOG
+    ]
+
+
+def _line_match_haystack(line: dict) -> str:
+    parts = [
+        line.get('orderProductName'),
+        line.get('itemName'),
+        line.get('orderSpec'),
+        line.get('note'),
+        line.get('color'),
+        line.get('colorName'),
+    ]
+    return _normalize_match_text(' '.join(str(p) for p in parts if p))
+
+
+def _catalog_entry_matches(entry: dict, haystack: str) -> bool:
+    if not haystack:
+        return False
+    label_n = _normalize_match_text(entry['sheet_label'])
+    if haystack == label_n or label_n in haystack or haystack in label_n:
+        return True
+    for alias in entry.get('aliases') or ():
+        a = _normalize_match_text(alias)
+        if a and (haystack == a or a in haystack or haystack in a):
+            return True
+    for tok in entry.get('match_all') or ():
+        if _normalize_match_text(tok) not in haystack:
+            return False
+    any_toks = entry.get('match_any') or ()
+    if any_toks and not any(_normalize_match_text(t) in haystack for t in any_toks):
+        return False
+    return True
+
+
+def _resolve_qty_cell_for_line(line: dict) -> str | None:
+    """itemId / explicit cell first, then name/spec/color catalog match. No guess."""
+    explicit = str(line.get('orderQtyCell') or '').strip().upper()
+    if explicit:
+        if explicit not in EMPIRE_CT_QTY_CELLS:
+            raise ValueError(
+                f'品目「{line.get("orderProductName") or line.get("itemName") or "?"}」の'
+                f'数量セル「{explicit}」は注文書の黄欄（D{ORDER_SHEET_DATA_START_ROW}〜'
+                f'D{ORDER_SHEET_DATA_END_ROW}）ではありません。'
+            )
+        return explicit
+    try:
+        iid = int(line.get('itemId')) if line.get('itemId') not in (None, '') else None
+    except (TypeError, ValueError):
+        iid = None
+    if iid is not None and iid in EMPIRE_CT_ITEM_ID_TO_QTY_CELL:
+        cell = str(EMPIRE_CT_ITEM_ID_TO_QTY_CELL[iid]).strip().upper()
+        if cell not in EMPIRE_CT_QTY_CELLS:
+            raise ValueError(f'itemId {iid} の数量セル対応「{cell}」が不正です。')
+        return cell
+
+    haystack = _line_match_haystack(line)
+    hits = [e for e in EMPIRE_CT_CATALOG if _catalog_entry_matches(e, haystack)]
+    if len(hits) == 1:
+        return hits[0]['qty_cell']
+    if len(hits) > 1:
+        labels = '、'.join(h['sheet_label'] for h in hits)
+        raise ValueError(
+            f'品目「{line.get("orderProductName") or line.get("itemName") or "?"}」が'
+            f'注文書の複数行に一致します（{labels}）。'
+            '発注品名・規格・色、または数量セル（orderQtyCell）を確認してください。推測では記入しません。'
+        )
+    return None
+
+
+def map_lines_to_empire_qty_cells(lines: list[dict]) -> tuple[dict[str, object], list[dict]]:
+    """Return ({qty_cell: orderQty}, unmapped_lines). Duplicate cell → ValueError."""
+    assigned: dict[str, object] = {}
+    owners: dict[str, str] = {}
+    unmapped: list[dict] = []
+    for ln in lines:
+        cell = _resolve_qty_cell_for_line(ln)
+        label = (ln.get('orderProductName') or ln.get('itemName') or '').strip() or '?'
+        if not cell:
+            unmapped.append(ln)
+            continue
+        if cell in assigned:
+            raise ValueError(
+                f'注文書セル {cell} に複数品目が割り当てられました'
+                f'（「{owners[cell]}」と「{label}」）。'
+                '数量の黄欄は品目ごとに1つです。確認してください。'
+            )
+        qty = ln.get('orderQty')
+        if isinstance(qty, str):
+            try:
+                qty = Decimal(qty.strip().replace(',', ''))
+            except (InvalidOperation, ValueError):
+                pass
+        assigned[cell] = qty
+        owners[cell] = label
+    return assigned, unmapped
+
+
+def _format_unmapped_confirmation(unmapped: list[dict]) -> str:
+    rows = []
+    for ln in unmapped:
+        name = (ln.get('orderProductName') or ln.get('itemName') or '').strip() or '?'
+        spec = (ln.get('orderSpec') or '').strip()
+        iid = ln.get('itemId')
+        bit = f'・{name}'
+        if spec:
+            bit += f'（規格: {spec}）'
+        if iid not in (None, ''):
+            bit += f' [itemId={iid}]'
+        rows.append(bit)
+    return (
+        '注文書（エンパイア／シーティープランニング）に対応する行が見つからない品目があります。'
+        '推測では黄欄に記入しません。発注品名・規格・色、または数量セルを確認してください:\n'
+        + '\n'.join(rows)
+    )
+
+
 def validate_order_template(template_path: Path) -> None:
     """Ensure template matches Empire order layout. Raises ValueError with reason."""
     try:
@@ -581,13 +814,10 @@ def validate_order_template(template_path: Path) -> None:
                     ' 想定レイアウトと異なるため記入できません（簡易表へは落とさない）。'
                 )
         required = [ORDER_SHEET_DATE_CELL]
-        for row in range(ORDER_SHEET_DATA_START_ROW, ORDER_SHEET_DATA_END_ROW + 1):
-            required.extend([
-                f'{ORDER_SHEET_NAME_COL}{row}',
-                f'{ORDER_SHEET_QTY_COL}{row}',
-                f'{ORDER_SHEET_UNIT_COL}{row}',
-                f'{ORDER_SHEET_NOTE_COL}{row}',
-            ])
+        for row in ORDER_SHEET_QTY_ROWS:
+            required.append(f'{ORDER_SHEET_QTY_COL}{row}')
+        for entry in EMPIRE_CT_CATALOG:
+            required.append(f"{ORDER_SHEET_NAME_COL}{entry['row']}")
         missing = [ref for ref in required if _find_cell_xml(sheet_xml, ref) is None]
         if missing:
             raise ValueError(
@@ -608,6 +838,17 @@ def validate_order_template(template_path: Path) -> None:
                 f'注文書テンプレートの B18 が見出し「品名」ではありません（取得値: {label!r}）。'
                 ' レイアウト不一致のため簡易表への置き換えはしません。'
             )
+        # Catalog labels must match pre-printed B cells (name map, not yellow scan).
+        for entry in EMPIRE_CT_CATALOG:
+            ref = f"{ORDER_SHEET_NAME_COL}{entry['row']}"
+            cell = _find_cell_xml(sheet_xml, ref)
+            got = _cell_display_value(cell, shared) if cell else ''
+            if _normalize_match_text(got) != _normalize_match_text(entry['sheet_label']):
+                raise ValueError(
+                    f'注文書テンプレートの {ref} が想定品名と一致しません'
+                    f'（想定: {entry["sheet_label"]!r} / 取得: {got!r}）。'
+                    ' 黄欄スキャンでは埋めず、レイアウト確認が必要です。'
+                )
     finally:
         zin.close()
 
@@ -619,21 +860,22 @@ def fill_order_workbook(
     vendor_name: str = '',
     lines: list[dict],
 ) -> bytes:
-    """Copy template zip and fill only date/item/qty cells. Never writes template_path.
+    """Copy template zip; write WEB qty as numbers into mapped yellow D cells only.
 
-    vendor_name is accepted for API compatibility but not written: the Empire form
-    letterhead already names the supplier (CT Planning). Silent layout fallback is
-    forbidden — validate_order_template must pass.
+    Never writes template_path. Preserves workbook structure (merges, drawings,
+    printerSettings, formulas). Does not rewrite pre-printed product names / units /
+    notes, and does not blanket-clear non-qty yellow or F/G sample prices.
+    Unmapped lines raise with a confirmation list (no guess fill).
+    vendor_name is not written (letterhead already names シーティープランニング).
     """
     del vendor_name  # letterhead / 仕入先欄はテンプレ固定。上書きしない。
     validate_order_template(template_path)
-    if len(lines) > ORDER_SHEET_MAX_LINES:
-        raise ValueError(
-            f'注文明細がテンプレートの行数上限（{ORDER_SHEET_MAX_LINES}行、'
-            f'{ORDER_SHEET_DATA_START_ROW}〜{ORDER_SHEET_DATA_END_ROW}行目）を超えています。'
-            ' 分割して発注するか、テンプレートの明細行を増やした互換コピーを'
-            ' BIHIN_ORDER_TEMPLATE で指定してください。'
-        )
+    if not lines:
+        raise ValueError('注文明細がありません。')
+
+    qty_by_cell, unmapped = map_lines_to_empire_qty_cells(lines)
+    if unmapped:
+        raise ValueError(_format_unmapped_confirmation(unmapped))
 
     try:
         raw = template_path.read_bytes()
@@ -651,35 +893,20 @@ def fill_order_workbook(
         )
         sheet_xml = zin.read(sheet_name).decode('utf-8')
 
-        # Prefer a readable Japanese date for 注文日 (H3).
         try:
             day = date.fromisoformat(str(order_date)[:10])
             date_label = f'{day.year}/{day.month:02d}/{day.day:02d}'
         except ValueError:
             date_label = str(order_date)
 
+        # H3 date + every qty cell: ordered → number only; unordered → clear sample qty.
         updates: dict = {ORDER_SHEET_DATE_CELL: date_label}
-        for i in range(ORDER_SHEET_MAX_LINES):
-            row = ORDER_SHEET_DATA_START_ROW + i
-            if i < len(lines):
-                ln = lines[i]
-                name = ln.get('orderProductName') or ln.get('itemName') or ''
-                qty = ln.get('orderQty')
-                # D=数量のまま。数字のみ単位は E に書かない（「1」を単位として出さない）。
-                unit = _display_order_unit(ln.get('orderUnit'))
-                note = ln.get('note') or ''
-                updates[f'{ORDER_SHEET_NAME_COL}{row}'] = name
-                updates[f'{ORDER_SHEET_QTY_COL}{row}'] = qty
-                updates[f'{ORDER_SHEET_UNIT_COL}{row}'] = unit
-                updates[f'{ORDER_SHEET_NOTE_COL}{row}'] = note
+        for row in ORDER_SHEET_QTY_ROWS:
+            ref = f'{ORDER_SHEET_QTY_COL}{row}'
+            if ref in qty_by_cell:
+                updates[ref] = qty_by_cell[ref]
             else:
-                updates[f'{ORDER_SHEET_NAME_COL}{row}'] = ''
-                updates[f'{ORDER_SHEET_QTY_COL}{row}'] = ''
-                updates[f'{ORDER_SHEET_UNIT_COL}{row}'] = ''
-                updates[f'{ORDER_SHEET_NOTE_COL}{row}'] = ''
-            # Always clear sample unit-price / amount on line rows.
-            for col in ORDER_SHEET_CLEAR_COLS:
-                updates[f'{col}{row}'] = ''
+                updates[ref] = ''
 
         new_sheet = _set_sheet_cells(sheet_xml, updates)
 
@@ -814,6 +1041,12 @@ def _validate_and_build_groups(c, lines_in: list) -> list[dict]:
             raise ValueError(f'「{item["name"]}」の発注単位が未設定です。発注設定で単位を入力してください。')
         order_spec = (item['order_spec'] if 'order_spec' in item.keys() else '') or ''
         order_spec = order_spec.strip()
+        qty_cell = ''
+        if 'order_qty_cell' in item.keys() and item['order_qty_cell']:
+            qty_cell = str(item['order_qty_cell']).strip().upper()
+        # Request may override cell for confirmation / repair (still validated).
+        if raw.get('orderQtyCell'):
+            qty_cell = str(raw.get('orderQtyCell')).strip().upper()
 
         line = {
             'itemId': item_id,
@@ -822,10 +1055,11 @@ def _validate_and_build_groups(c, lines_in: list) -> list[dict]:
             'orderProductName': order_name,
             'orderUnit': order_unit,
             'orderSpec': order_spec,
+            'orderQtyCell': qty_cell,
             'orderQty': kintai_bihin._dec_to_json(order_qty),
             'packingQty': kintai_bihin._dec_to_json(packing),
             'inventoryQty': kintai_bihin._dec_to_json(inv_qty),
-            # Excel 備考列: 行メモ優先、なければ規格・補足
+            # Excel 備考列用メモ（テンプレ備考は上書きしない。照合用に保持）
             'note': str(raw.get('note') or order_spec or '')[:120],
         }
         g = groups.get(vendor_id)
@@ -1087,16 +1321,23 @@ def prepare_orders(
                         vendor_name=row['vendor_name'] or '',
                         lines=lines,
                     )
+                    if not blob or len(blob) < 1000:
+                        raise ValueError('注文書 Excel の再生成に失敗しました。購入は二重加算していません。')
                     fname = (
                         f"bihin-order-{prep_key[:12]}-v{row['vendor_id']}-"
                         f"{row['order_date']}-regen.xlsx"
                     )
                     path = mail_dir / fname
-                    path.write_bytes(blob)
-                    attachment_path = str(path)
-                    attachment_uri = path.as_uri()
                     if template_path.resolve() == path.resolve():
                         raise ValueError('注文書テンプレートを上書きしようとしました。中止します。')
+                    try:
+                        path.write_bytes(blob)
+                    except OSError as e:
+                        raise ValueError(f'注文書の再添付を保存できませんでした: {e}') from e
+                    if not path.is_file():
+                        raise ValueError('注文書の再添付ファイルが作成できませんでした。')
+                    attachment_path = str(path)
+                    attachment_uri = path.as_uri()
                     c.execute(
                         'UPDATE kintai_bihin_orders SET attachment_path=? WHERE id=?',
                         (attachment_path, int(row['id'])),
@@ -1198,14 +1439,21 @@ def prepare_orders(
                 vendor_name=g['vendorName'],
                 lines=g['lines'],
             )
+            if not blob or len(blob) < 1000:
+                raise ValueError('注文書 Excel の生成に失敗しました（空または短すぎます）。発注を中止します。')
             fname = f"bihin-order-{prep_key[:12]}-v{g['vendorId']}-{order_day.isoformat()}.xlsx"
             path = mail_dir / fname
-            path.write_bytes(blob)
-            attachment_path = str(path)
-            attachment_uri = path.as_uri()
             # Ensure template untouched
             if template_path.resolve() == path.resolve():
                 raise ValueError('注文書テンプレートを上書きしようとしました。中止します。')
+            try:
+                path.write_bytes(blob)
+            except OSError as e:
+                raise ValueError(f'注文書の添付ファイルを保存できませんでした: {e}') from e
+            if not path.is_file() or path.stat().st_size < 1000:
+                raise ValueError('注文書の添付ファイルが作成できませんでした。発注を中止します。')
+            attachment_path = str(path)
+            attachment_uri = path.as_uri()
 
         prepared.append({
             'group': g,
@@ -1328,6 +1576,7 @@ def settings_bundle(c) -> dict:
         'fixtureTemplatePath': str(REPO_FIXTURE_TEMPLATE),
         'defaultSubject': DEFAULT_SUBJECT,
         'orderContentPlaceholder': ORDER_CONTENT_PLACEHOLDER,
+        'empireCtCellMap': empire_ct_cell_map(),
         'hints': {
             'packing': '入数＝発注1単位あたりの棚卸数量。未設定のままでは換算・発注できません。',
             'mail': 'Thunderbird で作成画面を開くだけです。送信済みにはしません。',
@@ -1343,6 +1592,11 @@ def settings_bundle(c) -> dict:
                 '数量と単位は空白区切りです（「数量：1 箱」）。'
                 '発注単位が数字だけのときは本文・Excel単位欄には出しません（「数量：1」）。'
                 '「本文に記載」モードでは必須です。「Excel添付」では任意（無ければ添付フローのまま）。'
+            ),
+            'empireExcel': (
+                'シーティープランニング（エンパイア注文書）は、テンプレの品名・規格・色で行を照合し、'
+                '黄欄（数量 D列）へ WEB 数量のみ数値で転記します。未対応品は確認リストを出して中止し、'
+                '推測記入しません。未発注行の見本数量はクリアします（単価・金額・単位・備考・数式は触りません）。'
             ),
         },
     }

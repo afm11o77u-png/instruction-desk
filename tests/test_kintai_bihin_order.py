@@ -117,32 +117,37 @@ class BihinOrderHelpersTest(unittest.TestCase):
             self.assertEqual(digits, f'Y\n数量：{q}')
             self.assertNotIn(f'数量：{q} 1', digits)
 
-    def test_fill_keeps_qty_and_unit_in_separate_cells(self):
-        """Excel 注文書は D=数量。数字のみ単位は E を空にし、本物の単位だけ書く。"""
+    def test_fill_writes_qty_number_only_into_mapped_yellow_cells(self):
+        """品名照合で黄欄 D のみ数値転記。単位は結合せず、品名セルは書き換えない。"""
         path, _ = kintai_bihin_order.resolve_template_path()
+        before = path.read_bytes()
         lines = [
-            {'orderProductName': 'CP2610HMES-TA／白ラベル', 'orderQty': 1, 'orderUnit': '1'},
-            {'orderProductName': 'B', 'orderQty': 2, 'orderUnit': '箱'},
-            {'orderProductName': 'C', 'orderQty': 10, 'orderUnit': '1ロット'},
+            {'orderProductName': 'コンビテックス 白', 'orderQty': 1, 'orderUnit': '1'},
+            {'orderProductName': 'HIQラベル(カラー)赤', 'orderQty': 2, 'orderUnit': '箱'},
+            {'orderProductName': '裾上げテープ', 'orderQty': 10, 'orderUnit': '1ロット'},
         ]
         blob = kintai_bihin_order.fill_order_workbook(
-            path, order_date='2026-10-29', lines=lines,
+            path, order_date='2026-10-29', vendor_name='株式会社シーティープランニング',
+            lines=lines,
         )
+        self.assertEqual(path.read_bytes(), before)
         with ZipFile(BytesIO(blob)) as z:
             sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
-            # D=数量（数値）。「11」にならない
             self.assertRegex(sheet, r'<c r="D19"[^>]*>\s*<v>1</v>')
             self.assertRegex(sheet, r'<c r="D20"[^>]*>\s*<v>2</v>')
-            self.assertRegex(sheet, r'<c r="D21"[^>]*>\s*<v>10</v>')
-            # E19: 数字のみ単位は空（「1」を単位として書かない）
-            self.assertNotRegex(sheet, r'<c r="E19"[^>]*t="inlineStr"[^>]*>.*?>1</t>')
-            e19 = re.search(r'<c r="E19"[^>]*(?:/>|>(.*?)</c>)', sheet, re.DOTALL)
-            self.assertIsNotNone(e19)
-            e19_inner = e19.group(1) or ''
-            self.assertNotIn('>1<', e19_inner)
-            self.assertRegex(sheet, r'<c r="E20"[^>]*t="inlineStr"[^>]*>.*?>箱</t>')
-            self.assertRegex(sheet, r'<c r="E21"[^>]*t="inlineStr"[^>]*>.*?>1ロット</t>')
+            self.assertRegex(sheet, r'<c r="D23"[^>]*>\s*<v>10</v>')
+            # 数量と単位を連結した「11」等は書かない
             self.assertNotRegex(sheet, r'<c r="D19"[^>]*>\s*<v>11</v>')
+            # テンプレ品名は sharedStrings のまま（シート XML へインラインしない）
+            sst = z.read('xl/sharedStrings.xml').decode('utf-8')
+            self.assertIn('コンビテックス', sst)
+            self.assertRegex(sheet, r'<c r="B19"[^>]*t="s"')
+            # 未発注の見本数量 D21/D22 はクリア
+            d21 = re.search(r'<c r="D21"[^>]*(?:/>|>(.*?)</c>)', sheet, re.DOTALL)
+            self.assertIsNotNone(d21)
+            self.assertNotIn('<v>1</v>', d21.group(0))
+            # 数式は残す
+            self.assertIn('SUM(G19:G31)', sheet)
 
     def test_compose_uses_html_br_not_literal_backslash_n(self):
         opened = []
@@ -172,9 +177,9 @@ class BihinOrderHelpersTest(unittest.TestCase):
         blob = kintai_bihin_order.fill_order_workbook(
             path,
             order_date='2026-10-29',
-            vendor_name='テスト商事',
+            vendor_name='株式会社シーティープランニング',
             lines=[{
-                'orderProductName': 'コピー用紙A4',
+                'orderProductName': 'カッター刃(上刃)',
                 'orderQty': 3,
                 'orderUnit': '箱',
                 'note': '至急',
@@ -193,9 +198,13 @@ class BihinOrderHelpersTest(unittest.TestCase):
             self.assertIn('pageSetup', sheet)
             self.assertIn('SUM(G19:G31)', sheet)
             self.assertNotIn('TODAY()', sheet)
-            self.assertIn('コピー用紙A4', sheet)
-            self.assertRegex(sheet, r'<c r="D19"[^>]*>\s*<v>3</v>')
+            # 品名は sharedStrings のまま（B24 を書き換えない）
+            sst = z.read('xl/sharedStrings.xml').decode('utf-8')
+            self.assertIn('カッター刃(上刃)', sst)
+            self.assertRegex(sheet, r'<c r="B24"[^>]*t="s"')
+            self.assertRegex(sheet, r'<c r="D24"[^>]*>\s*<v>3</v>')
             self.assertRegex(sheet, r'<c r="H3"[^>]*t="inlineStr"')
+            # F/G 見本単価はブランケットクリアしない（数式行は維持）
             calc = z.read('xl/calcChain.xml').decode('utf-8')
             self.assertNotIn('H3', calc)
             self.assertIn('G32', calc)
@@ -203,17 +212,59 @@ class BihinOrderHelpersTest(unittest.TestCase):
             self.assertIn('drawing', rels)
             self.assertIn('printerSettings', rels)
 
-    def test_fill_rejects_too_many_lines_without_fallback(self):
+    def test_fill_rejects_unmapped_without_guess(self):
         path, _ = kintai_bihin_order.resolve_template_path()
-        lines = [
-            {'orderProductName': f'品{i}', 'orderQty': 1, 'orderUnit': '箱'}
-            for i in range(kintai_bihin_order.ORDER_SHEET_MAX_LINES + 1)
-        ]
         with self.assertRaises(ValueError) as ctx:
             kintai_bihin_order.fill_order_workbook(
-                path, order_date='2026-10-29', lines=lines,
+                path,
+                order_date='2026-10-29',
+                lines=[
+                    {'orderProductName': '裾上げテープ', 'orderQty': 1, 'orderUnit': '箱'},
+                    {'orderProductName': '未知の備品XYZ', 'orderQty': 2, 'orderUnit': '箱',
+                     'itemId': 99},
+                ],
             )
-        self.assertIn('上限', str(ctx.exception))
+        msg = str(ctx.exception)
+        self.assertIn('見つからない', msg)
+        self.assertIn('未知の備品XYZ', msg)
+        self.assertIn('itemId=99', msg)
+
+    def test_fill_item_id_and_cell_override(self):
+        path, _ = kintai_bihin_order.resolve_template_path()
+        # 名前が曖昧でも orderQtyCell / itemId マップで確定
+        kintai_bihin_order.EMPIRE_CT_ITEM_ID_TO_QTY_CELL[9001] = 'D26'
+        try:
+            blob = kintai_bihin_order.fill_order_workbook(
+                path,
+                order_date='2026-10-29',
+                lines=[
+                    {'itemId': 9001, 'orderProductName': 'バネ部品（別名）', 'orderQty': 4},
+                    {'orderProductName': '別名ラベル', 'orderQty': 7, 'orderQtyCell': 'D21'},
+                ],
+            )
+        finally:
+            kintai_bihin_order.EMPIRE_CT_ITEM_ID_TO_QTY_CELL.pop(9001, None)
+        with ZipFile(BytesIO(blob)) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertRegex(sheet, r'<c r="D26"[^>]*>\s*<v>4</v>')
+            self.assertRegex(sheet, r'<c r="D21"[^>]*>\s*<v>7</v>')
+
+    def test_fill_multi_color_hiq(self):
+        path, _ = kintai_bihin_order.resolve_template_path()
+        blob = kintai_bihin_order.fill_order_workbook(
+            path,
+            order_date='2026-10-29',
+            lines=[
+                {'orderProductName': 'HIQラベル', 'orderSpec': '赤', 'orderQty': 1},
+                {'orderProductName': 'HIQラベル 青 幅50mm', 'orderQty': 2},
+                {'orderProductName': 'HIQラベル(カラー)緑', 'orderQty': 3},
+            ],
+        )
+        with ZipFile(BytesIO(blob)) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertRegex(sheet, r'<c r="D20"[^>]*>\s*<v>1</v>')
+            self.assertRegex(sheet, r'<c r="D21"[^>]*>\s*<v>2</v>')
+            self.assertRegex(sheet, r'<c r="D22"[^>]*>\s*<v>3</v>')
 
 
 class BihinOrderStoreTest(unittest.TestCase):
@@ -244,10 +295,26 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.c.close()
         self.tmp.cleanup()
 
-    def _vendor(self, name='文具店', email='vendor@example.com', mode='excel', **extra):
+    def _vendor(self, name='文具店', email='vendor@example.com', mode='body', **extra):
+        # 既定は本文モード（他仕入先の本文フローを壊さない）。Excel は CT 向けに明示。
+        if mode == 'body' and 'bodyTemplate' not in extra:
+            extra = {
+                **extra,
+                'bodyTemplate': '{vendor} 様\n\n{注文内容}\n',
+            }
         return kintai_bihin_order.save_vendor(self.c, self.user, {
             'name': name, 'email': email, 'mode': mode, **extra,
         })
+
+    def _ct_vendor(self, email='ct-test@example.com', **extra):
+        """シーティープランニング相当（実ベンダー宛ではない example.com）。"""
+        return self._vendor(
+            name='株式会社シーティープランニング',
+            email=email,
+            mode='excel',
+            bodyTemplate=extra.pop('bodyTemplate', '明細は添付の注文書をご確認ください。'),
+            **extra,
+        )
 
     def _item(self, name='コピー用紙', price=500, unit='枚', **order):
         return kintai_bihin.save_item(self.c, self.user, {
@@ -378,10 +445,10 @@ class BihinOrderStoreTest(unittest.TestCase):
             self.assertTrue(pq in (None, 0))
 
     def test_excel_mode_without_placeholder_keeps_attach_flow(self):
-        v = self._vendor(mode='excel', bodyTemplate='添付をご確認ください。')
+        v = self._ct_vendor(bodyTemplate='添付をご確認ください。')
         it = self._item(
             '添付のみ', 10, vendorId=v['id'], orderUnit='箱', packingQty=2,
-            orderProductName='添付品',
+            orderProductName='裾上げテープ',
         )
         opened = []
 
@@ -402,16 +469,18 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertNotIn('数量：', body)
         compose = opened[0][2]
         self.assertIn('attachment=', compose)
+        att = result['orders'][0]['attachmentPath']
+        self.assertTrue(att and Path(att).is_file())
+        with ZipFile(att) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertRegex(sheet, r'<c r="D23"[^>]*>\s*<v>3</v>')
         self.assertEqual(kintai_bihin.get_sheet(self.c, 2026, 10)['rows'][0]['purchaseQty'], 6)
 
     def test_excel_mode_with_placeholder_replaces(self):
-        v = self._vendor(
-            mode='excel',
-            bodyTemplate='前置き\n\n{注文内容}\n\n後書き',
-        )
+        v = self._ct_vendor(bodyTemplate='前置き\n\n{注文内容}\n\n後書き')
         it = self._item(
             '添付＋本文', 10, vendorId=v['id'], orderUnit='巻', packingQty=1,
-            orderProductName='両用テープ', orderSpec='透明',
+            orderProductName='コンビテックス 白', orderSpec='幅50mm',
         )
         result = kintai_bihin_order.prepare_orders(
             self.c, self.user,
@@ -422,9 +491,12 @@ class BihinOrderStoreTest(unittest.TestCase):
         body = result['orders'][0]['body']
         self.assertTrue(body.startswith('前置き\n\n'))
         self.assertTrue(body.rstrip().endswith('後書き'))
-        self.assertIn('両用テープ\n透明\n数量：4 巻', body)
+        self.assertIn('コンビテックス 白\n幅50mm\n数量：4 巻', body)
         self.assertNotIn('{注文内容}', body)
         self.assertTrue(result['orders'][0]['attachmentPath'])
+        with ZipFile(result['orders'][0]['attachmentPath']) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertRegex(sheet, r'<c r="D19"[^>]*>\s*<v>4</v>')
 
     def test_multi_vendor_separate_compose_bodies(self):
         va = self._vendor(
@@ -579,10 +651,10 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertIn('箱・巻・個', hints['orderUnit'])
 
     def test_regenerate_mail_does_not_readd_purchase(self):
-        v = self._vendor(mode='excel')
+        v = self._ct_vendor()
         it = self._item(
             '再生テスト', 90, vendorId=v['id'], orderUnit='箱', packingQty=2,
-            orderProductName='再生ラベル',
+            orderProductName='HIQラベル(カラー)赤',
         )
         first = kintai_bihin_order.prepare_orders(
             self.c, self.user,
@@ -616,7 +688,10 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertTrue(att and Path(att).is_file())
         with ZipFile(att) as z:
             sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
-            self.assertIn('再生ラベル', sheet)
+            sst = z.read('xl/sharedStrings.xml').decode('utf-8')
+            # テンプレ品名は残し、数量のみ D20
+            self.assertIn('HIQ', sst)
+            self.assertRegex(sheet, r'<c r="D20"[^>]*>\s*<v>2</v>')
 
     def test_cancel_reverses_only_that_order(self):
         v = self._vendor()
@@ -697,9 +772,15 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertEqual(saved['rows'][0]['closingQty'], 0)
 
     def test_group_same_vendor(self):
-        v = self._vendor(mode='excel')
-        a = self._item('A紙', 10, vendorId=v['id'], orderUnit='冊', packingQty=1, orderProductName='A')
-        b = self._item('B紙', 20, vendorId=v['id'], orderUnit='冊', packingQty=1, orderProductName='B')
+        v = self._ct_vendor()
+        a = self._item(
+            'A紙', 10, vendorId=v['id'], orderUnit='箱', packingQty=1,
+            orderProductName='HIQラベル(カラー)赤',
+        )
+        b = self._item(
+            'B紙', 20, vendorId=v['id'], orderUnit='箱', packingQty=1,
+            orderProductName='HIQラベル(カラー)青',
+        )
         opened = []
 
         def fake_popen(args, **kwargs):
@@ -722,7 +803,72 @@ class BihinOrderStoreTest(unittest.TestCase):
         compose = ' '.join(opened[0])
         self.assertIn('attachment=', compose)
         self.assertIn("format='1'", compose)
-        self.assertIn('<br>', compose)
+        self.assertIn("to='ct-test@example.com'", compose)
+        with ZipFile(result['orders'][0]['attachmentPath']) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertRegex(sheet, r'<c r="D20"[^>]*>\s*<v>1</v>')
+            self.assertRegex(sheet, r'<c r="D21"[^>]*>\s*<v>2</v>')
+            # 未発注の見本数量（緑）はクリア
+            d22 = re.search(r'<c r="D22"[^>]*(?:/>|>(.*?)</c>)', sheet, re.DOTALL)
+            self.assertIsNotNone(d22)
+            self.assertNotIn('<v>1</v>', d22.group(0))
+
+    def test_ct_planning_unmapped_blocks_purchase(self):
+        v = self._ct_vendor()
+        it = self._item(
+            '未知', 10, vendorId=v['id'], orderUnit='箱', packingQty=1,
+            orderProductName='ウェブにだけある品',
+        )
+        with self.assertRaises(ValueError) as ctx:
+            kintai_bihin_order.prepare_orders(
+                self.c, self.user,
+                {'prepKey': 'unmap', 'orderDate': '2026-10-09',
+                 'lines': [{'itemId': it['id'], 'orderQty': 1}]},
+                open_mail=True, skip_mail=True,
+            )
+        self.assertIn('ウェブにだけある品', str(ctx.exception))
+        self.assertEqual(kintai_bihin_order.list_order_history(self.c), [])
+        sheet = kintai_bihin.get_sheet(self.c, 2026, 10)
+        if sheet['rows']:
+            self.assertTrue(sheet['rows'][0].get('purchaseQty') in (None, 0))
+
+    def test_body_vendor_unchanged_when_ct_excel_exists(self):
+        """他仕入先の本文モードは Excel マップの影響を受けない。"""
+        body_v = self._vendor(name='別仕入先', mode='body')
+        ct = self._ct_vendor()
+        body_it = self._item(
+            '本文品', 10, vendorId=body_v['id'], orderUnit='箱', packingQty=1,
+            orderProductName='本文だけの品',
+        )
+        ct_it = self._item(
+            'CT品', 10, vendorId=ct['id'], orderUnit='箱', packingQty=1,
+            orderProductName='カッター刃のバネ',
+        )
+        opened = []
+
+        def fake_popen(args, **kwargs):
+            opened.append(args)
+            return mock.Mock()
+
+        result = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'mixed-modes', 'orderDate': '2026-10-11',
+             'lines': [
+                 {'itemId': body_it['id'], 'orderQty': 1},
+                 {'itemId': ct_it['id'], 'orderQty': 5},
+             ]},
+            open_mail=True, skip_mail=False,
+            popen=fake_popen, tb_path='/usr/bin/true',
+        )
+        self.assertEqual(len(result['orders']), 2)
+        by_mode = {o['mode']: o for o in result['orders']}
+        self.assertEqual(by_mode['body']['body'].count('本文だけの品'), 1)
+        self.assertFalse(by_mode['body']['attachmentPath'])
+        self.assertTrue(by_mode['excel']['attachmentPath'])
+        with ZipFile(by_mode['excel']['attachmentPath']) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertRegex(sheet, r'<c r="D26"[^>]*>\s*<v>5</v>')
+        self.assertEqual(len(opened), 2)
 
     def test_soft_deleted_item_hidden_from_order_keeps_history(self):
         v = self._vendor()
@@ -817,6 +963,9 @@ class BihinOrderUiContractTest(unittest.TestCase):
         self.assertIn('注文内容を挿入', index)
         self.assertIn('id="bihinitemorderspec"', index)
         self.assertIn('規格・補足', index)
+        self.assertIn('id="bihinitemorderqtycell"', index)
+        self.assertIn('注文書数量セル', index)
+        self.assertIn('empireCtCellMap', inspect.getsource(kintai_bihin_order.settings_bundle))
         self.assertIn('bihinitemorderunit', index)
         self.assertIn('箱・巻・個などの単位を入力', index)
         self.assertIn('id="bihinitemorderunithint"', index)
@@ -827,6 +976,7 @@ class BihinOrderUiContractTest(unittest.TestCase):
         self.assertIn('insertOrderContentPlaceholder', js)
         self.assertIn('{注文内容}', js)
         self.assertIn('orderSpec', js)
+        self.assertIn('orderQtyCell', js)
         self.assertIn('formatOrderQtyUnit', js)
         self.assertIn('displayOrderUnit', js)
         self.assertIn('isDigitsOnlyOrderUnit', js)
