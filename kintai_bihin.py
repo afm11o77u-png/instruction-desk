@@ -232,7 +232,9 @@ def save_item(c, user, payload: dict) -> dict:
            WHERE id=?''',
         (category, name, unit, price_s, sort_order, active, now, iid),
     )
-    if any(k in payload for k in ('vendorId', 'orderProductName', 'orderUnit', 'packingQty')):
+    if any(k in payload for k in (
+        'vendorId', 'orderProductName', 'orderUnit', 'packingQty', 'orderSpec',
+    )):
         import kintai_bihin_order
         kintai_bihin_order.apply_item_order_fields(c, iid, payload)
     row = c.execute('SELECT * FROM kintai_bihin_items WHERE id=?', (iid,)).fetchone()

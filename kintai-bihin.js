@@ -1148,6 +1148,8 @@
     </tr>`).join('');
   }
 
+  const ORDER_CONTENT_PLACEHOLDER = '{注文内容}';
+
   function clearVendorForm() {
     const id = $('#bihinvendorid');
     if (id) id.value = '';
@@ -1165,7 +1167,22 @@
     $('#bihinvendoremail').value = v.email || '';
     $('#bihinvendormode').value = v.mode === 'body' ? 'body' : 'excel';
     $('#bihinvendorsubject').value = v.subjectTemplate || '';
+    // 既存テンプレは上書きしない（空のまま読込）
     $('#bihinvendorbody').value = v.bodyTemplate || '';
+  }
+
+  function insertOrderContentPlaceholder() {
+    const ta = $('#bihinvendorbody');
+    if (!ta) return;
+    const ph = ORDER_CONTENT_PLACEHOLDER;
+    const start = typeof ta.selectionStart === 'number' ? ta.selectionStart : ta.value.length;
+    const end = typeof ta.selectionEnd === 'number' ? ta.selectionEnd : start;
+    const before = ta.value.slice(0, start);
+    const after = ta.value.slice(end);
+    ta.value = before + ph + after;
+    const caret = start + ph.length;
+    ta.focus();
+    if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(caret, caret);
   }
 
   function paintItemOrderSelects() {
@@ -1195,6 +1212,8 @@
     if (unit) unit.value = it.orderUnit || '';
     const pack = $('#bihinitemorderpacking');
     if (pack) pack.value = it.packingQty == null ? '' : it.packingQty;
+    const spec = $('#bihinitemorderspec');
+    if (spec) spec.value = it.orderSpec || '';
   }
 
   async function openOrderSettingsDialog() {
@@ -1269,6 +1288,7 @@
       vendorId: vendRaw === '' ? null : Number(vendRaw),
       orderProductName: ($('#bihinitemordername') && $('#bihinitemordername').value || '').trim(),
       orderUnit: ($('#bihinitemorderunit') && $('#bihinitemorderunit').value || '').trim(),
+      orderSpec: ($('#bihinitemorderspec') && $('#bihinitemorderspec').value || '').trim(),
       packingQty: packingRaw === '' ? '' : Number(packingRaw),
     };
     await api('/api/kintai/bihin/items', payload);
@@ -1393,6 +1413,8 @@
     if (settingsBtn) settingsBtn.onclick = () => { openOrderSettingsDialog().catch(e => toast(e.message)); };
     const settingsClose = $('#bihinordersettingsdialog-close');
     if (settingsClose) settingsClose.onclick = () => closeOrderSettingsDialog();
+    const vInsert = $('#bihinvendorinsertorder');
+    if (vInsert) vInsert.onclick = () => insertOrderContentPlaceholder();
     const vSave = $('#bihinvendorsave');
     if (vSave) vSave.onclick = () => { saveVendorFromForm().catch(e => {
       const err = $('#bihinordersettingserror');

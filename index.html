@@ -280,8 +280,10 @@
 <label>メール<input id="bihinvendoremail" type="email" maxlength="120" autocomplete="off"></label>
 <label>モード<select id="bihinvendormode"><option value="excel">Excel添付</option><option value="body">本文に記載</option></select></label>
 <label class="bihin-span2">件名テンプレ<input id="bihinvendorsubject" maxlength="500" placeholder="【備品発注】{date}／{vendor}" autocomplete="off"></label>
-<label class="bihin-span2">本文テンプレ<textarea id="bihinvendorbody" rows="4" maxlength="4000" placeholder="{vendor} ご担当者様… {lines}"></textarea></label>
-<div class="bihin-master-actions">
+<label class="bihin-span2">本文テンプレ<textarea id="bihinvendorbody" rows="5" maxlength="4000" placeholder="{vendor} ご担当者様… {注文内容}"></textarea></label>
+<p id="bihinvendorbodyhint" class="duehint bihin-span2">本文に <code>{注文内容}</code> を置くと、注文時に発注品名・数量（注文画面）・発注単位・任意の規格・補足が差し込まれます（金額なし）。「本文に記載」では必須、「Excel添付」では任意です。既存テンプレは自動では書き換えません。</p>
+<div class="bihin-master-actions bihin-span2">
+<button type="button" id="bihinvendorinsertorder">注文内容を挿入</button>
 <button type="button" class="primary" id="bihinvendorsave">仕入先を保存</button>
 <button type="button" id="bihinvendornew">新規クリア</button>
 </div>
@@ -298,6 +300,7 @@
 <label>仕入先<select id="bihinitemordervendor"></select></label>
 <label>発注品名<input id="bihinitemordername" maxlength="120" autocomplete="off"></label>
 <label>発注単位<input id="bihinitemorderunit" maxlength="40" autocomplete="off"></label>
+<label>規格・補足（任意）<input id="bihinitemorderspec" maxlength="200" autocomplete="off" placeholder="例：白ラベル"></label>
 <label>入数（棚卸換算）<input id="bihinitemorderpacking" type="number" min="0" step="any" title="発注1単位あたりの棚卸数量"></label>
 <div class="bihin-master-actions">
 <button type="button" class="primary" id="bihinitemordersave">品目の発注設定を保存</button>
