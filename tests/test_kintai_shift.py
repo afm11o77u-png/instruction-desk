@@ -839,14 +839,19 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('openPrintDialog', js)
         self.assertIn('runPrint', js)
         self.assertIn('マーク シフト表', js)
-        self.assertIn('空欄：出勤　×：休み　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定', js)
+        self.assertIn('空欄：出勤　×：休み　？：不明　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定', js)
         self.assertIn("kind: 'task'", js)
+        self.assertIn("kind: 'unknown'", js)
+        self.assertIn('UNKNOWN_MARK', js)
         self.assertIn('nextNormalCell', js)
         self.assertIn('selectedTaskMark', js)
         self.assertIn("data-shift-mode=\"task\"", (ROOT / 'index.html').read_text(encoding='utf-8'))
+        self.assertIn("data-shift-mode=\"unknown\"", (ROOT / 'index.html').read_text(encoding='utf-8'))
         self.assertIn('id="shifttaskmark"', (ROOT / 'index.html').read_text(encoding='utf-8'))
         self.assertIn('td.shift-task', (ROOT / 'style.css').read_text(encoding='utf-8'))
         self.assertIn('shift-task-mark', (ROOT / 'style.css').read_text(encoding='utf-8'))
+        self.assertIn('td.shift-unknown', (ROOT / 'style.css').read_text(encoding='utf-8'))
+        self.assertIn('shift-unknown-mark', (ROOT / 'style.css').read_text(encoding='utf-8'))
         self.assertIn('shift-print-banner', js)
         self.assertIn('afterprint', js)
         # 勤務メモ・区分色・時刻表示正規化
@@ -1021,7 +1026,7 @@ html,body{{margin:0;background:#fff}}
 {cols}
 <thead><tr class="shift-print-banner"><th colspan="32"><div class="shift-print-head">
 <span class="shift-print-title-text">2026年 10月 マーク シフト表</span>
-<span class="shift-print-legend">空欄：出勤　×：休み　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定</span>
+<span class="shift-print-legend">空欄：出勤　×：休み　？：不明　ピ：ピッキング　バ：バーコード　貼：シール貼　時刻：退勤予定</span>
 </div></th></tr>
 <tr><th class="shift-corner">氏名</th>{days}</tr></thead>
 <tbody>{rows}</tbody>
@@ -1233,6 +1238,41 @@ class ShiftWorkMemoTest(unittest.TestCase):
         self.assertEqual(again_row['6'], {'kind': 'task', 'text': '貼'})
         self.assertEqual(again_row['7']['text'], '15:00まで')
 
+    def test_unknown_mark_save_load_and_coexist(self):
+        """？は予定未定。休みでも確定出勤でもなく、×・作業・時刻と同居でき再読込でも消えない。"""
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'],
+            'cells': {
+                'regular:001': {
+                    '2': {'kind': 'unknown', 'text': '？'},
+                    '3': {'kind': 'off', 'text': '×'},
+                    '4': {'kind': 'task', 'text': 'ピ'},
+                    '5': {'kind': 'time', 'text': '15:00'},
+                },
+            },
+        })
+        self.assertEqual(code, 200)
+        row = saved['cells']['regular:001']
+        self.assertEqual(row['2'], {'kind': 'unknown', 'text': '？'})
+        self.assertEqual(row['3'], {'kind': 'off', 'text': '×'})
+        self.assertEqual(row['4'], {'kind': 'task', 'text': 'ピ'})
+        self.assertEqual(row['5'], {'kind': 'time', 'text': '15:00'})
+        again = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        self.assertTrue(again['exists'])
+        self.assertEqual(again['cells']['regular:001']['2'], {'kind': 'unknown', 'text': '？'})
+
+    def test_unknown_mark_normalizes_any_text_to_question(self):
+        sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
+        code, saved = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0,
+            'people': sheet['people'],
+            'cells': {'regular:001': {'2': {'kind': 'unknown', 'text': '不明'}}},
+        })
+        self.assertEqual(code, 200)
+        self.assertEqual(saved['cells']['regular:001']['2'], {'kind': 'unknown', 'text': '？'})
+
     def test_task_mark_invalid_text_rejected(self):
         sheet = kintai_shift.get_shift_sheet(self.c, 2026, 11)
         with self.assertRaises(ValueError):
@@ -1246,6 +1286,10 @@ class ShiftWorkMemoTest(unittest.TestCase):
         self.assertIn('task', kintai_shift.CELL_KINDS)
         self.assertEqual(kintai_shift.TASK_TEXTS, frozenset({'ピ', 'バ', '貼'}))
 
+    def test_unknown_kind_constant(self):
+        self.assertIn('unknown', kintai_shift.CELL_KINDS)
+        self.assertEqual(kintai_shift.UNKNOWN_TEXT, '？')
+
     def test_seed_sunday_does_not_overwrite_task(self):
         people = [{'key': 'regular:001'}, {'key': 'part:002'}]
         days = kintai_shift.month_calendar(2026, 11)
@@ -1257,6 +1301,18 @@ class ShiftWorkMemoTest(unittest.TestCase):
         }
         seeded = kintai_shift.seed_sunday_offs(people, cells, days)
         self.assertEqual(seeded['regular:001'][first_sun], {'kind': 'task', 'text': 'ピ'})
+        self.assertEqual(seeded['part:002'][first_sun], {'kind': 'off', 'text': '×'})
+
+    def test_seed_sunday_does_not_overwrite_unknown(self):
+        people = [{'key': 'regular:001'}, {'key': 'part:002'}]
+        days = kintai_shift.month_calendar(2026, 11)
+        sunday_days = [d['day'] for d in days if d['weekday'] == 6]
+        first_sun = str(sunday_days[0])
+        cells = {
+            'regular:001': {first_sun: {'kind': 'unknown', 'text': '？'}},
+        }
+        seeded = kintai_shift.seed_sunday_offs(people, cells, days)
+        self.assertEqual(seeded['regular:001'][first_sun], {'kind': 'unknown', 'text': '？'})
         self.assertEqual(seeded['part:002'][first_sun], {'kind': 'off', 'text': '×'})
 
 
@@ -1300,6 +1356,13 @@ class ShiftTaskMarkCycleTest(unittest.TestCase):
         # 通常クリックは時刻を×へ（時間指定モードは別）。保存経路では時刻を壊さない。
         self.assertEqual(
             self.next_normal({'kind': 'time', 'text': '15:00まで'}),
+            {'kind': 'off', 'text': '×'},
+        )
+
+    def test_unknown_becomes_off_in_normal_cycle(self):
+        # 不明は専用モードで入力。通常クリックは×へ（保存経路では？を壊さない）。
+        self.assertEqual(
+            self.next_normal({'kind': 'unknown', 'text': '？'}),
             {'kind': 'off', 'text': '×'},
         )
 
