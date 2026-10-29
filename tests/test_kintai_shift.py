@@ -750,10 +750,17 @@ class ShiftUiContractTest(unittest.TestCase):
         # 見本どおり: 濃緑バー・タイトル濃グレー大きめ・ゼブラ・×赤系・薄い罫線
         self.assertIn('2.8pt solid #245c47', css)
         self.assertIn('color:#464a4d', css)
-        self.assertIn('font-size:18pt', css)
-        self.assertIn('shift-print-title-text{font-size:18pt;font-weight:700', css.replace('\n', '').replace(' ', ''))
-        # 凡例は見本どおり小さめ（タイトルより小さい）
-        self.assertIn('shift-print-legend{font-size:8pt;font-weight:400', css.replace('\n', '').replace(' ', ''))
+        self.assertIn('font-size:19pt', css)
+        self.assertIn('shift-print-title-text{font-size:19pt;font-weight:700', css.replace('\n', '').replace(' ', ''))
+        # 凡例はタイトルより小さい。印刷は Excel プレビュー相当に行高・字号を拡大
+        self.assertIn('shift-print-legend{font-size:8.5pt;font-weight:400', css.replace('\n', '').replace(' ', ''))
+        compact_css = re.sub(r'\s+', '', css)
+        self.assertIn('tbodytr{height:9.3mm}', compact_css)
+        self.assertIn('transform:none!important', css)
+        print_shift = css[css.find('/* シフト表印刷:'):css.find('.shift-print-title{display:none}')]
+        print_shift_nocomment = re.sub(r'/\*.*?\*/', '', print_shift, flags=re.S)
+        self.assertNotIn('transform:scale', print_shift_nocomment)
+        self.assertIn('@pageshift-sheet{size:A4landscape;margin:6mm}', compact_css)
         self.assertIn('tbody tr:nth-child(even)', css)
         self.assertIn('background:#f0f5f2!important', css)
         self.assertIn('color:#b85c4a!important', css)
@@ -786,19 +793,19 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('body.printing-shift .shift-corner-memo', css)
         # 氏名は1行（nowrap・十分な min-width）。break-all / 強制折返しなし
         # colgroup で氏名列幅を確保（colspan バナー対策）
-        self.assertIn('col.shift-col-name{width:9em}', css.replace('\n', '').replace(' ', ''))
+        self.assertIn('col.shift-col-name{width:9.5em}', css.replace('\n', '').replace(' ', ''))
         self.assertIn('col.shift-col-day{width:auto}', css.replace('\n', '').replace(' ', ''))
         name_rule_start = css.find('body.printing-shift .shift-grid .shift-name{')
         self.assertGreater(name_rule_start, 0)
         name_print_rules = css[name_rule_start:]
         name_print_rules = name_print_rules[: name_print_rules.find('body.printing-shift .shift-grid .shift-day')]
         self.assertIn('white-space:nowrap', name_print_rules)
-        self.assertIn('min-width:9em', name_print_rules)
-        self.assertIn('width:9em', name_print_rules)
+        self.assertIn('min-width:9.5em', name_print_rules)
+        self.assertIn('width:9.5em', name_print_rules)
         self.assertNotIn('break-all', name_print_rules)
         self.assertNotIn('white-space:normal', name_print_rules)
         name_compact = name_print_rules.replace('\n', '').replace(' ', '')
-        self.assertIn('shift-name-print{display:inline!important;font-weight:700;color:#333;white-space:nowrap', name_compact)
+        self.assertIn('shift-name-print{display:inline!important;font-size:10.5pt;font-weight:700;color:#333;white-space:nowrap', name_compact)
         js_for_cols = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
         self.assertIn('shift-col-name', js_for_cols)
         self.assertIn('<colgroup>', js_for_cols)
@@ -846,7 +853,7 @@ class ShiftUiContractTest(unittest.TestCase):
         self.assertIn('ensureShiftLandscapePage', js)
         self.assertIn('clearShiftLandscapePage', js)
         self.assertIn('shift-print-page-css', js)
-        self.assertIn("@page{size:A4 landscape;margin:8mm}", js)
+        self.assertIn("@page{size:A4 landscape;margin:6mm}", js)
         self.assertIn('ensureShiftLandscapePage()', js)
         self.assertIn('clearShiftLandscapePage()', js)
         # 印刷モードは保存データを書き換えない
@@ -903,11 +910,11 @@ class ShiftUiContractTest(unittest.TestCase):
         html_forced = (
             '<!doctype html><html><head><meta charset="utf-8">'
             '<style>@page{size:A4;margin:12mm}body{margin:0}.box{font:12pt sans-serif}</style>'
-            '<style id="shift-print-page-css">@page{size:A4 landscape;margin:8mm}</style>'
+            '<style id="shift-print-page-css">@page{size:A4 landscape;margin:6mm}</style>'
             '</head><body class="printing-shift"><div class="box">shift forced</div></body></html>'
         )
         js = (ROOT / 'kintai-shift.js').read_text(encoding='utf-8')
-        self.assertIn("@page{size:A4 landscape;margin:8mm}", js)
+        self.assertIn("@page{size:A4 landscape;margin:6mm}", js)
 
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -991,8 +998,8 @@ class ShiftUiContractTest(unittest.TestCase):
 {print_css}
 html,body{{margin:0;background:#fff}}
 .shift-print-banner{{display:table-row!important}}
-.shift-grid-wrap{{width:281mm}}
-.shift-grid{{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8.5pt;
+.shift-grid-wrap{{width:285mm}}
+.shift-grid{{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10.5pt;
   font-family:"BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}}
 </style></head>
 <body class="printing-shift print-shift-color">
@@ -1061,7 +1068,8 @@ document.body.setAttribute('data-metrics', JSON.stringify(out));
             return float(v.replace('px', ''))
 
         self.assertGreater(px(metrics['titleFontSize']), px(metrics['legendFontSize']) * 1.5)
-        self.assertAlmostEqual(px(metrics['titleFontSize']), 24.0, delta=1.0)
+        # 19pt @ 96dpi ≈ 25.33px
+        self.assertAlmostEqual(px(metrics['titleFontSize']), 25.333, delta=1.5)
         self.assertIn(str(metrics['titleFontWeight']), ('700', 'bold'))
 
 
