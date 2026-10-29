@@ -382,7 +382,7 @@
     const headDays = days.map(d => {
       const cls = d.kind === 'sat' ? 'shift-sat' : (d.kind === 'sun' || d.kind === 'holiday' ? 'shift-sun' : '');
       const title = d.holidayName ? ` title="${esc(d.holidayName)}"` : '';
-      return `<th class="shift-day ${cls}"${title}><span class="shift-daynum">${d.day}</span><span class="shift-wday">${esc(d.weekdayLabel)}</span><button type="button" class="shift-day-bulk no-print" data-bulk-day="${d.day}" title="${d.day}日を表示中の全員×">この日を全員×</button></th>`;
+      return `<th class="shift-day ${cls}"${title}><span class="shift-daynum">${d.day}</span><span class="shift-wday">${esc(d.weekdayLabel)}</span><button type="button" class="shift-day-bulk no-print" data-bulk-day="${d.day}" title="${d.day}日を表示中の全員×" aria-label="${d.day}日を表示中の全員×">ALL</button></th>`;
     }).join('');
     const body = people.map(p => {
       const rowCls = [
