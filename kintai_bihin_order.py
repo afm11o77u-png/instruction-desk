@@ -7,17 +7,16 @@ prepKey で二重クリック／再試行を冪等化する。
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
 import secrets
-import shutil
 import subprocess
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from pathlib import Path
-from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile, BadZipFile
 
 import kintai_bihin
@@ -44,17 +43,32 @@ DEFAULT_BODY_INLINE = (
     'よろしくお願いいたします。\n'
 )
 
-# Desktop path on the office PC (read-only). Cloud uses repo fixture when missing.
+# Desktop path on the office PC (read-only). Cloud / other PCs use repo fixture when missing.
 DESKTOP_TEMPLATE = Path(r'C:\Users\zfm11\Desktop\注文書_エンパイア発寒支店.xlsx')
 REPO_FIXTURE_TEMPLATE = Path(__file__).resolve().parent / 'assets' / 'bihin-order' / '注文書_エンパイア発寒支店.xlsx'
 
-# Fixture / known layout for fill (matches assets fixture; document gap if live file differs)
-ORDER_SHEET_DATE_CELL = 'B2'
-ORDER_SHEET_VENDOR_CELL = 'B3'
-ORDER_SHEET_DATA_START_ROW = 6
-ORDER_SHEET_COLS = {'name': 0, 'qty': 1, 'unit': 2, 'note': 3}
+# Empire CT Planning order form layout (注文書_エンパイア発寒支店.xlsx).
+# Fill only these cells; never invent a simple replacement sheet.
+ORDER_SHEET_NAME = '注文書'
+ORDER_SHEET_DATE_CELL = 'H3'
+ORDER_SHEET_HEADER_MARKERS = ('品', '名')  # B18 header contains 品……名
+ORDER_SHEET_DATA_START_ROW = 19
+ORDER_SHEET_DATA_END_ROW = 31
+ORDER_SHEET_MAX_LINES = ORDER_SHEET_DATA_END_ROW - ORDER_SHEET_DATA_START_ROW + 1
+ORDER_SHEET_NAME_COL = 'B'
+ORDER_SHEET_QTY_COL = 'D'
+ORDER_SHEET_UNIT_COL = 'E'
+ORDER_SHEET_NOTE_COL = 'H'
+# Sample unit-price / amount columns — clear when rewriting lines so stale sample
+# numbers do not remain; formulas G32:G34 are left untouched.
+ORDER_SHEET_CLEAR_COLS = ('F', 'G')
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+# Match a single <c r="X99" .../> or <c r="X99" ...>...</c> element.
+_CELL_XML_RE = re.compile(
+    r'<c\s+r="([A-Z]+\d+)"([^>]*?)(?:/>|>(.*?)</c>)',
+    re.DOTALL,
+)
 
 
 def _now() -> str:
@@ -197,8 +211,9 @@ def save_vendor(c, user, payload: dict) -> dict:
     vendor_id = payload.get('id')
     name = str(payload.get('name') or '').strip()[:120]
     email = str(payload.get('email') or '').strip()[:120]
-    subject = str(payload.get('subjectTemplate') or '').strip()[:500]
-    body = str(payload.get('bodyTemplate') or '').strip()[:4000]
+    # Persist real newlines (convert typed "\n" escapes so compose does not show literals).
+    subject = _normalize_newlines(str(payload.get('subjectTemplate') or '')).strip()[:500]
+    body = _normalize_newlines(str(payload.get('bodyTemplate') or '')).strip()[:4000]
     mode = _mode_norm(payload.get('mode'))
     active = 1 if payload.get('active', True) else 0
     try:
@@ -331,19 +346,212 @@ def _format_lines_block(lines: list[dict]) -> str:
     return '\n'.join(parts)
 
 
-def _cell_ref(col: int, row: int) -> str:
-    return f'{chr(65 + col)}{row}'
+def _normalize_newlines(text: str) -> str:
+    """Turn typed/literal \\n escapes into real newlines; keep real newlines.
+
+    Thunderbird was showing literal \\n\\n because templates/compose escaped
+    newlines as two-character sequences. Save and compose both normalize here.
+    """
+    if text is None:
+        return ''
+    s = str(text).replace('\r\n', '\n').replace('\r', '\n')
+    # Convert literal backslash-n / backslash-r sequences (not real CRs).
+    s = s.replace('\\r\\n', '\n').replace('\\n', '\n').replace('\\r', '\n')
+    return s
 
 
-def _inline_cell(ref: str, value, style: int = 0) -> str:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return f'<c r="{ref}" s="{style}"><v>{value}</v></c>'
-    text = escape(str(value if value is not None else '')).replace('\n', '&#10;')
-    return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{text}</t></is></c>'
+def _xml_escape_text(value: str) -> str:
+    return (
+        str(value)
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;')
+        .replace('\n', '&#10;')
+    )
 
 
-def fill_order_workbook(template_path: Path, *, order_date: str, vendor_name: str, lines: list[dict]) -> bytes:
-    """Copy template bytes and fill known cells. Never writes back to template_path."""
+def _cell_attrs_style(attrs: str) -> str:
+    """Keep only the style index from existing cell attrs (preserve borders/fonts)."""
+    m = re.search(r'\ss="(\d+)"', attrs or '')
+    return f' s="{m.group(1)}"' if m else ''
+
+
+def _build_cell_xml(ref: str, attrs: str, value) -> str:
+    style = _cell_attrs_style(attrs)
+    if value is None or value == '':
+        return f'<c r="{ref}"{style}/>'
+    if isinstance(value, bool):
+        return f'<c r="{ref}"{style} t="inlineStr"><is><t>{_xml_escape_text(str(value))}</t></is></c>'
+    if isinstance(value, (int, float, Decimal)):
+        if isinstance(value, Decimal):
+            num = format(value, 'f')
+            if '.' in num:
+                num = num.rstrip('0').rstrip('.')
+        else:
+            num = str(value)
+        return f'<c r="{ref}"{style}><v>{num}</v></c>'
+    text = _xml_escape_text(str(value))
+    return (
+        f'<c r="{ref}"{style} t="inlineStr">'
+        f'<is><t xml:space="preserve">{text}</t></is></c>'
+    )
+
+
+def _set_sheet_cells(sheet_xml: str, updates: dict) -> str:
+    """Replace existing <c r=".."> nodes; refuse missing mapped refs."""
+    missing = [ref for ref in updates if f'r="{ref}"' not in sheet_xml]
+    if missing:
+        raise ValueError(
+            '注文書テンプレートに必要なセルがありません（'
+            + ', '.join(missing)
+            + '）。レイアウトが想定と異なるため、簡易表への置き換えはしません。'
+            ' 原本レイアウトを合わせるか BIHIN_ORDER_TEMPLATE で互換コピーを指定してください。'
+        )
+
+    def repl(match: re.Match) -> str:
+        ref = match.group(1)
+        if ref not in updates:
+            return match.group(0)
+        return _build_cell_xml(ref, match.group(2) or '', updates[ref])
+
+    return _CELL_XML_RE.sub(repl, sheet_xml)
+
+
+def _strip_calc_chain_ref(calc_xml: str, ref: str) -> str:
+    """Drop a formula cell from calcChain after replacing it with a value."""
+    return re.sub(rf'<c\s+r="{re.escape(ref)}"[^/]*/>', '', calc_xml)
+
+
+def _shared_string_plain(si_xml: str) -> str:
+    """Extract display text from a sharedStrings <si>, ignoring phonetic <rPh>."""
+    # Remove phonetic runs first so their <t> do not concatenate into the label.
+    cleaned = re.sub(r'<rPh\b[^>]*>.*?</rPh>', '', si_xml, flags=re.DOTALL)
+    parts = re.findall(r'<t[^>]*>(.*?)</t>', cleaned, flags=re.DOTALL)
+    if not parts:
+        return ''
+    text = ''.join(parts)
+    return (
+        text.replace('&lt;', '<')
+        .replace('&gt;', '>')
+        .replace('&amp;', '&')
+        .replace('&#10;', '\n')
+    )
+
+
+def _load_shared_strings(sst_xml: str) -> list[str]:
+    return [_shared_string_plain(si) for si in re.findall(r'<si\b[^>]*>.*?</si>', sst_xml, flags=re.DOTALL)]
+
+
+def _cell_display_value(cell_xml: str, shared: list[str]):
+    if 't="s"' in cell_xml or "t='s'" in cell_xml:
+        m = re.search(r'<v>(\d+)</v>', cell_xml)
+        if not m:
+            return ''
+        idx = int(m.group(1))
+        return shared[idx] if 0 <= idx < len(shared) else ''
+    if 't="inlineStr"' in cell_xml:
+        parts = re.findall(r'<t[^>]*>(.*?)</t>', cell_xml, flags=re.DOTALL)
+        return ''.join(parts)
+    m = re.search(r'<f[^>]*>(.*?)</f>', cell_xml, flags=re.DOTALL)
+    if m:
+        return f'={m.group(1)}'
+    m = re.search(r'<v>(.*?)</v>', cell_xml, flags=re.DOTALL)
+    return m.group(1) if m else ''
+
+
+def _find_cell_xml(sheet_xml: str, ref: str) -> str | None:
+    m = re.search(
+        rf'<c\s+r="{re.escape(ref)}"[^>]*?(?:/>|>.*?</c>)',
+        sheet_xml,
+        flags=re.DOTALL,
+    )
+    return m.group(0) if m else None
+
+
+def validate_order_template(template_path: Path) -> None:
+    """Ensure template matches Empire order layout. Raises ValueError with reason."""
+    try:
+        raw = template_path.read_bytes()
+    except OSError as e:
+        raise ValueError(f'注文書テンプレートを読めません: {e}') from e
+    try:
+        zin = ZipFile(BytesIO(raw))
+    except BadZipFile as e:
+        raise ValueError('注文書テンプレートが壊れているか、Excel形式ではありません。') from e
+    try:
+        names = zin.namelist()
+        sheet_name = next(
+            (n for n in names if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')),
+            None,
+        )
+        if not sheet_name:
+            raise ValueError('注文書テンプレートにワークシートがありません。簡易表への置き換えはしません。')
+        sheet_xml = zin.read(sheet_name).decode('utf-8')
+        sst = zin.read('xl/sharedStrings.xml').decode('utf-8') if 'xl/sharedStrings.xml' in names else ''
+        shared = _load_shared_strings(sst) if sst else []
+        # Workbook sheet title
+        if 'xl/workbook.xml' in names:
+            wb = zin.read('xl/workbook.xml').decode('utf-8')
+            if f'name="{ORDER_SHEET_NAME}"' not in wb and f"name='{ORDER_SHEET_NAME}'" not in wb:
+                raise ValueError(
+                    f'注文書テンプレートのシート名が「{ORDER_SHEET_NAME}」ではありません。'
+                    ' 想定レイアウトと異なるため記入できません（簡易表へは落とさない）。'
+                )
+        required = [ORDER_SHEET_DATE_CELL]
+        for row in range(ORDER_SHEET_DATA_START_ROW, ORDER_SHEET_DATA_END_ROW + 1):
+            required.extend([
+                f'{ORDER_SHEET_NAME_COL}{row}',
+                f'{ORDER_SHEET_QTY_COL}{row}',
+                f'{ORDER_SHEET_UNIT_COL}{row}',
+                f'{ORDER_SHEET_NOTE_COL}{row}',
+            ])
+        missing = [ref for ref in required if _find_cell_xml(sheet_xml, ref) is None]
+        if missing:
+            raise ValueError(
+                '注文書テンプレートに必要なセルがありません（'
+                + ', '.join(missing[:8])
+                + ('…' if len(missing) > 8 else '')
+                + '）。レイアウト不一致のため簡易表への置き換えはしません。'
+            )
+        header = _find_cell_xml(sheet_xml, 'B18')
+        if not header:
+            raise ValueError(
+                '注文書テンプレートに明細見出し（B18）がありません。'
+                ' 想定レイアウトと異なるため記入できません。'
+            )
+        label = _cell_display_value(header, shared)
+        if not all(mark in label for mark in ORDER_SHEET_HEADER_MARKERS):
+            raise ValueError(
+                f'注文書テンプレートの B18 が見出し「品名」ではありません（取得値: {label!r}）。'
+                ' レイアウト不一致のため簡易表への置き換えはしません。'
+            )
+    finally:
+        zin.close()
+
+
+def fill_order_workbook(
+    template_path: Path,
+    *,
+    order_date: str,
+    vendor_name: str = '',
+    lines: list[dict],
+) -> bytes:
+    """Copy template zip and fill only date/item/qty cells. Never writes template_path.
+
+    vendor_name is accepted for API compatibility but not written: the Empire form
+    letterhead already names the supplier (CT Planning). Silent layout fallback is
+    forbidden — validate_order_template must pass.
+    """
+    del vendor_name  # letterhead / 仕入先欄はテンプレ固定。上書きしない。
+    validate_order_template(template_path)
+    if len(lines) > ORDER_SHEET_MAX_LINES:
+        raise ValueError(
+            f'注文明細がテンプレートの行数上限（{ORDER_SHEET_MAX_LINES}行、'
+            f'{ORDER_SHEET_DATA_START_ROW}〜{ORDER_SHEET_DATA_END_ROW}行目）を超えています。'
+            ' 分割して発注するか、テンプレートの明細行を増やした互換コピーを'
+            ' BIHIN_ORDER_TEMPLATE で指定してください。'
+        )
+
     try:
         raw = template_path.read_bytes()
     except OSError as e:
@@ -353,73 +561,62 @@ def fill_order_workbook(template_path: Path, *, order_date: str, vendor_name: st
     except BadZipFile as e:
         raise ValueError('注文書テンプレートが壊れているか、Excel形式ではありません。') from e
 
-    # Build replacement sheet1 from fixture layout (safe for our known structure).
-    # If the live desktop file has a different layout, operators should align it
-    # or set BIHIN_ORDER_TEMPLATE to a compatible copy — documented in the report.
-    sheet_rows = []
-    sheet_rows.append(
-        f'<row r="1" ht="28" customHeight="1">{_inline_cell("A1", "注文書（エンパイア発寒支店）", 2)}</row>'
-    )
-    sheet_rows.append(
-        f'<row r="2">{_inline_cell("A2", "発注日")}{_inline_cell("B2", order_date)}</row>'
-    )
-    sheet_rows.append(
-        f'<row r="3">{_inline_cell("A3", "仕入先")}{_inline_cell("B3", vendor_name)}</row>'
-    )
-    sheet_rows.append('<row r="4"></row>')
-    sheet_rows.append(
-        '<row r="5" ht="22" customHeight="1">'
-        + _inline_cell('A5', '品名', 1)
-        + _inline_cell('B5', '数量', 1)
-        + _inline_cell('C5', '単位', 1)
-        + _inline_cell('D5', '備考', 1)
-        + '</row>'
-    )
-    for i, ln in enumerate(lines):
-        r = ORDER_SHEET_DATA_START_ROW + i
-        name = ln.get('orderProductName') or ln.get('itemName') or ''
-        qty = ln.get('orderQty')
-        unit = ln.get('orderUnit') or ''
-        note = ln.get('note') or ''
-        sheet_rows.append(
-            f'<row r="{r}">'
-            + _inline_cell(_cell_ref(0, r), name)
-            + _inline_cell(_cell_ref(1, r), qty)
-            + _inline_cell(_cell_ref(2, r), unit)
-            + _inline_cell(_cell_ref(3, r), note)
-            + '</row>'
+    try:
+        names = list(zin.namelist())
+        sheet_name = next(
+            n for n in names if n.startswith('xl/worksheets/sheet') and n.endswith('.xml')
         )
-    # pad blank rows
-    end = max(ORDER_SHEET_DATA_START_ROW + len(lines), 55)
-    for r in range(ORDER_SHEET_DATA_START_ROW + len(lines), end + 1):
-        sheet_rows.append(
-            f'<row r="{r}">'
-            + ''.join(_inline_cell(_cell_ref(c, r), '') for c in range(4))
-            + '</row>'
-        )
-    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-    new_sheet = f'<worksheet xmlns="{ns}"><sheetData>{"".join(sheet_rows)}</sheetData></worksheet>'
+        sheet_xml = zin.read(sheet_name).decode('utf-8')
 
-    out = BytesIO()
-    with ZipFile(out, 'w', ZIP_DEFLATED) as zout:
-        names = zin.namelist()
-        sheet_name = None
-        for n in names:
-            if n.startswith('xl/worksheets/sheet') and n.endswith('.xml'):
-                sheet_name = n
-                break
-        if not sheet_name:
-            sheet_name = 'xl/worksheets/sheet1.xml'
-        for n in names:
-            if n == sheet_name:
-                zout.writestr(n, new_sheet)
+        # Prefer a readable Japanese date for 注文日 (H3).
+        try:
+            day = date.fromisoformat(str(order_date)[:10])
+            date_label = f'{day.year}/{day.month:02d}/{day.day:02d}'
+        except ValueError:
+            date_label = str(order_date)
+
+        updates: dict = {ORDER_SHEET_DATE_CELL: date_label}
+        for i in range(ORDER_SHEET_MAX_LINES):
+            row = ORDER_SHEET_DATA_START_ROW + i
+            if i < len(lines):
+                ln = lines[i]
+                name = ln.get('orderProductName') or ln.get('itemName') or ''
+                qty = ln.get('orderQty')
+                unit = ln.get('orderUnit') or ''
+                note = ln.get('note') or ''
+                updates[f'{ORDER_SHEET_NAME_COL}{row}'] = name
+                updates[f'{ORDER_SHEET_QTY_COL}{row}'] = qty
+                updates[f'{ORDER_SHEET_UNIT_COL}{row}'] = unit
+                updates[f'{ORDER_SHEET_NOTE_COL}{row}'] = note
             else:
-                zout.writestr(n, zin.read(n))
-        if sheet_name not in names:
-            # fixture path always has sheet1; if somehow missing, write it
-            zout.writestr(sheet_name, new_sheet)
-    zin.close()
-    return out.getvalue()
+                updates[f'{ORDER_SHEET_NAME_COL}{row}'] = ''
+                updates[f'{ORDER_SHEET_QTY_COL}{row}'] = ''
+                updates[f'{ORDER_SHEET_UNIT_COL}{row}'] = ''
+                updates[f'{ORDER_SHEET_NOTE_COL}{row}'] = ''
+            # Always clear sample unit-price / amount on line rows.
+            for col in ORDER_SHEET_CLEAR_COLS:
+                updates[f'{col}{row}'] = ''
+
+        new_sheet = _set_sheet_cells(sheet_xml, updates)
+
+        out = BytesIO()
+        with ZipFile(out, 'w', ZIP_DEFLATED) as zout:
+            for n in names:
+                data = zin.read(n)
+                if n == sheet_name:
+                    zout.writestr(n, new_sheet.encode('utf-8'))
+                elif n == 'xl/calcChain.xml':
+                    # H3 was =TODAY(); now a static value — drop from calcChain to
+                    # avoid Excel "repaired" prompts.
+                    calc = data.decode('utf-8')
+                    calc = _strip_calc_chain_ref(calc, ORDER_SHEET_DATE_CELL)
+                    zout.writestr(n, calc.encode('utf-8'))
+                else:
+                    # Preserve drawings, printerSettings, styles, sharedStrings, etc.
+                    zout.writestr(n, data)
+        return out.getvalue()
+    finally:
+        zin.close()
 
 
 def thunderbird_path() -> str:
@@ -448,18 +645,24 @@ def thunderbird_path() -> str:
 
 
 def open_compose(*, to: str, subject: str, body: str, attachment: str | None = None, popen=subprocess.Popen, tb_path=None):
-    """Open Thunderbird compose. Does not send. Same pattern as picking.send_mail."""
-    for part in (to, subject, body, attachment or ''):
-        if "'" in part or '\n' in part or '\r' in part:
-            # body may have newlines — Thunderbird -compose uses single-quoted body;
-            # convert newlines to literal \n escapes like picking keeps body single-line.
-            pass
-    # Normalize body newlines for -compose (picking uses single-line body)
-    body_one = body.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\\n')
-    subject_one = subject.replace('\r', ' ').replace('\n', ' ')
-    if any("'" in part for part in (to, subject_one, body_one, attachment or '')):
+    """Open Thunderbird compose. Does not send. Keeps to/subject/body/attachment + identity signature.
+
+    Newlines: do NOT pass literal \\n (Thunderbird shows them as text). Use HTML
+    body with <br> and format=1 so real line breaks appear; the account signature
+    is still appended by Thunderbird's compose window.
+    """
+    subject_one = _normalize_newlines(subject).replace('\n', ' ').strip()
+    body_norm = _normalize_newlines(body)
+    # HTML body: escape, then real newlines → <br> (not the two-char sequence \\n).
+    body_html = html.escape(body_norm, quote=True).replace('\n', '<br>')
+    if any("'" in part for part in (to, subject_one, body_html, attachment or '')):
         raise ValueError('メールの内容に単引用符は使えません。テンプレートを見直してください。')
-    parts = [f"to='{to}'", f"subject='{subject_one}'", f"body='{body_one}'"]
+    parts = [
+        f"to='{to}'",
+        f"subject='{subject_one}'",
+        f"body='{body_html}'",
+        "format='1'",
+    ]
     if attachment:
         parts.append(f"attachment='{attachment}'")
     compose = ','.join(parts)
@@ -768,10 +971,72 @@ def prepare_orders(
 
     existing = _orders_for_prep(c, prep_key)
     if existing:
-        # Idempotent: already prepared — do not add purchase again
+        # Idempotent / regenerate: never re-add purchase for an existing prepKey.
+        regenerate = bool(payload.get('regenerateMail') or payload.get('regenerate'))
+        template_source = None
+        if regenerate and (open_mail or skip_mail):
+            mail_dir = _mail_out_dir()
+            for row in existing:
+                if row['cancelled']:
+                    continue
+                try:
+                    lines = json.loads(row['lines_json'] or '[]')
+                except json.JSONDecodeError:
+                    lines = []
+                attachment_uri = None
+                attachment_path = row['attachment_path'] or ''
+                if _mode_norm(row['mode']) == MODE_EXCEL:
+                    template_path, template_source = resolve_template_path()
+                    blob = fill_order_workbook(
+                        template_path,
+                        order_date=row['order_date'],
+                        vendor_name=row['vendor_name'] or '',
+                        lines=lines,
+                    )
+                    fname = (
+                        f"bihin-order-{prep_key[:12]}-v{row['vendor_id']}-"
+                        f"{row['order_date']}-regen.xlsx"
+                    )
+                    path = mail_dir / fname
+                    path.write_bytes(blob)
+                    attachment_path = str(path)
+                    attachment_uri = path.as_uri()
+                    if template_path.resolve() == path.resolve():
+                        raise ValueError('注文書テンプレートを上書きしようとしました。中止します。')
+                    c.execute(
+                        'UPDATE kintai_bihin_orders SET attachment_path=? WHERE id=?',
+                        (attachment_path, int(row['id'])),
+                    )
+                elif attachment_path:
+                    try:
+                        attachment_uri = Path(attachment_path).as_uri()
+                    except OSError:
+                        attachment_uri = None
+                if open_mail and not skip_mail:
+                    open_compose(
+                        to=row['vendor_email'] or '',
+                        subject=row['subject'] or '',
+                        body=row['body'] or '',
+                        attachment=attachment_uri,
+                        popen=popen,
+                        tb_path=tb_path,
+                    )
+            fresh = _orders_for_prep(c, prep_key)
+            return {
+                'prepKey': prep_key,
+                'idempotent': True,
+                'regenerated': True,
+                'orders': [_order_public(r) for r in fresh],
+                'message': (
+                    '既存の発注のメール／添付を再作成しました'
+                    '（当月購入は二重加算していません）。'
+                ),
+                'templateSource': template_source,
+            }
         return {
             'prepKey': prep_key,
             'idempotent': True,
+            'regenerated': False,
             'orders': [_order_public(r) for r in existing],
             'message': '同じ発注準備は既に完了しています（二重加算しません）。',
             'templateSource': None,
@@ -807,15 +1072,18 @@ def prepare_orders(
             'year': year,
             'month': month,
         }
-        subject_tpl = g['subjectTemplate'] or DEFAULT_SUBJECT
+        subject_tpl = _normalize_newlines(g['subjectTemplate'] or DEFAULT_SUBJECT)
         if g['mode'] == MODE_BODY:
-            body_tpl = g['bodyTemplate'] or DEFAULT_BODY_INLINE
+            body_tpl = _normalize_newlines(g['bodyTemplate'] or DEFAULT_BODY_INLINE)
         else:
-            body_tpl = g['bodyTemplate'] or DEFAULT_BODY_EXCEL
-        subject = _render_template(subject_tpl, mapping).strip() or DEFAULT_SUBJECT.format(**mapping)
-        body = _render_template(body_tpl, mapping)
+            body_tpl = _normalize_newlines(g['bodyTemplate'] or DEFAULT_BODY_EXCEL)
+        subject = _normalize_newlines(
+            _render_template(subject_tpl, mapping)
+        ).strip() or DEFAULT_SUBJECT.format(**mapping)
+        body = _normalize_newlines(_render_template(body_tpl, mapping))
         # Body mode must clearly show name/qty/unit
-        if g['mode'] == MODE_BODY and '{lines}' not in (g['bodyTemplate'] or DEFAULT_BODY_INLINE):
+        saved_body_tpl = _normalize_newlines(g['bodyTemplate'] or '')
+        if g['mode'] == MODE_BODY and '{lines}' not in (saved_body_tpl or DEFAULT_BODY_INLINE):
             if _format_lines_block(g['lines']) not in body:
                 body = body.rstrip() + '\n\n' + _format_lines_block(g['lines']) + '\n'
 

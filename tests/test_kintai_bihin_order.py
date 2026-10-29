@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import inspect
+import re
 import sqlite3
 import tempfile
 import unittest
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 from unittest import mock
+from zipfile import ZipFile
 
 import kintai
 import kintai_bihin
@@ -35,8 +38,37 @@ class BihinOrderHelpersTest(unittest.TestCase):
         path, src = kintai_bihin_order.resolve_template_path()
         self.assertTrue(path.is_file())
         self.assertIn(src, ('repo-fixture', 'desktop', 'env:BIHIN_ORDER_TEMPLATE'))
+        self.assertGreater(path.stat().st_size, 10000)
+        kintai_bihin_order.validate_order_template(path)
 
-    def test_fill_does_not_overwrite_template(self):
+    def test_normalize_newlines_literal_and_real(self):
+        self.assertEqual(kintai_bihin_order._normalize_newlines('a\\n\\nb'), 'a\n\nb')
+        self.assertEqual(kintai_bihin_order._normalize_newlines('a\n\nb'), 'a\n\nb')
+        self.assertEqual(kintai_bihin_order._normalize_newlines('a\\nb\nc'), 'a\nb\nc')
+
+    def test_compose_uses_html_br_not_literal_backslash_n(self):
+        opened = []
+
+        def fake_popen(args, **kwargs):
+            opened.append(args)
+            return mock.Mock()
+
+        kintai_bihin_order.open_compose(
+            to='vendor@example.com',
+            subject='件名',
+            body='行1\n\n行2',
+            attachment=None,
+            popen=fake_popen,
+            tb_path='/usr/bin/true',
+        )
+        compose = opened[0][2]
+        self.assertIn("format='1'", compose)
+        self.assertIn('行1<br><br>行2', compose)
+        self.assertNotIn('\\\\n', compose)
+        # two-char backslash-n must not appear as body text
+        self.assertNotRegex(compose, r"body='[^']*\\n")
+
+    def test_fill_does_not_overwrite_template_and_preserves_parts(self):
         path, _ = kintai_bihin_order.resolve_template_path()
         before = path.read_bytes()
         blob = kintai_bihin_order.fill_order_workbook(
@@ -47,13 +79,43 @@ class BihinOrderHelpersTest(unittest.TestCase):
                 'orderProductName': 'コピー用紙A4',
                 'orderQty': 3,
                 'orderUnit': '箱',
-                'note': '',
+                'note': '至急',
             }],
         )
         after = path.read_bytes()
         self.assertEqual(before, after)
         self.assertNotEqual(blob, before)
-        self.assertGreater(len(blob), 100)
+        self.assertGreater(len(blob), 10000)
+        with ZipFile(BytesIO(blob)) as z:
+            names = z.namelist()
+            self.assertTrue(any('drawings/' in n for n in names))
+            self.assertTrue(any('printerSettings/' in n for n in names))
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertIn('mergeCell', sheet)
+            self.assertIn('pageSetup', sheet)
+            self.assertIn('SUM(G19:G31)', sheet)
+            self.assertNotIn('TODAY()', sheet)
+            self.assertIn('コピー用紙A4', sheet)
+            self.assertRegex(sheet, r'<c r="D19"[^>]*>\s*<v>3</v>')
+            self.assertRegex(sheet, r'<c r="H3"[^>]*t="inlineStr"')
+            calc = z.read('xl/calcChain.xml').decode('utf-8')
+            self.assertNotIn('H3', calc)
+            self.assertIn('G32', calc)
+            rels = z.read('xl/worksheets/_rels/sheet1.xml.rels').decode('utf-8')
+            self.assertIn('drawing', rels)
+            self.assertIn('printerSettings', rels)
+
+    def test_fill_rejects_too_many_lines_without_fallback(self):
+        path, _ = kintai_bihin_order.resolve_template_path()
+        lines = [
+            {'orderProductName': f'品{i}', 'orderQty': 1, 'orderUnit': '箱'}
+            for i in range(kintai_bihin_order.ORDER_SHEET_MAX_LINES + 1)
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            kintai_bihin_order.fill_order_workbook(
+                path, order_date='2026-10-29', lines=lines,
+            )
+        self.assertIn('上限', str(ctx.exception))
 
 
 class BihinOrderStoreTest(unittest.TestCase):
@@ -178,11 +240,21 @@ class BihinOrderStoreTest(unittest.TestCase):
         again = kintai_bihin.get_sheet(self.c, 2026, 10)
         # 5 + 2*100 = 205
         self.assertEqual(again['rows'][0]['purchaseQty'], 205)
-        # body has clear name/qty/unit
+        # body has clear name/qty/unit and real newlines (not literal \n)
         body = result['orders'][0]['body']
         self.assertIn('HIQラベル', body)
         self.assertIn('2', body)
         self.assertIn('箱', body)
+        self.assertIn('\n', body)
+        self.assertNotIn('\\n', body)
+
+    def test_vendor_save_normalizes_literal_newlines(self):
+        v = self._vendor(
+            bodyTemplate='{vendor} 様\\n\\n明細:\\n{lines}\\n',
+            subjectTemplate='発注\\n{date}',
+        )
+        self.assertEqual(v['bodyTemplate'], '{vendor} 様\n\n明細:\n{lines}')
+        self.assertEqual(v['subjectTemplate'], '発注\n{date}')
 
     def test_idempotent_prep_key(self):
         v = self._vendor()
@@ -205,6 +277,46 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertTrue(r2['idempotent'])
         sheet = kintai_bihin.get_sheet(self.c, 2026, 10)
         self.assertEqual(sheet['rows'][0]['purchaseQty'], 3)
+
+    def test_regenerate_mail_does_not_readd_purchase(self):
+        v = self._vendor(mode='excel')
+        it = self._item(
+            '再生テスト', 90, vendorId=v['id'], orderUnit='箱', packingQty=2,
+            orderProductName='再生ラベル',
+        )
+        first = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'regen1', 'orderDate': '2026-10-01',
+             'lines': [{'itemId': it['id'], 'orderQty': 2}]},
+            open_mail=True, skip_mail=True,
+        )
+        self.assertEqual(kintai_bihin.get_sheet(self.c, 2026, 10)['rows'][0]['purchaseQty'], 4)
+        opened = []
+
+        def fake_popen(args, **kwargs):
+            opened.append(args)
+            return mock.Mock()
+
+        again = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'regen1', 'regenerateMail': True,
+             'orderDate': '2026-10-01',
+             'lines': [{'itemId': it['id'], 'orderQty': 2}]},
+            open_mail=True, skip_mail=False,
+            popen=fake_popen, tb_path='/usr/bin/true',
+        )
+        self.assertTrue(again['idempotent'])
+        self.assertTrue(again.get('regenerated'))
+        self.assertEqual(kintai_bihin.get_sheet(self.c, 2026, 10)['rows'][0]['purchaseQty'], 4)
+        self.assertEqual(len(opened), 1)
+        compose = opened[0][2]
+        self.assertIn('attachment=', compose)
+        self.assertIn("format='1'", compose)
+        att = again['orders'][0]['attachmentPath']
+        self.assertTrue(att and Path(att).is_file())
+        with ZipFile(att) as z:
+            sheet = z.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            self.assertIn('再生ラベル', sheet)
 
     def test_cancel_reverses_only_that_order(self):
         v = self._vendor()
@@ -309,6 +421,8 @@ class BihinOrderStoreTest(unittest.TestCase):
         self.assertEqual(len(opened), 1)
         compose = ' '.join(opened[0])
         self.assertIn('attachment=', compose)
+        self.assertIn("format='1'", compose)
+        self.assertIn('<br>', compose)
 
     def test_soft_deleted_item_hidden_from_order_keeps_history(self):
         v = self._vendor()
@@ -367,6 +481,8 @@ class BihinOrderUiContractTest(unittest.TestCase):
         self.assertNotIn('DROP TABLE', inspect.getsource(kintai_bihin_order.schema))
         fixture = ROOT / 'assets' / 'bihin-order' / '注文書_エンパイア発寒支店.xlsx'
         self.assertTrue(fixture.is_file())
+        self.assertGreater(fixture.stat().st_size, 10000)
+        kintai_bihin_order.validate_order_template(fixture)
 
 
 if __name__ == '__main__':
