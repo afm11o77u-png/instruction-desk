@@ -46,6 +46,31 @@ class BihinOrderHelpersTest(unittest.TestCase):
         self.assertEqual(kintai_bihin_order._normalize_newlines('a\n\nb'), 'a\n\nb')
         self.assertEqual(kintai_bihin_order._normalize_newlines('a\\nb\nc'), 'a\nb\nc')
 
+    def test_format_order_content_block(self):
+        single = kintai_bihin_order._format_order_content_block([{
+            'orderProductName': 'CP2610HMES-TA／白ラベル',
+            'orderQty': 2,
+            'orderUnit': '箱',
+        }])
+        self.assertEqual(single, 'CP2610HMES-TA／白ラベル\n数量：2箱')
+        multi = kintai_bihin_order._format_order_content_block([
+            {'orderProductName': 'A品', 'orderQty': 1, 'orderUnit': '箱', 'orderSpec': '規格X'},
+            {'orderProductName': 'B品', 'orderQty': Decimal('2.0'), 'orderUnit': '巻'},
+        ])
+        self.assertEqual(multi, 'A品\n規格X\n数量：1箱\n\nB品\n数量：2巻')
+        # 金額フィールドがあっても本文には出さない
+        with_amount = kintai_bihin_order._format_order_content_block([{
+            'orderProductName': 'C', 'orderQty': 3, 'orderUnit': '個',
+            'amount': 999, 'unitPrice': 100,
+        }])
+        self.assertNotIn('999', with_amount)
+        self.assertNotIn('100', with_amount)
+        self.assertNotIn('円', with_amount)
+        self.assertEqual(with_amount, 'C\n数量：3個')
+        # 注文画面数量のまま（入数換算しない）
+        self.assertIn('数量：2箱', single)
+        self.assertNotIn('数量：20', single)
+
     def test_compose_uses_html_br_not_literal_backslash_n(self):
         opened = []
 
@@ -240,21 +265,165 @@ class BihinOrderStoreTest(unittest.TestCase):
         again = kintai_bihin.get_sheet(self.c, 2026, 10)
         # 5 + 2*100 = 205
         self.assertEqual(again['rows'][0]['purchaseQty'], 205)
-        # body has clear name/qty/unit and real newlines (not literal \n)
+        # body has {注文内容} expanded: 発注品名 / 数量：注文画面qty+単位（入数換算なし）
         body = result['orders'][0]['body']
-        self.assertIn('HIQラベル', body)
-        self.assertIn('2', body)
-        self.assertIn('箱', body)
+        self.assertIn('HIQラベル\n数量：2箱', body)
+        self.assertNotIn('数量：200', body)  # packing 100 × 2 は本文に出さない
         self.assertIn('\n', body)
         self.assertNotIn('\\n', body)
+        self.assertNotIn('{注文内容}', body)
 
     def test_vendor_save_normalizes_literal_newlines(self):
         v = self._vendor(
-            bodyTemplate='{vendor} 様\\n\\n明細:\\n{lines}\\n',
+            bodyTemplate='{vendor} 様\\n\\n明細:\\n{注文内容}\\n',
             subjectTemplate='発注\\n{date}',
         )
-        self.assertEqual(v['bodyTemplate'], '{vendor} 様\n\n明細:\n{lines}')
+        self.assertEqual(v['bodyTemplate'], '{vendor} 様\n\n明細:\n{注文内容}')
         self.assertEqual(v['subjectTemplate'], '発注\n{date}')
+
+    def test_body_mode_requires_order_placeholder_no_mail_no_purchase(self):
+        v = self._vendor(
+            mode='body',
+            bodyTemplate='{vendor} 様\n\nよろしく。\n',  # {注文内容} なし
+        )
+        it = self._item(
+            '欠落プレース', 10, vendorId=v['id'], orderUnit='箱', packingQty=5,
+            orderProductName='欠落品',
+        )
+        with self.assertRaises(ValueError) as ctx:
+            kintai_bihin_order.prepare_orders(
+                self.c, self.user,
+                {'prepKey': 'no-ph', 'orderDate': '2026-10-20',
+                 'lines': [{'itemId': it['id'], 'orderQty': 1}]},
+                open_mail=True, skip_mail=True,
+            )
+        self.assertIn('{注文内容}', str(ctx.exception))
+        self.assertEqual(kintai_bihin_order.list_order_history(self.c), [])
+        sheet = kintai_bihin.get_sheet(self.c, 2026, 10)
+        if sheet['rows']:
+            pq = sheet['rows'][0].get('purchaseQty')
+            self.assertTrue(pq in (None, 0))
+
+    def test_excel_mode_without_placeholder_keeps_attach_flow(self):
+        v = self._vendor(mode='excel', bodyTemplate='添付をご確認ください。')
+        it = self._item(
+            '添付のみ', 10, vendorId=v['id'], orderUnit='箱', packingQty=2,
+            orderProductName='添付品',
+        )
+        opened = []
+
+        def fake_popen(args, **kwargs):
+            opened.append(args)
+            return mock.Mock()
+
+        result = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'excel-no-ph', 'orderDate': '2026-10-21',
+             'lines': [{'itemId': it['id'], 'orderQty': 3}]},
+            open_mail=True, skip_mail=False,
+            popen=fake_popen, tb_path='/usr/bin/true',
+        )
+        self.assertEqual(len(result['orders']), 1)
+        body = result['orders'][0]['body']
+        self.assertEqual(body, '添付をご確認ください。')
+        self.assertNotIn('数量：', body)
+        compose = opened[0][2]
+        self.assertIn('attachment=', compose)
+        self.assertEqual(kintai_bihin.get_sheet(self.c, 2026, 10)['rows'][0]['purchaseQty'], 6)
+
+    def test_excel_mode_with_placeholder_replaces(self):
+        v = self._vendor(
+            mode='excel',
+            bodyTemplate='前置き\n\n{注文内容}\n\n後書き',
+        )
+        it = self._item(
+            '添付＋本文', 10, vendorId=v['id'], orderUnit='巻', packingQty=1,
+            orderProductName='両用テープ', orderSpec='透明',
+        )
+        result = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'excel-ph', 'orderDate': '2026-10-22',
+             'lines': [{'itemId': it['id'], 'orderQty': 4}]},
+            open_mail=True, skip_mail=True,
+        )
+        body = result['orders'][0]['body']
+        self.assertTrue(body.startswith('前置き\n\n'))
+        self.assertTrue(body.rstrip().endswith('後書き'))
+        self.assertIn('両用テープ\n透明\n数量：4巻', body)
+        self.assertNotIn('{注文内容}', body)
+        self.assertTrue(result['orders'][0]['attachmentPath'])
+
+    def test_multi_vendor_separate_compose_bodies(self):
+        va = self._vendor(
+            name='店A', email='a@example.com', mode='body',
+            bodyTemplate='A宛\n{注文内容}\n以上',
+        )
+        vb = self._vendor(
+            name='店B', email='b@example.com', mode='body',
+            bodyTemplate='B宛\n{注文内容}\n以上',
+        )
+        ia = self._item(
+            'A商品', 10, vendorId=va['id'], orderUnit='箱', packingQty=1,
+            orderProductName='A品名',
+        )
+        ib = self._item(
+            'B商品', 20, vendorId=vb['id'], orderUnit='袋', packingQty=1,
+            orderProductName='B品名',
+        )
+        opened = []
+
+        def fake_popen(args, **kwargs):
+            opened.append(args)
+            return mock.Mock()
+
+        result = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'mv', 'orderDate': '2026-10-23',
+             'lines': [
+                 {'itemId': ia['id'], 'orderQty': 1},
+                 {'itemId': ib['id'], 'orderQty': 2},
+             ]},
+            open_mail=True, skip_mail=False,
+            popen=fake_popen, tb_path='/usr/bin/true',
+        )
+        self.assertEqual(len(result['orders']), 2)
+        self.assertEqual(len(opened), 2)
+        bodies = {o['vendorEmail']: o['body'] for o in result['orders']}
+        self.assertIn('A品名\n数量：1箱', bodies['a@example.com'])
+        self.assertNotIn('B品名', bodies['a@example.com'])
+        self.assertIn('B品名\n数量：2袋', bodies['b@example.com'])
+        self.assertNotIn('A品名', bodies['b@example.com'])
+        # 既存テンプレを勝手に書き換えない
+        again = kintai_bihin_order.list_vendors(self.c)
+        by_id = {v['id']: v for v in again}
+        self.assertEqual(by_id[va['id']]['bodyTemplate'], 'A宛\n{注文内容}\n以上')
+        self.assertEqual(by_id[vb['id']]['bodyTemplate'], 'B宛\n{注文内容}\n以上')
+
+    def test_multi_items_same_vendor_blank_line(self):
+        v = self._vendor(
+            mode='body',
+            bodyTemplate='注文:\n{注文内容}\n',
+        )
+        a = self._item(
+            '複数1', 10, vendorId=v['id'], orderUnit='箱', packingQty=1,
+            orderProductName='品1',
+        )
+        b = self._item(
+            '複数2', 10, vendorId=v['id'], orderUnit='本', packingQty=1,
+            orderProductName='品2',
+        )
+        result = kintai_bihin_order.prepare_orders(
+            self.c, self.user,
+            {'prepKey': 'multi-same', 'orderDate': '2026-10-24',
+             'lines': [
+                 {'itemId': a['id'], 'orderQty': 1},
+                 {'itemId': b['id'], 'orderQty': 3},
+             ]},
+            open_mail=True, skip_mail=True,
+        )
+        self.assertEqual(len(result['orders']), 1)
+        body = result['orders'][0]['body']
+        self.assertIn('品1\n数量：1箱\n\n品2\n数量：3本', body)
 
     def test_idempotent_prep_key(self):
         v = self._vendor()
@@ -512,12 +681,22 @@ class BihinOrderUiContractTest(unittest.TestCase):
         self.assertIn('id="bihinorderdialog"', index)
         self.assertIn('Excel添付', index)
         self.assertIn('本文に記載', index)
+        self.assertIn('{注文内容}', index)
+        self.assertIn('id="bihinvendorinsertorder"', index)
+        self.assertIn('注文内容を挿入', index)
+        self.assertIn('id="bihinitemorderspec"', index)
+        self.assertIn('規格・補足', index)
         js = (ROOT / 'kintai-bihin.js').read_text(encoding='utf-8')
         self.assertIn('/api/kintai/bihin/order/prepare', js)
         self.assertIn('/api/kintai/bihin/order/cancel', js)
         self.assertIn('prepKey', js)
+        self.assertIn('insertOrderContentPlaceholder', js)
+        self.assertIn('{注文内容}', js)
+        self.assertIn('orderSpec', js)
         self.assertNotIn('送信済み', js)
         self.assertNotIn('mailto:', js)
+        self.assertIn('ORDER_CONTENT_PLACEHOLDER', inspect.getsource(kintai_bihin_order))
+        self.assertIn('{注文内容}', kintai_bihin_order.DEFAULT_BODY_INLINE)
         server = (ROOT / 'server.py').read_text(encoding='utf-8')
         self.assertIn('/api/kintai/bihin/order/prepare', server)
         src = inspect.getsource(kintai_bihin.schema)

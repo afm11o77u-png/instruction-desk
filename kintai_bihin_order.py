@@ -30,6 +30,8 @@ MODE_LABELS = {
 }
 
 DEFAULT_SUBJECT = '【備品発注】{date}／{vendor}'
+# Placeholder vendors put in the body template; replaced on「注文」compose.
+ORDER_CONTENT_PLACEHOLDER = '{注文内容}'
 DEFAULT_BODY_EXCEL = (
     '{vendor} ご担当者様\n\n'
     'お疲れ様です。備品の発注をお願いいたします。\n'
@@ -39,7 +41,7 @@ DEFAULT_BODY_EXCEL = (
 DEFAULT_BODY_INLINE = (
     '{vendor} ご担当者様\n\n'
     'お疲れ様です。下記のとおり備品の発注をお願いいたします。\n\n'
-    '{lines}\n\n'
+    '{注文内容}\n\n'
     'よろしくお願いいたします。\n'
 )
 
@@ -143,6 +145,7 @@ def schema(c):
         ('order_product_name', "TEXT NOT NULL DEFAULT ''"),
         ('order_unit', "TEXT NOT NULL DEFAULT ''"),
         ('packing_qty', "TEXT NOT NULL DEFAULT ''"),
+        ('order_spec', "TEXT NOT NULL DEFAULT ''"),  # 規格・補足（任意）
     ]
     for name, decl in alters:
         if name not in cols:
@@ -293,6 +296,7 @@ def _item_order_fields(r) -> dict:
         'orderProductName': (r['order_product_name'] if 'order_product_name' in r.keys() else '') or '',
         'orderUnit': (r['order_unit'] if 'order_unit' in r.keys() else '') or '',
         'packingQty': packing,
+        'orderSpec': (r['order_spec'] if 'order_spec' in r.keys() else '') or '',
     }
 
 
@@ -317,15 +321,16 @@ def apply_item_order_fields(c, item_id: int, payload: dict):
                 raise ValueError('仕入先が見つかりません。')
     order_name = str(payload.get('orderProductName') or '').strip()[:120]
     order_unit = str(payload.get('orderUnit') or '').strip()[:40]
+    order_spec = str(payload.get('orderSpec') or '').strip()[:200]
     packing_raw = payload.get('packingQty')
     packing_s = ''
     if packing_raw not in (None, ''):
         packing_s = format(_parse_packing(packing_raw, required=True), 'f')
     c.execute(
         '''UPDATE kintai_bihin_items
-           SET vendor_id=?, order_product_name=?, order_unit=?, packing_qty=?
+           SET vendor_id=?, order_product_name=?, order_unit=?, packing_qty=?, order_spec=?
            WHERE id=?''',
-        (vendor_id, order_name, order_unit, packing_s, item_id),
+        (vendor_id, order_name, order_unit, packing_s, order_spec, item_id),
     )
 
 
@@ -336,14 +341,58 @@ def _render_template(tpl: str, mapping: dict) -> str:
     return out
 
 
+def _format_order_qty(qty) -> str:
+    """注文画面の数量をそのまま表示（入数換算しない）。末尾の不要な 0 を落とす。"""
+    if qty is None or qty == '':
+        return ''
+    try:
+        d = Decimal(str(qty).strip().replace(',', ''))
+    except (InvalidOperation, ValueError):
+        return str(qty)
+    if d.is_nan() or d.is_infinite():
+        return str(qty)
+    s = format(d, 'f')
+    if '.' in s:
+        s = s.rstrip('0').rstrip('.')
+    return s
+
+
+def _format_order_content_block(lines: list[dict]) -> str:
+    """本文へ差し込む注文内容。金額は入れない。数量0／空は呼び出し側で除外済み想定。
+
+    例:
+      CP2610HMES-TA／白ラベル
+      数量：2箱
+
+    複数品は空行区切り。規格・補足があれば品名の次行に出す。
+    """
+    parts = []
+    for ln in lines:
+        name = (ln.get('orderProductName') or ln.get('itemName') or '').strip()
+        qty_s = _format_order_qty(ln.get('orderQty'))
+        unit = (ln.get('orderUnit') or '').strip()
+        spec = (ln.get('orderSpec') or '').strip()
+        block_lines = [name] if name else []
+        if spec:
+            block_lines.append(spec)
+        block_lines.append(f'数量：{qty_s}{unit}')
+        parts.append('\n'.join(block_lines))
+    return '\n\n'.join(parts)
+
+
 def _format_lines_block(lines: list[dict]) -> str:
+    """後方互換: 旧 {lines} 用の一行形式。新規は {注文内容} を使う。"""
     parts = []
     for ln in lines:
         name = ln.get('orderProductName') or ln.get('itemName') or ''
-        qty = ln.get('orderQty')
+        qty = _format_order_qty(ln.get('orderQty'))
         unit = ln.get('orderUnit') or ''
         parts.append(f'・{name}　{qty}{unit}')
     return '\n'.join(parts)
+
+
+def _body_has_order_placeholder(tpl: str) -> bool:
+    return ORDER_CONTENT_PLACEHOLDER in (tpl or '')
 
 
 def _normalize_newlines(text: str) -> str:
@@ -728,6 +777,8 @@ def _validate_and_build_groups(c, lines_in: list) -> list[dict]:
         order_unit = order_unit.strip()
         if not order_unit:
             raise ValueError(f'「{item["name"]}」の発注単位が未設定です。発注設定で単位を入力してください。')
+        order_spec = (item['order_spec'] if 'order_spec' in item.keys() else '') or ''
+        order_spec = order_spec.strip()
 
         line = {
             'itemId': item_id,
@@ -735,10 +786,12 @@ def _validate_and_build_groups(c, lines_in: list) -> list[dict]:
             'inventoryUnit': item['unit'] or '',
             'orderProductName': order_name,
             'orderUnit': order_unit,
+            'orderSpec': order_spec,
             'orderQty': kintai_bihin._dec_to_json(order_qty),
             'packingQty': kintai_bihin._dec_to_json(packing),
             'inventoryQty': kintai_bihin._dec_to_json(inv_qty),
-            'note': str(raw.get('note') or '')[:120],
+            # Excel 備考列: 行メモ優先、なければ規格・補足
+            'note': str(raw.get('note') or order_spec or '')[:120],
         }
         g = groups.get(vendor_id)
         if not g:
@@ -1071,27 +1124,34 @@ def prepare_orders(
 
     date_label = f'{order_day.year}年{order_day.month}月{order_day.day}日'
     for g in groups:
+        order_content = _format_order_content_block(g['lines'])
         mapping = {
             'vendor': g['vendorName'],
             'date': date_label,
-            'lines': _format_lines_block(g['lines']),
+            '注文内容': order_content,
+            # 旧テンプレ互換（Excel 等で {lines} が残っていても差し替え）
+            'lines': order_content,
             'year': year,
             'month': month,
         }
         subject_tpl = _normalize_newlines(g['subjectTemplate'] or DEFAULT_SUBJECT)
+        saved_body_tpl = _normalize_newlines(g['bodyTemplate'] or '')
         if g['mode'] == MODE_BODY:
-            body_tpl = _normalize_newlines(g['bodyTemplate'] or DEFAULT_BODY_INLINE)
+            # 空テンプレのみ既定文を使う。既存保存文は上書きしない。
+            body_tpl = saved_body_tpl or DEFAULT_BODY_INLINE
+            if not _body_has_order_placeholder(body_tpl):
+                raise ValueError(
+                    f'仕入先「{g["vendorName"]}」の本文テンプレに {ORDER_CONTENT_PLACEHOLDER} がありません。'
+                    '発注設定で本文に「注文内容を挿入」し、プレースホルダを入れてから注文してください。'
+                    '（本文に記載モードでは差し込み位置が無いと不完全なメールになるため開きません。）'
+                )
         else:
-            body_tpl = _normalize_newlines(g['bodyTemplate'] or DEFAULT_BODY_EXCEL)
+            # Excel添付: プレースホルダがあれば差し替え、無ければテンプレ／既定文のまま（Excel添付フロー維持）
+            body_tpl = saved_body_tpl or DEFAULT_BODY_EXCEL
         subject = _normalize_newlines(
             _render_template(subject_tpl, mapping)
         ).strip() or DEFAULT_SUBJECT.format(**mapping)
         body = _normalize_newlines(_render_template(body_tpl, mapping))
-        # Body mode must clearly show name/qty/unit
-        saved_body_tpl = _normalize_newlines(g['bodyTemplate'] or '')
-        if g['mode'] == MODE_BODY and '{lines}' not in (saved_body_tpl or DEFAULT_BODY_INLINE):
-            if _format_lines_block(g['lines']) not in body:
-                body = body.rstrip() + '\n\n' + _format_lines_block(g['lines']) + '\n'
 
         attachment_uri = None
         attachment_path = ''
@@ -1232,9 +1292,15 @@ def settings_bundle(c) -> dict:
         'desktopTemplatePath': str(DESKTOP_TEMPLATE),
         'fixtureTemplatePath': str(REPO_FIXTURE_TEMPLATE),
         'defaultSubject': DEFAULT_SUBJECT,
+        'orderContentPlaceholder': ORDER_CONTENT_PLACEHOLDER,
         'hints': {
             'packing': '入数＝発注1単位あたりの棚卸数量。未設定のままでは換算・発注できません。',
             'mail': 'Thunderbird で作成画面を開くだけです。送信済みにはしません。',
             'purchase': '発注日の年月の当月購入へ加算します（表示中の過去月には入れません）。',
+            'orderContent': (
+                '本文に {注文内容} を置くと、注文時に発注品名・数量（注文画面の数量）・発注単位'
+                '（と任意の規格・補足）が差し込まれます。金額は入れません。'
+                '「本文に記載」モードでは必須です。「Excel添付」では任意（無ければ添付フローのまま）。'
+            ),
         },
     }
