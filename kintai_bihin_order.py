@@ -66,6 +66,9 @@ ORDER_SHEET_NOTE_COL = 'H'
 ORDER_SHEET_CLEAR_COLS = ('F', 'G')
 
 EMAIL_RE = re.compile(r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+# 発注単位が数字のみ（「1」「２」など）のとき設定画面で案内する。自動書き換えはしない。
+DIGITS_ONLY_UNIT_RE = re.compile(r'^[0-9０-９]+$')
+ORDER_UNIT_HINT = '箱・巻・個などの単位を入力'
 # Match a single <c r="X99" .../> or <c r="X99" ...>...</c> element.
 _CELL_XML_RE = re.compile(
     r'<c\s+r="([A-Z]+\d+)"([^>]*?)(?:/>|>(.*?)</c>)',
@@ -291,10 +294,13 @@ def _item_order_fields(r) -> dict:
             vendor_id = int(vendor_id)
         except (TypeError, ValueError):
             vendor_id = None
+    order_unit = (r['order_unit'] if 'order_unit' in r.keys() else '') or ''
     return {
         'vendorId': vendor_id,
         'orderProductName': (r['order_product_name'] if 'order_product_name' in r.keys() else '') or '',
-        'orderUnit': (r['order_unit'] if 'order_unit' in r.keys() else '') or '',
+        'orderUnit': order_unit,
+        # 数字のみ単位は要確認フラグのみ。保存値は推測で書き換えない。
+        'orderUnitNeedsReview': is_digits_only_unit(order_unit),
         'packingQty': packing,
         'orderSpec': (r['order_spec'] if 'order_spec' in r.keys() else '') or '',
     }
@@ -357,25 +363,45 @@ def _format_order_qty(qty) -> str:
     return s
 
 
+def is_digits_only_unit(unit) -> bool:
+    """発注単位が数字だけか。数量と連結すると「11」になる誤設定の検知用。自動修正しない。"""
+    s = str(unit or '').strip()
+    return bool(s) and bool(DIGITS_ONLY_UNIT_RE.fullmatch(s))
+
+
+def _format_qty_with_unit(qty, unit) -> str:
+    """数量と単位を空白区切りで結合。単位が空なら数量のみ（二重表示しない）。
+
+    「1」+「箱」→「1 箱」、「1」+「1ロット」→「1 1ロット」（「11ロット」にしない）。
+    """
+    qty_s = _format_order_qty(qty)
+    unit_s = str(unit or '').strip()
+    if not unit_s:
+        return qty_s
+    if not qty_s:
+        return unit_s
+    return f'{qty_s} {unit_s}'
+
+
 def _format_order_content_block(lines: list[dict]) -> str:
     """本文へ差し込む注文内容。金額は入れない。数量0／空は呼び出し側で除外済み想定。
 
     例:
       CP2610HMES-TA／白ラベル
-      数量：2箱
+      数量：2 箱
 
     複数品は空行区切り。規格・補足があれば品名の次行に出す。
+    数量と単位は空白区切り（連結しない）。単位が空なら「数量：1」のみ。
     """
     parts = []
     for ln in lines:
         name = (ln.get('orderProductName') or ln.get('itemName') or '').strip()
-        qty_s = _format_order_qty(ln.get('orderQty'))
-        unit = (ln.get('orderUnit') or '').strip()
+        qty_unit = _format_qty_with_unit(ln.get('orderQty'), ln.get('orderUnit'))
         spec = (ln.get('orderSpec') or '').strip()
         block_lines = [name] if name else []
         if spec:
             block_lines.append(spec)
-        block_lines.append(f'数量：{qty_s}{unit}')
+        block_lines.append(f'数量：{qty_unit}')
         parts.append('\n'.join(block_lines))
     return '\n\n'.join(parts)
 
@@ -385,9 +411,8 @@ def _format_lines_block(lines: list[dict]) -> str:
     parts = []
     for ln in lines:
         name = ln.get('orderProductName') or ln.get('itemName') or ''
-        qty = _format_order_qty(ln.get('orderQty'))
-        unit = ln.get('orderUnit') or ''
-        parts.append(f'・{name}　{qty}{unit}')
+        qty_unit = _format_qty_with_unit(ln.get('orderQty'), ln.get('orderUnit'))
+        parts.append(f'・{name}　{qty_unit}')
     return '\n'.join(parts)
 
 
@@ -1297,9 +1322,15 @@ def settings_bundle(c) -> dict:
             'packing': '入数＝発注1単位あたりの棚卸数量。未設定のままでは換算・発注できません。',
             'mail': 'Thunderbird で作成画面を開くだけです。送信済みにはしません。',
             'purchase': '発注日の年月の当月購入へ加算します（表示中の過去月には入れません）。',
+            'orderUnit': ORDER_UNIT_HINT,
+            'orderUnitDigitsOnly': (
+                f'発注単位が数字だけです。{ORDER_UNIT_HINT}。'
+                '既存値は自動では書き換えません。設定画面で確認してください。'
+            ),
             'orderContent': (
                 '本文に {注文内容} を置くと、注文時に発注品名・数量（注文画面の数量）・発注単位'
                 '（と任意の規格・補足）が差し込まれます。金額は入れません。'
+                '数量と単位は空白区切りです（「数量：1 箱」）。'
                 '「本文に記載」モードでは必須です。「Excel添付」では任意（無ければ添付フローのまま）。'
             ),
         },

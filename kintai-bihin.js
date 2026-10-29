@@ -1030,6 +1030,21 @@
     return data;
   }
 
+  /** 数量と単位を空白区切り。単位が空なら数量のみ（連結しない）。 */
+  function formatOrderQtyUnit(qty, unit) {
+    const q = qty == null || qty === '' ? '' : String(qty);
+    const u = String(unit || '').trim();
+    if (!u) return q;
+    if (!q) return u;
+    return `${q} ${u}`;
+  }
+
+  /** 発注単位が数字だけか（半角・全角）。要確認フラグ用。自動書き換えしない。 */
+  function isDigitsOnlyOrderUnit(unit) {
+    const s = String(unit || '').trim();
+    return s !== '' && /^[0-9０-９]+$/.test(s);
+  }
+
   function paintOrderForm() {
     const body = $('#bihinorderbody');
     if (!body) return;
@@ -1041,11 +1056,15 @@
     body.innerHTML = items.map(it => {
       const ready = it.vendorId && it.orderUnit && it.packingQty != null && it.packingQty !== '';
       const hint = ready ? '' : '（発注設定不足）';
+      const unitNeedsReview = it.orderUnitNeedsReview || isDigitsOnlyOrderUnit(it.orderUnit);
+      const unitReview = unitNeedsReview
+        ? ' <span class="kintaimeta bihin-unit-review" title="箱・巻・個などの単位を入力">要確認</span>'
+        : '';
       return `<tr data-item-id="${it.id}">
         <td>${esc(it.name)}${hint ? ` <span class="kintaimeta">${hint}</span>` : ''}</td>
         <td>${esc(it.orderProductName || it.name || '')}</td>
         <td>${esc(vendorNameById(it.vendorId) || '—')}</td>
-        <td>${esc(it.orderUnit || '—')}</td>
+        <td class="${unitNeedsReview ? 'bihin-warn' : ''}">${esc(it.orderUnit || '—')}${unitReview}</td>
         <td class="bihin-num">${it.packingQty == null || it.packingQty === '' ? '—' : esc(it.packingQty)}</td>
         <td><input class="bihin-order-qty" data-item-id="${it.id}" inputmode="decimal" value="" aria-label="${esc(it.name)}の発注数量"></td>
       </tr>`;
@@ -1200,6 +1219,13 @@
     }
   }
 
+  function updateItemOrderUnitHint(unitValue) {
+    const hint = $('#bihinitemorderunithint');
+    if (!hint) return;
+    const bad = isDigitsOnlyOrderUnit(unitValue);
+    hint.hidden = !bad;
+  }
+
   function fillItemOrderForm(it) {
     if (!it) return;
     const sel = $('#bihinitemorderselect');
@@ -1210,6 +1236,7 @@
     if (name) name.value = it.orderProductName || '';
     const unit = $('#bihinitemorderunit');
     if (unit) unit.value = it.orderUnit || '';
+    updateItemOrderUnitHint(it.orderUnit || '');
     const pack = $('#bihinitemorderpacking');
     if (pack) pack.value = it.packingQty == null ? '' : it.packingQty;
     const spec = $('#bihinitemorderspec');
@@ -1291,6 +1318,9 @@
       orderSpec: ($('#bihinitemorderspec') && $('#bihinitemorderspec').value || '').trim(),
       packingQty: packingRaw === '' ? '' : Number(packingRaw),
     };
+    if (isDigitsOnlyOrderUnit(payload.orderUnit)) {
+      toast('発注単位が数字だけです。箱・巻・個などの単位を入力してください（自動では書き換えません）。');
+    }
     await api('/api/kintai/bihin/items', payload);
     toast('品目の発注設定を保存しました（保存済み月の数量は書き換えません）。');
     await loadOrderSettingsBundle();
@@ -1313,7 +1343,8 @@
         body.innerHTML = '<tr><td colspan="8">発注履歴はまだありません。</td></tr>';
       } else {
         body.innerHTML = hist.map(h => {
-          const qty = `${h.orderQty == null ? '' : h.orderQty}${h.orderUnit || ''}`;
+          const qty = formatOrderQtyUnit(h.orderQty, h.orderUnit);
+          const unitBad = isDigitsOnlyOrderUnit(h.orderUnit);
           const ym = `${h.year}年${h.month}月`;
           const cancelled = h.cancelled ? '取消済み' : '—';
           const btn = h.cancelled
@@ -1323,7 +1354,7 @@
             <td>${esc(h.datetime || '')}</td>
             <td>${esc(h.vendor || '')}</td>
             <td>${esc(h.item || '')}</td>
-            <td class="bihin-num">${esc(qty)}</td>
+            <td class="bihin-num${unitBad ? ' bihin-warn' : ''}">${esc(qty)}${unitBad ? ' <span class="kintaimeta">要確認</span>' : ''}</td>
             <td>${esc(ym)}</td>
             <td>${esc(h.modeLabel || h.mode || '')}</td>
             <td>${esc(cancelled)}</td>
@@ -1438,7 +1469,13 @@
         const id = Number(itemSel.value);
         const it = masterItems.find(x => x.id === id);
         if (it) fillItemOrderForm(it);
+        else updateItemOrderUnitHint('');
       };
+    }
+    const itemUnit = $('#bihinitemorderunit');
+    if (itemUnit) {
+      itemUnit.addEventListener('input', () => updateItemOrderUnitHint(itemUnit.value));
+      itemUnit.addEventListener('change', () => updateItemOrderUnitHint(itemUnit.value));
     }
     const itemSave = $('#bihinitemordersave');
     if (itemSave) itemSave.onclick = () => { saveItemOrderFromForm().catch(e => {
