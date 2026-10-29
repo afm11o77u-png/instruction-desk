@@ -369,13 +369,22 @@ def is_digits_only_unit(unit) -> bool:
     return bool(s) and bool(DIGITS_ONLY_UNIT_RE.fullmatch(s))
 
 
-def _format_qty_with_unit(qty, unit) -> str:
-    """数量と単位を空白区切りで結合。単位が空なら数量のみ（二重表示しない）。
+def _display_order_unit(unit) -> str:
+    """表示・Excel用の単位。空または数字のみ（「1」「２」）は出さない。保存値は書き換えない。"""
+    unit_s = str(unit or '').strip()
+    if not unit_s or is_digits_only_unit(unit_s):
+        return ''
+    return unit_s
 
-    「1」+「箱」→「1 箱」、「1」+「1ロット」→「1 1ロット」（「11ロット」にしない）。
+
+def _format_qty_with_unit(qty, unit) -> str:
+    """数量と単位を空白区切りで結合。単位が空／数字のみなら数量のみ。
+
+    「1」+「箱」→「1 箱」、「1」+「1」→「1」（「1 1」「11」にしない）。
+    「1」+「1ロット」→「1 1ロット」（先頭数字をくっつけない）。
     """
     qty_s = _format_order_qty(qty)
-    unit_s = str(unit or '').strip()
+    unit_s = _display_order_unit(unit)
     if not unit_s:
         return qty_s
     if not qty_s:
@@ -391,7 +400,7 @@ def _format_order_content_block(lines: list[dict]) -> str:
       数量：2 箱
 
     複数品は空行区切り。規格・補足があれば品名の次行に出す。
-    数量と単位は空白区切り（連結しない）。単位が空なら「数量：1」のみ。
+    数量と単位は空白区切り（連結しない）。単位が空／数字のみなら「数量：1」のみ。
     """
     parts = []
     for ln in lines:
@@ -656,7 +665,8 @@ def fill_order_workbook(
                 ln = lines[i]
                 name = ln.get('orderProductName') or ln.get('itemName') or ''
                 qty = ln.get('orderQty')
-                unit = ln.get('orderUnit') or ''
+                # D=数量のまま。数字のみ単位は E に書かない（「1」を単位として出さない）。
+                unit = _display_order_unit(ln.get('orderUnit'))
                 note = ln.get('note') or ''
                 updates[f'{ORDER_SHEET_NAME_COL}{row}'] = name
                 updates[f'{ORDER_SHEET_QTY_COL}{row}'] = qty
@@ -1331,6 +1341,7 @@ def settings_bundle(c) -> dict:
                 '本文に {注文内容} を置くと、注文時に発注品名・数量（注文画面の数量）・発注単位'
                 '（と任意の規格・補足）が差し込まれます。金額は入れません。'
                 '数量と単位は空白区切りです（「数量：1 箱」）。'
+                '発注単位が数字だけのときは本文・Excel単位欄には出しません（「数量：1」）。'
                 '「本文に記載」モードでは必須です。「Excel添付」では任意（無ければ添付フローのまま）。'
             ),
         },
