@@ -1248,6 +1248,8 @@
     if (pack) pack.value = it.packingQty == null ? '' : it.packingQty;
     const spec = $('#bihinitemorderspec');
     if (spec) spec.value = it.orderSpec || '';
+    const qtyCell = $('#bihinitemorderqtycell');
+    if (qtyCell) qtyCell.value = it.orderQtyCell || '';
   }
 
   async function openOrderSettingsDialog() {
@@ -1323,6 +1325,7 @@
       orderProductName: ($('#bihinitemordername') && $('#bihinitemordername').value || '').trim(),
       orderUnit: ($('#bihinitemorderunit') && $('#bihinitemorderunit').value || '').trim(),
       orderSpec: ($('#bihinitemorderspec') && $('#bihinitemorderspec').value || '').trim(),
+      orderQtyCell: ($('#bihinitemorderqtycell') && $('#bihinitemorderqtycell').value || '').trim().toUpperCase(),
       packingQty: packingRaw === '' ? '' : Number(packingRaw),
     };
     if (isDigitsOnlyOrderUnit(payload.orderUnit)) {

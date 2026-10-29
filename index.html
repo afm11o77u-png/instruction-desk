@@ -302,6 +302,7 @@
 <label>発注単位<input id="bihinitemorderunit" maxlength="40" autocomplete="off" placeholder="箱・巻・個などの単位を入力" title="箱・巻・個などの単位を入力（数字だけの単位は数量と紛らわしいため避けてください）"></label>
 <label>規格・補足（任意）<input id="bihinitemorderspec" maxlength="200" autocomplete="off" placeholder="例：白ラベル"></label>
 <label>入数（棚卸換算）<input id="bihinitemorderpacking" type="number" min="0" step="any" title="発注1単位あたりの棚卸数量"></label>
+<label>注文書数量セル（任意）<input id="bihinitemorderqtycell" maxlength="8" autocomplete="off" placeholder="例：D20" title="エンパイア注文書の黄欄（D19〜D31）。品名照合の代わりに item 固定対応するときだけ"></label>
 <p id="bihinitemorderunithint" class="duehint bihin-span2" hidden>発注単位が数字だけです。箱・巻・個などの単位を入力してください。既存値は自動では書き換えません。</p>
 <div class="bihin-master-actions">
 <button type="button" class="primary" id="bihinitemordersave">品目の発注設定を保存</button>
