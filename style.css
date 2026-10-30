@@ -715,6 +715,8 @@ body.catalog-kintai main>header .headactions{display:none}
     -webkit-print-color-adjust:exact;
     print-color-adjust:exact
   }
+  body.printing-bihin-count tr.bihin-count-hiq-total td.bihin-count-qty,
+  body.printing-bihin-count tr.bihin-count-hiq-total td.bihin-count-note{background:#fff!important}
   body.printing-bihin-count .bihin-count-total-label{font-weight:700}
   body.printing-bihin-count .bihin-count-after{
     margin-top:4.5mm;
