@@ -28,7 +28,34 @@
   function $(sel, root) { return (root || document).querySelector(sel); }
 
   function canKintai() {
-    return !!currentUser && (currentUser.role === 'owner' || !!currentUser.manage || !!currentUser.overview || !!currentUser.mark_kintai);
+    return !!currentUser && (currentUser.role === 'floor3' || currentUser.role === 'owner' || !!currentUser.manage || !!currentUser.overview || !!currentUser.mark_kintai);
+  }
+
+  /** 現場３はシフト表を閲覧のみ（サーバー側でも保存 API は 403）。 */
+  function shiftReadOnly() {
+    return !!currentUser && currentUser.role === 'floor3';
+  }
+
+  function canEditShift() {
+    return canKintai() && !shiftReadOnly();
+  }
+
+  function applyReadOnlyChrome() {
+    const panel = $('#kintaishift');
+    if (!panel) return;
+    const ro = shiftReadOnly();
+    panel.classList.toggle('shift-readonly', ro);
+    panel.querySelectorAll('[data-shift-group="input"],[data-shift-group="rows"],#shifthint').forEach(el => { el.hidden = ro; });
+    ['#shiftsave', '#shiftsavestatus', '#shiftsavememos', '#shiftmemostatus', '#shiftundo'].forEach(sel => {
+      const el = $(sel);
+      if (el) el.hidden = ro;
+    });
+    if (!ro) return;
+    const wrap = $('#shiftgridwrap');
+    if (!wrap) return;
+    wrap.querySelectorAll('input,textarea,select').forEach(el => { el.readOnly = true; el.disabled = true; });
+    wrap.querySelectorAll('[draggable]').forEach(el => el.setAttribute('draggable', 'false'));
+    wrap.querySelectorAll('[data-del-person],[data-bulk-day]').forEach(el => { el.hidden = true; });
   }
 
   function todayYm() {
@@ -435,6 +462,7 @@
     const banner = `<tr class="shift-print-banner"><th colspan="${colSpan}"><div class="shift-print-head"><span class="shift-print-title-text">${esc(printTitleText())}</span><span class="shift-print-legend">${esc(PRINT_LEGEND)}</span></div></th></tr>`;
     const titleEl = $('#shiftprinttitle');
     if (titleEl) titleEl.textContent = printTitleText();
+    setTimeout(applyReadOnlyChrome, 0);
     table.innerHTML = `${cols}<thead>${banner}<tr><th class="shift-corner shift-corner-memo no-print">勤務メモ</th><th class="shift-corner shift-corner-name">氏名</th>${headDays}</tr></thead><tbody>${body || `<tr><td colspan="${colSpan}" class="shift-empty">行がありません。「行を追加」か「未掲載の在籍者を追加」を使ってください。</td></tr>`}</tbody>`;
   }
 
@@ -855,7 +883,7 @@
   }
 
   async function saveShift(opts) {
-    if (!canKintai()) return;
+    if (!canEditShift()) return;
     const force = opts && opts.force;
     if (saving) return;
     if (!force && !shiftDirty && saveState !== 'failed') return;
@@ -894,7 +922,7 @@
 
   /** 勤務メモのみ保存（月シートの version / cells / 並びは送らない・変更しない）。 */
   async function saveWorkMemos() {
-    if (!canKintai()) return;
+    if (!canEditShift()) return;
     if (memoSaving) return;
     memoSaving = true;
     setMemoSaveState('saving');
@@ -928,7 +956,7 @@
 
   /** 画面上の現在並びを「今後の未作成月」の標準並びとして保存（セル・月シートは送らない）。 */
   async function saveDefaultOrder() {
-    if (!canKintai()) return;
+    if (!canEditShift()) return;
     const keys = people.map(p => p && p.key).filter(Boolean);
     if (!keys.length) {
       toast('並び順として保存する行がありません。');
@@ -1054,6 +1082,7 @@
       };
     });
     paintModeButtons();
+    applyReadOnlyChrome();
     const ym = $('#shiftyearmonth');
     if (ym) {
       const t = todayYm();
@@ -1123,6 +1152,14 @@
     if (addRoster) addRoster.onclick = () => { try { addMissingRoster(); } catch (e) { toast(e.message); } };
     const wrap = $('#shiftgridwrap');
     if (wrap) {
+      // 現場３（閲覧のみ）では表の編集操作を受け付けない
+      ['click', 'contextmenu', 'input', 'change', 'focusin', 'focusout', 'dragstart', 'dragover', 'drop'].forEach(type => {
+        wrap.addEventListener(type, e => {
+          if (!shiftReadOnly()) return;
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }, true);
+      });
       wrap.addEventListener('click', e => {
         const bulkDay = e.target.closest && e.target.closest('[data-bulk-day]');
         if (bulkDay) {

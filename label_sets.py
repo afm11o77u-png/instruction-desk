@@ -13,7 +13,7 @@ def initialize(c):
 def handle(handler, c, path, data=None):
     u = handler.session_user(c)
     if not u or u['must_change']: return 401, {'error': 'ログインし直してください。'}
-    if u['role'] not in ('owner', 'floor', 'floor2'): return 403, {'error': '宛名の記憶は現場・現場２と主管理者が使用します。'}
+    if u['role'] not in ('owner', 'floor', 'floor2', 'floor3'): return 403, {'error': '宛名の記憶は現場・現場２・現場３と主管理者が使用します。'}
     if data is None:
         rows = c.execute('SELECT id,name,version,payload FROM label_sets WHERE user_id=? ORDER BY name', (u['id'],)).fetchall()
         return 200, [dict(r, payload=_decode_payload(r['payload'])) for r in rows]

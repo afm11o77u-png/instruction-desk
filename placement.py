@@ -130,13 +130,13 @@ def _row_public(row):
 
 def _require_view(user):
     if not user or user['must_change']: return 401, {'error':'ログインし直してください。'}
-    if user['role'] not in ('owner','sales','floor','floor2'): return 403, {'error':'貼付け位置は閲覧できません。'}
+    if user['role'] not in ('owner','sales','floor','floor2','floor3'): return 403, {'error':'貼付け位置は閲覧できません。'}
     return None
 
 def _require_edit(user):
     blocked=_require_view(user)
     if blocked: return blocked
-    if user['role'] not in ('owner','floor2'): return 403, {'error':'貼付け位置の登録と修正は主管理者と現場２が行えます。'}
+    if user['role'] not in ('owner','floor2','floor3'): return 403, {'error':'貼付け位置の登録と修正は主管理者と現場２・現場３が行えます。'}
     return None
 
 def _text(value, label, limit):
