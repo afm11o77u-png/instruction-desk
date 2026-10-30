@@ -305,6 +305,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .bihin-master-deleted-title{margin:0 0 6px;font-size:14px;font-weight:700}
 .bihin-master-deleted-wrap .bihin-master-table{margin-top:8px}
 .bihin-master-row-actions{display:flex;flex-wrap:wrap;gap:6px;white-space:nowrap}
+.bihin-master-target{margin:4px 0 8px;font-weight:700;color:#1d5a2a}
+.bihin-master-added{opacity:.7;cursor:default}
 .bihin-master-deleted-row td{color:#555;background:#fafafa}
 .bihin-master-table{width:100%;border-collapse:collapse;font-size:13px}
 .bihin-master-table th,.bihin-master-table td{border:1px solid #cfd9cf;padding:5px 8px;text-align:left}
