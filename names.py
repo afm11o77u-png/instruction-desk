@@ -8866,7 +8866,7 @@ def import_catalog(connect, data_dir):
 
 def _require(user):
     if not user or user['must_change']: return 401, {'error': 'ログインし直してください。'}
-    if user['role'] not in ('owner', 'sales', 'floor', 'floor2'): return 403, {'error': 'ネーム情報は閲覧できません。'}
+    if user['role'] not in ('owner', 'sales', 'floor', 'floor2', 'floor3'): return 403, {'error': 'ネーム情報は閲覧できません。'}
     return None
 
 def _number(row_id):

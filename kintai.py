@@ -2467,8 +2467,18 @@ def _parse_ym(value: str | None) -> tuple[int, int] | None:
     return y, mo
 
 
+def shift_view_only(user) -> bool:
+    """現場３はマーク管理のシフト表を閲覧のみ可能（mark_kintai 設定に関係なく、編集は不可）。"""
+    try:
+        return bool(user) and user['role'] == 'floor3'
+    except (KeyError, IndexError, TypeError):
+        return False
+
+
 def handle_get(h, c, path: str):
     denied = require_kintai(h.user)
+    if denied and shift_view_only(h.user) and path == '/api/kintai/shift':
+        denied = None
     if denied:
         return denied
     if path == '/api/kintai':
@@ -2534,6 +2544,8 @@ def handle_get(h, c, path: str):
 
 
 def handle_post(h, c, path: str, d: dict):
+    if shift_view_only(h.user) and (path == '/api/kintai/shift' or path.startswith('/api/kintai/shift/')):
+        return 403, {'error': '現場３はシフト表を閲覧のみできます。'}
     denied = require_kintai(h.user)
     if denied:
         return denied

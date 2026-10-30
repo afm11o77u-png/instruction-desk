@@ -216,7 +216,7 @@ class AuthMixin:
             if not (u['role']=='owner' or u['manage']): return 403,{'error':'利用者管理の権限が必要です。'}
             if path=='/api/users/create':
                 role=d.get('role')
-                if role not in ['sales','floor','floor2']: raise ValueError('業務権限を選択してください。')
+                if role not in ['sales','floor','floor2','floor3']: raise ValueError('業務権限を選択してください。')
                 raw_login=d.get('login','')
                 if not isinstance(raw_login,str): raise ValueError('ログインIDはメールアドレスを80文字以内で入力してください。')
                 raw_login=raw_login.strip()
@@ -226,7 +226,7 @@ class AuthMixin:
                 if not 1<=len(name)<=80: raise ValueError('氏名を80文字以内で入力してください。')
                 admin=bool(d.get('admin') or d.get('manage') or d.get('overview'))
                 if admin and u['role']!='owner': return 403,{'error':'管理者を付与できるのは主管理者だけです。'}
-                if role=='floor2' and admin: raise ValueError('現場２に管理者は付けられません。')
+                if role in ('floor2','floor3') and admin: raise ValueError(f"{'現場２' if role=='floor2' else '現場３'}に管理者は付けられません。")
                 name_only=role=='floor' and raw_login==''
                 if name_only and admin: raise ValueError('ログインしない作業者は管理者にできません。')
                 if not name_only and raw_login=='': raise ValueError('メールアドレスが必要です。現場の作業者だけ空欄にできます。')
@@ -268,8 +268,8 @@ class AuthMixin:
                 elif u['role']=='owner' and ('manage' in d or 'overview' in d): admin=int(bool(d.get('manage') or d.get('overview')))
                 else: admin=int(bool(target['manage'] or target['overview']))
                 manage=admin; overview=admin
-                if role not in ['sales','floor','floor2']: raise ValueError('業務権限を選択してください。')
-                if role=='floor2' and admin: raise ValueError('現場２に管理者は付けられません。')
+                if role not in ['sales','floor','floor2','floor3']: raise ValueError('業務権限を選択してください。')
+                if role in ('floor2','floor3') and admin: raise ValueError(f"{'現場２' if role=='floor2' else '現場３'}に管理者は付けられません。")
                 if u['role']=='owner' and 'login' in d:
                     raw_login=d.get('login')
                     if not isinstance(raw_login,str): raise ValueError('ログインIDはメールアドレスを80文字以内で入力してください。')

@@ -761,7 +761,7 @@ def due_confirm(handler,d):
         return 200, record(c.execute('SELECT * FROM orders WHERE id=?',(row['id'],)).fetchone())
 
 def can_access(user,payload):
-    if user['role']=='floor2': return False
+    if user['role'] in ('floor2','floor3'): return False
     if user['role']=='owner' or user['overview']: return True
     if user['role']=='floor': return payload.get('status')!='下書き'
     return user['id'] in (payload.get('authorId'),payload.get('assigneeId'))
@@ -1206,7 +1206,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 c.execute('BEGIN IMMEDIATE')
                 current=self.session_user(c)
                 if not current or current['must_change']: return self.reply(401,{'error':'ログインし直してください。'})
-                if current['role']=='floor2': return self.reply(403,{'error':'この権限では指示書を変更できません。'})
+                if current['role'] in ('floor2','floor3'): return self.reply(403,{'error':'この権限では指示書を変更できません。'})
                 if current['role']=='floor': return self.reply(403,{'error':'現場の指示書は閲覧専用です。変更は営業担当者に依頼してください。'})
                 if d.get('id'):
                     old=c.execute('SELECT * FROM orders WHERE id=?',(d['id'],)).fetchone()

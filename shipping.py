@@ -77,7 +77,7 @@ def _row_public(row):
 
 def _require_view(user):
     if not user or user['must_change']: return 401, {'error':'ログインし直してください。'}
-    if user['role'] not in ('owner','sales','floor','floor2'): return 403, {'error':'出荷情報は閲覧できません。'}
+    if user['role'] not in ('owner','sales','floor','floor2','floor3'): return 403, {'error':'出荷情報は閲覧できません。'}
     return None
 
 def _require_edit(user):

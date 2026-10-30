@@ -13,7 +13,7 @@ def handle(handler, c, path, data=None):
     if path.startswith('/api/templates/admin'): return repair.handle(handler,c,path,data)
     u = handler.session_user(c)
     if not u or u['must_change']: return 401, {'error':'ログインし直してください。'}
-    if u['role'] in ('floor','floor2'): return 403, {'error':'ひな形は営業・主管理者が利用できます。'}
+    if u['role'] in ('floor','floor2','floor3'): return 403, {'error':'ひな形は営業・主管理者が利用できます。'}
     if path=='/api/templates/import':
         return _import_excel(data)
     if data is None:
