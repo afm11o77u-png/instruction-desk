@@ -21,6 +21,7 @@ from xml.etree import ElementTree as ET
 
 import kintai_shift
 import kintai_bihin
+import kintai_bihin_xlsx
 
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
@@ -2525,6 +2526,10 @@ def handle_get(h, c, path: str):
     if path == '/api/kintai/bihin':
         q = _query_map(h)
         return 200, kintai_bihin.get_sheet(c, q.get('year'), q.get('month'))
+    if path == '/api/kintai/bihin/xlsx':
+        # 保存済みデータのみ・読み取り専用。権限は上の require_kintai（備品棚卸 GET と同じ）
+        q = _query_map(h)
+        return kintai_bihin_xlsx.export(c, q.get('year'), q.get('month'))
     if path == '/api/kintai/bihin/items':
         return 200, {'items': kintai_bihin.list_items(c, include_inactive=True)}
     if path == '/api/kintai/bihin/vendors':

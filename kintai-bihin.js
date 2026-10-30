@@ -10,6 +10,7 @@
   let saveState = 'idle'; // idle | dirty | saving | saved | failed
   let saveError = '';
   let bihinDirty = false;
+  let exporting = false;
   let saving = false;
   let loading = false;
   let leaveDialogResolver = null;
@@ -149,6 +150,76 @@
     }
     const btn = $('#bihinsave');
     if (btn) btn.disabled = state === 'saving' || (state === 'saved' && !bihinDirty);
+    paintExportButton();
+  }
+
+  /* ---------- エクセル出力（保存済みデータのみ） ---------- */
+  function exportButtonState(s, dirty) {
+    if (!s || !s.exists) {
+      return { disabled: true, title: 'この月はまだ保存されていないため出力できません。先に保存してください。' };
+    }
+    return {
+      disabled: false,
+      title: dirty
+        ? '未保存の変更があります。出力されるのは最後に保存した内容です。'
+        : '保存済みの内容をエクセル（.xlsx）で出力します',
+    };
+  }
+
+  function paintExportButton() {
+    const b = $('#bihinexport');
+    if (!b) return;
+    const st = exportButtonState(sheet, bihinDirty);
+    b.disabled = st.disabled || exporting;
+    b.title = st.title;
+  }
+
+  function filenameFromDisposition(header, fallback) {
+    const h = String(header || '');
+    const star = h.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (star) {
+      try { return decodeURIComponent(star[1].trim()); } catch (e) { /* fall through */ }
+    }
+    const plain = h.match(/filename\s*=\s*"([^"]+)"/i);
+    return plain ? plain[1] : fallback;
+  }
+
+  async function exportBihinXlsx() {
+    if (!year || !month) return;
+    if (!sheet || !sheet.exists) {
+      toast('この月はまだ保存されていないため、エクセル出力できません。先に保存してください。');
+      return;
+    }
+    if (bihinDirty && !confirm('未保存の変更があります。エクセルには最後に保存した内容が出力されます（画面の未保存の変更は含まれません）。出力しますか？')) return;
+    const y = year, m = month;
+    const fallback = `備品棚卸_${y}-${String(m).padStart(2, '0')}.xlsx`;
+    exporting = true;
+    paintExportButton();
+    try {
+      const r = await fetch(`/api/kintai/bihin/xlsx?year=${encodeURIComponent(y)}&month=${encodeURIComponent(m)}`, {
+        headers: { 'X-Desk-Request': '1' },
+        credentials: 'same-origin',
+      });
+      if (!r.ok) {
+        let msg = 'エクセル出力できませんでした。';
+        try { const d = await r.json(); if (d && d.error) msg = d.error; } catch (e) { /* ignore */ }
+        throw Error(msg);
+      }
+      const name = filenameFromDisposition(r.headers.get('Content-Disposition'), fallback);
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      toast(e.message || 'エクセル出力できませんでした。');
+    } finally {
+      exporting = false;
+      paintExportButton();
+    }
   }
 
   function markDirty() {
@@ -176,6 +247,7 @@
       const who = data && data.updatedBy ? `（${data.updatedBy}）` : '';
       meta.textContent = `${year}年${month}月 ・ ${rows.length}行 ・ ${when}${who}`;
     }
+    paintExportButton();
   }
 
   function rowKeyOf(r, i) {
@@ -1632,6 +1704,8 @@
     if (rowDelBtn) rowDelBtn.onclick = () => deleteSelectedRows();
     const printBtn = $('#bihinprint');
     if (printBtn) printBtn.onclick = () => printBihinCountSheet();
+    const exportBtn = $('#bihinexport');
+    if (exportBtn) exportBtn.onclick = () => { exportBihinXlsx(); };
     const printGo = $('#bihinprintdialog-go');
     if (printGo) {
       printGo.onclick = () => {
@@ -1797,6 +1871,7 @@
   };
   // 単体テスト／確認用に公開
   window._bihinMath = { moneyYen, usageQty, parseQtyInput };
+  window._bihinExport = { exportButtonState, filenameFromDisposition, exportBihinXlsx };
   window._bihinReorder = { moveArrayItem, moveRowByKey };
   window._bihinAddFromMaster = { sheetHasItemId, buildRowFromMasterItem, addMasterItemToSheet };
   window._bihinCountSheet = {
