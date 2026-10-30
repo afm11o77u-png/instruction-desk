@@ -281,7 +281,12 @@
       const key = rowKeyOf(r, i);
       const checked = selectedRowKeys.has(key) ? ' checked' : '';
       return `<tr data-row-index="${i}" data-row-key="${esc(key)}">
-        <td class="bihin-row-check-col no-print"><input type="checkbox" class="bihin-row-check no-print" data-row-key="${esc(key)}" aria-label="${esc(r.name || '行')}を選択"${checked}></td>
+        <td class="bihin-row-check-col no-print"><div class="bihin-row-tools">
+          <span class="bihin-drag-handle" draggable="true" data-drag-key="${esc(key)}" title="ドラッグで並べ替え" aria-hidden="true">⋮⋮</span>
+          <input type="checkbox" class="bihin-row-check no-print" data-row-key="${esc(key)}" aria-label="${esc(r.name || '行')}を選択"${checked}>
+          <button type="button" class="bihin-move" data-move-key="${esc(key)}" data-move-dir="-1" aria-label="${esc(r.name || '行')}を1行上へ"${i === 0 ? ' disabled' : ''}>↑</button>
+          <button type="button" class="bihin-move" data-move-key="${esc(key)}" data-move-dir="1" aria-label="${esc(r.name || '行')}を1行下へ"${i === rows.length - 1 ? ' disabled' : ''}>↓</button>
+        </div></td>
         <td class="bihin-cat bihin-calc">${esc(r.category)}</td>
         <td class="bihin-name bihin-calc">${esc(r.name)}</td>
         <td class="bihin-unit bihin-calc">${esc(r.unit)}</td>
@@ -716,6 +721,82 @@
     const note = retained ? '（その月で外した行の数量を戻しました）' : '（数量は空欄）';
     toast(`「${it.name || '（無題）'}」を${year}年${month}月の棚卸に追加しました${note}。未保存です。「保存」で確定します。`);
     return true;
+  }
+
+  /* ---- 行の並べ替え（表示中の月だけ。保存は既存「保存」で配列順を保存） ---- */
+
+  /** 配列の from 番目を to 番目へ移す（新しい配列を返す。範囲外・同位置はそのまま）。 */
+  function moveArrayItem(arr, from, to) {
+    const out = (arr || []).slice();
+    if (from < 0 || from >= out.length || to < 0 || to >= out.length || from === to) return out;
+    const [x] = out.splice(from, 1);
+    out.splice(to, 0, x);
+    return out;
+  }
+
+  function moveRowByKey(key, toIndex, focusSel) {
+    const from = rows.findIndex((r, i) => rowKeyOf(r, i) === key);
+    if (from < 0 || toIndex < 0 || toIndex >= rows.length || from === toIndex) return false;
+    // rowKey は保存済み行・追加行とも固定。idx: 由来なら先に固定キーを付けて入力退避がずれないようにする
+    rows.forEach((r, i) => { if (r.rowKey == null || r.rowKey === '') r.rowKey = rowKeyOf(r, i); });
+    const saved = captureQtyInputs();
+    rows = moveArrayItem(rows, from, toIndex);
+    markDirty();
+    paintBihin();
+    restoreQtyInputs(saved);
+    if (focusSel) {
+      const el = document.querySelector(`#bihingrid ${focusSel}[data-move-key="${(typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(key) : key}"]`);
+      if (el && !el.disabled) el.focus();
+    }
+    return true;
+  }
+
+  function onMoveClick(e) {
+    const btn = e.target.closest && e.target.closest('[data-move-key]');
+    if (!btn) return false;
+    const key = btn.dataset.moveKey;
+    const dir = Number(btn.dataset.moveDir);
+    const from = rows.findIndex((r, i) => rowKeyOf(r, i) === key);
+    moveRowByKey(key, from + dir, `button[data-move-dir="${dir}"]`);
+    return true;
+  }
+
+  let dragKey = null;
+  function bindRowDrag(wrap) {
+    wrap.addEventListener('dragstart', e => {
+      const h = e.target.closest && e.target.closest('[data-drag-key]');
+      if (!h) return;
+      dragKey = h.dataset.dragKey;
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', dragKey); } catch (_) { /* keep */ }
+      }
+      const tr = h.closest('tr');
+      if (tr) tr.classList.add('bihin-dragging');
+    });
+    wrap.addEventListener('dragover', e => {
+      if (!dragKey) return;
+      const tr = e.target.closest && e.target.closest('#bihingrid tbody tr[data-row-key]');
+      if (!tr) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      wrap.querySelectorAll('.bihin-drop-target').forEach(x => x.classList.remove('bihin-drop-target'));
+      tr.classList.add('bihin-drop-target');
+    });
+    wrap.addEventListener('drop', e => {
+      if (!dragKey) return;
+      const tr = e.target.closest && e.target.closest('#bihingrid tbody tr[data-row-key]');
+      if (!tr) return;
+      e.preventDefault();
+      const to = rows.findIndex((r, i) => rowKeyOf(r, i) === tr.dataset.rowKey);
+      const key = dragKey;
+      dragKey = null;
+      moveRowByKey(key, to);
+    });
+    wrap.addEventListener('dragend', () => {
+      dragKey = null;
+      wrap.querySelectorAll('.bihin-drop-target,.bihin-dragging').forEach(x => x.classList.remove('bihin-drop-target', 'bihin-dragging'));
+    });
   }
 
   /* ---- マスタ ---- */
@@ -1637,6 +1718,8 @@
     const wrap = $('#bihingridwrap');
     if (wrap) {
       wrap.addEventListener('input', onQtyInput);
+      wrap.addEventListener('click', e => { onMoveClick(e); });
+      bindRowDrag(wrap);
       wrap.addEventListener('change', e => {
         if (e.target && e.target.classList && e.target.classList.contains('bihin-row-check')) {
           onRowCheckChange(e);
@@ -1714,6 +1797,7 @@
   };
   // 単体テスト／確認用に公開
   window._bihinMath = { moneyYen, usageQty, parseQtyInput };
+  window._bihinReorder = { moveArrayItem, moveRowByKey };
   window._bihinAddFromMaster = { sheetHasItemId, buildRowFromMasterItem, addMasterItemToSheet };
   window._bihinCountSheet = {
     isHiqColorLabel,

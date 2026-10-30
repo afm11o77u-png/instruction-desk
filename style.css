@@ -282,7 +282,12 @@ body.catalog-kintai main>header .headactions{display:none}
 .bihin-grid .bihin-cat,.bihin-grid .bihin-name{text-align:left;min-width:5rem}
 .bihin-grid .bihin-unit{text-align:center;min-width:2.5rem}
 .bihin-grid .bihin-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.bihin-grid .bihin-row-check-col{width:2.2rem;min-width:2.2rem;text-align:center;padding:4px 2px}
+.bihin-grid .bihin-row-check-col{width:6.4rem;min-width:6.4rem;text-align:center;padding:4px 2px}
+.bihin-row-tools{display:flex;align-items:center;gap:2px;justify-content:center}
+.bihin-drag-handle{cursor:grab;user-select:none;color:#5a6b5a;padding:0 2px}
+.bihin-move{padding:0 4px;min-width:1.5rem;line-height:1.4}
+.bihin-grid tr.bihin-dragging{opacity:.5}
+.bihin-grid tr.bihin-drop-target td{box-shadow:inset 0 2px 0 #2b7a3b}
 .bihin-grid .bihin-row-check{width:1rem;height:1rem;margin:0;vertical-align:middle;accent-color:#186438}
 .bihin-grid td.bihin-input{background:#fffef2}
 .bihin-grid td.bihin-calc{background:#eef5ef;color:#2f4a38}
