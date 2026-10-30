@@ -1165,13 +1165,12 @@
         const rowsHtml = block.colors.map((color, i) => {
           const isTotal = color === '合計';
           const trClass = isTotal ? ' class="bihin-count-hiq-total"' : '';
-          const note = isTotal ? 'この合計を報告画面へ入力' : '';
           const nameTd = i === 0 ? nameCell : '';
           return `<tr${trClass}>${nameTd}
-            <td class="bihin-count-color${isTotal ? ' bihin-count-total-label' : ''}">${esc(color)}</td>
+            <td class="bihin-count-color${isTotal ? ' bihin-count-total-label' : ''}">${esc(isTotal ? '合計※' : color)}</td>
             <td class="bihin-count-unit">${esc(block.unit || '')}</td>
             <td class="bihin-count-qty"></td>
-            <td class="bihin-count-note">${esc(note)}</td>
+            <td class="bihin-count-note"></td>
           </tr>`;
         }).join('');
         return `<tbody class="bihin-count-block bihin-count-hiq">${rowsHtml}</tbody>`;
@@ -1196,7 +1195,7 @@
       </div>
       <div class="bihin-count-footnotes">
         <p>※ 単価は同名品を区別するための表示です。数量・金額の実績は印字しません。</p>
-        <p>※ 報告画面ではHIQラベルを色別に分けず、各単価の合計数量を入力します。</p>
+        <p>※ 合計欄には赤・緑・青の数量を足した数を記入し、その数を報告画面に入力してください（報告画面では色別に分けません）。</p>
       </div>
     </div>`;
 

@@ -192,7 +192,14 @@ if (blocks[2].kind !== 'hiq' || blocks[2].unitPrice != 67000) throw new Error('h
 if (blocks[3].kind !== 'single') throw new Error('white should be single');
 const html = buildCountSheetHtml(rows, 2026, 10);
 if (!html.includes('rowspan="4"')) throw new Error('no rowspan');
-if ((html.match(/この合計を報告画面へ入力/g) || []).length !== 2) throw new Error('total note count');
+if (html.includes('この合計を報告画面へ入力')) throw new Error('old total note still in cell');
+if ((html.match(/>合計※</g) || []).length !== 2) throw new Error('total marker count');
+if ((html.match(/※ 合計欄には/g) || []).length !== 1) throw new Error('footnote once');
+if (html.includes('各単価の合計数量を入力します')) throw new Error('duplicate old footnote');
+// 合計行の数量・備考セルは空（手書き用）
+for (const tr of html.match(/<tr class="bihin-count-hiq-total">[\s\S]*?<\/tr>/g) || []) {
+  if (!/bihin-count-qty"><\/td>/.test(tr) || !/bihin-count-note"><\/td>/.test(tr)) throw new Error('total cells not blank');
+}
 if (!html.includes('単価 63,000円') || !html.includes('単価 67,000円')) throw new Error('prices');
 // 数量セルは空（在庫数量を印字しない）
 if (/bihin-count-qty">\s*[^<\s]/.test(html)) throw new Error('qty not empty: ' + (html.match(/bihin-count-qty">[^<]*/)||[])[0]);
@@ -264,8 +271,8 @@ const need = [
   '棚卸数量（手書き）',
   '連絡事項・メモ',
   '※ 単価は同名品を区別するための表示です。数量・金額の実績は印字しません。',
-  '※ 報告画面ではHIQラベルを色別に分けず、各単価の合計数量を入力します。',
-  'この合計を報告画面へ入力',
+  '※ 合計欄には赤・緑・青の数量を足した数を記入し、その数を報告画面に入力してください（報告画面では色別に分けません）。',
+  '合計※',
 ];
 for (const s of need) {
   if (!html.includes(s)) throw new Error('missing ' + s);
@@ -308,7 +315,7 @@ class BihinCountSheetImpactNoneTest(unittest.TestCase):
         paint = JS[start:end]
         self.assertNotIn('isHiqColorLabel', paint)
         self.assertNotIn('bihin-count', paint)
-        self.assertNotIn('この合計を報告画面へ入力', paint)
+        self.assertNotIn('合計※', paint)
         self.assertNotIn(">赤<", paint)
         self.assertIn('月末在庫', paint)
         self.assertIn('closingQty', paint)
@@ -330,3 +337,9 @@ class BihinCountSheetImpactNoneTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BihinCountSheetTotalRowStyleTest(unittest.TestCase):
+    def test_total_qty_cell_is_white(self):
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        self.assertRegex(css, r'tr\.bihin-count-hiq-total td\.bihin-count-qty[\s\S]{0,120}background:#fff')
