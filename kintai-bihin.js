@@ -19,6 +19,8 @@
   let orderBusy = false;
   /** 表示中月シートの選択行（rowKey）。保存はせず、削除は画面上の行だけ。 */
   let selectedRowKeys = new Set();
+  /** 表示中セッションで棚卸表から外した行（`年-月:itemId` → 行）。再追加時に数量を戻すためだけに保持。 */
+  let removedRowsByYmItem = new Map();
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
@@ -167,6 +169,7 @@
     if (input && year && month) input.value = ymValue(year, month);
     paintBihin();
     paintNotices(data);
+    paintMasterList();
     const meta = $('#bihinmeta');
     if (meta) {
       const when = data && data.updatedAt ? `最終保存 ${data.updatedAt}` : 'まだ保存がありません';
@@ -327,6 +330,11 @@
     );
     if (!ok) return;
     const drop = new Set(doomed.map(d => d.key));
+    doomed.forEach(d => {
+      if (d.row && d.row.itemId != null && d.row.itemId !== '') {
+        removedRowsByYmItem.set(`${year}-${month}:${Number(d.row.itemId)}`, cloneData(d.row));
+      }
+    });
     rows = rows
       .filter((r, i) => !drop.has(rowKeyOf(r, i)))
       .map(enrichRow);
@@ -339,6 +347,7 @@
       const who = sheet && sheet.updatedBy ? `（${sheet.updatedBy}）` : '';
       meta.textContent = `${year}年${month}月 ・ ${rows.length}行 ・ ${when}${who}`;
     }
+    paintMasterList();
     toast(`${doomed.length}行を削除しました（未保存）。保存で確定します。`);
   }
 
@@ -605,6 +614,110 @@
     e.returnValue = '';
   }
 
+  /* ---- マスタ → 表示中の月へ追加 ---- */
+
+  /** 品目IDが表示中の棚卸行に既にあるか（名前では判定しない）。 */
+  function sheetHasItemId(sheetRows, itemId) {
+    const id = Number(itemId);
+    return (sheetRows || []).some(r => r && r.itemId != null && r.itemId !== '' && Number(r.itemId) === id);
+  }
+
+  function blankQty(v) {
+    return v === undefined || v === '' ? null : v;
+  }
+
+  /**
+   * マスタ品目から棚卸行を作る。科目・品名・単位・単価はマスタ値。
+   * 数量は、その月で外した行（retained）があればその数量を戻し、なければ空（0にしない）。
+   * 発注履歴からの購入数量の再加算はしない。
+   */
+  function buildRowFromMasterItem(item, retained) {
+    const keep = retained && Number(retained.itemId) === Number(item.id) ? retained : null;
+    return {
+      rowKey: keep && keep.rowKey ? String(keep.rowKey) : 'item:' + item.id + ':' + Date.now().toString(36),
+      itemId: Number(item.id),
+      category: item.category || '',
+      name: item.name || '',
+      unit: item.unit || '',
+      unitPrice: item.unitPrice == null || item.unitPrice === '' ? 0 : Number(item.unitPrice),
+      openingQty: keep ? blankQty(keep.openingQty) : null,
+      purchaseQty: keep ? blankQty(keep.purchaseQty) : null,
+      closingQty: keep ? blankQty(keep.closingQty) : null,
+    };
+  }
+
+  /** その月で外した行（このセッションで削除 → 最後に保存された同月スナップショットの順）を itemId で探す。 */
+  function findRetainedRow(itemId) {
+    const id = Number(itemId);
+    const k = `${year}-${month}:${id}`;
+    if (removedRowsByYmItem.has(k)) return removedRowsByYmItem.get(k);
+    if (sheet && sheet.exists && Number(sheet.year) === year && Number(sheet.month) === month) {
+      const hit = (sheet.rows || []).find(r => r && r.itemId != null && Number(r.itemId) === id);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  /** 入力欄の生の文字列（不正値を含む）を rowKey ごとに退避／復元する。再描画で入力途中を失わないため。 */
+  function captureQtyInputs() {
+    const out = new Map();
+    document.querySelectorAll('#bihingrid tr[data-row-key]').forEach(tr => {
+      const vals = {};
+      tr.querySelectorAll('input.bihin-qty').forEach(inp => { vals[inp.dataset.field] = inp.value; });
+      out.set(tr.dataset.rowKey, vals);
+    });
+    return out;
+  }
+
+  function restoreQtyInputs(saved) {
+    document.querySelectorAll('#bihingrid tr[data-row-key]').forEach(tr => {
+      const vals = saved.get(tr.dataset.rowKey);
+      if (!vals) return;
+      tr.querySelectorAll('input.bihin-qty').forEach(inp => {
+        if (Object.prototype.hasOwnProperty.call(vals, inp.dataset.field)) inp.value = vals[inp.dataset.field];
+      });
+    });
+  }
+
+  function paintBihinMeta() {
+    const meta = $('#bihinmeta');
+    if (!meta) return;
+    const when = sheet && sheet.updatedAt ? `最終保存 ${sheet.updatedAt}` : 'まだ保存がありません';
+    const who = sheet && sheet.updatedBy ? `（${sheet.updatedBy}）` : '';
+    meta.textContent = `${year}年${month}月 ・ ${rows.length}行 ・ ${when}${who}`;
+  }
+
+  function addMasterItemToSheet(id) {
+    if (!year || !month) {
+      toast('棚卸の年月が表示されていません。先に月を表示してください。');
+      return false;
+    }
+    const it = masterItems.find(x => Number(x.id) === Number(id));
+    if (!it) { toast('品目が見つかりません。'); return false; }
+    if (it.active === false) {
+      toast('削除済みの品目です。先に「復元」してから追加してください。');
+      return false;
+    }
+    if (sheetHasItemId(rows, it.id)) {
+      toast(`「${it.name || '（無題）'}」は${year}年${month}月の棚卸に追加済みです。`);
+      paintMasterList();
+      return false;
+    }
+    const retained = findRetainedRow(it.id);
+    const saved = captureQtyInputs();
+    let row = buildRowFromMasterItem(it, retained);
+    if (rows.some((r, i) => rowKeyOf(r, i) === row.rowKey)) row = buildRowFromMasterItem(it, null);
+    rows.push(enrichRow(row));
+    markDirty();
+    paintBihin();
+    restoreQtyInputs(saved);
+    paintBihinMeta();
+    paintMasterList();
+    const note = retained ? '（その月で外した行の数量を戻しました）' : '（数量は空欄）';
+    toast(`「${it.name || '（無題）'}」を${year}年${month}月の棚卸に追加しました${note}。未保存です。「保存」で確定します。`);
+    return true;
+  }
+
   /* ---- マスタ ---- */
   function openMasterDialog() {
     const dlg = $('#bihinmasterdialog');
@@ -641,21 +754,37 @@
     const body = $('#bihinmasterbody');
     const deletedBody = $('#bihinmasterdeletedbody');
     if (!body) return;
+    const target = $('#bihinmastertarget');
+    if (target) {
+      target.textContent = year && month
+        ? `追加先：${year}年${month}月の棚卸表（画面で選択中の月）。追加後は未保存です。「保存」で${year}年${month}月を上書き保存します。`
+        : '追加先の月が未表示です。棚卸の月を表示してから追加してください。';
+    }
     const active = masterItems.filter(it => it.active !== false);
     const deleted = masterItems.filter(it => it.active === false);
     if (!active.length) {
       body.innerHTML = '<tr><td colspan="5">まだ品目がありません。上の欄から登録してください。</td></tr>';
     } else {
-      body.innerHTML = active.map(it => `<tr>
+      const ymLabel = year && month ? `${year}年${month}月` : '';
+      body.innerHTML = active.map(it => {
+        const added = sheetHasItemId(rows, it.id);
+        const addBtn = !ymLabel
+          ? ''
+          : added
+            ? `<button type="button" class="bihin-master-added" disabled aria-label="${esc(ymLabel)}の棚卸に追加済み">追加済み</button>`
+            : `<button type="button" class="primary" data-add-item="${it.id}" title="${esc(ymLabel)}の棚卸表に追加（未保存）">この月の棚卸に追加</button>`;
+        return `<tr>
         <td>${esc(it.category)}</td>
         <td>${esc(it.name)}</td>
         <td>${esc(it.unit)}</td>
         <td class="bihin-num">${formatYen(it.unitPrice)}</td>
         <td class="bihin-master-row-actions">
+          ${addBtn}
           <button type="button" data-edit-item="${it.id}">編集</button>
           <button type="button" class="danger" data-delete-item="${it.id}">削除</button>
         </td>
-      </tr>`).join('');
+      </tr>`;
+      }).join('');
     }
     if (deletedBody) {
       if (!deleted.length) {
@@ -1540,6 +1669,11 @@
     const mBody = $('#bihinmasterbody');
     if (mBody) {
       mBody.addEventListener('click', e => {
+        const addBtn = e.target.closest && e.target.closest('[data-add-item]');
+        if (addBtn) {
+          addMasterItemToSheet(Number(addBtn.dataset.addItem));
+          return;
+        }
         const editBtn = e.target.closest && e.target.closest('[data-edit-item]');
         if (editBtn) {
           const id = Number(editBtn.dataset.editItem);
@@ -1580,6 +1714,7 @@
   };
   // 単体テスト／確認用に公開
   window._bihinMath = { moneyYen, usageQty, parseQtyInput };
+  window._bihinAddFromMaster = { sheetHasItemId, buildRowFromMasterItem, addMasterItemToSheet };
   window._bihinCountSheet = {
     isHiqColorLabel,
     expandCountSheetRows,
