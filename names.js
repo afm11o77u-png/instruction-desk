@@ -156,7 +156,7 @@ function paintNameDeptRoleSection(item){
 function paintNameDetail(item){
  const colors=nameSwatches(item.colors,item.fixedColor,item.mixColors);
  const mixNoteFor=value=>nameMixNote(value,item.mixColors);
- const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${mixNoteFor(sample.paperColor||item.fixedColor)?`<br>${esc(mixNoteFor(sample.paperColor||item.fixedColor))}`:''}</figcaption></figure>`).join('');
+ const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${mixNoteFor(sample.paperColor||item.fixedColor)?`<br>${esc(mixNoteFor(sample.paperColor||item.fixedColor))}`:''}</figcaption>${currentUser?.role==='owner'?`<button type="button" class="danger namesample-delete" data-delete-sample="${sample.id}">この画像を削除</button>`:''}</figure>`).join('');
  const reasons=(item.reviewReasons||[]).filter(text=>!/書体|代替表示/.test(text)).map(text=>`<li>${esc(text)}</li>`).join('');
  const deptRole=paintNameDeptRoleSection(item);
  const departments=deptRole.hideInlineDepartments?'':(item.departments||[]).map(esc).join('、');
@@ -183,6 +183,7 @@ function paintNameDetail(item){
  $('#namebody').querySelectorAll('[data-namezoom]').forEach(button=>button.onclick=()=>{const sample=item.samples.find(x=>String(x.id)===button.dataset.namezoom);if(sample)openNameZoom(item,sample)});
  const edit=$('#nameeditbtn');
  if(edit){edit.hidden=currentUser?.role!=='owner';edit.onclick=()=>openNameEditor(item)}
+ $('#namebody').querySelectorAll('[data-delete-sample]').forEach(button=>button.onclick=()=>{const sample=item.samples.find(x=>String(x.id)===button.dataset.deleteSample);if(sample)confirmDeleteSample(item,sample)});
  const delFmt=$('#namedeleteformat');
  if(delFmt){delFmt.hidden=currentUser?.role!=='owner';delFmt.onclick=()=>confirmDeleteFormat(item)}
 }
@@ -215,6 +216,22 @@ async function confirmDeleteFormat(item){
   toast('形式を削除しました（復元できます）。');
  }catch(e){toast(e.message||'削除できませんでした。')}
 }
+function nameSampleLabel(sample){
+ const parts=[sample.condition||'',sample.paperColor?`用紙色：${sample.paperColor}`:''].filter(Boolean);
+ return parts.join('　')||sample.caption||`見本 ${sample.id}`;
+}
+async function confirmDeleteSample(item,sample){
+ if(currentUser?.role!=='owner')return;
+ if((item.samples||[]).length<=1){toast('この形式に残っている最後の見本のため削除できません。不要な場合は「この形式を削除」を使ってください。');return}
+ const msg=`「${item.format}」（顧客：${item.sourceName}）の見本「${nameSampleLabel(sample)}」を削除しますか？\n\nこの画像1件だけが表示から消えます。形式・顧客・他の見本は残ります。\n画像ファイルは削除しません。後から「削除済み」から復元できます。\n内容が変わるため、了承済みの場合は再確認が必要になります。\n\nキャンセルなら何も変わりません。`;
+ if(!confirm(msg))return;
+ try{
+  await api('/api/name-labels/delete',{kind:'sample',id:sample.id});
+  await openNameFormat(item.id);
+  if(item.customerId)await openNameCustomer(item.customerId);
+  toast('見本画像を削除しました（復元できます）。');
+ }catch(e){toast(e.message||'削除できませんでした。')}
+}
 async function openNameDeleted(){
  if(currentUser?.role!=='owner')return;
  const box=$('#namedeletedbody');
@@ -224,7 +241,17 @@ async function openNameDeleted(){
   const data=await api('/api/name-labels/deleted');
   const customers=(data.customers||[]).map(item=>`<div class="namedeleted-row"><div><b>${esc(item.sourceName)}</b><span>大元（顧客）／削除 ${esc(item.deletedAt||'—')}／${esc(item.deletedByName||'—')}</span><span>一緒に隠した子情報：${item.hiddenWithParent||0}件${item.individuallyDeletedFormats?`（別途個別削除：${item.individuallyDeletedFormats}件）`:''}</span></div><button type="button" data-restore-customer="${item.id}">復元</button></div>`).join('');
   const formats=(data.formats||[]).map(item=>`<div class="namedeleted-row"><div><b>${esc(item.format)}</b><span>子情報（形式）${esc(item.number||'')}／顧客：${esc(item.sourceName)}${item.parentDeleted?'（顧客も削除中）':''}</span><span>削除 ${esc(item.deletedAt||'—')}／${esc(item.deletedByName||'—')}</span></div><button type="button" data-restore-format="${item.id}">復元</button></div>`).join('');
-  box.innerHTML=(customers||formats)?`<h3>削除済みの大元（顧客）</h3>${customers||'<p>ありません。</p>'}<h3>個別に削除した子情報（形式）</h3>${formats||'<p>ありません。</p>'}`:'<p>削除済みはありません。</p>';
+  const samples=(data.samples||[]).map(item=>`<div class="namedeleted-row"><div><b>${esc(item.label)}</b><span>見本画像／形式：${esc(item.format)} ${esc(item.number||'')}／顧客：${esc(item.sourceName)}${item.parentDeleted?'（形式または顧客も削除中）':''}</span><span>削除 ${esc(item.deletedAt||'—')}／${esc(item.deletedByName||'—')}</span></div><button type="button" data-restore-sample="${item.id}">復元</button></div>`).join('');
+  box.innerHTML=(customers||formats||samples)?`<h3>削除済みの大元（顧客）</h3>${customers||'<p>ありません。</p>'}<h3>個別に削除した子情報（形式）</h3>${formats||'<p>ありません。</p>'}<h3>個別に削除した見本画像</h3>${samples||'<p>ありません。</p>'}`:'<p>削除済みはありません。</p>';
+  box.querySelectorAll('[data-restore-sample]').forEach(button=>button.onclick=async()=>{
+   if(!confirm('この見本画像を復元しますか？'))return;
+   try{
+    const result=await api('/api/name-labels/restore',{kind:'sample',id:Number(button.dataset.restoreSample)});
+    toast(result.parentDeleted?'見本画像を復元しました（形式または顧客が削除中のため、その復元後に表示されます）。':'見本画像を復元しました。');
+    await openNameDeleted();
+    await loadNames(false);
+   }catch(e){toast(e.message||'復元できませんでした。')}
+  });
   box.querySelectorAll('[data-restore-customer]').forEach(button=>button.onclick=async()=>{
    if(!confirm('この顧客と、一緒に削除した子情報を復元しますか？\n（以前に個別削除した子情報は戻りません）'))return;
    try{

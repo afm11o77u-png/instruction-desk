@@ -184,6 +184,10 @@ def _ensure_soft_delete_columns(c):
         _column(c, 'name_customers', name, ddl)
     for name, ddl in SOFT_DELETE_FORMAT_COLS:
         _column(c, 'name_formats', name, ddl)
+    # 見本（条件ごとの画像）単位の論理削除。既存行は NULL のまま＝表示。
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='name_samples'").fetchone():
+        for name, ddl in SOFT_DELETE_CUSTOMER_COLS:
+            _column(c, 'name_samples', name, ddl)
 
 def _now():
     return datetime.now().isoformat(timespec='seconds')
@@ -8940,7 +8944,7 @@ def customer(handler, c, customer_id):
         f'SELECT * FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED} ORDER BY id',
         (row['id'],),
     ):
-        sample = c.execute('SELECT id, relative_path FROM name_samples WHERE format_id=? AND relative_path<>"" ORDER BY id LIMIT 1', (item['id'],)).fetchone()
+        sample = c.execute(f'SELECT id, relative_path FROM name_samples WHERE format_id=? AND relative_path<>"" AND {NOT_SOFT_DELETED} ORDER BY id LIMIT 1', (item['id'],)).fetchone()
         formats.append({
             'id': item['id'], 'number': _number(item['id']), 'format': item['format_name'],
             'placement': item['placement'], 'size': _size_text(item), 'needsReview': bool(item['needs_review']),
@@ -8966,7 +8970,7 @@ def detail(handler, c, format_id):
     if not customer_row or customer_row['retired'] or _row_deleted(customer_row):
         return 404, {'error': '形式が見つかりません。'}
     samples = []
-    for sample in c.execute('SELECT * FROM name_samples WHERE format_id=? ORDER BY id', (row['id'],)):
+    for sample in c.execute(f'SELECT * FROM name_samples WHERE format_id=? AND {NOT_SOFT_DELETED} ORDER BY id', (row['id'],)):
         samples.append({
             'id': sample['id'], 'condition': sample['condition_label'], 'paperColor': sample['paper_color'],
             'caption': sample['caption'], 'hasImage': bool(sample['relative_path']),
@@ -9009,6 +9013,7 @@ def send_sample(handler, c, sample_id):
             JOIN name_formats f ON f.id=s.format_id
             JOIN name_customers cu ON cu.id=f.customer_id
             WHERE s.id=? AND f.retired=0 AND cu.retired=0
+              AND (s.deleted_at IS NULL OR s.deleted_at='')
               AND (f.deleted_at IS NULL OR f.deleted_at='')
               AND (cu.deleted_at IS NULL OR cu.deleted_at='')''',
         (sample_id,),
@@ -9092,6 +9097,60 @@ def soft_delete_format(handler, c, d):
         'ok': True, 'kind': 'format', 'id': format_id,
         'format': row['format_name'], 'sourceName': customer_row['source_name'],
         'customerId': customer_row['id'], 'deletedAt': at, 'deletedByName': by_name,
+    }
+
+def _sample_label(sample):
+    parts = [p for p in (sample['condition_label'], f"用紙色：{sample['paper_color']}" if sample['paper_color'] else '') if p]
+    return '　'.join(parts) or sample['caption'] or f"見本 {sample['id']}"
+
+def soft_delete_sample(handler, c, d):
+    """形式内の見本（条件ごとの画像）1件だけを論理削除。形式・顧客・他の見本・画像ファイルは残す。
+    了承は既存の name_samples 更新トリガーで解除される（他の修正と同じ扱い）。"""
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    try: sample_id = int(d.get('id'))
+    except (TypeError, ValueError): return 400, {'error': '見本が見つかりません。'}
+    sample = c.execute(
+        f'SELECT * FROM name_samples WHERE id=? AND {NOT_SOFT_DELETED}', (sample_id,),
+    ).fetchone()
+    if not sample: return 404, {'error': '見本が見つかりません。'}
+    fmt = c.execute(
+        f'SELECT * FROM name_formats WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}', (sample['format_id'],),
+    ).fetchone()
+    cust = fmt and c.execute(
+        f'SELECT * FROM name_customers WHERE id=? AND retired=0 AND {NOT_SOFT_DELETED}', (fmt['customer_id'],),
+    ).fetchone()
+    if not fmt or not cust: return 404, {'error': '見本が見つかりません。'}
+    remaining = c.execute(
+        f'SELECT COUNT(*) n FROM name_samples WHERE format_id=? AND {NOT_SOFT_DELETED}', (fmt['id'],),
+    ).fetchone()['n']
+    if remaining <= 1:
+        return 409, {'error': 'この形式に残っている最後の見本のため削除できません。不要な場合は「この形式を削除」を使ってください。'}
+    at, by_id, by_name = _actor_fields(handler.user)
+    c.execute(
+        'UPDATE name_samples SET deleted_at=?, deleted_by=?, deleted_by_name=? WHERE id=?',
+        (at, by_id, by_name, sample_id),
+    )
+    return 200, {
+        'ok': True, 'kind': 'sample', 'id': sample_id, 'label': _sample_label(sample),
+        'formatId': fmt['id'], 'format': fmt['format_name'], 'sourceName': cust['source_name'],
+        'customerId': cust['id'], 'deletedAt': at, 'deletedByName': by_name,
+    }
+
+def restore_sample(handler, c, d):
+    blocked = _owner_delete(handler.user)
+    if blocked: return blocked
+    try: sample_id = int(d.get('id'))
+    except (TypeError, ValueError): return 400, {'error': '見本が見つかりません。'}
+    sample = c.execute(f'SELECT * FROM name_samples WHERE id=? AND {IS_SOFT_DELETED}', (sample_id,)).fetchone()
+    if not sample: return 404, {'error': '削除済みの見本が見つかりません。'}
+    fmt = c.execute('SELECT * FROM name_formats WHERE id=?', (sample['format_id'],)).fetchone()
+    c.execute('UPDATE name_samples SET deleted_at=NULL, deleted_by=NULL, deleted_by_name=? WHERE id=?', ('', sample_id))
+    return 200, {
+        'ok': True, 'kind': 'sample', 'id': sample_id, 'label': _sample_label(sample),
+        'formatId': sample['format_id'], 'format': fmt['format_name'] if fmt else '',
+        'customerId': fmt['customer_id'] if fmt else None,
+        'parentDeleted': bool(not fmt or fmt['retired'] or _row_deleted(fmt)),
     }
 
 def restore_customer(handler, c, d):
@@ -9189,18 +9248,38 @@ def list_deleted(handler, c):
             'deletedByName': row['deleted_by_name'] or '',
             'parentDeleted': bool(row['customer_deleted_at']),
         })
-    return 200, {'customers': customers, 'formats': formats}
+    samples = []
+    for row in c.execute(
+        f'''SELECT s.*, f.format_name, f.customer_id, f.deleted_at AS format_deleted_at,
+                   cu.source_name, cu.deleted_at AS customer_deleted_at
+            FROM name_samples s
+            JOIN name_formats f ON f.id=s.format_id
+            JOIN name_customers cu ON cu.id=f.customer_id
+            WHERE f.retired=0 AND cu.retired=0
+              AND (s.deleted_at IS NOT NULL AND s.deleted_at<>'')
+            ORDER BY s.deleted_at DESC, s.id DESC'''
+    ):
+        samples.append({
+            'kind': 'sample', 'id': row['id'], 'label': _sample_label(row),
+            'formatId': row['format_id'], 'number': _number(row['format_id']), 'format': row['format_name'],
+            'sourceName': row['source_name'], 'customerId': row['customer_id'],
+            'deletedAt': row['deleted_at'], 'deletedByName': row['deleted_by_name'] or '',
+            'parentDeleted': bool(row['format_deleted_at'] or row['customer_deleted_at']),
+        })
+    return 200, {'customers': customers, 'formats': formats, 'samples': samples}
 
 def soft_delete(handler, c, d):
     kind = str(d.get('kind') or '').strip()
     if kind == 'customer': return soft_delete_customer(handler, c, d)
     if kind == 'format': return soft_delete_format(handler, c, d)
+    if kind == 'sample': return soft_delete_sample(handler, c, d)
     return 400, {'error': '削除対象を指定してください。'}
 
 def restore(handler, c, d):
     kind = str(d.get('kind') or '').strip()
     if kind == 'customer': return restore_customer(handler, c, d)
     if kind == 'format': return restore_format(handler, c, d)
+    if kind == 'sample': return restore_sample(handler, c, d)
     return 400, {'error': '復元対象を指定してください。'}
 
 def _text(value, limit, label):
