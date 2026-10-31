@@ -11,7 +11,7 @@
     '@page{size:A4 landscape;margin:0}' +
     '*{box-sizing:border-box}' +
     'html,body{margin:0;padding:0;background:white;color:black;' +
-    'font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN",Meiryo,sans-serif}' +
+    'font-family:"Yu Gothic","YuGothic",Meiryo,"MS Gothic","Hiragino Kaku Gothic ProN","Noto Sans CJK JP","Noto Sans JP","IPAexGothic","IPAGothic",sans-serif}' +
     '.page{width:297mm;height:210mm;position:relative;display:grid;' +
     'grid-template-columns:148.5mm 148.5mm;grid-template-rows:105mm 105mm;' +
     'break-after:page;page-break-after:always;overflow:hidden}' +
@@ -52,7 +52,50 @@
     'grid-template-columns:none;grid-template-rows:none}' +
     '.page.page-image::before,.page.page-image::after{content:none;display:none}' +
     '.page.page-image .sheetimg{display:block;width:297mm;height:210mm;margin:0;padding:0;' +
-    'border:0;object-fit:contain;object-position:center;background:white}';
+    'border:0;object-fit:contain;object-position:center;background:white}' +
+    /* ひまわり：枠付きカード。店舗チェック2列→横線→氏名欄（様）→横線→【備考】枠→エンパイアー */
+    '.cell.hm{padding:5mm 5.5mm}' +
+    '.hm .frame{flex:1 1 auto;display:flex;flex-direction:column;border:1.2px solid #000;padding:5mm 6mm 2mm;min-height:0}' +
+    '.hm .stores{display:grid;grid-template-columns:1fr 1fr;column-gap:4mm;flex:0 0 auto}' +
+    '.hm .col{display:flex;flex-direction:column;gap:1.6mm}' +
+    '.hm .store{display:flex;align-items:center;gap:2.5mm;font-size:11pt;line-height:1.25;font-weight:400;white-space:nowrap}' +
+    '.hm .box{flex:0 0 auto;display:inline-block;width:3.2mm;height:3.2mm;border:1px solid #000;position:relative}' +
+    '.hm .rule{border-top:1px solid #000;margin:3mm 0 0;flex:0 0 auto}' +
+    '.hm .namearea{flex:1 1 auto;display:flex;justify-content:flex-end;align-items:flex-end;min-height:12mm;padding:0 1mm 1.5mm 0}' +
+    '.hm .sama{font-size:26pt;font-weight:700;line-height:1}' +
+    '.hm .memo{display:flex;align-items:flex-start;gap:1.5mm;margin-top:2.5mm;flex:0 0 auto}' +
+    '.hm .memo .label{font-size:8.5pt;font-weight:700;padding-top:2mm;white-space:nowrap}' +
+    '.hm .memo .memobox{flex:1 1 auto;height:12mm;border:1px solid #000}' +
+    '.hm .maker{text-align:right;font-size:6pt;line-height:1;margin-top:.8mm;flex:0 0 auto}';
+
+  function escText(value) {
+    return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /* ひまわり書式：stores を左列 leftCount 件・残りを右列。チェック欄は空の□（手書きでチェック）。 */
+  function himawariCellHtml(format) {
+    const item = (name) => `<div class="store"><span class="box"></span>${escText(name)}</div>`;
+    const left = format.stores.slice(0, format.leftCount);
+    const right = format.stores.slice(format.leftCount);
+    return (
+      '<section class="cell hm"><div class="frame">' +
+      `<div class="stores"><div class="col">${left.map(item).join('')}</div><div class="col">${right.map(item).join('')}</div></div>` +
+      '<div class="rule"></div>' +
+      '<div class="namearea"><div class="sama">様</div></div>' +
+      '<div class="rule" style="margin-top:0"></div>' +
+      '<div class="memo"><span class="label">【備考】</span><div class="memobox"></div></div>' +
+      '<div class="maker">エンパイアー</div>' +
+      '</div></section>'
+    );
+  }
+
+  function himawari(id, name, leftCount, stores) {
+    return {
+      id, name, kind: 'cells', leftCount,
+      stores: stores.map((s) => 'ひまわり' + s),
+      buildCellHtml() { return himawariCellHtml(this); },
+    };
+  }
 
   const FIXED_LABEL_FORMATS = [
     {
@@ -111,10 +154,16 @@
       imageFile: 'fixed-label/2242-ishiya.jpg',
       sourcePageRotate: 180,
     },
+    himawari('himawari-1', 'ひまわり1', 5, ['タワー店', 'ファイターズ通り店', '豊平店', '月寒店', '清田店', '新琴似店', '篠路店', '真駒内店', 'タウン店']),
+    himawari('himawari-2', 'ひまわり2', 4, ['五所川原店', '八戸店', '能代店', '大曲店', '岩沼店', '北上店', '多賀城店']),
+    himawari('himawari-3', 'ひまわり3', 5, ['弟子屈店', '知床店', '美幌店', '北見店', '紋別店', '中標津店', '根室店', '釧路店', '帯広店', '音更店']),
+    himawari('himawari-4', 'ひまわり4', 4, ['苫小牧店', '函館店', '日乃出店', '伊達店', '滝川店', '留萌店', '士別店', '室蘭店']),
   ];
 
   function listFixedLabelFormats() {
-    return FIXED_LABEL_FORMATS.map((f) => ({ id: f.id, name: f.name, kind: f.kind || 'cells' }));
+    return FIXED_LABEL_FORMATS.map((f) => {
+      return { id: f.id, name: f.name, kind: f.kind || 'cells' };
+    });
   }
 
   function getFixedLabelFormat(id) {
@@ -182,7 +231,7 @@
     const style = css || FIXED_LABEL_CSS;
     const pages = fixedLabelPagesHtml(formatId, sheetCount, assetBase);
     return (
-      '<!doctype html><html><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
+      '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
       style +
       '@media screen{body{background:#eee;padding:12px}.page{background:white;margin:0 auto 12px;' +
       'box-shadow:0 1px 4px rgba(0,0,0,.12)}}' +
