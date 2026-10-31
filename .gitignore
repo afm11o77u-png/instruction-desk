@@ -89,3 +89,6 @@ stock-desk/**/.cache/
 stock-desk/data/
 stock-desk/tls/
 stock-desk/network.json
+
+# 統合ネームラベル exe（アップロード保存先）
+data/name-label-exe/
