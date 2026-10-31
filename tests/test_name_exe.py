@@ -150,6 +150,18 @@ class NameExeHttpTest(unittest.TestCase):
         self.assertEqual(st, 200); self.assertEqual(data, EXE)
         self.assertIn("filename*=UTF-8''" + quote('統合.exe', safe=''), disp)
 
+    def test_update_notice_per_user(self):
+        self._req('POST', '/api/name-labels/exe', 'owner', EXE + b'notice')
+        info = lambda role: json.loads(self._req('GET', '/api/name-labels/exe/info', role)[2])
+        self.assertTrue(info('sales')['update']['pending'])
+        self.assertNotIn('downloads', info('sales'))
+        self.assertEqual(self._req('GET', '/api/name-labels/exe', 'sales')[0], 200)
+        self.assertFalse(info('sales')['update']['pending'])
+        rows = {r['login']: r['latest'] for r in info('owner')['downloads']}
+        self.assertTrue(rows['sales'])
+        self._req('POST', '/api/name-labels/exe', 'owner', EXE + b'notice2')
+        self.assertTrue(info('sales')['update']['pending'])
+
 
 if __name__ == '__main__':
     unittest.main()
