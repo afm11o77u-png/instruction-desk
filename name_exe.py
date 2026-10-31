@@ -221,3 +221,44 @@ def download(data_dir, user):
 def content_disposition(name):
     ascii_name = ''.join(ch if 32 <= ord(ch) < 127 and ch not in '"\\;' else '_' for ch in name) or 'togo-name-label.exe'
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+# --- 利用者ごとのダウンロード記録（更新のお知らせ用） ---
+
+def schema(c):
+    c.execute('CREATE TABLE IF NOT EXISTS name_exe_downloads (user_id INTEGER PRIMARY KEY, version TEXT NOT NULL, filename TEXT, at TEXT NOT NULL)')
+
+
+def version_of(meta):
+    """exe の版の識別子。SHA-256（無ければアップロード日時＋サイズ）。"""
+    if not meta:
+        return None
+    return meta.get('sha256') or f"{meta.get('uploadedAt', '')}|{meta.get('size', '')}"
+
+
+def record_download(c, user, meta, now=None):
+    schema(c)
+    at = (now or datetime.now(JST)).astimezone(JST).strftime('%Y-%m-%d %H:%M')
+    c.execute('INSERT INTO name_exe_downloads(user_id, version, filename, at) VALUES(?,?,?,?) '
+              'ON CONFLICT(user_id) DO UPDATE SET version=excluded.version, filename=excluded.filename, at=excluded.at',
+              (user['id'], version_of(meta), meta.get('filename'), at))
+
+
+def update_status(c, user, meta):
+    """{'pending': bool, 'lastDownloadAt': str|None}。exe が無ければ pending=False。"""
+    schema(c)
+    row = c.execute('SELECT version, at FROM name_exe_downloads WHERE user_id=?', (user['id'],)).fetchone()
+    last = row[1] if row else None
+    if not meta:
+        return {'pending': False, 'lastDownloadAt': last}
+    return {'pending': not row or row[0] != version_of(meta), 'lastDownloadAt': last}
+
+
+def download_report(c, meta):
+    """主管理者向け：有効な利用者ごとの 最新版ダウンロード済み／未。"""
+    schema(c)
+    ver = version_of(meta)
+    rows = c.execute('SELECT u.id, u.login, u.name, u.role, d.version, d.at FROM users u '
+                     'LEFT JOIN name_exe_downloads d ON d.user_id=u.id WHERE u.active=1 ORDER BY u.id').fetchall()
+    return [{'id': r[0], 'login': r[1], 'name': r[2], 'role': r[3],
+             'latest': bool(ver) and r[4] == ver, 'lastDownloadAt': r[5]} for r in rows]

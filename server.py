@@ -66,6 +66,7 @@ def initialize():
         picking.backfill_picking_flags(c)
         kintai.bind(DATA)
         kintai.schema(c)
+        name_exe.schema(c)
         if not c.execute("SELECT 1 FROM settings WHERE key='seeded'").fetchone():
             customers = ['宮の沢明日佳病院', 'だるま食品銭函工場', '弁釜札幌', 'サザエ食品 店舗']
             for i in range(6):
@@ -977,11 +978,16 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if path.endswith('/info'):
                     name_exe.check_user(u)
                     owner=u['role']=='owner'
-                    data={'exe': name_exe.info(DATA), 'canUpload': owner, 'maxBytes': name_exe.MAX_BYTES}
+                    meta=name_exe.info(DATA)
+                    data={'exe': dict(meta) if meta else None, 'canUpload': owner, 'maxBytes': name_exe.MAX_BYTES}
                     if data['exe']: data['exe'].pop('sha256', None)
+                    with connect() as c:
+                        data['update']=name_exe.update_status(c, u, meta)
+                        if owner and meta: data['downloads']=name_exe.download_report(c, meta)
                     if owner: data['dropFolder']={'path': str(EXE_DROP_DIR), 'enabled': EXE_DROP_ENABLED, 'intervalSeconds': name_exe.DROP_INTERVAL}
                     return self.reply(200, data)
                 file, meta, disposition = name_exe.download(DATA, u)
+                with connect() as c: name_exe.record_download(c, u, meta)
             except name_exe.ExeError as e:
                 return self.reply(e.status, {'error': e.message})
             return self.reply_file(200, file, 'application/vnd.microsoft.portable-executable', {'Content-Disposition': disposition})
