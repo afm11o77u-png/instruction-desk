@@ -336,11 +336,10 @@ function nameExeHistoryHtml(list){return list.map(h=>`<div class="exehistitem"><
 async function saveNameExeNotes(){const st=$('#nameexenotesstatus');const btn=$('#nameexenotessave');btn.disabled=true;st.textContent='保存中…';try{await api('/api/name-labels/exe/notes',{notes:$('#nameexenotes').value});await openNameExe();$('#nameexenotesstatus').textContent='更新内容を保存しました。'}catch(e){st.textContent=e.message||'保存できませんでした。'}finally{btn.disabled=false}}
 {const b=$('#nameexenotessave');if(b)b.onclick=saveNameExeNotes}
 function nameExeUsersHtml(list){if(!list)return'';if(!list.length)return'<p>利用者がいません。</p>';const todo=list.filter(u=>!u.latest).length;return `<h3>最新版のダウンロード状況（未 ${todo}人／${list.length}人）</h3><table class="exeusers"><thead><tr><th>ログインID</th><th>名前</th><th>最新版</th><th>最後のダウンロード（日本時間）</th></tr></thead><tbody>${list.map(u=>`<tr><td>${esc(u.login||'')}</td><td>${esc(u.name||'')}</td><td class="${u.latest?'done':'todo'}">${u.latest?'済':'未'}</td><td>${esc(u.lastDownloadAt||'—')}</td></tr>`).join('')}</tbody></table>`}
-function paintNameExeUpdate(data){const pending=!!(data&&data.exe&&data.update&&data.update.pending);document.querySelectorAll('[data-exebadge]').forEach(b=>b.hidden=!pending);const bar=$('#exeupdate');if(bar){bar.hidden=!pending;const at=$('#exeupdateat');if(at)at.textContent=pending&&data.exe.uploadedAt?`（${data.exe.uploadedAt} 日本時間）`:'';const note=$('#exeupdatenote');if(note){const first=pending?(String(data.exe.notes||'').split('\n').find(l=>l.trim())||'').trim():'';note.textContent=first?`更新内容：${first}`:''}}}
+function paintNameExeUpdate(data){const pending=!!(data&&data.exe&&data.update&&data.update.pending);document.querySelectorAll('[data-exebadge]').forEach(b=>b.hidden=!pending)}
 async function checkNameExeUpdate(){if(typeof currentUser==='undefined'||!currentUser||currentUser.must_change){paintNameExeUpdate(null);return}try{const r=await fetch('/api/name-labels/exe/info');if(!r.ok){paintNameExeUpdate(null);return}paintNameExeUpdate(await r.json())}catch{}}
 function downloadNameExe(){paintNameExeUpdate(null);location.href='/api/name-labels/exe';setTimeout(()=>{checkNameExeUpdate();if($('#nameexe').open)openNameExe()},4000)}
 $('#nameexedownload').onclick=downloadNameExe;
-{const dl=$('#exeupdatedl');if(dl)dl.onclick=downloadNameExe}
 setTimeout(checkNameExeUpdate,1500);setInterval(checkNameExeUpdate,60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkNameExeUpdate()});
 // account.js initializes login state later; loadNames updates the button.

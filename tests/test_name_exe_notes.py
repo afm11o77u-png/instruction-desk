@@ -84,5 +84,5 @@ class NameExeNotesTest(unittest.TestCase):
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
         self.assertIn("$('#nameexenotescurrent').textContent=notes", js)
         self.assertIn('${esc(h.notes)}', js)
-        self.assertIn("note.textContent=first?", js)
+        self.assertNotIn("exeupdatenote", js)  # バナーは廃止
         self.assertIn('.exenotes{white-space:pre-wrap', css)

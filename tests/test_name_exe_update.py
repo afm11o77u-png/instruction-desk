@@ -70,12 +70,16 @@ class NameExeUpdateWiringTest(unittest.TestCase):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         js = (ROOT / 'names.js').read_text(encoding='utf-8')
         css = (ROOT / 'style.css').read_text(encoding='utf-8')
-        self.assertIn('id="exeupdate"', html)
-        self.assertEqual(html.count('data-exebadge'), 3)
-        self.assertIn('NEW 更新あり', html)
+        self.assertNotIn('exeupdate', html)  # 上部バナーは廃止
+        self.assertNotIn('NEW 更新あり', html)
+        self.assertEqual(html.count('data-exebadge'), 1)  # ネーム情報の横だけ
+        self.assertIn('data-view="nameinfo">ネーム情報<span class="exebadge" data-exebadge hidden>NEW</span>', html)
+        self.assertNotIn('exeupdate', js)
+        self.assertNotIn('exeupdate', css)
         self.assertIn('id="nameexeusers"', html)
         self.assertIn('setInterval(checkNameExeUpdate,60000)', js)
-        self.assertIn('prefers-reduced-motion', css)
+        self.assertNotIn('exepulse', css)  # 控えめな赤字、アニメーションなし
+        self.assertIn('.exebadge{margin-left:6px;color:#d61f1f', css)
 
 
 if __name__ == '__main__':

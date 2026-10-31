@@ -755,17 +755,8 @@ body.catalog-kintai main>header .headactions{display:none}
 }
 
 .namesample-delete{margin-top:6px;font-size:.8rem;padding:4px 10px}
-/* 統合ネームラベル exe 更新のお知らせ */
-.exeupdate{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;padding:12px 16px;border-radius:10px;color:#fff;font-weight:700;font-size:1.05rem;background:linear-gradient(90deg,#d61f1f,#f26b0f,#d61f1f);background-size:200% 100%;box-shadow:0 0 0 3px #ffd34d,0 6px 18px rgba(214,31,31,.35);animation:exeflash 2.4s linear infinite}
-.exeupdate[hidden]{display:none}
-.exeupdate-new{background:#ffd34d;color:#8a1010;border-radius:6px;padding:2px 8px;font-weight:900;letter-spacing:.05em}
-.exeupdate-text{flex:1;min-width:16em}
-.exeupdate-dl{background:#fff;color:#c01717;border:2px solid #fff;font-weight:900;padding:6px 16px;border-radius:8px}
-.exebadge{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;background:#e11d1d;color:#fff;font-size:.7rem;font-weight:900;line-height:1.5;vertical-align:middle;box-shadow:0 0 0 2px #ffb020;animation:exepulse 1.2s ease-in-out infinite}
+/* 統合ネームラベル exe 更新のお知らせ（ネーム情報の横に赤字の NEW） */
+.exebadge{margin-left:6px;color:#d61f1f;font-size:.75rem;font-weight:700}
 .exebadge[hidden]{display:none}
-.exebadge-big{font-size:.8rem;background:linear-gradient(90deg,#e11d1d,#f26b0f)}
 .exeusers{width:100%;border-collapse:collapse;font-size:.9rem;margin-top:6px}.exeusers th,.exeusers td{border:1px solid #d5ead4;padding:4px 8px;text-align:left}.exeusers .done{color:#186438;font-weight:700}.exeusers .todo{color:#c01717;font-weight:700}
-@keyframes exepulse{0%,100%{transform:scale(1);box-shadow:0 0 0 2px #ffb020}50%{transform:scale(1.12);box-shadow:0 0 0 5px rgba(255,176,32,.35)}}
-@keyframes exeflash{0%{background-position:0 0}100%{background-position:200% 0}}
-@media (prefers-reduced-motion:reduce){.exebadge,.exeupdate{animation:none}}
-.exenotes{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;margin:0 0 8px;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;max-height:14em;overflow:auto}.exenotesview h3,#nameexenotesedit h3{margin:12px 0 6px;font-size:1rem}.exehistory{margin:8px 0}.exehistory summary{cursor:pointer;font-weight:700}#nameexehistory{max-height:22em;overflow:auto}.exehistitem{margin:8px 0;padding:6px 0;border-top:1px solid #e4eee4}.exehistitem .exehisthead{font-size:.85rem;color:#3d5344}.exehistitem .exehisthead b{color:#186438}.exenoteslabel{display:grid;gap:4px;margin:8px 0;font-size:.85rem;font-weight:700}#nameexenotes,#nameexeuploadnotes{width:100%;box-sizing:border-box;font:inherit;font-weight:400}.exeupdate-note{display:block;font-size:.9rem;font-weight:400;margin-top:2px}.exeupdate-note:empty{display:none}
+.exenotes{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;margin:0 0 8px;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;max-height:14em;overflow:auto}.exenotesview h3,#nameexenotesedit h3{margin:12px 0 6px;font-size:1rem}.exehistory{margin:8px 0}.exehistory summary{cursor:pointer;font-weight:700}#nameexehistory{max-height:22em;overflow:auto}.exehistitem{margin:8px 0;padding:6px 0;border-top:1px solid #e4eee4}.exehistitem .exehisthead{font-size:.85rem;color:#3d5344}.exehistitem .exehisthead b{color:#186438}.exenoteslabel{display:grid;gap:4px;margin:8px 0;font-size:.85rem;font-weight:700}#nameexenotes,#nameexeuploadnotes{width:100%;box-sizing:border-box;font:inherit;font-weight:400}
