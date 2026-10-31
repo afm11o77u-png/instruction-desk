@@ -299,6 +299,11 @@ async function openNameExe(){
   const exe=data.exe;
   info.innerHTML=exe?`<dl class="namedef"><dt>ファイル名</dt><dd>${esc(exe.filename)}</dd><dt>サイズ</dt><dd>${esc(nameExeSize(exe.size))}</dd><dt>アップロード日時</dt><dd>${esc(exe.uploadedAt)}（日本時間）${exe.uploadedBy?`／${esc(exe.uploadedBy)}`:''}</dd></dl>`:'<p>まだアップロードされていません。</p>';
   $('#nameexedownload').hidden=!exe;
+  const notes=exe&&exe.notes||'';
+  $('#nameexenotesview').hidden=!notes;$('#nameexenotescurrent').textContent=notes;
+  const hist=data.history||[];
+  $('#nameexehistorywrap').hidden=!hist.length;$('#nameexehistory').innerHTML=nameExeHistoryHtml(hist);
+  $('#nameexenotesedit').hidden=!(data.canUpload&&exe);$('#nameexenotes').value=notes;$('#nameexenotesstatus').textContent='';
   $('#nameexeusers').innerHTML=nameExeUsersHtml(data.downloads);
   paintNameExeUpdate(data);
   $('#nameexeupload').hidden=!data.canUpload;
@@ -315,10 +320,10 @@ async function sendNameExe(){
  if(!confirm(`「${file.name}」（${nameExeSize(file.size)}）をアップロードしますか？\n今の配布ファイルは置き換わります。`))return;
  status.textContent='アップロード中…';$('#nameexesend').disabled=true;
  try{
-  const r=await fetch('/api/name-labels/exe',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Desk-Request':'1','X-File-Name':encodeURIComponent(file.name)},body:file});
+  const r=await fetch('/api/name-labels/exe',{method:'POST',headers:Object.assign({'Content-Type':'application/octet-stream','X-Desk-Request':'1','X-File-Name':encodeURIComponent(file.name)},$('#nameexeuploadnotes').value.trim()?{'X-Exe-Notes':encodeURIComponent($('#nameexeuploadnotes').value)}:{}),body:file});
   const d=await r.json().catch(()=>({}));
   if(!r.ok)throw Error(d.error||'アップロードできませんでした。');
-  $('#nameexefile').value='';
+  $('#nameexefile').value='';$('#nameexeuploadnotes').value='';
   await openNameExe();
   status.textContent='アップロードしました。';
  }catch(e){status.textContent=e.message||'アップロードできませんでした。'}
@@ -327,8 +332,11 @@ async function sendNameExe(){
 $('#nameexeopen').onclick=()=>openNameExe();
 $('#nameexeclose').onclick=()=>$('#nameexe').close();
 $('#nameexesend').onclick=()=>sendNameExe();
+function nameExeHistoryHtml(list){return list.map(h=>`<div class="exehistitem"><div class="exehisthead">${h.current?'<b>現在の版</b>　':''}${esc(h.uploadedAt||'')}（日本時間）${h.uploadedBy?`／${esc(h.uploadedBy)}`:''}　${esc(h.filename||'')}</div>${h.notes?`<div class="exenotes">${esc(h.notes)}</div>`:'<div class="namewarn">更新内容なし</div>'}</div>`).join('')}
+async function saveNameExeNotes(){const st=$('#nameexenotesstatus');const btn=$('#nameexenotessave');btn.disabled=true;st.textContent='保存中…';try{await api('/api/name-labels/exe/notes',{notes:$('#nameexenotes').value});await openNameExe();$('#nameexenotesstatus').textContent='更新内容を保存しました。'}catch(e){st.textContent=e.message||'保存できませんでした。'}finally{btn.disabled=false}}
+{const b=$('#nameexenotessave');if(b)b.onclick=saveNameExeNotes}
 function nameExeUsersHtml(list){if(!list)return'';if(!list.length)return'<p>利用者がいません。</p>';const todo=list.filter(u=>!u.latest).length;return `<h3>最新版のダウンロード状況（未 ${todo}人／${list.length}人）</h3><table class="exeusers"><thead><tr><th>ログインID</th><th>名前</th><th>最新版</th><th>最後のダウンロード（日本時間）</th></tr></thead><tbody>${list.map(u=>`<tr><td>${esc(u.login||'')}</td><td>${esc(u.name||'')}</td><td class="${u.latest?'done':'todo'}">${u.latest?'済':'未'}</td><td>${esc(u.lastDownloadAt||'—')}</td></tr>`).join('')}</tbody></table>`}
-function paintNameExeUpdate(data){const pending=!!(data&&data.exe&&data.update&&data.update.pending);document.querySelectorAll('[data-exebadge]').forEach(b=>b.hidden=!pending);const bar=$('#exeupdate');if(bar){bar.hidden=!pending;const at=$('#exeupdateat');if(at)at.textContent=pending&&data.exe.uploadedAt?`（${data.exe.uploadedAt} 日本時間）`:''}}
+function paintNameExeUpdate(data){const pending=!!(data&&data.exe&&data.update&&data.update.pending);document.querySelectorAll('[data-exebadge]').forEach(b=>b.hidden=!pending);const bar=$('#exeupdate');if(bar){bar.hidden=!pending;const at=$('#exeupdateat');if(at)at.textContent=pending&&data.exe.uploadedAt?`（${data.exe.uploadedAt} 日本時間）`:'';const note=$('#exeupdatenote');if(note){const first=pending?(String(data.exe.notes||'').split('\n').find(l=>l.trim())||'').trim():'';note.textContent=first?`更新内容：${first}`:''}}}
 async function checkNameExeUpdate(){if(typeof currentUser==='undefined'||!currentUser||currentUser.must_change){paintNameExeUpdate(null);return}try{const r=await fetch('/api/name-labels/exe/info');if(!r.ok){paintNameExeUpdate(null);return}paintNameExeUpdate(await r.json())}catch{}}
 function downloadNameExe(){paintNameExeUpdate(null);location.href='/api/name-labels/exe';setTimeout(()=>{checkNameExeUpdate();if($('#nameexe').open)openNameExe()},4000)}
 $('#nameexedownload').onclick=downloadNameExe;

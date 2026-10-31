@@ -980,7 +980,10 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     owner=u['role']=='owner'
                     meta=name_exe.info(DATA)
                     data={'exe': dict(meta) if meta else None, 'canUpload': owner, 'maxBytes': name_exe.MAX_BYTES}
-                    if data['exe']: data['exe'].pop('sha256', None)
+                    if data['exe']:
+                        data['exe'].pop('sha256', None)
+                        data['exe']['notes']=name_exe.current_notes(DATA)
+                    data['history']=name_exe.history(DATA)
                     with connect() as c:
                         data['update']=name_exe.update_status(c, u, meta)
                         if owner and meta: data['downloads']=name_exe.download_report(c, meta)
@@ -1050,13 +1053,28 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             try:
                 try: n=int(self.headers.get('Content-Length') or 0)
                 except ValueError: raise name_exe.ExeError(400, '送信内容を読めませんでした。')
-                meta=name_exe.save(DATA, u, unquote(self.headers.get('X-File-Name') or ''), self.rfile, n)
+                raw_notes=self.headers.get('X-Exe-Notes')
+                meta=name_exe.save(DATA, u, unquote(self.headers.get('X-File-Name') or ''), self.rfile, n, notes=unquote(raw_notes) if raw_notes is not None else None)
             except name_exe.ExeError as e:
                 self.close_connection=True
                 return self.reply(e.status, {'error': e.message})
             except OSError:
                 return self.reply(500, {'error': 'exeを保存できませんでした。'})
             return self.reply(200, {'ok': True, 'exe': meta})
+        if route=='/api/name-labels/exe/notes':
+            with connect() as c: u=self.session_user(c)
+            try:
+                name_exe.check_user(u, upload=True)
+                try:
+                    n=int(self.headers.get('Content-Length') or 0)
+                    if n>200000: raise ValueError
+                    d=json.loads(self.rfile.read(n) or b'{}')
+                    if not isinstance(d,dict): raise ValueError
+                except ValueError: raise name_exe.ExeError(400, '送信内容を読めませんでした。')
+                notes=name_exe.set_notes(DATA, u, d.get('notes', ''))
+            except name_exe.ExeError as e:
+                return self.reply(e.status, {'error': e.message})
+            return self.reply(200, {'ok': True, 'notes': notes, 'history': name_exe.history(DATA)})
         try:
             n=int(self.headers.get('Content-Length','0'))
             limit=80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import') else 1000000
