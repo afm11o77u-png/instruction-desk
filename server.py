@@ -976,7 +976,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             try:
                 if path.endswith('/info'):
                     name_exe.check_user(u)
-                    return self.reply(200, {'exe': name_exe.info(DATA), 'canUpload': u['role']=='owner', 'maxBytes': name_exe.MAX_BYTES})
+                    owner=u['role']=='owner'
+                    data={'exe': name_exe.info(DATA), 'canUpload': owner, 'maxBytes': name_exe.MAX_BYTES}
+                    if data['exe']: data['exe'].pop('sha256', None)
+                    if owner: data['dropFolder']={'path': str(EXE_DROP_DIR), 'enabled': EXE_DROP_ENABLED, 'intervalSeconds': name_exe.DROP_INTERVAL}
+                    return self.reply(200, data)
                 file, meta, disposition = name_exe.download(DATA, u)
             except name_exe.ExeError as e:
                 return self.reply(e.status, {'error': e.message})
@@ -1278,8 +1282,19 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         except (ValueError,TypeError,KeyError) as e: self.reply(400,{'error':str(e)})
         except Exception: self.reply(500,{'error':'保存できませんでした。保存場所の空き容量や接続を確認してください。'})
 
+def exe_drop_settings():
+    """統合ネームラベルexeの置き場フォルダ。環境変数 > network.json > 既定（アプリ直下 name-label-exe-drop）。"""
+    path=os.environ.get('NAME_LABEL_EXE_DROP') or CONFIG.get('nameLabelExeDrop') or str(ROOT/'name-label-exe-drop')
+    flag=os.environ.get('NAME_LABEL_EXE_DROP_ENABLED')
+    enabled=(flag.strip().lower() not in ('0','false','no','off','')) if flag is not None else bool(CONFIG.get('nameLabelExeDropEnabled', True))
+    return Path(path), enabled
+EXE_DROP_DIR, EXE_DROP_ENABLED = exe_drop_settings()
+
 if __name__=='__main__':
     initialize()
+    if EXE_DROP_ENABLED:
+        name_exe.DropWatcher(DATA, EXE_DROP_DIR, log=lambda m: print(m, flush=True)).start()
+        print(f'統合ネームラベルexeの置き場: {EXE_DROP_DIR}', flush=True)
     server=ThreadingHTTPServer((BIND_HOST,PORT),Handler)
     if CONFIG.get('tls'):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

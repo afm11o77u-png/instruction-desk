@@ -3,7 +3,9 @@
 保存先はデータフォルダ（git 管理外）の name-label-exe/。常に最新の1件だけを残す。
 アップロードは主管理者のみ、ダウンロードはログイン済みの全員。
 """
+import hashlib
 import json
+import threading
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -72,6 +74,10 @@ def _atomic_json(path, data):
 def save(data_dir, user, filename, stream, length, now=None):
     """stream から length バイトを一時ファイルに書き、置き換える。"""
     check_user(user, upload=True)
+    return _store(data_dir, filename, stream, length, user['name'], now)
+
+
+def _store(data_dir, filename, stream, length, uploaded_by, now=None, extra=None):
     name = clean_name(filename)
     if length is None or length <= 0:
         raise ExeError(400, 'ファイルが空です。')
@@ -81,7 +87,7 @@ def save(data_dir, user, filename, stream, length, now=None):
     base.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix='.upload-', suffix='.exe', dir=base)
     try:
-        remaining, head = length, b''
+        remaining, head, sha = length, b'', hashlib.sha256()
         with os.fdopen(fd, 'wb') as f:
             while remaining:
                 chunk = stream.read(min(CHUNK, remaining))
@@ -90,7 +96,10 @@ def save(data_dir, user, filename, stream, length, now=None):
                 if len(head) < 2:
                     head += chunk[:2 - len(head)]
                 f.write(chunk)
+                sha.update(chunk)
                 remaining -= len(chunk)
+            if extra is not None and stream.read(1):  # 置き場のファイルだけ（HTTPでは読むと待ってしまう）
+                raise ExeError(400, '読み込み中にファイルが変わりました。')
             f.flush(); os.fsync(f.fileno())
         if head != b'MZ':
             raise ExeError(400, 'Windowsの実行ファイル（exe）ではないようです。')
@@ -98,14 +107,107 @@ def save(data_dir, user, filename, stream, length, now=None):
         meta = {
             'filename': name, 'size': length,
             'uploadedAt': uploaded.strftime('%Y-%m-%d %H:%M'),
-            'uploadedBy': user['name'],
+            'uploadedBy': uploaded_by, 'sha256': sha.hexdigest(),
         }
+        meta.update(extra or {})
         os.replace(tmp, base / EXE_NAME)
         _atomic_json(base / META_NAME, meta)
         return meta
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+DROP_UPLOADER = 'フォルダから自動取込'
+DROP_INTERVAL = 15
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(CHUNK), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class DropWatcher:
+    """置き場フォルダの exe を見張り、安定したら配布用 exe を差し替える（元ファイルは残す）。
+
+    check() を1回呼ぶごとに1回分の確認。同じ大きさ・更新時刻が2回続けて見えたら「置き終わり」とみなす。
+    複数あれば更新時刻が最も新しいもの。同じ中身（SHA-256）は取り込み直さない。
+    """
+
+    def __init__(self, data_dir, drop_dir, log=print, interval=DROP_INTERVAL):
+        self.data_dir, self.drop_dir = Path(data_dir), Path(drop_dir)
+        self.log, self.interval = log, interval
+        self.pending = None      # (path, size, mtime_ns) 前回見たもの
+        self.done = None         # 処理済み（成功・失敗とも）の (path, size, mtime_ns)
+        self._stop = threading.Event()
+        self.thread = None
+
+    def _newest(self):
+        try:
+            files = [p for p in self.drop_dir.iterdir() if p.is_file() and p.suffix.lower() == '.exe' and not p.name.startswith('.')]
+        except OSError:
+            return None
+        best = None
+        for p in files:
+            try: st = p.stat()
+            except OSError: continue
+            key = (p, st.st_size, st.st_mtime_ns)
+            if best is None or key[2] > best[2]: best = key
+        return best
+
+    def check(self, now=None):
+        """戻り値: 'imported' / 'waiting' / 'same' / 'failed' / None（何もなし）。"""
+        key = self._newest()
+        if key is None:
+            self.pending = None
+            return None
+        if key == self.done:
+            return None
+        if key != self.pending:
+            self.pending = key
+            return 'waiting'
+        path, size, _ = key
+        self.done = key
+        try:
+            current = info(self.data_dir)
+            digest = _sha256(path)
+            if current and current.get('sha256') == digest:
+                return 'same'
+            with open(path, 'rb') as f:
+                meta = _store(self.data_dir, path.name, f, size, DROP_UPLOADER, now, {'source': 'drop-folder'})
+        except ExeError as e:
+            self.log(f'[統合ネームラベルexe] 自動取込に失敗: {path.name}: {e.message}')
+            return 'failed'
+        except OSError as e:
+            self.done = None  # 読めない（使用中など）なら次回やり直す
+            self.pending = None
+            self.log(f'[統合ネームラベルexe] 自動取込に失敗: {path.name}: {e}')
+            return 'failed'
+        self.log(f"[統合ネームラベルexe] 自動取込しました: {meta['filename']}（{meta['size']} バイト）")
+        return 'imported'
+
+    def _run(self):
+        # 起動時：すぐ1回、数秒後にもう1回確認（安定していればここで取り込む）
+        try: self.check()
+        except Exception as e: self.log(f'[統合ネームラベルexe] 自動取込の確認でエラー: {e}')
+        if self._stop.wait(3): return
+        while not self._stop.is_set():
+            try: self.check()
+            except Exception as e:
+                self.log(f'[統合ネームラベルexe] 自動取込の確認でエラー: {e}')
+            self._stop.wait(self.interval)
+
+    def start(self):
+        self.drop_dir.mkdir(parents=True, exist_ok=True)
+        self.thread = threading.Thread(target=self._run, name='name-exe-drop', daemon=True)
+        self.thread.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
 
 
 def download(data_dir, user):

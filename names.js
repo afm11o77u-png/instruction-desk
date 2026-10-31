@@ -300,6 +300,8 @@ async function openNameExe(){
   info.innerHTML=exe?`<dl class="namedef"><dt>ファイル名</dt><dd>${esc(exe.filename)}</dd><dt>サイズ</dt><dd>${esc(nameExeSize(exe.size))}</dd><dt>アップロード日時</dt><dd>${esc(exe.uploadedAt)}（日本時間）${exe.uploadedBy?`／${esc(exe.uploadedBy)}`:''}</dd></dl>`:'<p>まだアップロードされていません。</p>';
   $('#nameexedownload').hidden=!exe;
   $('#nameexeupload').hidden=!data.canUpload;
+  const drop=data.dropFolder;
+  $('#nameexedrop').innerHTML=drop?(drop.enabled?`置き場フォルダ：<code>${esc(drop.path)}</code><br>ここにexeを置くと、約${esc(String(drop.intervalSeconds*2))}秒〜1分で自動的に差し替わります（置いたファイルはそのまま残ります）。`:`置き場フォルダからの自動取込は無効です（${esc(drop.path)}）。`):'';
  }catch(e){info.innerHTML=`<p>${esc(e.message||'読み込めませんでした。')}</p>`}
 }
 async function sendNameExe(){

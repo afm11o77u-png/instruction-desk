@@ -92,3 +92,7 @@ stock-desk/network.json
 
 # 統合ネームラベル exe（アップロード保存先）
 data/name-label-exe/
+
+# 統合ネームラベル exe 置き場（中身は git に含めない）
+name-label-exe-drop/*.exe
+name-label-exe-drop/*.EXE
