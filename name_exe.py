@@ -71,10 +71,15 @@ def _atomic_json(path, data):
         raise
 
 
-def save(data_dir, user, filename, stream, length, now=None):
-    """stream から length バイトを一時ファイルに書き、置き換える。"""
+def save(data_dir, user, filename, stream, length, now=None, notes=None):
+    """stream から length バイトを一時ファイルに書き、置き換える。notes は更新内容（任意）。"""
     check_user(user, upload=True)
-    return _store(data_dir, filename, stream, length, user['name'], now)
+    if notes is not None:
+        notes = clean_notes(notes)
+    meta = _store(data_dir, filename, stream, length, user['name'], now)
+    if notes:
+        set_notes(data_dir, user, notes, meta['sha256'])
+    return meta
 
 
 def _store(data_dir, filename, stream, length, uploaded_by, now=None, extra=None):
@@ -112,6 +117,7 @@ def _store(data_dir, filename, stream, length, uploaded_by, now=None, extra=None
         meta.update(extra or {})
         os.replace(tmp, base / EXE_NAME)
         _atomic_json(base / META_NAME, meta)
+        _remember_version(data_dir, meta)
         return meta
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
@@ -262,3 +268,85 @@ def download_report(c, meta):
                      'LEFT JOIN name_exe_downloads d ON d.user_id=u.id WHERE u.active=1 ORDER BY u.id').fetchall()
     return [{'id': r[0], 'login': r[1], 'name': r[2], 'role': r[3],
              'latest': bool(ver) and r[4] == ver, 'lastDownloadAt': r[5]} for r in rows]
+
+
+# --- 更新内容（リリースノート）と版の履歴：name-label-exe/history.json ---
+
+HISTORY_NAME = 'history.json'
+NOTES_MAX = 4000
+HISTORY_MAX = 100
+_history_lock = threading.Lock()
+
+
+def clean_notes(text):
+    if not isinstance(text, str):
+        raise ExeError(400, '更新内容は文字で入力してください。')
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    text = ''.join(ch for ch in text if ch in '\n\t' or (ch >= ' ' and ch != '\x7f'))
+    text = '\n'.join(line.rstrip() for line in text.split('\n')).strip('\n')
+    if len(text) > NOTES_MAX:
+        raise ExeError(400, f'更新内容が長すぎます（{NOTES_MAX}文字まで）。')
+    return text
+
+
+def _read_history(data_dir):
+    try:
+        data = json.loads((folder(data_dir) / HISTORY_NAME).read_text(encoding='utf-8'))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _remember_version(data_dir, meta):
+    """新しい版を履歴の先頭へ。同じ SHA-256 が既にあれば日時などを更新し、更新内容は残す。"""
+    with _history_lock:
+        items = _read_history(data_dir)
+        old = next((h for h in items if h.get('sha256') == meta['sha256']), None)
+        items = [h for h in items if h.get('sha256') != meta['sha256']]
+        entry = {'sha256': meta['sha256'], 'filename': meta['filename'], 'size': meta['size'],
+                 'uploadedAt': meta['uploadedAt'], 'uploadedBy': meta['uploadedBy'],
+                 'notes': (old or {}).get('notes', ''), 'notesUpdatedAt': (old or {}).get('notesUpdatedAt')}
+        _atomic_json(folder(data_dir) / HISTORY_NAME, ([entry] + items)[:HISTORY_MAX])
+
+
+def history(data_dir):
+    """新しい順。sha256 は外に出さない（current フラグで現行版を示す）。"""
+    current = version_of(info(data_dir))
+    out = []
+    for h in _read_history(data_dir):
+        item = {k: h.get(k) for k in ('filename', 'size', 'uploadedAt', 'uploadedBy', 'notes', 'notesUpdatedAt')}
+        item['notes'] = item['notes'] or ''
+        item['current'] = bool(current) and h.get('sha256') == current
+        out.append(item)
+    return out
+
+
+def current_notes(data_dir):
+    cur = version_of(info(data_dir))
+    for h in _read_history(data_dir):
+        if cur and h.get('sha256') == cur:
+            return h.get('notes') or ''
+    return ''
+
+
+def set_notes(data_dir, user, notes, version=None, now=None):
+    """現行版（または version 指定の版）の更新内容を保存。更新のお知らせ（SHA-256）には影響しない。"""
+    check_user(user, upload=True)
+    notes = clean_notes(notes)
+    meta = info(data_dir)
+    if not meta:
+        raise ExeError(404, NOT_UPLOADED)
+    target = version or version_of(meta)
+    with _history_lock:
+        items = _read_history(data_dir)
+        entry = next((h for h in items if h.get('sha256') == target), None)
+        if entry is None:
+            if target != version_of(meta):
+                raise ExeError(404, 'この版が見つかりません。')
+            entry = {'sha256': target, 'filename': meta.get('filename'), 'size': meta.get('size'),
+                     'uploadedAt': meta.get('uploadedAt'), 'uploadedBy': meta.get('uploadedBy')}
+            items.insert(0, entry)
+        entry['notes'] = notes
+        entry['notesUpdatedAt'] = (now or datetime.now(JST)).astimezone(JST).strftime('%Y-%m-%d %H:%M')
+        _atomic_json(folder(data_dir) / HISTORY_NAME, items[:HISTORY_MAX])
+    return notes

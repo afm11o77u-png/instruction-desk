@@ -53,7 +53,7 @@ class NameExeUnitTest(unittest.TestCase):
         self._save(name='old.exe')
         self._save(name='new.exe', body=EXE + b'2')
         files = sorted(p.name for p in name_exe.folder(self.data).iterdir())
-        self.assertEqual(files, ['meta.json', 'togo-name-label.exe'])
+        self.assertEqual(files, ['history.json', 'meta.json', 'togo-name-label.exe'])  # 履歴は文字情報だけ。exe本体は最新1件
         self.assertEqual(name_exe.info(self.data)['filename'], 'new.exe')
         self.assertEqual((name_exe.folder(self.data) / 'togo-name-label.exe').read_bytes(), EXE + b'2')
 
@@ -161,6 +161,32 @@ class NameExeHttpTest(unittest.TestCase):
         self.assertTrue(rows['sales'])
         self._req('POST', '/api/name-labels/exe', 'owner', EXE + b'notice2')
         self.assertTrue(info('sales')['update']['pending'])
+
+
+    def _json(self, method, path, role, payload):
+        conn = http.client.HTTPConnection('127.0.0.1', self.httpd.server_address[1], timeout=10)
+        headers = {'Host': f'127.0.0.1:{self.server.PORT}', 'X-Desk-Request': '1', 'Content-Type': 'application/json'}
+        if role: headers['Cookie'] = 'desk_session=' + self.tokens[role]
+        conn.request(method, path, body=json.dumps(payload).encode(), headers=headers)
+        r = conn.getresponse(); data = r.read(); conn.close()
+        return r.status, json.loads(data)
+
+    def test_notes_http(self):
+        conn = http.client.HTTPConnection('127.0.0.1', self.httpd.server_address[1], timeout=10)
+        conn.request('POST', '/api/name-labels/exe', body=EXE + b'notes', headers={'Host': f'127.0.0.1:{self.server.PORT}', 'X-Desk-Request': '1',
+                     'Cookie': 'desk_session=' + self.tokens['owner'], 'X-File-Name': quote('n.exe'), 'X-Exe-Notes': quote('・一行目\n- 二行目')})
+        r = conn.getresponse(); r.read(); conn.close(); self.assertEqual(r.status, 200)
+        info = lambda role: json.loads(self._req('GET', '/api/name-labels/exe/info', role)[2])
+        self.assertEqual(info('sales')['exe']['notes'], '・一行目\n- 二行目')
+        self.assertEqual(self._req('GET', '/api/name-labels/exe', 'sales')[0], 200)
+        self.assertEqual(self._json('POST', '/api/name-labels/exe/notes', None, {'notes': 'x'})[0], 401)
+        self.assertEqual(self._json('POST', '/api/name-labels/exe/notes', 'sales', {'notes': 'x'})[0], 403)
+        st, d = self._json('POST', '/api/name-labels/exe/notes', 'owner', {'notes': '・直した'})
+        self.assertEqual(st, 200, d)
+        got = info('sales')
+        self.assertEqual(got['exe']['notes'], '・直した')
+        self.assertFalse(got['update']['pending'])
+        self.assertEqual(got['history'][0]['notes'], '・直した')
 
 
 if __name__ == '__main__':

@@ -64,7 +64,7 @@ class DropWatcherTest(unittest.TestCase):
         self.w.check(); self.assertEqual(self.w.check(), 'imported')
         self.assertEqual(name_exe.info(self.data)['filename'], 'newer.exe')
         files = sorted(p.name for p in name_exe.folder(self.data).iterdir())
-        self.assertEqual(files, ['meta.json', 'togo-name-label.exe'])
+        self.assertEqual(files, ['history.json', 'meta.json', 'togo-name-label.exe'])
 
     def test_invalid_ignored_and_previous_kept(self):
         self._put('good.exe', EXE, 1_700_000_000)
