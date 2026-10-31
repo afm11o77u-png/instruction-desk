@@ -35,4 +35,7 @@ for (const [id, [name, left, stores]] of Object.entries(expected)) {
 assert.ok(f.FIXED_LABEL_CSS.includes('.hm .frame'))
 assert.ok(f.FIXED_LABEL_CSS.includes('border-left:1px dashed'))
 assert.strictEqual(f.validateFixedLabelPrintInput({ formatId: 'himawari-1', sheetCount: 0 }).ok, false)
+assert.ok(f.fixedLabelPreviewHtml('himawari-1', 1).includes('<html lang="ja">'))
+for (const fam of ['"Yu Gothic"', 'Meiryo', '"MS Gothic"', '"Noto Sans CJK JP"']) assert.ok(f.FIXED_LABEL_CSS.includes(fam), fam)
+assert.ok(!/\.hm[^{]*\{[^}]*(letter-spacing|scale|font-stretch)/.test(f.FIXED_LABEL_CSS), 'no condensing on himawari')
 console.log('ok')

@@ -11,7 +11,7 @@
     '@page{size:A4 landscape;margin:0}' +
     '*{box-sizing:border-box}' +
     'html,body{margin:0;padding:0;background:white;color:black;' +
-    'font-family:"Yu Gothic","YuGothic","Hiragino Kaku Gothic ProN",Meiryo,sans-serif}' +
+    'font-family:"Yu Gothic","YuGothic",Meiryo,"MS Gothic","Hiragino Kaku Gothic ProN","Noto Sans CJK JP","Noto Sans JP","IPAexGothic","IPAGothic",sans-serif}' +
     '.page{width:297mm;height:210mm;position:relative;display:grid;' +
     'grid-template-columns:148.5mm 148.5mm;grid-template-rows:105mm 105mm;' +
     'break-after:page;page-break-after:always;overflow:hidden}' +
@@ -58,7 +58,7 @@
     '.hm .frame{flex:1 1 auto;display:flex;flex-direction:column;border:1.2px solid #000;padding:5mm 6mm 2mm;min-height:0}' +
     '.hm .stores{display:grid;grid-template-columns:1fr 1fr;column-gap:4mm;flex:0 0 auto}' +
     '.hm .col{display:flex;flex-direction:column;gap:1.6mm}' +
-    '.hm .store{display:flex;align-items:center;gap:1.6mm;font-size:11pt;line-height:1.25;font-weight:700;white-space:nowrap}' +
+    '.hm .store{display:flex;align-items:center;gap:2.5mm;font-size:11pt;line-height:1.25;font-weight:400;white-space:nowrap}' +
     '.hm .box{flex:0 0 auto;display:inline-block;width:3.2mm;height:3.2mm;border:1px solid #000;position:relative}' +
     '.hm .rule{border-top:1px solid #000;margin:3mm 0 0;flex:0 0 auto}' +
     '.hm .namearea{flex:1 1 auto;display:flex;justify-content:flex-end;align-items:flex-end;min-height:12mm;padding:0 1mm 1.5mm 0}' +
@@ -231,7 +231,7 @@
     const style = css || FIXED_LABEL_CSS;
     const pages = fixedLabelPagesHtml(formatId, sheetCount, assetBase);
     return (
-      '<!doctype html><html><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
+      '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
       style +
       '@media screen{body{background:#eee;padding:12px}.page{background:white;margin:0 auto 12px;' +
       'box-shadow:0 1px 4px rgba(0,0,0,.12)}}' +
