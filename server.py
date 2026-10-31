@@ -13,6 +13,7 @@ import names
 import display_modes
 import migration
 import kintai
+import name_exe
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -970,6 +971,16 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             with connect() as c:
                 result=placement.list_corrections(self, c)
             return self.reply(*result)
+        if path in ('/api/name-labels/exe', '/api/name-labels/exe/info'):
+            with connect() as c: u=self.session_user(c)
+            try:
+                if path.endswith('/info'):
+                    name_exe.check_user(u)
+                    return self.reply(200, {'exe': name_exe.info(DATA), 'canUpload': u['role']=='owner', 'maxBytes': name_exe.MAX_BYTES})
+                file, meta, disposition = name_exe.download(DATA, u)
+            except name_exe.ExeError as e:
+                return self.reply(e.status, {'error': e.message})
+            return self.reply_file(200, file, 'application/vnd.microsoft.portable-executable', {'Content-Disposition': disposition})
         if path=='/api/name-labels' or path.startswith('/api/name-labels/'):
             with connect() as c:
                 if path=='/api/name-labels': result=names.search(self, c)
@@ -1023,6 +1034,19 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(403,{'error':'接続元を確認してください。'})
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if route=='/api/name-labels/exe':
+            from urllib.parse import unquote
+            with connect() as c: u=self.session_user(c)
+            try:
+                try: n=int(self.headers.get('Content-Length') or 0)
+                except ValueError: raise name_exe.ExeError(400, '送信内容を読めませんでした。')
+                meta=name_exe.save(DATA, u, unquote(self.headers.get('X-File-Name') or ''), self.rfile, n)
+            except name_exe.ExeError as e:
+                self.close_connection=True
+                return self.reply(e.status, {'error': e.message})
+            except OSError:
+                return self.reply(500, {'error': 'exeを保存できませんでした。'})
+            return self.reply(200, {'ok': True, 'exe': meta})
         try:
             n=int(self.headers.get('Content-Length','0'))
             limit=80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import') else 1000000

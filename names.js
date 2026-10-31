@@ -286,6 +286,44 @@ const nameDeletedClose=$('#namedeletedclose');
  if(nameDeletedClose)nameDeletedClose.onclick=()=>$('#namedeleted').close();
 const nameDeletedDialog=$('#namedeleted');
  if(nameDeletedDialog)nameDeletedDialog.addEventListener('cancel',e=>{e.preventDefault();nameDeletedDialog.close()});
+function nameExeSize(n){return n>=1048576?`${(n/1048576).toFixed(1)} MB`:`${Math.max(1,Math.round(n/1024))} KB`}
+let nameExeMax=200*1024*1024;
+async function openNameExe(){
+ const info=$('#nameexeinfo');
+ info.innerHTML='<p>読み込み中…</p>';
+ $('#nameexestatus').textContent='';
+ if(!$('#nameexe').open)$('#nameexe').showModal();
+ try{
+  const data=await api('/api/name-labels/exe/info');
+  nameExeMax=data.maxBytes||nameExeMax;
+  const exe=data.exe;
+  info.innerHTML=exe?`<dl class="namedef"><dt>ファイル名</dt><dd>${esc(exe.filename)}</dd><dt>サイズ</dt><dd>${esc(nameExeSize(exe.size))}</dd><dt>アップロード日時</dt><dd>${esc(exe.uploadedAt)}（日本時間）${exe.uploadedBy?`／${esc(exe.uploadedBy)}`:''}</dd></dl>`:'<p>まだアップロードされていません。</p>';
+  $('#nameexedownload').hidden=!exe;
+  $('#nameexeupload').hidden=!data.canUpload;
+ }catch(e){info.innerHTML=`<p>${esc(e.message||'読み込めませんでした。')}</p>`}
+}
+async function sendNameExe(){
+ const file=$('#nameexefile').files[0];
+ const status=$('#nameexestatus');
+ if(!file){status.textContent='exeファイルを選んでください。';return}
+ if(!/\.exe$/i.test(file.name)){status.textContent='拡張子が .exe のファイルを選んでください。';return}
+ if(file.size>nameExeMax){status.textContent=`ファイルが大きすぎます（上限 ${Math.round(nameExeMax/1048576)}MB）。`;return}
+ if(!confirm(`「${file.name}」（${nameExeSize(file.size)}）をアップロードしますか？\n今の配布ファイルは置き換わります。`))return;
+ status.textContent='アップロード中…';$('#nameexesend').disabled=true;
+ try{
+  const r=await fetch('/api/name-labels/exe',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Desk-Request':'1','X-File-Name':encodeURIComponent(file.name)},body:file});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw Error(d.error||'アップロードできませんでした。');
+  $('#nameexefile').value='';
+  await openNameExe();
+  status.textContent='アップロードしました。';
+ }catch(e){status.textContent=e.message||'アップロードできませんでした。'}
+ finally{$('#nameexesend').disabled=false}
+}
+$('#nameexeopen').onclick=()=>openNameExe();
+$('#nameexeclose').onclick=()=>$('#nameexe').close();
+$('#nameexesend').onclick=()=>sendNameExe();
+$('#nameexedownload').onclick=()=>{location.href='/api/name-labels/exe'};
 // account.js initializes login state later; loadNames updates the button.
 let nameEditing=null;
 function syncNameSize(){
