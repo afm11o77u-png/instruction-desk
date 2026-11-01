@@ -5610,6 +5610,12 @@ def _finalize_matched_product(
             info['reasons'].append(f'{row_no}行目：統合先の商品が見つかりません。')
             return info
         prod = live
+    # 「衣服（加工）」行が前回の取込で加工サービスに結ばれている場合は同じもの（再実行で要確認にしない）
+    if stock.text(prod['category']) == stock.CATEGORY_PROCESS_SERVICE:
+        comp = proc_svc.garment_paren_processing_name(name)
+        if comp and proc_svc.normalize_service_key(comp) == proc_svc.normalize_service_key(prod['name']):
+            name = stock.text(prod['name'])
+            proposed_category = stock.CATEGORY_PROCESS_SERVICE
     if not prod['active']:
         info['action'] = 'review'
         info['id'] = prod['id']
@@ -7785,6 +7791,74 @@ def _row_handle_processing_text(row):
     return stock.text(pc.get('processing') or '')
 
 
+PHASE_PARTS = 'parts'
+PHASE_GOODS = 'goods'
+
+
+def resolve_product_phase(body):
+    """旧CSV（商品を登録）の段階: parts=部品・加工 / goods=商品 / ''=一括（従来）。"""
+    raw = stock.text((body or {}).get('productPhase') or '').lower()
+    return raw if raw in (PHASE_PARTS, PHASE_GOODS) else ''
+
+
+def _row_is_service_only(row):
+    """加工サービス・部品・資材として登録される行（本体の衣服を伴わない）。"""
+    prod = row.get('product') or {}
+    if prod.get('processingServiceProduct'):
+        return True
+    cat = stock.text(prod.get('category') or prod.get('proposedCategory') or '')
+    if cat in (stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE):
+        return True
+    # 品番なしの「衣服（加工）」は加工サービスだけ登録
+    return bool(_row_companion_service_name(row)) and not stock.text((row.get('csv') or {}).get('code'))
+
+
+def _row_has_parts_side(row):
+    """部品・加工段階で扱う行。"""
+    prod = row.get('product') or {}
+    return (_row_is_service_only(row) or bool(_row_companion_service_name(row))
+            or bool(prod.get('processingServiceSplit') and row.get('processingServicePlanKey')))
+
+
+def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
+    """段階外の行を一覧・件数・確定から外す（登録しない・保留には数えない）。"""
+    kept, hidden = [], set()
+    for row in classified:
+        if not isinstance(row, dict):
+            continue
+        if phase == PHASE_PARTS:
+            ok = _row_has_parts_side(row)
+            if ok and not _row_is_service_only(row):
+                row['phasePartsOnly'] = True  # 衣服は作らず加工サービスだけ
+                comp = _row_companion_service_name(row)
+                prod = dict(row.get('product') or {})
+                prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                if comp:
+                    prod['officialName'] = comp
+                row['product'] = prod
+        else:
+            ok = not _row_is_service_only(row)
+        if ok:
+            kept.append(row)
+        else:
+            hidden.add(row.get('rowNo'))
+    if not hidden:
+        return kept, sku_groups, 0
+    groups = []
+    for g in sku_groups or []:
+        nos = [n for n in (g.get('rowNos') or []) if n not in hidden]
+        if not nos:
+            continue
+        if len(nos) != len(g.get('rowNos') or []):
+            g = dict(g)
+            g['rowNos'] = nos
+        groups.append(g)
+    # 段階外の行だけが元の加工サービス計画は落とす（商品段階では本体行が参照する分を再利用）
+    _prune_excluded_from_processing_plans(processing_split_meta, hidden)
+    return kept, groups, len(hidden)
+
+
 def _mark_unresolved_process_links(c, rows):
     """取扱の加工が加工サービスに結び付かない行を要確認へ（文字だけで登録しない）。"""
     planned = set()
@@ -9816,6 +9890,12 @@ def build_preview(c, body):
     row_exclusion_meta = _apply_user_row_exclusions(
         classified, sku_groups, processing_split_meta, _parse_row_exclusions(body),
     )
+    phase = resolve_product_phase(body) if mode == IMPORT_MODE_PRODUCTS else ''
+    phase_hidden = 0
+    if phase:
+        classified, sku_groups, phase_hidden = _apply_product_phase(
+            classified, sku_groups, processing_split_meta, phase,
+        )
     if isinstance(decision_meta, dict):
         decision_meta = dict(decision_meta)
         decision_meta['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
@@ -9851,7 +9931,7 @@ def build_preview(c, body):
         if not comp:
             continue
         row['companionProcessingService'] = comp
-        if not stock.text((row.get('csv') or {}).get('code')):
+        if not stock.text((row.get('csv') or {}).get('code')) or row.get('phasePartsOnly'):
             prod = dict(row.get('product') or {})
             prod['category'] = stock.CATEGORY_PROCESS_SERVICE
             prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
@@ -9932,6 +10012,8 @@ def build_preview(c, body):
     total_ms = round((time.perf_counter() - t_all) * 1000, 2)
     return {
         'importMode': mode,
+        'productPhase': phase,
+        'phaseHiddenRows': phase_hidden,
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
         'fileSize': uploaded['fileSize'],
@@ -11020,6 +11102,10 @@ def commit_preview(c, body, *, db_path=None):
                         result_counts['productsCreated'] += 1
                     else:
                         result_counts['processingServicesReused'] += 1
+                    if row.get('phasePartsOnly'):
+                        # 原文→商品の対応は商品段階で衣服へ付ける（ここで加工サービスへ結ぶと再照合で取り違える）
+                        result_counts['committedRows'] += 1
+                        continue
                     if not code_t:
                         prov = dict(row.get('specProvenance') or {})
                         prov['processingProductId'] = companion_id
@@ -11033,6 +11119,10 @@ def commit_preview(c, body, *, db_path=None):
                         result_counts['committedRows'] += 1
                         continue
 
+                # 部品・加工段階の分割行: 加工サービスは計画で確保済み。本体と原文対応は商品段階で
+                if row.get('phasePartsOnly'):
+                    result_counts['committedRows'] += 1
+                    continue
                 # 加工業者仕入先を本体へ渡さない
                 ensure_sup_id = None if (
                     prod_info.get('processingServiceSplit') and not prod_info.get('processingServiceProduct')
