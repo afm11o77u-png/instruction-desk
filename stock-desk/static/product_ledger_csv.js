@@ -5183,6 +5183,38 @@
     </div>`
   }
 
+  /** 要確認を「理由×品番」にまとめる（1グループ1操作）。 */
+  function openingReviewGroups(st){
+    const os=st.preview&&st.preview.openingStock
+    const out=[];const byKey={}
+    ;((os&&os.plans)||[]).forEach(p=>{
+      if(p.status!=='needs_review'||!p.reviewGroup)return
+      const code=((p.csv||{}).code)||''
+      const k=p.reviewGroup+'|'+code
+      let g=byKey[k]
+      if(!g){g=byKey[k]={key:k,reason:p.reviewGroup,label:p.reviewGroupLabel||'',code,rowNos:[],candidates:[]};out.push(g)}
+      g.rowNos.push(p.rowNo)
+      ;(p.reviewCandidates||[]).forEach(c=>{if(!g.candidates.some(x=>String(x.mapId)===String(c.mapId)))g.candidates.push(c)})
+    })
+    return out
+  }
+  function openingReviewGroupsHtml(st){
+    const groups=openingReviewGroups(st)
+    if(!groups.length)return ''
+    const byReason={}
+    groups.forEach(g=>{(byReason[g.reason]=byReason[g.reason]||[]).push(g)})
+    const dis=st.busy?'disabled':''
+    const blocks=Object.keys(byReason).map(r=>{
+      const gs=byReason[r]
+      const n=gs.reduce((a,g)=>a+g.rowNos.length,0)
+      const items=gs.map(g=>`<li>${esc(g.code||'（品番なし）')} ${g.rowNos.length}行
+        ${g.candidates.length?`<select data-pl-open-cand="${esc(g.key)}" ${dis}><option value="">候補…</option>${g.candidates.map(c=>`<option value="${esc(String(c.mapId))}">${esc(c.label||('ID '+c.productId))}</option>`).join('')}</select><button type="button" data-pl-open-pick="${esc(g.key)}" ${dis}>この候補で登録</button>`:''}
+        <button type="button" class="quiet" data-pl-open-skip="${esc(g.key)}" ${dis}>登録しない</button></li>`).join('')
+      return `<details class="pl-open-review-group"><summary>${esc(gs[0].label)} ${n}行 <button type="button" data-pl-open-skip-reason="${esc(r)}" ${dis}>すべて登録しない</button></summary><ul>${items}</ul></details>`
+    }).join('')
+    return `<div class="pl-open-review-groups"><h4>要確認（理由別）</h4>${blocks}<p class="excelhint">要確認の行はそのままでも登録されません。</p></div>`
+  }
+
   function openingStockSectionsHtml(st){
     const os=st.preview&&st.preview.openingStock
     if(!os||!os.enabled)return ''
@@ -5254,6 +5286,7 @@
       <p class="notice">${esc(os.note||sum.note||'確認後に初期在庫を登録します。数量・新品中古・拠点・単価を確認してください。')}</p>
       ${exclHint}
       <p><strong>${esc(countLine)}</strong></p>
+      ${openingReviewGroupsHtml(st)}
       <div class="bar">
         <label>取扱種別<select id="plOpenUsageFilter" ${st.busy?'disabled':''}>
           <option value="" ${!usageFilter?'selected':''}>すべて</option>
@@ -6066,6 +6099,26 @@
       el.onchange=()=>{
         const rowNo=el.getAttribute('data-pl-open-qty')
         st.openingSelections[String(rowNo)]=Object.assign({},st.openingSelections[String(rowNo)]||{},{updateQty:!!el.checked})
+      }
+    })
+    const openGroupSel=(rowNos,patch)=>{
+      rowNos.forEach(n=>{st.openingSelections[String(n)]=Object.assign({},st.openingSelections[String(n)]||{},patch)})
+      const b=$('#plRePreview');if(b)b.click()
+    }
+    const openGroups=()=>openingReviewGroups(st)
+    document.querySelectorAll('[data-pl-open-skip]').forEach(el=>{
+      el.onclick=()=>{const g=openGroups().find(x=>x.key===el.getAttribute('data-pl-open-skip'));if(g)openGroupSel(g.rowNos,{skip:true})}
+    })
+    document.querySelectorAll('[data-pl-open-skip-reason]').forEach(el=>{
+      el.onclick=(ev)=>{ev.preventDefault();const r=el.getAttribute('data-pl-open-skip-reason');openGroupSel(openGroups().filter(x=>x.reason===r).flatMap(x=>x.rowNos),{skip:true})}
+    })
+    document.querySelectorAll('[data-pl-open-pick]').forEach(el=>{
+      el.onclick=()=>{
+        const k=el.getAttribute('data-pl-open-pick')
+        const sel=[...document.querySelectorAll('[data-pl-open-cand]')].find(x=>x.getAttribute('data-pl-open-cand')===k)
+        const g=openGroups().find(x=>x.key===k)
+        if(!g||!sel||!sel.value){st.toast('候補を選んでください。');return}
+        openGroupSel(g.rowNos,{mapId:sel.value,skip:false})
       }
     })
     const runPreview=async(previewOpts)=>{
@@ -6983,6 +7036,8 @@
     open,
     // 区分分類の単体検証用（本番UIは open のみ使用）
     __test:{
+      openingReviewGroups,
+      openingReviewGroupsHtml,
       pendingRematchCodes,
       snapshotAppliedSkuDecisions,
       pendingRematchBannerHtml,

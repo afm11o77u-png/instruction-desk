@@ -1062,7 +1062,7 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
     return True
 
 
-def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size, supplier):
+def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size, supplier, prefer_map_id=None):
     """商品登録で永続化したマップから登録先候補を返す（推測で別商品へ寄せない）。"""
     import product_ledger_import as pli
 
@@ -1169,6 +1169,12 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             ),
             'matches': [],
         }
+
+    # 利用者が候補を選んだときはそれだけに絞る（候補外の ID は無視）
+    if prefer_map_id:
+        picked = [m for m in matches if str(m.get('mapId')) == str(prefer_map_id)]
+        if picked:
+            matches = picked
 
     # 同一別名でも仕様（色・加工・素材・販売用途）や登録先が食い違うときは曖昧
     # 色分割後: 初期在庫CSVの商品名から明示色が取れ、マップ色と一意に一致すれば絞る
@@ -1347,6 +1353,7 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
         product_name=payload['productName'],
         size=payload['size'],
         supplier=payload['supplier'],
+        prefer_map_id=(selection or {}).get('mapId') if isinstance(selection, dict) else None,
     )
     reasons = list(creasons) + list(qreasons)
     dest = resolved.get('destination') or {}
@@ -1550,6 +1557,59 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
     }
 
 
+REVIEW_GROUP_LABELS = {
+    'product_excluded': '商品登録で登録しないにした商品',
+    'ambiguous': '登録先の候補が複数',
+    'deleted': '登録先が削除・停止',
+    'usage': '販売用途が不一致',
+    'place': '拠点・棚が停止中',
+    'prior': '以前取り込んだ記録あり',
+    'input': '数量・単価・新品中古の不備',
+}
+OPENING_SKIP_REASON = '確認済み・登録しない'
+
+
+def _opening_review_group(plan):
+    """要確認行の理由を1つの分類にまとめる（一括操作用）。"""
+    t = plan.get('target') or {}
+    ms = t.get('mapStatus') or ''
+    if plan.get('productRegistrationExcluded') and ms != 'ok':
+        return 'product_excluded'
+    if ms in ('ambiguous', 'deleted'):
+        return ms
+    if t.get('usageConflict'):
+        return 'usage'
+    if (plan.get('place') or {}).get('action') == 'review':
+        return 'place'
+    if plan.get('priorImport') or any('以前取り込んだ' in r for r in plan.get('reasons') or []):
+        return 'prior'
+    return 'input'
+
+
+def _apply_opening_review_group(c, plan, sel):
+    """要確認に分類と候補を付け、利用者が「登録しない」を選んだ行は対象外にする。"""
+    if plan.get('status') != legacy.STATUS_REVIEW:
+        return
+    key = _opening_review_group(plan)
+    plan['reviewGroup'] = key
+    plan['reviewGroupLabel'] = REVIEW_GROUP_LABELS[key]
+    if key == 'ambiguous':
+        cands = []
+        for m in (plan.get('mapResolve') or {}).get('matches') or []:
+            prod = c.execute('SELECT name, code FROM products WHERE id=?', (m.get('productId'),)).fetchone()
+            label = ' / '.join(x for x in (
+                prod['name'] if prod else '', m.get('color') or '', m.get('processing') or '',
+                m.get('usageKind') or '',
+            ) if x)
+            cands.append({'mapId': m.get('mapId'), 'productId': m.get('productId'), 'label': label})
+        plan['reviewCandidates'] = cands
+    if isinstance(sel, dict) and sel.get('skip'):
+        plan['status'] = legacy.STATUS_EXCLUDED
+        plan['statusLabel'] = OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED]
+        plan['reasons'] = [OPENING_SKIP_REASON, *(plan.get('reasons') or [])]
+        plan['userSkipped'] = True
+
+
 def build_opening_stock_plans_from_maps(
     c,
     *,
@@ -1606,13 +1666,15 @@ def build_opening_stock_plans_from_maps(
                 'fromPersistedMap': True,
             })
             continue
+        sel = selections.get(str(row_no)) or selections.get(row_no) or {}
         plan = _plan_opening_row_from_map(
             c,
             row_no=row_no,
             item=item,
             default_site=default_site,
-            selection=selections.get(str(row_no)) or selections.get(row_no) or {},
+            selection=sel,
         )
+        _apply_opening_review_group(c, plan, sel)
         plans.append(plan)
         if plan.get('complement') or plan.get('status') == COMPLEMENT_STATUS:
             complement.append(plan)
