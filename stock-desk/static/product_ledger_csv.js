@@ -984,6 +984,7 @@
   function previewPayload(st){
     const body={
       importMode:st.importMode||MODE_PRODUCTS,
+      productPhase:isProductsMode(st)?(st.productPhase||''):'',
       selections:st.selections,skuDecisions:st.skuDecisions,
       rowClassifications:st.rowClassifications||{},
       rowExclusions:st.rowExclusions||{},
@@ -1098,7 +1099,8 @@
   /** 未登録の選択を同じファイル名・サイズの再読込で戻せるよう保存（ログイン切れ対策）。 */
   const DRAFT_FIELDS=['selections','skuDecisions','rowClassifications','rowExclusions']
   function draftKey(st){
-    return st&&st.fileName?`plLedgerDraft:${st.fileName}:${st.fileSize||0}`:''
+    const ph=st&&st.productPhase?`:${st.productPhase}`:''
+    return st&&st.fileName?`plLedgerDraft:${st.fileName}:${st.fileSize||0}${ph}`:''
   }
   function saveDraft(st){
     const k=draftKey(st);if(!k)return
@@ -5311,7 +5313,9 @@
     return `<div class="product-ledger-mode-chooser">
       <p class="merge-lead">旧CSV一括取り込みは<strong>二段階</strong>です。先に商品を登録し、あとから初期在庫を登録します（待ち時間を分けます）。</p>
       <div class="bar product-ledger-mode-actions">
-        <button type="button" class="primary" id="plModeProducts" ${st.busy?'disabled':''}>商品を登録</button>
+        <button type="button" class="primary" id="plModeParts" ${st.busy?'disabled':''}>部品・加工</button>
+        <button type="button" class="primary" id="plModeGoods" ${st.busy?'disabled':''}>商品</button>
+        <button type="button" class="quiet" id="plModeProducts" ${st.busy?'disabled':''}>商品を登録（まとめて）</button>
         <button type="button" class="primary" id="plModeOpening" ${st.busy?'disabled':''}>初期在庫を登録</button>
       </div>
       <p class="excelhint">商品登録では初期在庫CSVを判定補助に使えても在庫は書きません。初期在庫登録は商品台帳CSVの再選択不要です。</p>
@@ -5856,7 +5860,8 @@
       return
     }
     const openingOnly=isOpeningMode(st)
-    const title=openingOnly?'旧CSV一括取り込み（初期在庫を登録）':'旧CSV一括取り込み（商品を登録）'
+    const phaseName={parts:'部品・加工',goods:'商品'}[st.productPhase]||''
+    const title=openingOnly?'旧CSV一括取り込み（初期在庫を登録）':`旧CSV一括取り込み（商品を登録${phaseName?'：'+phaseName:''}）`
     const lead=openingOnly
       ?'初期在庫CSVだけで登録します。登録先は商品登録時の永続マップから原文キーで解決します。曖昧・削除済み・未登録は理由を示し、別商品へ推測登録しません。プレビューまではDBを変更しません。'
       :`商品台帳CSVから商品と顧客取扱を登録します。初期在庫CSVは任意で、<strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。通常品番は<strong>1品番=1商品</strong>です。プレビューまではDBを変更しません。`
@@ -5872,6 +5877,7 @@
       :`<p class="excelhint">${esc(st.preview.note||'')}</p>
           ${timingsHtml(st)}
           ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定補助）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
+          ${st.preview.phaseHiddenRows?`<p class="excelhint">この段階の対象外 ${Number(st.preview.phaseHiddenRows)} 行</p>`:''}
           <p><strong>${countLine(st.preview.countsRaw)}</strong>
            　確認リスト未解決 ${statusCounts?statusCounts.unresolved:0}件　確認事項 ${statusCounts?statusCounts.issueCount:0}
            　未承認 ${statusCounts?statusCounts.unapproved:0}
@@ -6037,8 +6043,19 @@
       if(st.busy)return
       resetStageFiles(st)
       st.importMode=MODE_PRODUCTS
+      st.productPhase=''
       paintDialog({preserveScroll:false})
     }
+    ;[['#plModeParts','parts'],['#plModeGoods','goods']].forEach(([sel,ph])=>{
+      const b=$(sel)
+      if(b)b.onclick=()=>{
+        if(st.busy)return
+        resetStageFiles(st)
+        st.importMode=MODE_PRODUCTS
+        st.productPhase=ph
+        paintDialog({preserveScroll:false})
+      }
+    })
     const modeOpening=$('#plModeOpening')
     if(modeOpening)modeOpening.onclick=()=>{
       if(st.busy)return
