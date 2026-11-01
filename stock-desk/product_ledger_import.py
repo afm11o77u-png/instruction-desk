@@ -6815,6 +6815,62 @@ def _sku_product_plan(group):
     }
 
 
+def _row_explicit_colors(row):
+    pc = row.get('parenClassification') or {}
+    out = []
+    for seg in pc.get('segments') or []:
+        if seg.get('kind') == 'color' and stock.text(seg.get('value') or ''):
+            out.append(stock.text(seg.get('value')))
+    if stock.text(pc.get('color') or ''):
+        out.append(stock.text(pc.get('color')))
+    return out
+
+
+def mark_multi_color_groups(sku_groups, classified):
+    """自動まとめ扱いでも、行ごとの明示色が複数あれば判断（まとめる／色別）を出す。"""
+    rows_by_code = defaultdict(list)
+    for row in classified or []:
+        rows_by_code[stock.text((row.get('csv') or {}).get('code'))].append(row)
+    for group in sku_groups or []:
+        if group.get('needsDecision'):
+            continue
+        code = stock.text(group.get('code') or '')
+        if not stock_product_merge.is_normal_product_code(code):
+            continue
+        colors = []
+        for row in rows_by_code.get(code) or []:
+            if (row.get('processingService') or {}).get('isProcessingService'):
+                continue
+            row_colors = _row_explicit_colors(row)
+            if row_colors and row_colors[0] not in colors:
+                colors.append(row_colors[0])
+        if len(colors) < 2:
+            continue
+        # 括弧外にも色があり行の色が確定しないときだけ（例: 白（ゴールド））
+        conflict = any(
+            (r.get('parenClassification') or {}).get('needsConfirm')
+            and len((r.get('parenClassification') or {}).get('colorCandidates') or []) > 1
+            for r in rows_by_code.get(code) or []
+        )
+        if not conflict:
+            continue
+        group['needsDecision'] = True
+        group['plannedSingleProduct'] = False
+        group['status'] = 'needs_decision'
+        group['reviewTier'] = REVIEW_TIER_INDIVIDUAL
+        group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_INDIVIDUAL]
+        group['colorDiffPossible'] = True
+        group['multiColorDecision'] = True
+        group['colorCandidates'] = colors
+        reasons = [
+            r for r in (group.get('reviewReasons') or [])
+            if stock.text(r.get('code')) not in ('auto', 'aux_stock_pick_paren')
+        ]
+        reasons.insert(0, {'code': 'color', 'label': '色が複数', 'values': colors})
+        group['reviewReasons'] = reasons
+        group['skuDecisionNeeded'] = True
+
+
 def build_sku_groups(c, classified):
     """通常品番の比較グループを作る。
 
@@ -9446,6 +9502,8 @@ def build_preview(c, body):
     )
     # 在庫一意／候補1組 → フルパッケージ採用。色・加工・素材差だけでは要確認に残さない
     apply_aux_full_package_adoption(sku_groups, sku_decisions)
+    # 同名で色だけ違う行は自動まとめにせず、まとめる／色別の選択を出す
+    mark_multi_color_groups(sku_groups, classified)
     # 色別に分けて登録: 選択を再照合でも保持し、在庫自動まとめ対象外の予定を付与
     attach_color_split_plans(c, sku_groups, sku_decisions, classified=classified)
     # 内容別に分けて登録: 色別とは独立。件数見積りは常時、予定は選択時

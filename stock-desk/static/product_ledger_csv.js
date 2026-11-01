@@ -643,7 +643,8 @@
       const tier=g.reviewTier||'individual'
       if(dec==='hold'){hold.push(g);return}
       if(dec==='merge'||dec==='color_split'||dec==='content_split'||dec==='separate'){
-        if(userActionChoiceComplete(st,g)){confirmed.push(g);return}
+        // まとめるフォームで通常仕入先を選んだ直後は、再照合まで確認リストに残す
+        if(userActionChoiceComplete(st,g)&&!skuSupplierPendingRematch(st,g.code)){confirmed.push(g);return}
         // 必須未完・再照合後の穴 → 確認リスト側に残し、選んだ対応＋残課題を出す
         individual.push(g)
         return
@@ -678,7 +679,12 @@
     const key=String(r.rowNo)
     const edit=(st.rowClassifications&&st.rowClassifications[key])||{}
     const sel=(st.selections&&st.selections[key])||{}
-    if(issue.type==='paren_confirm')return !!edit.confirmed
+    if(issue.type==='paren_confirm'){
+      if(edit.confirmed)return true
+      // 色だけの迷いは色を入れれば解決
+      if(issue.fieldKey==='color')return String(edit.color||'').trim()!==''
+      return false
+    }
     if(issue.type==='processing_name'){
       const ps=r.processingService||{}
       const pc=r.parenClassification||{}
@@ -694,6 +700,15 @@
     return false
   }
 
+  // 括弧の要確認が「色が複数」だけなら色欄の問題として扱う
+  function parenConfirmIsColorOnly(r){
+    const pc=(r&&r.parenClassification)||{}
+    if(uniqueNonEmpty(pc.colorCandidates||[]).length<2)return false
+    if(uniqueNonEmpty(pc.nameCandidates||[]).length>1)return false
+    const reasons=(r.reasons||[]).filter(Boolean)
+    return !reasons.length||reasons.every(x=>/色/.test(String(x)))
+  }
+
   function collectRowIssues(st,r){
     const issues=[]
     const ps=r.processingService||{}
@@ -707,11 +722,12 @@
         fieldKey:'procName'
       })
     }else if(pc.needsConfirm||r.parenNeedsConfirm){
+      const colorOnly=parenConfirmIsColorOnly(r)
       issues.push({
         type:'paren_confirm',
-        label:'括弧分類・メーカー補正候補の確認',
+        label:colorOnly?'色の確認':'括弧分類・メーカー補正候補の確認',
         detail:(r.reasons||[]).join(' '),
-        fieldKey:'name'
+        fieldKey:colorOnly?'color':'name'
       })
     }
     if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length&&!r.skuDecisionNeeded){
@@ -793,6 +809,9 @@
       }))
       const leftover=remainingDecisionIssues(st,g)
       const issues=reasons.concat(leftover)
+      if(skuSupplierPendingRematch(st,g.code)&&!issues.some(i=>i.type==='repreview')){
+        issues.push({type:'repreview',label:'再照合して反映',detail:'選択内容をプレビューへ反映してください',fieldKey:'',resolved:false})
+      }
       const issueList=issues.length?issues:[{type:'sku_reason',label:'個別確認',detail:'',fieldKey:'',resolved:false}]
       items.push({
         id:`sku:${g.code}`,
@@ -2490,6 +2509,7 @@
     AUTO:'自動決定済み',
     MANUAL:'手動確定済み',
     PROVISIONAL:'仮',
+    PENDING:'未反映',
     NEED_CHOICE:'選択が必要',
     UNSET:'未設定',
     NA:'該当なし'
@@ -2528,6 +2548,7 @@
 
   function planStatusUnsettled(status){
     return status===PLAN_STATUS.PROVISIONAL
+      ||status===PLAN_STATUS.PENDING
       ||status===PLAN_STATUS.NEED_CHOICE
       ||status===PLAN_STATUS.UNSET
   }
@@ -2698,7 +2719,7 @@
       return makePlanField('supplier',supplierCandidateList(g).join('／'),PLAN_STATUS.AUTO,{hint:'登録先ごと'})
     }
     if(d.primarySupplierManual&&d.primarySupplier){
-      return makePlanField('supplier',d.primarySupplier,pendingManual?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.MANUAL,{
+      return makePlanField('supplier',d.primarySupplier,pendingManual?PLAN_STATUS.PENDING:PLAN_STATUS.MANUAL,{
         hint:pendingManual?pendingSupplierLabel():'手動選択',
         editHint:'詳細の通常仕入先'
       })
@@ -2922,9 +2943,11 @@
     const name=edit.plannedName!=null?edit.plannedName:(pc.plannedName||csv.productName||item.plannedName||'')
     const color=edit.color!=null?edit.color:(pc.color||item.plannedColor||'')
     const csvSupplier=csv.supplier||item.plannedSupplier||''
-    const nameNeed=!!(pc.needsConfirm||sample.parenNeedsConfirm||(item.issues||[]).some(i=>!i.resolved&&(i.type==='paren_confirm'||i.type==='product_pick')))
+    const colorOnly=parenConfirmIsColorOnly(sample)
+    const parenNeed=!!(pc.needsConfirm||sample.parenNeedsConfirm)&&!edit.confirmed&&!colorOnly
+    const nameNeed=!!(parenNeed||(item.issues||[]).some(i=>!i.resolved&&i.fieldKey!=='color'&&(i.type==='paren_confirm'||i.type==='product_pick')))
     const colorCands=uniqueNonEmpty(pc.colorCandidates||[])
-    const colorNeed=colorCands.length>1||!!(pc.needsConfirm&&!color&&colorCands.length)
+    const colorNeed=!edit.confirmed&&(colorCands.length>1||!!(pc.needsConfirm&&!color&&colorCands.length))
     const fields=[]
     if(code){
       fields.push(makePlanField('sku',csv.codeDisplay||code,PLAN_STATUS.AUTO))
@@ -2932,14 +2955,14 @@
     fields.push(makePlanField(
       'name',
       name||(nameNeed?(uniqueNonEmpty(pc.nameCandidates||[csv.productName]).join('／')):''),
-      edit.plannedName!=null?PLAN_STATUS.MANUAL:(nameNeed?PLAN_STATUS.NEED_CHOICE:(name?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
+      (edit.plannedName!=null||(edit.confirmed&&(pc.needsConfirm||sample.parenNeedsConfirm)))?PLAN_STATUS.MANUAL:(nameNeed?PLAN_STATUS.NEED_CHOICE:(name?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
       {editHint:'詳細の商品名／名称／加工名'}
     ))
     if(colorNeed||color||colorCands.length){
       fields.push(makePlanField(
         'color',
         color||colorCands.join('／'),
-        edit.color!=null?PLAN_STATUS.MANUAL:(colorNeed||colorCands.length>1?PLAN_STATUS.NEED_CHOICE:(color?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
+        (edit.color!=null&&String(edit.color).trim()!=='')?PLAN_STATUS.MANUAL:(colorNeed?PLAN_STATUS.NEED_CHOICE:(color?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET)),
         {editHint:'詳細の色'}
       ))
     }else{
@@ -2982,7 +3005,7 @@
 
   function planFieldStatusClass(status){
     if(status===PLAN_STATUS.NEED_CHOICE)return 'is-need-choice'
-    if(status===PLAN_STATUS.PROVISIONAL)return 'is-provisional'
+    if(status===PLAN_STATUS.PROVISIONAL||status===PLAN_STATUS.PENDING)return 'is-provisional'
     if(status===PLAN_STATUS.UNSET)return 'is-unset'
     if(status===PLAN_STATUS.AUTO)return 'is-auto'
     if(status===PLAN_STATUS.MANUAL)return 'is-manual'
@@ -3944,7 +3967,7 @@
       ${uncBlock}
       ${unusedNote}
       ${preview}
-      ${pc.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> 分類を確認した</label>`:''}
+      ${pc.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> この内容で確定</label>`:''}
     </div>`
   }
 
