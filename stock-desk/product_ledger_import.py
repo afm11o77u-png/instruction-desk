@@ -7822,7 +7822,7 @@ def _row_has_parts_side(row):
 
 def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
     """段階外の行を一覧・件数・確定から外す（登録しない・保留には数えない）。"""
-    kept, hidden = [], set()
+    kept, hidden, parts_only = [], set(), set()
     for row in classified:
         if not isinstance(row, dict):
             continue
@@ -7830,7 +7830,10 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
             ok = _row_has_parts_side(row)
             if ok and not _row_is_service_only(row):
                 row['phasePartsOnly'] = True  # 衣服は作らず加工サービスだけ
-                comp = _row_companion_service_name(row)
+                comp = (_row_companion_service_name(row)
+                        or stock.text((row.get('processingService') or {}).get('serviceName') or ''))
+                row['skuDecisionNeeded'] = False
+                parts_only.add(row.get('rowNo'))
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
@@ -7843,16 +7846,20 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
             kept.append(row)
         else:
             hidden.add(row.get('rowNo'))
-    if not hidden:
+    if not hidden and not parts_only:
         return kept, sku_groups, 0
+    # 部品・加工段階: 衣服側の行は品番グループ（一括承認・個別確認など）に出さない
+    drop = hidden | parts_only
     groups = []
     for g in sku_groups or []:
-        nos = [n for n in (g.get('rowNos') or []) if n not in hidden]
+        nos = [n for n in (g.get('rowNos') or []) if n not in drop]
         if not nos:
             continue
         if len(nos) != len(g.get('rowNos') or []):
             g = dict(g)
             g['rowNos'] = nos
+            if g.get('activeRowNos') is not None:
+                g['activeRowNos'] = [n for n in g['activeRowNos'] if n not in drop]
         groups.append(g)
     # 段階外の行だけが元の加工サービス計画は落とす（商品段階では本体行が参照する分を再利用）
     _prune_excluded_from_processing_plans(processing_split_meta, hidden)

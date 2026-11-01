@@ -82,3 +82,58 @@ class ImportPhaseTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+GROUP_ROWS = [
+    '顧客A,フジ総合安全㈱,May-93,長袖シャツ,L',
+    '顧客B,フジ総合安全㈱,May-93,ポロシャツ（刺繍）,L',
+    '顧客A,住商モンブラン㈱,SD8711-2,白衣ポケット加工(住商モンブラン),L',
+    '顧客B,㈱札幌白衣,SD8711-2,白衣,L',
+    '顧客C,住商モンブラン㈱,SD8711-2,白衣(住商モンブラン),M',
+    '顧客A,仕入先X,,ボタン,F',
+]
+
+
+class PartsPhaseGroupTest(unittest.TestCase):
+    """部品・加工段階では衣服の品番グループ（一括承認候補など）を出さない。"""
+
+    def setUp(self):
+        self.folder, self.path, self.c = newdb()
+
+    def tearDown(self):
+        self.c.close()
+        self.folder.cleanup()
+
+    def _body(self, phase):
+        return {'importMode': 'products', 'productPhase': phase, 'name': 'g.csv',
+                'file': b64(ledger_csv(GROUP_ROWS)), '_canWrite': True, '_actor': {'name': 't'}}
+
+    def test_parts_phase_has_no_garment_groups(self):
+        b = self._body('parts')
+        p = pli.build_preview(self.c, b)
+        self.assertEqual(p['skuGroups'], [])
+        self.assertFalse(any(r.get('skuDecisionNeeded') for r in p['rows']))
+        self.assertFalse(any((r.get('csv') or {}).get('code') == 'May-93' and not r.get('phasePartsOnly')
+                             for r in p['rows']))
+        with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+            pli.commit_preview(self.c, {**b, 'commitToken': 'tok-ph-g1',
+                                        'previewFingerprint': p['previewFingerprint']}, db_path=self.path)
+        got = products(self.c)
+        codes = [x[0] for x in got]
+        self.assertNotIn('May-93', codes)
+        self.assertNotIn('SD8711-2', codes)
+        svc = sorted(x[1] for x in got if x[2] == stock.CATEGORY_PROCESS_SERVICE)
+        self.assertEqual(svc, ['ポケット加工', '刺繍加工'])
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM product_ledger_row_maps m JOIN products p '
+                                        "ON p.id=m.product_id WHERE p.code IN ('May-93','SD8711-2')").fetchone()[0], 0)
+        # 再実行しても増えない
+        p2 = pli.build_preview(self.c, b)
+        self.assertEqual(p2['skuGroups'], [])
+        with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+            pli.commit_preview(self.c, {**b, 'commitToken': 'tok-ph-g2',
+                                        'previewFingerprint': p2['previewFingerprint']}, db_path=self.path)
+        self.assertEqual(products(self.c), got)
+
+    def test_goods_phase_still_has_garment_groups(self):
+        p = pli.build_preview(self.c, self._body('goods'))
+        self.assertEqual(sorted(g['code'] for g in p['skuGroups']), ['May-93', 'SD8711-2'])
