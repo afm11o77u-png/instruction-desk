@@ -5031,6 +5031,19 @@ def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
         if bucket and stock.text(user.get('internalCode') or '') and bucket.get('kind') != 'process_service':
             bucket['internalCode'] = stock.text(user.get('internalCode'))
 
+    # 提案品番が内容間で重複し色で区別できるときは色を付ける（利用者入力は変えない）
+    _dup = {}
+    for plan in buckets.values():
+        if plan.get('kind') != 'process_service' and plan.get('internalCode'):
+            _dup.setdefault(plan['internalCode'], []).append(plan)
+    for same in _dup.values():
+        colors = [stock.text(p.get('color') or '') for p in same]
+        if len(same) < 2 or not all(colors) or len(set(colors)) != len(same):
+            continue
+        for plan, color in zip(same, colors):
+            if plan['internalCode'] == plan.get('suggestedInternalCode'):
+                plan['internalCode'] = plan['suggestedInternalCode'] = f"{plan['internalCode']}-{color}"
+
     # 衝突検査（商品のみ。加工サービスは品番なし）
     seen_internal = {}
     plans = []
@@ -5108,6 +5121,8 @@ def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
         else:
             plan['needsCollisionChoice'] = False
             plan['action'] = 'create'
+        # 社内品番があれば入力済み（未衝突なら確認不要。衝突は needsCollisionChoice で扱う）
+        plan['needsInternalCode'] = not internal
         if not plan.get('productName'):
             plan['productName'] = stock.text(
                 ((group.get('nameCandidates') or [None])[0]) or maker_code

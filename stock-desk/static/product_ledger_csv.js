@@ -2661,6 +2661,10 @@
     const value=effectivePrimarySupplier(st,g)
     const reason=plannedSupplierReasonForGroup(st,g)
     const pendingManual=!!(d.primarySupplierManual&&d.primarySupplier&&skuSupplierPendingRematch(st,g.code))
+    // 内容別は登録先ごとに CSV 行の仕入先を使う（品番単位の通常仕入先は不要）
+    if(effectiveDecision(st,g)==='content_split'){
+      return makePlanField('supplier',supplierCandidateList(g).join('／'),PLAN_STATUS.AUTO,{hint:'登録先ごと'})
+    }
     if(d.primarySupplierManual&&d.primarySupplier){
       return makePlanField('supplier',d.primarySupplier,pendingManual?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.MANUAL,{
         hint:pendingManual?pendingSupplierLabel():'手動選択',
