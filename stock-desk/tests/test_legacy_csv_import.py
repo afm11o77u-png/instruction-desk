@@ -107,7 +107,7 @@ class LegacyCsvPreviewCommitTest(unittest.TestCase):
             self.assertEqual(preview['rowCount'], 3)
             blank = next(r for r in preview['rows'] if r['csv']['code'] == '')
             self.assertEqual(blank['product']['category'], '部品・資材')
-            self.assertEqual(blank['csv']['codeDisplay'], '品番なし')
+            self.assertEqual(blank['csv']['codeDisplay'], '')  # 部品・資材は空表示
             # 0・マイナスも対象（別ケース）
             text2 = tiny_csv_rows([
                 '新品,仕入B,顧客B,パンツ,P-1,L,2000,0,0,0,0,0,0,1,,,0',
@@ -632,7 +632,7 @@ class LegacyCsvBlankSkuTest(unittest.TestCase):
                 self.assertEqual(r['product']['code'], '')
             parts = next(r for r in preview['rows'] if r['csv']['productName'] == '丈直し')
             self.assertEqual(parts['product']['category'], '部品・資材')
-            self.assertEqual(parts['csv']['codeDisplay'], '品番なし')
+            self.assertEqual(parts['csv']['codeDisplay'], '')  # 部品・資材は品番なしが普通なので空表示
             fabric = next(r for r in preview['rows'] if r['csv']['productName'] == 'NPC白生地')
             self.assertEqual(fabric['qty'], 1)
             self.assertEqual(fabric['unitCost'], 2900)

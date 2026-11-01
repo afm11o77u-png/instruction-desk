@@ -185,9 +185,28 @@ def normalize_vendor_key(value: str) -> str:
     return t.casefold()
 
 
+_SERVICE_MARKER_RE = re.compile(r'^[＊*※☆★◆◇●○・]+|[＊*※☆★◆◇●○・]+$')
+
+
+def strip_service_markers(value: str) -> str:
+    """先頭・末尾の ＊ ※ ☆ などの印を外す（中身の文字は変えない）。"""
+    t = stock.text(value)
+    prev = None
+    while prev != t:
+        prev = t
+        t = _SERVICE_MARKER_RE.sub('', t).strip()
+    return t
+
+
 def normalize_service_key(value: str) -> str:
-    """照合用キー。取付／取り付け等の表記差も揃えて重複登録を防ぐ。"""
-    t = canonicalize_attach_verbs(value)
+    """照合用キー。全角半角・空白・前後の印・取付／取り付け等の表記差を揃えて重複登録を防ぐ。
+
+    「ポケット加工」と「ポケット付け」のように語が違うものは別のまま（加工の有無で寄せない）。
+    """
+    t = unicodedata.normalize('NFKC', stock.text(value) or '')
+    t = re.sub(r'[\s\u3000]+', '', t)
+    t = strip_service_markers(t)
+    t = canonicalize_attach_verbs(t)
     return t.casefold()
 
 
@@ -446,6 +465,9 @@ def is_standalone_processing_service_name(product_name: str) -> bool:
     base, _inners = _strip_parens_keep_inner(t)
     base_stripped = _KIND_STRIP_RE.sub('', canonicalize_attach_verbs(base))
     base_stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', base_stripped or ''))
+    # 「ポロシャツ（刺繍）」のように括弧外が衣服種だけなら本体行（括弧は取扱の加工）
+    if _inners and stock.text(base) and not base_stripped:
+        return False
     core = base_stripped or stripped
     if not core:
         return False
@@ -458,7 +480,7 @@ def unify_processing_service_name(raw_name: str) -> str:
     「ポケット取付」のように『加工』文字が無くても、取付／縫付等の明確な加工名は認識する。
     「袖加工」を「七分袖加工」へ置き換えるなど原文にない具体化はしない。
     """
-    raw = stock.text(raw_name)
+    raw = strip_service_markers(unicodedata.normalize('NFKC', stock.text(raw_name) or ''))
     if not raw:
         return ''
     aliases = _alias_map()
@@ -598,7 +620,8 @@ def service_dedupe_key(service_name: str, vendor_name: str) -> str:
             f'{normalize_service_key(ELMS_EMBROIDERY_SERVICE_NAME)}|'
             f'{normalize_vendor_key(ELMS_VENDOR_DISPLAY)}'
         )
-    return f'{normalize_service_key(name)}|{normalize_vendor_key(vendor)}'
+    # 業者が違っても同じ加工は1件（業者はサブ仕入先）
+    return f'{normalize_service_key(name)}|*'
 
 
 def classify_processing_service_row(
@@ -937,6 +960,9 @@ def find_existing_processing_service(c, service_name: str, vendor_name: str):
     if not name or not vendor:
         return None
     pool = find_existing_processing_services(c, name, vendor)
+    if not pool and not is_elms_corporation_vendor(vendor):
+        # 別業者で登録済みの同じ加工を再利用（業者はサブ仕入先として足す）
+        return find_existing_processing_service_any_vendor(c, name)
     if not pool:
         return None
     if len(pool) == 1:
@@ -1255,3 +1281,122 @@ def apply_process_service_migration(c, product_ids, *, dry_run: bool = True) -> 
         'skipped': skipped,
         'writes': (not dry_run) and bool(applied),
     }
+
+
+def inventory_coded_process_services(c) -> dict:
+    """品番付きで登録された加工サービスの棚卸し（読取のみ）。
+
+    action:
+      clear_code … 名前が加工サービス名だけ → 品番を外す
+      to_product … 名前が衣服など本体（例: ポロシャツ(刺繍)）→ 区分を外して商品に戻す
+      confirm    … 判断できない（名前が空など）→ 画面で確認
+    """
+    items = []
+    for row in c.execute(
+        '''SELECT id, code, name, category FROM products
+           WHERE TRIM(COALESCE(code, '')) <> '' ORDER BY id'''
+    ):
+        if not stock.is_process_service_category(row['category']):
+            continue
+        name = stock.text(row['name'])
+        if not name:
+            action, why = 'confirm', '商品名が空'
+        elif is_standalone_processing_service_name(name):
+            action, why = 'clear_code', '加工サービス名だけ'
+        else:
+            action, why = 'to_product', '本体の商品名'
+        items.append({'id': row['id'], 'code': row['code'], 'name': name, 'action': action, 'reason': why})
+    counts = {}
+    for it in items:
+        counts[it['action']] = counts.get(it['action'], 0) + 1
+    return {'items': items, 'counts': counts}
+
+
+def apply_coded_process_service_repair(c, product_ids, *, dry_run: bool = True) -> dict:
+    """棚卸し結果のうち指定 ID だけ直す。既定は dry_run（書込なし）。confirm は直さない。"""
+    want = {int(x) for x in product_ids or [] if str(x).isdigit()}
+    inv = inventory_coded_process_services(c)
+    planned, skipped = [], []
+    for it in inv['items']:
+        if it['id'] not in want:
+            continue
+        (planned if it['action'] in ('clear_code', 'to_product') else skipped).append(it)
+    found = {it['id'] for it in inv['items']}
+    skipped += [{'id': i, 'reason': '対象外（品番付きの加工サービスではない）'} for i in sorted(want - found)]
+    if not dry_run and planned:
+        with c:
+            for it in planned:
+                if it['action'] == 'clear_code':
+                    c.execute("UPDATE products SET code='' WHERE id=?", (it['id'],))
+                else:
+                    c.execute("UPDATE products SET category='' WHERE id=?", (it['id'],))
+    return {'dryRun': dry_run, 'planned': planned, 'skipped': skipped}
+
+
+def find_existing_processing_service_any_vendor(c, service_name: str):
+    """業者を問わず、同じ加工名（正規化キー一致）の品番なし加工サービスを1件（ID最小）。"""
+    key = normalize_service_key(service_name)
+    if not key:
+        return None
+    for row in c.execute(
+        """SELECT * FROM products WHERE category=? AND TRIM(COALESCE(code,''))=''
+           ORDER BY active DESC, id""",
+        (stock.CATEGORY_PROCESS_SERVICE,),
+    ):
+        if normalize_service_key(row['name']) == key:
+            return dict(row)
+    return None
+
+
+def inventory_duplicate_process_services(c) -> dict:
+    """同じ加工名（正規化キー一致）の加工サービスが複数ある組の一覧（読取のみ）。ID最小を残す候補。"""
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
+    merged_filter = " AND merged_into_id IS NULL" if 'merged_into_id' in cols else ''
+    groups = {}
+    for row in c.execute(
+        f"""SELECT id, code, name, supplier_id, active FROM products
+            WHERE category=?{merged_filter} ORDER BY id""",
+        (stock.CATEGORY_PROCESS_SERVICE,),
+    ):
+        if stock.text(row['code']):
+            continue  # 品番付きは inventory_coded_process_services で先に直す
+        key = normalize_service_key(row['name'])
+        if key:
+            groups.setdefault(key, []).append({'id': row['id'], 'name': row['name'], 'supplierId': row['supplier_id']})
+    out = [
+        {'key': k, 'keepId': items[0]['id'], 'items': items}
+        for k, items in groups.items() if len(items) > 1
+    ]
+    return {'groups': out, 'count': len(out)}
+
+
+def apply_duplicate_process_service_merge(c, keys=None, *, dry_run: bool = True, db_path=None) -> dict:
+    """重複組を既存の「商品統合」で1件にまとめる（在庫・取扱・参照は統合処理が付け替え）。
+
+    既定は dry_run（書込なし）。keys 未指定なら全組。取扱に差異がある組は統合しない。
+    """
+    import uuid
+
+    import stock_product_merge as merge
+
+    want = set(keys or [])
+    done, skipped = [], []
+    for g in inventory_duplicate_process_services(c)['groups']:
+        if want and g['key'] not in want:
+            continue
+        body = {'productIds': [i['id'] for i in g['items']], 'keepProductId': g['keepId']}
+        try:
+            pv = merge.preview_merge(c, body)
+        except Exception as e:  # noqa: BLE001
+            skipped.append({**g, 'reason': str(e)})
+            continue
+        if pv.get('unresolvedConflicts') or pv.get('handleConflicts'):
+            skipped.append({**g, 'reason': '取扱に差異あり（画面の商品統合で確認してください）'})
+            continue
+        if not dry_run:
+            merge.execute_merge(c, {
+                **body, 'fingerprint': pv['fingerprint'],
+                'token': f'dup-proc-{uuid.uuid4().hex}', '_actor': {'name': '重複加工サービス修復'},
+            }, db_path=db_path)
+        done.append(g)
+    return {'dryRun': dry_run, 'merged' if not dry_run else 'planned': done, 'skipped': skipped}

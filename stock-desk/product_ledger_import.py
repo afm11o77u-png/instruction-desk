@@ -7188,8 +7188,16 @@ def apply_manual_register_kind(classified, row_classifications=None):
             pc['physicalPartsView'] = False
             pc['processingServiceView'] = True
             prod = dict(row.get('product') or {})
+            if prod.get('processingServiceSplit') and not prod.get('processingServiceProduct'):
+                # この行の商品は本体（品番あり）へ寄せ済み。加工サービスは別に登録されるので本体の区分は変えない
+                row['parenClassification'] = pc
+                continue
             prod['category'] = stock.CATEGORY_PROCESS_SERVICE
             prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+            # 加工サービスは品番なし（CSVの品番は元データとして csv に残る）
+            prod['code'] = ''
+            prod['codeOverride'] = ''
+            prod['blankSku'] = True
             # 加工名が空で予定名がある場合でも、無条件にはコピーしない（既存方針）
             row['product'] = prod
         else:
@@ -7501,6 +7509,8 @@ def apply_processing_service_split(c, classified, sku_groups):
         if info.get('identifiable') and info.get('isProcessingService'):
             key = proc_svc.service_dedupe_key(info['serviceName'], info['vendorName'])
             plan = service_plans.get(key)
+            if plan:
+                _note_processing_vendor(plan, info['vendorName'])
             if not plan:
                 plan = _processing_service_plan_payload(
                     info,
@@ -7752,6 +7762,23 @@ def apply_processing_service_split(c, classified, sku_groups):
     }
 
 
+def _note_processing_vendor(plan, vendor):
+    """同じ加工の別業者を記録（登録時にサブ仕入先へ）。"""
+    vendor = stock.text(vendor)
+    names = plan.setdefault('vendorNames', [stock.text(plan.get('vendorName') or '')])
+    if vendor and vendor not in names:
+        names.append(vendor)
+
+
+def _add_processing_vendors(c, pid, plan):
+    for v in plan.get('vendorNames') or [plan.get('vendorName')]:
+        v = stock.text(v)
+        if not v:
+            continue
+        sid, _ = _ensure_person(c, 'suppliers', stock.save_supplier, v, create=True)
+        _ensure_sub_supplier(c, pid, sid)
+
+
 def _ensure_processing_service_product(c, plan):
     """加工サービスを CATEGORY_PROCESS_SERVICE として確保（本体品番は流用しない）。
 
@@ -7780,6 +7807,7 @@ def _ensure_processing_service_product(c, plan):
                     'UPDATE products SET name=?, updated_at=? WHERE id=?',
                     (canon, stock.stamp(), pid),
                 )
+        _add_processing_vendors(c, pid, plan)
         return pid, False
     # 別名表記（取り付け等）でも同じキーで再利用できるよう正規化名で保存
     # 表示名は加工名からのみ（plan.displayName の古い値を優先しない）
@@ -7799,6 +7827,7 @@ def _ensure_processing_service_product(c, plan):
         'active': True,
     })
     pid = saved['id'] if isinstance(saved, dict) else int(saved)
+    _add_processing_vendors(c, pid, plan)
     # エルムス規則: 対象衣服の旧商品名を別名一覧へ出さない。品番メモのみ（空品番はスキップ）
     if plan.get('elmsEmbroideryRule'):
         for gcode in plan.get('targetGarmentCodes') or []:
@@ -7924,6 +7953,8 @@ def apply_separate_as_process_service_plans(c, classified, sku_groups, sku_decis
         }
         key = proc_svc.service_dedupe_key(service_name, vendor_name)
         pplan = plans_by_key.get(key)
+        if pplan:
+            _note_processing_vendor(pplan, vendor_name)
         if not pplan:
             pplan = _processing_service_plan_payload(
                 info,
@@ -8171,6 +8202,8 @@ def apply_content_split_as_process_service_plans(
         }
         key = proc_svc.service_dedupe_key(service_name, vendor_name)
         pplan = plans_by_key.get(key)
+        if pplan:
+            _note_processing_vendor(pplan, vendor_name)
         if not pplan:
             pplan = _processing_service_plan_payload(
                 info,
