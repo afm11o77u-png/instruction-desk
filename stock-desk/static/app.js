@@ -1069,6 +1069,7 @@ function productForm(r){
     :`<p class="excelhint">旧商品名がある場合は照合用別名として表示されます。代表名を変えても旧名は別名に残ります。</p>`
   return `<div class="grid">${field('code','社内管理品番（空欄可）',r.code,false)}${field('makerCode','メーカー品番（空＝社内と同じ）',r.makerCode||'',false)}${field('name','商品名（代表名）',r.name,true)}${field('color','色',r.color)}${field('material','生地・素材',r.material||'')}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
     ${aliasBlock}
+    ${r.id?`<label class="add-aliases">別名を追加（、区切り）<input id="addNameAliases" placeholder="例: スナッパ加工"></label>`:''}
     <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierChecks">${subChecks}</div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
     <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材／加工サービス）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。加工サービスは衣服在庫数量ではなく加工回数・単価の管理向けです。色分割登録では社内管理品番とメーカー品番を分け、発注書にはメーカー品番＋色を出します。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
@@ -1240,7 +1241,7 @@ function readForm(row){
   })
   const categoryEl=$('#category')
   const makerEl=$('#makerCode')
-  return {id:row&&row.id,code:$('#code').value,makerCode:makerEl?makerEl.value:'',name:$('#name').value,color:$('#color').value,material:($('#material')&&$('#material').value)||'',category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,subSupplierIds,sizes:editor.sizes,links,active}
+  return {id:row&&row.id,code:$('#code').value,makerCode:makerEl?makerEl.value:'',name:$('#name').value,color:$('#color').value,material:($('#material')&&$('#material').value)||'',category:categoryEl?categoryEl.value:'',supplierId:supplier?Number(supplier):null,subSupplierIds,sizes:editor.sizes,links,active,addNameAliases:(($('#addNameAliases')&&$('#addNameAliases').value)||'').split(/[、,，]/).map(x=>x.trim()).filter(Boolean)}
 }
 function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,value,required=true}){
   const req=required?'（必須）':''

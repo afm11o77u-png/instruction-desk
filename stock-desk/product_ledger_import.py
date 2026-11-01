@@ -90,7 +90,7 @@ _COLOR_HINT_RE = re.compile(
     r'\d{2,3}\.\s*[\u3040-\u30ff\u4e00-\u9fff]+)'
 )
 _PROCESSING_HINT_RE = re.compile(
-    r'(加工|刺繍|プリント|ネーム|スナッパー|マジックテープ|反射|コーティング|'
+    r'(加工|刺繍|プリント|ネーム|スナッパー?|マジックテープ|反射|コーティング|'
     r'アイロン|ワッペン|カット|縫製)'
 )
 # 具体的な帽子種は一般の「帽子／キャップ」同義より先に取る（誤統合防止）
@@ -7517,6 +7517,12 @@ def apply_processing_service_split(c, classified, sku_groups):
             plan = service_plans.get(key)
             if plan:
                 _note_processing_vendor(plan, info['vendorName'])
+                if plan.get('action') == 'create':
+                    best = proc_svc.prefer_service_display_name(plan.get('serviceName'), info['serviceName'])
+                    if best != plan.get('serviceName'):
+                        plan['serviceName'] = plan['displayName'] = best
+                        v = stock.text(plan.get('vendorName') or '')
+                        plan['displayLabel'] = f'{best}／{v}' if v else best
             if not plan:
                 plan = _processing_service_plan_payload(
                     info,
@@ -9933,10 +9939,17 @@ def build_preview(c, body):
         if g.get('plannedSingleProduct') and g.get('productPlan')
     ]
     # 衣服＋括弧加工の行: 加工サービスも登録する旨を表示。品番なしなら加工サービスだけ
+    best_comp = {}
+    for row in classified:
+        comp = _row_companion_service_name(row) if isinstance(row, dict) else ''
+        if comp:
+            k = proc_svc.normalize_service_key(comp)
+            best_comp[k] = proc_svc.prefer_service_display_name(best_comp.get(k, ''), comp)
     for row in classified:
         comp = _row_companion_service_name(row) if isinstance(row, dict) else ''
         if not comp:
             continue
+        comp = best_comp.get(proc_svc.normalize_service_key(comp), comp)
         row['companionProcessingService'] = comp
         if not stock.text((row.get('csv') or {}).get('code')) or row.get('phasePartsOnly'):
             prod = dict(row.get('product') or {})
