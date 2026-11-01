@@ -57,7 +57,7 @@ class ProcessingNoCodeTest(unittest.TestCase):
         ])
         self.assertEqual(coded_services(self.c), [])
         body = self.c.execute("SELECT category FROM products WHERE code='ABC-200'").fetchone()
-        self.assertEqual(body['category'], '')
+        self.assertEqual(body['category'], stock.CATEGORY_UNIFORM)
         names = {r['name'] for r in self.c.execute(
             'SELECT name FROM products WHERE category=?', (stock.CATEGORY_PROCESS_SERVICE,))}
         self.assertIn('ネーム加工', names)
@@ -162,3 +162,85 @@ class CodeDisplayTest(unittest.TestCase):
         js = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         self.assertIn('function productCodeShow(r)', js)
         self.assertNotIn("r.codeDisplay||r.code||'品番なし'", js)
+
+
+class GarmentParenSplitTest(unittest.TestCase):
+    """「ポロシャツ（刺繍）」: 品番ありは商品＋加工サービス、品番なしは加工サービスだけ。"""
+
+    def setUp(self):
+        self.folder, self.path, self.c = newdb()
+
+    def tearDown(self):
+        self.c.close()
+        self.folder.cleanup()
+
+    def services(self):
+        return [dict(r) for r in self.c.execute(
+            'SELECT id, code, name, supplier_id FROM products WHERE category=? AND merged_into_id IS NULL',
+            (stock.CATEGORY_PROCESS_SERVICE,))]
+
+    def test_coded_row_makes_product_and_service(self):
+        p = commit(self.c, self.path, ['顧客A,仕入先X,ABC-200,ポロシャツ（刺繍）,L'])
+        self.assertEqual(p['rows'][0]['companionProcessingService'], '刺繍加工')
+        body = self.c.execute("SELECT id, name FROM products WHERE code='ABC-200'").fetchone()
+        self.assertEqual(body['name'], 'ポロシャツ')
+        h = self.c.execute('SELECT embroidery FROM customer_products WHERE product_id=?', (body['id'],)).fetchone()
+        self.assertEqual(h['embroidery'], '刺繍')
+        svc = self.services()
+        self.assertEqual(len(svc), 1)
+        self.assertEqual((svc[0]['code'], svc[0]['supplier_id']), ('', None))
+
+    def test_no_code_row_makes_service_only_and_dedupes(self):
+        commit(self.c, self.path, [
+            '顧客A,仕入先X,ABC-200,ポロシャツ（刺繍）,L',
+            '顧客A,仕入先Y,,ポロシャツ（刺繍）,L',
+            '顧客A,仕入先X,,刺繍,F',
+        ])
+        self.assertEqual(len(self.services()), 1)
+        names = [r['name'] for r in self.c.execute(
+            "SELECT name FROM products WHERE COALESCE(category,'')<>?", (stock.CATEGORY_PROCESS_SERVICE,))]
+        self.assertEqual(names, ['ポロシャツ'])
+
+    def test_repair_creates_missing_services_dry_run_first(self):
+        sup = stock.save_supplier(self.c, {'name': '仕入先X'})
+        sup_id = sup['id'] if isinstance(sup, dict) else int(sup)
+        cust = stock.save_customer(self.c, {'name': '顧客A'})
+        cust_id = cust['id'] if isinstance(cust, dict) else int(cust)
+        stock.save_product(self.c, {'code': 'ABC-1', 'name': 'ポロシャツ', 'supplierId': sup_id, 'sizes': ['L'],
+                                    'links': [{'customerId': cust_id, 'embroidery': '刺繍'}], 'active': True})
+        stock.save_product(self.c, {'code': '', 'name': 'ポロシャツ（刺繍）', 'category': stock.CATEGORY_PARTS,
+                                    'sizes': ['L'], 'active': True})
+        dry = proc_svc.apply_missing_companion_services(self.c)
+        self.assertTrue(dry['dryRun'])
+        self.assertEqual([m['serviceName'] for m in dry['plan']], ['刺繍加工'])
+        self.assertEqual(len(dry['reviewOnly']), 1)
+        self.assertEqual(self.services(), [])
+        done = proc_svc.apply_missing_companion_services(self.c, dry_run=False)
+        self.assertEqual(len(done['created']), 1)
+        self.assertEqual(len(self.services()), 1)
+        self.assertEqual(proc_svc.apply_missing_companion_services(self.c)['plan'], [])
+
+
+class CategoryDefaultTest(unittest.TestCase):
+    def setUp(self):
+        self.folder, self.path, self.c = newdb()
+
+    def tearDown(self):
+        self.c.close()
+        self.folder.cleanup()
+
+    def test_coded_garments_become_uniform(self):
+        commit(self.c, self.path, ['顧客A,仕入先X,ABC-1,ポロシャツ,L', '顧客A,仕入先X,別注,特注ベスト,L'])
+        cats = {r['code']: r['category'] for r in self.c.execute('SELECT code, category FROM products')}
+        self.assertEqual(cats, {'ABC-1': stock.CATEGORY_UNIFORM, '別注': stock.CATEGORY_UNIFORM})
+
+    def test_category_repair_dry_run_then_commit(self):
+        pid = stock.save_product(self.c, {'code': 'OLD-1', 'name': 'シャツ', 'category': '', 'sizes': ['L'], 'active': True})
+        pid = pid['id'] if isinstance(pid, dict) else int(pid)
+        self.c.execute("UPDATE products SET category='' WHERE id=?", (pid,))
+        dry = proc_svc.apply_category_fixes(self.c)
+        self.assertEqual([x['id'] for x in dry['fix']], [pid])
+        self.assertEqual(self.c.execute('SELECT category FROM products WHERE id=?', (pid,)).fetchone()[0], '')
+        proc_svc.apply_category_fixes(self.c, dry_run=False)
+        self.assertEqual(self.c.execute('SELECT category FROM products WHERE id=?', (pid,)).fetchone()[0], stock.CATEGORY_UNIFORM)
+        self.assertEqual(proc_svc.apply_category_fixes(self.c)['fix'], [])

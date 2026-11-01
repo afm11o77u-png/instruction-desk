@@ -858,7 +858,7 @@ def _product_preview(
     custom_order = is_custom_order_code(code)
     proposed_category = (
         proposed_blank_sku_category(customer_name, name) if blank_sku
-        else (stock.CATEGORY_UNIFORM if custom_order else '')
+        else stock.CATEGORY_UNIFORM  # 品番のある通常商品・別注は制服
     )
     if selected_category is not None and selected_category != '':
         try:
