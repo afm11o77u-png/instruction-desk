@@ -7779,6 +7779,33 @@ def _add_processing_vendors(c, pid, plan):
         _ensure_sub_supplier(c, pid, sid)
 
 
+def _row_companion_service_name(row):
+    """衣服＋括弧加工の行なら加工サービス名。加工業者行・加工サービス行・手動で商品以外にした行は対象外。"""
+    prod = row.get('product') or {}
+    if prod.get('processingServiceProduct') or prod.get('processingServiceSplit'):
+        return ''
+    csv = row.get('csv') or {}
+    if proc_svc.is_processing_vendor(stock.text(csv.get('supplier') or '')):
+        return ''
+    pc = row.get('parenClassification') or {}
+    if pc.get('registerKindManual') and stock.text(pc.get('registerKind')) not in ('', '商品'):
+        return ''
+    return proc_svc.garment_paren_processing_name(csv.get('productName') or '')
+
+
+def _ensure_companion_processing_service(c, name, ids_by_key):
+    """衣服行に付く加工サービスを確保（同名は1件にまとめる）。
+
+    行の仕入先は衣服の仕入先で加工をした業者ではないため、メイン仕入先は付けない。
+    """
+    key = proc_svc.service_dedupe_key(name, '')
+    if key in ids_by_key:
+        return ids_by_key[key], False
+    pid, created = proc_svc.create_companion_processing_service(c, name)
+    ids_by_key[key] = pid
+    return pid, created
+
+
 def _ensure_processing_service_product(c, plan):
     """加工サービスを CATEGORY_PROCESS_SERVICE として確保（本体品番は流用しない）。
 
@@ -9771,6 +9798,19 @@ def build_preview(c, body):
         g.get('productPlan') for g in sku_groups
         if g.get('plannedSingleProduct') and g.get('productPlan')
     ]
+    # 衣服＋括弧加工の行: 加工サービスも登録する旨を表示。品番なしなら加工サービスだけ
+    for row in classified:
+        comp = _row_companion_service_name(row) if isinstance(row, dict) else ''
+        if not comp:
+            continue
+        row['companionProcessingService'] = comp
+        if not stock.text((row.get('csv') or {}).get('code')):
+            prod = dict(row.get('product') or {})
+            prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+            prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+            prod['officialName'] = comp
+            row['product'] = prod
+            row['companionOnly'] = True
     fp = db_fingerprint(c)
     snap = stock_snapshot(c)
     if register_opening:
@@ -10916,6 +10956,31 @@ def commit_preview(c, body, *, db_path=None):
                     if prod_info.get('size') and prod_info.get('sizeAction') != 'reuse':
                         prod_info['sizeAction'] = 'add'
 
+                # 衣服＋括弧加工の行: 加工サービスを別に確保。品番なしなら加工サービスだけ登録
+                companion = _row_companion_service_name(row)
+                companion_id = None
+                if companion:
+                    companion_id, comp_created = _ensure_companion_processing_service(
+                        c, companion, processing_ids_by_key,
+                    )
+                    if comp_created:
+                        result_counts['processingServicesCreated'] += 1
+                        result_counts['productsCreated'] += 1
+                    else:
+                        result_counts['processingServicesReused'] += 1
+                    if not code_t:
+                        prov = dict(row.get('specProvenance') or {})
+                        prov['processingProductId'] = companion_id
+                        prov['rowKind'] = 'processing_service'
+                        row['specProvenance'] = prov
+                        upsert_row_map(
+                            c, run_id=run_id, file_sha256=uploaded['fileSha256'],
+                            file_name=uploaded['fileName'], row=row,
+                            customer_id=cust_id, product_id=companion_id, customer_product_id=None,
+                        )
+                        result_counts['committedRows'] += 1
+                        continue
+
                 # 加工業者仕入先を本体へ渡さない
                 ensure_sup_id = None if (
                     prod_info.get('processingServiceSplit') and not prod_info.get('processingServiceProduct')
@@ -10956,6 +11021,11 @@ def commit_preview(c, body, *, db_path=None):
                     if created_h:
                         result_counts['handlesCreated'] += 1
 
+                if companion_id:
+                    prov = dict(row.get('specProvenance') or {})
+                    prov['processingProductId'] = companion_id
+                    prov.setdefault('rowKind', 'processing_service_link')
+                    row['specProvenance'] = prov
                 # 加工サービス ID を provenance へ
                 if ps_key and ps_key in processing_ids_by_key:
                     prov = dict(row.get('specProvenance') or {})

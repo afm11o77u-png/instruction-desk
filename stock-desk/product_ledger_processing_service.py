@@ -474,6 +474,25 @@ def is_standalone_processing_service_name(product_name: str) -> bool:
     return _looks_like_service_core(core) or normalize_service_key(core) == normalize_service_key(unified)
 
 
+def garment_paren_processing_name(product_name: str) -> str:
+    """「ポロシャツ（刺繍）」のように括弧外が衣服種だけ・括弧内が加工なら加工名を返す。"""
+    t = stock.text(product_name)
+    if not t or is_physical_parts_name(t):
+        return ''
+    base, inners = _strip_parens_keep_inner(t)
+    if not inners or not stock.text(base):
+        return ''
+    base_stripped = _KIND_STRIP_RE.sub('', canonicalize_attach_verbs(base))
+    base_stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', base_stripped or ''))
+    if base_stripped:
+        return ''
+    for inner in inners:
+        name = unify_processing_service_name(inner)
+        if name:
+            return name
+    return ''
+
+
 def unify_processing_service_name(raw_name: str) -> str:
     """加工サービス表示名へ統一。衣服種・顧客用接頭・括弧仕様は落とす。読めなければ空。
 
@@ -1400,3 +1419,59 @@ def apply_duplicate_process_service_merge(c, keys=None, *, dry_run: bool = True,
             }, db_path=db_path)
         done.append(g)
     return {'dryRun': dry_run, 'merged' if not dry_run else 'planned': done, 'skipped': skipped}
+
+
+def create_companion_processing_service(c, name):
+    """品番なし・メイン仕入先なしの加工サービスを作る（同名があれば作らずその ID）。"""
+    existing = find_existing_processing_service_any_vendor(c, name)
+    if existing:
+        return int(existing['id']), False
+    saved = stock.save_product(c, {
+        'code': '', 'name': name, 'color': '', 'material': '',
+        'category': stock.CATEGORY_PROCESS_SERVICE, 'supplierId': None,
+        'sizes': ['—'], 'links': [], 'active': True,
+    })
+    return (saved['id'] if isinstance(saved, dict) else int(saved)), True
+
+
+def inventory_missing_companion_services(c):
+    """品番付き商品の取扱 加工にあるのに、加工サービスが無い加工名を一覧。
+
+    品番なしで「ポロシャツ（刺繍）」形のまま残る商品は自動では直さず reviewOnly に出す。
+    """
+    missing = {}
+    for r in c.execute(
+        '''SELECT p.id, p.code, p.name, cp.embroidery FROM customer_products cp
+           JOIN products p ON p.id=cp.product_id
+           WHERE p.code<>'' AND p.merged_into_id IS NULL
+             AND COALESCE(p.category,'') NOT IN (?, ?)''',
+        (stock.CATEGORY_PROCESS_SERVICE, stock.CATEGORY_PARTS),
+    ):
+        name = unify_processing_service_name(r['embroidery'] or '')
+        if not name or find_existing_processing_service_any_vendor(c, name):
+            continue
+        key = normalize_service_key(name)
+        m = missing.setdefault(key, {'serviceName': name, 'productIds': []})
+        if r['id'] not in m['productIds']:
+            m['productIds'].append(r['id'])
+    review = []
+    for r in c.execute(
+        "SELECT id, name, category FROM products WHERE code='' AND merged_into_id IS NULL AND COALESCE(category,'')<>?",
+        (stock.CATEGORY_PROCESS_SERVICE,),
+    ):
+        svc = garment_paren_processing_name(r['name'])
+        if svc:
+            review.append({'id': r['id'], 'name': r['name'], 'category': r['category'] or '', 'serviceName': svc})
+    return {'missing': list(missing.values()), 'reviewOnly': review}
+
+
+def apply_missing_companion_services(c, dry_run=True):
+    """足りない加工サービスを作る。dry_run=True（既定）は計画だけ返し書き込まない。"""
+    inv = inventory_missing_companion_services(c)
+    created = []
+    if not dry_run:
+        for m in inv['missing']:
+            pid, made = create_companion_processing_service(c, m['serviceName'])
+            if made:
+                created.append({'id': pid, 'serviceName': m['serviceName']})
+    return {'dryRun': dry_run, 'plan': inv['missing'], 'created': created, 'reviewOnly': inv['reviewOnly']}
