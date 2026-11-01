@@ -7188,8 +7188,16 @@ def apply_manual_register_kind(classified, row_classifications=None):
             pc['physicalPartsView'] = False
             pc['processingServiceView'] = True
             prod = dict(row.get('product') or {})
+            if prod.get('processingServiceSplit') and not prod.get('processingServiceProduct'):
+                # この行の商品は本体（品番あり）へ寄せ済み。加工サービスは別に登録されるので本体の区分は変えない
+                row['parenClassification'] = pc
+                continue
             prod['category'] = stock.CATEGORY_PROCESS_SERVICE
             prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+            # 加工サービスは品番なし（CSVの品番は元データとして csv に残る）
+            prod['code'] = ''
+            prod['codeOverride'] = ''
+            prod['blankSku'] = True
             # 加工名が空で予定名がある場合でも、無条件にはコピーしない（既存方針）
             row['product'] = prod
         else:

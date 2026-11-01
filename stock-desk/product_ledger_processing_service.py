@@ -446,6 +446,9 @@ def is_standalone_processing_service_name(product_name: str) -> bool:
     base, _inners = _strip_parens_keep_inner(t)
     base_stripped = _KIND_STRIP_RE.sub('', canonicalize_attach_verbs(base))
     base_stripped = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', base_stripped or ''))
+    # 「ポロシャツ（刺繍）」のように括弧外が衣服種だけなら本体行（括弧は取扱の加工）
+    if _inners and stock.text(base) and not base_stripped:
+        return False
     core = base_stripped or stripped
     if not core:
         return False
@@ -1255,3 +1258,53 @@ def apply_process_service_migration(c, product_ids, *, dry_run: bool = True) -> 
         'skipped': skipped,
         'writes': (not dry_run) and bool(applied),
     }
+
+
+def inventory_coded_process_services(c) -> dict:
+    """品番付きで登録された加工サービスの棚卸し（読取のみ）。
+
+    action:
+      clear_code … 名前が加工サービス名だけ → 品番を外す
+      to_product … 名前が衣服など本体（例: ポロシャツ(刺繍)）→ 区分を外して商品に戻す
+      confirm    … 判断できない（名前が空など）→ 画面で確認
+    """
+    items = []
+    for row in c.execute(
+        '''SELECT id, code, name, category FROM products
+           WHERE TRIM(COALESCE(code, '')) <> '' ORDER BY id'''
+    ):
+        if not stock.is_process_service_category(row['category']):
+            continue
+        name = stock.text(row['name'])
+        if not name:
+            action, why = 'confirm', '商品名が空'
+        elif is_standalone_processing_service_name(name):
+            action, why = 'clear_code', '加工サービス名だけ'
+        else:
+            action, why = 'to_product', '本体の商品名'
+        items.append({'id': row['id'], 'code': row['code'], 'name': name, 'action': action, 'reason': why})
+    counts = {}
+    for it in items:
+        counts[it['action']] = counts.get(it['action'], 0) + 1
+    return {'items': items, 'counts': counts}
+
+
+def apply_coded_process_service_repair(c, product_ids, *, dry_run: bool = True) -> dict:
+    """棚卸し結果のうち指定 ID だけ直す。既定は dry_run（書込なし）。confirm は直さない。"""
+    want = {int(x) for x in product_ids or [] if str(x).isdigit()}
+    inv = inventory_coded_process_services(c)
+    planned, skipped = [], []
+    for it in inv['items']:
+        if it['id'] not in want:
+            continue
+        (planned if it['action'] in ('clear_code', 'to_product') else skipped).append(it)
+    found = {it['id'] for it in inv['items']}
+    skipped += [{'id': i, 'reason': '対象外（品番付きの加工サービスではない）'} for i in sorted(want - found)]
+    if not dry_run and planned:
+        with c:
+            for it in planned:
+                if it['action'] == 'clear_code':
+                    c.execute("UPDATE products SET code='' WHERE id=?", (it['id'],))
+                else:
+                    c.execute("UPDATE products SET category='' WHERE id=?", (it['id'],))
+    return {'dryRun': dry_run, 'planned': planned, 'skipped': skipped}
