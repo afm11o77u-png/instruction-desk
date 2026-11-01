@@ -2135,6 +2135,19 @@
     </div>`
   }
 
+  function sepPartsRowNos(st,g){
+    const d=skuDecision(st,g.code)
+    if((d.decision||'')!=='separate')return new Set()
+    const plans=(d.plans&&typeof d.plans==='object')?d.plans:{}
+    return new Set((g.variants||[]).filter(v=>(plans[v.key]||{}).approach==='as_parts').flatMap(v=>(v.rowNos||[]).map(Number)))
+  }
+
+  function sepPartsRowsHtml(st,g,v){
+    const nos=new Set((v.rowNos||[]).map(Number))
+    const rows=((st.preview&&st.preview.rows)||[]).filter(r=>nos.has(Number(r.rowNo)))
+    return rows.map(r=>`<div class="sku-sep-parts-row" data-pl-sep-parts-row="${r.rowNo}"><span class="sub">行 ${r.rowNo}</span>${parenCell(st,r)}</div>`).join('')
+  }
+
   function skuRowDetailHtml(st,g,opts){
     opts=opts||{}
     const d=skuDecision(st,g.code)
@@ -2177,6 +2190,7 @@
           <option value="defer" ${plan.approach==='defer'?'selected':''}>この内容は保留</option>
         </select></label>
         ${plan.approach==='change_code'?`<label>修正品番<input data-pl-sep-code="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(plan.newCode||'')}" placeholder="別の品番" ${sepDis?'disabled':''}></label>`:''}
+        ${plan.approach==='as_parts'?sepPartsRowsHtml(st,g,v):''}
         ${isProc?`<label>加工名<input data-pl-sep-service="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(serviceName)}" placeholder="例: ライン加工" ${sepDis?'disabled':''}></label>
         <label>加工業者<input data-pl-sep-vendor="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(vendorName)}" placeholder="CSV仕入先" ${sepDis?'disabled':''}></label>`:''}
       </div>`)
@@ -2273,7 +2287,7 @@
         ${namePlanBlock}
         ${isColorSplit||isContentSplit?'':auxPanel}
         ${hideDecisionBtns||compact?'':skuDecisionButtonsHtml(st,g)}
-        ${normalSupplierPickerHtml(st,g,d,{notesOnly:compact})}
+        ${(!decision&&!opts.supplierPick)?'':normalSupplierPickerHtml(st,g,d,{notesOnly:compact})}
         ${decision==='color_split'?colorSplitFormHtml(st,g,d,{part:'rest'}):''}
         ${decision==='content_split'?contentSplitFormHtml(st,g,d,{part:'rest'}):''}
         ${decision==='merge'?`<div class="sku-merge-form">
@@ -2989,10 +3003,29 @@
       const code=String(item.code||item.group.code||'')
       rows=((st.preview&&st.preview.rows)||[]).filter(r=>String((r.csv||{}).code||'')===code)
     }
+    const isSkuItem=item.kind==='sku'&&!!item.group
+    const itemDec=isSkuItem?(skuDecision(st,item.group.code).decision||''):''
+    // 方針未選択の品番は根拠表示のみ（入力欄は方針選択後）
+    const readOnly=isSkuItem&&!itemDec
+    if(isSkuItem&&itemDec==='separate'){
+      const moved=sepPartsRowNos(st,item.group)
+      rows=rows.filter(r=>!moved.has(Number(r.rowNo)))
+    }
     if(!rows.length)return ''
     const body=rows.map(r=>{
       const csv=r.csv||{}
       const excluded=isRowExcluded(st,r)
+      if(readOnly)return `<div class="unified-row-detail-card is-readonly${excluded?' is-row-excluded':''}" data-unified-row-info="${r.rowNo}">
+        <p class="excelhint">行 ${r.rowNo}　顧客 ${esc(csv.customer||'—')}　サイズ ${esc(csv.size||'—')}　原文 ${esc(csv.productName||'—')}　仕入先 ${esc(csv.supplier||'—')}${excluded?'　<span class="badge">登録しない</span>':''}</p>
+        <p class="excelhint">登録先: ${targetCell(r)}</p>
+        ${(r.reasons||[]).length?`<p class="excelhint">${esc(r.reasons.join(' '))}</p>`:''}
+      </div>`
+      if(!isSkuItem)return `<div class="unified-row-detail-card${excluded?' is-row-excluded':''}" data-unified-row="${r.rowNo}">
+        <div class="unified-row-info"><p class="excelhint">行 ${r.rowNo}　顧客 ${esc(csv.customer||'—')}　サイズ ${esc(csv.size||'—')}　原文 ${esc(csv.productName||'—')}　仕入先 ${esc(csv.supplier||'—')}${excluded?'　<span class="badge">登録しない</span>':''}</p>
+        <p class="excelhint">登録先: ${targetCell(r)}</p>
+        ${(r.reasons||[]).length?`<p class="excelhint">${esc(r.reasons.join(' '))}</p>`:''}</div>
+        <div class="unified-row-quick" data-pl-row-quick="${r.rowNo}">${parenCell(st,r)}<div class="bar">${rowActions(st,r)}</div></div>
+      </div>`
       return `<div class="unified-row-detail-card${excluded?' is-row-excluded':''}" data-unified-row="${r.rowNo}">
         <p class="excelhint">行 ${r.rowNo}　顧客 ${esc(csv.customer||'—')}　サイズ ${esc(csv.size||'—')}　原文 ${esc(csv.productName||'—')}　仕入先 ${esc(csv.supplier||'—')}${excluded?'　<span class="badge">登録しない</span>':''}</p>
         <div class="unified-row-detail-grid">
@@ -3004,12 +3037,11 @@
     }).join('')
     const rowNos=(item.rowNos||[]).length
       ?`<p class="excelhint">元CSV行: ${(item.rowNos||[]).join(', ')}</p>`:''
-    const itemDec=item.kind==='sku'&&item.group?(skuDecision(st,item.group.code).decision||''):''
     const collapse=['merge','color_split','content_split','separate'].includes(itemDec)
     const moreKey='rows:'+String(item.id)
-    const inner=`<p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。登録予定の未確定項目は下の入力欄で選択・編集してください（まだ未登録）。</p>
+    const inner=readOnly?`${rowNos}${body}`:(!isSkuItem?body:`<p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。登録予定の未確定項目は下の入力欄で選択・編集してください（まだ未登録）。</p>
         ${rowNos}
-        ${body}`
+        ${body}`)
     return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="${UNIFIED_REVIEW_COL_COUNT}">
       <div class="sku-detail-body">
         ${collapse?`<details class="sku-more-details" data-pl-more-details="${esc(moreKey)}" ${st.moreDetailsOpen&&st.moreDetailsOpen[moreKey]?'open':''}><summary>その他の詳細（行ごとの編集 ${rows.length}行）</summary>${inner}</details>`:inner}
@@ -3076,7 +3108,7 @@
           </div>
           ${skipRegisterActionsHtml(st,item)}
         </td>
-      </tr>${showSkuPicker&&skuExpanded?skuRowDetailHtml(st,linkedGroup,detailOpts):''}${expanded?unifiedRowDetailHtml(st,item):''}`
+      </tr>${showSkuPicker&&skuExpanded?skuRowDetailHtml(st,linkedGroup,Object.assign({supplierPick:true},detailOpts)):''}${expanded?unifiedRowDetailHtml(st,item):''}`
     }).join('')
   }
 
