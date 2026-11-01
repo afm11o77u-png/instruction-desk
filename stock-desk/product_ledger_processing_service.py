@@ -1475,3 +1475,28 @@ def apply_missing_companion_services(c, dry_run=True):
             if made:
                 created.append({'id': pid, 'serviceName': m['serviceName']})
     return {'dryRun': dry_run, 'plan': inv['missing'], 'created': created, 'reviewOnly': inv['reviewOnly']}
+
+
+def inventory_category_fixes(c):
+    """品番があるのにカテゴリ空欄の商品を一覧（→ 制服）。部品らしい名前は reviewOnly。"""
+    fix, review = [], []
+    for r in c.execute(
+        "SELECT id, code, name FROM products WHERE code<>'' AND COALESCE(category,'')='' "
+        'AND merged_into_id IS NULL ORDER BY id'
+    ):
+        item = {'id': r['id'], 'code': r['code'], 'name': r['name'], 'to': stock.CATEGORY_UNIFORM}
+        (review if is_physical_parts_name(r['name'] or '') else fix).append(item)
+    return {'fix': fix, 'reviewOnly': review}
+
+
+def apply_category_fixes(c, dry_run=True):
+    """カテゴリ空欄の品番付き商品を制服にする。dry_run=True（既定）は計画だけ。"""
+    inv = inventory_category_fixes(c)
+    if not dry_run:
+        now = stock.stamp()
+        for it in inv['fix']:
+            c.execute(
+                "UPDATE products SET category=?, updated_at=? WHERE id=? AND COALESCE(category,'')=''",
+                (stock.CATEGORY_UNIFORM, now, it['id']),
+            )
+    return {'dryRun': dry_run, **inv}

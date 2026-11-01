@@ -5698,7 +5698,7 @@ def _product_preview(
     # 登録後のカテゴリ変更は選択／編集で可能。
     proposed_category = (
         stock.CATEGORY_PARTS if blank_sku
-        else (stock.CATEGORY_UNIFORM if custom_order else '')
+        else stock.CATEGORY_UNIFORM  # 品番のある通常商品・別注は制服
     )
     if selected_category is not None and selected_category != '':
         try:
@@ -10312,7 +10312,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
 
     category = stock.normalize_category(
         product_info.get('category') or (
-            stock.CATEGORY_UNIFORM if legacy.is_custom_order_code(code) else ''
+            stock.CATEGORY_UNIFORM if stock.text(code) else ''
         )
     )
     # 新規作成時は指定の通常仕入先を優先（行順に依存しない）

@@ -57,7 +57,7 @@ class ProcessingNoCodeTest(unittest.TestCase):
         ])
         self.assertEqual(coded_services(self.c), [])
         body = self.c.execute("SELECT category FROM products WHERE code='ABC-200'").fetchone()
-        self.assertEqual(body['category'], '')
+        self.assertEqual(body['category'], stock.CATEGORY_UNIFORM)
         names = {r['name'] for r in self.c.execute(
             'SELECT name FROM products WHERE category=?', (stock.CATEGORY_PROCESS_SERVICE,))}
         self.assertIn('ネーム加工', names)
@@ -219,3 +219,28 @@ class GarmentParenSplitTest(unittest.TestCase):
         self.assertEqual(len(done['created']), 1)
         self.assertEqual(len(self.services()), 1)
         self.assertEqual(proc_svc.apply_missing_companion_services(self.c)['plan'], [])
+
+
+class CategoryDefaultTest(unittest.TestCase):
+    def setUp(self):
+        self.folder, self.path, self.c = newdb()
+
+    def tearDown(self):
+        self.c.close()
+        self.folder.cleanup()
+
+    def test_coded_garments_become_uniform(self):
+        commit(self.c, self.path, ['顧客A,仕入先X,ABC-1,ポロシャツ,L', '顧客A,仕入先X,別注,特注ベスト,L'])
+        cats = {r['code']: r['category'] for r in self.c.execute('SELECT code, category FROM products')}
+        self.assertEqual(cats, {'ABC-1': stock.CATEGORY_UNIFORM, '別注': stock.CATEGORY_UNIFORM})
+
+    def test_category_repair_dry_run_then_commit(self):
+        pid = stock.save_product(self.c, {'code': 'OLD-1', 'name': 'シャツ', 'category': '', 'sizes': ['L'], 'active': True})
+        pid = pid['id'] if isinstance(pid, dict) else int(pid)
+        self.c.execute("UPDATE products SET category='' WHERE id=?", (pid,))
+        dry = proc_svc.apply_category_fixes(self.c)
+        self.assertEqual([x['id'] for x in dry['fix']], [pid])
+        self.assertEqual(self.c.execute('SELECT category FROM products WHERE id=?', (pid,)).fetchone()[0], '')
+        proc_svc.apply_category_fixes(self.c, dry_run=False)
+        self.assertEqual(self.c.execute('SELECT category FROM products WHERE id=?', (pid,)).fetchone()[0], stock.CATEGORY_UNIFORM)
+        self.assertEqual(proc_svc.apply_category_fixes(self.c)['fix'], [])
