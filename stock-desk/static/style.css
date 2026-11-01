@@ -1068,3 +1068,8 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
   }
   .sku-compare-table tr.sku-detail-row td{border:0;padding:4px 0}
 }
+.sku-merge-quick{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:flex-end;margin:8px 0}
+.sku-merge-quick label{display:flex;flex-direction:column;gap:2px}
+.sku-quick-need{color:#b42318;font-weight:700}
+.sku-more-details{margin-top:6px}
+.sku-more-details>summary{cursor:pointer}
