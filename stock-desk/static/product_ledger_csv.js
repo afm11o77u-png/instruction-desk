@@ -1355,7 +1355,8 @@
       snap[code]={
         decision:dec||'',
         primarySupplier:local.primarySupplier||'',
-        primarySupplierManual:!!local.primarySupplierManual
+        primarySupplierManual:!!local.primarySupplierManual,
+        color:local.color||''
       }
     })
     st.appliedSkuDecisions=snap
@@ -2678,7 +2679,10 @@
   function skuColorPlanField(st,g,d){
     const aux=g.auxPrimary||{}
     if(d.color){
-      return makePlanField('color',d.color,PLAN_STATUS.MANUAL,{editHint:'詳細の色'})
+      const snap=st.appliedSkuDecisions&&st.appliedSkuDecisions[g.code]
+      const pending=!snap||(Object.prototype.hasOwnProperty.call(snap,'color')&&String(snap.color||'')!==String(d.color))
+      return makePlanField('color',d.color,pending?PLAN_STATUS.PENDING:PLAN_STATUS.MANUAL,{
+        hint:pending?'手動選択・未反映':'',editHint:'詳細の色'})
     }
     const adopted=String(
       g.plannedRegisteredColor||g.plannedColor||aux.plannedRegisteredColor||aux.adoptedColor||''
@@ -6262,6 +6266,8 @@
       el.onclick=()=>{
         const id=el.getAttribute('data-pl-unified-expand')
         if(!st.expandedUnified)st.expandedUnified={}
+        // 閉じる前に入力中の値（色の選択など）を保存する。保存しないと再描画で消える
+        harvestFormEdits(st)
         st.expandedUnified[id]=!st.expandedUnified[id]
         paintDialog()
       }
@@ -6359,7 +6365,19 @@
     document.querySelectorAll('[data-pl-sku-expand]').forEach(el=>{
       el.onclick=()=>{
         const code=el.getAttribute('data-pl-sku-expand')
+        // 閉じる前に入力中の値（色の選択など）を保存する。保存しないと再描画で消える
+        harvestFormEdits(st)
         st.expandedCodes[code]=!st.expandedCodes[code]
+        paintDialog()
+      }
+    })
+    // まとめるフォームの代表名・色は変更時に保存（再描画で選択が消えないように）
+    document.querySelectorAll('[data-pl-official-name-edit]').forEach(el=>{
+      el.onchange=()=>setSkuDecision(st,el.getAttribute('data-pl-official-name-edit'),{officialName:el.value})
+    })
+    document.querySelectorAll('[data-pl-official-color]').forEach(el=>{
+      el.onchange=()=>{
+        setSkuDecision(st,el.getAttribute('data-pl-official-color'),{color:el.value})
         paintDialog()
       }
     })
@@ -6367,6 +6385,8 @@
       el.onclick=()=>{
         const code=el.getAttribute('data-pl-confirmed-expand')
         if(!st.expandedConfirmed)st.expandedConfirmed={}
+        // 閉じる前に入力中の値（色の選択など）を保存する。保存しないと再描画で消える
+        harvestFormEdits(st)
         st.expandedConfirmed[code]=!st.expandedConfirmed[code]
         paintDialog()
       }
@@ -7085,6 +7105,9 @@
       applyLocalTargetSkipRegister,
       skipRegisterActionsHtml,
       harvestFormEdits,
+      mergeQuickFormHtml,
+      skuColorPlanField,
+      skuDecision,
       snapshotRowBeforeExclude,
       syncSkuGroupAfterLocalExclude,
       sameContentKey,
