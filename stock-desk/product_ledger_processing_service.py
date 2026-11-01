@@ -523,6 +523,10 @@ def unify_processing_service_name(raw_name: str) -> str:
     raw = strip_service_markers(unicodedata.normalize('NFKC', stock.text(raw_name) or ''))
     if not raw:
         return ''
+    # 「未加工」「加工なし」等は加工が無い意味（加工サービス名にしない）
+    import product_ledger_paren as _paren
+    if _paren.classify_paren_segment(raw) and (_paren.classify_paren_segment(raw) or {}).get('noProcessing'):
+        return ''
     aliases = _alias_map()
     # 構成加工（半袖＋リフレクター＋…）は接尾マッチより先にまとめて保持
     composed = _extract_composition_label(raw)

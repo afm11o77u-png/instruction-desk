@@ -766,6 +766,13 @@ def _classify_as_pure_color_span(raw: str):
     }
 
 
+_NO_PROCESSING_WORDS = ('未加工品', '未加工', '無加工', '加工なし', '加工無し', '加工無', 'ノー加工')
+
+
+def _no_processing_keys():
+    return {_norm_token(unify_import_notation(w)) for w in _NO_PROCESSING_WORDS}
+
+
 def classify_paren_segment(segment: str, *, pants: bool = False):
     """1セグメントを色／加工／素材／不明に分類。
 
@@ -782,6 +789,10 @@ def classify_paren_segment(segment: str, *, pants: bool = False):
     if not key:
         return None
 
+    # 「未加工品」「加工なし」等は加工が無いという意味。加工にせず括弧ごと名から落とす
+    if key in _no_processing_keys():
+        return {'kind': 'hem_ignore', 'value': raw, 'matched': key, 'original': source,
+                'noProcessing': True}
     # 完全一致を優先（長い語が先）。別名は代表色へ。
     if key in _COLOR_SYNONYM_BY_KEY:
         canon = _COLOR_SYNONYM_BY_KEY[key]
