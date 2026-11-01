@@ -1819,8 +1819,9 @@
     return reason?`${sup}（${reason}）`:sup
   }
 
-  function normalSupplierPickerHtml(st,g,d){
+  function normalSupplierPickerHtml(st,g,d,popts){
     d=d||{}
+    popts=popts||{}
     const dec=d.decision||''
     const needs=primarySupplierNeedsChoice(st,g)
     const cands=supplierCandidateList(g)
@@ -1842,6 +1843,7 @@
         ?`<p class="notice">${esc(pendingSupplierLabel())} — 「選択を反映して再照合」で登録予定へ反映します。自動判定では上書きしません。</p>`
         :'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>')
       :`<p class="excelhint">ここは品番単位の通常仕入先です。CSV各行の仕入先は行ごと／サブとして残します（先頭行の仕入先を自動では通常にしません）。</p>`
+    if(popts.notesOnly)return `<div class="sku-primary-supplier-note">${note}</div>`
     return `<div class="sku-primary-supplier-pick" data-plan-edit="supplier">
       <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}>${opts.join('')}</select></label>
       ${note}
@@ -2035,6 +2037,36 @@
     return hay.includes(q)
   }
 
+  /** まとめる選択時の簡易フォーム（代表名・色・通常仕入先だけ）。既存の詳細欄と同じ state を編集する */
+  function mergeQuickFormHtml(st,g,d){
+    const code=esc(g.code)
+    const dis=st.busy?'disabled':''
+    const need=f=>f&&f.status===PLAN_STATUS.NEED_CHOICE?' <span class="sku-quick-need">【選択が必要】</span>':''
+    const nameField=skuNamePlanField(st,g,d)
+    const colorField=skuColorPlanField(st,g,d)
+    const supField=skuSupplierPlanField(st,g,d)
+    const nameCands=uniqueNonEmpty([...(g.nameCandidates||[]),...(g.variants||[]).map(v=>v.productName||'')])
+    const nameList=nameCands.length>1?`<datalist id="plQuickNames-${code}">${nameCands.map(n=>`<option value="${esc(n)}"></option>`).join('')}</datalist>`:''
+    const nameVal=d.officialName||g.plannedRegisteredName||''
+    const colorVal=d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||''
+    const colors=variantColors(g)
+    const colorInput=colors.length>1
+      ?`<select data-pl-official-color="${code}" ${dis}><option value="">選択してください</option>${uniqueNonEmpty([...colors,colorVal]).map(c=>`<option value="${esc(c)}" ${(d.color||(colorField.status===PLAN_STATUS.NEED_CHOICE?'':colorVal))===c?'selected':''}>${esc(c)}</option>`).join('')}</select>`
+      :`<input data-pl-official-color="${code}" value="${esc(colorVal)}" ${dis}>`
+    const cands=supplierCandidateList(g)
+    const needs=primarySupplierNeedsChoice(st,g)
+    const chosen=d.primarySupplier||(needs?'':effectivePrimarySupplier(st,g))||''
+    const supInput=`<select data-pl-primary-sup="${code}" ${dis}><option value="">選択してください</option>${uniqueNonEmpty([...cands,chosen]).map(s=>`<option value="${esc(s)}" ${chosen===s?'selected':''}>${esc(s)}</option>`).join('')}</select>`
+    const keepNeeded=g.existingCount>1
+    const keep=keepNeeded?`<fieldset class="sku-quick-keep"><legend>残す商品${d.keepProductId?'':' <span class="sku-quick-need">【選択が必要】</span>'}</legend>${(g.existingProducts||[]).map(p=>`<label class="check"><input type="radio" name="plKeep-${code}" data-pl-keep="${code}" value="${p.id}" ${Number(d.keepProductId)===Number(p.id)?'checked':''} ${dis}>ID ${p.id}　${esc(p.name||'')}${p.color?` / ${esc(p.color)}`:''}</label>`).join('')}</fieldset>`:''
+    return `<div class="sku-merge-quick" data-pl-merge-quick="${code}">
+      <label data-plan-edit="name">代表名${need(nameField)}<input data-pl-official-name-edit="${code}" value="${esc(nameVal)}" ${nameList?`list="plQuickNames-${code}"`:''} ${dis}></label>${nameList}
+      <label data-plan-edit="color">色${need(colorField)}${colorInput}</label>
+      <label data-plan-edit="supplier">通常仕入先${need(supField)}${supInput}</label>
+      ${keep}
+    </div>`
+  }
+
   function skuRowDetailHtml(st,g,opts){
     opts=opts||{}
     const d=skuDecision(st,g.code)
@@ -2133,25 +2165,27 @@
     const auxPanel=auxSupplierPanelHtml(st,g,d)
     const colspan=Number(opts.colspan)||SKU_COMPARE_COL_COUNT
     const decisionPending=!!(decision&&skuDecisionPendingRematch(st,g.code))
+    const isMerge=decision==='merge'
     const hideDecisionBtns=!!(opts.hideDecisionButtons||(st.reselectCodes&&st.reselectCodes[g.code]))
     return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="${colspan}">
       <div class="sku-detail-body">
+        ${isMerge?`${hideDecisionBtns?'':skuDecisionButtonsHtml(st,g)}${mergeQuickFormHtml(st,g,d)}
+        <details class="sku-more-details" data-pl-more-details="${esc(g.code)}" ${st.moreDetailsOpen&&st.moreDetailsOpen[g.code]?'open':''}><summary>その他の詳細</summary>`:''}
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
         ${decisionPending?`<p class="notice">${esc((skuSupplierPendingRematch(st,g.code)&&appliedDecisionForCode(st,g.code)===(decision||''))?pendingSupplierLabel():pendingDecisionLabel(decision))} — 登録予定の再計算は「選択を反映して再照合」でまとめて行います（選択だけでは登録・全件再計算しません）。</p>`:''}
         ${namePlanBlock}
         ${isColorSplit||isContentSplit?'':auxPanel}
-        ${hideDecisionBtns?'':skuDecisionButtonsHtml(st,g)}
-        ${normalSupplierPickerHtml(st,g,d)}
+        ${hideDecisionBtns||isMerge?'':skuDecisionButtonsHtml(st,g)}
+        ${normalSupplierPickerHtml(st,g,d,{notesOnly:isMerge})}
         ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
         ${decision==='content_split'?contentSplitFormHtml(st,g,d):''}
         ${decision==='merge'?`<div class="sku-merge-form">
           ${decisionPending&&(namePlan.colorSplit||namePlan.contentSplit||!(namePlan.nameMappings||[]).length)?'<p class="excelhint">統合用の名称予定は再照合後に設定できます。代表名・色・通常仕入先は今すぐ編集できます（方針切替では消しません）。</p>':''}
           ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
           <label data-plan-edit="name">公式商品名<select data-pl-official-name="${esc(g.code)}" ${st.busy?'disabled':''}><option value="">仮代表名を使う…</option>${nameOpts}</select></label>
-          <label data-plan-edit="name">代表名（編集可）<input data-pl-official-name-edit="${esc(g.code)}" value="${esc(d.officialName||g.plannedRegisteredName||'')}" placeholder="空なら仮代表名（名称未整理ステータス）" ${st.busy?'disabled':''}></label>
-          <label data-plan-edit="color">色<input data-pl-official-color="${esc(g.code)}" value="${esc(d.color||g.plannedRegisteredColor||g.plannedColor||(g.auxPrimary&&g.auxPrimary.plannedRegisteredColor)||'')}" ${st.busy?'disabled':''}></label>
+          <p class="excelhint">代表名を空にすると仮代表名（名称未整理ステータス）で登録します。</p>
           <p class="excelhint">予定代表名: ${esc(plannedNameForGroup(st,g)||'—')}　予定色: ${esc(d.color||g.plannedRegisteredColor||g.plannedColor||'（空）')}　予定通常仕入先: ${esc(plannedSupplierDisplay(st,g))}</p>
-          <fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>
+          ${g.existingCount>1?'':`<fieldset><legend>残す商品（登録済が複数のとき必須）</legend>${existing}</fieldset>`}
           ${g.existingCount>1?`<fieldset><legend>統合する商品（残す以外）</legend>${mergeSources||'<span class="sub">残す商品を先に選んでください</span>'}</fieldset>`:''}
           <p class="excelhint">旧商品名・仕入先は照合用の別名として残します。既存の公式名は仮名では上書きしません。サイズの LL≡2L 同一化はしません。</p>
         </div>`:''}
@@ -2164,6 +2198,7 @@
           <label>保留理由<input data-pl-defer-reason="${esc(g.code)}" value="${esc(d.deferReason||'')}" placeholder="例: 制服本体と加工サービスの切り分けが未確定" ${st.busy?'disabled':''}></label>
           <p class="excelhint">この品番は今回登録しません。同じCSVを後で再読込して処理できます。${decisionPending?'【未反映】再照合で登録予定へ反映します。':''}</p>
         </div>`:''}
+        ${isMerge?'</details>':''}
       </div>
     </td></tr>`
   }
@@ -6212,6 +6247,12 @@
         }
         // 軽いUI更新のみ。確認済み移動でも操作行 chase せず、ビューポートを維持。
         paintDialog()
+      }
+    })
+    document.querySelectorAll('[data-pl-more-details]').forEach(el=>{
+      el.ontoggle=()=>{
+        st.moreDetailsOpen=st.moreDetailsOpen||{}
+        st.moreDetailsOpen[el.getAttribute('data-pl-more-details')]=el.open
       }
     })
     document.querySelectorAll('[data-pl-keep]').forEach(el=>{
