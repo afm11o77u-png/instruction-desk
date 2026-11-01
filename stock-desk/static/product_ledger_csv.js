@@ -1345,13 +1345,8 @@
     ])
     codes.forEach(code=>{
       const local=skuDecision(st,code)
-      let dec=local.decision||''
-      if(!dec){
-        const g=((st.preview&&st.preview.skuGroups)||[]).find(x=>x&&x.code===code)
-        const remote=g&&g.decision
-        if(remote&&typeof remote==='object')dec=remote.decision||''
-        else if(typeof remote==='string')dec=remote
-      }
+      // 未反映判定は手元の選択と比べるので、サーバー側の自動方針は入れない（入れると永久に未反映になる）
+      const dec=local.decision||''
       snap[code]={
         decision:dec||'',
         primarySupplier:local.primarySupplier||'',
@@ -1387,10 +1382,8 @@
   }
 
   function pendingRematchCodes(st){
+    // 今のプレビューにない品番（古い下書きなど）は数えない
     const codes=new Set()
-    Object.keys(st.skuDecisions||{}).forEach(code=>{
-      if(skuDecisionPendingRematch(st,code))codes.add(code)
-    })
     ;((st.preview&&st.preview.skuGroups)||[]).forEach(g=>{
       if(g&&g.code&&skuDecisionPendingRematch(st,g.code))codes.add(g.code)
     })
@@ -1490,6 +1483,7 @@
     return `<div class="pl-pending-rematch-bar" role="status" data-pl-pending-count="${n}">
       <div class="pl-pending-rematch-copy">
         <strong>未反映の変更 ${n} 件</strong>
+        <span class="sub">品番 ${esc(pendingRematchCodes(st).slice(0,5).join('、'))}${n>5?' ほか':''}</span>
         <span class="excelhint">方針の選択は編集状態に保存済みです。登録予定への反映は「選択を反映して再照合」でまとめて行います。</span>
       </div>
       <button type="button" id="plRePreviewPending" class="primary" ${st.busy?'disabled':''}>選択を反映して再照合</button>
@@ -6989,6 +6983,9 @@
     open,
     // 区分分類の単体検証用（本番UIは open のみ使用）
     __test:{
+      pendingRematchCodes,
+      snapshotAppliedSkuDecisions,
+      pendingRematchBannerHtml,
       partitionJudgmentGroups,
       judgmentStatusCounts,
       buildUnifiedReviewItems,
