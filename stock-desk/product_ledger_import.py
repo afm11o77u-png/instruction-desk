@@ -7449,7 +7449,33 @@ def apply_processing_service_split(c, classified, sku_groups):
             (r.get('processingService') or {}).get('elmsEmbroideryRule')
             for r in proc_rows
         )
-        if elms_only:
+        # 加工行だけの品番（本体行・既存本体なし、加工名が読める）: 本体確認にせず加工サービスとして登録
+        proc_only = (
+            not elms_only and bool(proc_rows) and not garment_rows and not existing
+            and all((r.get('processingService') or {}).get('identifiable') for r in proc_rows)
+        )
+        if proc_only:
+            group['garmentBodyKnown'] = False
+            group['garmentBodyReviewOnly'] = False
+            group['processingOnlySku'] = True
+            group['needsDecision'] = False
+            group['plannedSingleProduct'] = True
+            group['status'] = 'auto'
+            group['reviewTier'] = REVIEW_TIER_AUTO
+            group['reviewTierLabel'] = REVIEW_TIER_LABELS[REVIEW_TIER_AUTO]
+            group['reviewReasons'] = [{
+                'code': 'processing_only',
+                'label': '加工行だけの品番（加工サービスとして登録）',
+                'values': [code] if code else ['（品番なし）'],
+            }]
+            group['processingServiceAutoSplit'] = True
+            group['skuDecisionNeeded'] = False
+            group['productPlan'] = {
+                **dict(group.get('productPlan') or {}),
+                'skipGarmentBody': True,
+                'processingServiceOnly': True,
+            }
+        elif elms_only:
             group['garmentBodyKnown'] = False
             group['garmentBodyReviewOnly'] = False
             group['elmsEmbroideryOnly'] = True
