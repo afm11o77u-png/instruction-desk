@@ -999,6 +999,14 @@ def _merge_one_source(c, *, keep_id, source_id, resolutions, when):
 
     # 発注ヘッダ以外で商品ID直参照を付け替え
     _remap_product_refs(c, from_product_id=source_id, to_product_id=keep_id)
+    # 加工サービス同士の統合: 取扱の参照を統合先へ
+    if 'customer_product_processes' in _tables(c):
+        c.execute(
+            '''INSERT OR IGNORE INTO customer_product_processes(customer_product_id, process_product_id, sort_order)
+               SELECT customer_product_id, ?, sort_order FROM customer_product_processes WHERE process_product_id=?''',
+            (keep_id, source_id),
+        )
+        c.execute('DELETE FROM customer_product_processes WHERE process_product_id=?', (source_id,))
 
     c.execute(
         'UPDATE products SET active=0, merged_into_id=?, merged_at=?, updated_at=? WHERE id=?',
@@ -1014,6 +1022,13 @@ def _remap_handle_refs(c, *, from_handle_id, to_handle_id):
         (to_handle_id, stock.stamp(), from_handle_id),
     )
     tables = _tables(c)
+    if 'customer_product_processes' in tables:
+        # 消える取扱の加工サービスを残す取扱へ（重複は無視）
+        c.execute(
+            '''INSERT OR IGNORE INTO customer_product_processes(customer_product_id, process_product_id, sort_order)
+               SELECT ?, process_product_id, sort_order FROM customer_product_processes WHERE customer_product_id=?''',
+            (to_handle_id, from_handle_id),
+        )
     if 'purchase_order_lines' in tables:
         c.execute(
             'UPDATE purchase_order_lines SET customer_product_id=? WHERE customer_product_id=?',
