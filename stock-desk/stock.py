@@ -1202,6 +1202,14 @@ def save_product(c, body):
             'UPDATE products SET code=?,maker_code=?,name=?,color=?,material=?,category=?,supplier_id=?,active=?,updated_at=? WHERE id=?',
             (code, maker_code, name, color, material, category, supplier_id, active, t, pid),
         )
+        # 利用者が足す照合用別名（例: 加工サービスの表記ゆれ スナッパ加工 → スナッパー加工）
+        extra = body.get('addNameAliases') or []
+        if isinstance(extra, str):
+            extra = [extra]
+        for alias in extra[:20]:
+            alias = text(alias)[:120]
+            if alias:
+                stock_product_merge.ensure_name_alias(c, pid, alias)
         existing = {r['label']: r['id'] for r in c.execute('SELECT id,label FROM product_sizes WHERE product_id=?', (pid,))}
         for label in existing:
             if label not in labels and c.execute(

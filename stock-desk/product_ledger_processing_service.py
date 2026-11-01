@@ -198,6 +198,26 @@ def strip_service_markers(value: str) -> str:
     return t
 
 
+# カタカナ語の語末の長音「ー」の有無だけの差（スナッパ／スナッパー）は同じ加工とみなす。
+# 語中の「ー」や、カタカナ1文字＋ー（例: 「ノー」）は変えない。
+_KATA = '\u30a1-\u30fa\u30fc'
+_WORD_END_LONG_VOWEL_RE = re.compile(rf'(?<=[\u30a1-\u30fa][\u30a1-\u30fa])ー+(?![{_KATA}])')
+
+
+def _fold_word_end_long_vowel(t: str) -> str:
+    return _WORD_END_LONG_VOWEL_RE.sub('', t)
+
+
+def prefer_service_display_name(current: str, candidate: str) -> str:
+    """同じ照合キーの表示名のうち、語末の長音「ー」がある方を正とする。"""
+    cur, cand = stock.text(current), stock.text(candidate)
+    if not cur:
+        return cand
+    if not cand or normalize_service_key(cur) != normalize_service_key(cand):
+        return cur
+    return cand if cand.count('ー') > cur.count('ー') else cur
+
+
 def normalize_service_key(value: str) -> str:
     """照合用キー。全角半角・空白・前後の印・取付／取り付け等の表記差を揃えて重複登録を防ぐ。
 
@@ -207,6 +227,7 @@ def normalize_service_key(value: str) -> str:
     t = re.sub(r'[\s\u3000]+', '', t)
     t = strip_service_markers(t)
     t = canonicalize_attach_verbs(t)
+    t = _fold_word_end_long_vowel(t)
     return t.casefold()
 
 
@@ -1364,6 +1385,23 @@ def find_existing_processing_service_any_vendor(c, service_name: str):
     ):
         if normalize_service_key(row['name']) == key:
             return dict(row)
+    # 利用者が登録した照合用別名（商品の別名と同じ表）
+    try:
+        rows = list(c.execute(
+            """SELECT p.*, a.value AS alias_value FROM product_match_aliases a
+               JOIN products p ON p.id=a.product_id
+               WHERE a.kind='name' AND p.category=? AND TRIM(COALESCE(p.code,''))=''
+                 AND p.merged_into_id IS NULL
+               ORDER BY p.active DESC, p.id""",
+            (stock.CATEGORY_PROCESS_SERVICE,),
+        ))
+    except Exception:  # noqa: BLE001  別名表が無い古いDB
+        rows = []
+    for row in rows:
+        if normalize_service_key(row['alias_value']) == key:
+            d = dict(row)
+            d.pop('alias_value', None)
+            return d
     return None
 
 
@@ -1382,10 +1420,14 @@ def inventory_duplicate_process_services(c) -> dict:
         key = normalize_service_key(row['name'])
         if key:
             groups.setdefault(key, []).append({'id': row['id'], 'name': row['name'], 'supplierId': row['supplier_id']})
-    out = [
-        {'key': k, 'keepId': items[0]['id'], 'items': items}
-        for k, items in groups.items() if len(items) > 1
-    ]
+    out = []
+    for k, items in groups.items():
+        if len(items) < 2:
+            continue
+        best = ''
+        for it in items:
+            best = prefer_service_display_name(best, it['name'])
+        out.append({'key': k, 'keepId': items[0]['id'], 'items': items, 'suggestedName': best})
     return {'groups': out, 'count': len(out)}
 
 
@@ -1417,6 +1459,12 @@ def apply_duplicate_process_service_merge(c, keys=None, *, dry_run: bool = True,
                 **body, 'fingerprint': pv['fingerprint'],
                 'token': f'dup-proc-{uuid.uuid4().hex}', '_actor': {'name': '重複加工サービス修復'},
             }, db_path=db_path)
+            # 正の表記（語末「ー」あり等）へ代表名を寄せる。旧名は別名に残る
+            keep = c.execute('SELECT * FROM products WHERE id=?', (g['keepId'],)).fetchone()
+            if keep and g.get('suggestedName') and stock.text(keep['name']) != g['suggestedName']:
+                merge.ensure_name_alias(c, g['keepId'], keep['name'])
+                c.execute('UPDATE products SET name=?, updated_at=? WHERE id=?',
+                          (g['suggestedName'], stock.stamp(), g['keepId']))
         done.append(g)
     return {'dryRun': dry_run, 'merged' if not dry_run else 'planned': done, 'skipped': skipped}
 
