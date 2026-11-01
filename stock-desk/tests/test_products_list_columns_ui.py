@@ -30,15 +30,17 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         )
         self.assertIsNotNone(header)
         cols = re.findall(r'<th>([^<]*)</th>', header.group(1))
-        self.assertEqual(cols, ['商品ID', '商品', '取扱', 'サイズ', '開く'])
+        self.assertEqual(cols, ['商品ID', 'カテゴリ', '商品', '取扱', 'サイズ', '開く'])
 
     def test_table_body_cells_match_header_order(self):
         body = _fn(APP_JS, 'products')
         # Class markers keep header/body alignment for width CSS.
-        for cls in ('prod-id', 'prod-name', 'prod-handles', 'prod-sizes', 'prod-act'):
+        for cls in ('prod-id', 'prod-cat', 'prod-name', 'prod-handles', 'prod-sizes', 'prod-act'):
             self.assertIn(f'class="{cls}"', body)
         # 取扱 (links) cell must appear before サイズ (sizes) in each row template.
         self.assertLess(body.index('prod-handles'), body.index('prod-sizes'))
+        # カテゴリは商品名のすぐ左
+        self.assertLess(body.index('class="prod-cat"'), body.index('class="prod-name"'))
         self.assertLess(body.index('r.links.map'), body.index('r.sizes.map(esc).join'))
         self.assertIn('class="products-list"', body)
 
@@ -72,7 +74,8 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         self.assertIn('.prod-id', products_css)
         self.assertIn('white-space:nowrap', products_css)
         self.assertIn('overflow:hidden', products_css)
-        self.assertIn('.prod-handles{width:38%}', products_css)
+        self.assertIn('.prod-handles{width:30%}', products_css)
+        self.assertIn('.prod-cat{width:10%', products_css)
         self.assertIn('.prod-act{width:4.75rem', products_css)
         self.assertIn('.prod-sizes{width:18%', products_css)
         # directory reference still documents the 2em sid slot for in-cell IDs

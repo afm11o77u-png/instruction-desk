@@ -31,7 +31,7 @@ function productCompareFields(p){
     :'なし'
   return [
     ['商品ID', String(p.id)],
-    ['品番', esc(p.codeDisplay||p.code||'品番なし')],
+    ['品番', esc(p.code||(['部品・資材','加工サービス'].includes(p.category||'')?'':(p.codeDisplay||'品番なし')))],
     ['商品名', esc(p.name)],
     ['色', esc(p.color)||'—'],
     ['カテゴリ', esc(p.category)||'—'],

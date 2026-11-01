@@ -308,6 +308,7 @@ def initialize(c):
 CATEGORY_UNIFORM = '制服'
 CATEGORY_PARTS = '部品・資材'
 CATEGORY_PROCESS_SERVICE = '加工サービス'
+CODELESS_CATEGORIES = (CATEGORY_PARTS, CATEGORY_PROCESS_SERVICE)
 PRODUCT_CATEGORIES = frozenset({
     '', CATEGORY_UNIFORM, CATEGORY_PARTS, CATEGORY_PROCESS_SERVICE,
 })
@@ -369,6 +370,9 @@ def product_code_display(code, category=''):
     if t:
         return t
     cat = text(category)
+    if cat in CODELESS_CATEGORIES:
+        # 部品・資材／加工サービスは品番を持たないのが普通。何も出さない
+        return ''
     if cat == CATEGORY_UNIFORM:
         return BLANK_SKU_UNIFORM_DISPLAY
     return BLANK_SKU_DISPLAY

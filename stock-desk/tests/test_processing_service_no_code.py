@@ -97,3 +97,68 @@ class ProcessingNoCodeTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProcessingDedupeTest(unittest.TestCase):
+    def setUp(self):
+        self.folder, self.path, self.c = newdb()
+
+    def tearDown(self):
+        self.c.close()
+        self.folder.cleanup()
+
+    def services(self):
+        return [dict(r) for r in self.c.execute(
+            'SELECT id, name, supplier_id FROM products WHERE category=? ORDER BY id',
+            (stock.CATEGORY_PROCESS_SERVICE,))]
+
+    def test_key_normalizes_but_keeps_different_services(self):
+        k = proc_svc.normalize_service_key
+        self.assertEqual(k('ポケット加工'), k('＊ﾎﾟｹｯﾄ 加工'))
+        self.assertNotEqual(k('ポケット加工'), k('ポケット付け'))
+        self.assertEqual(proc_svc.unify_processing_service_name('＊ポケット加工'), 'ポケット加工')
+
+    def test_csv_variants_and_vendors_become_one_with_sub_supplier(self):
+        commit(self.c, self.path, [
+            '顧客A,仕入先X,P1,ポケット加工,F',
+            '顧客A,仕入先X,P2,ポケット 加工,F',
+            '顧客A,仕入先Y,P3,ﾎﾟｹｯﾄ加工,F',
+            '顧客A,仕入先X,P4,＊ポケット加工,F',
+            '顧客A,仕入先X,P6,ポケット付け,F',
+        ])
+        names = sorted(s['name'] for s in self.services())
+        self.assertEqual(names, ['ポケット付け', 'ポケット加工'])
+        pid = [s for s in self.services() if s['name'] == 'ポケット加工'][0]['id']
+        subs = {s['name'] for s in stock.product_sub_suppliers(self.c, pid)}
+        self.assertIn('仕入先Y', subs)
+
+    def test_reuses_existing_service_in_db(self):
+        commit(self.c, self.path, ['顧客A,仕入先X,P1,ポケット加工,F'])
+        commit(self.c, self.path, ['顧客B,仕入先Z,P9,＊ポケット加工,F'])
+        self.assertEqual(len([s for s in self.services() if s['name'] == 'ポケット加工']), 1)
+
+    def test_duplicate_repair_dry_run_then_merge(self):
+        sup = stock.save_supplier(self.c, {'name': '仕入先X', 'active': True})
+        for n in ('ポケット加工', '＊ポケット加工', 'ポケット付け'):
+            stock.save_product(self.c, {'code': '', 'name': n, 'category': stock.CATEGORY_PROCESS_SERVICE,
+                                        'supplierId': sup['id'], 'sizes': ['—'], 'active': True})
+        inv = proc_svc.inventory_duplicate_process_services(self.c)
+        self.assertEqual(inv['count'], 1)
+        out = proc_svc.apply_duplicate_process_service_merge(self.c)
+        self.assertTrue(out['dryRun'])
+        self.assertEqual(len(self.services()), 3)
+        proc_svc.apply_duplicate_process_service_merge(self.c, dry_run=False)
+        self.assertEqual(proc_svc.inventory_duplicate_process_services(self.c)['count'], 0)
+        merged = self.c.execute('SELECT merged_into_id FROM products WHERE name=?', ('＊ポケット加工',)).fetchone()[0]
+        self.assertIsNotNone(merged)
+
+
+class CodeDisplayTest(unittest.TestCase):
+    def test_codeless_categories_show_nothing(self):
+        self.assertEqual(stock.product_code_display('', stock.CATEGORY_PROCESS_SERVICE), '')
+        self.assertEqual(stock.product_code_display('', stock.CATEGORY_PARTS), '')
+        self.assertEqual(stock.product_code_display('', ''), stock.BLANK_SKU_DISPLAY)
+        self.assertEqual(stock.product_code_display('A1', stock.CATEGORY_PARTS), 'A1')
+        js = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        self.assertIn('function productCodeShow(r)', js)
+        self.assertNotIn("r.codeDisplay||r.code||'品番なし'", js)
