@@ -739,6 +739,9 @@
     if(r.status==='needs_review'&&r.product&&r.product.blankSku){
       issues.push({type:'category',label:'区分の確認',detail:'',fieldKey:'sku'})
     }
+    if(r.processLinkMissing){
+      issues.push({type:'process_link',label:'加工サービス未登録',detail:r.processLinkMissing,fieldKey:'procName'})
+    }
     if(r.status==='needs_review'&&!issues.length){
       const labs=(r.reasons||[]).filter(Boolean)
       ;(labs.length?labs:['要確認']).forEach(lab=>{

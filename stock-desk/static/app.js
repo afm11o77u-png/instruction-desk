@@ -409,6 +409,13 @@ async function api(path,data){
   }
   return result
 }
+function linkProcessIds(l){return Array.isArray(l.processIds)?l.processIds:(l.processes||[]).map(p=>p.id)}
+function procNames(l){const n=(l.processes||[]).map(p=>p.name);return n.length?` <span class="sub">［${esc(n.join('・'))}］</span>`:''}
+function processServiceOptions(l){
+  const sel=new Set(linkProcessIds(l))
+  return (state.data.products||[]).filter(p=>p.category==='加工サービス'&&(p.active||sel.has(p.id))&&!p.mergedIntoId)
+    .map(p=>`<option value="${p.id}" ${sel.has(p.id)?'selected':''}>${esc(p.name)}</option>`).join('')
+}
 function specLabel(v){
   const t=String(v||'').trim()
   if(!t||t==='加工なし'||t==='刺繍なし')return '加工なし'
@@ -814,13 +821,13 @@ function products(){
       const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
       const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
       const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
-      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id">${r.id}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
+      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id">${r.id}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
     }).join('')||'<tr><td colspan="6">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>{
     const maker=r.makerCode&&r.makerCode!==r.code?`　メーカー ${esc(r.makerCode)}`:''
-    return `<article class="dm-card"><div class="dm-primary">${esc(productCodeShow(r))} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
+    return `<article class="dm-card"><div class="dm-primary">${esc(productCodeShow(r))} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
   }).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows.filter(r=>!r.mergedIntoId),'商品',productForm,body=>api('/api/products',body),'products')
   const supplierSelect=$('#productSupplier')
@@ -1111,7 +1118,8 @@ function bindProductEditor(row){
       const display=cust?cust.name:(l.customerQuery||'')
       return `<div class="linkrow" data-link-i="${i}">
       ${searchPickerMarkup({label:'顧客',inputId:`linkCustomerQ${i}`,listId:`linkCustomerList${i}`,clearId:`linkCustomerClear${i}`,hintId:`linkCustomerHint${i}`,placeholder:'顧客名またはカナで検索',value:display})}
-      <label>刺繍・加工<input data-i="${i}" data-k="embroidery" value="${esc(l.embroidery)}" placeholder="空欄は加工なし"></label>
+      <label>加工サービス<select data-k="processIds" data-i="${i}" multiple size="3">${processServiceOptions(l)}</select></label>
+      <label>仕様メモ<input data-i="${i}" data-k="embroidery" value="${esc(l.embroidery)}" placeholder="空欄は加工なし"></label>
       <label class="check"><input data-i="${i}" data-k="isStandard" type="checkbox" ${l.isStandard?'checked':''}>標準仕様</label>
       <label class="check"><input data-i="${i}" data-k="active" type="checkbox" ${l.active!==false?'checked':''}>使用中</label>
       <button type="button" data-remove="${i}">外す</button></div>`
@@ -1120,6 +1128,7 @@ function bindProductEditor(row){
       const link=editor.links[Number(el.dataset.i)]
       touchEditDirty()
       if(el.dataset.k==='embroidery')link.embroidery=el.value.trim()
+      if(el.dataset.k==='processIds')link.processIds=[...el.selectedOptions].map(o=>Number(o.value))
       if(el.dataset.k==='isStandard'){link.isStandard=el.checked;if(el.checked)editor.links.forEach(x=>{if(x!==link&&x.customerId===link.customerId)x.isStandard=false});draw()}
       if(el.dataset.k==='active')link.active=el.checked
     })
@@ -1227,7 +1236,7 @@ function readForm(row){
     if(!Number.isFinite(cid)||cid<=0||!resolveProductLinkCustomer(state.data.customers,cid)){
       throw new Error('取扱の顧客を候補から選んでください。入力した文字だけでは保存できません。')
     }
-    return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false}
+    return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false,processIds:linkProcessIds(l)}
   })
   const categoryEl=$('#category')
   const makerEl=$('#makerCode')

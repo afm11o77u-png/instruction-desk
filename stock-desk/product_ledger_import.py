@@ -7779,6 +7779,53 @@ def _add_processing_vendors(c, pid, plan):
         _ensure_sub_supplier(c, pid, sid)
 
 
+def _row_handle_processing_text(row):
+    """取扱の加工仕様のうち加工部分（販売用途などの区分を除く）。"""
+    pc = row.get('parenClassification') or {}
+    return stock.text(pc.get('processing') or '')
+
+
+def _mark_unresolved_process_links(c, rows):
+    """取扱の加工が加工サービスに結び付かない行を要確認へ（文字だけで登録しない）。"""
+    planned = set()
+    marked = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for n in (row.get('companionProcessingService'), (row.get('processingService') or {}).get('serviceName')):
+            if stock.text(n):
+                planned.add(proc_svc.normalize_service_key(n))
+    for row in rows:
+        if not isinstance(row, dict) or row.get('companionOnly') or row.get('companionProcessingService'):
+            continue
+        if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+            continue
+        prod = row.get('product') or {}
+        handle = row.get('handle') or {}
+        if prod.get('processingServiceProduct') or prod.get('processingServiceSplit'):
+            continue
+        if handle.get('skipForProcessingService') or handle.get('action') == 'excluded':
+            continue
+        emb = stock.text(handle.get('embroidery') or '')
+        if not emb or emb == PENDING_EMBROIDERY or not handle.get('fromParenClassification'):
+            continue
+        emb = _row_handle_processing_text(row)
+        if not emb:
+            continue  # 販売用途だけ等、加工なし
+        # 加工名として認識できれば確定時に加工サービスを確保（同名は1件）できる
+        if proc_svc.unify_processing_service_name(emb) or stock.resolve_process_service_ids(c, emb):
+            continue
+        row['processLinkMissing'] = emb
+        row['status'] = STATUS_REVIEW
+        row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+        row['canCommit'] = False
+        reasons = list(row.get('reasons') or [])
+        reasons.append(f'加工「{emb}」に対応する加工サービスがありません')
+        row['reasons'] = reasons
+        marked += 1
+    return marked
+
+
 def _row_companion_service_name(row):
     """衣服＋括弧加工の行なら加工サービス名。加工業者行・加工サービス行・手動で商品以外にした行は対象外。"""
     prod = row.get('product') or {}
@@ -9811,6 +9858,11 @@ def build_preview(c, body):
             prod['officialName'] = comp
             row['product'] = prod
             row['companionOnly'] = True
+    if _mark_unresolved_process_links(c, classified):
+        summary = _preview_outcome_summary(classified, sku_groups, planned, decision_meta)
+        summary['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
+        summary['autoExcludedRows'] = k2_auto_meta.get('autoExcludedRowCount') or 0
+        summary['registrationExcludedRows'] = planned['registrationExcludedRows']
     fp = db_fingerprint(c)
     snap = stock_snapshot(c)
     if register_opening:
@@ -11021,6 +11073,23 @@ def commit_preview(c, body, *, db_path=None):
                     if created_h:
                         result_counts['handlesCreated'] += 1
 
+                # 取扱 → 加工サービスのリンク（同じ取込で確保した加工サービスを優先）
+                if cp_id:
+                    link_ids = []
+                    if companion_id:
+                        link_ids = [companion_id]
+                    elif ps_key in processing_ids_by_key and not prod_info.get('processingServiceProduct'):
+                        link_ids = [processing_ids_by_key[ps_key]]
+                    else:
+                        proc_text = _row_handle_processing_text(row)
+                        svc_name = proc_svc.unify_processing_service_name(proc_text) if proc_text else ''
+                        if svc_name:
+                            sid, _ = _ensure_companion_processing_service(c, svc_name, processing_ids_by_key)
+                            link_ids = [sid] if sid else []
+                        elif proc_text:
+                            link_ids = stock.resolve_process_service_ids(c, proc_text)
+                    if link_ids:
+                        stock.add_handle_processes(c, cp_id, link_ids)
                 if companion_id:
                     prov = dict(row.get('specProvenance') or {})
                     prov['processingProductId'] = companion_id

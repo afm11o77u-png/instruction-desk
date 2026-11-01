@@ -404,6 +404,8 @@ def needs_migration(c):
         return True
     if 'legacy_csv_row_maps' not in tables:
         return True
+    if 'customer_product_processes' not in tables:
+        return True
     if 'product_ledger_row_maps' not in tables or 'product_ledger_import_runs' not in tables:
         return True
     import stock_orders
@@ -723,6 +725,94 @@ def migrate_schema(c):
     )
     import stock_orders
     stock_orders.migrate_purchase_orders(c)
+    ensure_handle_process_schema(c)
+
+
+def ensure_handle_process_schema(c):
+    """取扱 → 加工サービス（複数可）のリンク表。初回作成時だけ既存の加工仕様文字を名前で対応付け。
+
+    既存の embroidery（加工仕様の文字）は消さない・書き換えない。
+    """
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='customer_product_processes'").fetchone():
+        return
+    c.execute('''CREATE TABLE customer_product_processes (
+      customer_product_id INTEGER NOT NULL REFERENCES customer_products(id) ON DELETE CASCADE,
+      process_product_id INTEGER NOT NULL REFERENCES products(id),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(customer_product_id, process_product_id)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS customer_product_processes_proc '
+              'ON customer_product_processes(process_product_id)')
+    backfill_handle_processes(c)
+
+
+def resolve_process_service_ids(c, spec):
+    """加工仕様の文字から加工サービス商品IDを探す（見つからなければ空）。"""
+    import product_ledger_processing_service as proc_svc
+    name = proc_svc.unify_processing_service_name(spec or '')
+    if not name:
+        return []
+    hit = proc_svc.find_existing_processing_service_any_vendor(c, name)
+    return [int(hit['id'])] if hit else []
+
+
+def backfill_handle_processes(c):
+    """リンクの無い取扱に、加工仕様の文字と同名の加工サービスを付ける（追加のみ）。"""
+    added = 0
+    rows = c.execute(
+        '''SELECT cp.id, cp.embroidery FROM customer_products cp
+           WHERE cp.embroidery<>'' AND NOT EXISTS (
+             SELECT 1 FROM customer_product_processes x WHERE x.customer_product_id=cp.id)'''
+    ).fetchall()
+    for r in rows:
+        for pid in resolve_process_service_ids(c, r['embroidery']):
+            added += add_handle_processes(c, r['id'], [pid])
+    return added
+
+
+def handle_processes(c, cp_id):
+    return [
+        {'id': r['id'], 'name': r['name']}
+        for r in c.execute(
+            '''SELECT p.id, p.name FROM customer_product_processes x JOIN products p ON p.id=x.process_product_id
+               WHERE x.customer_product_id=? ORDER BY x.sort_order, p.id''', (cp_id,))
+    ]
+
+
+def _valid_process_ids(c, ids):
+    out = []
+    for v in ids or []:
+        try:
+            pid = int(v)
+        except (TypeError, ValueError):
+            raise ValueError('加工サービスを候補から選んでください。')
+        r = c.execute('SELECT category FROM products WHERE id=?', (pid,)).fetchone()
+        if not r or (r['category'] or '') != CATEGORY_PROCESS_SERVICE:
+            raise ValueError('加工サービスを候補から選んでください。')
+        if pid not in out:
+            out.append(pid)
+    return out
+
+
+def add_handle_processes(c, cp_id, ids):
+    """取扱へ加工サービスを追加（既にあれば何もしない）。追加件数を返す。"""
+    n = 0
+    base = c.execute('SELECT COALESCE(MAX(sort_order),-1)+1 FROM customer_product_processes WHERE customer_product_id=?',
+                     (cp_id,)).fetchone()[0]
+    for pid in _valid_process_ids(c, ids):
+        cur = c.execute('INSERT OR IGNORE INTO customer_product_processes(customer_product_id,process_product_id,sort_order) '
+                        'VALUES(?,?,?)', (cp_id, pid, base + n))
+        n += cur.rowcount or 0
+    return n
+
+
+def set_handle_processes(c, cp_id, ids):
+    """取扱の加工サービスを指定どおりに置き換える。"""
+    valid = _valid_process_ids(c, ids)
+    c.execute('DELETE FROM customer_product_processes WHERE customer_product_id=?', (cp_id,))
+    for i, pid in enumerate(valid):
+        c.execute('INSERT INTO customer_product_processes(customer_product_id,process_product_id,sort_order) VALUES(?,?,?)',
+                  (cp_id, pid, i))
 
 
 def ensure_unconfirmed_site(c):
@@ -991,6 +1081,15 @@ def _links(c, body):
         if not isinstance(customer_id, int) or not c.execute('SELECT id FROM customers WHERE id=?', (customer_id,)).fetchone():
             raise ValueError('取扱の顧客を、顧客台帳から選んでください。')
         embroidery = normalize_embroidery(optional(raw.get('embroidery'), '加工仕様', 80))
+        process_ids = raw.get('processIds')
+        if process_ids is not None:
+            if not isinstance(process_ids, list):
+                raise ValueError('加工サービスを候補から選んでください。')
+            process_ids = _valid_process_ids(c, process_ids)
+            if not embroidery and process_ids:
+                # 加工仕様の文字が空なら、選んだ加工サービス名を入れる（指示書・ピッキング等の表示用）
+                names = [c.execute('SELECT name FROM products WHERE id=?', (i,)).fetchone()['name'] for i in process_ids]
+                embroidery = normalize_embroidery('・'.join(names)[:80])
         key = (customer_id, embroidery)
         if key in seen:
             raise ValueError('同じ顧客で、同じ加工仕様が重複しています。加工ありとなしは別の行にしてください。')
@@ -1000,8 +1099,19 @@ def _links(c, body):
             if customer_id in standards:
                 raise ValueError('同じ顧客の標準仕様は1つだけにしてください。')
             standards.add(customer_id)
-        links.append({'customerId': customer_id, 'embroidery': embroidery, 'isStandard': standard, 'active': flag(raw.get('active', True))})
+        links.append({'customerId': customer_id, 'embroidery': embroidery, 'isStandard': standard,
+                      'active': flag(raw.get('active', True)), 'processIds': process_ids})
     return links
+
+
+def _save_link_processes(c, pid, links):
+    for link in links:
+        if link.get('processIds') is None:
+            continue
+        r = c.execute('SELECT id FROM customer_products WHERE customer_id=? AND product_id=? AND embroidery=?',
+                      (link['customerId'], pid, link['embroidery'])).fetchone()
+        if r:
+            set_handle_processes(c, r['id'], link['processIds'])
 
 
 def _sub_supplier_ids(c, body, primary_id):
@@ -1147,6 +1257,7 @@ def save_product(c, body):
                          VALUES(?,?,?,?,?,?,?)''',
                       (link['customerId'], pid, link['embroidery'], link['isStandard'], link['active'], t, t))
         _replace_sub_suppliers(c, pid, sub_ids or [], t)
+    _save_link_processes(c, pid, links)
     return product_row(c, pid)
 
 
@@ -1746,7 +1857,8 @@ def product_row(c, pid):
     for x in c.execute('''SELECT cp.*, cu.name AS customer_name FROM customer_products cp
                           JOIN customers cu ON cu.id=cp.customer_id WHERE cp.product_id=? ORDER BY cp.id''', (pid,)):
         links.append({'id': x['id'], 'customerId': x['customer_id'], 'customerName': x['customer_name'],
-                      'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active'])})
+                      'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active']),
+                      'processes': handle_processes(c, x['id'])})
     category = r['category'] if 'category' in r.keys() else ''
     code = r['code'] or ''
     merged_into = r['merged_into_id'] if 'merged_into_id' in r.keys() else None

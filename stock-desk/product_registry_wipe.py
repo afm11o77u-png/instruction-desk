@@ -248,6 +248,7 @@ def count_targets(c):
         'productSizes': safe('product_sizes'),
         'productSuppliers': safe('product_suppliers'),
         'customerProducts': safe('customer_products'),
+        'customerProductProcesses': safe('customer_product_processes'),
         'productMerges': safe('product_merges'),
         'productMergeSources': safe('product_merge_sources'),
         'productMatchAliases': safe('product_match_aliases'),
@@ -326,6 +327,8 @@ def _delete_registry(c):
         run_delete('productSuppliers', 'DELETE FROM product_suppliers')
     if 'product_sizes' in tables:
         run_delete('productSizes', 'DELETE FROM product_sizes')
+    if 'customer_product_processes' in tables:
+        run_delete('customerProductProcesses', 'DELETE FROM customer_product_processes')
     if 'customer_products' in tables:
         run_delete('customerProducts', 'DELETE FROM customer_products')
     if 'products' in tables:
