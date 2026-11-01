@@ -6844,6 +6844,13 @@ def mark_multi_color_groups(sku_groups, classified):
             row_colors = _row_explicit_colors(row)
             if row_colors and row_colors[0] not in colors:
                 colors.append(row_colors[0])
+            # 名前に括弧の色がなくても、行の色候補が複数なら品番単位で色を決める
+            pc = row.get('parenClassification') or {}
+            if len(rows_by_code.get(code) or []) > 1 and pc.get('needsConfirm') and len(pc.get('colorCandidates') or []) > 1:
+                for cand in pc.get('colorCandidates') or []:
+                    t = stock.text(cand)
+                    if t and t not in colors:
+                        colors.append(t)
         if len(colors) < 2:
             continue
         # 括弧外にも色があり行の色が確定しないときだけ（例: 白（ゴールド））
