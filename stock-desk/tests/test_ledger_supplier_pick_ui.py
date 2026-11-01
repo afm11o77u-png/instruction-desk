@@ -381,7 +381,8 @@ class SupplierPickUiDisplayTest(unittest.TestCase):
             self.assertFalse(u['hasAutoWhileUndecided'], u)
             self.assertFalse(u['allSettledWhileUnresolved'], u)
             self.assertFalse(u['planSaysAligned'], u)
-            self.assertTrue(u['hasPicker'], u)
+            # 方針未選択の「詳細を開く」は閲覧専用（仕入先選択は方針選択後の簡易フォーム）
+            self.assertFalse(u['hasPicker'], u)
             self.assertTrue(u['needsChoice'], u)
         finally:
             c.close()
