@@ -184,14 +184,12 @@ class ColorSplitPreviewCommitTest(unittest.TestCase):
             preview = pli.build_preview(c, body)
             group = next(g for g in preview['skuGroups'] if g['code'] == 'ABC-100')
             split = group['colorSplitPlans']
-            self.assertFalse(split['complete'])
-            self.assertTrue(split['unassignedRows'])
-            # 未割当があるうちはコミット不可
-            pending = [
-                r for r in preview['rows']
-                if r.get('status') == 'needs_review' and '色別' in ' '.join(r.get('reasons') or [])
-            ]
-            self.assertTrue(pending)
+            # 色なしの行は色別では自動で登録しない（推測で割り当てない）
+            self.assertEqual(split['unassignedRows'], [])
+            self.assertEqual(split['noColorRows'], [3])
+            row3 = next(r for r in preview['rows'] if r['rowNo'] == 3)
+            self.assertEqual(row3['status'], 'hold')
+            self.assertFalse(row3['canCommit'])
         finally:
             c.close()
             folder.cleanup()

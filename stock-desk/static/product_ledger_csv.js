@@ -2057,6 +2057,8 @@
     const plans=split.plans||[]
     const unassigned=split.unassignedRows||[]
     const colorOpts=plans.map(p=>`<option value="${esc(p.colorKey||p.color)}">${esc(p.color)}</option>`).join('')
+    const noColorN=(split.noColorRows||[]).length
+    const noColorNote=noColorN?`<p class="excelhint">色なし ${noColorN}行は登録しません</p>`:''
     const planCards=plans.map(p=>{
       const existing=(p.existingProducts||[]).map(x=>
         `<label class="check"><input type="radio" name="plColorKeep-${esc(g.code)}-${esc(p.colorKey)}" data-pl-color-keep="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${x.id}" ${Number(p.keepProductId)===Number(x.id)?'checked':''} ${st.busy?'disabled':''}>
@@ -2103,6 +2105,7 @@
       return `<div class="sku-color-split-form sku-split-quick" data-plan-edit="color">
         ${planCards||'<p class="notice">色候補をまだ作れません。商品名の色を確認するか、行き先を指定してください。</p>'}
         ${unCards?`<div class="sku-color-unassigned-list"><h4>行き先未定の行 <span class="sku-quick-need">【選択が必要】</span></h4>${unCards}</div>`:''}
+        ${noColorNote}
       </div>`
     }
     if(part==='rest'){
