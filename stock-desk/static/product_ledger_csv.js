@@ -1844,6 +1844,7 @@
         :'<p class="excelhint">通常仕入先は手動選択です（初期在庫CSVの再読込でも上書きしません）。</p>')
       :`<p class="excelhint">ここは品番単位の通常仕入先です。CSV各行の仕入先は行ごと／サブとして残します（先頭行の仕入先を自動では通常にしません）。</p>`
     if(popts.notesOnly)return `<div class="sku-primary-supplier-note">${note}</div>`
+    if(popts.selectOnly)return `<div class="sku-primary-supplier-pick" data-plan-edit="supplier"><label>通常仕入先${needs&&!chosen?'<span class="sku-quick-need">【選択が必要】</span>':''}<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}>${opts.join('')}</select></label></div>`
     return `<div class="sku-primary-supplier-pick" data-plan-edit="supplier">
       <label>通常仕入先<select data-pl-primary-sup="${esc(g.code)}" ${st.busy?'disabled':''}>${opts.join('')}</select></label>
       ${note}
@@ -1894,7 +1895,8 @@
     return '未決定'
   }
 
-  function contentSplitFormHtml(st,g,d){
+  function contentSplitFormHtml(st,g,d,fopts){
+    const part=(fopts&&fopts.part)||''
     const split=g.contentSplitPlans||{}
     const plans=split.plans||[]
     const unassigned=split.unassignedRows||[]
@@ -1914,6 +1916,31 @@
              <label class="check"><input type="radio" name="plContentKeep-${esc(g.code)}-${esc(p.contentKey)}" data-pl-content-keep="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="" ${!p.keepProductId?'checked':''} ${st.busy?'disabled':''}>品番を編集して新規</label>
            </fieldset>`
         :(!isProc&&p.collision&&p.keepProductId?`<p class="excelhint">既存商品 ID ${esc(String(p.keepProductId))} を使用予定</p>`:'')
+      if(isProc&&part==='quick'){
+        return `<div class="sku-content-plan" data-content-key="${esc(p.contentKey)}" data-kind="process_service">
+          <strong>加工サービス</strong>
+          <label>加工名<input data-pl-content-service="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.serviceName||'')}" ${st.busy?'disabled':''}></label>
+          <label>加工業者<input data-pl-content-vendor="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.vendorName||'')}" ${st.busy?'disabled':''}></label>
+        </div>`
+      }
+      if(part==='rest'){
+        if(isProc)return `<div class="sku-content-plan-detail" data-content-key="${esc(p.contentKey)}">
+          <strong>加工サービス: ${esc(p.serviceName||p.productName||'—')}</strong>
+          <span class="sub">CSV行 ${(p.rowNos||[]).join(',')||'—'}　メーカー／旧CSV品番 ${esc(p.makerCode||g.code)}　サイズ ${(p.sizes||[]).join('、')||'—'}</span>
+          <label>補足／個別仕様<input data-pl-content-notes="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.notes||'')}" ${st.busy?'disabled':''}></label>
+          <p class="excelhint">同名・同業者のみ再利用。別加工名は別名統合しません。仕入先・色・素材・仕様はソース行から継承（一括上書きしません）。</p>
+        </div>`
+        return `<div class="sku-content-plan-detail" data-content-key="${esc(p.contentKey)}"><span class="sub">${esc(p.productName||'—')}：CSV行 ${(p.rowNos||[]).join(',')||'—'}　メーカー／旧CSV品番 ${esc(p.makerCode||g.code)}　仕入 ${esc(p.supplier||'—')}</span></div>`
+      }
+      if(part==='quick'){
+        return `<div class="sku-content-plan" data-content-key="${esc(p.contentKey)}" data-kind="product">
+          <strong>商品</strong>
+          <label>社内管理品番${p.needsCollisionChoice?'<span class="sku-quick-need">【選択が必要】</span>':''}<input data-pl-content-internal="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.internalCode||'')}" placeholder="${esc(p.suggestedInternalCode||'')}" ${st.busy?'disabled':''}></label>
+          ${collision}
+          <label>商品名<input data-pl-content-name="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.productName||'')}" ${st.busy?'disabled':''}></label>
+          <label>色<input data-pl-content-color="${esc(g.code)}" data-pl-content-key="${esc(p.contentKey)}" value="${esc(p.color||'')}" ${st.busy?'disabled':''}></label>
+        </div>`
+      }
       if(isProc){
         return `<div class="sku-content-plan" data-content-key="${esc(p.contentKey)}" data-kind="process_service">
           <strong>加工サービス: ${esc(p.serviceName||p.productName||'—')}</strong>
@@ -1938,6 +1965,22 @@
     const unCards=unassigned.map(u=>`<div class="sku-content-unassigned">
       <span>行 ${u.rowNo}: ${esc(u.originalName||'')} — ${esc(u.reason||'')}</span>
     </div>`).join('')
+    if(part==='quick'){
+      if(pending&&!hasPlans)return `<div class="sku-content-split-form sku-split-quick" data-plan-edit="content"><p class="notice">内容別分割案・未反映。登録先は再照合後に設定できます。</p></div>`
+      return `<div class="sku-content-split-form sku-split-quick" data-plan-edit="content">
+        ${planCards||'<p class="notice">内容候補をまだ作れません。商品名／加工名を確認してください。</p>'}
+        ${unCards?`<div class="sku-content-unassigned-list"><h4>行き先未定の行 <span class="sku-quick-need">【選択が必要】</span></h4>${unCards}</div>`:''}
+      </div>`
+    }
+    if(part==='rest'){
+      return `<div class="sku-split-rest">
+        <p class="excelhint">${esc(split.note||'内容ごとに別登録先として登録予定です。まだ保存していません。')}</p>
+        ${pending?splitPreRematchTargetsHtml(st,g,'content_split'):''}
+        ${hasPlans?`<p class="excelhint">予定: ${esc(contentSplitSummaryForGroup(g))}。サイズだけの差は統合します。メーカー品番・旧CSV品番は元の「${esc(g.code)}」のままです。</p>`:''}
+        ${planCards}
+        ${split.complete?'<p class="excelhint">予定は揃っています。再照合のあと一括登録で確定できます。</p>':'<p class="excelhint">未定の行き先・品番衝突・加工名／業者を解消してから再照合してください。</p>'}
+      </div>`
+    }
     if(pending&&!hasPlans){
       const n=contentSplitPlannedCount(g)
       return `<div class="sku-content-split-form" data-plan-edit="content">
@@ -1956,7 +1999,8 @@
     </div>`
   }
 
-  function colorSplitFormHtml(st,g,d){
+  function colorSplitFormHtml(st,g,d,fopts){
+    const part=(fopts&&fopts.part)||''
     const split=g.colorSplitPlans||{}
     const plans=split.plans||[]
     const unassigned=split.unassignedRows||[]
@@ -1975,6 +2019,14 @@
         :(p.collision&&p.keepProductId?`<p class="excelhint">既存商品 ID ${esc(String(p.keepProductId))} を使用予定</p>`:'')
       const sizes=(p.sizes&&p.sizes.length)?p.sizes:sizesForColorPlan(st,g,p)
       const pendingBadge=skuDecisionPendingRematch(st,g.code)?'色別分割案・未反映':(p.statusLabel||'確認済み')
+      if(part==='rest')return `<div class="sku-color-plan-detail" data-color-key="${esc(p.colorKey)}"><span class="sub">${esc(colorSplitTargetLabel(p))}：区分 ${esc(p.category||'商品')}　仕入 ${esc(p.supplier||plannedSupplierForGroup(st,g)||'—')}　サイズ ${esc(sizes.join('、')||'—')}　CSV行 ${(p.rowNos||[]).join(',')||'—'}　メーカー品番 ${esc(p.makerCode||g.code)}</span></div>`
+      if(part==='quick')return `<div class="sku-color-plan" data-color-key="${esc(p.colorKey)}">
+        <strong>${esc(p.color||'—')}</strong>
+        <label>社内管理品番${p.needsCollisionChoice?'<span class="sku-quick-need">【選択が必要】</span>':''}<input data-pl-color-internal="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${esc(p.internalCode||'')}" placeholder="${esc(p.suggestedInternalCode||'')}" ${st.busy?'disabled':''}></label>
+        ${collision}
+        <label>商品名<input data-pl-color-name="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${esc(p.productName||'')}" ${st.busy?'disabled':''}></label>
+        <label>色<input data-pl-color-color="${esc(g.code)}" data-pl-color-key="${esc(p.colorKey)}" value="${esc(p.color||'')}" ${st.busy?'disabled':''}></label>
+      </div>`
       return `<div class="sku-color-plan" data-color-key="${esc(p.colorKey)}">
         <strong>${esc(colorSplitTargetLabel(p))}</strong>
         <span class="badge">${esc(pendingBadge)}</span>
@@ -1994,6 +2046,22 @@
     const pending=skuDecisionPendingRematch(st,g.code)
     const hasPlans=!!plans.length
     // 再照合前は色別予定が無い／古い統合対応表を確定予定として出さない
+    if(part==='quick'){
+      if(pending&&!hasPlans)return `<div class="sku-color-split-form sku-split-quick" data-plan-edit="color"><p class="notice">色別分割案・未反映。登録先は再照合後に設定できます。</p></div>`
+      return `<div class="sku-color-split-form sku-split-quick" data-plan-edit="color">
+        ${planCards||'<p class="notice">色候補をまだ作れません。商品名の色を確認するか、行き先を指定してください。</p>'}
+        ${unCards?`<div class="sku-color-unassigned-list"><h4>行き先未定の行 <span class="sku-quick-need">【選択が必要】</span></h4>${unCards}</div>`:''}
+      </div>`
+    }
+    if(part==='rest'){
+      return `<div class="sku-split-rest">
+        <p class="excelhint">${esc(split.note||'色ごとに別商品として登録予定です。まだ保存していません。')}</p>
+        ${pending?splitPreRematchTargetsHtml(st,g,'color_split'):''}
+        <p class="excelhint">メーカー品番は元の「${esc(g.code)}」のまま（先頭ゼロも維持）。社内管理品番の初期値は「品番-色」です。緑と蛍光グリーンは別色です。黒↔白の別名統合はしません。</p>
+        ${planCards}
+        ${split.complete?'<p class="excelhint">予定は揃っています。再照合のあと一括登録で確定できます。</p>':'<p class="excelhint">未定の行き先・品番衝突を解消してから再照合してください。</p>'}
+      </div>`
+    }
     if(pending&&!hasPlans){
       const n=colorSplitPlannedCount(g)
       return `<div class="sku-color-split-form" data-plan-edit="color">
@@ -2081,6 +2149,7 @@
       const checked=(d.mergeSourceIds||[]).map(Number).includes(Number(p.id))||(decision==='merge'&&g.existingCount>1&&d.keepProductId)
       return `<label class="check"><input type="checkbox" data-pl-merge-src="${esc(g.code)}" value="${p.id}" ${checked?'checked':''} ${st.busy||decision!=='merge'||!d.keepProductId?'disabled':''}>統合元 ID ${p.id}</label>`
     }).join('')
+    const sepQuick=[],sepRest=[]
     const variantPlans=(g.variants||[]).map(v=>{
       const plans=(d.plans&&typeof d.plans==='object')?d.plans:{}
       const plan=plans[v.key]||{}
@@ -2096,6 +2165,25 @@
           <label>補足／個別仕様<input data-pl-sep-supp="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(supplement)}" placeholder="位置・寸法・顧客固有など" ${st.busy||decision!=='separate'?'disabled':''}></label>
           <p class="excelhint">加工名が登録・表示名です（別の表示名欄はありません）。衣服品番は加工SKUに使いません。同名・同業者のみ再利用し、別加工名は別名統合しません。</p>
         </div>`:''
+      const sepDis=st.busy||decision!=='separate'
+      sepQuick.push(`<div class="sku-variant-plan" data-variant-key="${esc(v.key)}">
+        <strong>${esc(v.productName||'（名なし）')}</strong>
+        <label>整理方法${plan.approach?'':'<span class="sku-quick-need">【選択が必要】</span>'}<select data-pl-sep-approach="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" ${sepDis?'disabled':''}>
+          <option value="">選択…</option>
+          <option value="change_code" ${plan.approach==='change_code'?'selected':''}>品番を修正して登録</option>
+          <option value="as_parts" ${plan.approach==='as_parts'?'selected':''}>部品・資材として整理</option>
+          <option value="as_process_service" ${plan.approach==='as_process_service'?'selected':''}>加工サービスとして整理</option>
+          <option value="as_blank" ${plan.approach==='as_blank'?'selected':''}>品番なしとして整理</option>
+          <option value="defer" ${plan.approach==='defer'?'selected':''}>この内容は保留</option>
+        </select></label>
+        ${plan.approach==='change_code'?`<label>修正品番<input data-pl-sep-code="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(plan.newCode||'')}" placeholder="別の品番" ${sepDis?'disabled':''}></label>`:''}
+        ${isProc?`<label>加工名<input data-pl-sep-service="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(serviceName)}" placeholder="例: ライン加工" ${sepDis?'disabled':''}></label>
+        <label>加工業者<input data-pl-sep-vendor="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(vendorName)}" placeholder="CSV仕入先" ${sepDis?'disabled':''}></label>`:''}
+      </div>`)
+      sepRest.push(`<div class="sku-variant-plan-detail" data-variant-key="${esc(v.key)}">
+        <span class="sub">${esc(v.productName||'（名なし）')}：仕入 ${esc(v.supplier||'未設定')}　サイズ ${(v.sizes||[]).map(esc).join('、')||'—'}　顧客 ${(v.customers||[]).slice(0,3).map(esc).join('、')}${(v.customers||[]).length>3?'…':''}　CSV行 ${(v.rowNos||[]).join(',')||'—'}</span>
+        ${isProc?`<label>補足／個別仕様<input data-pl-sep-supp="${esc(g.code)}" data-pl-sep-key="${esc(v.key)}" value="${esc(supplement)}" placeholder="位置・寸法・顧客固有など" ${sepDis?'disabled':''}></label>`:''}
+      </div>`)
       return `<div class="sku-variant-plan" data-variant-key="${esc(v.key)}">
         <strong>${esc(v.productName||'（名なし）')}</strong>
         <span class="sub">仕入 ${esc(v.supplier||'未設定')}　サイズ ${(v.sizes||[]).map(esc).join('、')||'—'}　顧客 ${(v.customers||[]).slice(0,3).map(esc).join('、')}${(v.customers||[]).length>3?'…':''}　CSV行 ${(v.rowNos||[]).join(',')||'—'}</span>
@@ -2166,19 +2254,28 @@
     const colspan=Number(opts.colspan)||SKU_COMPARE_COL_COUNT
     const decisionPending=!!(decision&&skuDecisionPendingRematch(st,g.code))
     const isMerge=decision==='merge'
+    const isSeparate=decision==='separate'
+    const compact=isMerge||isColorSplit||isContentSplit||isSeparate
+    const quickHtml=isMerge?mergeQuickFormHtml(st,g,d)
+      :(compact?`<div class="sku-merge-quick sku-split-quick-wrap" data-pl-merge-quick="${esc(g.code)}">
+        ${isColorSplit?colorSplitFormHtml(st,g,d,{part:'quick'}):''}
+        ${isContentSplit?contentSplitFormHtml(st,g,d,{part:'quick'}):''}
+        ${isSeparate?`<div class="sku-separate-form">${sepQuick.join('')}</div>`:''}
+        ${normalSupplierPickerHtml(st,g,d,{selectOnly:true})}
+      </div>`:'')
     const hideDecisionBtns=!!(opts.hideDecisionButtons||(st.reselectCodes&&st.reselectCodes[g.code]))
     return `<tr class="sku-detail-row" data-sku-detail="${esc(g.code)}"><td colspan="${colspan}">
       <div class="sku-detail-body">
-        ${isMerge?`${hideDecisionBtns?'':skuDecisionButtonsHtml(st,g)}${mergeQuickFormHtml(st,g,d)}
+        ${compact?`${hideDecisionBtns?'':skuDecisionButtonsHtml(st,g)}${quickHtml}
         <details class="sku-more-details" data-pl-more-details="${esc(g.code)}" ${st.moreDetailsOpen&&st.moreDetailsOpen[g.code]?'open':''}><summary>その他の詳細</summary>`:''}
         <p class="excelhint">顧客: ${esc(customers.join('、')||'—')}　サイズ: ${esc(sizes.join('、')||'—')}　CSV行: ${esc(rowNos||'—')}</p>
         ${decisionPending?`<p class="notice">${esc((skuSupplierPendingRematch(st,g.code)&&appliedDecisionForCode(st,g.code)===(decision||''))?pendingSupplierLabel():pendingDecisionLabel(decision))} — 登録予定の再計算は「選択を反映して再照合」でまとめて行います（選択だけでは登録・全件再計算しません）。</p>`:''}
         ${namePlanBlock}
         ${isColorSplit||isContentSplit?'':auxPanel}
-        ${hideDecisionBtns||isMerge?'':skuDecisionButtonsHtml(st,g)}
-        ${normalSupplierPickerHtml(st,g,d,{notesOnly:isMerge})}
-        ${decision==='color_split'?colorSplitFormHtml(st,g,d):''}
-        ${decision==='content_split'?contentSplitFormHtml(st,g,d):''}
+        ${hideDecisionBtns||compact?'':skuDecisionButtonsHtml(st,g)}
+        ${normalSupplierPickerHtml(st,g,d,{notesOnly:compact})}
+        ${decision==='color_split'?colorSplitFormHtml(st,g,d,{part:'rest'}):''}
+        ${decision==='content_split'?contentSplitFormHtml(st,g,d,{part:'rest'}):''}
         ${decision==='merge'?`<div class="sku-merge-form">
           ${decisionPending&&(namePlan.colorSplit||namePlan.contentSplit||!(namePlan.nameMappings||[]).length)?'<p class="excelhint">統合用の名称予定は再照合後に設定できます。代表名・色・通常仕入先は今すぐ編集できます（方針切替では消しません）。</p>':''}
           ${nameColorSplitPreviewHtml(Object.assign({},g,g.auxPrimary||{},{productName:plannedNameForGroup(st,g),color:d.color||g.plannedRegisteredColor||g.plannedColor||''}))}
@@ -2192,13 +2289,13 @@
         ${decision==='separate'?`<div class="sku-separate-form">
           <p class="excelhint">同じ通常品番のまま別商品として新規登録はできません。品番修正・部品・資材・加工サービス・品番なし・保留のいずれかを内容ごとに選んでください。</p>
           ${decisionPending?'<p class="excelhint">個別整理の内容は保持します。登録予定への反映は再照合後です。</p>':''}
-          ${variantPlans}
+          ${sepRest.join('')}
         </div>`:''}
         ${decision==='hold'?`<div class="sku-hold-form">
           <label>保留理由<input data-pl-defer-reason="${esc(g.code)}" value="${esc(d.deferReason||'')}" placeholder="例: 制服本体と加工サービスの切り分けが未確定" ${st.busy?'disabled':''}></label>
           <p class="excelhint">この品番は今回登録しません。同じCSVを後で再読込して処理できます。${decisionPending?'【未反映】再照合で登録予定へ反映します。':''}</p>
         </div>`:''}
-        ${isMerge?'</details>':''}
+        ${compact?'</details>':''}
       </div>
     </td></tr>`
   }
@@ -2907,11 +3004,15 @@
     }).join('')
     const rowNos=(item.rowNos||[]).length
       ?`<p class="excelhint">元CSV行: ${(item.rowNos||[]).join(', ')}</p>`:''
+    const itemDec=item.kind==='sku'&&item.group?(skuDecision(st,item.group.code).decision||''):''
+    const collapse=['merge','color_split','content_split','separate'].includes(itemDec)
+    const moreKey='rows:'+String(item.id)
+    const inner=`<p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。登録予定の未確定項目は下の入力欄で選択・編集してください（まだ未登録）。</p>
+        ${rowNos}
+        ${body}`
     return `<tr class="sku-detail-row unified-detail-row" data-unified-detail="${esc(item.id)}"><td colspan="${UNIFIED_REVIEW_COL_COUNT}">
       <div class="sku-detail-body">
-        <p class="excelhint">対象内の行だけを編集します。品番単位の操作で別行の個別仕様を一律上書きしません。行ごとの「この行を登録しない」は品番の「保留」とは別です。登録予定の未確定項目は下の入力欄で選択・編集してください（まだ未登録）。</p>
-        ${rowNos}
-        ${body}
+        ${collapse?`<details class="sku-more-details" data-pl-more-details="${esc(moreKey)}" ${st.moreDetailsOpen&&st.moreDetailsOpen[moreKey]?'open':''}><summary>その他の詳細（行ごとの編集 ${rows.length}行）</summary>${inner}</details>`:inner}
       </div>
     </td></tr>`
   }
@@ -3033,7 +3134,7 @@
       if(rowNos.has(Number(r.rowNo)))add((r.csv||{}).size)
     })
     if(sizes.length)return sizes
-    ;(g.variants||[]).forEach(v=>{
+    const variantPlans=(g.variants||[]).map(v=>{
       const overlap=(v.rowNos||[]).some(rn=>rowNos.has(Number(rn)))
       if(overlap)(v.sizes||[]).forEach(add)
     })
