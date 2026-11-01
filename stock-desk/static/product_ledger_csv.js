@@ -1068,8 +1068,40 @@
     if(b64&&estimatePostBodyBytes(file&&file.name||'',b64)>MAX_POST_BODY_BYTES)throw Error(OVERSIZE_MSG)
   }
 
+  const SESSION_EXPIRED_MSG='ログインが切れました。別のタブでログインし直してから、もう一度押してください（選択は残っています）。'
+  function isSessionExpired(e){
+    return !!e&&(e.status===401||/ログインしてください/.test(String((e.payload&&e.payload.error)||e.message||'')))
+  }
+
+  /** 未登録の選択を同じファイル名・サイズの再読込で戻せるよう保存（ログイン切れ対策）。 */
+  const DRAFT_FIELDS=['selections','skuDecisions','rowClassifications','rowExclusions']
+  function draftKey(st){
+    return st&&st.fileName?`plLedgerDraft:${st.fileName}:${st.fileSize||0}`:''
+  }
+  function saveDraft(st){
+    const k=draftKey(st);if(!k)return
+    const d={};DRAFT_FIELDS.forEach(f=>{d[f]=st[f]||{}})
+    try{localStorage.setItem(k,JSON.stringify(d))}catch(_){}
+  }
+  function restoreDraft(st){
+    const k=draftKey(st);if(!k)return false
+    let d=null
+    try{d=JSON.parse(localStorage.getItem(k)||'null')}catch(_){d=null}
+    if(!d||typeof d!=='object')return false
+    let any=false
+    DRAFT_FIELDS.forEach(f=>{
+      if(d[f]&&typeof d[f]==='object'&&Object.keys(d[f]).length){st[f]=d[f];any=true}
+    })
+    return any
+  }
+  function clearDraft(st){
+    const k=draftKey(st);if(!k)return
+    try{localStorage.removeItem(k)}catch(_){}
+  }
+
   function apiErrorMessage(e,fallback){
     if(!e)return fallback
+    if(isSessionExpired(e))return SESSION_EXPIRED_MSG
     const fromPayload=e.payload&&(e.payload.error||e.payload.message)
     let msg=fromPayload||e.message||''
     if(/failed to fetch|networkerror|load failed|communication/i.test(msg)){
@@ -5854,6 +5886,7 @@
       const b64=await readFileAsBase64(f)
       assertUploadSize(f,b64)
       st.fileB64=b64
+      if(restoreDraft(st))st.toast('前回の選択を戻しました',4000)
       try{
         st.history=await st.api('/api/product-ledger-csv/history',{name:f.name,file:st.fileB64})
         st.historyError=''
@@ -6112,6 +6145,7 @@
       st.previewError=''
       st.progressLabel=isOpeningMode(st)?'CSVを読み込み中…':'CSVを読み込み中…'
       st.busy=true;paintPreview()
+      saveDraft(st)
       try{
         st.progressLabel=isOpeningMode(st)?'初期在庫の登録予定を作成中…':'商品を照合中…'
         paintPreview()
@@ -6871,6 +6905,7 @@
         commitBody.previewAt=st.preview.previewAt
         commitBody.token=st.commitToken
         st.result=await st.api('/api/product-ledger-csv/commit',commitBody)
+        clearDraft(st)
         st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         if(typeof st.boot==='function')await st.boot()
         st.toast(isOpeningMode(st)?'初期在庫の登録が完了しました':'商品登録が完了しました（在庫は書いていません）')
@@ -6960,6 +6995,10 @@
       splitPreRematchTargetsHtml,
       DECISION_BLURBS,
       contentSplitFormHtml,
+      apiErrorMessage,
+      saveDraft,
+      restoreDraft,
+      clearDraft,
       separateProcessServiceConfirmedDetailHtml,
       detectedProcessServiceForVariant,
       initSeparateProcessServicePlan,

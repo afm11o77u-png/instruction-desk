@@ -848,7 +848,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if not (STOCK_ROOT / 'server.py').is_file(): return self.reply(503, {'error':'在庫管理の置き場所が見つかりません。'})
         with connect() as c:
             u=self.session_user(c)
-        if not u: return self.reply(401, {'error':'ログインしてください。'})
+        if not u:
+            # 画面遷移で JSON を表示しない（ログイン画面へ戻す）
+            if not path.startswith('/inventory/api'):
+                return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': '/'})
+            return self.reply(401, {'error':'ログインしてください。'})
         if u['must_change']: return self.reply(403, {'error':'最初に仮パスワードを変更してください。'})
         if u['role']!='owner' and not u['manage'] and not u['overview']: return self.reply(403, {'error':'在庫管理は主管理者と管理者が使用します。'})
         # overview-only (no manage) is read-only for stock quantity changes.

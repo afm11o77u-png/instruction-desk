@@ -395,6 +395,12 @@ async function api(path,data){
   let result={}
   try{result=await r.json()}catch(_){result={}}
   if(!r.ok){
+    if(r.status===401){
+      const err=Error('ログインが切れました。ログインし直してください。')
+      err.status=401;err.payload=result
+      toast(err.message,8000)
+      throw err
+    }
     const msg=result.error||(r.status===413?'ファイル容量が上限を超えています':'処理できませんでした。')
     const err=Error(msg)
     err.status=r.status
