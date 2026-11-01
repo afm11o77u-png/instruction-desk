@@ -2,6 +2,14 @@
 import hashlib, hmac, secrets, time, re, sqlite3, json
 from http.cookies import SimpleCookie
 
+SESSION_IDLE_SECONDS=12*3600  # 無操作で切れるまで（操作のたびに延長）
+SESSION_REFRESH_SECONDS=60  # 延長の書き込み間隔
+
+
+def session_cookie(token):
+    return f'desk_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={SESSION_IDLE_SECONDS}'
+
+
 def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -97,13 +105,21 @@ class AuthMixin:
         try:
             cookie=SimpleCookie(self.headers.get('Cookie','')); token=cookie['desk_session'].value
         except (KeyError, Exception): return None
-        return c.execute('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1',(digest(token),time.time())).fetchone()
+        now=time.time()
+        row=c.execute('SELECT u.*, s.expires AS session_expires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1',(digest(token),now)).fetchone()
+        if row and row['session_expires']<now+SESSION_IDLE_SECONDS-SESSION_REFRESH_SECONDS:
+            # 操作中は延長（最後の操作から SESSION_IDLE_SECONDS で切れる）
+            c.execute('UPDATE sessions SET expires=? WHERE token=?',(now+SESSION_IDLE_SECONDS,digest(token)))
+            c.commit()
+            if not getattr(self,'cookie',None):
+                self.cookie=session_cookie(token)
+        return row
 
     def new_session(self,c,uid):
         token=secrets.token_urlsafe(32)
         c.execute('DELETE FROM sessions WHERE expires<=?',(time.time(),))
-        c.execute('INSERT INTO sessions VALUES(?,?,?)',(digest(token),uid,time.time()+28800))
-        self.cookie=[f'desk_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800','desk_gate=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0']
+        c.execute('INSERT INTO sessions VALUES(?,?,?)',(digest(token),uid,time.time()+SESSION_IDLE_SECONDS))
+        self.cookie=[session_cookie(token),'desk_gate=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0']
 
     def gate_user(self,c):
         try:
