@@ -1284,6 +1284,14 @@ def _span_overlaps_blocked(start: int, end: int, blocked) -> bool:
     return False
 
 
+def _is_kana(ch: str) -> bool:
+    return bool(ch) and ('\u3041' <= ch <= '\u309f' or '\u30a0' <= ch <= '\u30ff')
+
+
+def _short_kana_term(term: str) -> bool:
+    return len(term) <= 2 and all(_is_kana(c) for c in term)
+
+
 def find_explicit_colors_in_text(text: str):
     """辞書色を境界付きで列挙（長い語優先・重複区間は短い方を捨てる）。
 
@@ -1325,6 +1333,12 @@ def find_explicit_colors_in_text(text: str):
             if _span_overlaps_blocked(idx, end, blocked):
                 continue
             if not _is_free(idx, end):
+                continue
+            # 短いかな色（キン・コン・チャ 等）は語の途中なら色にしない（ズキン の キン）
+            if _short_kana_term(term) and (
+                _is_kana(search[idx - 1] if idx > 0 else '')
+                or _is_kana(search[end] if end < len(search) else '')
+            ):
                 continue
             # 長い語を先に処理しているので、既占有で短い方は弾かれる
             display = _display_for('color', term, term)

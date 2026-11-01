@@ -743,6 +743,7 @@ def row_map_key(*, customer, code, product_name, size, supplier):
 
 
 # 今回の取り込みだけ「今回登録しない」。恒久ルールにはしない。
+COLOR_SPLIT_NO_COLOR_REASON = '色なしのため登録しない'
 USER_ROW_EXCLUDE_REASON = '利用者が今回登録しないと指定'
 USER_ROW_EXCLUDE_REASON_LEGACY = 'この行を登録しない（今回の取り込み）'
 # 自動除外（K2 加工内容不明など）。手動除外と理由を区別する。
@@ -4365,6 +4366,7 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
             bucket['rowSpecsSamples'] = samples[:12]
 
     row_info_by_no = {}
+    no_color_rows = []
     for row in source_rows:
         row_no = int(row.get('rowNo') or 0)
         info = _row_color_extraction(row)
@@ -4382,6 +4384,10 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
             if bucket:
                 _inherit_color_row(bucket, row, info, preferred_name)
                 continue
+        if not (info.get('needsConfirm') or info.get('colorCandidates')):
+            # 色の手がかりがない行は色別では登録しない
+            no_color_rows.append(row_no)
+            continue
         unassigned_rows.append({
             'rowNo': row_no,
             'originalName': info.get('originalName') or '',
@@ -4484,6 +4490,7 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
         'plans': plans,
         'planCount': len(plans),
         'unassignedRows': unassigned_rows,
+        'noColorRows': no_color_rows,
         'complete': complete,
         'summaryLabel': color_split_summary_label(plans),
         'nameMappings': name_mappings,
@@ -8862,6 +8869,11 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                     plan_by_row[int(rn)] = plan
 
             row_no = int(row.get('rowNo') or 0)
+            if row_no in {int(x) for x in (split_info.get('noColorRows') or [])}:
+                _mark_row_excluded_from_registration(
+                    row, reason=COLOR_SPLIT_NO_COLOR_REASON, exclusion_kind='auto',
+                )
+                continue
             if row_no in unassigned or row_no not in plan_by_row:
                 row['status'] = STATUS_REVIEW
                 row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
