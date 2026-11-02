@@ -4046,7 +4046,11 @@ def _row_color_extraction(row):
     pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
     provenance = row.get('specProvenance') if isinstance(row.get('specProvenance'), dict) else {}
     split = paren_classify.split_name_and_color(name)
-    extracted = paren_classify.extract_explicit_color_from_name(name)
+    # ○○ラインは仕様なので、色の抽出からは外す
+    line_rest, line_specs = paren_classify.extract_line_specs(name)
+    extracted = paren_classify.extract_explicit_color_from_name(
+        line_rest if line_specs and line_rest else name
+    )
     color = stock.text(
         provenance.get('color')
         or pc.get('color')
@@ -8786,6 +8790,40 @@ def _apply_auto_merge_official_names(classified, sku_groups):
         row['product'] = prod
 
 
+
+def auto_line_spec_sku_decisions(uploaded, sku_decisions):
+    """同じ品番で取扱の仕様（○○ライン／なし）だけが違う行は自動で「まとめる」。
+
+    商品名・衣類の色・ほかの加工が同じで、ライン仕様だけが違う品番が対象。
+    利用者が判断済みの品番はそのまま。戻り値: (判断dict, 自動決定した品番の一覧)
+    """
+    decisions = dict(sku_decisions) if isinstance(sku_decisions, dict) else {}
+    groups = {}
+    for _row_no, item in uploaded.get('rows') or []:
+        code = stock.text(item.get('商品コード'))
+        if not code:
+            continue
+        rest, specs = paren_classify.extract_line_specs(stock.text(item.get('商品名')))
+        d = paren_classify.split_name_and_color(rest or stock.text(item.get('商品名')))
+        key = (
+            stock.text(d.get('plannedName')), stock.text(d.get('colorKey') or d.get('color')),
+            stock.text(d.get('processing')), stock.text(d.get('material')),
+        )
+        groups.setdefault(code, []).append((key, '・'.join(specs) if rest else ''))
+    auto = []
+    for code, items in groups.items():
+        if len(items) < 2 or code in decisions:
+            continue
+        if len({k for k, _ in items}) != 1:
+            continue  # 色・名前などが違う → 既存の判断（色別など）
+        specs = {sp for _, sp in items}
+        if not any(specs) or len(specs) < 2:
+            continue
+        decisions[code] = {'decision': SKU_DECISION_MERGE, 'autoLineSpec': True}
+        auto.append(code)
+    return decisions, auto
+
+
 def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
     """品番決定を行ステータスへ反映。
 
@@ -9792,6 +9830,7 @@ def build_preview(c, body):
     mode = resolve_import_mode(body, aux_uploaded)
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
     sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
+    sku_decisions, auto_line_codes = auto_line_spec_sku_decisions(uploaded, sku_decisions)
     row_classifications = (
         body.get('rowClassifications') if isinstance(body.get('rowClassifications'), dict) else {}
     )
@@ -9883,6 +9922,9 @@ def build_preview(c, body):
     apply_aux_full_package_adoption(sku_groups, sku_decisions)
     # 同名で色だけ違う行は自動まとめにせず、まとめる／色別の選択を出す
     mark_multi_color_groups(sku_groups, classified)
+    for g in sku_groups:
+        if str(g.get('code')) in auto_line_codes:
+            g['autoLineSpecMerge'] = True  # 仕様だけ違う → 自動決定済み
     # 色別に分けて登録: 選択を再照合でも保持し、在庫自動まとめ対象外の予定を付与
     attach_color_split_plans(c, sku_groups, sku_decisions, classified=classified)
     # 内容別に分けて登録: 色別とは独立。件数見積りは常時、予定は選択時
@@ -9996,6 +10038,14 @@ def build_preview(c, body):
         )
         g['plannedPrimarySupplierSource'] = source
     decision_meta = _apply_sku_decisions(c, classified, sku_groups, sku_decisions)
+    # 仕様だけ違う品番の「ラインなし」行は 仕様なし（加工なし）の取扱にする
+    for r in classified:
+        code_r = stock.text((r.get('csv') or {}).get('productCode') or (r.get('csv') or {}).get('code') or '')
+        if code_r in auto_line_codes and not _row_line_spec(r):
+            h = r.get('handle')
+            if isinstance(h, dict) and not h.get('id'):
+                h['embroidery'] = ''
+                h['plainSpec'] = True
     _attach_product_plans(classified, sku_groups)
     _apply_auto_merge_official_names(classified, sku_groups)
     _apply_paren_names_after_sku_plans(classified, sku_groups)
@@ -10209,6 +10259,7 @@ def build_preview(c, body):
         'rowCount': len(classified),
         'rows': classified,
         'skuGroups': sku_groups,
+        'autoLineSpecCodes': auto_line_codes,
         'processServices': registered_process_services(c),
         'skuGroupCount': len(sku_groups),
         'skuDecisionPending': decision_meta['pendingDecisionGroups'],
@@ -10720,6 +10771,11 @@ def _ensure_handle(c, customer_id, product_id, handle_info):
     info = handle_info if isinstance(handle_info, dict) else {}
     if info.get('id'):
         return legacy._ensure_handle(c, customer_id, product_id, info)
+    if info.get('plainSpec'):
+        saved = stock.ensure_customer_product(c, {
+            'customerId': customer_id, 'productId': product_id, 'embroidery': '',
+        })
+        return saved['id'], not saved.get('already')
     emb = stock.text(info.get('embroidery') or '')
     proposed = stock.text(info.get('proposedEmbroidery') or '')
     if info.get('fromParenClassification') and (emb or proposed):
@@ -11029,6 +11085,7 @@ def commit_preview(c, body, *, db_path=None):
     uploaded = decode_upload(body)
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
     sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
+    sku_decisions, _auto = auto_line_spec_sku_decisions(uploaded, sku_decisions)
 
     review_rows = [r for r in classified if r['status'] == STATUS_REVIEW]
     excluded_rows = [r for r in classified if r['status'] == STATUS_EXCLUDED]
