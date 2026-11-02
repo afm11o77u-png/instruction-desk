@@ -70,6 +70,30 @@ class ImportTest(unittest.TestCase):
         self.assertEqual(c.execute("SELECT COUNT(*) FROM products WHERE code='H1'").fetchone()[0], 1)
         self.assertEqual(sorted(x[0] for x in c.execute("SELECT embroidery FROM customer_products")), ['赤ライン', '青ライン'])
 
+    def test_auto_merge_line_variants(self):
+        c, path, src, p = self.run_import(['顧客A,仕入X,H1,帽子(青) 赤ライン,F', '顧客A,仕入X,H1,帽子(青) 青ライン,F',
+                                           '顧客A,仕入X,H1,帽子(青),F'])
+        self.assertEqual(p['autoLineSpecCodes'], ['H1'])
+        self.assertFalse(p['skuDecisionPending'])
+        self.assertTrue(all(r['status'] == 'create' for r in p['rows']))
+        self.commit(c, path, src, p)
+        self.assertEqual([tuple(x) for x in c.execute("SELECT name,color FROM products WHERE code='H1'")], [('帽子', 'ブルー')])
+        self.assertEqual(sorted(x[0] for x in c.execute("SELECT embroidery FROM customer_products")), ['', '赤ライン', '青ライン'])
+
+    def test_color_differs_keeps_color_split(self):
+        rows = ['顧客A,仕入X,H2,帽子(青) 赤ライン,F', '顧客A,仕入X,H2,帽子(白) 赤ライン,F']
+        c, path, src, p = self.run_import(rows)
+        self.assertEqual(p['autoLineSpecCodes'], [])
+        c, path, src, p = self.run_import(rows, dec={'H2': {'decision': 'color_split'}})
+        self.commit(c, path, src, p)
+        got = sorted(tuple(x) for x in c.execute("SELECT p.color,cp.embroidery FROM customer_products cp JOIN products p ON p.id=cp.product_id"))
+        self.assertEqual(got, [('ブルー', '赤ライン'), ('ホワイト', '赤ライン')])
+
+    def test_user_decision_wins(self):
+        c, path, src, p = self.run_import(['顧客A,仕入X,H1,帽子(青) 赤ライン,F', '顧客A,仕入X,H1,帽子(青) 青ライン,F'],
+                                          dec={'H1': {'decision': 'hold'}})
+        self.assertEqual(p['autoLineSpecCodes'], [])
+
 
 if __name__ == '__main__':
     unittest.main()

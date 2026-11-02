@@ -470,6 +470,7 @@
     if(local&&local.decision)return local.decision
     const remote=g&&g.decision
     if(remote&&typeof remote==='object')return remote.decision||''
+    if(g&&g.autoLineSpecMerge)return 'merge'
     return ''
   }
 
@@ -1465,7 +1466,8 @@
     const recColor=preferColor&&!decision?`<span class="sku-dec-rec">推奨</span>`:''
     const recContent=preferContent&&!decision?`<span class="sku-dec-rec">推奨</span>`:''
     const blurb=(key)=>compact?'':`<span class="sku-dec-blurb">${esc(DECISION_BLURBS[key]||'')}</span>`
-    return `<div class="bar sku-decision-btns${compact?' sku-decision-btns-inline':''}" data-sku-dec-bar="${esc(g.code)}">
+    const autoNote=(g.autoLineSpecMerge&&!(skuDecision(st,g.code)||{}).decision)?`<span class="excelhint">自動決定済み（仕様だけ違う）</span>`:''
+    return `<div class="bar sku-decision-btns${compact?' sku-decision-btns-inline':''}" data-sku-dec-bar="${esc(g.code)}">${autoNote}
       <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="merge" class="${mergeClass}" ${st.busy?'disabled':''} title="${esc(DECISION_BLURBS.merge)}">同じ商品としてまとめる${blurb('merge')}</button>
       <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="color_split" class="${colorBtnClass}" ${st.busy?'disabled':''} title="${esc(DECISION_BLURBS.color_split)}">色別に分けて登録${recColor}${blurb('color_split')}</button>
       <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="content_split" class="${contentBtnClass}" ${st.busy?'disabled':''} title="${esc(DECISION_BLURBS.content_split)}">${esc(contentSplitButtonLabel(st,g))}${recContent}${blurb('content_split')}</button>
