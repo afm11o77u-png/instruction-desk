@@ -154,5 +154,36 @@ class UsedStarCustomOrderTest(unittest.TestCase):
         self.assertEqual(lots, sorted([(stock.CONDITION_NEW, 3), (stock.CONDITION_USED, 2)]))
 
 
+class ReopenMergedRowsTest(unittest.TestCase):
+    def test_reimport_after_merged_rows_is_unchanged(self):
+        folder, path, c = newdb()
+        self.addCleanup(folder.cleanup)
+        led = ['顧客L,仕入S,7-851,イージーパンツ,L']
+        base = {'importMode': 'products', 'name': 'p.csv', 'file': b64(ledger_csv(led)),
+                '_canWrite': True, '_actor': {'name': 't'}}
+        for i, phase in enumerate(('parts', 'goods')):
+            body = {**base, 'productPhase': phase}
+            p = pli.build_preview(c, body)
+            if not any(r['status'] in ('create', 'size_add', 'reuse') for r in p['rows']):
+                continue
+            with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+                pli.commit_preview(c, {**body, 'commitToken': f'reopen-merge-token-{i}',
+                                       'previewFingerprint': p['previewFingerprint']}, db_path=path)
+        op = ['新品,仕入S,顧客L,イージーパンツ,7-851,L,3240,0,0,2,本社,棚1,0',
+              '新品,仕入S,顧客L,イージーパンツ,7-851,L,2970,0,0,1,本社,棚1,0']
+        st = {'importMode': 'opening_stock', 'auxName': 'o.csv', 'auxFile': b64(opening_csv(op)),
+              'basisDate': '2026-01-15', 'defaultSiteName': '未確認', '_canWrite': True, '_actor': {'name': 't'}}
+        p = pli.build_preview(c, st)
+        self.assertEqual(p['openingStockSummary']['merged'], 1)
+        with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+            pli.commit_preview(c, {**st, 'commitToken': 'reopen-merge-token-open',
+                                   'previewFingerprint': p['previewFingerprint']}, db_path=path)
+        c.commit()
+        self.assertEqual(c.execute('SELECT SUM(qty_received) FROM lots').fetchone()[0], 3)
+        s = pli.build_preview(c, st)['openingStockSummary']
+        self.assertEqual((s['needsReview'], s['create'], s['reuse'], s['unchanged'], s['merged']),
+                         (0, 0, 0, 1, 1), s)
+
+
 if __name__ == '__main__':
     unittest.main()
