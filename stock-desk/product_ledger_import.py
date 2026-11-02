@@ -7929,6 +7929,38 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
     return kept, groups, len(hidden)
 
 
+def registered_process_services(c):
+    """登録済みの加工サービス（確認リストの選択肢）。"""
+    return [
+        {'id': r['id'], 'name': r['name']}
+        for r in c.execute(
+            'SELECT id,name FROM products WHERE category=? AND COALESCE(active,1)=1 ORDER BY name,id',
+            (stock.CATEGORY_PROCESS_SERVICE,),
+        )
+    ]
+
+
+def _chosen_process_service_ids(c, paren_ov):
+    """確認リストで選んだ加工サービス（登録済みのものだけ）。未指定は None。"""
+    if not isinstance(paren_ov, dict) or 'processServiceIds' not in paren_ov:
+        return None
+    raw = paren_ov.get('processServiceIds') or []
+    ids = []
+    for v in raw if isinstance(raw, list) else []:
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return []
+    marks = ','.join('?' * len(ids))
+    ok = {r['id'] for r in c.execute(
+        f'SELECT id FROM products WHERE category=? AND id IN ({marks})',
+        (stock.CATEGORY_PROCESS_SERVICE, *ids),
+    )}
+    return [i for i in dict.fromkeys(ids) if i in ok]
+
+
 def _mark_unresolved_process_links(c, rows):
     """取扱の加工が加工サービスに結び付かない行を要確認へ（文字だけで登録しない）。"""
     planned = set()
@@ -7950,6 +7982,8 @@ def _mark_unresolved_process_links(c, rows):
             continue
         if handle.get('skipForProcessingService') or handle.get('action') == 'excluded':
             continue
+        if row.get('chosenProcessServiceIds') is not None:
+            continue  # 確認リストで登録済み加工サービスを選んだ（文字の照合はしない）
         emb = stock.text(handle.get('embroidery') or '')
         if not emb or emb == PENDING_EMBROIDERY or not handle.get('fromParenClassification'):
             continue
@@ -9768,14 +9802,18 @@ def build_preview(c, body):
             kid = sku.get('keepProductId') or sku.get('productId')
             if kid and sel.get('productId') is None:
                 sel['productId'] = kid
-        classified.append(classify_row(
+        row_c = classify_row(
             c, row_no, item,
             selected_product_id=sel.get('productId'),
             selected_handle_id=sel.get('handleId'),
             selected_category=sel.get('category') if 'category' in sel else None,
             force_create_product=force,
             paren_override=paren_ov,
-        ))
+        )
+        chosen = _chosen_process_service_ids(c, paren_ov)
+        if chosen is not None:
+            row_c['chosenProcessServiceIds'] = chosen
+        classified.append(row_c)
 
     # 照合グループ件数
     group_counts = defaultdict(int)
@@ -10125,6 +10163,7 @@ def build_preview(c, body):
         'rowCount': len(classified),
         'rows': classified,
         'skuGroups': sku_groups,
+        'processServices': registered_process_services(c),
         'skuGroupCount': len(sku_groups),
         'skuDecisionPending': decision_meta['pendingDecisionGroups'],
         'skuDecisionPendingRows': sku_pending_rows,
@@ -11310,7 +11349,9 @@ def commit_preview(c, body, *, db_path=None):
                 # 取扱 → 加工サービスのリンク（同じ取込で確保した加工サービスを優先）
                 if cp_id:
                     link_ids = []
-                    if companion_id:
+                    if row.get('chosenProcessServiceIds') is not None:
+                        link_ids = list(row.get('chosenProcessServiceIds'))
+                    elif companion_id:
                         link_ids = [companion_id]
                     elif ps_key in processing_ids_by_key and not prod_info.get('processingServiceProduct'):
                         link_ids = [processing_ids_by_key[ps_key]]

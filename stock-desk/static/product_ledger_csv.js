@@ -3966,7 +3966,7 @@
       <label>商品名<input data-pl-paren-name="${r.rowNo}" value="${esc(planned)}" ${disabled}></label>
       <label>色<input data-pl-paren-color="${r.rowNo}" value="${esc(color)}" ${disabled}></label>
       <label>仕入先<input value="${esc(supplier)}" readonly disabled></label>
-      <label>必要な加工・仕様<input data-pl-paren-proc="${r.rowNo}" value="${esc(processing)}" ${disabled} placeholder="商品に付く加工仕様（加工サービス名ではない）"></label>
+      ${processServicePickerHtml(st,r,edit,processing,disabled)}
       <label>素材<input data-pl-paren-mat="${r.rowNo}" value="${esc(material)}" ${disabled} placeholder="材質・生地の種類など"></label>
       <p class="excelhint">素材は材質のヒントです。生地そのものの在庫は部品・資材区分で登録します。</p>
       <label>補足<input data-pl-paren-supp="${r.rowNo}" value="${esc(supplement)}" ${disabled}></label>
@@ -3976,6 +3976,39 @@
       ${preview}
       ${pc.needsConfirm?`<label class="pl-paren-confirm"><input type="checkbox" data-pl-paren-ok="${r.rowNo}" ${edit.confirmed?'checked':''} ${disabled}> この内容で確定</label>`:''}
     </div>`
+  }
+
+  /** 登録済み加工サービス名の照合キー（空白・全半角の差を無視） */
+  function svcKey(v){return String(v||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase()}
+
+  /** 行で選ばれている加工サービスID（未選択なら原文の加工名と一致する登録済みサービス） */
+  function chosenProcessServiceIds(st,edit,processing){
+    if(edit&&Array.isArray(edit.processServiceIds))return edit.processServiceIds.map(Number)
+    const list=(st.preview&&st.preview.processServices)||[]
+    const parts=String(processing||'').split(/[・、,，/／]/).map(svcKey).filter(Boolean)
+    return list.filter(s=>parts.includes(svcKey(s.name))).map(s=>Number(s.id))
+  }
+
+  /** 加工は登録済みの加工サービスから選ぶ（複数可）。自由入力はしない */
+  function processServicePickerHtml(st,r,edit,processing,disabled){
+    const list=(st.preview&&st.preview.processServices)||[]
+    const chosen=chosenProcessServiceIds(st,edit,processing)
+    const boxes=list.map(s=>`<label class="pl-svc-opt"><input type="checkbox" data-pl-paren-svc="${r.rowNo}" value="${esc(String(s.id))}" data-name="${esc(s.name)}" ${chosen.includes(Number(s.id))?'checked':''} ${disabled}> ${esc(s.name)}</label>`).join(' ')
+    const names=list.filter(s=>chosen.includes(Number(s.id))).map(s=>svcKey(s.name))
+    const memo=String(processing||'').trim()
+    const memoShown=memo&&!(edit&&Array.isArray(edit.processServiceIds))&&!memo.split(/[・、,，/／]/).map(svcKey).every(k=>!k||names.includes(k))
+    return `<fieldset class="pl-svc-pick"><legend>加工</legend>
+      ${boxes||'<span class="excelhint">登録済みの加工サービスはありません</span>'}
+      ${memoShown?`<p class="excelhint">仕様メモ（原文）：${esc(memo)}</p>`:''}
+    </fieldset>`
+  }
+
+  function readProcessServicePick(rowNo){
+    const ids=[];const names=[]
+    document.querySelectorAll(`[data-pl-paren-svc="${CSS.escape(String(rowNo))}"]`).forEach(el=>{
+      if(el.checked){ids.push(Number(el.value));names.push(el.getAttribute('data-name')||'')}
+    })
+    return {processServiceIds:ids,processing:names.join('・')}
   }
 
   function makerLookupPanelHtml(st,opts){
@@ -5512,6 +5545,13 @@
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
     })
+    const svcRows=new Set()
+    document.querySelectorAll('[data-pl-paren-svc]').forEach(el=>svcRows.add(el.getAttribute('data-pl-paren-svc')))
+    svcRows.forEach(rowNo=>{
+      // 触っていない行は原文のまま（選択を保存しない）
+      const e=(st.rowClassifications||{})[rowNo]
+      if(e&&Array.isArray(e.processServiceIds))setRowClassification(st,rowNo,readProcessServicePick(rowNo))
+    })
     document.querySelectorAll('[data-pl-paren-purpose]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-purpose'),{partsUsage:el.value})
     })
@@ -6644,6 +6684,12 @@
         setRowClassification(st,rowNo,patch)
       }
     })
+    document.querySelectorAll('[data-pl-paren-svc]').forEach(el=>{
+      el.onchange=()=>{
+        const rowNo=el.getAttribute('data-pl-paren-svc')
+        setRowClassification(st,rowNo,readProcessServicePick(rowNo))
+      }
+    })
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
       // 素材欄の入力だけでは登録区分を切り替えない
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
@@ -7058,6 +7104,8 @@
     open,
     // 区分分類の単体検証用（本番UIは open のみ使用）
     __test:{
+      processServicePickerHtml,
+      chosenProcessServiceIds,
       modeChooserHtml,
       openingReviewGroups,
       openingReviewGroupsHtml,
