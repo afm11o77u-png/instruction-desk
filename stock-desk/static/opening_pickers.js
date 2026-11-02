@@ -33,7 +33,7 @@ function filterOpeningProducts(products, query){
   const list=activeOpeningProducts(products)
   if(!needle)return list.slice()
   return list.filter(p=>{
-    const hay=`${p.code||''} ${p.name||''} ${p.color||''} ${p.supplierName||''}`.toLowerCase()
+    const hay=`${p.displayNo||''} ${p.code||''} ${p.name||''} ${p.color||''} ${p.supplierName||''}`.toLowerCase()
     return hay.includes(needle)
   })
 }
@@ -68,7 +68,7 @@ function filterOpeningOfferings(handles, customerId, query){
   return mine.filter(h=>{
     const p=h.product||{}
     const spec=openingSpecLabel(h.embroidery)
-    const hay=`${p.code||''} ${p.name||''} ${p.color||''} ${spec} ${h.embroidery||''}`.toLowerCase()
+    const hay=`${p.displayNo||''} ${p.code||''} ${p.name||''} ${p.color||''} ${spec} ${h.embroidery||''}`.toLowerCase()
     return hay.includes(needle)
   })
 }
