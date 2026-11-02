@@ -66,7 +66,7 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         import product_registry_wipe
         try:
             with stock.connect(db_path) as c:
-                return 200, product_registry_wipe.preview_wipe(c, {'_actor': actor or {}, '_canWrite': bool(can_write)})
+                return 200, product_registry_wipe.preview_wipe(c, {'_actor': actor or {}, '_canWrite': bool(can_write), 'scope': (query.get('scope', [''])[0] or '')})
         except PermissionError as e:
             return 403, {'error': str(e), 'deleted': False}
         except (ValueError, TypeError, KeyError) as e:

@@ -50,10 +50,11 @@ class UiWiringTest(unittest.TestCase):
         app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
         html = (ROOT / 'static' / 'index.html').read_text(encoding='utf-8')
         js = (ROOT / 'static' / 'product_registry_wipe.js').read_text(encoding='utf-8')
-        self.assertIn('商品登録を全削除（検証用）', app)
+        for label in ('部品を削除', '加工を削除', '制服を削除'):
+            self.assertIn(label, app)
         self.assertIn('verify-zone', app)
         self.assertIn('stockIsOwner', app)
-        self.assertIn('productRegistryWipeOpen', app)
+        self.assertIn('product-wipe-scope', app)
         self.assertIn('product_registry_wipe.js', html)
         self.assertIn('ProductRegistryWipe', js)
         self.assertIn(wipe.CONFIRM_TEXT, js)
@@ -176,6 +177,87 @@ class WipeSuccessTest(unittest.TestCase):
         finally:
             c.close()
             folder.cleanup()
+
+
+class ScopedWipeTest(unittest.TestCase):
+    def _setup(self, c):
+        cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+        su = stock.save_supplier(c, {'name': '仕入A', 'active': True})
+        t = stock.now()
+        def prod(code, name, cat):
+            c.execute('INSERT INTO products(code,name,color,category,active,created_at,updated_at) '
+                      'VALUES(?,?,?,?,1,?,?)', (code, name, '', cat, t, t))
+            return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        ids = {
+            'uniform': prod('U-1', '白衣', stock.CATEGORY_UNIFORM),
+            'blank': prod('U-2', '前掛け', ''),
+            'parts': prod('', '生地', stock.CATEGORY_PARTS),
+            'process': prod('', '内ポケット加工', stock.CATEGORY_PROCESS_SERVICE),
+        }
+        hid = {}
+        for k, pid in ids.items():
+            c.execute('INSERT INTO product_sizes(product_id,label,sort_order) VALUES(?,?,0)', (pid, 'F'))
+            c.execute('INSERT INTO customer_products(customer_id,product_id,embroidery,is_standard,active,created_at,updated_at) '
+                      'VALUES(?,?,?,1,1,?,?)', (cu['id'], pid, '', t, t))
+            hid[k] = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        stock.ensure_handle_process_schema(c)
+        c.execute('INSERT INTO customer_product_processes(customer_product_id,process_product_id,sort_order) VALUES(?,?,0)',
+                  (hid['uniform'], ids['process']))
+        c.commit()
+        return ids, hid
+
+    def _left(self, c):
+        return {r['name'] for r in c.execute('SELECT name FROM products')}
+
+    def _run(self, path, scope):
+        return stock_server.api_post(
+            str(path), 'desk', '/api/products/registry-wipe',
+            {'_canWrite': True, '_actor': {'id': 1, 'name': '主', 'role': 'owner'}, 'scope': scope},
+            can_write=True, actor={'id': 1, 'name': '主', 'role': 'owner'},
+        )
+
+    def test_process_unlinks_from_uniform(self):
+        folder, path, c = newdb()
+        try:
+            ids, hid = self._setup(c)
+            prev = wipe.preview_wipe(c, owner_body(scope='process'))
+            self.assertEqual(prev['counts']['products'], 1)
+            self.assertEqual(prev['counts']['customerProductProcesses'], 1)
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path):
+                code, res = self._run(path, 'process')
+            self.assertEqual(code, 200, res)
+            with stock.connect(path) as c2:
+                self.assertEqual(self._left(c2), {'白衣', '前掛け', '生地'})
+                self.assertIsNotNone(c2.execute('SELECT id FROM customer_products WHERE id=?', (hid['uniform'],)).fetchone())
+                self.assertEqual(c2.execute('SELECT COUNT(*) FROM customer_product_processes').fetchone()[0], 0)
+        finally:
+            c.close(); folder.cleanup()
+
+    def test_parts_and_uniform_scopes(self):
+        folder, path, c = newdb()
+        try:
+            self._setup(c)
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path):
+                code, res = self._run(path, 'parts')
+                self.assertEqual(code, 200, res)
+                with stock.connect(path) as c2:
+                    self.assertEqual(self._left(c2), {'白衣', '前掛け', '内ポケット加工'})
+                code, res = self._run(path, 'uniform')
+                self.assertEqual(code, 200, res)
+            with stock.connect(path) as c2:
+                self.assertEqual(self._left(c2), {'内ポケット加工'})
+                self.assertEqual(c2.execute('SELECT COUNT(*) FROM customer_products').fetchone()[0], 1)
+                self.assertEqual(c2.execute('SELECT COUNT(*) FROM customer_product_processes').fetchone()[0], 0)
+        finally:
+            c.close(); folder.cleanup()
+
+    def test_bad_scope_rejected(self):
+        folder, path, c = newdb()
+        try:
+            with self.assertRaises(ValueError):
+                wipe.preview_wipe(c, owner_body(scope='x'))
+        finally:
+            c.close(); folder.cleanup()
 
 
 class InUseAbortTest(unittest.TestCase):
