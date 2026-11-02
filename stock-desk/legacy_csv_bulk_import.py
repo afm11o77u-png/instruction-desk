@@ -47,7 +47,15 @@ OPENING_STATUS_LABELS = {
 }
 
 
-def _opening_merge_key(plan):
+def _merge_size(c, plan):
+    t = plan.get('target') or {}
+    size = stock.text(t.get('size') or (plan.get('csv') or {}).get('size') or '')
+    if c is not None and t.get('productId'):
+        size = _codeless_stock_size(c, t.get('productId'), size)
+    return size
+
+
+def _opening_merge_key(plan, c=None):
     t = plan.get('target') or {}
     csv = plan.get('csv') or {}
     place = plan.get('place') or {}
@@ -59,7 +67,7 @@ def _opening_merge_key(plan):
         t.get('productId'),
         stock.text(t.get('embroidery') or ''),
         t.get('handlingType') or '',
-        stock.text(t.get('size') or csv.get('size') or ''),
+        _merge_size(c, plan),
         place.get('locationId') or '',
         stock.text(place.get('siteName') or ''),
         stock.text(place.get('shelfName') or ''),
@@ -68,18 +76,19 @@ def _opening_merge_key(plan):
 
 
 def _weighted_cost(items):
+    """(単価, 注記種別)。注記: ''=同一単価, 'avg'=加重平均, 'first'=先頭行の単価。"""
     costs = [p.get('unitCost') for p in items]
     if len({c for c in costs}) <= 1:
-        return costs[0], False
+        return costs[0], ''
     total = sum(p.get('qty') or 0 for p in items)
     if total <= 0 or any((p.get('qty') or 0) < 0 for p in items):
-        return costs[0], True
+        return costs[0], 'first'
     val = sum((p.get('qty') or 0) * (p.get('unitCost') or 0) for p in items) / total
     if all(float(c or 0).is_integer() for c in costs):
         val = int(round(val))
     else:
         val = round(val, 2)
-    return val, True
+    return val, 'avg'
 
 
 def merge_duplicate_opening_plans(c, plans):
@@ -93,7 +102,7 @@ def merge_duplicate_opening_plans(c, plans):
     for p in plans:
         if p.get('status') not in ok:
             continue
-        key = _opening_merge_key(p)
+        key = _opening_merge_key(p, c)
         if key is not None:
             groups[key].append(p)
     merged_rows = 0
@@ -108,8 +117,10 @@ def merge_duplicate_opening_plans(c, plans):
         lead['unitCost'] = cost
         lead['mergedRows'] = rows
         note = f'{"・".join(str(r) for r in rows)}行目は同じ在庫のため数量を合算します（計 {qty}）。'
-        if cost_differs:
+        if cost_differs == 'avg':
             note += f'単価が異なるため数量加重平均 {cost} で登録します。'
+        elif cost_differs == 'first':
+            note += f'単価が異なり合計数量が0以下のため、先頭行の単価 {cost} で登録します。'
         reasons = [r for r in (lead.get('reasons') or []) if '既存在庫' not in r]
         reasons.append(note)
         lead['reasons'] = reasons
@@ -118,7 +129,7 @@ def merge_duplicate_opening_plans(c, plans):
         info = None
         if t.get('handleId') and place.get('locationId'):
             info = legacy._stock_match(
-                c, t.get('handleId'), (lead.get('csv') or {}).get('size') or '',
+                c, t.get('handleId'), _merge_size(c, lead),
                 place.get('locationId'), lead.get('condition'), cost,
             )
         lead['stock'] = info
@@ -572,7 +583,9 @@ def _plan_one_opening_row(
     else:
         # 既存在庫照合（取扱IDがある場合のみ。未作成なら新規扱い）
         stock_info = legacy._stock_match(
-            c, handle_id, payload['size'], place.get('locationId'), condition, cost,
+            c, handle_id,
+            _codeless_stock_size(c, product_id, payload['size']) if product_id else payload['size'],
+            place.get('locationId'), condition, cost,
         )
         prior = legacy.lookup_stock_map(
             c,
@@ -695,6 +708,7 @@ def commit_opening_stock_plans(
     basis = basis_date
     merged_later = []
     lead_lots = {}
+    created_in_run = {}
 
     def _up(c, **kw):
         lead_lots[kw['plan']['rowNo']] = list(kw.get('lot_ids') or [])
@@ -775,6 +789,29 @@ def commit_opening_stock_plans(
         qty = plan.get('qty')
 
         stock_info = legacy._stock_match(c, cp_id, size, loc_id, condition, unit_cost)
+        run_key = (cp_id, size, loc_id, condition, unit_cost)
+        if stock_info and stock_info.get('exists') and run_key in created_in_run:
+            # 同じ取込で先に作ったロットへ加算する（エラーにしない）
+            lead_row, lead_qty = created_in_run[run_key]
+            new_qty = stock_info['currentQty'] + qty
+            stock.adjust_opening_qty_diff(c, {
+                '_canWrite': True,
+                '_actor': body.get('_actor'),
+                'lotIds': stock_info.get('lotIds') or [],
+                'targetQty': new_qty,
+                'fingerprint': stock_info.get('fingerprint') or '',
+                'reason': f'{BULK_OPENING_NOTE}（初期在庫CSV {row_no}行目を{lead_row}行目と同じ在庫に合算）',
+                'businessOn': basis,
+                'actorName': actor,
+            })
+            created_in_run[run_key] = (lead_row, new_qty)
+            counts['merged'] = counts.get('merged', 0) + 1
+            _up(
+                c, run_id=run_id, aux_uploaded=aux_uploaded, plan=plan,
+                lot_ids=stock_info.get('lotIds') or [],
+                customer_id=cust_id, product_id=product_id, customer_product_id=cp_id,
+            )
+            continue
         if stock_info and stock_info.get('exists'):
             if stock_info['currentQty'] == qty:
                 counts['unchanged'] += 1
@@ -857,6 +894,7 @@ def commit_opening_stock_plans(
             customer_id=cust_id, product_id=product_id, customer_product_id=cp_id,
         )
         counts['openingCreated'] += 1
+        created_in_run[run_key] = (row_no, qty)
 
     for plan in merged_later:
         lots = lead_lots.get(plan.get('mergedInto'))
@@ -1669,7 +1707,9 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
         status = legacy.STATUS_REVIEW
     else:
         stock_info = legacy._stock_match(
-            c, handle_id, payload['size'], place.get('locationId'), condition, cost,
+            c, handle_id,
+            _codeless_stock_size(c, product_id, payload['size']) if product_id else payload['size'],
+            place.get('locationId'), condition, cost,
         )
         prior = legacy.lookup_stock_map(
             c,
