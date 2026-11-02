@@ -4002,8 +4002,11 @@
     const names=list.filter(s=>chosen.includes(Number(s.id))).map(s=>svcKey(s.name))
     const memo=String(processing||'').trim()
     const memoShown=!lineSpec&&memo&&!(edit&&Array.isArray(edit.processServiceIds))&&!memo.split(/[・、,，/／]/).map(svcKey).every(k=>!k||names.includes(k))
+    const chosenNames=list.filter(s=>chosen.includes(Number(s.id))).map(s=>s.name)
+    const pop=boxes?`<details class="pl-svc-pop" data-pl-svc-pop="${r.rowNo}"><summary data-pl-svc-summary>${esc(chosenNames.join('・')||'加工なし')}</summary>
+        <div class="pl-svc-panel"><input type="search" data-pl-svc-filter placeholder="検索" ${disabled}><div class="pl-svc-list">${boxes}</div></div></details>`:''
     return `<fieldset class="pl-svc-pick" data-pl-line-spec="${esc(lineSpec?(memo||lineSpec):'')}"><legend>加工</legend>
-      ${boxes||'<span class="excelhint">登録済みの加工サービスはありません</span>'}
+      ${pop||'<span class="excelhint">登録済みの加工サービスはありません</span>'}
       ${lineSpec?`<p class="excelhint">仕様：${esc(memo||lineSpec)}</p>`:''}
       ${memoShown?`<p class="excelhint">仕様メモ（原文）：${esc(memo)}</p>`:''}
     </fieldset>`
@@ -5559,7 +5562,8 @@
     svcRows.forEach(rowNo=>{
       // 触っていない行は原文のまま（選択を保存しない）
       const e=(st.rowClassifications||{})[rowNo]
-      if(e&&Array.isArray(e.processServiceIds))setRowClassification(st,rowNo,readProcessServicePick(rowNo))
+      const touched=document.querySelector(`[data-pl-svc-pop="${CSS.escape(String(rowNo))}"][data-dirty]`)
+      if((e&&Array.isArray(e.processServiceIds))||touched)setRowClassification(st,rowNo,readProcessServicePick(rowNo))
     })
     document.querySelectorAll('[data-pl-paren-purpose]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-purpose'),{partsUsage:el.value})
@@ -6693,12 +6697,41 @@
         setRowClassification(st,rowNo,patch)
       }
     })
-    document.querySelectorAll('[data-pl-paren-svc]').forEach(el=>{
-      el.onchange=()=>{
-        const rowNo=el.getAttribute('data-pl-paren-svc')
-        setRowClassification(st,rowNo,readProcessServicePick(rowNo))
+    // 加工はポップアップで選び、閉じたときに反映する
+    document.querySelectorAll('[data-pl-svc-pop]').forEach(pop=>{
+      const rowNo=pop.getAttribute('data-pl-svc-pop')
+      const summary=pop.querySelector('[data-pl-svc-summary]')
+      const filter=pop.querySelector('[data-pl-svc-filter]')
+      let dirty=false
+      pop.querySelectorAll('[data-pl-paren-svc]').forEach(el=>{
+        el.onchange=()=>{
+          dirty=true;pop.setAttribute('data-dirty','1')
+          const names=[...pop.querySelectorAll('[data-pl-paren-svc]:checked')].map(x=>x.getAttribute('data-name')||'')
+          summary.textContent=names.join('・')||'加工なし'
+        }
+      })
+      if(filter)filter.oninput=()=>{
+        const k=filter.value.trim().toLowerCase()
+        pop.querySelectorAll('.pl-svc-opt').forEach(o=>{o.hidden=!!k&&!o.textContent.toLowerCase().includes(k)})
+      }
+      pop.ontoggle=()=>{
+        if(pop.open){
+          document.querySelectorAll('[data-pl-svc-pop][open]').forEach(o=>{if(o!==pop)o.open=false})
+          if(filter)setTimeout(()=>filter.focus(),0)
+          return
+        }
+        if(dirty){dirty=false;pop.removeAttribute('data-dirty');setRowClassification(st,rowNo,readProcessServicePick(rowNo))}
       }
     })
+    if(!document.__plSvcOutside){
+      document.__plSvcOutside=true
+      document.addEventListener('click',e=>{
+        document.querySelectorAll('[data-pl-svc-pop][open]').forEach(o=>{if(!o.contains(e.target))o.open=false})
+      })
+      document.addEventListener('keydown',e=>{
+        if(e.key==='Escape')document.querySelectorAll('[data-pl-svc-pop][open]').forEach(o=>{o.open=false})
+      })
+    }
     document.querySelectorAll('[data-pl-paren-mat]').forEach(el=>{
       // 素材欄の入力だけでは登録区分を切り替えない
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-mat'),{material:el.value})
