@@ -514,6 +514,11 @@ def garment_paren_processing_name(product_name: str) -> str:
     return ''
 
 
+def _looks_like_garment_name(name):
+    from legacy_code_assign import blank_code_kind
+    return blank_code_kind(name) == 'garment'
+
+
 def unify_processing_service_name(raw_name: str) -> str:
     """加工サービス表示名へ統一。衣服種・顧客用接頭・括弧仕様は落とす。読めなければ空。
 
@@ -750,6 +755,8 @@ def classify_processing_service_row(
             and _strip_parens_keep_inner(name_t)[1]
             # 括弧外の名前そのもの（例: スナッパー）から加工名を補った場合だけ
             and unify_processing_service_name(_strip_parens_keep_inner(name_t)[0]) == service_only
+            # 衣服名（例: コックシャツ七分袖 → 「七分袖加工」）は部品にしない
+            and not _looks_like_garment_name(name_t)
         ):
             result['isPhysicalParts'] = True
             result['makerParts'] = True
