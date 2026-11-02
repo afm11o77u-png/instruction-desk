@@ -8,10 +8,10 @@
     create:'新規',merge:'統合して登録',size_add:'サイズ追加',reuse:'既存使用',
     unchanged:'変更なし',needs_review:'要確認',hold:'保留',excluded:'対象外'
   }
-  const OPEN_STATUS_ORDER=['create','reuse','qty_diff','unchanged','needs_review','hold','excluded','complement']
+  const OPEN_STATUS_ORDER=['create','reuse','qty_diff','unchanged','needs_review','hold','excluded','complement','merged']
   const OPEN_STATUS_LABELS={
     create:'新規追加',reuse:'既存使用',qty_diff:'数量差異',unchanged:'変更なし',
-    needs_review:'要確認',hold:'保留',excluded:'対象外',complement:'補完候補'
+    needs_review:'要確認',hold:'保留',excluded:'対象外',complement:'補完候補',merged:'同じ在庫に合算'
   }
   const PAGE_SIZE=80
   const SKU_PAGE_SIZE=40
@@ -7040,7 +7040,7 @@
       if(!canWriteNow){st.toast('閲覧専用のため登録できません。');return}
       if(isOpeningMode(st)){
         const osSum=st.preview.openingStockSummary||{}
-        const summary=`【初期在庫を登録】新規 ${osSum.create||0} / 再利用 ${osSum.reuse||0} / 数量差異(選択時) ${osSum.qtyDiff||0} / 要確認 ${osSum.needsReview||0} / 補完候補(登録しない) ${osSum.complement||0}\n在庫基準日 ${st.basisDate||''} / 拠点空欄→ ${st.defaultSiteName||'未確認'}\n登録先は商品登録時の永続マップから解決します。\n\nよろしいですか？`
+        const summary=`【初期在庫を登録】新規 ${osSum.create||0} / 再利用 ${osSum.reuse||0} / 数量差異(選択時) ${osSum.qtyDiff||0} / 要確認 ${osSum.needsReview||0} / 補完候補(登録しない) ${osSum.complement||0}${osSum.merged?` / 同じ在庫に合算 ${osSum.merged}行`:''}\n在庫基準日 ${st.basisDate||''} / 拠点空欄→ ${st.defaultSiteName||'未確認'}\n登録先は商品登録時の永続マップから解決します。\n\nよろしいですか？`
         const oc=st.preview.officeCodePlan||{}
         const ocLine=(oc.willSet?`\n営業所コード設定 ${oc.willSet} 顧客`:'')+((oc.warnings||[]).length?`\n${oc.warnings.join('\n')}`:'')
         if(!confirm(summary+ocLine))return
