@@ -48,8 +48,29 @@
     ].join('　')
   }
 
+  function stockLine(sc){
+    const c=sc||{}
+    const parts=[]
+    if(c.lots)parts.push(`在庫ロット ${c.lots}`)
+    if(c.moves)parts.push(`入出庫・棚卸履歴 ${c.moves}`)
+    if(c.purchaseOrderLines)parts.push(`発注明細 ${c.purchaseOrderLines}`)
+    if(c.loanLines)parts.push(`貸出明細 ${c.loanLines}`)
+    return parts.join('、')
+  }
+
+  function historyHtml(list){
+    if(!list||!list.length)return ''
+    const rows=list.map(h=>`<li>${esc((h.at||'').replace('T',' '))} ${esc(h.actorName||'')}：${esc(h.scopeLabel||'')}（商品 ${esc((h.counts||{}).products||0)}${(h.counts||{}).lots?`・在庫ロット ${esc(h.counts.lots)}`:''}${(h.counts||{}).moves?`・履歴 ${esc(h.counts.moves)}`:''}）</li>`).join('')
+    return `<details class="wipe-history"><summary>削除履歴</summary><ul>${rows}</ul></details>`
+  }
+
   function blockersHtml(blockers){
+    const s=ensureState()
     if(!blockers||!blockers.length)return ''
+    if(s.scope){
+      const line=stockLine(s.preview&&s.preview.stockCounts)
+      return `<p class="wipe-error">在庫・入出庫履歴も削除されます${line?`（${esc(line)}）`:''}</p>`
+    }
     const rows=blockers.map(b=>{
       const reasons=(b.reasons||[]).map(r=>`<li>${esc(r)}</li>`).join('')
       return `<tr>
@@ -83,6 +104,7 @@
           <p><strong>削除予定:</strong> ${esc(countLines(p.counts))}</p>
           <p><strong>残すもの:</strong> ${esc((p.kept||[]).join('、'))}</p>
           ${blockersHtml(p.blockers)}
+          ${historyHtml(p.history)}
           ${p.canWipe&&s.scope?`<p id="pwError" class="wipe-error" role="alert">${esc(s.error||'')}</p>`:p.canWipe?`<label class="wipe-confirm-label">確認のため「${esc(CONFIRM_TEXT)}」と入力
             <input id="pwConfirm" type="text" autocomplete="off" spellcheck="false" value="${esc(s.confirmText)}" ${s.busy?'disabled':''}>
           </label>
@@ -147,7 +169,8 @@
     if(s.busy)return
     if(!s.preview||!s.preview.canWipe)return
     if(s.scope){
-      if(!confirm(`${scopeLabel()}の商品登録と、その取扱を削除します。よろしいですか？`))return
+      const line=s.preview.withStock?stockLine(s.preview.stockCounts):''
+      if(!confirm(`${scopeLabel()}と、その取扱を削除します。`+(line?`\n在庫・入出庫履歴も削除されます（${line}）。`:'')+`\nよろしいですか？`))return
     }else if(s.confirmText!==CONFIRM_TEXT){
       s.error=`確認のため「${CONFIRM_TEXT}」と入力してください。`
       paintDialog()
@@ -159,6 +182,8 @@
       const result=await s.api('/api/products/registry-wipe',{
         confirmText:CONFIRM_TEXT,
         scope:s.scope||'',
+        withStock:!!(s.scope&&s.preview.withStock),
+        stockCounts:s.preview.stockCounts||null,
         actorName:s.actorName||'',
       })
       s.result=result
