@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 import time
 from collections import defaultdict
 
@@ -33,6 +35,8 @@ OPENING_STATUS_ORDER = (
     legacy.STATUS_EXCLUDED,
     COMPLEMENT_STATUS,
 )
+
+OPENING_SERVICE_EXCLUDED_REASON = '在庫対象外（加工サービス）'
 
 OPENING_STATUS_LABELS = {
     **legacy.STATUS_LABELS,
@@ -1083,11 +1087,15 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
     pli.ensure_schema(c)
     code_t = stock.text(code)
     if not code_t:
-        return {
-            'status': 'missing',
-            'reason': '商品コードが空のため、商品登録マップから登録先を特定できません。',
-            'matches': [],
-        }
+        named = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
+        if not named:
+            return {
+                'status': 'missing',
+                'reason': '商品コードが空のため、商品登録マップから登録先を特定できません。',
+                'matches': [],
+            }
+        return _resolve_from_map_rows(c, named, product_name=product_name, customer=customer,
+                                      code_t='', prefer_map_id=prefer_map_id)
     variants = position_sku.sku_code_variants(code_t)
     base, _pos = position_sku.strip_sku_position_suffix(code_t)
     # 原文・密着・スペース付き・基礎（基礎は後で上下で絞る）
@@ -1124,21 +1132,51 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             ) in variants:
                 seen_ids.add(row['id'])
                 rows.append(row)
+    rows = [r for r in rows if _map_matches_aux_identity(
+        r, customer=customer, code=code_t, product_name=product_name, size=size, supplier=supplier,
+    )]
+    if not rows:
+        # 部品などで品番を記録していないマップ: 仕入先＋商品名＋サイズで照合
+        rows = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
+    return _resolve_from_map_rows(c, rows, product_name=product_name, customer=customer,
+                                  code_t=code_t, prefer_map_id=prefer_map_id)
+
+
+def _exact_name_key(name):
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', stock.text(name)))
+
+
+def _codeless_map_rows(c, *, customer, product_name, size, supplier):
+    """品番が空で記録されたマップ（部品・加工サービス）を 仕入先＋商品名（完全一致）＋サイズ で探す。"""
+    key = _exact_name_key(product_name)
+    if not key:
+        return []
+    out = []
+    for row in c.execute(
+        '''SELECT * FROM product_ledger_row_maps
+           WHERE COALESCE(csv_product_code,'')='' AND product_id IS NOT NULL ORDER BY id DESC'''
+    ).fetchall():
+        if _exact_name_key(row['csv_product_name']) != key:
+            continue
+        if supplier and stock.text(row['csv_supplier'] or '') and not _person_names_match(supplier, row['csv_supplier']):
+            continue
+        map_size = stock.text(row['csv_size'] or '')
+        aux_size = stock.text(size)
+        if map_size and aux_size and map_size != aux_size:
+            continue
+        out.append(row)
+    return out
+
+
+def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_map_id):
     matches = []
     seen = set()
+    service_hit = False
     for row in rows:
-        if not _map_matches_aux_identity(
-            row,
-            customer=customer,
-            code=code_t,
-            product_name=product_name,
-            size=size,
-            supplier=supplier,
-        ):
-            continue
         full = _map_row_spec_full(row)
         # 加工サービス商品自体には衣服在庫を付けない（リンク行の本体 product_id を使う）
         if full.get('rowKind') == 'processing_service':
+            service_hit = True
             continue
         pid = row['product_id']
         # 誤って加工サービス商品 ID が本体欄に入っていればスキップ
@@ -1174,6 +1212,8 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             'sourceRowNo': row['source_row_no'],
         })
 
+    if not matches and service_hit:
+        return {'status': 'service', 'reason': OPENING_SERVICE_EXCLUDED_REASON, 'matches': []}
     if not matches:
         return {
             'status': 'missing',
@@ -1248,6 +1288,17 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             if len(narrow_u_keys) == 1:
                 matches = narrowed_u
                 dest_keys = narrow_u_keys
+        # 仕様（○○ライン／なし）で絞る: 同じ品番でライン違いの取扱
+        if len(dest_keys) > 1:
+            import product_ledger_paren as paren_classify
+            _rest, aux_lines = paren_classify.extract_line_specs(product_name)
+            if aux_lines or any(paren_classify.extract_line_specs(m.get('processing') or '')[1] for m in matches):
+                aux_spec = stock.spec_key(paren_classify.split_name_and_color(product_name).get('processing') or '')
+                narrowed_s = [m for m in matches if stock.spec_key(m.get('processing') or '') == aux_spec]
+                narrow_s_keys = {_dest_key(m) for m in narrowed_s}
+                if len(narrow_s_keys) == 1:
+                    matches = narrowed_s
+                    dest_keys = narrow_s_keys
         if len(dest_keys) > 1:
             return {
                 'status': 'ambiguous',
@@ -1387,6 +1438,21 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
         if label not in reasons:
             reasons = [label, *reasons]
 
+    if map_status == 'service':
+        return {
+            'rowNo': row_no, 'status': legacy.STATUS_EXCLUDED,
+            'statusLabel': OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED],
+            'qty': qty, 'unitCost': cost, 'condition': condition,
+            'conditionLabel': stock.condition_label(condition) if condition else '',
+            'reasons': [OPENING_SERVICE_EXCLUDED_REASON], 'csv': payload,
+            'target': {'productName': payload['productName'], 'productCode': payload['code'],
+                       'customer': payload['customer'], 'supplier': payload['supplier'],
+                       'size': payload['size'], 'mapStatus': 'service'},
+            'place': place, 'stock': None, 'matchedLedger': False, 'complement': False,
+            'heldWithProduct': False, 'selected': False, 'mapResolve': resolved,
+            'fromPersistedMap': True, 'serviceExcluded': True,
+            'productRegistrationExcluded': False, 'productRegistrationExcludedLabel': '',
+        }
     if map_status != 'ok':
         status = legacy.STATUS_REVIEW if map_status in ('ambiguous', 'deleted') else COMPLEMENT_STATUS
         if map_status == 'missing':
@@ -1449,7 +1515,9 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
     product_id = dest.get('productId')
     handle_id = dest.get('handleId') or dest.get('customerProductId')
     customer_id = dest.get('customerId')
-    embroidery = stock.text(dest.get('embroidery') or '') or legacy.PENDING_EMBROIDERY
+    embroidery = stock.text(dest.get('embroidery') or '')
+    if not (embroidery or handle_id):
+        embroidery = legacy.PENDING_EMBROIDERY  # 既存取扱の仕様なし（空）はそのまま表示
     official_name = stock.text(dest.get('officialName') or '')
     aux_usage = _aux_row_usage_kind(
         product_name=payload['productName'], customer=payload['customer'],
