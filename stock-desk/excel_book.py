@@ -339,6 +339,8 @@ def _links(c, rows):
                 raise ValueError(f'取扱の{row_no}行目：顧客「{item["customer"]}」がありません。顧客シートに先に入れてください。')
             standard = item['standard'] in YES
             embroidery = stock.normalize_embroidery(item['embroidery'])
+            embroidery = stock.match_existing_spec(
+                [e for (cid, e) in links if cid == customer['id']], embroidery)
             link_key = (customer['id'], embroidery)
             previous = links.get(link_key)
             if standard:
@@ -433,6 +435,9 @@ def _opening(c, rows, meta=None):
         matches = c.execute('SELECT id FROM products WHERE code=? AND name=? AND color=?', (code, name, color)).fetchall()
         if len(matches) != 1:
             raise ValueError(f'初期在庫の{row_no}行目：品番・商品名・色が一致する商品が{"複数あります" if matches else "ありません"}。')
+        embroidery = stock.match_existing_spec([r[0] for r in c.execute(
+            'SELECT embroidery FROM customer_products WHERE customer_id=? AND product_id=? AND active=1',
+            (person['id'], matches[0]['id']))], embroidery)
         handle = c.execute('SELECT id FROM customer_products WHERE customer_id=? AND product_id=? AND embroidery=? AND active=1',
                            (person['id'], matches[0]['id'], embroidery)).fetchone()
         if not handle:

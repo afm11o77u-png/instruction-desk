@@ -24,7 +24,7 @@ REQUIRED_COLUMNS = (
 # 使わない列（明示。購入・出荷・補正からの再計算はしない）
 IGNORED_QTY_COLUMNS = ('購入数量', '購入金額', '出荷数', '出荷金額', '在庫金額', '補正在庫数', '営業所コード')
 
-PENDING_EMBROIDERY = '加工未整理'
+PENDING_EMBROIDERY = stock.PENDING_EMBROIDERY  # 保存値（表示は stock.embroidery_label →「加工なし」）
 LEGACY_IMPORT_NOTE = '旧システムCSV一括取込'
 # 品番がこの値（前後空白除去後の完全一致）のときだけ複数登録を許可する例外。
 # 「別注(…)」など別品番までは対象にしない。
@@ -1040,7 +1040,7 @@ def _handle_preview(c, customer_id, product_id, row_no, *, csv_source=None):
     info = {
         'action': 'missing', 'id': None,
         'embroidery': PENDING_EMBROIDERY,
-        'embroideryLabel': PENDING_EMBROIDERY,
+        'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL,
         'candidates': [], 'reasons': [],
         # 実加工仕様キーとは別に、CSV由来の整理待ちを保持する
         'pendingEmbroiderySort': True,
@@ -1286,7 +1286,7 @@ def classify_row(
             handle = _reuse_handle(
                 {
                     'action': 'reuse', 'id': None, 'embroidery': PENDING_EMBROIDERY,
-                    'embroideryLabel': PENDING_EMBROIDERY, 'candidates': [], 'reasons': [],
+                    'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL, 'candidates': [], 'reasons': [],
                     'pendingEmbroiderySort': True, 'csvSource': csv_source,
                 },
                 h,
@@ -1439,7 +1439,7 @@ def build_preview(c, body):
         '入荷日はCSVに無いため入荷日不明で登録します。架空の日付は作りません。',
         '払出し順はCSV行番号を仮に使います。CSVの並び＝入荷順とは断定しません。',
         'CSVに加工欄がありません。既存取扱が「加工なし」1件だけのときはそれを再利用し、'
-        '加工仕様は変更しません。取扱が無いときだけ「加工未整理」を追加します。',
+        '加工仕様は変更しません。取扱が無いときだけ「加工なし」の取扱を追加します。',
         '品番・商品名の加工記載（例: 刺繍あり）はそのまま残し、後から整理できます。'
         '同じ品番でも商品名が違う行は無条件に合算しません。空品番だけで同一視しません。',
         '品番「別注」は制服として、同じ品番の複数商品を許可します。'

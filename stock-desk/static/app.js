@@ -418,7 +418,7 @@ function processServiceOptions(l){
 }
 function specLabel(v){
   const t=String(v||'').trim()
-  if(!t||t==='加工なし'||t==='刺繍なし')return '加工なし'
+  if(!t||t==='加工なし'||t==='刺繍なし'||t==='加工未整理')return '加工なし'
   return t
 }
 function loadSetupTab(){
