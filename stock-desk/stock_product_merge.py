@@ -18,12 +18,17 @@ ALIAS_KIND_SUPPLIER = 'supplier'
 def is_normal_product_code(code):
     """通常品番（1品番=1商品の対象）。別注・不明・空欄は対象外。"""
     t = stock.text(code)
-    return bool(t) and t not in SPECIAL_CODES
+    return bool(t) and t not in SPECIAL_CODES and not _is_assigned_special(t)
+
+
+def _is_assigned_special(t):
+    """旧CSV取込で品番空欄の衣服に付けた「要確認」（顧客＋商品名で区別する品番）。"""
+    return t == '要確認'
 
 
 def is_special_product_code(code):
     t = stock.text(code)
-    return (not t) or t in SPECIAL_CODES
+    return (not t) or t in SPECIAL_CODES or _is_assigned_special(t)
 
 
 def alias_value_key(value):
@@ -397,8 +402,10 @@ def _bucket_for_code(code):
     t = stock.text(code)
     if not t:
         return 'blank'
-    if t == CUSTOM_ORDER_CODE:
+    if t == CUSTOM_ORDER_CODE or t.startswith(CUSTOM_ORDER_CODE + '('):
         return 'customOrder'
+    if t == '要確認':
+        return 'unknown'
     if t == UNKNOWN_CODE:
         return 'unknown'
     return 'normal'

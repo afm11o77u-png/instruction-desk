@@ -1075,3 +1075,5 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .sku-quick-need{color:#b42318;font-weight:700}
 .sku-more-details{margin-top:6px}
 .sku-more-details>summary{cursor:pointer}
+
+.badge.code-needs{background:#fde8c8;color:#7a4300;margin-left:6px;font-size:11px}

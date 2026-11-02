@@ -364,7 +364,7 @@ class ProductLedgerPreviewCommitTest(unittest.TestCase):
             ]
             self.assertIn('＊帽子', star_aliases)
             # 別注は2商品（例外）
-            betchu = c.execute("SELECT COUNT(*) AS n FROM products WHERE code='別注'").fetchone()['n']
+            betchu = c.execute("SELECT COUNT(*) AS n FROM products WHERE code GLOB '別注(*)'").fetchone()['n']
             self.assertEqual(betchu, 2)
             # FT2 は1商品のまま。別名が残る
             ft2n = c.execute("SELECT COUNT(*) AS n FROM products WHERE code='FT2' AND merged_into_id IS NULL").fetchone()['n']
@@ -1864,8 +1864,9 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
                 '_canWrite': True, '_actor': {'name': 't'},
             })
             by_no = {r['rowNo']: r for r in preview['rows']}
-            self.assertTrue(by_no[2]['product']['blankSku'])
-            self.assertEqual(by_no[2]['product']['proposedCategory'], stock.CATEGORY_PARTS)
+            # 品番空欄の衣服は品番「要確認」の制服（部品にしない）
+            self.assertEqual(by_no[2]['csv']['code'], '要確認')
+            self.assertEqual(by_no[2]['product']['proposedCategory'], stock.CATEGORY_UNIFORM)
             self.assertEqual(by_no[3]['product']['proposedCategory'], stock.CATEGORY_PARTS)
             # 別商品として分かれる（全品番なしを1つに潰さない）
             self.assertNotEqual(by_no[2]['matchGroupKey'], by_no[3]['matchGroupKey'])
@@ -2223,14 +2224,14 @@ class ReviewTierAndProvisionalNameTest(unittest.TestCase):
             }, db_path=str(path))
             c.commit()
             n = c.execute(
-                "SELECT COUNT(*) AS n FROM products WHERE code='別注' AND merged_into_id IS NULL"
+                "SELECT COUNT(*) AS n FROM products WHERE code='別注(病院A)' AND merged_into_id IS NULL"
             ).fetchone()['n']
             self.assertEqual(n, 1)
             sizes = {
                 r['label'] for r in c.execute(
                     '''SELECT ps.label FROM product_sizes ps
                        JOIN products p ON p.id=ps.product_id
-                       WHERE p.code='別注' AND p.merged_into_id IS NULL'''
+                       WHERE p.code='別注(病院A)' AND p.merged_into_id IS NULL'''
                 )
             }
             self.assertEqual(sizes, {'S', 'M'})

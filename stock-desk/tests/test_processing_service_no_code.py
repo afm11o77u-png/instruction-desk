@@ -232,7 +232,7 @@ class CategoryDefaultTest(unittest.TestCase):
     def test_coded_garments_become_uniform(self):
         commit(self.c, self.path, ['顧客A,仕入先X,ABC-1,ポロシャツ,L', '顧客A,仕入先X,別注,特注ベスト,L'])
         cats = {r['code']: r['category'] for r in self.c.execute('SELECT code, category FROM products')}
-        self.assertEqual(cats, {'ABC-1': stock.CATEGORY_UNIFORM, '別注': stock.CATEGORY_UNIFORM})
+        self.assertEqual(cats, {'ABC-1': stock.CATEGORY_UNIFORM, '別注(顧客A)': stock.CATEGORY_UNIFORM})
 
     def test_category_repair_dry_run_then_commit(self):
         pid = stock.save_product(self.c, {'code': 'OLD-1', 'name': 'シャツ', 'category': '', 'sizes': ['L'], 'active': True})
