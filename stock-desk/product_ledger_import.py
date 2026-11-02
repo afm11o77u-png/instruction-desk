@@ -2313,6 +2313,43 @@ def _try_ledger_max_name_adoption(
     )
 
 
+def _candidate_base_key(cand):
+    pkg = _full_package_for_candidate(cand)
+    return product_name_core_key(
+        stock.text(pkg.get('plannedName') or '') or cand.get('productName') or ''
+    )
+
+
+def _majority_base_name_candidate(pool, color_hit):
+    """色あり候補の本体名が少数派なら、最も多くの顧客が使う本体名の候補を返す（なければ None）。
+
+    例: CD630 で多数の顧客が「白衣」、1顧客だけ「長袖ジャンパー 白」→ 白衣を代表にする。
+    """
+    weights = {}
+    for cand in pool:
+        key = _candidate_base_key(cand)
+        if key:
+            weights[key] = weights.get(key, 0) + max(1, len(cand.get('customers') or []))
+    if not weights:
+        return None
+    hit_key = _candidate_base_key(color_hit)
+    top = max(weights.values())
+    top_keys = [k for k, w in weights.items() if w == top]
+    if len(top_keys) != 1 or top_keys[0] == hit_key or weights.get(hit_key, 0) * 2 > top:
+        return None
+    best = None
+    for cand in pool:
+        if _candidate_base_key(cand) != top_keys[0]:
+            continue
+        rank = (
+            0 if not stock.text(cand.get('processing') or '') else 1,
+            -len(cand.get('customers') or []),
+        )
+        if best is None or rank < best[0]:
+            best = (rank, cand)
+    return best[1] if best else None
+
+
 def _try_explicit_color_adoption(
     pool,
     *,
@@ -2378,11 +2415,17 @@ def _try_explicit_color_adoption(
             f'商品名に色「{pkg.get("color") or color_display}」が明示されているため採用'
             f'（在庫では代表が決まらなかった候補から）'
         )
+        rule_code = 'explicit_color_name'
+        majority = _majority_base_name_candidate(pool, hit)
+        if majority is not None:
+            hit = majority
+            rule = '台帳で最も多くの顧客が使う商品名のため採用（在庫では代表が決まらなかった候補から）'
+            rule_code = 'ledger_max_name_zero_stock'
         adopted = _adopt_candidate_package(
             hit,
             candidates=all_candidates,
             rule=rule,
-            rule_code='explicit_color_name',
+            rule_code=rule_code,
             reasons=reasons,
         )
         # ペア候補表示は呼び出し側の在庫付きを優先
@@ -3766,6 +3809,16 @@ def _attach_stock_pick_display(group, aux, package, *, auto_cleared):
 def stamp_aux_adopted_package_on_rows(classified, sku_groups):
     """在庫一意採用グループの各行へメイン仕様を載せ、非採用行は原文仕様を provenance に残す。"""
     by_code = {g['code']: g for g in sku_groups}
+    # 顧客×品番ごとの括弧加工。顧客内で加工が1種類に揃っていれば、その顧客の取扱仕様に使う。
+    customer_processing = {}
+    for row in classified:
+        csv_row = row.get('csv') or {}
+        key = (
+            identity_match_key(csv_row.get('customer') or ''),
+            stock.text(csv_row.get('code') or ''),
+        )
+        proc = stock.text((row.get('parenClassification') or {}).get('processing') or '')
+        customer_processing.setdefault(key, set()).add(proc)
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code') or '')
         group = by_code.get(code)
@@ -3873,7 +3926,12 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
             composed = paren_classify.compose_handling_embroidery(row_proc, usage_kind)
             handle['provenanceEmbroidery'] = composed or row_proc
             handle['usageKind'] = usage_kind
-            if usage_kind == paren_classify.USAGE_KIND_SALES and composed:
+            customer_key = (
+                identity_match_key((row.get('csv') or {}).get('customer') or ''),
+                code,
+            )
+            customer_uniform = bool(row_proc) and customer_processing.get(customer_key) == {row_proc}
+            if composed and (usage_kind == paren_classify.USAGE_KIND_SALES or customer_uniform):
                 handle['proposedEmbroidery'] = composed
                 if handle.get('action') == 'create' or handle.get('embroidery') in (
                     '', None, PENDING_EMBROIDERY,
