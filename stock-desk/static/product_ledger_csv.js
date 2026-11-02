@@ -3884,6 +3884,7 @@
       <label>登録区分<select data-pl-register-kind="${r.rowNo}" ${disabled}>${kindOpts}</select></label>
       <span class="excelhint">${manual?'手動（自動より優先）':`自動検出: ${esc(autoKind)}`}</span>
       <p class="excelhint">加工・素材欄への入力だけでは区分は切り替わりません。</p>
+      ${(r.processingService&&r.processingService.k2GarmentCandidate)?'<p class="excelhint pl-k2-garment-note">K2スタッフ工房の衣服らしい行です。既定は加工サービス。制服として登録するなら「商品」、不要なら「この行を登録しない」。</p>':''}
     </div>`
     const unusedNote=unusedFieldsNoteHtml(kind,edit,pc)
     const uncBlock=unclassifiedBlockHtml(st,r,uncText,disabled)

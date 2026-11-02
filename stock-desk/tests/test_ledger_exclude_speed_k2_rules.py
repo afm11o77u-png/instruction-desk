@@ -108,9 +108,10 @@ class K2ClassifyUnitTest(unittest.TestCase):
             product_name='チェック柄ベスト',
             code='',
         )
-        self.assertFalse(r['identifiable'])
-        self.assertTrue(r.get('k2AutoExclude'))
-        self.assertIn('加工内容を特定できない', r.get('autoExcludeReason') or '')
+        # 衣服名は加工名辞書に入れない。K2では既定加工＋行ごとに商品/登録しないを選択
+        self.assertFalse(r.get('k2AutoExclude'))
+        self.assertTrue(r.get('k2GarmentCandidate'))
+        self.assertEqual(r.get('serviceName'), 'チェック柄ベスト')
 
     def test_vendor_normalization(self):
         for s in ('K2スタッフ工房', 'Ｋ２スタッフ工房', 'K2 スタッフ 工房', 'ｋ２ｽﾀｯﾌ工房'):
@@ -165,11 +166,11 @@ class K2PreviewIntegrationTest(unittest.TestCase):
         })
         rows = preview.get('rows') or []
         auto_ex = [r for r in rows if r.get('autoRowExcluded')]
-        self.assertEqual(len(auto_ex), 1, msg=[(r.get('csv'), r.get('reasons')) for r in rows])
-        self.assertIn(pli.K2_AUTO_EXCLUDE_REASON, ' '.join(auto_ex[0].get('reasons') or []))
-        # 確認待ちに残らない
-        self.assertFalse(auto_ex[0].get('processingServiceNeedsConfirm'))
-        self.assertNotEqual(auto_ex[0].get('status'), pli.STATUS_REVIEW)
+        self.assertEqual(len(auto_ex), 0, msg=[(r.get('csv'), r.get('reasons')) for r in rows])
+        k2v = [r for r in rows if (r.get('processingService') or {}).get('k2GarmentCandidate')]
+        self.assertEqual(len(k2v), 1)
+        self.assertFalse(k2v[0].get('processingServiceNeedsConfirm'))
+        self.assertNotEqual(k2v[0].get('status'), pli.STATUS_REVIEW)
 
         # 別行のほつれ補修は借用されず登録対象のまま
         hoture = [
@@ -211,7 +212,8 @@ class K2PreviewIntegrationTest(unittest.TestCase):
         self.assertFalse(row.get('autoRowExcluded'))
 
         # 加工名不明→自動除外→手入力復帰→再照合で勝手に除外しない
-        text2 = ledger('顧客B,K2スタッフ工房,,謎の帽子,')
+        # （K2は名前があれば加工になるため、品名空欄の行で確認）
+        text2 = ledger('顧客B,K2スタッフ工房,X-1,,')
         prev2 = pli.build_preview(c, {
             'file': csv_b64(text2), 'name': 'restore.csv',
             '_canWrite': True, '_actor': {'name': 't'},
@@ -344,7 +346,7 @@ class ExcludeServerTimingSmokeTest(unittest.TestCase):
         folder, path, c = newdb()
         self.addCleanup(folder.cleanup)
         rows = [f'顧客{i},部品屋,,生地{i},' for i in range(40)]
-        rows.append('顧客X,K2スタッフ工房,,謎の帽子,')
+        rows.append('顧客X,K2スタッフ工房,X-1,,')
         text = ledger(*rows)
         t0 = time.perf_counter()
         prev = pli.build_preview(c, {

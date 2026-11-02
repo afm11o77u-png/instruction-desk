@@ -179,3 +179,49 @@ class WorkSuffixNotPartsTest(unittest.TestCase):
             self.assertFalse(r.get('k2AutoExclude'), name)
         for name in ('ボタン　18mm グリーン', 'DCP515用生地(袖/裾加工用)', '裏地', 'ファスナー'):
             self.assertTrue(ps.is_physical_parts_name(name), name)
+
+
+class GarmentBodyNotProcessingTest(unittest.TestCase):
+    """品番のある制服は名前に加工語があっても加工サービスにしない（#332）。"""
+
+    def _c(self, sup, name, code, paren=''):
+        import product_ledger_processing_service as ps
+        return ps.classify_processing_service_row(supplier=sup, product_name=name, code=code, paren_processing=paren)
+
+    def test_garment_with_code_not_processing(self):
+        for code, name in [('AS6800', 'コックコート七分袖'), ('34207-81', '七分袖シャツ'),
+                           ('AZ8710-008', '反射ベスト'), ('AZ66301-008', 'リフレクターキャップ'),
+                           ('FP6700U-16', '裾上げパンツ'), ('RW0009-1', 'コックコート（七分袖）')]:
+            r = self._c('アイトス', name, code)
+            self.assertFalse(r.get('isProcessingService'), (code, name, r.get('serviceName')))
+
+
+class K2StaffWorkshopTest(unittest.TestCase):
+    def _c(self, name, code=''):
+        import product_ledger_processing_service as ps
+        return ps.classify_processing_service_row(supplier='Ｋ２スタッフ工房', product_name=name, code=code)
+
+    def test_repairs_are_processing(self):
+        for n in ('修理', 'サイズダウン・アップ', '丈直し・反射板調整'):
+            r = self._c(n)
+            self.assertTrue(r.get('isProcessingService'), n)
+            self.assertFalse(r.get('k2AutoExclude'), n)
+            self.assertFalse(r.get('k2GarmentCandidate'), n)
+
+    def test_garment_like_defaults_processing_with_choice(self):
+        for n in ('衣装係ベスト', 'エプロン　ピンク', '赤エプロン', 'ブルゾン　紺×緑'):
+            r = self._c(n, '要確認')
+            self.assertTrue(r.get('isProcessingService'), n)
+            self.assertTrue(r.get('k2GarmentCandidate'), n)
+
+    def test_choice_product_makes_uniform(self):
+        import product_ledger_import as pli, stock
+        ps = self._c('衣装係ベスト', '要確認')
+        rows = [{'rowNo': 5, 'processingService': ps, 'product': {'category': '加工サービス'}}]
+        pli.apply_k2_garment_choice(rows, {'5': {'registerKind': '商品'}})
+        self.assertTrue(rows[0]['k2GarmentAsProduct'])
+        self.assertEqual(rows[0]['product']['category'], stock.CATEGORY_UNIFORM)
+        self.assertFalse(rows[0]['processingService']['isProcessingService'])
+        rows2 = [{'rowNo': 5, 'processingService': ps, 'product': {}}]
+        pli.apply_k2_garment_choice(rows2, {})
+        self.assertFalse(rows2[0].get('k2GarmentAsProduct'))
