@@ -12,12 +12,11 @@ async function openTemplateRepair(){
  if(dirty){toast('開いている指示書の変更を保存してから管理・修正を開いてください。');return}
  const uid=currentUser.id;const data=await api('/api/templates/admin');if(currentUser?.id!==uid||currentUser.role!=='owner')return;
  repairData=data;repairCurrent=null;repairDirty=false;
- repairDialog.innerHTML=`<div class="dialoghead"><div><h2>ひな形を修正</h2><p>主管理者専用 ／ 全員のひな形を確認・修正できます。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button><button type="button" id="repair-orders">指示書の修正へ</button><button type="button" id="repair-backup">バックアップを作成</button><button type="button" id="repair-refresh">一覧を更新</button></div><p id="repair-message" role="status"></p><section id="repair-library"><h3>全員のひな形</h3><p>ひな形を直しても、投函済みの指示書は変更されません。</p><div class="repairfilters"><label>所有者<select id="repair-owner-filter"><option value="">全員</option>${data.users.map(u=>`<option value="${u.id}">${esc(u.name)}${u.active?'':'（停止中）'}</option>`).join('')}</select></label><label>検索<input id="repair-search" placeholder="フォルダ・保存名・顧客名"></label></div><div id="repair-list"></div></section><section id="repair-editor" hidden></section></div>`;
+ repairDialog.innerHTML=`<div class="dialoghead"><div><h2>ひな形を修正</h2><p>主管理者専用 ／ 全員のひな形を確認・修正できます。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button><button type="button" id="repair-orders">指示書の修正へ</button><button type="button" id="repair-refresh">一覧を更新</button></div><p id="repair-message" role="status"></p><section id="repair-library"><h3>全員のひな形</h3><p>ひな形を直しても、投函済みの指示書は変更されません。</p><div class="repairfilters"><label>所有者<select id="repair-owner-filter"><option value="">全員</option>${data.users.map(u=>`<option value="${u.id}">${esc(u.name)}${u.active?'':'（停止中）'}</option>`).join('')}</select></label><label>検索<input id="repair-search" placeholder="フォルダ・保存名・顧客名"></label></div><div id="repair-list"></div></section><section id="repair-editor" hidden></section></div>`;
  repairDialog.querySelector('#repair-close').onclick=closeRepair;
  repairDialog.querySelector('#repair-home').onclick=()=>{if(closeRepair())openRepair()};
  repairDialog.oncancel=e=>{e.preventDefault();closeRepair()};
  repairDialog.querySelector('#repair-refresh').onclick=()=>repairRun(async()=>{if(repairDirty&&!confirm('未保存の修正を破棄して一覧を更新しますか？'))return;repairData=await api('/api/templates/admin');repairDirty=false;repairCurrent=null;showRepairLibrary()});
- repairDialog.querySelector('#repair-backup').onclick=()=>repairRun(async()=>{const r=await api('/api/backup',{});repairMessage('バックアップを作成しました：'+r.filename)});
  repairDialog.querySelector('#repair-orders').onclick=()=>{if(!closeRepair())return;document.querySelector('.nav[data-view="all"]').click();toast('修正する指示書を検索して「開く」を押してください。保存すると変更履歴が残ります。')};
  repairDialog.querySelector('#repair-search').oninput=drawRepairList;repairDialog.querySelector('#repair-owner-filter').onchange=drawRepairList;
  drawRepairList();repairDialog.showModal();
@@ -77,7 +76,7 @@ async function openRepair(){
  if(currentUser?.role!=='owner')return;
  if(dirty){toast('開いている指示書の変更を保存してから管理・修正を開いてください。');return}
  repairCurrent=null;repairDirty=false;
- repairDialog.innerHTML=`<div class="dialoghead"><div><h2>管理・修正</h2><p>主管理者専用 ／ 行いたい操作を選んでください。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairmenu"><button type="button" id="repair-templates"><strong>ひな形を修正</strong><span>全員の保存済みひな形を確認・修正します。</span></button><button type="button" id="repair-records"><strong>指示書の状態・記録を修正</strong><span>作業状況、印刷済み、バーコード発行、発送記録を修正します。</span></button><button type="button" id="repair-backup"><strong>バックアップを作成</strong><span>指示書のデータ、出荷情報、貼付け位置の画像、修正依頼掲示板をこのパソコン内に保存します。</span></button><button type="button" id="repair-migrate-export"><strong>移行用バックアップを書き出し</strong><span>自宅PCから会社PCへ移すためのZIPをダウンロードします。指示書・在庫などの業務データを含めます（パスワード等の認証情報は含めません）。画像は容量のため含めません。</span></button><button type="button" id="repair-migrate-restore"><strong>業務データを復元（利用者情報は変更しません）</strong><span>移行用ZIPで指示書・在庫などを置き換えます。このパソコンのログイン・権限はそのままです。担当の割り当てを確認してから実行します。</span></button><button type="button" id="repair-test-reset"><strong>テスト用：ピッキング依頼をリセット</strong><span>テストで作ったリストの取り込み・保存・送信確認をやり直します。通常の削除とは別です。実際の倉庫へ依頼したリストには使わないでください。</span></button></div><p id="repair-message" role="status"></p></div>`;
+ repairDialog.innerHTML=`<div class="dialoghead"><div><h2>管理・修正</h2><p>主管理者専用 ／ 行いたい操作を選んでください。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairmenu"><button type="button" id="repair-templates"><strong>ひな形を修正</strong><span>全員の保存済みひな形を確認・修正します。</span></button><button type="button" id="repair-records"><strong>指示書の状態・記録を修正</strong><span>作業状況、印刷済み、バーコード発行、発送記録を修正します。</span></button><button type="button" id="repair-split"><strong>メニュー別バックアップ・復元</strong><span>指示書デスク／顧客・商品情報／在庫管理／マーク管理／利用者管理 を別々のZIPでダウンロードし、別のPCで復元します。</span></button><button type="button" id="repair-migrate-export"><strong>移行用バックアップを書き出し</strong><span>自宅PCから会社PCへ移すためのZIPをダウンロードします。指示書・在庫などの業務データを含めます（パスワード等の認証情報は含めません）。画像は容量のため含めません。</span></button><button type="button" id="repair-migrate-restore"><strong>業務データを復元（利用者情報は変更しません）</strong><span>移行用ZIPで指示書・在庫などを置き換えます。このパソコンのログイン・権限はそのままです。担当の割り当てを確認してから実行します。</span></button><button type="button" id="repair-test-reset"><strong>テスト用：ピッキング依頼をリセット</strong><span>テストで作ったリストの取り込み・保存・送信確認をやり直します。通常の削除とは別です。実際の倉庫へ依頼したリストには使わないでください。</span></button></div><p id="repair-message" role="status"></p></div>`;
  repairDialog.querySelector('#repair-close').onclick=closeRepair;
  repairDialog.oncancel=e=>{e.preventDefault();closeRepair()};
  repairDialog.querySelector('#repair-templates').onclick=()=>repairRun(openTemplateRepair);
@@ -89,7 +88,7 @@ async function openRepair(){
   const box=document.querySelector('#debugdeskdialog');
   box.onclose=()=>{box.onclose=null;if(currentUser?.id===uid&&currentUser?.role==='owner')openRepair()};
  });
- repairDialog.querySelector('#repair-backup').onclick=()=>repairRun(async()=>{const r=await api('/api/backup',{});repairMessage('バックアップを作成しました：'+r.filename)});
+ repairDialog.querySelector('#repair-split').onclick=()=>openSplitBackup();
  repairDialog.querySelector('#repair-migrate-export').onclick=()=>repairRun(exportMigrationBackup);
  repairDialog.querySelector('#repair-migrate-restore').onclick=()=>openMigrationRestore();
  repairDialog.querySelector('#repair-test-reset').onclick=()=>openTestReset();
@@ -99,6 +98,42 @@ async function openRepair(){
 function migrationFileToBase64(file){
  if(typeof fileToBase64==='function')return fileToBase64(file);
  return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>{const text=String(reader.result||'');resolve(text.slice(text.indexOf(',')+1))};reader.onerror=()=>reject(Error('ZIPを読み込めません。'));reader.readAsDataURL(file)});
+}
+const SPLIT_CATEGORIES=[['desk','指示書デスク','指示書・履歴・ひな形・修正依頼・宛名の記憶・ピッキング・持出し'],['customer','顧客・商品情報','貼付け位置・出荷情報・ネーム情報（画像を含む）'],['stock','在庫管理','在庫データベース全体'],['mark','マーク管理','勤怠・シフト・備品'],['users','利用者管理','利用者・ログイン制限・表示モード・操作記録（パスワードを含む）']];
+function splitLabel(key){return (SPLIT_CATEGORIES.find(c=>c[0]===key)||[key,key])[1]}
+function openSplitBackup(){
+ if(currentUser?.role!=='owner')return;
+ repairDialog.innerHTML=`<div class="dialoghead"><div><h2>メニュー別バックアップ・復元</h2><p>主管理者専用 ／ 会社PCでダウンロードしたZIPを自宅PCで復元できます（逆も可）。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button><button type="button" id="split-all">5つすべてダウンロード</button></div><table class="splittable"><tbody>${SPLIT_CATEGORIES.map(([k,l,d])=>`<tr><th>${esc(l)}</th><td>${esc(d)}</td><td><button type="button" data-split-export="${k}">ダウンロード</button></td><td><button type="button" data-split-restore="${k}">ZIPから復元</button></td></tr>`).join('')}</tbody></table><input type="file" id="split-file" accept=".zip" hidden><p>復元はその区分だけを置き換えます。復元前に、このPCの現在のデータを data/backups に自動で保存します。</p><p id="repair-message" role="status"></p></div>`;
+ repairDialog.querySelector('#repair-close').onclick=closeRepair;
+ repairDialog.querySelector('#repair-home').onclick=()=>{if(!repairBusy)openRepair()};
+ repairDialog.querySelectorAll('[data-split-export]').forEach(b=>b.onclick=()=>repairRun(()=>exportSplitBackup(b.dataset.splitExport)));
+ repairDialog.querySelector('#split-all').onclick=()=>repairRun(async()=>{for(const [k] of SPLIT_CATEGORIES)await exportSplitBackup(k);repairMessage('5つのZIPをダウンロードしました。')});
+ const input=repairDialog.querySelector('#split-file');let target='';
+ repairDialog.querySelectorAll('[data-split-restore]').forEach(b=>b.onclick=()=>{target=b.dataset.splitRestore;input.value='';input.click()});
+ input.onchange=()=>{const file=input.files[0];if(file)repairRun(()=>restoreSplitBackup(target,file))};
+}
+async function exportSplitBackup(key){
+ repairMessage(`「${splitLabel(key)}」を書き出し中です…`);
+ const r=await fetch('/api/migration/split-export?category='+encodeURIComponent(key));
+ if(!r.ok){let msg='書き出せませんでした。';try{msg=(await r.json()).error||msg}catch{}throw Error(msg)}
+ const blob=await r.blob();
+ const header=(r.headers.get('Content-Disposition')||'').match(/filename=\"([^\"]+)\"/);
+ const name=header?header[1]:`desk-${key}.zip`;
+ const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),15000);
+ repairMessage('ダウンロードしました：'+name);
+}
+async function restoreSplitBackup(key,file){
+ repairMessage('ZIPを確認しています…');
+ const data=await migrationFileToBase64(file);
+ const info=await api('/api/migration/split-inspect',{data,filename:file.name});
+ if(info.category!==key)throw Error(`このZIPは「${splitLabel(info.category)}」のバックアップです。「${splitLabel(key)}」の行から復元してください。`);
+ const counts=Object.entries(info.counts||{}).map(([t,n])=>`${t}：${n}`).join('\n');
+ const extra=key==='users'?'\n\n利用者・パスワードもZIPの内容になります。復元後は全員ログインし直しになります。':'';
+ if(!confirm(`「${splitLabel(key)}」をこのZIPの内容で置き換えます。\nZIP作成：${info.createdAt||'-'}（${info.createdBy||'-'}）\n${counts}${info.fileCount?'\nファイル：'+info.fileCount+'件':''}${extra}\n\n他の区分は変更しません。現在のデータは自動で保存されます。よろしいですか？`))return;
+ repairMessage('復元しています…');
+ const r=await api('/api/migration/split-restore',{data,filename:file.name,category:key,confirm:true});
+ repairMessage(`「${r.label}」を復元しました。安全バックアップ：${(r.safetyBackup||[]).join('、')}`);
+ if(key==='users')setTimeout(()=>location.reload(),1500);
 }
 async function exportMigrationBackup(){
  if(currentUser?.role!=='owner')return;
