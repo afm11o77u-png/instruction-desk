@@ -175,6 +175,25 @@ def merge_duplicate_opening_plans(c, plans):
     return merged_rows
 
 
+def _name_processing_key(name):
+    """原文名の括弧加工（商品登録と同じ分類器）を比較キーにする。形状語（七分袖等）は加工にならない。"""
+    try:
+        import product_ledger_paren as paren_classify
+        proc = paren_classify.split_name_and_color(stock.text(name)).get('processing') or ''
+    except Exception:
+        proc = ''
+    return _processing_cmp_key(proc)
+
+
+def _processing_cmp_key(proc):
+    key = stock.spec_key(stock.text(proc))
+    for suf in ('あり', '有り', '有'):
+        if key.endswith(suf) and len(key) > len(suf):
+            key = key[: -len(suf)]
+            break
+    return key
+
+
 def _names_equivalent_core(a, b):
     """原文名の同一判定。
 
@@ -190,7 +209,7 @@ def _names_equivalent_core(a, b):
     # 本体キー一致＋色キー一致（片方色なしはここでは同一視しない＝色省略は上位処理）
     ba, ca, _, _ = legacy.product_name_base_and_color(ta)
     bb, cb, _, _ = legacy.product_name_base_and_color(tb)
-    if ba and ba == bb and ca == cb:
+    if ba and ba == bb and ca == cb and _name_processing_key(ta) == _name_processing_key(tb):
         return True
     # 半角カナ等: classify と同じ unify（SKU 全体 NFKC はしない）でも照合
     import product_ledger_paren as paren_classify
@@ -1462,6 +1481,23 @@ def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_ma
             if len(narrow_u_keys) == 1:
                 matches = narrowed_u
                 dest_keys = narrow_u_keys
+        # 括弧加工で絞る: 白衣→加工なし、白衣(DHC刺繍あり)→DHC刺繍（＊は在庫側の中古、商品は同じ）
+        if len(dest_keys) > 1:
+            aux_proc = _name_processing_key(product_name)
+
+            def _m_proc(m):
+                p = _processing_cmp_key(m.get('processing') or '')
+                return p or _name_processing_key(m.get('csvProductName') or '')
+
+            if aux_proc:
+                narrowed_p = [m for m in matches if _m_proc(m) and (
+                    _m_proc(m) == aux_proc or aux_proc in _m_proc(m) or _m_proc(m) in aux_proc)]
+            else:
+                narrowed_p = [m for m in matches if not _m_proc(m)]
+            narrow_p_keys = {_dest_key(m) for m in narrowed_p}
+            if len(narrow_p_keys) == 1:
+                matches = narrowed_p
+                dest_keys = narrow_p_keys
         # 仕様（○○ライン／なし）で絞る: 同じ品番でライン違いの取扱
         if len(dest_keys) > 1:
             import product_ledger_paren as paren_classify
