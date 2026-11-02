@@ -740,6 +740,20 @@ def classify_processing_service_row(
         service_only, source_only = _resolve_service_name_from_row_fields(
             product_name=name_t, paren_processing='', code='',
         )
+        # メーカー品（加工業者でない仕入先）で原文に「加工」が無いのに「○○加工」へ補った名前は
+        # 部品の現物（例: YKK「スナッパー(赤)」）。加工サービスへまとめない。
+        if (
+            service_only
+            and '加工' in service_only
+            and '加工' not in unicodedata.normalize('NFKC', name_t)
+            and code_t
+            and _strip_parens_keep_inner(name_t)[1]
+            # 括弧外の名前そのもの（例: スナッパー）から加工名を補った場合だけ
+            and unify_processing_service_name(_strip_parens_keep_inner(name_t)[0]) == service_only
+        ):
+            result['isPhysicalParts'] = True
+            result['makerParts'] = True
+            return result
         if service_only and source_only == 'name' and is_standalone_processing_service_name(name_t):
             result['isProcessingVendor'] = True
             result['isProcessingService'] = True

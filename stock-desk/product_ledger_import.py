@@ -7219,7 +7219,8 @@ def apply_manual_register_kind(classified, row_classifications=None):
             pc['physicalPartsView'] = True
             pc['processingServiceView'] = False
             prod = dict(row.get('product') or {})
-            if prod.get('blankSku') or not stock.text((row.get('csv') or {}).get('code') or ''):
+            if (prod.get('blankSku') or not stock.text((row.get('csv') or {}).get('code') or '')
+                    or (ps.get('makerParts') and not pc.get('registerKindManual'))):
                 prod['category'] = stock.CATEGORY_PARTS
                 prod['proposedCategory'] = stock.CATEGORY_PARTS
                 row['product'] = prod
