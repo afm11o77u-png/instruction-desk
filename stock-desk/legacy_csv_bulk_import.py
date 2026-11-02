@@ -648,6 +648,7 @@ def commit_opening_stock_plans(
             'siteName': default_site, 'shelfName': '',
         })
         size = stock.text(target.get('size') or csv.get('size') or '')
+        size = _codeless_stock_size(c, product_id, size)
         if size:
             _ensure_product_size(c, product_id, size)
         condition = plan.get('condition')
@@ -776,6 +777,19 @@ def _upsert_opening_map(
         opening_token=opening_token,
         lot_ids=lot_ids or [],
     )
+
+
+def _codeless_stock_size(c, product_id, size_label):
+    """部品・加工サービスは CSV のサイズを使わず、商品の既定サイズ（先頭）で在庫を持つ。"""
+    if not product_id:
+        return size_label
+    row = c.execute('SELECT category FROM products WHERE id=?', (product_id,)).fetchone()
+    if not row or stock.text(row['category'] or '') not in stock.CODELESS_CATEGORIES:
+        return size_label
+    first = c.execute(
+        'SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order,id LIMIT 1', (product_id,),
+    ).fetchone()
+    return first['label'] if first else 'F'
 
 
 def _ensure_product_size(c, product_id, size_label):

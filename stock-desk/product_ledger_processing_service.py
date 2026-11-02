@@ -1552,3 +1552,47 @@ def apply_category_fixes(c, dry_run=True):
                 (stock.CATEGORY_UNIFORM, now, it['id']),
             )
     return {'dryRun': dry_run, **inv}
+
+
+def _size_in_use(c, pid, label):
+    if c.execute('''SELECT 1 FROM lots l JOIN customer_products cp ON cp.id=l.customer_product_id
+                    WHERE cp.product_id=? AND l.size_label=? LIMIT 1''', (pid, label)).fetchone():
+        return True
+    has_po = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='purchase_order_lines'").fetchone()
+    return bool(has_po and c.execute(
+        'SELECT 1 FROM purchase_order_lines WHERE product_id=? AND size_label=? LIMIT 1', (pid, label)).fetchone())
+
+
+def apply_service_size_color_cleanup(c, dry_run=True):
+    """加工サービスのサイズ・色を外す計画（既定: 書込なし）。
+
+    在庫・発注で使っているサイズは残す。サイズは最低1つ必要なので、何も残らなければ「—」1つにする。
+    """
+    plans = []
+    for p in c.execute(
+        '''SELECT id, name, color FROM products WHERE category=? AND merged_into_id IS NULL ORDER BY id''',
+        (stock.CATEGORY_PROCESS_SERVICE,),
+    ).fetchall():
+        pid = int(p['id'])
+        sizes = [r['label'] for r in c.execute(
+            'SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order,id', (pid,))]
+        used = [s for s in sizes if _size_in_use(c, pid, s)]
+        keep = used or ['—']
+        remove = [s for s in sizes if s not in keep]
+        add = [s for s in keep if s not in sizes]
+        clear_color = bool(stock.text(p['color'] or ''))
+        if not remove and not add and not clear_color:
+            continue
+        plans.append({'id': pid, 'name': p['name'], 'color': p['color'] or '',
+                      'clearColor': clear_color, 'removeSizes': remove, 'addSizes': add,
+                      'keptInUse': used})
+    if not dry_run:
+        t = stock.stamp()
+        for pl in plans:
+            for s in pl['removeSizes']:
+                c.execute('DELETE FROM product_sizes WHERE product_id=? AND label=?', (pl['id'], s))
+            for s in pl['addSizes']:
+                c.execute('INSERT INTO product_sizes(product_id,label,sort_order) VALUES(?,?,0)', (pl['id'], s))
+            if pl['clearColor']:
+                c.execute("UPDATE products SET color='', updated_at=? WHERE id=?", (t, pl['id']))
+    return {'dryRun': dry_run, 'planned' if dry_run else 'applied': plans}

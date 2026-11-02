@@ -10,6 +10,8 @@
   python ... path/to/stock.sqlite3 --missing --commit      # バックアップ後に作成
   python ... path/to/stock.sqlite3 --categories            # カテゴリ空欄の品番付き商品（→制服）の計画
   python ... path/to/stock.sqlite3 --categories --commit   # バックアップ後に更新
+  python ... path/to/stock.sqlite3 --service-sizes         # 加工サービスのサイズ・色を外す計画
+  python ... path/to/stock.sqlite3 --service-sizes --commit  # バックアップ後に更新（在庫・発注で使うサイズは残す）
 """
 from __future__ import annotations
 
@@ -35,22 +37,27 @@ def main(argv=None):
     p.add_argument('--keys', default='', help='--duplicates で統合する組のキー（カンマ区切り。省略時は全組）')
     p.add_argument('--missing', action='store_true', help='足りない加工サービスを作る計画（--commit で作成）')
     p.add_argument('--categories', action='store_true', help='カテゴリ空欄の品番付き商品を制服にする計画（--commit で更新）')
+    p.add_argument('--service-sizes', action='store_true', help='加工サービスのサイズ・色を外す計画（--commit で更新）')
     args = p.parse_args(argv)
     path = Path(args.db)
     if not path.is_file():
         print(f'DB がありません: {path}', file=sys.stderr)
         return 2
     ids = [x for x in args.ids.replace(' ', '').split(',') if x]
-    if args.missing or args.categories:
+    if args.missing or args.categories or args.service_sizes:
         if args.commit:
-            backup = stock.backup_sqlite(path, tag='pre-category-fix' if args.categories else 'pre-missing-process-service')
+            tag = ('pre-service-size-cleanup' if args.service_sizes
+                   else 'pre-category-fix' if args.categories else 'pre-missing-process-service')
+            backup = stock.backup_sqlite(path, tag=tag)
             print(f'バックアップ: {backup}')
             c = stock.connect(path)
         else:
             c = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
             c.row_factory = sqlite3.Row
         try:
-            fn = proc_svc.apply_category_fixes if args.categories else proc_svc.apply_missing_companion_services
+            fn = (proc_svc.apply_service_size_color_cleanup if args.service_sizes
+                  else proc_svc.apply_category_fixes if args.categories
+                  else proc_svc.apply_missing_companion_services)
             out = fn(c, dry_run=not args.commit)
             if args.commit:
                 c.commit()

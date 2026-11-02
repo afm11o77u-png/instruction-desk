@@ -3740,7 +3740,8 @@
     else if(p.action==='create')bits.push('新規商品')
     if(p.id&&plan.label!=='既存商品を使用')bits.push(`商品ID ${p.id}`)
     if(p.officialName)bits.push(`公式名 ${esc(p.officialName)}`)
-    if(plan.sizes&&plan.sizes.length){
+    if(p.sizeHidden){/* 部品・加工サービスはサイズを出さない */}
+    else if(plan.sizes&&plan.sizes.length){
       const shown=plan.sizes.slice(0,8).map(esc).join('、')
       const more=plan.sizes.length>8?` …他${plan.sizes.length-8}`:''
       bits.push(`予定サイズ ${shown}${more}`)
@@ -3753,7 +3754,7 @@
     if(p.subSupplierAdd)bits.push('サブ仕入先追加（通常は変更なし）')
     if(p.mergeSourceIds&&p.mergeSourceIds.length)bits.push(`統合元 ${p.mergeSourceIds.join(',')}`)
     if(h.id)bits.push(`取扱 ${h.id}`)
-    else if(h.action==='create')bits.push('取扱新規（加工未整理）')
+    else if(h.action==='create')bits.push(p.sizeHidden?'取扱新規':'取扱新規（加工未整理）')
     else if(h.embroideryLabel||h.embroidery)bits.push(esc(h.embroideryLabel||h.embroidery))
     if(r.usedMarkerAutoMerged)bits.push('中古標記まとめ')
     else if(r.skuAutoMerged&&(r.matchGroupCount||0)>1)bits.push('サイズ自動まとめ')
@@ -5140,7 +5141,7 @@
         <td class="lc-code">${esc(csv.codeDisplay||csv.code||'')}</td>
         <td class="lc-product">${esc(csv.productName||'')}${csv.usedMarkerPossible?' <span class="badge">＊中古候補</span>':''}</td>
         <td class="lc-paren">${parenCell(st,r)}</td>
-        <td class="lc-size">${esc(csv.size||'')}</td>
+        <td class="lc-size">${(r.product||{}).sizeHidden?'':esc(csv.size||'')}</td>
         <td class="lc-handle">${targetCell(r)}</td>
         <td class="lc-detail"><span class="lc-clip">${esc(reason)}</span></td>
         <td class="lc-actions">${rowActions(st,r)}</td>
