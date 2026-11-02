@@ -123,5 +123,36 @@ class LedgerAndOpeningTest(unittest.TestCase):
         self.assertEqual((s['create'], s['reuse']), (0, 0), s)
 
 
+class UsedStarCustomOrderTest(unittest.TestCase):
+    def test_star_variant_is_same_product_and_used(self):
+        folder, path, c = newdb()
+        self.addCleanup(folder.cleanup)
+        led = ['顧客N,仕入S,別注,緑つなぎ,L', '顧客N,仕入S,別注,＊緑つなぎ,L']
+        base = {'importMode': 'products', 'name': 'p.csv', 'file': b64(ledger_csv(led)),
+                '_canWrite': True, '_actor': {'name': 't'}}
+        for i, phase in enumerate(('parts', 'goods')):
+            body = {**base, 'productPhase': phase}
+            p = pli.build_preview(c, body)
+            if not any(r['status'] in ('create', 'size_add', 'reuse') for r in p['rows']):
+                continue
+            with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+                pli.commit_preview(c, {**body, 'commitToken': f'star-used-token-{i}',
+                                       'previewFingerprint': p['previewFingerprint']}, db_path=path)
+        prods = [tuple(r) for r in c.execute("SELECT code,name FROM products WHERE code GLOB '別注(*)'")]
+        self.assertEqual(prods, [('別注(顧客N)', '緑つなぎ')])
+        op = ['新品,仕入S,顧客N,緑つなぎ,別注,L,1000,0,0,3,本社,棚1,0',
+              '新品,仕入S,顧客N,＊緑つなぎ,別注,L,1000,0,0,2,本社,棚1,0']
+        st = {'importMode': 'opening_stock', 'auxName': 'o.csv', 'auxFile': b64(opening_csv(op)),
+              'basisDate': '2026-01-15', 'defaultSiteName': '未確認', '_canWrite': True, '_actor': {'name': 't'}}
+        p = pli.build_preview(c, st)
+        self.assertEqual(p['openingStockSummary']['needsReview'], 0,
+                         [x.get('reasons') for x in p['openingStock']['plans']])
+        with mock.patch.object(stock, 'backup_sqlite', return_value=''):
+            pli.commit_preview(c, {**st, 'commitToken': 'star-used-token-open',
+                                   'previewFingerprint': p['previewFingerprint']}, db_path=path)
+        lots = sorted((r[0], r[1]) for r in c.execute('SELECT condition, qty_received FROM lots'))
+        self.assertEqual(lots, sorted([(stock.CONDITION_NEW, 3), (stock.CONDITION_USED, 2)]))
+
+
 if __name__ == '__main__':
     unittest.main()

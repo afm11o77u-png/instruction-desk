@@ -71,8 +71,9 @@ class LegacyCsvParseTest(unittest.TestCase):
         cond, reasons = legacy_csv_import.parse_row_condition(
             {'新古': '新品', '商品名': '＊帽子'}, 2,
         )
+        # ＊印を優先して中古。新古列が新品でも要確認にしない
         self.assertEqual(cond, stock.CONDITION_USED)
-        self.assertTrue(reasons)
+        self.assertEqual(reasons, [])
 
     def test_company_form_variant_detection(self):
         self.assertTrue(legacy_csv_import.looks_like_company_form_variant('㈱テスト', '株式会社テスト'))

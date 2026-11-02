@@ -1199,7 +1199,7 @@ def decode_upload(body):
     text, encoding = decode_csv_bytes(blob)
     fields, rows = parse_csv_text(text)
     # 別注→別注(顧客名)／品番空欄の衣服→要確認（初期在庫CSVと同じ規則）
-    legacy_code_assign.assign_rows(rows)
+    legacy_code_assign.assign_rows(rows, strip_used=True)
     name = stock.text(body.get('name') or body.get('fileName') or '商品台帳.csv') or '商品台帳.csv'
     sha = hashlib.sha256(blob).hexdigest()
     result = {

@@ -76,9 +76,28 @@ def canonical_needs_code_name(name):
     return _GENDER_RE.sub(r'\1', t)
 
 
-def assign_item_code(item):
+def _strip_used_mark_for_custom(item):
+    """商品台帳の 別注／要確認 行: 先頭＊（中古）を外し、通常品番と同じく1商品へ寄せる。
+
+    原文は 元商品名 に残す（照合用）。中古の判定は初期在庫CSV側の＊で行う。
+    """
+    import legacy_csv_import as legacy
+    name = stock.text(item.get('商品名'))
+    core, star = legacy.strip_used_marker(name)
+    core = stock.text(core)
+    if star and core:
+        item.setdefault('元商品名', name)
+        item['商品名'] = core
+        return True
+    return False
+
+
+def assign_item_code(item, *, strip_used=False):
     """1行分の品番を補完（item を直接更新）。変更した種類を返す。"""
     code = stock.text(item.get('商品コード'))
+    strip_used = strip_used and '新古' not in item
+    if strip_used and is_custom_order_code(code):
+        _strip_used_mark_for_custom(item)
     # 別注は CSV 上「別注」のまま照合し、登録時に「別注(顧客名)」にする（_ensure_product）
     if code or stock.text(item.get('元品番')):
         return ''
@@ -87,19 +106,21 @@ def assign_item_code(item):
         return ''
     item['元品番'] = ''
     item['商品コード'] = NEEDS_CODE
+    if strip_used and _strip_used_mark_for_custom(item):
+        name = item.get('商品名')
     canon = canonical_needs_code_name(name)
     if canon != stock.text(name):
-        item['元商品名'] = stock.text(name)
+        item.setdefault('元商品名', stock.text(name))
         item['商品名'] = canon
     return 'needs_code'
 
 
-def assign_rows(rows):
+def assign_rows(rows, *, strip_used=False):
     """[(rowNo, item)] を補完。種類別件数を返す。"""
     counts = {}
     for _no, item in rows or []:
         if isinstance(item, dict):
-            k = assign_item_code(item)
+            k = assign_item_code(item, strip_used=strip_used)
             if k:
                 counts[k] = counts.get(k, 0) + 1
     return counts

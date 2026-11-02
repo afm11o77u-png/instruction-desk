@@ -423,8 +423,7 @@ def parse_row_condition(item, row_no):
     if condition is None and star:
         condition = stock.CONDITION_USED
     if star and condition == stock.CONDITION_NEW:
-        # ＊は中古。新古列が新品なら矛盾→要確認（判定上は中古として扱う）
-        reasons.append(f'{row_no}行目：商品名の「＊」は中古ですが、新古列が新品です。')
+        # ＊は中古。＊印を優先し、新古列が新品でも中古として扱う（要確認にしない）
         return stock.CONDITION_USED, reasons
     if star and condition == stock.CONDITION_USED:
         return condition, reasons
