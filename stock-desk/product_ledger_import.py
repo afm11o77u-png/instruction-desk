@@ -7315,11 +7315,44 @@ def apply_manual_register_kind(classified, row_classifications=None):
             if prod.get('blankSku') and prod.get('category') in (
                 stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE,
             ):
-                if pc.get('registerKindManual'):
+                if row.get('k2GarmentAsProduct'):
+                    prod['category'] = stock.CATEGORY_UNIFORM
+                    prod['proposedCategory'] = stock.CATEGORY_UNIFORM
+                    prod['processingServiceProduct'] = False
+                    row['product'] = prod
+                elif pc.get('registerKindManual'):
                     prod['category'] = ''
                     prod['proposedCategory'] = ''
                     row['product'] = prod
         row['parenClassification'] = pc
+
+
+def apply_k2_garment_choice(classified, row_classifications=None):
+    """K2スタッフ工房の衣服らしい行（持ち込み生地のベスト・エプロン等）の行ごとの選択。
+
+    既定は加工サービス。登録区分で「商品」を選んだ行だけ制服として登録する
+    （部品・加工の段階でそのまま確定できる）。「登録しない」は行の除外で扱う。
+    """
+    rc = row_classifications if isinstance(row_classifications, dict) else {}
+    for row in classified or []:
+        ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+        if not ps.get('k2GarmentCandidate'):
+            continue
+        ov = rc.get(str(row.get('rowNo'))) or rc.get(row.get('rowNo')) or {}
+        if not isinstance(ov, dict) or stock.text(ov.get('registerKind')) != '商品':
+            continue
+        ps = dict(ps)
+        ps['isProcessingService'] = False
+        ps['serviceName'] = ''
+        ps['k2GarmentAsProduct'] = True
+        row['processingService'] = ps
+        row['k2GarmentAsProduct'] = True
+        row['processingServiceView'] = False
+        prod = dict(row.get('product') or {})
+        prod['processingServiceProduct'] = False
+        prod['category'] = stock.CATEGORY_UNIFORM
+        prod['proposedCategory'] = stock.CATEGORY_UNIFORM
+        row['product'] = prod
 
 
 def attach_processing_service_detection(classified):
@@ -7946,6 +7979,8 @@ def _row_is_service_only(row):
 def _row_has_parts_side(row):
     """部品・加工段階で扱う行。"""
     prod = row.get('product') or {}
+    if row.get('k2GarmentAsProduct'):
+        return True  # K2の衣服行で「商品」を選んだもの（商品段階には出ないのでここで登録）
     return (_row_is_service_only(row) or bool(_row_companion_service_name(row))
             or bool(prod.get('processingServiceSplit') and row.get('processingServicePlanKey')))
 
@@ -7958,7 +7993,7 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
             continue
         if phase == PHASE_PARTS:
             ok = _row_has_parts_side(row)
-            if ok and not _row_is_service_only(row):
+            if ok and not _row_is_service_only(row) and not row.get('k2GarmentAsProduct'):
                 row['phasePartsOnly'] = True  # 衣服は作らず加工サービスだけ
                 comp = (_row_companion_service_name(row)
                         or stock.text((row.get('processingService') or {}).get('serviceName') or ''))
@@ -10035,6 +10070,7 @@ def build_preview(c, body):
         row['matchGroupCount'] = group_counts[row['matchGroupKey']]
 
     attach_processing_service_detection(classified)
+    apply_k2_garment_choice(classified, row_classifications)
     sku_groups = build_sku_groups(c, classified)
     processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
     apply_manual_register_kind(classified, row_classifications)

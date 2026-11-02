@@ -88,14 +88,15 @@ class ProcessingServiceUnitTest(unittest.TestCase):
         )
         self.assertFalse(other['isProcessingService'])
         self.assertFalse(other['elmsEmbroideryRule'])
-        # K2 の不明名は確認待ちに残さず自動除外（エルムス強制を流用しない）
+        # K2 の衣服らしい名は既定で加工（行ごとに商品へ切替可）。エルムス強制は流用しない
         k2 = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='エプロン', code='',
         )
         self.assertFalse(k2['needsConfirm'])
-        self.assertTrue(k2.get('k2AutoExclude'))
+        self.assertFalse(k2.get('k2AutoExclude'))
         self.assertFalse(k2.get('elmsEmbroideryRule'))
-        self.assertIn('加工内容を特定できない', k2.get('autoExcludeReason') or '')
+        self.assertTrue(k2.get('k2GarmentCandidate'))
+        self.assertEqual(k2.get('serviceName'), 'エプロン')
 
     def test_pocket_attach_without_kako_char(self):
         """『加工』文字がなくてもポケット取付は認識。表記差は同一名へ。"""
@@ -171,14 +172,14 @@ class ProcessingServiceUnitTest(unittest.TestCase):
             ps.service_dedupe_key('ポケット付替', 'K2スタッフ工房'),
             ps.service_dedupe_key('ポケット取付', 'K2スタッフ工房'),
         )
-        # 衣服種だけの名称は加工にしない（K2不明→自動除外）
+        # 衣服種だけの名称は辞書上は加工名にしない。K2では既定加工＋行ごとの選択
         for bare in ('帽子', 'パンツ', 'エプロン'):
             self.assertEqual(ps.unify_processing_service_name(bare), '', msg=bare)
             r = ps.classify_processing_service_row(
                 supplier='K2スタッフ工房', product_name=bare, code='',
             )
-            self.assertFalse(r['isProcessingService'], msg=bare)
-            self.assertTrue(r.get('k2AutoExclude'), msg=bare)
+            self.assertTrue(r.get('k2GarmentCandidate'), msg=bare)
+            self.assertFalse(r.get('k2AutoExclude'), msg=bare)
             self.assertNotEqual(r.get('serviceName'), '加工', msg=bare)
 
     def test_sleeve_hem_snapper_shared(self):
@@ -269,11 +270,11 @@ class ProcessingServiceUnitTest(unittest.TestCase):
         k2 = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='謎の一行', code='X',
         )
+        # K2は修理屋: 不明名も原文名のまま加工サービス
         self.assertFalse(k2['needsConfirm'])
-        self.assertTrue(k2.get('k2AutoExclude'))
-        self.assertFalse(k2['identifiable'])
-        self.assertFalse(k2['isProcessingService'])
-        self.assertIn('加工内容を特定できない', k2.get('autoExcludeReason') or '')
+        self.assertFalse(k2.get('k2AutoExclude'))
+        self.assertTrue(k2['isProcessingService'])
+        self.assertEqual(k2['serviceName'], '謎の一行')
 
     def test_composition_kept(self):
         name = '半袖加工＋リフレクター＋マジックテープ付け'
@@ -1095,15 +1096,13 @@ class ProcessingServiceImportTest(unittest.TestCase):
             folder.cleanup()
 
     def test_display_name_not_filled_from_planned_when_unknown(self):
-        """不明な原文では予定名から加工名を無条件補完しない。K2は自動除外。"""
+        """不明な原文では予定名から加工名を補完しない。K2は原文名のまま加工。"""
         r = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='謎の一行', code='X',
         )
         self.assertFalse(r['needsConfirm'])
-        self.assertTrue(r.get('k2AutoExclude'))
-        self.assertFalse(r['identifiable'])
-        self.assertEqual(r.get('serviceName') or '', '')
-        self.assertEqual(r.get('displayName') or '', '')
+        self.assertFalse(r.get('k2AutoExclude'))
+        self.assertEqual(r.get('serviceName') or '', '謎の一行')
 
         folder, path, c = newdb()
         try:
@@ -1123,15 +1122,11 @@ class ProcessingServiceImportTest(unittest.TestCase):
             row = (preview.get('rows') or [None])[0]
             self.assertIsNotNone(row)
             ps_info = row.get('processingService') or {}
-            self.assertFalse(ps_info.get('identifiable'))
-            self.assertEqual(ps_info.get('serviceName') or '', '')
-            self.assertTrue(row.get('autoRowExcluded') or ps_info.get('k2AutoExclude'))
-            self.assertEqual(row.get('status'), pli.STATUS_HOLD)
-            pc = row.get('parenClassification') or {}
-            # 加工名欄は空のまま（plannedName から補完しない）
-            self.assertEqual(pc.get('processing') or '', '')
+            # 表示名（サイズダウン）は加工名へ流し込まない。K2は原文名で加工
+            self.assertNotEqual(ps_info.get('serviceName') or '', 'サイズダウン')
+            self.assertEqual(ps_info.get('serviceName') or '', '謎の一行')
             plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
-            self.assertEqual(plans, [])
+            self.assertNotIn('サイズダウン', [p.get('serviceName') for p in plans])
         finally:
             c.close()
             folder.cleanup()

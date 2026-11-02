@@ -23,6 +23,10 @@ _PROCESSING_VENDOR_DISPLAY = {
 }
 
 K2_VENDOR_DISPLAY = 'K2スタッフ工房'
+K2_GARMENT_CHOICE_NOTE = (
+    'K2スタッフ工房の衣服らしい行です（持ち込み生地での製作など）。既定は加工サービスで登録します。'
+    '制服として登録する場合は登録区分を「商品」に、不要なら「この行を登録しない」を選んでください。'
+)
 K2_AUTO_EXCLUDE_REASON = (
     'K2スタッフ工房の加工行ですが、加工内容を特定できないため登録対象外'
 )
@@ -81,7 +85,6 @@ _SERVICE_NAME_ALIASES = {
     'ししゅういれ': '刺繍加工',
     '刺繍加工': '刺繍加工',
     '七分袖加工': '七分袖加工',
-    '七分袖': '七分袖加工',
     '半袖加工': '半袖加工',
     '長袖加工': '長袖加工',
     '袖加工': '袖加工',
@@ -529,6 +532,21 @@ def _looks_like_garment_name(name):
     return blank_code_kind(name) == 'garment'
 
 
+def is_garment_body_name(name):
+    """括弧外が衣服名そのもの（七分袖シャツ・反射ベスト・裾上げパンツ等）なら True。
+
+    括弧内の加工（白衣(内ポケット加工)の「内ポケット加工」）は別に扱うので見ない。
+    「コックコート半袖加工」「千鳥パンツ裾上げ」のように末尾が加工語なら False。
+    """
+    base = _strip_parens_keep_inner(stock.text(name))[0] or stock.text(name)
+    compact = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', base or ''))
+    if not compact or '加工' in compact or _SERVICE_SUFFIX_RE.search(compact):
+        return False
+    if re.search(_KIND_STRIP_RE.pattern + r'$', compact):
+        return True
+    return _looks_like_garment_name(compact)
+
+
 def unify_processing_service_name(raw_name: str) -> str:
     """加工サービス表示名へ統一。衣服種・顧客用接頭・括弧仕様は落とす。読めなければ空。
 
@@ -748,6 +766,11 @@ def classify_processing_service_row(
 
     if physical:
         return result
+    # 品番ありで括弧外が衣服名なら衣服（商品フェーズで登録）。名前の加工語で加工にしない。
+    # K2スタッフ工房は修理屋なので対象外（既定で加工）
+    if code_t and not k2 and is_garment_body_name(name_t):
+        result['garmentBody'] = True
+        return result
     if not vendor:
         # whitelist外でも「商品名全体が明確な加工サービス名だけ」の行は加工サービス化する。
         # 本体行の括弧内加工（例: コックコート（裾上げ））は unify が空のため対象外。
@@ -841,6 +864,27 @@ def classify_processing_service_row(
         )
     if not result['vendorName'] and not supplier_t:
         missing.append('加工業者')
+    if k2 and name_t:
+        # K2スタッフ工房は修理屋。加工名が辞書に無くても原文名のまま加工サービスで登録
+        # （修理・サイズダウン・アップ・丈直し・反射板調整 等）。
+        # 衣服らしい名前（持ち込み生地のベスト・エプロン等）も既定は加工。
+        # 画面の登録区分（商品／加工サービス）と「この行を登録しない」で行ごとに選べる。
+        service = re.sub(r'[\s\u3000]+', ' ', unicodedata.normalize('NFKC', name_t)).strip()
+        result['isProcessingVendor'] = True
+        result['isPhysicalParts'] = False
+        result['isProcessingService'] = True
+        result['k2StaffWorkshopRule'] = True
+        result['serviceName'] = service
+        result['displayName'] = service
+        result['vendorName'] = K2_VENDOR_DISPLAY
+        result['identifiable'] = True
+        result['serviceNameSource'] = 'k2_raw_name'
+        result['excludeFromGarmentSuppliers'] = True
+        result['rowSpecs']['originalCode'] = code_t
+        if is_garment_body_name(name_t) or _KIND_STRIP_RE.search(name_t):
+            result['k2GarmentCandidate'] = True
+            result['confirmReasons'] = [K2_GARMENT_CHOICE_NOTE]
+        return result
     if k2:
         result['isProcessingVendor'] = True
         result['k2StaffWorkshopRule'] = True
