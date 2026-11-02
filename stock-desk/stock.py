@@ -563,6 +563,72 @@ def backup_sqlite(db_path, *, tag='pre-shortage'):
     return _backup_sqlite_online(src, dest)
 
 
+# 区分ごとの表示番号（内部 id・参照は変えない）。K=加工サービス B=部品・資材 S=制服・その他
+DISPLAY_NO_PREFIX_SQL = (
+    "CASE {col} WHEN '加工サービス' THEN 'K' WHEN '部品・資材' THEN 'B' ELSE 'S' END"
+)
+
+
+def display_no_prefix(category):
+    cat = text(category)
+    if cat == CATEGORY_PROCESS_SERVICE:
+        return 'K'
+    if cat == CATEGORY_PARTS:
+        return 'B'
+    return 'S'
+
+
+DISPLAY_NO_WIDTH = {'K': 4, 'B': 4, 'S': 5}
+
+
+def format_display_no(prefix, n):
+    return f'{prefix}-{int(n):0{DISPLAY_NO_WIDTH.get(prefix, 4)}d}'
+
+
+def migrate_display_no(c):
+    """products.display_no を追加し、未採番行を id 順に補完。採番はトリガーで作成時／区分変更時に行う。
+
+    採番カウンタ（product_display_no_seq）は削除で戻さない＝番号を再利用・振り直ししない。
+    """
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(products)')}
+    if 'display_no' not in cols:
+        c.execute("ALTER TABLE products ADD COLUMN display_no TEXT NOT NULL DEFAULT ''")
+    c.execute('''CREATE TABLE IF NOT EXISTS product_display_no_seq (
+      prefix TEXT PRIMARY KEY,
+      last_no INTEGER NOT NULL DEFAULT 0
+    )''')
+    # 既存の番号より後ろから振る（復元・手修正後もカウンタが追い越されないように）
+    for prefix in ('K', 'B', 'S'):
+        mx = 0
+        for r in c.execute("SELECT display_no FROM products WHERE display_no LIKE ?", (prefix + '-%',)):
+            try:
+                mx = max(mx, int(str(r['display_no']).split('-', 1)[1]))
+            except (ValueError, IndexError):
+                pass
+        c.execute('INSERT OR IGNORE INTO product_display_no_seq(prefix,last_no) VALUES(?,0)', (prefix,))
+        c.execute('UPDATE product_display_no_seq SET last_no=? WHERE prefix=? AND last_no<?', (mx, prefix, mx))
+    pending = c.execute(
+        f"SELECT id, {DISPLAY_NO_PREFIX_SQL.format(col='category')} AS px FROM products "
+        "WHERE COALESCE(display_no,'')='' ORDER BY id"
+    ).fetchall()
+    for r in pending:
+        c.execute('UPDATE product_display_no_seq SET last_no=last_no+1 WHERE prefix=?', (r['px'],))
+        n = c.execute('SELECT last_no FROM product_display_no_seq WHERE prefix=?', (r['px'],)).fetchone()[0]
+        c.execute('UPDATE products SET display_no=? WHERE id=?', (format_display_no(r['px'], n), r['id']))
+    new_px = DISPLAY_NO_PREFIX_SQL.format(col='NEW.category')
+    old_px = DISPLAY_NO_PREFIX_SQL.format(col='OLD.category')
+    assign = f'''
+      INSERT OR IGNORE INTO product_display_no_seq(prefix,last_no) VALUES({new_px},0);
+      UPDATE product_display_no_seq SET last_no=last_no+1 WHERE prefix={new_px};
+      UPDATE products SET display_no = {new_px} || '-' || printf(CASE WHEN {new_px}='S' THEN '%05d' ELSE '%04d' END,
+        (SELECT last_no FROM product_display_no_seq WHERE prefix={new_px})) WHERE id=NEW.id;
+    '''
+    c.execute(f'''CREATE TRIGGER IF NOT EXISTS products_display_no_ins AFTER INSERT ON products
+      WHEN COALESCE(NEW.display_no,'')='' BEGIN {assign} END''')
+    c.execute(f'''CREATE TRIGGER IF NOT EXISTS products_display_no_cat AFTER UPDATE OF category ON products
+      WHEN {new_px} <> {old_px} BEGIN {assign} END''')
+
+
 def migrate_schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS move_batches (
       id INTEGER PRIMARY KEY,
@@ -709,6 +775,7 @@ def migrate_schema(c):
         if 'maker_code' not in product_cols:
             # 社内管理品番(code)とメーカー品番を分離。空なら従来どおり code をメーカー品番扱い。
             c.execute("ALTER TABLE products ADD COLUMN maker_code TEXT NOT NULL DEFAULT ''")
+        migrate_display_no(c)
     import stock_product_merge
     stock_product_merge.migrate_product_merge(c)
     # Backfill business dates from lot fields only (no invented dates for outbound).
@@ -1928,6 +1995,7 @@ def product_row(c, pid):
     maker_code = text(r['maker_code'] or '') if 'maker_code' in r.keys() else ''
     return {
         'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
+        'displayNo': (r['display_no'] if 'display_no' in r.keys() else '') or '',
         'codeNeedsReview': text(code) == '要確認',
         'makerCode': maker_code,
         'makerCodeDisplay': maker_code_of(code, maker_code),

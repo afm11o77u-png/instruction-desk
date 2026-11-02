@@ -30,7 +30,7 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         )
         self.assertIsNotNone(header)
         cols = re.findall(r'<th>([^<]*)</th>', header.group(1))
-        self.assertEqual(cols, ['商品ID', 'カテゴリ', '商品', '取扱', 'サイズ', '開く'])
+        self.assertEqual(cols, ['No.', 'カテゴリ', '商品', '取扱', 'サイズ', '開く'])
 
     def test_table_body_cells_match_header_order(self):
         body = _fn(APP_JS, 'products')

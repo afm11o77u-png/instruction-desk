@@ -30,6 +30,7 @@ function productCompareFields(p){
     ?`${num(p.stockQty)}着 / ${yen(p.stockAmount)}（ロット${num(p.lotCount)}）`
     :'なし'
   return [
+    ['No.', esc(p.displayNo||String(p.id))],
     ['商品ID', String(p.id)],
     ['品番', esc(p.code||(['部品・資材','加工サービス'].includes(p.category||'')?'':(p.codeDisplay||'品番なし')))],
     ['商品名', esc(p.name)],
@@ -62,7 +63,7 @@ function groupBlock(group, state){
         <label class="merge-pick"><input type="checkbox" data-merge-pick="${p.id}" ${selected?'checked':''}> 統合対象</label>
         <label class="merge-keep"><input type="radio" name="mergeKeep" value="${p.id}" ${isKeep?'checked':''}> 残す</label>
       </div>
-      <div class="merge-col-title">ID ${p.id}</div>
+      <div class="merge-col-title">${esc(p.displayNo||'')} <span class="sub">ID ${p.id}</span></div>
     </th>`).join('')
   const fieldRows=labels.map((label,i)=>{
     const cells=fieldsByProduct.map(({selected,isKeep,fields})=>

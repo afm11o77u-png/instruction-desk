@@ -805,7 +805,7 @@ function products(){
     if(supplierId&&!productMatchesSupplierFilter(r,supplierId))return false
     if(!productMatchesCategoryFilter(r,categoryFilter))return false
     const subNames=(r.subSuppliers||[]).map(s=>s.name||'').join('')
-    const text=`${r.code}${r.codeDisplay||''}${r.makerCode||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
+    const text=`${r.displayNo||''}${r.code}${r.codeDisplay||''}${r.makerCode||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return text.includes(state.q)
   }),sortKey)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの仕様は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
@@ -816,14 +816,14 @@ function products(){
       <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む選んだ区分の商品登録が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
       <div class="bar merge-entry"><button type="button" class="danger product-wipe-scope" data-scope="parts">部品を削除</button><button type="button" class="danger product-wipe-scope" data-scope="process">加工を削除</button><button type="button" class="danger product-wipe-scope" data-scope="uniform">制服を削除</button><span class="excelhint">取扱も一緒に消えます。在庫などの参照があると中止します。制服はカテゴリ空欄も含みます。</span></div>
     </div>`:''}
-    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>商品ID</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>No.</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
       const codeShow=esc(productCodeShow(r))
       const makerBit=r.makerCode&&r.makerCode!==r.code?` <span class="sub">メーカー ${esc(r.makerCode)}</span>`:''
       const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
       const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
       const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
-      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id">${r.id}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
+      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id" title="内部ID ${r.id}">${esc(r.displayNo||String(r.id))}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
     }).join('')||'<tr><td colspan="6">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -1559,7 +1559,7 @@ function mountOpeningHandleCreateForm(dlg){
     getItems:()=>filterOpeningProducts(state.data.products,productInput.value).map(p=>({
       id:p.id,
       label:productPickerLabel(p),
-      html:`<span class="dm-primary">${esc(p.code)} ${esc(p.name)}</span><span class="sub dm-secondary">${esc(p.color||'')} / ${esc(p.supplierName||'仕入先未設定')} · 商品ID ${p.id}</span>`,
+      html:`<span class="dm-primary">${esc(p.code)} ${esc(p.name)}</span><span class="sub dm-secondary">${esc(p.color||'')} / ${esc(p.supplierName||'仕入先未設定')} · No. ${esc(p.displayNo||String(p.id))}</span>`,
       raw:p
     })),
     isConfirmed:()=>!!resolveConfirmedOpeningProduct(state.data.products,draft.productId),
@@ -1977,7 +1977,7 @@ function stockList(){
   $('#main').innerHTML=`<section class="panel stock-list-panel">
     <div class="bar stock-list-filters">
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${state.data.customers.map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
-      <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（ID ${p.id}）`,f.productId)).join('')}</select></label>
+      <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
       <label>仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${state.data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
@@ -2294,7 +2294,7 @@ function filterHistoryProducts(query){
 }
 function historyProductLabel(p){
   if(!p)return ''
-  return `${p.code} ${p.name} ${p.color||''}（ID ${p.id}）`.replace(/\s+/g,' ').trim()
+  return `${p.code} ${p.name} ${p.color||''}（No. ${p.displayNo||p.id}）`.replace(/\s+/g,' ').trim()
 }
 function historyShortAt(at){
   const m=String(at||'').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
