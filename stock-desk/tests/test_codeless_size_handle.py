@@ -39,6 +39,10 @@ class Base(unittest.TestCase):
              '_canWrite': True, '_actor': {'name': 't'}}
         if phase:
             b['productPhase'] = phase
+        # SN10 スナッパー(赤)/(白) はメーカー部品。色違いは色ごとに分ける
+        d = {'SN10': {'decision': 'color_split'}}
+        b['skuDecisions'] = d
+        b['appliedSkuDecisions'] = d
         p = pli.build_preview(self.c, b)
         if p['rows']:
             with mock.patch.object(stock, 'backup_sqlite', return_value=''):
@@ -66,7 +70,10 @@ class ImportTest(Base):
             self.assertFalse([x for x in r.get('reasons') or [] if 'サイズが空' in x])
         got = self.products()
         self.assertEqual(got['刺繍加工'], ('', stock.CATEGORY_PROCESS_SERVICE, ['—'], 0))
-        self.assertEqual(got['スナッパー加工'], ('', stock.CATEGORY_PROCESS_SERVICE, ['—'], 0))
+        self.assertNotIn('スナッパー加工', got)
+        snap = [v for k, v in got.items() if k.startswith('スナッパー')]
+        self.assertTrue(snap)
+        self.assertTrue(all(v[1] == stock.CATEGORY_PARTS for v in snap), snap)
         self.assertEqual(got['ボタン'], ('', stock.CATEGORY_PARTS, ['F'], 0))
         self.assertEqual(got['作業服上'][2], ['L', 'M'])
         self.assertEqual(got['作業服上'][3], 1)
@@ -122,3 +129,15 @@ class RepairTest(Base):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MakerPartsNotServiceTest(unittest.TestCase):
+    def test_classify(self):
+        import product_ledger_processing_service as ps
+        r = ps.classify_processing_service_row(supplier='YKK', product_name='スナッパー(赤)', code='SN10')
+        self.assertFalse(r['isProcessingService'])
+        self.assertTrue(r['isPhysicalParts'])
+        for name in ('スナッパー加工', '刺繍'):
+            self.assertFalse(ps.classify_processing_service_row(supplier='YKK', product_name=name, code='')['isPhysicalParts'])
+        self.assertFalse(ps.classify_processing_service_row(
+            supplier='株サーヴォ', product_name='作業服上(刺繍)', code='DCP600')['isPhysicalParts'])
