@@ -173,5 +173,9 @@ class WorkSuffixNotPartsTest(unittest.TestCase):
             self.assertFalse(ps.is_physical_parts_name(name), name)
             r = ps.classify_processing_service_row(supplier='Ｋ２スタッフ工房', product_name=name, code='')
             self.assertFalse(r['isPhysicalParts'], name)
+        for name in ('裏地補修', 'ファスナーガード交換', 'ﾌｧｽﾅｰ交換', 'ボタンホール作製', '片布作製', '胸囲幅直し'):
+            r = ps.classify_processing_service_row(supplier='Ｋ２スタッフ工房', product_name=name, code='')
+            self.assertTrue(r['isProcessingService'], name)
+            self.assertFalse(r.get('k2AutoExclude'), name)
         for name in ('ボタン　18mm グリーン', 'DCP515用生地(袖/裾加工用)', '裏地', 'ファスナー'):
             self.assertTrue(ps.is_physical_parts_name(name), name)
