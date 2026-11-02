@@ -471,7 +471,7 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn('e.color', detail_spec)
         detail = APP_JS[APP_JS.index('function historyDetailHtml(e)'):APP_JS.index('function historyPage()')]
         for label in (
-            '記録日時', '業務日', '加工仕様', '保管場所',
+            '記録日時', '業務日', '仕様', '保管場所',
             '対象ロットの数量（変更前→変更後）',
             '単価（変更前→変更後）', '金額（変更前→変更後）',
             '記録者', '備考', '対象ロットID', '同一出庫のロット内訳',

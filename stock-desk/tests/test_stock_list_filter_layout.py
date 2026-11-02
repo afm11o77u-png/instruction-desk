@@ -32,7 +32,7 @@ class StockListFilterLayoutTest(unittest.TestCase):
             ('fCustomer', '顧客'),
             ('fProduct', '商品'),
             ('fSize', 'サイズ'),
-            ('fSpec', '加工仕様'),
+            ('fSpec', '仕様'),
             ('fLocation', '保管場所'),
         ):
             self.assertIn(f'id="{fid}"', body)
