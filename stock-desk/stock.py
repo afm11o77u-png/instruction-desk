@@ -677,6 +677,9 @@ def migrate_schema(c):
         'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file '
         'ON product_ledger_row_maps(file_sha256, source_row_no)'
     )
+    customer_cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
+    if 'office_code' not in customer_cols:
+        c.execute("ALTER TABLE customers ADD COLUMN office_code TEXT NOT NULL DEFAULT ''")
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
     if 'move_batch_id' not in move_cols:
         c.execute('ALTER TABLE moves ADD COLUMN move_batch_id INTEGER REFERENCES move_batches(id)')
@@ -1024,6 +1027,8 @@ def save_customer(c, body):
     address = optional(body.get('address'), '住所', 200)
     phone = optional(body.get('phone'), '電話番号', 40)
     contact = optional(body.get('contact'), '担当者', 80)
+    has_office = 'officeCode' in body
+    office_code = optional(body.get('officeCode'), '営業所コード', 40) if has_office else ''
     active = flag(body.get('active', True))
     t = stamp()
     cid = body.get('id')
@@ -1036,12 +1041,16 @@ def save_customer(c, body):
             raise ValueError('同じ名前の顧客が既にあります。名前の変更は、開いている顧客の修正として保存してください。')
         c.execute('UPDATE customers SET name=?,kana=?,address=?,phone=?,contact=?,active=?,updated_at=? WHERE id=?',
                   (name, kana, address, phone, contact, active, t, cid))
+        if has_office:
+            c.execute('UPDATE customers SET office_code=? WHERE id=?', (office_code, cid))
     else:
         if c.execute('SELECT id FROM customers WHERE name=?', (name,)).fetchone():
             raise ValueError('同じ名前の顧客が既にあります。新しい顧客を増やさず、一覧から修正してください。')
         c.execute('INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
                   (name, kana, address, phone, contact, active, t, t))
         cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        if office_code:
+            c.execute('UPDATE customers SET office_code=? WHERE id=?', (office_code, cid))
     return customer_row(c, cid)
 
 
@@ -1850,7 +1859,8 @@ def batch_result(c, batch_id, already):
 def customer_row(c, cid):
     r = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone()
     return {'id': r['id'], 'name': r['name'], 'kana': r['kana'], 'address': r['address'], 'phone': r['phone'],
-            'contact': r['contact'], 'active': bool(r['active'])}
+            'contact': r['contact'], 'active': bool(r['active']),
+            'officeCode': (r['office_code'] if 'office_code' in r.keys() else '') or ''}
 
 
 def supplier_row(c, sid):

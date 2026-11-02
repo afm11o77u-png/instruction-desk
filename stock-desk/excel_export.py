@@ -479,12 +479,13 @@ def _meta_sheet(kind, scope, payload, when, args):
 def _sheets_for(kind, scope, payload, when, args):
     meta = _meta_sheet(kind, scope, payload, when, args)
     if kind == 'customers':
-        headers = ['顧客ID', '顧客名', 'カナ', '住所', '電話番号', '担当者', '使用状態']
+        headers = ['顧客ID', '顧客名', 'カナ', '住所', '電話番号', '担当者', '営業所コード', '使用状態']
         rows = [[
             r['id'], r['name'], r.get('kana') or '', r.get('address') or '',
-            r.get('phone') or '', r.get('contact') or '', _active_label(r['active']),
+            r.get('phone') or '', r.get('contact') or '', r.get('officeCode') or '',
+            _active_label(r['active']),
         ] for r in payload['rows']]
-        return [meta, ('顧客', headers, rows, [10, 22, 16, 28, 16, 12, 10])]
+        return [meta, ('顧客', headers, rows, [10, 22, 16, 28, 16, 12, 12, 10])]
     if kind == 'suppliers':
         headers = ['仕入先ID', '仕入先名', '住所', '電話番号', '担当者', '使用状態']
         rows = [[

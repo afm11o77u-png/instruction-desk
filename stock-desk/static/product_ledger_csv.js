@@ -7041,7 +7041,9 @@
       if(isOpeningMode(st)){
         const osSum=st.preview.openingStockSummary||{}
         const summary=`【初期在庫を登録】新規 ${osSum.create||0} / 再利用 ${osSum.reuse||0} / 数量差異(選択時) ${osSum.qtyDiff||0} / 要確認 ${osSum.needsReview||0} / 補完候補(登録しない) ${osSum.complement||0}\n在庫基準日 ${st.basisDate||''} / 拠点空欄→ ${st.defaultSiteName||'未確認'}\n登録先は商品登録時の永続マップから解決します。\n\nよろしいですか？`
-        if(!confirm(summary))return
+        const oc=st.preview.officeCodePlan||{}
+        const ocLine=(oc.willSet?`\n営業所コード設定 ${oc.willSet} 顧客`:'')+((oc.warnings||[]).length?`\n${oc.warnings.join('\n')}`:'')
+        if(!confirm(summary+ocLine))return
         if(!st.basisDate){st.toast('在庫基準日を指定してください。');return}
         try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }else{

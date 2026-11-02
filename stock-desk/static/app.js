@@ -765,13 +765,13 @@ function bindExcel(kind){
   }
 }
 function customers(){
-  const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}`.includes(state.q))
+  const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}${r.officeCode||''}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者','','新しく登録','customers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
+  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者・営業所コード','','新しく登録','customers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}${r.officeCode?`<span class="sub dm-secondary">営業所 ${esc(r.officeCode)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}${r.officeCode?`<div class="dm-secondary">営業所 ${esc(r.officeCode)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
   bindList(rows,'顧客',customerForm,body=>api('/api/customers',body),'customers')
 }
 function suppliers(){
@@ -974,7 +974,7 @@ function edit(row,title,form,save){
   }
 }
 function field(id,label,value,required){return `<label>${label}${required?'（必須）':''}<input id="${id}" value="${esc(value||'')}"></label>`}
-function customerForm(r){r=r||{};return `<div class="grid">${field('name','顧客名',r.name,true)}${field('kana','フリガナ',r.kana)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label><p class="sub">顧客IDは自動です。名前を変えても、同じ顧客のまま在庫がつながります。</p>`}
+function customerForm(r){r=r||{};return `<div class="grid">${field('name','顧客名',r.name,true)}${field('kana','フリガナ',r.kana)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}${field('officeCode','営業所コード',r.officeCode)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label><p class="sub">顧客IDは自動です。名前を変えても、同じ顧客のまま在庫がつながります。</p>`}
 function supplierForm(r){r=r||{};return `<div class="grid">${field('name','仕入先名',r.name,true)}${field('phone','電話番号',r.phone)}${field('fax','FAX',r.fax)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label>`}
 function locationSiteContext(r){
   if(!r||!r.id)return {site:null,shelves:[]}
@@ -1214,7 +1214,7 @@ function bindProductEditor(row){
 function readForm(row){
   const title=$('#dialog h2').textContent
   const active=row?row.active!==false:true
-  if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,address:$('#address').value,active}
+  if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,officeCode:$('#officeCode')?$('#officeCode').value:'',address:$('#address').value,active}
   if(title.includes('仕入先'))return {id:row&&row.id,name:$('#name').value,phone:$('#phone').value,fax:$('#fax')?$('#fax').value:'',contact:$('#contact').value,address:$('#address').value,active}
   if(title.includes('保管場所')||title.includes('拠点を新しく登録')){
     const shelves=collectLocationShelves()
