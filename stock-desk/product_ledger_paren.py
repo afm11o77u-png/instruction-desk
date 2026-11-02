@@ -773,6 +773,15 @@ def _no_processing_keys():
     return {_norm_token(unify_import_notation(w)) for w in _NO_PROCESSING_WORDS}
 
 
+_NEGATION_SUFFIXES = ('無し', 'なし', 'ナシ', '無', '不要')
+
+
+def is_negation_spec(text: str) -> bool:
+    """括弧内が『〜無し／なし／無／不要』の否定仕様か（加工なし系は別扱い）。"""
+    t = re.sub(r'[\s\u3000]+', '', unify_import_notation(text or '') or '')
+    return any(t.endswith(sx) and len(t) > len(sx) for sx in _NEGATION_SUFFIXES)
+
+
 def classify_paren_segment(segment: str, *, pants: bool = False):
     """1セグメントを色／加工／素材／不明に分類。
 
@@ -793,6 +802,10 @@ def classify_paren_segment(segment: str, *, pants: bool = False):
     if key in _no_processing_keys():
         return {'kind': 'hem_ignore', 'value': raw, 'matched': key, 'original': source,
                 'noProcessing': True}
+    # 「反射材無し」等の否定仕様は、付きの品と区別する商品名の一部。加工にせず名に残す（要確認なし）
+    if is_negation_spec(raw):
+        return {'kind': 'unknown', 'value': raw, 'matched': '', 'original': source,
+                'negationSpec': True}
     # 完全一致を優先（長い語が先）。別名は代表色へ。
     if key in _COLOR_SYNONYM_BY_KEY:
         canon = _COLOR_SYNONYM_BY_KEY[key]
@@ -1108,6 +1121,8 @@ def classify_product_name(product_name: str):
                 usage_kind = USAGE_KIND_SALES
             elif kind == 'hem_ignore':
                 hem_ignored = True
+            elif hit.get('negationSpec'):
+                pass  # 商品名に残すだけ（通知・要確認なし）
             else:
                 if hit['value'] not in unclassified:
                     unclassified.append(hit['value'])
