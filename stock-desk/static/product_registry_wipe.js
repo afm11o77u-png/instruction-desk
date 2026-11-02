@@ -22,8 +22,15 @@
       st.boot=opts.boot
       st.isOwner=opts.isOwner
       st.actorName=opts.actorName||''
+      st.scope=opts.scope||''
     }
     return st
+  }
+
+  const SCOPE_LABELS={parts:'部品',process:'加工',uniform:'制服'}
+  function scopeLabel(){
+    const s=ensureState()
+    return s.scope?`${SCOPE_LABELS[s.scope]||s.scope}の商品登録`:'商品登録全体'
   }
 
   function countLines(counts){
@@ -66,16 +73,17 @@
     const dlg=document.getElementById('dialog')
     if(!dlg||!s.open)return
     const p=s.preview
-    const can=p&&p.canWipe&&!s.busy&&s.confirmText===CONFIRM_TEXT
+    const label=scopeLabel()
+    const can=p&&p.canWipe&&!s.busy&&(s.scope||s.confirmText===CONFIRM_TEXT)
     dlg.classList.add('product-wipe-dialog')
-    dlg.innerHTML=`<div class="dialoghead"><h2>商品登録を全削除（検証用）</h2><button type="button" id="pwClose" class="quiet">閉じる</button></div>
+    dlg.innerHTML=`<div class="dialoghead"><h2>${esc(label)}を削除（検証用）</h2><button type="button" id="pwClose" class="quiet">閉じる</button></div>
       <div class="dialogbody">
         <p class="testwarn">主管理者専用の検証用操作です。通常の商品削除ではありません。部分削除はせず、参照があると全体を中止します。</p>
         ${p?`<p class="excelhint">${esc(p.scopeNote||'')}</p>
           <p><strong>削除予定:</strong> ${esc(countLines(p.counts))}</p>
           <p><strong>残すもの:</strong> ${esc((p.kept||[]).join('、'))}</p>
           ${blockersHtml(p.blockers)}
-          ${p.canWipe?`<label class="wipe-confirm-label">確認のため「${esc(CONFIRM_TEXT)}」と入力
+          ${p.canWipe&&s.scope?`<p id="pwError" class="wipe-error" role="alert">${esc(s.error||'')}</p>`:p.canWipe?`<label class="wipe-confirm-label">確認のため「${esc(CONFIRM_TEXT)}」と入力
             <input id="pwConfirm" type="text" autocomplete="off" spellcheck="false" value="${esc(s.confirmText)}" ${s.busy?'disabled':''}>
           </label>
           <p id="pwError" class="wipe-error" role="alert">${esc(s.error||'')}</p>`:
@@ -83,14 +91,14 @@
           `<p>${s.busy?'削除内容を確認しています…':'削除内容を読み込めませんでした。'}</p>
            <p id="pwError" class="wipe-error" role="alert">${esc(s.error||'')}</p>`}
         ${s.result&&s.result.ok?`<div class="notice legacy-csv-result">
-          <strong>商品登録の全削除が完了しました</strong>
+          <strong>${esc(label)}の削除が完了しました</strong>
           <p>${esc(countLines(s.result.counts))}</p>
           <p class="excelhint">バックアップ: ${esc(s.result.backupPath||'—')}　実行: ${esc(s.result.actorName||'')} ${esc(s.result.at||'')}</p>
         </div>`:''}
       </div>
       <div class="dialogactions">
         <button type="button" id="pwCancel">閉じる</button>
-        <button type="button" class="danger" id="pwRun" ${can?'':'disabled'}>商品登録を全削除する</button>
+        <button type="button" class="danger" id="pwRun" ${can?'':'disabled'}>${esc(label)}を削除する</button>
       </div>`
     if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
     bindDialog()
@@ -125,7 +133,7 @@
     s.busy=true;s.error='';s.preview=null;s.result=null;s.confirmText=''
     paintDialog()
     try{
-      s.preview=await s.api('/api/products/registry-wipe/preview')
+      s.preview=await s.api('/api/products/registry-wipe/preview'+(s.scope?`?scope=${encodeURIComponent(s.scope)}`:''))
     }catch(e){
       s.error=apiErrorMessage(e,'削除内容を確認できませんでした。')
       s.toast(s.error)
@@ -138,7 +146,9 @@
     const s=ensureState()
     if(s.busy)return
     if(!s.preview||!s.preview.canWipe)return
-    if(s.confirmText!==CONFIRM_TEXT){
+    if(s.scope){
+      if(!confirm(`${scopeLabel()}の商品登録と、その取扱を削除します。よろしいですか？`))return
+    }else if(s.confirmText!==CONFIRM_TEXT){
       s.error=`確認のため「${CONFIRM_TEXT}」と入力してください。`
       paintDialog()
       return
@@ -148,10 +158,11 @@
     try{
       const result=await s.api('/api/products/registry-wipe',{
         confirmText:CONFIRM_TEXT,
+        scope:s.scope||'',
         actorName:s.actorName||'',
       })
       s.result=result
-      s.toast('商品登録を全削除しました。')
+      s.toast(`${scopeLabel()}を削除しました。`)
       if(typeof s.boot==='function')await s.boot()
     }catch(e){
       const payload=e&&e.payload
