@@ -14,7 +14,7 @@ PKG = '{http://schemas.openxmlformats.org/package/2006/relationships}'
 SHEET_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
 SHEETS = [
-    ('顧客', [('顧客名', 'name', True), ('カナ', 'kana', False), ('住所', 'address', False), ('電話番号', 'phone', False), ('担当者', 'contact', False)]),
+    ('顧客', [('顧客名', 'name', True), ('カナ', 'kana', False), ('住所', 'address', False), ('電話番号', 'phone', False), ('担当者', 'contact', False), ('営業所コード', 'officeCode', False)]),
     ('仕入先', [('仕入先名', 'name', True), ('住所', 'address', False), ('電話番号', 'phone', False), ('担当者', 'contact', False)]),
     ('商品', [
         ('品番', 'code', False), ('商品名', 'name', True), ('色', 'color', False),
@@ -163,6 +163,8 @@ def _people(c, rows, table, save, fetch, label):
                     'phone': item['phone'] or stored['phone'], 'contact': item['contact'] or stored['contact'], 'active': stored['active']}
             if 'kana' in item:
                 body['kana'] = item['kana'] or stored['kana']
+            if item.get('officeCode'):
+                body['officeCode'] = item['officeCode']
             try:
                 save(c, body)
             except ValueError as e:
@@ -172,6 +174,8 @@ def _people(c, rows, table, save, fetch, label):
             body = {'name': name, 'address': item['address'], 'phone': item['phone'], 'contact': item['contact'], 'active': True}
             if 'kana' in item:
                 body['kana'] = item['kana']
+            if item.get('officeCode'):
+                body['officeCode'] = item['officeCode']
             try:
                 save(c, body)
             except ValueError as e:

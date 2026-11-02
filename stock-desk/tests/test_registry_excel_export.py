@@ -120,12 +120,12 @@ class RegistryExcelExportTests(unittest.TestCase):
             self.assertTrue(name.endswith('.xlsx'))
             self.assertEqual(blob[:2], b'PK')
             rows = read_sheet_rows(blob, '顧客')
-            self.assertEqual(rows[0][:7], ['顧客ID', '顧客名', 'カナ', '住所', '電話番号', '担当者', '使用状態'])
+            self.assertEqual(rows[0][:8], ['顧客ID', '顧客名', 'カナ', '住所', '電話番号', '担当者', '営業所コード', '使用状態'])
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[1][0], str(active['id']))
             self.assertEqual(rows[1][1], '出力病院')
             self.assertEqual(rows[1][4], '011-000-0099')
-            self.assertEqual(rows[1][6], '使用中')
+            self.assertEqual(rows[1][7], '使用中')
             all_blob, all_name = excel_export.export_xlsx(c, {
                 'kind': ['customers'], 'scope': ['all'],
             })
@@ -134,7 +134,7 @@ class RegistryExcelExportTests(unittest.TestCase):
             ids = {r[0] for r in all_rows[1:]}
             self.assertEqual(ids, {str(active['id']), str(stopped['id']), str(other['id'])})
             stopped_row = next(r for r in all_rows[1:] if r[0] == str(stopped['id']))
-            self.assertEqual(stopped_row[6], '停止')
+            self.assertEqual(stopped_row[7], '停止')
             self.assertEqual(stopped_row[4], '0120-00-0001')
             after = snapshot_counts(c)
             self.assertEqual(before, after)

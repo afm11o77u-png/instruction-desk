@@ -9784,6 +9784,69 @@ def _preview_outcome_summary(classified, sku_groups, planned, decision_meta):
     }
 
 
+def plan_office_codes(c, aux_rows):
+    """初期在庫CSVの営業所コードを顧客ごとにまとめる。空の顧客にだけ設定する予定を返す。"""
+    codes_by_customer = {}
+    order = []
+    for item in aux_rows or []:
+        if isinstance(item, (tuple, list)):
+            item = item[-1]
+        if not isinstance(item, dict):
+            continue
+        name = stock.text(item.get('顧客'))
+        code = stock.text(item.get('営業所コード'))
+        if not name or not code:
+            continue
+        if name not in codes_by_customer:
+            codes_by_customer[name] = set()
+            order.append(name)
+        codes_by_customer[name].add(code)
+    items = []
+    warnings = []
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
+    if 'office_code' not in cols:
+        return {'willSet': 0, 'items': [], 'warnings': []}
+    for name in order:
+        codes = sorted(codes_by_customer[name])
+        if len(codes) > 1:
+            warnings.append(f'顧客「{name}」の営業所コードが複数あります（{"・".join(codes)}）。設定しません。')
+            continue
+        code = codes[0]
+        matches, how = legacy.find_person_matches(c, 'customers', name)
+        if how == 'exact' and len(matches) == 1:
+            row = c.execute('SELECT office_code FROM customers WHERE id=?', (matches[0]['id'],)).fetchone()
+            current = stock.text(row['office_code'] if row else '')
+            if current:
+                if current != code:
+                    warnings.append(
+                        f'顧客「{name}」は営業所コード {current} が登録済みのため、{code} に変えません。'
+                    )
+                continue
+            items.append({'customerId': matches[0]['id'], 'customer': name, 'officeCode': code})
+        elif not matches:
+            # 今回の登録で新しく作られる顧客。確定時に名前で引き直す。
+            items.append({'customerId': None, 'customer': name, 'officeCode': code})
+    return {'willSet': len(items), 'items': items, 'warnings': warnings}
+
+
+def apply_office_codes(c, plan):
+    """plan_office_codes の予定を反映。空欄の顧客にだけ書く。"""
+    applied = 0
+    for it in (plan or {}).get('items') or []:
+        cid = it.get('customerId')
+        if not cid:
+            matches, how = legacy.find_person_matches(c, 'customers', it.get('customer'))
+            if how != 'exact' or len(matches) != 1:
+                continue
+            cid = matches[0]['id']
+        cur = c.execute(
+            "UPDATE customers SET office_code=? WHERE id=? AND COALESCE(office_code,'')=''",
+            (it['officeCode'], cid),
+        )
+        applied += cur.rowcount or 0
+    return applied
+
+
 def build_opening_stock_preview(c, body):
     """段階2: 初期在庫CSVのみ。商品台帳CSVは不要。永続マップで登録先を解決。"""
     ensure_schema(c)
@@ -9841,6 +9904,7 @@ def build_opening_stock_preview(c, body):
         },
         'openingStock': opening_stock,
         'openingStockSummary': bulk.summarize_opening_for_preview(opening_stock),
+        'officeCodePlan': plan_office_codes(c, aux_uploaded.get('rows')),
         'reviewTierLabels': dict(REVIEW_TIER_LABELS),
         'provisionalNameTag': PROVISIONAL_NAME_TAG,
         'counts': dict(STATUS_LABELS),
@@ -11080,6 +11144,7 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
         result_counts['openingUnchanged'] = opening_counts.get('unchanged', 0)
         result_counts['openingHeld'] = opening_counts.get('held', 0)
         result_counts['openingComplementSkipped'] = opening_counts.get('complementSkipped', 0)
+        result_counts['officeCodesSet'] = apply_office_codes(c, preview.get('officeCodePlan'))
         after_stock = stock_snapshot(c)
         result = {
             'runId': run_id,
