@@ -1113,6 +1113,33 @@ def decode_csv_bytes(blob):
     return legacy.decode_csv_bytes(blob)
 
 
+# 品番欄に入った「生地」等の総称（実品番ではない）
+_GENERIC_MATERIAL_CODES = frozenset({
+    'fabric', 'fabrics', 'cloth', 'material', 'materials', 'kiji', 'parts',
+    '生地', '資材', '部品', '材料', '副資材',
+})
+# 商品名の本体（括弧外）がこれで終わる行は生地＝部品・資材
+_MATERIAL_NAME_SUFFIXES = ('生地', '芯地', '裏地')
+
+
+def is_material_row(code, name):
+    """生地などの資材行か（衣服として商品段階に出さない）。"""
+    key = unicodedata.normalize('NFKC', stock.text(code)).strip().lower()
+    if key in _GENERIC_MATERIAL_CODES:
+        return True
+    base = re.split(r'[(（【\[]', unicodedata.normalize('NFKC', stock.text(name)), 1)[0]
+    base = re.sub(r'[\s\u3000]+', '', base)
+    return bool(base) and base.endswith(_MATERIAL_NAME_SUFFIXES)
+
+
+def _material_row_to_parts(item):
+    """生地行は品番を外して品番なし＝部品・資材にする（名前ごとに別の部品）。元の品番は残す。"""
+    code = stock.text(item.get('商品コード'))
+    if code and is_material_row(code, item.get('商品名')):
+        item['元品番'] = code
+        item['商品コード'] = ''
+
+
 def parse_csv_text(text):
     sample = text[:4096]
     try:
@@ -1138,6 +1165,7 @@ def parse_csv_text(text):
         for k in fields:
             v = raw.get(k)
             item[k] = '' if v is None else v
+        _material_row_to_parts(item)
         rows.append((i, item))
     if not rows:
         raise ValueError('読み込む行がありません。')

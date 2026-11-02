@@ -48,8 +48,10 @@ class ContentSplitInternalCodeTest(unittest.TestCase):
             self.assertTrue(r.get('canCommit'), r.get('reasons'))
             self.assertFalse(any('社内管理品番' in x for x in (r.get('reasons') or [])))
 
-    def test_fabric_no_collision_needs_no_confirm(self):
-        self._assert_resolved(self._rematch(FABRIC, 'fabric'), 'fabric')
+    def test_fabric_rows_are_parts_not_sku_group(self):
+        # 品番 fabric は生地の総称 → 品番なしの部品・資材（品番グループにしない）
+        pv = self._rematch(FABRIC, 'fabric')
+        self.assertNotIn('fabric', [g['code'] for g in pv['skuGroups']])
 
     def test_hat_colors_no_collision_needs_no_confirm(self):
         self._assert_resolved(self._rematch(HAT, 'SD5000AM-5U'), 'SD5000AM-5U')
