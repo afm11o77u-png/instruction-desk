@@ -1,5 +1,7 @@
 """在庫モジュール。数量と金額はロット（入荷分）から計算し、画面から現在庫を手入力させない。"""
+import re
 import sqlite3
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
@@ -907,6 +909,11 @@ def normalize_embroidery(value):
     return t
 
 
+def spec_key(value):
+    """仕様の照合キー（全角半角・空白の差を無視）。保存値は変えない。"""
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', normalize_embroidery(value)))
+
+
 def embroidery_label(value):
     """空（および未加工の別名）の加工仕様を表示名にする。保存キーそのものは変えない。"""
     return EMPTY_EMBROIDERY_LABEL if not normalize_embroidery(value) else text(value)
@@ -1080,7 +1087,7 @@ def _links(c, body):
         customer_id = raw.get('customerId')
         if not isinstance(customer_id, int) or not c.execute('SELECT id FROM customers WHERE id=?', (customer_id,)).fetchone():
             raise ValueError('取扱の顧客を、顧客台帳から選んでください。')
-        embroidery = normalize_embroidery(optional(raw.get('embroidery'), '加工仕様', 80))
+        embroidery = normalize_embroidery(optional(raw.get('embroidery'), '仕様', 80))
         process_ids = raw.get('processIds')
         if process_ids is not None:
             if not isinstance(process_ids, list):
@@ -1090,9 +1097,9 @@ def _links(c, body):
                 # 加工仕様の文字が空なら、選んだ加工サービス名を入れる（指示書・ピッキング等の表示用）
                 names = [c.execute('SELECT name FROM products WHERE id=?', (i,)).fetchone()['name'] for i in process_ids]
                 embroidery = normalize_embroidery('・'.join(names)[:80])
-        key = (customer_id, embroidery)
+        key = (customer_id, spec_key(embroidery))
         if key in seen:
-            raise ValueError('同じ顧客で、同じ加工仕様が重複しています。加工ありとなしは別の行にしてください。')
+            raise ValueError('同じ顧客で、同じ仕様が重複しています。')
         seen.add(key)
         standard = flag(raw.get('isStandard'))
         if standard:
@@ -1226,10 +1233,14 @@ def save_product(c, body):
                 c.execute('INSERT INTO product_sizes(product_id,label,sort_order) VALUES(?,?,?)', (pid, label, i))
         current = {(r['customer_id'], r['embroidery']): r for r in c.execute(
             'SELECT * FROM customer_products WHERE product_id=?', (pid,))}
+        # 表記ゆれ（全角半角・空白）だけの違いは既存の仕様に寄せる
+        by_key = {(cid, spec_key(e)): e for (cid, e) in current}
+        for link in links:
+            link['embroidery'] = by_key.get((link['customerId'], spec_key(link['embroidery'])), link['embroidery'])
         incoming = {(link['customerId'], link['embroidery']) for link in links}
         for key, row in current.items():
             if key not in incoming and c.execute('SELECT 1 FROM lots WHERE customer_product_id=?', (row['id'],)).fetchone():
-                raise ValueError('在庫の履歴がある顧客・加工仕様は外せません。使用停止にして残してください。')
+                raise ValueError('在庫の履歴がある顧客・仕様は外せません。使用停止にして残してください。')
         for key, row in current.items():
             if key not in incoming:
                 c.execute('DELETE FROM customer_products WHERE id=?', (row['id'],))
@@ -1320,7 +1331,7 @@ def ensure_customer_product(c, body):
     """
     customer_id = _as_positive_id(body.get('customerId'), '顧客')
     product_id = _as_positive_id(body.get('productId'), '商品')
-    embroidery = normalize_embroidery(optional(body.get('embroidery'), '加工情報', 80))
+    embroidery = normalize_embroidery(optional(body.get('embroidery'), '仕様', 80))
     customer = c.execute('SELECT id,active FROM customers WHERE id=?', (customer_id,)).fetchone()
     if not customer:
         raise ValueError('顧客が未登録です。顧客台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
@@ -1345,10 +1356,17 @@ def ensure_customer_product(c, body):
         ).fetchone()
 
     row = existing_row()
+    if not row:
+        k = spec_key(embroidery)
+        for peer in c.execute('SELECT * FROM customer_products WHERE customer_id=? AND product_id=?',
+                              (customer_id, product_id)):
+            if spec_key(peer['embroidery']) == k:
+                row = peer
+                break
     if row:
         if not row['active']:
             raise ValueError(
-                '同じ顧客・商品・加工情報の取扱は既にありますが、使用停止です。'
+                '同じ顧客・商品・仕様の取扱は既にありますが、使用停止です。'
                 '商品台帳で取扱を使用中に戻してから初期在庫に選んでください。自動では再開しません。'
             )
         return customer_product_payload(c, row['id'], already=True)
@@ -1371,7 +1389,7 @@ def ensure_customer_product(c, body):
             raise
         if not row['active']:
             raise ValueError(
-                '同じ顧客・商品・加工情報の取扱は既にありますが、使用停止です。'
+                '同じ顧客・商品・仕様の取扱は既にありますが、使用停止です。'
                 '商品台帳で取扱を使用中に戻してから初期在庫に選んでください。自動では再開しません。'
             )
         return customer_product_payload(c, row['id'], already=True)
@@ -1628,7 +1646,7 @@ def register_opening(c, body):
                       JOIN customers cu ON cu.id=cp.customer_id
                       WHERE cp.id=?''', (cp_id,)).fetchone()
     if not cp or not cp['active'] or not cp['product_active'] or not cp['customer_active']:
-        raise ValueError('使用中の顧客・商品・加工仕様を選んでください。')
+        raise ValueError('使用中の顧客・商品・仕様を選んでください。')
     location_id = body.get('locationId')
     loc = c.execute('SELECT * FROM locations WHERE id=?', (location_id,)).fetchone() if isinstance(location_id, int) else None
     if not loc or not loc['active']:
@@ -2629,7 +2647,7 @@ def resolve_customer_product(c, cp_id):
                       JOIN customers cu ON cu.id=cp.customer_id
                       WHERE cp.id=?''', (cp_id,)).fetchone()
     if not cp or not cp['active'] or not cp['product_active'] or not cp['customer_active']:
-        raise ValueError('使用中の顧客・商品・加工仕様を選んでください。')
+        raise ValueError('使用中の顧客・商品・仕様を選んでください。')
     return cp
 
 
