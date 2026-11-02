@@ -225,3 +225,15 @@ class K2StaffWorkshopTest(unittest.TestCase):
         rows2 = [{'rowNo': 5, 'processingService': ps, 'product': {}}]
         pli.apply_k2_garment_choice(rows2, {})
         self.assertFalse(rows2[0].get('k2GarmentAsProduct'))
+
+
+class ShapeWordBracketNotProcessingTest(unittest.TestCase):
+    """括弧内の七分袖は形状。七分袖加工と明記されたときだけ加工（#332）。"""
+
+    def test_shape_word_not_service(self):
+        import product_ledger_processing_service as ps
+        self.assertEqual(ps.unify_processing_service_name('七分袖'), '')
+        self.assertEqual(ps.unify_processing_service_name('七分袖加工'), '七分袖加工')
+        r = ps.classify_processing_service_row(
+            supplier='アイトス', product_name='コックコート（七分袖）', code='RW0009-1')
+        self.assertFalse(r.get('isProcessingService'))
