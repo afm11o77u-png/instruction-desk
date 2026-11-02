@@ -1223,9 +1223,6 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     c.execute('BEGIN IMMEDIATE')
                     result=display_modes.handle_post(self,c,d)
                 return self.reply(*result)
-            if self.path=='/api/backup':
-                dest=placement.make_backup(connect, DATA)
-                return self.reply(200,{'message':'バックアップを作成しました。指示書のデータ、出荷情報、貼付け位置の画像、修正依頼掲示板を含みます。','filename':dest.name})
             if self.path=='/api/ship': return self.reply(*ship_order(self,d))
             if self.path=='/api/orders/flags': return self.reply(*tune_flags(self,d))
             if self.path=='/api/orders/debug': return self.reply(*debug_flags(self,d))
