@@ -95,8 +95,20 @@ def proposed_blank_sku_category(customer_name, product_name):
 
 
 def is_custom_order_code(code):
-    """品番「別注」限定。空白は照合用に整理するが、部分一致はしない。"""
-    return stock.text(code) == CUSTOM_ORDER_CODE
+    """品番「別注」「要確認」（顧客＋商品名全文で区別する品番）。「別注(…)」など別品番は対象外。"""
+    t = stock.text(code)
+    return t == CUSTOM_ORDER_CODE or t == NEEDS_CODE
+
+
+NEEDS_CODE = '要確認'
+
+
+def _custom_code_where(code):
+    """別注は登録品番「別注(顧客名)」と旧「別注」の両方を顧客取扱で探す。"""
+    t = stock.text(code) or CUSTOM_ORDER_CODE
+    if t == CUSTOM_ORDER_CODE:
+        return "(p.code=? OR p.code GLOB '別注(*)')", (t,)
+    return 'p.code=?', (t,)
 
 
 def custom_order_name_key(product_name):
@@ -411,8 +423,7 @@ def parse_row_condition(item, row_no):
     if condition is None and star:
         condition = stock.CONDITION_USED
     if star and condition == stock.CONDITION_NEW:
-        # ＊は中古。新古列が新品なら矛盾→要確認（判定上は中古として扱う）
-        reasons.append(f'{row_no}行目：商品名の「＊」は中古ですが、新古列が新品です。')
+        # ＊は中古。＊印を優先し、新古列が新品でも中古として扱う（要確認にしない）
         return stock.CONDITION_USED, reasons
     if star and condition == stock.CONDITION_USED:
         return condition, reasons
@@ -457,7 +468,7 @@ def find_products_by_code(c, code):
     ))
 
 
-def find_custom_order_products_for_customer(c, product_name, *, customer_id=None):
+def find_custom_order_products_for_customer(c, product_name, *, customer_id=None, code=None):
     """品番「別注」を商品名全文＋対象顧客の取扱関係で照合。
 
     仕入先は照合キーに使わない。顧客対応が取れない既存別注は候補にしない。
@@ -471,13 +482,14 @@ def find_custom_order_products_for_customer(c, product_name, *, customer_id=None
            FROM products p
            LEFT JOIN suppliers s ON s.id=p.supplier_id
            JOIN customer_products cp ON cp.product_id=p.id AND cp.active=1
-           WHERE p.code=? AND p.name=? AND cp.customer_id=? AND p.merged_into_id IS NULL
+           WHERE ''' + _custom_code_where(code)[0] + ''' AND p.name=? AND cp.customer_id=?
+             AND p.merged_into_id IS NULL
            ORDER BY p.id''',
-        (CUSTOM_ORDER_CODE, name, customer_id),
+        (*_custom_code_where(code)[1], name, customer_id),
     ))
 
 
-def find_custom_order_products_by_name(c, product_name):
+def find_custom_order_products_by_name(c, product_name, code=None):
     """品番「別注」＋商品名全文の候補（顧客未確定時の複数候補表示用）。"""
     name = stock.text(product_name)
     if not name:
@@ -485,8 +497,9 @@ def find_custom_order_products_by_name(c, product_name):
     return list(c.execute(
         '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-           WHERE p.code=? AND p.name=? AND p.merged_into_id IS NULL ORDER BY p.id''',
-        (CUSTOM_ORDER_CODE, name),
+           WHERE ''' + _custom_code_where(code)[0] + ''' AND p.name=? AND p.merged_into_id IS NULL
+           ORDER BY p.id''',
+        (*_custom_code_where(code)[1], name),
     ))
 
 
@@ -1571,7 +1584,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None)
     if is_custom_order_code(code):
         # 別注: 品番一致だけでは再利用しない。顧客取扱＋商品名全文で特定。
         matches = find_custom_order_products_for_customer(
-            c, name, customer_id=customer_id,
+            c, name, customer_id=customer_id, code=code,
         )
         if len(matches) == 1:
             product_info = {**product_info, 'id': matches[0]['id'], 'sizeAction': 'add'}
@@ -1581,7 +1594,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None)
             product_info.get('category') or stock.CATEGORY_UNIFORM
         )
         saved = stock.save_product(c, {
-            'code': CUSTOM_ORDER_CODE,
+            'code': code or CUSTOM_ORDER_CODE,
             'name': csv_name,  # 色・加工を含む商品名をそのまま（自動分解しない）
             'color': '',
             'category': category,

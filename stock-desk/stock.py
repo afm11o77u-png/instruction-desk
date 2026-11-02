@@ -1928,6 +1928,7 @@ def product_row(c, pid):
     maker_code = text(r['maker_code'] or '') if 'maker_code' in r.keys() else ''
     return {
         'id': r['id'], 'code': code, 'codeDisplay': product_code_display(code, category),
+        'codeNeedsReview': text(code) == '要確認',
         'makerCode': maker_code,
         'makerCodeDisplay': maker_code_of(code, maker_code),
         'name': r['name'], 'color': r['color'], 'material': material or '',

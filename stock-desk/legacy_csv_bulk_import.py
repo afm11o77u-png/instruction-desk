@@ -91,6 +91,16 @@ def _weighted_cost(items):
     return val, 'avg'
 
 
+def _prior_record_only(plan):
+    """要確認の理由が「以前取り込んだ行の記録」だけの行（登録先・数量・単価は確定済み）。"""
+    if plan.get('status') != legacy.STATUS_REVIEW:
+        return False
+    reasons = plan.get('reasons') or []
+    return bool(reasons) and all('以前取り込んだ行の記録があります' in r for r in reasons) and bool(
+        (plan.get('target') or {}).get('handleId')
+    )
+
+
 def merge_duplicate_opening_plans(c, plans):
     """同じ在庫（商品×サイズ×取扱×拠点棚×新品中古）に当たる行を1件に合算する。
 
@@ -100,7 +110,7 @@ def merge_duplicate_opening_plans(c, plans):
     ok = (legacy.STATUS_CREATE, legacy.STATUS_REUSE, legacy.STATUS_UNCHANGED, legacy.STATUS_QTY_DIFF)
     groups = defaultdict(list)
     for p in plans:
-        if p.get('status') not in ok:
+        if p.get('status') not in ok and not _prior_record_only(p):
             continue
         key = _opening_merge_key(p, c)
         if key is not None:
@@ -109,6 +119,12 @@ def merge_duplicate_opening_plans(c, plans):
     for items in groups.values():
         if len(items) < 2:
             continue
+        # 再取込: 前回「同じ在庫に合算」した行は単価が加重平均に変わっているため単独では
+        # 既存在庫と一致せず「以前の記録あり」になる。グループ内で合算し直して再照合する
+        for p in items:
+            if _prior_record_only(p):
+                p['status'] = legacy.STATUS_REUSE
+                p['reasons'] = []
         lead = items[0]
         cost, cost_differs = _weighted_cost(items)
         qty = sum(p.get('qty') or 0 for p in items)

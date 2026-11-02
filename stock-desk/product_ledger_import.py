@@ -27,6 +27,7 @@ import product_ledger_position as position_sku
 import product_ledger_processing_service as proc_svc
 import product_ledger_scoped_color as scoped_color
 import stock
+import legacy_code_assign
 import stock_product_merge
 
 # 配色つなぎ（先頭中古標記を除いたあとの /／×✕*＊ → 比較上 ×）
@@ -1197,6 +1198,8 @@ def decode_upload(body):
         raise ValueError('CSVファイルを選んでください。') from e
     text, encoding = decode_csv_bytes(blob)
     fields, rows = parse_csv_text(text)
+    # 別注→別注(顧客名)／品番空欄の衣服→要確認（初期在庫CSVと同じ規則）
+    legacy_code_assign.assign_rows(rows, strip_used=True)
     name = stock.text(body.get('name') or body.get('fileName') or '商品台帳.csv') or '商品台帳.csv'
     sha = hashlib.sha256(blob).hexdigest()
     result = {
@@ -1232,6 +1235,7 @@ def decode_aux_upload(body):
         'name': body.get('auxName') or body.get('openingStockFileName') or '初期在庫.csv',
     }
     uploaded = legacy.decode_upload(aux_body)
+    legacy_code_assign.assign_rows(uploaded['rows'])
     result = {
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
@@ -5945,7 +5949,7 @@ def _product_preview(
         info['categoryAction'] = 'set'
         info['codeDisplay'] = stock.product_code_display(code, info['category'])
         matches = legacy.find_custom_order_products_for_customer(
-            c, name, customer_id=customer_id,
+            c, name, customer_id=customer_id, code=code,
         )
         if not matches:
             info['action'] = 'create'
@@ -10789,7 +10793,7 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     if not force_create:
         if legacy.is_custom_order_code(code):
             matches = legacy.find_custom_order_products_for_customer(
-                c, name, customer_id=customer_id,
+                c, name, customer_id=customer_id, code=code,
             )
             if len(matches) == 1:
                 size_added = _save_product_sizes_only(c, matches[0]['id'], product_info.get('size'))
@@ -10855,6 +10859,9 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     # 新規作成時は指定の通常仕入先を優先（行順に依存しない）
     create_supplier_id = primary_id or supplier_id
     maker_code = stock.text(product_info.get('makerCode') or product_info.get('maker_code') or '')
+    # 別注は「別注(顧客名)」で登録（顧客名はCSVのまま）。照合は顧客取扱＋商品名で行う
+    if code == legacy.CUSTOM_ORDER_CODE and stock.text(product_info.get('customOrderCustomer')):
+        code = legacy_code_assign.custom_order_code_for(product_info.get('customOrderCustomer'))
     save_body = {
         'code': code,
         'name': name,  # 公式名（括弧分類後の予定名またはCSV原文）
@@ -10868,6 +10875,9 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     }
     if maker_code:
         save_body['makerCode'] = maker_code
+    if legacy_code_assign.is_custom_order_code(code):
+        # 別注(顧客名) は同じ品番でも商品名ごとに別商品（1品番=1商品の対象外）
+        save_body['_allowHistoricalDuplicateCode'] = True
     saved = stock.save_product(c, save_body)
     # 原文名は照合用別名（初期在庫CSVなどの後続解決用）。
     # 同義・色省略などの表記ゆれ自動まとめは通常画面別名へ出さず、row_maps で照合する。
@@ -11540,6 +11550,8 @@ def commit_preview(c, body, *, db_path=None):
                 if prod_info.get('processingServiceProduct'):
                     ensure_sup_id = None  # ID 再利用時は仕入先変更しない
 
+                if legacy.is_custom_order_code(prod_info.get('code')):
+                    prod_info = {**prod_info, 'customOrderCustomer': row['csv'].get('customer') or ''}
                 pid, created, size_added, sub_added = _ensure_product(
                     c, prod_info, ensure_sup_id, row['csv']['productName'],
                     customer_id=cust_id,

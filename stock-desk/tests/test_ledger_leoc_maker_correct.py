@@ -180,7 +180,7 @@ class ScopedColorPreviewCommitTest(unittest.TestCase):
 
             # ブルーサックスは1商品（サイズまとめ）。ピンクは別商品。
             prods = list(c.execute(
-                "SELECT id,name,color FROM products WHERE code='別注' AND merged_into_id IS NULL ORDER BY id"
+                "SELECT id,name,color FROM products WHERE code GLOB '別注(*)' AND merged_into_id IS NULL ORDER BY id"
             ))
             blue = [p for p in prods if 'ブルー・サックス' in (p['color'] or '')]
             self.assertEqual(len(blue), 1, prods)
