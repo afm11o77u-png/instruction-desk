@@ -5698,6 +5698,9 @@ def _product_preview(
     size = size_raw if isinstance(size_raw, str) else ('' if size_raw is None else str(size_raw))
     size_label = size.strip()
     blank_sku = not code
+    if blank_sku:
+        # 品番なし（部品・資材／加工サービス）は CSV のサイズを使わず内部既定サイズ1つ
+        size_label = PARTS_INTERNAL_SIZE
     custom_order = legacy.is_custom_order_code(code)
     star = used_marker_possible(name)
     # 台帳取込の品番空欄は一律「部品・資材」（旧・品番なし制服例外は使わない）。
@@ -9390,6 +9393,31 @@ def _product_plan_key(row):
     return f'row:{row.get("rowNo")}'
 
 
+def _hide_codeless_sizes(classified):
+    """部品・加工サービスの行はサイズを確認リストに出さない（サイズ追加にしない）。部品は取扱も作らない。"""
+    for row in classified:
+        prod = row.get('product') if isinstance(row, dict) else None
+        if not isinstance(prod, dict):
+            continue
+        kind = _codeless_kind(prod)
+        if not kind and not stock.text((row.get('csv') or {}).get('code') or ''):
+            kind = 'parts'
+        if not kind:
+            continue
+        prod['sizeAction'] = 'none'
+        prod['sizeHidden'] = True
+        h = row.get('handle')
+        if kind == 'parts' and isinstance(h, dict) and h.get('action') == 'create':
+            # 部品は台帳取込で取扱を作らない（在庫・注文で使うときに取扱を付ける）
+            h['action'] = 'excluded'
+            h['partsNoHandle'] = True
+        prod['reasons'] = [x for x in (prod.get('reasons') or []) if 'サイズが空' not in str(x)]
+        row['reasons'] = [x for x in (row.get('reasons') or []) if 'サイズが空' not in str(x)]
+        if row.get('status') == STATUS_SIZE_ADD:
+            row['status'] = STATUS_REUSE
+            row['statusLabel'] = STATUS_LABELS[STATUS_REUSE]
+
+
 def _planned_counts(classified, sku_groups):
     """CSV行数と新規商品数を混同しないための集計。
 
@@ -9944,6 +9972,7 @@ def build_preview(c, body):
             1 for g in sku_groups if g.get('needsDecision') and not g.get('decision')
         )
 
+    _hide_codeless_sizes(classified)
     counts = defaultdict(int)
     for row in classified:
         counts[row['status']] += 1
@@ -10130,6 +10159,8 @@ def _save_product_sizes_only(c, pid, size_label):
     labels = list(current['sizes'])
     if not size_label or size_label in labels:
         return False
+    if stock.text(current.get('category') or '') in stock.CODELESS_CATEGORIES and labels:
+        return False  # 部品・加工サービスはサイズを増やさない（内部既定サイズ1つ）
     labels.append(size_label)
     stock.save_product(c, {
         'id': pid,
@@ -10317,7 +10348,46 @@ def _row_registered_code(row) -> str:
     return stock.text(prod.get('code') or '')
 
 
+def _codeless_kind(product_info):
+    """加工サービス=service / 部品・資材=parts / それ以外 ''。"""
+    info = product_info or {}
+    cat = stock.text(info.get('category') or info.get('proposedCategory') or '')
+    if info.get('processingServiceProduct') or cat == stock.CATEGORY_PROCESS_SERVICE:
+        return 'service'
+    if cat == stock.CATEGORY_PARTS:
+        return 'parts'
+    return ''
+
+
+# 部品・加工サービスは CSV のサイズを使わず内部既定サイズ1つだけ持つ（在庫・注文の必須行用）
+SERVICE_INTERNAL_SIZE = '—'
+PARTS_INTERNAL_SIZE = 'F'
+
+
+def _normalize_codeless_product_info(c, product_info):
+    kind = _codeless_kind(product_info)
+    if not kind:
+        return product_info
+    info = dict(product_info)
+    info['size'] = SERVICE_INTERNAL_SIZE if kind == 'service' else PARTS_INTERNAL_SIZE
+    if kind == 'service':
+        # 加工サービスは色を持たない
+        info['officialColor'] = ''
+        info['proposedColor'] = ''
+    elif info.get('id'):
+        prod = _load_product(c, info['id'])
+        new_color = info.get('officialColor')
+        if new_color is None:
+            new_color = info.get('proposedColor')
+        if prod and new_color is not None and stock.text(prod['color']) != stock.text(new_color):
+            # 元の色が違う部品をまとめたときは色を空にする
+            info['officialColor'] = ''
+            info['proposedColor'] = ''
+    return info
+
+
 def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None, force_create=False):
+    product_info = _normalize_codeless_product_info(c, product_info)
     if product_info.get('codeOverride') is not None:
         product_info = dict(product_info)
         product_info['code'] = product_info.get('codeOverride')
