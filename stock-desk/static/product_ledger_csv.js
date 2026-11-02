@@ -5346,6 +5346,7 @@
   function modeChooserHtml(st){
     return `<div class="product-ledger-mode-chooser">
       <p class="merge-lead">旧CSV一括取り込みは<strong>二段階</strong>です。先に商品を登録し、あとから初期在庫を登録します（待ち時間を分けます）。</p>
+      ${st.busy?'<p class="notice" role="status">読み込み中…</p>':''}
       <div class="bar product-ledger-mode-actions">
         <button type="button" class="primary" id="plModeParts" ${st.busy?'disabled':''}>部品・加工</button>
         <button type="button" class="primary" id="plModeGoods" ${st.busy?'disabled':''}>商品</button>
@@ -7105,6 +7106,7 @@
     __test:{
       processServicePickerHtml,
       chosenProcessServiceIds,
+      modeChooserHtml,
       openingReviewGroups,
       openingReviewGroupsHtml,
       pendingRematchCodes,
