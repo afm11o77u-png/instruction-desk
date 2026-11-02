@@ -141,3 +141,23 @@ class MakerPartsNotServiceTest(unittest.TestCase):
             self.assertFalse(ps.classify_processing_service_row(supplier='YKK', product_name=name, code='')['isPhysicalParts'])
         self.assertFalse(ps.classify_processing_service_row(
             supplier='株サーヴォ', product_name='作業服上(刺繍)', code='DCP600')['isPhysicalParts'])
+
+
+class GarmentNotMakerPartsTest(unittest.TestCase):
+    """回帰: 「七分袖」→「七分袖加工」と補われ、品番ありの衣服が部品になっていた"""
+
+    def test_garment_with_code_not_parts(self):
+        import product_ledger_processing_service as ps
+        cases = [
+            ('住商モンブラン㈱', '長白衣七分袖（女性）', '71-139'),
+            ('㈱マジェステックストレード', 'スタッフ・女性七分袖シャツ(マイスター)', '400-L-S7-m'),
+            ('ＫＡＺＥＮ　ＷＬＤ㈱', 'レディスシャツ七分袖(ﾎﾜｲﾄ)', '627-10'),
+            ('ＫＡＺＥＮ　ＷＬＤ㈱', 'コックシャツ七分袖(ﾎﾜｲﾄ)', 'APK210-10'),
+            ('ＫＡＺＥＮ　ＷＬＤ㈱', 'コックシャツ七分袖(ｸﾘｰﾑ) (不使用)', 'APK210-24 (不使用)'),
+        ]
+        for sup, name, code in cases:
+            r = ps.classify_processing_service_row(supplier=sup, product_name=name, code=code)
+            self.assertFalse(r['isPhysicalParts'], name)
+            self.assertFalse(r.get('makerParts'), name)
+        r = ps.classify_processing_service_row(supplier='YKK', product_name='スナッパー(赤)', code='SN10')
+        self.assertTrue(r['isPhysicalParts'])
