@@ -161,3 +161,21 @@ class GarmentNotMakerPartsTest(unittest.TestCase):
             self.assertFalse(r.get('makerParts'), name)
         r = ps.classify_processing_service_row(supplier='YKK', product_name='スナッパー(赤)', code='SN10')
         self.assertTrue(r['isPhysicalParts'])
+
+
+class WorkSuffixNotPartsTest(unittest.TestCase):
+    """回帰: 裏地補修・ファスナーガード交換が「裏地」「ファスナー」で部品・資材になっていた"""
+
+    def test_work_names_not_physical(self):
+        import product_ledger_processing_service as ps
+        for name in ('裏地補修', 'ファスナーガード交換', 'ﾌｧｽﾅｰ交換', 'ボタンホール作製',
+                     'スカート裏地補修', 'エプロンボタン付け', '裾マジックテープ取付'):
+            self.assertFalse(ps.is_physical_parts_name(name), name)
+            r = ps.classify_processing_service_row(supplier='Ｋ２スタッフ工房', product_name=name, code='')
+            self.assertFalse(r['isPhysicalParts'], name)
+        for name in ('裏地補修', 'ファスナーガード交換', 'ﾌｧｽﾅｰ交換', 'ボタンホール作製', '片布作製', '胸囲幅直し'):
+            r = ps.classify_processing_service_row(supplier='Ｋ２スタッフ工房', product_name=name, code='')
+            self.assertTrue(r['isProcessingService'], name)
+            self.assertFalse(r.get('k2AutoExclude'), name)
+        for name in ('ボタン　18mm グリーン', 'DCP515用生地(袖/裾加工用)', '裏地', 'ファスナー'):
+            self.assertTrue(ps.is_physical_parts_name(name), name)

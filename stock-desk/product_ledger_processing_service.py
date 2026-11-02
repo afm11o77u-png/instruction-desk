@@ -56,6 +56,12 @@ _PHYSICAL_PARTS_MARKERS = (
     'ベルト部品', '芯', 'パッド',
 )
 
+# 名前の末尾がこれなら実物部品ではなく作業（加工サービス）
+_WORK_SUFFIXES = (
+    '補修', '交換', '修理', '直し', '作製', '取付', '取り付け', '付け', '縫付', '縫い付け',
+    '付替', '付け替え', '詰め',
+)
+
 # 取付・縫付・付替などの表記ゆれ → 短い正規形（同一サービスへの名寄せ）
 _ATTACH_VERB_CANON = (
     ('付け替え', '付替'),
@@ -158,7 +164,8 @@ _SERVICE_NAME_CANDIDATES = sorted(
 _SERVICE_SUFFIX_RE = re.compile(
     r'(?:加工|取付|取り付け|取付け|縫付|縫い付け|縫付け|付替|付け替え|付替え|'
     r'裾上げ|裾直し|丈直し|丈上げ|ウエスト直し|カン止|'
-    r'サイズダウン|付け|補修|外し|取り外し|取外し)$'
+    r'サイズダウン|付け|補修|外し|取り外し|取外し|'
+    r'交換|修理|直し|作製|貼替|張替|詰め|潰し)$'
 )
 # 顧客固有の「〜用」接頭（わらく堂用上衣加工 など）
 _CUSTOMER_USE_RE = re.compile(r'^(.+?用)(.+)$')
@@ -366,6 +373,9 @@ def is_physical_parts_name(product_name: str) -> bool:
         return False
     # 本体側に加工サービス語があるときだけ部品扱いしない（括弧用途の『加工用』は見ない）
     if any(normalize_service_key(a) in core for a in ('加工', '刺繍', 'プリント', '縫製')):
+        return False
+    # 末尾が作業語（裏地補修・ファスナー交換・ボタン付け等）は修理／加工サービス
+    if any(core.endswith(normalize_service_key(w)) for w in _WORK_SUFFIXES):
         return False
     for marker in _PHYSICAL_PARTS_MARKERS:
         mk = normalize_service_key(marker)
