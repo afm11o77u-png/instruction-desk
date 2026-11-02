@@ -8,6 +8,7 @@ import templates
 import label_sets
 import picking
 import placement
+import split_backup
 import shipping
 import names
 import display_modes
@@ -812,6 +813,16 @@ def stockdesk():
     _stockdesk = mod
     return mod
 
+def _split_audit(actor, action, target):
+    try:
+        import auth as _auth
+        with connect() as c:
+            row = c.execute('SELECT id, name, login FROM users WHERE login=? COLLATE NOCASE', (actor.get('login') or '',)).fetchone()
+            u = {'id': row[0], 'name': row[1], 'login': row[2]} if row else {'id': None, 'name': actor.get('name') or '', 'login': actor.get('login') or ''}
+            _auth.log(c, u, action, target)
+    except Exception:
+        pass
+
 def ensure_stock():
     stockdesk().prepare(STOCK_DB, 'desk')
 
@@ -900,6 +911,22 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/inventory' or path.startswith('/inventory/'): return self.serve_inventory('GET')
         if path.startswith('/api/') and migration.is_busy() and path != '/api/me':
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if path == '/api/migration/split-export':
+            try:
+                from urllib.parse import urlparse as _up, parse_qs as _pq
+                cat = (_pq(_up(self.path).query).get('category') or [''])[0]
+                with connect() as c:
+                    u = self.session_user(c)
+                    migration.owner_guard(u)
+                    actor = {'id': u['id'], 'name': u['name'], 'login': u['login']}
+                dest, manifest = split_backup.export_category(cat, DATA, actor=actor)
+                _split_audit(actor, '分割バックアップ作成', f"{manifest['label']} {dest.name}")
+                return self.reply_file(200, dest, 'application/zip', {'Content-Disposition': f'attachment; filename="{dest.name}"'})
+            except (migration.MigrationError, split_backup.SplitBackupError) as e:
+                return self.reply(403 if '主管理者' in str(e) or 'ログイン' in str(e) else 400, {'error': str(e)})
+            except Exception:
+                import traceback; traceback.print_exc()
+                return self.reply(500, {'error': 'バックアップを作成できませんでした。'})
         if path == '/api/migration/export':
             try:
                 with connect() as c:
@@ -1081,10 +1108,45 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200, {'ok': True, 'notes': notes, 'history': name_exe.history(DATA)})
         try:
             n=int(self.headers.get('Content-Length','0'))
-            limit=80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import') else 1000000
+            limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import') else 1000000
             if n>limit: raise ValueError('データが大きすぎます。')
             d=json.loads(self.rfile.read(n))
             if not isinstance(d,dict): raise ValueError('入力内容を確認してください。')
+            if route in ('/api/migration/split-inspect','/api/migration/split-restore'):
+                upload = None
+                try:
+                    with connect() as c:
+                        u = self.session_user(c)
+                        migration.owner_guard(u)
+                        actor = {'id': u['id'], 'name': u['name'], 'login': u['login']}
+                    raw = d.get('data')
+                    if not isinstance(raw, str) or not raw:
+                        raise split_backup.SplitBackupError('バックアップZIPを選んでください。')
+                    with tempfile.NamedTemporaryFile(prefix='split-upload-', suffix='.zip', delete=False) as tmp:
+                        tmp.write(base64.b64decode(raw))
+                        upload = Path(tmp.name)
+                    if route == '/api/migration/split-inspect':
+                        return self.reply(200, split_backup.inspect(upload))
+                    if d.get('confirm') is not True:
+                        raise split_backup.SplitBackupError('復元するには、置き換えることに同意してください。')
+                    result = split_backup.restore_category(
+                        upload, DATA, actor=actor, expect_category=d.get('category') or None,
+                        prepare_stock=lambda p: stockdesk().prepare(Path(p), 'desk'))
+                    _split_audit(actor, '分割バックアップ復元', f"{result['label']}（ZIP作成 {result.get('sourceCreatedAt') or '-'}）")
+                    if result['category'] == 'users':
+                        self.cookie = ['desk_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0',
+                                       'desk_gate=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0']
+                    return self.reply(200, result)
+                except (migration.MigrationError, split_backup.SplitBackupError) as e:
+                    msg = str(e)
+                    return self.reply(403 if ('主管理者' in msg or 'ログイン' in msg) else 400, {'error': msg})
+                except Exception:
+                    import traceback; traceback.print_exc()
+                    return self.reply(500, {'error': '復元処理でエラーが発生しました。復元前の安全バックアップは data/backups にあります。'})
+                finally:
+                    if upload:
+                        try: upload.unlink()
+                        except OSError: pass
             if route in ('/api/migration/inspect','/api/migration/restore'):
                 try:
                     from contextlib import closing
