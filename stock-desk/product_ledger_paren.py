@@ -1570,7 +1570,53 @@ def _strip_outside_color_once(name: str, hit) -> str:
     return merged.strip()
 
 
+LINE_PROCESS_SERVICE_NAME = 'ライン加工'
+
+
+def extract_line_specs(text: str):
+    """「赤ライン」等（色語＋ライン）を取り出す。服の色ではなく取扱の仕様。
+
+    Returns (残りの商品名, [仕様, ...])。括弧だけになった（赤ライン）は括弧ごと除く。
+    """
+    raw = unify_import_notation(text or '')
+    if 'ライン' not in raw:
+        return raw, []
+    terms = [t for t in _COLOR_MATCH_TERMS if t]
+    for syn, _canon in _COLOR_SYNONYM_PAIRS:
+        if syn and syn not in terms:
+            terms.append(syn)
+    terms = sorted(set(terms) | set(_COLOR_DISPLAY.values()), key=len, reverse=True)
+    pat = re.compile('(?:' + '|'.join(re.escape(t) for t in terms) + ')ライン(?![ァ-ヴー])', re.IGNORECASE)
+    specs = []
+
+    def take(m):
+        specs.append(m.group(0))
+        return ' '
+    rest = pat.sub(take, raw)
+    if not specs:
+        return raw, []
+    rest = re.sub(r'[（(]\s*[）)]', ' ', rest)
+    rest = re.sub(r'\s+', ' ', rest).strip()
+    return rest, specs
+
+
 def split_name_and_color(product_name: str):
+    """「○○ライン」は仕様として先に外し、残りを従来どおり商品名・色へ振り分ける。"""
+    original = (product_name or '').strip()
+    rest, specs = extract_line_specs(original)
+    if not specs or not rest:
+        return _split_name_and_color_core(product_name)
+    out = _split_name_and_color_core(rest)
+    spec = '・'.join(dict.fromkeys(specs))
+    proc = (out.get('processing') or '').strip()
+    out['processing'] = f'{proc}・{spec}' if proc else spec
+    out['lineSpec'] = spec
+    out['lineProcessService'] = LINE_PROCESS_SERVICE_NAME
+    out['originalName'] = original
+    return out
+
+
+def _split_name_and_color_core(product_name: str):
     """登録用に商品名と色を振り分ける。
 
     - 括弧内色: 既存 classify の plannedName / color を基本に使う

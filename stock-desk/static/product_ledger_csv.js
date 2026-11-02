@@ -3982,8 +3982,9 @@
   function svcKey(v){return String(v||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase()}
 
   /** 行で選ばれている加工サービスID（未選択なら原文の加工名と一致する登録済みサービス） */
-  function chosenProcessServiceIds(st,edit,processing){
+  function chosenProcessServiceIds(st,edit,processing,r){
     if(edit&&Array.isArray(edit.processServiceIds))return edit.processServiceIds.map(Number)
+    if(r&&Array.isArray(r.chosenProcessServiceIds)&&r.chosenProcessServiceIds.length)return r.chosenProcessServiceIds.map(Number)
     const list=(st.preview&&st.preview.processServices)||[]
     const parts=String(processing||'').split(/[・、,，/／]/).map(svcKey).filter(Boolean)
     return list.filter(s=>parts.includes(svcKey(s.name))).map(s=>Number(s.id))
@@ -3992,13 +3993,15 @@
   /** 加工は登録済みの加工サービスから選ぶ（複数可）。自由入力はしない */
   function processServicePickerHtml(st,r,edit,processing,disabled){
     const list=(st.preview&&st.preview.processServices)||[]
-    const chosen=chosenProcessServiceIds(st,edit,processing)
+    const chosen=chosenProcessServiceIds(st,edit,processing,r)
+    const lineSpec=String((r&&r.lineSpec)||'')
     const boxes=list.map(s=>`<label class="pl-svc-opt"><input type="checkbox" data-pl-paren-svc="${r.rowNo}" value="${esc(String(s.id))}" data-name="${esc(s.name)}" ${chosen.includes(Number(s.id))?'checked':''} ${disabled}> ${esc(s.name)}</label>`).join(' ')
     const names=list.filter(s=>chosen.includes(Number(s.id))).map(s=>svcKey(s.name))
     const memo=String(processing||'').trim()
-    const memoShown=memo&&!(edit&&Array.isArray(edit.processServiceIds))&&!memo.split(/[・、,，/／]/).map(svcKey).every(k=>!k||names.includes(k))
-    return `<fieldset class="pl-svc-pick"><legend>加工</legend>
+    const memoShown=!lineSpec&&memo&&!(edit&&Array.isArray(edit.processServiceIds))&&!memo.split(/[・、,，/／]/).map(svcKey).every(k=>!k||names.includes(k))
+    return `<fieldset class="pl-svc-pick" data-pl-line-spec="${esc(lineSpec?(memo||lineSpec):'')}"><legend>加工</legend>
       ${boxes||'<span class="excelhint">登録済みの加工サービスはありません</span>'}
+      ${lineSpec?`<p class="excelhint">仕様：${esc(memo||lineSpec)}</p>`:''}
       ${memoShown?`<p class="excelhint">仕様メモ（原文）：${esc(memo)}</p>`:''}
     </fieldset>`
   }
@@ -4008,7 +4011,10 @@
     document.querySelectorAll(`[data-pl-paren-svc="${CSS.escape(String(rowNo))}"]`).forEach(el=>{
       if(el.checked){ids.push(Number(el.value));names.push(el.getAttribute('data-name')||'')}
     })
-    return {processServiceIds:ids,processing:names.join('・')}
+    // ライン色の行は仕様（例: 赤ライン）を保つ
+    const fs=document.querySelector(`[data-pl-paren-svc="${CSS.escape(String(rowNo))}"]`)?.closest('fieldset')
+    const spec=fs&&fs.getAttribute('data-pl-line-spec')
+    return {processServiceIds:ids,processing:spec||names.join('・')}
   }
 
   function makerLookupPanelHtml(st,opts){

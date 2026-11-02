@@ -7961,6 +7961,35 @@ def _chosen_process_service_ids(c, paren_ov):
     return [i for i in dict.fromkeys(ids) if i in ok]
 
 
+def _row_line_spec(row):
+    pc = row.get('parenClassification') or {}
+    if stock.text(pc.get('lineSpec')):
+        return stock.text(pc.get('lineSpec'))
+    name = stock.text((row.get('csv') or {}).get('productName') or '')
+    rest, specs = paren_classify.extract_line_specs(name)
+    return '・'.join(dict.fromkeys(specs)) if specs and rest else ''
+
+
+def _line_process_service_ids(c, row):
+    """「○○ライン」の行は登録済みの「ライン加工」1件へ（色ごとのサービスは作らない）。"""
+    line_spec = _row_line_spec(row)
+    if not line_spec:
+        return None
+    row['lineSpec'] = line_spec
+    name = paren_classify.LINE_PROCESS_SERVICE_NAME
+    key = proc_svc.normalize_service_key(name)
+    # ライン以外の加工（例: 刺繍）は登録済みサービスに名前で合うものだけ足す
+    csv_name = stock.text((row.get('csv') or {}).get('productName') or '')
+    rest, _specs = paren_classify.extract_line_specs(csv_name)
+    other = stock.text(paren_classify.split_name_and_color(rest).get('processing') or '') if rest else ''
+    extra = stock.resolve_process_service_ids(c, other) if other else []
+    for svc in registered_process_services(c):
+        if proc_svc.normalize_service_key(svc['name']) == key:
+            return list(dict.fromkeys([svc['id'], *extra]))
+    row['lineServiceMissing'] = name
+    return []
+
+
 def _mark_unresolved_process_links(c, rows):
     """取扱の加工が加工サービスに結び付かない行を要確認へ（文字だけで登録しない）。"""
     planned = set()
@@ -7981,6 +8010,19 @@ def _mark_unresolved_process_links(c, rows):
         if prod.get('processingServiceProduct') or prod.get('processingServiceSplit'):
             continue
         if handle.get('skipForProcessingService') or handle.get('action') == 'excluded':
+            continue
+        if row.get('lineServiceMissing') and not row.get('chosenProcessServiceIds'):
+            emb = row['lineServiceMissing']
+            row['processLinkMissing'] = emb
+            row['status'] = STATUS_REVIEW
+            row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+            row['canCommit'] = False
+            reasons = list(row.get('reasons') or [])
+            msg = f'加工「{emb}」に対応する加工サービスがありません'
+            if msg not in reasons:
+                reasons.append(msg)
+            row['reasons'] = reasons
+            marked += 1
             continue
         if row.get('chosenProcessServiceIds') is not None:
             continue  # 確認リストで登録済み加工サービスを選んだ（文字の照合はしない）
@@ -8015,6 +8057,8 @@ def _row_companion_service_name(row):
     pc = row.get('parenClassification') or {}
     if pc.get('registerKindManual') and stock.text(pc.get('registerKind')) not in ('', '商品'):
         return ''
+    if _row_line_spec(row):
+        return ''  # ライン色は仕様。色別の加工サービスは作らない
     return proc_svc.garment_paren_processing_name(csv.get('productName') or '')
 
 
@@ -9811,6 +9855,8 @@ def build_preview(c, body):
             paren_override=paren_ov,
         )
         chosen = _chosen_process_service_ids(c, paren_ov)
+        if chosen is None:
+            chosen = _line_process_service_ids(c, row_c)
         if chosen is not None:
             row_c['chosenProcessServiceIds'] = chosen
         classified.append(row_c)
