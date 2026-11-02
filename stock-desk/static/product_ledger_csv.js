@@ -5313,7 +5313,7 @@
   function modeChooserHtml(st){
     return `<div class="product-ledger-mode-chooser">
       <p class="merge-lead">旧CSV一括取り込みは<strong>二段階</strong>です。先に商品を登録し、あとから初期在庫を登録します（待ち時間を分けます）。</p>
-      ${st.busy?'<p class="notice" role="status">前の処理中です。終わると選べます。</p>':''}
+      ${st.busy?'<p class="notice" role="status">読み込み中…</p>':''}
       <div class="bar product-ledger-mode-actions">
         <button type="button" class="primary" id="plModeParts" ${st.busy?'disabled':''}>部品・加工</button>
         <button type="button" class="primary" id="plModeGoods" ${st.busy?'disabled':''}>商品</button>
@@ -7039,46 +7039,25 @@
 
   function open(opts){
     const st=ensureState()
-    const rawApi=opts.api
-    // 通信中の数を数える（閉じても処理は続く。再表示時に「処理中」か「止まった busy」かを見分ける）
-    st.api=rawApi?async(...args)=>{
-      st.apiInflight=(st.apiInflight||0)+1
-      try{return await rawApi(...args)}finally{st.apiInflight=Math.max(0,(st.apiInflight||0)-1)}
-    }:rawApi
+    st.api=opts.api
     st.toast=opts.toast||(m=>alert(m))
     st.boot=opts.boot
     st.stockCanWrite=opts.stockCanWrite
     st.actorName=opts.actorName||''
     st.open=true
-    // 通信がないのに busy が残っていたら解除（閉じても入り直せるように）
-    if(st.busy&&!st.apiInflight){st.busy=false;st.progressLabel=''}
-    if(canResume(st)){
-      // 確認途中なら続きから（選択は保存済み）。通信中ならそのまま進捗を表示
-      st.previewError=''
-      paintDialog()
-      return
-    }
     st.result=null
     st.previewError=''
     st.progressLabel=''
+    // 毎回段階選択から（閉じたあとも標準フローを保つ）
     resetStageFiles(st)
     st.importMode=MODE_CHOOSE
     paintDialog()
-  }
-
-  /** 前回の確認途中（ファイル読込済み・照合済み・処理中）なら再表示で続きから。登録完了後は段階選択から。 */
-  function canResume(st){
-    if(!st||!st.importMode||st.importMode===MODE_CHOOSE)return false
-    if(st.result)return false
-    return !!(st.busy||st.preview||st.fileB64||st.auxFileB64)
   }
 
   window.ProductLedgerCsv={
     open,
     // 区分分類の単体検証用（本番UIは open のみ使用）
     __test:{
-      _state:()=>ensureState(),
-      canResume,
       modeChooserHtml,
       openingReviewGroups,
       openingReviewGroupsHtml,
