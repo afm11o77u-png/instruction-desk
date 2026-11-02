@@ -899,6 +899,25 @@ def text(value):
 EMPTY_EMBROIDERY_LABEL = '加工なし'
 # 表示名をそのまま入力・Excel記入された場合の互換（完全一致のみ。説明文の部分置換はしない）。
 EMPTY_EMBROIDERY_ALIASES = frozenset({EMPTY_EMBROIDERY_LABEL, '刺繍なし'})
+# 旧CSV取込で自動作成した「加工サービス未設定」の取扱の保存値（データは変えない）。
+# 画面・出力の表示は「加工なし」。照合では加工なしと同じ扱いで既存取扱に寄せる。
+PENDING_EMBROIDERY = '加工未整理'
+
+
+def match_existing_spec(existing, value):
+    """既存の仕様一覧から value に当たる保存値を返す（なければ value）。
+
+    表記ゆれは spec_key で寄せる。加工なし（空・「加工なし」）で同じ空の取扱が無く、
+    「加工未整理」の取扱があればそれに寄せる（表示「加工なし」の再取込互換）。
+    """
+    k = spec_key(value)
+    vals = list(existing or [])
+    for e in vals:
+        if spec_key(e) == k:
+            return e
+    if k == '' and PENDING_EMBROIDERY in vals:
+        return PENDING_EMBROIDERY
+    return value
 
 
 def normalize_embroidery(value):
@@ -916,7 +935,8 @@ def spec_key(value):
 
 def embroidery_label(value):
     """空（および未加工の別名）の加工仕様を表示名にする。保存キーそのものは変えない。"""
-    return EMPTY_EMBROIDERY_LABEL if not normalize_embroidery(value) else text(value)
+    t = normalize_embroidery(value)
+    return EMPTY_EMBROIDERY_LABEL if not t or t == PENDING_EMBROIDERY else text(value)
 
 
 def need(value, label, limit=80):
@@ -1234,9 +1254,11 @@ def save_product(c, body):
         current = {(r['customer_id'], r['embroidery']): r for r in c.execute(
             'SELECT * FROM customer_products WHERE product_id=?', (pid,))}
         # 表記ゆれ（全角半角・空白）だけの違いは既存の仕様に寄せる
-        by_key = {(cid, spec_key(e)): e for (cid, e) in current}
+        by_cust = {}
+        for (cid, e) in current:
+            by_cust.setdefault(cid, []).append(e)
         for link in links:
-            link['embroidery'] = by_key.get((link['customerId'], spec_key(link['embroidery'])), link['embroidery'])
+            link['embroidery'] = match_existing_spec(by_cust.get(link['customerId']), link['embroidery'])
         incoming = {(link['customerId'], link['embroidery']) for link in links}
         for key, row in current.items():
             if key not in incoming and c.execute('SELECT 1 FROM lots WHERE customer_product_id=?', (row['id'],)).fetchone():

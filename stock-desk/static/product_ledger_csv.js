@@ -3712,7 +3712,7 @@
       bits.push(`<label>商品<select data-pl-prod="${r.rowNo}" ${st.busy?'disabled':''}><option value="">選択…</option>${opts}${allowNew?`<option value="__new__" ${sel.forceCreate?'selected':''}>新規として登録</option>`:''}</select></label>`)
     }
     if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
-      const opts=r.handle.candidates.map(c=>`<option value="${c.id}" ${Number(sel.handleId)===Number(c.id)?'selected':''}>${esc(c.embroideryLabel||c.embroidery||'')}</option>`).join('')
+      const opts=r.handle.candidates.map(c=>`<option value="${c.id}" ${Number(sel.handleId)===Number(c.id)?'selected':''}>${esc(c.embroideryLabel||(c.embroidery==='加工未整理'?'加工なし':c.embroidery)||'')}</option>`).join('')
       bits.push(`<label>取扱<select data-pl-handle="${r.rowNo}" ${st.busy?'disabled':''}><option value="">選択…</option>${opts}</select></label>`)
     }
     if(r.product&&r.product.blankSku){
@@ -3756,8 +3756,8 @@
     if(p.subSupplierAdd)bits.push('サブ仕入先追加（通常は変更なし）')
     if(p.mergeSourceIds&&p.mergeSourceIds.length)bits.push(`統合元 ${p.mergeSourceIds.join(',')}`)
     if(h.id)bits.push(`取扱 ${h.id}`)
-    else if(h.action==='create')bits.push(p.sizeHidden?'取扱新規':'取扱新規（加工未整理）')
-    else if(h.embroideryLabel||h.embroidery)bits.push(esc(h.embroideryLabel||h.embroidery))
+    else if(h.action==='create')bits.push(p.sizeHidden?'取扱新規':'取扱新規（加工なし）')
+    else if(h.embroideryLabel||h.embroidery)bits.push(esc(h.embroideryLabel||(h.embroidery==='加工未整理'?'加工なし':h.embroidery)))
     if(r.usedMarkerAutoMerged)bits.push('中古標記まとめ')
     else if(r.skuAutoMerged&&(r.matchGroupCount||0)>1)bits.push('サイズ自動まとめ')
     if(r.status==='hold')bits.push(`保留 ${esc(r.deferReason||'')}`)
@@ -5306,7 +5306,7 @@
       const emb=t.embroidery||''
       const usageLabel=usage==='販売'||emb==='販売'||String(emb).endsWith('｜販売')
         ?(emb&&emb!=='販売'?emb:'販売')
-        :(emb||'—')
+        :(emb==='加工未整理'?'加工なし':(emb||'—'))
       const qtyCheck=p.status==='qty_diff'
         ?`<label class="check"><input type="checkbox" data-pl-open-qty="${p.rowNo}" ${sel.updateQty?'checked':''}>CSV数量へ更新</label>`
         :''

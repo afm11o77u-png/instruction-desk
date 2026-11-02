@@ -3886,7 +3886,7 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
                 handle['fromParenClassification'] = False
                 if row_proc and stock.text(handle.get('embroidery') or '') == row_proc:
                     handle['embroidery'] = PENDING_EMBROIDERY
-                    handle['embroideryLabel'] = PENDING_EMBROIDERY
+                    handle['embroideryLabel'] = stock.EMPTY_EMBROIDERY_LABEL
                     handle['pendingEmbroiderySort'] = True
                     handle.pop('proposedEmbroidery', None)
         row['handle'] = handle
@@ -6492,7 +6492,7 @@ def classify_row(
         else:
             handle = {
                 'action': 'defer', 'id': None, 'candidates': [], 'reasons': [],
-                'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': PENDING_EMBROIDERY,
+                'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL,
             }
     elif selected_handle_id:
         row = c.execute(
@@ -6503,7 +6503,7 @@ def classify_row(
             handle = legacy._reuse_handle(
                 {
                     'action': 'reuse', 'id': None, 'candidates': [], 'reasons': [],
-                    'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': PENDING_EMBROIDERY,
+                    'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL,
                     'pendingEmbroiderySort': True, 'csvSource': {},
                 },
                 row, pending_sort=True,
@@ -6512,7 +6512,7 @@ def classify_row(
             handle = {
                 'action': 'review', 'id': None, 'candidates': [],
                 'reasons': [f'{row_no}行目：選択した取扱が使えません。'],
-                'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': PENDING_EMBROIDERY,
+                'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL,
             }
     elif mapped_handle_id and product.get('id'):
         row = c.execute(
@@ -6526,7 +6526,7 @@ def classify_row(
             handle = legacy._reuse_handle(
                 {
                     'action': 'reuse', 'id': None, 'candidates': [], 'reasons': [],
-                    'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': PENDING_EMBROIDERY,
+                    'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL,
                     'pendingEmbroiderySort': True, 'csvSource': {},
                 },
                 row, pending_sort=True,
@@ -6554,7 +6554,7 @@ def classify_row(
     elif product.get('action') == 'create' and cust.get('action') in ('create', 'reuse'):
         handle = {
             'action': 'create', 'id': None, 'candidates': [], 'reasons': [],
-            'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': PENDING_EMBROIDERY,
+            'embroidery': PENDING_EMBROIDERY, 'embroideryLabel': stock.EMPTY_EMBROIDERY_LABEL,
             'pendingEmbroiderySort': True,
         }
 
