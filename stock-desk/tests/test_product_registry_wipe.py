@@ -514,3 +514,75 @@ class ConfirmTextTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ScopedStockCascadeTest(unittest.TestCase):
+    ACTOR = {'id': 1, 'name': '主管理テスト', 'role': 'owner'}
+
+    def _post(self, path, body):
+        return stock_server.api_post(str(path), 'desk', '/api/products/registry-wipe',
+                                     body, can_write=True, actor=self.ACTOR)
+
+    def test_scope_with_stock_needs_flag_then_deletes_and_logs(self):
+        folder, path, c = newdb()
+        try:
+            sample_data.seed(c)
+            c.commit()
+            prev = wipe.preview_wipe(c, owner_body(scope='uniform'))
+            self.assertTrue(prev['canWipe'])
+            self.assertTrue(prev['withStock'])
+            sc = prev['stockCounts']
+            self.assertGreater(sc['lots'], 0)
+            kept_customers = c.execute('SELECT COUNT(*) FROM customers').fetchone()[0]
+            # フラグなしは従来どおり中止
+            code, res = self._post(path, owner_body(scope='uniform'))
+            self.assertEqual(code, 409, res)
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path) as bk:
+                code, res = self._post(path, owner_body(scope='uniform', withStock=True, stockCounts=sc))
+                self.assertTrue(bk.called)
+            self.assertEqual(code, 200, res)
+            self.assertEqual(res['counts']['lots'], sc['lots'])
+            with stock.connect(path) as c2:
+                left = wipe.scope_product_ids(c2, 'uniform')
+                self.assertEqual(left, set())
+                self.assertEqual(c2.execute('SELECT COUNT(*) FROM customers').fetchone()[0], kept_customers)
+                log = wipe.list_audit(c2)
+                self.assertEqual(len(log), 1)
+                self.assertEqual(log[0]['actorName'], '主管理テスト')
+                self.assertEqual(log[0]['scopeLabel'], '制服')
+                self.assertEqual(log[0]['counts']['lots'], sc['lots'])
+                self.assertTrue(log[0]['at'])
+                # 記録は削除操作でも消えない
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path):
+                code, res = self._post(path, owner_body(scope='parts'))
+            self.assertEqual(code, 200, res)
+            with stock.connect(path) as c2:
+                self.assertEqual(len(wipe.list_audit(c2)), 2)
+                self.assertEqual(len(wipe.preview_wipe(c2, owner_body(scope='parts'))['history']), 2)
+        finally:
+            c.close(); folder.cleanup()
+
+    def test_changed_counts_abort(self):
+        folder, path, c = newdb()
+        try:
+            sample_data.seed(c)
+            c.commit()
+            sc = dict(wipe.preview_wipe(c, owner_body(scope='uniform'))['stockCounts'])
+            sc['moves'] += 1
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path):
+                code, res = self._post(path, owner_body(scope='uniform', withStock=True, stockCounts=sc))
+            self.assertEqual(code, 400, res)
+            with stock.connect(path) as c2:
+                self.assertGreater(c2.execute('SELECT COUNT(*) FROM lots').fetchone()[0], 0)
+                self.assertEqual(wipe.list_audit(c2), [])
+        finally:
+            c.close(); folder.cleanup()
+
+    def test_non_owner_rejected(self):
+        folder, path, c = newdb()
+        try:
+            sample_data.seed(c); c.commit()
+            with self.assertRaises(PermissionError):
+                wipe.execute_wipe(c, {'_canWrite': True, '_actor': {'role': 'staff'}, 'scope': 'uniform', 'withStock': True})
+        finally:
+            c.close(); folder.cleanup()

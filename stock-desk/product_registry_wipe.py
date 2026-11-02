@@ -183,6 +183,128 @@ def _parse_lot_ids(raw):
     return ids
 
 
+def stock_counts(c, ids):
+    """区分削除で一緒に消す在庫・履歴・発注・貸出の件数。"""
+    tables = _tables(c)
+    h = _in(_handle_ids(c, ids))
+    p = _in(ids)
+
+    def safe(table, where):
+        if table not in tables:
+            return 0
+        return _count(c, f'SELECT COUNT(*) AS n FROM {table} WHERE {where}')
+
+    lots_w = f'customer_product_id IN {h}'
+    lot_sub = f'(SELECT id FROM lots WHERE {lots_w})' if 'lots' in tables else '(NULL)'
+    return {
+        'lots': safe('lots', lots_w),
+        'moves': safe('moves', f'lot_id IN {lot_sub}'),
+        'stocktakeMoves': safe('moves', f"lot_id IN {lot_sub} AND kind LIKE 'stocktake%'"),
+        'purchaseOrderLines': safe(
+            'purchase_order_lines', f'product_id IN {p} OR customer_product_id IN {h}'),
+        'loanLines': safe('loan_lines', f'lot_id IN {lot_sub}'),
+    }
+
+
+def _delete_stock(c, ids):
+    """在庫ロット・入出庫/棚卸履歴・発注明細・貸出明細を消す（空になった発注/貸出も）。"""
+    tables = _tables(c)
+    h = _in(_handle_ids(c, ids))
+    p = _in(ids)
+    deleted = {}
+    if 'lots' not in tables:
+        return deleted
+    lot_ids = {int(r['id']) for r in c.execute(f'SELECT id FROM lots WHERE customer_product_id IN {h}')}
+    lots = _in(lot_ids)
+
+    def run(key, table, where):
+        if table not in tables:
+            return
+        cur = c.execute(f'DELETE FROM {table} WHERE {where}')
+        deleted[key] = deleted.get(key, 0) + max(int(cur.rowcount or 0), 0)
+
+    pol = '(NULL)'
+    po_ids = set()
+    if 'purchase_order_lines' in tables:
+        rows = list(c.execute(
+            f'SELECT id, purchase_order_id FROM purchase_order_lines '
+            f'WHERE product_id IN {p} OR customer_product_id IN {h}'))
+        pol = _in({int(r['id']) for r in rows})
+        po_ids = {int(r['purchase_order_id']) for r in rows}
+    run('purchaseOrderReceipts', 'purchase_order_receipts',
+        f'purchase_order_line_id IN {pol} OR lot_id IN {lots}')
+    run('purchaseOrderLines', 'purchase_order_lines', f'id IN {pol}')
+    if po_ids and 'purchase_orders' in tables:
+        empty = {int(r['id']) for r in c.execute(
+            f'SELECT id FROM purchase_orders WHERE id IN {_in(po_ids)} AND id NOT IN '
+            '(SELECT purchase_order_id FROM purchase_order_lines)')}
+        if empty:
+            run('purchaseOrderEvents', 'purchase_order_events', f'purchase_order_id IN {_in(empty)}')
+            run('purchaseOrderReceipts', 'purchase_order_receipts', f'purchase_order_id IN {_in(empty)}')
+            run('purchaseOrders', 'purchase_orders', f'id IN {_in(empty)}')
+    loan_ids = set()
+    if 'loan_lines' in tables:
+        loan_ids = {int(r['loan_id']) for r in c.execute(
+            f'SELECT DISTINCT loan_id FROM loan_lines WHERE lot_id IN {lots}')}
+        run('loanLines', 'loan_lines', f'lot_id IN {lots}')
+    if loan_ids and 'loans' in tables:
+        empty = {int(r['id']) for r in c.execute(
+            f'SELECT id FROM loans WHERE id IN {_in(loan_ids)} AND id NOT IN '
+            '(SELECT loan_id FROM loan_lines)')}
+        if empty:
+            run('loanEvents', 'loan_events', f'loan_id IN {_in(empty)}')
+            run('loans', 'loans', f'id IN {_in(empty)}')
+    if 'moves' in tables:
+        c.execute(f'UPDATE moves SET corrects_move_id=NULL WHERE corrects_move_id IN '
+                  f'(SELECT id FROM moves WHERE lot_id IN {lots}) AND lot_id NOT IN {lots}')
+        run('moves', 'moves', f'lot_id IN {lots}')
+    if 'legacy_csv_row_maps' in tables:
+        # 消したロットだけを指す旧CSVマップ（他区分商品のもの）も外す
+        for r in list(c.execute('SELECT id, lot_ids_json FROM legacy_csv_row_maps')):
+            ids_ = _parse_lot_ids(r['lot_ids_json'])
+            if ids_ and set(ids_) <= lot_ids:
+                c.execute('DELETE FROM legacy_csv_row_maps WHERE id=?', (r['id'],))
+    run('lots', 'lots', f'id IN {lots}')
+    return deleted
+
+
+AUDIT_DDL = """CREATE TABLE IF NOT EXISTS product_registry_wipe_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  actor_name TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  scope_label TEXT NOT NULL,
+  counts_json TEXT NOT NULL,
+  backup_path TEXT NOT NULL DEFAULT ''
+)"""
+
+
+def ensure_audit_table(c):
+    c.execute(AUDIT_DDL)
+
+
+def write_audit(c, *, at, actor, scope, counts, backup_path):
+    ensure_audit_table(c)
+    c.execute(
+        'INSERT INTO product_registry_wipe_log(at, actor_name, scope, scope_label, counts_json, backup_path) '
+        'VALUES (?,?,?,?,?,?)',
+        (at, actor, scope or 'all', scope_label(scope), json.dumps(counts, ensure_ascii=False), backup_path or ''),
+    )
+
+
+def list_audit(c, limit=50):
+    ensure_audit_table(c)
+    return [
+        {
+            'id': r['id'], 'at': r['at'], 'actorName': r['actor_name'], 'scope': r['scope'],
+            'scopeLabel': r['scope_label'], 'counts': json.loads(r['counts_json'] or '{}'),
+            'backupPath': r['backup_path'],
+        }
+        for r in c.execute(
+            'SELECT * FROM product_registry_wipe_log ORDER BY id DESC LIMIT ?', (int(limit),))
+    ]
+
+
 def collect_blockers(c, scope=''):
     """参照があると削除できない商品の一覧（部分削除なしの判定用）。"""
     ids = scope_product_ids(c, scope)
@@ -399,7 +521,11 @@ def preview_wipe(c, body=None):
     scope = scope_of(body)
     blockers = collect_blockers(c, scope)
     counts = count_targets(c, scope)
+    ids = scope_product_ids(c, scope)
+    stock_n = stock_counts(c, ids) if ids is not None else None
     return {
+        'stockCounts': stock_n,
+        'history': list_audit(c, 20),
         'scope': scope,
         'scopeLabel': scope_label(scope),
         'confirmText': CONFIRM_TEXT,
@@ -407,7 +533,9 @@ def preview_wipe(c, body=None):
         'kept': list(KEPT_LABELS),
         'counts': counts,
         'blockers': blockers,
-        'canWipe': len(blockers) == 0,
+        # 区分削除は在庫ごと削除できる（確認画面で件数を出す）。全体削除は従来どおり参照があると中止。
+        'canWipe': len(blockers) == 0 or bool(scope),
+        'withStock': bool(scope) and len(blockers) > 0,
         'keptSnapshot': kept_snapshot(c),
     }
 
@@ -471,9 +599,12 @@ def execute_wipe(c, body, *, db_path=None):
         require_confirm_text(body)
     ids = scope_product_ids(c, scope)
 
+    with_stock = bool(scope) and bool(body.get('withStock'))
     before_counts = count_targets(c, scope)
+    before_stock = stock_counts(c, ids) if ids is not None else {}
     before_kept = kept_snapshot(c)
-    _assert_no_blockers(c, scope)
+    if not with_stock:
+        _assert_no_blockers(c, scope)
 
     backup_path = ''
     if db_path:
@@ -487,13 +618,27 @@ def execute_wipe(c, body, *, db_path=None):
         if not backup_path:
             raise stock.BackupError(stock.BACKUP_FAILED_MESSAGE)
 
-    # バックアップ後に参照が増えていないか再確認
-    _assert_no_blockers(c, scope)
+    stock_deleted = {}
+    if with_stock:
+        # 確認画面で見せた件数と変わっていれば中止（その間に入出庫などがあった）
+        if stock_counts(c, ids) != (body.get('stockCounts') or before_stock):
+            raise ValueError('確認後に在庫・履歴の件数が変わりました。もう一度削除画面を開いてください。')
+        stock_deleted = _delete_stock(c, ids)
+    else:
+        # バックアップ後に参照が増えていないか再確認
+        _assert_no_blockers(c, scope)
 
     deleted = _delete_registry(c) if ids is None else _delete_scoped(c, ids)
 
     after_counts = count_targets(c) if ids is None else _count_scoped(c, ids)
     after_kept = kept_snapshot(c)
+    if with_stock:
+        if any(v != 0 for v in stock_counts(c, ids).values()):
+            raise RuntimeError('在庫・履歴の削除が完了しませんでした。変更は取り消します。')
+        for t in ('lots', 'moves', 'purchase_order_lines', 'purchase_order_events',
+                  'purchase_order_receipts', 'purchase_orders', 'loan_lines', 'loan_events', 'loans'):
+            before_kept.pop(t, None)
+            after_kept.pop(t, None)
     if any(v != 0 for v in after_counts.values()):
         raise RuntimeError(
             '商品登録の削除が完了しませんでした。変更は取り消します。'
@@ -505,6 +650,9 @@ def execute_wipe(c, body, *, db_path=None):
 
     when = stock.now()
     who = actor_name(body)
+    deleted = {**deleted, **stock_deleted}
+    # 削除操作では消さない履歴として記録（同じトランザクション。失敗時は削除ごと取り消し）
+    write_audit(c, at=when, actor=who, scope=scope, counts=deleted, backup_path=backup_path)
     print(
         'product_registry_wipe ok '
         f'actor={who!r} at={when} backup={backup_path!r} '
@@ -521,6 +669,7 @@ def execute_wipe(c, body, *, db_path=None):
         'at': when,
         'backupPath': backup_path,
         'counts': deleted,
+        'withStock': with_stock,
         'beforeCounts': before_counts,
         'kept': list(KEPT_LABELS),
         'scopeNote': SCOPE_NOTE,
