@@ -31,6 +31,7 @@ WRITE_PATHS = {
     '/api/stocktake', '/api/history/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
+    '/api/purchase-orders/printed',
     '/api/company-profile',
     '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
 }
@@ -681,6 +682,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/purchase-orders/mark-ordered': stock_orders.mark_ordered,
         '/api/purchase-orders/cancel': stock_orders.cancel_purchase_order,
         '/api/purchase-orders/receive': stock_orders.receive_purchase_order,
+        '/api/purchase-orders/printed': stock_orders.mark_printed,
         '/api/company-profile': stock_orders.save_company_profile,
     }
     fn = routes.get(path)
