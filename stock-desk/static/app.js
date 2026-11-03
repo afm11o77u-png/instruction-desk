@@ -2004,13 +2004,13 @@ function stockList(){
       <label>在庫<select id="fStockFilter"><option value="" ${!f.stockFilter?'selected':''}>すべて</option><option value="shortage" ${f.stockFilter==='shortage'?'selected':''}>在庫不足（マイナス）のみ</option></select></label>
       ${writable?`<button type="button" class="primary" id="listInboundNew">一覧にない商品を入庫</button>`:''}
     </div>
-    <div class="tabs" id="groups">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<button type="button" data-group="${id}" class="${f.group===id?'active':''}">${label}</button>`).join('')}</div>
+    <select id="groups" class="stock-group-select" aria-label="表示の切替">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<option value="${id}"${(f.group||'lot')===id?' selected':''}>${label}</option>`).join('')}</select>
     <div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong>${pending?`<span class="sub shortage-tag">原価未確定の不足 ${num(pending)}枚</span>`:''}</div></div>
     ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。原価未確定の不足分は金額に含めません。中古を新品の単価では評価しません。数量と金額は計算結果なので、手入力できません。在庫0・マイナスの行も表示します（未登録の組み合わせは自動では作りません）。訂正は「在庫履歴」から行います。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;f.stockFilter=$('#fStockFilter').value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
   ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
-  $('#groups').querySelectorAll('button').forEach(b=>b.onclick=async()=>{f.group=b.dataset.group;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()})
+  $('#groups').onchange=async e=>{f.group=e.target.value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
   const openNew=$('#listInboundNew')
   if(openNew)openNew.onclick=()=>openNormalInboundRegister()
   const stage=$('#stockliststage')
@@ -2021,10 +2021,10 @@ function stockList(){
   if(f.group==='lot'){
     // 表示中のモード（表／グリッド）だけ描画する。切替時は再描画される。
     const showGrid=mode==='grid'
-    body.innerHTML=showGrid?'':`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>状態</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
-      ${state.stock.lots.map(l=>`<tr class="${stockRowClass(l)}"><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td>${esc(l.locationLabel)}<span class="sub">${l.costPending?'原価未確定':(l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn))}</span></td><td class="money">${l.costPending?'原価未確定':yen(l.unitCost)}</td><td class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}</td><td class="money">${stockAmountText(l)}</td><td>${stockActionButtonsHtml(l,{lotId:l.id})}</td></tr>`).join('')||'<tr><td colspan="9">在庫はありません。</td></tr>'}
+    body.innerHTML=showGrid?'':`<div class="tablewrap"><table class="stock-fixed-table stock-lot-table">${stockColgroup('lot')}<thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>状態</th><th>場所</th><th class="num">単価</th><th class="num">数量</th><th class="num">金額</th><th></th></tr></thead><tbody>
+      ${state.stock.lots.map(l=>`<tr class="${stockRowClass(l)}"><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}</td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td>${esc(l.locationLabel)}<span class="sub">${l.costPending?'原価未確定':(l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn))}</span></td><td class="money">${l.costPending?'原価未確定':yen(l.unitCost)}</td><td class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}</td><td class="money">${stockAmountText(l)}</td><td>${stockActionButtonsHtml(l,{lotId:l.id})}</td></tr>`).join('')||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>`
-    if(grid)grid.innerHTML=!showGrid?'':state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    if(grid)grid.innerHTML=!showGrid?'':state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
     const lotCount=state.stock.lotCount??state.stock.lots.length
     if(lotCount>state.stock.lots.length){
       stage.insertAdjacentHTML('beforeend',`<div class="stock-lot-more"><span class="count">${num(lotCount)}件中${num(state.stock.lots.length)}件表示</span> <button type="button" id="stockLotMore">さらに表示</button></div>`)
@@ -2074,11 +2074,21 @@ function productNameColor(r){
   return r.color?`${esc(r.productName)}／${esc(r.color)}`:esc(r.productName)
 }
 
+// 在庫一覧の表は view ごとに共通の列幅（table-layout:fixed）で、グループ間・見出しと明細の列をそろえる
+const STOCK_TABLE_COLS={
+  lot:['c-cust','c-name','c-spec','c-cond','c-loc','c-num','c-num','c-amt','c-act'],
+  product:['c-name','c-spec','c-size','c-loc','c-qty','c-amt','c-act'],
+  customer:['c-code','c-name','c-spec','c-size','c-loc','c-qty','c-amt','c-act'],
+  location:['c-shelf','c-cust','c-code','c-name','c-spec','c-size','c-qty','c-amt','c-act'],
+}
+function stockColgroup(view){
+  return `<colgroup>${STOCK_TABLE_COLS[view].map(c=>`<col class="${c}">`).join('')}</colgroup>`
+}
 function renderProductStockList(groups){
   if(!groups.length)return ''
   return groups.map(g=>`<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>顧客</th><th>仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th><th></th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('product')}<thead><tr><th>顧客</th><th>仕様</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
       ${(g.rows||[]).map(r=>`<tr class="${stockRowClass(r)}">
         <td class="dm-primary">${esc(r.customerName)}</td>
         <td>${esc(r.embroideryLabel)}</td>
@@ -2124,7 +2134,7 @@ function renderCustomerStockList(groups){
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>品番</th><th>商品名／色</th><th>仕様</th><th>サイズ</th><th>保管場所</th><th>数量（新品／中古／合計）</th><th>在庫金額</th><th></th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('customer')}<thead><tr><th>品番</th><th>商品名／色</th><th>仕様</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
       ${rows||'<tr><td colspan="8">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
@@ -2170,7 +2180,7 @@ function renderLocationStockList(groups){
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table"><thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>仕様</th><th>サイズ</th><th>数量（新品／中古／合計）</th><th>在庫金額</th><th></th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('location')}<thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>仕様</th><th>サイズ</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
       ${rows||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`

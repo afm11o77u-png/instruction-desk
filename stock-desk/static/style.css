@@ -166,7 +166,7 @@ dialog.opening-dialog .dialogbody{padding-bottom:8px}
 }
 @media(max-width:800px){header,main,footer{padding-left:14px;padding-right:14px}.grid,.linkrow,.sizerow{grid-template-columns:1fr}}
 
-#groups{padding:8px 12px;border-bottom:1px solid var(--line)}
+#groups.stock-group-select{display:block;margin:8px 12px;min-height:40px;width:auto;max-width:calc(100% - 24px)}
 
 /* 在庫一覧: five search selects on one row; 表示 lives on the title-row right end */
 .stock-list-filters{
@@ -1088,3 +1088,20 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .pl-svc-list{max-height:240px;overflow:auto}
 .legacy-csv-table .pl-paren-edit .pl-svc-list label.pl-svc-opt,.pl-svc-list label.pl-svc-opt{display:flex;flex-direction:row;align-items:center;gap:4px;margin:0;padding:1px 2px;font-size:12px;line-height:1.3}
 .pl-svc-list label.pl-svc-opt[hidden]{display:none}
+/* 在庫一覧：共通列幅で見出しと明細・グループ間をそろえる */
+.stock-fixed-table{table-layout:fixed;width:100%;min-width:1000px}
+.stock-fixed-table th,.stock-fixed-table td{overflow-wrap:anywhere;word-break:normal;vertical-align:top}
+.stock-fixed-table th{white-space:normal}
+.stock-fixed-table th.num,.stock-fixed-table td.qty,.stock-fixed-table td.money{text-align:right;font-variant-numeric:tabular-nums}
+.stock-fixed-table td.qty .price-breakdown{text-align:left}
+.stock-fixed-table col.c-name{width:auto}
+.stock-fixed-table col.c-cust{width:130px}
+.stock-fixed-table col.c-code,.stock-fixed-table col.c-shelf{width:90px}
+.stock-fixed-table col.c-spec{width:110px}
+.stock-fixed-table col.c-size{width:56px}
+.stock-fixed-table col.c-cond{width:56px}
+.stock-fixed-table col.c-loc{width:130px}
+.stock-fixed-table col.c-num{width:80px}
+.stock-fixed-table col.c-qty{width:170px}
+.stock-fixed-table col.c-amt{width:100px}
+.stock-fixed-table col.c-act{width:140px}
