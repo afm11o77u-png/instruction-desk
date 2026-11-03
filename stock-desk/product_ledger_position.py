@@ -119,6 +119,17 @@ def _mask_false_positive_fragments(unified: str) -> str:
     return masked
 
 
+_USED_MARK_HEAD_RE = re.compile(r'^[\s\u3000]*[*＊]+[\s\u3000]*')
+_CONDITION_TAIL_RE = re.compile(r'[\s\u3000]*[（(](?:新品|中古)[）)][\s\u3000]*$')
+
+
+def _strip_condition_marks(text: str) -> str:
+    """先頭の中古標記「＊/*」と末尾の（新品）／（中古）を外す（上下判定専用。新品中古は在庫側で判定）。"""
+    out = _USED_MARK_HEAD_RE.sub('', text or '')
+    out = _CONDITION_TAIL_RE.sub('', out)
+    return out
+
+
 def extract_garment_position_from_text(text: str) -> str:
     """商品名などから上下区分を安全に取る。取れなければ空。
 
@@ -128,7 +139,7 @@ def extract_garment_position_from_text(text: str) -> str:
     認めないもの:
     - 裾上げ・上下セット・上衣・股下 等の複合語内
     """
-    unified = _unify(text)
+    unified = _strip_condition_marks(_unify(text))
     if not unified:
         return ''
     masked = _mask_false_positive_fragments(unified)
