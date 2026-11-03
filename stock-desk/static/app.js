@@ -829,6 +829,7 @@ function products(){
   }),sortKey)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの仕様は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
+    <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
     <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>（「表示」の左）から行います。</p>
     ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
       <h3 class="verify-zone-title">検証用</h3>
@@ -868,6 +869,11 @@ function products(){
     state.productSort=sortSelect.value
     saveProductSort(state.productSort)
     paint()
+  }
+  if(typeof CurrentPrice!=='undefined'&&$('#priceInitOpen')){
+    $('#priceInitOpen').onclick=()=>CurrentPrice.openInit()
+    $('#priceReviewOpen').onclick=()=>CurrentPrice.openReview()
+    $('#priceRulesOpen').onclick=()=>CurrentPrice.openRules()
   }
   const mergeBtn=$('#productMergeOpen')
   if(mergeBtn)mergeBtn.onclick=()=>{
@@ -1437,9 +1443,6 @@ function opening(){
       <label class="opening-list-search">検索<input id="openingListQ" value="${esc(q)}" placeholder="顧客名・品番・商品名で検索" aria-label="顧客名・品番・商品名で検索"></label>
       <span class="opening-list-count" id="openingListCount">${esc(countLabel)}</span>
       <button type="button" class="primary" id="openOpeningRegister">初期在庫を登録</button>
-      <button type="button" id="priceInitOpen">現単価の初期設定</button>
-      <button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button>
-      <button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button>
       ${excelTools('opening')}
     </div>
     ${excelExportNotice()}
@@ -1464,11 +1467,6 @@ function opening(){
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('opening'))
   $('#openOpeningRegister').onclick=()=>openOpeningRegister()
-  if(typeof CurrentPrice!=='undefined'){
-    $('#priceInitOpen').onclick=()=>CurrentPrice.openInit()
-    $('#priceReviewOpen').onclick=()=>CurrentPrice.openReview()
-    $('#priceRulesOpen').onclick=()=>CurrentPrice.openRules()
-  }
   const search=$('#openingListQ')
   if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
   bindExcel('opening')
