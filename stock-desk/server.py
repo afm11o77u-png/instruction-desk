@@ -35,11 +35,55 @@ WRITE_PATHS = {
     '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
 }
 
+def _git_short_hash(start):
+    """起動時のコードの git コミット（短縮）。git コマンドは使わず .git を直接読む。読めなければ空。"""
+    try:
+        for d in [start, *start.parents]:
+            g = d / '.git'
+            if g.is_file():
+                line = g.read_text(encoding='utf-8').strip()
+                if not line.startswith('gitdir:'):
+                    return ''
+                g = (d / line[len('gitdir:'):].strip()).resolve()
+            elif not g.is_dir():
+                continue
+            head = (g / 'HEAD').read_text(encoding='utf-8').strip()
+            if not head.startswith('ref:'):
+                return head[:7]
+            ref = head[4:].strip()
+            common = g
+            if (g / 'commondir').is_file():
+                common = (g / (g / 'commondir').read_text(encoding='utf-8').strip()).resolve()
+            for base in (g, common):
+                f = base / ref
+                if f.is_file():
+                    return f.read_text(encoding='utf-8').strip()[:7]
+            packed = common / 'packed-refs'
+            if packed.is_file():
+                for row in packed.read_text(encoding='utf-8').splitlines():
+                    if row.endswith(' ' + ref):
+                        return row.split(' ', 1)[0][:7]
+            return ''
+    except OSError:
+        return ''
+    return ''
+
+
+def _started_label():
+    import datetime
+    return datetime.datetime.now().strftime('%m/%d %H:%M')
+
+
+VERSION = {'commit': _git_short_hash(ROOT), 'startedAt': _started_label()}
+
+
 PO_ID_RE = re.compile(r'^/api/purchase-orders/(\d+)$')
 PO_HTML_RE = re.compile(r'^/api/purchase-orders/(\d+)/html$')
 
 
 def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
+    if path == '/api/version':
+        return 200, dict(VERSION)
     if path == '/api/import/template':
         import excel_book
         return 200, excel_book.template(), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
