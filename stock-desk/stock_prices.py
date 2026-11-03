@@ -487,7 +487,9 @@ def save_base(c, body):
         if not cur.rowcount:
             raise ValueError('対象の現単価が見つかりません。')
     else:
-        pid = int(body.get('productId'))
+        pid = int(body.get('productId') or 0)
+        if not c.execute('SELECT 1 FROM products WHERE id=?', (pid,)).fetchone():
+            raise ValueError('商品が見つかりません。')
         size = stock.text(body.get('size'))
         if not size:
             raise ValueError('サイズを選んでください。')

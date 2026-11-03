@@ -189,6 +189,32 @@ class OverwriteAndEditTest(Base):
         self.assertEqual(self.base(p, 'M'), (1100, 'ok', ''))
         self.assertEqual(len(stock_prices.review_list(self.c)['items']), 1)
 
+    def test_manual_base_add_and_edit(self):
+        p = self.lot('A', 'X1', 'M', 1000)
+        self.lot('A', 'X1', 'L', 0)
+        stock_prices.run_initial(self.c, {}, srows=[])
+        self.assertEqual(self.base(p, 'L')[1], 'unset')
+        s1, s2 = self._id('suppliers', 'S1'), self._id('suppliers', 'S2')
+        # 既存行（未設定）を手で直すと通常に戻る
+        lid = [b['id'] for b in stock_prices.product_prices(self.c, p)['base'] if b['size'] == 'L'][0]
+        stock_prices.save_base(self.c, {'id': lid, 'price': '1200'})
+        self.assertEqual(self.base(p, 'L'), (1200, 'ok', ''))
+        # 行がない仕入先×サイズを新規追加
+        stock_prices.save_base(self.c, {'productId': p, 'supplierId': s2, 'size': 'M', 'price': '900'})
+        rows = {(b['supplierId'], b['size']): (b['price'], b['status'], b['source'])
+                for b in stock_prices.product_prices(self.c, p)['base']}
+        self.assertEqual(rows[(s2, 'M')], (900, 'ok', 'manual'))
+        self.assertEqual(rows[(s1, 'M')][0], 1000)
+        # 同じ組み合わせの追加は上書き（重複行を作らない）
+        stock_prices.save_base(self.c, {'productId': p, 'supplierId': s2, 'size': 'M', 'price': 950})
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM price_base WHERE supplier_id=?', (s2,)).fetchone()[0], 1)
+        with self.assertRaises(ValueError):
+            stock_prices.save_base(self.c, {'productId': p, 'supplierId': s2, 'size': '', 'price': 1})
+        with self.assertRaises(ValueError):
+            stock_prices.save_base(self.c, {'productId': 99999, 'supplierId': s2, 'size': 'M', 'price': 1})
+        with self.assertRaises(ValueError):
+            stock_prices.save_base(self.c, {'id': 99999, 'price': 1})
+
     def test_special_lookup_no_auto(self):
         p = self.lot('A', 'X1', 'M', 1000)
         self.lot('B', 'X1', 'M', 500)
@@ -260,6 +286,27 @@ class UiWiringTest(unittest.TestCase):
         self.assertIn('currentPriceBox', app)
         for s in ('/api/prices/initial', '/api/prices/review', '/api/prices/special', '/api/prices/code-map', '取り込みルール'):
             self.assertIn(s, js)
+
+    def test_base_price_editable_in_product_form(self):
+        js = (ROOT / 'static' / 'current_price.js').read_text(encoding='utf-8')
+        mount = js[js.index('async function mountProduct'):]
+        self.assertIn('data-base-id', mount)
+        self.assertIn('data-base-new', mount)
+        self.assertEqual(mount.count("api('/api/prices/base'"), 2)
+        self.assertIn("addEventListener('input',e=>e.stopPropagation())", mount)
+        self.assertIn("addEventListener('change',e=>e.stopPropagation())", mount)
+
+    def test_price_buttons_on_products_tab(self):
+        app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        products = app[app.index('id="productMergeOpen"'):]
+        products = products[:products.index('function ', products.index('const mergeBtn'))]
+        opening = app[app.index('id="openOpeningRegister"'):]
+        opening = opening[:opening.index("const search=$('#openingListQ')")]
+        for i in ('priceInitOpen', 'priceReviewOpen', 'priceRulesOpen'):
+            self.assertIn(f'id="{i}"', products)
+            self.assertIn(f"$('#{i}')", products)
+            self.assertNotIn(i, opening)
+            self.assertEqual(app.count(f'id="{i}"'), 1)
 
 
 if __name__ == '__main__':

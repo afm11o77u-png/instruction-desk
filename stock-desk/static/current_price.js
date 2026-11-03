@@ -99,14 +99,21 @@ const CurrentPrice=(()=>{
       try{r=await api('/api/prices/product?productId='+pid)}catch(e){el.innerHTML=`<p class="excelhint">${esc(e.message)}</p>`;return}
       const supIds=[...new Set([product.supplierId||0,...r.base.map(b=>b.supplierId),...(product.subSupplierIds||[])].map(Number))]
       const supName=id=>id?((suppliers.find(s=>s.id===id)||{}).name||''):'未設定'
-      const base=r.base.map(b=>`<tr><td>${esc(b.supplierName||'未設定')}</td><td>${esc(b.size)}</td><td class="money">${yenv(b.price)}</td><td>${esc(b.statusLabel)}${b.reason?` <span class="sub">${esc(b.reason)}</span>`:''}</td></tr>`).join('')
+      const base=r.base.map(b=>`<tr data-base-id="${b.id}"><td>${esc(b.supplierName||'未設定')}</td><td>${esc(b.size)}</td><td><input data-k="price" inputmode="numeric" value="${b.price}" aria-label="現単価"></td><td>${esc(b.statusLabel)}${b.reason?` <span class="sub">${esc(b.reason)}</span>`:''}</td><td><button type="button" data-save>保存</button></td></tr>`).join('')
+      const baseSizeOpts=['<option value="">サイズ</option>'].concat(sizes.map(s=>`<option>${esc(s)}</option>`)).join('')
+      const baseNew=`<tr data-base-new><td><select data-k="supplierId">${supIds.map(id=>`<option value="${id}">${esc(supName(id))}</option>`).join('')}</select></td><td><select data-k="size">${baseSizeOpts}</select></td><td><input data-k="price" inputmode="numeric" aria-label="現単価"></td><td></td><td><button type="button" data-add>追加</button></td></tr>`
       const sizeOpts=sel=>['<option value="">全サイズ</option>'].concat(sizes.map(s=>`<option ${s===sel?'selected':''}>${esc(s)}</option>`)).join('')
       const sp=r.specials.map(s=>`<tr data-id="${s.id}"><td>${esc(s.customerName)}</td><td>${esc(s.supplierName||'未設定')}</td><td><select data-k="size">${sizeOpts(s.size||'')}</select></td><td><input data-k="price" inputmode="numeric" value="${s.price}"></td><td><button type="button" data-save>保存</button> <button type="button" class="quiet" data-del>削除</button></td></tr>`).join('')
-      el.innerHTML=`<h2>現単価</h2><div class="tablewrap"><table><thead><tr><th>仕入先</th><th>サイズ</th><th>現単価</th><th>状態</th></tr></thead><tbody>${base||'<tr><td colspan="4">未設定</td></tr>'}</tbody></table></div>
+      el.innerHTML=`<h2>現単価</h2><div class="tablewrap"><table><thead><tr><th>仕入先</th><th>サイズ</th><th>現単価</th><th>状態</th><th></th></tr></thead><tbody>${base}${baseNew}</tbody></table></div>
         <h3>特値</h3><div class="tablewrap"><table><thead><tr><th>顧客</th><th>仕入先</th><th>サイズ</th><th>単価</th><th></th></tr></thead><tbody>${sp}
         <tr data-new><td><select data-k="customerId"><option value="">顧客</option>${customers.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></td><td><select data-k="supplierId">${supIds.map(id=>`<option value="${id}">${esc(supName(id))}</option>`).join('')}</select></td><td><select data-k="size">${sizeOpts('')}</select></td><td><input data-k="price" inputmode="numeric"></td><td><button type="button" data-add>追加</button></td></tr></tbody></table></div><p class="cp-error" data-cp-err></p>`
       const fail=e=>{el.querySelector('[data-cp-err]').textContent=e.message}
       const val=tr=>Object.fromEntries([...tr.querySelectorAll('[data-k]')].map(i=>[i.dataset.k,i.value]))
+      el.querySelectorAll('tr[data-base-id]').forEach(tr=>{
+        tr.querySelector('[data-save]').onclick=async()=>{try{await api('/api/prices/base',{id:Number(tr.dataset.baseId),price:val(tr).price});toast('保存しました。');paint()}catch(e){fail(e)}}
+      })
+      const bn=el.querySelector('tr[data-base-new]')
+      bn.querySelector('[data-add]').onclick=async()=>{try{await api('/api/prices/base',{...val(bn),productId:pid});toast('追加しました。');paint()}catch(e){fail(e)}}
       el.querySelectorAll('tr[data-id]').forEach(tr=>{
         const id=Number(tr.dataset.id)
         tr.querySelector('[data-save]').onclick=async()=>{try{await api('/api/prices/special',{...val(tr),id});toast('保存しました。');paint()}catch(e){fail(e)}}
@@ -114,10 +121,11 @@ const CurrentPrice=(()=>{
       })
       const nr=el.querySelector('tr[data-new]')
       nr.querySelector('[data-add]').onclick=async()=>{try{await api('/api/prices/special',{...val(nr),productId:pid});toast('追加しました。');paint()}catch(e){fail(e)}}
-      // 特値の入力は商品の「保存」とは別に即時保存。編集中フラグを立てない
-      el.addEventListener('input',e=>e.stopPropagation())
-      el.addEventListener('change',e=>e.stopPropagation())
     }
+    // 現単価・特値の入力は商品の「保存」とは別に即時保存。編集中フラグを立てない
+    el.addEventListener('input',e=>e.stopPropagation())
+    el.addEventListener('change',e=>e.stopPropagation())
+    el.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.tagName==='INPUT')e.preventDefault()})
     paint()
   }
   return {openInit,openReview,openRules,mountProduct}
