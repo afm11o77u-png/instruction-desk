@@ -204,6 +204,7 @@ function resolveProductSupplierFilter(){
   if(!ok)saveProductSupplierFilter('')
   return next
 }
+function periodInAmount(r){const p=Number(r.costPendingInboundQty||0);return r.inboundAmount==null?'原価未確定':yen(r.inboundAmount)+(p?`<span class="sub">原価未確定 ${num(p)}枚</span>`:'')}
 function yen(n){if(n==null||n==='')return '原価未確定';return Number(n).toLocaleString('ja-JP')+'円'}
 function num(n){return Number(n).toLocaleString('ja-JP')}
 function stockAmountText(row){
@@ -284,6 +285,7 @@ async function openOrderFromStockRow(row){
   const product=((state.data&&state.data.products)||[]).find(p=>String(p.id)===String(row.productId))
   if(!(await setStockSection('orders')))return
   PurchaseOrders.openEditor(null,{customerId:row.customerId,supplierId:product&&product.supplierId||null,customerProductId:row.customerProductId,size:row.size||''})
+  if(product&&!product.supplierId)toast('通常仕入先が未設定です')
 }
 function bindStockRowActions(root,rows){
   const find=btn=>{
@@ -2357,7 +2359,7 @@ async function showHistory(lotId){
   const dlg=$('#dialog')
   dlg.innerHTML=`<div class="dialoghead"><h2>在庫の履歴</h2><button type="button" id="close" class="quiet">閉じる</button></div><div class="dialogbody"><ul>${data.events.map(e=>{
     const who=e.actorName?`　${esc(e.actorName)}` : ''
-    return `<li>${esc(e.at)}${who}　${esc(names[e.kind]||e.kind)}　数量 ${e.qtyBefore??'-'}→${e.qtyAfter??'-'}　単価 ${e.costBefore??'-'}→${e.costAfter??'-'}　金額 ${e.amountBefore??'-'}→${e.amountAfter??'-'}<span class="sub">${esc(e.note)}</span></li>`
+    return `<li>${esc(e.at)}${who}　${esc(names[e.kind]||e.kind)}　数量 ${e.qtyBefore??'-'}→${e.qtyAfter??'-'}　単価 ${e.costPending?'原価未確定':`${e.costBefore??'-'}→${e.costAfter??'-'}`}　金額 ${e.amountBefore??'-'}→${e.amountAfter??'-'}<span class="sub">${esc(e.note)}</span></li>`
   }).join('')}</ul></div>`
   dlg.showModal();$('#close').onclick=()=>{dlg.close();dlg.innerHTML=''}
 }
@@ -2699,7 +2701,7 @@ function periodPage(){
       <div>期間内入庫数<strong>${totals?num(totals.inboundQty):'—'}</strong></div>
       <div>期間内出庫数<strong>${totals?num(totals.outboundQty):'—'}</strong></div>
       <div>訂正増減数<strong>${totals?num(totals.correctionQty):'—'}</strong></div>
-      <div>入庫金額（仕入原価）<strong>${totals?yen(totals.inboundAmount):'—'}</strong></div>
+      <div>入庫金額（仕入原価）<strong>${totals?periodInAmount(totals):'—'}</strong></div>
       <div>出庫金額（仕入原価）<strong>${totals?yen(totals.outboundAmount):'—'}</strong></div>
     </div>
     <div class="bar">
@@ -2758,7 +2760,7 @@ function periodPage(){
           <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.conditionLabel||conditionLabel(row.condition))}</td><td>${esc(row.locationLabel)}</td>
           <td class="qty">${num(row.openingQty)}</td><td class="qty">${num(row.inboundQty)}</td><td class="qty">${num(row.outboundQty)}</td>
           <td class="qty">${num(row.correctionQty)}</td><td class="qty">${num(row.closingQty)}</td>
-          <td class="money">${yen(row.inboundAmount)}</td><td class="money">${yen(row.outboundAmount)}${prices}</td>
+          <td class="money">${periodInAmount(row)}</td><td class="money">${yen(row.outboundAmount)}${prices}</td>
           <td><button type="button" class="quiet" data-period-hist="${i}">内訳</button></td>
         </tr>`
       }).join('')||'<tr><td colspan="14">該当する行がありません。</td></tr>'}
@@ -2767,7 +2769,7 @@ function periodPage(){
   }else{
     body.innerHTML=(result.groups||[]).map(g=>`<article class="product-stock-group">
       <h2 class="dm-primary product-stock-title">${esc(g.title)}</h2>
-      <p class="dm-secondary product-stock-total">入庫${num(g.inboundQty)} / 出庫${num(g.outboundQty)} / 訂正${num(g.correctionQty)}　入庫金額${yen(g.inboundAmount)} / 出庫金額${yen(g.outboundAmount)}</p>
+      <p class="dm-secondary product-stock-total">入庫${num(g.inboundQty)} / 出庫${num(g.outboundQty)} / 訂正${num(g.correctionQty)}　入庫金額${periodInAmount(g)} / 出庫金額${yen(g.outboundAmount)}</p>
       <div class="tablewrap"><table class="period-table"><thead><tr>
         <th>顧客</th><th>品番・商品名・色</th><th>仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th>
         <th>期首</th><th>入庫</th><th>出庫</th><th>訂正</th><th>期末</th><th>入庫金額</th><th>出庫金額</th><th></th>
@@ -2779,7 +2781,7 @@ function periodPage(){
             <td>${esc(row.embroideryLabel)}</td><td>${esc(row.size)}</td><td>${esc(row.conditionLabel||conditionLabel(row.condition))}</td><td>${esc(row.locationLabel)}</td>
             <td class="qty">${num(row.openingQty)}</td><td class="qty">${num(row.inboundQty)}</td><td class="qty">${num(row.outboundQty)}</td>
             <td class="qty">${num(row.correctionQty)}</td><td class="qty">${num(row.closingQty)}</td>
-            <td class="money">${yen(row.inboundAmount)}</td><td class="money">${yen(row.outboundAmount)}</td>
+            <td class="money">${periodInAmount(row)}</td><td class="money">${yen(row.outboundAmount)}</td>
             <td><button type="button" class="quiet" data-cp="${row.customerProductId}" data-size="${esc(row.size)}" data-loc="${row.locationId}" data-condition="${esc(row.condition||'new')}">内訳</button></td>
           </tr>`
         }).join('')}

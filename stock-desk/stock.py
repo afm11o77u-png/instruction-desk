@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS moves (
   business_on TEXT,
   corrects_move_id INTEGER REFERENCES moves(id),
   note TEXT NOT NULL DEFAULT '',
+  price_source TEXT,
   at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS moves_lot ON moves(lot_id);
@@ -847,6 +848,9 @@ def migrate_schema(c):
         c.execute('ALTER TABLE moves ADD COLUMN business_on TEXT')
     if 'corrects_move_id' not in move_cols:
         c.execute('ALTER TABLE moves ADD COLUMN corrects_move_id INTEGER REFERENCES moves(id)')
+    if 'price_source' not in move_cols:
+        # 不足出庫で登録単価（special=特値 / base=現単価）を記録したときだけ入る
+        c.execute('ALTER TABLE moves ADD COLUMN price_source TEXT')
     # Ensure lots.condition exists. Do not rewrite existing values (including empty /
     # unexpected codes): legacy 「＊」product names are not used to infer 中古, and
     # ambiguous stock must not be force-converted to 新品.
@@ -2378,7 +2382,7 @@ _STOCK_LOT_SELECT = '''SELECT l.*, cp.id AS customer_product_id, cp.customer_id,
 
 def _stock_lot_filters(args):
     """在庫一覧の絞り込み（stock_query と stock_lot_page で共通）。"""
-    sql = ''
+    sql = ' AND l.qty_remaining<>0'
     params = []
     cond_sql, cond_params = condition_filter_sql(args)
     sql += cond_sql
@@ -2454,7 +2458,7 @@ def stock_query(c, args):
     qty_new = sum(x['qty'] for x in lots if x['condition'] == CONDITION_NEW)
     qty_used = sum(x['qty'] for x in lots if x['condition'] == CONDITION_USED)
     confirmed_lots = [x for x in lots if not x['costPending'] and x['amount'] is not None]
-    pending_qty = sum(x['qty'] for x in lots if x['costPending'] and x['qty'] < 0)
+    pending_qty = sum(abs(x['qty']) for x in lots if x['costPending'])
     return {'lots': lots, 'groups': groups, 'group': group,
             'totalQty': sum(x['qty'] for x in lots),
             'totalQtyNew': qty_new, 'totalQtyUsed': qty_used,
@@ -2511,8 +2515,8 @@ def stock_lot_page(c, args, lot_limit=None):
                    COALESCE(SUM(CASE WHEN l.condition=? THEN l.qty_remaining END),0) AS qty_used,
                    COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)=0 AND l.unit_cost IS NOT NULL
                                      THEN l.qty_remaining*l.unit_cost END),0) AS amount,
-                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)<>0 AND l.qty_remaining<0
-                                     THEN l.qty_remaining END),0) AS pending_qty,
+                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)<>0
+                                     THEN ABS(l.qty_remaining) END),0) AS pending_qty,
                    COALESCE(MAX(l.qty_remaining<0),0) AS has_shortage
             {base}""",
         [CONDITION_NEW, CONDITION_USED] + params,
@@ -2558,8 +2562,8 @@ def _stock_totals(c, where, params):
                    COALESCE(SUM(CASE WHEN l.condition=? THEN l.qty_remaining END),0) AS qty_used,
                    COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)=0 AND l.unit_cost IS NOT NULL
                                      THEN l.qty_remaining*l.unit_cost END),0) AS amount,
-                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)<>0 AND l.qty_remaining<0
-                                     THEN l.qty_remaining END),0) AS pending_qty,
+                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)<>0
+                                     THEN ABS(l.qty_remaining) END),0) AS pending_qty,
                    COALESCE(MAX(l.qty_remaining<0),0) AS has_shortage
             FROM lots l
              JOIN customer_products cp ON cp.id=l.customer_product_id
@@ -2715,7 +2719,7 @@ def _bump_condition_qty(row, lot):
     row['qty'] += lot['qty']
     if lot.get('amount') is not None and not lot.get('costPending'):
         row['amount'] = (row.get('amount') or 0) + lot['amount']
-    if lot.get('costPending') and lot['qty'] < 0:
+    if lot.get('costPending') and lot['qty']:
         row['costPendingQty'] = row.get('costPendingQty', 0) + abs(lot['qty'])
     if lot.get('qty') is not None and lot['qty'] < 0:
         row['isShortage'] = True
@@ -3049,17 +3053,41 @@ def issue_sequence(lots):
     return sorted(lots, key=key)
 
 
+def move_cost_pending(kind, lot_cost_pending=0, price_source=None):
+    """履歴1件の金額が未確定か。不足出庫は登録単価を記録した場合のみ確定、原価未確定ロットへの入庫は未確定。"""
+    if kind in ('outbound_shortage', 'stocktake_shortage'):
+        return not price_source
+    return kind == 'inbound' and bool(lot_cost_pending)
+
+
+def registered_shortage_price(c, customer_product_id, size):
+    """不足出庫時点の登録単価（特値→現単価）。なければ (0, None)。"""
+    import stock_prices
+    cp = c.execute('SELECT customer_id, product_id FROM customer_products WHERE id=?',
+                   (customer_product_id,)).fetchone()
+    if not cp:
+        return 0, None
+    hit = stock_prices.lookup(c, customer_id=cp['customer_id'], product_id=cp['product_id'], size_label=size)
+    if hit.get('price') is None or hit.get('source') not in ('special', 'base'):
+        return 0, None
+    return int(hit['price']), hit['source']
+
+
 def lot_history(c, lot_id):
     rows = []
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
     has_actor = 'actor_name' in move_cols
+    lot = c.execute('SELECT COALESCE(cost_pending,0) AS p FROM lots WHERE id=?', (lot_id,)).fetchone()
+    lot_pending = lot['p'] if lot else 0
     for r in c.execute('SELECT * FROM moves WHERE lot_id=? ORDER BY id', (lot_id,)):
+        pending = move_cost_pending(r['kind'], lot_pending, r['price_source'] if 'price_source' in r.keys() else None)
         item = {
+            'costPending': pending,
             'id': r['id'], 'kind': r['kind'], 'at': r['at'],
             'qtyDelta': r['qty_delta'],
             'qtyBefore': r['qty_before'], 'qtyAfter': r['qty_after'],
             'costBefore': r['cost_before'], 'costAfter': r['cost_after'],
-            'unitCost': r['unit_cost'],
+            'unitCost': None if pending else r['unit_cost'],
             'note': r['note'],
             'actorName': r['actor_name'] if has_actor else '',
             'amountBefore': None if r['qty_before'] is None or r['cost_before'] is None else r['qty_before'] * r['cost_before'],
@@ -3093,9 +3121,13 @@ def _move_token_result(c, batch_id, already):
             r['kind'] == 'shortage_cover'
         )
         # shortage_cover は原価が確定する対応。outbound_shortage は未確定。
-        if r['kind'] == 'outbound_shortage':
+        shortage_pending = move_cost_pending(r['kind'], 0, r['price_source'])
+        if r['kind'] == 'outbound_shortage' and shortage_pending:
             amount = None
             cost_pending_qty += abs(r['qty_delta'])
+        elif r['kind'] == 'outbound_shortage':
+            amount = abs(r['qty_delta']) * r['unit_cost']
+            confirmed_amount += amount
         elif r['kind'] in ('shortage_cover', 'inbound', 'outbound', 'stocktake', 'stocktake_increase', 'stocktake_decrease'):
             if r['unit_cost'] is None:
                 amount = None
@@ -3110,7 +3142,7 @@ def _move_token_result(c, batch_id, already):
             'lotId': r['lot_id'], 'kind': r['kind'], 'qty': abs(r['qty_delta']),
             'unitCost': r['unit_cost'],
             'amount': amount,
-            'costPending': r['kind'] == 'outbound_shortage',
+            'costPending': r['kind'] == 'outbound_shortage' and shortage_pending,
             'qtyBefore': r['qty_before'], 'qtyAfter': r['qty_after'],
             'size': r['size_label'],
             'condition': r['condition'],
@@ -3531,6 +3563,7 @@ def register_outbound(c, body):
         )
         s_before = shortage['qty_remaining']
         s_after = s_before - plan['shortfall']
+        s_price, s_source = registered_shortage_price(c, plan['customerProductId'], plan['size'])
         c.execute(
             'UPDATE lots SET qty_remaining=?,updated_at=? WHERE id=? AND qty_remaining=?',
             (s_after, t, shortage['id'], s_before),
@@ -3539,10 +3572,11 @@ def register_outbound(c, body):
             raise ValueError('同時に出庫されたため、保存を中止しました。最新の数量を確認してください。')
         c.execute(
             '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
-               location_id,move_batch_id,actor_name,business_on,note,at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-            (shortage['id'], 'outbound_shortage', -plan['shortfall'], 0, s_before, s_after, None, None,
-             plan['locationId'], batch_id, actor, business_on, note or '不足出庫（原価未確定）', t),
+               location_id,move_batch_id,actor_name,business_on,note,price_source,at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (shortage['id'], 'outbound_shortage', -plan['shortfall'], s_price, s_before, s_after, None, None,
+             plan['locationId'], batch_id, actor, business_on,
+             note or ('不足出庫' if s_source else '不足出庫（原価未確定）'), s_source, t),
         )
     result = _move_token_result(c, batch_id, False)
     result.update({
