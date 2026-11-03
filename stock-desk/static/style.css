@@ -1115,14 +1115,16 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .stock-lot-table col.l-spec{width:68px}
 .stock-lot-table col.l-cond{width:40px}
 .stock-lot-table col.l-loc{width:104px}
-.stock-lot-table col.l-ord{width:46px}
-.stock-lot-table col.l-unit{width:78px}
+/* 順(4桁)・単価(99,999円)は文字幅(ch)基準で確保し、表示モードや最小フォント設定で文字が大きくなっても重ならないようにする */
+.stock-lot-table col.l-ord{width:calc(5ch + 12px)}
+.stock-lot-table col.l-unit{width:calc(9ch + 14px)}
 .stock-lot-table col.l-qty{width:44px}
 .stock-lot-table col.l-amt{width:76px}
 .stock-lot-table td.lot-oneline,.stock-lot-table .lot-product>span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
 .stock-lot-table td.lot-oneline{display:table-cell}
 .stock-lot-table .lot-code{font-variant-numeric:tabular-nums}
-.stock-lot-table .lot-order{padding-left:4px;padding-right:6px;white-space:nowrap}
+.list-stage .stock-lot-table th.lot-order,.list-stage .stock-lot-table td.lot-order,.stock-lot-table th.lot-order,.stock-lot-table td.lot-order{padding-left:4px;padding-right:10px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:clip;font-variant-numeric:tabular-nums}
+.list-stage .stock-lot-table th.lot-unit,.list-stage .stock-lot-table td.lot-unit,.stock-lot-table th.lot-unit,.stock-lot-table td.lot-unit{padding-left:10px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .stock-lot-table col.c-act{width:146px}
 /* 標準表示は文字が大きいので、顧客を少し狭くして他の列を#347の幅に戻す */
 .dm-standard .stock-lot-table col.l-cust{width:150px}
@@ -1130,8 +1132,6 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .dm-standard .stock-lot-table col.l-spec{width:80px}
 .dm-standard .stock-lot-table col.l-cond{width:44px}
 .dm-standard .stock-lot-table col.l-loc{width:124px}
-.dm-standard .stock-lot-table col.l-ord{width:48px}
-.dm-standard .stock-lot-table col.l-unit{width:88px}
 .dm-standard .stock-lot-table col.l-qty{width:48px}
 .dm-standard .stock-lot-table col.l-amt{width:84px}
 .dm-standard .stock-lot-table col.c-act{width:150px}
