@@ -402,7 +402,7 @@ const PurchaseOrders={
       token:newToken(),
       receivedOn:todayISO(),
       locationId:null,siteId:'',shelfId:'',
-      items:remain.map(l=>({lineId:l.id,lineNo:l.lineNo,label:`${l.code} ${l.productName} ${l.size}`,remaining:l.qtyRemaining,qty:l.qtyRemaining,unitCost:'',price:l.registeredPrice,enabled:true})),
+      items:remain.map(l=>({lineId:l.id,lineNo:l.lineNo,label:`${l.code} ${l.productName} ${l.size}`,remaining:l.qtyRemaining,qty:l.qtyRemaining,unitCost:l.registeredPrice!=null?String(l.registeredPrice):'',price:l.registeredPrice,enabled:true})),
     }
     const render=()=>{
       const keep=state.opening
@@ -429,7 +429,7 @@ const PurchaseOrders={
               <td>${esc(it.label)}<span class="sub">#${it.lineNo}</span></td>
               <td class="qty">${num(it.remaining)}</td>
               <td><input data-qty="${i}" inputmode="numeric" value="${esc(it.qty)}"></td>
-              <td>${it.price!=null?yen(it.price):`<input data-cost="${i}" inputmode="numeric" placeholder="未設定" value="${esc(it.unitCost)}">`}</td>
+              <td><input data-cost="${i}" inputmode="numeric" placeholder="未設定" value="${esc(it.unitCost)}"></td>
             </tr>`).join('')||'<tr><td colspan="5">入荷できる残がありません。</td></tr>'}
           </tbody></table></div>
           <p id="poRecvErr"></p>
@@ -451,6 +451,8 @@ const PurchaseOrders={
         try{
           const items=draft.items.filter(it=>it.enabled).map(it=>({lineId:it.lineId,qty:Number(it.qty),unitCost:it.unitCost}))
           if(!items.length)throw Error('入荷する明細にチェックを入れてください。')
+          const changed=draft.items.filter(it=>it.enabled&&it.price!=null&&String(it.unitCost).replace(/,/g,'').trim()!==String(it.price))
+          if(changed.length&&!confirm(`登録単価と違う単価があります。\n${changed.map(it=>`${it.label}：${yen(it.price)} → ${it.unitCost}円`).join('\n')}\nこのまま確定しますか？`))return
           const next=await api('/api/purchase-orders/receive',{
             id:po.id,token:draft.token,receivedOn:draft.receivedOn,locationId:draft.locationId,items,
           })

@@ -364,14 +364,6 @@ def _registered_price(c, po, line):
     return price if isinstance(price, int) and not isinstance(price, bool) and price >= 0 else None
 
 
-def _receipt_unit_cost(c, po, line, given):
-    """納品確定時の仕入単価。登録単価があればそれ、未設定なら従来どおり入力値。"""
-    price = _registered_price(c, po, line)
-    if price is not None:
-        return price
-    return stock.parse_money(given, '仕入単価')
-
-
 def _line_dict(r, *, internal_code=''):
     ordered = r['qty_ordered']
     received = r['qty_received']
@@ -848,7 +840,7 @@ def receive_purchase_order(c, body):
             raise ValueError(
                 f"明細{line['line_no']}の残数は{remaining}枚です。残数を超える入荷はできません。"
             )
-        cost = _receipt_unit_cost(c, po, line, item.get('unitCost'))
+        cost = stock.parse_money(item.get('unitCost'), '仕入単価')
         loc_id = item.get('locationId') if item.get('locationId') is not None else body.get('locationId')
         loc = stock.resolve_active_location(c, loc_id)
         note = stock.optional(item.get('note'), '備考', 200) or f"発注 {po['number']} 明細{line['line_no']}"

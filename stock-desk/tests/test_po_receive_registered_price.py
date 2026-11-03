@@ -1,4 +1,4 @@
-"""納品確定: 商品登録の単価（特値→基準単価）をロットの仕入単価に記録する。"""
+"""納品確認: 商品登録の単価（特値→基準単価）を初期値に出し、送られた単価をロットに記録する。"""
 from __future__ import annotations
 
 import sys
@@ -50,20 +50,18 @@ class RegisteredPriceReceiveTest(unittest.TestCase):
         self.c.close()
         self.folder.cleanup()
 
-    def test_base_price_recorded_and_typed_cost_ignored(self):
+    def test_registered_price_offered_and_sent_cost_recorded(self):
         po = ordered_po(self.c, self.fx, 'po-rp-01')
         self.assertEqual([l['registeredPrice'] for l in po['lines']], [1200, 1300])
         r = receive(self.c, self.fx, po, 'po-rp-r1', cost=999)
-        self.assertEqual([x['unitCost'] for x in r['receiveResults']], [1200, 1300])
-        self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [1200, 1300])
+        self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [999, 999])
 
     def test_special_price_wins(self):
         sid, pid = self.fx['supplier']['id'], self.fx['p2']['id']
         self.c.execute("INSERT INTO price_special(customer_id,supplier_id,product_id,size_label,price,created_at,updated_at) VALUES(?,?,?,NULL,800,?,?)",
                        (self.fx['customer']['id'], sid, pid, stock.stamp(), stock.stamp()))
         po = ordered_po(self.c, self.fx, 'po-rp-02')
-        r = receive(self.c, self.fx, po, 'po-rp-r2')
-        self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [800, 800])
+        self.assertEqual([l['registeredPrice'] for l in po['lines']], [800, 800])
 
     def test_unset_price_keeps_manual_cost(self):
         self.c.execute('DELETE FROM price_base')
@@ -80,6 +78,8 @@ class RegisteredPriceReceiveTest(unittest.TestCase):
         self.assertIn('>納品確認<', js)
         self.assertIn('>納品確定<', js)
         self.assertIn('registeredPrice', js)
+        self.assertIn('登録単価と違う単価があります。', js)
+        self.assertIn('placeholder="未設定"', js)
 
 
 if __name__ == '__main__':
