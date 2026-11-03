@@ -1993,6 +1993,7 @@ async function loadStock(){
   if(f.stockFilter)q.set('stockFilter',f.stockFilter)
   state.stock=await api('/api/stock?'+q.toString())
 }
+let stockListBarCache={el:null,data:null,writable:null}
 function stockList(){
   const f=state.filters
   const sizes=[...new Set(state.data.products.flatMap(p=>p.sizes))]
@@ -2003,7 +2004,17 @@ function stockList(){
   const totalUsed=state.stock?state.stock.totalQtyUsed:0
   const pending=state.stock?state.stock.costPendingQty:0
   const writable=stockCanWrite()
-  $('#main').innerHTML=`<section class="panel stock-list-panel">
+  // 絞り込み欄（顧客・商品などの選択肢が数千件）は一度だけ作り、選択肢の元データが変わったときだけ作り直す。
+  const barReuse=stockListBarCache.el&&stockListBarCache.el.isConnected&&stockListBarCache.data===state.data&&stockListBarCache.writable===writable
+  const restHtml=`<div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong>${pending?`<span class="sub shortage-tag">原価未確定の不足 ${num(pending)}枚</span>`:''}</div></div>
+    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。原価未確定の不足分は金額に含めません。中古を新品の単価では評価しません。数量と金額は計算結果なので、手入力できません。在庫0・マイナスの行も表示します（未登録の組み合わせは自動では作りません）。訂正は「在庫履歴」から行います。')}
+    <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div>`
+  if(barReuse){
+    $('#stockListRest').innerHTML=restHtml
+    const setv=(id,v)=>{const el=$('#'+id);if(el&&el.value!==String(v??''))el.value=String(v??'')}
+    setv('fCustomer',f.customerId);setv('fProduct',f.productId);setv('fSize',f.size);setv('fSpec',f.spec);setv('fLocation',f.locationId);setv('fCondition',f.condition||'');setv('fStockFilter',f.stockFilter);setv('groups',f.group||'lot')
+  }else{
+    $('#main').innerHTML=`<section class="panel stock-list-panel"><div id="stockListBar">
     <div class="bar stock-list-filters">
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${customersBySortKey(state.data.customers).map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
       <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
@@ -2014,10 +2025,9 @@ function stockList(){
       <label>在庫<select id="fStockFilter"><option value="" ${!f.stockFilter?'selected':''}>すべて</option><option value="shortage" ${f.stockFilter==='shortage'?'selected':''}>在庫不足（マイナス）のみ</option></select></label>
       ${writable?`<button type="button" class="primary" id="listInboundNew">一覧にない商品を入庫</button>`:''}
     </div>
-    <select id="groups" class="stock-group-select" aria-label="表示の切替">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<option value="${id}"${(f.group||'lot')===id?' selected':''}>${label}</option>`).join('')}</select>
-    <div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong>${pending?`<span class="sub shortage-tag">原価未確定の不足 ${num(pending)}枚</span>`:''}</div></div>
-    ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。原価未確定の不足分は金額に含めません。中古を新品の単価では評価しません。数量と金額は計算結果なので、手入力できません。在庫0・マイナスの行も表示します（未登録の組み合わせは自動では作りません）。訂正は「在庫履歴」から行います。')}
-    <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+    <select id="groups" class="stock-group-select" aria-label="表示の切替">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<option value="${id}"${(f.group||'lot')===id?' selected':''}>${label}</option>`).join('')}</select></div><div id="stockListRest">${restHtml}</div></section>`
+    stockListBarCache={el:$('#stockListBar'),data:state.data,writable}
+  }
   const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;f.stockFilter=$('#fStockFilter').value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
   ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
   $('#groups').onchange=async e=>{f.group=e.target.value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
