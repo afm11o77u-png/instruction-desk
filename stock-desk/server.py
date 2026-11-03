@@ -147,6 +147,13 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
                 if (args.get('group') or 'lot') == 'lot':
                     # 在庫明細: 合計は SQL 集計、行は表示する件数だけ組み立てる
                     body = stock.stock_lot_page(c, args, lot_limit=lot_limit)
+                elif args.get('group') in stock.GROUPED_STOCK_VIEWS:
+                    # 顧客別・商品別・場所別: グループ単位で区切り、表示するグループのロットだけ組み立てる
+                    try:
+                        offset = int(args.pop('offset', 0) or 0)
+                    except ValueError:
+                        offset = 0
+                    body = stock.stock_group_page(c, args, group_limit=lot_limit, group_offset=offset)
                 else:
                     body = stock.slim_stock_view(stock.stock_query(c, args), lot_limit=lot_limit)
         except ValueError as e:
