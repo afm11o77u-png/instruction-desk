@@ -491,6 +491,7 @@ async function setSetupTab(tab){
   notifyParentSection()
   return true
 }
+const STOCK_LOAD_ERROR='読み込みに失敗しました。再起動.cmdで再起動してください。'
 async function boot(){
   // bootstrap・在庫・表示モードを同時に取りに行き、在庫が先に届いたら行だけ先に描く。
   loadProductCategoryFilter()
@@ -513,10 +514,11 @@ async function boot(){
   if(stockP&&!state.data){
     stockP.then(async()=>{
       await modesP
-      if(!state.data&&state.tab==='list')paint()
+      if(!state.data&&!state.bootFailed&&state.tab==='list')paint()
     }).catch(()=>{})
   }
   state.data=await bootP
+  if(!state.data||typeof state.data!=='object')throw new Error(STOCK_LOAD_ERROR)
   state.ready=true
   const labels={sample:['試用版・架空のサンプル','サンプルのデータは data\\sample に保存されています。'],desk:['在庫管理','指示書デスクと同じ画面から使っています。在庫のデータは指示書とは別のファイルです。'],live:['試用版・このパソコンの台帳','この台帳は data\\live に保存されています。サンプルとは別です。']}
   const label=labels[state.data.mode]||labels.live
@@ -524,6 +526,7 @@ async function boot(){
   $('#foot').textContent=label[1]
   if(stockP)await stockP
   else if(state.tab==='list')await loadStock()
+  if(state.tab==='list'&&!(state.stock&&(Array.isArray(state.stock.lots)||Array.isArray(state.stock.groups))))throw new Error(STOCK_LOAD_ERROR)
   if(state.tab==='opening')await loadOpeningEntries()
   if(state.tab==='history'){ensureHistoryDefaults();await loadStockHistory()}
   if(state.tab==='period')ensurePeriodDefaults()
@@ -3163,4 +3166,4 @@ window.addEventListener('message',async e=>{
   if(e.origin!==location.origin||!e.data||e.data.type!=='stock-section')return
   await setStockSection(e.data.section,{setupTab:e.data.setupTab})
 })
-boot().catch(e=>{$('#main').textContent=e.message})
+boot().catch(e=>{console.error(e);state.bootFailed=true;const m=$('#main');if(m)m.textContent=STOCK_LOAD_ERROR+((e&&e.message&&e.message!==STOCK_LOAD_ERROR)?'（'+e.message+'）':'')})
