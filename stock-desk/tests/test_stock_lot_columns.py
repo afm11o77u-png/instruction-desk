@@ -28,8 +28,17 @@ class StockLotColumnsTest(unittest.TestCase):
         self.assertIn('class="dm-primary lot-oneline" title="${esc(l.customerName)}"', APP)
         self.assertIn('class="lot-oneline" title="${esc(l.locationLabel)}"', APP)
         self.assertIn('text-overflow:ellipsis', CSS)
-        self.assertIn('.stock-lot-table col.l-ord{width:28px}', CSS)
+        self.assertIn('.stock-lot-table col.l-ord{width:46px}', CSS)
 
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StockLotOrderWidthTest(unittest.TestCase):
+    def test_order_and_unit_fit_large_values(self):
+        for rule in ('.stock-lot-table col.l-ord{width:46px}', '.stock-lot-table col.l-unit{width:78px}',
+                     '.dm-standard .stock-lot-table col.l-ord{width:48px}', '.dm-standard .stock-lot-table col.l-unit{width:88px}',
+                     '.stock-lot-table .lot-order{padding-left:4px;padding-right:6px;white-space:nowrap}',
+                     '.stock-lot-table col.l-cust{width:calc(15em + 12px)}', '.dm-standard .stock-lot-table col.l-cust{width:150px}'):
+            self.assertIn(rule, CSS)
