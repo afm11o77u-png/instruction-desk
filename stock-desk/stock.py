@@ -282,10 +282,21 @@ def now():
 
 
 # 顧客名の並び替えで無視する先頭の会社種別（登録名は変えない）
-_COMPANY_MARKER_WORDS = ('株式会社', '有限会社', '合同会社', '合名会社', '合資会社')
-_COMPANY_MARKER_RE = re.compile(
-    r'^\s*(?:\(\s*[株有合名資代]\s*\)|' + '|'.join(_COMPANY_MARKER_WORDS) + r')\s*'
+_COMPANY_MARKER_WORDS = (
+    # 長いものから（一般社団法人 → 社団法人 の順に照合）
+    '特定非営利活動法人', '一般社団法人', '一般財団法人', '公益社団法人', '公益財団法人',
+    '社会福祉法人', '医療法人社団', '医療法人財団', '医療法人', '財団法人', '社団法人', '学校法人', 'NPO法人',
+    '株式会社', '有限会社', '合同会社', '合名会社', '合資会社',
 )
+# 括弧付きの略号（NFKC 後）。㈱㈲㈳㈴㈵㈶㈹㈻㈾ は NFKC で (株) などになる。（福）の1文字の囲み文字は Unicode にない。
+_COMPANY_MARKER_ABBR = ('特非', '株', '有', '合', '名', '資', '代', '福', '医', '財', '社', '学', '特')
+_COMPANY_MARKER_RE = re.compile(
+    r'^\s*(?:\(\s*(?:' + '|'.join(_COMPANY_MARKER_ABBR) + r')\s*\)|'
+    + '|'.join(_COMPANY_MARKER_WORDS) + r')\s*',
+    re.IGNORECASE,
+)
+# 丸囲みの略号（㊑㊒㊓㊔㊕㊖㊩㊫㊮）は NFKC で1文字の漢字になるため、正規化前に外す
+_CIRCLED_MARKER_RE = re.compile(r'^\s*[\u3291-\u3296\u32a9\u32ab\u32ae]\s*')
 
 
 def customer_sort_key(name):
@@ -293,7 +304,8 @@ def customer_sort_key(name):
 
     NFKC で全角括弧・㈱㈲㈹・全角英数を半角にそろえてから判定し、英字は大文字小文字を区別しない。
     """
-    key = unicodedata.normalize('NFKC', name or '')
+    raw = name or ''
+    key = unicodedata.normalize('NFKC', _CIRCLED_MARKER_RE.sub('', raw, count=1) or raw)
     stripped = _COMPANY_MARKER_RE.sub('', key, count=1)
     # 全角英字（ＮＰＧ）も半角にそろえ、大文字小文字を区別しない（ローマ字名をまとめる）
     return (stripped or key).casefold()

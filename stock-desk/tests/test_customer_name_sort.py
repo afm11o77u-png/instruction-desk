@@ -77,3 +77,24 @@ class QueryOrderTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MoreMarkersTest(unittest.TestCase):
+    def test_welfare_and_other_markers(self):
+        cases = [
+            '（福）やまびこ', '(福)やまびこ', '(福) やまびこ', '社会福祉法人やまびこ', '社会福祉法人　やまびこ',
+            '（医）やまびこ', '㊩やまびこ', '医療法人やまびこ', '医療法人社団やまびこ', '医療法人財団やまびこ',
+            '（財）やまびこ', '㈶やまびこ', '財団法人やまびこ', '一般財団法人やまびこ', '公益財団法人やまびこ',
+            '（社）やまびこ', '㈳やまびこ', '社団法人やまびこ', '一般社団法人やまびこ', '公益社団法人やまびこ',
+            '（学）やまびこ', '㈻やまびこ', '学校法人やまびこ',
+            '（特非）やまびこ', 'NPO法人やまびこ', 'ＮＰＯ法人やまびこ', '特定非営利活動法人やまびこ',
+            '株式会社やまびこ', '㊑やまびこ', '(資)やまびこ', '㈾やまびこ',
+        ]
+        for n in cases:
+            self.assertEqual(stock.customer_sort_key(n), 'やまびこ', n)
+
+    def test_not_stripped_inside_or_bare(self):
+        self.assertEqual(stock.customer_sort_key('福田商店'), '福田商店')
+        self.assertEqual(stock.customer_sort_key('医大前薬局'), '医大前薬局')
+        self.assertEqual(stock.customer_sort_key('やまびこ(福)'), 'やまびこ(福)')
+        self.assertEqual(stock.customer_sort_key('社会福祉法人'), '社会福祉法人')
