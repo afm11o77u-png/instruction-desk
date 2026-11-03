@@ -2303,7 +2303,7 @@ def opening_entries(c):
 def stock_query(c, args):
     sql = '''SELECT l.*, cp.id AS customer_product_id, cp.customer_id, cp.product_id, cp.embroidery,
                     cp.is_standard, cp.active AS handle_active,
-                    cu.name AS customer_name, cu.active AS customer_active,
+                    cu.name AS customer_name, cu.active AS customer_active, cu.office_code AS office_code,
                     p.code, p.name AS product_name, p.color, p.active AS product_active, p.supplier_id,
                     s.name AS supplier_name, loc.name AS location_name, loc.parent_id,
                     COALESCE(parent.name, loc.name) AS site_name,
@@ -2357,7 +2357,7 @@ def stock_query(c, args):
         amount = lot_confirmed_amount(qty, r['unit_cost'], cost_pending)
         lots.append({
             'id': r['id'], 'customerProductId': r['customer_product_id'],
-            'customerId': r['customer_id'], 'customerName': r['customer_name'],
+            'customerId': r['customer_id'], 'customerName': r['customer_name'], 'officeCode': r['office_code'] or '',
             'customerActive': bool(r['customer_active']), 'productId': r['product_id'], 'code': r['code'],
             'productName': r['product_name'], 'color': r['color'], 'supplierName': r['supplier_name'] or '',
             'embroidery': r['embroidery'], 'embroideryLabel': embroidery_label(r['embroidery']),
@@ -2603,6 +2603,7 @@ def group_lots_by_customer(lots, size_orders=None):
         bucket = customers.setdefault(cid, {
             'customerId': cid,
             'customerName': lot['customerName'],
+            'officeCode': lot.get('officeCode', ''),
             'title': lot['customerName'],
             'qty': 0, 'qtyNew': 0, 'qtyUsed': 0,
             'amount': 0, 'costPendingQty': 0, 'conditions': set(),
@@ -2656,6 +2657,7 @@ def group_lots_by_customer(lots, size_orders=None):
             'title': bucket['title'],
             'customerId': bucket['customerId'],
             'customerName': bucket['customerName'],
+            'officeCode': bucket.get('officeCode', ''),
             **_qty_fields(bucket),
             'rows': rows,
         })

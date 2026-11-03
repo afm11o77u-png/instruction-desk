@@ -10,8 +10,8 @@ class StockLotColumnsTest(unittest.TestCase):
 
     def test_colgroup_matches_header(self):
         m = re.search(r"lot:\[([^\]]*)\]", APP)
-        self.assertEqual(len(m.group(1).split(',')), 11)
-        self.assertIn('colspan="11">在庫はありません。', APP)
+        self.assertEqual(len(m.group(1).split(',')), 12)
+        self.assertIn('colspan="12">在庫はありません。', APP)
 
     def test_product_two_lines_and_split_size_spec(self):
         self.assertIn('<span class="lot-code">${esc(l.code)}</span><span class="lot-pname"', APP)
@@ -39,7 +39,7 @@ class StockLotOrderWidthTest(unittest.TestCase):
         for rule in ('.stock-lot-table col.l-ord{width:calc(5ch + 12px)}', '.stock-lot-table col.l-unit{width:calc(9ch + 14px)}',
                      '.list-stage .stock-lot-table td.lot-order', '.list-stage .stock-lot-table td.lot-unit',
                      'padding-right:10px;text-align:right;white-space:nowrap;overflow:hidden',
-                     '.stock-lot-table col.l-cust{width:calc(15em + 12px)}', '.dm-standard .stock-lot-table col.l-cust{width:150px}'):
+                     '.stock-lot-table col.l-cust{width:calc(15em + 12px)}', '.dm-standard .stock-lot-table col.l-cust{width:138px}'):
             self.assertIn(rule, CSS)
         self.assertNotIn('.dm-standard .stock-lot-table col.l-ord', CSS)
         self.assertNotIn('.dm-standard .stock-lot-table col.l-unit', CSS)

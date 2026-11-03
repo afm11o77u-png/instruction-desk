@@ -18,7 +18,7 @@ class StockLotShowAllTest(unittest.TestCase):
     def test_customer_fixed_product_flexible(self):
         self.assertIn('.stock-lot-table col.l-cust{width:calc(15em + 12px)}', CSS)
         self.assertIn('.stock-lot-table col.l-name{width:auto}', CSS)
-        self.assertIn('.dm-standard .stock-lot-table col.l-cust{width:150px}', CSS)
+        self.assertIn('.dm-standard .stock-lot-table col.l-cust{width:138px}', CSS)
 
 
 if __name__ == '__main__':
