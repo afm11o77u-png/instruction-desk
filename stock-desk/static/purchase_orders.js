@@ -189,20 +189,23 @@ const PurchaseOrders={
     }
     if(!dlg.open)dlg.showModal()
   },
-  openEditor(existing){
+  openEditor(existing,prefill){
+    // prefill（新規のみ）: {customerId,supplierId,customerProductId,size} 在庫一覧の「発注」から
+    const pre=!existing&&prefill?prefill:null
     if(!stockCanWrite()){toast('閲覧専用のため、発注できません。');return}
     const dlg=$('#dialog')
     dlg.classList.add('opening-dialog','po-dialog')
     const draft={
       id:existing?existing.id:null,
       token:newToken(),
-      supplierId:existing?existing.supplierId:null,
-      customerId:existing?existing.customerId:null,
+      supplierId:existing?existing.supplierId:(pre&&pre.supplierId)||null,
+      customerId:existing?existing.customerId:(pre&&pre.customerId)||null,
       remarks:existing?existing.remarks:'',
       supplierQuery:'',customerQuery:'',
       products:[],
       candidates:[],
       dirty:false,
+      pending:pre&&pre.customerProductId!=null?{customerProductId:pre.customerProductId,size:pre.size||''}:null,
     }
     if(existing&&existing.lines){
       const byCp=new Map()
@@ -319,12 +322,31 @@ const PurchaseOrders={
         draft.candidates=data.products||[]
         const box=$('#poProdCandidates')
         const taken=new Set(draft.products.map(p=>p.customerProductId))
+        let forceShow=false
+        if(draft.pending){
+          const want=draft.pending
+          const hit=draft.candidates.find(x=>String(x.customerProductId)===String(want.customerProductId))
+          if(hit&&!taken.has(hit.customerProductId)){
+            draft.pending=null
+            addCand(hit)
+            const idx=draft.products.length-1
+            const inp=[...$('#poProductRows').querySelectorAll('[data-sz]')].find(x=>x.dataset.sz===idx+':'+want.size)||$('#poProductRows').querySelector(`[data-sz^="${idx}:"]`)
+            if(inp)inp.focus()
+            return
+          }
+          draft.pending=null
+          forceShow=true
+        }
         const list=draft.candidates.filter(p=>!taken.has(p.customerProductId))
-        box.hidden=!list.length
+        box.hidden=!list.length&&!forceShow
         box.innerHTML=list.slice(0,40).map(p=>`<button type="button" class="po-cand" data-cp="${p.customerProductId}">${esc(p.label)}</button>`).join('')||'<span class="sub">候補がありません</span>'
         box.querySelectorAll('[data-cp]').forEach(b=>b.onclick=()=>{
           const p=draft.candidates.find(x=>String(x.customerProductId)===b.dataset.cp)
           if(!p)return
+          addCand(p);loadCand().catch(()=>{})
+        })
+      }
+      const addCand=p=>{
           draft.products.push({
             customerProductId:p.customerProductId,productId:p.productId,
             code:p.code,internalCode:p.internalCode||p.code,makerCode:p.makerCode||'',
@@ -332,8 +354,7 @@ const PurchaseOrders={
             embroidery:p.embroidery,embroideryLabel:p.embroideryLabel,
             sizes:{},note:'',sizeList:p.sizes||[],
           })
-          touch();paintProducts();loadCand().catch(()=>{})
-        })
+          touch();paintProducts()
       }
       $('#poOpenReg').onclick=()=>{
         if(draft.products.length&&!confirm('作成中の発注書は保存されません。商品登録を開きますか？'))return

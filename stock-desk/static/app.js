@@ -257,7 +257,7 @@ function stockActionButtonsHtml(row,{lotId}={}){
   const cond=row.conditionMixed?'':esc(row.condition||'new')
   const mixed=row.conditionMixed?'1':'0'
   const lot=lotId!=null?` data-lot="${lotId}"`:''
-  return `<button type="button" class="primary stock-row-btn" data-stock-in="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>入庫</button> <button type="button" class="stock-row-btn" data-stock-out="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>出庫</button> <button type="button" class="quiet" data-stock-take="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>棚卸</button>`
+  return `<button type="button" class="primary stock-row-btn" data-stock-in="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>入庫</button> <button type="button" class="stock-row-btn" data-stock-out="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>出庫</button> <button type="button" class="quiet" data-stock-order="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>発注</button>`
 }
 async function pickConditionIfNeeded(target,actionLabel){
   if(!target)return null
@@ -278,9 +278,16 @@ async function pickConditionIfNeeded(target,actionLabel){
     })
   })
 }
+// 在庫一覧の行「発注」: 発注へ移動し、顧客・通常仕入先・商品（行のサイズ）を入れた新規発注書を開く
+async function openOrderFromStockRow(row){
+  if(!stockCanWrite()||typeof PurchaseOrders==='undefined')return
+  const product=((state.data&&state.data.products)||[]).find(p=>String(p.id)===String(row.productId))
+  if(!(await setStockSection('orders')))return
+  PurchaseOrders.openEditor(null,{customerId:row.customerId,supplierId:product&&product.supplierId||null,customerProductId:row.customerProductId,size:row.size||''})
+}
 function bindStockRowActions(root,rows){
   const find=btn=>{
-    const cp=btn.dataset.stockIn||btn.dataset.stockOut||btn.dataset.stockTake
+    const cp=btn.dataset.stockIn||btn.dataset.stockOut||btn.dataset.stockOrder
     const size=btn.dataset.size
     const loc=btn.dataset.location
     const cond=btn.dataset.condition||''
@@ -298,11 +305,9 @@ function bindStockRowActions(root,rows){
     target=await pickConditionIfNeeded(target,'出庫');if(!target)return
     openOutboundDialog(target)
   })
-  root.querySelectorAll('[data-stock-take]').forEach(b=>b.onclick=async()=>{
+  root.querySelectorAll('[data-stock-order]').forEach(b=>b.onclick=async()=>{
     const row=find(b);if(!row)return
-    let target=targetFromStockRow(row,b.dataset.condition||null)
-    target=await pickConditionIfNeeded(target,'棚卸');if(!target)return
-    openStocktakeDialog(target)
+    openOrderFromStockRow(row)
   })
 }
 function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;clearTimeout(toast._);toast._=setTimeout(()=>{el.hidden=true},ms)}
@@ -2101,7 +2106,7 @@ function stockList(){
     if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
     return
   }
-  const allRows=(state.stock.groups||[]).flatMap(g=>(g.rows||[]).map(r=>({...r,customerName:r.customerName||g.customerName,code:r.code||g.code,productName:r.productName||g.productName,color:r.color||g.color})))
+  const allRows=(state.stock.groups||[]).flatMap(g=>(g.rows||[]).map(r=>({...r,customerId:r.customerId??g.customerId,productId:r.productId??g.productId,customerName:r.customerName||g.customerName,code:r.code||g.code,productName:r.productName||g.productName,color:r.color||g.color})))
   // 表示中のモード（表／グリッド）だけ描画する。切替時は再描画される。
   const showGrid=mode==='grid'
   const renderers={product:[renderProductStockList,renderProductStockGrid],customer:[renderCustomerStockList,renderCustomerStockGrid],location:[renderLocationStockList,renderLocationStockGrid]}[f.group]
