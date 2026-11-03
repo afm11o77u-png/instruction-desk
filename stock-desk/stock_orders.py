@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS purchase_order_receipts (
   lot_id INTEGER NOT NULL REFERENCES lots(id),
   qty INTEGER NOT NULL,
   unit_cost INTEGER NOT NULL,
+  cost_pending INTEGER NOT NULL DEFAULT 0,
   received_on TEXT NOT NULL,
   location_id INTEGER NOT NULL,
   client_token TEXT NOT NULL UNIQUE,
@@ -114,6 +115,10 @@ def migrate_purchase_orders(c):
     cols = {r['name'] for r in c.execute('PRAGMA table_info(suppliers)')}
     if 'fax' not in cols:
         c.execute("ALTER TABLE suppliers ADD COLUMN fax TEXT NOT NULL DEFAULT ''")
+    rcols = {r['name'] for r in c.execute('PRAGMA table_info(purchase_order_receipts)')}
+    if 'cost_pending' not in rcols:
+        # cost_pending=1: 単価未設定で納品確定（unit_cost=0 は確定単価ではない）
+        c.execute('ALTER TABLE purchase_order_receipts ADD COLUMN cost_pending INTEGER NOT NULL DEFAULT 0')
 
 
 def needs_purchase_order_migration(c):
@@ -121,7 +126,10 @@ def needs_purchase_order_migration(c):
     if 'purchase_orders' not in tables:
         return True
     cols = {r['name'] for r in c.execute('PRAGMA table_info(suppliers)')}
-    return 'fax' not in cols
+    if 'fax' not in cols:
+        return True
+    rcols = {r['name'] for r in c.execute('PRAGMA table_info(purchase_order_receipts)')}
+    return 'cost_pending' not in rcols
 
 
 def status_label(code):
@@ -461,7 +469,8 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
                 'moveBatchId': r['move_batch_id'],
                 'lotId': r['lot_id'],
                 'qty': r['qty'],
-                'unitCost': r['unit_cost'],
+                'unitCost': None if r['cost_pending'] else r['unit_cost'],
+                'costPending': bool(r['cost_pending']),
                 'receivedOn': r['received_on'],
                 'locationId': r['location_id'],
                 'actorName': r['actor_name'],
@@ -841,9 +850,9 @@ def receive_purchase_order(c, body):
                 f"明細{line['line_no']}の残数は{remaining}枚です。残数を超える入荷はできません。"
             )
         # 仕入単価は商品登録の単価（特値→現単価）。画面から送られた単価は使わない。
+        # 未設定なら原価未確定（cost_pending）ロットとして入庫する。
         cost = _registered_price(c, po, line)
-        if cost is None:
-            raise ValueError('単価が未設定の商品があります。商品登録で単価を設定してください。')
+        pending = cost is None
         loc_id = item.get('locationId') if item.get('locationId') is not None else body.get('locationId')
         loc = stock.resolve_active_location(c, loc_id)
         note = stock.optional(item.get('note'), '備考', 200) or f"発注 {po['number']} 明細{line['line_no']}"
@@ -856,12 +865,12 @@ def receive_purchase_order(c, body):
             'size': line['size_label'],
             'locationId': loc['id'],
             'qty': qty,
-            'unitCost': cost,
+            'unitCost': 0 if pending else cost,
             'receivedOn': item.get('receivedOn') or received_on,
             'note': note,
             '_canWrite': True,
             '_actor': body.get('_actor') or {'name': actor},
-        })
+        }, cost_pending=pending)
         before = line['qty_received']
         after = before + qty
         c.execute(
@@ -875,11 +884,11 @@ def receive_purchase_order(c, body):
         c.execute(
             '''INSERT INTO purchase_order_receipts(
                  purchase_order_id,purchase_order_line_id,move_batch_id,lot_id,
-                 qty,unit_cost,received_on,location_id,client_token,actor_name,created_at)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                 qty,unit_cost,cost_pending,received_on,location_id,client_token,actor_name,created_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
             (
                 po_id, line_id, inbound['batchId'], inbound['lotId'],
-                qty, cost, item.get('receivedOn') or received_on, loc['id'],
+                qty, 0 if pending else cost, 1 if pending else 0, item.get('receivedOn') or received_on, loc['id'],
                 token if i == 0 else f'{token}#{i}',
                 actor, stock.stamp(),
             ),

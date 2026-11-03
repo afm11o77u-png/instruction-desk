@@ -73,12 +73,25 @@ class RegisteredPriceReceiveTest(unittest.TestCase):
         r = receive(self.c, self.fx, po, 'po-rp-r2', cost=5000)
         self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [800, 800])
 
-    def test_unset_price_refused_even_with_cost(self):
+    def test_unset_price_goes_in_as_cost_pending(self):
         self.c.execute("DELETE FROM price_base WHERE size_label='L' AND product_id=?", (self.fx['p2']['id'],))
         po = ordered_po(self.c, self.fx, 'po-rp-03')
         self.assertEqual([l['registeredPrice'] for l in po['lines']], [1200, None])
-        with self.assertRaisesRegex(ValueError, '単価が未設定の商品があります'):
-            receive(self.c, self.fx, po, 'po-rp-r3', cost=1500)
+        r = receive(self.c, self.fx, po, 'po-rp-r3', cost=1500)
+        res = r['receiveResults']
+        self.assertEqual([x['unitCost'] for x in res], [1200, None])
+        lots = [self.c.execute('SELECT unit_cost,cost_pending,qty_remaining FROM lots WHERE id=?', (x['lotId'],)).fetchone()
+                for x in res]
+        self.assertEqual([(l[0], l[1]) for l in lots], [(1200, 0), (0, 1)])
+        self.assertNotEqual(res[0]['lotId'], res[1]['lotId'])
+        mv = self.c.execute('SELECT unit_cost,cost_after FROM moves WHERE lot_id=?', (res[1]['lotId'],)).fetchone()
+        self.assertEqual((mv[0], mv[1]), (0, None))
+        rec = [(x['unitCost'], x['costPending']) for x in r['receipts']]
+        self.assertEqual(rec, [(1200, False), (None, True)])
+        lots_q = {l['id']: l for l in stock.stock_query(self.c, {})['lots']}
+        self.assertTrue(lots_q[res[1]['lotId']]['costPending'])
+        self.assertIsNone(lots_q[res[1]['lotId']]['unitCost'])
+        self.assertFalse(lots_q[res[0]['lotId']]['costPending'])
 
     def test_ui_wording(self):
         js = (ROOT / 'static' / 'purchase_orders.js').read_text(encoding='utf-8')
@@ -88,7 +101,8 @@ class RegisteredPriceReceiveTest(unittest.TestCase):
         self.assertIn('registeredPrice', js)
         self.assertNotIn('登録単価と違う単価', js)
         self.assertNotIn('data-cost', js)
-        self.assertIn('単価が未設定の商品があります。', js)
+        self.assertNotIn('単価が未設定の商品があります。', js)
+        self.assertIn('単価未設定', js)
         self.assertIn('商品登録を開く', js)
         self.assertIn("setStockSection('setup',{setupTab:'products'})", js)
         self.assertIn('id="poOpenReg"', js)

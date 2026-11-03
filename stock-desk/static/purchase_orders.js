@@ -116,7 +116,7 @@ const PurchaseOrders={
         <h3>変更履歴</h3>
         <ul class="po-events">${(po.events||[]).map(e=>`<li>${esc(e.at)}　${esc(e.actorName||'')}　${esc(e.kind)}　${esc(e.detail||'')}</li>`).join('')||'<li>なし</li>'}</ul>
         ${(po.receipts||[]).length?`<h3>入荷履歴（発注 ${esc(po.number)}）</h3>
-          <ul>${po.receipts.map(r=>`<li>${esc(r.receivedOn)}　明細#${r.lineId}　${num(r.qty)}枚　${yen(r.unitCost)}　ロット${r.lotId}</li>`).join('')}</ul>
+          <ul>${po.receipts.map(r=>`<li>${esc(r.receivedOn)}　明細#${r.lineId}　${num(r.qty)}枚　${r.costPending||r.unitCost==null?'単価未設定':yen(r.unitCost)}　ロット${r.lotId}</li>`).join('')}</ul>
           <p class="notice">この入荷は在庫に反映済みです。通常の入庫画面で同じ内容を再登録する必要はありません。</p>`:''}
         <p id="poDetailErr"></p>
       </div>
@@ -465,7 +465,6 @@ const PurchaseOrders={
         try{
           const items=draft.items.filter(it=>it.enabled).map(it=>({lineId:it.lineId,qty:Number(it.qty)}))
           if(!items.length)throw Error('入荷する明細にチェックを入れてください。')
-          if(draft.items.some(it=>it.enabled&&it.price==null))throw Error('単価が未設定の商品があります。商品登録で単価を設定してください。')
           const next=await api('/api/purchase-orders/receive',{
             id:po.id,token:draft.token,receivedOn:draft.receivedOn,locationId:draft.locationId,items,
           })
