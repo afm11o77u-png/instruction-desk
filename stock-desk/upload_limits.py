@@ -16,6 +16,7 @@ LARGE_BODY_MAX_BYTES = 12_000_000
 # Paths that may send Base64 file payloads in the JSON body.
 LARGE_BODY_PATHS = frozenset({
     '/api/import',
+    '/api/prices/initial',
     '/api/legacy-csv/preview',
     '/api/legacy-csv/commit',
     '/api/legacy-csv/history',

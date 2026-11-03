@@ -963,6 +963,7 @@ function edit(row,title,form,save){
     state.editDirty=false
   }
   if(row&&title==='商品')bindProductEditor(row)
+  if(row&&title==='商品'&&typeof CurrentPrice!=='undefined')CurrentPrice.mountProduct($('#currentPriceBox'),row)
   if(!row&&title==='商品')bindProductEditor({sizes:[],links:[],active:true})
   if(title==='保管場所')bindLocationEditor(row)
   $('#save').onclick=async ev=>{
@@ -1102,7 +1103,8 @@ function productForm(r){
     <p id="sizeUnit" class="size-unit" ${scheme==='waist'?'':'hidden'}>単位：cm</p>
     <div class="chips" id="chips"></div>
     <div class="bar"><label>特殊サイズ<input id="customSize" placeholder="${esc(sizeSchemePlaceholder(scheme))}"></label><button type="button" id="addSize">サイズを追加</button></div>
-    <h2>この商品を扱う顧客</h2><div class="links" id="links"></div><button type="button" id="addLink">顧客の取扱を追加</button>`
+    <h2>この商品を扱う顧客</h2><div class="links" id="links"></div><button type="button" id="addLink">顧客の取扱を追加</button>
+    ${r.id?'<div id="currentPriceBox" class="current-price-box"></div>':''}`
 }
 function resolveProductLinkCustomer(customers, customerId){
   if(customerId==null||customerId==='')return null
@@ -1421,6 +1423,9 @@ function opening(){
       <label class="opening-list-search">検索<input id="openingListQ" value="${esc(q)}" placeholder="顧客名・品番・商品名で検索" aria-label="顧客名・品番・商品名で検索"></label>
       <span class="opening-list-count" id="openingListCount">${esc(countLabel)}</span>
       <button type="button" class="primary" id="openOpeningRegister">初期在庫を登録</button>
+      <button type="button" id="priceInitOpen">現単価の初期設定</button>
+      <button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button>
+      <button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button>
       ${excelTools('opening')}
     </div>
     ${excelExportNotice()}
@@ -1445,6 +1450,11 @@ function opening(){
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('opening'))
   $('#openOpeningRegister').onclick=()=>openOpeningRegister()
+  if(typeof CurrentPrice!=='undefined'){
+    $('#priceInitOpen').onclick=()=>CurrentPrice.openInit()
+    $('#priceReviewOpen').onclick=()=>CurrentPrice.openReview()
+    $('#priceRulesOpen').onclick=()=>CurrentPrice.openRules()
+  }
   const search=$('#openingListQ')
   if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
   bindExcel('opening')
