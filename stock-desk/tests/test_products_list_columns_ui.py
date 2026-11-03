@@ -76,7 +76,7 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         self.assertIn('overflow:hidden', products_css)
         self.assertIn('.prod-handles{width:30%}', products_css)
         self.assertIn('.prod-cat{width:10%', products_css)
-        self.assertIn('.prod-act{width:4.75rem', products_css)
+        self.assertIn('.prod-act{width:6.75rem', products_css)
         self.assertIn('.prod-sizes{width:18%', products_css)
         # directory reference still documents the 2em sid slot for in-cell IDs
         self.assertIn('table.directory .sid{display:inline-block;width:2em', STYLE_CSS)
