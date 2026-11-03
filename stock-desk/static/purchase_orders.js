@@ -6,6 +6,10 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function yen(n){return Number(n).toLocaleString('ja-JP')+'円'}
 function num(n){return Number(n).toLocaleString('ja-JP')}
 function todayISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+function printMark(o){
+  if(o.needsReprint)return '<span class="sub">再印刷が必要</span>'
+  return o.printedAt?`<span class="sub">印刷済 ${esc(String(o.printedAt).slice(0,10))}</span>`:'<span class="sub">未印刷</span>'
+}
 function fmtAt(s){return String(s||'').replace('T',' ').slice(0,16)}
 function newToken(){return 'po-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10)}
 
@@ -52,7 +56,7 @@ const PurchaseOrders={
           <td>${esc(o.supplierName)}</td>
           <td>${esc(o.customerName)}</td>
           <td>${esc(o.createdBy||o.ordererName||'')}</td>
-          <td>${esc(o.statusLabel)}</td>
+          <td>${esc(o.statusLabel)}${printMark(o)}</td>
           <td><button type="button" class="quiet" data-po-open="${o.id}">開く</button></td>
         </tr>`).join('')||'<tr><td colspan="7">保存した発注書はまだありません。</td></tr>'}
       </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
@@ -123,7 +127,7 @@ const PurchaseOrders={
       </div>
       <div class="dialogactions">
         <button type="button" id="poClose2">戻る</button>
-        <button type="button" id="poPreviewSaved">プレビュー / 印刷</button>
+        <button type="button" id="poPreviewSaved">プレビュー / 印刷</button>${printMark(po)}
         ${canEdit?`<button type="button" id="poEdit">内容を修正</button>`:''}
         ${canMark?`<button type="button" class="primary" id="poMark">発注済みにする</button>`:''}
         ${canReceive?`<button type="button" class="primary" id="poReceive">納品確認</button>`:''}
@@ -131,7 +135,7 @@ const PurchaseOrders={
       </div>`
     const close=()=>{dlg.close();dlg.classList.remove('opening-dialog','po-dialog');dlg.innerHTML='';PurchaseOrders.loadList().then(()=>paint()).catch(()=>paint())}
     $('#poClose').onclick=close;$('#poClose2').onclick=close
-    $('#poPreviewSaved').onclick=()=>PurchaseOrders.showHtmlPreview(null,po.id)
+    $('#poPreviewSaved').onclick=()=>PurchaseOrders.showHtmlPreview(null,po.id,next=>PurchaseOrders.renderDetail(next))
     const edit=$('#poEdit');if(edit)edit.onclick=()=>{dlg.close();PurchaseOrders.openEditor(po)}
     const mark=$('#poMark')
     if(mark)mark.onclick=async()=>{
@@ -396,7 +400,7 @@ const PurchaseOrders={
     render()
     if(!dlg.open)dlg.showModal()
   },
-  async showHtmlPreview(draftBody,poId){
+  async showHtmlPreview(draftBody,poId,onPrinted){
     let html
     if(poId){
       const r=await fetch(BASE+'/api/purchase-orders/'+poId+'/html')
@@ -427,7 +431,8 @@ const PurchaseOrders={
     wrap.querySelector('#poPrevClose').onclick=close
     wrap.querySelector('#poPrevClose2').onclick=close
     wrap.querySelector('#poPrevPrint').onclick=()=>{
-      try{frame.contentWindow.focus();frame.contentWindow.print()}catch(_){toast('印刷画面を開けませんでした。')}
+      try{frame.contentWindow.focus();frame.contentWindow.print()}catch(_){toast('印刷画面を開けませんでした。');return}
+      if(poId)api('/api/purchase-orders/printed',{id:poId}).then(next=>{if(onPrinted)onPrinted(next)}).catch(()=>{})
     }
   },
   openReceive(po){
