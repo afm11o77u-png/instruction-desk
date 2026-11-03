@@ -123,4 +123,62 @@ def assign_rows(rows, *, strip_used=False):
             k = assign_item_code(item, strip_used=strip_used)
             if k:
                 counts[k] = counts.get(k, 0) + 1
+    n = align_color_word_position(rows)
+    if n:
+        counts['color_position'] = n
     return counts
+
+
+_SEP = ' \u3000'
+
+
+def _color_words():
+    import product_ledger_paren as paren
+    return sorted({*paren.COLOR_TERMS, *paren.COLOR_SYNONYMS.keys()}, key=len, reverse=True)
+
+
+def align_color_word_position(rows):
+    """同じ 顧客＋品番 の中で、色語の位置（先頭／末尾）だけが違う商品名を末尾形へそろえる。
+
+    例: 「緑清浄帽子」→「清浄帽子　緑」（同じ 顧客＋品番 に「清浄帽子　緑」がある場合のみ）。
+    先頭＊（中古）は残したまま照合する。色語以外は完全一致が条件（清浄帽子≠準清浄帽子）。
+    原文は 元商品名 に残す。直した行数を返す。
+    """
+    import legacy_csv_import as legacy
+    colors = _color_words()
+    groups = {}
+    for _no, item in rows or []:
+        if not isinstance(item, dict):
+            continue
+        key = (stock.text(item.get('顧客')), stock.text(item.get('商品コード')))
+        groups.setdefault(key, []).append(item)
+    fixed = 0
+    for items in groups.values():
+        suffix = {}  # (本体, 色) -> 末尾形の名前
+        for item in items:
+            core, _star = legacy.strip_used_marker(item.get('商品名'))
+            core = stock.text(core)
+            for color in colors:
+                for sep in _SEP:
+                    tail = sep + color
+                    if core.endswith(tail):
+                        body = core[:-len(tail)].rstrip(_SEP)
+                        if body:
+                            suffix.setdefault((body, color), core)
+        if not suffix:
+            continue
+        for item in items:
+            name = stock.text(item.get('商品名'))
+            core, star = legacy.strip_used_marker(name)
+            core = stock.text(core)
+            for color in colors:
+                if not core.startswith(color):
+                    continue
+                body = core[len(color):].lstrip(_SEP)
+                target = suffix.get((body, color))
+                if body and target:
+                    item.setdefault('元商品名', name)
+                    item['商品名'] = ('＊' if star else '') + target
+                    fixed += 1
+                    break
+    return fixed
