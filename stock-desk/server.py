@@ -32,6 +32,7 @@ WRITE_PATHS = {
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/company-profile',
+    '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
 }
 
 PO_ID_RE = re.compile(r'^/api/purchase-orders/(\d+)$')
@@ -51,6 +52,25 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         body['actorRole'] = (actor or {}).get('role') or ''
         body['isOwner'] = (actor or {}).get('role') == 'owner'
         return 200, body
+    if path.startswith('/api/prices/'):
+        import stock_prices
+        q = {k: v[0] for k, v in query.items()}
+        try:
+            with stock.connect(db_path) as c:
+                if path == '/api/prices/review':
+                    return 200, stock_prices.review_list(c)
+                if path == '/api/prices/product':
+                    return 200, stock_prices.product_prices(c, q.get('productId'))
+                if path == '/api/prices/code-map':
+                    return 200, {'maps': stock_prices.code_maps(c)}
+                if path == '/api/prices/lookup':
+                    # 納品確認の単価初期値用（特値→基準単価）
+                    return 200, stock_prices.lookup(
+                        c, customer_id=q.get('customerId'), product_id=q.get('productId'),
+                        size_label=q.get('size'), supplier_id=q.get('supplierId'))
+        except (ValueError, TypeError) as e:
+            return 400, {'error': str(e) or '入力を確認してください。'}
+        return 404, {'error': '見つかりません。'}
     if path == '/api/products/duplicates':
         import stock_product_merge
         with stock.connect(db_path) as c:
@@ -584,7 +604,12 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             return 200, html.encode('utf-8'), 'text/html; charset=utf-8'
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
+    import stock_prices
     routes = {
+        '/api/prices/initial': stock_prices.run_initial,
+        '/api/prices/base': stock_prices.save_base,
+        '/api/prices/special': stock_prices.save_special,
+        '/api/prices/code-map': stock_prices.save_code_map,
         '/api/customers': stock.save_customer,
         '/api/suppliers': stock.save_supplier,
         '/api/products': stock.save_product,

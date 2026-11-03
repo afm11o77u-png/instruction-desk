@@ -1135,3 +1135,11 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .dm-standard .stock-lot-table col.l-qty{width:48px}
 .dm-standard .stock-lot-table col.l-amt{width:84px}
 .dm-standard .stock-lot-table col.c-act{width:150px}
+
+/* 現単価 */
+.cp-dialog{max-width:min(1100px,96vw)}
+.cp-dialog .cp-price{width:7em;text-align:right}
+.cp-error{color:#b42318}
+.cp-rules li{margin:.4em 0;line-height:1.6}
+.current-price-box{margin-top:16px}
+.current-price-box input[data-k="price"]{width:7em;text-align:right}

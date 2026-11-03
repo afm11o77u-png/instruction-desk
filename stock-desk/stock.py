@@ -444,9 +444,11 @@ def needs_migration(c):
         return True
     import stock_orders
     import stock_product_merge
+    import stock_prices
     return (
         stock_orders.needs_purchase_order_migration(c)
         or stock_product_merge.needs_merge_migration(c)
+        or stock_prices.needs_migration(c)
     )
 
 
@@ -888,6 +890,8 @@ def migrate_schema(c):
     import stock_orders
     stock_orders.migrate_purchase_orders(c)
     ensure_handle_process_schema(c)
+    import stock_prices
+    stock_prices.migrate(c)
 
 
 def ensure_handle_process_schema(c):
