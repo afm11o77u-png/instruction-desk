@@ -281,9 +281,28 @@ def now():
     return datetime.now().isoformat(timespec='seconds')
 
 
+# 顧客名の並び替えで無視する先頭の会社種別（登録名は変えない）
+_COMPANY_MARKER_WORDS = ('株式会社', '有限会社', '合同会社', '合名会社', '合資会社')
+_COMPANY_MARKER_RE = re.compile(
+    r'^\s*(?:\(\s*[株有合名資代]\s*\)|' + '|'.join(_COMPANY_MARKER_WORDS) + r')\s*'
+)
+
+
+def customer_sort_key(name):
+    """顧客名の並び替えキー。先頭の（株）・(株)・㈱・株式会社・有限会社などと続く空白を除く。
+
+    NFKC で全角括弧・㈱㈲㈹・全角英数を半角にそろえてから判定し、英字は大文字小文字を区別しない。
+    """
+    key = unicodedata.normalize('NFKC', name or '')
+    stripped = _COMPANY_MARKER_RE.sub('', key, count=1)
+    # 全角英字（ＮＰＧ）も半角にそろえ、大文字小文字を区別しない（ローマ字名をまとめる）
+    return (stripped or key).casefold()
+
+
 def connect(path):
     c = sqlite3.connect(path, timeout=15)
     c.row_factory = sqlite3.Row
+    c.create_function('customer_sort_key', 1, customer_sort_key, deterministic=True)
     c.execute('PRAGMA foreign_keys=ON')
     return c
 
@@ -1985,7 +2004,7 @@ def batch_result(c, batch_id, already):
 def customer_row(c, cid):
     r = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone()
     return {'id': r['id'], 'name': r['name'], 'kana': r['kana'], 'address': r['address'], 'phone': r['phone'],
-            'contact': r['contact'], 'active': bool(r['active']),
+            'contact': r['contact'], 'active': bool(r['active']), 'sortKey': customer_sort_key(r['name']),
             'officeCode': (r['office_code'] if 'office_code' in r.keys() else '') or ''}
 
 
@@ -2308,7 +2327,7 @@ def stock_query(c, args):
     stock_filter = (args.get('stockFilter') or args.get('qtyFilter') or '').strip()
     if stock_filter in ('shortage', 'negative', '不足', 'マイナス'):
         sql += ' AND l.qty_remaining<0'
-    sql += ' ORDER BY cu.name, p.code, p.id, cp.embroidery, l.size_label, l.condition, l.id'
+    sql += ' ORDER BY customer_sort_key(cu.name), cu.name, p.code, p.id, cp.embroidery, l.size_label, l.condition, l.id'
     lots = []
     for r in c.execute(sql, params):
         loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
@@ -2539,7 +2558,7 @@ def group_lots_by_product(lots, size_orders=None):
                 'prices': _sorted_prices(row),
             })
         rows.sort(key=lambda r: (
-            r['customerName'],
+            customer_sort_key(r['customerName']), r['customerName'],
             order.get(r['size'], 10_000),
             r['size'],
             r['embroideryLabel'],
@@ -2624,7 +2643,7 @@ def group_lots_by_customer(lots, size_orders=None):
             **_qty_fields(bucket),
             'rows': rows,
         })
-    result.sort(key=lambda g: (g['customerName'], g['customerId']))
+    result.sort(key=lambda g: (customer_sort_key(g['customerName']), g['customerName'], g['customerId']))
     return result
 
 
@@ -2685,7 +2704,7 @@ def group_lots_by_location(lots, size_orders=None):
             0 if r['shelfLabel'] == SITE_STOCK_SHELF_LABEL else 1,
             r['shelfLabel'],
             r['locationId'],
-            r['customerName'],
+            customer_sort_key(r['customerName']), r['customerName'],
             r['customerId'],
             r['code'],
             r['productId'],
@@ -3358,7 +3377,7 @@ def move_targets(c, args=None):
             str(r['productId']),
         ]).lower()]
     rows.sort(key=lambda r: (
-        r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'],
+        customer_sort_key(r['customerName']), r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'],
         r['locationLabel'], 0 if r['condition'] == CONDITION_NEW else 1, r['condition'],
     ))
     return {

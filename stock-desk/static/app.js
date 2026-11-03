@@ -137,6 +137,11 @@ function resolveProductSort(){
 function isBlankProductCode(code){
   return !String(code??'').trim()
 }
+/** 顧客名順（サーバーの customer_sort_key: 先頭の（株）・㈱・株式会社などを除いた名前。同順は名前・ID）。 */
+function customersBySortKey(list){
+  const cmp=(x,y)=>x<y?-1:x>y?1:0
+  return (list||[]).slice().sort((a,b)=>cmp(a.sortKey??a.name??'',b.sortKey??b.name??'')||cmp(a.name||'',b.name||'')||Number(a.id)-Number(b.id))
+}
 function compareProductIds(a,b){
   return Number(a.id)-Number(b.id)
 }
@@ -1990,7 +1995,7 @@ function stockList(){
   const writable=stockCanWrite()
   $('#main').innerHTML=`<section class="panel stock-list-panel">
     <div class="bar stock-list-filters">
-      <label>顧客<select id="fCustomer"><option value="">すべて</option>${state.data.customers.map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
+      <label>顧客<select id="fCustomer"><option value="">すべて</option>${customersBySortKey(state.data.customers).map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
       <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
       <label>仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>

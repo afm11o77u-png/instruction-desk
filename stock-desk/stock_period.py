@@ -213,7 +213,7 @@ def summarize_period(c, args):
 
     # Also include keys that have current lots but no moves? Not needed for period moves view.
     rows.sort(key=lambda r: (
-        r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'], r['locationLabel'],
+        stock.customer_sort_key(r['customerName']), r['customerName'], r['code'], r['productId'], r['embroideryLabel'], r['size'], r['locationLabel'],
         0 if r.get('condition') == stock.CONDITION_NEW else 1, r.get('condition') or '',
     ))
     # Drop empty rows with all zeros and computable (no activity ever intersecting period or balance)
@@ -444,7 +444,10 @@ def _group_rows(rows, group):
         else:
             b['unavailableRows'] += 1
     result = list(buckets.values())
-    result.sort(key=lambda g: (g['title'], g['key']))
+    if group == 'customer':
+        result.sort(key=lambda g: (stock.customer_sort_key(g['title']), g['title'], g['key']))
+    else:
+        result.sort(key=lambda g: (g['title'], g['key']))
     return result
 
 
