@@ -75,7 +75,12 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
     if path == '/api/stock':
         try:
             with stock.connect(db_path) as c:
-                body = stock.slim_stock_view(stock.stock_query(c, {k: v[0] for k, v in query.items()}))
+                args = {k: v[0] for k, v in query.items()}
+                try:
+                    lot_limit = int(args.pop('limit')) if 'limit' in args else None
+                except ValueError:
+                    lot_limit = None
+                body = stock.slim_stock_view(stock.stock_query(c, args), lot_limit=lot_limit)
         except ValueError as e:
             return 400, {'error': str(e)}
         return 200, body
