@@ -864,8 +864,10 @@ function products(){
   const renumberBtn=document.getElementById('displayNoRenumber')
   if(renumberBtn)renumberBtn.onclick=async()=>{
     if(!stockIsOwner())return
-    if(!confirm('全商品のNo.を商品名順に振り直します（K/B/Sとも1から）。今のNo.は変わります。実行しますか？'))return
-    const order=sortProductRows(state.data.products||[],'nameAsc').map(r=>r.id)
+    if(!confirm('全商品のNo.を品番順に振り直します（K/B/Sとも1から）。今のNo.は変わります。実行しますか？'))return
+    const all=state.data.products||[]
+    const live=all.filter(r=>!r.mergedIntoId&&r.active),rest=all.filter(r=>r.mergedIntoId||!r.active)
+    const order=[...sortProductRows(live,'codeAsc'),...sortProductRows(rest,'codeAsc')].map(r=>r.id)
     try{await api('/api/products/display-no/renumber',{order});toast('振り直しました');await boot()}
     catch(e){toast(e.message||'失敗しました')}
   }
