@@ -85,6 +85,17 @@ class RulesTest(Base):
         self.assertEqual(self.base(pid, 'M'), (1000, 'ok', ''))
         self.assertEqual(self.base(p2, '-'), (360, 'review', stock_prices.REASON_MAX_VS_MODE))
 
+    def test_customer_spread_across_split_products(self):
+        # 同じ品番が顧客ごとに別商品として登録されていても顧客間2倍ルールで比較する
+        p1 = self.lot('北の食品', 'DBP6713', 'L', 24, name='帽子（緑）')
+        self.ids.pop(('p', 'DBP6713', 'S1'))
+        p2 = self.lot('釧路丸水', 'DBP6713', 'L', 1150, name='頭巾')
+        self.assertNotEqual(p1, p2)
+        stock_prices.run_initial(self.c, {}, srows=[
+            self.st('北の食品', 'DBP6713', 'L', 24, name='帽子（緑）'), self.st('釧路丸水', 'DBP6713', 'L', 1150, name='頭巾')])
+        self.assertEqual(self.base(p1, 'L'), (24, 'review', stock_prices.REASON_CUSTOMER_SPREAD))
+        self.assertEqual(self.base(p2, 'L'), (1150, 'review', stock_prices.REASON_CUSTOMER_SPREAD))
+
     def test_mode_weight_stock_then_purchase(self):
         lots = [{'price': 100, 'stockQty': 0, 'buyQty': 9}, {'price': 200, 'stockQty': 1, 'buyQty': 0},
                 {'price': 300, 'stockQty': 1, 'buyQty': 5}]

@@ -346,6 +346,15 @@ def compute(c, srows):
     for m in matched:
         key = (m['supplierId'], m['productId'], size_label.get((m['supplierId'], m['productId'], m['dbSize']), m['dbSize']))
         st[key].append(m)
+    # 顧客間2倍ルール: 同じ品番でも顧客ごとに商品が分かれていることがあるので、
+    # 仕入先×品番(正規化)×サイズでまとめて比較する
+    pcode = {r[0]: norm(r[1]) for r in c.execute('SELECT id,code FROM products')}
+    fam = collections.defaultdict(lambda: collections.defaultdict(int))
+    for m in matched:
+        if (m['price'] or 0) > 0:
+            fk = (m['supplierId'], pcode.get(m['productId'], m['productId']), norm(m['dbSize']))
+            ck = norm(m['customer'])
+            fam[fk][ck] = max(fam[fk][ck], m['price'])
     results = {}
     for key in set(groups) | set(st):
         g = groups.get(key, [])
@@ -358,9 +367,7 @@ def compute(c, srows):
             price = max(m['price'] for m in st_pos)
             if db_max is not None and db_max != price:
                 reasons.append(REASON_STOCKTAKE_VS_DB)
-            per_cust = collections.defaultdict(int)
-            for m in st_pos:
-                per_cust[norm(m['customer'])] = max(per_cust[norm(m['customer'])], m['price'])
+            per_cust = fam[(key[0], pcode.get(key[1], key[1]), norm(key[2]))]
             if len(per_cust) > 1 and max(per_cust.values()) >= CUSTOMER_SPREAD_RATIO * min(per_cust.values()):
                 reasons.append(REASON_CUSTOMER_SPREAD)
         elif db_pos:
