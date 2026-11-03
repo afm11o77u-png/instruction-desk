@@ -56,7 +56,9 @@ class SlimViewTest(unittest.TestCase):
 
     def test_lot_view_untouched(self):
         b = body('lot')
-        self.assertEqual(stock.slim_stock_view(b), body('lot'))
+        out = stock.slim_stock_view(b)
+        self.assertEqual(out.pop('lotCount'), 1)  # 在庫明細の総件数
+        self.assertEqual(out, body('lot'))
 
     def test_server_uses_slim(self):
         src = (Path(__file__).resolve().parents[1] / 'server.py').read_text(encoding='utf-8')

@@ -2364,14 +2364,18 @@ def stock_query(c, args):
 GROUPED_STOCK_VIEWS = ('product', 'customer', 'location')
 
 
-def slim_stock_view(body):
+def slim_stock_view(body, lot_limit=None):
     """/api/stock 応答の軽量化（画面表示は同じ）。
 
     - 顧客別・商品別・場所別では画面が groups だけを使うので、平坦な lots を送らない。
     - 単価が1つで入荷も1件の行は「単価の内訳」を出さないので receipts を省く。
     """
     if body.get('group') not in GROUPED_STOCK_VIEWS:
-        return body
+        # 在庫明細: 絞り込み後の全件で合計を出したうえで、先頭 lot_limit 件だけ送る
+        lots = body.get('lots') or []
+        if lot_limit is None or lot_limit < 0:
+            return dict(body, lotCount=len(lots))
+        return dict(body, lots=lots[:lot_limit], lotCount=len(lots))
     out = dict(body)
     out.pop('lots', None)
     for g in out.get('groups') or []:
