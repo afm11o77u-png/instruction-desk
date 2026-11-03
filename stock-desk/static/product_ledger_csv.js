@@ -5284,7 +5284,7 @@
     if((masters.shelves||[]).length)masterBits.push(`棚新規予定: ${masters.shelves.slice(0,8).map(esc).join('、')}`)
     const usageFilter=st.openingUsageFilter||''
     const allPlans=os.plans||[]
-    const filteredPlans=usageFilter==='販売'
+    const usagePlans=usageFilter==='販売'
       ?allPlans.filter(p=>{
         const t=p.target||{}
         const u=t.usageKind||t.handlingType||''
@@ -5299,6 +5299,13 @@
           return !(u==='販売'||emb==='販売'||String(emb).endsWith('｜販売'))
         })
         :allPlans
+    // 判定フィルタ（表示のみ。登録対象・選択は変えない）
+    const judgeOf=p=>String(p.statusLabel||p.status||'')
+    const judgeFilter=st.openingJudgeFilter||''
+    const judgeCounts=new Map()
+    allPlans.forEach(p=>{const k=judgeOf(p);judgeCounts.set(k,(judgeCounts.get(k)||0)+1)})
+    const filteredPlans=judgeFilter&&judgeCounts.has(judgeFilter)?usagePlans.filter(p=>judgeOf(p)===judgeFilter):usagePlans
+    const judgeOptions=[...judgeCounts].map(([k,n])=>`<option value="${esc(k)}" ${judgeFilter===k?'selected':''}>${esc(k||'—')} (${n})</option>`).join('')
     const plans=filteredPlans.slice(0,60)
     const rows=plans.map(p=>{
       const t=p.target||{}
@@ -5343,6 +5350,10 @@
           <option value="" ${!usageFilter?'selected':''}>すべて</option>
           <option value="販売" ${usageFilter==='販売'?'selected':''}>販売</option>
           <option value="other" ${usageFilter==='other'?'selected':''}>販売以外</option>
+        </select></label>
+        <label>判定<select id="plOpenJudgeFilter" ${st.busy?'disabled':''}>
+          <option value="" ${!judgeFilter?'selected':''}>すべて</option>
+          ${judgeOptions}
         </select></label>
         <span class="excelhint">表示 ${filteredPlans.length} / ${allPlans.length} 件（在庫一覧の加工仕様フィルタでも「販売」を選べます）</span>
       </div>
@@ -6168,6 +6179,11 @@
     const usageFilter=$('#plOpenUsageFilter')
     if(usageFilter)usageFilter.onchange=()=>{
       st.openingUsageFilter=usageFilter.value||''
+      paintDialog({preserveScroll:true})
+    }
+    const judgeFilterEl=$('#plOpenJudgeFilter')
+    if(judgeFilterEl)judgeFilterEl.onchange=()=>{
+      st.openingJudgeFilter=judgeFilterEl.value||''
       paintDialog({preserveScroll:true})
     }
     document.querySelectorAll('[data-pl-open-qty]').forEach(el=>{
