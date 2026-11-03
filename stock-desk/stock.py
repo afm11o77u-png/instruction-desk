@@ -629,6 +629,49 @@ def migrate_display_no(c):
       WHEN {new_px} <> {old_px} BEGIN {assign} END''')
 
 
+def display_no_name_key(name):
+    """サーバー側の商品名順（画面の並び順がない商品用の予備）。"""
+    import unicodedata
+    return unicodedata.normalize('NFKC', text(name)).casefold()
+
+
+def renumber_display_no(c, ordered_ids=None):
+    """表示番号を区分（K/B/S）ごとに商品名順で 1 から振り直す。内部 ID は変えない。
+
+    ordered_ids: 画面の「商品名順」（localeCompare('ja')・同名は ID 昇順）で並べた商品 ID。
+    含まれない商品（停止中など）は 商品名（NFKC）→ID 順で後ろに付ける。
+    カウンタは各区分の件数（＝最大番号）にそろえ、以後の新規はその次から。
+    """
+    rows = c.execute(
+        f"SELECT id, name, {DISPLAY_NO_PREFIX_SQL.format(col='category')} AS px FROM products"
+    ).fetchall()
+    by_id = {int(r['id']): r for r in rows}
+    order = []
+    seen = set()
+    for raw in ordered_ids or []:
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if pid in by_id and pid not in seen:
+            seen.add(pid)
+            order.append(pid)
+    rest = sorted((r for r in rows if int(r['id']) not in seen),
+                  key=lambda r: (display_no_name_key(r['name']), int(r['id'])))
+    order.extend(int(r['id']) for r in rest)
+    counts = {'K': 0, 'B': 0, 'S': 0}
+    # 一時的に重複しないよう先に空ける（トリガーは category 変更時のみなので発火しない）
+    c.execute("UPDATE products SET display_no=''")
+    for pid in order:
+        px = by_id[pid]['px']
+        counts[px] = counts.get(px, 0) + 1
+        c.execute('UPDATE products SET display_no=? WHERE id=?', (format_display_no(px, counts[px]), pid))
+    for px, n in counts.items():
+        c.execute('INSERT OR IGNORE INTO product_display_no_seq(prefix,last_no) VALUES(?,0)', (px,))
+        c.execute('UPDATE product_display_no_seq SET last_no=? WHERE prefix=?', (n, px))
+    return counts
+
+
 def migrate_schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS move_batches (
       id INTEGER PRIMARY KEY,

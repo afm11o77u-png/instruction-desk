@@ -26,6 +26,7 @@ WRITE_PATHS = {
     '/api/product-ledger-csv/maker-lookup/adopt',
     '/api/products/merge',
     '/api/products/registry-wipe',
+    '/api/products/display-no/renumber',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
@@ -520,6 +521,16 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'registered': False,
             }
         return 200, result
+    if path == '/api/products/display-no/renumber':
+        if not can_write:
+            return 403, {'error': '閲覧専用のため実行できません。'}
+        role = stock.text(((payload or {}).get('_actor') or {}).get('role') if isinstance((payload or {}).get('_actor'), dict) else '')
+        if role != 'owner':
+            return 403, {'error': '主管理者だけが実行できます。'}
+        with stock.connect(db_path) as c:
+            c.execute('BEGIN IMMEDIATE')
+            counts = stock.renumber_display_no(c, (payload or {}).get('order') or [])
+        return 200, {'ok': True, 'counts': counts}
     if path == '/api/products/registry-wipe':
         import product_registry_wipe
         if not can_write:
