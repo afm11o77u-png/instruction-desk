@@ -2075,16 +2075,24 @@ def product_row(c, pid):
     links = []
     for x in c.execute('''SELECT cp.*, cu.name AS customer_name FROM customer_products cp
                           JOIN customers cu ON cu.id=cp.customer_id WHERE cp.product_id=? ORDER BY cp.id''', (pid,)):
-        links.append({'id': x['id'], 'customerId': x['customer_id'], 'customerName': x['customer_name'],
-                      'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active']),
-                      'processes': handle_processes(c, x['id'])})
-    category = r['category'] if 'category' in r.keys() else ''
-    code = r['code'] or ''
-    merged_into = r['merged_into_id'] if 'merged_into_id' in r.keys() else None
+        links.append(_product_link_dict(x, handle_processes(c, x['id'])))
     sub_suppliers = product_sub_suppliers(c, pid)
     import stock_product_merge
     stock_product_merge.migrate_product_merge(c)
     name_aliases = stock_product_merge.list_name_aliases(c, pid)
+    return _product_dict(r, sizes, links, sub_suppliers, name_aliases)
+
+
+def _product_link_dict(x, processes):
+    return {'id': x['id'], 'customerId': x['customer_id'], 'customerName': x['customer_name'],
+            'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active']),
+            'processes': processes}
+
+
+def _product_dict(r, sizes, links, sub_suppliers, name_aliases):
+    category = r['category'] if 'category' in r.keys() else ''
+    code = r['code'] or ''
+    merged_into = r['merged_into_id'] if 'merged_into_id' in r.keys() else None
     material = r['material'] if 'material' in r.keys() else ''
     maker_code = text(r['maker_code'] or '') if 'maker_code' in r.keys() else ''
     return {
@@ -2105,6 +2113,56 @@ def product_row(c, pid):
         'sizes': sizes, 'links': links,
         'nameAliases': name_aliases,
     }
+
+
+def product_rows_all(c):
+    """全商品を product_row と同じ形で返す（商品ごとの問い合わせをまとめて実行）。"""
+    import stock_product_merge
+    stock_product_merge.migrate_product_merge(c)
+    rows = c.execute('''SELECT p.*, s.name AS supplier_name FROM products p
+                        LEFT JOIN suppliers s ON s.id=p.supplier_id ORDER BY p.id''').fetchall()
+    sizes = {}
+    for x in c.execute('SELECT product_id, label FROM product_sizes ORDER BY product_id, sort_order, id'):
+        sizes.setdefault(x['product_id'], []).append(x['label'])
+    processes = {}
+    for x in c.execute('''SELECT x.customer_product_id, p.id, p.name FROM customer_product_processes x
+                          JOIN products p ON p.id=x.process_product_id
+                          ORDER BY x.customer_product_id, x.sort_order, p.id'''):
+        processes.setdefault(x['customer_product_id'], []).append({'id': x['id'], 'name': x['name']})
+    links = {}
+    for x in c.execute('''SELECT cp.*, cu.name AS customer_name FROM customer_products cp
+                          JOIN customers cu ON cu.id=cp.customer_id ORDER BY cp.product_id, cp.id'''):
+        links.setdefault(x['product_id'], []).append(_product_link_dict(x, processes.get(x['id'], [])))
+    subs = {}
+    for x in c.execute('''SELECT ps.product_id, ps.supplier_id, s.name AS supplier_name, s.active
+                          FROM product_suppliers ps JOIN suppliers s ON s.id=ps.supplier_id
+                          ORDER BY ps.product_id, ps.sort_order, ps.id'''):
+        subs.setdefault(x['product_id'], []).append(
+            {'id': x['supplier_id'], 'name': x['supplier_name'] or '', 'active': bool(x['active'])})
+    aliases = {}
+    for x in c.execute('''SELECT product_id, value FROM product_match_aliases WHERE kind=? ORDER BY product_id, id''',
+                       (stock_product_merge.ALIAS_KIND_NAME,)):
+        aliases.setdefault(x['product_id'], []).append(x['value'])
+    merged = {r['id']: r['merged_into_id'] for r in rows}
+
+    def live(pid):
+        # stock_product_merge.resolve_live_product_id と同じ辿り方
+        pid = int(pid)
+        seen = set()
+        for _ in range(20):
+            if pid in seen:
+                break
+            seen.add(pid)
+            if pid not in merged:
+                return pid
+            nxt = merged[pid]
+            if nxt in (None, ''):
+                return pid
+            pid = int(nxt)
+        return pid
+
+    return [_product_dict(r, sizes.get(r['id'], []), links.get(r['id'], []), subs.get(r['id'], []),
+                          list(aliases.get(live(r['id']), []))) for r in rows]
 
 
 def location_label(c, row):
@@ -2249,7 +2307,7 @@ def resolve_opening_location(site_id, shelf_id, locations):
 def bootstrap(c):
     customers = [customer_row(c, r['id']) for r in c.execute('SELECT id FROM customers ORDER BY id')]
     suppliers = [supplier_row(c, r['id']) for r in c.execute('SELECT id FROM suppliers ORDER BY id')]
-    products = [product_row(c, r['id']) for r in c.execute('SELECT id FROM products ORDER BY id')]
+    products = product_rows_all(c)
     locations = [location_row(c, r['id']) for r in c.execute('SELECT id FROM locations ORDER BY parent_id IS NOT NULL, id')]
     import stock_orders
     return {

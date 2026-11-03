@@ -1149,3 +1149,5 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .cp-rules li{margin:.4em 0;line-height:1.6}
 .current-price-box{margin-top:16px}
 .current-price-box input[data-k="price"]{width:7em;text-align:right}
+
+.app-version{margin-left:auto;font-size:12px;color:#6b7d72}

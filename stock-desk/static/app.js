@@ -492,7 +492,7 @@ async function setSetupTab(tab){
   return true
 }
 async function boot(){
-  state.data=await api('/api/bootstrap')
+  // bootstrap・在庫・表示モードを同時に取りに行き、在庫が先に届いたら行だけ先に描く。
   loadProductCategoryFilter()
   if(!state.ready){
     const params=new URLSearchParams(location.search)
@@ -504,17 +504,31 @@ async function boot(){
     }
     applySectionState(normalizeSection(params.get('section')),loadSetupTab())
   }
+  const bootP=api('/api/bootstrap')
+  if(!state.ready)api('/api/version').then(v=>{const el=$('#ver');if(el&&v&&v.commit)el.textContent=`版 ${v.commit}（起動 ${v.startedAt}）`}).catch(()=>{})
+  const modesP=ensureStockDisplayModes().catch(()=>{})
+  const stockP=state.tab==='list'?loadStock():null
+  bootP.catch(()=>{})
+  if(stockP)stockP.catch(()=>{})
+  if(stockP&&!state.data){
+    stockP.then(async()=>{
+      await modesP
+      if(!state.data&&state.tab==='list')paint()
+    }).catch(()=>{})
+  }
+  state.data=await bootP
   state.ready=true
   const labels={sample:['試用版・架空のサンプル','サンプルのデータは data\\sample に保存されています。'],desk:['在庫管理','指示書デスクと同じ画面から使っています。在庫のデータは指示書とは別のファイルです。'],live:['試用版・このパソコンの台帳','この台帳は data\\live に保存されています。サンプルとは別です。']}
   const label=labels[state.data.mode]||labels.live
   $('#eyebrow').textContent=label[0]
   $('#foot').textContent=label[1]
-  if(state.tab==='list')await loadStock()
+  if(stockP)await stockP
+  else if(state.tab==='list')await loadStock()
   if(state.tab==='opening')await loadOpeningEntries()
   if(state.tab==='history'){ensureHistoryDefaults();await loadStockHistory()}
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
-  await ensureStockDisplayModes().catch(()=>{})
+  await modesP
   paint()
   notifyParentSection()
 }
@@ -1994,18 +2008,21 @@ async function loadStock(){
   state.stock=await api('/api/stock?'+q.toString())
 }
 let stockListBarCache={el:null,data:null,writable:null}
+// 起動直後、bootstrap より先に在庫が届いたときの仮データ（絞り込み欄は bootstrap 到着後に埋まる）
+const STOCK_LIST_EMPTY_DATA={products:[],customers:[],locations:[]}
 function stockList(){
   const f=state.filters
-  const sizes=[...new Set(state.data.products.flatMap(p=>p.sizes))]
+  const data=state.data||STOCK_LIST_EMPTY_DATA
+  const sizes=[...new Set(data.products.flatMap(p=>p.sizes))]
   const specs=new Map()
-  state.data.products.forEach(p=>p.links.forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
+  data.products.forEach(p=>p.links.forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
   const totalNew=state.stock?state.stock.totalQtyNew:0
   const totalUsed=state.stock?state.stock.totalQtyUsed:0
   const pending=state.stock?state.stock.costPendingQty:0
-  const writable=stockCanWrite()
+  const writable=state.data?stockCanWrite():false
   // 絞り込み欄（顧客・商品などの選択肢が数千件）は一度だけ作り、選択肢の元データが変わったときだけ作り直す。
-  const barReuse=stockListBarCache.el&&stockListBarCache.el.isConnected&&stockListBarCache.data===state.data&&stockListBarCache.writable===writable
+  const barReuse=stockListBarCache.el&&stockListBarCache.el.isConnected&&stockListBarCache.data===data&&stockListBarCache.writable===writable
   const restHtml=`<div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong>${pending?`<span class="sub shortage-tag">原価未確定の不足 ${num(pending)}枚</span>`:''}</div></div>
     ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。原価未確定の不足分は金額に含めません。中古を新品の単価では評価しません。数量と金額は計算結果なので、手入力できません。在庫0・マイナスの行も表示します（未登録の組み合わせは自動では作りません）。訂正は「在庫履歴」から行います。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div>`
@@ -2016,17 +2033,17 @@ function stockList(){
   }else{
     $('#main').innerHTML=`<section class="panel stock-list-panel"><div id="stockListBar">
     <div class="bar stock-list-filters">
-      <label>顧客<select id="fCustomer"><option value="">すべて</option>${customersBySortKey(state.data.customers).map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
-      <label>商品<select id="fProduct"><option value="">すべて</option>${state.data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
+      <label>顧客<select id="fCustomer"><option value="">すべて</option>${customersBySortKey(data.customers).map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
+      <label>商品<select id="fProduct"><option value="">すべて</option>${data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
       <label>仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
-      <label>保管場所<select id="fLocation"><option value="">すべて</option>${state.data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
+      <label>保管場所<select id="fLocation"><option value="">すべて</option>${data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
       <label>状態${conditionSelectHtml('fCondition',f.condition||'',{allowAll:true})}</label>
       <label>在庫<select id="fStockFilter"><option value="" ${!f.stockFilter?'selected':''}>すべて</option><option value="shortage" ${f.stockFilter==='shortage'?'selected':''}>在庫不足（マイナス）のみ</option></select></label>
       ${writable?`<button type="button" class="primary" id="listInboundNew">一覧にない商品を入庫</button>`:''}
     </div>
     <select id="groups" class="stock-group-select" aria-label="表示の切替">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<option value="${id}"${(f.group||'lot')===id?' selected':''}>${label}</option>`).join('')}</select></div><div id="stockListRest">${restHtml}</div></section>`
-    stockListBarCache={el:$('#stockListBar'),data:state.data,writable}
+    stockListBarCache={el:$('#stockListBar'),data,writable}
   }
   const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;f.stockFilter=$('#fStockFilter').value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
   ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
@@ -2051,7 +2068,7 @@ function stockList(){
       $('#stockLotMore').onclick=async()=>{state.stockLotLimit=state.stock.lots.length+STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
       $('#stockLotAll').onclick=async()=>{state.stockLotLimit=-1;await loadStock();paint()}
     }
-    bindStockRowActions(document,state.stock.lots)
+    if(state.data)bindStockRowActions(document,state.stock.lots)
     if(grid)grid.hidden=mode!=='grid'
     if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
     return
@@ -2067,7 +2084,7 @@ function stockList(){
     body.innerHTML='<p class="dialogbody">在庫はありません。</p>'
     if(grid)grid.innerHTML='<div class="dm-empty">在庫はありません。</div>'
   }
-  bindStockRowActions(document,allRows)
+  if(state.data)bindStockRowActions(document,allRows)
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
 }

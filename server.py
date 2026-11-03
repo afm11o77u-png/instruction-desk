@@ -823,8 +823,21 @@ def _split_audit(actor, action, target):
     except Exception:
         pass
 
+_stock_prepared = None
+
 def ensure_stock():
+    # 在庫DBの準備（スキーマ確認）はプロセスで1回。DBファイルが差し替えられた（移行・復元）ときだけやり直す。
+    global _stock_prepared
+    try:
+        st = STOCK_DB.stat()
+        key = (st.st_dev, st.st_ino)
+    except OSError:
+        key = None
+    if key is not None and key == _stock_prepared:
+        return
     stockdesk().prepare(STOCK_DB, 'desk')
+    st = STOCK_DB.stat()
+    _stock_prepared = (st.st_dev, st.st_ino)
 
 class Handler(AuthMixin, BaseHTTPRequestHandler):
     def end_headers(self):
