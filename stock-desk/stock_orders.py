@@ -350,6 +350,28 @@ def product_candidates(c, args=None):
     return {'customerId': customer_id, 'supplierId': supplier_id, 'products': rows}
 
 
+def _registered_price(c, po, line):
+    """商品登録の単価（顧客特値→基準単価）。未設定なら None。"""
+    import stock_prices
+    try:
+        hit = stock_prices.lookup(
+            c, customer_id=po['customer_id'], product_id=line['product_id'],
+            size_label=line['size_label'], supplier_id=po['supplier_id'],
+        )
+    except Exception:  # 単価表がない古いDBなど
+        return None
+    price = hit.get('price')
+    return price if isinstance(price, int) and not isinstance(price, bool) and price >= 0 else None
+
+
+def _receipt_unit_cost(c, po, line, given):
+    """納品確定時の仕入単価。登録単価があればそれ、未設定なら従来どおり入力値。"""
+    price = _registered_price(c, po, line)
+    if price is not None:
+        return price
+    return stock.parse_money(given, '仕入単価')
+
+
 def _line_dict(r, *, internal_code=''):
     ordered = r['qty_ordered']
     received = r['qty_received']
@@ -395,7 +417,9 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
                     internal = stock.text(prod['code'] or '')
                 elif stock.text(r['product_code'] or '') and stock.text(prod['code'] or '') != stock.text(r['product_code'] or ''):
                     internal = stock.text(prod['code'] or '')
-        lines.append(_line_dict(r, internal_code=internal))
+        d = _line_dict(r, internal_code=internal)
+        d['registeredPrice'] = _registered_price(c, po, r)
+        lines.append(d)
     body = {
         'id': po['id'],
         'number': po['number'],
@@ -789,9 +813,9 @@ def receive_purchase_order(c, body):
     if not po:
         raise ValueError('発注書が見つかりません。')
     if po['status'] == STATUS_CANCELLED:
-        raise ValueError('取消済みの発注書には入荷登録できません。')
+        raise ValueError('取消済みの発注書には納品確認できません。')
     if po['status'] == STATUS_UNORDERED:
-        raise ValueError('未発注のままでは入荷登録できません。先に「発注済みにする」を押してください。')
+        raise ValueError('未発注のままでは納品確認できません。先に「発注済みにする」を押してください。')
 
     items = body.get('items') or body.get('lines') or []
     if not isinstance(items, list) or not items:
@@ -824,7 +848,7 @@ def receive_purchase_order(c, body):
             raise ValueError(
                 f"明細{line['line_no']}の残数は{remaining}枚です。残数を超える入荷はできません。"
             )
-        cost = stock.parse_money(item.get('unitCost'), '仕入単価')
+        cost = _receipt_unit_cost(c, po, line, item.get('unitCost'))
         loc_id = item.get('locationId') if item.get('locationId') is not None else body.get('locationId')
         loc = stock.resolve_active_location(c, loc_id)
         note = stock.optional(item.get('note'), '備考', 200) or f"発注 {po['number']} 明細{line['line_no']}"
@@ -852,7 +876,7 @@ def receive_purchase_order(c, body):
             (after, stock.stamp(), line_id, before, qty),
         )
         if c.execute('SELECT changes()').fetchone()[0] != 1:
-            raise ValueError('同時に入荷登録されたため、保存を中止しました。最新の残数を確認してください。')
+            raise ValueError('同時に納品確認されたため、保存を中止しました。最新の残数を確認してください。')
         c.execute(
             '''INSERT INTO purchase_order_receipts(
                  purchase_order_id,purchase_order_line_id,move_batch_id,lot_id,
