@@ -116,7 +116,7 @@ const PurchaseOrders={
         <button type="button" id="poPreviewSaved">プレビュー / 印刷</button>
         ${canEdit?`<button type="button" id="poEdit">内容を修正</button>`:''}
         ${canMark?`<button type="button" class="primary" id="poMark">発注済みにする</button>`:''}
-        ${canReceive?`<button type="button" class="primary" id="poReceive">入荷を登録</button>`:''}
+        ${canReceive?`<button type="button" class="primary" id="poReceive">納品確認</button>`:''}
         ${canCancel?`<button type="button" id="poCancel">取消</button>`:''}
       </div>`
     const close=()=>{dlg.close();dlg.classList.remove('opening-dialog','po-dialog');dlg.innerHTML='';PurchaseOrders.loadList().then(()=>paint()).catch(()=>paint())}
@@ -402,7 +402,7 @@ const PurchaseOrders={
       token:newToken(),
       receivedOn:todayISO(),
       locationId:null,siteId:'',shelfId:'',
-      items:remain.map(l=>({lineId:l.id,lineNo:l.lineNo,label:`${l.code} ${l.productName} ${l.size}`,remaining:l.qtyRemaining,qty:l.qtyRemaining,unitCost:'',enabled:true})),
+      items:remain.map(l=>({lineId:l.id,lineNo:l.lineNo,label:`${l.code} ${l.productName} ${l.size}`,remaining:l.qtyRemaining,qty:l.qtyRemaining,unitCost:l.registeredPrice!=null?String(l.registeredPrice):'',price:l.registeredPrice,enabled:true})),
     }
     const render=()=>{
       const keep=state.opening
@@ -416,27 +416,27 @@ const PurchaseOrders={
         .replace(/id="openingSite"/g,'id="poRecvSite"')
         .replace(/id="openingShelf"/g,'id="poRecvShelf"')
         .replace(/id="openingShelfLabel"/g,'id="poRecvShelfLabel"')
-      dlg.innerHTML=`<div class="dialoghead"><h2>入荷を登録（発注 ${esc(po.number)}）</h2><button type="button" id="poRecvClose" class="quiet">閉じる</button></div>
+      dlg.innerHTML=`<div class="dialoghead"><h2>納品確認（発注 ${esc(po.number)}）</h2><button type="button" id="poRecvClose" class="quiet">閉じる</button></div>
         <div class="dialogbody">
           <p class="notice">確定すると通常の入庫と同じ経路で在庫が増えます。発注時点では在庫は増えません。残数を超える入荷はできません。同じ内容を入庫画面で再登録する必要はありません。</p>
           <div class="grid">
             <label>入荷日<input id="poRecvDate" type="date" value="${esc(draft.receivedOn)}"></label>
             ${locFields}
           </div>
-          <div class="tablewrap"><table><thead><tr><th>入荷</th><th>明細</th><th>残</th><th>今回数量</th><th>仕入単価</th></tr></thead><tbody>
+          <div class="tablewrap"><table><thead><tr><th>入荷</th><th>明細</th><th>残</th><th>今回数量</th><th>単価</th></tr></thead><tbody>
             ${draft.items.map((it,i)=>`<tr>
               <td><input type="checkbox" data-en="${i}" ${it.enabled?'checked':''}></td>
               <td>${esc(it.label)}<span class="sub">#${it.lineNo}</span></td>
               <td class="qty">${num(it.remaining)}</td>
               <td><input data-qty="${i}" inputmode="numeric" value="${esc(it.qty)}"></td>
-              <td><input data-cost="${i}" inputmode="numeric" value="${esc(it.unitCost)}"></td>
+              <td><input data-cost="${i}" inputmode="numeric" placeholder="未設定" value="${esc(it.unitCost)}"></td>
             </tr>`).join('')||'<tr><td colspan="5">入荷できる残がありません。</td></tr>'}
           </tbody></table></div>
           <p id="poRecvErr"></p>
         </div>
         <div class="dialogactions">
           <button type="button" id="poRecvClose2">戻る</button>
-          <button type="button" class="primary" id="poRecvGo">入荷を確定</button>
+          <button type="button" class="primary" id="poRecvGo">納品確定</button>
         </div>`
       const back=()=>{PurchaseOrders.renderDetail(po)}
       $('#poRecvClose').onclick=back;$('#poRecvClose2').onclick=back
@@ -451,10 +451,12 @@ const PurchaseOrders={
         try{
           const items=draft.items.filter(it=>it.enabled).map(it=>({lineId:it.lineId,qty:Number(it.qty),unitCost:it.unitCost}))
           if(!items.length)throw Error('入荷する明細にチェックを入れてください。')
+          const changed=draft.items.filter(it=>it.enabled&&it.price!=null&&String(it.unitCost).replace(/,/g,'').trim()!==String(it.price))
+          if(changed.length&&!confirm(`登録単価と違う単価があります。\n${changed.map(it=>`${it.label}：${yen(it.price)} → ${it.unitCost}円`).join('\n')}\nこのまま確定しますか？`))return
           const next=await api('/api/purchase-orders/receive',{
             id:po.id,token:draft.token,receivedOn:draft.receivedOn,locationId:draft.locationId,items,
           })
-          toast(next.already?'同じ入荷は登録済みです。':'入荷を登録しました。')
+          toast(next.already?'同じ入荷は登録済みです。':'納品を確定しました。')
           PurchaseOrders.renderDetail(next)
         }catch(e){err.textContent=e.message}
       }
