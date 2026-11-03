@@ -428,7 +428,7 @@ class StockHistoryUiSourceTest(unittest.TestCase):
     def test_compact_list_columns_and_detail_popup(self):
         page = APP_JS[APP_JS.index('function historyPage()'):APP_JS.index('async function loadMoveTargets()')]
         # Compact columns: 記録者 is on the list; 業務日・保管場所などは詳細へ
-        self.assertIn('<th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>記録者</th><th>詳細</th>', page)
+        self.assertIn('<th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>加工</th><th>増減数</th><th>記録者</th><th>詳細</th>', page)
         self.assertNotIn('<th>業務日</th>', page)
         self.assertNotIn('<th>加工仕様</th>', page)
         self.assertNotIn('<th>保管場所</th>', page)
@@ -472,7 +472,7 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn('e.color', detail_spec)
         detail = APP_JS[APP_JS.index('function historyDetailHtml(e)'):APP_JS.index('function historyPage()')]
         for label in (
-            '記録日時', '業務日', '仕様', '保管場所',
+            '記録日時', '業務日', '加工', '保管場所',
             '対象ロットの数量（変更前→変更後）',
             '単価（変更前→変更後）', '金額（変更前→変更後）',
             '記録者', '備考', '対象ロットID', '同一出庫のロット内訳',

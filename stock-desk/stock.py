@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS customer_products (
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   product_id INTEGER NOT NULL REFERENCES products(id),
   embroidery TEXT NOT NULL DEFAULT '',
+  handling_kind TEXT,
   is_standard INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -441,6 +442,12 @@ def needs_migration(c):
         return True
     if 'customer_product_processes' not in tables:
         return True
+    if 'customer_products' in tables:
+        cp_cols = {r['name'] for r in c.execute('PRAGMA table_info(customer_products)')}
+        if 'handling_kind' not in cp_cols:
+            return True
+        if c.execute('SELECT 1 FROM customer_products WHERE handling_kind IS NULL LIMIT 1').fetchone():
+            return True
     if 'product_ledger_row_maps' not in tables or 'product_ledger_import_runs' not in tables:
         return True
     import stock_orders
@@ -723,6 +730,7 @@ def renumber_display_no(c, ordered_ids=None):
 def migrate_schema(c):
     # 在庫一覧でロットごとの移動種別を引くため（既存DBにも追加。冪等）
     c.execute('CREATE INDEX IF NOT EXISTS moves_lot ON moves(lot_id)')
+    migrate_handling_kind(c)
     c.execute('''CREATE TABLE IF NOT EXISTS move_batches (
       id INTEGER PRIMARY KEY,
       client_token TEXT NOT NULL UNIQUE,
@@ -1072,6 +1080,70 @@ EMPTY_EMBROIDERY_ALIASES = frozenset({EMPTY_EMBROIDERY_LABEL, '刺繍なし'})
 PENDING_EMBROIDERY = '加工未整理'
 
 
+# 取扱の区分（販売／レンタル）。リース等の販売以外はすべてレンタル。
+HANDLING_KIND_SALE = '販売'
+HANDLING_KIND_RENTAL = 'レンタル'
+HANDLING_KINDS = (HANDLING_KIND_SALE, HANDLING_KIND_RENTAL)
+# 区分の語だけが加工欄に入っていた場合は加工なしとみなす（保存キーは変えない）
+_KIND_ONLY_WORDS = frozenset({'レンタル', 'リース', 'レンタル用', 'リース用'})
+
+
+def handling_kind_of(embroidery):
+    """保存キー（旧仕様）から区分を決める。販売の印があれば販売、それ以外はレンタル。"""
+    import product_ledger_paren as paren
+    return HANDLING_KIND_SALE if paren.handling_has_sales_usage(text(embroidery)) else HANDLING_KIND_RENTAL
+
+
+def handling_processing(embroidery):
+    """保存キーから加工部分だけを返す（販売の印を除く）。加工なしは空。"""
+    import product_ledger_paren as paren
+    t = text(embroidery)
+    if not t or t == PENDING_EMBROIDERY or t in EMPTY_EMBROIDERY_ALIASES:
+        return ''
+    if t == paren.USAGE_KIND_SALES:
+        return ''
+    suffix = paren.USAGE_HANDLING_SEP + paren.USAGE_KIND_SALES
+    if t.endswith(suffix):
+        t = t[:-len(suffix)].strip()
+    elif paren.handling_has_sales_usage(t):
+        t = text(paren.strip_sales_usage_markers(t)[0])
+    return '' if t in _KIND_ONLY_WORDS else t
+
+
+def handling_key(processing, kind):
+    """加工＋区分 → 保存キー。販売は既存の取込と同じ「加工｜販売」（加工なしは「販売」）。"""
+    import product_ledger_paren as paren
+    if kind not in HANDLING_KINDS:
+        raise ValueError('区分は販売かレンタルを選んでください。')
+    proc = handling_processing(processing)
+    return normalize_embroidery(
+        paren.compose_handling_embroidery(proc, paren.USAGE_KIND_SALES if kind == HANDLING_KIND_SALE else '')
+    )
+
+
+def sync_handling_kind(c):
+    """区分が未設定の取扱へ、保存キーから区分を入れる（冪等・追加のみ）。"""
+    rows = c.execute('SELECT id, embroidery FROM customer_products WHERE handling_kind IS NULL').fetchall()
+    for r in rows:
+        c.execute('UPDATE customer_products SET handling_kind=? WHERE id=?', (handling_kind_of(r['embroidery']), r['id']))
+    return len(rows)
+
+
+def migrate_handling_kind(c):
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(customer_products)')}
+    if 'handling_kind' not in cols:
+        c.execute('ALTER TABLE customer_products ADD COLUMN handling_kind TEXT')
+    sync_handling_kind(c)
+
+
+def _link_embroidery(raw_embroidery, raw_kind):
+    """画面から区分付きで来たら保存キーを合成。区分なし（取込など）は従来どおり。"""
+    emb = normalize_embroidery(optional(raw_embroidery, '加工', 80))
+    if raw_kind is None:
+        return emb
+    return handling_key(emb, text(raw_kind))
+
+
 def match_existing_spec(existing, value):
     """既存の仕様一覧から value に当たる保存値を返す（なければ value）。
 
@@ -1104,7 +1176,12 @@ def spec_key(value):
 def embroidery_label(value):
     """空（および未加工の別名）の加工仕様を表示名にする。保存キーそのものは変えない。"""
     t = normalize_embroidery(value)
-    return EMPTY_EMBROIDERY_LABEL if not t or t == PENDING_EMBROIDERY else text(value)
+    if not t or t == PENDING_EMBROIDERY:
+        return EMPTY_EMBROIDERY_LABEL
+    if handling_kind_of(t) == HANDLING_KIND_SALE:
+        # 区分が販売の取扱は「加工・販売」（加工なしは「加工なし・販売」）
+        return f'{handling_processing(t) or EMPTY_EMBROIDERY_LABEL}・{HANDLING_KIND_SALE}'
+    return text(value)
 
 
 def need(value, label, limit=80):
@@ -1281,7 +1358,7 @@ def _links(c, body):
         customer_id = raw.get('customerId')
         if not isinstance(customer_id, int) or not c.execute('SELECT id FROM customers WHERE id=?', (customer_id,)).fetchone():
             raise ValueError('取扱の顧客を、顧客台帳から選んでください。')
-        embroidery = normalize_embroidery(optional(raw.get('embroidery'), '仕様', 80))
+        embroidery = _link_embroidery(raw.get('embroidery'), raw.get('handlingKind'))
         process_ids = raw.get('processIds')
         if process_ids is not None:
             if not isinstance(process_ids, list):
@@ -1291,6 +1368,8 @@ def _links(c, body):
                 # 加工仕様の文字が空なら、選んだ加工サービス名を入れる（指示書・ピッキング等の表示用）
                 names = [c.execute('SELECT name FROM products WHERE id=?', (i,)).fetchone()['name'] for i in process_ids]
                 embroidery = normalize_embroidery('・'.join(names)[:80])
+                if raw.get('handlingKind') is not None:
+                    embroidery = handling_key(embroidery, text(raw.get('handlingKind')))
         key = (customer_id, spec_key(embroidery))
         if key in seen:
             raise ValueError('同じ顧客で、同じ仕様が重複しています。')
@@ -1472,6 +1551,7 @@ def save_product(c, body):
                          VALUES(?,?,?,?,?,?,?)''',
                       (link['customerId'], pid, link['embroidery'], link['isStandard'], link['active'], t, t))
         _replace_sub_suppliers(c, pid, sub_ids or [], t)
+    sync_handling_kind(c)
     _save_link_processes(c, pid, links)
     return product_row(c, pid)
 
@@ -1506,6 +1586,8 @@ def customer_product_payload(c, cp_id, *, already=False):
         'productId': row['product_id'],
         'embroidery': row['embroidery'] or '',
         'embroideryLabel': embroidery_label(row['embroidery']),
+        'processing': handling_processing(row['embroidery']),
+        'handlingKind': handling_kind_of(row['embroidery']),
         'isStandard': bool(row['is_standard']),
         'active': bool(row['active']),
         'already': bool(already),
@@ -1527,7 +1609,7 @@ def ensure_customer_product(c, body):
     """
     customer_id = _as_positive_id(body.get('customerId'), '顧客')
     product_id = _as_positive_id(body.get('productId'), '商品')
-    embroidery = normalize_embroidery(optional(body.get('embroidery'), '仕様', 80))
+    embroidery = _link_embroidery(body.get('embroidery'), body.get('handlingKind'))
     customer = c.execute('SELECT id,active FROM customers WHERE id=?', (customer_id,)).fetchone()
     if not customer:
         raise ValueError('顧客が未登録です。顧客台帳で登録してから取扱を作成してください。名前だけでは自動作成しません。')
@@ -1590,6 +1672,7 @@ def ensure_customer_product(c, body):
             )
         return customer_product_payload(c, row['id'], already=True)
     cp_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    sync_handling_kind(c)
     return customer_product_payload(c, cp_id, already=False)
 
 
@@ -2089,7 +2172,9 @@ def product_row(c, pid):
 
 def _product_link_dict(x, processes):
     return {'id': x['id'], 'customerId': x['customer_id'], 'customerName': x['customer_name'],
-            'embroidery': x['embroidery'], 'isStandard': bool(x['is_standard']), 'active': bool(x['active']),
+            'embroidery': x['embroidery'], 'processing': handling_processing(x['embroidery']),
+            'handlingKind': handling_kind_of(x['embroidery']),
+            'isStandard': bool(x['is_standard']), 'active': bool(x['active']),
             'processes': processes}
 
 

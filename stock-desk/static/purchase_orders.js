@@ -105,7 +105,7 @@ const PurchaseOrders={
         <p><strong>${esc(po.statusLabel)}</strong>　作成日時 ${esc(fmtAt(po.createdAt))}　作成者 ${esc(po.createdBy||po.ordererName||'')}　仕入先 ${esc(po.supplierName)}　対象顧客 ${esc(po.customerName)}
           ${po.needsResend?'　<span class="po-resend">紙の再送が必要</span>':''}</p>
         <p class="notice">印刷用紙の発注日・担当・FAX・発注者は手書き欄です（画面では入力しません）。</p>
-        <div class="tablewrap"><table><thead><tr><th>#</th><th>商品</th><th>仕様</th><th>サイズ</th><th>発注</th><th>入荷済</th><th>残</th><th>備考</th></tr></thead><tbody>
+        <div class="tablewrap"><table><thead><tr><th>#</th><th>商品</th><th>加工</th><th>サイズ</th><th>発注</th><th>入荷済</th><th>残</th><th>備考</th></tr></thead><tbody>
           ${(po.lines||[]).map(l=>`<tr>
             <td>${l.lineNo}</td>
             <td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}</td>
@@ -243,7 +243,7 @@ const PurchaseOrders={
           </div>
           <p class="notice">発注日・仕入先担当・FAX・発注者は印刷用紙に手書きします（ここでは入力しません）。作成日時・作成者・発注番号は保存時に自動記録します。</p>
           <h3>明細（1発注＝1仕入先＋1顧客）</h3>
-          <p class="notice">候補は「対象顧客の取扱」かつ「選択した仕入先が通常仕入先の商品」です。発注仕入先を変えても商品マスタの通常仕入先は変わりません。仕様は社内用で、メーカー依頼は明細備考へ。</p>
+          <p class="notice">候補は「対象顧客の取扱」かつ「選択した仕入先が通常仕入先の商品」です。発注仕入先を変えても商品マスタの通常仕入先は変わりません。加工は社内用で、メーカー依頼は明細備考へ。</p>
           <div class="bar">
             <input id="poProdQ" type="search" placeholder="品番・商品名・加工で候補検索" ${draft.customerId&&draft.supplierId?'':'disabled'}>
             <button type="button" id="poAddProd" ${draft.customerId&&draft.supplierId?'':'disabled'}>候補から追加</button>
