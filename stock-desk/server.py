@@ -75,7 +75,7 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
     if path == '/api/stock':
         try:
             with stock.connect(db_path) as c:
-                body = stock.stock_query(c, {k: v[0] for k, v in query.items()})
+                body = stock.slim_stock_view(stock.stock_query(c, {k: v[0] for k, v in query.items()}))
         except ValueError as e:
             return 400, {'error': str(e)}
         return 200, body

@@ -2011,25 +2011,24 @@ function stockList(){
   const grid=$('#stocklistgrid')
   if(!state.stock){body.innerHTML='';if(grid)grid.innerHTML='';return}
   if(f.group==='lot'){
-    body.innerHTML=`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>状態</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
+    // 表示中のモード（表／グリッド）だけ描画する。切替時は再描画される。
+    const showGrid=mode==='grid'
+    body.innerHTML=showGrid?'':`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>状態</th><th>場所</th><th>単価</th><th>数量</th><th>金額</th><th></th></tr></thead><tbody>
       ${state.stock.lots.map(l=>`<tr class="${stockRowClass(l)}"><td class="dm-primary">${esc(l.customerName)}</td><td>${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}<span class="sub dm-secondary">商品ID ${l.productId}</span></td><td>${esc(l.size)} / ${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td>${esc(l.locationLabel)}<span class="sub">${l.costPending?'原価未確定':(l.receivedUnknown?'入荷日不明・払出し順 '+l.payoutOrder:'入荷日 '+esc(l.receivedOn))}</span></td><td class="money">${l.costPending?'原価未確定':yen(l.unitCost)}</td><td class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}</td><td class="money">${stockAmountText(l)}</td><td>${stockActionButtonsHtml(l,{lotId:l.id})}</td></tr>`).join('')||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>`
-    if(grid)grid.innerHTML=state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
+    if(grid)grid.innerHTML=!showGrid?'':state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)} ${esc(l.productName)} ${esc(l.color)}（商品ID ${l.productId}）</div><div class="dm-meta"><span>${esc(l.size)} / ${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span></div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
     bindStockRowActions(document,state.stock.lots)
     if(grid)grid.hidden=mode!=='grid'
     if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('list'))
     return
   }
   const allRows=(state.stock.groups||[]).flatMap(g=>(g.rows||[]).map(r=>({...r,customerName:r.customerName||g.customerName,code:r.code||g.code,productName:r.productName||g.productName,color:r.color||g.color})))
-  if(f.group==='product'){
-    body.innerHTML=renderProductStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
-    if(grid)grid.innerHTML=renderProductStockGrid(state.stock.groups)
-  }else if(f.group==='customer'){
-    body.innerHTML=renderCustomerStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
-    if(grid)grid.innerHTML=renderCustomerStockGrid(state.stock.groups)
-  }else if(f.group==='location'){
-    body.innerHTML=renderLocationStockList(state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>'
-    if(grid)grid.innerHTML=renderLocationStockGrid(state.stock.groups)
+  // 表示中のモード（表／グリッド）だけ描画する。切替時は再描画される。
+  const showGrid=mode==='grid'
+  const renderers={product:[renderProductStockList,renderProductStockGrid],customer:[renderCustomerStockList,renderCustomerStockGrid],location:[renderLocationStockList,renderLocationStockGrid]}[f.group]
+  if(renderers){
+    body.innerHTML=showGrid?'':(renderers[0](state.stock.groups)||'<p class="dialogbody">在庫はありません。</p>')
+    if(grid)grid.innerHTML=showGrid?renderers[1](state.stock.groups):''
   }else{
     body.innerHTML='<p class="dialogbody">在庫はありません。</p>'
     if(grid)grid.innerHTML='<div class="dm-empty">在庫はありません。</div>'

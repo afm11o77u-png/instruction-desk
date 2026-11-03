@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS moves (
   note TEXT NOT NULL DEFAULT '',
   at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS moves_lot ON moves(lot_id);
 CREATE TABLE IF NOT EXISTS loans (
   id INTEGER PRIMARY KEY,
   stock_customer_id INTEGER NOT NULL REFERENCES customers(id),
@@ -686,6 +687,8 @@ def renumber_display_no(c, ordered_ids=None):
 
 
 def migrate_schema(c):
+    # 在庫一覧でロットごとの移動種別を引くため（既存DBにも追加。冪等）
+    c.execute('CREATE INDEX IF NOT EXISTS moves_lot ON moves(lot_id)')
     c.execute('''CREATE TABLE IF NOT EXISTS move_batches (
       id INTEGER PRIMARY KEY,
       client_token TEXT NOT NULL UNIQUE,
@@ -2356,6 +2359,27 @@ def stock_query(c, args):
             'hasShortage': any(x['qty'] < 0 for x in lots),
             'stockFilter': stock_filter if stock_filter in ('shortage', 'negative', '不足', 'マイナス') else '',
             'amountLabel': '仕入原価ベースの在庫金額（原価未確定分を除く）'}
+
+
+GROUPED_STOCK_VIEWS = ('product', 'customer', 'location')
+
+
+def slim_stock_view(body):
+    """/api/stock 応答の軽量化（画面表示は同じ）。
+
+    - 顧客別・商品別・場所別では画面が groups だけを使うので、平坦な lots を送らない。
+    - 単価が1つで入荷も1件の行は「単価の内訳」を出さないので receipts を省く。
+    """
+    if body.get('group') not in GROUPED_STOCK_VIEWS:
+        return body
+    out = dict(body)
+    out.pop('lots', None)
+    for g in out.get('groups') or []:
+        for r in g.get('rows') or []:
+            prices = r.get('prices') or []
+            if len(prices) == 1 and len(prices[0].get('receipts') or []) <= 1:
+                prices[0] = {k: v for k, v in prices[0].items() if k != 'receipts'}
+    return out
 
 
 def product_size_orders(c, product_ids):
