@@ -844,7 +844,7 @@ function products(){
       const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
       const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
       const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
-      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id" title="内部ID ${r.id}">${esc(r.displayNo||String(r.id))}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':stockOpenBtn(r.id)}</td></tr>`
+      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id" title="内部ID ${r.id}">${esc(r.displayNo||String(r.id))}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':`${stockOpenBtn(r.id)}<button type="button" class="quiet prod-price" data-price-id="${r.id}">単価</button>`}</td></tr>`
     }).join('')||'<tr><td colspan="6">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
@@ -853,6 +853,12 @@ function products(){
     return `<article class="dm-card"><div class="dm-primary">${esc(productCodeShow(r))} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}${codeNeedsBadge(r)}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
   }).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows.filter(r=>!r.mergedIntoId),'商品',productForm,body=>api('/api/products',body),'products')
+  document.querySelectorAll('#main [data-price-id]').forEach(b=>{
+    b.onclick=()=>{
+      const p=rows.find(r=>r.id===Number(b.dataset.priceId))
+      if(p&&typeof CurrentPrice!=='undefined')CurrentPrice.openProductView(p)
+    }
+  })
   const supplierSelect=$('#productSupplier')
   if(supplierSelect)supplierSelect.onchange=()=>{
     state.productSupplierId=supplierSelect.value

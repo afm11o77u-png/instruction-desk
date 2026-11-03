@@ -128,5 +128,18 @@ const CurrentPrice=(()=>{
     el.addEventListener('keydown',e=>{if(e.key==='Enter'&&e.target.tagName==='INPUT')e.preventDefault()})
     paint()
   }
-  return {openInit,openReview,openRules,mountProduct}
+  // 商品一覧の「単価」：現単価と特値の確認のみ（編集は商品フォームで）
+  async function openProductView(product){
+    const d=show(`${product.code||''} ${product.name||''}`.trim()+' の単価','<p class="excelhint">読み込み中…</p>')
+    const body=d.querySelector('.dialogbody')
+    let r
+    try{r=await api('/api/prices/product?productId='+product.id)}catch(e){body.innerHTML=`<p class="cp-error">${esc(e.message)}</p>`;return}
+    if(!d.open)return
+    const st=b=>b.status==='unset'?'<span class="badge stop">未設定</span>':b.status==='review'?`<span class="badge warn">要確認</span>${b.reason?` <span class="sub">${esc(b.reason)}</span>`:''}`:''
+    const base=r.base.map(b=>`<tr><td>${esc(b.supplierName||'未設定')}</td><td>${esc(b.size)}</td><td class="money">${b.status==='unset'?'—':yenv(b.price)}</td><td>${st(b)}</td></tr>`).join('')
+    const sp=r.specials.map(s=>`<tr><td>${esc(s.customerName)}</td><td>${esc(s.supplierName||'未設定')}</td><td>${esc(s.size||'全サイズ')}</td><td class="money">${yenv(s.price)}</td></tr>`).join('')
+    body.innerHTML=`<h3>現単価</h3>${base?`<div class="tablewrap"><table><thead><tr><th>仕入先</th><th>サイズ</th><th>現単価</th><th>状態</th></tr></thead><tbody>${base}</tbody></table></div>`:'<p>なし</p>'}
+      <h3>特値</h3>${sp?`<div class="tablewrap"><table><thead><tr><th>顧客</th><th>仕入先</th><th>サイズ</th><th>単価</th></tr></thead><tbody>${sp}</tbody></table></div>`:'<p>なし</p>'}`
+  }
+  return {openInit,openReview,openRules,mountProduct,openProductView}
 })()

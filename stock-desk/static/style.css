@@ -132,12 +132,12 @@ table.products-list .prod-name{width:26%}
 table.products-list .prod-cat{width:10%;font-size:12px;white-space:normal}
 table.products-list .prod-handles{width:30%}
 table.products-list .prod-sizes{width:18%;min-width:6.5rem}
-table.products-list .prod-act{width:4.75rem;min-width:4.75rem;white-space:nowrap;text-align:right}
+table.products-list .prod-act{width:6.75rem;min-width:6.75rem;white-space:nowrap;text-align:right}
 table.products-list th:nth-child(2),table.products-list td.prod-cat{width:10%}
 table.products-list th:nth-child(3),table.products-list td.prod-name{width:26%}
 table.products-list th:nth-child(4),table.products-list td.prod-handles{width:30%}
 table.products-list th:nth-child(5),table.products-list td.prod-sizes{width:18%}
-table.products-list th:nth-child(6),table.products-list td.prod-act{width:4.75rem}
+table.products-list th:nth-child(6),table.products-list td.prod-act{width:6.75rem}
 .check,.inactive-toggle{display:inline-flex;flex-direction:row;align-items:center;font-weight:700;gap:6px;white-space:nowrap;flex-shrink:0;line-height:1}
 .check input,.inactive-toggle input{width:auto;min-width:0;min-height:0;flex-shrink:0;margin:0;padding:0}
 .bar .check,.bar .inactive-toggle{align-self:flex-end}
@@ -1151,3 +1151,6 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .current-price-box input[data-k="price"]{width:7em;text-align:right}
 
 .app-version{margin-left:auto;font-size:12px;color:#6b7d72}
+
+table.products-list .prod-price{margin-left:4px;padding-left:8px;padding-right:8px}
+.badge.warn{background:#f6e3b8;color:#6b4a00}

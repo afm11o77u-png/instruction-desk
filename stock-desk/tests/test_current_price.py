@@ -308,6 +308,21 @@ class UiWiringTest(unittest.TestCase):
             self.assertNotIn(i, opening)
             self.assertEqual(app.count(f'id="{i}"'), 1)
 
+    def test_product_list_price_view(self):
+        app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
+        js = (ROOT / 'static' / 'current_price.js').read_text(encoding='utf-8')
+        self.assertIn('data-price-id="${r.id}">単価</button>', app)
+        self.assertIn('CurrentPrice.openProductView(p)', app)
+        view = js[js.index('async function openProductView'):js.index('return {openInit')]
+        self.assertIn("api('/api/prices/product?productId='+product.id)", view)
+        for s in ('未設定', '要確認', '全サイズ', 'なし', '<th>仕入先</th><th>サイズ</th><th>現単価</th><th>状態</th>',
+                  '<th>顧客</th><th>仕入先</th><th>サイズ</th><th>単価</th>'):
+            self.assertIn(s, view)
+        # 読み取り専用：入力欄も保存呼び出しもない
+        for s in ('<input', '<select', "api('/api/prices/base'", "api('/api/prices/special'"):
+            self.assertNotIn(s, view)
+        self.assertIn('openProductView}', js)
+
 
 if __name__ == '__main__':
     unittest.main()
