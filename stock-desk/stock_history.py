@@ -102,7 +102,13 @@ def _serialize_event(c, r, batch_counts):
     amount_before = None if qty_before is None or cost_before is None else qty_before * cost_before
     amount_after = None if qty_after is None or cost_after is None else qty_after * cost_after
     actor = r['actor_name'] if 'actor_name' in r.keys() else ''
+    keys = r.keys()
+    pending = stock.move_cost_pending(
+        r['kind'], r['lot_cost_pending'] if 'lot_cost_pending' in keys else 0,
+        r['price_source'] if 'price_source' in keys else None,
+    )
     return {
+        'costPending': pending,
         'id': r['id'],
         'lotId': r['lot_id'],
         'kind': r['kind'],
@@ -116,7 +122,7 @@ def _serialize_event(c, r, batch_counts):
         'qtyDelta': r['qty_delta'],
         'qtyBefore': qty_before,
         'qtyAfter': qty_after,
-        'unitCost': r['unit_cost'],
+        'unitCost': None if pending else r['unit_cost'],
         'costBefore': cost_before,
         'costAfter': cost_after,
         'amountBefore': amount_before,
@@ -187,7 +193,7 @@ def list_history(c, args):
 
     sql = '''SELECT m.*, l.customer_product_id, l.size_label, l.location_id, l.unit_cost AS lot_unit_cost,
                     l.basis_date, l.received_on AS lot_received_on, l.received_unknown,
-                    l.qty_remaining AS lot_qty_remaining, l.condition,
+                    l.qty_remaining AS lot_qty_remaining, l.condition, COALESCE(l.cost_pending,0) AS lot_cost_pending,
                     cp.customer_id, cp.product_id, cp.embroidery,
                     cu.name AS customer_name, cu.active AS customer_active,
                     p.code, p.name AS product_name, p.color, p.active AS product_active,

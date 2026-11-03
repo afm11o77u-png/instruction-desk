@@ -406,7 +406,7 @@ class PurchaseOrdersTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
-    def test_cancel_keeps_received_stock(self):
+    def test_cancel_rejected_after_receipt(self):
         folder, path, c = newdb()
         try:
             fx = seed(c)
@@ -426,15 +426,15 @@ class PurchaseOrdersTest(unittest.TestCase):
                 'items': [{'lineId': po['lines'][0]['id'], 'qty': 2, 'unitCost': 700}],
                 '_canWrite': True,
             })
-            cancelled = stock_orders.cancel_purchase_order(c, {'id': po['id'], '_canWrite': True})
+            with self.assertRaisesRegex(ValueError, '入荷済みの数量がある発注書は取消できません'):
+                stock_orders.cancel_purchase_order(c, {'id': po['id'], '_canWrite': True})
             c.commit()
-            self.assertEqual(cancelled['status'], 'cancelled')
+            self.assertEqual(stock_orders.get_purchase_order(c, po['id'])['status'], 'partial')
             qty = c.execute(
                 'SELECT COALESCE(SUM(qty_remaining),0) AS q FROM lots WHERE customer_product_id=? AND size_label=?',
                 (fx['h2'], 'M'),
             ).fetchone()['q']
             self.assertEqual(qty, 2)
-            self.assertTrue(any(e['kind'] == 'cancelled' for e in cancelled['events']))
         finally:
             c.close()
             folder.cleanup()

@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   remarks TEXT NOT NULL DEFAULT '',
   client_token TEXT NOT NULL UNIQUE,
   needs_resend INTEGER NOT NULL DEFAULT 0,
+  printed_at TEXT,
+  print_count INTEGER NOT NULL DEFAULT 0,
+  needs_reprint INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -109,6 +112,13 @@ CREATE INDEX IF NOT EXISTS po_receipt_line_idx ON purchase_order_receipts(purcha
 """
 
 
+PRINT_COLUMNS = (
+    ('printed_at', 'TEXT'),
+    ('print_count', 'INTEGER NOT NULL DEFAULT 0'),
+    ('needs_reprint', 'INTEGER NOT NULL DEFAULT 0'),
+)
+
+
 def migrate_purchase_orders(c):
     """Additive migration for PO tables + optional supplier.fax."""
     c.executescript(PO_SCHEMA)
@@ -119,6 +129,10 @@ def migrate_purchase_orders(c):
     if 'cost_pending' not in rcols:
         # cost_pending=1: 単価未設定で納品確定（unit_cost=0 は確定単価ではない）
         c.execute('ALTER TABLE purchase_order_receipts ADD COLUMN cost_pending INTEGER NOT NULL DEFAULT 0')
+    pcols = {r['name'] for r in c.execute('PRAGMA table_info(purchase_orders)')}
+    for name, ddl in PRINT_COLUMNS:
+        if name not in pcols:
+            c.execute(f'ALTER TABLE purchase_orders ADD COLUMN {name} {ddl}')
 
 
 def needs_purchase_order_migration(c):
@@ -129,7 +143,10 @@ def needs_purchase_order_migration(c):
     if 'fax' not in cols:
         return True
     rcols = {r['name'] for r in c.execute('PRAGMA table_info(purchase_order_receipts)')}
-    return 'cost_pending' not in rcols
+    if 'cost_pending' not in rcols:
+        return True
+    pcols = {r['name'] for r in c.execute('PRAGMA table_info(purchase_orders)')}
+    return any(name not in pcols for name, _ in PRINT_COLUMNS)
 
 
 def status_label(code):
@@ -441,7 +458,10 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
         'createdBy': po['orderer_name'],
         'ordererUserId': po['orderer_user_id'],
         'remarks': po['remarks'],
-        'needsResend': bool(po['needs_resend']),
+        'needsResend': bool(po['needs_resend']) and po['status'] != STATUS_CANCELLED,
+        'printedAt': po['printed_at'],
+        'printCount': po['print_count'],
+        'needsReprint': bool(po['needs_reprint']) and po['status'] != STATUS_CANCELLED,
         'createdAt': po['created_at'],
         'updatedAt': po['updated_at'],
         'lines': lines,
@@ -513,7 +533,9 @@ def list_purchase_orders(c, args=None):
             'createdBy': r['orderer_name'],
             'status': r['status'],
             'statusLabel': status_label(r['status']),
-            'needsResend': bool(r['needs_resend']),
+            'needsResend': bool(r['needs_resend']) and r['status'] != STATUS_CANCELLED,
+            'printedAt': r['printed_at'],
+            'needsReprint': bool(r['needs_reprint']) and r['status'] != STATUS_CANCELLED,
         }
         if q:
             hay = ' '.join([
@@ -658,6 +680,7 @@ def save_purchase_order(c, body):
              customer_name=?, customer_address=?,
              remarks=?,
              needs_resend=CASE WHEN ?=1 THEN 1 ELSE needs_resend END,
+             needs_reprint=CASE WHEN printed_at IS NOT NULL THEN 1 ELSE needs_reprint END,
              updated_at=?
            WHERE id=?''',
         (
@@ -775,6 +798,25 @@ def mark_ordered(c, body):
     return {**_po_dict(c, po_id, include_events=True), 'already': False}
 
 
+def mark_printed(c, body):
+    """印刷ボタンを押した記録（最終印刷日時・回数）。再印刷が必要フラグを消す。"""
+    stock._require_write(body)
+    po_id = body.get('id')
+    if not isinstance(po_id, int):
+        raise ValueError('発注書を選んでください。')
+    po = c.execute('SELECT id FROM purchase_orders WHERE id=?', (po_id,)).fetchone()
+    if not po:
+        raise ValueError('発注書が見つかりません。')
+    t = stock.stamp()
+    c.execute(
+        '''UPDATE purchase_orders SET printed_at=?, print_count=print_count+1, needs_reprint=0
+           WHERE id=?''',
+        (t, po_id),
+    )
+    _add_event(c, po_id, 'printed', stock._actor_name(body), '印刷')
+    return _po_dict(c, po_id, include_events=True)
+
+
 def cancel_purchase_order(c, body):
     stock._require_write(body)
     po_id = body.get('id')
@@ -785,7 +827,11 @@ def cancel_purchase_order(c, body):
         raise ValueError('発注書が見つかりません。')
     if po['status'] == STATUS_CANCELLED:
         return {**_po_dict(c, po_id, include_events=True), 'already': True}
-    # Do NOT reverse received stock
+    received = c.execute(
+        'SELECT COALESCE(SUM(qty),0) n FROM purchase_order_receipts WHERE purchase_order_id=?', (po_id,)
+    ).fetchone()['n']
+    if received > 0 or po['status'] in (STATUS_PARTIAL, STATUS_COMPLETE):
+        raise ValueError('入荷済みの数量がある発注書は取消できません。')
     actor = stock._actor_name(body)
     t = stock.stamp()
     c.execute(
@@ -828,6 +874,8 @@ def receive_purchase_order(c, body):
 
     actor = stock._actor_name(body)
     received_on = stock.parse_date(body.get('receivedOn') or date.today().isoformat(), '入荷日')
+    if received_on > date.today().isoformat():
+        raise ValueError('入荷日に未来の日付は指定できません。')
     results = []
     for i, item in enumerate(items):
         if not isinstance(item, dict):
