@@ -100,7 +100,11 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
                     lot_limit = int(args.pop('limit')) if 'limit' in args else None
                 except ValueError:
                     lot_limit = None
-                body = stock.slim_stock_view(stock.stock_query(c, args), lot_limit=lot_limit)
+                if (args.get('group') or 'lot') == 'lot':
+                    # 在庫明細: 合計は SQL 集計、行は表示する件数だけ組み立てる
+                    body = stock.stock_lot_page(c, args, lot_limit=lot_limit)
+                else:
+                    body = stock.slim_stock_view(stock.stock_query(c, args), lot_limit=lot_limit)
         except ValueError as e:
             return 400, {'error': str(e)}
         return 200, body

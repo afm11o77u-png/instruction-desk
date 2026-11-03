@@ -2300,8 +2300,7 @@ def opening_entries(c):
     return {'entries': rows}
 
 
-def stock_query(c, args):
-    sql = '''SELECT l.*, cp.id AS customer_product_id, cp.customer_id, cp.product_id, cp.embroidery,
+_STOCK_LOT_SELECT = '''SELECT l.*, cp.id AS customer_product_id, cp.customer_id, cp.product_id, cp.embroidery,
                     cp.is_standard, cp.active AS handle_active,
                     cu.name AS customer_name, cu.active AS customer_active, cu.office_code AS office_code,
                     p.code, p.name AS product_name, p.color, p.active AS product_active, p.supplier_id,
@@ -2317,6 +2316,11 @@ def stock_query(c, args):
              JOIN locations loc ON loc.id=l.location_id
              LEFT JOIN locations parent ON parent.id=loc.parent_id
              WHERE 1=1'''
+
+
+def _stock_lot_filters(args):
+    """在庫一覧の絞り込み（stock_query と stock_lot_page で共通）。"""
+    sql = ''
     params = []
     cond_sql, cond_params = condition_filter_sql(args)
     sql += cond_sql
@@ -2343,6 +2347,13 @@ def stock_query(c, args):
     stock_filter = (args.get('stockFilter') or args.get('qtyFilter') or '').strip()
     if stock_filter in ('shortage', 'negative', '不足', 'マイナス'):
         sql += ' AND l.qty_remaining<0'
+    return sql, params, stock_filter
+
+
+def stock_query(c, args):
+    sql = _STOCK_LOT_SELECT
+    where, params, stock_filter = _stock_lot_filters(args)
+    sql += where
     sql += ' ORDER BY customer_sort_key(cu.name), cu.name, p.code, p.id, cp.embroidery, l.size_label, l.condition, l.id'
     lots = []
     for r in c.execute(sql, params):
@@ -2394,6 +2405,110 @@ def stock_query(c, args):
             'hasShortage': any(x['qty'] < 0 for x in lots),
             'stockFilter': stock_filter if stock_filter in ('shortage', 'negative', '不足', 'マイナス') else '',
             'amountLabel': '仕入原価ベースの在庫金額（原価未確定分を除く）'}
+
+
+SHORTAGE_FILTERS = ('shortage', 'negative', '不足', 'マイナス')
+
+
+def _customer_rank_table(c):
+    """顧客の並び順（customer_sort_key, 名前）を一時表に入れる。SQL の ORDER BY と同じ順序。"""
+    c.execute('CREATE TEMP TABLE IF NOT EXISTS stock_customer_rank(customer_id INTEGER PRIMARY KEY, rk INTEGER NOT NULL)')
+    c.execute('DELETE FROM temp.stock_customer_rank')
+    rows = c.execute('SELECT id, name FROM customers').fetchall()
+    keys = sorted({(customer_sort_key(r['name']), r['name'] is not None, r['name'] or '') for r in rows})
+    rank = {k: i for i, k in enumerate(keys)}
+    c.executemany(
+        'INSERT INTO temp.stock_customer_rank(customer_id, rk) VALUES(?,?)',
+        [(r['id'], rank[(customer_sort_key(r['name']), r['name'] is not None, r['name'] or '')]) for r in rows],
+    )
+
+
+def _lot_move_kinds(c, lot_ids):
+    kinds = {i: set() for i in lot_ids}
+    ids = list(lot_ids)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = f"SELECT DISTINCT lot_id, kind FROM moves WHERE lot_id IN ({','.join('?' * len(chunk))})"
+        for m in c.execute(q, chunk):
+            kinds[m['lot_id']].add(m['kind'])
+    return kinds
+
+
+def stock_lot_page(c, args, lot_limit=None):
+    """在庫明細（group=lot）の高速版。slim_stock_view(stock_query(...), lot_limit) と同じ結果を返す。
+
+    合計は SQL で集計し、表示する先頭 lot_limit 件だけを取り出して行を組み立てる。
+    """
+    where, params, stock_filter = _stock_lot_filters(args)
+    base = """FROM lots l
+             JOIN customer_products cp ON cp.id=l.customer_product_id
+             JOIN customers cu ON cu.id=cp.customer_id
+             JOIN products p ON p.id=cp.product_id
+             JOIN locations loc ON loc.id=l.location_id
+             WHERE 1=1""" + where
+    t = c.execute(
+        f"""SELECT COUNT(*) AS n,
+                   COALESCE(SUM(l.qty_remaining),0) AS qty,
+                   COALESCE(SUM(CASE WHEN l.condition=? THEN l.qty_remaining END),0) AS qty_new,
+                   COALESCE(SUM(CASE WHEN l.condition=? THEN l.qty_remaining END),0) AS qty_used,
+                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)=0 AND l.unit_cost IS NOT NULL
+                                     THEN l.qty_remaining*l.unit_cost END),0) AS amount,
+                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)<>0 AND l.qty_remaining<0
+                                     THEN l.qty_remaining END),0) AS pending_qty,
+                   COALESCE(MAX(l.qty_remaining<0),0) AS has_shortage
+            {base}""",
+        [CONDITION_NEW, CONDITION_USED] + params,
+    ).fetchone()
+    _customer_rank_table(c)
+    sql = (_STOCK_LOT_SELECT.replace('WHERE 1=1', 'JOIN temp.stock_customer_rank cr ON cr.customer_id=cu.id\n             WHERE 1=1')
+           + where
+           + ' ORDER BY cr.rk, p.code, p.id, cp.embroidery, l.size_label, l.condition, l.id')
+    page_params = list(params)
+    if lot_limit is not None and lot_limit >= 0:
+        sql += ' LIMIT ?'
+        page_params.append(lot_limit)
+    rows = c.execute(sql, page_params).fetchall()
+    kinds = _lot_move_kinds(c, [r['id'] for r in rows])
+    lots = [_stock_lot_row(r, kinds[r['id']]) for r in rows]
+    return {'lots': lots, 'groups': [], 'group': 'lot',
+            'totalQty': t['qty'], 'totalQtyNew': t['qty_new'], 'totalQtyUsed': t['qty_used'],
+            'totalAmount': t['amount'],
+            'costPendingQty': abs(t['pending_qty']),
+            'hasShortage': bool(t['has_shortage']),
+            'stockFilter': stock_filter if stock_filter in SHORTAGE_FILTERS else '',
+            'amountLabel': '仕入原価ベースの在庫金額（原価未確定分を除く）',
+            'lotCount': t['n']}
+
+
+def _stock_lot_row(r, kinds):
+    """在庫明細1行（場所名は JOIN の親拠点名を使い、追加の問い合わせをしない）。"""
+    unconsumed = r['qty_remaining'] == r['qty_received']
+    site_only = r['parent_id'] is None
+    cost_pending = bool(r['cost_pending_flag'])
+    qty = r['qty_remaining']
+    location_label_text = r['location_name'] if site_only else f"{r['site_name']}／{r['location_name']}"
+    return {
+        'id': r['id'], 'customerProductId': r['customer_product_id'],
+        'customerId': r['customer_id'], 'customerName': r['customer_name'], 'officeCode': r['office_code'] or '',
+        'customerActive': bool(r['customer_active']), 'productId': r['product_id'], 'code': r['code'],
+        'productName': r['product_name'], 'color': r['color'], 'supplierName': r['supplier_name'] or '',
+        'embroidery': r['embroidery'], 'embroideryLabel': embroidery_label(r['embroidery']),
+        'isStandard': bool(r['is_standard']), 'size': r['size_label'], 'locationId': r['location_id'],
+        'locationLabel': location_label_text,
+        'siteId': r['site_id'], 'siteName': r['site_name'],
+        'shelfLabel': SITE_STOCK_SHELF_LABEL if site_only else r['location_name'],
+        'unitCost': None if cost_pending else r['unit_cost'],
+        'qty': qty,
+        'amount': lot_confirmed_amount(qty, r['unit_cost'], cost_pending),
+        'costPending': cost_pending,
+        'isShortage': qty < 0,
+        'basisDate': r['basis_date'],
+        'receivedOn': r['received_on'], 'receivedUnknown': bool(r['received_unknown']),
+        'payoutOrder': r['payout_order'], 'condition': r['condition'],
+        'conditionLabel': condition_label(r['condition']),
+        'correctable': kinds <= {'opening', 'opening_correction'} and unconsumed,
+        'inboundCorrectable': kinds <= {'inbound', 'inbound_correction'} and unconsumed,
+    }
 
 
 GROUPED_STOCK_VIEWS = ('product', 'customer', 'location')
