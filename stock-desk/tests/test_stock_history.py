@@ -399,7 +399,8 @@ class StockHistoryUiSourceTest(unittest.TestCase):
         self.assertIn('stockActionButtonsHtml', lot_table)
         self.assertIn('data-stock-in', APP_JS)
         self.assertIn('data-stock-out', APP_JS)
-        self.assertIn('data-stock-take', APP_JS)
+        self.assertIn('data-stock-order', APP_JS)
+        self.assertNotIn('data-stock-take', APP_JS)
         self.assertIn("history:'在庫履歴'", APP_JS)
 
     def test_history_filters_are_two_top_packed_rows(self):
