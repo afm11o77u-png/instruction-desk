@@ -835,7 +835,7 @@ function products(){
     const text=`${r.displayNo||''}${r.code}${r.codeDisplay||''}${r.makerCode||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
     return text.includes(state.q)
   }),sortKey)
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの仕様は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
     <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
     <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>（「表示」の左）から行います。</p>
@@ -1174,15 +1174,17 @@ function bindProductEditor(row){
       return `<div class="linkrow" data-link-i="${i}">
       ${searchPickerMarkup({label:'顧客',inputId:`linkCustomerQ${i}`,listId:`linkCustomerList${i}`,clearId:`linkCustomerClear${i}`,hintId:`linkCustomerHint${i}`,placeholder:'顧客名またはカナで検索',value:display})}
       <label>加工サービス<select data-k="processIds" data-i="${i}" multiple size="3">${processServiceOptions(l)}</select></label>
-      <label>仕様<input data-i="${i}" data-k="embroidery" value="${esc(l.embroidery)}" placeholder="空欄は加工なし"></label>
-      <label class="check"><input data-i="${i}" data-k="isStandard" type="checkbox" ${l.isStandard?'checked':''}>標準仕様</label>
+      <label>加工<input data-i="${i}" data-k="embroidery" value="${esc(l.processing??l.embroidery)}" placeholder="空欄は加工なし"></label>
+      <label>区分<select data-k="handlingKind" data-i="${i}"><option${l.handlingKind==='販売'?'':' selected'}>レンタル</option><option${l.handlingKind==='販売'?' selected':''}>販売</option></select></label>
+      <label class="check"><input data-i="${i}" data-k="isStandard" type="checkbox" ${l.isStandard?'checked':''}>標準加工</label>
       <label class="check"><input data-i="${i}" data-k="active" type="checkbox" ${l.active!==false?'checked':''}>使用中</label>
       <button type="button" data-remove="${i}">外す</button></div>`
     }).join('')||'<p>まだ顧客に結び付いていません。</p>'
     $('#links').querySelectorAll('[data-k]').forEach(el=>el.onchange=()=>{
       const link=editor.links[Number(el.dataset.i)]
       touchEditDirty()
-      if(el.dataset.k==='embroidery')link.embroidery=el.value.trim()
+      if(el.dataset.k==='embroidery')link.processing=link.embroidery=el.value.trim()
+      if(el.dataset.k==='handlingKind')link.handlingKind=el.value
       if(el.dataset.k==='processIds')link.processIds=[...el.selectedOptions].map(o=>Number(o.value))
       if(el.dataset.k==='isStandard'){link.isStandard=el.checked;if(el.checked)editor.links.forEach(x=>{if(x!==link&&x.customerId===link.customerId)x.isStandard=false});draw()}
       if(el.dataset.k==='active')link.active=el.checked
@@ -1291,7 +1293,7 @@ function readForm(row){
     if(!Number.isFinite(cid)||cid<=0||!resolveProductLinkCustomer(state.data.customers,cid)){
       throw new Error('取扱の顧客を候補から選んでください。入力した文字だけでは保存できません。')
     }
-    return {customerId:cid,embroidery:(l.embroidery||'').trim(),isStandard:!!l.isStandard,active:l.active!==false,processIds:linkProcessIds(l)}
+    return {customerId:cid,embroidery:String(l.processing??l.embroidery??'').trim(),handlingKind:l.handlingKind||'レンタル',isStandard:!!l.isStandard,active:l.active!==false,processIds:linkProcessIds(l)}
   })
   const categoryEl=$('#category')
   const makerEl=$('#makerCode')
@@ -1461,7 +1463,7 @@ function opening(){
     </div>
     ${excelExportNotice()}
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}
-    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>仕様</th><th>サイズ</th><th>状態</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
+    <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>加工</th><th>サイズ</th><th>状態</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
       ${entries.map(e=>`<tr>
         <td class="dm-primary">${esc(e.customerName)}</td>
         <td>${esc(e.code)} ${esc(e.productName)} ${esc(e.color)}<span class="sub dm-secondary">商品ID ${e.productId}</span></td>
@@ -1552,11 +1554,12 @@ function mountOpeningHandleCreateForm(dlg){
   const productQuery=product?productPickerLabel(product):(draft.productQuery||'')
   dlg.innerHTML=`<div class="dialoghead"><h2>取扱を新しく登録</h2><button type="button" id="closeHandleCreate" class="quiet">キャンセル</button></div>
     <div class="dialogbody">
-      <p class="provisional">顧客と商品は台帳から選びます。未登録の名前では自動作成しません。保存するのは顧客・商品・仕様の紐づけだけで、在庫の枚数は増えません。</p>
+      <p class="provisional">顧客と商品は台帳から選びます。未登録の名前では自動作成しません。保存するのは顧客・商品・加工の紐づけだけで、在庫の枚数は増えません。</p>
       <div class="grid">
         ${searchPickerMarkup({label:'顧客',inputId:'handleCustomerQuery',listId:'handleCustomerOptions',clearId:'handleCustomerClear',hintId:'handleCustomerHint',placeholder:'顧客名またはカナで検索',value:customerQuery})}
         ${searchPickerMarkup({label:'商品',inputId:'handleProductQuery',listId:'handleProductOptions',clearId:'handleProductClear',hintId:'handleProductHint',placeholder:'品番・商品名・色・仕入先で検索',value:productQuery})}
-        <label>仕様<input id="handleEmbroidery" maxlength="80" placeholder="空欄は加工なし" value="${esc(draft.embroidery||'')}"></label>
+        <label>加工<input id="handleEmbroidery" maxlength="80" placeholder="空欄は加工なし" value="${esc(draft.embroidery||'')}"></label>
+        <label>区分<select id="handleKind"><option${draft.handlingKind==='販売'?'':' selected'}>レンタル</option><option${draft.handlingKind==='販売'?' selected':''}>販売</option></select></label>
       </div>
       <p class="sub">顧客・商品が一覧に無いときは、先にそれぞれの台帳で登録してください。</p>
       <p id="error"></p>
@@ -1640,6 +1643,7 @@ function mountOpeningHandleCreateForm(dlg){
     }
   })
   $('#handleEmbroidery',root).oninput=e=>{draft.embroidery=e.target.value}
+  $('#handleKind',root).onchange=e=>{draft.handlingKind=e.target.value}
   const cancel=()=>cancelOpeningHandleCreate()
   $('#closeHandleCreate',root).onclick=cancel
   $('#cancelHandleCreate',root).onclick=cancel
@@ -1657,7 +1661,8 @@ function mountOpeningHandleCreateForm(dlg){
       const result=await api('/api/customer-products',{
         customerId:Number(c.id),
         productId:Number(p.id),
-        embroidery:String(draft.embroidery||'').trim()
+        embroidery:String(draft.embroidery||'').trim(),
+        handlingKind:draft.handlingKind||'レンタル'
       })
       state.data=await api('/api/bootstrap')
       const handles=openingHandlesFromData(state.data)
@@ -1716,7 +1721,7 @@ function mountOpeningRegisterForm(){
     <div class="dialogbody">
     ${openingHints}${inboundHints}
     <div class="opening-handle-block">
-      ${searchPickerMarkup({label:'取扱',inputId:'handleQuery',listId:'handleOptions',clearId:'handleClear',hintId:'handleHint',placeholder:'顧客名・品番・商品名・仕様で検索',value:handleQuery})}
+      ${searchPickerMarkup({label:'取扱',inputId:'handleQuery',listId:'handleOptions',clearId:'handleClear',hintId:'handleHint',placeholder:'顧客名・品番・商品名・加工で検索',value:handleQuery})}
       <div class="opening-handle-tools">
         <button type="button" class="quiet" id="openHandleCreate">取扱を新しく登録</button>
         <p class="opening-handle-empty-guide" id="handleEmptyGuide">候補が無いときは「取扱を新しく登録」から、登録済みの顧客と商品を選んで追加できます。顧客・商品そのものは各台帳で先に登録してください。</p>
@@ -1742,7 +1747,7 @@ function mountOpeningRegisterForm(){
     $('#sizerows',root).querySelectorAll('input').forEach(el=>el.oninput=()=>{rows[Number(el.dataset.i)][el.dataset.k]=el.value;touchOpeningDirty()})
     $('#sizerows',root).querySelectorAll('[data-addprice]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.addprice);rows.splice(i+1,0,{size:rows[i].size,qty:'',unitCost:''});state.opening.lines.rows=rows;touchOpeningDirty();drawSizes()})
     const standard=$('#standardNote',root)
-    standard.textContent=selected&&selected.isStandard&&peers.length===1?'この顧客はこの仕様だけを使う標準仕様です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'加工ありとなしを併用する顧客では、仕様ごとに在庫を分けています。':' '
+    standard.textContent=selected&&selected.isStandard&&peers.length===1?'この顧客はこの加工だけを使う標準加工です。入出荷では、毎回選び直さなくてよい形で登録されています。':selected?'加工ありとなしを併用する顧客では、加工ごとに在庫を分けています。':' '
   }
   const syncUnknown=()=>{
     if(inbound)return
@@ -2069,7 +2074,7 @@ function stockList(){
       <label>顧客<select id="fCustomer"><option value="">すべて</option>${customersBySortKey(data.customers).map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
       <label>商品<select id="fProduct"><option value="">すべて</option>${data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
-      <label>仕様<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
+      <label>加工<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
       <label>状態${conditionSelectHtml('fCondition',f.condition||'',{allowAll:true})}</label>
       <label>在庫<select id="fStockFilter"><option value="" ${!f.stockFilter?'selected':''}>すべて</option><option value="shortage" ${f.stockFilter==='shortage'?'selected':''}>在庫不足（マイナス）のみ</option></select></label>
@@ -2091,7 +2096,7 @@ function stockList(){
   if(f.group==='lot'){
     // 表示中のモード（表／グリッド）だけ描画する。切替時は再描画される。
     const showGrid=mode==='grid'
-    body.innerHTML=showGrid?'':`<div class="tablewrap"><table class="stock-fixed-table stock-lot-table">${stockColgroup('lot')}<thead><tr><th class="office-code">営業所</th><th>顧客</th><th>商品</th><th>サイズ</th><th>仕様</th><th>状態</th><th>場所</th><th class="num lot-order" title="入荷日不明の払出し順">順</th><th class="num lot-unit">単価</th><th class="num">数量</th><th class="num">金額</th><th></th></tr></thead><tbody>
+    body.innerHTML=showGrid?'':`<div class="tablewrap"><table class="stock-fixed-table stock-lot-table">${stockColgroup('lot')}<thead><tr><th class="office-code">営業所</th><th>顧客</th><th>商品</th><th>サイズ</th><th>加工</th><th>状態</th><th>場所</th><th class="num lot-order" title="入荷日不明の払出し順">順</th><th class="num lot-unit">単価</th><th class="num">数量</th><th class="num">金額</th><th></th></tr></thead><tbody>
       ${state.stock.lots.map(l=>`<tr class="${stockRowClass(l)}"><td class="office-code">${esc(l.officeCode||'')}</td><td class="dm-primary lot-oneline" title="${esc(l.customerName)}">${esc(l.customerName)}</td><td class="lot-product"><span class="lot-code">${esc(l.code)}</span><span class="lot-pname" title="${esc(l.productName)} ${esc(l.color)}">${esc(l.productName)} ${esc(l.color)}</span></td><td>${esc(l.size)}</td><td>${esc(l.embroideryLabel)}</td><td>${esc(l.conditionLabel||conditionLabel(l.condition))}</td><td class="lot-oneline" title="${esc(l.locationLabel)}">${esc(l.locationLabel)}</td><td class="qty lot-order">${l.receivedUnknown?esc(l.payoutOrder):''}</td><td class="money lot-unit">${l.costPending?'原価未確定':yen(l.unitCost)}</td><td class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}</td><td class="money">${stockAmountText(l)}</td><td>${stockActionButtonsHtml(l,{lotId:l.id})}</td></tr>`).join('')||'<tr><td colspan="12">在庫はありません。</td></tr>'}
     </tbody></table></div>`
     if(grid)grid.innerHTML=!showGrid?'':state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)}<br>${esc(l.productName)} ${esc(l.color)}</div><div class="dm-meta"><span>${esc(l.size)}</span><span>${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span>${l.receivedUnknown?`<span>順 ${esc(l.payoutOrder)}</span>`:''}</div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
@@ -2165,7 +2170,7 @@ function renderProductStockList(groups){
   if(!groups.length)return ''
   return groups.map(g=>`<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('product')}<thead><tr><th>顧客</th><th>仕様</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('product')}<thead><tr><th>顧客</th><th>加工</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
       ${(g.rows||[]).map(r=>`<tr class="${stockRowClass(r)}">
         <td class="dm-primary">${esc(r.customerName)}</td>
         <td>${esc(r.embroideryLabel)}</td>
@@ -2212,7 +2217,7 @@ function renderCustomerStockList(groups){
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table stock-fixed-table stock-customer-table">${stockColgroup('customer')}<thead><tr><th class="office-code">営業所</th><th>品番</th><th>商品名／色</th><th>仕様</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table stock-fixed-table stock-customer-table">${stockColgroup('customer')}<thead><tr><th class="office-code">営業所</th><th>品番</th><th>商品名／色</th><th>加工</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
       ${rows||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
@@ -2258,7 +2263,7 @@ function renderLocationStockList(groups){
     }).join('')
     return `<article class="product-stock-group">
     ${stockGroupHeading(g)}
-    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('location')}<thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>仕様</th><th>サイズ</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
+    <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('location')}<thead><tr><th>棚・区画</th><th>顧客</th><th>品番</th><th>商品名／色</th><th>加工</th><th>サイズ</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
       ${rows||'<tr><td colspan="9">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`
@@ -2467,8 +2472,8 @@ function historyDetailHtml(e){
       <div><dt>操作</dt><dd>${esc(e.kindLabel)}${e.id!=null?`<span class="sub">記録ID ${e.id}</span>`:''}${batchMark?`<span class="sub">${esc(batchMark)}</span>`:''}${e.moveBatchId&&e.batchLineCount<=1?`<span class="sub">バッチ ${esc(e.moveBatchId)}</span>`:''}</dd></div>
       <div><dt>顧客</dt><dd>${esc(e.customerName)}${stopCust}${e.customerId!=null?`<span class="sub">顧客ID ${e.customerId}</span>`:''}</dd></div>
       <div><dt>商品</dt><dd>${esc(e.code)} ${esc(e.productName)}${stopProd}<span class="sub">商品ID ${e.productId}</span></dd></div>
-      <div><dt>仕様</dt><dd>${esc(historySpecText(e))}</dd></div>
-      <div><dt>仕様</dt><dd>${esc(e.embroideryLabel||'未記録')}</dd></div>
+      <div><dt>加工</dt><dd>${esc(historySpecText(e))}</dd></div>
+      <div><dt>加工</dt><dd>${esc(e.embroideryLabel||'未記録')}</dd></div>
       <div><dt>保管場所</dt><dd>${esc(e.locationLabel||'未記録')}</dd></div>
       <div><dt>増減数</dt><dd>${esc(historyDeltaText(e))}</dd></div>
       <div><dt>対象ロットの数量（変更前→変更後）</dt><dd>${esc(historyLotQtyText(e))}</dd></div>
@@ -2572,7 +2577,7 @@ function historyPage(){
   if(!result){body.innerHTML='<p class="dialogbody">条件を選んで「表示する」を押してください。</p>';return}
   const events=result.events||[]
   body.innerHTML=`<table class="period-table history-table"><thead><tr>
-    <th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>仕様</th><th>増減数</th><th>記録者</th><th>詳細</th>
+    <th>記録日時</th><th>操作</th><th>顧客</th><th>商品</th><th>加工</th><th>増減数</th><th>記録者</th><th>詳細</th>
   </tr></thead><tbody>
     ${events.map((e,i)=>{
       const batchMark=e.batchLineCount>1?`<span class="sub">同一操作 ${e.batchLineIndex}/${e.batchLineCount}</span>`:''
@@ -2688,7 +2693,7 @@ function periodPage(){
       <label>顧客<select id="pCustomer"><option value="">すべて</option>${(state.data.customers||[]).map(c=>opt(c.id,c.name,p.customerId)).join('')}</select></label>
       <label>商品<select id="pProduct"><option value="">すべて</option>${(state.data.products||[]).map(prod=>opt(prod.id,`${prod.code} ${prod.name} ${prod.color}（ID ${prod.id}）`,p.productId)).join('')}</select></label>
       <label>サイズ<select id="pSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,p.size)).join('')}</select></label>
-      <label>仕様<select id="pSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,p.spec)).join('')}</select></label>
+      <label>加工<select id="pSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,p.spec)).join('')}</select></label>
       <label>保管場所<select id="pLocation"><option value="">すべて</option>${(state.data.locations||[]).map(l=>opt(l.id,l.label,p.locationId)).join('')}</select></label>
       <label>状態${conditionSelectHtml('pCondition',p.condition||'',{allowAll:true})}</label>
       <button type="button" class="primary" id="pRun">集計する</button>
@@ -2743,7 +2748,7 @@ function periodPage(){
   if(!result){body.innerHTML='<p class="dialogbody">条件を選んで「集計する」を押してください。</p>';return}
   if(p.group==='detail'){
     body.innerHTML=`<table class="period-table"><thead><tr>
-      <th>顧客</th><th>品番・商品名・色</th><th>仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th>
+      <th>顧客</th><th>品番・商品名・色</th><th>加工</th><th>サイズ</th><th>状態</th><th>保管場所</th>
       <th>期首在庫数</th><th>期間内入庫数</th><th>期間内出庫数</th><th>訂正増減数</th><th>期末在庫数</th>
       <th>期間内入庫金額（仕入原価）</th><th>期間内出庫金額（仕入原価）</th><th></th>
     </tr></thead><tbody>
@@ -2769,7 +2774,7 @@ function periodPage(){
       <h2 class="dm-primary product-stock-title">${esc(g.title)}</h2>
       <p class="dm-secondary product-stock-total">入庫${num(g.inboundQty)} / 出庫${num(g.outboundQty)} / 訂正${num(g.correctionQty)}　入庫金額${yen(g.inboundAmount)} / 出庫金額${yen(g.outboundAmount)}</p>
       <div class="tablewrap"><table class="period-table"><thead><tr>
-        <th>顧客</th><th>品番・商品名・色</th><th>仕様</th><th>サイズ</th><th>状態</th><th>保管場所</th>
+        <th>顧客</th><th>品番・商品名・色</th><th>加工</th><th>サイズ</th><th>状態</th><th>保管場所</th>
         <th>期首</th><th>入庫</th><th>出庫</th><th>訂正</th><th>期末</th><th>入庫金額</th><th>出庫金額</th><th></th>
       </tr></thead><tbody>
         ${(g.rows||[]).map((row,i)=>{
@@ -2881,7 +2886,7 @@ function openInboundDialog(target){
         ${target?`<p>${esc(target.customerName)} / ${esc(target.code)} ${esc(target.productName)} / ${esc(target.size)} / ${esc(target.embroideryLabel)} / ${esc(target.locationLabel)}</p>`:
           `<div class="grid">
             ${searchPickerMarkup({label:'顧客',inputId:'moveCustomer',listId:'moveCustomerList',clearId:'moveCustomerClear',hintId:'moveCustomerHint',placeholder:'顧客名またはカナで検索',value:customer?customer.name:(draft.customerQuery||'')})}
-            ${searchPickerMarkup({label:'商品と仕様',inputId:'moveHandle',listId:'moveHandleList',clearId:'moveHandleClear',hintId:'moveHandleHint',placeholder:customer?'品番・商品名・仕様で検索':'先に顧客を選択',value:offering?offeringPickerLabel(offering):(draft.handleQuery||'')})}
+            ${searchPickerMarkup({label:'商品と加工',inputId:'moveHandle',listId:'moveHandleList',clearId:'moveHandleClear',hintId:'moveHandleHint',placeholder:customer?'品番・商品名・加工で検索':'先に顧客を選択',value:offering?offeringPickerLabel(offering):(draft.handleQuery||'')})}
           </div>
           <div class="grid">
             <label>サイズ（必須）<select id="moveSize"><option value="">選んでください</option>${sizes.map(s=>`<option value="${esc(s)}" ${draft.size===s?'selected':''}>${esc(s)}</option>`).join('')}</select></label>
@@ -2934,7 +2939,7 @@ function openInboundDialog(target){
       bindOpeningSearchPicker({
         input:$('#moveHandle'),list:$('#moveHandleList'),clearBtn:$('#moveHandleClear'),hint:$('#moveHandleHint'),
         getItems:()=>filterOpeningOfferings(handles,draft.customerId,$('#moveHandle').value).map(h=>({id:h.id,label:offeringPickerLabel(h),html:esc(offeringPickerLabel(h)),raw:h})),
-        emptyText:'該当する商品・仕様がありません',
+        emptyText:'該当する商品・加工がありません',
         isConfirmed:()=>!!resolveConfirmedOpeningOffering(handles,draft.customerId,draft.handleId),
         confirmedLabel:()=>{const h=resolveConfirmedOpeningOffering(handles,draft.customerId,draft.handleId);return h?offeringPickerLabel(h):''},
         onPick:item=>{draft.handleId=String(item.id);draft.customerProductId=item.id;draft.handleQuery=item.label;draft.size='';state.moveDirty=true;render()},

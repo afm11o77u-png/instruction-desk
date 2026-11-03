@@ -6,7 +6,7 @@ CSS = (ROOT / 'static' / 'style.css').read_text(encoding='utf-8')
 
 class StockLotColumnsTest(unittest.TestCase):
     def test_header_order(self):
-        self.assertIn('<th>顧客</th><th>商品</th><th>サイズ</th><th>仕様</th><th>状態</th><th>場所</th><th class="num lot-order" title="入荷日不明の払出し順">順</th><th class="num lot-unit">単価</th>', APP)
+        self.assertIn('<th>顧客</th><th>商品</th><th>サイズ</th><th>加工</th><th>状態</th><th>場所</th><th class="num lot-order" title="入荷日不明の払出し順">順</th><th class="num lot-unit">単価</th>', APP)
 
     def test_colgroup_matches_header(self):
         m = re.search(r"lot:\[([^\]]*)\]", APP)
