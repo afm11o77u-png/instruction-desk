@@ -840,7 +840,10 @@ def receive_purchase_order(c, body):
             raise ValueError(
                 f"明細{line['line_no']}の残数は{remaining}枚です。残数を超える入荷はできません。"
             )
-        cost = stock.parse_money(item.get('unitCost'), '仕入単価')
+        # 仕入単価は商品登録の単価（特値→現単価）。画面から送られた単価は使わない。
+        cost = _registered_price(c, po, line)
+        if cost is None:
+            raise ValueError('単価が未設定の商品があります。商品登録で単価を設定してください。')
         loc_id = item.get('locationId') if item.get('locationId') is not None else body.get('locationId')
         loc = stock.resolve_active_location(c, loc_id)
         note = stock.optional(item.get('note'), '備考', 200) or f"発注 {po['number']} 明細{line['line_no']}"

@@ -14,6 +14,7 @@ import server
 import stock
 import stock_orders
 import stock_period
+import stock_prices
 
 
 def newdb():
@@ -22,6 +23,15 @@ def newdb():
     c = stock.connect(path)
     stock.initialize(c)
     return folder, path, c
+
+
+def set_price(c, supplier_id, product_id, size, price):
+    c.execute(
+        '''INSERT INTO price_base(supplier_id,product_id,size_label,price,status,updated_at)
+           VALUES(?,?,?,?,'ok',?)
+           ON CONFLICT(supplier_id,product_id,size_label) DO UPDATE SET price=excluded.price''',
+        (supplier_id, product_id, size, price, stock.stamp()),
+    )
 
 
 def seed(c):
@@ -47,6 +57,11 @@ def seed(c):
         'supplierId': su2['id'], 'active': True, 'sizes': ['M'],
         'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
     })
+    # 納品確定は商品登録の単価を使う（テスト用の基準単価）
+    c.executescript(stock_prices.SCHEMA)
+    for pr, sizes in ((pr1, ['S', 'M', 'L', 'LL']), (pr2, ['M', 'L'])):
+        for size in sizes:
+            set_price(c, su['id'], pr['id'], size, 1000)
     loc = stock.save_location(c, {'siteName': '発注テスト倉庫', 'active': True})
     stock_orders.save_company_profile(c, {
         'companyName': 'テスト商事', 'companyBranch': '石狩支店',
@@ -270,6 +285,7 @@ class PurchaseOrdersTest(unittest.TestCase):
             self.assertEqual(r1['lines'][0]['qtyRemaining'], 4)
 
             # split remainder @ different unit cost
+            set_price(c, fx['supplier']['id'], fx['p2']['id'], 'M', 1200)
             r2 = stock_orders.receive_purchase_order(c, {
                 'id': po['id'], 'token': 'po-recv-batch-b2',
                 'receivedOn': '2026-10-08', 'locationId': fx['loc']['id'],
