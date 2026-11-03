@@ -75,7 +75,7 @@ def _event_bucket(kind):
 def _load_events(c, args):
     sql = '''SELECT m.*, l.customer_product_id, l.size_label, l.location_id, l.unit_cost AS lot_unit_cost,
                     l.basis_date, l.received_on AS lot_received_on, l.received_unknown,
-                    l.qty_received AS lot_qty_received, l.condition,
+                    l.qty_received AS lot_qty_received, l.condition, COALESCE(l.cost_pending,0) AS lot_cost_pending,
                     cp.customer_id, cp.product_id, cp.embroidery,
                     cu.name AS customer_name,
                     p.code, p.name AS product_name, p.color,
@@ -123,7 +123,9 @@ def _load_events(c, args):
         business_on = resolve_business_on(r, lot)
         loc = {'name': r['location_name'], 'parent_id': r['parent_id']}
         site_id = r['parent_id'] if r['parent_id'] is not None else r['location_id']
-        pending_cost = r['kind'] in ('outbound_shortage', 'stocktake_shortage') or (
+        pending_cost = stock.move_cost_pending(
+            r['kind'], r['lot_cost_pending'], r['price_source'] if 'price_source' in r.keys() else None,
+        ) or (
             r['kind'] in ('stocktake', 'outbound') and r['cost_after'] is None and r['cost_before'] is None
         )
         amount = None if pending_cost else abs(r['qty_delta']) * r['unit_cost']
@@ -233,7 +235,8 @@ def summarize_period(c, args):
             totals['inboundQty'] += r['inboundQty']
             totals['outboundQty'] += r['outboundQty']
             totals['correctionQty'] += r['correctionQty']
-            totals['inboundAmount'] += r['inboundAmount']
+            totals['inboundAmount'] += r['inboundAmount'] or 0
+            totals['costPendingInboundQty'] = totals.get('costPendingInboundQty', 0) + r.get('costPendingInboundQty', 0)
             totals['outboundAmount'] += r['outboundAmount']
             totals['computableRows'] += 1
         else:
@@ -252,7 +255,7 @@ def summarize_period(c, args):
             'businessDate': '入庫は入荷日、出庫は出庫日、初期在庫は在庫基準日。登録日時は使いません。',
             'opening': '初期在庫は期間内入庫に数えず、基準日前なら期首、期間内なら訂正増減（＋）に入れます。',
             'missingDate': '業務日がない履歴がある行は算出不可とし、0で埋めません。',
-            'outboundAmount': '出庫金額は出庫時点のロット仕入単価×数量（FIFO結果）です。不足出庫の原価未確定分は出庫金額に含めません。',
+            'outboundAmount': '出庫金額は出庫時点のロット仕入単価×数量（FIFO結果）です。不足出庫分は出庫時点の登録単価（特値→現単価）×数量で、登録単価がない分は原価未確定として出庫金額に含めません。原価未確定の入庫も入庫金額に含めません。',
             'stocktake': '棚卸調整は通常入出庫と分け、期末式では「＋棚卸増減」として扱います。',
         },
     }
@@ -314,6 +317,7 @@ def _summarize_bucket(bucket, start, end):
     inbound_amount = 0
     outbound_amount = 0
     cost_pending_outbound_qty = 0
+    cost_pending_inbound_qty = 0
     history = []
     price_map = {}
 
@@ -369,7 +373,9 @@ def _summarize_bucket(bucket, start, end):
                 price['amount'] += amount
         elif bucket_kind == 'inbound':
             inbound_qty += abs_qty
-            if amount is not None:
+            if ev.get('costPending') or amount is None:
+                cost_pending_inbound_qty += abs_qty
+            else:
                 inbound_amount += amount
         elif bucket_kind == 'stocktake':
             hist['qty'] = qty
@@ -401,8 +407,9 @@ def _summarize_bucket(bucket, start, end):
         'correctionQty': correction_qty,
         'stocktakeQty': stocktake_qty,
         'closingQty': closing_qty,
-        'inboundAmount': inbound_amount,
+        'inboundAmount': None if inbound_qty and cost_pending_inbound_qty == inbound_qty else inbound_amount,
         'outboundAmount': outbound_amount,
+        'costPendingInboundQty': cost_pending_inbound_qty,
         'costPendingOutboundQty': cost_pending_outbound_qty,
         'identityOk': identity_ok,
         'history': history,
@@ -438,7 +445,8 @@ def _group_rows(rows, group):
             b['inboundQty'] += r['inboundQty']
             b['outboundQty'] += r['outboundQty']
             b['correctionQty'] += r['correctionQty']
-            b['inboundAmount'] += r['inboundAmount']
+            b['inboundAmount'] += r['inboundAmount'] or 0
+            b['costPendingInboundQty'] = b.get('costPendingInboundQty', 0) + r.get('costPendingInboundQty', 0)
             b['outboundAmount'] += r['outboundAmount']
             b['computableRows'] += 1
         else:
