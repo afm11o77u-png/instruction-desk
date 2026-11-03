@@ -1108,6 +1108,12 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .stock-fixed-table col.c-amt{width:88px}
 .stock-fixed-table col.c-act{width:150px}
 
+/* 営業所コード（4桁）。見出し「営業所」3文字が収まる幅 */
+.stock-fixed-table col.c-office{width:calc(3em + 12px)}
+.list-stage .stock-fixed-table th.office-code,.list-stage .stock-fixed-table td.office-code,.stock-fixed-table th.office-code,.stock-fixed-table td.office-code{white-space:nowrap;overflow:hidden;text-overflow:clip;font-variant-numeric:tabular-nums;padding-left:5px;padding-right:5px}
+/* 顧客別: 営業所の分、品番・金額を少し詰めて商品名の折り返しを防ぐ */
+.stock-customer-table col.c-code{width:70px}
+.stock-customer-table col.c-amt{width:80px}
 /* 在庫明細（ロット行）の列幅 */
 .stock-lot-table col.l-cust{width:calc(15em + 12px)}
 .stock-lot-table col.l-name{width:auto}
@@ -1127,11 +1133,11 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .list-stage .stock-lot-table th.lot-unit,.list-stage .stock-lot-table td.lot-unit,.stock-lot-table th.lot-unit,.stock-lot-table td.lot-unit{padding-left:10px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
 .stock-lot-table col.c-act{width:146px}
 /* 標準表示は文字が大きいので、顧客を少し狭くして他の列を#347の幅に戻す */
-.dm-standard .stock-lot-table col.l-cust{width:150px}
+.dm-standard .stock-lot-table col.l-cust{width:138px}
 .dm-standard .stock-lot-table col.l-size{width:58px}
 .dm-standard .stock-lot-table col.l-spec{width:80px}
 .dm-standard .stock-lot-table col.l-cond{width:44px}
-.dm-standard .stock-lot-table col.l-loc{width:124px}
+.dm-standard .stock-lot-table col.l-loc{width:112px}
 .dm-standard .stock-lot-table col.l-qty{width:48px}
 .dm-standard .stock-lot-table col.l-amt{width:84px}
 .dm-standard .stock-lot-table col.c-act{width:150px}
