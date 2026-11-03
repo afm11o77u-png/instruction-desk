@@ -2027,8 +2027,9 @@ function stockList(){
     if(grid)grid.innerHTML=!showGrid?'':state.stock.lots.length?state.stock.lots.map(l=>`<article class="dm-card ${stockRowClass(l)}"><div class="dm-primary">${esc(l.customerName)}</div><div class="dm-secondary">${esc(l.code)}<br>${esc(l.productName)} ${esc(l.color)}</div><div class="dm-meta"><span>${esc(l.size)}</span><span>${esc(l.embroideryLabel)}</span><span>${esc(l.conditionLabel||conditionLabel(l.condition))}</span><span>${esc(l.locationLabel)}</span>${l.receivedUnknown?`<span>順 ${esc(l.payoutOrder)}</span>`:''}</div><div class="dm-meta"><span>${l.costPending?'原価未確定':yen(l.unitCost)}</span><span class="${stockQtyClass(l)}">${num(l.qty)}${Number(l.qty)<0?' 在庫不足':''}</span><span>${stockAmountText(l)}</span></div><div class="dm-actions">${stockActionButtonsHtml(l,{lotId:l.id})}</div></article>`).join(''):'<div class="dm-empty">在庫はありません。</div>'
     const lotCount=state.stock.lotCount??state.stock.lots.length
     if(lotCount>state.stock.lots.length){
-      stage.insertAdjacentHTML('beforeend',`<div class="stock-lot-more"><span class="count">${num(lotCount)}件中${num(state.stock.lots.length)}件表示</span> <button type="button" id="stockLotMore">さらに表示</button></div>`)
+      stage.insertAdjacentHTML('beforeend',`<div class="stock-lot-more"><span class="count">${num(lotCount)}件中${num(state.stock.lots.length)}件表示</span> <button type="button" id="stockLotMore">さらに表示</button> <button type="button" id="stockLotAll">すべて表示</button></div>`)
       $('#stockLotMore').onclick=async()=>{state.stockLotLimit=state.stock.lots.length+STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
+      $('#stockLotAll').onclick=async()=>{state.stockLotLimit=-1;await loadStock();paint()}
     }
     bindStockRowActions(document,state.stock.lots)
     if(grid)grid.hidden=mode!=='grid'

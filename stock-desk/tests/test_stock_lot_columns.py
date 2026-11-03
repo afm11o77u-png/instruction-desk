@@ -28,7 +28,7 @@ class StockLotColumnsTest(unittest.TestCase):
         self.assertIn('class="dm-primary lot-oneline" title="${esc(l.customerName)}"', APP)
         self.assertIn('class="lot-oneline" title="${esc(l.locationLabel)}"', APP)
         self.assertIn('text-overflow:ellipsis', CSS)
-        self.assertIn('.stock-lot-table col.l-ord{width:30px}', CSS)
+        self.assertIn('.stock-lot-table col.l-ord{width:28px}', CSS)
 
 
 if __name__ == '__main__':
