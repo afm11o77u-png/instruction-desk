@@ -1115,14 +1115,14 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .stock-lot-table col.l-spec{width:68px}
 .stock-lot-table col.l-cond{width:40px}
 .stock-lot-table col.l-loc{width:104px}
-.stock-lot-table col.l-ord{width:28px}
-.stock-lot-table col.l-unit{width:68px}
+.stock-lot-table col.l-ord{width:46px}
+.stock-lot-table col.l-unit{width:78px}
 .stock-lot-table col.l-qty{width:44px}
 .stock-lot-table col.l-amt{width:76px}
 .stock-lot-table td.lot-oneline,.stock-lot-table .lot-product>span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
 .stock-lot-table td.lot-oneline{display:table-cell}
 .stock-lot-table .lot-code{font-variant-numeric:tabular-nums}
-.stock-lot-table .lot-order{padding-left:2px;padding-right:4px}
+.stock-lot-table .lot-order{padding-left:4px;padding-right:6px;white-space:nowrap}
 .stock-lot-table col.c-act{width:146px}
 /* 標準表示は文字が大きいので、顧客を少し狭くして他の列を#347の幅に戻す */
 .dm-standard .stock-lot-table col.l-cust{width:150px}
@@ -1130,8 +1130,8 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .dm-standard .stock-lot-table col.l-spec{width:80px}
 .dm-standard .stock-lot-table col.l-cond{width:44px}
 .dm-standard .stock-lot-table col.l-loc{width:124px}
-.dm-standard .stock-lot-table col.l-ord{width:30px}
-.dm-standard .stock-lot-table col.l-unit{width:76px}
+.dm-standard .stock-lot-table col.l-ord{width:48px}
+.dm-standard .stock-lot-table col.l-unit{width:88px}
 .dm-standard .stock-lot-table col.l-qty{width:48px}
 .dm-standard .stock-lot-table col.l-amt{width:84px}
 .dm-standard .stock-lot-table col.c-act{width:150px}
