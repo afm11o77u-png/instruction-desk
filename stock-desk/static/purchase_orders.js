@@ -8,6 +8,15 @@ function num(n){return Number(n).toLocaleString('ja-JP')}
 function todayISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function newToken(){return 'po-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10)}
 
+/** 設定→商品を開き、検索欄に品番を入れる（在庫アプリ内で移動）。 */
+async function openProductRegistry(q){
+  const dlg=document.getElementById('dialog')
+  if(dlg&&dlg.open){dlg.close();dlg.classList.remove('opening-dialog','po-dialog');dlg.innerHTML=''}
+  if(typeof state!=='undefined')state.q=String(q||'').trim()
+  if(typeof setStockSection==='function')await setStockSection('setup',{setupTab:'products'})
+  if(typeof paint==='function')paint()
+}
+
 const PurchaseOrders={
   async loadList(){
     const q=new URLSearchParams()
@@ -107,7 +116,7 @@ const PurchaseOrders={
         <h3>変更履歴</h3>
         <ul class="po-events">${(po.events||[]).map(e=>`<li>${esc(e.at)}　${esc(e.actorName||'')}　${esc(e.kind)}　${esc(e.detail||'')}</li>`).join('')||'<li>なし</li>'}</ul>
         ${(po.receipts||[]).length?`<h3>入荷履歴（発注 ${esc(po.number)}）</h3>
-          <ul>${po.receipts.map(r=>`<li>${esc(r.receivedOn)}　明細#${r.lineId}　${num(r.qty)}枚　${yen(r.unitCost)}　ロット${r.lotId}</li>`).join('')}</ul>
+          <ul>${po.receipts.map(r=>`<li>${esc(r.receivedOn)}　明細#${r.lineId}　${num(r.qty)}枚　${r.costPending||r.unitCost==null?'単価未設定':yen(r.unitCost)}　ロット${r.lotId}</li>`).join('')}</ul>
           <p class="notice">この入荷は在庫に反映済みです。通常の入庫画面で同じ内容を再登録する必要はありません。</p>`:''}
         <p id="poDetailErr"></p>
       </div>
@@ -230,6 +239,7 @@ const PurchaseOrders={
           <div class="bar">
             <input id="poProdQ" type="search" placeholder="品番・商品名・加工で候補検索" ${draft.customerId&&draft.supplierId?'':'disabled'}>
             <button type="button" id="poAddProd" ${draft.customerId&&draft.supplierId?'':'disabled'}>候補から追加</button>
+            <button type="button" id="poOpenReg" class="quiet">商品登録を開く</button>
           </div>
           <div id="poProdCandidates" class="po-candidates" hidden></div>
           <div id="poProductRows"></div>
@@ -325,6 +335,10 @@ const PurchaseOrders={
           touch();paintProducts();loadCand().catch(()=>{})
         })
       }
+      $('#poOpenReg').onclick=()=>{
+        if(draft.products.length&&!confirm('作成中の発注書は保存されません。商品登録を開きますか？'))return
+        openProductRegistry($('#poProdQ').value)
+      }
       $('#poAddProd').onclick=()=>loadCand().catch(e=>{$('#poEdErr').textContent=e.message})
       let cq=null
       $('#poProdQ').oninput=()=>{clearTimeout(cq);cq=setTimeout(()=>loadCand().catch(()=>{}),200)}
@@ -402,7 +416,7 @@ const PurchaseOrders={
       token:newToken(),
       receivedOn:todayISO(),
       locationId:null,siteId:'',shelfId:'',
-      items:remain.map(l=>({lineId:l.id,lineNo:l.lineNo,label:`${l.code} ${l.productName} ${l.size}`,remaining:l.qtyRemaining,qty:l.qtyRemaining,unitCost:l.registeredPrice!=null?String(l.registeredPrice):'',price:l.registeredPrice,enabled:true})),
+      items:remain.map(l=>({lineId:l.id,lineNo:l.lineNo,label:`${l.code} ${l.productName} ${l.size}`,remaining:l.qtyRemaining,qty:l.qtyRemaining,price:l.registeredPrice,regCode:l.internalCode||l.code,enabled:true})),
     }
     const render=()=>{
       const keep=state.opening
@@ -429,7 +443,7 @@ const PurchaseOrders={
               <td>${esc(it.label)}<span class="sub">#${it.lineNo}</span></td>
               <td class="qty">${num(it.remaining)}</td>
               <td><input data-qty="${i}" inputmode="numeric" value="${esc(it.qty)}"></td>
-              <td><input data-cost="${i}" inputmode="numeric" placeholder="未設定" value="${esc(it.unitCost)}"></td>
+              <td>${it.price!=null?yen(it.price):`未設定 <button type="button" class="quiet" data-reg="${i}">商品登録を開く</button>`}</td>
             </tr>`).join('')||'<tr><td colspan="5">入荷できる残がありません。</td></tr>'}
           </tbody></table></div>
           <p id="poRecvErr"></p>
@@ -445,14 +459,12 @@ const PurchaseOrders={
       const shelfEl=$('#poRecvShelf');if(shelfEl)shelfEl.onchange=()=>{draft.shelfId=shelfEl.value;render()}
       dlg.querySelectorAll('[data-en]').forEach(el=>el.onchange=()=>{draft.items[Number(el.dataset.en)].enabled=el.checked})
       dlg.querySelectorAll('[data-qty]').forEach(el=>el.oninput=()=>{draft.items[Number(el.dataset.qty)].qty=el.value})
-      dlg.querySelectorAll('[data-cost]').forEach(el=>el.oninput=()=>{draft.items[Number(el.dataset.cost)].unitCost=el.value})
+      dlg.querySelectorAll('[data-reg]').forEach(el=>el.onclick=()=>openProductRegistry(draft.items[Number(el.dataset.reg)].regCode))
       $('#poRecvGo').onclick=async()=>{
         const err=$('#poRecvErr');err.textContent=''
         try{
-          const items=draft.items.filter(it=>it.enabled).map(it=>({lineId:it.lineId,qty:Number(it.qty),unitCost:it.unitCost}))
+          const items=draft.items.filter(it=>it.enabled).map(it=>({lineId:it.lineId,qty:Number(it.qty)}))
           if(!items.length)throw Error('入荷する明細にチェックを入れてください。')
-          const changed=draft.items.filter(it=>it.enabled&&it.price!=null&&String(it.unitCost).replace(/,/g,'').trim()!==String(it.price))
-          if(changed.length&&!confirm(`登録単価と違う単価があります。\n${changed.map(it=>`${it.label}：${yen(it.price)} → ${it.unitCost}円`).join('\n')}\nこのまま確定しますか？`))return
           const next=await api('/api/purchase-orders/receive',{
             id:po.id,token:draft.token,receivedOn:draft.receivedOn,locationId:draft.locationId,items,
           })

@@ -3079,7 +3079,8 @@ def _ensure_shortage_lot(c, cp_id, size, location_id, condition, business_on, t)
     return c.execute('SELECT * FROM lots WHERE id=?', (lot_id,)).fetchone()
 
 
-def _apply_inbound_cover_shortage(c, *, cp_id, size, location_id, condition, qty, cost, received, batch_id, actor, note, t):
+def _apply_inbound_cover_shortage(c, *, cp_id, size, location_id, condition, qty, cost, received, batch_id, actor, note, t,
+                                  cost_pending=False):
     """不足ロットを先に埋め、超過分だけ通常入庫ロットにする。過去出庫を二重差し引きしない。
 
     Returns (shortage_cover_qty, excess_lot_id_or_None, before_qty, after_qty).
@@ -3102,8 +3103,10 @@ def _apply_inbound_cover_shortage(c, *, cp_id, size, location_id, condition, qty
             '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
                location_id,move_batch_id,actor_name,business_on,note,at)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-            (shortage['id'], 'shortage_cover', cover, cost, s_before, s_after, None, cost,
-             location_id, batch_id, actor, received, note or '不足の補充（原価対応）', t),
+            (shortage['id'], 'shortage_cover', cover, 0 if cost_pending else cost, s_before, s_after, None,
+             None if cost_pending else cost,
+             location_id, batch_id, actor, received,
+             note or ('不足の補充（原価未確定）' if cost_pending else '不足の補充（原価対応）'), t),
         )
     excess = qty - cover
     excess_lot_id = None
@@ -3111,22 +3114,24 @@ def _apply_inbound_cover_shortage(c, *, cp_id, size, location_id, condition, qty
         c.execute(
             '''INSERT INTO lots(batch_id,customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
                basis_date,received_on,received_unknown,payout_order,condition,cost_pending,created_at,updated_at)
-               VALUES(NULL,?,?,?,?,?,?,?,?,0,0,?,0,?,?)''',
-            (cp_id, size, location_id, cost, excess, excess, received, received, condition, t, t),
+               VALUES(NULL,?,?,?,?,?,?,?,?,0,0,?,?,?,?)''',
+            (cp_id, size, location_id, 0 if cost_pending else cost, excess, excess, received, received, condition,
+             1 if cost_pending else 0, t, t),
         )
         excess_lot_id = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         c.execute(
             '''INSERT INTO moves(lot_id,kind,qty_delta,unit_cost,qty_before,qty_after,cost_before,cost_after,
                location_id,move_batch_id,actor_name,business_on,note,at)
                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-            (excess_lot_id, 'inbound', excess, cost, 0, excess, None, cost, location_id, batch_id, actor, received,
-             note or '入庫', t),
+            (excess_lot_id, 'inbound', excess, 0 if cost_pending else cost, 0, excess, None,
+             None if cost_pending else cost, location_id, batch_id, actor, received,
+             note or ('入庫（原価未確定）' if cost_pending else '入庫'), t),
         )
     after = before + qty
     return cover, excess_lot_id, before, after
 
 
-def register_inbound(c, body):
+def register_inbound(c, body, *, cost_pending=False):
     """Daily inbound: creates receipt lot(s). kind='inbound' (never opening).
 
     同一対象に不足（マイナス）があれば、先に不足を埋め（shortage_cover）、超過分だけ通常ロットにする。
@@ -3161,6 +3166,7 @@ def register_inbound(c, body):
         cover, excess_lot_id, _b, _a = _apply_inbound_cover_shortage(
             c, cp_id=cp['id'], size=size, location_id=loc['id'], condition=condition,
             qty=qty, cost=cost, received=received, batch_id=batch_id, actor=actor, note=note, t=t,
+            cost_pending=cost_pending,
         )
         covered_total += cover
         if excess_lot_id is not None:
@@ -3187,7 +3193,7 @@ def register_inbound(c, body):
             'lotId': lot_id,
             'currentQtyBefore': before,
             'currentQtyAfter': before + qty,
-            'unitCost': cost,
+            'unitCost': None if cost_pending else cost,
             'size': size,
         })
     return result

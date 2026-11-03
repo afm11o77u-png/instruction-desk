@@ -43,34 +43,55 @@ class RegisteredPriceReceiveTest(unittest.TestCase):
         self.fx = seed(c)
         sid, pid = self.fx['supplier']['id'], self.fx['p2']['id']
         t = stock.stamp()
-        c.execute("INSERT INTO price_base(supplier_id,product_id,size_label,price,status,updated_at) VALUES(?,?,'M',1200,'ok',?)", (sid, pid, t))
-        c.execute("INSERT INTO price_base(supplier_id,product_id,size_label,price,status,updated_at) VALUES(?,?,'L',1300,'ok',?)", (sid, pid, t))
+        c.execute("INSERT INTO price_base(supplier_id,product_id,size_label,price,status,updated_at) VALUES(?,?,'M',1200,'ok',?) ON CONFLICT(supplier_id,product_id,size_label) DO UPDATE SET price=excluded.price", (sid, pid, t))
+        c.execute("INSERT INTO price_base(supplier_id,product_id,size_label,price,status,updated_at) VALUES(?,?,'L',1300,'ok',?) ON CONFLICT(supplier_id,product_id,size_label) DO UPDATE SET price=excluded.price", (sid, pid, t))
 
     def tearDown(self):
         self.c.close()
         self.folder.cleanup()
 
-    def test_registered_price_offered_and_sent_cost_recorded(self):
+    def test_registered_price_recorded_and_sent_cost_ignored(self):
         po = ordered_po(self.c, self.fx, 'po-rp-01')
         self.assertEqual([l['registeredPrice'] for l in po['lines']], [1200, 1300])
         r = receive(self.c, self.fx, po, 'po-rp-r1', cost=999)
-        self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [999, 999])
+        lots = [x['lotId'] for x in r['receiveResults']]
+        self.assertEqual([lot_cost(self.c, x) for x in lots], [1200, 1300])
+        self.assertEqual([x['unitCost'] for x in r['receiveResults']], [1200, 1300])
+        moves = [m[0] for m in self.c.execute(
+            "SELECT unit_cost FROM moves WHERE lot_id IN (?,?) ORDER BY lot_id", lots)]
+        self.assertEqual(moves, [1200, 1300])
+        recs = [m[0] for m in self.c.execute(
+            'SELECT unit_cost FROM purchase_order_receipts WHERE purchase_order_id=? ORDER BY id', (po['id'],))]
+        self.assertEqual(recs, [1200, 1300])
 
     def test_special_price_wins(self):
         sid, pid = self.fx['supplier']['id'], self.fx['p2']['id']
+        t = stock.stamp()
         self.c.execute("INSERT INTO price_special(customer_id,supplier_id,product_id,size_label,price,created_at,updated_at) VALUES(?,?,?,NULL,800,?,?)",
-                       (self.fx['customer']['id'], sid, pid, stock.stamp(), stock.stamp()))
+                       (self.fx['customer']['id'], sid, pid, t, t))
         po = ordered_po(self.c, self.fx, 'po-rp-02')
-        self.assertEqual([l['registeredPrice'] for l in po['lines']], [800, 800])
+        r = receive(self.c, self.fx, po, 'po-rp-r2', cost=5000)
+        self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [800, 800])
 
-    def test_unset_price_keeps_manual_cost(self):
-        self.c.execute('DELETE FROM price_base')
+    def test_unset_price_goes_in_as_cost_pending(self):
+        self.c.execute("DELETE FROM price_base WHERE size_label='L' AND product_id=?", (self.fx['p2']['id'],))
         po = ordered_po(self.c, self.fx, 'po-rp-03')
-        self.assertEqual([l['registeredPrice'] for l in po['lines']], [None, None])
-        with self.assertRaises(ValueError):
-            receive(self.c, self.fx, po, 'po-rp-r3')
-        r = receive(self.c, self.fx, po, 'po-rp-r4', cost=1500)
-        self.assertEqual([lot_cost(self.c, x['lotId']) for x in r['receiveResults']], [1500, 1500])
+        self.assertEqual([l['registeredPrice'] for l in po['lines']], [1200, None])
+        r = receive(self.c, self.fx, po, 'po-rp-r3', cost=1500)
+        res = r['receiveResults']
+        self.assertEqual([x['unitCost'] for x in res], [1200, None])
+        lots = [self.c.execute('SELECT unit_cost,cost_pending,qty_remaining FROM lots WHERE id=?', (x['lotId'],)).fetchone()
+                for x in res]
+        self.assertEqual([(l[0], l[1]) for l in lots], [(1200, 0), (0, 1)])
+        self.assertNotEqual(res[0]['lotId'], res[1]['lotId'])
+        mv = self.c.execute('SELECT unit_cost,cost_after FROM moves WHERE lot_id=?', (res[1]['lotId'],)).fetchone()
+        self.assertEqual((mv[0], mv[1]), (0, None))
+        rec = [(x['unitCost'], x['costPending']) for x in r['receipts']]
+        self.assertEqual(rec, [(1200, False), (None, True)])
+        lots_q = {l['id']: l for l in stock.stock_query(self.c, {})['lots']}
+        self.assertTrue(lots_q[res[1]['lotId']]['costPending'])
+        self.assertIsNone(lots_q[res[1]['lotId']]['unitCost'])
+        self.assertFalse(lots_q[res[0]['lotId']]['costPending'])
 
     def test_ui_wording(self):
         js = (ROOT / 'static' / 'purchase_orders.js').read_text(encoding='utf-8')
@@ -78,8 +99,13 @@ class RegisteredPriceReceiveTest(unittest.TestCase):
         self.assertIn('>納品確認<', js)
         self.assertIn('>納品確定<', js)
         self.assertIn('registeredPrice', js)
-        self.assertIn('登録単価と違う単価があります。', js)
-        self.assertIn('placeholder="未設定"', js)
+        self.assertNotIn('登録単価と違う単価', js)
+        self.assertNotIn('data-cost', js)
+        self.assertNotIn('単価が未設定の商品があります。', js)
+        self.assertIn('単価未設定', js)
+        self.assertIn('商品登録を開く', js)
+        self.assertIn("setStockSection('setup',{setupTab:'products'})", js)
+        self.assertIn('id="poOpenReg"', js)
 
 
 if __name__ == '__main__':
