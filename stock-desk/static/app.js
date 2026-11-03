@@ -1998,7 +1998,9 @@ function confirmNormalInbound(){
 }
 // 在庫明細で一度に表示する件数（さらに表示で同じ件数ずつ追加）
 const STOCK_LOT_PAGE_SIZE=200
-async function loadStock(){
+// 顧客別・商品別・場所別で一度に表示するグループ数（グループの途中では切らない）
+const STOCK_GROUP_PAGE_SIZES={customer:20,product:50,location:5}
+function stockQuery(){
   const f=state.filters
   const q=new URLSearchParams({group:f.group})
   if(f.group==='lot')q.set('limit',String(state.stockLotLimit||STOCK_LOT_PAGE_SIZE))
@@ -2009,7 +2011,26 @@ async function loadStock(){
   if(f.locationId)q.set('locationId',f.locationId)
   if(f.condition)q.set('condition',f.condition)
   if(f.stockFilter)q.set('stockFilter',f.stockFilter)
-  state.stock=await api('/api/stock?'+q.toString())
+  if(STOCK_GROUP_PAGE_SIZES[f.group]){
+    // 表示の切替・絞り込みを変えたら最初のページから
+    const key=q.toString()
+    if(state.stockGroupKey!==key){state.stockGroupKey=key;state.stockGroupLimit=0}
+    q.set('limit',String(state.stockGroupLimit||STOCK_GROUP_PAGE_SIZES[f.group]))
+  }else state.stockGroupKey=''
+  return q
+}
+async function loadStock(){
+  state.stock=await api('/api/stock?'+stockQuery().toString())
+}
+// さらに表示（グループ別）: 次のグループだけ取得して後ろに足す
+async function loadStockMoreGroups(){
+  const shown=(state.stock.groups||[]).length
+  const q=stockQuery()
+  q.set('limit',String(STOCK_GROUP_PAGE_SIZES[state.filters.group]))
+  q.set('offset',String(shown))
+  const next=await api('/api/stock?'+q.toString())
+  state.stock={...next,groups:[...(state.stock.groups||[]),...(next.groups||[])],groupOffset:0}
+  state.stockGroupLimit=state.stock.groups.length
 }
 let stockListBarCache={el:null,data:null,writable:null}
 // 起動直後、bootstrap より先に在庫が届いたときの仮データ（絞り込み欄は bootstrap 到着後に埋まる）
@@ -2087,6 +2108,12 @@ function stockList(){
   }else{
     body.innerHTML='<p class="dialogbody">在庫はありません。</p>'
     if(grid)grid.innerHTML='<div class="dm-empty">在庫はありません。</div>'
+  }
+  const groupCount=state.stock.groupCount??(state.stock.groups||[]).length
+  if(groupCount>(state.stock.groups||[]).length){
+    stage.insertAdjacentHTML('beforeend',`<div class="stock-lot-more"><span class="count">${num(groupCount)}件中${num(state.stock.groups.length)}件表示</span> <button type="button" id="stockGroupMore">さらに表示</button> <button type="button" id="stockGroupAll">すべて表示</button></div>`)
+    $('#stockGroupMore').onclick=async()=>{await loadStockMoreGroups();paint()}
+    $('#stockGroupAll').onclick=async()=>{state.stockGroupLimit=-1;await loadStock();paint()}
   }
   if(state.data)bindStockRowActions(document,allRows)
   if(grid)grid.hidden=mode!=='grid'

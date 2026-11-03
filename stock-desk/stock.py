@@ -2538,6 +2538,104 @@ def stock_lot_page(c, args, lot_limit=None):
             'lotCount': t['n']}
 
 
+# 顧客別・商品別・場所別で一度に返すグループ数（さらに表示で同じ数ずつ追加）
+STOCK_GROUP_PAGE_SIZES = {'customer': 20, 'product': 50, 'location': 5}
+
+# グループの並び（従来の group_lots_by_* の並びと同じ）と、ロットを絞るための列
+_STOCK_GROUP_KEYS = {
+    'customer': ('cu.id', 'cr.rk, cu.id'),
+    'product': ('p.id', 'p.code, p.id'),
+    'location': ('COALESCE(loc.parent_id, loc.id)', 'MIN(COALESCE(parent.name, loc.name)), COALESCE(loc.parent_id, loc.id)'),
+}
+
+
+def _stock_totals(c, where, params):
+    """絞り込み後の全ロットの合計（stock_query の合計と同じ値）。"""
+    return c.execute(
+        f"""SELECT COUNT(*) AS n,
+                   COALESCE(SUM(l.qty_remaining),0) AS qty,
+                   COALESCE(SUM(CASE WHEN l.condition=? THEN l.qty_remaining END),0) AS qty_new,
+                   COALESCE(SUM(CASE WHEN l.condition=? THEN l.qty_remaining END),0) AS qty_used,
+                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)=0 AND l.unit_cost IS NOT NULL
+                                     THEN l.qty_remaining*l.unit_cost END),0) AS amount,
+                   COALESCE(SUM(CASE WHEN COALESCE(l.cost_pending,0)<>0 AND l.qty_remaining<0
+                                     THEN l.qty_remaining END),0) AS pending_qty,
+                   COALESCE(MAX(l.qty_remaining<0),0) AS has_shortage
+            FROM lots l
+             JOIN customer_products cp ON cp.id=l.customer_product_id
+             JOIN customers cu ON cu.id=cp.customer_id
+             JOIN products p ON p.id=cp.product_id
+             JOIN locations loc ON loc.id=l.location_id
+             WHERE 1=1{where}""",
+        [CONDITION_NEW, CONDITION_USED] + params,
+    ).fetchone()
+
+
+def _product_size_orders_batch(c, product_ids):
+    """product_size_orders と同じ結果を、まとめた問い合わせで返す。"""
+    orders = {pid: {} for pid in product_ids}
+    ids = list(orders)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = (f"SELECT product_id, label, sort_order FROM product_sizes WHERE product_id IN ({','.join('?' * len(chunk))})"
+             ' ORDER BY product_id, sort_order, id')
+        for r in c.execute(q, chunk):
+            orders[r['product_id']][r['label']] = r['sort_order']
+    return orders
+
+
+def stock_group_page(c, args, group_limit=None, group_offset=0):
+    """顧客別・商品別・場所別の高速版。グループ単位で区切り、途中で切らない。
+
+    slim_stock_view(stock_query(...)) の groups[offset:offset+limit] と同じグループ・行・小計を返し、
+    合計は絞り込み後の全件を SQL で集計する。group_limit が None / 負なら残り全部。
+    """
+    group = args.get('group')
+    if group not in GROUPED_STOCK_VIEWS:
+        raise ValueError('集計の種類が不正です。')
+    where, params, stock_filter = _stock_lot_filters(args)
+    t = _stock_totals(c, where, params)
+    _customer_rank_table(c)
+    key_sql, order_sql = _STOCK_GROUP_KEYS[group]
+    group_from = """FROM lots l
+             JOIN customer_products cp ON cp.id=l.customer_product_id
+             JOIN customers cu ON cu.id=cp.customer_id
+             JOIN temp.stock_customer_rank cr ON cr.customer_id=cu.id
+             JOIN products p ON p.id=cp.product_id
+             JOIN locations loc ON loc.id=l.location_id
+             LEFT JOIN locations parent ON parent.id=loc.parent_id
+             WHERE 1=1""" + where
+    keys = [r[0] for r in c.execute(
+        f'SELECT {key_sql} AS k {group_from} GROUP BY k ORDER BY {order_sql}', params)]
+    offset = max(int(group_offset or 0), 0)
+    page_keys = keys[offset:] if group_limit is None or group_limit < 0 else keys[offset:offset + group_limit]
+    lots = []
+    if page_keys:
+        base_sql = (_STOCK_LOT_SELECT.replace('WHERE 1=1', 'JOIN temp.stock_customer_rank cr ON cr.customer_id=cu.id\n             WHERE 1=1')
+                    + where)
+        order = ' ORDER BY cr.rk, p.code, p.id, cp.embroidery, l.size_label, l.condition, l.id'
+        rows = []
+        for i in range(0, len(page_keys), 500):
+            chunk = page_keys[i:i + 500]
+            rows.extend(c.execute(
+                base_sql + f" AND {key_sql} IN ({','.join('?' * len(chunk))})" + order, list(params) + chunk))
+        # グループは1つの塊にまとまって入るので、塊をまたぐ順序は結果に影響しない（グループ内の順序は従来と同じ）
+        kinds = _lot_move_kinds(c, [r['id'] for r in rows])
+        lots = [_stock_lot_row(r, kinds[r['id']]) for r in rows]
+    size_orders = _product_size_orders_batch(c, {lot['productId'] for lot in lots})
+    body = {'groups': group_lots(lots, group, size_orders=size_orders), 'group': group,
+            'totalQty': t['qty'], 'totalQtyNew': t['qty_new'], 'totalQtyUsed': t['qty_used'],
+            'totalAmount': t['amount'],
+            'costPendingQty': abs(t['pending_qty']),
+            'hasShortage': bool(t['has_shortage']),
+            'stockFilter': stock_filter if stock_filter in SHORTAGE_FILTERS else '',
+            'amountLabel': '仕入原価ベースの在庫金額（原価未確定分を除く）'}
+    body = slim_stock_view(body)
+    body['groupCount'] = len(keys)
+    body['groupOffset'] = offset
+    return body
+
+
 def _stock_lot_row(r, kinds):
     """在庫明細1行（場所名は JOIN の親拠点名を使い、追加の問い合わせをしない）。"""
     unconsumed = r['qty_remaining'] == r['qty_received']
