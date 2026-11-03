@@ -629,6 +629,19 @@ def migrate_display_no(c):
       WHEN {new_px} <> {old_px} BEGIN {assign} END''')
 
 
+def display_no_code_key(row):
+    """品番順（画面の codeAsc 相当）: 停止・統合済みは後ろ、品番空欄は後ろ、数字部分は数値比較、同順は ID。"""
+    import re
+    import unicodedata
+    hidden = 1 if (row['merged_into_id'] or not row['active']) else 0
+    code = unicodedata.normalize('NFKC', text(row['code'])).strip()
+    # ICU（ja, numeric）と同じく 記号 < 数字 < 文字
+    parts = tuple((1, int(t), '') if t.isdigit()
+                  else ((2, 0, t.casefold()) if t[0].isalnum() else (0, 0, t))
+                  for t in re.findall(r'\d+|[^\W\d_]+|[\W_]+', code))
+    return (hidden, 1 if not code else 0, parts, int(row['id']))
+
+
 def display_no_name_key(name):
     """サーバー側の商品名順（画面の並び順がない商品用の予備）。"""
     import unicodedata
@@ -636,14 +649,14 @@ def display_no_name_key(name):
 
 
 def renumber_display_no(c, ordered_ids=None):
-    """表示番号を区分（K/B/S）ごとに商品名順で 1 から振り直す。内部 ID は変えない。
+    """表示番号を区分（K/B/S）ごとに品番順で 1 から振り直す。内部 ID は変えない。
 
-    ordered_ids: 画面の「商品名順」（localeCompare('ja')・同名は ID 昇順）で並べた商品 ID。
-    含まれない商品（停止中など）は 商品名（NFKC）→ID 順で後ろに付ける。
+    ordered_ids: 画面の品番順（codeAsc: 空欄は後ろ・localeCompare('ja',numeric)・同順は ID）で
+    有効品→停止/統合済みの順に並べた商品 ID。含まれない商品は display_no_code_key 順で後ろに付ける。
     カウンタは各区分の件数（＝最大番号）にそろえ、以後の新規はその次から。
     """
     rows = c.execute(
-        f"SELECT id, name, {DISPLAY_NO_PREFIX_SQL.format(col='category')} AS px FROM products"
+        f"SELECT id, name, code, active, merged_into_id, {DISPLAY_NO_PREFIX_SQL.format(col='category')} AS px FROM products"
     ).fetchall()
     by_id = {int(r['id']): r for r in rows}
     order = []
@@ -657,7 +670,7 @@ def renumber_display_no(c, ordered_ids=None):
             seen.add(pid)
             order.append(pid)
     rest = sorted((r for r in rows if int(r['id']) not in seen),
-                  key=lambda r: (display_no_name_key(r['name']), int(r['id'])))
+                  key=display_no_code_key)
     order.extend(int(r['id']) for r in rest)
     counts = {'K': 0, 'B': 0, 'S': 0}
     # 一時的に重複しないよう先に空ける（トリガーは category 変更時のみなので発火しない）
