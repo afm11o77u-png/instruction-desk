@@ -815,6 +815,7 @@ function products(){
       <h3 class="verify-zone-title">検証用</h3>
       <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む選んだ区分の商品登録が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
       <div class="bar merge-entry"><button type="button" class="danger product-wipe-scope" data-scope="parts">部品を削除</button><button type="button" class="danger product-wipe-scope" data-scope="process">加工を削除</button><button type="button" class="danger product-wipe-scope" data-scope="uniform">制服を削除</button><span class="excelhint">取扱も一緒に消えます。在庫などの参照があると中止します。制服はカテゴリ空欄も含みます。</span></div>
+      <div class="bar merge-entry"><button type="button" id="displayNoRenumber">No.振り直し</button></div>
     </div>`:''}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>No.</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
@@ -859,6 +860,14 @@ function products(){
       stockCanWrite,
       actorName:(state.data&&state.data.actorName)||'',
     })
+  }
+  const renumberBtn=document.getElementById('displayNoRenumber')
+  if(renumberBtn)renumberBtn.onclick=async()=>{
+    if(!stockIsOwner())return
+    if(!confirm('全商品のNo.を商品名順に振り直します（K/B/Sとも1から）。今のNo.は変わります。実行しますか？'))return
+    const order=sortProductRows(state.data.products||[],'nameAsc').map(r=>r.id)
+    try{await api('/api/products/display-no/renumber',{order});toast('振り直しました');await boot()}
+    catch(e){toast(e.message||'失敗しました')}
   }
   document.querySelectorAll('.product-wipe-scope').forEach(btn=>{btn.onclick=()=>{
     if(typeof ProductRegistryWipe==='undefined'||!ProductRegistryWipe.open){toast('削除画面を読み込めませんでした。');return}
