@@ -458,7 +458,7 @@ def _po_dict(c, po_id, *, include_events=False, include_receipts=False):
         'createdBy': po['orderer_name'],
         'ordererUserId': po['orderer_user_id'],
         'remarks': po['remarks'],
-        'needsResend': bool(po['needs_resend']),
+        'needsResend': bool(po['needs_resend']) and po['status'] != STATUS_CANCELLED,
         'printedAt': po['printed_at'],
         'printCount': po['print_count'],
         'needsReprint': bool(po['needs_reprint']) and po['status'] != STATUS_CANCELLED,
@@ -533,7 +533,7 @@ def list_purchase_orders(c, args=None):
             'createdBy': r['orderer_name'],
             'status': r['status'],
             'statusLabel': status_label(r['status']),
-            'needsResend': bool(r['needs_resend']),
+            'needsResend': bool(r['needs_resend']) and r['status'] != STATUS_CANCELLED,
             'printedAt': r['printed_at'],
             'needsReprint': bool(r['needs_reprint']) and r['status'] != STATUS_CANCELLED,
         }
@@ -827,7 +827,11 @@ def cancel_purchase_order(c, body):
         raise ValueError('発注書が見つかりません。')
     if po['status'] == STATUS_CANCELLED:
         return {**_po_dict(c, po_id, include_events=True), 'already': True}
-    # Do NOT reverse received stock
+    received = c.execute(
+        'SELECT COALESCE(SUM(qty),0) n FROM purchase_order_receipts WHERE purchase_order_id=?', (po_id,)
+    ).fetchone()['n']
+    if received > 0 or po['status'] in (STATUS_PARTIAL, STATUS_COMPLETE):
+        raise ValueError('入荷済みの数量がある発注書は取消できません。')
     actor = stock._actor_name(body)
     t = stock.stamp()
     c.execute(
@@ -870,6 +874,8 @@ def receive_purchase_order(c, body):
 
     actor = stock._actor_name(body)
     received_on = stock.parse_date(body.get('receivedOn') or date.today().isoformat(), '入荷日')
+    if received_on > date.today().isoformat():
+        raise ValueError('入荷日に未来の日付は指定できません。')
     results = []
     for i, item in enumerate(items):
         if not isinstance(item, dict):

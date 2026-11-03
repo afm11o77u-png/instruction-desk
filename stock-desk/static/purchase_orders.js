@@ -10,6 +10,7 @@ function printMark(o){
   if(o.needsReprint)return '<span class="sub">再印刷が必要</span>'
   return o.printedAt?`<span class="sub">印刷済 ${esc(String(o.printedAt).slice(0,10))}</span>`:'<span class="sub">未印刷</span>'
 }
+function fmtAt(s){return String(s||'').replace('T',' ').slice(0,16)}
 function newToken(){return 'po-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10)}
 
 /** 設定→商品を開き、検索欄に品番を入れる（在庫アプリ内で移動）。 */
@@ -51,7 +52,7 @@ const PurchaseOrders={
       </tr></thead><tbody>
         ${orders.map(o=>`<tr>
           <td class="dm-primary">${esc(o.number)}${o.needsResend?'<span class="sub">再送が必要</span>':''}</td>
-          <td>${esc(o.createdAt||'')}</td>
+          <td>${esc(fmtAt(o.createdAt))}</td>
           <td>${esc(o.supplierName)}</td>
           <td>${esc(o.customerName)}</td>
           <td>${esc(o.createdBy||o.ordererName||'')}</td>
@@ -79,7 +80,7 @@ const PurchaseOrders={
     const displayMode=typeof mountStockDisplay==='function'?mountStockDisplay(stage,'orders',()=>paint()):'standard'
     const grid=$('#stocklistgrid')
     if(grid){
-      grid.innerHTML=orders.length?orders.map(o=>`<article class="dm-card"><div class="dm-primary">${esc(o.number)}${o.needsResend?' <span class="sub">再送が必要</span>':''}</div><div class="dm-secondary">${esc(o.createdAt||'')}</div><div class="dm-meta"><span>${esc(o.supplierName)}</span><span>${esc(o.customerName)}</span></div><div class="dm-meta"><span>${esc(o.createdBy||o.ordererName||'')}</span><span>${esc(o.statusLabel)}</span></div><div class="dm-actions"><button type="button" class="quiet" data-po-open="${o.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">保存した発注書はまだありません。</div>'
+      grid.innerHTML=orders.length?orders.map(o=>`<article class="dm-card"><div class="dm-primary">${esc(o.number)}${o.needsResend?' <span class="sub">再送が必要</span>':''}</div><div class="dm-secondary">${esc(fmtAt(o.createdAt))}</div><div class="dm-meta"><span>${esc(o.supplierName)}</span><span>${esc(o.customerName)}</span></div><div class="dm-meta"><span>${esc(o.createdBy||o.ordererName||'')}</span><span>${esc(o.statusLabel)}</span></div><div class="dm-actions"><button type="button" class="quiet" data-po-open="${o.id}">開く</button></div></article>`).join(''):'<div class="dm-empty">保存した発注書はまだありません。</div>'
       grid.hidden=displayMode!=='grid'
     }
     if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,typeof stockScreenId==='function'?stockScreenId('orders'):'stock-orders')
@@ -98,10 +99,10 @@ const PurchaseOrders={
     const canReceive=writable&&(po.status==='ordered'||po.status==='partial')
     const canMark=writable&&po.status==='unordered'
     const canEdit=writable&&po.status!=='cancelled'
-    const canCancel=writable&&po.status!=='cancelled'
+    const canCancel=writable&&!['cancelled','partial','complete'].includes(po.status)
     dlg.innerHTML=`<div class="dialoghead"><h2>発注書 ${esc(po.number)}</h2><button type="button" id="poClose" class="quiet">閉じる</button></div>
       <div class="dialogbody">
-        <p><strong>${esc(po.statusLabel)}</strong>　作成日時 ${esc(po.createdAt||'')}　作成者 ${esc(po.createdBy||po.ordererName||'')}　仕入先 ${esc(po.supplierName)}　対象顧客 ${esc(po.customerName)}
+        <p><strong>${esc(po.statusLabel)}</strong>　作成日時 ${esc(fmtAt(po.createdAt))}　作成者 ${esc(po.createdBy||po.ordererName||'')}　仕入先 ${esc(po.supplierName)}　対象顧客 ${esc(po.customerName)}
           ${po.needsResend?'　<span class="po-resend">紙の再送が必要</span>':''}</p>
         <p class="notice">印刷用紙の発注日・担当・FAX・発注者は手書き欄です（画面では入力しません）。</p>
         <div class="tablewrap"><table><thead><tr><th>#</th><th>商品</th><th>仕様</th><th>サイズ</th><th>発注</th><th>入荷済</th><th>残</th><th>備考</th></tr></thead><tbody>
@@ -148,7 +149,7 @@ const PurchaseOrders={
     const recv=$('#poReceive');if(recv)recv.onclick=()=>PurchaseOrders.openReceive(po)
     const cancel=$('#poCancel')
     if(cancel)cancel.onclick=async()=>{
-      if(!window.confirm('この発注書を取消しますか？入荷済みの在庫は減りません。'))return
+      if(!window.confirm('この発注書を取消しますか？'))return
       try{
         const next=await api('/api/purchase-orders/cancel',{id:po.id})
         toast('取消しました。')
@@ -460,7 +461,7 @@ const PurchaseOrders={
         <div class="dialogbody">
           <p class="notice">確定すると通常の入庫と同じ経路で在庫が増えます。発注時点では在庫は増えません。残数を超える入荷はできません。同じ内容を入庫画面で再登録する必要はありません。</p>
           <div class="grid">
-            <label>入荷日<input id="poRecvDate" type="date" value="${esc(draft.receivedOn)}"></label>
+            <label>入荷日<input id="poRecvDate" type="date" max="${todayISO()}" value="${esc(draft.receivedOn)}"></label>
             ${locFields}
           </div>
           <div class="tablewrap"><table><thead><tr><th>入荷</th><th>明細</th><th>残</th><th>今回数量</th><th>単価</th></tr></thead><tbody>
