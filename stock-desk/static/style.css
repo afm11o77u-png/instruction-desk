@@ -1107,3 +1107,19 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 .stock-fixed-table col.c-qty{width:196px}
 .stock-fixed-table col.c-amt{width:88px}
 .stock-fixed-table col.c-act{width:150px}
+
+/* 在庫明細（ロット行）の列幅 */
+.stock-lot-table col.l-cust{width:auto}
+.stock-lot-table col.l-name{width:112px}
+.stock-lot-table col.l-size{width:58px}
+.stock-lot-table col.l-spec{width:80px}
+.stock-lot-table col.l-cond{width:44px}
+.stock-lot-table col.l-loc{width:124px}
+.stock-lot-table col.l-ord{width:30px}
+.stock-lot-table col.l-unit{width:76px}
+.stock-lot-table col.l-qty{width:48px}
+.stock-lot-table col.l-amt{width:84px}
+.stock-lot-table td.lot-oneline,.stock-lot-table .lot-product>span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;overflow-wrap:normal}
+.stock-lot-table td.lot-oneline{display:table-cell}
+.stock-lot-table .lot-code{font-variant-numeric:tabular-nums}
+.stock-lot-table .lot-order{padding-left:2px;padding-right:4px}
