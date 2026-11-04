@@ -10,6 +10,7 @@ function thisMonth(){const d=new Date();return `${d.getFullYear()}-${String(d.ge
 function at(s){return String(s||'').replace('T',' ').slice(0,16)}
 
 const CSS=`
+.st-grid tr[draggable]{cursor:grab}.st-grid tr.st-drag{opacity:.4}
 .st-wrap{overflow:auto;max-height:calc(100vh - 230px);border:1px solid #9e9e9e;background:#fff}
 .st-grid{border-collapse:collapse;table-layout:fixed;font-size:12.5px;line-height:1.25;color:#000;width:max-content}
 .st-grid th,.st-grid td{border:1px solid #9e9e9e;padding:2px 4px;height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -167,7 +168,7 @@ const Stocktake={
       <div class="st-chips">${s.blocks.map(b=>`<span class="st-chip">${esc(b.customerName)} <span class="sub">${b.applied?`反映済 ${esc(at(b.appliedAt))} ${esc(b.appliedBy)}`:`入力 ${b.enteredCount}/${b.rowCount}`}</span>${w&&!b.applied?`<button type="button" title="棚卸表から外す" data-st-remove="${b.customerId}">×</button>`:''}</span>`).join('')||'<span class="sub">顧客にチェックを入れて「選んだ顧客を追加」すると、その顧客の在庫が下に追加されます。</span>'}</div>
       <div class="st-wrap"><table class="st-grid"><colgroup>${COLS.map(c=>`<col style="width:${c[1]}px">`).join('')}</colgroup>
       <thead><tr>${COLS.map(c=>`<th class="${c[2]}">${c[0]}</th>`).join('')}</tr></thead><tbody>
-      ${s.rows.map(r=>{const b=blockById[r.blockId];const edit=w&&!b.applied;const start=prev!==null&&prev!==r.blockId;prev=r.blockId;return `<tr class="${b.applied?'st-done':''}${start?' st-block-start':''}">
+      ${s.rows.map(r=>{const b=blockById[r.blockId];const edit=w&&!b.applied;const start=prev!==null&&prev!==r.blockId;prev=r.blockId;return `<tr class="${b.applied?'st-done':''}${start?' st-block-start':''}" data-rid="${r.id}" data-blk="${r.blockId}"${w?' draggable="true"':''}>
         <td class="n">${esc(r.officeCode)}</td><td>${esc(r.customerName)}</td><td title="${esc(r.productName)}">${esc(r.productName)}</td><td class="n">${esc(r.productCode)}</td>
         <td>${sizeText(r)}</td><td class="n">${unitText(r)}</td><td class="n">${num(r.bookQty)}</td><td class="n">${money(r.bookAmount)}</td>
         <td class="n cI">${edit?`<input class="st-actual" data-row="${r.id}" type="text" inputmode="numeric" value="${r.actualQty??''}">`:num(r.actualQty)}${mis(r)}</td>
@@ -183,6 +184,7 @@ const Stocktake={
     const rowsBody=()=>[...document.querySelectorAll('.st-actual')].map(i=>({id:Number(i.dataset.row),actualQty:i.value.trim(),note:(document.querySelector(`[data-note="${i.dataset.row}"]`)||{}).value||''}))
     const save=async()=>{if(!document.querySelector('.st-actual'))return;state.stCur=await api('/api/stocktakes/save',{month:s.month,rows:rowsBody()})}
     bindExcel(this,s,save)
+    if(w)bindDrag(s,save,()=>this.page())
     const picked=()=>[...document.querySelectorAll('.st-pick-list input:checked:not(:disabled)')].map(i=>Number(i.value))
     const showPicked=()=>{const el=$('#stPicked');if(el)el.textContent=`${picked().length}件選択`}
     showPicked()
@@ -214,5 +216,21 @@ const Stocktake={
     }
   },
 }
+// 行のドラッグ並べ替え（同じ顧客の中だけ）。落とした時点で順番を保存する。
+function bindDrag(s,save,rerender){
+  const body=document.querySelector('.st-grid tbody');if(!body)return
+  let drag=null
+  body.addEventListener('dragstart',e=>{const tr=e.target.closest&&e.target.closest('tr[data-rid]');if(!tr)return;const a=document.activeElement;if(a&&a.tagName==='INPUT'&&tr.contains(a)){e.preventDefault();return}drag=tr;tr.classList.add('st-drag');e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',tr.dataset.rid)}catch(_){}})
+  body.addEventListener('dragover',e=>{const tr=e.target.closest('tr[data-rid]');if(!drag||!tr||tr===drag||tr.dataset.blk!==drag.dataset.blk)return;e.preventDefault();const r=tr.getBoundingClientRect();(e.clientY>r.top+r.height/2?tr.after(drag):tr.before(drag))})
+  body.addEventListener('dragend',()=>{if(drag)drag.classList.remove('st-drag')})
+  body.addEventListener('drop',async e=>{
+    if(!drag)return;e.preventDefault()
+    const blk=drag.dataset.blk;drag.classList.remove('st-drag');drag=null
+    const b=s.blocks.find(x=>String(x.id)===blk);if(!b)return
+    const ids=[...body.querySelectorAll(`tr[data-blk="${blk}"]`)].map(t=>Number(t.dataset.rid))
+    try{await save();state.stCur=await api('/api/stocktakes/order',{month:s.month,customerId:b.customerId,rowIds:ids});rerender()}catch(err){toast(err.message);rerender()}
+  })
+}
 global.Stocktake=Stocktake
 })(window)
+

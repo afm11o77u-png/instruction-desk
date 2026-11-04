@@ -2,6 +2,8 @@
 実棚を入力し「実棚で在庫を上書き」で stock.register_stocktake を使い差分だけ棚卸調整する。
 顧客の自動選別（帳簿のずれ等）は行わない。"""
 import json
+import re
+import unicodedata
 import uuid
 
 import stock
@@ -57,6 +59,16 @@ def schema(c):
         # 棚卸チェックシートの5つの入力欄（空欄は null）。計＝合計が実棚点数になる。
         c.execute("ALTER TABLE stocktake_sheet_rows ADD COLUMN check_json TEXT NOT NULL DEFAULT '[]'")
     c.execute('CREATE INDEX IF NOT EXISTS stocktake_sheet_rows_block ON stocktake_sheet_rows(block_id, sort_no)')
+    # 顧客ごとの行の並び（ドラッグで保存）。月の棚卸表とは独立して保持し、再追加・翌月にも使う。
+    c.execute('''CREATE TABLE IF NOT EXISTS stocktake_row_order (
+      customer_id INTEGER NOT NULL,
+      customer_product_id INTEGER NOT NULL,
+      size_label TEXT NOT NULL,
+      location_id INTEGER NOT NULL,
+      condition TEXT NOT NULL,
+      pos INTEGER NOT NULL,
+      PRIMARY KEY(customer_id, customer_product_id, size_label, location_id, condition)
+    )''')
 
 
 def _month(v):
@@ -284,10 +296,82 @@ def _inc_price(c, cp_id, size, location_id, condition):
     return None, None
 
 
+_SIZE_RANK = {'XS': 1, 'SS': 2, 'S': 3, 'M': 4, 'L': 5, 'LL': 6, 'XL': 6, 'XXL': 7, '2L': 6, '3L': 7, '4L': 8,
+              '5L': 9, '6L': 10, '7L': 11, '8L': 12}
+
+
+def size_key(size):
+    """サイズの小→大。数値は数値順、SS<S<M<L<LL<3L<4L…、F/FREE は文字サイズの後、その他は文字列順。"""
+    s = unicodedata.normalize('NFKC', str(size or '')).strip().upper()
+    if s in _SIZE_RANK:
+        return (1, _SIZE_RANK[s], s)
+    m = re.fullmatch(r'(\d+)X?L', s)
+    if m:
+        return (1, int(m.group(1)) + 4, s)
+    m = re.fullmatch(r'(\d+(?:\.\d+)?)(.*)', s)
+    if m:
+        return (0, float(m.group(1)), m.group(2))
+    if s in ('F', 'FREE', 'フリー', 'FS'):
+        return (2, 0, s)
+    return (3, 0, s)
+
+
+def supplier_key(name):
+    """仕入先名の Shift-JIS（cp932）バイト順。"""
+    try:
+        return str(name or '').encode('cp932')
+    except UnicodeEncodeError:
+        return str(name or '').encode('cp932', 'replace')
+
+
+def default_row_key(supplier, code, size):
+    return (supplier_key(supplier), str(code or ''), size_key(size))
+
+
+def order_items(items, saved):
+    """items: 既定順に並んだキーの列。saved: キー→pos。保存済みは保存順に並べ、新しいものは既定順で
+    直前の行の後ろ（先頭側で直前がなければ、次の保存済み行の前）へ入れる。"""
+    out = sorted([k for k in items if k in saved], key=lambda k: saved[k])
+    prev = None
+    lead = []
+    for k in items:
+        if k in saved:
+            if lead:
+                i = out.index(k)
+                out[i:i] = lead
+                lead = []
+            prev = k
+        elif prev is None:
+            lead.append(k)
+        else:
+            out.insert(out.index(prev) + 1, k)
+            prev = k
+    return out + lead
+
+
+def save_order(c, body):
+    """行のドラッグ並べ替え: rowIds（その顧客の全行）の順で保存。"""
+    stock._require_write(body)
+    month = _month(body.get('month'))
+    b = _block(c, month, body.get('customerId'))
+    ids = body.get('rowIds')
+    rows = {r['id']: r for r in c.execute('SELECT * FROM stocktake_sheet_rows WHERE block_id=?', (b['id'],))}
+    if not isinstance(ids, list) or sorted(ids) != sorted(rows):
+        raise ValueError('並び順が正しくありません。')
+    for i, rid in enumerate(ids, 1):
+        r = rows[rid]
+        c.execute('UPDATE stocktake_sheet_rows SET sort_no=? WHERE id=?', (i, rid))
+        c.execute('''INSERT INTO stocktake_row_order(customer_id,customer_product_id,size_label,location_id,condition,pos)
+                     VALUES(?,?,?,?,?,?) ON CONFLICT(customer_id,customer_product_id,size_label,location_id,condition)
+                     DO UPDATE SET pos=excluded.pos''',
+                  (b['customer_id'], r['customer_product_id'], r['size_label'], r['location_id'], r['condition'], i))
+    return get(c, month)
+
+
 def _snapshot_rows(c, block_id, cu):
-    lots = c.execute('''SELECT l.*, p.code, p.name AS product_name, p.color, cp.embroidery
+    lots = c.execute('''SELECT l.*, p.code, p.name AS product_name, p.color, cp.embroidery, COALESCE(su.name,'') AS supplier_name
                         FROM lots l JOIN customer_products cp ON cp.id=l.customer_product_id
-                        JOIN products p ON p.id=cp.product_id
+                        JOIN products p ON p.id=cp.product_id LEFT JOIN suppliers su ON su.id=p.supplier_id
                         WHERE cp.customer_id=? AND l.qty_remaining<>0
                         ORDER BY p.code, p.id, cp.embroidery, l.size_label, l.location_id, l.condition, l.id''',
                      (cu['id'],)).fetchall()
@@ -295,8 +379,12 @@ def _snapshot_rows(c, block_id, cu):
     for lot in lots:
         key = (lot['customer_product_id'], lot['size_label'], lot['location_id'], lot['condition'])
         groups.setdefault(key, []).append(lot)
+    keys = sorted(groups, key=lambda k: default_row_key(groups[k][0]['supplier_name'], groups[k][0]['code'], k[1]))
+    saved = {(r['customer_product_id'], r['size_label'], r['location_id'], r['condition']): r['pos'] for r in c.execute(
+        'SELECT * FROM stocktake_row_order WHERE customer_id=?', (cu['id'],))}
     no = 0
-    for key, glots in groups.items():
+    for key in order_items(keys, saved):
+        glots = groups[key]
         cp_id, size, loc_id, cond = key
         ordered = stock.issue_sequence([l for l in glots if l['qty_remaining'] > 0])
         ordered += [l for l in glots if l['qty_remaining'] <= 0]
