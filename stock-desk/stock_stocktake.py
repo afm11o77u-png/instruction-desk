@@ -324,8 +324,17 @@ def supplier_key(name):
         return str(name or '').encode('cp932', 'replace')
 
 
+_CODE_HYPHENS = str.maketrans('', '', '-‐−－')
+
+
+def code_key(code):
+    """品番の並び用キー。ハイフンを無視して比較し（5-056 < 51-611 < 5-397）、同じなら元の品番で決める。"""
+    c = str(code or '')
+    return (c.translate(_CODE_HYPHENS), c)
+
+
 def default_row_key(supplier, code, size):
-    return (supplier_key(supplier), str(code or ''), size_key(size))
+    return (supplier_key(supplier), code_key(code), size_key(size))
 
 
 def order_items(items, saved):
