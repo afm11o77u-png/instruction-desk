@@ -816,7 +816,6 @@
   async function loadKintaiShift(forceYm, opts) {
     if (!canKintai()) throw Error('マーク管理の権限がありません。');
     if (loading) return;
-    if (window.loadKintaiCrimp) window.loadKintaiCrimp().catch(() => {});
     const skipGuard = opts && opts.skipGuard;
     if (!skipGuard && shiftDirty) {
       const ok = await confirmLeaveShift();

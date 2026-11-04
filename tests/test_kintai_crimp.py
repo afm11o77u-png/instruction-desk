@@ -111,8 +111,15 @@ class CrimpTest(unittest.TestCase):
 
     def test_ui_wired(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
-        self.assertLess(html.index('id="shiftgrid"'), html.index('id="crimpcounter"'))
-        self.assertLess(html.index('id="crimpcounter"'), html.index('id="kintaibihin"'))
+        nav = html[html.index('id="kintainav"'):html.index('id="sidebarfooter"')]
+        self.assertLess(nav.index('data-kintai-section="bihin"'), nav.index('data-kintai-section="crimp">圧着カウンター<'))
+        shift = html[html.index('id="kintaishift"'):html.index('id="kintaicrimp"')]
+        self.assertNotIn('crimpcounter', shift)
+        self.assertLess(html.index('id="kintaicrimp" hidden'), html.index('id="crimpcounter"'))
+        pl = (ROOT / 'placement.js').read_text(encoding='utf-8')
+        self.assertIn("if(section==='crimp')return 'crimp';", pl)
+        self.assertIn("['shift','crimp'].includes(b.dataset.kintaiSection)", pl)
+        self.assertNotIn('loadKintaiCrimp', (ROOT / 'kintai-shift.js').read_text(encoding='utf-8'))
         self.assertIn('/kintai-crimp.js', (ROOT / 'server.py').read_text(encoding='utf-8'))
         js = (ROOT / 'kintai-crimp.js').read_text(encoding='utf-8')
         self.assertIn('confirm(', js)
