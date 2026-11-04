@@ -14,7 +14,7 @@ function conditionSelectHtml(id,value,opts){
   const all=allowAll?`<option value="" ${cur===''?'selected':''}>すべて</option>`:''
   return `<select id="${id}" aria-label="状態">${all}${CONDITION_OPTS.map(([v,l])=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('')}</select>`
 }
-const STOCK_SECTIONS=new Set(['list','history','setup','period','orders'])
+const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake'])
 /** Legacy ?section=move / 保存済みURL → 在庫一覧へ案内 */
 let moveRedirectNotice=false
 function normalizeSection(section){
@@ -316,7 +316,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders',stocktake:'stock-stocktake'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -335,7 +335,7 @@ function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
   // Title-row 表示 slot: 在庫一覧系 + 登録・設定（枠外・右上）
-  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='setup'){
+  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='setup'){
     slot.hidden=false
     syncLegacyCsvBulkEntry(section)
     return
@@ -381,7 +381,7 @@ function mountStockDisplay(stage,tab,repaint){
   const screenId=stockScreenId(tab)
   // Title-row 表示 slot (syncStockListDisplaySlot): 在庫一覧・期間・発注・登録設定.
   // Must remount here so the visible control matches this page's screenId (not a leftover).
-  const useTitleSlot=tab==='list'||tab==='history'||tab==='period'||tab==='orders'||SETUP_TAB_IDS.has(tab)
+  const useTitleSlot=tab==='list'||tab==='history'||tab==='period'||tab==='orders'||tab==='stocktake'||SETUP_TAB_IDS.has(tab)
   const toolbar=useTitleSlot
     ? document.querySelector('#stocklistdisplay')
     : document.querySelector('#main .bar')
@@ -459,6 +459,9 @@ function applySectionState(section,setupTab){
   }else if(state.section==='orders'){
     state.tab='orders'
     state.mode='stock'
+  }else if(state.section==='stocktake'){
+    state.tab='stocktake'
+    state.mode='stock'
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
     state.setupTab=next
@@ -484,6 +487,7 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(state.tab==='history'){ensureHistoryDefaults();await loadStockHistory()}
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
+  if(state.tab==='stocktake'&&typeof Stocktake!=='undefined')await Stocktake.loadList()
   paint()
   if(!silent)notifyParentSection()
   return true
@@ -538,6 +542,7 @@ async function boot(){
   if(state.tab==='history'){ensureHistoryDefaults();await loadStockHistory()}
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
+  if(state.tab==='stocktake'&&typeof Stocktake!=='undefined')await Stocktake.loadList()
   await modesP
   paint()
   notifyParentSection()
@@ -559,16 +564,19 @@ function paint(){
   }else if(state.section==='orders'){
     state.tab='orders'
     state.mode='stock'
+  }else if(state.section==='stocktake'){
+    state.tab='stocktake'
+    state.mode='stock'
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders')))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -585,7 +593,7 @@ function paint(){
   syncStockListDisplaySlot(state.section)
   // 旧「旧CSV取込」タブは廃止。残っている localStorage 値は商品タブへ寄せる
   if(state.tab==='legacyCsv'){state.tab='products';state.setupTab='products';saveSetupTab('products')}
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>')}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>')}[state.tab]
   view()
   // 表示コントロール再マウント後も「旧CSV一括取り込み」を表示の左に維持
   if(state.section==='setup')syncLegacyCsvBulkEntry('setup')
@@ -797,7 +805,7 @@ function customers(){
   const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}${r.officeCode||''}`.includes(state.q))
   const blank='<span class="blank">—</span>'
   $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者・営業所コード','','新しく登録','customers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
-    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}${r.officeCode?`<span class="sub dm-secondary">営業所 ${esc(r.officeCode)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
+    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}${r.officeCode?`<span class="sub dm-secondary">営業所 ${esc(r.officeCode)}</span>`:''}${r.stocktakeTarget?'<span class="badge">棚卸</span>':''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}${r.officeCode?`<div class="dm-secondary">営業所 ${esc(r.officeCode)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
@@ -1029,7 +1037,7 @@ function edit(row,title,form,save){
   }
 }
 function field(id,label,value,required){return `<label>${label}${required?'（必須）':''}<input id="${id}" value="${esc(value||'')}"></label>`}
-function customerForm(r){r=r||{};return `<div class="grid">${field('name','顧客名',r.name,true)}${field('kana','フリガナ',r.kana)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}${field('officeCode','営業所コード',r.officeCode)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label><p class="sub">顧客IDは自動です。名前を変えても、同じ顧客のまま在庫がつながります。</p>`}
+function customerForm(r){r=r||{};return `<div class="grid">${field('name','顧客名',r.name,true)}${field('kana','フリガナ',r.kana)}${field('phone','電話番号',r.phone)}${field('contact','担当者',r.contact)}${field('officeCode','営業所コード',r.officeCode)}</div><label class="check"><input type="checkbox" id="stocktakeTarget" ${r.stocktakeTarget?'checked':''}> 棚卸対象</label><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label><p class="sub">顧客IDは自動です。名前を変えても、同じ顧客のまま在庫がつながります。</p>`}
 function supplierForm(r){r=r||{};return `<div class="grid">${field('name','仕入先名',r.name,true)}${field('phone','電話番号',r.phone)}${field('fax','FAX',r.fax)}${field('contact','担当者',r.contact)}</div><label>住所<textarea id="address">${esc(r.address||'')}</textarea></label>`}
 function locationSiteContext(r){
   if(!r||!r.id)return {site:null,shelves:[]}
@@ -1272,7 +1280,7 @@ function bindProductEditor(row){
 function readForm(row){
   const title=$('#dialog h2').textContent
   const active=row?row.active!==false:true
-  if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,officeCode:$('#officeCode')?$('#officeCode').value:'',address:$('#address').value,active}
+  if(title.includes('顧客'))return {id:row&&row.id,name:$('#name').value,kana:$('#kana').value,phone:$('#phone').value,contact:$('#contact').value,officeCode:$('#officeCode')?$('#officeCode').value:'',stocktakeTarget:$('#stocktakeTarget')?$('#stocktakeTarget').checked:false,address:$('#address').value,active}
   if(title.includes('仕入先'))return {id:row&&row.id,name:$('#name').value,phone:$('#phone').value,fax:$('#fax')?$('#fax').value:'',contact:$('#contact').value,address:$('#address').value,active}
   if(title.includes('保管場所')||title.includes('拠点を新しく登録')){
     const shelves=collectLocationShelves()
