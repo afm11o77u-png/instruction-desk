@@ -180,19 +180,22 @@ function tellStockFrame(section){
 let kintaiSection='attendance';
 function kintaiShiftOnly(){return currentUser?.role==='floor3'&&!(currentUser.manage||currentUser.overview||currentUser.mark_kintai)}
 function normalizeKintaiSection(section){
+  if(section==='crimp')return 'crimp';
   if(section==='shift'||kintaiShiftOnly())return 'shift';
   if(section==='bihin')return 'bihin';
   return 'attendance';
 }
 function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
-  document.querySelectorAll('#kintainav .nav').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&b.dataset.kintaiSection!=='shift'});
+  document.querySelectorAll('#kintainav .nav').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
   const att=$('#kintaiattendance');
   const shift=$('#kintaishift');
   const bihin=$('#kintaibihin');
   if(att)att.hidden=kintaiSection!=='attendance';
   if(shift)shift.hidden=kintaiSection!=='shift';
   if(bihin)bihin.hidden=kintaiSection!=='bihin';
+  const crimp=$('#kintaicrimp');
+  if(crimp)crimp.hidden=kintaiSection!=='crimp';
 }
 async function showKintaiSection(section){
   const next=normalizeKintaiSection(section);
@@ -207,6 +210,8 @@ async function showKintaiSection(section){
   if(typeof listChrome==='function')listChrome();
   if(kintaiSection==='shift'){
     if(typeof loadKintaiShift==='function')loadKintaiShift().catch(e=>toast(e.message));
+  }else if(kintaiSection==='crimp'){
+    if(typeof loadKintaiCrimp==='function')loadKintaiCrimp().catch(e=>toast(e.message));
   }else if(kintaiSection==='bihin'){
     if(typeof loadKintaiBihin==='function')loadKintaiBihin().catch(e=>toast(e.message));
   }else if(typeof loadKintai==='function'){
