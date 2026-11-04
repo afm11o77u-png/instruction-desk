@@ -20,6 +20,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import kintai_shift
+import kintai_crimp
 import kintai_bihin
 import kintai_bihin_xlsx
 
@@ -353,6 +354,7 @@ def schema(c):
         )'''
     )
     kintai_shift.schema(c)
+    kintai_crimp.schema(c)
     kintai_bihin.schema(c)
     _seed_people(c)
     _ensure_shift_top_people(c)
@@ -2468,8 +2470,12 @@ def _parse_ym(value: str | None) -> tuple[int, int] | None:
     return y, mo
 
 
-def shift_view_only(user) -> bool:
-    """現場３はマーク管理のシフト表を閲覧のみ可能（mark_kintai 設定に関係なく、編集は不可）。"""
+def is_shift_path(path: str) -> bool:
+    return path == '/api/kintai/shift' or path.startswith('/api/kintai/shift/')
+
+
+def shift_access_only(user) -> bool:
+    """現場３はマーク管理のうちシフト表だけ閲覧・編集・保存できる（他はマーク権限が必要）。"""
     try:
         return bool(user) and user['role'] == 'floor3'
     except (KeyError, IndexError, TypeError):
@@ -2477,8 +2483,14 @@ def shift_view_only(user) -> bool:
 
 
 def handle_get(h, c, path: str):
+    if path in ('/api/kintai/crimp', '/api/kintai/crimp/workers'):
+        if not (can_use_kintai(h.user) or shift_access_only(h.user)):
+            return 403, {'error': 'マーク管理の権限がありません。'}
+        if path == '/api/kintai/crimp/workers':
+            return 200, kintai_crimp.workers(c)
+        return 200, kintai_crimp.list_month(c, _query_map(h).get('month'), h.user)
     denied = require_kintai(h.user)
-    if denied and shift_view_only(h.user) and path == '/api/kintai/shift':
+    if denied and shift_access_only(h.user) and is_shift_path(path):
         denied = None
     if denied:
         return denied
@@ -2549,9 +2561,16 @@ def handle_get(h, c, path: str):
 
 
 def handle_post(h, c, path: str, d: dict):
-    if shift_view_only(h.user) and (path == '/api/kintai/shift' or path.startswith('/api/kintai/shift/')):
-        return 403, {'error': '現場３はシフト表を閲覧のみできます。'}
+    if path in ('/api/kintai/crimp', '/api/kintai/crimp/delete'):
+        # 圧着カウンター: シフト表を見られる人は入力可。修正・削除は管理者だけ。
+        if not (can_use_kintai(h.user) or shift_access_only(h.user)):
+            return 403, {'error': 'マーク管理の権限がありません。'}
+        if path.endswith('/delete'):
+            return kintai_crimp.delete(c, h.user, d or {})
+        return kintai_crimp.save(c, h.user, d or {})
     denied = require_kintai(h.user)
+    if denied and shift_access_only(h.user) and is_shift_path(path):
+        denied = None
     if denied:
         return denied
     if path == '/api/kintai/import':
