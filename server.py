@@ -14,6 +14,7 @@ import names
 import display_modes
 import migration
 import kintai
+import kintai_crimp
 import name_exe
 from requirements import METHODS, check_posting
 
@@ -977,7 +978,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/api/ship-workers':
             if self.user['role'] not in ('owner','floor'): return self.reply(403,{'error':'出荷仕分けは現場と主管理者が使用します。'})
             with connect() as c:
-                rows=[{'id':r['id'],'name':r['name']} for r in c.execute("SELECT id,name FROM users WHERE active=1 AND role IN ('owner','floor') ORDER BY name")]
+                rows=kintai_crimp.workers(c)
             return self.reply(200,rows)
         if path=='/api/assignees':
             with connect() as c:
@@ -1063,7 +1064,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if not order or not can_access(self.user,json.loads(order['payload'])): return self.reply(404,{'error':'指示書が見つかりません。'})
                 rows=[dict(r) for r in c.execute('SELECT at,action,actor,changes FROM history WHERE order_id=? ORDER BY id DESC',(oid,))]
             return self.reply(200,rows)
-        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
