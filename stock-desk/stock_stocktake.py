@@ -7,9 +7,7 @@ import stock
 
 
 def schema(c):
-    cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
-    if 'stocktake_target' not in cols:
-        c.execute('ALTER TABLE customers ADD COLUMN stocktake_target INTEGER NOT NULL DEFAULT 0')
+    # 旧 customers.stocktake_target 列は使わない（既存DBに残っていても無害。データは消さない）。
     c.execute('''CREATE TABLE IF NOT EXISTS stocktakes (
       id INTEGER PRIMARY KEY,
       customer_id INTEGER NOT NULL REFERENCES customers(id),
@@ -150,8 +148,8 @@ def list_stocktakes(c):
         out.append({'id': r['id'], 'month': r['month'], 'customerId': r['customer_id'],
                     'customerName': r['customer_name'], 'appliedAt': r['applied_at'],
                     'createdAt': r['created_at'], 'rowCount': r['n'], 'enteredCount': r['entered']})
-    customers = [{'id': r['id'], 'name': r['name']} for r in c.execute(
-        'SELECT id, name FROM customers WHERE stocktake_target=1 AND active=1 ORDER BY name')]
+    customers = [{'id': r['id'], 'name': r['name'], 'kana': r['kana'] or ''} for r in c.execute(
+        'SELECT id, name, kana FROM customers WHERE active=1 ORDER BY name')]
     customers.sort(key=lambda x: stock.customer_sort_key(x['name']))
     return {'stocktakes': out, 'customers': customers}
 
@@ -180,8 +178,6 @@ def create(c, body):
     existing = c.execute('SELECT id FROM stocktakes WHERE customer_id=? AND month=?', (cid, month)).fetchone()
     if existing:
         return {**get(c, existing['id']), 'already': True}
-    if not cu['stocktake_target']:
-        raise ValueError('棚卸対象の顧客を選んでください。')
     t = stock.stamp()
     actor = stock._actor_name(body)
     c.execute('INSERT INTO stocktakes(customer_id,month,created_at,created_by,updated_at) VALUES(?,?,?,?,?)',

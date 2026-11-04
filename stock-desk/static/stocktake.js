@@ -31,22 +31,38 @@ const Stocktake={
     const L=state.stList||{stocktakes:[],customers:[]}
     $('#main').innerHTML=`<section class="panel">
       ${w?`<div class="bar">
-        <select id="stCust"><option value="">棚卸対象の顧客</option>${L.customers.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
-        <input id="stMonth" type="month" value="${thisMonth()}">
-        <button type="button" class="primary" id="stCreate">棚卸表を開く</button>
-      </div>${L.customers.length?'':'<p class="sub">顧客マスタで「棚卸対象」に印を付けた顧客が選べます。</p>'}`:''}
+        <input id="stMonth" type="month" value="${esc(state.stMonth||thisMonth())}">
+        <input id="stFind" type="search" placeholder="顧客を検索">
+        <button type="button" class="primary" id="stCreate">選んだ顧客の棚卸表を作成</button>
+        <span class="sub" id="stPicked"></span>
+      </div>
+      <div id="stCustList" style="max-height:220px;overflow:auto;border:1px solid #d5ead4;border-radius:8px;padding:6px;margin:0 0 12px">
+        ${L.customers.map(c=>`<label class="check" data-st-name="${esc(c.name+' '+c.kana)}" style="display:block"><input type="checkbox" value="${c.id}"> ${esc(c.name)}</label>`).join('')||'<span class="sub">顧客がありません。</span>'}
+      </div>`:''}
       <table><thead><tr><th>年月</th><th>顧客</th><th>入力</th><th>状態</th><th></th></tr></thead><tbody>
       ${L.stocktakes.map(s=>`<tr><td>${esc(s.month)}</td><td>${esc(s.customerName)}</td><td>${s.enteredCount}/${s.rowCount}</td><td>${s.appliedAt?`反映済 ${esc(at(s.appliedAt))}`:'入力中'}</td><td><button type="button" data-st-open="${s.id}">開く</button></td></tr>`).join('')||'<tr><td colspan="5">棚卸はまだありません。</td></tr>'}
       </tbody></table></section>`
+    const picked=()=>[...document.querySelectorAll('#stCustList input:checked')].map(i=>Number(i.value))
+    const showPicked=()=>{const el=$('#stPicked');if(el)el.textContent=picked().length?`${picked().length}件選択`:''}
+    document.querySelectorAll('#stCustList input').forEach(i=>i.onchange=showPicked)
+    const find=$('#stFind')
+    if(find)find.oninput=()=>{const q=find.value.trim();document.querySelectorAll('#stCustList [data-st-name]').forEach(l=>{l.hidden=!!q&&!l.dataset.stName.includes(q)})}
     const btn=$('#stCreate')
     if(btn)btn.onclick=async()=>{
-      const cid=Number($('#stCust').value)
-      if(!cid)return toast('顧客を選んでください。')
+      const ids=picked()
+      if(!ids.length)return toast('顧客を選んでください。')
+      const month=$('#stMonth').value;state.stMonth=month
+      let made=0,already=0,last=null
       try{
-        const r=await api('/api/stocktakes/create',{customerId:cid,month:$('#stMonth').value})
-        if(r.already)toast('作成済みの棚卸を開きました。')
-        state.stId=r.id;state.stCur=r;this.page()
+        for(const cid of ids){
+          const r=await api('/api/stocktakes/create',{customerId:cid,month})
+          r.already?already++:made++;last=r
+        }
       }catch(e){toast(e.message)}
+      if(!last)return
+      if(ids.length===1){state.stId=last.id;state.stCur=last;return this.page()}
+      toast(`${made}件作成${already?`・${already}件は作成済み`:''}`)
+      state.stId=null;await this.loadList();this.page()
     }
     document.querySelectorAll('[data-st-open]').forEach(b=>b.onclick=async()=>{
       state.stId=Number(b.dataset.stOpen)
