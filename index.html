@@ -26,9 +26,7 @@
 <p id="kintailayout" class="kintaimeta"></p>
 <p id="kintainote" class="kintaimeta"></p>
 <details class="kintaisettings" open><summary>読取元設定（利用者管理権限）</summary>
-<p>サーバー実行ユーザーに読取権限が必要です。パスにパスワードを書かないでください。設定は Git に載らない data/ 配下に保存されます。マーク管理のONは利用者管理から行い、ここでは推測して付けません。</p>
 <div class="kintai-paths-import">
-<p><strong>出勤簿パス一覧</strong>（氏名とフルUNCのxlsx）。先頭の不可視文字は自動除去。一覧に無い人（加藤など）は消しません。</p>
 <input id="kintaipathsfile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
 <div class="kintai-setting-actions">
 <button type="button" class="primary" id="kintaipathsimport">出勤簿パス.xlsxを取込</button>
@@ -37,40 +35,10 @@
 <p id="kintaipathsstatus" class="kintaimeta"></p>
 </div>
 <label>対象者<select id="kintaifileperson" aria-label="読取元を設定する対象者"></select></label>
-<label>この人のレイアウト<select id="kintaipersonlayout" aria-label="対象者ごとのレイアウト">
-<option value="">（雇用区分の既定を使う）</option>
-<option value="shukkinbo-2026-seishain-v1">正社員2026集計</option>
-<option value="shukkinbo-2026-monthdot-v1">契約2026（集計・月シート）</option>
-<option value="shukkinbo-2026-monthdot-part-v1">パート2026（集計・月シート）</option>
-<option value="shukkinbo-2026-monthdot-pending">契約2026（旧ID・エイリアス）</option>
-<option value="fixture-v1">検証用 fixture-v1</option>
-</select></label>
 <label>出勤簿ファイル（フルパス）<input id="kintaifileinput" maxlength="1000" placeholder="\\Desktop-iu7d38q\e\…\出勤簿   2026年度版\①　正社員…\009  ….xlsx" autocomplete="off" spellcheck="false"></label>
 <div class="kintai-setting-actions">
-<button type="button" id="kintaifilefill">正社員の例（加藤・フルパス）</button>
-<button type="button" id="kintaifilefill-contract">契約の例（フルパス）</button>
-<button type="button" id="kintaifilefill-part">パートの例（フルパス）</button>
 <button type="button" class="primary" id="kintaifilesave">この対象者の読取元を保存</button>
-<button type="button" id="kintaiprobe">ファイル構造を確認（読取専用）</button>
 </div>
-<details class="kintai-optional-root">
-<summary>任意：年度ルート（相対パス用）・候補一覧</summary>
-<p>フルパス運用では不要です。相対パスだけ使うとき、またはフォルダ内候補を読むときに使います。</p>
-<label>年度ルート（出勤簿 2026年度版まで）<input id="kintaishareinput" maxlength="1000" placeholder="\\Desktop-iu7d38q\e\…\出勤簿   2026年度版" autocomplete="off"></label>
-<label>全体の既定レイアウト（雇用区分に無い場合）<select id="kintailayoutsel" aria-label="既定の出勤簿レイアウト">
-<option value="shukkinbo-2026-seishain-v1">正社員（営業手当無し）2026（集計シート）</option>
-<option value="shukkinbo-2026-monthdot-v1">契約2026（集計・月シート）</option>
-<option value="shukkinbo-2026-monthdot-part-v1">パート2026（集計・月シート）</option>
-<option value="shukkinbo-2026-monthdot-pending">契約2026（旧ID・エイリアス）</option>
-<option value="fixture-v1">検証用 fixture-v1</option>
-</select></label>
-<button type="button" id="kintaisaveshare">年度ルートとレイアウトを保存</button>
-<label>雇用区分フォルダ（候補用）<select id="kintaisubdir" aria-label="雇用区分サブフォルダ"><option value="">（年度ルート直下／対象者の相対から推定）</option></select></label>
-<label>フォルダ内の候補<select id="kintaifilepick" aria-label="共有フォルダ内の候補ファイル"><option value="">（「候補を読む」で一覧）</option></select></label>
-<button type="button" id="kintailistfiles">フォルダ内の候補を読む</button>
-</details>
-<pre id="kintaiproberesult" class="kintaiprobe" hidden></pre>
-<p id="kintaisampleneed" class="kintaimeta"></p>
 </details>
 <div id="kintaiimportresult" class="kintaiimportresult" hidden></div>
 <p id="kintaistatus"></p>
