@@ -760,3 +760,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .exeusers{width:100%;border-collapse:collapse;font-size:.9rem;margin-top:6px}.exeusers th,.exeusers td{border:1px solid #d5ead4;padding:4px 8px;text-align:left}.exeusers .done{color:#186438;font-weight:700}.exeusers .todo{color:#c01717;font-weight:700}
 .exenotes{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;margin:0 0 8px;padding:8px 12px;border:1px solid #d5ead4;border-radius:8px;background:#fff;max-height:14em;overflow:auto}.exenotesview h3,#nameexenotesedit h3{margin:12px 0 6px;font-size:1rem}.exehistory{margin:8px 0}.exehistory summary{cursor:pointer;font-weight:700}#nameexehistory{max-height:22em;overflow:auto}.exehistitem{margin:8px 0;padding:6px 0;border-top:1px solid #e4eee4}.exehistitem .exehisthead{font-size:.85rem;color:#3d5344}.exehistitem .exehisthead b{color:#186438}.exenoteslabel{display:grid;gap:4px;margin:8px 0;font-size:.85rem;font-weight:700}#nameexenotes,#nameexeuploadnotes{width:100%;box-sizing:border-box;font:inherit;font-weight:400}
 .crimp-counter{margin-top:1.5rem}.crimp-form{display:flex;gap:.75rem;align-items:end;flex-wrap:wrap;margin-bottom:.5rem}.crimp-table{border-collapse:collapse;margin-top:.5rem}.crimp-table th,.crimp-table td{border:1px solid #ccc;padding:.25rem .6rem;text-align:right}.crimp-table td:first-child,.crimp-table td:nth-child(4){text-align:left}
+#memodesk{width:min(1000px,94vw);max-height:90vh}
+#memodesk .memo-layout{display:flex;gap:16px;align-items:flex-start}
+#memodesk .memo-list{flex:0 0 220px;display:flex;flex-direction:column;gap:4px}
+#memodesk .memo-body{flex:1;line-height:1.7;overflow:auto}
+#memodesk .memo-body h2{margin-top:0}

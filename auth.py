@@ -1,4 +1,5 @@
 """Local authentication and account administration. No external services."""
+from pathlib import Path
 import hashlib, hmac, secrets, time, re, sqlite3, json
 from http.cookies import SimpleCookie
 
@@ -150,6 +151,9 @@ class AuthMixin:
         if not u: return 401,{'error':'ログインしてください。'}
         if u['must_change']: return 403,{'error':'最初に仮パスワードを変更してください。'}
         self.user=u
+        if path=='/api/memos' or path.startswith('/api/memos/'):
+            if u['role']!='owner': return 403,{'error':'構想メモは主管理者だけが見られます。'}
+            return memo_get(path)
         if path in ['/api/users','/api/audit']:
             if not (u['role']=='owner' or u['manage']): return 403,{'error':'利用者管理の権限が必要です。'}
             if path=='/api/users': return 200,[public(r) for r in c.execute('SELECT * FROM users ORDER BY id')]
@@ -324,3 +328,22 @@ class AuthMixin:
         if path.startswith('/api/migration/') and (not u or u['role']!='owner'):
             return 403,{'error':'移行用バックアップは主管理者だけが使用できます。'}
         return None
+
+
+MEMO_DIR=Path(__file__).resolve().parent/'memos'
+
+def _memo_title(text,fallback):
+    for line in text.splitlines():
+        if line.startswith('# '): return line[2:].strip()
+    return fallback
+
+def memo_get(path):
+    """構想メモ（memos/*.md、1ファイル1メモ）。読み取り専用。"""
+    files=sorted(MEMO_DIR.glob('*.md')) if MEMO_DIR.is_dir() else []
+    if path=='/api/memos':
+        return 200,[{'id':f.stem,'title':_memo_title(f.read_text(encoding='utf-8'),f.stem)} for f in files]
+    key=path[len('/api/memos/'):]
+    f=next((f for f in files if f.stem==key),None)
+    if not f: return 404,{'error':'メモが見つかりません。'}
+    text=f.read_text(encoding='utf-8')
+    return 200,{'id':f.stem,'title':_memo_title(text,f.stem),'markdown':text}
