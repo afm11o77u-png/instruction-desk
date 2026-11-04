@@ -7,6 +7,7 @@ import stock_history
 import stock_period
 import stock_orders
 import stock_stocktake
+import stock_checksheet
 import excel_export
 from upload_limits import (
     LARGE_BODY_MAX_BYTES,
@@ -34,6 +35,7 @@ WRITE_PATHS = {
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/purchase-orders/printed',
     '/api/stocktakes/add', '/api/stocktakes/remove', '/api/stocktakes/save', '/api/stocktakes/apply',
+    '/api/stocktakes/checksheet/import-preview', '/api/stocktakes/checksheet/import',
     '/api/company-profile',
     '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
 }
@@ -247,6 +249,15 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
     if path == '/api/company-profile':
         with stock.connect(db_path) as c:
             return 200, stock_orders.company_profile(c)
+    if path == '/api/stocktakes/checksheet.xlsx':
+        try:
+            with stock.connect(db_path) as c:
+                data, filename = stock_checksheet.export_xlsx(c, (query.get('month') or [''])[0])
+            return 200, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {
+                'Content-Disposition': excel_export.content_disposition(filename),
+            }
+        except ValueError as e:
+            return 400, {'error': str(e)}
     if path in ('/api/stocktakes', '/api/stocktakes/get'):
         try:
             with stock.connect(db_path) as c:
@@ -697,6 +708,8 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/stocktakes/remove': stock_stocktake.remove_customer,
         '/api/stocktakes/save': stock_stocktake.save,
         '/api/stocktakes/apply': stock_stocktake.apply,
+        '/api/stocktakes/checksheet/import-preview': stock_checksheet.import_preview,
+        '/api/stocktakes/checksheet/import': stock_checksheet.import_apply,
         '/api/company-profile': stock_orders.save_company_profile,
     }
     fn = routes.get(path)

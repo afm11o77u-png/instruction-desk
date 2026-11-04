@@ -28,7 +28,17 @@ const CSS=`
 .st-chip{border:1px solid #c9dcc4;border-radius:12px;padding:2px 8px;font-size:12.5px;background:#f7fbf7}
 .st-chip button{border:0;background:none;padding:0 0 0 4px;cursor:pointer;font-weight:700}
 .st-pick{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.st-pick select{min-width:240px}`
+.st-pick select{min-width:240px}
+.st-mis{color:#c00;font-weight:700;cursor:help}
+.st-tabs{display:flex;flex-wrap:wrap;gap:2px;margin:6px 0 0}
+.st-tabs button{border:1px solid #9e9e9e;border-bottom:0;background:#f2f2f2;padding:3px 10px;font-size:12.5px;cursor:pointer}
+.st-tabs button.on{background:#fff;font-weight:700}
+.st-cs{font-family:'ＭＳ Ｐゴシック','MS PGothic',sans-serif}
+.st-cs th,.st-cs td{height:30px;border-color:#000}
+.st-cs thead th{background:#D9D9D9;font-size:14.5px}
+.st-cs thead th.k{font-size:18.5px}
+.st-cs td.b{font-weight:700;font-size:16px}.st-cs td.b1{font-weight:700;font-size:14.5px}
+.st-cs input{height:26px;font-size:14.5px}`
 function ensureCss(){if(!document.getElementById('stocktake-css')){const s=document.createElement('style');s.id='stocktake-css';s.textContent=CSS;document.head.appendChild(s)}}
 
 const COLS=[['コード',48,'hA'],['顧客',196,'hA'],['商品名',196,'hA'],['商品コード',125,'hA'],['サイズ',80,'hA'],['仕入単価',64,'hA'],['在庫数',95,'hG'],['在庫金額',95,'hG'],['実棚点数',95,'cI'],['在庫数との差',98,'cJ'],['実棚金額',95,'cK'],['在庫金額との差',110,'cL'],['備考',112,'hM']]
@@ -36,6 +46,42 @@ const COLS=[['コード',48,'hA'],['顧客',196,'hA'],['商品名',196,'hA'],['�
 function unitText(r){
   if(r.unitCost!=null)return num(r.unitCost)
   return r.unitMixed?'複数':'<span class="st-pending">原価未確定</span>'
+}
+
+function mis(r){return r.checkMismatch?`<span class="st-mis" title="チェックシートの計: ${r.checkTotal}">※</span>`:''}
+const fileB64=f=>new Promise((ok,ng)=>{const r=new FileReader();r.onload=()=>ok(String(r.result).split(',')[1]||'');r.onerror=()=>ng(Error('ファイルを読めませんでした。'));r.readAsDataURL(f)})
+function bindExcel(self,s,save){
+  $('#stXlsx').onclick=async()=>{
+    try{
+      await save()
+      const r=await fetch(BASE+'/api/stocktakes/checksheet.xlsx?month='+encodeURIComponent(s.month))
+      if(!r.ok){let m='Excelを出力できませんでした。';try{m=(await r.json()).error||m}catch(e){}throw Error(m)}
+      const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download=`棚卸チェックシート_${s.month}.xlsx`;a.click()
+      setTimeout(()=>URL.revokeObjectURL(a.href),1000)
+    }catch(e){toast(e.message)}
+  }
+  const imp=$('#stImport')
+  if(!imp)return
+  imp.onclick=()=>{
+    const f=document.createElement('input');f.type='file';f.accept='.xlsx'
+    f.onchange=async()=>{
+      if(!f.files[0])return
+      try{
+        await save()
+        const body={month:s.month,fileBase64:await fileB64(f.files[0])}
+        const pv=await api('/api/stocktakes/checksheet/import-preview',body)
+        if(pv.errors.length){toast(pv.errors.slice(0,3).join(' / '),8000);return}
+        const lines=pv.updates.slice(0,15).map(u=>`${u.sheet} ${u.productName} ${u.size}: ${u.before??'空欄'}→${u.after??'空欄'}`)
+        if(pv.updates.length>15)lines.push(`…ほか${pv.updates.length-15}行`)
+        const msg=`更新 ${pv.updateCount}行 / 変更なし ${pv.unchanged}行 / 該当なし ${pv.unmatched}行 / 反映済のため除外 ${pv.skippedApplied}行`
+        if(!pv.updateCount){toast(msg,6000);return}
+        if(!confirm(msg+'\n\n'+lines.join('\n')+'\n\n取り込みますか？'))return
+        state.stCur=await api('/api/stocktakes/checksheet/import',{...body,confirm:true})
+        toast(`${state.stCur.imported}行を取り込みました。`);self.page()
+      }catch(e){toast(e.message)}
+    }
+    f.click()
+  }
 }
 
 const Stocktake={
@@ -46,6 +92,7 @@ const Stocktake={
   },
   page(){
     ensureCss()
+    if(state.stCur&&state.stView==='check')return this.check()
     if(state.stCur)return this.sheet()
     const L=state.stList||{months:[],customers:[]}
     $('#main').innerHTML=`<section class="panel">
@@ -59,6 +106,37 @@ const Stocktake={
     }
     $('#stOpen').onclick=()=>open($('#stMonth').value)
     document.querySelectorAll('[data-st-month]').forEach(b=>b.onclick=()=>open(b.dataset.stMonth))
+  },
+  check(){
+    const s=state.stCur
+    const w=stockCanWrite()
+    if(!s.blocks.some(b=>b.id===state.stTab))state.stTab=(s.blocks[0]||{}).id
+    const b=s.blocks.find(x=>x.id===state.stTab)
+    const edit=w&&b&&!b.applied
+    const rows=b?s.rows.filter(r=>r.blockId===b.id):[]
+    const W=[100,170,150,50,50,76,76,76,76,76,76]
+    const sz=r=>esc(r.size)+(r.condition!=='new'?`（${esc(r.conditionLabel)}）`:'')
+    $('#main').innerHTML=`<section class="panel">
+      <div class="bar"><button type="button" id="stBack">棚卸表へ</button><b>${esc(s.month)} 棚卸チェックシート</b>
+        <button type="button" id="stXlsx">Excel出力</button>${w&&s.blocks.some(x=>!x.applied)?'<button type="button" id="stImport">Excel取込</button>':''}
+        ${edit?'<button type="button" class="primary" id="stSave">保存</button>':''}${b&&b.applied?'<span class="sub">上書き済</span>':''}</div>
+      <div class="st-tabs">${s.blocks.map(x=>`<button type="button" data-tab="${x.id}" class="${x.id===state.stTab?'on':''}">${esc(x.customerName)}</button>`).join('')}</div>
+      <div class="st-wrap"><table class="st-grid st-cs"><colgroup>${W.map(x=>`<col style="width:${x}px">`).join('')}<col style="width:24px"></colgroup>
+      <thead><tr><th>仕入先</th><th>商品名</th><th>商品コード</th><th>サイズ</th><th>在庫数</th><th></th><th></th><th></th><th></th><th></th><th class="k">計</th><th></th></tr></thead><tbody>
+      ${rows.map(r=>`<tr data-row="${r.id}"><td class="b1">${esc(r.supplierName)}</td><td class="b" title="${esc(r.productName)}">${esc(r.productName)}</td><td class="b">${esc(r.productCode)}</td><td class="b">${sz(r)}</td><td class="b n">${num(r.bookQty)}</td>
+        ${r.checks.map((v,i)=>`<td class="n">${edit?`<input class="st-ck" data-i="${i}" type="text" inputmode="numeric" value="${v??''}">`:num(v)}</td>`).join('')}
+        <td class="n b st-sum">${num(r.checkTotal)}</td><td>${mis(r)}</td></tr>`).join('')||'<tr><td colspan="12">行はありません。</td></tr>'}
+      </tbody></table></div></section>`
+    const collect=()=>[...document.querySelectorAll('tr[data-row]')].filter(tr=>tr.querySelector('.st-ck')).map(tr=>({id:Number(tr.dataset.row),checks:[...tr.querySelectorAll('.st-ck')].map(i=>i.value.trim())}))
+    const save=async()=>{const rs=collect();if(rs.length)state.stCur=await api('/api/stocktakes/save',{month:s.month,rows:rs})}
+    document.querySelectorAll('.st-ck').forEach(i=>i.oninput=()=>{
+      const tr=i.closest('tr');const v=[...tr.querySelectorAll('.st-ck')].map(x=>x.value.trim()).filter(x=>x!=='').map(Number)
+      tr.querySelector('.st-sum').textContent=v.length&&v.every(Number.isFinite)?num(v.reduce((a,x)=>a+x,0)):''
+    })
+    $('#stBack').onclick=async()=>{try{await save();state.stView=null;this.page()}catch(e){toast(e.message)}}
+    document.querySelectorAll('[data-tab]').forEach(t=>t.onclick=async()=>{try{await save();state.stTab=Number(t.dataset.tab);this.page()}catch(e){toast(e.message)}})
+    if($('#stSave'))$('#stSave').onclick=async()=>{try{await save();toast('保存しました。');this.page()}catch(e){toast(e.message)}}
+    bindExcel(this,s,save)
   },
   sheet(){
     const s=state.stCur
@@ -76,6 +154,7 @@ const Stocktake={
         <button type="button" id="stBack">一覧へ</button>
         <b>${esc(s.month)} 棚卸</b>
         ${w?`<span class="st-pick"><input id="stFind" type="search" placeholder="顧客を検索"><select id="stCust">${L.customers.map(c=>`<option value="${c.id}" data-k="${esc(c.name+' '+c.kana)}">${esc(c.name)}${inSheet.has(c.id)?'（追加済）':''}</option>`).join('')}</select><button type="button" id="stAdd">追加</button></span>`:''}
+        <button type="button" id="stCheck">チェックシート</button><button type="button" id="stXlsx">Excel出力</button>${w&&open?'<button type="button" id="stImport">Excel取込</button>':''}
         ${w&&open?'<button type="button" id="stSave">保存</button><button type="button" class="primary" id="stApply">実棚で在庫を上書き</button>':''}
       </div>
       <div class="st-chips">${s.blocks.map(b=>`<span class="st-chip">${esc(b.customerName)} <span class="sub">${b.applied?`反映済 ${esc(at(b.appliedAt))} ${esc(b.appliedBy)}`:`入力 ${b.enteredCount}/${b.rowCount}`}</span>${w&&!b.applied?`<button type="button" title="棚卸表から外す" data-st-remove="${b.customerId}">×</button>`:''}</span>`).join('')||'<span class="sub">顧客を選んで「追加」すると、その顧客の在庫が下に追加されます。</span>'}</div>
@@ -84,14 +163,16 @@ const Stocktake={
       ${s.rows.map(r=>{const b=blockById[r.blockId];const edit=w&&!b.applied;const start=prev!==null&&prev!==r.blockId;prev=r.blockId;return `<tr class="${b.applied?'st-done':''}${start?' st-block-start':''}">
         <td class="n">${esc(r.officeCode)}</td><td>${esc(r.customerName)}</td><td title="${esc(r.productName)}">${esc(r.productName)}</td><td class="n">${esc(r.productCode)}</td>
         <td>${sizeText(r)}</td><td class="n">${unitText(r)}</td><td class="n">${num(r.bookQty)}</td><td class="n">${money(r.bookAmount)}</td>
-        <td class="n cI">${edit?`<input class="st-actual" data-row="${r.id}" type="text" inputmode="numeric" value="${r.actualQty??''}">`:num(r.actualQty)}</td>
+        <td class="n cI">${edit?`<input class="st-actual" data-row="${r.id}" type="text" inputmode="numeric" value="${r.actualQty??''}">`:num(r.actualQty)}${mis(r)}</td>
         <td class="n cJ">${signed(r.diffQty)}</td>
         <td class="n cK">${r.actualQty==null?'':money(r.actualAmount)}</td>
         <td class="n cL">${r.actualQty==null||r.actualAmount==null||r.bookAmount==null?'':signed(r.diffAmount)}</td>
         <td>${edit?`<input class="st-note" data-note="${r.id}" type="text" value="${esc(r.note)}">`:esc(r.note)}</td></tr>`}).join('')||'<tr><td colspan="13">行はまだありません。</td></tr>'}
       </tbody><tfoot><tr><th colspan="6">合計</th><th class="n">${num(t.bookQty)}</th><th class="n">${money(t.bookAmount)}</th><th class="n">${num(t.actualQty)}</th><th></th><th class="n">${t.actualQty==null?'':money(t.actualAmount)}</th><th></th><th></th></tr></tfoot></table></div>
     </section>`
-    const back=async()=>{state.stMonth=null;state.stCur=null;await this.loadList();this.page()}
+    $('#stCheck').onclick=async()=>{try{await save();state.stView='check';this.page()}catch(e){toast(e.message)}}
+    bindExcel(this,s,save)
+    const back=async()=>{state.stMonth=null;state.stCur=null;state.stView=null;await this.loadList();this.page()}
     $('#stBack').onclick=back
     const rowsBody=()=>[...document.querySelectorAll('.st-actual')].map(i=>({id:Number(i.dataset.row),actualQty:i.value.trim(),note:(document.querySelector(`[data-note="${i.dataset.row}"]`)||{}).value||''}))
     const save=async()=>{if(!document.querySelector('.st-actual'))return;state.stCur=await api('/api/stocktakes/save',{month:s.month,rows:rowsBody()})}
