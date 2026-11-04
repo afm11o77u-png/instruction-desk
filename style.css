@@ -255,7 +255,9 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid .shift-cell:hover{outline:2px solid #5d9a72;outline-offset:-2px}
 .shift-grid .shift-sat,.shift-grid th.shift-sat{background:#e8f2fb}
 .shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}
-.shift-grid td.shift-off{font-weight:800;color:#9d3434;background:#fff5f3}
+.shift-grid td.shift-off{font-weight:800;color:#333}
+/* ×の赤は日曜・祝日だけ（平日・土曜は列の色のまま） */
+.shift-grid td.shift-sun.shift-off{color:#9d3434}
 .shift-grid td.shift-unknown{font-weight:800;color:#6a5a2a;background:#faf6ea;font-size:12px}
 .shift-grid td.shift-unknown .shift-unknown-mark{display:inline;font-size:12px;font-weight:800}
 .shift-grid td.shift-task{font-weight:800;color:#1f5c45;background:#eef7f1;font-size:12px}
@@ -435,7 +437,8 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-shift .shift-grid td.shift-time .shift-time-main{display:inline;text-align:center;font-size:8.5pt;font-weight:700}
   body.printing-shift .shift-grid td.shift-time .shift-time-until{display:none!important}
   /* カラー用: 画面と同じ薄青／薄赤。ジオメトリは白黒用と共通。×は見本どおり赤系、作業は緑系、不明は茶系 */
-  body.printing-shift.print-shift-color .shift-grid td.shift-off{color:#b85c4a!important}
+  body.printing-shift.print-shift-color .shift-grid td.shift-off{color:#333!important}
+  body.printing-shift.print-shift-color .shift-grid td.shift-sun.shift-off{color:#b85c4a!important}
   body.printing-shift.print-shift-color .shift-grid td.shift-unknown{color:#6a5a2a!important}
   body.printing-shift.print-shift-color .shift-grid td.shift-task{color:#1f5c45!important}
   body.printing-shift.print-shift-color .shift-grid .shift-sat,
