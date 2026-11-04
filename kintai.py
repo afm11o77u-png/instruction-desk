@@ -20,6 +20,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import kintai_shift
+import kintai_crimp
 import kintai_bihin
 import kintai_bihin_xlsx
 
@@ -353,6 +354,7 @@ def schema(c):
         )'''
     )
     kintai_shift.schema(c)
+    kintai_crimp.schema(c)
     kintai_bihin.schema(c)
     _seed_people(c)
     _ensure_shift_top_people(c)
@@ -2477,6 +2479,10 @@ def shift_view_only(user) -> bool:
 
 
 def handle_get(h, c, path: str):
+    if path == '/api/kintai/crimp':
+        if not (can_use_kintai(h.user) or shift_view_only(h.user)):
+            return 403, {'error': 'マーク管理の権限がありません。'}
+        return 200, kintai_crimp.list_month(c, _query_map(h).get('month'), h.user)
     denied = require_kintai(h.user)
     if denied and shift_view_only(h.user) and path == '/api/kintai/shift':
         denied = None
@@ -2549,6 +2555,13 @@ def handle_get(h, c, path: str):
 
 
 def handle_post(h, c, path: str, d: dict):
+    if path in ('/api/kintai/crimp', '/api/kintai/crimp/delete'):
+        # 圧着カウンター: シフト表を見られる人は入力可。修正・削除は管理者だけ。
+        if not (can_use_kintai(h.user) or shift_view_only(h.user)):
+            return 403, {'error': 'マーク管理の権限がありません。'}
+        if path.endswith('/delete'):
+            return kintai_crimp.delete(c, h.user, d or {})
+        return kintai_crimp.save(c, h.user, d or {})
     if shift_view_only(h.user) and (path == '/api/kintai/shift' or path.startswith('/api/kintai/shift/')):
         return 403, {'error': '現場３はシフト表を閲覧のみできます。'}
     denied = require_kintai(h.user)
