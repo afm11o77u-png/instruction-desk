@@ -37,6 +37,7 @@ const CSS=`
 .st-cs th,.st-cs td{height:30px;border-color:#000}
 .st-cs thead th{background:#D9D9D9;font-size:14.5px}
 .st-cs thead th.k{font-size:18.5px}
+.st-cs td.wrap{white-space:normal;line-height:1.1}
 .st-cs td.b{font-weight:700;font-size:16px}.st-cs td.b1{font-weight:700;font-size:14.5px}
 .st-cs input{height:26px;font-size:14.5px}`
 function ensureCss(){if(!document.getElementById('stocktake-css')){const s=document.createElement('style');s.id='stocktake-css';s.textContent=CSS;document.head.appendChild(s)}}
@@ -114,7 +115,9 @@ const Stocktake={
     const b=s.blocks.find(x=>x.id===state.stTab)
     const edit=w&&b&&!b.applied
     const rows=b?s.rows.filter(r=>r.blockId===b.id):[]
-    const W=[100,170,150,50,50,76,76,76,76,76,76]
+    const k=b?b.checkCols:5
+    const px=w=>Math.floor(w*7+5)
+    const W=[px(b?b.supplierWidth:14.125),px(24),px(21.125),px(6.625),px(6.625),...Array(k+1).fill(px(10.625))]
     const sz=r=>esc(r.size)+(r.condition!=='new'?`（${esc(r.conditionLabel)}）`:'')
     $('#main').innerHTML=`<section class="panel">
       <div class="bar"><button type="button" id="stBack">棚卸表へ</button><b>${esc(s.month)} 棚卸チェックシート</b>
@@ -122,8 +125,8 @@ const Stocktake={
         ${edit?'<button type="button" class="primary" id="stSave">保存</button>':''}${b&&b.applied?'<span class="sub">上書き済</span>':''}</div>
       <div class="st-tabs">${s.blocks.map(x=>`<button type="button" data-tab="${x.id}" class="${x.id===state.stTab?'on':''}">${esc(x.customerName)}</button>`).join('')}</div>
       <div class="st-wrap"><table class="st-grid st-cs"><colgroup>${W.map(x=>`<col style="width:${x}px">`).join('')}<col style="width:24px"></colgroup>
-      <thead><tr><th>仕入先</th><th>商品名</th><th>商品コード</th><th>サイズ</th><th>在庫数</th><th></th><th></th><th></th><th></th><th></th><th class="k">計</th><th></th></tr></thead><tbody>
-      ${rows.map(r=>`<tr data-row="${r.id}"><td class="b1">${esc(r.supplierName)}</td><td class="b" title="${esc(r.productName)}">${esc(r.productName)}</td><td class="b">${esc(r.productCode)}</td><td class="b">${sz(r)}</td><td class="b n">${num(r.bookQty)}</td>
+      <thead><tr><th>仕入先</th><th>商品名</th><th>商品コード</th><th>サイズ</th><th>在庫数</th>${'<th></th>'.repeat(k)}<th class="k">計</th><th></th></tr></thead><tbody>
+      ${rows.map(r=>`<tr data-row="${r.id}"><td class="b1 wrap">${esc(r.supplierName)}</td><td class="b" title="${esc(r.productName)}">${esc(r.productName)}</td><td class="b">${esc(r.productCode)}</td><td class="b">${sz(r)}</td><td class="b n">${num(r.bookQty)}</td>
         ${r.checks.map((v,i)=>`<td class="n">${edit?`<input class="st-ck" data-i="${i}" type="text" inputmode="numeric" value="${v??''}">`:num(v)}</td>`).join('')}
         <td class="n b st-sum">${num(r.checkTotal)}</td><td>${mis(r)}</td></tr>`).join('')||'<tr><td colspan="12">行はありません。</td></tr>'}
       </tbody></table></div></section>`

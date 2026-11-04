@@ -138,7 +138,42 @@ def _row_payload(r, applied):
     return out
 
 
-CHECK_COLS = 5
+CHECK_COLS = 5  # 入力欄の上限
+
+# 棚卸チェックシートの印刷レイアウト（雛形の実測値）。A4横・左0.71in/右0.31in → 印刷幅 10.67in ≒ 1024px（96dpi）。
+# Excelの列幅w（文字数）は約 w*7+5 px。雛形どおり 仕入先 以外は固定幅、仕入先は文字幅に合わせて広げる
+# （雛形: 通常14.125、「石屋商事　あまり制服」で35.875）。残りの幅に入力欄（10.625）を入るだけ並べる。
+PRINT_PX = int((11.6929 - 0.7086614173228347 - 0.31496062992125984) * 96)
+FIXED_WIDTHS = {'B': 24.0, 'C': 21.125, 'D': 6.625, 'E': 6.625}
+SUPPLIER_MIN_WIDTH = 14.125
+INPUT_WIDTH = 10.625  # 入力欄と計
+
+
+def col_px(w):
+    return int(w * 7 + 5)
+
+
+def display_width(s):
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(ch) in 'WFA' else 1 for ch in str(s or ''))
+
+
+SUPPLIER_WRAP_MAX = 28  # 標準幅14.125・行高30で折り返し2行に収まる文字幅（半角換算）
+
+
+def supplier_width(names):
+    # 雛形: 2行に収まる仕入先（半角換算26まで）は14.125のまま、収まらない長さ（38）は1行で入る幅（35.875）に広げる
+    m = max([display_width(n) for n in names] + [0])
+    if m <= SUPPLIER_WRAP_MAX:
+        return SUPPLIER_MIN_WIDTH
+    return round(min(m * 0.92 + 1, 60), 3)
+
+
+def check_layout(names):
+    sw = supplier_width(names)
+    fixed = col_px(sw) + sum(col_px(w) for w in FIXED_WIDTHS.values()) + col_px(INPUT_WIDTH)  # 計
+    n = (PRINT_PX - fixed) // col_px(INPUT_WIDTH)
+    return {'supplierWidth': sw, 'checkCols': max(1, min(CHECK_COLS, n))}
 
 
 def check_values(r):
@@ -146,8 +181,15 @@ def check_values(r):
         vals = json.loads(r['check_json'] or '[]')
     except (ValueError, KeyError, IndexError):
         vals = []
-    vals = [v if isinstance(v, int) and not isinstance(v, bool) else None for v in vals][:CHECK_COLS]
-    return vals + [None] * (CHECK_COLS - len(vals))
+    return [v if isinstance(v, int) and not isinstance(v, bool) else None for v in vals][:CHECK_COLS]
+
+
+def fit_checks(vals, n):
+    # 入力欄の数に合わせる（欄より後ろに値がある場合は消さずに残す）
+    vals = list(vals)
+    while len(vals) > n and vals[-1] is None:
+        vals.pop()
+    return vals + [None] * (n - len(vals))
 
 
 def check_total(vals):
@@ -166,7 +208,9 @@ def parse_checks(raw):
             if isinstance(v, float) and v.is_integer():
                 v = int(v)
             out.append(stock.parse_qty(v, 'チェック欄', allow_zero=True))
-    return out + [None] * (CHECK_COLS - len(out))
+    while out and out[-1] is None:
+        out.pop()
+    return out
 
 
 def _sheet(c, month):
@@ -189,7 +233,10 @@ def get(c, month):
                    LEFT JOIN customer_products cp ON cp.id=x.customer_product_id
                    LEFT JOIN products p ON p.id=cp.product_id LEFT JOIN suppliers su ON su.id=p.supplier_id
                    WHERE x.block_id=? ORDER BY x.sort_no, x.id''', (b['id'],))]
-            out['blocks'].append({'id': b['id'], 'customerId': b['customer_id'], 'customerName': b['customer_name'],
+            lay = check_layout([r['supplierName'] for r in brows])
+            for r in brows:
+                r['checks'] = fit_checks(r['checks'], lay['checkCols'])
+            out['blocks'].append({**lay, 'id': b['id'], 'customerId': b['customer_id'], 'customerName': b['customer_name'],
                                   'addedAt': b['added_at'], 'addedBy': b['added_by'], 'appliedAt': b['applied_at'],
                                   'appliedBy': b['applied_by'], 'applied': applied, 'rowCount': len(brows),
                                   'enteredCount': sum(1 for r in brows if r['actualQty'] is not None)})
