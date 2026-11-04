@@ -334,7 +334,7 @@ MEMO_DIR=Path(__file__).resolve().parent/'memos'
 
 def _memo_title(text,fallback):
     for line in text.splitlines():
-        if line.startswith('# '): return line[2:].strip()
+        if line.startswith('# '): return re.sub(r'\[/?red\]','',line[2:]).strip()
     return fallback
 
 def memo_get(path):

@@ -765,3 +765,4 @@ body.catalog-kintai main>header .headactions{display:none}
 #memodesk .memo-list{flex:0 0 220px;display:flex;flex-direction:column;gap:4px}
 #memodesk .memo-body{flex:1;line-height:1.7;overflow:auto}
 #memodesk .memo-body h2{margin-top:0}
+#memodesk .memo-body .memo-red{color:#d00000}

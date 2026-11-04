@@ -2,7 +2,8 @@
 // 構想メモ（主管理者のみ・読み取り専用）。memos/*.md を一覧表示。
 const memoDialog=document.createElement('dialog');memoDialog.id='memodesk';document.body.append(memoDialog);
 function resetMemos(){memoDialog.close();memoDialog.replaceChildren()}
-function memoInline(s){return esc(s)}
+// [red]…[/red] で囲んだ部分は赤字（複数行にまたがる場合は行ごとに囲む）。
+function memoInline(s){return esc(s).replace(/\[red\]([\s\S]*?)\[\/red\]/g,'<span class="memo-red">$1</span>')}
 function memoHtml(md){
  const out=[];let list=null;
  const close=()=>{if(list){out.push(`</${list}>`);list=null}};

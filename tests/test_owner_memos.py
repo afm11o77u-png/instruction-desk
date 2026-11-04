@@ -38,6 +38,22 @@ class OwnerMemosTest(unittest.TestCase):
         self.assertIn('## 進め方', memo['markdown'])
         self.assertEqual(_H(U('owner')).auth_get('/api/memos/../auth', self.c)[0], 404)
 
+    def test_red_memo_tanaoroshi(self):
+        code, rows = _H(U('owner')).auth_get('/api/memos', self.c)
+        titles = [r['title'] for r in rows]
+        self.assertIn('棚卸期間中の在庫の扱い（未対応・後で検討）', titles)  # 一覧の題名に [red] を出さない
+        code, memo = _H(U('owner')).auth_get('/api/memos/02-tanaoroshi-kikan', self.c)
+        self.assertEqual(code, 200)
+        md = memo['markdown']
+        self.assertIn('2026-11-05', md)
+        self.assertIn('実棚 − スナップショット', md)
+        for line in md.splitlines():
+            if line.strip():
+                self.assertIn('[red]', line)
+        js = (ROOT / 'memos.js').read_text(encoding='utf-8')
+        self.assertIn('memo-red', js)
+        self.assertIn('.memo-red{color:', (ROOT / 'style.css').read_text(encoding='utf-8'))
+
     def test_non_owner_rejected(self):
         for path in ('/api/memos', '/api/memos/01-irai-web'):
             for u in (U('sales', manage=1, overview=1), U('floor'), U('floor2'), U('floor3')):
