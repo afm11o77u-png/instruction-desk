@@ -53,6 +53,9 @@ def schema(c):
       applied_batch_id INTEGER REFERENCES move_batches(id),
       sort_no INTEGER NOT NULL DEFAULT 0
     )''')
+    if 'check_json' not in {r['name'] for r in c.execute('PRAGMA table_info(stocktake_sheet_rows)')}:
+        # 棚卸チェックシートの5つの入力欄（空欄は null）。計＝合計が実棚点数になる。
+        c.execute("ALTER TABLE stocktake_sheet_rows ADD COLUMN check_json TEXT NOT NULL DEFAULT '[]'")
     c.execute('CREATE INDEX IF NOT EXISTS stocktake_sheet_rows_block ON stocktake_sheet_rows(block_id, sort_no)')
 
 
@@ -120,12 +123,93 @@ def _row_payload(r, applied):
         'actualQty': actual, 'diffQty': None, 'actualAmount': None, 'diffAmount': None,
         'note': r['note'] or '', 'incPrice': r['inc_price'], 'applied': applied,
         'adjusted': r['applied_batch_id'] is not None,
+        'supplierName': r['supplier_name'] if 'supplier_name' in r.keys() else '',
     }
+    checks = check_values(r)
+    out['checks'] = checks
+    out['checkTotal'] = check_total(checks)
+    # チェックシート入力後に棚卸表の実棚点数を直接変えて計と違う場合の印
+    out['checkMismatch'] = out['checkTotal'] is not None and out['checkTotal'] != actual
     if actual is not None:
         out['diffQty'] = actual - r['book_qty']
         out['actualAmount'] = _amount(_after_lots(lots, r['book_qty'], actual, r['inc_price']))
         if out['actualAmount'] is not None and book_amount is not None:
             out['diffAmount'] = out['actualAmount'] - book_amount
+    return out
+
+
+CHECK_COLS = 5  # 入力欄の上限
+
+# 棚卸チェックシートの印刷レイアウト（雛形の実測値）。A4横・左0.71in/右0.31in → 印刷幅 10.67in ≒ 1024px（96dpi）。
+# Excelの列幅w（文字数）は約 w*7+5 px。雛形どおり 仕入先 以外は固定幅、仕入先は文字幅に合わせて広げる
+# （雛形: 通常14.125、「石屋商事　あまり制服」で35.875）。残りの幅に入力欄（10.625）を入るだけ並べる。
+PRINT_PX = int((11.6929 - 0.7086614173228347 - 0.31496062992125984) * 96)
+FIXED_WIDTHS = {'B': 24.0, 'C': 21.125, 'D': 6.625, 'E': 6.625}
+SUPPLIER_MIN_WIDTH = 14.125
+INPUT_WIDTH = 10.625  # 入力欄と計
+
+
+def col_px(w):
+    return int(w * 7 + 5)
+
+
+def display_width(s):
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(ch) in 'WFA' else 1 for ch in str(s or ''))
+
+
+SUPPLIER_WRAP_MAX = 28  # 標準幅14.125・行高30で折り返し2行に収まる文字幅（半角換算）
+
+
+def supplier_width(names):
+    # 雛形: 2行に収まる仕入先（半角換算26まで）は14.125のまま、収まらない長さ（38）は1行で入る幅（35.875）に広げる
+    m = max([display_width(n) for n in names] + [0])
+    if m <= SUPPLIER_WRAP_MAX:
+        return SUPPLIER_MIN_WIDTH
+    return round(min(m * 0.92 + 1, 60), 3)
+
+
+def check_layout(names):
+    sw = supplier_width(names)
+    fixed = col_px(sw) + sum(col_px(w) for w in FIXED_WIDTHS.values()) + col_px(INPUT_WIDTH)  # 計
+    n = (PRINT_PX - fixed) // col_px(INPUT_WIDTH)
+    return {'supplierWidth': sw, 'checkCols': max(1, min(CHECK_COLS, n))}
+
+
+def check_values(r):
+    try:
+        vals = json.loads(r['check_json'] or '[]')
+    except (ValueError, KeyError, IndexError):
+        vals = []
+    return [v if isinstance(v, int) and not isinstance(v, bool) else None for v in vals][:CHECK_COLS]
+
+
+def fit_checks(vals, n):
+    # 入力欄の数に合わせる（欄より後ろに値がある場合は消さずに残す）
+    vals = list(vals)
+    while len(vals) > n and vals[-1] is None:
+        vals.pop()
+    return vals + [None] * (n - len(vals))
+
+
+def check_total(vals):
+    nums = [v for v in vals if v is not None]
+    return sum(nums) if nums else None
+
+
+def parse_checks(raw):
+    if not isinstance(raw, list) or len(raw) > CHECK_COLS:
+        raise ValueError('チェック欄の値が正しくありません。')
+    out = []
+    for v in raw:
+        if v is None or (isinstance(v, str) and v.strip() == ''):
+            out.append(None)
+        else:
+            if isinstance(v, float) and v.is_integer():
+                v = int(v)
+            out.append(stock.parse_qty(v, 'チェック欄', allow_zero=True))
+    while out and out[-1] is None:
+        out.pop()
     return out
 
 
@@ -145,8 +229,14 @@ def get(c, month):
                           (sh['id'],)).fetchall():
             applied = bool(b['applied_at'])
             brows = [_row_payload(r, applied) for r in c.execute(
-                'SELECT * FROM stocktake_sheet_rows WHERE block_id=? ORDER BY sort_no, id', (b['id'],))]
-            out['blocks'].append({'id': b['id'], 'customerId': b['customer_id'], 'customerName': b['customer_name'],
+                '''SELECT x.*, COALESCE(su.name,'') AS supplier_name FROM stocktake_sheet_rows x
+                   LEFT JOIN customer_products cp ON cp.id=x.customer_product_id
+                   LEFT JOIN products p ON p.id=cp.product_id LEFT JOIN suppliers su ON su.id=p.supplier_id
+                   WHERE x.block_id=? ORDER BY x.sort_no, x.id''', (b['id'],))]
+            lay = check_layout([r['supplierName'] for r in brows])
+            for r in brows:
+                r['checks'] = fit_checks(r['checks'], lay['checkCols'])
+            out['blocks'].append({**lay, 'id': b['id'], 'customerId': b['customer_id'], 'customerName': b['customer_name'],
                                   'addedAt': b['added_at'], 'addedBy': b['added_by'], 'appliedAt': b['applied_at'],
                                   'appliedBy': b['applied_by'], 'applied': applied, 'rowCount': len(brows),
                                   'enteredCount': sum(1 for r in brows if r['actualQty'] is not None)})
@@ -291,17 +381,24 @@ def save(c, body):
                            WHERE x.id=? AND b.sheet_id=?''', (r.get('id'), sh['id'])).fetchone()
         if not cur:
             continue
-        raw = r.get('actualQty')
+        checks_json = cur['check_json']
+        if 'checks' in r:
+            checks = parse_checks(r.get('checks'))
+            checks_json = json.dumps(checks)
+            raw = check_total(checks)
+        else:
+            raw = r.get('actualQty')
         if raw is None or (isinstance(raw, str) and raw.strip() == ''):
             val = None
         else:
             val = stock.parse_qty(raw, '実棚点数', allow_zero=True)
         note = stock.optional(r.get('note'), '備考', 200) if 'note' in r else cur['note']
         if cur['applied_at']:
-            if val != cur['actual_qty'] or note != cur['note']:
+            if val != cur['actual_qty'] or note != cur['note'] or checks_json != cur['check_json']:
                 raise ValueError('在庫に反映済みの顧客の行は変更できません。')
             continue
-        c.execute('UPDATE stocktake_sheet_rows SET actual_qty=?, note=? WHERE id=?', (val, note, cur['id']))
+        c.execute('UPDATE stocktake_sheet_rows SET actual_qty=?, note=?, check_json=? WHERE id=?',
+                  (val, note, checks_json, cur['id']))
     c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (stock.stamp(), sh['id']))
     return get(c, month)
 
