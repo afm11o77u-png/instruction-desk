@@ -51,6 +51,15 @@ class StocktakeSheetTest(unittest.TestCase):
         self.assertIn('customerIds', body)
         self.assertNotIn('id="stCust"', body)
 
+    def test_row_drag_generous(self):
+        js = (Path(__file__).resolve().parents[1] / 'static' / 'stocktake.js').read_text(encoding='utf-8')
+        drag = js[js.index('function bindDrag'):]
+        self.assertIn("input,textarea,select,button", drag)  # 入力欄の上ではドラッグしない
+        self.assertIn('st-drop-line', drag)                   # 挿入線
+        self.assertIn('ST_DRAG_SLACK', drag)                  # 行から少し外れても落とせる
+        self.assertIn("document.addEventListener('dragover'", drag)
+        self.assertIn('/api/stocktakes/order', drag)          # 落とした時点で保存
+
     def test_monthly_sheet_add_remove(self):
         folder, c, cu, other, *_ = setup()
         with folder, c:
