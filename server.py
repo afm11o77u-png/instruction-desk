@@ -14,6 +14,7 @@ import names
 import display_modes
 import migration
 import kintai
+import kintai_crimp
 import name_exe
 from requirements import METHODS, check_posting
 
@@ -977,7 +978,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/api/ship-workers':
             if self.user['role'] not in ('owner','floor'): return self.reply(403,{'error':'出荷仕分けは現場と主管理者が使用します。'})
             with connect() as c:
-                rows=[{'id':r['id'],'name':r['name']} for r in c.execute("SELECT id,name FROM users WHERE active=1 AND role IN ('owner','floor') ORDER BY name")]
+                rows=kintai_crimp.workers(c)
             return self.reply(200,rows)
         if path=='/api/assignees':
             with connect() as c:

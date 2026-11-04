@@ -2479,9 +2479,11 @@ def shift_view_only(user) -> bool:
 
 
 def handle_get(h, c, path: str):
-    if path == '/api/kintai/crimp':
+    if path in ('/api/kintai/crimp', '/api/kintai/crimp/workers'):
         if not (can_use_kintai(h.user) or shift_view_only(h.user)):
             return 403, {'error': 'マーク管理の権限がありません。'}
+        if path == '/api/kintai/crimp/workers':
+            return 200, kintai_crimp.workers(c)
         return 200, kintai_crimp.list_month(c, _query_map(h).get('month'), h.user)
     denied = require_kintai(h.user)
     if denied and shift_view_only(h.user) and path == '/api/kintai/shift':

@@ -133,7 +133,7 @@
 <table id="shiftgrid" class="shift-grid" aria-label="月別シフト表"></table>
 </div>
 <p id="shiftmeta" class="kintaimeta"></p>
-<section id="crimpcounter" class="crimp-counter no-print"><h3>圧着カウンター</h3><form id="crimpform" class="crimp-form"><label>日付<input id="crimpday" type="date" required></label><label>カウンター<input id="crimpreading" type="number" min="0" step="1" inputmode="numeric" required></label><button type="submit" class="primary" id="crimpsave">保存</button></form><label>月<input id="crimpmonth" type="month"></label><p id="crimptotal" class="kintaimeta"></p><table id="crimptable" class="crimp-table"><thead><tr><th>日付</th><th>カウンター</th><th>圧着数</th><th>入力者</th><th></th></tr></thead><tbody></tbody></table></section>
+<section id="crimpcounter" class="crimp-counter no-print"><h3>圧着カウンター</h3><form id="crimpform" class="crimp-form"><label>入力者<select id="crimpworker" required><option value="">選択してください</option></select></label><label>日付<input id="crimpday" type="date" required></label><label>カウンター<input id="crimpreading" type="number" min="0" step="1" inputmode="numeric" required></label><button type="submit" class="primary" id="crimpsave">保存</button></form><label>月<input id="crimpmonth" type="month"></label><p id="crimptotal" class="kintaimeta"></p><table id="crimptable" class="crimp-table"><thead><tr><th>日付</th><th>カウンター</th><th>圧着数</th><th>入力者</th><th></th></tr></thead><tbody></tbody></table></section>
 </div>
 <div id="kintaibihin" hidden>
 <p class="kintailead">月ごとの備品棚卸です。在庫デスクの入庫・出庫には連動しません。金額は数量×単価を四捨五入して円にします（空の数量は0ではありません）。</p>

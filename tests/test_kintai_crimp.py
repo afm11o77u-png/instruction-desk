@@ -38,6 +38,9 @@ class CrimpTest(unittest.TestCase):
             "role TEXT, manage INTEGER, overview INTEGER, active INTEGER, must_change INTEGER, "
             "version INTEGER, mark_kintai INTEGER DEFAULT 0)"
         )
+        self.c.executemany("INSERT INTO users(id,login,name,role,active) VALUES(?,?,?,?,?)", [
+            (1, 'a', '現場花子', 'floor', 1), (2, 'b', '主任次郎', 'owner', 1),
+            (3, 'c', '退職三郎', 'floor', 0), (4, 'd', '営業四郎', 'sales', 1)])
         kintai.bind(Path(self.tmp.name))
         kintai.schema(self.c)
 
@@ -45,7 +48,9 @@ class CrimpTest(unittest.TestCase):
         self.c.close()
         self.tmp.cleanup()
 
-    def post(self, user, d, path='/api/kintai/crimp'):
+    def post(self, user, d, path='/api/kintai/crimp', worker=1):
+        if path == '/api/kintai/crimp' and worker is not None:
+            d = {'workerId': worker, **d}
         return kintai.handle_post(_H(user, path), self.c, path, d)
 
     def get(self, user, month):
@@ -64,16 +69,17 @@ class CrimpTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual([r['diff'] for r in res['rows']], [300, 400])
         self.assertEqual(res['total'], 700)
-        self.assertEqual(res['rows'][0]['userName'], 'floor3太郎')
+        self.assertEqual(res['rows'][0]['userName'], '現場花子')
+        self.assertEqual(res['rows'][0]['loginName'], 'floor3太郎')
         self.assertFalse(res['canAdmin'])
         self.assertIsNone(self.get(OWNER, '2026-10')[1]['rows'][0]['diff'])
 
     def test_same_day_reentry_updates(self):
         self.post(FLOOR3, {'day': '2026-11-02', 'reading': 10})
-        self.post(OWNER, {'day': '2026-11-02', 'reading': 12})
+        self.post(OWNER, {'day': '2026-11-02', 'reading': 12}, worker=2)
         rows = self.get(OWNER, '2026-11')[1]['rows']
         self.assertEqual(len(rows), 1)
-        self.assertEqual((rows[0]['reading'], rows[0]['userName']), (12, 'owner太郎'))
+        self.assertEqual((rows[0]['reading'], rows[0]['userName']), (12, '主任次郎'))
 
     def test_admin_only_edit_delete(self):
         self.post(FLOOR3, {'day': '2026-11-02', 'reading': 10})
@@ -91,6 +97,18 @@ class CrimpTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.post(OWNER, bad)
 
+    def test_worker_required_and_same_list_as_shipping(self):
+        p = '/api/kintai/crimp/workers'
+        code, rows = kintai.handle_get(_H(FLOOR3, p), self.c, p)
+        self.assertEqual(code, 200)
+        self.assertEqual([r['name'] for r in rows], [r['name'] for r in kintai_crimp.workers(self.c)])
+        self.assertEqual(sorted(r['id'] for r in rows), [1, 2])
+        self.assertEqual(kintai.handle_get(_H(U('floor'), p), self.c, p)[0], 403)
+        for w in (None, 3, 4, 'x'):
+            with self.assertRaises(ValueError):
+                self.post(FLOOR3, {'day': '2026-11-02', 'reading': 1}, worker=w)
+        self.assertIn('kintai_crimp.workers(c)', (ROOT / 'server.py').read_text(encoding='utf-8'))
+
     def test_ui_wired(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         self.assertLess(html.index('id="shiftgrid"'), html.index('id="crimpcounter"'))
@@ -98,6 +116,7 @@ class CrimpTest(unittest.TestCase):
         self.assertIn('/kintai-crimp.js', (ROOT / 'server.py').read_text(encoding='utf-8'))
         js = (ROOT / 'kintai-crimp.js').read_text(encoding='utf-8')
         self.assertIn('confirm(', js)
+        self.assertIn('id="crimpworker" required', html)
 
 
 if __name__ == '__main__':

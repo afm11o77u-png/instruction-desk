@@ -15,6 +15,17 @@ def schema(c):
             updated_at TEXT NOT NULL
         )'''
     )
+    cols = {r[1] for r in c.execute('PRAGMA table_info(kintai_crimp_readings)')}
+    if 'worker_id' not in cols:
+        c.execute('ALTER TABLE kintai_crimp_readings ADD COLUMN worker_id INTEGER')
+    if 'worker_name' not in cols:
+        c.execute("ALTER TABLE kintai_crimp_readings ADD COLUMN worker_name TEXT NOT NULL DEFAULT ''")
+
+
+def workers(c) -> list[dict]:
+    """出荷仕分けの作業者と同じ一覧（/api/ship-workers と共通）。"""
+    return [{'id': r['id'], 'name': r['name']} for r in c.execute(
+        "SELECT id,name FROM users WHERE active=1 AND role IN ('owner','floor') ORDER BY name")]
 
 
 def can_admin(user) -> bool:
@@ -50,7 +61,7 @@ def list_month(c, ym: str | None, user=None) -> dict:
     if not re.fullmatch(r'\d{4}-\d{2}', ym):
         raise ValueError('対象月は YYYY-MM 形式で指定してください。')
     rows = c.execute(
-        'SELECT day, reading, user_name, updated_at FROM kintai_crimp_readings WHERE day <= ? ORDER BY day',
+        'SELECT day, reading, user_name, worker_name, updated_at FROM kintai_crimp_readings WHERE day <= ? ORDER BY day',
         (ym + '-31',),
     ).fetchall()
     prev = None
@@ -60,7 +71,7 @@ def list_month(c, ym: str | None, user=None) -> dict:
         prev = r['reading']
         if r['day'].startswith(ym):
             out.append({'day': r['day'], 'reading': r['reading'], 'diff': diff,
-                        'userName': r['user_name'], 'updatedAt': r['updated_at']})
+                        'userName': r['worker_name'] or r['user_name'], 'loginName': r['user_name'], 'updatedAt': r['updated_at']})
     total = sum(x['diff'] for x in out if x['diff'] is not None)
     return {'month': ym, 'rows': out, 'total': total, 'canAdmin': can_admin(user)}
 
@@ -76,12 +87,19 @@ def save(c, user, d: dict):
     exists = c.execute('SELECT 1 FROM kintai_crimp_readings WHERE day=?', (day,)).fetchone()
     if exists and d.get('edit') and not can_admin(user):
         return 403, {'error': '修正は管理者だけです。'}
+    try:
+        wid = int(d.get('workerId'))
+    except (TypeError, ValueError):
+        wid = None
+    worker = next((w for w in workers(c) if w['id'] == wid), None)
+    if worker is None:
+        raise ValueError('入力者を選んでください。')
     now = dt.datetime.now().isoformat(timespec='seconds')
     c.execute(
-        '''INSERT INTO kintai_crimp_readings(day, reading, user_id, user_name, updated_at) VALUES(?,?,?,?,?)
+        '''INSERT INTO kintai_crimp_readings(day, reading, user_id, user_name, worker_id, worker_name, updated_at) VALUES(?,?,?,?,?,?,?)
            ON CONFLICT(day) DO UPDATE SET reading=excluded.reading, user_id=excluded.user_id,
-           user_name=excluded.user_name, updated_at=excluded.updated_at''',
-        (day, reading, user['id'] if user else None, (user['name'] if user else '') or '', now),
+           user_name=excluded.user_name, worker_id=excluded.worker_id, worker_name=excluded.worker_name, updated_at=excluded.updated_at''',
+        (day, reading, user['id'] if user else None, (user['name'] if user else '') or '', worker['id'], worker['name'], now),
     )
     return 200, {'ok': True, 'day': day}
 
