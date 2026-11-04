@@ -15,7 +15,7 @@ def setup():
     folder = tempfile.TemporaryDirectory()
     c = stock.connect(Path(folder.name) / 'stock.sqlite3')
     stock.initialize(c)
-    cu = stock.save_customer(c, {'name': '棚卸病院', 'active': True, 'officeCode': 'K01', 'stocktakeTarget': True})
+    cu = stock.save_customer(c, {'name': '棚卸病院', 'active': True, 'officeCode': 'K01'})
     other = stock.save_customer(c, {'name': '対象外病院', 'active': True})
     su = stock.save_supplier(c, {'name': '仕入先', 'active': True})
     pr = stock.save_product(c, {'code': 'TK-1', 'name': '白衣', 'color': '白', 'supplierId': su['id'], 'active': True,
@@ -33,14 +33,17 @@ def setup():
 
 
 class StocktakeSheetTest(unittest.TestCase):
-    def test_flag_default_off_and_listing(self):
+    def test_any_customer_selectable_per_month(self):
         folder, c, cu, other, *_ = setup()
         with folder, c:
-            self.assertTrue(cu['stocktakeTarget'])
-            self.assertFalse(other['stocktakeTarget'])
-            self.assertEqual([x['id'] for x in st.list_stocktakes(c)['customers']], [cu['id']])
-            with self.assertRaises(ValueError):
-                st.create(c, {**W, 'customerId': other['id'], 'month': '2026-10'})
+            self.assertNotIn('stocktakeTarget', cu)
+            ids = {x['id'] for x in st.list_stocktakes(c)['customers']}
+            self.assertEqual(ids, {cu['id'], other['id']})
+            a = st.create(c, {**W, 'customerId': cu['id'], 'month': '2026-10'})
+            b = st.create(c, {**W, 'customerId': other['id'], 'month': '2026-10'})
+            self.assertNotEqual(a['id'], b['id'])
+            self.assertEqual(b['rows'], [])
+            self.assertEqual(len(st.list_stocktakes(c)['stocktakes']), 2)
             with self.assertRaises(PermissionError if hasattr(stock, 'PermissionError') else Exception):
                 st.create(c, {'_canWrite': False, 'customerId': cu['id'], 'month': '2026-10'})
 

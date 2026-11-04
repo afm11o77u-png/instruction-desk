@@ -1287,8 +1287,6 @@ def save_customer(c, body):
                   (name, kana, address, phone, contact, active, t, cid))
         if has_office:
             c.execute('UPDATE customers SET office_code=? WHERE id=?', (office_code, cid))
-        if 'stocktakeTarget' in body:
-            c.execute('UPDATE customers SET stocktake_target=? WHERE id=?', (flag(body.get('stocktakeTarget')), cid))
     else:
         if c.execute('SELECT id FROM customers WHERE name=?', (name,)).fetchone():
             raise ValueError('同じ名前の顧客が既にあります。新しい顧客を増やさず、一覧から修正してください。')
@@ -1297,8 +1295,6 @@ def save_customer(c, body):
         cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         if office_code:
             c.execute('UPDATE customers SET office_code=? WHERE id=?', (office_code, cid))
-        if flag(body.get('stocktakeTarget', False)):
-            c.execute('UPDATE customers SET stocktake_target=1 WHERE id=?', (cid,))
     return customer_row(c, cid)
 
 
@@ -2114,8 +2110,7 @@ def customer_row(c, cid):
     r = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone()
     return {'id': r['id'], 'name': r['name'], 'kana': r['kana'], 'address': r['address'], 'phone': r['phone'],
             'contact': r['contact'], 'active': bool(r['active']), 'sortKey': customer_sort_key(r['name']),
-            'officeCode': (r['office_code'] if 'office_code' in r.keys() else '') or '',
-            'stocktakeTarget': bool(r['stocktake_target']) if 'stocktake_target' in r.keys() else False}
+            'officeCode': (r['office_code'] if 'office_code' in r.keys() else '') or ''}
 
 
 def supplier_row(c, sid):
