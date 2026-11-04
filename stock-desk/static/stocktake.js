@@ -27,8 +27,13 @@ const CSS=`
 .st-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 8px}
 .st-chip{border:1px solid #c9dcc4;border-radius:12px;padding:2px 8px;font-size:12.5px;background:#f7fbf7}
 .st-chip button{border:0;background:none;padding:0 0 0 4px;cursor:pointer;font-weight:700}
-.st-pick{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.st-pick select{min-width:240px}
+.st-pick{padding:8px 12px;text-align:left;border-bottom:1px solid var(--line)}
+.st-pick-head{display:flex;gap:8px;align-items:center;justify-content:flex-start;margin:0 0 4px}
+.st-pick-head input{width:280px;margin:0}
+.st-pick-list{max-height:220px;overflow:auto;border:1px solid #ccc;padding:4px 8px;width:fit-content;min-width:280px;text-align:left}
+.st-pick-list label{display:block;margin:0;padding:1px 0;white-space:nowrap}
+.st-pick-list label.st-has{color:#777}
+.st-pick-list label[hidden]{display:none}
 .st-mis{color:#c00;font-weight:700;cursor:help}
 .st-tabs{display:flex;flex-wrap:wrap;gap:2px;margin:6px 0 0}
 .st-tabs button{border:1px solid #9e9e9e;border-bottom:0;background:#f2f2f2;padding:3px 10px;font-size:12.5px;cursor:pointer}
@@ -153,14 +158,13 @@ const Stocktake={
     const t=s.totals
     let prev=null
     $('#main').innerHTML=`<section class="panel">
-      <div class="bar">
-        <button type="button" id="stBack">一覧へ</button>
-        <b>${esc(s.month)} 棚卸</b>
-        ${w?`<span class="st-pick"><input id="stFind" type="search" placeholder="顧客を検索"><select id="stCust">${L.customers.map(c=>`<option value="${c.id}" data-k="${esc(c.name+' '+c.kana)}">${esc(c.name)}${inSheet.has(c.id)?'（追加済）':''}</option>`).join('')}</select><button type="button" id="stAdd">追加</button></span>`:''}
-        <button type="button" id="stCheck">チェックシート</button><button type="button" id="stXlsx">Excel出力</button>${w&&open?'<button type="button" id="stImport">Excel取込</button>':''}
+      <div class="bar"><button type="button" id="stBack">一覧へ</button><b>${esc(s.month)} 棚卸</b></div>
+      ${w?`<div class="st-pick"><div class="st-pick-head"><input id="stFind" type="search" placeholder="顧客を検索"><span class="sub" id="stPicked"></span><button type="button" id="stAdd">選んだ顧客を追加</button></div>
+        <div class="st-pick-list">${L.customers.map(c=>{const has=inSheet.has(c.id);return `<label class="check${has?' st-has':''}" data-st-name="${esc(c.name+' '+(c.kana||''))}"><input type="checkbox" value="${c.id}"${has?' checked disabled':''}> ${esc(c.name)}${has?' <span class="sub">追加済</span>':''}</label>`}).join('')||'<span class="sub">顧客がありません。</span>'}</div></div>`:''}
+      <div class="bar"><button type="button" id="stCheck">チェックシート</button><button type="button" id="stXlsx">Excel出力</button>${w&&open?'<button type="button" id="stImport">Excel取込</button>':''}
         ${w&&open?'<button type="button" id="stSave">保存</button><button type="button" class="primary" id="stApply">実棚で在庫を上書き</button>':''}
       </div>
-      <div class="st-chips">${s.blocks.map(b=>`<span class="st-chip">${esc(b.customerName)} <span class="sub">${b.applied?`反映済 ${esc(at(b.appliedAt))} ${esc(b.appliedBy)}`:`入力 ${b.enteredCount}/${b.rowCount}`}</span>${w&&!b.applied?`<button type="button" title="棚卸表から外す" data-st-remove="${b.customerId}">×</button>`:''}</span>`).join('')||'<span class="sub">顧客を選んで「追加」すると、その顧客の在庫が下に追加されます。</span>'}</div>
+      <div class="st-chips">${s.blocks.map(b=>`<span class="st-chip">${esc(b.customerName)} <span class="sub">${b.applied?`反映済 ${esc(at(b.appliedAt))} ${esc(b.appliedBy)}`:`入力 ${b.enteredCount}/${b.rowCount}`}</span>${w&&!b.applied?`<button type="button" title="棚卸表から外す" data-st-remove="${b.customerId}">×</button>`:''}</span>`).join('')||'<span class="sub">顧客にチェックを入れて「選んだ顧客を追加」すると、その顧客の在庫が下に追加されます。</span>'}</div>
       <div class="st-wrap"><table class="st-grid"><colgroup>${COLS.map(c=>`<col style="width:${c[1]}px">`).join('')}</colgroup>
       <thead><tr>${COLS.map(c=>`<th class="${c[2]}">${c[0]}</th>`).join('')}</tr></thead><tbody>
       ${s.rows.map(r=>{const b=blockById[r.blockId];const edit=w&&!b.applied;const start=prev!==null&&prev!==r.blockId;prev=r.blockId;return `<tr class="${b.applied?'st-done':''}${start?' st-block-start':''}">
@@ -174,18 +178,21 @@ const Stocktake={
       </tbody><tfoot><tr><th colspan="6">合計</th><th class="n">${num(t.bookQty)}</th><th class="n">${money(t.bookAmount)}</th><th class="n">${num(t.actualQty)}</th><th></th><th class="n">${t.actualQty==null?'':money(t.actualAmount)}</th><th></th><th></th></tr></tfoot></table></div>
     </section>`
     $('#stCheck').onclick=async()=>{try{await save();state.stView='check';this.page()}catch(e){toast(e.message)}}
-    bindExcel(this,s,save)
     const back=async()=>{state.stMonth=null;state.stCur=null;state.stView=null;await this.loadList();this.page()}
     $('#stBack').onclick=back
     const rowsBody=()=>[...document.querySelectorAll('.st-actual')].map(i=>({id:Number(i.dataset.row),actualQty:i.value.trim(),note:(document.querySelector(`[data-note="${i.dataset.row}"]`)||{}).value||''}))
     const save=async()=>{if(!document.querySelector('.st-actual'))return;state.stCur=await api('/api/stocktakes/save',{month:s.month,rows:rowsBody()})}
+    bindExcel(this,s,save)
+    const picked=()=>[...document.querySelectorAll('.st-pick-list input:checked:not(:disabled)')].map(i=>Number(i.value))
+    const showPicked=()=>{const el=$('#stPicked');if(el)el.textContent=`${picked().length}件選択`}
+    showPicked()
+    document.querySelectorAll('.st-pick-list input').forEach(i=>i.onchange=showPicked)
     const find=$('#stFind')
-    if(find)find.oninput=()=>{const q=find.value.trim();let first=null;[...$('#stCust').options].forEach(o=>{o.hidden=!!q&&!o.dataset.k.includes(q);if(!o.hidden&&!first)first=o});if(first)$('#stCust').value=first.value}
+    if(find)find.oninput=()=>{const q=find.value.trim();document.querySelectorAll('[data-st-name]').forEach(l=>{l.hidden=!!q&&!l.dataset.stName.includes(q)})}
     if($('#stAdd'))$('#stAdd').onclick=async()=>{
-      const cid=Number($('#stCust').value)
-      if(!cid)return toast('顧客を選んでください。')
-      if(inSheet.has(cid))return toast('この顧客は追加済みです。')
-      try{await save();const r=await api('/api/stocktakes/add',{month:s.month,customerId:cid});state.stCur=r;toast(r.already?'この顧客は追加済みです。':`${r.added}行を追加しました。`);this.page()}catch(e){toast(e.message)}
+      const ids=picked()
+      if(!ids.length)return toast('顧客にチェックを入れてください。')
+      try{await save();const r=await api('/api/stocktakes/add',{month:s.month,customerIds:ids});state.stCur=r;toast(`${r.addedCustomers}件の顧客（${r.added}行）を追加しました。`+(r.skipped?`追加済みの${r.skipped}件は飛ばしました。`:''));this.page()}catch(e){toast(e.message)}
     }
     document.querySelectorAll('[data-st-remove]').forEach(b=>b.onclick=async()=>{
       const blk=s.blocks.find(x=>x.customerId===Number(b.dataset.stRemove))

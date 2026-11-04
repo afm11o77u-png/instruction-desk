@@ -321,10 +321,27 @@ def _snapshot_rows(c, block_id, cu):
 
 
 def add_customer(c, body):
-    """顧客をその月の棚卸表に追加（在庫をスナップショットして末尾に行を追加）。追加済みなら何もしない。"""
+    """顧客をその月の棚卸表に追加（在庫をスナップショットして末尾に行を追加）。追加済みなら何もしない。
+    customerIds（複数）にも対応。結果に added（行数）・addedCustomers・skipped（追加済みで飛ばした顧客数）。"""
+    ids = body.get('customerIds')
+    if ids is None:
+        return _add_one(c, body, body.get('customerId'))
+    if not isinstance(ids, list) or not ids:
+        raise ValueError('顧客を選んでください。')
+    rows = custs = skipped = 0
+    for cid in ids:
+        r = _add_one(c, body, cid)
+        if r.get('already'):
+            skipped += 1
+        else:
+            custs += 1
+            rows += r['added']
+    return {**get(c, _month(body.get('month'))), 'added': rows, 'addedCustomers': custs, 'skipped': skipped}
+
+
+def _add_one(c, body, cid):
     stock._require_write(body)
     month = _month(body.get('month'))
-    cid = body.get('customerId')
     cu = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone() if isinstance(cid, int) else None
     if not cu:
         raise ValueError('顧客を選んでください。')

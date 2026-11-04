@@ -33,6 +33,24 @@ def setup():
 
 
 class StocktakeSheetTest(unittest.TestCase):
+    def test_add_multiple_customers_skips_existing(self):
+        folder, c, cu, other, *_ = setup()
+        with folder, c:
+            st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
+            s = st.add_customer(c, {**W, 'month': '2026-10', 'customerIds': [cu['id'], other['id']]})
+            self.assertEqual((s['addedCustomers'], s['skipped']), (1, 1))
+            self.assertEqual([b['customerId'] for b in s['blocks']], [cu['id'], other['id']])
+            with self.assertRaises(ValueError):
+                st.add_customer(c, {**W, 'month': '2026-10', 'customerIds': []})
+
+    def test_sheet_page_binds_after_save_defined(self):
+        js = (Path(__file__).resolve().parents[1] / 'static' / 'stocktake.js').read_text(encoding='utf-8')
+        body = js[js.index('  sheet(){'):]
+        # save を定義する前に bindExcel(save) を呼ぶと ReferenceError で「追加」等のボタンが効かなくなる
+        self.assertLess(body.index('const save='), body.index('bindExcel(this,s,save)'))
+        self.assertIn('customerIds', body)
+        self.assertNotIn('id="stCust"', body)
+
     def test_monthly_sheet_add_remove(self):
         folder, c, cu, other, *_ = setup()
         with folder, c:
