@@ -33,8 +33,10 @@ class FiscalYearUiTest(unittest.TestCase):
         self.assertNotIn('月〜</option>', js)  # 終端なしラベルを組み立てない
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         self.assertIn('年度（2月〜翌1月）', html)
-        self.assertIn('kintaifilefill', html)
-        self.assertIn('kintaiprobe', html)
+        for removed in ('kintaifilefill', 'kintaiprobe', 'kintaipersonlayout', 'kintaishareinput'):
+            self.assertNotIn(removed, html)
+        for kept in ('kintaipathsimport', 'kintaipathsreload', 'kintaifileperson', 'kintaifileinput', 'kintaifilesave'):
+            self.assertIn(kept, html)
 
 
 class LongPathSettingsTest(unittest.TestCase):

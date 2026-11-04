@@ -38,10 +38,10 @@ class NormalizeFilenameTest(unittest.TestCase):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         self.assertIn('kintaihow', html)
         self.assertIn('kintaiimportresult', html)
-        self.assertIn('kintailistfiles', html)
+        self.assertNotIn('kintailistfiles', html)
         js = (ROOT / 'kintai.js').read_text(encoding='utf-8')
         self.assertIn('paintImportResult', js)
-        self.assertIn('shareInputUnsaved', js)
+        self.assertIn('fileInputUnsaved', js)
         self.assertIn('未保存', js)
 
 
