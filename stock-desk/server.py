@@ -33,7 +33,7 @@ WRITE_PATHS = {
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/purchase-orders/printed',
-    '/api/stocktakes/create', '/api/stocktakes/save', '/api/stocktakes/apply',
+    '/api/stocktakes/add', '/api/stocktakes/remove', '/api/stocktakes/save', '/api/stocktakes/apply',
     '/api/company-profile',
     '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
 }
@@ -252,7 +252,7 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             with stock.connect(db_path) as c:
                 if path == '/api/stocktakes':
                     return 200, stock_stocktake.list_stocktakes(c)
-                return 200, stock_stocktake.get(c, int((query.get('id') or ['0'])[0] or 0))
+                return 200, stock_stocktake.get(c, (query.get('month') or [''])[0])
         except ValueError as e:
             return 400, {'error': str(e)}
     if path == '/api/purchase-orders':
@@ -693,7 +693,8 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/purchase-orders/cancel': stock_orders.cancel_purchase_order,
         '/api/purchase-orders/receive': stock_orders.receive_purchase_order,
         '/api/purchase-orders/printed': stock_orders.mark_printed,
-        '/api/stocktakes/create': stock_stocktake.create,
+        '/api/stocktakes/add': stock_stocktake.add_customer,
+        '/api/stocktakes/remove': stock_stocktake.remove_customer,
         '/api/stocktakes/save': stock_stocktake.save,
         '/api/stocktakes/apply': stock_stocktake.apply,
         '/api/company-profile': stock_orders.save_company_profile,
