@@ -41,6 +41,14 @@ class StocktakeRowOrderTest(unittest.TestCase):
         got = sorted(['F', '3L', 'LL', 'M', 'S', 'L', '4L', 'SS', '100', '90', '5L'], key=st.size_key)
         self.assertEqual(got, ['90', '100', 'SS', 'S', 'M', 'L', 'LL', '3L', '4L', '5L', 'F'])
 
+    def test_code_key_ignores_hyphens(self):
+        codes = ['5-397', '51-611', '5-056', '5-724', '7-611', '7133', '7-133']
+        got = sorted(codes, key=st.code_key)
+        self.assertEqual(got, ['5-056', '51-611', '5-397', '5-724', '7-133', '7133', '7-611'])
+        rows = sorted([('A', '7-611', '110'), ('A', '7-611', '73'), ('A', '51-611', 'L'), ('A', '5-056', 'F')],
+                      key=lambda r: st.default_row_key(*r))
+        self.assertEqual(rows, [('A', '5-056', 'F'), ('A', '51-611', 'L'), ('A', '7-611', '73'), ('A', '7-611', '110')])
+
     def test_default_order_supplier_sjis_code_size(self):
         folder, c, cu, item = seed()
         with folder, c:
