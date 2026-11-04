@@ -1,5 +1,6 @@
-"""棚卸（顧客×月の棚卸表）。作成時に顧客の在庫をスナップショットし、実棚を入力、
-「実棚で在庫を上書き」で stock.register_stocktake を使って差分だけ棚卸調整する。"""
+"""棚卸（月ごとに1枚の棚卸表）。顧客を選んで「追加」すると、その顧客の在庫を表の末尾に追加する。
+実棚を入力し「実棚で在庫を上書き」で stock.register_stocktake を使い差分だけ棚卸調整する。
+顧客の自動選別（帳簿のずれ等）は行わない。"""
 import json
 import uuid
 
@@ -7,21 +8,33 @@ import stock
 
 
 def schema(c):
-    # 旧 customers.stocktake_target 列は使わない（既存DBに残っていても無害。データは消さない）。
-    c.execute('''CREATE TABLE IF NOT EXISTS stocktakes (
+    # 旧形式（顧客×月ごとの棚卸表: stocktakes.customer_id）は試験データのみのため削除する。
+    # 反映済みでも在庫の移動（moves / move_batches）には触れない。棚卸表の記録だけを消す。
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(stocktakes)')}
+    if 'customer_id' in cols:
+        c.execute('DROP TABLE IF EXISTS stocktake_rows')
+        c.execute('DROP TABLE IF EXISTS stocktakes')
+    c.execute('''CREATE TABLE IF NOT EXISTS stocktake_sheets (
       id INTEGER PRIMARY KEY,
-      customer_id INTEGER NOT NULL REFERENCES customers(id),
-      month TEXT NOT NULL,
+      month TEXT NOT NULL UNIQUE,
       created_at TEXT NOT NULL,
       created_by TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS stocktake_blocks (
+      id INTEGER PRIMARY KEY,
+      sheet_id INTEGER NOT NULL REFERENCES stocktake_sheets(id),
+      customer_id INTEGER NOT NULL REFERENCES customers(id),
+      sort_no INTEGER NOT NULL DEFAULT 0,
+      added_at TEXT NOT NULL,
+      added_by TEXT NOT NULL DEFAULT '',
       applied_at TEXT,
       applied_by TEXT NOT NULL DEFAULT '',
-      UNIQUE(customer_id, month)
+      UNIQUE(sheet_id, customer_id)
     )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS stocktake_rows (
+    c.execute('''CREATE TABLE IF NOT EXISTS stocktake_sheet_rows (
       id INTEGER PRIMARY KEY,
-      stocktake_id INTEGER NOT NULL REFERENCES stocktakes(id),
+      block_id INTEGER NOT NULL REFERENCES stocktake_blocks(id),
       customer_product_id INTEGER NOT NULL,
       size_label TEXT NOT NULL,
       location_id INTEGER NOT NULL,
@@ -36,10 +49,11 @@ def schema(c):
       inc_price INTEGER,
       inc_source TEXT,
       actual_qty INTEGER,
+      note TEXT NOT NULL DEFAULT '',
       applied_batch_id INTEGER REFERENCES move_batches(id),
       sort_no INTEGER NOT NULL DEFAULT 0
     )''')
-    c.execute('CREATE INDEX IF NOT EXISTS stocktake_rows_st ON stocktake_rows(stocktake_id, sort_no)')
+    c.execute('CREATE INDEX IF NOT EXISTS stocktake_sheet_rows_block ON stocktake_sheet_rows(block_id, sort_no)')
 
 
 def _month(v):
@@ -90,21 +104,22 @@ def _after_lots(lots, book, actual, inc_price):
     return [tuple(x) for x in lots]
 
 
-def _row_payload(r):
+def _row_payload(r, applied):
     lots = [tuple(x) for x in json.loads(r['lots_json'] or '[]')]
     unit, mixed_pending = _unit(lots)
     costs = {cost for qty, cost in lots if qty > 0 and cost is not None}
     book_amount = _amount(lots)
     actual = r['actual_qty']
     out = {
-        'id': r['id'], 'officeCode': r['office_code'], 'customerName': r['customer_name'],
+        'id': r['id'], 'blockId': r['block_id'], 'officeCode': r['office_code'], 'customerName': r['customer_name'],
         'productName': r['product_name'], 'productCode': r['product_code'], 'size': r['size_label'],
         'locationLabel': r['location_label'], 'condition': r['condition'],
         'conditionLabel': stock.condition_label(r['condition']),
         'unitCost': unit, 'unitMixed': unit is None and len(costs) > 1 and not mixed_pending,
         'bookQty': r['book_qty'], 'bookAmount': book_amount,
         'actualQty': actual, 'diffQty': None, 'actualAmount': None, 'diffAmount': None,
-        'incPrice': r['inc_price'], 'applied': r['applied_batch_id'] is not None,
+        'note': r['note'] or '', 'incPrice': r['inc_price'], 'applied': applied,
+        'adjusted': r['applied_batch_id'] is not None,
     }
     if actual is not None:
         out['diffQty'] = actual - r['book_qty']
@@ -114,44 +129,55 @@ def _row_payload(r):
     return out
 
 
-def get(c, sid):
-    st = c.execute('''SELECT s.*, cu.name AS customer_name FROM stocktakes s
-                      JOIN customers cu ON cu.id=s.customer_id WHERE s.id=?''', (sid,)).fetchone()
-    if not st:
-        raise ValueError('棚卸が見つかりません。')
-    rows = [_row_payload(r) for r in c.execute(
-        'SELECT * FROM stocktake_rows WHERE stocktake_id=? ORDER BY sort_no, id', (sid,))]
-    def total(key):
-        vals = [r[key] for r in rows]
+def _sheet(c, month):
+    return c.execute('SELECT * FROM stocktake_sheets WHERE month=?', (month,)).fetchone()
+
+
+def get(c, month):
+    month = _month(month)
+    sh = _sheet(c, month)
+    out = {'month': month, 'id': None, 'blocks': [], 'rows': [], 'totals': {}}
+    rows = []
+    if sh:
+        out['id'] = sh['id']
+        for b in c.execute('''SELECT b.*, cu.name AS customer_name FROM stocktake_blocks b
+                             JOIN customers cu ON cu.id=b.customer_id WHERE b.sheet_id=? ORDER BY b.sort_no, b.id''',
+                          (sh['id'],)).fetchall():
+            applied = bool(b['applied_at'])
+            brows = [_row_payload(r, applied) for r in c.execute(
+                'SELECT * FROM stocktake_sheet_rows WHERE block_id=? ORDER BY sort_no, id', (b['id'],))]
+            out['blocks'].append({'id': b['id'], 'customerId': b['customer_id'], 'customerName': b['customer_name'],
+                                  'addedAt': b['added_at'], 'addedBy': b['added_by'], 'appliedAt': b['applied_at'],
+                                  'appliedBy': b['applied_by'], 'applied': applied, 'rowCount': len(brows),
+                                  'enteredCount': sum(1 for r in brows if r['actualQty'] is not None)})
+            rows += brows
+    out['rows'] = rows
+    def total(key, src):
+        vals = [r[key] for r in src]
         return None if any(v is None for v in vals) else sum(vals)
     entered = [r for r in rows if r['actualQty'] is not None]
-    return {
-        'id': st['id'], 'customerId': st['customer_id'], 'customerName': st['customer_name'],
-        'month': st['month'], 'createdAt': st['created_at'], 'createdBy': st['created_by'],
-        'appliedAt': st['applied_at'], 'appliedBy': st['applied_by'], 'applied': bool(st['applied_at']),
-        'rows': rows,
-        'totals': {
-            'bookQty': sum(r['bookQty'] for r in rows), 'bookAmount': total('bookAmount'),
-            'actualQty': sum(r['actualQty'] for r in entered) if entered else None,
-            'actualAmount': None if len(entered) != len(rows) else total('actualAmount'),
-        },
+    out['totals'] = {
+        'bookQty': sum(r['bookQty'] for r in rows), 'bookAmount': total('bookAmount', rows),
+        'actualQty': sum(r['actualQty'] for r in entered) if entered else None,
+        'actualAmount': None if not rows or len(entered) != len(rows) else total('actualAmount', rows),
     }
+    return out
 
 
 def list_stocktakes(c):
-    out = []
-    for r in c.execute('''SELECT s.id, s.month, s.customer_id, s.applied_at, s.created_at, cu.name AS customer_name,
-                                 (SELECT COUNT(*) FROM stocktake_rows x WHERE x.stocktake_id=s.id) AS n,
-                                 (SELECT COUNT(*) FROM stocktake_rows x WHERE x.stocktake_id=s.id AND x.actual_qty IS NOT NULL) AS entered
-                          FROM stocktakes s JOIN customers cu ON cu.id=s.customer_id
-                          ORDER BY s.month DESC, cu.name'''):
-        out.append({'id': r['id'], 'month': r['month'], 'customerId': r['customer_id'],
-                    'customerName': r['customer_name'], 'appliedAt': r['applied_at'],
-                    'createdAt': r['created_at'], 'rowCount': r['n'], 'enteredCount': r['entered']})
+    months = []
+    for r in c.execute('''SELECT s.id, s.month, s.created_at,
+                                 (SELECT COUNT(*) FROM stocktake_blocks b WHERE b.sheet_id=s.id) AS customers,
+                                 (SELECT COUNT(*) FROM stocktake_blocks b WHERE b.sheet_id=s.id AND b.applied_at IS NOT NULL) AS applied,
+                                 (SELECT COUNT(*) FROM stocktake_sheet_rows x JOIN stocktake_blocks b ON b.id=x.block_id WHERE b.sheet_id=s.id) AS n,
+                                 (SELECT COUNT(*) FROM stocktake_sheet_rows x JOIN stocktake_blocks b ON b.id=x.block_id WHERE b.sheet_id=s.id AND x.actual_qty IS NOT NULL) AS entered
+                          FROM stocktake_sheets s ORDER BY s.month DESC'''):
+        months.append({'month': r['month'], 'customerCount': r['customers'], 'appliedCount': r['applied'],
+                       'rowCount': r['n'], 'enteredCount': r['entered'], 'createdAt': r['created_at']})
     customers = [{'id': r['id'], 'name': r['name'], 'kana': r['kana'] or ''} for r in c.execute(
         'SELECT id, name, kana FROM customers WHERE active=1 ORDER BY name')]
     customers.sort(key=lambda x: stock.customer_sort_key(x['name']))
-    return {'stocktakes': out, 'customers': customers}
+    return {'months': months, 'customers': customers}
 
 
 def _inc_price(c, cp_id, size, location_id, condition):
@@ -168,27 +194,13 @@ def _inc_price(c, cp_id, size, location_id, condition):
     return None, None
 
 
-def create(c, body):
-    stock._require_write(body)
-    cid = body.get('customerId')
-    month = _month(body.get('month'))
-    cu = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone() if isinstance(cid, int) else None
-    if not cu:
-        raise ValueError('顧客を選んでください。')
-    existing = c.execute('SELECT id FROM stocktakes WHERE customer_id=? AND month=?', (cid, month)).fetchone()
-    if existing:
-        return {**get(c, existing['id']), 'already': True}
-    t = stock.stamp()
-    actor = stock._actor_name(body)
-    c.execute('INSERT INTO stocktakes(customer_id,month,created_at,created_by,updated_at) VALUES(?,?,?,?,?)',
-              (cid, month, t, actor, t))
-    sid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+def _snapshot_rows(c, block_id, cu):
     lots = c.execute('''SELECT l.*, p.code, p.name AS product_name, p.color, cp.embroidery
                         FROM lots l JOIN customer_products cp ON cp.id=l.customer_product_id
                         JOIN products p ON p.id=cp.product_id
                         WHERE cp.customer_id=? AND l.qty_remaining<>0
                         ORDER BY p.code, p.id, cp.embroidery, l.size_label, l.location_id, l.condition, l.id''',
-                     (cid,)).fetchall()
+                     (cu['id'],)).fetchall()
     groups = {}
     for lot in lots:
         key = (lot['customer_product_id'], lot['size_label'], lot['location_id'], lot['condition'])
@@ -200,8 +212,6 @@ def create(c, body):
         ordered += [l for l in glots if l['qty_remaining'] <= 0]
         snap = [[l['qty_remaining'], None if l['cost_pending'] else l['unit_cost']] for l in ordered]
         book = sum(l['qty_remaining'] for l in glots)
-        if book == 0 and all(q == 0 for q, _ in snap):
-            continue
         first = glots[0]
         name = first['product_name']
         if first['color']:
@@ -211,67 +221,127 @@ def create(c, body):
         loc = c.execute('SELECT * FROM locations WHERE id=?', (loc_id,)).fetchone()
         inc, src = _inc_price(c, cp_id, size, loc_id, cond)
         no += 1
-        c.execute('''INSERT INTO stocktake_rows(stocktake_id,customer_product_id,size_label,location_id,condition,
+        c.execute('''INSERT INTO stocktake_sheet_rows(block_id,customer_product_id,size_label,location_id,condition,
                      location_label,office_code,customer_name,product_name,product_code,book_qty,lots_json,
                      inc_price,inc_source,sort_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                  (sid, cp_id, size, loc_id, cond, stock.location_label(c, loc) if loc else '',
+                  (block_id, cp_id, size, loc_id, cond, stock.location_label(c, loc) if loc else '',
                    (cu['office_code'] or ''), cu['name'], name, first['code'] or '', book,
                    json.dumps(snap), inc, src, no))
-    return get(c, sid)
+    return no
+
+
+def add_customer(c, body):
+    """顧客をその月の棚卸表に追加（在庫をスナップショットして末尾に行を追加）。追加済みなら何もしない。"""
+    stock._require_write(body)
+    month = _month(body.get('month'))
+    cid = body.get('customerId')
+    cu = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone() if isinstance(cid, int) else None
+    if not cu:
+        raise ValueError('顧客を選んでください。')
+    t = stock.stamp()
+    actor = stock._actor_name(body)
+    sh = _sheet(c, month)
+    if not sh:
+        c.execute('INSERT INTO stocktake_sheets(month,created_at,created_by,updated_at) VALUES(?,?,?,?)', (month, t, actor, t))
+        sh = _sheet(c, month)
+    if c.execute('SELECT id FROM stocktake_blocks WHERE sheet_id=? AND customer_id=?', (sh['id'], cid)).fetchone():
+        return {**get(c, month), 'already': True, 'added': 0}
+    no = c.execute('SELECT COALESCE(MAX(sort_no),0)+1 FROM stocktake_blocks WHERE sheet_id=?', (sh['id'],)).fetchone()[0]
+    c.execute('INSERT INTO stocktake_blocks(sheet_id,customer_id,sort_no,added_at,added_by) VALUES(?,?,?,?,?)',
+              (sh['id'], cid, no, t, actor))
+    bid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    n = _snapshot_rows(c, bid, cu)
+    c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (t, sh['id']))
+    return {**get(c, month), 'added': n}
+
+
+def _block(c, month, cid):
+    sh = _sheet(c, month)
+    b = c.execute('SELECT * FROM stocktake_blocks WHERE sheet_id=? AND customer_id=?',
+                  (sh['id'], cid)).fetchone() if sh else None
+    if not b:
+        raise ValueError('この顧客は棚卸表にありません。')
+    return b
+
+
+def remove_customer(c, body):
+    stock._require_write(body)
+    month = _month(body.get('month'))
+    b = _block(c, month, body.get('customerId'))
+    if b['applied_at']:
+        raise ValueError('在庫に反映済みの顧客は外せません。')
+    c.execute('DELETE FROM stocktake_sheet_rows WHERE block_id=?', (b['id'],))
+    c.execute('DELETE FROM stocktake_blocks WHERE id=?', (b['id'],))
+    return get(c, month)
 
 
 def save(c, body):
     stock._require_write(body)
-    sid = body.get('id')
-    st = c.execute('SELECT * FROM stocktakes WHERE id=?', (sid,)).fetchone() if isinstance(sid, int) else None
-    if not st:
-        raise ValueError('棚卸が見つかりません。')
-    if st['applied_at']:
-        raise ValueError('在庫に反映済みのため変更できません。')
+    month = _month(body.get('month'))
+    sh = _sheet(c, month)
+    if not sh:
+        raise ValueError('棚卸表が見つかりません。')
     rows = body.get('rows')
     if not isinstance(rows, list):
         raise ValueError('実棚を入力してください。')
     for r in rows:
-        rid = r.get('id') if isinstance(r, dict) else None
-        raw = r.get('actualQty') if isinstance(r, dict) else None
+        if not isinstance(r, dict):
+            continue
+        cur = c.execute('''SELECT x.*, b.applied_at FROM stocktake_sheet_rows x JOIN stocktake_blocks b ON b.id=x.block_id
+                           WHERE x.id=? AND b.sheet_id=?''', (r.get('id'), sh['id'])).fetchone()
+        if not cur:
+            continue
+        raw = r.get('actualQty')
         if raw is None or (isinstance(raw, str) and raw.strip() == ''):
             val = None
         else:
             val = stock.parse_qty(raw, '実棚点数', allow_zero=True)
-        c.execute('UPDATE stocktake_rows SET actual_qty=? WHERE id=? AND stocktake_id=?', (val, rid, sid))
-    c.execute('UPDATE stocktakes SET updated_at=? WHERE id=?', (stock.stamp(), sid))
-    return get(c, sid)
+        note = stock.optional(r.get('note'), '備考', 200) if 'note' in r else cur['note']
+        if cur['applied_at']:
+            if val != cur['actual_qty'] or note != cur['note']:
+                raise ValueError('在庫に反映済みの顧客の行は変更できません。')
+            continue
+        c.execute('UPDATE stocktake_sheet_rows SET actual_qty=?, note=? WHERE id=?', (val, note, cur['id']))
+    c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (stock.stamp(), sh['id']))
+    return get(c, month)
 
 
 def apply(c, body):
-    """実棚で在庫を上書き。実棚入力済みで現在庫と違う行だけ、register_stocktake で棚卸調整を記録する。"""
+    """実棚で在庫を上書き。未反映の顧客のうち実棚が1行以上入力された顧客を対象に、
+    実棚入力済みで現在庫と違う行だけ register_stocktake で棚卸調整し、その顧客を反映済みにする。"""
     stock._require_write(body)
     if body.get('confirm') not in (True, 1, '1'):
         raise ValueError('確認してから実行してください。')
-    sid = body.get('id')
-    st = c.execute('SELECT * FROM stocktakes WHERE id=?', (sid,)).fetchone() if isinstance(sid, int) else None
-    if not st:
-        raise ValueError('棚卸が見つかりません。')
-    if st['applied_at']:
-        return {**get(c, sid), 'already': True, 'adjusted': 0}
+    month = _month(body.get('month'))
+    sh = _sheet(c, month)
+    if not sh:
+        raise ValueError('棚卸表が見つかりません。')
     t = stock.stamp()
+    actor = stock._actor_name(body)
     adjusted = 0
-    for r in c.execute('SELECT * FROM stocktake_rows WHERE stocktake_id=? AND actual_qty IS NOT NULL ORDER BY sort_no, id',
-                       (sid,)).fetchall():
-        cur = stock.current_qty_for_target(c, r['customer_product_id'], r['size_label'], r['location_id'], r['condition'])
-        if cur == r['actual_qty']:
+    applied_customers = 0
+    for b in c.execute('SELECT * FROM stocktake_blocks WHERE sheet_id=? AND applied_at IS NULL ORDER BY sort_no, id',
+                       (sh['id'],)).fetchall():
+        rows = c.execute('SELECT * FROM stocktake_sheet_rows WHERE block_id=? AND actual_qty IS NOT NULL ORDER BY sort_no, id',
+                         (b['id'],)).fetchall()
+        if not rows:
             continue
-        res = stock.register_stocktake(c, {
-            '_actor': body.get('_actor'), '_canWrite': body.get('_canWrite'),
-            'token': f'stocktake-{sid}-{r["id"]}-{uuid.uuid4().hex[:8]}',
-            'customerProductId': r['customer_product_id'], 'size': r['size_label'],
-            'locationId': r['location_id'], 'condition': r['condition'],
-            'actualQty': r['actual_qty'], 'businessOn': t[:10],
-            'unitCost': r['inc_price'],
-            'note': f"棚卸調整（{st['month']} 棚卸#{sid}・{cur}→{r['actual_qty']}）",
-        })
-        c.execute('UPDATE stocktake_rows SET applied_batch_id=? WHERE id=?', (res.get('batchId'), r['id']))
-        adjusted += 1
-    c.execute('UPDATE stocktakes SET applied_at=?, applied_by=?, updated_at=? WHERE id=?',
-              (t, stock._actor_name(body), t, sid))
-    return {**get(c, sid), 'adjusted': adjusted}
+        for r in rows:
+            cur = stock.current_qty_for_target(c, r['customer_product_id'], r['size_label'], r['location_id'], r['condition'])
+            if cur == r['actual_qty']:
+                continue
+            res = stock.register_stocktake(c, {
+                '_actor': body.get('_actor'), '_canWrite': body.get('_canWrite'),
+                'token': f'stocktake-{sh["id"]}-{r["id"]}-{uuid.uuid4().hex[:8]}',
+                'customerProductId': r['customer_product_id'], 'size': r['size_label'],
+                'locationId': r['location_id'], 'condition': r['condition'],
+                'actualQty': r['actual_qty'], 'businessOn': t[:10],
+                'unitCost': r['inc_price'],
+                'note': f"棚卸調整（{month} 棚卸・{r['customer_name']}・{cur}→{r['actual_qty']}）",
+            })
+            c.execute('UPDATE stocktake_sheet_rows SET applied_batch_id=? WHERE id=?', (res.get('batchId'), r['id']))
+            adjusted += 1
+        c.execute('UPDATE stocktake_blocks SET applied_at=?, applied_by=? WHERE id=?', (t, actor, b['id']))
+        applied_customers += 1
+    c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (t, sh['id']))
+    return {**get(c, month), 'adjusted': adjusted, 'appliedCustomers': applied_customers}
