@@ -20,6 +20,8 @@ LARGE_BODY_PATHS = frozenset({
     '/api/legacy-csv/preview',
     '/api/legacy-csv/commit',
     '/api/legacy-csv/history',
+    '/api/qr-link/preview',
+    '/api/qr-link/commit',
     '/api/product-ledger-csv/preview',
     '/api/product-ledger-csv/commit',
     '/api/product-ledger-csv/history',

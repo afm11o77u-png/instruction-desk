@@ -452,6 +452,8 @@ def needs_migration(c):
             return True
     if 'product_ledger_row_maps' not in tables or 'product_ledger_import_runs' not in tables:
         return True
+    if 'qr_stock_links' not in tables or 'qr_link_import_runs' not in tables:
+        return True
     import stock_orders
     import stock_product_merge
     import stock_prices
@@ -906,6 +908,8 @@ def migrate_schema(c):
     ensure_handle_process_schema(c)
     import stock_prices
     stock_prices.migrate(c)
+    import qr_link_import
+    qr_link_import.ensure_schema(c)
 
 
 def ensure_handle_process_schema(c):

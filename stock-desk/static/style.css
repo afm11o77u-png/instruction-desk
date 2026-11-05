@@ -19,7 +19,7 @@ header,.stockhead{display:flex;justify-content:flex-start;gap:10px 14px;align-it
 /* Title row: 表示 sits at the right end (在庫一覧 + 登録・設定; after mode switch when visible) */
 .stockhead .stock-list-display{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
 .stockhead .stock-list-display[hidden]{display:none!important}
-.stockhead .legacy-csv-bulk-entry{display:flex;align-items:center;flex:0 0 auto}
+.stockhead .legacy-csv-bulk-entry{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .stockhead .legacy-csv-bulk-entry #legacyCsvBulkOpen{white-space:nowrap}
 .stockhead .stock-list-display .display-mode-bar,
 .stockhead .stock-list-display .display-mode-bar-inline{
@@ -982,6 +982,9 @@ button.linkish{
 .primary-change-confirm{display:block;margin:8px 0 0;font-weight:600;color:#7a3e12}
 .legacy-status-hold td{background:#f3f1ea}
 .legacy-status-merge td{background:#eef5f0}
+dialog.qr-link-dialog{width:min(1100px,96vw);max-height:min(92vh,900px)}
+dialog.qr-link-dialog .dialogbody{overflow:auto}
+dialog.qr-link-dialog .qr-link-error{margin:0 0 8px;padding:8px 10px}
 /* 商品台帳モーダル: 画面幅いっぱいに近づけ、legacy-csv-detail の短い max-height / pre-wrap を打ち消す。
    縦スクロールは .legacy-csv-detail-body。比較表は親幅拘束＋操作列 sticky。 */
 dialog.product-ledger-dialog,

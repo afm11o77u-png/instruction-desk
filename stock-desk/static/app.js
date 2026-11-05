@@ -356,7 +356,7 @@ function syncLegacyCsvBulkEntry(section){
     wrap=document.createElement('div')
     wrap.id='legacyCsvBulkEntry'
     wrap.className='legacy-csv-bulk-entry'
-    wrap.innerHTML='<button type="button" id="legacyCsvBulkOpen" class="quiet">旧CSV一括取り込み</button>'
+    wrap.innerHTML='<button type="button" id="legacyCsvBulkOpen" class="quiet">旧CSV一括取り込み</button><button type="button" id="qrLinkOpen" class="quiet">旧QR対応</button>'
     const displayBar=slot.querySelector(':scope > .display-mode-bar')
     if(displayBar)slot.insertBefore(wrap,displayBar)
     else slot.appendChild(wrap)
@@ -371,6 +371,19 @@ function syncLegacyCsvBulkEntry(section){
       api,
       toast,
       boot,
+      stockCanWrite,
+      actorName:(state.data&&state.data.actorName)||'',
+    })
+  }
+  const qrBtn=wrap.querySelector('#qrLinkOpen')
+  if(qrBtn)qrBtn.onclick=()=>{
+    if(typeof QrLink==='undefined'||!QrLink.open){
+      toast('旧QR対応の画面を読み込めませんでした。')
+      return
+    }
+    QrLink.open({
+      api,
+      toast,
       stockCanWrite,
       actorName:(state.data&&state.data.actorName)||'',
     })
@@ -848,7 +861,7 @@ function products(){
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
     <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
-    <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>（「表示」の左）から行います。</p>
+    <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>から行います。既存のQRを今の商品へ対応づけるのは、その隣の<strong>旧QR対応</strong>です（在庫数量は変えません）。</p>
     ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
       <h3 class="verify-zone-title">検証用</h3>
       <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む選んだ区分の商品登録が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
