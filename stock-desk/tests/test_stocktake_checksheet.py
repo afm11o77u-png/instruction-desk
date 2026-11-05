@@ -6,15 +6,17 @@ from openpyxl import load_workbook
 
 import stock_checksheet as cs
 import stock_stocktake as st
+import stock_month_close as mc
 try:
-    from test_stocktake_sheet import W, setup
+    from test_stocktake_sheet import W, setup, close_month
 except ImportError:
-    from tests.test_stocktake_sheet import W, setup
+    from tests.test_stocktake_sheet import W, setup, close_month
 
 
 class CheckSheetTest(unittest.TestCase):
     def _sheet(self):
         folder, c, cu, other, h, loc = setup()
+        close_month(c)
         st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
         return folder, c, cu, other
 
@@ -37,6 +39,7 @@ class CheckSheetTest(unittest.TestCase):
     def test_export_format_and_import(self):
         folder, c, cu, other = self._sheet()
         with folder, c:
+            close_month(c)
             st.add_customer(c, {**W, 'month': '2026-10', 'customerId': other['id']})
             rows = st.get(c, '2026-10')['rows']
             m = next(r for r in rows if r['size'] == 'M')

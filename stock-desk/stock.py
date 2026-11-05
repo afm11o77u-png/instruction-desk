@@ -339,6 +339,8 @@ def initialize(c):
     migrate_schema(c)
     import stock_stocktake
     stock_stocktake.schema(c)
+    import stock_month_close
+    stock_month_close.schema(c)
     ensure_unconfirmed_site(c)
 
 

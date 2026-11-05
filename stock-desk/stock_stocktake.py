@@ -1,5 +1,6 @@
 """棚卸（月ごとに1枚の棚卸表）。顧客を選んで「追加」すると、その顧客の在庫を表の末尾に追加する。
-実棚を入力し「実棚で在庫を上書き」で stock.register_stocktake を使い差分だけ棚卸調整する。
+実棚を入力し「実棚を反映」で、差分（実棚 − 締め時在庫数）を今の在庫に増減する。
+基準の在庫数・在庫金額は月末締めの記録。その月の締めが無いと追加・反映できない。
 顧客の自動選別（帳簿のずれ等）は行わない。"""
 import json
 import re
@@ -232,7 +233,8 @@ def _sheet(c, month):
 def get(c, month):
     month = _month(month)
     sh = _sheet(c, month)
-    out = {'month': month, 'id': None, 'blocks': [], 'rows': [], 'totals': {}}
+    closed = bool(c.execute('SELECT id FROM month_closes WHERE month=?', (month,)).fetchone())
+    out = {'month': month, 'id': None, 'blocks': [], 'rows': [], 'totals': {}, 'hasClose': closed}
     rows = []
     if sh:
         out['id'] = sh['id']
@@ -377,42 +379,40 @@ def save_order(c, body):
     return get(c, month)
 
 
-def _snapshot_rows(c, block_id, cu):
-    lots = c.execute('''SELECT l.*, p.code, p.name AS product_name, p.color, cp.embroidery, COALESCE(su.name,'') AS supplier_name
-                        FROM lots l JOIN customer_products cp ON cp.id=l.customer_product_id
-                        JOIN products p ON p.id=cp.product_id LEFT JOIN suppliers su ON su.id=p.supplier_id
-                        WHERE cp.customer_id=? AND l.qty_remaining<>0
-                        ORDER BY p.code, p.id, cp.embroidery, l.size_label, l.location_id, l.condition, l.id''',
-                     (cu['id'],)).fetchall()
+def _snapshot_rows(c, block_id, cu, month):
+    """締め時の記録から行を作る（今の在庫は使わない）。同一品番・サイズ・場所・状態は合算1行。"""
+    import stock_month_close as mc
+    closed = mc.lots_for_customer(c, month, cu['id'])
+    if closed is None:
+        raise ValueError('先に締めてください。')
     groups = {}
-    for lot in lots:
+    for lot in closed:
         key = (lot['customer_product_id'], lot['size_label'], lot['location_id'], lot['condition'])
         groups.setdefault(key, []).append(lot)
-    keys = sorted(groups, key=lambda k: default_row_key(groups[k][0]['supplier_name'], groups[k][0]['code'], k[1]))
+    keys = sorted(groups, key=lambda k: default_row_key(groups[k][0]['supplier_name'], groups[k][0]['product_code'], k[1]))
     saved = {(r['customer_product_id'], r['size_label'], r['location_id'], r['condition']): r['pos'] for r in c.execute(
         'SELECT * FROM stocktake_row_order WHERE customer_id=?', (cu['id'],))}
     no = 0
     for key in order_items(keys, saved):
         glots = groups[key]
         cp_id, size, loc_id, cond = key
-        ordered = stock.issue_sequence([l for l in glots if l['qty_remaining'] > 0])
-        ordered += [l for l in glots if l['qty_remaining'] <= 0]
-        snap = [[l['qty_remaining'], None if l['cost_pending'] else l['unit_cost']] for l in ordered]
-        book = sum(l['qty_remaining'] for l in glots)
+        ordered = [l for l in glots if l['qty'] > 0] + [l for l in glots if l['qty'] <= 0]
+        snap = [[l['qty'], None if l['cost_pending'] else l['unit_cost']] for l in ordered]
+        book = sum(l['qty'] for l in glots)
         first = glots[0]
         name = first['product_name']
         if first['color']:
             name += ' ' + first['color']
         if first['embroidery']:
             name += f"（{stock.embroidery_label(first['embroidery'])}）"
-        loc = c.execute('SELECT * FROM locations WHERE id=?', (loc_id,)).fetchone()
+        loc_label = first['location_label'] or ''
         inc, src = _inc_price(c, cp_id, size, loc_id, cond)
         no += 1
         c.execute('''INSERT INTO stocktake_sheet_rows(block_id,customer_product_id,size_label,location_id,condition,
                      location_label,office_code,customer_name,product_name,product_code,book_qty,lots_json,
                      inc_price,inc_source,sort_no) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                  (block_id, cp_id, size, loc_id, cond, stock.location_label(c, loc) if loc else '',
-                   (cu['office_code'] or ''), cu['name'], name, first['code'] or '', book,
+                  (block_id, cp_id, size, loc_id, cond, loc_label,
+                   first['office_code'] or (cu['office_code'] or ''), cu['name'], name, first['product_code'] or '', book,
                    json.dumps(snap), inc, src, no))
     return no
 
@@ -448,13 +448,15 @@ def _add_one(c, body, cid):
     if not sh:
         c.execute('INSERT INTO stocktake_sheets(month,created_at,created_by,updated_at) VALUES(?,?,?,?)', (month, t, actor, t))
         sh = _sheet(c, month)
+    import stock_month_close as mc
+    mc.require_closed(c, month)
     if c.execute('SELECT id FROM stocktake_blocks WHERE sheet_id=? AND customer_id=?', (sh['id'], cid)).fetchone():
         return {**get(c, month), 'already': True, 'added': 0}
     no = c.execute('SELECT COALESCE(MAX(sort_no),0)+1 FROM stocktake_blocks WHERE sheet_id=?', (sh['id'],)).fetchone()[0]
     c.execute('INSERT INTO stocktake_blocks(sheet_id,customer_id,sort_no,added_at,added_by) VALUES(?,?,?,?,?)',
               (sh['id'], cid, no, t, actor))
     bid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
-    n = _snapshot_rows(c, bid, cu)
+    n = _snapshot_rows(c, bid, cu, month)
     c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (t, sh['id']))
     return {**get(c, month), 'added': n}
 
@@ -518,12 +520,13 @@ def save(c, body):
 
 
 def apply(c, body):
-    """実棚で在庫を上書き。未反映の顧客のうち実棚が1行以上入力された顧客を対象に、
-    実棚入力済みで現在庫と違う行だけ register_stocktake で棚卸調整し、その顧客を反映済みにする。"""
+    """実棚を反映。差分（実棚 − 締め時在庫数）を今の在庫に増減する。
+    減は FIFO、増は特値→現単価→最終仕入単価（inc_price）。その月の締めが無いと不可。"""
     stock._require_write(body)
     if body.get('confirm') not in (True, 1, '1'):
         raise ValueError('確認してから実行してください。')
-    month = _month(body.get('month'))
+    import stock_month_close as mc
+    month = mc.require_closed(c, body.get('month'))
     sh = _sheet(c, month)
     if not sh:
         raise ValueError('棚卸表が見つかりません。')
@@ -538,17 +541,19 @@ def apply(c, body):
         if not rows:
             continue
         for r in rows:
-            cur = stock.current_qty_for_target(c, r['customer_product_id'], r['size_label'], r['location_id'], r['condition'])
-            if cur == r['actual_qty']:
+            delta = r['actual_qty'] - r['book_qty']
+            if delta == 0:
                 continue
+            cur = stock.current_qty_for_target(c, r['customer_product_id'], r['size_label'], r['location_id'], r['condition'])
+            target = cur + delta
             res = stock.register_stocktake(c, {
                 '_actor': body.get('_actor'), '_canWrite': body.get('_canWrite'),
                 'token': f'stocktake-{sh["id"]}-{r["id"]}-{uuid.uuid4().hex[:8]}',
                 'customerProductId': r['customer_product_id'], 'size': r['size_label'],
                 'locationId': r['location_id'], 'condition': r['condition'],
-                'actualQty': r['actual_qty'], 'businessOn': t[:10],
+                'actualQty': target, 'businessOn': t[:10],
                 'unitCost': r['inc_price'],
-                'note': f"棚卸調整（{month} 棚卸・{r['customer_name']}・{cur}→{r['actual_qty']}）",
+                'note': f"棚卸反映（{month}・{r['customer_name']}・締め{r['book_qty']}実棚{r['actual_qty']}差{delta:+d}・{cur}→{target}）",
             })
             c.execute('UPDATE stocktake_sheet_rows SET applied_batch_id=? WHERE id=?', (res.get('batchId'), r['id']))
             adjusted += 1

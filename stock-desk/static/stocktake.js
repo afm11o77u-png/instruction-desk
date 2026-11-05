@@ -156,14 +156,16 @@ const Stocktake={
     const multi={loc:new Set(s.rows.map(r=>r.locationLabel)).size>1,cond:new Set(s.rows.map(r=>r.condition)).size>1}
     const sizeText=r=>{const x=[];if(multi.loc)x.push(r.locationLabel);if(multi.cond)x.push(r.conditionLabel);return esc(r.size)+(x.length?` <span class="st-pending">${esc(x.join('・'))}</span>`:'')}
     const open=s.blocks.some(b=>!b.applied)
+    const closed=!!s.hasClose
     const t=s.totals
     let prev=null
     $('#main').innerHTML=`<section class="panel">
       <div class="bar"><button type="button" id="stBack">一覧へ</button><b>${esc(s.month)} 棚卸</b></div>
+      ${closed?'':'<p class="notice">先に締めてください（月末締め）。締め時の在庫が表の基準になります。</p>'}
       ${w?`<div class="st-pick"><div class="st-pick-head"><input id="stFind" type="search" placeholder="顧客を検索"><span class="sub" id="stPicked"></span><button type="button" id="stAdd">選んだ顧客を追加</button></div>
         <div class="st-pick-list">${L.customers.map(c=>{const has=inSheet.has(c.id);return `<label class="check${has?' st-has':''}" data-st-name="${esc(c.name+' '+(c.kana||''))}"><input type="checkbox" value="${c.id}"${has?' checked disabled':''}> ${esc(c.name)}${has?' <span class="sub">追加済</span>':''}</label>`}).join('')||'<span class="sub">顧客がありません。</span>'}</div></div>`:''}
       <div class="bar"><button type="button" id="stCheck">チェックシート</button><button type="button" id="stXlsx">Excel出力</button>${w&&open?'<button type="button" id="stImport">Excel取込</button>':''}
-        ${w&&open?'<button type="button" id="stSave">保存</button><button type="button" class="primary" id="stApply">実棚で在庫を上書き</button>':''}
+        ${w&&open?'<button type="button" id="stSave">保存</button>'+(closed?'<button type="button" class="primary" id="stApply">実棚を反映</button>':'<button type="button" class="primary" disabled title="先に締めてください">実棚を反映</button>'):''}
       </div>
       <div class="st-chips">${s.blocks.map(b=>`<span class="st-chip">${esc(b.customerName)} <span class="sub">${b.applied?`反映済 ${esc(at(b.appliedAt))} ${esc(b.appliedBy)}`:`入力 ${b.enteredCount}/${b.rowCount}`}</span>${w&&!b.applied?`<button type="button" title="棚卸表から外す" data-st-remove="${b.customerId}">×</button>`:''}</span>`).join('')||'<span class="sub">顧客にチェックを入れて「選んだ顧客を追加」すると、その顧客の在庫が下に追加されます。</span>'}</div>
       <div class="st-wrap"><table class="st-grid"><colgroup>${COLS.map(c=>`<col style="width:${c[1]}px">`).join('')}</colgroup>
@@ -191,7 +193,7 @@ const Stocktake={
     document.querySelectorAll('.st-pick-list input').forEach(i=>i.onchange=showPicked)
     const find=$('#stFind')
     if(find)find.oninput=()=>{const q=find.value.trim();document.querySelectorAll('[data-st-name]').forEach(l=>{l.hidden=!!q&&!l.dataset.stName.includes(q)})}
-    if($('#stAdd'))$('#stAdd').onclick=async()=>{
+    if($('#stAdd'))$('#stAdd').onclick=async()=>{if(!state.stCur||!state.stCur.hasClose){toast('先に締めてください。');return}
       const ids=picked()
       if(!ids.length)return toast('顧客にチェックを入れてください。')
       try{await save();const r=await api('/api/stocktakes/add',{month:s.month,customerIds:ids});state.stCur=r;toast(`${r.addedCustomers}件の顧客（${r.added}行）を追加しました。`+(r.skipped?`追加済みの${r.skipped}件は飛ばしました。`:''));this.page()}catch(e){toast(e.message)}
@@ -204,14 +206,15 @@ const Stocktake={
     if($('#stSave'))$('#stSave').onclick=async()=>{try{await save();toast('保存しました。');this.page()}catch(e){toast(e.message)}}
     if($('#stApply'))$('#stApply').onclick=async()=>{
       try{
+        if(!state.stCur||!state.stCur.hasClose){toast('先に締めてください。');return}
         await save()
         const cur=state.stCur
         const ready=cur.blocks.filter(b=>!b.applied&&b.enteredCount>0)
         if(!ready.length){toast('実棚が入力された未反映の顧客がありません。');this.page();return}
         const n=cur.rows.filter(r=>!r.applied&&r.actualQty!=null&&r.diffQty!==0).length
-        if(!confirm(`実棚点数で在庫を上書きします。\n対象: ${ready.map(b=>b.customerName).join('、')}\n差がある ${n} 行を棚卸調整します（空欄の行は変更しません）。\n反映後、この顧客の行は変更できません。よろしいですか？`)){this.page();return}
+        if(!confirm(`実棚を反映します（差分＝実棚−締め時在庫数を今の在庫に増減）。\n対象: ${ready.map(b=>b.customerName).join('、')}\n差がある ${n} 行を反映します（空欄の行は変更しません）。\n反映後、この顧客の行は変更できません。よろしいですか？`)){this.page();return}
         const r=await api('/api/stocktakes/apply',{month:s.month,confirm:true})
-        state.stCur=r;toast(`${r.appliedCustomers}顧客・${r.adjusted}行を棚卸調整しました。`);this.page()
+        state.stCur=r;toast(`${r.appliedCustomers}顧客・${r.adjusted}行を反映しました。`);this.page()
       }catch(e){toast(e.message)}
     }
   },

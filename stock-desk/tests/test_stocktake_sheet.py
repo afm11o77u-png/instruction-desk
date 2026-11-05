@@ -7,8 +7,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import stock
 import stock_stocktake as st
+import stock_month_close as mc
 
 W = {'_canWrite': True, '_actor': {'name': 'テスト担当'}}
+
+
+def close_month(c, month='2026-10'):
+    return mc.close_month(c, {**W, 'month': month, 'confirm': True})
 
 
 def setup():
@@ -36,6 +41,7 @@ class StocktakeSheetTest(unittest.TestCase):
     def test_add_multiple_customers_skips_existing(self):
         folder, c, cu, other, *_ = setup()
         with folder, c:
+            close_month(c)
             st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             s = st.add_customer(c, {**W, 'month': '2026-10', 'customerIds': [cu['id'], other['id']]})
             self.assertEqual((s['addedCustomers'], s['skipped']), (1, 1))
@@ -50,6 +56,12 @@ class StocktakeSheetTest(unittest.TestCase):
         self.assertLess(body.index('const save='), body.index('bindExcel(this,s,save)'))
         self.assertIn('customerIds', body)
         self.assertNotIn('id="stCust"', body)
+
+    def test_apply_button_renamed(self):
+        js = (Path(__file__).resolve().parents[1] / 'static' / 'stocktake.js').read_text(encoding='utf-8')
+        self.assertIn('実棚を反映', js)
+        self.assertNotIn('実棚で在庫を上書き', js)
+        self.assertIn('先に締めてください', js)
 
     def test_row_drag_generous(self):
         js = (Path(__file__).resolve().parents[1] / 'static' / 'stocktake.js').read_text(encoding='utf-8')
@@ -67,6 +79,10 @@ class StocktakeSheetTest(unittest.TestCase):
             self.assertEqual(ids, {cu['id'], other['id']})
             empty = st.get(c, '2026-10')
             self.assertEqual((empty['id'], empty['rows']), (None, []))
+            with self.assertRaises(ValueError) as ar:
+                st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
+            self.assertIn('先に締めて', str(ar.exception))
+            close_month(c)
             s = st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             self.assertEqual(s['added'], 2)
             s = st.add_customer(c, {**W, 'month': '2026-10', 'customerId': other['id']})
@@ -84,6 +100,7 @@ class StocktakeSheetTest(unittest.TestCase):
     def test_save_apply_per_customer(self):
         folder, c, cu, other, h, loc = setup()
         with folder, c:
+            close_month(c)
             st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             s = st.get(c, '2026-10')
             rows = {r['size']: r for r in s['rows']}
@@ -118,6 +135,7 @@ class StocktakeSheetTest(unittest.TestCase):
     def test_increase_uses_lot_price(self):
         folder, c, cu, _, h, loc = setup()
         with folder, c:
+            close_month(c, '2026-11')
             s = st.add_customer(c, {**W, 'month': '2026-11', 'customerId': cu['id']})
             m = {r['size']: r for r in s['rows']}['M']
             self.assertEqual(m['incPrice'], 1200)
@@ -126,6 +144,24 @@ class StocktakeSheetTest(unittest.TestCase):
             self.assertEqual((m['actualAmount'], m['diffAmount']), (6600, 1200))
             st.apply(c, {**W, 'month': '2026-11', 'confirm': True})
             self.assertEqual(stock.current_qty_for_target(c, h, 'M', loc['id']), 6)
+
+    def test_apply_uses_close_diff(self):
+        """締め10・実棚9・その後3出庫で今7 → 反映で6。"""
+        folder, c, cu, _, h, loc = setup()
+        with folder, c:
+            # M is 5 (3@1000 + 2@1200). Close, then set actual 4 (= -1 vs close).
+            close_month(c)
+            s = st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
+            m = {r['size']: r for r in s['rows']}['M']
+            self.assertEqual(m['bookQty'], 5)
+            st.save(c, {**W, 'month': '2026-10', 'rows': [{'id': m['id'], 'actualQty': 4}]})
+            stock.register_outbound(c, {**W, 'token': 'tk-after-count-out1', 'customerProductId': h,
+                                        'size': 'M', 'locationId': loc['id'], 'qty': 3, 'businessOn': '2026-10-20'})
+            self.assertEqual(stock.current_qty_for_target(c, h, 'M', loc['id']), 2)
+            s = st.apply(c, {**W, 'month': '2026-10', 'confirm': True})
+            self.assertEqual(s['adjusted'], 1)
+            # current 2 + (4-5) = 1
+            self.assertEqual(stock.current_qty_for_target(c, h, 'M', loc['id']), 1)
 
     def test_old_per_customer_tables_dropped_moves_kept(self):
         folder = tempfile.TemporaryDirectory()

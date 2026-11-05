@@ -7,8 +7,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import stock
 import stock_stocktake as st
+import stock_month_close as mc
 
 W = {'_canWrite': True, '_actor': {'name': 'テスト担当'}}
+
+def close_month(c, month='2026-10'):
+    return mc.close_month(c, {**W, 'month': month, 'confirm': True})
 
 
 def seed():
@@ -56,6 +60,7 @@ class StocktakeRowOrderTest(unittest.TestCase):
             item('㈱サーヴォ', 'Z-9', ['L', 'S'])
             item('㈱サーヴォ', 'B-2', ['3L', 'LL'])
             item('アイトス㈱', 'Q-1', ['F'])
+            close_month(c)
             s = st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             self.assertEqual(seq(s), [('Q-1', 'F'), ('B-2', 'LL'), ('B-2', '3L'), ('Z-9', 'S'), ('Z-9', 'L'), ('A-1', 'M')])
 
@@ -64,14 +69,17 @@ class StocktakeRowOrderTest(unittest.TestCase):
         with folder, c:
             item('A社', 'A-1', ['M'])
             item('B社', 'B-1', ['M'])
+            close_month(c)
             s = st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             ids = [r['id'] for r in s['rows']][::-1]
             s = st.save_order(c, {**W, 'month': '2026-10', 'customerId': cu['id'], 'rowIds': ids})
             self.assertEqual(seq(s), [('B-1', 'M'), ('A-1', 'M')])
             st.remove_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             item('A社', 'A-0', ['M'])   # 新規品は既定順の位置（直前の行の後ろ）へ
+            close_month(c)
             s = st.add_customer(c, {**W, 'month': '2026-10', 'customerId': cu['id']})
             self.assertEqual(seq(s), [('B-1', 'M'), ('A-0', 'M'), ('A-1', 'M')])
+            close_month(c, '2026-11')
             s = st.add_customer(c, {**W, 'month': '2026-11', 'customerId': cu['id']})
             self.assertEqual(seq(s), [('B-1', 'M'), ('A-0', 'M'), ('A-1', 'M')])
             with self.assertRaises(ValueError):

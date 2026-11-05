@@ -41,12 +41,13 @@ class OwnerMemosTest(unittest.TestCase):
     def test_red_memo_tanaoroshi(self):
         code, rows = _H(U('owner')).auth_get('/api/memos', self.c)
         titles = [r['title'] for r in rows]
-        self.assertIn('棚卸期間中の在庫の扱い（未対応・後で検討）', titles)  # 一覧の題名に [red] を出さない
+        self.assertIn('棚卸期間中の在庫の扱い（決定）', titles)  # 一覧の題名に [red] を出さない
         code, memo = _H(U('owner')).auth_get('/api/memos/02-tanaoroshi-kikan', self.c)
         self.assertEqual(code, 200)
         md = memo['markdown']
         self.assertIn('2026-11-05', md)
-        self.assertIn('実棚 − スナップショット', md)
+        self.assertIn('実棚 − 締め時在庫数', md)
+        self.assertIn('月末締め', md)
         for line in md.splitlines():
             if line.strip():
                 self.assertIn('[red]', line)

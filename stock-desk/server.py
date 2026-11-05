@@ -7,6 +7,7 @@ import stock_history
 import stock_period
 import stock_orders
 import stock_stocktake
+import stock_month_close
 import stock_checksheet
 import excel_export
 from upload_limits import (
@@ -36,6 +37,7 @@ WRITE_PATHS = {
     '/api/purchase-orders/printed',
     '/api/stocktakes/add', '/api/stocktakes/remove', '/api/stocktakes/save', '/api/stocktakes/apply', '/api/stocktakes/order',
     '/api/stocktakes/checksheet/import-preview', '/api/stocktakes/checksheet/import',
+    '/api/month-closes/close',
     '/api/company-profile',
     '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
 }
@@ -264,6 +266,23 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
                 if path == '/api/stocktakes':
                     return 200, stock_stocktake.list_stocktakes(c)
                 return 200, stock_stocktake.get(c, (query.get('month') or [''])[0])
+        except ValueError as e:
+            return 400, {'error': str(e)}
+    if path in ('/api/month-closes', '/api/month-closes/get'):
+        try:
+            with stock.connect(db_path) as c:
+                if path == '/api/month-closes':
+                    return 200, stock_month_close.list_closes(c)
+                return 200, stock_month_close.get(c, (query.get('month') or [''])[0])
+        except ValueError as e:
+            return 400, {'error': str(e)}
+    if path == '/api/month-closes/export.xlsx':
+        try:
+            with stock.connect(db_path) as c:
+                data, filename = stock_month_close.export_xlsx(c, (query.get('month') or [''])[0])
+            return 200, data, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', {
+                'Content-Disposition': excel_export.content_disposition(filename),
+            }
         except ValueError as e:
             return 400, {'error': str(e)}
     if path == '/api/purchase-orders':
@@ -709,6 +728,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/stocktakes/save': stock_stocktake.save,
         '/api/stocktakes/order': stock_stocktake.save_order,
         '/api/stocktakes/apply': stock_stocktake.apply,
+        '/api/month-closes/close': stock_month_close.close_month,
         '/api/stocktakes/checksheet/import-preview': stock_checksheet.import_preview,
         '/api/stocktakes/checksheet/import': stock_checksheet.import_apply,
         '/api/company-profile': stock_orders.save_company_profile,

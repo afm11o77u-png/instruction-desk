@@ -14,7 +14,7 @@ function conditionSelectHtml(id,value,opts){
   const all=allowAll?`<option value="" ${cur===''?'selected':''}>すべて</option>`:''
   return `<select id="${id}" aria-label="状態">${all}${CONDITION_OPTS.map(([v,l])=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('')}</select>`
 }
-const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake'])
+const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake','monthclose'])
 /** Legacy ?section=move / 保存済みURL → 在庫一覧へ案内 */
 let moveRedirectNotice=false
 function normalizeSection(section){
@@ -316,7 +316,7 @@ function toast(t,ms=3200){const el=$('#toast');el.hidden=false;el.textContent=t;
 const BASE=location.pathname.startsWith('/inventory')?'/inventory':''
 const embedded=new URLSearchParams(location.search).get('embed')==='1'
 
-const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders',stocktake:'stock-stocktake'}
+const STOCK_SCREENS={customers:'stock-customers',suppliers:'stock-suppliers',products:'stock-products',locations:'stock-locations',opening:'stock-opening',list:'stock-list',move:'stock-move',history:'stock-history',period:'stock-period',orders:'stock-orders',stocktake:'stock-stocktake',monthclose:'stock-monthclose'}
 async function deskDisplayFetch(path,data){
   const opts=data?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data)}:{}
   const r=await fetch(path,opts)
@@ -335,7 +335,7 @@ function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
   // Title-row 表示 slot: 在庫一覧系 + 登録・設定（枠外・右上）
-  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='setup'){
+  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='monthclose'||section==='setup'){
     slot.hidden=false
     syncLegacyCsvBulkEntry(section)
     return
@@ -381,7 +381,7 @@ function mountStockDisplay(stage,tab,repaint){
   const screenId=stockScreenId(tab)
   // Title-row 表示 slot (syncStockListDisplaySlot): 在庫一覧・期間・発注・登録設定.
   // Must remount here so the visible control matches this page's screenId (not a leftover).
-  const useTitleSlot=tab==='list'||tab==='history'||tab==='period'||tab==='orders'||tab==='stocktake'||SETUP_TAB_IDS.has(tab)
+  const useTitleSlot=tab==='list'||tab==='history'||tab==='period'||tab==='orders'||tab==='stocktake'||tab==='monthclose'||SETUP_TAB_IDS.has(tab)
   const toolbar=useTitleSlot
     ? document.querySelector('#stocklistdisplay')
     : document.querySelector('#main .bar')
@@ -462,6 +462,9 @@ function applySectionState(section,setupTab){
   }else if(state.section==='stocktake'){
     state.tab='stocktake'
     state.mode='stock'
+  }else if(state.section==='monthclose'){
+    state.tab='monthclose'
+    state.mode='stock'
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
     state.setupTab=next
@@ -488,6 +491,7 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
   if(state.tab==='stocktake'&&typeof Stocktake!=='undefined')await Stocktake.loadList()
+  if(state.tab==='monthclose'&&typeof MonthClose!=='undefined')await MonthClose.loadList()
   paint()
   if(!silent)notifyParentSection()
   return true
@@ -543,6 +547,7 @@ async function boot(){
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
   if(state.tab==='stocktake'&&typeof Stocktake!=='undefined')await Stocktake.loadList()
+  if(state.tab==='monthclose'&&typeof MonthClose!=='undefined')await MonthClose.loadList()
   await modesP
   paint()
   notifyParentSection()
@@ -567,16 +572,19 @@ function paint(){
   }else if(state.section==='stocktake'){
     state.tab='stocktake'
     state.mode='stock'
+  }else if(state.section==='monthclose'){
+    state.tab='monthclose'
+    state.mode='stock'
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake')))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake'||state.section==='monthclose')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',monthclose:'月末締め',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -593,7 +601,7 @@ function paint(){
   syncStockListDisplaySlot(state.section)
   // 旧「旧CSV取込」タブは廃止。残っている localStorage 値は商品タブへ寄せる
   if(state.tab==='legacyCsv'){state.tab='products';state.setupTab='products';saveSetupTab('products')}
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>')}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>'),monthclose:()=>typeof MonthClose!=='undefined'?MonthClose.page():($('#main').innerHTML='<p>月末締め画面を読み込めませんでした。</p>')}[state.tab]
   view()
   // 表示コントロール再マウント後も「旧CSV一括取り込み」を表示の左に維持
   if(state.section==='setup')syncLegacyCsvBulkEntry('setup')
