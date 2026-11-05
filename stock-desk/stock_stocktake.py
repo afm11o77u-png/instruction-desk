@@ -531,28 +531,30 @@ def apply(c, body):
     actor = stock._actor_name(body)
     adjusted = 0
     applied_customers = 0
-    for b in c.execute('SELECT * FROM stocktake_blocks WHERE sheet_id=? AND applied_at IS NULL ORDER BY sort_no, id',
-                       (sh['id'],)).fetchall():
-        rows = c.execute('SELECT * FROM stocktake_sheet_rows WHERE block_id=? AND actual_qty IS NOT NULL ORDER BY sort_no, id',
-                         (b['id'],)).fetchall()
-        if not rows:
-            continue
-        for r in rows:
-            cur = stock.current_qty_for_target(c, r['customer_product_id'], r['size_label'], r['location_id'], r['condition'])
-            if cur == r['actual_qty']:
+    import stock_close
+    with stock_close.stocktake_apply_scope():
+        for b in c.execute('SELECT * FROM stocktake_blocks WHERE sheet_id=? AND applied_at IS NULL ORDER BY sort_no, id',
+                           (sh['id'],)).fetchall():
+            rows = c.execute('SELECT * FROM stocktake_sheet_rows WHERE block_id=? AND actual_qty IS NOT NULL ORDER BY sort_no, id',
+                             (b['id'],)).fetchall()
+            if not rows:
                 continue
-            res = stock.register_stocktake(c, {
-                '_actor': body.get('_actor'), '_canWrite': body.get('_canWrite'),
-                'token': f'stocktake-{sh["id"]}-{r["id"]}-{uuid.uuid4().hex[:8]}',
-                'customerProductId': r['customer_product_id'], 'size': r['size_label'],
-                'locationId': r['location_id'], 'condition': r['condition'],
-                'actualQty': r['actual_qty'], 'businessOn': t[:10],
-                'unitCost': r['inc_price'],
-                'note': f"棚卸調整（{month} 棚卸・{r['customer_name']}・{cur}→{r['actual_qty']}）",
-            })
-            c.execute('UPDATE stocktake_sheet_rows SET applied_batch_id=? WHERE id=?', (res.get('batchId'), r['id']))
-            adjusted += 1
-        c.execute('UPDATE stocktake_blocks SET applied_at=?, applied_by=? WHERE id=?', (t, actor, b['id']))
-        applied_customers += 1
-    c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (t, sh['id']))
+            for r in rows:
+                cur = stock.current_qty_for_target(c, r['customer_product_id'], r['size_label'], r['location_id'], r['condition'])
+                if cur == r['actual_qty']:
+                    continue
+                res = stock.register_stocktake(c, {
+                    '_actor': body.get('_actor'), '_canWrite': body.get('_canWrite'),
+                    'token': f'stocktake-{sh["id"]}-{r["id"]}-{uuid.uuid4().hex[:8]}',
+                    'customerProductId': r['customer_product_id'], 'size': r['size_label'],
+                    'locationId': r['location_id'], 'condition': r['condition'],
+                    'actualQty': r['actual_qty'], 'businessOn': t[:10],
+                    'unitCost': r['inc_price'],
+                    'note': f"棚卸調整（{month} 棚卸・{r['customer_name']}・{cur}→{r['actual_qty']}）",
+                })
+                c.execute('UPDATE stocktake_sheet_rows SET applied_batch_id=? WHERE id=?', (res.get('batchId'), r['id']))
+                adjusted += 1
+            c.execute('UPDATE stocktake_blocks SET applied_at=?, applied_by=? WHERE id=?', (t, actor, b['id']))
+            applied_customers += 1
+        c.execute('UPDATE stocktake_sheets SET updated_at=? WHERE id=?', (t, sh['id']))
     return {**get(c, month), 'adjusted': adjusted, 'appliedCustomers': applied_customers}

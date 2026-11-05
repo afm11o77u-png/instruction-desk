@@ -14,7 +14,7 @@ function conditionSelectHtml(id,value,opts){
   const all=allowAll?`<option value="" ${cur===''?'selected':''}>すべて</option>`:''
   return `<select id="${id}" aria-label="状態">${all}${CONDITION_OPTS.map(([v,l])=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('')}</select>`
 }
-const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake'])
+const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake','close'])
 /** Legacy ?section=move / 保存済みURL → 在庫一覧へ案内 */
 let moveRedirectNotice=false
 function normalizeSection(section){
@@ -22,6 +22,7 @@ function normalizeSection(section){
   return STOCK_SECTIONS.has(section)?section:'list'
 }
 function stockCanWrite(){return !(state.data&&state.data.canWrite===false)}
+function stockCanHold(){return !!(state.data&&state.data.canHoldStock)}
 function stockIsOwner(){return !!(state.data&&state.data.isOwner)}
 function monthStartISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`}
 function todayISO(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
@@ -335,7 +336,7 @@ function syncStockListDisplaySlot(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
   // Title-row 表示 slot: 在庫一覧系 + 登録・設定（枠外・右上）
-  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='setup'){
+  if(section==='list'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='close'||section==='setup'){
     slot.hidden=false
     syncLegacyCsvBulkEntry(section)
     return
@@ -475,6 +476,9 @@ function applySectionState(section,setupTab){
   }else if(state.section==='stocktake'){
     state.tab='stocktake'
     state.mode='stock'
+  }else if(state.section==='close'){
+    state.tab='close'
+    state.mode='stock'
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
     state.setupTab=next
@@ -501,6 +505,7 @@ async function setStockSection(section,{setupTab,silent}={}){
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
   if(state.tab==='stocktake'&&typeof Stocktake!=='undefined')await Stocktake.loadList()
+  if(state.tab==='close'&&typeof StockClose!=='undefined')await StockClose.load()
   paint()
   if(!silent)notifyParentSection()
   return true
@@ -556,6 +561,7 @@ async function boot(){
   if(state.tab==='period')ensurePeriodDefaults()
   if(state.tab==='orders'&&typeof PurchaseOrders!=='undefined')await PurchaseOrders.loadList()
   if(state.tab==='stocktake'&&typeof Stocktake!=='undefined')await Stocktake.loadList()
+  if(state.tab==='close'&&typeof StockClose!=='undefined')await StockClose.load()
   await modesP
   paint()
   notifyParentSection()
@@ -580,16 +586,19 @@ function paint(){
   }else if(state.section==='stocktake'){
     state.tab='stocktake'
     state.mode='stock'
+  }else if(state.section==='close'){
+    state.tab='close'
+    state.mode='stock'
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake')))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake'||state.section==='close')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',close:'月末締め',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -606,7 +615,7 @@ function paint(){
   syncStockListDisplaySlot(state.section)
   // 旧「旧CSV取込」タブは廃止。残っている localStorage 値は商品タブへ寄せる
   if(state.tab==='legacyCsv'){state.tab='products';state.setupTab='products';saveSetupTab('products')}
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>')}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>'),close:()=>typeof StockClose!=='undefined'?StockClose.page():($('#main').innerHTML='<p>月末締めの画面を読み込めませんでした。</p>')}[state.tab]
   view()
   // 表示コントロール再マウント後も「旧CSV一括取り込み」を表示の左に維持
   if(state.section==='setup')syncLegacyCsvBulkEntry('setup')
@@ -2085,6 +2094,7 @@ function stockList(){
   // 絞り込み欄（顧客・商品などの選択肢が数千件）は一度だけ作り、選択肢の元データが変わったときだけ作り直す。
   const barReuse=stockListBarCache.el&&stockListBarCache.el.isConnected&&stockListBarCache.data===data&&stockListBarCache.writable===writable
   const restHtml=`<div class="total"><div>数量<strong>${state.stock?conditionQtyText({qtyNew:totalNew,qtyUsed:totalUsed,qty:state.stock.totalQty}):conditionQtyText({qtyNew:0,qtyUsed:0,qty:0})}</strong></div><div>仕入原価ベースの在庫金額<strong>${state.stock?yen(state.stock.totalAmount):yen(0)}</strong>${pending?`<span class="sub shortage-tag">原価未確定の不足 ${num(pending)}枚</span>`:''}</div></div>
+    ${(data.stockHold&&data.stockHold.held)?'<p class="notice">在庫の更新を停止中です。入庫・出庫・納品確認はできません。棚卸の反映は続けられます。</p>':''}
     ${listNote('在庫金額の見方','表示中の金額は、各入荷（在庫明細）の「残数量×仕入単価」を足したものです。原価未確定の不足分は金額に含めません。中古を新品の単価では評価しません。数量と金額は計算結果なので、手入力できません。在庫0・マイナスの行も表示します（未登録の組み合わせは自動では作りません）。訂正は「在庫履歴」から行います。')}
     <div class="list-stage" id="stockliststage"><div id="stockbody"></div><div class="list-grid" id="stocklistgrid" hidden></div></div>`
   if(barReuse){

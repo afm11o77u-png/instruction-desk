@@ -208,6 +208,8 @@ def stock_counts(c, ids):
 
 def _delete_stock(c, ids):
     """在庫ロット・入出庫/棚卸履歴・発注明細・貸出明細を消す（空になった発注/貸出も）。"""
+    import stock_close
+    stock_close.require_stock_open(c)
     tables = _tables(c)
     h = _in(_handle_ids(c, ids))
     p = _in(ids)
