@@ -219,7 +219,7 @@ async function showKintaiSection(section){
   }
 }
 async function showCatalog(which){
-  const stockAllowed=currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview;
+  const stockAllowed=currentUser?.role==='owner'||currentUser?.role==='warehouse'||!!currentUser?.manage||!!currentUser?.overview;
   const kintaiAllowed=currentUser?.role==='floor3'||currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview||!!currentUser?.mark_kintai;
   if(which==='stock'&&!stockAllowed)which='desk';
   if(which==='kintai'&&!kintaiAllowed)which='desk';

@@ -97,7 +97,7 @@ class StockCloseTest(unittest.TestCase):
         try:
             cu, pr, loc, h = seed(c)
             before = qty(c)
-            for role in ('sales', 'floor2', 'floor3'):
+            for role in ('sales', 'floor', 'floor2', 'floor3'):
                 with self.assertRaises(PermissionError):
                     stock_close.set_hold(c, {'_actor': actor(role), '_canWrite': True}, held=True)
             c.rollback()
@@ -106,10 +106,15 @@ class StockCloseTest(unittest.TestCase):
                 can_write=True, actor=actor('sales', '営業管理者'),
             )
             self.assertEqual(code, 403)
+            code, floor_denied = stock_server.api_post(
+                str(path), 'desk', '/api/stock-close/hold', {},
+                can_write=True, actor=actor('floor', '現場'),
+            )
+            self.assertEqual(code, 403)
             self.assertFalse(stock_close.hold_state(c)['held'])
             code, ok = stock_server.api_post(
                 str(path), 'desk', '/api/stock-close/hold', {},
-                can_write=False, actor=actor('floor', '現場'),
+                can_write=False, actor=actor('warehouse', '倉庫担当'),
             )
             self.assertEqual(code, 200)
             self.assertTrue(ok['held'])
@@ -191,7 +196,7 @@ class StockCloseTest(unittest.TestCase):
             self.assertGreater(qty(c)[1], after_apply_qty[1])
             code, no = stock_server.api_post(
                 str(path), 'desk', '/api/stock-close/save', {'month': '2026-11'},
-                can_write=False, actor=actor('floor'),
+                can_write=False, actor=actor('warehouse'),
             )
             self.assertEqual(code, 403)
         finally:
@@ -226,6 +231,25 @@ class StockCloseTest(unittest.TestCase):
         finally:
             c.close()
             folder.cleanup()
+
+    def test_stock_gate_and_role_assignment(self):
+        sys.path.insert(0, str(ROOT.parent))
+        import auth
+        self.assertTrue(auth.can_open_stock({'role': 'warehouse', 'manage': 0, 'overview': 0}))
+        self.assertFalse(auth.stock_can_write({'role': 'warehouse', 'manage': 0}))
+        self.assertTrue(auth.can_open_stock({'role': 'owner', 'manage': 0, 'overview': 0}))
+        self.assertFalse(auth.can_open_stock({'role': 'floor', 'manage': 0, 'overview': 0}))
+        self.assertTrue(auth.can_open_stock({'role': 'floor', 'manage': 1, 'overview': 0}))
+        self.assertTrue(auth.can_open_stock({'role': 'sales', 'manage': 0, 'overview': 1}))
+        self.assertFalse(auth.stock_can_write({'role': 'sales', 'manage': 0, 'overview': 1}))
+        # 既存利用者を倉庫担当へ書き換えるSQLは置かない
+        src = (ROOT.parent / 'auth.py').read_text(encoding='utf-8')
+        self.assertNotIn("SET role='warehouse'", src)
+        self.assertNotIn('SET role="warehouse"', src)
+        self.assertIn("'warehouse'", src)
+        account = (ROOT.parent / 'account.js').read_text(encoding='utf-8')
+        self.assertIn('value="warehouse">倉庫担当', account)
+        self.assertIn("role==='warehouse'", account)
 
     def test_ui_copy(self):
         js = (ROOT / 'static' / 'stock_close.js').read_text(encoding='utf-8')

@@ -20,7 +20,7 @@ const StockClose = {
       <div class="bar">
         <button type="button" id="scHold" ${canHold&&!hold.held?'':'disabled'}>在庫更新を停止</button>
         <button type="button" id="scRelease" ${canHold&&hold.held?'':'disabled'}>停止を解除</button>
-        ${canHold?'':'<span class="excelhint">停止と解除は、現場（倉庫担当）と主管理者だけです。</span>'}
+        ${canHold?'':'<span class="excelhint">停止と解除は、倉庫担当と主管理者だけです。</span>'}
       </div>
       <div class="bar">
         <label>対象月<input id="scMonth" type="month" value="${ym}"></label>

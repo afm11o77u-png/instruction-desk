@@ -735,7 +735,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         import stock_close
         if path != '/api/stock-close/save' and not stock_close.can_hold(payload.get('_actor')):
             return 403, {
-                'error': '在庫更新の停止と解除は、現場（倉庫担当）と主管理者だけが実行できます。',
+                'error': '在庫更新の停止と解除は、倉庫担当と主管理者だけが実行できます。',
                 'code': 'hold_forbidden',
             }
         try:

@@ -2,8 +2,8 @@
 (() => {
   const $ = s => document.querySelector(s);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const roleNames = { owner: '主管理者', sales: '営業', floor: '現場', floor2: '現場２', floor3: '現場３' };
-  const roleOrder = { owner: 0, sales: 1, floor: 2, floor2: 3, floor3: 4 };
+  const roleNames = { owner: '主管理者', sales: '営業', floor: '現場', floor2: '現場２', floor3: '現場３', warehouse: '倉庫担当' };
+  const roleOrder = { owner: 0, sales: 1, floor: 2, floor2: 3, floor3: 4, warehouse: 5 };
   let rows = [], key = null, dir = 1;
   const text = {
     login: u => u.login || '', name: u => u.name || '', role: u => roleNames[u.role] || u.role,

@@ -3,7 +3,7 @@ import base64, importlib.util, json, shutil, sqlite3, os, re, sys, tempfile, thr
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from auth import AuthMixin, schema
+from auth import AuthMixin, schema, can_open_stock, stock_can_write
 import templates
 import label_sets
 import picking
@@ -765,7 +765,7 @@ def due_confirm(handler,d):
         return 200, record(c.execute('SELECT * FROM orders WHERE id=?',(row['id'],)).fetchone())
 
 def can_access(user,payload):
-    if user['role'] in ('floor2','floor3'): return False
+    if user['role'] in ('floor2','floor3','warehouse'): return False
     if user['role']=='owner' or user['overview']: return True
     if user['role']=='floor': return payload.get('status')!='下書き'
     return user['id'] in (payload.get('authorId'),payload.get('assigneeId'))
@@ -879,9 +879,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': '/'})
             return self.reply(401, {'error':'ログインしてください。'})
         if u['must_change']: return self.reply(403, {'error':'最初に仮パスワードを変更してください。'})
-        if u['role']!='owner' and not u['manage'] and not u['overview']: return self.reply(403, {'error':'在庫管理は主管理者と管理者が使用します。'})
-        # overview-only (no manage) is read-only for stock quantity changes.
-        can_write = u['role']=='owner' or bool(u['manage'])
+        if not can_open_stock(u): return self.reply(403, {'error':'在庫管理は主管理者と管理者、倉庫担当が使用します。'})
+        # overview-only and 倉庫担当 are read-only for stock quantity changes.
+        can_write = stock_can_write(u)
         actor = {'id': u['id'], 'name': u['name'], 'role': u['role']}
         ensure_stock()
         if path.startswith('/inventory/api'):
@@ -1335,7 +1335,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 c.execute('BEGIN IMMEDIATE')
                 current=self.session_user(c)
                 if not current or current['must_change']: return self.reply(401,{'error':'ログインし直してください。'})
-                if current['role'] in ('floor2','floor3'): return self.reply(403,{'error':'この権限では指示書を変更できません。'})
+                if current['role'] in ('floor2','floor3','warehouse'): return self.reply(403,{'error':'この権限では指示書を変更できません。'})
                 if current['role']=='floor': return self.reply(403,{'error':'現場の指示書は閲覧専用です。変更は営業担当者に依頼してください。'})
                 if d.get('id'):
                     old=c.execute('SELECT * FROM orders WHERE id=?',(d['id'],)).fetchone()

@@ -17,7 +17,7 @@ import stock
 _MONTH = re.compile(r'^\d{4}-(0[1-9]|1[0-2])$')
 # 利用者管理の表示名: owner=主管理者, floor=現場。
 # 独立した「倉庫担当」ロールは無い。倉庫画面（出荷仕分け・ピッキング）は owner と floor。
-HOLD_ROLES = frozenset({'owner', 'floor'})
+HOLD_ROLES = frozenset({'owner', 'warehouse'})
 HELD_MESSAGE = '在庫の更新を停止中です。入庫・出庫・納品確認などはできません。棚卸の反映は続けられます。'
 
 _stocktake_apply = contextvars.ContextVar('stocktake_sheet_apply', default=False)
@@ -144,7 +144,7 @@ def _actor(body):
 def _require_hold_role(body):
     actor = _actor(body)
     if not can_hold(actor):
-        raise PermissionError('在庫更新の停止と解除は、現場（倉庫担当）と主管理者だけが実行できます。')
+        raise PermissionError('在庫更新の停止と解除は、倉庫担当と主管理者だけが実行できます。')
     return actor
 
 
