@@ -24,6 +24,7 @@ WRITE_PATHS = {
     '/api/customer-products',
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/legacy-csv/commit',
+    '/api/qr-link/commit',
     '/api/product-ledger-csv/commit',
     '/api/product-ledger-csv/maker-lookup/adopt',
     '/api/products/merge',
@@ -92,6 +93,14 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
     if path == '/api/import/template':
         import excel_book
         return 200, excel_book.template(), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    if path == '/api/qr-link/template':
+        import qr_link_import
+        return (
+            200,
+            qr_link_import.template_bytes(),
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            {'Content-Disposition': 'attachment; filename="qr-link-template.xlsx"'},
+        )
     if path == '/api/bootstrap':
         with stock.connect(db_path) as c:
             body = stock.bootstrap(c)
@@ -357,6 +366,46 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             return 400, {'error': '同じ内容が既にあるため、取込を中止しました。'}
         except (OSError, sqlite3.Error) as e:
             print(f'legacy-csv commit failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '取込を中止しました。登録は完了していません。',
+                'code': 'commit_failed',
+                'registered': False,
+            }
+        return 200, result
+    if path == '/api/qr-link/preview':
+        import qr_link_import
+        try:
+            with stock.connect(db_path) as c:
+                result = qr_link_import.build_preview(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or 'Excelを確認してください。'}
+        return 200, result
+    if path == '/api/qr-link/commit':
+        import qr_link_import
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = qr_link_import.commit_preview(c, payload, db_path=db_path)
+        except stock.StockConflict as e:
+            return 409, e.payload
+        except stock.BackupError as e:
+            cause = getattr(e, 'cause', None)
+            print(
+                f'qr-link commit backup failed: {e}'
+                + (f' cause={type(cause).__name__}: {cause}' if cause else ''),
+                flush=True,
+            )
+            return 400, {
+                'error': str(e) or stock.BACKUP_FAILED_MESSAGE,
+                'code': 'backup_failed',
+                'registered': False,
+            }
+        except ValueError as e:
+            return 400, {'error': str(e) or '取込を確認してください。', 'registered': False}
+        except sqlite3.IntegrityError:
+            return 400, {'error': '同じ旧QRが既にあるため、取込を中止しました。', 'registered': False}
+        except (OSError, sqlite3.Error) as e:
+            print(f'qr-link commit failed: {type(e).__name__}: {e}', flush=True)
             return 400, {
                 'error': '取込を中止しました。登録は完了していません。',
                 'code': 'commit_failed',
