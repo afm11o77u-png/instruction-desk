@@ -454,6 +454,8 @@ def needs_migration(c):
         return True
     if 'qr_stock_links' not in tables or 'qr_link_import_runs' not in tables:
         return True
+    if 'stock_close_records' not in tables or 'stock_update_hold' not in tables:
+        return True
     import stock_orders
     import stock_product_merge
     import stock_prices
@@ -910,6 +912,8 @@ def migrate_schema(c):
     stock_prices.migrate(c)
     import qr_link_import
     qr_link_import.ensure_schema(c)
+    import stock_close
+    stock_close.ensure_schema(c)
 
 
 def ensure_handle_process_schema(c):
@@ -1917,11 +1921,17 @@ def _token(value):
     return token
 
 
+def _reject_if_stock_held(c):
+    import stock_close
+    stock_close.require_stock_open(c)
+
+
 def register_opening(c, body):
     token = _token(body.get('token'))
     existing = c.execute('SELECT id FROM opening_batches WHERE client_token=?', (token,)).fetchone()
     if existing:
         return batch_result(c, existing['id'], True)
+    _reject_if_stock_held(c)
     cp_id = body.get('customerProductId')
     if not isinstance(cp_id, int):
         raise ValueError('顧客と商品の取扱を選んでください。')
@@ -1987,6 +1997,7 @@ def register_opening(c, body):
 def adjust_opening_qty_diff(c, body):
     """差分調整: 既存ロットの残数を CSV 数量へ合わせる（履歴は残す・FIFO ロットを消さない）。"""
     _require_write(body)
+    _reject_if_stock_held(c)
     lot_ids = body.get('lotIds') or []
     if not isinstance(lot_ids, list) or not lot_ids or not all(isinstance(x, int) for x in lot_ids):
         raise ValueError('数量差異の対象在庫を選んでください。')
@@ -2062,6 +2073,7 @@ def adjust_opening_qty_diff(c, body):
 
 
 def correct_opening(c, body):
+    _reject_if_stock_held(c)
     lot_id = body.get('lotId')
     if not isinstance(lot_id, int):
         raise ValueError('訂正する在庫を選んでください。')
@@ -3537,6 +3549,7 @@ def register_inbound(c, body, *, cost_pending=False):
     existing = c.execute('SELECT id FROM move_batches WHERE client_token=?', (token,)).fetchone()
     if existing:
         return _move_token_result(c, existing['id'], True)
+    _reject_if_stock_held(c)
     cp = resolve_customer_product(c, body.get('customerProductId'))
     loc = resolve_active_location(c, body.get('locationId'))
     condition = parse_condition(body.get('condition'), default=CONDITION_NEW)
@@ -3600,6 +3613,7 @@ def register_outbound(c, body):
     existing = c.execute('SELECT id FROM move_batches WHERE client_token=?', (token,)).fetchone()
     if existing:
         return _move_token_result(c, existing['id'], True)
+    _reject_if_stock_held(c)
     plan = plan_outbound(c, body)
     confirm_shortage = body.get('confirmShortage') in (True, 1, '1')
     if plan['shortfall'] > 0 and not confirm_shortage:
@@ -3690,6 +3704,7 @@ def register_outbound(c, body):
 def correct_inbound(c, body):
     """Correct an unconsumed daily inbound lot. Not for opening stock or consumed receipts."""
     _require_write(body)
+    _reject_if_stock_held(c)
     lot_id = body.get('lotId')
     if not isinstance(lot_id, int):
         raise ValueError('訂正する在庫を選んでください。')
@@ -3816,6 +3831,9 @@ def register_stocktake(c, body):
     existing = c.execute('SELECT id FROM move_batches WHERE client_token=?', (token,)).fetchone()
     if existing:
         return _move_token_result(c, existing['id'], True)
+    import stock_close
+    if not stock_close.stocktake_apply_active():
+        stock_close.require_stock_open(c)
     cp = resolve_customer_product(c, body.get('customerProductId'))
     size = resolve_size_label(c, cp['product_id'], body.get('size'))
     loc = resolve_active_location(c, body.get('locationId'))
@@ -3934,6 +3952,7 @@ def correct_history_move(c, body):
     後続入出庫があるロットは数量直書きせず、取消（逆仕訳）で整合を取る。
     """
     _require_write(body)
+    _reject_if_stock_held(c)
     move_id = body.get('moveId')
     if not isinstance(move_id, int):
         raise ValueError('訂正する履歴を選んでください。')

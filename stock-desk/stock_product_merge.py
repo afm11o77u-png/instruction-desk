@@ -1024,6 +1024,8 @@ def _merge_one_source(c, *, keep_id, source_id, resolutions, when):
 def _remap_handle_refs(c, *, from_handle_id, to_handle_id):
     if from_handle_id == to_handle_id:
         return
+    import stock_close
+    stock_close.require_stock_open(c)
     c.execute(
         'UPDATE lots SET customer_product_id=?, updated_at=? WHERE customer_product_id=?',
         (to_handle_id, stock.stamp(), from_handle_id),

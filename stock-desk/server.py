@@ -32,6 +32,7 @@ WRITE_PATHS = {
     '/api/products/display-no/renumber',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
+    '/api/stock-close/save',
     '/api/purchase-orders', '/api/purchase-orders/mark-ordered',
     '/api/purchase-orders/cancel', '/api/purchase-orders/receive',
     '/api/purchase-orders/printed',
@@ -109,6 +110,9 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         body['actorName'] = (actor or {}).get('name') or ''
         body['actorRole'] = (actor or {}).get('role') or ''
         body['isOwner'] = (actor or {}).get('role') == 'owner'
+        import stock_close
+        body['stockHold'] = stock_close.hold_state(c)
+        body['canHoldStock'] = stock_close.can_hold(actor)
         return 200, body
     if path.startswith('/api/prices/'):
         import stock_prices
@@ -196,6 +200,17 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
                 return 200, stock_history.list_history(c, args)
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
+    if path == '/api/stock-close':
+        import stock_close
+        with stock.connect(db_path) as c:
+            return 200, stock_close.list_records(c)
+    if path == '/api/stock-close/record':
+        import stock_close
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_close.record_detail(c, (query.get('id') or [None])[0])
+        except ValueError as e:
+            return 400, {'error': str(e)}
     if path == '/api/outbound/preview':
         # Allow GET-style preview via query for simple clients; prefer POST.
         try:
@@ -715,6 +730,27 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'code': 'commit_failed',
                 'deleted': False,
             }
+        return 200, result
+    if path in ('/api/stock-close/hold', '/api/stock-close/release', '/api/stock-close/save'):
+        import stock_close
+        if path != '/api/stock-close/save' and not stock_close.can_hold(payload.get('_actor')):
+            return 403, {
+                'error': '在庫更新の停止と解除は、倉庫担当と主管理者だけが実行できます。',
+                'code': 'hold_forbidden',
+            }
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                if path == '/api/stock-close/save':
+                    result = stock_close.save_record(c, payload)
+                elif path == '/api/stock-close/hold':
+                    result = stock_close.set_hold(c, payload, held=True)
+                else:
+                    result = stock_close.set_hold(c, payload, held=False)
+        except PermissionError as e:
+            return 403, {'error': str(e), 'code': 'hold_forbidden'}
+        except ValueError as e:
+            return 400, {'error': str(e) or '確認してください。', 'registered': False}
         return 200, result
     if path == '/api/outbound/preview':
         try:
