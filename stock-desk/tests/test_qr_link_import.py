@@ -340,6 +340,125 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def test_name_difference_alone_is_exact(self):
+        """旧「＊白衣」と今「白衣」。顧客・品番・サイズが一致し候補が1件なら完全一致。"""
+        folder, path, c = newdb()
+        try:
+            seeded = seed_cap(c, code='AZ-100', name='白衣', sizes=['F'])
+            before = snap(c)
+            self.assertEqual(ql._name_match('＊白衣', '白衣'), 'diff')
+            blob = xlsx([filled(
+                legacyStockId=OLD + 'N',
+                itemNum='AZ-100', itemName='＊白衣', itemSize='F',
+            )])
+            preview = ql.build_preview(c, body_of(blob))
+            row = preview['rows'][0]
+            self.assertEqual(len(row['candidates']), 1)
+            cand = row['candidates'][0]
+            self.assertEqual(cand['nameMatch'], 'diff')
+            self.assertEqual(cand['codeMatch'], 'exact')
+            self.assertEqual(cand['customerMatch'], 'exact')
+            self.assertEqual(cand['sizeMatch'], 'exact')
+            self.assertEqual(cand['supplierMatch'], 'exact')
+            self.assertTrue(cand['auto'])
+            self.assertIn('品名が違います', cand['matchNote'])
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertIn('品名が違っても完全一致', '\n'.join(ql.NOTES))
+            result = ql.commit_preview(c, body_of(
+                blob, previewFingerprint=preview['previewFingerprint'],
+                token='qr-name-diff-exact1',
+            ), db_path=str(path))
+            c.commit()
+            self.assertEqual(result['created'], 1)
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(snap(c), before)
+            link = c.execute('SELECT * FROM qr_stock_links').fetchone()
+            self.assertEqual(link['product_id'], seeded['product']['id'])
+            self.assertEqual(link['item_name'], '＊白衣')
+            self.assertEqual(link['item_num'], 'AZ-100')
+            self.assertEqual(link['size_label'], 'F')
+            self.assertEqual(link['match_kind'], 'exact')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_name_difference_does_not_relax_other_matches(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='AZ8618003', name='白衣', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-8618-003', itemName='＊白衣', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'review')
+            self.assertFalse(row['includeDefault'])
+            self.assertEqual(row['candidates'][0]['codeMatch'], 'normalized')
+            self.assertEqual(row['candidates'][0]['nameMatch'], 'diff')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, customer='株式会社北光', code='AZ-100', name='白衣', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='㈱北光', itemNum='AZ-100', itemName='＊白衣', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'review')
+            self.assertFalse(row['includeDefault'])
+            self.assertEqual(row['candidates'][0]['customerMatch'], 'form')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='AZ-100', name='白衣', sizes=['F'])
+            blank = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-100', itemName='＊白衣', itemSize='',
+            )])))['rows'][0]
+            self.assertEqual(blank['status'], 'review')
+            self.assertFalse(blank['includeDefault'])
+            self.assertEqual(blank['candidates'][0]['sizeMatch'], 'blank')
+            wide = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-100', itemName='＊白衣', itemSize='Ｆ',
+            )])))['rows'][0]
+            self.assertEqual(wide['status'], 'review')
+            self.assertFalse(wide['includeDefault'])
+            self.assertEqual(wide['candidates'][0]['sizeMatch'], 'normalized')
+            maker = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-100', itemName='＊白衣', itemSize='F', makerName='別のメーカー',
+            )])))['rows'][0]
+            self.assertEqual(maker['status'], 'review')
+            self.assertFalse(maker['includeDefault'])
+            self.assertEqual(maker['candidates'][0]['supplierMatch'], 'diff')
+            self.assertEqual(len(maker['candidates']), 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='AZ-8618-003', name='白衣', sizes=['F'])
+            cu = c.execute("SELECT id FROM customers WHERE name='顧客A'").fetchone()['id']
+            su = c.execute("SELECT id FROM suppliers WHERE name='メーカーA'").fetchone()['id']
+            stock.save_product(c, {
+                'code': 'AZ8618003', 'name': '白衣', 'color': '', 'supplierId': su,
+                'active': True, 'sizes': ['F'],
+                'links': [{'customerId': cu, 'embroidery': '', 'isStandard': True, 'active': True}],
+            })
+            c.commit()
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-8618-003', itemName='＊白衣', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'ambiguous')
+            self.assertFalse(row['includeDefault'])
+            self.assertGreaterEqual(len(row['candidates']), 2)
+            self.assertTrue(all(item['nameMatch'] == 'diff' for item in row['candidates']))
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:
