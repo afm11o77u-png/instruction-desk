@@ -6,6 +6,7 @@
 顧客・品番・サイズが一致して候補が1件なら、品名が違っても完全一致にする。
 完全一致でも正規化一致でも無い品番は、一方が他方に含まれるときだけ部分一致にする。
 そのときは商品名も一致し、候補が1件の場合だけ完全一致にする。
+今の商品名の文字列全体が旧品名に含まれるときも、途中の空白は消さずに見て、1件なら完全一致にする。
 旧品名の末尾の（加工名）で取扱の加工仕様を選ぶ。無ければ加工なし。候補が1件なら完全一致。
 括弧全体が一致しなくても、括弧の中に取扱の加工名が含まれていればその取扱を選ぶ。
 """
@@ -105,7 +106,7 @@ NOTES = (
     '新品中古が空欄または null のときは、新品にしません。状態は未指定のまま対応づけます。',
     '品番の完全一致と、ハイフン・空白・全角半角を畳んだ一致は別です。畳んだだけの候補は選ぶまで登録しません。',
     '顧客・品番・サイズが一致し、候補が1件のときは、品名が違っても完全一致にします。候補が複数のときは選ぶまで登録しません。',
-    '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名が違う部分一致は自動では確定しません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
+    '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名の完全一致が無いときは、今の商品名の文字列全体が旧品名に含まれるものだけに絞ります（途中の空白は消しません。NFKCと先頭の＊だけ揃えます）。それが1件なら完全一致、複数なら候補が複数、一つも含まれなければ自動では確定しません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
     '旧品名の末尾の（加工名）で取扱を選びます。例: ＊白衣(スナッパー加工) は「スナッパー加工」の取扱です。括弧全体が一致しなくても、括弧の中に取扱の加工名が含まれていればその取扱です（白・刺繍入り は 刺繍入り）。完全一致を優先します。短い加工名の含有では選びません。その取扱が無いとき、または括弧が無いときは「加工なし」です。先頭の＊や空白の差は同じ名前です。このあと候補が1件なら完全一致にします。候補が複数のときは選ぶまで登録しません。',
     '顧客名の㈱と株式会社、空白だけの違いで複数になるときは、選ぶまで登録しません。',
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
@@ -195,6 +196,8 @@ _PARTIAL_ASCII_MIN = 6
 _PARTIAL_OTHER_MIN = 2
 # 括弧文字列が加工名を含む、の下限。2文字の「刺繍」が「LEOC刺繍」や「刺繍入り」に当たらない。
 _PROC_CONTAIN_MIN = 3
+# 今の商品名全体が旧品名に含まれる、の下限。1文字の含有では別商品に寄せない。
+_NAME_CONTAIN_MIN = 2
 _LEADING_NAME_STARS = re.compile(r'^[＊*]+')
 
 
@@ -589,6 +592,31 @@ def _partial_name_match(left, right):
     return 'diff'
 
 
+def _name_contain_key(value):
+    """品名含有用。NFKCと先頭の＊、前後の空白だけ。途中の空白は残す。"""
+    text = unicodedata.normalize('NFKC', stock.text(value))
+    return _LEADING_NAME_STARS.sub('', text).strip()
+
+
+def _current_name_in_legacy(legacy_name, current_name):
+    """今の商品名の文字列全体が旧品名に含まれる。空白を消してつなぐ含有はしない。"""
+    cur = _name_contain_key(current_name)
+    old = _name_contain_key(legacy_name)
+    if not cur or not old or len(cur) < _NAME_CONTAIN_MIN or cur == old:
+        return False
+    return cur in old
+
+
+def _partial_name_relation(legacy_name, current_name):
+    """品番の部分一致で使う品名の関係。完全一致を含有より先に見る。"""
+    kind = _partial_name_match(legacy_name, current_name)
+    if kind in ('exact', 'blank'):
+        return kind
+    if _current_name_in_legacy(legacy_name, current_name):
+        return 'contained'
+    return 'diff'
+
+
 def _legacy_processing_raw(item_name):
     """旧品名の末尾側の括弧を加工名として読む。無ければ空（加工なし）。"""
     text = unicodedata.normalize('NFKC', stock.text(item_name))
@@ -766,7 +794,12 @@ def _partial_product_hits(catalog, item_num, item_name):
     if not hits:
         return []
     named = [item for item in hits if _partial_name_match(item_name, item['name']) == 'exact']
-    return named or hits
+    if named:
+        return named
+    contained = [item for item in hits if _current_name_in_legacy(item_name, item['name'])]
+    if contained:
+        return contained
+    return hits
 
 
 def _candidate_key(product_id, customer_id, handle_id, size, condition, location_id):
@@ -775,13 +808,14 @@ def _candidate_key(product_id, customer_id, handle_id, size, condition, location
 
 def _auto_ok(cand):
     # 品番の完全一致は品名を見ない。顧客・サイズが揃い候補が1件なら完全一致（品名違いを含む）。
-    # 部分一致は別商品へ付けないよう、品名の一致も必須。正規化一致は自動確定しない。
+    # 部分一致は品名の完全一致、または今の商品名全体が旧品名に含まれるときに限る。
+    # 正規化一致は自動確定しない。
     # 顧客の法人表記、サイズ空欄・不一致、メーカー名の違いは通さない。複数候補は呼び出し側で確定しない。
     # 加工の取扱が決まらなかった候補は自動確定しない。
     if cand.get('_processingPick') == 'leftover':
         return False
     if cand['codeMatch'] == 'partial':
-        if cand['nameMatch'] != 'exact':
+        if cand['nameMatch'] not in ('exact', 'contained'):
             return False
     elif cand['codeMatch'] != 'exact':
         return False
@@ -801,7 +835,9 @@ def _match_note(cand):
         bits.append('品番はハイフン等を無視した一致')
     elif cand['codeMatch'] == 'partial':
         bits.append('品番が部分一致します')
-    if cand['nameMatch'] == 'diff':
+    if cand['nameMatch'] == 'contained':
+        bits.append('品名が含まれます')
+    elif cand['nameMatch'] == 'diff':
         bits.append('品名が違います')
     if cand['supplierMatch'] == 'form':
         bits.append('メーカー名は法人表記だけ違います')
@@ -871,7 +907,7 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
         if size_kind == 'missing':
             continue
         if code_match == 'partial':
-            name_match = _partial_name_match(item_name, product['name'])
+            name_match = _partial_name_relation(item_name, product['name'])
         else:
             name_match = _name_match(item_name, product['name'])
         supplier_match = _supplier_match(product, maker_name)

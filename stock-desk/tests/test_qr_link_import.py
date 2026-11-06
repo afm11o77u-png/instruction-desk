@@ -906,6 +906,110 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def _seed_same_code(self, c, *, code, names, customer, sizes=None):
+        cu = stock.save_customer(c, {'name': customer, 'active': True})
+        su = stock.save_supplier(c, {'name': 'メーカーA', 'active': True})
+        stock.save_location(c, {'siteName': '本社', 'shelfName': 'A-1', 'active': True})
+        products = []
+        for name in names:
+            products.append(stock.save_product(c, {
+                'code': code, 'name': name, 'color': '', 'supplierId': su['id'],
+                'active': True, 'sizes': sizes or ['F'],
+                '_allowHistoricalDuplicateCode': True,
+                'links': [{
+                    'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True,
+                }],
+            }))
+        c.commit()
+        return {'customer': cu, 'supplier': su, 'products': products}
+
+    def test_current_name_contained_in_legacy_name_is_exact(self):
+        """別注の複数商品から、旧品名に文字列全体が含まれるブルーエプロンだけを完全一致にする。"""
+        folder, path, c = newdb()
+        try:
+            customer = '⒈ＬＥＯＣ'
+            code = '別注(⒈ＬＥＯＣ)'
+            names = ['ネイビーエプロン', 'ピンクエプロン', 'ブルーエプロン', 'エプロン（胸当）', '衛生帽子(三角帽子)']
+            self._seed_same_code(c, code=code, names=names, customer=customer)
+            before = snap(c)
+            blob = xlsx([filled(
+                legacyStockId=OLD + 'B',
+                customerName=customer, makerName='メーカーA',
+                itemNum=' 別注 ', itemName=' ブルーエプロン (胸当・ｻｯｸｽ) ',
+                itemSize='F',
+            )])
+            row = ql.build_preview(c, body_of(blob))['rows'][0]
+            self.assertEqual(len(row['candidates']), 1)
+            cand = row['candidates'][0]
+            self.assertEqual(cand['productName'], 'ブルーエプロン')
+            self.assertEqual(cand['code'], code)
+            self.assertEqual(cand['codeMatch'], 'partial')
+            self.assertEqual(cand['nameMatch'], 'contained')
+            self.assertEqual(cand['customerMatch'], 'exact')
+            self.assertEqual(cand['sizeMatch'], 'exact')
+            self.assertEqual(cand['supplierMatch'], 'exact')
+            self.assertNotIn('エプロン（胸当）', cand['productName'])
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertIn('品名が含まれます', cand['matchNote'])
+            preview = ql.build_preview(c, body_of(blob))
+            result = ql.commit_preview(c, body_of(
+                blob, previewFingerprint=preview['previewFingerprint'],
+                token='qr-name-contained-1',
+            ), db_path=str(path))
+            c.commit()
+            self.assertEqual(result['created'], 1)
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(snap(c), before)
+            link = c.execute(
+                'SELECT p.name FROM qr_stock_links q JOIN products p ON p.id=q.product_id'
+            ).fetchone()
+            self.assertEqual(link['name'], 'ブルーエプロン')
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], before['products'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_name_containment_keeps_multi_and_skips_supplier_mismatch(self):
+        folder, path, c = newdb()
+        try:
+            customer = '⒈ＬＥＯＣ'
+            code = '別注(⒈ＬＥＯＣ)'
+            self._seed_same_code(
+                c, code=code, customer=customer,
+                names=['ネイビーエプロン', 'ブルーエプロン', 'エプロン（胸当）'],
+            )
+            both = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, itemNum='別注',
+                itemName='ネイビーエプロンとブルーエプロン', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(both['status'], 'ambiguous')
+            self.assertFalse(both['includeDefault'])
+            self.assertEqual(
+                {item['productName'] for item in both['candidates']},
+                {'ネイビーエプロン', 'ブルーエプロン'},
+            )
+            none = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, itemNum='別注',
+                itemName='存在しない商品', itemSize='F',
+            )])))['rows'][0]
+            self.assertNotEqual(none['status'], 'exact')
+            self.assertFalse(none['includeDefault'])
+            self.assertGreaterEqual(len(none['candidates']), 2)
+            self.assertTrue(all(item['nameMatch'] == 'diff' for item in none['candidates']))
+            maker = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='別のメーカー', itemNum='別注',
+                itemName='ブルーエプロン (胸当・サックス)', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(len(maker['candidates']), 1)
+            self.assertEqual(maker['candidates'][0]['productName'], 'ブルーエプロン')
+            self.assertEqual(maker['candidates'][0]['supplierMatch'], 'diff')
+            self.assertEqual(maker['status'], 'review')
+            self.assertFalse(maker['includeDefault'])
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:
