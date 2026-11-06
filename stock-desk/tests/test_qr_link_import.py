@@ -787,6 +787,125 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def test_paren_containing_processing_name_selects_that_handle(self):
+        """括弧に色などが混ざっていても、中に加工名があればその取扱を選ぶ。"""
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(
+                c, code='73-1424 (LEOC刺繍)', name='ナースコート',
+                handles=['', 'LEOC刺繍'], customer='顧客A',
+            )
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='73-1424 (LEOC刺繍)',
+                itemName=' ナースコート(白/ｻｯｸｽ・LEOC刺繍)',
+                itemSize='5L',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertEqual(len(row['candidates']), 1)
+            self.assertEqual(row['candidates'][0]['embroidery'], 'LEOC刺繍')
+            self.assertEqual(row['candidates'][0]['codeMatch'], 'exact')
+            self.assertIn('LEOC刺繍', row['candidates'][0]['label'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '㈱ＬＥＯＣ'
+            self._seed_handles(
+                c, code='OV5003-2', name='サロンエプロン',
+                handles=['', '刺繍入り'], customer=customer,
+            )
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, itemNum='OV5003-2',
+                itemName=' サロンエプロン (白・刺繍入り)',
+                itemSize='5L',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertEqual(len(row['candidates']), 1)
+            self.assertEqual(row['candidates'][0]['embroidery'], '刺繍入り')
+            self.assertEqual(row['candidates'][0]['customerName'], customer)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_processing_containment_does_not_reverse_or_overmatch(self):
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(c, code='DCP514', name='白衣', handles=['', 'LEOC刺繍'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP514',
+                itemName='白衣(刺繍入り)', itemSize='5L',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertEqual(row['candidates'][0]['embroidery'], '加工なし')
+            short = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP514',
+                itemName='白衣(白・刺繍入り)', itemSize='5L',
+            )])))['rows'][0]
+            self.assertEqual(short['candidates'][0]['embroidery'], '加工なし')
+            self.assertNotEqual(short['candidates'][0]['embroidery'], 'LEOC刺繍')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(c, code='DCP514', name='白衣', handles=['', '刺繍'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP514',
+                itemName='白衣(白・刺繍入り)', itemSize='5L',
+            )])))['rows'][0]
+            self.assertEqual(row['candidates'][0]['embroidery'], '加工なし')
+            self.assertNotEqual(row['candidates'][0]['embroidery'], '刺繍')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(
+                c, code='DCP514', name='白衣',
+                handles=['', '刺繍入り', 'LEOC刺繍'],
+            )
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP514',
+                itemName='白衣(白・LEOC刺繍・刺繍入り)', itemSize='5L',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'ambiguous')
+            self.assertFalse(row['includeDefault'])
+            self.assertEqual(
+                {item['embroidery'] for item in row['candidates']},
+                {'刺繍入り', 'LEOC刺繍'},
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_two_products_stay_ambiguous_when_paren_is_not_processing(self):
+        folder, path, c = newdb()
+        try:
+            seeded = self._seed_handles(
+                c, code='EM-710', name='エプロン', handles=[''],
+                customer='顧客A', sizes=['F'],
+            )
+            self._add_product(
+                c, code='EM710', name='胸あてエプロン',
+                customer_id=seeded['customer']['id'], supplier_id=seeded['supplier']['id'],
+                sizes=['F'],
+            )
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='EM-710', itemName='エプロン(ﾍｯｰｼｮ・EM-710)', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'ambiguous')
+            self.assertFalse(row['includeDefault'])
+            self.assertEqual({item['code'] for item in row['candidates']}, {'EM-710', 'EM710'})
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:

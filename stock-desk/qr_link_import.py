@@ -7,6 +7,7 @@
 完全一致でも正規化一致でも無い品番は、一方が他方に含まれるときだけ部分一致にする。
 そのときは商品名も一致し、候補が1件の場合だけ完全一致にする。
 旧品名の末尾の（加工名）で取扱の加工仕様を選ぶ。無ければ加工なし。候補が1件なら完全一致。
+括弧全体が一致しなくても、括弧の中に取扱の加工名が含まれていればその取扱を選ぶ。
 """
 from __future__ import annotations
 
@@ -105,7 +106,7 @@ NOTES = (
     '品番の完全一致と、ハイフン・空白・全角半角を畳んだ一致は別です。畳んだだけの候補は選ぶまで登録しません。',
     '顧客・品番・サイズが一致し、候補が1件のときは、品名が違っても完全一致にします。候補が複数のときは選ぶまで登録しません。',
     '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名が違う部分一致は自動では確定しません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
-    '旧品名の末尾の（加工名）で取扱を選びます。例: ＊白衣(スナッパー加工) は「スナッパー加工」の取扱です。その取扱が無いとき、または括弧が無いときは「加工なし」です。先頭の＊や空白の差は同じ名前です。このあと候補が1件なら完全一致にします。候補が複数のときは選ぶまで登録しません。',
+    '旧品名の末尾の（加工名）で取扱を選びます。例: ＊白衣(スナッパー加工) は「スナッパー加工」の取扱です。括弧全体が一致しなくても、括弧の中に取扱の加工名が含まれていればその取扱です（白・刺繍入り は 刺繍入り）。完全一致を優先します。短い加工名の含有では選びません。その取扱が無いとき、または括弧が無いときは「加工なし」です。先頭の＊や空白の差は同じ名前です。このあと候補が1件なら完全一致にします。候補が複数のときは選ぶまで登録しません。',
     '顧客名の㈱と株式会社、空白だけの違いで複数になるときは、選ぶまで登録しません。',
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
@@ -192,6 +193,8 @@ def template_bytes():
 # 部分一致の短い側。ASCIIだけの品番は短すぎると広く当たりすぎる。別注のような漢字は2文字から。
 _PARTIAL_ASCII_MIN = 6
 _PARTIAL_OTHER_MIN = 2
+# 括弧文字列が加工名を含む、の下限。2文字の「刺繍」が「LEOC刺繍」や「刺繍入り」に当たらない。
+_PROC_CONTAIN_MIN = 3
 _LEADING_NAME_STARS = re.compile(r'^[＊*]+')
 
 
@@ -602,8 +605,19 @@ def _proc_key(value):
     return stock.spec_key(stock.handling_processing(value))
 
 
+def _paren_contains_proc(paren_key, handle_key):
+    """括弧側が取扱の加工名を含む。逆（取扱が括弧文字列を含む）は見ない。"""
+    if not paren_key or not handle_key or len(handle_key) < _PROC_CONTAIN_MIN:
+        return False
+    return handle_key in paren_key
+
+
 def _select_handles(handle_rows, item_name):
-    """加工名が一致する取扱へ絞る。無ければ加工なし。どちらも無ければ候補は残し、自動確定しない。"""
+    """加工名が一致する取扱へ絞る。括弧の中に加工名が含まれていればそれも選ぶ。
+
+    完全一致を優先する。含有が複数なら1件に絞らない。無ければ加工なし。
+    どちらも無ければ候補は残し、自動確定しない。
+    """
     if not handle_rows:
         return [], 'leftover'
     wanted = _proc_key(_legacy_processing_raw(item_name))
@@ -615,6 +629,9 @@ def _select_handles(handle_rows, item_name):
         hits = [row for row in handle_rows if key_of(row) == wanted]
         if hits:
             return hits, 'matched'
+        contained = [row for row in handle_rows if _paren_contains_proc(wanted, key_of(row))]
+        if contained:
+            return contained, 'matched'
     plain = [row for row in handle_rows if key_of(row) == '']
     if plain:
         return plain, 'matched'
