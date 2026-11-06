@@ -4,6 +4,8 @@
 照合単位は旧在庫行ID（QRの id）。ロットが統合されていても、対応先はロット1件に決めない。
 品番の完全一致と、ハイフン等を畳んだ正規化一致は別ステータスにする。
 顧客・品番・サイズが一致して候補が1件なら、品名が違っても完全一致にする。
+完全一致でも正規化一致でも無い品番は、一方が他方に含まれるときだけ部分一致にする。
+そのときは商品名も一致し、候補が1件の場合だけ完全一致にする。
 """
 from __future__ import annotations
 
@@ -101,6 +103,7 @@ NOTES = (
     '新品中古が空欄または null のときは、新品にしません。状態は未指定のまま対応づけます。',
     '品番の完全一致と、ハイフン・空白・全角半角を畳んだ一致は別です。畳んだだけの候補は選ぶまで登録しません。',
     '顧客・品番・サイズが一致し、候補が1件のときは、品名が違っても完全一致にします。候補が複数のときは選ぶまで登録しません。',
+    '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名が違う部分一致は自動では確定しません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
     '顧客名の㈱と株式会社、空白だけの違いで複数になるときは、選ぶまで登録しません。',
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
@@ -182,6 +185,12 @@ def template_bytes():
         (SHEET_NAME, headers, [], widths),
         (NOTE_SHEET, ['説明'], notes, [88]),
     ])
+
+
+# 部分一致の短い側。ASCIIだけの品番は短すぎると広く当たりすぎる。別注のような漢字は2文字から。
+_PARTIAL_ASCII_MIN = 6
+_PARTIAL_OTHER_MIN = 2
+_LEADING_NAME_STARS = re.compile(r'^[＊*]+')
 
 
 def code_norm_key(value):
@@ -560,6 +569,21 @@ def _name_match(left, right):
     return 'diff'
 
 
+def _partial_name_key(value):
+    """部分一致の品名。先頭の＊と空白だけを外して比べる。"""
+    text = _LEADING_NAME_STARS.sub('', stock.text(value))
+    return _identity(text)
+
+
+def _partial_name_match(left, right):
+    if not stock.text(left) or not stock.text(right):
+        return 'blank'
+    a, b = _partial_name_key(left), _partial_name_key(right)
+    if a and a == b:
+        return 'exact'
+    return 'diff'
+
+
 def _supplier_match(product, maker_name):
     if not stock.text(maker_name):
         return 'blank'
@@ -625,17 +649,87 @@ def _product_hits(catalog, item_num):
     return exact, norm
 
 
+def _partial_key_ok(short):
+    if len(short) < _PARTIAL_OTHER_MIN:
+        return False
+    if all(ch.isascii() and ch.isalnum() for ch in short):
+        return len(short) >= _PARTIAL_ASCII_MIN
+    return True
+
+
+def _code_partial(left, right):
+    """正規化後の品番が、等しくはないが一方が他方に含まれる。
+
+    枝番の数字だけ長い場合（AZ8618 と AZ8618003）は含めない。
+    """
+    if not left or not right or left == right:
+        return False
+    short, long = (left, right) if len(left) <= len(right) else (right, left)
+    if not _partial_key_ok(short):
+        return False
+    at = long.find(short)
+    if at < 0:
+        return False
+    prefix, suffix = long[:at], long[at + len(short):]
+    if at == 0 and suffix.isdigit():
+        return False
+    if suffix == '' and prefix.isdigit():
+        return False
+    return True
+
+
+def _catalog_products(catalog):
+    cached = catalog.get('_all_products')
+    if cached is not None:
+        return cached
+    seen = set()
+    found = []
+    for items in catalog['by_norm'].values():
+        for item in items:
+            if item['id'] in seen:
+                continue
+            seen.add(item['id'])
+            found.append(item)
+    catalog['_all_products'] = found
+    return found
+
+
+def _partial_product_hits(catalog, item_num, item_name):
+    """完全一致も正規化一致も無いときだけ。品名が合う商品があれば、そちらだけに絞る。"""
+    key = code_norm_key(item_num)
+    if not _partial_key_ok(key):
+        return []
+    hits = []
+    seen = set()
+    for item in _catalog_products(catalog):
+        if item['id'] in seen:
+            continue
+        other = code_norm_key(item['code'])
+        if not _code_partial(key, other):
+            continue
+        seen.add(item['id'])
+        hits.append(item)
+    if not hits:
+        return []
+    named = [item for item in hits if _partial_name_match(item_name, item['name']) == 'exact']
+    return named or hits
+
+
 def _candidate_key(product_id, customer_id, handle_id, size, condition, location_id):
     return f'{product_id}:{customer_id}:{handle_id}:{size}:{condition}:{location_id or ""}'
 
 
 def _auto_ok(cand):
-    # 品名は見ない。登録時に品名を一つへまとめた結果、旧「＊白衣」と今「白衣」のように違って見える。
-    # 顧客・品番（完全一致）・サイズが揃い、候補が1件なら完全一致。品番の正規化一致、
+    # 品番の完全一致は品名を見ない。顧客・サイズが揃い候補が1件なら完全一致（品名違いを含む）。
+    # 部分一致は別商品へ付けないよう、品名の一致も必須。正規化一致は自動確定しない。
     # 顧客の法人表記、サイズ空欄・不一致、メーカー名の違いは通さない。複数候補は呼び出し側で確定しない。
+    if cand['codeMatch'] == 'partial':
+        if cand['nameMatch'] != 'exact':
+            return False
+    elif cand['codeMatch'] != 'exact':
+        return False
     return (
-        cand['codeMatch'] == 'exact'
-        and cand['supplierMatch'] in ('exact', 'blank')
+        cand['supplierMatch'] in ('exact', 'blank')
         and cand['customerMatch'] == 'exact'
         and cand['sizeMatch'] == 'exact'
         and cand['locationMatch'] in ('exact', 'blank')
@@ -648,6 +742,8 @@ def _match_note(cand):
     bits = []
     if cand['codeMatch'] == 'normalized':
         bits.append('品番はハイフン等を無視した一致')
+    elif cand['codeMatch'] == 'partial':
+        bits.append('品番が部分一致します')
     if cand['nameMatch'] == 'diff':
         bits.append('品名が違います')
     if cand['supplierMatch'] == 'form':
@@ -681,10 +777,13 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                       item_size, condition, site_name, shelf_name):
     reasons = []
     exact_products, norm_products = _product_hits(catalog, item_num)
+    partial_products = []
     if not stock.text(item_num):
         reasons.append('品番が空です。商品は推測しません。')
         return [], reasons
     if not exact_products and not norm_products:
+        partial_products = _partial_product_hits(catalog, item_num, item_name)
+    if not exact_products and not norm_products and not partial_products:
         reasons.append(f'品番「{stock.text(item_num)}」の商品がありません。新しくは作りません。')
         return [], reasons
     exact_customers, form_customers = _customer_hits(catalog, customer_name)
@@ -704,13 +803,20 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
     if loc_kind == 'missing':
         reasons.append('拠点または棚が見つかりません。場所は作りません。')
         return [], reasons
-    products = [(item, 'exact') for item in exact_products] + [(item, 'normalized') for item in norm_products]
+    products = (
+        [(item, 'exact') for item in exact_products]
+        + [(item, 'normalized') for item in norm_products]
+        + [(item, 'partial') for item in partial_products]
+    )
     candidates = []
     for product, code_match in products:
         size_kind, size_labels = _size_hits(item_size, product['sizes'])
         if size_kind == 'missing':
             continue
-        name_match = _name_match(item_name, product['name'])
+        if code_match == 'partial':
+            name_match = _partial_name_match(item_name, product['name'])
+        else:
+            name_match = _name_match(item_name, product['name'])
         supplier_match = _supplier_match(product, maker_name)
         for customer, customer_match in customers:
             handle_rows = [
@@ -767,7 +873,7 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                             f"（{cand['matchNote']}、在庫ロット {lot_n}件）"
                         )
                         candidates.append(cand)
-    if exact_products or norm_products:
+    if products:
         if not candidates and not any('見つかりません' in r or 'ありません' in r for r in reasons):
             if _size_hits(item_size, [label for p, _k in products for label in p['sizes']])[0] == 'missing' and stock.text(item_size):
                 reasons.append(f'サイズ「{stock.text(item_size)}」は商品にありません。サイズは追加しません。')
