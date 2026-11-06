@@ -169,10 +169,28 @@
     </div>`
   }
 
+  function diffLines(row){
+    if(row.status!=='review'&&row.status!=='ambiguous')return []
+    const cs=row.candidates||[]
+    const lines=[]
+    cs.forEach(c=>{
+      const note=String(c.matchNote||'')
+      if(!note||note==='完全一致')return
+      const text=cs.length>1&&(c.productName||c.code)?`${c.productName||c.code}：${note}`:note
+      if(lines.indexOf(text)<0)lines.push(text)
+    })
+    return lines
+  }
+
   function rowHtml(row, busy){
     const leg=row.legacy||{}
     const dis=busy?' disabled':''
-    const reasons=(row.reasons||[]).map(r=>`<div class="sub">${esc(r)}</div>`).join('')
+    const have=(row.reasons||[]).join('\n')
+    const extra=diffLines(row).filter(t=>have.indexOf(t)<0&&have.indexOf(t.split('：').slice(1).join('：'))<0)
+    const reasons=(row.reasons||[]).map(r=>{
+      const diff=r.indexOf('旧：')>=0
+      return `<div class="${diff?'sub qr-link-diff':'sub'}">${esc(r)}</div>`
+    }).join('')+extra.map(t=>`<div class="sub qr-link-diff">${esc(t)}</div>`).join('')
     const existing=row.existing?`<div class="sub">登録済み 商品ID ${esc(row.existing.productId)} / サイズ ${esc(row.existing.sizeLabel||'—')} / ${esc(row.existing.condition==='used'?'中古':row.existing.condition==='new'?'新品':'状態未指定')}</div>`:''
     let pick=''
     if(row.canCommit&&row.status!=='exact'){

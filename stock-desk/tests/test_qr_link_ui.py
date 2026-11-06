@@ -161,6 +161,43 @@ class QrLinkUiTest(unittest.TestCase):
                     'result': None,
                 },
             },
+            'diffs': {
+                'kind': 'preview',
+                'preview': {
+                    'fileName': 'diff.xlsx',
+                    'counts': {'要確認': 1, '候補が複数': 1, '完全一致': 1},
+                    'notices': [],
+                    'rows': [
+                        row(rowNo=1, status='exact', statusLabel='完全一致', includeDefault=True,
+                            candidates=[{'key': 'auto', 'label': '完全一致の候補', 'matchNote': '完全一致'}]),
+                        row(
+                            rowNo=2, status='review', statusLabel='要確認',
+                            reasons=['メーカーが違います（旧：(有)ユニスタイル / 今：熊谷縫製）'],
+                            legacy=legacy(itemNum='別注', itemName='ブルーエプロン (胸当・サックス)'),
+                            candidates=[{
+                                'key': 'k1', 'productName': 'ブルーエプロン',
+                                'label': '別注 ブルーエプロン（メーカーが違います（旧：(有)ユニスタイル / 今：熊谷縫製）、在庫ロット 1件）',
+                                'matchNote': 'メーカーが違います（旧：(有)ユニスタイル / 今：熊谷縫製）',
+                            }],
+                        ),
+                        row(
+                            rowNo=3, status='ambiguous', statusLabel='候補が複数',
+                            reasons=[
+                                '候補が複数あります。一つ選ぶまで登録しません。',
+                                'ネイビーエプロン：品名が違います（旧：作業着 / 今：ネイビーエプロン）',
+                                'ブルーエプロン：品名が違います（旧：作業着 / 今：ブルーエプロン）',
+                            ],
+                            candidates=[
+                                {'key': 'a', 'productName': 'ネイビーエプロン', 'label': 'ネイビー',
+                                 'matchNote': '品名が違います（旧：作業着 / 今：ネイビーエプロン）'},
+                                {'key': 'b', 'productName': 'ブルーエプロン', 'label': 'ブルー',
+                                 'matchNote': '品名が違います（旧：作業着 / 今：ブルーエプロン）'},
+                            ],
+                        ),
+                    ],
+                },
+                'opts': {'writable': True, 'busy': False},
+            },
         }
         with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as harness:
             harness.write(HARNESS)
@@ -298,6 +335,19 @@ class QrLinkUiTest(unittest.TestCase):
         # 完全一致を登録対象から外す処理は足していない
         self.assertNotIn('includeDefault=false', js)
         self.assertIn("row.includeDefault?' checked'", js)
+
+    def test_review_reasons_are_visible_without_opening_candidates(self):
+        import re
+        html = self.html['diffs']
+        main = section(html, 'main')
+        exact = section(html, 'exact')
+        self.assertIn('qr-link-diff', main)
+        self.assertIn('メーカーが違います（旧：(有)ユニスタイル / 今：熊谷縫製）', main)
+        self.assertIn('ネイビーエプロン：品名が違います（旧：作業着 / 今：ネイビーエプロン）', main)
+        self.assertIn('ブルーエプロン：品名が違います（旧：作業着 / 今：ブルーエプロン）', main)
+        body = re.sub(r'<option\b[\s\S]*?</option>', '', main)
+        self.assertIn('メーカーが違います（旧：(有)ユニスタイル / 今：熊谷縫製）', body)
+        self.assertNotIn('メーカーが違います', exact)
 
 
 if __name__ == '__main__':

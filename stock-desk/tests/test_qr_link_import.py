@@ -952,6 +952,9 @@ class QrLinkMatchTest(unittest.TestCase):
             self.assertEqual(row['status'], 'exact')
             self.assertTrue(row['includeDefault'])
             self.assertIn('品名が含まれます', cand['matchNote'])
+            self.assertIn('旧：ブルーエプロン (胸当・ｻｯｸｽ)', cand['matchNote'])
+            self.assertIn('今：ブルーエプロン', cand['matchNote'])
+            self.assertNotIn('品名が含まれます', '\n'.join(row['reasons']))
             preview = ql.build_preview(c, body_of(blob))
             result = ql.commit_preview(c, body_of(
                 blob, previewFingerprint=preview['previewFingerprint'],
@@ -1006,6 +1009,28 @@ class QrLinkMatchTest(unittest.TestCase):
             self.assertEqual(maker['candidates'][0]['supplierMatch'], 'diff')
             self.assertEqual(maker['status'], 'review')
             self.assertFalse(maker['includeDefault'])
+            note = maker['candidates'][0]['matchNote']
+            self.assertIn('メーカーが違います（旧：別のメーカー / 今：メーカーA）', note)
+            self.assertIn('品名が含まれます（旧：ブルーエプロン (胸当・サックス) / 今：ブルーエプロン）', note)
+            self.assertIn(note, maker['reasons'])
+            self.assertNotIn('または未指定', note)
+            self.assertNotIn('表記ゆれ、または未指定の項目があります', '\n'.join(maker['reasons']))
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='AZ-100', name='白衣', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-100', itemName='白衣', itemSize='', makerName='',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'review')
+            note = row['candidates'][0]['matchNote']
+            self.assertIn('サイズは空欄です（旧：未指定）', note)
+            self.assertIn('メーカーが未指定です（旧：未指定 / 今：メーカーA）', note)
+            self.assertNotIn('または未指定です', note)
+            self.assertIn('メーカーが未指定です（旧：未指定 / 今：メーカーA）', '\n'.join(row['reasons']))
         finally:
             c.close()
             folder.cleanup()

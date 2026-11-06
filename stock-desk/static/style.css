@@ -985,6 +985,9 @@ button.linkish{
 dialog.qr-link-dialog{width:min(1100px,96vw);max-height:min(92vh,900px)}
 dialog.qr-link-dialog .dialogbody{overflow:auto}
 dialog.qr-link-dialog .qr-link-error{margin:0 0 8px;padding:8px 10px}
+dialog.qr-link-dialog .qr-link-diff{
+  margin-top:4px;color:#7a3e12;font-weight:600;white-space:normal;line-height:1.45;
+}
 dialog.qr-link-dialog .qr-link-progress{
   position:sticky;top:0;z-index:3;font-weight:700;margin:0 0 10px;
 }
