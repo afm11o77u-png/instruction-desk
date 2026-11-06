@@ -1,6 +1,27 @@
-/** 旧QRと現在の商品の対応づけ。在庫数量は変えない。 */
+/** 旧QRと現在の商品の対応づけ。在庫数量は変えない。照合ルールはサーバ側のまま。 */
 (function(){
   let st=null
+
+  const LABEL_READING='読み込み中…'
+  const LABEL_MATCHING='照合中…（登録はまだしていません）'
+  const LABEL_SAVING='登録中…'
+
+  // メインは要確認（候補が複数を含む）。完全一致は閉じて別リスト。判定は変えない。
+  const SECTIONS=[
+    {id:'invalid', title:'不正', statuses:['invalid'], kind:'alert', mode:'open',
+      hint:'この行は登録できません。内容を直してから、もう一度照合してください。'},
+    {id:'duplicate', title:'同じ旧ID', statuses:['duplicate'], kind:'alert', mode:'open',
+      hint:'同じ旧在庫行IDが複数あります。一つにしてから、もう一度照合してください。'},
+    {id:'conflict', title:'別対応が登録済み', statuses:['conflict'], kind:'action', mode:'open',
+      hint:'登録済みと違う対応です。変えるときだけ候補を選んでください。'},
+    {id:'main', title:'要確認', statuses:['review','ambiguous'], kind:'main', mode:'open', hint:''},
+    {id:'exact', title:'完全一致', statuses:['exact'], kind:'aside', mode:'details-closed',
+      hint:'初期選択のまま登録します。確認するとき開いてください。'},
+    {id:'unmatched', title:'未一致', statuses:['unmatched'], kind:'separate', mode:'details-open',
+      hint:'一致する商品がありません。未一致から商品は作りません。'},
+    {id:'unchanged', title:'登録済み', statuses:['unchanged'], kind:'aside', mode:'details-closed',
+      hint:'同じ対応が登録済みです。変えるときだけ開いて指定してください。'},
+  ]
 
   function esc(s){
     return String(s==null?'':s)
@@ -27,56 +48,144 @@
     return st&&typeof st.stockCanWrite==='function'?st.stockCanWrite():true
   }
 
-  function paint(){
-    const el=dlg()
-    const err=st.error?`<p class="notice qr-link-error" role="alert">${esc(st.error)}</p>`:''
-    const preview=st.preview?previewHtml(st.preview):''
-    const result=st.result?`<p class="notice">${esc((st.result.notices||[]).join(' '))}</p>`:''
-    el.innerHTML=`<div class="dialoghead"><h2>旧QR対応</h2><button type="button" id="qrClose" class="quiet">閉じる</button></div>
+  function viewModel(){
+    return {
+      error:st.error||'',
+      result:st.result,
+      preview:st.preview,
+      progressLabel:st.progressLabel||'',
+      busy:!!st.busy,
+      writable:canWrite(),
+    }
+  }
+
+  function actionLabels(vm){
+    const label=vm.progressLabel||''
+    const saving=label.indexOf('登録')===0
+    const reading=label.indexOf('読み込み')===0
+    let preview='照合する'
+    if(vm.busy&&label&&!saving)preview=reading?LABEL_READING:'照合中…'
+    let commit=vm.writable?'選んだ対応を登録':'閲覧専用'
+    if(vm.writable&&vm.busy&&saving)commit=LABEL_SAVING
+    return {preview, commit}
+  }
+
+  function renderDialog(vm){
+    vm=vm||{}
+    const labels=actionLabels(vm)
+    const dis=vm.busy?' disabled':''
+    const err=vm.error?`<p class="notice qr-link-error" role="alert">${esc(vm.error)}</p>`:''
+    const progress=vm.progressLabel?`<p class="notice qr-link-progress" id="qrProgress" role="status">${esc(vm.progressLabel)}</p>`:''
+    const result=vm.result?`<p class="notice qr-link-result">${esc((vm.result.notices||[]).join(' '))}</p>`:''
+    const preview=vm.preview?previewHtml(vm.preview,{
+      writable:!!vm.writable, busy:!!vm.busy, commitLabel:labels.commit,
+    }):''
+    return `<div class="dialoghead"><h2>旧QR対応</h2><button type="button" id="qrClose" class="quiet">閉じる</button></div>
       <div class="dialogbody">
         <p class="excelhint">既存のQR（旧在庫行ID・旧顧客ID・旧メーカーID）を、今の商品・顧客・サイズ・新品中古・場所へ対応づけます。在庫数量・単価・金額は変えません。未一致から商品は作りません。</p>
+        ${progress}
         ${err}
         <div class="bar">
-          <button type="button" id="qrTemplate">テンプレート</button>
-          <label class="excelhint">Excel<input type="file" id="qrFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label>
-          <button type="button" id="qrPreview">照合する</button>
+          <button type="button" id="qrTemplate"${dis}>テンプレート</button>
+          <label class="excelhint">Excel<input type="file" id="qrFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"${dis}></label>
+          <button type="button" id="qrPreview"${dis}>${esc(labels.preview)}</button>
         </div>
         ${result}
         ${preview}
       </div>`
-    if(typeof el.showModal==='function'&&!el.open)el.showModal()
+  }
+
+  function paint(){
+    const el=dlg()
+    el.innerHTML=renderDialog(viewModel())
+    if(st.busy)el.setAttribute('aria-busy','true')
+    else el.removeAttribute('aria-busy')
+    if(st.open&&typeof el.showModal==='function'&&!el.open)el.showModal()
     bind()
   }
 
-  function previewHtml(p){
-    const counts=Object.entries(p.counts||{}).filter(([,n])=>n).map(([k,n])=>`${esc(k)} ${n}`).join('、')
-    const rows=(p.rows||[]).map(rowHtml).join('')
-    const writable=canWrite()
-    return `<p class="excelhint">${esc(p.fileName||'')}　${counts}</p>
-      <ul class="excelhint">${(p.notices||[]).map(n=>`<li>${esc(n)}</li>`).join('')}</ul>
-      <div class="legacy-csv-table-wrap"><table class="legacy-csv-table">
-        <thead><tr><th>行</th><th>状態</th><th>旧ID</th><th>品番 / 顧客 / サイズ</th><th>候補</th><th>登録</th></tr></thead>
-        <tbody>${rows||'<tr><td colspan="6">行がありません。</td></tr>'}</tbody>
-      </table></div>
-      <div class="dialogactions"><button type="button" class="primary" id="qrCommit" ${writable?'':'disabled'}>${writable?'選んだ対応を登録':'閲覧専用'}</button></div>`
+  function rowsFor(rows, statuses){
+    const set={}
+    statuses.forEach(s=>{set[s]=true})
+    return (rows||[]).filter(row=>set[row.status])
   }
 
-  function rowHtml(row){
+  function mainHint(rows){
+    if(!rows.length)return '要確認の行はありません。'
+    const n=rows.filter(row=>row.status==='ambiguous').length
+    const base='候補を選んで登録します。'
+    return n?`${base}候補が複数 ${n} 件もこの一覧です。`:base
+  }
+
+  function tableHtml(rows, busy){
+    return `<div class="legacy-csv-table-wrap"><table class="legacy-csv-table">
+      <thead><tr><th>行</th><th>状態</th><th>旧ID</th><th>品番 / 顧客 / サイズ</th><th>候補</th><th>登録</th></tr></thead>
+      <tbody>${rows.map(row=>rowHtml(row, busy)).join('')}</tbody>
+    </table></div>`
+  }
+
+  function sectionBlock(def, rows, busy){
+    if(!rows.length&&def.id!=='main')return ''
+    const hint=def.id==='main'?mainHint(rows):def.hint
+    const title=(def.id==='main'&&!rows.length)?def.title:`${def.title} ${rows.length}`
+    const body=`<p class="excelhint">${esc(hint)}</p>${rows.length?tableHtml(rows, busy):''}`
+    const cls=`qr-link-section qr-link-section-${def.kind}`
+    if(def.mode==='details-closed'||def.mode==='details-open'){
+      const open=def.mode==='details-open'?' open':''
+      return `<details class="${cls}" data-qr-section="${def.id}"${open}><summary>${esc(title)}</summary>${body}</details>`
+    }
+    return `<section class="${cls}" data-qr-section="${def.id}"><h3>${esc(title)}</h3>${body}</section>`
+  }
+
+  function sectionsHtml(rows, busy){
+    const known={}
+    SECTIONS.forEach(def=>(def.statuses||[]).forEach(s=>{known[s]=true}))
+    const parts=SECTIONS.map(def=>sectionBlock(def, rowsFor(rows, def.statuses||[]), busy)).filter(Boolean)
+    const other=(rows||[]).filter(row=>!known[row.status])
+    if(other.length){
+      parts.push(sectionBlock({
+        id:'other', title:'その他', kind:'separate', mode:'open',
+        hint:'区分に入らない行です。',
+      }, other, busy))
+    }
+    return parts.join('')
+  }
+
+  function previewHtml(p, opts){
+    opts=opts||{}
+    const writable=!!opts.writable
+    const busy=!!opts.busy
+    const rows=p.rows||[]
+    const counts=Object.entries(p.counts||{}).filter(([,n])=>n).map(([k,n])=>`${esc(k)} ${n}`).join('、')
+    const notices=(p.notices||[]).map(n=>`<li>${esc(n)}</li>`).join('')
+    const body=rows.length?sectionsHtml(rows, busy):'<p class="excelhint">行がありません。</p>'
+    const commitDis=(!writable||busy)?' disabled':''
+    const commitLabel=opts.commitLabel||(writable?'選んだ対応を登録':'閲覧専用')
+    return `<div class="qr-link-preview">
+      <p class="excelhint">${esc(p.fileName||'')}　${counts}</p>
+      <ul class="excelhint">${notices}</ul>
+      ${body}
+      <div class="dialogactions"><button type="button" class="primary" id="qrCommit"${commitDis}>${esc(commitLabel)}</button></div>
+    </div>`
+  }
+
+  function rowHtml(row, busy){
     const leg=row.legacy||{}
+    const dis=busy?' disabled':''
     const reasons=(row.reasons||[]).map(r=>`<div class="sub">${esc(r)}</div>`).join('')
     const existing=row.existing?`<div class="sub">登録済み 商品ID ${esc(row.existing.productId)} / サイズ ${esc(row.existing.sizeLabel||'—')} / ${esc(row.existing.condition==='used'?'中古':row.existing.condition==='new'?'新品':'状態未指定')}</div>`:''
     let pick=''
     if(row.canCommit&&row.status!=='exact'){
       const opts=(row.candidates||[]).map(c=>`<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')
-      pick=`<select data-qr-key="${row.rowNo}"><option value="">候補を選ぶ</option>${opts}</select>`
+      pick=`<select data-qr-key="${row.rowNo}"${dis}><option value="">候補を選ぶ</option>${opts}</select>`
       if(row.status==='conflict'||row.status==='unchanged'){
-        pick+=`<label class="sub"><input type="checkbox" data-qr-replace="${row.rowNo}"> この対応に変更する</label>`
+        pick+=`<label class="sub"><input type="checkbox" data-qr-replace="${row.rowNo}"${dis}> この対応に変更する</label>`
       }
     }else if(row.status==='exact'&&row.candidates&&row.candidates[0]){
       pick=`<div>${esc(row.candidates[0].label)}</div>`
     }
     const check=row.canCommit
-      ?`<label><input type="checkbox" data-qr-include="${row.rowNo}" ${row.includeDefault?'checked':''}> 登録</label>`
+      ?`<label><input type="checkbox" data-qr-include="${row.rowNo}"${row.includeDefault?' checked':''}${dis}> 登録</label>`
       :''
     return `<tr>
       <td>${row.rowNo}</td>
@@ -115,7 +224,51 @@
     if(commitBtn)commitBtn.onclick=runCommit
   }
 
+  function applyBusyDom(){
+    const el=dlg()
+    const vm=viewModel()
+    const labels=actionLabels(vm)
+    let status=el.querySelector('#qrProgress')
+    if(vm.progressLabel){
+      if(!status){
+        status=document.createElement('p')
+        status.id='qrProgress'
+        status.className='notice qr-link-progress'
+        status.setAttribute('role','status')
+        const intro=el.querySelector('.dialogbody > .excelhint')
+        if(intro)intro.insertAdjacentElement('afterend', status)
+        else{
+          const body=el.querySelector('.dialogbody')
+          if(body)body.insertBefore(status, body.firstChild)
+        }
+      }
+      status.textContent=vm.progressLabel
+    }else if(status){
+      status.remove()
+    }
+    if(vm.busy)el.setAttribute('aria-busy','true')
+    else el.removeAttribute('aria-busy')
+    const previewBtn=el.querySelector('#qrPreview')
+    if(previewBtn){
+      previewBtn.disabled=!!vm.busy
+      previewBtn.textContent=labels.preview
+    }
+    const tpl=el.querySelector('#qrTemplate')
+    if(tpl)tpl.disabled=!!vm.busy
+    const file=el.querySelector('#qrFile')
+    if(file)file.disabled=!!vm.busy
+    const commitBtn=el.querySelector('#qrCommit')
+    if(commitBtn){
+      commitBtn.disabled=!!vm.busy||!vm.writable
+      commitBtn.textContent=labels.commit
+    }
+    el.querySelectorAll('[data-qr-include],[data-qr-key],[data-qr-replace]').forEach(node=>{
+      node.disabled=!!vm.busy
+    })
+  }
+
   async function downloadTemplate(){
+    if(st.busy)return
     try{
       const r=await fetch(basePath()+'/api/qr-link/template')
       if(!r.ok){
@@ -135,10 +288,14 @@
     }
   }
 
-  function filePayload(){
+  function selectedFile(){
     const input=dlg().querySelector('#qrFile')
     const file=input&&input.files&&input.files[0]
-    if(!file)return Promise.reject(Error('Excelファイルを選んでください。'))
+    if(!file)throw Error('Excelファイルを選んでください。')
+    return file
+  }
+
+  function readFile(file){
     return new Promise((resolve,reject)=>{
       const reader=new FileReader()
       reader.onload=()=>{
@@ -154,49 +311,88 @@
     })
   }
 
+  function clearTransient(){
+    dlg().querySelectorAll('.qr-link-error,.qr-link-result').forEach(n=>n.remove())
+  }
+
   async function runPreview(){
-    st.error=''
-    st.result=null
+    if(st.busy)return
+    const session=st
+    let raw
     try{
-      const file=await filePayload()
-      st.file=file
-      st.preview=await st.api('/api/qr-link/preview',{
-        file:file.file,name:file.name,actorName:st.actorName||'',
+      raw=selectedFile()
+    }catch(e){
+      session.error=e.message||'照合に失敗しました。'
+      session.progressLabel=''
+      session.busy=false
+      paint()
+      return
+    }
+    session.error=''
+    session.result=null
+    session.busy=true
+    session.progressLabel=LABEL_READING
+    dlg().querySelectorAll('.qr-link-error,.qr-link-result,.qr-link-preview').forEach(n=>n.remove())
+    applyBusyDom()
+    try{
+      const file=await readFile(raw)
+      if(st!==session)return
+      session.file=file
+      session.progressLabel=LABEL_MATCHING
+      applyBusyDom()
+      session.preview=await session.api('/api/qr-link/preview',{
+        file:file.file,name:file.name,actorName:session.actorName||'',
       })
     }catch(e){
-      st.error=e.message||'照合に失敗しました。'
+      if(st!==session)return
+      session.error=e.message||'照合に失敗しました。'
     }
+    if(st!==session)return
+    session.busy=false
+    session.progressLabel=''
     paint()
   }
 
   async function runCommit(){
+    if(st.busy)return
+    const session=st
     if(!canWrite()){
-      st.error='閲覧専用のため、登録できません。'
+      session.error='閲覧専用のため、登録できません。'
       paint()
       return
     }
-    if(!st.preview||!st.file){
-      st.error='先に照合してください。'
+    if(!session.preview||!session.file){
+      session.error='先に照合してください。'
       paint()
       return
     }
-    st.error=''
+    const picked=selections(dlg())
+    session.error=''
+    clearTransient()
+    session.busy=true
+    session.progressLabel=LABEL_SAVING
+    applyBusyDom()
     const token='qr'+Math.random().toString(16).slice(2)+Date.now().toString(16)
     try{
-      st.result=await st.api('/api/qr-link/commit',{
-        file:st.file.file,
-        name:st.file.name,
-        previewFingerprint:st.preview.previewFingerprint,
-        previewAt:st.preview.previewAt,
+      session.result=await session.api('/api/qr-link/commit',{
+        file:session.file.file,
+        name:session.file.name,
+        previewFingerprint:session.preview.previewFingerprint,
+        previewAt:session.preview.previewAt,
         token:token.slice(0,40),
-        selections:selections(dlg()),
-        actorName:st.actorName||'',
+        selections:picked,
+        actorName:session.actorName||'',
       })
-      if(st.toast)st.toast((st.result.notices||['対応を登録しました。']).join(' '))
-      st.preview=null
+      if(st!==session)return
+      if(session.toast)session.toast((session.result.notices||['対応を登録しました。']).join(' '))
+      session.preview=null
     }catch(e){
-      st.error=e.message||'登録を中止しました。'
+      if(st!==session)return
+      session.error=e.message||'登録を中止しました。'
     }
+    if(st!==session)return
+    session.busy=false
+    session.progressLabel=''
     paint()
   }
 
@@ -211,9 +407,14 @@
       result:null,
       file:null,
       error:'',
+      busy:false,
+      progressLabel:'',
     }
     paint()
   }
 
-  window.QrLink={open}
+  window.QrLink={
+    open,
+    __test:{renderDialog, previewHtml, actionLabels},
+  }
 })()
