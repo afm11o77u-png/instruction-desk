@@ -459,6 +459,208 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def _add_product(self, c, *, code, name, customer_id, supplier_id, sizes=None):
+        pr = stock.save_product(c, {
+            'code': code, 'name': name, 'color': '', 'supplierId': supplier_id,
+            'active': True, 'sizes': sizes or ['F'],
+            'links': [{'customerId': customer_id, 'embroidery': '', 'isStandard': True, 'active': True}],
+        })
+        c.commit()
+        return pr
+
+    def test_partial_code_with_matching_name_is_exact(self):
+        """旧 NPC75082 / 白下（＊白下も）は、今の NPC75082下 / 白下 が1件なら完全一致。"""
+        folder, path, c = newdb()
+        try:
+            seeded = seed_cap(c, code='NPC75082下', name='白下', sizes=['F'])
+            before = snap(c)
+            for legacy_name in ('白下', '＊白下'):
+                blob = xlsx([filled(
+                    legacyStockId=OLD + 'P' + legacy_name,
+                    itemNum='NPC75082', itemName=legacy_name, itemSize='F',
+                )])
+                preview = ql.build_preview(c, body_of(blob))
+                row = preview['rows'][0]
+                self.assertEqual(len(row['candidates']), 1, legacy_name)
+                cand = row['candidates'][0]
+                self.assertEqual(cand['code'], 'NPC75082下')
+                self.assertEqual(cand['codeMatch'], 'partial')
+                self.assertEqual(cand['nameMatch'], 'exact')
+                self.assertEqual(cand['customerMatch'], 'exact')
+                self.assertEqual(cand['sizeMatch'], 'exact')
+                self.assertTrue(cand['auto'])
+                self.assertIn('品番が部分一致します', cand['matchNote'])
+                self.assertNotIn('品名が違います', cand['matchNote'])
+                self.assertEqual(row['status'], 'exact', legacy_name)
+                self.assertTrue(row['includeDefault'])
+            blob = xlsx([filled(
+                legacyStockId=OLD + 'P',
+                itemNum='NPC75082', itemName='＊白下', itemSize='F',
+            )])
+            preview = ql.build_preview(c, body_of(blob))
+            result = ql.commit_preview(c, body_of(
+                blob, previewFingerprint=preview['previewFingerprint'],
+                token='qr-partial-npc-1',
+            ), db_path=str(path))
+            c.commit()
+            self.assertEqual(result['created'], 1)
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(snap(c), before)
+            link = c.execute('SELECT * FROM qr_stock_links').fetchone()
+            self.assertEqual(link['product_id'], seeded['product']['id'])
+            self.assertEqual(link['item_num'], 'NPC75082')
+            self.assertEqual(link['match_kind'], 'exact')
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], before['products'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_partial_code_name_selects_down_not_up(self):
+        folder, path, c = newdb()
+        try:
+            seeded = seed_cap(c, code='NPC75082下', name='白下', sizes=['F'])
+            self._add_product(
+                c, code='NPC75082上', name='白上',
+                customer_id=seeded['customer']['id'], supplier_id=seeded['supplier']['id'],
+            )
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='＊白下', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertEqual([item['code'] for item in row['candidates']], ['NPC75082下'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_partial_code_same_name_stays_ambiguous(self):
+        folder, path, c = newdb()
+        try:
+            seeded = seed_cap(c, code='NPC75082下', name='白下', sizes=['F'])
+            self._add_product(
+                c, code='NPC75082上', name='白下',
+                customer_id=seeded['customer']['id'], supplier_id=seeded['supplier']['id'],
+            )
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='白下', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'ambiguous')
+            self.assertFalse(row['includeDefault'])
+            self.assertEqual({item['code'] for item in row['candidates']}, {'NPC75082下', 'NPC75082上'})
+            self.assertGreaterEqual(len(row['candidates']), 2)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_partial_code_name_mismatch_is_not_exact(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='NPC75082下', name='白下', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='白上', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(len(row['candidates']), 1)
+            self.assertEqual(row['candidates'][0]['nameMatch'], 'diff')
+            self.assertFalse(row['candidates'][0]['auto'])
+            self.assertEqual(row['status'], 'review')
+            self.assertFalse(row['includeDefault'])
+            self.assertIn('品番が部分一致します', row['candidates'][0]['matchNote'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_betchu_partial_code_is_exact_when_name_matches(self):
+        folder, path, c = newdb()
+        try:
+            seeded = seed_cap(c, code='別注(顧客A)', name='白衣', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='別注', itemName='＊白衣', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertEqual(row['candidates'][0]['code'], '別注(顧客A)')
+            self.assertEqual(row['candidates'][0]['codeMatch'], 'partial')
+            self.assertEqual(row['candidates'][0]['nameMatch'], 'exact')
+            self._add_product(
+                c, code='別注(顧客B)', name='白衣',
+                customer_id=seeded['customer']['id'], supplier_id=seeded['supplier']['id'],
+            )
+            both = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='別注', itemName='白衣', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(both['status'], 'ambiguous')
+            self.assertFalse(both['includeDefault'])
+            self.assertEqual({item['code'] for item in both['candidates']}, {'別注(顧客A)', '別注(顧客B)'})
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_partial_code_does_not_relax_other_rules_or_branch_digits(self):
+        folder, path, c = newdb()
+        try:
+            seeded = seed_cap(c, code='NPC75082下', name='白下', sizes=['F'])
+            blank = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='白下', itemSize='',
+            )])))['rows'][0]
+            self.assertEqual(blank['status'], 'review')
+            self.assertFalse(blank['includeDefault'])
+            self.assertEqual(blank['candidates'][0]['sizeMatch'], 'blank')
+            wide = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='白下', itemSize='Ｆ',
+            )])))['rows'][0]
+            self.assertEqual(wide['status'], 'review')
+            self.assertEqual(wide['candidates'][0]['sizeMatch'], 'normalized')
+            maker = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='白下', itemSize='F', makerName='別のメーカー',
+            )])))['rows'][0]
+            self.assertEqual(maker['status'], 'review')
+            self.assertEqual(maker['candidates'][0]['supplierMatch'], 'diff')
+            self.assertFalse(maker['includeDefault'])
+            self._add_product(
+                c, code='NPC75082', name='白衣',
+                customer_id=seeded['customer']['id'], supplier_id=seeded['supplier']['id'],
+            )
+            exact = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='NPC75082', itemName='＊白衣', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(exact['status'], 'exact')
+            self.assertEqual([item['code'] for item in exact['candidates']], ['NPC75082'])
+            self.assertEqual(exact['candidates'][0]['codeMatch'], 'exact')
+            self.assertEqual(exact['candidates'][0]['nameMatch'], 'diff')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, customer='株式会社北光', code='NPC75082下', name='白下', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='㈱北光', itemNum='NPC75082', itemName='白下', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'review')
+            self.assertEqual(row['candidates'][0]['customerMatch'], 'form')
+            self.assertFalse(row['includeDefault'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='AZ-8618-003', name='ワークキャップ', sizes=['F'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ-8618', itemName='ワークキャップ', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'unmatched')
+            self.assertFalse(row['candidates'])
+            short = ql.build_preview(c, body_of(xlsx([filled(
+                itemNum='AZ', itemName='ワークキャップ', itemSize='F',
+            )])))['rows'][0]
+            self.assertEqual(short['status'], 'unmatched')
+            self.assertFalse(short['candidates'])
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:
