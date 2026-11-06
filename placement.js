@@ -183,15 +183,66 @@ function normalizeKintaiSection(section){
   if(section==='crimp')return 'crimp';
   if(section==='shift'||kintaiShiftOnly())return 'shift';
   if(section==='bihin')return 'bihin';
+  if(section==='register')return 'register';
+  if(section==='summary')return 'summary';
   return 'attendance';
+}
+function kintaiSectionFromLocation(){
+  const path=(location.pathname.replace(/\/$/,'')||'/');
+  if(path==='/kintai/register')return 'register';
+  if(path==='/kintai/summary')return 'summary';
+  if(path==='/kintai'||path==='/kintai/attendance')return 'attendance';
+  try{
+    const q=new URLSearchParams(location.search).get('kintai');
+    if(q==='register'||q==='summary'||q==='attendance')return q;
+  }catch(_){}
+  return '';
+}
+function writeKintaiLocation(section){
+  if(!document.body.classList.contains('catalog-kintai'))return;
+  try{
+    const url=new URL(location.href);
+    const cur=url.pathname.replace(/\/$/,'')||'/';
+    let path=cur;
+    if(section==='register')path='/kintai/register';
+    else if(section==='summary')path='/kintai/summary';
+    else if(cur==='/kintai/register'||cur==='/kintai/summary')path='/';
+    url.pathname=path;
+    url.searchParams.delete('kintai');
+    const next=url.pathname+url.search+url.hash;
+    if(next!==location.pathname+location.search+location.hash)history.replaceState(null,'',next);
+  }catch(_){}
+}
+function clearKintaiLocation(){
+  try{
+    const url=new URL(location.href);
+    const cur=url.pathname.replace(/\/$/,'')||'/';
+    const tracked=cur==='/kintai'||cur==='/kintai/attendance'||cur==='/kintai/register'||cur==='/kintai/summary'||url.searchParams.has('kintai');
+    if(!tracked)return;
+    url.pathname='/';
+    url.searchParams.delete('kintai');
+    history.replaceState(null,'',url.pathname+url.search+url.hash);
+  }catch(_){}
+}
+async function openKintaiFromLocation(){
+  const section=kintaiSectionFromLocation();
+  if(!section)return;
+  const allowed=currentUser?.role==='floor3'||currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview||!!currentUser?.mark_kintai;
+  if(!allowed){clearKintaiLocation();return}
+  kintaiSection=normalizeKintaiSection(section);
+  await showCatalog('kintai');
 }
 function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
   document.querySelectorAll('#kintainav .nav').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
   const att=$('#kintaiattendance');
+  const reg=$('#kintairegister');
+  const summary=$('#kintaisummary');
   const shift=$('#kintaishift');
   const bihin=$('#kintaibihin');
   if(att)att.hidden=kintaiSection!=='attendance';
+  if(reg)reg.hidden=kintaiSection!=='register';
+  if(summary)summary.hidden=kintaiSection!=='summary';
   if(shift)shift.hidden=kintaiSection!=='shift';
   if(bihin)bihin.hidden=kintaiSection!=='bihin';
   const crimp=$('#kintaicrimp');
@@ -208,12 +259,20 @@ async function showKintaiSection(section){
   }
   syncKintaiNav(next);
   if(typeof listChrome==='function')listChrome();
+  const heading=$('#title');
+  if(heading&&document.body.classList.contains('catalog-kintai')){
+    const labels={attendance:'出勤簿',register:'登録',summary:'月別集計'};
+    if(labels[kintaiSection])heading.textContent=labels[kintaiSection];
+  }
+  writeKintaiLocation(kintaiSection);
   if(kintaiSection==='shift'){
     if(typeof loadKintaiShift==='function')loadKintaiShift().catch(e=>toast(e.message));
   }else if(kintaiSection==='crimp'){
     if(typeof loadKintaiCrimp==='function')loadKintaiCrimp().catch(e=>toast(e.message));
   }else if(kintaiSection==='bihin'){
     if(typeof loadKintaiBihin==='function')loadKintaiBihin().catch(e=>toast(e.message));
+  }else if(kintaiSection==='summary'){
+    if(typeof loadKintaiSummary==='function')loadKintaiSummary().catch(e=>toast(e.message));
   }else if(typeof loadKintai==='function'){
     loadKintai().catch(e=>toast(e.message));
   }
@@ -231,6 +290,7 @@ async function showCatalog(which){
     if(typeof confirmKintaiBihinLeave==='function'){
       if(!(await confirmKintaiBihinLeave()))return;
     }
+    clearKintaiLocation();
   }
   const titles={desk:'指示書デスク',info:'顧客・商品情報',stock:'在庫管理',kintai:'マーク管理'};
   document.body.classList.toggle('catalog-info',which==='info');

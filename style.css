@@ -175,6 +175,16 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintai-section{margin:16px 0 6px;font-size:15px;color:#2f4a38}
 .kintai-retired-tag{display:inline-block;margin-left:6px;padding:1px 6px;font-size:11px;font-weight:600;color:#6b3a1e;background:#f3e6d8;border-radius:3px}
 .kintai-retired-row{background:#faf7f3}
+.kintai-sheet{border-collapse:collapse;font-size:13px;min-width:max-content}
+.kintai-sheet th,.kintai-sheet td{border:1px solid #b7c3d0;padding:4px 8px;white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+.kintai-sheet thead th{background:#1f4e79;color:#fff;font-weight:700;text-align:center;position:sticky;top:0;z-index:1}
+.kintai-sheet td.kintai-month{text-align:left;font-weight:600}
+.kintai-person-sheet td{background:#fff2cc}
+.kintai-person-sheet td.kintai-month,.kintai-person-sheet td.kintai-blank{background:#fff}
+.kintai-summary-sheet tbody tr:nth-child(odd) td{background:#fff}
+.kintai-summary-sheet tbody tr:nth-child(even) td{background:#f3f3f3}
+.kintai-summary-sheet tfoot td,.kintai-summary-sheet tr.kintai-total td{background:#d9e2f3;font-weight:700}
+.kintai-sheet-note{margin:8px 0 0;font-size:12.5px;line-height:1.5;color:#333}
 #kintaifileinput{min-width:min(100%,42rem)}
 #kintainav{display:flex;flex-direction:column;gap:4px;min-width:0;flex:0 1 auto;margin:0 0 12px}
 #kintainav .nav{margin:0}

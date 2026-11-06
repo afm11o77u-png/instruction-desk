@@ -2,10 +2,19 @@
 (function () {
   const EMP = { regular: '社員', contract: '契約', part: 'パート' };
   let pack = null;
-  let mode = 'month'; // month | person
-  let selectedYm = '';
+  let chosenYear = 0;
+  let pinnedPersonId = null;
   let lastImportSummary = null;
   let peopleFilter = 'all'; // all | active | retired
+  // 出勤簿（個人）の列。累計・残数・起算日・給与などは集計ルール未定のため空欄。
+  const PERSON_COLUMNS = [
+    '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数',
+    '有給休暇起算日', '普通勤務時間', '残業時間', '勤務時間計', '通常勤務給与', '残業給', '有給付与日数', '有給失効日数', 'その他休暇等', '備考',
+  ];
+  // 月別集計（全員合計）。給与列は未集計。
+  const SUMMARY_COLUMNS = [
+    '月', '普通勤務時間（時間:分）', '残業時間（時間:分）', '勤務時間計（時間:分）', '通常勤務給与（円）', '残業給与（円）', '給与計（円）',
+  ];
   try {
     const raw = sessionStorage.getItem('kintaiLastImportSummary');
     if (raw) lastImportSummary = JSON.parse(raw);
@@ -14,30 +23,52 @@
   function $(sel, root) { return (root || document).querySelector(sel); }
 
   function fiscalStartYear() {
+    if (chosenYear) return chosenYear;
     const el = $('#kintaiyear');
     const n = el ? Number(el.value) : 0;
     return n || (pack && pack.preferredFiscalStartYear) || 2026;
   }
 
-  function selectedYearMonth() {
-    const el = $('#kintaimonth');
-    if (el && el.value) return el.value;
-    if (selectedYm) return selectedYm;
-    if (pack && pack.months && pack.months[0]) return pack.months[0].key;
-    return '2026-02';
+  function rememberYear(year) {
+    const n = Number(year);
+    if (n) chosenYear = n;
+    return chosenYear || fiscalStartYear();
+  }
+
+  function yearOptionsFrom(source) {
+    if (source && source.fiscalYearOptions && source.fiscalYearOptions.length) return source.fiscalYearOptions;
+    if (pack && pack.fiscalYearOptions && pack.fiscalYearOptions.length) return pack.fiscalYearOptions;
+    const y = (source && source.fiscalStartYear) || chosenYear || 2026;
+    const label = (source && source.fiscalLabel) || `${y}年2月〜${y + 1}年1月`;
+    return [{ startYear: y, label }];
+  }
+
+  function fillYearSelect(el, source) {
+    if (!el) return;
+    const opts = yearOptionsFrom(source);
+    const want = (source && source.fiscalStartYear) || chosenYear || (pack && pack.fiscalStartYear) || 2026;
+    el.innerHTML = opts.map(o => `<option value="${o.startYear}">${esc(o.label)}</option>`).join('');
+    if (![...el.options].some(o => Number(o.value) === Number(want))) {
+      el.insertAdjacentHTML('afterbegin', `<option value="${want}">${want}年2月〜${want + 1}年1月</option>`);
+    }
+    el.value = String(want);
+  }
+
+  function fillAllYearSelects(source) {
+    ['kintaiyear', 'kintaiimportyear', 'kintaisummaryyear'].forEach(id => fillYearSelect(document.getElementById(id), source));
+  }
+
+  function syncYearValue(year) {
+    ['kintaiyear', 'kintaiimportyear', 'kintaisummaryyear'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && [...el.options].some(o => Number(o.value) === Number(year))) el.value = String(year);
+    });
   }
 
   function selectedPersonId() {
     const el = $('#kintaiperson');
     const v = el && el.value;
     return v ? Number(v) : null;
-  }
-
-  function num(v) {
-    if (v == null || v === '') return '—';
-    const n = Number(v);
-    if (Number.isNaN(n)) return '—';
-    return Number.isInteger(n) ? String(n) : String(n);
   }
 
   function canKintai() {
@@ -103,30 +134,20 @@
     </details>`;
   }
 
-  function monthRowHtml(r) {
-    const m = r.month || {};
-    const err = r.lastError || m.error || '';
-    const retired = r.retired ? '<small class="kintai-retired-tag">退職</small>' : '';
-    return `<tr class="${r.retired ? 'kintai-retired-row' : ''}">
-      <td><b>${esc(r.displayName)}</b>${retired}</td>
-      <td>${esc(r.employeeCode)}</td>
-      <td>${esc(EMP[r.employment] || r.employment)}</td>
-      <td>${num(m.workDays)}</td>
-      <td>${num(m.holidayDays)}</td>
-      <td>${num(m.paidLeaveDays)}</td>
-      <td>${esc(m.ordinaryHm || '—')}</td>
-      <td>${esc(m.overtimeHm || '—')}</td>
-      <td>${esc(m.totalHm || '—')}</td>
-      <td><strong>${esc(r.lastStatus || m.status || '未取得')}</strong>${errorBlockHtml(err, true)}${r.lastImportAt ? `<small>${esc(r.lastImportAt)}</small>` : ''}</td>
-    </tr>`;
+  function dayText(v) {
+    if (v == null || v === '') return '';
+    const n = Number(v);
+    if (Number.isNaN(n)) return '';
+    return n.toFixed(1);
   }
 
-  function monthTableHtml(rows, heading) {
-    if (!rows.length) return '';
-    return `<h3 class="kintai-section">${esc(heading)}（${rows.length}）</h3>
-      <table><thead><tr><th>氏名</th><th>社員番号</th><th>区分</th><th>出勤日数</th><th>休日数</th><th>有給取得日数</th><th>普通勤務</th><th>残業</th><th>勤務時間計</th><th>取込結果</th></tr></thead><tbody>${
-        rows.map(monthRowHtml).join('')
-      }</tbody></table>`;
+  function sheetCell(text) {
+    if (text == null || text === '') return '<td class="kintai-blank"></td>';
+    return `<td>${esc(String(text))}</td>`;
+  }
+
+  function blankCells(n) {
+    return '<td class="kintai-blank"></td>'.repeat(n);
   }
 
   function fileInputUnsaved() {
@@ -143,15 +164,23 @@
     if (share) share.textContent = '';
   }
 
+  function visiblePeople() {
+    return ((pack && pack.people) || []).filter(p => passesPeopleFilter(p.retired));
+  }
+
   async function loadKintai() {
     if (!canKintai()) return;
-    const year = fiscalStartYear();
+    const year = rememberYear(fiscalStartYear());
     const qs = new URLSearchParams({ year: String(year) });
-    if (mode === 'person') {
-      const pid = selectedPersonId();
-      if (pid) qs.set('personId', String(pid));
-    } else {
-      qs.set('ym', selectedYearMonth());
+    let pid = pinnedPersonId || selectedPersonId();
+    if (!pid) {
+      pack = await api('/api/kintai?' + qs.toString());
+      const first = visiblePeople()[0];
+      pid = first ? first.id : null;
+    }
+    if (pid) {
+      pinnedPersonId = pid;
+      qs.set('personId', String(pid));
     }
     pack = await api('/api/kintai?' + qs.toString());
     paintKintai();
@@ -159,41 +188,20 @@
 
   function paintFilters() {
     if (!pack) return;
-    const yearSel = $('#kintaiyear');
-    if (yearSel) {
-      const opts = pack.fiscalYearOptions && pack.fiscalYearOptions.length
-        ? pack.fiscalYearOptions
-        : [{ startYear: 2026, label: '2026年2月〜2027年1月' }];
-      const want = pack.fiscalStartYear || pack.preferredFiscalStartYear || 2026;
-      yearSel.innerHTML = opts.map(o =>
-        `<option value="${o.startYear}" ${Number(o.startYear) === Number(want) ? 'selected' : ''}>${esc(o.label)}</option>`
-      ).join('');
-      if (![...yearSel.options].some(o => Number(o.value) === Number(want))) {
-        yearSel.insertAdjacentHTML('afterbegin', `<option value="${want}" selected>${want}年2月〜${want + 1}年1月</option>`);
-      } else {
-        yearSel.value = String(want);
-      }
-    }
-    const monthSel = $('#kintaimonth');
-    if (monthSel) {
-      const keep = selectedYm || selectedYearMonth();
-      monthSel.innerHTML = (pack.months || []).map(m =>
-        `<option value="${esc(m.key)}">${m.year}年${m.month}月</option>`
-      ).join('');
-      if (keep && [...monthSel.options].some(o => o.value === keep)) monthSel.value = keep;
-      else if (pack.months && pack.months[0]) monthSel.value = pack.months[0].key;
-      selectedYm = monthSel.value;
-    }
+    if (!chosenYear && pack.fiscalStartYear) chosenYear = Number(pack.fiscalStartYear);
+    fillAllYearSelects(pack);
     const filterSel = $('#kintaifilter');
     if (filterSel && !filterSel.dataset.bound) {
       filterSel.value = peopleFilter;
     }
     const personSel = $('#kintaiperson');
     if (personSel) {
-      const keep = personSel.value;
-      const visiblePeople = (pack.people || []).filter(p => passesPeopleFilter(p.retired));
-      personSel.innerHTML = peopleSelectHtml(visiblePeople, '（月別の全員比較）');
-      if (keep && [...personSel.options].some(o => o.value === keep)) personSel.value = keep;
+      const keep = pinnedPersonId || personSel.value;
+      const people = visiblePeople();
+      personSel.innerHTML = peopleSelectHtml(people, null);
+      if (keep && [...personSel.options].some(o => o.value === String(keep))) personSel.value = String(keep);
+      else if (personSel.options[0]) personSel.value = personSel.options[0].value;
+      if (personSel.value) pinnedPersonId = Number(personSel.value);
     }
     const filePerson = $('#kintaifileperson');
     if (filePerson) {
@@ -274,6 +282,26 @@
       </div>`;
   }
 
+  function personSheetHtml(p) {
+    const head = PERSON_COLUMNS.map(name => `<th>${esc(name)}</th>`).join('');
+    const rows = ((p && p.months) || []).map(m => {
+      const label = `${m.year}/${String(m.month).padStart(2, '0')}`;
+      return `<tr>
+        <td class="kintai-month">${esc(label)}</td>
+        ${sheetCell(dayText(m.workDays))}
+        ${sheetCell(dayText(m.holidayDays))}
+        ${blankCells(2)}
+        ${sheetCell(dayText(m.paidLeaveDays))}
+        ${blankCells(3)}
+        ${sheetCell(m.ordinaryHm)}
+        ${sheetCell(m.overtimeHm)}
+        ${sheetCell(m.totalHm)}
+        ${blankCells(6)}
+      </tr>`;
+    }).join('');
+    return `<table class="kintai-sheet kintai-person-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
   function paintKintai() {
     if (!$('#kintaidesk')) return;
     paintFilters();
@@ -283,39 +311,51 @@
       if (body) body.innerHTML = '';
       return;
     }
-    mode = selectedPersonId() ? 'person' : 'month';
-    if (mode === 'person' && pack.rows[0]?.months) {
-      const p = pack.rows[0];
-      const empLabel = p.retired ? '退職' : (EMP[p.employment] || p.employment);
-      if (status) {
-        status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／取込: ${p.lastStatus || '未取得'}`;
-      }
-      body.innerHTML = `<table><thead><tr><th>対象年月</th><th>出勤日数</th><th>休日数</th><th>有給取得日数</th><th>普通勤務</th><th>残業</th><th>勤務時間計</th><th>取込</th></tr></thead><tbody>${
-        p.months.map(m => `<tr>
-          <td>${m.year}年${m.month}月</td>
-          <td>${num(m.workDays)}</td>
-          <td>${num(m.holidayDays)}</td>
-          <td>${num(m.paidLeaveDays)}</td>
-          <td>${esc(m.ordinaryHm || '—')}</td>
-          <td>${esc(m.overtimeHm || '—')}</td>
-          <td>${esc(m.totalHm || '—')}</td>
-          <td>${esc(m.status || '未取得')}${m.error ? `<small class="kintai-errdetail">${esc(m.error)}</small>` : ''}</td>
-        </tr>`).join('')
-      }</tbody></table>`;
-      if (p.lastError) {
-        status.innerHTML = `${esc(status.textContent)}${errorBlockHtml(p.lastError, false)}`;
-      }
+    const p = (pack.rows || []).find(r => r.months) || null;
+    if (!p) {
+      if (status) status.textContent = '表示する対象者がいません。';
+      if (body) body.innerHTML = '';
       return;
     }
-    const ymLabel = selectedYearMonth().replace('-', '年') + '月';
-    const visible = (pack.rows || []).filter(r => passesPeopleFilter(r.retired));
-    const activeRows = visible.filter(r => !r.retired);
-    const retiredRows = visible.filter(r => r.retired);
+    const empLabel = p.retired ? '退職' : (EMP[p.employment] || p.employment);
     if (status) {
-      status.textContent = `${pack.fiscalLabel} ／ ${ymLabel} ／ 在職${activeRows.length}・退職${retiredRows.length}`;
+      status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／${pack.fiscalLabel || ''}／取込: ${p.lastStatus || '未取得'}`;
+      if (p.lastError) status.innerHTML = `${esc(status.textContent)}${errorBlockHtml(p.lastError, false)}`;
     }
-    body.innerHTML = monthTableHtml(activeRows, '在職') + monthTableHtml(retiredRows, '退職者')
-      || '<p class="kintaimeta">表示対象の人がいません。</p>';
+    if (body) body.innerHTML = personSheetHtml(p);
+  }
+
+  function summaryRow(label, item, total) {
+    return `<tr class="${total ? 'kintai-total' : ''}">
+      <td class="kintai-month">${esc(label)}</td>
+      ${sheetCell(item && item.ordinaryHm)}
+      ${sheetCell(item && item.overtimeHm)}
+      ${sheetCell(item && item.totalHm)}
+      ${blankCells(3)}
+    </tr>`;
+  }
+
+  function paintSummary(data) {
+    fillAllYearSelects(data || pack);
+    const status = $('#kintaisummarystatus');
+    const body = $('#kintaisummarytable');
+    if (status) {
+      status.textContent = data && data.fiscalLabel ? `${data.fiscalLabel}　全員の合計` : '';
+    }
+    if (!body) return;
+    const head = SUMMARY_COLUMNS.map(name => `<th>${esc(name)}</th>`).join('');
+    const months = (data && data.months) || [];
+    const rows = months.map(m => summaryRow(m.key || `${m.year}/${String(m.month).padStart(2, '0')}`, m, false)).join('');
+    const period = (data && data.period) || {};
+    body.innerHTML = `<table class="kintai-sheet kintai-summary-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${summaryRow('期間合計', period, true)}</tfoot></table>`;
+  }
+
+  async function loadKintaiSummary() {
+    if (!canKintai()) return;
+    const year = rememberYear(fiscalStartYear());
+    const data = await api('/api/kintai/month-summary?year=' + encodeURIComponent(year));
+    if (data && data.fiscalStartYear) rememberYear(data.fiscalStartYear);
+    paintSummary(data);
   }
 
   function paintPathsImportResult(summary) {
@@ -415,31 +455,50 @@
   window.loadKintai = loadKintai;
   window.paintKintai = paintKintai;
   window.importKintai = importKintai;
+  window.loadKintaiSummary = loadKintaiSummary;
 
   function bindKintaiControls() {
     const year = $('#kintaiyear');
-    const month = $('#kintaimonth');
+    const importYear = $('#kintaiimportyear');
+    const summaryYear = $('#kintaisummaryyear');
     const person = $('#kintaiperson');
     const refresh = $('#kintairefresh');
+    const summaryRefresh = $('#kintaisummaryrefresh');
     const imp = $('#kintaiimport');
     const saveFile = $('#kintaifilesave');
     const fileInput = $('#kintaifileinput');
     const filePerson = $('#kintaifileperson');
-    if (year) year.onchange = () => { selectedYm = ''; loadKintai().catch(e => toast(e.message)); };
-    if (month) month.onchange = () => {
-      mode = 'month';
-      selectedYm = month.value;
-      if (person) person.value = '';
+    const onYear = (el, load) => {
+      if (!el) return;
+      el.onchange = () => {
+        rememberYear(el.value);
+        syncYearValue(chosenYear);
+        load().catch(e => toast(e.message));
+      };
+    };
+    onYear(year, loadKintai);
+    onYear(importYear, loadKintai);
+    onYear(summaryYear, loadKintaiSummary);
+    if (person) person.onchange = () => {
+      pinnedPersonId = person.value ? Number(person.value) : null;
       loadKintai().catch(e => toast(e.message));
     };
-    if (person) person.onchange = () => { mode = person.value ? 'person' : 'month'; loadKintai().catch(e => toast(e.message)); };
     const filter = $('#kintaifilter');
     if (filter) filter.onchange = () => {
       peopleFilter = filter.value || 'all';
-      paintKintai();
+      const people = visiblePeople();
+      const cur = person && person.value;
+      if (!people.some(p => String(p.id) === String(cur))) {
+        pinnedPersonId = people[0] ? people[0].id : null;
+        loadKintai().catch(e => toast(e.message));
+      } else paintKintai();
     };
     if (refresh) refresh.onclick = () => loadKintai().catch(e => toast(e.message));
-    if (imp) imp.onclick = () => importKintai().catch(e => toast(e.message));
+    if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
+    if (imp) imp.onclick = () => {
+      if (importYear && importYear.value) rememberYear(importYear.value);
+      importKintai().catch(e => toast(e.message));
+    };
     if (saveFile) saveFile.onclick = () => savePersonFile().catch(e => toast(e.message));
     const pathsImportBtn = $('#kintaipathsimport');
     const pathsReloadBtn = $('#kintaipathsreload');

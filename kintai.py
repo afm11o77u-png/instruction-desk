@@ -2370,6 +2370,104 @@ def list_overview(
     }
 
 
+def _minutes_or_none(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def month_hour_summary(c, fiscal_start_year: int) -> dict:
+    """全員の普通勤務・残業を月ごとに足す。給与は計算しない。
+
+    分が NULL の人はその列に足さない。その月の両方とも一件も無ければ空欄。
+    片方だけある月は、無い方を 0 として勤務時間計を出す。
+    在職・退職とも active=1 の対象者を含む。active=0 は含めない。
+    """
+    if type(fiscal_start_year) is not int or not 2000 <= fiscal_start_year <= 2100:
+        raise ValueError('年度の開始年を確認してください。')
+    months = fiscal_months(fiscal_start_year, DEFAULT_FISCAL_START[1])
+    month_set = set(months)
+    buckets = {
+        ym: {'ordinary': 0, 'overtime': 0, 'ordinary_n': 0, 'overtime_n': 0}
+        for ym in months
+    }
+    ids = [r['id'] for r in c.execute('SELECT id FROM kintai_people WHERE active=1')]
+    if ids:
+        marks = ','.join('?' * len(ids))
+        rows = c.execute(
+            f'''SELECT year, month, ordinary_minutes, overtime_minutes
+                FROM kintai_monthly WHERE person_id IN ({marks})''',
+            ids,
+        )
+        for row in rows:
+            key = (row['year'], row['month'])
+            if key not in month_set:
+                continue
+            bucket = buckets[key]
+            ordinary = _minutes_or_none(row['ordinary_minutes'])
+            overtime = _minutes_or_none(row['overtime_minutes'])
+            if ordinary is not None:
+                bucket['ordinary'] += ordinary
+                bucket['ordinary_n'] += 1
+            if overtime is not None:
+                bucket['overtime'] += overtime
+                bucket['overtime_n'] += 1
+
+    def pack_minutes(bucket):
+        if bucket['ordinary_n'] == 0 and bucket['overtime_n'] == 0:
+            return None, None, None
+        ordinary = bucket['ordinary'] if bucket['ordinary_n'] else 0
+        overtime = bucket['overtime'] if bucket['overtime_n'] else 0
+        return ordinary, overtime, ordinary + overtime
+
+    out = []
+    period_ordinary = 0
+    period_overtime = 0
+    any_month = False
+    for y, m in months:
+        ordinary, overtime, total = pack_minutes(buckets[(y, m)])
+        if total is not None:
+            any_month = True
+            period_ordinary += ordinary
+            period_overtime += overtime
+        out.append({
+            'year': y,
+            'month': m,
+            'key': f'{y}/{m:02d}',
+            'ordinaryMinutes': ordinary,
+            'overtimeMinutes': overtime,
+            'totalMinutes': total,
+            'ordinaryHm': format_hm(ordinary) if ordinary is not None else '',
+            'overtimeHm': format_hm(overtime) if overtime is not None else '',
+            'totalHm': format_hm(total) if total is not None else '',
+        })
+    if any_month:
+        period_total = period_ordinary + period_overtime
+    else:
+        period_ordinary = period_overtime = period_total = None
+    return {
+        'fiscalLabel': fiscal_label(fiscal_start_year),
+        'fiscalStartYear': fiscal_start_year,
+        'fiscalStartMonth': DEFAULT_FISCAL_START[1],
+        'preferredFiscalStartYear': preferred_fiscal_start_year(),
+        'fiscalYearOptions': [
+            {'startYear': y, 'label': fiscal_label(y)} for y in fiscal_year_choices(fiscal_start_year)
+        ],
+        'months': out,
+        'period': {
+            'ordinaryMinutes': period_ordinary,
+            'overtimeMinutes': period_overtime,
+            'totalMinutes': period_total,
+            'ordinaryHm': format_hm(period_ordinary) if period_ordinary is not None else '',
+            'overtimeHm': format_hm(period_overtime) if period_overtime is not None else '',
+            'totalHm': format_hm(period_total) if period_total is not None else '',
+        },
+    }
+
+
 def update_person_file(c, person_id: int, source_file: str, layout_id: str | None = None) -> dict:
     if type(person_id) is not int:
         raise ValueError('対象者を選択してください。')
@@ -2553,6 +2651,10 @@ def handle_get(h, c, path: str):
         ym = _parse_ym(q.get('ym'))
         month = int(q['month']) if q.get('month') not in (None, '') else None
         return 200, list_overview(c, year, month=month, person_id=person_id, year_month=ym)
+    if path == '/api/kintai/month-summary':
+        q = _query_map(h)
+        year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
+        return 200, month_hour_summary(c, year)
     if path == '/api/kintai/settings':
         # マーク権限者のみ。資格情報は含めない
         s = load_local_settings()
