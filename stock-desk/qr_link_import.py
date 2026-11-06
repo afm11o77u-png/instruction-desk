@@ -829,30 +829,51 @@ def _auto_ok(cand):
     )
 
 
-def _match_note(cand):
+def _shown(value):
+    t = stock.text(value)
+    return t if t else '未指定'
+
+
+def _pair(old, new):
+    return f'（旧：{_shown(old)} / 今：{_shown(new)}）'
+
+
+def _match_note(cand, legacy=None):
+    """要確認の原因だけを書く。一致している顧客・サイズは足さない。"""
+    legacy = legacy or {}
     bits = []
     if cand['codeMatch'] == 'normalized':
-        bits.append('品番はハイフン等を無視した一致')
+        bits.append('品番はハイフン等を無視した一致' + _pair(legacy.get('itemNum'), cand.get('code')))
     elif cand['codeMatch'] == 'partial':
-        bits.append('品番が部分一致します')
+        bits.append('品番が部分一致します' + _pair(legacy.get('itemNum'), cand.get('code')))
     if cand['nameMatch'] == 'contained':
-        bits.append('品名が含まれます')
+        bits.append('品名が含まれます' + _pair(legacy.get('itemName'), cand.get('productName')))
     elif cand['nameMatch'] == 'diff':
-        bits.append('品名が違います')
+        bits.append('品名が違います' + _pair(legacy.get('itemName'), cand.get('productName')))
+    old_proc = stock.text(legacy.get('processing') or '')
+    now_proc = stock.text(cand.get('embroidery') or '')
+    if old_proc and _proc_key(old_proc) != _proc_key(now_proc):
+        bits.append('加工が違います' + _pair(old_proc, now_proc))
+    elif not old_proc and cand.get('_processingPick') == 'leftover' and now_proc and now_proc != '加工なし':
+        bits.append('加工が違います' + _pair('括弧なし', now_proc))
+    old_maker = legacy.get('makerName')
+    now_maker = cand.get('supplierName')
     if cand['supplierMatch'] == 'form':
-        bits.append('メーカー名は法人表記だけ違います')
+        bits.append('メーカー名は法人表記だけ違います' + _pair(old_maker, now_maker))
     elif cand['supplierMatch'] == 'diff':
-        bits.append('メーカー名が違います')
+        bits.append('メーカーが違います' + _pair(old_maker, now_maker))
+    elif cand['supplierMatch'] == 'blank' and not cand.get('auto'):
+        bits.append('メーカーが未指定です' + _pair('', now_maker))
     if cand['customerMatch'] == 'form':
-        bits.append('顧客名は法人表記だけ違います')
+        bits.append('顧客名は法人表記だけ違います' + _pair(legacy.get('customerName'), cand.get('customerName')))
     if cand['sizeMatch'] == 'normalized':
-        bits.append('サイズは全角半角の差です')
+        bits.append('サイズは全角半角の差です' + _pair(legacy.get('itemSize'), cand.get('size')))
     elif cand['sizeMatch'] == 'blank':
-        bits.append('サイズは空欄です')
-    if cand['locationMatch'] == 'blank':
-        bits.append('場所は未指定')
-    elif cand['locationMatch'] == 'ambiguous':
-        bits.append('同じ場所名が複数あります')
+        bits.append('サイズは空欄です（旧：未指定）')
+    if cand['locationMatch'] == 'ambiguous':
+        bits.append(f"同じ場所名が複数あります（{_shown(cand.get('locationLabel'))}）")
+    elif cand['locationMatch'] == 'blank' and not cand.get('auto'):
+        bits.append('場所は未指定です（旧：未指定）')
     if not cand['productActive']:
         bits.append('商品は停止中')
     if not cand['customerActive']:
@@ -864,6 +885,24 @@ def _match_note(cand):
     if not bits:
         return '完全一致'
     return '、'.join(bits)
+
+
+def _candidate_reason_lines(candidates):
+    """要確認・候補が複数の行に出す照合メモ。複数候補は商品名で区別する。"""
+    lines = []
+    multi = len(candidates) > 1
+    for cand in candidates:
+        note = cand.get('matchNote') or ''
+        if not note or note == '完全一致':
+            continue
+        if multi:
+            head = stock.text(cand.get('productName') or cand.get('code') or '') or '候補'
+            line = f'{head}：{note}'
+        else:
+            line = note
+        if line not in lines:
+            lines.append(line)
+    return lines
 
 
 def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_name,
@@ -955,9 +994,17 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                             'customerActive': customer['active'],
                             'handleActive': handle['active'],
                             'locationActive': True if place is None else place['active'],
+                            'supplierName': product.get('supplierName') or '',
                         }
                         cand['auto'] = _auto_ok(cand)
-                        cand['matchNote'] = _match_note(cand)
+                        cand['matchNote'] = _match_note(cand, {
+                            'itemNum': item_num,
+                            'itemName': item_name,
+                            'makerName': maker_name,
+                            'customerName': customer_name,
+                            'itemSize': item_size,
+                            'processing': _legacy_processing_raw(item_name),
+                        })
                         lot_n = _lot_count(
                             c, handle['id'], size, condition, location_id,
                         )
@@ -1121,10 +1168,15 @@ def classify_rows(c, parsed):
             status = _status_for(candidates, reasons)
             if status == STATUS_EXACT:
                 reasons = [r for r in reasons if '複数あります' not in r]
-            if status == STATUS_REVIEW and not reasons:
-                reasons.append('表記ゆれ、または未指定の項目があります。選ぶまで登録しません。')
+            detail = _candidate_reason_lines(candidates) if status in (STATUS_REVIEW, STATUS_AMBIGUOUS) else []
             if status == STATUS_AMBIGUOUS:
                 reasons.append('候補が複数あります。一つ選ぶまで登録しません。')
+            if status == STATUS_REVIEW and not reasons:
+                reasons.extend(detail or ['表記ゆれ、または未指定の項目があります。選ぶまで登録しません。'])
+            elif detail:
+                for line in detail:
+                    if line not in reasons:
+                        reasons.append(line)
         existing = catalog['links'].get(values['legacyStockId']) if values['legacyStockId'] else None
         rows.append({
             'rowNo': row_no,
