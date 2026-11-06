@@ -661,6 +661,132 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def _seed_handles(self, c, *, code, name, handles, sizes=None, customer='ミルクの郷'):
+        cu = stock.save_customer(c, {'name': customer, 'active': True})
+        su = stock.save_supplier(c, {'name': 'メーカーA', 'active': True})
+        stock.save_location(c, {'siteName': '本社', 'shelfName': 'A-1', 'active': True})
+        links = []
+        for emb in handles:
+            links.append({
+                'customerId': cu['id'],
+                'embroidery': emb,
+                'isStandard': emb == '',
+                'active': True,
+            })
+        pr = stock.save_product(c, {
+            'code': code, 'name': name, 'color': '', 'supplierId': su['id'],
+            'active': True, 'sizes': sizes or ['5L'],
+            'links': links,
+        })
+        c.commit()
+        return {'customer': cu, 'supplier': su, 'product': pr}
+
+    def test_processing_paren_selects_matching_handle(self):
+        """＊白衣(スナッパー加工) はスナッパー加工の取扱だけ。白衣だけなら加工なし。"""
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(c, code='DCP514', name='白衣', handles=['', 'スナッパー加工'])
+            before = snap(c)
+            for legacy_name in ('＊白衣(スナッパー加工)', '＊白衣（スナッパー加工）', '白衣(スナッパー加工)'):
+                row = ql.build_preview(c, body_of(xlsx([filled(
+                    legacyStockId=OLD + 'S',
+                    customerName='ミルクの郷', itemNum='DCP514', itemName=legacy_name,
+                    itemSize='5L', isUsed='中古',
+                )])))['rows'][0]
+                self.assertEqual(row['status'], 'exact', legacy_name)
+                self.assertTrue(row['includeDefault'], legacy_name)
+                self.assertEqual(len(row['candidates']), 1, legacy_name)
+                cand = row['candidates'][0]
+                self.assertEqual(cand['embroidery'], 'スナッパー加工')
+                self.assertIn('スナッパー加工', cand['label'])
+                self.assertEqual(cand['code'], 'DCP514')
+                self.assertEqual(cand['size'], '5L')
+                self.assertEqual(cand['customerName'], 'ミルクの郷')
+            plain = ql.build_preview(c, body_of(xlsx([filled(
+                legacyStockId=OLD + 'N',
+                customerName='ミルクの郷', itemNum='DCP514', itemName='白衣',
+                itemSize='5L', isUsed='中古',
+            )])))['rows'][0]
+            self.assertEqual(plain['status'], 'exact')
+            self.assertTrue(plain['includeDefault'])
+            self.assertEqual(len(plain['candidates']), 1)
+            self.assertEqual(plain['candidates'][0]['embroidery'], '加工なし')
+            self.assertIn('加工なし', plain['candidates'][0]['label'])
+            starred = ql.build_preview(c, body_of(xlsx([filled(
+                legacyStockId=OLD + 'NS',
+                customerName='ミルクの郷', itemNum='DCP514', itemName='＊白衣',
+                itemSize='5L', isUsed='中古',
+            )])))['rows'][0]
+            self.assertEqual(starred['status'], 'exact')
+            self.assertEqual(starred['candidates'][0]['embroidery'], '加工なし')
+            blob = xlsx([filled(
+                legacyStockId=OLD + 'C',
+                customerName='ミルクの郷', itemNum='DCP514', itemName='＊白衣(スナッパー加工)',
+                itemSize='5L', isUsed='中古',
+            )])
+            preview = ql.build_preview(c, body_of(blob))
+            result = ql.commit_preview(c, body_of(
+                blob, previewFingerprint=preview['previewFingerprint'],
+                token='qr-proc-snap-1',
+            ), db_path=str(path))
+            c.commit()
+            self.assertEqual(result['created'], 1)
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(snap(c), before)
+            link = c.execute('SELECT customer_product_id FROM qr_stock_links').fetchone()
+            emb = c.execute(
+                'SELECT embroidery FROM customer_products WHERE id=?',
+                (link['customer_product_id'],),
+            ).fetchone()['embroidery']
+            self.assertEqual(emb, 'スナッパー加工')
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], before['products'])
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM customer_products').fetchone()['n'], before['handles'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_missing_processing_handle_falls_back_to_plain(self):
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(c, code='DCP843', name='女白下', handles=['', '裾上げ'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP843', itemName='女白下(スナッパー加工)',
+                itemSize='5L', isUsed='中古',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertEqual(len(row['candidates']), 1)
+            self.assertEqual(row['candidates'][0]['embroidery'], '加工なし')
+            self.assertIn('加工なし', row['candidates'][0]['label'])
+            bare = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP843', itemName='女白下',
+                itemSize='5L', isUsed='新品',
+            )])))['rows'][0]
+            self.assertEqual(bare['status'], 'exact')
+            self.assertEqual(bare['candidates'][0]['embroidery'], '加工なし')
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_unresolved_processing_stays_ambiguous_and_labels_differ(self):
+        folder, path, c = newdb()
+        try:
+            self._seed_handles(c, code='DCP514', name='白衣', handles=['スナッパー加工', '裾上げ'])
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='ミルクの郷', itemNum='DCP514', itemName='白衣',
+                itemSize='5L', isUsed='中古',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'ambiguous')
+            self.assertFalse(row['includeDefault'])
+            labels = {item['embroidery']: item['label'] for item in row['candidates']}
+            self.assertEqual(set(labels), {'スナッパー加工', '裾上げ'})
+            self.assertIn('スナッパー加工', labels['スナッパー加工'])
+            self.assertIn('裾上げ', labels['裾上げ'])
+            self.assertNotEqual(labels['スナッパー加工'], labels['裾上げ'])
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:
