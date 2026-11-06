@@ -7,6 +7,7 @@
 完全一致でも正規化一致でも無い品番は、一方が他方に含まれるときだけ部分一致にする。
 そのときは商品名も一致し、候補が1件の場合だけ完全一致にする。
 今の商品名の文字列全体が旧品名に含まれるときも、途中の空白は消さずに見て、1件なら完全一致にする。
+品番の部分一致で、仕入先が一致し色の各語が旧品名に含まれる商品が1件なら完全一致にする。
 旧品名の末尾の（加工名）で取扱の加工仕様を選ぶ。無ければ加工なし。候補が1件なら完全一致。
 括弧全体が一致しなくても、括弧の中に取扱の加工名が含まれていればその取扱を選ぶ。
 """
@@ -106,7 +107,7 @@ NOTES = (
     '新品中古が空欄または null のときは、新品にしません。状態は未指定のまま対応づけます。',
     '品番の完全一致と、ハイフン・空白・全角半角を畳んだ一致は別です。畳んだだけの候補は選ぶまで登録しません。',
     '顧客・品番・サイズが一致し、候補が1件のときは、品名が違っても完全一致にします。候補が複数のときは選ぶまで登録しません。',
-    '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名の完全一致が無いときは、今の商品名の文字列全体が旧品名に含まれるものだけに絞ります（途中の空白は消しません。NFKCと先頭の＊だけ揃えます）。それが1件なら完全一致、複数なら候補が複数、一つも含まれなければ自動では確定しません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
+    '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名の完全一致が無いときは、今の商品名の文字列全体が旧品名に含まれるものだけに絞ります（途中の空白は消しません。NFKCと先頭の＊だけ揃えます）。それが1件なら完全一致、複数なら候補が複数、一つも含まれなければ自動では確定しません。ただし仕入先が一致し、色の各語（・や／で分ける）が旧品名に含まれる商品が1件なら、品名の含有よりそちらを完全一致にします。色が空の商品は色が一致したことにしません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
     '旧品名の末尾の（加工名）で取扱を選びます。例: ＊白衣(スナッパー加工) は「スナッパー加工」の取扱です。括弧全体が一致しなくても、括弧の中に取扱の加工名が含まれていればその取扱です（白・刺繍入り は 刺繍入り）。完全一致を優先します。短い加工名の含有では選びません。その取扱が無いとき、または括弧が無いときは「加工なし」です。先頭の＊や空白の差は同じ名前です。このあと候補が1件なら完全一致にします。候補が複数のときは選ぶまで登録しません。',
     '顧客名の㈱と株式会社、空白だけの違いで複数になるときは、選ぶまで登録しません。',
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
@@ -198,6 +199,8 @@ _PARTIAL_OTHER_MIN = 2
 _PROC_CONTAIN_MIN = 3
 # 今の商品名全体が旧品名に含まれる、の下限。1文字の含有では別商品に寄せない。
 _NAME_CONTAIN_MIN = 2
+# 色欄の区切り。NFKC 後に半角スラッシュと中黒へ揃うものも含む。
+_COLOR_SPLIT_RE = re.compile(r'[・･·/／、,，]+')
 _LEADING_NAME_STARS = re.compile(r'^[＊*]+')
 
 
@@ -486,7 +489,7 @@ def _load_catalog(c):
     by_exact = defaultdict(list)
     by_norm = defaultdict(list)
     for row in c.execute(
-        '''SELECT p.id, p.code, p.name, p.active, p.supplier_id, s.name AS supplier_name
+        '''SELECT p.id, p.code, p.name, p.color, p.active, p.supplier_id, s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
            WHERE p.merged_into_id IS NULL
            ORDER BY p.id'''
@@ -495,6 +498,7 @@ def _load_catalog(c):
             'id': row['id'],
             'code': row['code'] or '',
             'name': row['name'] or '',
+            'color': row['color'] or '',
             'active': bool(row['active']),
             'supplierId': row['supplier_id'],
             'supplierName': row['supplier_name'] or '',
@@ -776,8 +780,37 @@ def _catalog_products(catalog):
     return found
 
 
-def _partial_product_hits(catalog, item_num, item_name):
-    """完全一致も正規化一致も無いときだけ。品名が合う商品があれば、そちらだけに絞る。"""
+def _color_tokens(color):
+    text = unicodedata.normalize('NFKC', stock.text(color))
+    if not text:
+        return []
+    return [part.strip() for part in _COLOR_SPLIT_RE.split(text) if part.strip()]
+
+
+def _color_tokens_in_legacy(color, legacy_name):
+    """色が空なら満たさない。各語が旧品名に含まれるときだけ真。"""
+    tokens = _color_tokens(color)
+    if not tokens:
+        return False
+    legacy = unicodedata.normalize('NFKC', stock.text(legacy_name))
+    return all(token in legacy for token in tokens)
+
+
+def _mark_name_pick(items, pick):
+    marked = []
+    for item in items:
+        copied = dict(item)
+        copied['_namePick'] = pick
+        marked.append(copied)
+    return marked
+
+
+def _partial_product_hits(catalog, item_num, item_name, maker_name=''):
+    """完全一致も正規化一致も無いときだけ。品名の完全一致を優先する。
+
+    その次に、仕入先が一致し色の各語が旧品名に含まれる商品があればそれだけを返す。
+    色が空の商品はここには入れない。無ければ品名の含有、それも無ければ全部を残す。
+    """
     key = code_norm_key(item_num)
     if not _partial_key_ok(key):
         return []
@@ -796,6 +829,13 @@ def _partial_product_hits(catalog, item_num, item_name):
     named = [item for item in hits if _partial_name_match(item_name, item['name']) == 'exact']
     if named:
         return named
+    by_supplier_color = [
+        item for item in hits
+        if _supplier_match(item, maker_name) == 'exact'
+        and _color_tokens_in_legacy(item.get('color') or '', item_name)
+    ]
+    if by_supplier_color:
+        return _mark_name_pick(by_supplier_color, 'supplier_color')
     contained = [item for item in hits if _current_name_in_legacy(item_name, item['name'])]
     if contained:
         return contained
@@ -808,14 +848,17 @@ def _candidate_key(product_id, customer_id, handle_id, size, condition, location
 
 def _auto_ok(cand):
     # 品番の完全一致は品名を見ない。顧客・サイズが揃い候補が1件なら完全一致（品名違いを含む）。
-    # 部分一致は品名の完全一致、または今の商品名全体が旧品名に含まれるときに限る。
-    # 正規化一致は自動確定しない。
+    # 部分一致は品名の完全一致、品名全体の含有、または仕入先と色で1件に絞れたときに限る。
+    # 仕入先が違う候補を、色が空のまま通すことはしない。正規化一致は自動確定しない。
     # 顧客の法人表記、サイズ空欄・不一致、メーカー名の違いは通さない。複数候補は呼び出し側で確定しない。
     # 加工の取扱が決まらなかった候補は自動確定しない。
     if cand.get('_processingPick') == 'leftover':
         return False
     if cand['codeMatch'] == 'partial':
-        if cand['nameMatch'] not in ('exact', 'contained'):
+        if cand['nameMatch'] == 'supplier_color':
+            if cand['supplierMatch'] != 'exact':
+                return False
+        elif cand['nameMatch'] not in ('exact', 'contained'):
             return False
     elif cand['codeMatch'] != 'exact':
         return False
@@ -848,6 +891,14 @@ def _match_note(cand, legacy=None):
         bits.append('品番が部分一致します' + _pair(legacy.get('itemNum'), cand.get('code')))
     if cand['nameMatch'] == 'contained':
         bits.append('品名が含まれます' + _pair(legacy.get('itemName'), cand.get('productName')))
+    elif cand['nameMatch'] == 'supplier_color':
+        bits.append(
+            '仕入先と色が一致します（仕入先：'
+            + _shown(cand.get('supplierName'))
+            + ' / 色：'
+            + _shown(cand.get('color'))
+            + '）'
+        )
     elif cand['nameMatch'] == 'diff':
         bits.append('品名が違います' + _pair(legacy.get('itemName'), cand.get('productName')))
     old_proc = stock.text(legacy.get('processing') or '')
@@ -914,7 +965,7 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
         reasons.append('品番が空です。商品は推測しません。')
         return [], reasons
     if not exact_products and not norm_products:
-        partial_products = _partial_product_hits(catalog, item_num, item_name)
+        partial_products = _partial_product_hits(catalog, item_num, item_name, maker_name)
     if not exact_products and not norm_products and not partial_products:
         reasons.append(f'品番「{stock.text(item_num)}」の商品がありません。新しくは作りません。')
         return [], reasons
@@ -945,7 +996,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
         size_kind, size_labels = _size_hits(item_size, product['sizes'])
         if size_kind == 'missing':
             continue
-        if code_match == 'partial':
+        if code_match == 'partial' and product.get('_namePick') == 'supplier_color':
+            name_match = 'supplier_color'
+        elif code_match == 'partial':
             name_match = _partial_name_relation(item_name, product['name'])
         else:
             name_match = _name_match(item_name, product['name'])
@@ -995,6 +1048,7 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                             'handleActive': handle['active'],
                             'locationActive': True if place is None else place['active'],
                             'supplierName': product.get('supplierName') or '',
+                            'color': product.get('color') or '',
                         }
                         cand['auto'] = _auto_ok(cand)
                         cand['matchNote'] = _match_note(cand, {

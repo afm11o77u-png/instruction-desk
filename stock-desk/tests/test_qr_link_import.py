@@ -1035,6 +1035,127 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def _seed_color_siblings(self, c, *, customer, code, rows):
+        cu = stock.save_customer(c, {'name': customer, 'active': True})
+        suppliers = {}
+        for _name, supplier_name, _color in rows:
+            if supplier_name not in suppliers:
+                suppliers[supplier_name] = stock.save_supplier(
+                    c, {'name': supplier_name, 'active': True},
+                )
+        stock.save_location(c, {'siteName': '本社', 'shelfName': 'A-1', 'active': True})
+        products = []
+        for name, supplier_name, color in rows:
+            products.append(stock.save_product(c, {
+                'code': code, 'name': name, 'color': color, 'supplierId': suppliers[supplier_name]['id'],
+                'active': True, 'sizes': ['S', 'M', 'L', 'LL', '3L'],
+                '_allowHistoricalDuplicateCode': True,
+                'links': [{
+                    'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True,
+                }],
+            }))
+        c.commit()
+        return products
+
+    def test_supplier_and_color_select_chest_apron(self):
+        """ユニスタイルと色ブルー・サックスで、エプロン（胸当）だけを完全一致にする。"""
+        folder, path, c = newdb()
+        try:
+            customer = '顧客L'
+            code = '別注(顧客L)'
+            self._seed_color_siblings(c, customer=customer, code=code, rows=[
+                ('ブルーエプロン', '熊谷縫製', 'ブルー'),
+                ('エプロン（胸当）', '(有)ユニスタイル', 'ブルー・サックス'),
+                ('ピンクエプロン (胸当・ﾌﾞﾓｸ)', '(有)ユニスタイル', 'ピンク'),
+            ])
+            before = snap(c)
+            blob = xlsx([filled(
+                legacyStockId=OLD + 'SC',
+                customerName=customer, makerName='(有)ユニスタイル',
+                itemNum='別注', itemName='ブルーエプロン (胸当・ｻｯｸｽ)',
+                itemSize='L',
+            )])
+            row = ql.build_preview(c, body_of(blob))['rows'][0]
+            self.assertEqual(len(row['candidates']), 1)
+            cand = row['candidates'][0]
+            self.assertEqual(cand['productName'], 'エプロン（胸当）')
+            self.assertEqual(cand['color'], 'ブルー・サックス')
+            self.assertEqual(cand['supplierName'], '(有)ユニスタイル')
+            self.assertEqual(cand['nameMatch'], 'supplier_color')
+            self.assertEqual(cand['codeMatch'], 'partial')
+            self.assertEqual(cand['supplierMatch'], 'exact')
+            self.assertEqual(row['status'], 'exact')
+            self.assertTrue(row['includeDefault'])
+            self.assertNotIn('ピンク', cand['productName'])
+            self.assertIn('仕入先と色が一致します', cand['matchNote'])
+            preview = ql.build_preview(c, body_of(blob))
+            result = ql.commit_preview(c, body_of(
+                blob, previewFingerprint=preview['previewFingerprint'],
+                token='qr-supplier-color-1',
+            ), db_path=str(path))
+            c.commit()
+            self.assertEqual(result['created'], 1)
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(snap(c), before)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_supplier_color_does_not_match_without_color_or_supplier(self):
+        folder, path, c = newdb()
+        try:
+            customer = '顧客L'
+            code = '別注(顧客L)'
+            self._seed_color_siblings(c, customer=customer, code=code, rows=[
+                ('ブルーエプロン', '熊谷縫製', 'ブルー'),
+                ('エプロン（胸当）', '(有)ユニスタイル', ''),
+                ('ピンクエプロン (胸当・ﾌﾞﾓｸ)', '(有)ユニスタイル', 'ピンク'),
+            ])
+            blank_color = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='(有)ユニスタイル',
+                itemNum='別注', itemName='ブルーエプロン (胸当・サックス)',
+                itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(blank_color['status'], 'review')
+            self.assertFalse(blank_color['includeDefault'])
+            self.assertEqual(blank_color['candidates'][0]['productName'], 'ブルーエプロン')
+            self.assertEqual(blank_color['candidates'][0]['supplierMatch'], 'diff')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '顧客L'
+            code = '別注(顧客L)'
+            self._seed_color_siblings(c, customer=customer, code=code, rows=[
+                ('ブルーエプロン', '熊谷縫製', 'ブルー'),
+                ('エプロン（胸当）', '(有)ユニスタイル', 'ブルー・サックス'),
+                ('ピンクエプロン (胸当・ﾌﾞﾓｸ)', '(有)ユニスタイル', 'ピンク'),
+            ])
+            missed = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='別の縫製',
+                itemNum='別注', itemName='ブルーエプロン (胸当・サックス)',
+                itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(missed['status'], 'review')
+            self.assertFalse(missed['includeDefault'])
+            self.assertEqual(missed['candidates'][0]['productName'], 'ブルーエプロン')
+            both = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='(有)ユニスタイル',
+                itemNum='別注', itemName='ブルーエプロン (胸当・サックス・ピンク)',
+                itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(both['status'], 'ambiguous')
+            self.assertFalse(both['includeDefault'])
+            self.assertEqual(
+                {item['productName'] for item in both['candidates']},
+                {'エプロン（胸当）', 'ピンクエプロン (胸当・ﾌﾞﾓｸ)'},
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:
