@@ -6,6 +6,7 @@
 顧客・品番・サイズが一致して候補が1件なら、品名が違っても完全一致にする。
 完全一致でも正規化一致でも無い品番は、一方が他方に含まれるときだけ部分一致にする。
 そのときは商品名も一致し、候補が1件の場合だけ完全一致にする。
+旧品名の末尾の（加工名）で取扱の加工仕様を選ぶ。無ければ加工なし。候補が1件なら完全一致。
 """
 from __future__ import annotations
 
@@ -104,6 +105,7 @@ NOTES = (
     '品番の完全一致と、ハイフン・空白・全角半角を畳んだ一致は別です。畳んだだけの候補は選ぶまで登録しません。',
     '顧客・品番・サイズが一致し、候補が1件のときは、品名が違っても完全一致にします。候補が複数のときは選ぶまで登録しません。',
     '品番が完全一致でも正規化一致でも無いときは、一方が他方に含まれる部分一致も見ます（例: NPC75082 と NPC75082下、別注 と 別注(顧客名)）。顧客・サイズ・商品名も一致して候補が1件のときだけ完全一致にします。先頭の＊や空白だけの品名の差は同じ名前です。品名が違う部分一致は自動では確定しません。枝番の数字だけ長い品番（AZ-8618 と AZ-8618-003）は部分一致にしません。',
+    '旧品名の末尾の（加工名）で取扱を選びます。例: ＊白衣(スナッパー加工) は「スナッパー加工」の取扱です。その取扱が無いとき、または括弧が無いときは「加工なし」です。先頭の＊や空白の差は同じ名前です。このあと候補が1件なら完全一致にします。候補が複数のときは選ぶまで登録しません。',
     '顧客名の㈱と株式会社、空白だけの違いで複数になるときは、選ぶまで登録しません。',
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
@@ -584,6 +586,41 @@ def _partial_name_match(left, right):
     return 'diff'
 
 
+def _legacy_processing_raw(item_name):
+    """旧品名の末尾側の括弧を加工名として読む。無ければ空（加工なし）。"""
+    text = unicodedata.normalize('NFKC', stock.text(item_name))
+    if not text:
+        return ''
+    found = re.findall(r'\(([^()]*)\)', text)
+    if not found:
+        return ''
+    return stock.text(found[-1])
+
+
+def _proc_key(value):
+    """取扱の加工仕様の照合キー。加工なし・空・加工未整理は空。"""
+    return stock.spec_key(stock.handling_processing(value))
+
+
+def _select_handles(handle_rows, item_name):
+    """加工名が一致する取扱へ絞る。無ければ加工なし。どちらも無ければ候補は残し、自動確定しない。"""
+    if not handle_rows:
+        return [], 'leftover'
+    wanted = _proc_key(_legacy_processing_raw(item_name))
+
+    def key_of(row):
+        return _proc_key(row.get('embroidery'))
+
+    if wanted:
+        hits = [row for row in handle_rows if key_of(row) == wanted]
+        if hits:
+            return hits, 'matched'
+    plain = [row for row in handle_rows if key_of(row) == '']
+    if plain:
+        return plain, 'matched'
+    return list(handle_rows), 'leftover'
+
+
 def _supplier_match(product, maker_name):
     if not stock.text(maker_name):
         return 'blank'
@@ -723,6 +760,9 @@ def _auto_ok(cand):
     # 品番の完全一致は品名を見ない。顧客・サイズが揃い候補が1件なら完全一致（品名違いを含む）。
     # 部分一致は別商品へ付けないよう、品名の一致も必須。正規化一致は自動確定しない。
     # 顧客の法人表記、サイズ空欄・不一致、メーカー名の違いは通さない。複数候補は呼び出し側で確定しない。
+    # 加工の取扱が決まらなかった候補は自動確定しない。
+    if cand.get('_processingPick') == 'leftover':
+        return False
     if cand['codeMatch'] == 'partial':
         if cand['nameMatch'] != 'exact':
             return False
@@ -825,7 +865,8 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
             ]
             if not handle_rows:
                 continue
-            for handle in handle_rows:
+            chosen_handles, processing_pick = _select_handles(handle_rows, item_name)
+            for handle in chosen_handles:
                 for size in size_labels:
                     places = loc_rows if loc_kind != 'blank' else [None]
                     for place in places:
@@ -845,6 +886,7 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                             'customerMatch': customer_match,
                             'handleId': handle['id'],
                             'embroidery': stock.embroidery_label(handle['embroidery']),
+                            '_processingPick': processing_pick,
                             'size': size,
                             'sizeMatch': 'blank' if size_kind == 'blank' else size_kind,
                             'locationId': location_id,
@@ -869,7 +911,7 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                         cand['lotCount'] = lot_n
                         cand['label'] = (
                             f"{product['code']} {product['name']} / {customer['name']} / "
-                            f"{size or 'サイズ未指定'} / {cand['conditionLabel']} / {cand['locationLabel']}"
+                            f"{size or 'サイズ未指定'} / {cand['embroidery']} / {cand['conditionLabel']} / {cand['locationLabel']}"
                             f"（{cand['matchNote']}、在庫ロット {lot_n}件）"
                         )
                         candidates.append(cand)
