@@ -66,6 +66,13 @@
     return `<option value="${p.id}">${esc(p.displayName)}（${esc(p.employeeCode)}・${esc(tag)}）</option>`;
   }
 
+  function applyPersonCode(personId, employeeCode) {
+    if (!pack || personId == null || employeeCode == null || employeeCode === '') return;
+    const id = String(personId);
+    (pack.people || []).forEach(p => { if (String(p.id) === id) p.employeeCode = employeeCode; });
+    (pack.rows || []).forEach(r => { if (String(r.personId) === id) r.employeeCode = employeeCode; });
+  }
+
   function peopleSelectHtml(people, emptyLabel) {
     const list = people || [];
     const active = list.filter(p => !p.retired);
@@ -370,12 +377,14 @@
     if (!confirm('出勤簿から集計を更新します。元ファイルは変更しません。よろしいですか？')) return;
     const summary = await api('/api/kintai/import', { year: fiscalStartYear() });
     lastImportSummary = summary;
+    (summary.people || []).forEach(p => applyPersonCode(p.personId, p.employeeCode));
     const counts = summary.counts || {};
     const ok = counts.ok != null ? counts.ok : (summary.people || []).filter(p => p.status === '成功').length;
     const err = counts.error != null ? counts.error : (summary.people || []).filter(p => p.status === 'エラー').length;
     const miss = counts.missing != null ? counts.missing : (summary.people || []).filter(p => p.status === '未取得').length;
     toast(`取込完了: 成功${ok}／エラー${err}／未取得${miss}（詳細は画面の「取込結果の詳細」）`);
     paintImportResult(summary);
+    paintKintai();
     await loadKintai();
   }
 
@@ -388,9 +397,18 @@
     if (!personId) throw Error('対象者を選んでください。');
     // レイアウトは雇用区分で自動選択（layoutId は送らない＝既存の個別指定は保持）
     const body = { personId, sourceFile };
-    await api('/api/kintai/person-file', body);
+    const saved = await api('/api/kintai/person-file', body);
     if (fileEl) delete fileEl.dataset.touched;
-    toast('読取元を保存しました。');
+    const person = pack && (pack.people || []).find(x => String(x.id) === String(personId));
+    const previousCode = person && person.employeeCode;
+    if (person) person.sourceFile = sourceFile;
+    if (saved && saved.employeeCode) applyPersonCode(personId, saved.employeeCode);
+    paintKintai();
+    if (saved && saved.employeeCode && previousCode && previousCode !== saved.employeeCode) {
+      toast(`読取元を保存しました。社員番号を ${saved.employeeCode} に更新しました。`);
+    } else {
+      toast('読取元を保存しました。');
+    }
     await loadKintai();
   }
 

@@ -1491,6 +1491,41 @@ def infer_code_from_path(path: str) -> str:
     return m.group(1) if m else ''
 
 
+def is_provisional_employee_code(code: str) -> bool:
+    """番号未確認の仮コード。pending と、衝突退避の pending- 始まり。"""
+    s = str(code or '').strip()
+    return s == 'pending' or s.startswith('pending-')
+
+
+def promote_provisional_employee_code(c, person: dict, path: str) -> str:
+    """仮番号ならパスのファイル名先頭の実番号へ更新する。更新後の番号を返す。
+
+    本番号（pending 以外）は上書きしない。同じ雇用区分にその番号が既にあれば触らない。
+    別雇用区分の同番号（例: 018パートがいても 018正社員へ更新）は衝突にしない。
+    """
+    current = str(person.get('employee_code') or '').strip()
+    if not is_provisional_employee_code(current):
+        return current
+    new_code = infer_code_from_path(path or '')
+    if not new_code or new_code == current or is_provisional_employee_code(new_code):
+        return current
+    clash = c.execute(
+        'SELECT id FROM kintai_people WHERE employee_code=? AND employment=? AND id!=?',
+        (new_code, person.get('employment'), person.get('id')),
+    ).fetchone()
+    if clash:
+        return current
+    try:
+        c.execute(
+            'UPDATE kintai_people SET employee_code=? WHERE id=?',
+            (new_code, person.get('id')),
+        )
+    except sqlite3.IntegrityError:
+        return current
+    person['employee_code'] = new_code
+    return new_code
+
+
 def paths_list_path() -> Path:
     return Path(DATA_DIR) / PATHS_LIST_NAME
 
@@ -2092,6 +2127,14 @@ def import_all(c, user, fiscal_start_year: int, as_of: date | None = None) -> di
             item['sourceMtime'] = mtime
             item['sourcePath'] = str(path)
             _set_person_status(c, person['id'], '成功', '', str(path), mtime)
+            # パスだけ先に保存され仮番号のままの人を、成功した読取元から本番号へ。
+            # 失敗時はここでは通らないので番号は変えない。
+            for code_path in (str(path), item.get('configuredPath') or ''):
+                if not code_path:
+                    continue
+                item['employeeCode'] = promote_provisional_employee_code(c, person, code_path)
+                if not is_provisional_employee_code(item['employeeCode']):
+                    break
         except PermissionError as e:
             item['status'] = 'エラー'
             item['errorKind'] = 'permission'
@@ -2327,17 +2370,18 @@ def list_overview(
     }
 
 
-def update_person_file(c, person_id: int, source_file: str, layout_id: str | None = None):
+def update_person_file(c, person_id: int, source_file: str, layout_id: str | None = None) -> dict:
     if type(person_id) is not int:
         raise ValueError('対象者を選択してください。')
     if not isinstance(source_file, str) or len(source_file) > PATH_MAX:
         raise ValueError(f'ファイルパスは{PATH_MAX}文字以内です。')
     if '..' in source_file.replace('\\', '/'):
         raise ValueError('相対パスに .. は使えません。')
-    row = c.execute('SELECT id FROM kintai_people WHERE id=?', (person_id,)).fetchone()
+    row = c.execute('SELECT * FROM kintai_people WHERE id=?', (person_id,)).fetchone()
     if not row:
         raise ValueError('対象者が見つかりません。')
-    c.execute('UPDATE kintai_people SET source_file=? WHERE id=?', (source_file.strip(), person_id))
+    source = source_file.strip()
+    c.execute('UPDATE kintai_people SET source_file=? WHERE id=?', (source, person_id))
     if layout_id is not None:
         if layout_id == '':
             # 個別指定を外して既定レイアウトへ
@@ -2352,6 +2396,14 @@ def update_person_file(c, person_id: int, source_file: str, layout_id: str | Non
                 {'peopleLayouts': {**(load_local_settings().get('peopleLayouts') or {}), str(person_id): layout_id}},
                 True,
             )
+    person = dict(row)
+    code = promote_provisional_employee_code(c, person, source)
+    return {
+        'ok': True,
+        'personId': person_id,
+        'employeeCode': code,
+        'sourceFile': source,
+    }
 
 
 def probe_person(c, person_id: int) -> dict:
@@ -2591,14 +2643,14 @@ def handle_post(h, c, path: str, d: dict):
             return 403, {'error': '対象者の読取元設定は利用者管理の権限が必要です。'}
         pid = d.get('personId')
         layout_id = d.get('layoutId') if 'layoutId' in d else None
-        update_person_file(c, pid, d.get('sourceFile', ''), layout_id=layout_id)
+        saved = update_person_file(c, pid, d.get('sourceFile', ''), layout_id=layout_id)
         # あわせて local peopleFiles も更新（相対／フルUNC）
         if type(pid) is int:
             save_local_settings(
-                {'peopleFiles': {**(load_local_settings().get('peopleFiles') or {}), str(pid): str(d.get('sourceFile') or '').strip()}},
+                {'peopleFiles': {**(load_local_settings().get('peopleFiles') or {}), str(pid): saved['sourceFile']}},
                 True,
             )
-        return 200, {'ok': True}
+        return 200, saved
     if path == '/api/kintai/probe':
         try:
             return 200, probe_person(c, d.get('personId'))
