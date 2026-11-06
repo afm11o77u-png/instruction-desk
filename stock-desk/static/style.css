@@ -985,6 +985,33 @@ button.linkish{
 dialog.qr-link-dialog{width:min(1100px,96vw);max-height:min(92vh,900px)}
 dialog.qr-link-dialog .dialogbody{overflow:auto}
 dialog.qr-link-dialog .qr-link-error{margin:0 0 8px;padding:8px 10px}
+dialog.qr-link-dialog .qr-link-progress{
+  position:sticky;top:0;z-index:3;font-weight:700;margin:0 0 10px;
+}
+dialog.qr-link-dialog .qr-link-section{margin:0 0 16px}
+dialog.qr-link-dialog .qr-link-section>h3{margin:0 0 4px;font-size:1.02rem}
+dialog.qr-link-dialog .qr-link-section>summary{
+  cursor:pointer;font-weight:700;font-size:1.02rem;margin:0 0 6px;
+}
+dialog.qr-link-dialog .qr-link-section-alert{
+  background:#fff;border:1px solid #e2c7a2;border-left:4px solid #9a3412;
+  border-radius:8px;padding:10px 12px;
+}
+dialog.qr-link-dialog .qr-link-section-action{
+  background:#fff;border:1px solid #e2c7a2;border-left:4px solid #8a5a12;
+  border-radius:8px;padding:10px 12px;
+}
+dialog.qr-link-dialog .qr-link-section-main{
+  border-left:4px solid var(--green);padding-left:10px;
+}
+dialog.qr-link-dialog .qr-link-section-separate,
+dialog.qr-link-dialog .qr-link-section-aside{
+  background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+}
+dialog.qr-link-dialog .qr-link-section-aside{background:#f7faf7}
+dialog.qr-link-dialog .qr-link-preview .dialogactions{
+  position:sticky;bottom:0;z-index:2;background:#fff;
+}
 /* 商品台帳モーダル: 画面幅いっぱいに近づけ、legacy-csv-detail の短い max-height / pre-wrap を打ち消す。
    縦スクロールは .legacy-csv-detail-body。比較表は親幅拘束＋操作列 sticky。 */
 dialog.product-ledger-dialog,
