@@ -27,6 +27,19 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn('data-kintai-section="attendance"', nav)
         self.assertIn('data-kintai-section="register"', nav)
         self.assertIn('data-kintai-section="summary"', nav)
+        row = _slice(nav, 'class="kintai-entryrow"', '</div>')
+        self.assertIn('>出勤簿<', row)
+        self.assertIn('>日別<', row)
+        self.assertIn('>登録<', row)
+        self.assertNotIn('>月別集計<', row)
+        self.assertNotIn('>シフト表<', row)
+        self.assertLess(nav.index('</div>'), nav.index('data-kintai-section="summary"'))
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        rule = css[css.index('#kintainav .kintai-entryrow{'):css.index('}', css.index('#kintainav .kintai-entryrow{'))]
+        self.assertIn('flex-flow:row nowrap', rule)
+        child_at = css.index('#kintainav .kintai-entryrow .nav{')
+        child = css[child_at:css.index('}', child_at)]
+        self.assertIn('white-space:nowrap', child)
 
     def test_panels_keep_attendance_and_split_import(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
