@@ -261,6 +261,10 @@ MONTHDOT_2026_PART_LAYOUT = {
     'date_col': 1,   # A
     'leave_col': 4,  # D 休み
     'start_col': 8,  # H 始業時間（パート。Eは有休時間のため使わない）
+    # 日別表示だけ。集計には使わない（Eは有休時間としてサンプル確認済み）。
+    'extra_day_cols': (
+        {'key': 'paidTime', 'label': '有休時間', 'col': 5},
+    ),
 }
 
 # 旧 pending ID（設定に残っていても契約レイアウトとして読める）
@@ -2468,6 +2472,226 @@ def month_hour_summary(c, fiscal_start_year: int) -> dict:
     }
 
 
+def _display_raw(value) -> str:
+    """セルのキャッシュを文字にする。集計も単位の換算もしない。"""
+    if value is None or value == '':
+        return ''
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        return '（計算結果なし）'
+    if isinstance(value, bool):
+        return 'TRUE' if value else 'FALSE'
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return format(value, 'g')
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=' ')
+    if isinstance(value, date):
+        return f'{value.year}/{value.month:02d}/{value.day:02d}'
+    return str(value).strip()
+
+
+def _display_clock(value) -> str:
+    """始業の数値だけ、0より大きく1未満なら Excel の時刻シリアルとして時:分にする。
+
+    1以上はそのまま（時間数か日付かはファイルの書式を足さない）。文字列もそのまま。
+    """
+    if isinstance(value, datetime):
+        return f'{value.hour}:{value.minute:02d}'
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        number = float(value)
+        if 0 < number < 1:
+            minutes = int(round(number * 24 * 60))
+            hour, minute = divmod(minutes, 60)
+            return f'{hour}:{minute:02d}'
+    return _display_raw(value)
+
+
+def _display_date(value) -> str:
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        return '（計算結果なし）'
+    found = _excel_serial_to_date(value)
+    if found is not None:
+        return f'{found.year}/{found.month:02d}/{found.day:02d}'
+    return _display_raw(value)
+
+
+def _column_heading(grid, col: int, before_row: int, fallback: str) -> str:
+    found = ''
+    for row in range(1, max(1, before_row)):
+        value = _cell(grid, row, col)
+        if isinstance(value, str) and value.strip():
+            found = ' '.join(value.split())
+    if not found:
+        return fallback
+    return found[:40]
+
+
+def _daily_base_columns(layout: dict) -> list[dict]:
+    if layout.get('kind') == 'fixture-days':
+        return [
+            {'key': 'date', 'label': '日'},
+            {'key': 'start', 'label': '始業'},
+            {'key': 'leave', 'label': '休み'},
+            {'key': 'ordinary', 'label': '普通分'},
+            {'key': 'overtime', 'label': '残業分'},
+        ]
+    columns = [
+        {'key': 'date', 'label': '日付'},
+        {'key': 'leave', 'label': '休み', 'col': layout.get('leave_col')},
+        {'key': 'start', 'label': '始業', 'col': layout.get('start_col'), 'clock': True},
+    ]
+    for extra in layout.get('extra_day_cols') or ():
+        columns.append({
+            'key': extra['key'],
+            'label': extra['label'],
+            'col': extra['col'],
+        })
+    return columns
+
+
+def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -> dict:
+    """月シートの日別行を、保存してある列のキャッシュのまま返す。月次集計はしない。"""
+    if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
+        raise ValueError('対象月を確認してください。')
+    sheets = read_xlsx_grid(blob)
+    kind = layout.get('kind') or 'fixture-days'
+    if kind == 'fixture-days':
+        name = layout['sheet_name_format'].format(yyyy=year, mm=month, month=month)
+        grid = sheets.get(name)
+        if grid is None:
+            found = '、'.join(list(sheets.keys())[:8]) or '（なし）'
+            raise ValueError(f'月シート「{name}」がありません。ファイル内: {found}')
+        columns = _daily_base_columns(layout)
+        header_row = layout.get('header_row') or 1
+        labels = {
+            'date': _column_heading(grid, layout['day_col'], header_row + 1, '日'),
+            'start': _column_heading(grid, layout['start_col'], header_row + 1, '始業'),
+            'leave': _column_heading(grid, layout['leave_col'], header_row + 1, '休み'),
+            'ordinary': _column_heading(grid, layout['ordinary_col'], header_row + 1, '普通分'),
+            'overtime': _column_heading(grid, layout['overtime_col'], header_row + 1, '残業分'),
+        }
+        for column in columns:
+            column['label'] = labels.get(column['key'], column['label'])
+        rows = []
+        first = layout['first_data_row']
+        for row in range(first, first + 40):
+            day_val = _cell(grid, row, layout['day_col'])
+            if day_val is None or day_val == '':
+                continue
+            if isinstance(day_val, dict) and day_val.get('__missing_cache__'):
+                day_text = '（計算結果なし）'
+            else:
+                try:
+                    day = int(float(day_val))
+                except (TypeError, ValueError):
+                    continue
+                day_text = f'{year}/{month:02d}/{day:02d}'
+            item = {
+                'date': day_text,
+                'start': _display_clock(_cell(grid, row, layout['start_col'])),
+                'leave': _display_raw(_cell(grid, row, layout['leave_col'])),
+                'ordinary': _display_raw(_cell(grid, row, layout['ordinary_col'])),
+                'overtime': _display_raw(_cell(grid, row, layout['overtime_col'])),
+            }
+            rows.append(item)
+        return {'sheetName': name, 'columns': columns, 'rows': rows}
+
+    month_sheets = layout.get('month_sheets') or {}
+    if (year, month) not in month_sheets:
+        raise ValueError(f'{year}-{month:02d} はこのレイアウトの対象外です。')
+    sheet_name = month_sheets[(year, month)]
+    grid = sheets.get(sheet_name)
+    if grid is None:
+        found = '、'.join(list(sheets.keys())[:8]) or '（なし）'
+        raise ValueError(f'月シート「{sheet_name}」がありません。ファイル内: {found}')
+    columns = _daily_base_columns(layout)
+    before = layout.get('day_first_row') or 5
+    for column in columns:
+        if column.get('col'):
+            column['label'] = _column_heading(grid, column['col'], before, column['label'])
+    rows = []
+    if layout.get('calendar_sheet'):
+        cal_name = layout['calendar_sheet']
+        cal = sheets.get(cal_name)
+        if cal is None:
+            raise ValueError(f'「{cal_name}」シートがありません。')
+        cal_col = (layout.get('calendar_cols') or {}).get((year, month))
+        if cal_col is None:
+            raise ValueError(f'{year}-{month:02d} のカレンダー列がレイアウトにありません。')
+        cal_first = layout['calendar_first_row']
+        cal_last = layout.get('calendar_last_row', cal_first + 50)
+        offset = layout['day_first_row'] - cal_first
+        for cal_row in range(cal_first, cal_last + 1):
+            raw = _cell(cal, cal_row, cal_col)
+            if raw is None or raw == '':
+                continue
+            month_row = cal_row + offset
+            if month_row < layout['day_first_row'] or month_row > layout['day_last_row']:
+                continue
+            item = {'date': _display_date(raw)}
+            for column in columns:
+                if column['key'] == 'date' or not column.get('col'):
+                    continue
+                cell = _cell(grid, month_row, column['col'])
+                item[column['key']] = _display_clock(cell) if column.get('clock') else _display_raw(cell)
+            rows.append(item)
+    else:
+        day_first = layout['day_first_row']
+        day_last = layout['day_last_row']
+        date_col = layout.get('date_col', 1)
+        for row in range(day_first, day_last + 1):
+            raw = _cell(grid, row, date_col)
+            if raw is None or raw == '':
+                continue
+            item = {'date': _display_date(raw)}
+            for column in columns:
+                if column['key'] == 'date' or not column.get('col'):
+                    continue
+                cell = _cell(grid, row, column['col'])
+                item[column['key']] = _display_clock(cell) if column.get('clock') else _display_raw(cell)
+            rows.append(item)
+    return {'sheetName': sheet_name, 'columns': columns, 'rows': rows}
+
+
+def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
+    """保存パスの出勤簿を読取専用で開き、指定月の日別行を返す。ファイルは書き換えない。"""
+    if type(person_id) is not int or person_id <= 0:
+        raise ValueError('対象者を選択してください。')
+    if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
+        raise ValueError('対象月を確認してください。')
+    row = c.execute('SELECT * FROM kintai_people WHERE id=? AND active=1', (person_id,)).fetchone()
+    if not row:
+        raise ValueError('対象者が見つかりません。')
+    person = dict(row)
+    settings = load_local_settings()
+    layout = get_layout(layout_id_for_person(person, settings))
+    resolved = resolve_person_file_existing(person, settings)
+    if not resolved['ok']:
+        raise ValueError(resolved['message'] or '読取元ファイルを開けません。')
+    path = resolved['path']
+    try:
+        blob = path.read_bytes()
+    except OSError as e:
+        raise ValueError(f'ファイルを読めません（{type(e).__name__}: {e}）。') from e
+    body = daily_rows_from_workbook(blob, year, month, layout)
+    body.update({
+        'personId': person['id'],
+        'displayName': person['display_name'],
+        'employeeCode': person['employee_code'],
+        'employment': person['employment'],
+        'retired': bool(person.get('retired') or 0),
+        'year': year,
+        'month': month,
+        'layoutId': layout.get('id') or '',
+        'fileName': path.name,
+        'readOnly': True,
+    })
+    return body
+
+
 def update_person_file(c, person_id: int, source_file: str, layout_id: str | None = None) -> dict:
     if type(person_id) is not int:
         raise ValueError('対象者を選択してください。')
@@ -2655,6 +2879,16 @@ def handle_get(h, c, path: str):
         q = _query_map(h)
         year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
         return 200, month_hour_summary(c, year)
+    if path == '/api/kintai/daily':
+        q = _query_map(h)
+        ym = _parse_ym(q.get('ym'))
+        if ym:
+            year, month = ym
+        else:
+            year = int(q.get('year') or 0)
+            month = int(q.get('month') or 0)
+        person_id = int(q.get('personId') or 0)
+        return 200, person_daily_sheet(c, person_id, year, month)
     if path == '/api/kintai/settings':
         # マーク権限者のみ。資格情報は含めない
         s = load_local_settings()
