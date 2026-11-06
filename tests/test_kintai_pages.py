@@ -20,7 +20,7 @@ class KintaiPageSplitTest(unittest.TestCase):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         nav = _slice(html, 'id="kintainav"', 'id="sidebarfooter"')
         pos = 0
-        for label in ('>出勤簿<', '>登録<', '>月別集計<', '>シフト表<', '>備品棚卸<', '>圧着カウンター<'):
+        for label in ('>出勤簿<', '>日別<', '>登録<', '>月別集計<', '>シフト表<', '>備品棚卸<', '>圧着カウンター<'):
             i = nav.index(label, pos)
             self.assertGreater(i, pos)
             pos = i
@@ -30,7 +30,8 @@ class KintaiPageSplitTest(unittest.TestCase):
 
     def test_panels_keep_attendance_and_split_import(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
-        att = _slice(html, 'id="kintaiattendance"', 'id="kintairegister"')
+        att = _slice(html, 'id="kintaiattendance"', 'id="kintaidaily"')
+        daily = _slice(html, 'id="kintaidaily"', 'id="kintairegister"')
         reg = _slice(html, 'id="kintairegister"', 'id="kintaisummary"')
         summary = _slice(html, 'id="kintaisummary"', 'id="kintaishift"')
         self.assertIn('id="kintaitable" class="kintai-tablewrap"', att)
@@ -40,6 +41,10 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertNotIn('出勤簿から更新', att)
         self.assertNotIn('読取元設定', att)
         self.assertNotIn('kintaiimportresult', att)
+        self.assertIn('id="kintaidaily" hidden', daily[:40])
+        self.assertIn('id="kintaidailymonth"', daily)
+        self.assertIn('id="kintaidailyperson"', daily)
+        self.assertNotIn('出勤簿から更新', daily)
         self.assertTrue(reg.startswith('id="kintairegister" hidden') or 'id="kintairegister" hidden' in reg[:40])
         self.assertIn('出勤簿から更新', reg)
         self.assertIn('id="kintaiimport"', reg)
@@ -57,10 +62,12 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn("if(section==='crimp')return 'crimp';", place)
         self.assertIn("if(section==='register')return 'register';", place)
         self.assertIn("if(section==='summary')return 'summary';", place)
+        self.assertIn("if(section==='daily')return 'daily';", place)
         self.assertIn("['shift','crimp'].includes(b.dataset.kintaiSection)", place)
-        self.assertIn("else if(cur==='/kintai/register'||cur==='/kintai/summary')path='/';", place)
+        self.assertIn("else if(cur==='/kintai/register'||cur==='/kintai/summary'||cur==='/kintai/daily')path='/';", place)
         self.assertIn("path==='/kintai/register'", place)
         self.assertIn("path==='/kintai/summary'", place)
+        self.assertIn("path==='/kintai/daily'", place)
         # 出勤簿は新しいパスへ移さない。登録・月別集計だけ新しいパス。
         self.assertNotIn("section==='attendance')path=", place)
         account = (ROOT / 'account.js').read_text(encoding='utf-8')
@@ -73,11 +80,13 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn("'/kintai/register'", server)
         self.assertIn("'/kintai/summary'", server)
         self.assertIn("'/kintai/attendance'", server)
+        self.assertIn("'/kintai/daily'", server)
         src = (ROOT / 'kintai.py').read_text(encoding='utf-8')
         self.assertIn("path == '/api/kintai/month-summary'", src)
         doc = (ROOT / '勤怠管理マークの使い方.md').read_text(encoding='utf-8')
         self.assertIn('/kintai/register', doc)
         self.assertIn('/kintai/summary', doc)
+        self.assertIn('/kintai/daily', doc)
         self.assertIn('月別集計', doc)
 
     def test_sheet_columns_match_excel_and_skip_unfixed_rules(self):

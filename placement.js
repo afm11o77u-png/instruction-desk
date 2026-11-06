@@ -185,16 +185,18 @@ function normalizeKintaiSection(section){
   if(section==='bihin')return 'bihin';
   if(section==='register')return 'register';
   if(section==='summary')return 'summary';
+  if(section==='daily')return 'daily';
   return 'attendance';
 }
 function kintaiSectionFromLocation(){
   const path=(location.pathname.replace(/\/$/,'')||'/');
   if(path==='/kintai/register')return 'register';
   if(path==='/kintai/summary')return 'summary';
+  if(path==='/kintai/daily')return 'daily';
   if(path==='/kintai'||path==='/kintai/attendance')return 'attendance';
   try{
     const q=new URLSearchParams(location.search).get('kintai');
-    if(q==='register'||q==='summary'||q==='attendance')return q;
+    if(q==='register'||q==='summary'||q==='daily'||q==='attendance')return q;
   }catch(_){}
   return '';
 }
@@ -206,7 +208,8 @@ function writeKintaiLocation(section){
     let path=cur;
     if(section==='register')path='/kintai/register';
     else if(section==='summary')path='/kintai/summary';
-    else if(cur==='/kintai/register'||cur==='/kintai/summary')path='/';
+    else if(section==='daily')path='/kintai/daily';
+    else if(cur==='/kintai/register'||cur==='/kintai/summary'||cur==='/kintai/daily')path='/';
     url.pathname=path;
     url.searchParams.delete('kintai');
     const next=url.pathname+url.search+url.hash;
@@ -217,7 +220,7 @@ function clearKintaiLocation(){
   try{
     const url=new URL(location.href);
     const cur=url.pathname.replace(/\/$/,'')||'/';
-    const tracked=cur==='/kintai'||cur==='/kintai/attendance'||cur==='/kintai/register'||cur==='/kintai/summary'||url.searchParams.has('kintai');
+    const tracked=cur==='/kintai'||cur==='/kintai/attendance'||cur==='/kintai/register'||cur==='/kintai/summary'||cur==='/kintai/daily'||url.searchParams.has('kintai');
     if(!tracked)return;
     url.pathname='/';
     url.searchParams.delete('kintai');
@@ -236,11 +239,13 @@ function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
   document.querySelectorAll('#kintainav .nav').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
   const att=$('#kintaiattendance');
+  const daily=$('#kintaidaily');
   const reg=$('#kintairegister');
   const summary=$('#kintaisummary');
   const shift=$('#kintaishift');
   const bihin=$('#kintaibihin');
   if(att)att.hidden=kintaiSection!=='attendance';
+  if(daily)daily.hidden=kintaiSection!=='daily';
   if(reg)reg.hidden=kintaiSection!=='register';
   if(summary)summary.hidden=kintaiSection!=='summary';
   if(shift)shift.hidden=kintaiSection!=='shift';
@@ -261,7 +266,7 @@ async function showKintaiSection(section){
   if(typeof listChrome==='function')listChrome();
   const heading=$('#title');
   if(heading&&document.body.classList.contains('catalog-kintai')){
-    const labels={attendance:'出勤簿',register:'登録',summary:'月別集計'};
+    const labels={attendance:'出勤簿',register:'登録',summary:'月別集計',daily:'日別'};
     if(labels[kintaiSection])heading.textContent=labels[kintaiSection];
   }
   writeKintaiLocation(kintaiSection);
@@ -273,6 +278,8 @@ async function showKintaiSection(section){
     if(typeof loadKintaiBihin==='function')loadKintaiBihin().catch(e=>toast(e.message));
   }else if(kintaiSection==='summary'){
     if(typeof loadKintaiSummary==='function')loadKintaiSummary().catch(e=>toast(e.message));
+  }else if(kintaiSection==='daily'){
+    if(typeof loadKintaiDaily==='function')loadKintaiDaily().catch(e=>toast(e.message));
   }else if(typeof loadKintai==='function'){
     loadKintai().catch(e=>toast(e.message));
   }

@@ -4,6 +4,7 @@
   let pack = null;
   let chosenYear = 0;
   let pinnedPersonId = null;
+  let dailyYm = '';
   let lastImportSummary = null;
   let peopleFilter = 'all'; // all | active | retired
   // 出勤簿（個人）の列。累計・残数・起算日・給与などは集計ルール未定のため空欄。
@@ -55,11 +56,11 @@
   }
 
   function fillAllYearSelects(source) {
-    ['kintaiyear', 'kintaiimportyear', 'kintaisummaryyear'].forEach(id => fillYearSelect(document.getElementById(id), source));
+    ['kintaiyear', 'kintaiimportyear', 'kintaisummaryyear', 'kintaidailyyear'].forEach(id => fillYearSelect(document.getElementById(id), source));
   }
 
   function syncYearValue(year) {
-    ['kintaiyear', 'kintaiimportyear', 'kintaisummaryyear'].forEach(id => {
+    ['kintaiyear', 'kintaiimportyear', 'kintaisummaryyear', 'kintaidailyyear'].forEach(id => {
       const el = document.getElementById(id);
       if (el && [...el.options].some(o => Number(o.value) === Number(year))) el.value = String(year);
     });
@@ -203,6 +204,23 @@
       else if (personSel.options[0]) personSel.value = personSel.options[0].value;
       if (personSel.value) pinnedPersonId = Number(personSel.value);
     }
+    const dailyPerson = $('#kintaidailyperson');
+    if (dailyPerson) {
+      const keep = pinnedPersonId || dailyPerson.value;
+      const people = visiblePeople();
+      dailyPerson.innerHTML = peopleSelectHtml(people, null);
+      if (keep && [...dailyPerson.options].some(o => o.value === String(keep))) dailyPerson.value = String(keep);
+    }
+    const monthSel = $('#kintaidailymonth');
+    if (monthSel) {
+      const keep = dailyYm || monthSel.value;
+      monthSel.innerHTML = (pack.months || []).map(m =>
+        `<option value="${esc(m.key)}">${m.year}年${m.month}月</option>`
+      ).join('');
+      if (keep && [...monthSel.options].some(o => o.value === keep)) monthSel.value = keep;
+      else if (monthSel.options[0]) monthSel.value = monthSel.options[0].value;
+      dailyYm = monthSel.value || dailyYm;
+    }
     const filePerson = $('#kintaifileperson');
     if (filePerson) {
       const keep = filePerson.value;
@@ -287,7 +305,7 @@
     const rows = ((p && p.months) || []).map(m => {
       const label = `${m.year}/${String(m.month).padStart(2, '0')}`;
       return `<tr>
-        <td class="kintai-month">${esc(label)}</td>
+        <td class="kintai-month"><button type="button" class="kintai-daylink" data-year="${m.year}" data-month="${m.month}">${esc(label)}</button></td>
         ${sheetCell(dayText(m.workDays))}
         ${sheetCell(dayText(m.holidayDays))}
         ${blankCells(2)}
@@ -452,18 +470,87 @@
     await loadKintai();
   }
 
+  function paintDaily(data) {
+    const status = $('#kintaidailystatus');
+    const body = $('#kintaidailytable');
+    const cols = (data && data.columns) || [];
+    if (status) {
+      const who = data && data.displayName ? `${data.displayName}（${data.employeeCode || ''}）` : '';
+      const sheet = data && data.sheetName ? `／シート ${data.sheetName}` : '';
+      const file = data && data.fileName ? `／${data.fileName}` : '';
+      const n = data && data.rows ? data.rows.length : 0;
+      status.textContent = `${who}${sheet}${file}／${n}日`;
+    }
+    if (!body) return;
+    if (!cols.length) {
+      body.innerHTML = '';
+      return;
+    }
+    const head = cols.map(c => `<th>${esc(c.label)}</th>`).join('');
+    const rows = ((data && data.rows) || []).map(r => `<tr>${cols.map(c => {
+      const text = r[c.key] == null ? '' : String(r[c.key]);
+      return `<td class="${c.key === 'date' ? 'kintai-month' : ''}">${esc(text)}</td>`;
+    }).join('')}</tr>`).join('');
+    body.innerHTML = rows
+      ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
+      : '<p class="kintaimeta">この月シートに日付の行がありません。</p>';
+  }
+
+  async function ensurePeoplePack() {
+    const year = rememberYear(fiscalStartYear());
+    if (pack && Number(pack.fiscalStartYear) === Number(year) && pack.people && pack.months) return;
+    const pid = pinnedPersonId || selectedPersonId();
+    const qs = new URLSearchParams({ year: String(year) });
+    if (pid) qs.set('personId', String(pid));
+    pack = await api('/api/kintai?' + qs.toString());
+  }
+
+  async function loadKintaiDaily() {
+    if (!canKintai()) return;
+    await ensurePeoplePack();
+    paintFilters();
+    const monthSel = $('#kintaidailymonth');
+    const personSel = $('#kintaidailyperson');
+    const ym = (monthSel && monthSel.value) || dailyYm;
+    dailyYm = ym || '';
+    const pid = (personSel && personSel.value) ? Number(personSel.value) : (pinnedPersonId || selectedPersonId());
+    const status = $('#kintaidailystatus');
+    const body = $('#kintaidailytable');
+    if (!pid || !ym) {
+      if (status) status.textContent = '人と月を選んでください。';
+      if (body) body.innerHTML = '';
+      return;
+    }
+    const parts = ym.split('-');
+    const data = await api('/api/kintai/daily?personId=' + encodeURIComponent(pid) + '&year=' + encodeURIComponent(parts[0]) + '&month=' + encodeURIComponent(parts[1]));
+    paintDaily(data);
+  }
+
+  function openDailyMonth(year, month) {
+    if (!year || !month) return;
+    dailyYm = year + '-' + String(month).padStart(2, '0');
+    const pid = selectedPersonId();
+    if (pid) pinnedPersonId = pid;
+    if (typeof showKintaiSection === 'function') showKintaiSection('daily');
+  }
+
   window.loadKintai = loadKintai;
   window.paintKintai = paintKintai;
   window.importKintai = importKintai;
   window.loadKintaiSummary = loadKintaiSummary;
+  window.loadKintaiDaily = loadKintaiDaily;
 
   function bindKintaiControls() {
     const year = $('#kintaiyear');
     const importYear = $('#kintaiimportyear');
     const summaryYear = $('#kintaisummaryyear');
+    const dailyYear = $('#kintaidailyyear');
     const person = $('#kintaiperson');
+    const dailyPerson = $('#kintaidailyperson');
+    const dailyMonth = $('#kintaidailymonth');
     const refresh = $('#kintairefresh');
     const summaryRefresh = $('#kintaisummaryrefresh');
+    const dailyRefresh = $('#kintaidailyrefresh');
     const imp = $('#kintaiimport');
     const saveFile = $('#kintaifilesave');
     const fileInput = $('#kintaifileinput');
@@ -479,6 +566,7 @@
     onYear(year, loadKintai);
     onYear(importYear, loadKintai);
     onYear(summaryYear, loadKintaiSummary);
+    onYear(dailyYear, loadKintaiDaily);
     if (person) person.onchange = () => {
       pinnedPersonId = person.value ? Number(person.value) : null;
       loadKintai().catch(e => toast(e.message));
@@ -495,6 +583,24 @@
     };
     if (refresh) refresh.onclick = () => loadKintai().catch(e => toast(e.message));
     if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
+    if (dailyPerson) dailyPerson.onchange = () => {
+      pinnedPersonId = dailyPerson.value ? Number(dailyPerson.value) : null;
+      loadKintaiDaily().catch(e => toast(e.message));
+    };
+    if (dailyMonth) dailyMonth.onchange = () => {
+      dailyYm = dailyMonth.value || '';
+      loadKintaiDaily().catch(e => toast(e.message));
+    };
+    if (dailyRefresh) dailyRefresh.onclick = () => loadKintaiDaily().catch(e => toast(e.message));
+    const dayTable = $('#kintaitable');
+    if (dayTable && !dayTable.dataset.daybound) {
+      dayTable.dataset.daybound = '1';
+      dayTable.addEventListener('click', (e) => {
+        const button = e.target.closest('.kintai-daylink');
+        if (!button) return;
+        openDailyMonth(Number(button.dataset.year), Number(button.dataset.month));
+      });
+    }
     if (imp) imp.onclick = () => {
       if (importYear && importYear.value) rememberYear(importYear.value);
       importKintai().catch(e => toast(e.message));
