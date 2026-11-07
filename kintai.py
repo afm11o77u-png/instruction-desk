@@ -2425,6 +2425,7 @@ def _person_fiscal_months(c, person: dict, fiscal_start_year: int) -> list[dict]
         ).fetchone()
         rows.append(_month_public(rec) if rec else _blank_month(year, month))
     _fill_displayed_work_days(c, person, rows)
+    apply_displayed_holidays(rows)
     annotate_running_totals(rows)
     return rows
 
@@ -3170,10 +3171,15 @@ def _load_saved_work_days(c, person_id: int) -> dict[str, float]:
     return {str(row['day']): float(row['days']) for row in rows}
 
 
-def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | None:
-    """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
+def _overlay_work_days(rows: list[dict], saved: dict[str, float]) -> tuple[float | None, bool]:
+    """保存値を日付に重ねる。戻り値は（確定している日の合計, 表示中の日が全部確定か）。
+
+    未確定の日は合計に足さない。合計そのものは従来どおり出すが、全日が確定していない月は
+    休日数の計算には使わない。
+    """
     total = Decimal('0')
     any_value = False
+    unset = False
     for row in rows:
         try:
             iso = _iso_day(row.get('date'))
@@ -3188,12 +3194,19 @@ def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | 
             row['workDays'] = value
             row['workDaysSaved'] = False
         if value is None:
+            unset = True
             continue
         total += Decimal(str(value))
         any_value = True
     if not any_value:
-        return None
-    return float(total.quantize(Decimal('0.01')))
+        return None, False
+    return float(total.quantize(Decimal('0.01'))), not unset
+
+
+def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | None:
+    """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
+    total, _complete = _overlay_work_days(rows, saved)
+    return total
 
 
 def _person_workbook_bytes(person: dict, settings: dict | None = None) -> bytes | None:
@@ -3207,21 +3220,58 @@ def _person_workbook_bytes(person: dict, settings: dict | None = None) -> bytes 
         return None
 
 
-def month_attendance_total(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None) -> float | None:
-    """前月16日〜当月15日の日別出勤日数の合計。Excelの月計は使わない。"""
+def month_attendance_detail(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None) -> tuple[float | None, bool]:
+    """日別出勤の合計と、表示中の日が全部確定しているか。"""
     settings = load_local_settings()
     layout = get_layout(layout_id_for_person(person, settings))
     if blob is None:
         blob = _person_workbook_bytes(person, settings)
     if blob is None:
-        return None
+        return None, False
     if saved is None:
         saved = _load_saved_work_days(c, int(person['id']))
     try:
         view = daily_rows_from_workbook(blob, year, month, layout)
     except ValueError:
+        return None, False
+    return _overlay_work_days(view['rows'], saved)
+
+
+def month_attendance_total(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None) -> float | None:
+    """前月16日〜当月15日の日別出勤日数の合計。Excelの月計は使わない。"""
+    total, _complete = month_attendance_detail(c, person, year, month, blob=blob, saved=saved)
+    return total
+
+
+def closing_period_days(year: int, month: int) -> int:
+    """締め期間の暦日数。前月16日と当月15日を両方数える。"""
+    start, end = closing_period(year, month)
+    return (end - start).days + 1
+
+
+def displayed_holiday_days(year: int, month: int, work_days, paid_leave_days, complete: bool = True):
+    """休日数 = 締め期間の暦日数 − 出勤日数 − 有給取得日数。
+
+    出勤が全日確定でない、または有給取得が未取得なら空欄。0 は確定の 0 として引く。
+    結果が負でも 0 にはしない。特有休は足さない。
+    """
+    if not complete or work_days is None or paid_leave_days is None:
         return None
-    return _with_saved_work_days(view['rows'], saved)
+    span = Decimal(closing_period_days(year, month))
+    value = span - Decimal(str(work_days)) - Decimal(str(paid_leave_days))
+    return float(value.quantize(Decimal('0.01')))
+
+
+def apply_displayed_holidays(month_rows: list[dict]) -> None:
+    """表示用の休日数を、同じ出勤日数と有給取得日数から置く。保存済みの取込値は書き換えない。"""
+    for item in month_rows:
+        item['holidayDays'] = displayed_holiday_days(
+            int(item['year']),
+            int(item['month']),
+            item.get('workDays'),
+            item.get('paidLeaveDays'),
+            complete=bool(item.get('workDaysComplete')),
+        )
 
 
 def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
@@ -3231,9 +3281,11 @@ def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
     blob = _person_workbook_bytes(person, settings)
     saved = _load_saved_work_days(c, int(person['id']))
     for item in months:
-        item['workDays'] = month_attendance_total(
+        total, complete = month_attendance_detail(
             c, person, int(item['year']), int(item['month']), blob=blob, saved=saved,
         )
+        item['workDays'] = total
+        item['workDaysComplete'] = complete
         item['workDaysFrom'] = 'daily'
 
 

@@ -47,8 +47,8 @@ class CumulativeColumnTest(unittest.TestCase):
         view = kintai.list_overview(self.c, 2026, person_id=self.person['id'])
         months = { (m['year'], m['month']): m for m in view['rows'][0]['months'] }
         feb, mar, apr = months[(2026, 2)], months[(2026, 3)], months[(2026, 4)]
-        self.assertEqual(feb['holidayDays'], 2)
-        self.assertEqual(feb['holidayCumulative'], 2)
+        self.assertIsNone(feb['holidayDays'])
+        self.assertIsNone(feb['holidayCumulative'])
         self.assertEqual(feb['paidLeaveDays'], 1)
         self.assertEqual(feb['paidLeaveCumulative'], 1)
         self.assertIsNone(mar['holidayCumulative'])
@@ -68,7 +68,7 @@ class CumulativeColumnTest(unittest.TestCase):
         self.c.commit()
         roster = kintai.list_roster(self.c, 2026)
         row = next(r for r in roster['rows'] if r['personId'] == self.person['id'])
-        self.assertEqual(row['holidayCumulative'], 12)
+        self.assertIsNone(row['holidayCumulative'])
         self.assertEqual(row['paidLeaveCumulative'], 6)
         self.assertIsNone(row['workCumulative'])
         self.assertIsNone(row['holidayAllowance'])

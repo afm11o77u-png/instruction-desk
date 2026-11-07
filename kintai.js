@@ -367,7 +367,7 @@
       ${rosterCell(r.paidLeaveCumulative)}
       ${blankCells(7)}
     </tr>`).join('');
-    body.innerHTML = `<p class="kintaimeta">出勤・休日・有給の累計は、取込済みの月を年度の初めから足した数です。未取得の月があると、そこから先は空欄です。年間休日枠・残数・有給の開始残と残数・入社日・退職日・起算日は、元の値と算定ルールが無いので空欄です。</p>
+    body.innerHTML = `<p class="kintaimeta">休日数は、前月16日〜当月15日の日数から出勤日数と有給取得日数を引いた数です。累計は、その月の値を年度の初めから足しています。未確定の月があると、そこから先は空欄です。年間休日枠・残数・有給の開始残と残数・入社日・退職日・起算日は空欄です。</p>
       <table class="kintai-sheet kintai-person-sheet"><thead><tr>${head.map(name => `<th>${esc(name)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`;
   }
 
