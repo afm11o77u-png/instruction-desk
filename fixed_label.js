@@ -75,7 +75,11 @@
     '.checkrow.cols2{grid-template-columns:repeat(2,minmax(0,1fr))}' +
     '.checkrow.cols3{grid-template-columns:repeat(3,minmax(0,1fr))}' +
     '.cell.depts .check{white-space:normal;overflow-wrap:anywhere}' +
-    '.cell.depts .checks.tight{gap:1.6mm;margin-bottom:2mm}';
+    '.cell.depts .checks.tight{gap:1.6mm;margin-bottom:2mm}' +
+    /* 店舗名は顧客名の直下。店舗名を使わない書式は従来の1行タイトルのまま */
+    '.cell.depts .title-stack{display:flex;flex-direction:column;align-items:center;gap:.8mm}' +
+    '.cell.depts .title-customer,.cell.depts .title-store{font-weight:700;line-height:1.2;' +
+    'letter-spacing:.04em;overflow-wrap:anywhere;white-space:pre-wrap}';
 
   function escText(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -259,6 +263,7 @@
   const FIXED_LABEL_CUSTOMER_LIMIT = 40;
   const FIXED_LABEL_DEPT_LIMIT = 16;
   const FIXED_LABEL_DEPT_MAX = 24;
+  const FIXED_LABEL_STORE_LIMIT = 40;
 
   function fixedLabelBuiltinNames() {
     return FIXED_LABEL_FORMATS.map((f) => f.name);
@@ -330,7 +335,13 @@
         }
         departments.push(text);
       }
-      return { ok: true, kind, payload: { customer, departments } };
+      const storeSlot = body.storeSlot === undefined ? false : body.storeSlot;
+      if (storeSlot !== true && storeSlot !== false) {
+        return { ok: false, error: '店舗名の設定を確認してください。' };
+      }
+      const payloadOut = { customer, departments };
+      if (storeSlot) payloadOut.storeSlot = true;
+      return { ok: true, kind, payload: payloadOut };
     }
     return { ok: false, error: '書式の種類を選んでください。' };
   }
@@ -346,6 +357,40 @@
     const body = normalizeFixedLabelPayload(input && input.kind, input && input.payload);
     if (!body.ok) return body;
     return { ok: true, name, kind: body.kind, payload: body.payload };
+  }
+
+  /* 登録前の確認。保存名は不要。店舗名は「印刷時に入れる」書式のときだけ必須で、書式には含めない。 */
+  function validateFixedLabelPreviewInput(input) {
+    const body = normalizeFixedLabelPayload(input && input.kind, input && input.payload);
+    if (!body.ok) return body;
+    const sheets = normalizeFixedLabelSheetCount(input && input.sheetCount);
+    if (sheets == null) return { ok: false, error: '印刷する用紙枚数は1以上の整数で入力してください。' };
+    let storeName = '';
+    if (body.kind === 'departments' && body.payload.storeSlot) {
+      const store = cleanStoreName(input && input.storeName);
+      if (!store.ok) return store;
+      storeName = store.storeName;
+    }
+    const name = cleanFixedLabelText(input && typeof input.name === 'string' ? input.name : '');
+    const displayName = name && !isBlankFixedLabelText(name) ? name : '入力中の書式';
+    return {
+      ok: true,
+      name: displayName,
+      kind: body.kind,
+      payload: body.payload,
+      storeName,
+      sheetCount: sheets,
+    };
+  }
+
+  function cleanStoreName(value) {
+    const store = cleanFixedLabelText(value == null ? '' : value);
+    if (store == null) return { ok: false, error: '店舗名を文字で入力してください。' };
+    if (isBlankFixedLabelText(store)) return { ok: false, error: '店舗名を入力してください。' };
+    if (Array.from(store).length > FIXED_LABEL_STORE_LIMIT) {
+      return { ok: false, error: `店舗名は${FIXED_LABEL_STORE_LIMIT}文字以内で入力してください。` };
+    }
+    return { ok: true, storeName: store };
   }
 
   function tierFontSize(lines) {
@@ -413,32 +458,53 @@
     return `<div class="checkrow ${cls}">${cells}</div>`;
   }
 
-  function departmentCellHtml(customer, departments) {
+  function departmentTitleHtml(customer, storeName) {
+    const customerSize = customerTitleSize(customer);
+    const store = cleanFixedLabelText(storeName == null ? '' : storeName);
+    if (!store || isBlankFixedLabelText(store)) {
+      return `<div class="title" style="font-size:${customerSize}pt">${escText(customer)}</div>`;
+    }
+    const storeSize = Math.min(customerSize, customerTitleSize(store));
+    return (
+      '<div class="title title-stack">' +
+      `<div class="title-customer" style="font-size:${customerSize}pt">${escText(customer)}</div>` +
+      `<div class="title-store" style="font-size:${storeSize}pt">${escText(store)}</div>` +
+      '</div>'
+    );
+  }
+
+  function departmentCellHtml(customer, departments, storeName) {
     const body = normalizeFixedLabelPayload('departments', { customer, departments });
     if (!body.ok) throw new Error(body.error);
     const layout = departmentLayout(body.payload.departments);
-    const titleSize = customerTitleSize(body.payload.customer);
     const rows = layout.rows.map((row) => departmentCheckRowHtml(row, layout.cols, layout.font)).join('');
     const tight = layout.rows.length >= 5 ? ' tight' : '';
     return (
       '<section class="cell depts">' +
-      `<div class="title" style="font-size:${titleSize}pt">${escText(body.payload.customer)}</div>` +
+      departmentTitleHtml(body.payload.customer, storeName) +
       `<div class="checks${tight}">${rows}</div>` +
       fixedLabelNameBlockHtml() +
       '</section>'
     );
   }
 
-  function validateSavedFixedLabelPrintInput(record, sheetCount) {
+  function validateSavedFixedLabelPrintInput(record, sheetCount, storeName) {
     const sheets = normalizeFixedLabelSheetCount(sheetCount);
     if (sheets == null) return { ok: false, error: '印刷する用紙枚数は1以上の整数で入力してください。' };
     if (!record || typeof record !== 'object') return { ok: false, error: '書式を選んでください。' };
     const body = normalizeFixedLabelPayload(record.kind, record.payload);
     if (!body.ok) return body;
+    let printedStore = '';
+    if (body.kind === 'departments' && body.payload.storeSlot) {
+      const store = cleanStoreName(storeName);
+      if (!store.ok) return store;
+      printedStore = store.storeName;
+    }
     const name = cleanFixedLabelText(record.name);
     return {
       ok: true,
       sheetCount: sheets,
+      storeName: printedStore,
       record: {
         name: name && !isBlankFixedLabelText(name) ? name : '定型書式',
         kind: body.kind,
@@ -447,23 +513,24 @@
     };
   }
 
-  function savedFixedLabelPageHtml(record) {
+  function savedFixedLabelPageHtml(record, storeName) {
+    const useStore = record.kind === 'departments' && record.payload && record.payload.storeSlot ? storeName : '';
     const cell = record.kind === 'tiers'
       ? tierCellHtml(record.payload.lines)
-      : departmentCellHtml(record.payload.customer, record.payload.departments);
+      : departmentCellHtml(record.payload.customer, record.payload.departments, useStore);
     return `<div class="page">${cell}${cell}${cell}${cell}</div>`;
   }
 
-  function savedFixedLabelPagesHtml(record, sheetCount) {
-    const checked = validateSavedFixedLabelPrintInput(record, sheetCount);
+  function savedFixedLabelPagesHtml(record, sheetCount, storeName) {
+    const checked = validateSavedFixedLabelPrintInput(record, sheetCount, storeName);
     if (!checked.ok) throw new Error(checked.error);
-    const page = savedFixedLabelPageHtml(checked.record);
+    const page = savedFixedLabelPageHtml(checked.record, checked.storeName);
     return Array.from({ length: checked.sheetCount }, () => page).join('');
   }
 
-  function savedFixedLabelPreviewHtml(record, sheetCount, css) {
+  function savedFixedLabelPreviewHtml(record, sheetCount, css, storeName) {
     const style = css || FIXED_LABEL_CSS;
-    const pages = savedFixedLabelPagesHtml(record, sheetCount);
+    const pages = savedFixedLabelPagesHtml(record, sheetCount, storeName);
     return (
       '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
       style +
@@ -506,8 +573,10 @@
     FIXED_LABEL_CUSTOMER_LIMIT,
     FIXED_LABEL_DEPT_LIMIT,
     FIXED_LABEL_DEPT_MAX,
+    FIXED_LABEL_STORE_LIMIT,
     fixedLabelBuiltinNames,
     validateFixedLabelDraft,
+    validateFixedLabelPreviewInput,
     validateSavedFixedLabelPrintInput,
     tierCellHtml,
     departmentCellHtml,
