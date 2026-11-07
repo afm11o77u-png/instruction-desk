@@ -185,7 +185,14 @@ def _payload(kind, payload):
         if _is_blank(text):
             raise ValueError('空の部署名があります。行を外すか、部署名を入力してください。')
         cleaned.append(text)
-    return {'customer': customer, 'departments': cleaned}
+    # 店舗名そのものは保存しない。印刷のときに入れる印だけを残す。
+    store_slot = payload.get('storeSlot', False)
+    if store_slot not in (True, False):
+        raise ValueError('店舗名の設定を確認してください。')
+    out = {'customer': customer, 'departments': cleaned}
+    if store_slot:
+        out['storeSlot'] = True
+    return out
 
 
 def _line(value, limit, label):

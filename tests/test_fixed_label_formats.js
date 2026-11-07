@@ -176,4 +176,85 @@ const cell = f.tierCellHtml(['石屋商事', '長尾様行', '納品日　月　
 assert.strictEqual(count(cell, /class="tierline"/g), 3)
 assert.throws(() => f.departmentCellHtml('', []), /部署名|顧客名/)
 
+const plain = {
+  name: '固定だけ',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所', '工場'] },
+}
+const plainBefore = JSON.stringify(plain)
+const plainHtml = f.savedFixedLabelPreviewHtml(plain, 1, null, '宮の沢店')
+assert.strictEqual(JSON.stringify(plain), plainBefore)
+assert.ok(plainHtml.includes('>サザエ食品</div>') || plainHtml.includes('サザエ食品'))
+assert.ok(!plainHtml.includes('宮の沢店'))
+assert.ok(!plainHtml.includes('class="title-store"'))
+assert.ok(plainHtml.includes('class="title"'))
+
+const slotted = {
+  name: '店舗ひな形',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所', '工場'], storeSlot: true },
+}
+const slottedBefore = JSON.stringify(slotted)
+assert.strictEqual(f.validateSavedFixedLabelPrintInput(slotted, 1, '').ok, false)
+assert.strictEqual(f.validateSavedFixedLabelPrintInput(slotted, 1, '   ').ok, false)
+const printed = f.savedFixedLabelPreviewHtml(slotted, 1, null, '宮の沢店')
+assert.strictEqual(JSON.stringify(slotted), slottedBefore)
+const storeCell = printed.slice(printed.indexOf('<section class="cell depts">'))
+assert.ok(storeCell.includes('class="title-customer"'))
+assert.ok(storeCell.includes('>サザエ食品</div>'))
+assert.ok(storeCell.includes('class="title-store"'))
+assert.ok(storeCell.includes('>宮の沢店</div>'))
+assert.ok(storeCell.indexOf('title-customer') < storeCell.indexOf('title-store'))
+assert.ok(storeCell.indexOf('title-store') < storeCell.indexOf('class="checks'))
+assert.ok(printed.includes('新規　交換　その他'))
+assert.ok(printed.includes('>NO.</span>'))
+assert.strictEqual(count(printed, /宮の沢店/g), 4)
+assert.ok(!printed.includes('storeSlot'))
+
+const evilStore = f.savedFixedLabelPreviewHtml(slotted, 1, null, '<script>alert(1)</script>')
+assert.ok(!evilStore.includes('<script>'))
+assert.ok(evilStore.includes('&lt;script&gt;alert(1)&lt;/script&gt;'))
+
+const preview = f.validateFixedLabelPreviewInput({
+  name: '',
+  kind: 'tiers',
+  sheetCount: 2,
+  payload: { lines: ['上', '中', '下'] },
+})
+assert.strictEqual(preview.ok, true)
+assert.strictEqual(preview.name, '入力中の書式')
+assert.strictEqual(preview.sheetCount, 2)
+assert.strictEqual(f.validateFixedLabelPreviewInput({
+  name: '',
+  kind: 'departments',
+  sheetCount: 1,
+  storeName: '銭函店',
+  payload: { customer: 'だるま食品', departments: ['製造'], storeSlot: true, storeName: '保存してはいけない' },
+}).storeName, '銭函店')
+assert.strictEqual(f.validateFixedLabelPreviewInput({
+  kind: 'departments',
+  sheetCount: 1,
+  payload: { customer: 'だるま食品', departments: ['製造'], storeSlot: true },
+}).ok, false)
+assert.strictEqual(f.validateFixedLabelPreviewInput({
+  kind: 'tiers',
+  sheetCount: 1,
+  payload: { lines: ['上', '', '下'] },
+}).ok, false)
+assert.strictEqual(f.validateFixedLabelDraft({
+  name: '店舗ひな形',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'], storeSlot: true, storeName: '宮の沢店' },
+}).payload.storeName, undefined)
+assert.strictEqual(f.validateFixedLabelDraft({
+  name: '店舗ひな形',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'], storeSlot: true },
+}).payload.storeSlot, true)
+assert.strictEqual(f.validateFixedLabelDraft({
+  name: '普通',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'] },
+}).payload.storeSlot, undefined)
+
 console.log('ok')

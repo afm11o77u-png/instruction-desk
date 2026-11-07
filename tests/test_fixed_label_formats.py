@@ -231,6 +231,50 @@ class FixedLabelFormatStoreTest(unittest.TestCase):
         self.assertEqual(self.c.execute('SELECT payload FROM orders').fetchone()['payload'], '{"customer":"残す顧客"}')
         self.assertEqual(self.c.execute('SELECT name FROM label_sets').fetchone()['name'], '既存宛名')
 
+    def test_store_name_is_not_saved_on_the_format(self):
+        status, saved = self._save({
+            'name': '店舗ひな形',
+            'kind': 'departments',
+            'payload': {
+                'customer': 'サザエ食品',
+                'departments': ['事務所', '工場'],
+                'storeSlot': True,
+                'storeName': '宮の沢店',
+            },
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(saved['payload']['customer'], 'サザエ食品')
+        self.assertEqual(saved['payload']['departments'], ['事務所', '工場'])
+        self.assertIs(saved['payload']['storeSlot'], True)
+        self.assertNotIn('storeName', saved['payload'])
+        self.assertNotIn('宮の沢店', json.dumps(saved['payload'], ensure_ascii=False))
+        raw = self.c.execute('SELECT payload,version FROM fixed_label_formats WHERE id=?', (saved['id'],)).fetchone()
+        self.assertEqual(raw['version'], 1)
+        self.assertNotIn('宮の沢店', raw['payload'])
+        status, rows = forms.handle(_handler(_user()), self.c, '/api/fixed-label-formats', None)
+        self.assertEqual(status, 200)
+        again = next(r for r in rows if r['id'] == saved['id'])
+        self.assertEqual(again['payload'], saved['payload'])
+        self.assertEqual(again['version'], 1)
+        self.assertEqual(self.c.execute('SELECT payload FROM orders').fetchone()['payload'], '{"customer":"残す顧客"}')
+
+        self.c.execute(
+            "INSERT INTO fixed_label_formats(name,kind,version,payload,updated_at,updated_by) VALUES(?,?,1,?,datetime('now','localtime'),'')",
+            ('旧書式', 'departments', json.dumps({'customer': '旧顧客', 'departments': ['課']}, ensure_ascii=False)),
+        )
+        self.c.commit()
+        _, rows = forms.handle(_handler(_user('warehouse', 4)), self.c, '/api/fixed-label-formats', None)
+        legacy = next(r for r in rows if r['name'] == '旧書式')
+        self.assertNotIn('storeSlot', legacy['payload'])
+        self.assertEqual(legacy['payload']['customer'], '旧顧客')
+
+        with self.assertRaises(ValueError):
+            self._save({
+                'name': '壊れた印',
+                'kind': 'departments',
+                'payload': {'customer': '顧客', 'departments': ['課'], 'storeSlot': 'yes'},
+            })
+
     def test_source_has_no_destructive_sql(self):
         src = (ROOT / 'fixed_label_formats.py').read_text(encoding='utf-8')
         self.assertIn('CREATE TABLE IF NOT EXISTS fixed_label_formats', src)
@@ -290,6 +334,15 @@ class FixedLabelFormatWiringTest(unittest.TestCase):
         self.assertIn('placeholder="例：交換用・9月"', index)
         self.assertIn('placeholder="例：だるま食品銭函工場"', index)
         self.assertIn('id="fixedregload"', index)
+        self.assertIn('id="fixedregpreview">プレビュー</button>', index)
+        self.assertNotIn('登録せずプレビュー', index)
+        self.assertIn('id="fixedprint">プレビューして印刷</button>', index)
+        self.assertIn('id="fixedstore"', index)
+        self.assertIn('id="fixedregstoreslot"', index)
+        self.assertIn('placeholder="例：だるま食品銭函工場"', index)
+        preview_fn = sheet[sheet.index('function previewFixedLabelDraft'):sheet.index('function previewFixedLabelDraft') + 900]
+        self.assertNotIn('api(', preview_fn)
+        self.assertNotIn('/api/fixed-label-formats/save', preview_fn)
         dept_fn = sheet[sheet.index('function addFixedDeptRow'):sheet.index('function resetFixedDeptRows')]
         self.assertIn("createTextNode('部署名(店名)')", dept_fn)
         self.assertIn("setAttribute('aria-label','部署名(店名)')", dept_fn)
