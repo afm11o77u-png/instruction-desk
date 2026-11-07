@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  let csvData = '', workbookData = '', result = null, revision = 0;
+  let csvData = '', result = null, revision = 0;
 
   function status(message) { $('totattstatus').textContent = message; }
   function clearResult() {
@@ -68,9 +68,7 @@
     result = data;
     const body = $('totattrows');
     body.replaceChildren();
-    $('totattdestination').textContent = data.name + 'さん／' + data.start + '～' + data.end +
-      ' → Excel「' + data.layout.sheet + '」の ' + data.layout.range + '（開始セル ' + data.layout.cell + '）';
-    if (data.layout.dateYearMismatch) $('totattdestination').textContent += ' ※出勤簿の日付セルに年のずれがあるため、対象シートと月日で照合しています。';
+    $('totattdestination').textContent = data.name + 'さん／' + data.start + '～' + data.end + '／' + data.rows.length + '日分。Excelで ' + data.start + ' の行の「始業時間」セルを選び、値のみで貼り付けてください。';
     data.rows.forEach((row, index) => {
       const tr = document.createElement('tr');
       const day = document.createElement('td');
@@ -129,7 +127,7 @@
         if (!document.execCommand('copy')) throw Error('下の欄を選択してCtrl+Cでコピーしてください。');
         area.hidden = true;
       }
-      status('コピーしました。Excel「' + result.layout.sheet + '」の ' + result.layout.cell + ' を選び、「値のみ」で貼り付けてください。');
+      status('コピーしました。Excelで ' + result.start + ' の行の「始業時間」セルを選び、「値のみ」で貼り付けてください。');
     } catch (error) {
       const area = $('totattmanual'); area.hidden = false; area.value = data.text; area.select();
       status(error.message || '下の欄を選択してCtrl+Cでコピーしてください。');
@@ -150,30 +148,39 @@
         csvData = encoded;
         data.people.forEach(p => $('totattperson').add(new Option(p.name, p.key)));
         data.months.forEach(m => $('totattmonth').add(new Option(m + '（前月16日～15日）', m)));
-        status(data.people.length + '名分を読み込みました。従業員・締め月・本人の出勤簿Excelを選んでください。');
+        status(data.people.length + '名分を読み込みました。従業員と締め月を選んでください。');
       } catch (error) { if (ticket === revision) status(error.message); }
-    };
-    $('totattbook').onchange = async () => {
-      clearResult(); workbookData = '';
-      const ticket = revision;
-      const file = $('totattbook').files[0];
-      if (!file) return;
-      try { const data = await readFile(file, 5000000); if (ticket === revision) workbookData = data; }
-      catch (error) { status(error.message); }
     };
     ['totattperson', 'totattmonth'].forEach(id => { $(id).onchange = clearResult; });
     $('totattprepare').onclick = async () => {
       clearResult();
-      if (!csvData || !workbookData) { status('CSVと、貼り付け先の本人の出勤簿Excelを選択してください。'); return; }
+      if (!csvData) { status('Touch On Timeの日別CSVを選択してください。'); return; }
       const ticket = revision;
       $('totattprepare').disabled = true;
       try {
-        status('日付と貼り付け先を確認しています…');
-        const data = await post('prepare', { csvData, workbookData, person: $('totattperson').value, month: $('totattmonth').value });
+        status('日付と時刻を確認しています…');
+        const data = await post('prepare', { csvData, person: $('totattperson').value, month: $('totattmonth').value });
         if (ticket !== revision) return;
         render(data); status('読み込みました。休憩の空欄や打刻漏れを確認してください。');
       } catch (error) { if (ticket === revision) status(error.message); }
       finally { $('totattprepare').disabled = false; }
+    };
+    const openFolder = async event => {
+      event.preventDefault();
+      try { const data = await post('open-folder', {}); status(data.message); }
+      catch (error) { status(error.message); }
+    };
+    $('totattopenfolder').onclick = openFolder;
+    $('totattfolderpath').onclick = openFolder;
+    $('totattcopypath').onclick = async () => {
+      const path = $('totattfolderpath').textContent;
+      try {
+        await navigator.clipboard.writeText(path);
+        status('パスをコピーしました。エクスプローラーのアドレス欄へ貼り付け、Enterを押してください。');
+      } catch (_) {
+        const area = $('totattpathmanual'); area.hidden = false; area.value = path; area.select();
+        status('下のパスをCtrl+Cでコピーして、エクスプローラーのアドレス欄へ貼り付けてください。');
+      }
     };
     $('totattreview').onchange = refreshValidation;
     $('totattcopy').onclick = copy;
