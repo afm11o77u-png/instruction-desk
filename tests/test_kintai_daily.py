@@ -32,6 +32,8 @@ def _xlsx(sheets: dict[str, list[tuple[int, int, object]]]) -> bytes:
 
     def cell(col, row, value):
         ref = f'{_col_letters(col)}{row}'
+        if isinstance(value, tuple) and value and value[0] == 'formula':
+            return f'<c r="{ref}"><f>{escape(str(value[1]))}</f></c>'
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return f'<c r="{ref}"><v>{value}</v></c>'
         text = escape(str(value if value is not None else ''))
@@ -168,6 +170,115 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(row['paidTime'], '0.5')
         self.assertIn('paidTime', [c['key'] for c in part_view['columns']])
 
+    def test_headed_columns_follow_excel_order_and_keep_blanks(self):
+        """正社員サンプルで確認した見出し列。空欄は0にせず、時間数は時刻にしない。"""
+        break_serial = 70 / (24 * 60)  # 1:10
+        end_serial = 19 / 24
+        blob = _xlsx({
+            '年間ｶﾚﾝﾀﾞｰ': [
+                (3, 2, _serial(date(2026, 2, 2))),
+            ],
+            '26.2': [
+                (3, 3, '曜日'),
+                (3, 4, '休み'),
+                (3, 5, '始業時間（00：00）'),
+                (3, 6, '休憩時間（00：00）'),
+                (3, 7, '終業時間（00：00）'),
+                (3, 22, '早朝勤務'),
+                (3, 24, '実労働時間'),
+                (3, 26, '日残業\n（深残除く）'),
+                (3, 27, '深夜残業'),
+                (3, 36, '休出早朝深夜勤務'),
+                (3, 39, 'メモ'),
+                (5, 3, '月'),
+                (5, 4, ''),
+                (5, 5, 9 / 24),
+                (5, 6, break_serial),
+                (5, 7, ''),
+                (5, 22, 0),
+                (5, 24, 8.5),
+                (5, 26, ''),
+                (5, 27, 0.25),
+                (5, 30, 99),
+                (5, 36, ('formula', 'Z5+AA5')),
+                (5, 39, '遅番'),
+            ],
+            '集計': [],
+        })
+        view = kintai.daily_rows_from_workbook(blob, 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        labels = [c['label'] for c in view['columns']]
+        self.assertEqual(labels, [
+            '日付', '曜日', '休み', '始業時間（00：00）', '休憩時間（00：00）', '終業時間（00：00）',
+            '早朝勤務', '実労働時間', '日残業\n（深残除く）', '深夜残業', '休出早朝深夜勤務', 'メモ',
+        ])
+        row = view['rows'][0]
+        self.assertEqual(row['date'], '2026/02/02')
+        self.assertEqual(row['c3'], '月')
+        self.assertEqual(row['leave'], '')
+        self.assertEqual(row['start'], '9:00')
+        self.assertEqual(row['c6'], '1:10')
+        self.assertEqual(row['c7'], '')
+        self.assertNotEqual(row['c7'], '0')
+        self.assertEqual(row['c22'], '0')
+        self.assertEqual(row['c24'], '8.5')
+        self.assertEqual(row['c26'], '')
+        self.assertEqual(row['c27'], '0.25')
+        self.assertEqual(row['c36'], '（計算結果なし）')
+        self.assertEqual(row['c39'], '遅番')
+        self.assertNotIn('c30', row)
+        self.assertNotIn('c46', [c['key'] for c in view['columns']])
+        self.assertNotIn('99', row.values())
+
+    def test_part_columns_use_their_own_positions_not_seishain(self):
+        blob = _xlsx({
+            '2026.2': [
+                (3, 4, '休み'),
+                (3, 5, '有休\n時間'),
+                (3, 6, '時給'),
+                (3, 8, '始業時間（00：00）'),
+                (3, 9, '休憩時間（00：00）'),
+                (3, 10, '終業時間（00：00）'),
+                (3, 24, '実労働時間'),
+                (5, 1, _serial(date(2026, 2, 1))),
+                (5, 4, ''),
+                (5, 5, 0.5),
+                (5, 6, 1105),
+                (5, 8, 8.933333333333334 / 24),
+                (5, 9, 70 / (24 * 60)),
+                (5, 10, 16 / 24),
+                (5, 24, 6.25),
+            ],
+        })
+        view = kintai.daily_rows_from_workbook(blob, 2026, 2, kintai.MONTHDOT_2026_PART_LAYOUT)
+        self.assertEqual([c['label'] for c in view['columns']], [
+            '日付', '休み', '有休\n時間', '時給', '始業時間（00：00）',
+            '休憩時間（00：00）', '終業時間（00：00）', '実労働時間',
+        ])
+        row = view['rows'][0]
+        self.assertEqual(row['paidTime'], '0.5')
+        self.assertEqual(row['c6'], '1105')
+        self.assertEqual(row['start'], '8:56')
+        self.assertEqual(row['c9'], '1:10')
+        self.assertEqual(row['c10'], '16:00')
+        self.assertEqual(row['c24'], '6.25')
+        self.assertNotEqual(row['c9'], '1105')
+
+    def test_daily_table_scrolls_and_keeps_date_with_headers(self):
+        js = (ROOT / 'kintai.js').read_text(encoding='utf-8')
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        html = (ROOT / 'index.html').read_text(encoding='utf-8')
+        paint = js.split('function paintDaily', 1)[1].split('async function ensurePeoplePack', 1)[0]
+        self.assertIn('cols.map', paint)
+        self.assertIn('scope="col"', paint)
+        self.assertIn('scope="row"', paint)
+        self.assertIn('title=', paint)
+        self.assertNotIn("['date','leave','start']", paint)
+        self.assertIn('#kintaidaily .kintai-tablewrap{max-width:100%', css)
+        self.assertIn('overflow:auto', css[css.find('#kintaidaily'):css.find('#kintaidaily') + 400])
+        self.assertIn('.kintai-daily-sticky{position:sticky;left:0', css)
+        self.assertIn('見出しがある列', html)
+        self.assertNotIn('パートはそれに有休時間を足します', html)
+
 
 class DailySheetApiTest(unittest.TestCase):
     def setUp(self):
@@ -233,6 +344,47 @@ class DailySheetApiTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body['sheetName'], '2026-02')
         self.assertEqual(body['personId'], self.person['id'])
+
+    def test_saved_path_returns_sheet_columns_without_writing(self):
+        blob = _xlsx({
+            '年間ｶﾚﾝﾀﾞｰ': [(3, 2, _serial(date(2026, 2, 3)))],
+            '26.2': [
+                (3, 4, '休み'),
+                (3, 5, '始業時間（00：00）'),
+                (3, 6, '休憩時間（00：00）'),
+                (3, 7, '終業時間（00：00）'),
+                (3, 24, '実労働時間'),
+                (5, 5, 9 / 24),
+                (5, 6, 70 / (24 * 60)),
+                (5, 24, 8.5),
+            ],
+            '集計': [],
+        })
+        self.book.write_bytes(blob)
+        before = self.book.read_bytes()
+        mtime = self.book.stat().st_mtime
+        monthly = self.c.execute('SELECT COUNT(*) FROM kintai_monthly').fetchone()[0]
+        (self.data / 'kintai-local.json').write_text(json.dumps({
+            'shareRoot': '',
+            'layoutId': 'shukkinbo-2026-seishain-v1',
+            'peopleFiles': {},
+            'peopleLayouts': {str(self.person['id']): 'shukkinbo-2026-seishain-v1'},
+        }, ensure_ascii=False), encoding='utf-8')
+        view = kintai.person_daily_sheet(self.c, self.person['id'], 2026, 2)
+        self.assertEqual(self.book.read_bytes(), before)
+        self.assertEqual(self.book.stat().st_mtime, mtime)
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM kintai_monthly').fetchone()[0], monthly)
+        self.assertTrue(view['readOnly'])
+        labels = [c['label'] for c in view['columns']]
+        self.assertEqual(labels, [
+            '日付', '休み', '始業時間（00：00）', '休憩時間（00：00）', '終業時間（00：00）', '実労働時間',
+        ])
+        hit = view['rows'][0]
+        self.assertEqual(hit['date'], '2026/02/03')
+        self.assertEqual(hit['start'], '9:00')
+        self.assertEqual(hit['c6'], '1:10')
+        self.assertEqual(hit['c7'], '')
+        self.assertEqual(hit['c24'], '8.5')
 
 
 if __name__ == '__main__':

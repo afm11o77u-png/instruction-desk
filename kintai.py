@@ -2529,6 +2529,82 @@ def _column_heading(grid, col: int, before_row: int, fallback: str) -> str:
     return found[:40]
 
 
+def _grid_max_col(grid) -> int:
+    if not grid:
+        return 0
+    return max(col for _, col in grid)
+
+
+def _daily_header_rows(layout: dict) -> list[int]:
+    """日付行の直前2行だけを見出しにする。それより上は帳票タイトルなので列名にしない。"""
+    first = int(layout.get('day_first_row') or 5)
+    start = max(1, first - 2)
+    return list(range(start, first))
+
+
+def _band_heading(grid, col: int, rows: list[int]) -> str:
+    parts = []
+    for row in rows:
+        value = _cell(grid, row, col)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    return '\n'.join(parts)[:80]
+
+
+def _clock_header(label: str) -> bool:
+    """見出しが「00：00」の列だけ時刻シリアルを時:分にする。時間数の列は変換しない。"""
+    flat = (label or '').replace('\n', '').replace(' ', '')
+    return '00：00' in flat or '00:00' in flat
+
+
+def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
+    """月シートの見出しがある列を、列番号順のまま返す。見出しの無い列は足さない。"""
+    header_rows = _daily_header_rows(layout)
+    date_col = layout.get('date_col', 1)
+    known = {}
+    if layout.get('leave_col'):
+        known[layout['leave_col']] = {'key': 'leave', 'fallback': '休み'}
+    if layout.get('start_col'):
+        known[layout['start_col']] = {'key': 'start', 'fallback': '始業', 'clock': True}
+    for extra in layout.get('extra_day_cols') or ():
+        known[extra['col']] = {
+            'key': extra['key'],
+            'fallback': extra['label'],
+            'clock': bool(extra.get('clock')),
+        }
+    max_col = _grid_max_col(grid)
+    if known:
+        max_col = max(max_col, max(known))
+    columns = [{'key': 'date', 'label': '日付'}]
+    seen = {'date'}
+    for col in range(1, max_col + 1):
+        if col == date_col:
+            continue
+        heading = _band_heading(grid, col, header_rows)
+        spec = known.get(col)
+        if spec is None and not heading:
+            continue
+        key = spec['key'] if spec else f'c{col}'
+        if key in seen:
+            key = f'c{col}'
+        seen.add(key)
+        label = heading or spec['fallback']
+        clock = bool(spec and spec.get('clock')) or _clock_header(label)
+        columns.append({'key': key, 'label': label, 'col': col, 'clock': clock})
+    return columns
+
+
+def _daily_cell_text(cell, clock: bool) -> str:
+    return _display_clock(cell) if clock else _display_raw(cell)
+
+
+def _fill_daily_item(item: dict, grid, row: int, columns: list[dict]) -> None:
+    for column in columns:
+        if column['key'] == 'date' or not column.get('col'):
+            continue
+        item[column['key']] = _daily_cell_text(_cell(grid, row, column['col']), column.get('clock'))
+
+
 def _daily_base_columns(layout: dict) -> list[dict]:
     if layout.get('kind') == 'fixture-days':
         return [
@@ -2553,7 +2629,7 @@ def _daily_base_columns(layout: dict) -> list[dict]:
 
 
 def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -> dict:
-    """月シートの日別行を、保存してある列のキャッシュのまま返す。月次集計はしない。"""
+    """月シートの日別行を、見出しのある列のキャッシュのまま返す。月次集計はしない。"""
     if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
         raise ValueError('対象月を確認してください。')
     sheets = read_xlsx_grid(blob)
@@ -2607,11 +2683,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
     if grid is None:
         found = '、'.join(list(sheets.keys())[:8]) or '（なし）'
         raise ValueError(f'月シート「{sheet_name}」がありません。ファイル内: {found}')
-    columns = _daily_base_columns(layout)
-    before = layout.get('day_first_row') or 5
-    for column in columns:
-        if column.get('col'):
-            column['label'] = _column_heading(grid, column['col'], before, column['label'])
+    columns = _daily_sheet_columns(grid, layout)
     rows = []
     if layout.get('calendar_sheet'):
         cal_name = layout['calendar_sheet']
@@ -2632,11 +2704,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
             if month_row < layout['day_first_row'] or month_row > layout['day_last_row']:
                 continue
             item = {'date': _display_date(raw)}
-            for column in columns:
-                if column['key'] == 'date' or not column.get('col'):
-                    continue
-                cell = _cell(grid, month_row, column['col'])
-                item[column['key']] = _display_clock(cell) if column.get('clock') else _display_raw(cell)
+            _fill_daily_item(item, grid, month_row, columns)
             rows.append(item)
     else:
         day_first = layout['day_first_row']
@@ -2647,11 +2715,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
             if raw is None or raw == '':
                 continue
             item = {'date': _display_date(raw)}
-            for column in columns:
-                if column['key'] == 'date' or not column.get('col'):
-                    continue
-                cell = _cell(grid, row, column['col'])
-                item[column['key']] = _display_clock(cell) if column.get('clock') else _display_raw(cell)
+            _fill_daily_item(item, grid, row, columns)
             rows.append(item)
     return {'sheetName': sheet_name, 'columns': columns, 'rows': rows}
 

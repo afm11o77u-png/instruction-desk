@@ -186,8 +186,16 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintai-summary-sheet tfoot td,.kintai-summary-sheet tr.kintai-total td{background:#d9e2f3;font-weight:700}
 .kintai-sheet-note{margin:8px 0 0;font-size:12.5px;line-height:1.5;color:#333}
 .kintai-daylink{border:0;background:transparent;padding:0;color:#1f4e79;font-weight:700;text-decoration:underline;cursor:pointer}
+#kintaidaily{min-width:0;max-width:100%}
+#kintaidaily .kintai-tablewrap{max-width:100%;min-width:0;overflow:auto}
+.kintai-daily-sheet{border-collapse:separate;border-spacing:0}
+.kintai-daily-sheet thead th{white-space:pre-line;line-height:1.25;vertical-align:bottom}
 .kintai-daily-sheet td{background:#fff;text-align:left}
 .kintai-daily-sheet tbody tr:nth-child(even) td{background:#f7f7f7}
+.kintai-daily-sheet .kintai-daily-sticky{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 #b7c3d0}
+.kintai-daily-sheet thead .kintai-daily-sticky{top:0;z-index:4;background:#1f4e79;color:#fff}
+.kintai-daily-sheet tbody .kintai-daily-sticky{top:auto}
+.kintai-daily-sheet tbody tr:nth-child(even) .kintai-daily-sticky{background:#f7f7f7}
 #kintaifileinput{min-width:min(100%,42rem)}
 #kintainav{display:flex;flex-direction:column;gap:4px;min-width:0;flex:0 1 auto;margin:0 0 12px}
 #kintainav .nav{margin:0}
