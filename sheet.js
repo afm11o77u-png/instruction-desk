@@ -499,11 +499,11 @@ function addFixedDeptRow(value){
  const row=document.createElement('div');
  row.className='fixedregdeptrow';
  const label=document.createElement('label');
- label.append(document.createTextNode('部署名'));
+ label.append(document.createTextNode('部署名(店名)'));
  const input=document.createElement('input');
  input.maxLength=typeof FIXED_LABEL_DEPT_LIMIT==='number'?FIXED_LABEL_DEPT_LIMIT:16;
  input.autocomplete='off';
- input.setAttribute('aria-label','部署名');
+ input.setAttribute('aria-label','部署名(店名)');
  input.value=value||'';
  label.append(input);
  const remove=document.createElement('button');
