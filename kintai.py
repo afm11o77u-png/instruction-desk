@@ -15,6 +15,7 @@ import sqlite3
 import unicodedata
 import zipfile
 from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -839,16 +840,29 @@ def read_xlsx_grid(blob: bytes) -> dict[str, dict[tuple[int, int], object]]:
     return out
 
 
+def _text_without_phonetic(el) -> str:
+    """ふりがな（rPh）はセルの値に含めない。Excel 上はルビで、本文ではない。"""
+    parts = []
+
+    def walk(node):
+        for child in list(node):
+            if child.tag in (f'{NS}rPh', f'{NS}phoneticPr'):
+                continue
+            if child.tag == f'{NS}t':
+                parts.append(child.text or '')
+            else:
+                walk(child)
+
+    walk(el)
+    return ''.join(parts)
+
+
 def _shared_strings(book):
     try:
         root = ET.fromstring(book.read('xl/sharedStrings.xml'))
     except KeyError:
         return []
-    values = []
-    for si in root.findall(f'{NS}si'):
-        texts = [t.text or '' for t in si.iter(f'{NS}t')]
-        values.append(''.join(texts))
-    return values
+    return [_text_without_phonetic(si) for si in root.findall(f'{NS}si')]
 
 
 def _sheet_map(book):
@@ -882,8 +896,7 @@ def _sheet_grid(book, path, strings):
             v = c.find(f'{NS}v')
             is_el = c.find(f'{NS}is')
             if typ == 'inlineStr' and is_el is not None:
-                texts = [t.text or '' for t in is_el.iter(f'{NS}t')]
-                grid[(rn, col)] = ''.join(texts)
+                grid[(rn, col)] = _text_without_phonetic(is_el)
                 continue
             if v is None or v.text is None:
                 if f is not None:
@@ -2552,15 +2565,15 @@ def _clock_header(label: str) -> bool:
 # match は正規化後の完全一致。前の候補が1列だけならそれを使い、複数なら後の候補を見ない。
 # 合計はここには含めない。右側の行ラベルとその右の数値を、計算せずに出す。
 DAILY_VIEW_FIELDS = (
-    {'key': 'leave', 'label': '休み', 'match': ('休み',), 'fallback': 'leave_col', 'clock': False},
+    {'key': 'leave', 'label': '有休', 'match': ('休み',), 'fallback': 'leave_col', 'clock': False},
     {'key': 'start', 'label': '始業時間', 'match': ('始業時間',), 'fallback': 'start_col', 'clock': True},
     {'key': 'breakTime', 'label': '休憩時間', 'match': ('休憩時間',), 'clock': True},
     {'key': 'end', 'label': '終業時間', 'match': ('終業時間',), 'clock': True},
-    {'key': 'calendarHours', 'label': '年間', 'match': ('年間ｶﾚﾝﾀﾞｰ時間', '年間カレンダー時間'), 'clock': False},
-    {'key': 'actual', 'label': '実労働時間', 'match': ('実労働時間',), 'clock': False},
-    {'key': 'earlyNight', 'label': '早朝深夜', 'match': ('早朝深夜勤務時間',), 'clock': False},
-    {'key': 'dayOvertime', 'label': '日残業', 'match': ('日残業',), 'clock': False},
-    {'key': 'nightOvertime', 'label': '深夜残業', 'match': ('深夜残業',), 'clock': False},
+    {'key': 'calendarHours', 'label': '年間', 'match': ('年間ｶﾚﾝﾀﾞｰ時間', '年間カレンダー時間'), 'hours': True},
+    {'key': 'actual', 'label': '実労働時間', 'match': ('実労働時間',), 'hours': True},
+    {'key': 'earlyNight', 'label': '早朝深夜', 'match': ('早朝深夜勤務時間',), 'hours': True},
+    {'key': 'dayOvertime', 'label': '日残業', 'match': ('日残業',), 'hours': True},
+    {'key': 'nightOvertime', 'label': '深夜残業', 'match': ('深夜残業',), 'hours': True},
 )
 # 正社員月シートの右側（画像の AK 列）に、日付行へ縦に繰り返される文言。
 # 列を決めるためだけに使う。見つかった列は、知らない文言も含めてそのまま出す。
@@ -2576,6 +2589,7 @@ DAILY_TOTAL_LABELS = frozenset({
 DAILY_MISSING_COLUMN = '（列なし）'
 DAILY_AMBIGUOUS_COLUMN = '（列が複数）'
 _HEADING_KATAKANA_TAIL = re.compile(r'[ァ-ヶーｦ-ﾟｰ]+$')
+_KANA_ANY = re.compile(r'[ぁ-ゖァ-ヶーｦ-ﾟｰ]')
 
 
 def _heading_core(text: str) -> str:
@@ -2589,6 +2603,36 @@ def _heading_core(text: str) -> str:
             break
         s = s[:tail.start()]
     return s
+
+
+def _total_label_key(text: str) -> str:
+    """合計ラベルの照合用。末尾だけでなく漢字のあいだの読み仮名も除く。"""
+    return _KANA_ANY.sub('', _heading_core(text))
+
+
+def _display_total_label(value) -> str:
+    raw = _display_raw(value)
+    if raw in ('', '（計算結果なし）'):
+        return raw
+    key = _total_label_key(raw)
+    if key in DAILY_TOTAL_LABELS:
+        return key
+    cleaned = _heading_core(raw)
+    return cleaned or raw
+
+
+def _display_hours(value) -> str:
+    """時間数の表示だけ小数第2位へ四捨五入する。空欄は 0.00 にしない。"""
+    if value is None or value == '':
+        return ''
+    if isinstance(value, dict) and value.get('__missing_cache__'):
+        return '（計算結果なし）'
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _display_raw(value)
+    quant = Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+    if quant == 0:
+        return '0.00'
+    return f'{quant:.2f}'
 
 
 def _daily_header_index(grid, layout: dict) -> dict[int, dict]:
@@ -2631,7 +2675,7 @@ def _daily_total_block(grid, layout: dict, used_cols: set[int]) -> tuple[int, in
         count = 0
         for row in range(first, last + 1):
             value = _cell(grid, row, col)
-            if isinstance(value, str) and _heading_core(value) in DAILY_TOTAL_LABELS:
+            if isinstance(value, str) and _total_label_key(value) in DAILY_TOTAL_LABELS:
                 count += 1
         if count >= 2:
             hits.append(col)
@@ -2674,7 +2718,7 @@ def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
     for field in DAILY_VIEW_FIELDS:
         col, ambiguous = _pick_daily_column(found, field['match'])
         source = found.get(col, {}).get('raw', '') if col else ''
-        clock = bool(field.get('clock')) or _clock_header(source)
+        clock = bool(field.get('clock')) or (not field.get('hours') and _clock_header(source))
         if ambiguous:
             columns.append({
                 'key': field['key'],
@@ -2704,6 +2748,7 @@ def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
             'label': field['label'],
             'col': col,
             'clock': clock,
+            'hours': bool(field.get('hours')),
             'missing': '',
             'sourceLabel': source,
         })
@@ -2712,8 +2757,12 @@ def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
     return columns
 
 
-def _daily_cell_text(cell, clock: bool) -> str:
-    return _display_clock(cell) if clock else _display_raw(cell)
+def _daily_cell_text(cell, column: dict) -> str:
+    if column.get('clock'):
+        return _display_clock(cell)
+    if column.get('hours'):
+        return _display_hours(cell)
+    return _display_raw(cell)
 
 
 def _fill_daily_item(item: dict, grid, row: int, columns: list[dict]) -> None:
@@ -2727,14 +2776,18 @@ def _fill_daily_item(item: dict, grid, row: int, columns: list[dict]) -> None:
                 item[parts[1]['key']] = column['missing']
                 continue
             for part in parts:
-                item[part['key']] = _daily_cell_text(_cell(grid, row, part['col']), False)
+                cell = _cell(grid, row, part['col'])
+                if part['key'] == 'totalLabel':
+                    item[part['key']] = _display_total_label(cell)
+                else:
+                    item[part['key']] = _display_hours(cell)
             continue
         if column.get('missing'):
             item[column['key']] = column['missing']
             continue
         if not column.get('col'):
             continue
-        item[column['key']] = _daily_cell_text(_cell(grid, row, column['col']), column.get('clock'))
+        item[column['key']] = _daily_cell_text(_cell(grid, row, column['col']), column)
 
 
 def _daily_base_columns(layout: dict) -> list[dict]:
