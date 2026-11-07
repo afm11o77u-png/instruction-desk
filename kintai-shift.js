@@ -1194,9 +1194,9 @@
     }
   }
 
-  async function exportTouchOnTime(excelData) {
-    if ((!sheet && !excelData) || exporting) return;
-    const payload = excelData ? { excelData: excelData } : buildShiftExportPayload(currentExportState());
+  async function exportTouchOnTime() {
+    if (!sheet || exporting) return;
+    const payload = buildShiftExportPayload(currentExportState());
     exporting = true;
     paintExportButton();
     const post = async (suffix) => {
@@ -1246,26 +1246,6 @@
   function bindShiftControls() {
     const tot = $('#shifttouchontime');
     if (tot) tot.onclick = () => exportTouchOnTime();
-    const totExcel = $('#shifttotexcel');
-    const totFile = $('#shifttotfile');
-    if (totExcel && totFile) {
-      totExcel.onclick = () => { if (!exporting) totFile.click(); };
-      totFile.onchange = async () => {
-        const file = totFile.files[0];
-        totFile.value = '';
-        if (!file) return;
-        if (file.size > 3000000) { toast('Excelファイルは3MB以下にしてください。'); return; }
-        try {
-          const encoded = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(String(reader.result).split(',')[1]);
-            reader.onerror = () => reject(Error('Excelファイルを読み込めませんでした。'));
-            reader.readAsDataURL(file);
-          });
-          await exportTouchOnTime(encoded);
-        } catch (error) { toast(error.message); }
-      };
-    }
     if (!$('#kintaishift')) return;
     document.querySelectorAll('.shift-mode').forEach(b => {
       b.onclick = () => {
