@@ -1135,6 +1135,8 @@
   }
 
   function paintExportButton() {
+    const tot = $('#shifttouchontime');
+    if (tot) tot.disabled = !sheet || exporting;
     const b = $('#shiftexport');
     if (!b) return;
     const st = exportButtonState(sheet, shiftDirty, memoDirty);
@@ -1192,7 +1194,78 @@
     }
   }
 
+  async function exportTouchOnTime(excelData) {
+    if ((!sheet && !excelData) || exporting) return;
+    const payload = excelData ? { excelData: excelData } : buildShiftExportPayload(currentExportState());
+    exporting = true;
+    paintExportButton();
+    const post = async (suffix) => {
+      const response = await fetch('/api/kintai/shift/touch-on-time/' + suffix, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-Desk-Request': '1' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        let message = 'Touch On Time用CSVを作成できませんでした。';
+        try { const data = await response.json(); message = data.error || message; } catch (_) {}
+        throw Error(message);
+      }
+      return response;
+    };
+    try {
+      const data = await (await post('preview')).json();
+      const lines = data.members.map(p =>
+        p.name + ' [' + p.code + '] ' + p.start + '～' + p.end + ' 休憩' + p.breakMinutes +
+        '分：出勤' + p.work + '日／日曜休' + p.holiday + '日／未確定' + p.unknown + '日');
+      const message = data.year + '年' + data.month + '月 Touch On Time用CSV\n' +
+        data.members.length + '名・' + data.records + '件\n\n' + lines.join('\n') +
+        '\n\n対象外：' + (data.excluded.join('、') || 'なし') +
+        '\n\n「？」と日曜以外の×は出力しません。既存の予定は消えません。' +
+        '\n日曜の×は法定休日、作業記号は通常出勤、時刻指定は退勤予定になります。' +
+        (data.pending ? '\n未保存の変更を含む、現在の表示内容を出力します。' : '') +
+        '\n\nCSVをダウンロードしますか？';
+      if (!window.confirm(message)) return;
+      const response = await post('csv');
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filenameFromDisposition(response.headers.get('Content-Disposition'), 'TouchOnTime_schedule.csv');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      toast('CSVを出力しました。Touch On Timeで「サンプル」「登録されている値をそのまま残す」を選び、確認後に登録してください。');
+    } catch (error) {
+      toast(error.message || 'CSVを作成できませんでした。');
+    } finally {
+      exporting = false;
+      paintExportButton();
+    }
+  }
+
   function bindShiftControls() {
+    const tot = $('#shifttouchontime');
+    if (tot) tot.onclick = () => exportTouchOnTime();
+    const totExcel = $('#shifttotexcel');
+    const totFile = $('#shifttotfile');
+    if (totExcel && totFile) {
+      totExcel.onclick = () => { if (!exporting) totFile.click(); };
+      totFile.onchange = async () => {
+        const file = totFile.files[0];
+        totFile.value = '';
+        if (!file) return;
+        if (file.size > 3000000) { toast('Excelファイルは3MB以下にしてください。'); return; }
+        try {
+          const encoded = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(',')[1]);
+            reader.onerror = () => reject(Error('Excelファイルを読み込めませんでした。'));
+            reader.readAsDataURL(file);
+          });
+          await exportTouchOnTime(encoded);
+        } catch (error) { toast(error.message); }
+      };
+    }
     if (!$('#kintaishift')) return;
     document.querySelectorAll('.shift-mode').forEach(b => {
       b.onclick = () => {
