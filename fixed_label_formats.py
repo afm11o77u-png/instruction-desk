@@ -5,9 +5,9 @@
 
 閲覧できる人は、宛名書き・管理票印刷を開ける人と同じ
 （主管理者・現場・現場２・現場３・倉庫担当）。
-登録と修正ができる人は、宛名の記憶（label_sets）と同じ
+登録・修正・削除ができる人は、宛名の記憶（label_sets）と同じ
 （主管理者・現場・現場２・現場３）。営業には広げない。倉庫担当は印刷だけ。
-削除APIは作らない。
+削除は登録した書式の1件だけで、id と version が一致したときだけ行う。
 """
 import json
 import re
@@ -71,7 +71,9 @@ def handle(handler, c, path, data=None):
         ).fetchall()
         return 200, [_public(row) for row in rows]
     if user['role'] not in WRITE_ROLES:
-        return 403, {'error': '定型書式の登録と修正は、現場・現場２・現場３と主管理者が行えます。'}
+        return 403, {'error': '定型書式の登録・修正・削除は、現場・現場２・現場３と主管理者が行えます。'}
+    if path == '/api/fixed-label-formats/delete':
+        return _delete(c, user, data)
     if path != '/api/fixed-label-formats/save':
         return 404, {'error': '操作が見つかりません。'}
     name, kind, payload = _draft(data)
@@ -105,6 +107,24 @@ def handle(handler, c, path, data=None):
         (saved_id,),
     ).fetchone()
     return 200, _public(row)
+
+
+def _delete(c, user, data):
+    if not isinstance(data, dict):
+        raise ValueError('入力内容を確認してください。')
+    old = _existing(c, data)
+    if isinstance(old, tuple):
+        return old
+    if old is None:
+        return 404, {'error': '削除する書式を選んでください。'}
+    deleted = c.execute(
+        'DELETE FROM fixed_label_formats WHERE id=? AND version=?',
+        (old['id'], old['version']),
+    ).rowcount
+    if deleted != 1:
+        return 409, {'error': '別の画面で更新されました。読み込み直してください。'}
+    log(c, user, '定型書式を削除', old['name'])
+    return 200, {'ok': True, 'id': old['id'], 'name': old['name']}
 
 
 def _session(handler, c):
