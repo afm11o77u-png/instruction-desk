@@ -441,6 +441,40 @@
     body.innerHTML = `<table class="kintai-sheet kintai-summary-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody><tfoot>${summaryRow('期間合計', period, true)}</tfoot></table>`;
   }
 
+  function filenameFromDisposition(header, fallback) {
+    const h = String(header || '');
+    const star = h.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (star) {
+      try { return decodeURIComponent(star[1].trim()); } catch (e) { /* 読めなければ下へ */ }
+    }
+    const plain = h.match(/filename\s*=\s*"([^"]+)"/i);
+    return plain ? plain[1] : fallback;
+  }
+
+  async function exportKintaiSummary() {
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
+    const year = rememberYear(fiscalStartYear());
+    const fallback = `月別集計_${year}-02_${Number(year) + 1}-01.xlsx`;
+    const r = await fetch('/api/kintai/month-summary/xlsx?year=' + encodeURIComponent(year), {
+      headers: { 'X-Desk-Request': '1' },
+      credentials: 'same-origin',
+    });
+    if (!r.ok) {
+      let msg = 'エクセル出力できませんでした。';
+      try { const d = await r.json(); if (d && d.error) msg = d.error; } catch (e) { /* ignore */ }
+      throw Error(msg);
+    }
+    const name = filenameFromDisposition(r.headers.get('Content-Disposition'), fallback);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
   async function loadKintaiSummary() {
     if (!canKintai()) return;
     const year = rememberYear(fiscalStartYear());
@@ -732,6 +766,8 @@
       });
     }
     if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
+    const summaryExport = $('#kintaisummaryexport');
+    if (summaryExport) summaryExport.onclick = () => exportKintaiSummary().catch(e => toast(e.message));
     if (dailyPerson) dailyPerson.onchange = () => {
       pinnedPersonId = dailyPerson.value ? Number(dailyPerson.value) : null;
       loadKintaiDaily().catch(e => toast(e.message));

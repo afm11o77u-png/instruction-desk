@@ -75,6 +75,7 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn('kintaifileperson', reg)
         self.assertIn('id="kintaisummary" hidden', summary[:40])
         self.assertIn('id="kintaisummarytable"', summary)
+        self.assertIn('id="kintaisummaryexport"', summary)
         self.assertNotIn('出勤簿から更新', summary)
         self.assertNotIn('id="kintaitable"', summary)
 
