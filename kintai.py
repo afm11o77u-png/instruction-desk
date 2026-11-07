@@ -21,6 +21,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import kintai_shift
+import kintai_shift_xlsx
 import kintai_crimp
 import kintai_bihin
 import kintai_bihin_xlsx
@@ -3281,6 +3282,9 @@ def handle_post(h, c, path: str, d: dict):
         except Exception as e:
             raise ValueError('ファイルデータを読めません。') from e
         return 200, import_paths_from_upload(c, str(filename), blob)
+    if path == '/api/kintai/shift/xlsx':
+        # 表示中の表をファイルにするだけ。接続 c は使わない（月シート・メモ・出勤簿は読まない・更新しない）。
+        return kintai_shift_xlsx.export_view(d or {})
     if path == '/api/kintai/shift':
         # シフトは予定のみ。kintai_monthly（出勤簿実績）は変更しない。勤務メモも触らない。
         return kintai_shift.save_shift_sheet(c, h.user, d or {})

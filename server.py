@@ -1321,6 +1321,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     # 勤怠APIは汎用の容量案内に落とさず、入力保持を明示する（本文・氏名はログに出さない）
                     import logging
                     logging.getLogger('instruction-desk').exception('kintai api error path=%s', kintai_path)
+                    if kintai_path == '/api/kintai/shift/xlsx':
+                        return self.reply(500, {'error': 'シフト表のExcelを出力できませんでした。保存はしていません。'})
                     if kintai_path in (
                         '/api/kintai/shift',
                         '/api/kintai/shift/default-order',
