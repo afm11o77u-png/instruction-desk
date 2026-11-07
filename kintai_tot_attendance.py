@@ -120,7 +120,7 @@ def period(value):
     return start, end
 
 
-def prepare(payload):
+def prepare(payload, _unused_read_grid=None):
     people = parse_csv(payload.get('csvData'))
     person = people.get(payload.get('person'))
     if not person:
