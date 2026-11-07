@@ -2981,6 +2981,36 @@ def _daily_base_columns(layout: dict) -> list[dict]:
     return columns
 
 
+
+def _sheet_actual_rows(grid, layout: dict) -> list[dict]:
+    """日別表の下の実績8項目をキャッシュから読む。計算や書き込みはしない。"""
+    names = (
+        '普通残業時間', '深夜残業時間', '60時間超時間', '休日出勤勤務時間',
+        '休日出勤残業時間', '早朝・深夜勤務時間',
+        '休日出勤深夜残業時間', '休日出勤深夜勤務時間',
+    )
+    first = int(layout.get('day_last_row') or 46) + 1
+    cells = {(r, c): v for (r, c), v in grid.items() if first <= r < first + 12}
+    anchors = [r for (r, c), v in cells.items() if _heading_core(_display_raw(v)) == '実績']
+    if not anchors:
+        return []
+    first = min(anchors)
+    found = {}
+    for (row, col), value in sorted(cells.items()):
+        if not first <= row < first + 4 or not isinstance(value, str):
+            continue
+        label = _heading_core(value)
+        name = next((name for name in names if label.startswith(name + '(') or label.startswith(name + '（') or label == name), None)
+        if name is None or name in found:
+            continue
+        following = sorted((c, v) for (r, c), v in cells.items() if r == row and c > col)
+        # 結合セルのラベル直後にある値だけを使う。次のラベルを越えて探さない。
+        raw = following[0][1] if following else None
+        if isinstance(raw, str) and any(_heading_core(raw).startswith(n) for n in names):
+            raw = None
+        found[name] = {'label': value, 'value': _display_hours(raw)}
+    return [found[name] for name in names if name in found]
+
 def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -> dict:
     """月シートの日別行を、見出しのある列のキャッシュのまま返す。月次集計はしない。"""
     if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
@@ -3084,6 +3114,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
         'rows': rows,
         'totals': totals,
         'totalsNote': totals_note,
+        'actuals': _sheet_actual_rows(grid, layout),
         'periodStart': f'{period_start.year}/{period_start.month:02d}/{period_start.day:02d}',
         'periodEnd': f'{period_end.year}/{period_end.month:02d}/{period_end.day:02d}',
     }
