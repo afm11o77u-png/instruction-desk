@@ -21,6 +21,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import kintai_shift
+import kintai_leave_balance
 import kintai_shift_xlsx
 import kintai_touch_on_time
 import kintai_crimp
@@ -2532,6 +2533,7 @@ def list_roster(c, fiscal_start_year: int) -> dict:
     people = [dict(r) for r in c.execute(
         'SELECT * FROM kintai_people WHERE active=1 ORDER BY COALESCE(retired,0), sort_order, id'
     )]
+    balances = {r['personId']: r for r in kintai_leave_balance.bundle(c)['people']}
     rows = []
     for person in people:
         months = _person_fiscal_months(c, person, fiscal_start_year)
@@ -2553,7 +2555,8 @@ def list_roster(c, fiscal_start_year: int) -> dict:
             'hiredOn': person.get('hired_on') or None,
             'retiredOn': person.get('retired_on') or None,
             'paidLeaveOpening': None,
-            'paidLeaveRemaining': None,
+            'paidLeaveRemaining': balances.get(person['id'], {}).get('balance'),
+            'paidLeaveBalanceUpdatedAt': balances.get(person['id'], {}).get('updatedAt'),
             'paidLeaveBaseDate': person.get('paid_leave_base_on') or None,
         })
     return {
@@ -3854,6 +3857,8 @@ def handle_get(h, c, path: str):
         ym = _parse_ym(q.get('ym'))
         month = int(q['month']) if q.get('month') not in (None, '') else None
         return 200, list_overview(c, year, month=month, person_id=person_id, year_month=ym)
+    if path == '/api/kintai/leave-balance':
+        return 200, kintai_leave_balance.bundle(c)
     if path == '/api/kintai/roster':
         q = _query_map(h)
         year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
@@ -3944,6 +3949,8 @@ def handle_post(h, c, path: str, d: dict):
         denied = None
     if denied:
         return denied
+    if path == '/api/kintai/leave-balance':
+        return 200, kintai_leave_balance.handle(c, d or {}, read_xlsx_grid)
     if path == '/api/kintai/import':
         year = d.get('year', preferred_fiscal_start_year())
         if type(year) is not int or year < 2000 or year > 2100:

@@ -1130,6 +1130,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         try:
             n=int(self.headers.get('Content-Length','0'))
             limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import') else 1000000
+            if route == '/api/kintai/leave-balance': limit=15000000
             if n>limit: raise ValueError('データが大きすぎます。')
             d=json.loads(self.rfile.read(n))
             if not isinstance(d,dict): raise ValueError('入力内容を確認してください。')

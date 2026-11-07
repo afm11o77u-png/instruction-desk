@@ -377,7 +377,7 @@
       ${rosterCell(r.holidayCumulative)}
       ${r.holidayRemaining == null ? '<td class="kintai-blank"></td>' : rosterCell(r.holidayRemaining)}
       ${rosterCell(r.paidLeaveCumulative)}
-      <td class="kintai-blank"></td>
+      <td title="${esc(r.paidLeaveBalanceUpdatedAt ? '有給管理簿の最新読取値（年度末の残数ではありません）' : '')}">${r.paidLeaveRemaining == null ? '' : esc(r.paidLeaveRemaining)}</td>
       ${dateCell(r.personId, 'hired', r.hiredOn)}
       ${dateCell(r.personId, 'retired', r.retiredOn)}
       <td>${esc(EMP[r.employment] || r.employment || '')}</td>
@@ -673,6 +673,59 @@
   window.loadKintaiSummary = loadKintaiSummary;
   window.loadKintaiDaily = loadKintaiDaily;
 
+
+  let leaveLoading = false;
+  function paintLeaveBalances(data) {
+    const body = $('#kintaileaverows');
+    body.innerHTML = (data.people || []).map(p => `<tr>
+      <td>${esc(p.name)}<br><small>${esc(p.employeeCode)}${p.retired ? '／退職' : ''}</small></td>
+      <td><input class="kintai-leave-cell" data-person="${p.personId}" value="${esc(p.cell)}" placeholder="K3" maxlength="12" aria-label="${esc(p.name)}の集計セル"></td>
+      <td>${p.balance == null ? '' : esc(p.balance) + '日'}</td>
+      <td>${esc(p.note || '')}</td>
+      <td>${esc(p.updatedAt ? new Date(p.updatedAt).toLocaleString('ja-JP') : '')}<br><small>${esc(p.filename || '')}</small></td>
+    </tr>`).join('');
+  }
+  async function loadLeaveBalances() {
+    paintLeaveBalances(await api('/api/kintai/leave-balance'));
+  }
+  async function saveLeaveBalances(action) {
+    if (leaveLoading) return;
+    leaveLoading = true;
+    const status = $('#kintaileavestatus');
+    const password = $('#kintaileavepassword');
+    $('#kintaileavesave').disabled = $('#kintaileaveupdate').disabled = true;
+    try {
+      const people = Array.from(document.querySelectorAll('.kintai-leave-cell')).map(el => ({
+        personId: Number(el.dataset.person), cell: el.value.trim(),
+      }));
+      const payload = { action, people };
+      if (action === 'update') {
+        const file = $('#kintaileavefile').files[0];
+        if (!file || !file.name.toLowerCase().endsWith('.xlsx') || file.size > 10 * 1024 * 1024) throw Error('10MB以下の.xlsxを選択してください。');
+        payload.filename = file.name;
+        payload.data = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1]);
+          reader.onerror = () => reject(Error('Excelを読み込めません。'));
+          reader.readAsDataURL(file);
+        });
+        payload.password = password.value;
+      }
+      status.textContent = action === 'update' ? '集計シートを読み取っています…' : 'セル位置を保存しています…';
+      const data = await api('/api/kintai/leave-balance', payload);
+      paintLeaveBalances(data);
+      status.textContent = action === 'update' ? '現保有数を更新しました。空欄や確認事項がある行は内容を確認してください。' : 'セル位置を保存しました。変更した行の前回値は消去しました。';
+      const roster = $('#kintairoster');
+      if (roster && !roster.hidden) await loadKintaiRoster();
+    } catch (e) {
+      status.textContent = e.message || '読み取りに失敗しました。';
+    } finally {
+      password.value = '';
+      leaveLoading = false;
+      $('#kintaileavesave').disabled = $('#kintaileaveupdate').disabled = false;
+    }
+  }
+
   function bindKintaiControls() {
     const year = $('#kintaiyear');
     const importYear = $('#kintaiimportyear');
@@ -715,6 +768,21 @@
       } else paintKintai();
     };
     if (refresh) refresh.onclick = () => loadKintai().catch(e => toast(e.message));
+    const leavePanel = $('#kintaileavepanel');
+    if (leavePanel && !leavePanel.dataset.bound) {
+      leavePanel.dataset.bound = '1';
+      leavePanel.addEventListener('toggle', () => {
+        if (leavePanel.open && !leavePanel.dataset.loaded) loadLeaveBalances().then(() => { leavePanel.dataset.loaded = '1'; }).catch(e => { $('#kintaileavestatus').textContent = e.message; });
+      });
+      $('#kintaileaverows').addEventListener('input', e => {
+        if (!e.target.matches('.kintai-leave-cell')) return;
+        const cells = e.target.closest('tr').cells;
+        cells[2].textContent = '';
+        cells[3].textContent = 'セル位置が未保存です';
+      });
+      $('#kintaileavesave').onclick = () => saveLeaveBalances('save');
+      $('#kintaileaveupdate').onclick = () => saveLeaveBalances('update');
+    }
     const rosterBtn = $('#kintairosteropen');
     if (rosterBtn) rosterBtn.onclick = () => {
       const roster = $('#kintairoster');
