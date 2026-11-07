@@ -507,7 +507,11 @@
     const daysHtml = rows
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="kintaimeta">${data && data.periodStart ? `${esc(data.periodStart)}～${esc(data.periodEnd)}の` : ''}この月シートに対象の日付がありません。</p>`;
-    body.innerHTML = daysHtml + totalsHtml;
+    const actuals = (data && data.actuals) || [];
+    const actualsHtml = actuals.length
+      ? `<section><h3 class="kintai-section">実績</h3><p class="kintaimeta">元のExcelに保存されている実績値です。</p><table class="kintai-sheet kintai-daily-sheet kintai-daily-totals"><thead><tr><th scope="col">項目</th><th scope="col">時間</th></tr></thead><tbody>${actuals.map(t => `<tr><td class="kintai-daily-total-label">${esc(t.label || '')}</td><td class="kintai-daily-total-value">${esc(t.value ?? '')}</td></tr>`).join('')}</tbody></table></section>`
+      : '';
+    body.innerHTML = daysHtml + `<div class="kintai-daily-summaries"><section>${totalsHtml}</section>${actualsHtml}</div>`;
   }
 
   async function ensurePeoplePack() {
