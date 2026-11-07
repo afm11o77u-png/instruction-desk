@@ -282,6 +282,18 @@ class FixedLabelFormatWiringTest(unittest.TestCase):
             self.assertIn(token, index)
         self.assertIn('この行を外す', sheet)
         self.assertNotIn('id="fixedregdelete"', index)
+        save_at = index.index('id="fixedregname"')
+        save_name = index[index.rindex('<label>', 0, save_at):index.index('</label>', save_at)]
+        self.assertIn('id="fixedregname"', save_name)
+        self.assertNotIn('placeholder', save_name)
+        self.assertNotIn('例：', save_name)
+        self.assertIn('placeholder="例：交換用・9月"', index)
+        self.assertIn('placeholder="例：だるま食品銭函工場"', index)
+        self.assertIn('id="fixedregload"', index)
+        dept_fn = sheet[sheet.index('function addFixedDeptRow'):sheet.index('function resetFixedDeptRows')]
+        self.assertIn("createTextNode('部署名(店名)')", dept_fn)
+        self.assertIn("setAttribute('aria-label','部署名(店名)')", dept_fn)
+        self.assertNotIn("createTextNode('部署名')", dept_fn)
         self.assertNotIn('fixed-label-formats/delete', sheet)
         self.assertIn("['owner','floor','floor2','floor3']", sheet)
         self.assertIn("currentUser?.role==='warehouse'", sheet)
