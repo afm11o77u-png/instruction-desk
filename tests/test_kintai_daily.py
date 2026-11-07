@@ -782,6 +782,8 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertIn('dayCols.map', paint)
         self.assertIn('kintai-daily-totals', paint)
         self.assertIn('data.totals', paint)
+        self.assertIn('kintai-workdays', paint)
+        self.assertIn('出勤日数を保存', paint)
         self.assertIn("c.key !== 'total'", paint)
         self.assertNotIn('colspan=', paint)
         self.assertIn('scope="col"', paint)

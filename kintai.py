@@ -360,6 +360,17 @@ def schema(c):
             source_mtime TEXT NOT NULL DEFAULT ''
         )'''
     )
+    # 日別の出勤日数。人・暦日で一意。Excelの月計とは別。kintai_ でマーク管理のバックアップに入る。
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS kintai_daily_work_days (
+            person_id INTEGER NOT NULL,
+            day TEXT NOT NULL,
+            days REAL NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (person_id, day)
+        )'''
+    )
     kintai_shift.schema(c)
     kintai_crimp.schema(c)
     kintai_bihin.schema(c)
@@ -2411,6 +2422,7 @@ def list_overview(
                 'ordinaryHm': '', 'overtimeHm': '', 'totalHm': '',
                 'importedAt': None, 'sourceMtime': None,
             })
+        _fill_displayed_work_days(c, person, month_rows)
         rows.append({
             'personId': person['id'],
             'employeeCode': person['employee_code'],
@@ -2456,6 +2468,7 @@ def list_overview(
                     'importedAt': None, 'sourceMtime': None,
                 },
             })
+            _fill_displayed_work_days(c, person, [rows[-1]['month']])
     last_run = c.execute(
         'SELECT at, actor, fiscal_label, summary_json FROM kintai_import_runs ORDER BY id DESC LIMIT 1'
     ).fetchone()
@@ -2981,6 +2994,240 @@ def _daily_base_columns(layout: dict) -> list[dict]:
     return columns
 
 
+# 日別の出勤日数。Excelの月計は足さない。保存値がある日はそれを使い、無い日だけ初期値。
+# 初期値: 始業と終業が両方空欄なら 0。両方とも時刻として読めるとき、終業が14:00より前なら 0.5、14:00ちょうど以降は 1。
+# 片方だけ空欄、または時刻として読めない日は初期値を置かない（空欄のまま。月合計にも足さない）。
+WORK_DAY_CUTOFF_MINUTES = 14 * 60
+_WORK_DAY_CLOCK = re.compile(r'^(\d{1,2}):(\d{2})$')
+
+
+def _clock_state(value) -> tuple[str, int | None]:
+    """表示と同じ範囲で時刻を分にする。
+
+    戻り値は blank / clock / unreadable。
+    Excelシリアル 1.20625 は 28:57（1737分）。小数部だけを見て4:57にはしない。
+    Python の datetime は、既存の表示と同じく時・分だけ（日付を24時間には足さない）。
+    0 や 2 より大きい数、計算結果の無いセルは unreadable。空欄だけが blank。
+    """
+    if value is None or value == '':
+        return 'blank', None
+    if isinstance(value, dict):
+        return 'unreadable', None
+    if isinstance(value, datetime):
+        return 'clock', value.hour * 60 + value.minute
+    if isinstance(value, bool):
+        return 'unreadable', None
+    if isinstance(value, (int, float)):
+        number = float(value)
+        if 0 < number <= 2:
+            return 'clock', int(round(number * 24 * 60))
+        return 'unreadable', None
+    if isinstance(value, str):
+        text = value.strip().replace('：', ':')
+        found = _WORK_DAY_CLOCK.fullmatch(text)
+        if not found:
+            return 'unreadable', None
+        hour, minute = int(found.group(1)), int(found.group(2))
+        if minute >= 60 or hour > 48:
+            return 'unreadable', None
+        return 'clock', hour * 60 + minute
+    return 'unreadable', None
+
+
+def default_attendance_days(start, end) -> float | None:
+    """保存が無い日の出勤日数。未確定は None。"""
+    start_kind, _start_minutes = _clock_state(start)
+    end_kind, end_minutes = _clock_state(end)
+    if start_kind == 'blank' and end_kind == 'blank':
+        return 0.0
+    if start_kind == 'clock' and end_kind == 'clock':
+        if end_minutes < WORK_DAY_CUTOFF_MINUTES:
+            return 0.5
+        return 1.0
+    return None
+
+
+def _attach_work_day_default(item: dict, grid, row: int, columns: list[dict]) -> None:
+    start_col = next((column for column in columns if column.get('key') == 'start'), None)
+    end_col = next((column for column in columns if column.get('key') == 'end'), None)
+
+    def raw(column):
+        if not column or column.get('missing') or not column.get('col'):
+            return {'__unreadable__': True}
+        return _cell(grid, row, column['col'])
+
+    default = default_attendance_days(raw(start_col), raw(end_col))
+    item['workDaysDefault'] = default
+    item['workDays'] = default
+    item['workDaysSaved'] = False
+
+
+def _iso_day(value) -> str:
+    text = str(value or '').strip().replace('/', '-')
+    found = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', text)
+    if not found:
+        raise ValueError('日付は YYYY-MM-DD で指定してください。')
+    year, month, day = int(found.group(1)), int(found.group(2)), int(found.group(3))
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError as e:
+        raise ValueError('日付が正しくありません。') from e
+
+
+def _parse_attendance_days(value) -> float:
+    """0以上2以下、小数第2位まで。空欄の削除は呼び出し側。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError('出勤日数は0から2までの数値です。')
+    number = float(value)
+    if number != number or number in (float('inf'), float('-inf')):
+        raise ValueError('出勤日数は0から2までの数値です。')
+    dec = Decimal(str(value))
+    if dec < 0 or dec > 2:
+        raise ValueError('出勤日数は0から2までの数値です。')
+    exponent = dec.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -2:
+        raise ValueError('出勤日数は小数第2位までです。')
+    return float(dec.quantize(Decimal('0.01')))
+
+
+def _load_saved_work_days(c, person_id: int) -> dict[str, float]:
+    rows = c.execute(
+        'SELECT day, days FROM kintai_daily_work_days WHERE person_id=?',
+        (person_id,),
+    ).fetchall()
+    return {str(row['day']): float(row['days']) for row in rows}
+
+
+def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | None:
+    """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
+    total = Decimal('0')
+    any_value = False
+    for row in rows:
+        try:
+            iso = _iso_day(row.get('date'))
+        except ValueError:
+            iso = ''
+        if iso and iso in saved:
+            value = saved[iso]
+            row['workDays'] = value
+            row['workDaysSaved'] = True
+        else:
+            value = row.get('workDaysDefault')
+            row['workDays'] = value
+            row['workDaysSaved'] = False
+        if value is None:
+            continue
+        total += Decimal(str(value))
+        any_value = True
+    if not any_value:
+        return None
+    return float(total.quantize(Decimal('0.01')))
+
+
+def _person_workbook_bytes(person: dict, settings: dict | None = None) -> bytes | None:
+    settings = settings if settings is not None else load_local_settings()
+    resolved = resolve_person_file_existing(person, settings)
+    if not resolved.get('ok'):
+        return None
+    try:
+        return resolved['path'].read_bytes()
+    except OSError:
+        return None
+
+
+def month_attendance_total(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None) -> float | None:
+    """前月16日〜当月15日の日別出勤日数の合計。Excelの月計は使わない。"""
+    settings = load_local_settings()
+    layout = get_layout(layout_id_for_person(person, settings))
+    if blob is None:
+        blob = _person_workbook_bytes(person, settings)
+    if blob is None:
+        return None
+    if saved is None:
+        saved = _load_saved_work_days(c, int(person['id']))
+    try:
+        view = daily_rows_from_workbook(blob, year, month, layout)
+    except ValueError:
+        return None
+    return _with_saved_work_days(view['rows'], saved)
+
+
+def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
+    if not months:
+        return
+    settings = load_local_settings()
+    blob = _person_workbook_bytes(person, settings)
+    saved = _load_saved_work_days(c, int(person['id']))
+    for item in months:
+        item['workDays'] = month_attendance_total(
+            c, person, int(item['year']), int(item['month']), blob=blob, saved=saved,
+        )
+        item['workDaysFrom'] = 'daily'
+
+
+def save_daily_work_days(c, user, payload: dict) -> dict:
+    """表示中の月・人の日だけを保存する。days が null の日は保存を消し、初期値に戻す。"""
+    if not isinstance(payload, dict):
+        raise ValueError('保存内容を確認してください。')
+    person_id = payload.get('personId')
+    year = payload.get('year')
+    month = payload.get('month')
+    entries = payload.get('days')
+    if type(person_id) is not int or person_id <= 0:
+        raise ValueError('対象者を選択してください。')
+    if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
+        raise ValueError('対象月を確認してください。')
+    if not isinstance(entries, list):
+        raise ValueError('出勤日数の一覧がありません。')
+    person = c.execute('SELECT * FROM kintai_people WHERE id=? AND active=1', (person_id,)).fetchone()
+    if not person:
+        raise ValueError('対象者が見つかりません。')
+    period_start, period_end = closing_period(year, month)
+    current = person_daily_sheet(c, person_id, year, month)
+    allowed = set()
+    for row in current['rows']:
+        try:
+            allowed.add(_iso_day(row.get('date')))
+        except ValueError:
+            continue
+    actor = ''
+    if user:
+        try:
+            actor = str(user['name'] or user['login'] or '')[:80]
+        except (KeyError, IndexError, TypeError):
+            actor = ''
+    now = datetime.now().isoformat(timespec='seconds')
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or 'date' not in entry or 'days' not in entry:
+            raise ValueError('出勤日数は日付と数値で指定してください。')
+        iso = _iso_day(entry.get('date'))
+        if iso in seen:
+            raise ValueError('同じ日付が重複しています。')
+        seen.add(iso)
+        day = date.fromisoformat(iso)
+        if not (period_start <= day <= period_end) or iso not in allowed:
+            raise ValueError('この月の表示期間にない日付です。')
+        if entry.get('days') is None:
+            c.execute(
+                'DELETE FROM kintai_daily_work_days WHERE person_id=? AND day=?',
+                (person_id, iso),
+            )
+            continue
+        days = _parse_attendance_days(entry.get('days'))
+        c.execute(
+            '''INSERT INTO kintai_daily_work_days(person_id, day, days, updated_at, updated_by)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(person_id, day) DO UPDATE SET
+                 days=excluded.days,
+                 updated_at=excluded.updated_at,
+                 updated_by=excluded.updated_by
+            ''',
+            (person_id, iso, days, now, actor),
+        )
+    return person_daily_sheet(c, person_id, year, month)
+
+
 def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -> dict:
     """月シートの日別行を、見出しのある列のキャッシュのまま返す。月次集計はしない。"""
     if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
@@ -3063,6 +3310,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
                 continue
             item = {'date': _display_date(raw)}
             _fill_daily_item(item, grid, month_row, columns)
+            _attach_work_day_default(item, grid, month_row, columns)
             rows.append(item)
     else:
         day_first = layout['day_first_row']
@@ -3076,6 +3324,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
                 continue
             item = {'date': _display_date(raw)}
             _fill_daily_item(item, grid, row, columns)
+            _attach_work_day_default(item, grid, row, columns)
             rows.append(item)
     totals, totals_note = _sheet_total_rows(grid, layout, columns)
     return {
@@ -3110,6 +3359,8 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
     except OSError as e:
         raise ValueError(f'ファイルを読めません（{type(e).__name__}: {e}）。') from e
     body = daily_rows_from_workbook(blob, year, month, layout)
+    saved = _load_saved_work_days(c, person['id'])
+    total = _with_saved_work_days(body['rows'], saved)
     body.update({
         'personId': person['id'],
         'displayName': person['display_name'],
@@ -3121,6 +3372,8 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         'layoutId': layout.get('id') or '',
         'fileName': path.name,
         'readOnly': True,
+        'canEditWorkDays': True,
+        'workDaysTotal': total,
     })
     return body
 
@@ -3420,6 +3673,9 @@ def handle_post(h, c, path: str, d: dict):
                 True,
             )
         return 200, saved
+    if path == '/api/kintai/daily/work-days':
+        # 日別を開ける人だけ。新しい権限は足さない。Excelファイルは書き換えない。
+        return 200, save_daily_work_days(c, h.user, d or {})
     if path == '/api/kintai/probe':
         try:
             return 200, probe_person(c, d.get('personId'))

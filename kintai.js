@@ -5,6 +5,7 @@
   let chosenYear = 0;
   let pinnedPersonId = null;
   let dailyYm = '';
+  let lastDaily = null;
   let lastImportSummary = null;
   let peopleFilter = 'all'; // all | active | retired
   // 出勤簿（個人）の列。累計・残数・起算日・給与などは集計ルール未定のため空欄。
@@ -493,12 +494,21 @@
       return c.label;
     };
     const dayCols = cols.filter(c => c.key !== 'total');
-    const head = dayCols.map((c, i) => `<th scope="col" title="${esc(tip(c))}"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('');
+    const editable = !!(data && data.canEditWorkDays);
+    lastDaily = data || null;
+    const workCell = (r) => {
+      const value = r.workDays == null ? '' : String(r.workDays);
+      const initial = r.workDaysDefault == null ? '' : String(r.workDaysDefault);
+      const date = r.date || '';
+      if (!editable) return `<td class="kintai-workdays-cell">${esc(value)}</td>`;
+      return `<td class="kintai-workdays-cell"><input class="kintai-workdays" type="number" inputmode="decimal" min="0" max="2" step="0.01" aria-label="${esc(date)}の出勤日数" data-date="${esc(date)}" data-default="${esc(initial)}" data-saved="${r.workDaysSaved ? '1' : '0'}" value="${esc(value)}"></td>`;
+    };
+    const head = dayCols.map((c, i) => `<th scope="col" title="${esc(tip(c))}"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('') + '<th scope="col">出勤日数</th>';
     const rows = ((data && data.rows) || []).map(r => `<tr>${dayCols.map((c, i) => {
       const text = r[c.key] == null ? '' : String(r[c.key]);
       if (i === 0) return `<th scope="row" class="kintai-daily-sticky kintai-month" title="${esc(tip(c))}">${esc(text)}</th>`;
       return `<td title="${esc(tip(c))}">${esc(text)}</td>`;
-    }).join('')}</tr>`).join('');
+    }).join('')}${workCell(r)}</tr>`).join('');
     const totals = (data && data.totals) || [];
     const totalsNote = data && data.totalsNote ? data.totalsNote : '';
     const totalsHtml = totals.length
@@ -507,7 +517,40 @@
     const daysHtml = rows
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="kintaimeta">${data && data.periodStart ? `${esc(data.periodStart)}～${esc(data.periodEnd)}の` : ''}この月シートに対象の日付がありません。</p>`;
-    body.innerHTML = daysHtml + totalsHtml;
+    const totalText = data && data.workDaysTotal != null
+      ? `出勤日数の合計 ${dayText(data.workDaysTotal)}（この月の16日〜15日）`
+      : '';
+    const saveBar = rows
+      ? `<p class="kintai-workdays-bar">${editable ? '<button type="button" id="kintaiworkdayssave">出勤日数を保存</button>' : ''}<span class="kintaimeta">${esc(totalText)}</span></p>`
+      : '';
+    body.innerHTML = daysHtml + saveBar + totalsHtml;
+  }
+
+  async function saveDailyWorkDays() {
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
+    if (!lastDaily) throw Error('日別を表示してから保存してください。');
+    const inputs = [...document.querySelectorAll('#kintaidailytable .kintai-workdays')];
+    const days = [];
+    inputs.forEach(el => {
+      const typed = el.value.trim();
+      const initial = el.dataset.default || '';
+      const wasSaved = el.dataset.saved === '1';
+      if (typed !== '' && !Number.isFinite(Number(typed))) throw Error('出勤日数は数値で入れてください。');
+      const same = (typed === '' && initial === '') || (typed !== '' && initial !== '' && Number(typed) === Number(initial));
+      if (same) {
+        if (wasSaved) days.push({ date: el.dataset.date, days: null });
+        return;
+      }
+      days.push({ date: el.dataset.date, days: typed === '' ? null : Number(typed) });
+    });
+    const saved = await api('/api/kintai/daily/work-days', {
+      personId: lastDaily.personId,
+      year: lastDaily.year,
+      month: lastDaily.month,
+      days,
+    });
+    paintDaily(saved);
+    toast('出勤日数を保存しました。');
   }
 
   async function ensurePeoplePack() {
@@ -606,6 +649,14 @@
       loadKintaiDaily().catch(e => toast(e.message));
     };
     if (dailyRefresh) dailyRefresh.onclick = () => loadKintaiDaily().catch(e => toast(e.message));
+    const dailyTable = $('#kintaidailytable');
+    if (dailyTable && !dailyTable.dataset.workdaybound) {
+      dailyTable.dataset.workdaybound = '1';
+      dailyTable.addEventListener('click', (e) => {
+        if (!e.target.closest('#kintaiworkdayssave')) return;
+        saveDailyWorkDays().catch(err => toast(err.message));
+      });
+    }
     const dayTable = $('#kintaitable');
     if (dayTable && !dayTable.dataset.daybound) {
       dayTable.dataset.daybound = '1';
