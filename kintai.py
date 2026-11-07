@@ -2925,18 +2925,7 @@ def _fill_daily_item(item: dict, grid, row: int, columns: list[dict]) -> None:
     for column in columns:
         if column['key'] == 'date':
             continue
-        parts = column.get('parts')
-        if parts:
-            if column.get('missing'):
-                item[parts[0]['key']] = ''
-                item[parts[1]['key']] = column['missing']
-                continue
-            for part in parts:
-                cell = _cell(grid, row, part['col'])
-                if part['key'] == 'totalLabel':
-                    item[part['key']] = _display_total_label(cell)
-                else:
-                    item[part['key']] = _display_hours(cell)
+        if column.get('parts'):
             continue
         if column.get('missing'):
             item[column['key']] = column['missing']
@@ -2944,6 +2933,29 @@ def _fill_daily_item(item: dict, grid, row: int, columns: list[dict]) -> None:
         if not column.get('col'):
             continue
         item[column['key']] = _daily_cell_text(_cell(grid, row, column['col']), column)
+
+
+def _sheet_total_rows(grid, layout: dict, columns: list[dict]) -> tuple[list[dict], str]:
+    """日付の表示とは別に、月シートの集計名と数値を元の行順で返す。再計算しない。"""
+    total = next((column for column in columns if column.get('key') == 'total'), None)
+    if not total:
+        return [], ''
+    if total.get('missing'):
+        return [], total['missing']
+    label_col = total['parts'][0].get('col')
+    value_col = total['parts'][1].get('col')
+    if not label_col or not value_col:
+        return [], DAILY_MISSING_COLUMN
+    first = int(layout.get('day_first_row') or 5)
+    last = int(layout.get('day_last_row') or first)
+    rows = []
+    for row in range(first, last + 1):
+        label = _display_total_label(_cell(grid, row, label_col))
+        value = _display_hours(_cell(grid, row, value_col))
+        if label == '' and value == '':
+            continue
+        rows.append({'label': label, 'value': value})
+    return rows, ''
 
 
 def _daily_base_columns(layout: dict) -> list[dict]:
@@ -3065,10 +3077,13 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
             item = {'date': _display_date(raw)}
             _fill_daily_item(item, grid, row, columns)
             rows.append(item)
+    totals, totals_note = _sheet_total_rows(grid, layout, columns)
     return {
         'sheetName': sheet_name,
         'columns': columns,
         'rows': rows,
+        'totals': totals,
+        'totalsNote': totals_note,
         'periodStart': f'{period_start.year}/{period_start.month:02d}/{period_start.day:02d}',
         'periodEnd': f'{period_end.year}/{period_end.month:02d}/{period_end.day:02d}',
     }
