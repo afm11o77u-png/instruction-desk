@@ -1,0 +1,1 @@
+msoffcrypto-tool==5.4.2
