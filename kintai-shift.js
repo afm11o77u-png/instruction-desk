@@ -13,6 +13,7 @@
   let saveError = '';
   let shiftDirty = false;
   let saving = false;
+  let exporting = false;
   let loading = false;
   let rosterList = []; // 出勤簿在籍（未掲載追加用）
   let workMemos = {}; // { personKey: text } 人ごと・月横断（personId 優先でサーバ保存）
@@ -100,20 +101,22 @@
     saveState = state;
     saveError = err || '';
     const el = $('#shiftsavestatus');
-    if (!el) return;
-    el.className = 'shift-save-status shift-save-' + state;
-    if (state === 'idle') el.textContent = '未保存';
-    else if (state === 'dirty') el.textContent = '未保存の変更';
-    else if (state === 'saving') el.textContent = '保存中…';
-    else if (state === 'saved') {
-      const when = formatSavedAt(sheet && sheet.updatedAt);
-      el.textContent = when ? `保存済み（${when}）` : '保存済み';
-    } else if (state === 'failed') {
-      el.textContent = '保存失敗' + (saveError ? '：' + saveError : '');
+    if (el) {
+      el.className = 'shift-save-status shift-save-' + state;
+      if (state === 'idle') el.textContent = '未保存';
+      else if (state === 'dirty') el.textContent = '未保存の変更';
+      else if (state === 'saving') el.textContent = '保存中…';
+      else if (state === 'saved') {
+        const when = formatSavedAt(sheet && sheet.updatedAt);
+        el.textContent = when ? `保存済み（${when}）` : '保存済み';
+      } else if (state === 'failed') {
+        el.textContent = '保存失敗' + (saveError ? '：' + saveError : '');
+      }
     }
     const btn = $('#shiftsave');
     // 未保存月の初回保存・失敗再試行・未保存の変更は押下可。保存済みで変更なしのときだけ無効
     if (btn) btn.disabled = state === 'saving' || (state === 'saved' && !shiftDirty);
+    paintExportButton();
   }
 
   function applySheet(data, opts) {
@@ -152,15 +155,17 @@
 
   function setMemoSaveState(state, err) {
     const el = $('#shiftmemostatus');
-    if (!el) return;
-    el.className = 'shift-save-status shift-memo-status shift-save-' + state;
-    if (state === 'idle') el.textContent = 'メモ未保存';
-    else if (state === 'dirty') el.textContent = 'メモ未保存の変更';
-    else if (state === 'saving') el.textContent = 'メモ保存中…';
-    else if (state === 'saved') el.textContent = 'メモ保存済み';
-    else if (state === 'failed') el.textContent = 'メモ保存失敗' + (err ? '：' + err : '');
+    if (el) {
+      el.className = 'shift-save-status shift-memo-status shift-save-' + state;
+      if (state === 'idle') el.textContent = 'メモ未保存';
+      else if (state === 'dirty') el.textContent = 'メモ未保存の変更';
+      else if (state === 'saving') el.textContent = 'メモ保存中…';
+      else if (state === 'saved') el.textContent = 'メモ保存済み';
+      else if (state === 'failed') el.textContent = 'メモ保存失敗' + (err ? '：' + err : '');
+    }
     const btn = $('#shiftsavememos');
     if (btn) btn.disabled = state === 'saving' || (state === 'saved' && !memoDirty) || (state === 'idle' && !memoDirty);
+    paintExportButton();
   }
 
   function markMemoDirty() {
@@ -1049,6 +1054,144 @@
     e.returnValue = '';
   }
 
+  /* ---------- Excel出力（表示中の表。保存もDB更新もしない） ---------- */
+  function exportNameFromInput(raw) {
+    const next = String(raw == null ? '' : raw).slice(0, 80).trim();
+    return next || '（未入力）';
+  }
+
+  function exportMemoFromInput(raw) {
+    return String(raw == null ? '' : raw).slice(0, 80);
+  }
+
+  function buildShiftExportPayload(state) {
+    const list = (state && state.people) || [];
+    const nameOf = state && state.nameOf;
+    const memoOf = state && state.memoOf;
+    const memoMap = (state && state.memos) || {};
+    return {
+      year: state.year,
+      month: state.month,
+      exists: !!state.exists,
+      pending: !!state.pending,
+      shiftPending: !!state.shiftPending,
+      memoPending: !!state.memoPending,
+      updatedAt: state.updatedAt || '',
+      updatedBy: state.updatedBy || '',
+      people: list.map(p => ({
+        key: p.key,
+        displayName: exportNameFromInput(nameOf ? nameOf(p) : p.displayName),
+        employment: p.employment || '',
+        source: p.source || '',
+      })),
+      cells: (state && state.cells) || {},
+      memos: list.map(p => ({
+        key: p.key,
+        memo: exportMemoFromInput(memoOf ? memoOf(p) : (memoMap[p.key] || '')),
+      })),
+    };
+  }
+
+  function currentExportState() {
+    const nameOf = (p) => {
+      const input = document.querySelector('.shift-name-input[data-person="' + CSS.escape(p.key) + '"]');
+      return input ? input.value : (p.displayName || '');
+    };
+    const memoOf = (p) => {
+      const input = document.querySelector('.shift-memo-input[data-memo-person="' + CSS.escape(p.key) + '"]');
+      return input ? input.value : (workMemos[p.key] || '');
+    };
+    let shiftPending = !!shiftDirty;
+    let memoPending = !!memoDirty;
+    for (const p of people) {
+      if (exportNameFromInput(nameOf(p)) !== exportNameFromInput(p.displayName || '')) shiftPending = true;
+      if (exportMemoFromInput(memoOf(p)) !== exportMemoFromInput(workMemos[p.key] || '')) memoPending = true;
+    }
+    return {
+      year: year,
+      month: month,
+      exists: !!(sheet && sheet.exists),
+      pending: shiftPending || memoPending,
+      shiftPending: shiftPending,
+      memoPending: memoPending,
+      updatedAt: (sheet && sheet.updatedAt) || '',
+      updatedBy: (sheet && sheet.updatedBy) || '',
+      people: people,
+      cells: cells,
+      nameOf: nameOf,
+      memoOf: memoOf,
+    };
+  }
+
+  function exportButtonState(s, shiftDirtyFlag, memoDirtyFlag) {
+    if (!s) return { disabled: true, title: 'シフト表を読み込んでから出力できます。' };
+    if (shiftDirtyFlag || memoDirtyFlag) {
+      return { disabled: false, title: '表示中の内容（未保存の変更を含む）をExcelに出力します。保存はしません。' };
+    }
+    if (!s.exists) {
+      return { disabled: false, title: '表示中の未保存の月をExcelに出力します。保存はしません。' };
+    }
+    return { disabled: false, title: '表示中の保存済み内容をExcelに出力します。保存はしません。' };
+  }
+
+  function paintExportButton() {
+    const b = $('#shiftexport');
+    if (!b) return;
+    const st = exportButtonState(sheet, shiftDirty, memoDirty);
+    b.disabled = st.disabled || exporting;
+    b.title = st.title;
+  }
+
+  function filenameFromDisposition(header, fallback) {
+    const h = String(header || '');
+    const star = h.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    if (star) {
+      try { return decodeURIComponent(star[1].trim()); } catch (e) { /* fall through */ }
+    }
+    const plain = h.match(/filename\s*=\s*"([^"]+)"/i);
+    return plain ? plain[1] : fallback;
+  }
+
+  async function exportShiftXlsx() {
+    if (!year || !month || !sheet) {
+      toast('シフト表を読み込んでから出力できます。');
+      return;
+    }
+    const y = year;
+    const m = month;
+    const payload = buildShiftExportPayload(currentExportState());
+    const fallback = 'マークシフト表_' + y + '-' + String(m).padStart(2, '0') + '.xlsx';
+    exporting = true;
+    paintExportButton();
+    try {
+      const r = await fetch('/api/kintai/shift/xlsx', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Desk-Request': '1' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        let msg = 'Excel出力できませんでした。';
+        try { const d = await r.json(); if (d && d.error) msg = d.error; } catch (e) { /* ignore */ }
+        throw Error(msg);
+      }
+      const name = filenameFromDisposition(r.headers.get('Content-Disposition'), fallback);
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } catch (e) {
+      toast(e.message || 'Excel出力できませんでした。');
+    } finally {
+      exporting = false;
+      paintExportButton();
+    }
+  }
+
   function bindShiftControls() {
     if (!$('#kintaishift')) return;
     document.querySelectorAll('.shift-mode').forEach(b => {
@@ -1102,6 +1245,8 @@
     }
     const pr = $('#shiftprint');
     if (pr) pr.onclick = printShift;
+    const ex = $('#shiftexport');
+    if (ex) ex.onclick = () => { exportShiftXlsx(); };
     const printGo = $('#shiftprintdialog-go');
     if (printGo) {
       printGo.onclick = () => {
