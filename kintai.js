@@ -479,7 +479,8 @@
       const sheet = data && data.sheetName ? `／シート ${data.sheetName}` : '';
       const file = data && data.fileName ? `／${data.fileName}` : '';
       const n = data && data.rows ? data.rows.length : 0;
-      status.textContent = `${who}${sheet}${file}／${n}日`;
+      const period = data && data.periodStart && data.periodEnd ? `／${data.periodStart}～${data.periodEnd}` : '';
+      status.textContent = `${who}${sheet}${file}${period}／${n}日`;
     }
     if (!body) return;
     if (!cols.length) {
@@ -510,7 +511,7 @@
     }).join('')}</tr>`).join('');
     body.innerHTML = rows
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
-      : '<p class="kintaimeta">この月シートに日付の行がありません。</p>';
+      : `<p class="kintaimeta">${data && data.periodStart ? `${esc(data.periodStart)}～${esc(data.periodEnd)}の` : ''}この月シートに対象の日付がありません。</p>`;
   }
 
   async function ensurePeoplePack() {
