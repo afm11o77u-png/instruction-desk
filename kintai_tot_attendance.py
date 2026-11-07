@@ -1,13 +1,14 @@
-"""Read TOT daily CSV and prepare three time columns for an existing workbook."""
+"""Read TOT daily CSV and prepare three time columns for clipboard use."""
 import base64
 import binascii
 import csv
+import ipaddress
+import os
+import subprocess
 import re
 import unicodedata
-from datetime import date, datetime, timedelta
-from io import BytesIO, StringIO
-from zipfile import ZipFile, BadZipFile
-from xml.etree import ElementTree as ET
+from datetime import date, timedelta
+from io import StringIO
 
 from kintai_touch_on_time import STAFF
 
@@ -119,78 +120,7 @@ def period(value):
     return start, end
 
 
-def col_name(value):
-    out = ''
-    while value:
-        value, mod = divmod(value - 1, 26)
-        out = chr(65 + mod) + out
-    return out
-
-
-def workbook_layout(raw, year, month, name, dates, read_grid):
-    blob = decode_file(raw, 5_000_000)
-    try:
-        with ZipFile(BytesIO(blob)) as book:
-            if sum(x.file_size for x in book.infolist()) > 30_000_000:
-                raise ValueError('出勤簿の展開サイズが大きすぎます。')
-            grid = read_grid(blob)
-            candidates = [k for k in grid if k in (f'{year % 100}.{month}', f'{year}.{month}')]
-            if len(candidates) != 1:
-                raise ValueError('出勤簿に対象月のシート（例 26.11）が見つかりません。')
-            sheet = candidates[0]
-            cells = grid[sheet]
-            if norm(name) not in {norm(v) for (r, c), v in cells.items() if r <= 2 and isinstance(v, str)}:
-                raise ValueError('CSVで選んだ従業員と出勤簿の氏名が一致しません。本人の出勤簿を選んでください。')
-            starts = [c for (r, c), v in cells.items() if r in (3, 4) and norm(v).startswith('始業時間')]
-            starts = [c for c in starts if any(norm(cells.get((r, c + 1))).startswith('休憩時間') for r in (3, 4)) and any(norm(cells.get((r, c + 2))).startswith('終業時間') for r in (3, 4))]
-            if len(set(starts)) != 1:
-                raise ValueError('出勤簿の始業・休憩・終業の3列を特定できません。')
-            col = starts[0]
-            matches = []
-            for first in range(5, 47):
-                actual = []
-                for offset in range(len(dates)):
-                    value = cells.get((first + offset, 1))
-                    if not isinstance(value, (int, float)) or not 1 <= value <= 100000:
-                        break
-                    actual.append((datetime(1899, 12, 30) + timedelta(days=value)).strftime('%m-%d'))
-                if actual == [d.strftime('%m-%d') for d in dates]:
-                    matches.append(first)
-            if len(matches) != 1:
-                raise ValueError('出勤簿の日付と締め期間が一致しません。日付セルの計算結果を確認してください。')
-            first = matches[0]
-            expected_year = dates[0].year
-            actual_first = datetime(1899, 12, 30) + timedelta(days=cells[(first, 1)])
-            ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
-            # Use the workbook's relationship map to inspect the actual destination cells.
-            wb = ET.fromstring(book.read('xl/workbook.xml'))
-            rels = {x.get('Id'): x.get('Target') for x in ET.fromstring(book.read('xl/_rels/workbook.xml.rels'))}
-            sh = next(x for x in wb.find(ns + 'sheets') if x.get('name') == sheet)
-            target = rels[sh.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')]
-            path = target.lstrip('/') if target.startswith('/') else 'xl/' + target
-            xml = ET.fromstring(book.read(path))
-            destinations = {f'{col_name(c)}{r}' for r in range(first, first + len(dates)) for c in range(col, col + 3)}
-            if any(c.get('r') in destinations and c.find(ns + 'f') is not None for c in xml.iter(ns + 'c')):
-                raise ValueError('貼り付け先に数式があります。数式を上書きしないため停止しました。')
-            for merge in xml.iter(ns + 'mergeCell'):
-                parts = re.fullmatch(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', merge.get('ref', ''))
-                if parts:
-                    def number(s):
-                        n = 0
-                        for ch in s:
-                            n = n * 26 + ord(ch) - 64
-                        return n
-                    c1, r1, c2, r2 = parts.groups()
-                    if number(c1) <= col + 2 and number(c2) >= col and int(r1) <= first + len(dates) - 1 and int(r2) >= first:
-                        raise ValueError('貼り付け先に結合セルがあります。この書式は確認が必要です。')
-    except (BadZipFile, KeyError, StopIteration, ET.ParseError) as error:
-        raise ValueError('出勤簿の.xlsxファイルを読み込めません。') from error
-    return {'sheet': sheet, 'cell': f'{col_name(col)}{first}',
-            'range': f'{col_name(col)}{first}:{col_name(col + 2)}{first + len(dates) - 1}',
-            'dateYearMismatch': actual_first.year != expected_year}
-
-
-def prepare(payload, read_grid):
+def prepare(payload):
     people = parse_csv(payload.get('csvData'))
     person = people.get(payload.get('person'))
     if not person:
@@ -215,8 +145,27 @@ def prepare(payload, read_grid):
                 row['note'] = '出退勤なし（休み・未入力の確認）'
             row['note'] = '／'.join(x for x in [source.get('sourceWarning'), row['note']] if x)
         rows.append(row)
-    layout = workbook_layout(payload.get('workbookData'), end.year, end.month, person['name'], dates, read_grid)
     config = STAFF.get(norm(person['name']))
     return 200, {'name': person['name'], 'month': payload['month'], 'start': start.isoformat(),
-                 'end': end.isoformat(), 'rows': rows, 'layout': layout,
+                 'end': end.isoformat(), 'rows': rows,
                  'defaultBreak': config[2] if config else None}
+
+
+ATTENDANCE_FOLDER = "\\\\Desktop-iu7d38q\\e\\札幌発寒支店共有\\札幌発寒支店\\札幌発寒支店管理職以外閲覧禁止\\※閲覧禁止※\\出勤簿   2026年度版"
+
+
+def open_folder(handler):
+    """Open only the fixed folder, only for a browser on the server PC."""
+    try:
+        local = ipaddress.ip_address(handler.client_address[0]).is_loopback
+    except (AttributeError, ValueError, IndexError):
+        local = False
+    if not local:
+        return 403, {'error': '別のPCからは直接開けません。「パスをコピー」を使い、エクスプローラーのアドレス欄へ貼り付けてください。'}
+    if os.name != 'nt':
+        return 400, {'error': 'フォルダーを開く操作はWindows用です。「パスをコピー」を使ってください。'}
+    try:
+        subprocess.Popen(['explorer.exe', ATTENDANCE_FOLDER], shell=False)
+    except OSError as error:
+        raise ValueError('フォルダーを開けませんでした。「パスをコピー」を使ってください。') from error
+    return 200, {'message': 'エクスプローラーへフォルダーを開く指示を送りました。'}
