@@ -309,9 +309,11 @@
         <td class="kintai-month"><button type="button" class="kintai-daylink" data-year="${m.year}" data-month="${m.month}">${esc(label)}</button></td>
         ${sheetCell(dayText(m.workDays))}
         ${sheetCell(dayText(m.holidayDays))}
-        ${blankCells(2)}
+        ${sheetCell(dayText(m.holidayCumulative))}
+        ${blankCells(1)}
         ${sheetCell(dayText(m.paidLeaveDays))}
-        ${blankCells(3)}
+        ${sheetCell(dayText(m.paidLeaveCumulative))}
+        ${blankCells(2)}
         ${sheetCell(m.ordinaryHm)}
         ${sheetCell(m.overtimeHm)}
         ${sheetCell(m.totalHm)}
@@ -342,6 +344,38 @@
       if (p.lastError) status.innerHTML = `${esc(status.textContent)}${errorBlockHtml(p.lastError, false)}`;
     }
     if (body) body.innerHTML = personSheetHtml(p);
+    const roster = $('#kintairoster');
+    if (roster && !roster.hidden) loadKintaiRoster().catch(e => toast(e.message));
+  }
+
+  function rosterCell(value) {
+    return sheetCell(value == null || value === '' ? '' : dayText(value));
+  }
+
+  function paintRoster(data) {
+    const body = $('#kintairoster');
+    if (!body) return;
+    const rows = ((data && data.rows) || []).filter(r => passesPeopleFilter(r.retired));
+    const head = ['社員番号', '氏名', '在籍', '雇用区分', '出勤累計', '休日累計', '有給取得累計', '年間休日枠', '休日残数', '開始有給残', '有給残数', '入社日', '退職日', '有給休暇起算日'];
+    const bodyRows = rows.map(r => `<tr>
+      <td>${esc(r.employeeCode || '')}</td>
+      <td>${esc(r.displayName || '')}</td>
+      <td>${r.retired ? '退職' : '在職'}</td>
+      <td>${esc(EMP[r.employment] || r.employment || '')}</td>
+      ${rosterCell(r.workCumulative)}
+      ${rosterCell(r.holidayCumulative)}
+      ${rosterCell(r.paidLeaveCumulative)}
+      ${blankCells(7)}
+    </tr>`).join('');
+    body.innerHTML = `<p class="kintaimeta">出勤・休日・有給の累計は、取込済みの月を年度の初めから足した数です。未取得の月があると、そこから先は空欄です。年間休日枠・残数・有給の開始残と残数・入社日・退職日・起算日は、元の値と算定ルールが無いので空欄です。</p>
+      <table class="kintai-sheet kintai-person-sheet"><thead><tr>${head.map(name => `<th>${esc(name)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  }
+
+  async function loadKintaiRoster() {
+    if (!canKintai()) return;
+    const year = rememberYear(fiscalStartYear());
+    const data = await api('/api/kintai/roster?year=' + encodeURIComponent(year));
+    paintRoster(data);
   }
 
   function summaryRow(label, item, total) {
@@ -643,6 +677,14 @@
       } else paintKintai();
     };
     if (refresh) refresh.onclick = () => loadKintai().catch(e => toast(e.message));
+    const rosterBtn = $('#kintairosteropen');
+    if (rosterBtn) rosterBtn.onclick = () => {
+      const roster = $('#kintairoster');
+      if (!roster) return;
+      roster.hidden = !roster.hidden;
+      rosterBtn.textContent = roster.hidden ? '全員の累計' : '全員の累計を閉じる';
+      if (!roster.hidden) loadKintaiRoster().catch(e => toast(e.message));
+    };
     if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
     if (dailyPerson) dailyPerson.onchange = () => {
       pinnedPersonId = dailyPerson.value ? Number(dailyPerson.value) : null;

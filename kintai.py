@@ -2387,6 +2387,92 @@ def _month_public(row) -> dict:
     }
 
 
+def _blank_month(year: int, month: int) -> dict:
+    return {
+        'year': year, 'month': month, 'status': '未取得', 'error': '',
+        'workDays': None, 'holidayDays': None, 'paidLeaveDays': None,
+        'ordinaryMinutes': None, 'overtimeMinutes': None, 'totalMinutes': None,
+        'ordinaryHm': '', 'overtimeHm': '', 'totalHm': '',
+        'importedAt': None, 'sourceMtime': None,
+    }
+
+
+def annotate_running_totals(month_rows: list[dict]) -> None:
+    """年度の並びで、取れている月次だけを足す。未取得の月以降の累計は空欄。残数・付与・起算日は作らない。"""
+    state = {
+        'holidayDays': ['holidayCumulative', Decimal('0'), True],
+        'paidLeaveDays': ['paidLeaveCumulative', Decimal('0'), True],
+        'workDays': ['workCumulative', Decimal('0'), True],
+    }
+    for item in month_rows:
+        for source, (dest, total, open_) in state.items():
+            value = item.get(source)
+            if open_ and value is not None:
+                total += Decimal(str(value))
+                state[source][1] = total
+                item[dest] = float(total.quantize(Decimal('0.01')))
+            else:
+                state[source][2] = False
+                item[dest] = None
+
+
+def _person_fiscal_months(c, person: dict, fiscal_start_year: int) -> list[dict]:
+    rows = []
+    for year, month in fiscal_months(fiscal_start_year, DEFAULT_FISCAL_START[1]):
+        rec = c.execute(
+            'SELECT * FROM kintai_monthly WHERE person_id=? AND year=? AND month=?',
+            (person['id'], year, month),
+        ).fetchone()
+        rows.append(_month_public(rec) if rec else _blank_month(year, month))
+    _fill_displayed_work_days(c, person, rows)
+    annotate_running_totals(rows)
+    return rows
+
+
+def _prefix_total(month_rows: list[dict], key: str):
+    found = None
+    for item in month_rows:
+        value = item.get(key)
+        if value is None:
+            break
+        found = value
+    return found
+
+
+def list_roster(c, fiscal_start_year: int) -> dict:
+    """全員の年度累計。取込済みの出勤・休日・有給だけ。枠・残数・起算日・入社日は持っていない。"""
+    if type(fiscal_start_year) is not int or not 2000 <= fiscal_start_year <= 2100:
+        raise ValueError('年度の開始年を確認してください。')
+    people = [dict(r) for r in c.execute(
+        'SELECT * FROM kintai_people WHERE active=1 ORDER BY COALESCE(retired,0), sort_order, id'
+    )]
+    rows = []
+    for person in people:
+        months = _person_fiscal_months(c, person, fiscal_start_year)
+        rows.append({
+            'personId': person['id'],
+            'employeeCode': person['employee_code'],
+            'displayName': person['display_name'],
+            'retired': bool(person.get('retired') or 0),
+            'employment': person['employment'],
+            'workCumulative': _prefix_total(months, 'workCumulative'),
+            'holidayCumulative': _prefix_total(months, 'holidayCumulative'),
+            'paidLeaveCumulative': _prefix_total(months, 'paidLeaveCumulative'),
+            'holidayAllowance': None,
+            'holidayRemaining': None,
+            'paidLeaveOpening': None,
+            'paidLeaveRemaining': None,
+            'hiredOn': None,
+            'retiredOn': None,
+            'paidLeaveBaseDate': None,
+        })
+    return {
+        'fiscalStartYear': fiscal_start_year,
+        'fiscalLabel': fiscal_label(fiscal_start_year),
+        'rows': rows,
+    }
+
+
 def list_overview(
     c,
     fiscal_start_year: int,
@@ -2409,20 +2495,7 @@ def list_overview(
         person = next((p for p in people if p['id'] == person_id), None)
         if not person:
             raise ValueError('対象者が見つかりません。')
-        month_rows = []
-        for y, m in months:
-            rec = c.execute(
-                'SELECT * FROM kintai_monthly WHERE person_id=? AND year=? AND month=?',
-                (person_id, y, m),
-            ).fetchone()
-            month_rows.append(_month_public(rec) if rec else {
-                'year': y, 'month': m, 'status': '未取得', 'error': '',
-                'workDays': None, 'holidayDays': None, 'paidLeaveDays': None,
-                'ordinaryMinutes': None, 'overtimeMinutes': None, 'totalMinutes': None,
-                'ordinaryHm': '', 'overtimeHm': '', 'totalHm': '',
-                'importedAt': None, 'sourceMtime': None,
-            })
-        _fill_displayed_work_days(c, person, month_rows)
+        month_rows = _person_fiscal_months(c, person, fiscal_start_year)
         rows.append({
             'personId': person['id'],
             'employeeCode': person['employee_code'],
@@ -2460,13 +2533,7 @@ def list_overview(
                 'lastStatus': person.get('last_status') or '未取得',
                 'lastError': person.get('last_error') or '',
                 'lastImportAt': person.get('last_import_at'),
-                'month': _month_public(rec) if rec else {
-                    'year': y, 'month': m, 'status': '未取得', 'error': '',
-                    'workDays': None, 'holidayDays': None, 'paidLeaveDays': None,
-                    'ordinaryMinutes': None, 'overtimeMinutes': None, 'totalMinutes': None,
-                    'ordinaryHm': '', 'overtimeHm': '', 'totalHm': '',
-                    'importedAt': None, 'sourceMtime': None,
-                },
+                'month': _month_public(rec) if rec else _blank_month(y, m),
             })
             _fill_displayed_work_days(c, person, [rows[-1]['month']])
     last_run = c.execute(
@@ -3597,6 +3664,10 @@ def handle_get(h, c, path: str):
         ym = _parse_ym(q.get('ym'))
         month = int(q['month']) if q.get('month') not in (None, '') else None
         return 200, list_overview(c, year, month=month, person_id=person_id, year_month=ym)
+    if path == '/api/kintai/roster':
+        q = _query_map(h)
+        year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
+        return 200, list_roster(c, year)
     if path == '/api/kintai/month-summary':
         q = _query_map(h)
         year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
