@@ -13,10 +13,12 @@
 <option value="retired">退職者のみ</option>
 </select></label>
 <button type="button" id="kintairefresh">再表示</button>
+<button type="button" id="kintairosteropen">全員の累計</button>
 </form>
 <p id="kintailast" class="kintaimeta"></p>
 <p id="kintaistatus"></p>
 <div id="kintaitable" class="kintai-tablewrap"></div>
+<div id="kintairoster" class="kintai-tablewrap" hidden></div>
 <details class="kintaisettings" id="totattpanel">
 <summary>Touch On TimeのCSVから出勤簿へ貼り付け</summary>
 <p>日別実績CSVから、日付順の「始業・休憩・終業」3列をまとめてコピーします。出勤簿Excelの読み込みは不要です。空欄の日も行を残します。</p>
@@ -40,7 +42,7 @@
 <textarea id="totattmanual" rows="8" aria-label="手動コピー用の3列データ" hidden readonly></textarea>
 </div>
 </details>
-<p class="kintai-sheet-note">累計・残数・有給休暇起算日・付与・失効・給与の列は、集計方法が決まってから入れます。出勤日数は、日別で保存した値の月合計です。休日数・有給取得日数・普通勤務時間・残業時間・勤務時間計は、出勤簿の取込値です。</p>
+<p class="kintai-sheet-note">累計休日数と有給累計取得日数は、取込済みの月の数を年度の初めから足しています。未取得の月以降は空欄です。年間休日残数・有給残数・有給休暇起算日・付与・失効・給与は、元の値や算定ルールが無いので空欄です。出勤日数は、日別で保存した値の月合計です。休日数・有給取得日数・普通勤務時間・残業時間・勤務時間計は、出勤簿の取込値です。</p>
 </div>
 <div id="kintaidaily" hidden>
 <p class="kintailead">取り込んだ個人出勤簿の月シートを、読取専用で日別に表示します。元ファイルは変更しません。労働時間や合計の別表は計算しません。出勤日数だけ、この画面で保存します。</p>
