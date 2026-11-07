@@ -167,6 +167,15 @@ class ShiftXlsxExportTest(unittest.TestCase):
             },
             'shift:s1': {str(wd[5]): {'kind': 'time', 'text': '=NOW()'}},
             'regular:r1': {str(wd[4]): {'kind': 'off', 'text': '×'}},
+            'contract:c1': {
+                str(wd[6]): {'kind': 'unknown', 'text': '？'},
+                str(self.holiday['day']): {'kind': 'unknown', 'text': '？'},
+            },
+            'history:h1': {
+                str(next(d['day'] for d in self.days if d['weekday'] == 6 and d['day'] != self.sunday)): {
+                    'kind': 'unknown', 'text': '？',
+                },
+            },
         }
         memos = [
             {'key': 'part:p1', 'memo': '週5\nLEOC'},
@@ -288,7 +297,24 @@ class ShiftXlsxExportTest(unittest.TestCase):
         self.assertEqual(book['paint'](cells[self._ref(self.sunday, 6)][2])['font'], 'FF9D3434')
         self.assertEqual(book['paint'](cells[self._ref(self.weekdays[4], 6)][2])['font'], 'FF333333')
         self.assertIsNone(book['paint'](cells[self._ref(self.weekdays[4], 6)][2])['fill'])
-        self.assertEqual(book['paint'](cells[self._ref(self.saturday, 6)][2])['fill'], 'FFFAF6EA')
+        # ？は列色のまま（平日は塗りなし、土は薄青、祝日は薄赤）。文字色だけ茶。作業・時刻の背景は維持。
+        sat_unknown = book['paint'](cells[self._ref(self.saturday, 6)][2])
+        self.assertEqual(cells[self._ref(self.saturday, 6)][0], '？')
+        self.assertEqual(sat_unknown['fill'], 'FFE8F2FB')
+        self.assertEqual(sat_unknown['font'], 'FF6A5A2A')
+        wd_unknown = book['paint'](cells[self._ref(self.weekdays[6], 9)][2])
+        self.assertEqual(cells[self._ref(self.weekdays[6], 9)][0], '？')
+        self.assertIsNone(wd_unknown['fill'])
+        self.assertEqual(wd_unknown['font'], 'FF6A5A2A')
+        hol_unknown = book['paint'](cells[self._ref(self.holiday['day'], 9)][2])
+        self.assertEqual(cells[self._ref(self.holiday['day'], 9)][0], '？')
+        self.assertEqual(hol_unknown['fill'], 'FFFDECEB')
+        self.assertEqual(hol_unknown['font'], 'FF6A5A2A')
+        sun2 = next(d['day'] for d in self.days if d['weekday'] == 6 and d['day'] != self.sunday)
+        sun_unknown = book['paint'](cells[self._ref(sun2, 10)][2])
+        self.assertEqual(cells[self._ref(sun2, 10)][0], '？')
+        self.assertEqual(sun_unknown['fill'], 'FFFDECEB')
+        self.assertEqual(sun_unknown['font'], 'FF6A5A2A')
         self.assertEqual(book['paint'](cells[self._ref(self.weekdays[1], 6)][2])['fill'], 'FFEEF7F1')
         self.assertEqual(book['paint'](cells[self._ref(self.weekdays[0], 6)][2])['fill'], 'FFF3F8FF')
         self.assertEqual(book['paint'](cells['B6'][2])['fill'], 'FFF7F0E8')  # パート
@@ -449,6 +475,109 @@ console.log(JSON.stringify({
         self.assertIn('未保存の月', out['fresh']['title'])
         self.assertIn('保存済み', out['saved']['title'])
         self.assertEqual(out['fn'], 'マークシフト表_2026-11.xlsx')
+
+
+def _css_blocks(css: str, needle: str) -> list[str]:
+    blocks = []
+    start = 0
+    token = needle + '{'
+    while True:
+        at = css.find(token, start)
+        if at < 0:
+            return blocks
+        line = css.rfind('\n', 0, at) + 1
+        end = css.find('}', at)
+        blocks.append(css[line:end + 1].strip())
+        start = end + 1
+
+
+class UnknownMarkBackgroundTest(unittest.TestCase):
+    """？の背景は日付列と同じ。記号・保存値・作業/時刻の背景は変えない。"""
+
+    def test_screen_and_print_keep_column_background(self):
+        css = (ROOT / 'style.css').read_text(encoding='utf-8')
+        self.assertNotIn('#faf6ea', css.lower())
+        self.assertNotIn('faf6ea', css.lower())
+        screen = [
+            block for block in _css_blocks(css, '.shift-grid td.shift-unknown')
+            if 'printing-shift' not in block
+        ]
+        self.assertEqual(len(screen), 1)
+        self.assertIn('color:#6a5a2a', screen[0])
+        self.assertNotIn('background', screen[0])
+        flat = css.replace('\n', '')
+        self.assertIn('.shift-grid td.shift-task{font-weight:800;color:#1f5c45;background:#eef7f1', flat)
+        self.assertIn('.shift-grid td.shift-time{font-weight:700;color:#1a4a7a;background:#f3f8ff', flat)
+        self.assertIn('.shift-grid .shift-sat,.shift-grid th.shift-sat{background:#e8f2fb}', css)
+        self.assertIn('.shift-grid .shift-sun,.shift-grid th.shift-sun{background:#fdeceb}', css)
+
+        base_print = [
+            block for block in _css_blocks(css, 'body.printing-shift .shift-grid td.shift-unknown')
+            if 'print-shift-color' not in block and 'print-shift-bw' not in block
+        ]
+        self.assertEqual(len(base_print), 1)
+        self.assertNotIn('background', base_print[0])
+        compact = css.replace('\n', '').replace(' ', '')
+        self.assertIn('td.shift-sat.shift-unknown', compact)
+        self.assertIn('td.shift-sun.shift-unknown', compact)
+        self.assertIn('background:#e8f2fb!important', css)
+        self.assertIn('background:#fdeceb!important', css)
+        self.assertIn('background:#d9d9d9!important', css)
+        self.assertIn('background:#bfbfbf!important', css)
+        # 偶数行の平日ゼブラは？を除外しない
+        zebra = css[css.find('tbody tr:nth-child(even) td.shift-cell'):]
+        zebra = zebra[:zebra.find('}')]
+        self.assertNotIn('shift-unknown', zebra)
+        color = [
+            block for block in _css_blocks(css, 'body.printing-shift.print-shift-color .shift-grid td.shift-unknown')
+        ]
+        self.assertTrue(color)
+        self.assertIn('color:#6a5a2a', color[0])
+
+    def test_saved_unknown_text_is_unchanged(self):
+        normalized = kintai_shift._normalize_cells(
+            {'part:p1': {'4': {'kind': 'unknown', 'text': '？'}}},
+            30,
+        )
+        self.assertEqual(normalized['part:p1']['4'], {'kind': 'unknown', 'text': '？'})
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = sqlite3.connect(Path(tmp) / 't.sqlite3')
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, login TEXT, name TEXT, password TEXT, "
+                "role TEXT, manage INTEGER, overview INTEGER, active INTEGER, must_change INTEGER, "
+                "version INTEGER, mark_kintai INTEGER DEFAULT 0)"
+            )
+            kintai.bind(Path(tmp))
+            kintai.schema(conn)
+            conn.execute('DELETE FROM kintai_people')
+            conn.execute(
+                'INSERT INTO kintai_people(employee_code, employment, display_name, source_file, active, sort_order, retired) '
+                'VALUES (?,?,?,?,1,1,0)',
+                ('p1', 'part', '合成花子', ''),
+            )
+            user = {'id': 1, 'name': '主', 'login': 'o@ex.com', 'role': 'owner', 'mark_kintai': 1}
+            code, saved = kintai_shift.save_shift_sheet(conn, user, {
+                'year': 2026, 'month': 11, 'version': 0,
+                'people': [{
+                    'key': 'part:p1', 'displayName': '合成花子', 'employment': 'part',
+                    'employeeCode': 'p1', 'source': 'roster',
+                }],
+                'cells': {'part:p1': {'4': {'kind': 'unknown', 'text': '？'}, '5': {'kind': 'task', 'text': 'ピ'}}},
+            })
+            self.assertEqual(code, 200)
+            before = hashlib.sha256(''.join(conn.iterdump()).encode()).hexdigest()
+            exported = kintai_shift_xlsx.export_view({
+                'year': 2026, 'month': 11,
+                'people': [{'key': 'part:p1', 'displayName': '合成花子', 'employment': 'part', 'source': 'roster'}],
+                'cells': saved['cells'],
+            })
+            self.assertEqual(exported[0], 200)
+            self.assertEqual(hashlib.sha256(''.join(conn.iterdump()).encode()).hexdigest(), before)
+            again = kintai_shift.get_shift_sheet(conn, 2026, 11)
+            self.assertEqual(again['cells']['part:p1']['4'], {'kind': 'unknown', 'text': '？'})
+            self.assertEqual(again['cells']['part:p1']['5'], {'kind': 'task', 'text': 'ピ'})
+            conn.close()
 
 
 if __name__ == '__main__':

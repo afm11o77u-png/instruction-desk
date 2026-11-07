@@ -37,7 +37,6 @@ FILL_RGB = {
     'part': 'FFF7F0E8',
     'shift': 'FFF3F7FB',
     'hist': 'FFFAF7F3',
-    'unk': 'FFFAF6EA',
     'task': 'FFEEF7F1',
     'time': 'FFF3F8FF',
 }
@@ -208,9 +207,12 @@ def _name_style(person: dict) -> str:
 def _mark_style(kind: str, bucket: str) -> str:
     if kind == 'off':
         return {'wd': 'off', 'sat': 'off_sat', 'sun': 'off_sun'}[bucket]
-    if kind in ('unknown', 'task', 'time'):
-        # 画面では記号の背景が土日色より優先される
-        return {'unknown': 'unk', 'task': 'task', 'time': 'time'}[kind]
+    if kind == 'unknown':
+        # ？は列の背景のまま（平日通常・土薄青・日祝薄赤）。文字色だけ茶。
+        return {'wd': 'unk', 'sat': 'unk_sat', 'sun': 'unk_sun'}[bucket]
+    if kind in ('task', 'time'):
+        # 作業・時刻は記号側の背景を優先する
+        return {'task': 'task', 'time': 'time'}[kind]
     return {'wd': 'blank', 'sat': 'blank_sat', 'sun': 'blank_sun'}[bucket]
 
 
@@ -261,7 +263,9 @@ def _style_sheet() -> tuple[str, dict[str, int]]:
         ('off', 'off', 'none', 1, 0, 'center', False, True),
         ('off_sat', 'off', 'sat', 1, 0, 'center', False, True),
         ('off_sun', 'off_sun', 'sun', 1, 0, 'center', False, True),
-        ('unk', 'unk', 'unk', 1, 0, 'center', False, True),
+        ('unk', 'unk', 'none', 1, 0, 'center', False, True),
+        ('unk_sat', 'unk', 'sat', 1, 0, 'center', False, True),
+        ('unk_sun', 'unk', 'sun', 1, 0, 'center', False, True),
         ('task', 'task', 'task', 1, 0, 'center', False, True),
         ('time', 'time', 'time', 1, 0, 'center', False, True),
     ]
