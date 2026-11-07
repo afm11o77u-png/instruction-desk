@@ -1,11 +1,10 @@
 import base64
 import csv
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 from datetime import date, timedelta
-from io import BytesIO, StringIO
-from xml.sax.saxutils import escape
-from zipfile import ZipFile
+from io import StringIO
 
 import kintai
 import kintai_tot_attendance as tot
@@ -23,30 +22,6 @@ def csv_file(rows, encoding='cp932', header=None):
     return encoded(out.getvalue().encode(encoding))
 
 
-def workbook(name='加藤 篤郎', col=5, formula=False, merged=False):
-    ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-    def cell(ref, value):
-        if isinstance(value, int):
-            return f'<c r="{ref}"><v>{value}</v></c>'
-        return f'<c r="{ref}" t="inlineStr"><is><t>{escape(value)}</t></is></c>'
-    body = cell('AK2', name)
-    for c, label in zip(range(col, col + 3), ['始業時間（00：00）', '休憩時間（00：00）', '終業時間（00：00）']):
-        body += cell(tot.col_name(c) + '3', label)
-    for offset in range(42):
-        # This real template has stale cached years: preserve month/day alignment.
-        d = date(2025, 10, 16) + timedelta(days=offset)
-        body += cell('A' + str(offset + 5), (d - date(1899, 12, 30)).days)
-    if formula:
-        body += f'<c r="{tot.col_name(col)}5"><f>1+1</f><v>2</v></c>'
-    extra = f'<mergeCells><mergeCell ref="{tot.col_name(col)}5:{tot.col_name(col + 1)}5"/></mergeCells>' if merged else ''
-    out = BytesIO()
-    with ZipFile(out, 'w') as z:
-        z.writestr('xl/workbook.xml', f'<workbook xmlns="{ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="26.11" sheetId="1" r:id="rId1"/></sheets></workbook>')
-        z.writestr('xl/_rels/workbook.xml.rels', '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>')
-        z.writestr('xl/worksheets/sheet1.xml', f'<worksheet xmlns="{ns}"><sheetData><row>{body}</row></sheetData>{extra}</worksheet>')
-    return encoded(out.getvalue())
-
-
 class TotAttendanceTest(unittest.TestCase):
     def payload(self, **options):
         p = {'csvData': csv_file([
@@ -54,7 +29,7 @@ class TotAttendanceTest(unittest.TestCase):
             ['加藤 篤郎', '2026/10/17(土)', '09:00', '', '17:40', '09:00'],
             ['加藤 篤郎', '2026/10/18(日)', '', '', '', ''],
             ['加藤 篤郎', '2026/10/19(月)', '09:00', '0', '15:00', '09:00'],
-        ]), 'workbookData': workbook(), 'person': '加藤篤郎', 'month': '2026-11'}
+        ]), 'person': '加藤篤郎', 'month': '2026-11'}
         p.update(options)
         return p
 
@@ -67,25 +42,15 @@ class TotAttendanceTest(unittest.TestCase):
         self.assertEqual(days['2026-10-17']['rest'], '')
         self.assertEqual(days['2026-10-19']['rest'], '0:00')
 
-    def test_period_and_destination(self):
-        _, body = tot.prepare(self.payload(), kintai.read_xlsx_grid)
-        self.assertEqual(body['layout']['range'], 'E5:G35')
-        self.assertTrue(body['layout']['dateYearMismatch'])
+    def test_period_without_workbook(self):
+        _, body = tot.prepare(self.payload())
+        self.assertNotIn('layout', body)
         self.assertEqual(len(body['rows']), 31)
         self.assertEqual(body['rows'][0]['date'], '2026-10-16')
         self.assertEqual(body['rows'][-1]['date'], '2026-11-15')
         self.assertEqual(body['defaultBreak'], 70)
         self.assertIn('空欄', body['rows'][1]['note'])
         self.assertIn('ありません', body['rows'][4]['note'])
-
-    def test_other_input_columns(self):
-        _, body = tot.prepare(self.payload(workbookData=workbook(col=8)), kintai.read_xlsx_grid)
-        self.assertEqual(body['layout']['range'], 'H5:J35')
-
-    def test_workbook_identity_formulas_merges(self):
-        for data in [workbook(name='別の人'), workbook(formula=True), workbook(merged=True)]:
-            with self.assertRaises(ValueError):
-                tot.prepare(self.payload(workbookData=data), kintai.read_xlsx_grid)
 
     def test_duplicate_or_planned_start_rejected(self):
         row = ['加藤 篤郎', '2026/10/16(金)', '9:00', '70', '17:40', '9:00']
@@ -107,7 +72,7 @@ class TotAttendanceTest(unittest.TestCase):
     def test_multiple_punches_preserved_for_review(self):
         row = ['加藤 篤郎', '2026/10/16(金)', '08:52 17:42', '', '', '9:00']
         p = self.payload(csvData=csv_file([row]))
-        _, result = tot.prepare(p, kintai.read_xlsx_grid)
+        _, result = tot.prepare(p)
         self.assertEqual(result['rows'][0]['start'], '08:52 17:42')
         self.assertIn('原CSV', result['rows'][0]['note'])
 
@@ -116,6 +81,26 @@ class TotAttendanceTest(unittest.TestCase):
         self.assertEqual(tot.closing_month(date(2026, 10, 15)), '2026-10')
         a, b = tot.period('2024-03')
         self.assertEqual((b - a).days + 1, 29)
+
+    def test_empty_days_are_not_classified_as_holidays(self):
+        p = self.payload()
+        _, result = tot.prepare(p)
+        self.assertEqual([r['date'] for r in result['rows']][0], '2026-10-16')
+        self.assertEqual(result['rows'][2]['start'], '')
+        self.assertEqual(result['rows'][2]['rest'], '')
+        self.assertEqual(result['rows'][2]['end'], '')
+        self.assertTrue(all('holiday' not in row for row in result['rows']))
+
+    def test_open_folder_local_only_and_fixed_path(self):
+        remote = SimpleNamespace(client_address=('192.168.1.50', 1234))
+        local = SimpleNamespace(client_address=('127.0.0.1', 1234))
+        with patch.object(tot.subprocess, 'Popen') as run:
+            self.assertEqual(tot.open_folder(remote)[0], 403)
+            run.assert_not_called()
+            with patch.object(tot.os, 'name', 'nt'):
+                self.assertEqual(tot.open_folder(local)[0], 200)
+            run.assert_called_once_with(['explorer.exe', tot.ATTENDANCE_FOLDER], shell=False)
+        self.assertIn('出勤簿   2026年度版', tot.ATTENDANCE_FOLDER)
 
     def test_endpoints_permissions_no_database_writes(self):
         class NoDatabase:

@@ -3465,6 +3465,9 @@ def handle_post(h, c, path: str, d: dict):
         except Exception as e:
             raise ValueError('ファイルデータを読めません。') from e
         return 200, import_paths_from_upload(c, str(filename), blob)
+    if path == '/api/kintai/tot-attendance/open-folder':
+        import kintai_tot_attendance
+        return kintai_tot_attendance.open_folder(h)
     if path == '/api/kintai/tot-attendance/parse':
         import kintai_tot_attendance
         return kintai_tot_attendance.import_preview(d or {})
