@@ -487,6 +487,12 @@ function syncFixedStoreField(){
  const hint=$('#fixedstorehint');
  if(label)label.hidden=!on;
  if(hint)hint.hidden=!on;
+ syncFixedDeleteButton();
+}
+function syncFixedDeleteButton(){
+ const btn=$('#fixeddelete');
+ if(!btn)return;
+ btn.hidden=!(canWriteFixedLabelFormats()&&selectedSavedFixedLabel());
 }
 function syncFixedRegKind(){
  const kind=document.querySelector('input[name="fixedregkind"]:checked')?.value||'tiers';
@@ -662,8 +668,38 @@ $('#fixedregpreview')?.addEventListener('click',previewFixedLabelDraft);
 $('#fixedregsave')?.addEventListener('click',()=>saveFixedLabelFormat(false));
 $('#fixedregupdate')?.addEventListener('click',()=>saveFixedLabelFormat(true));
 $('#fixedformat')?.addEventListener('change',syncFixedStoreField);
+$('#fixeddelete')?.addEventListener('click',deleteFixedLabelFormat);
 syncFixedRegKind();
 syncFixedStoreField();
+async function deleteFixedLabelFormat(){
+ $('#labelfixederror').textContent='';
+ if(!canWriteFixedLabelFormats()){
+  $('#labelfixederror').textContent='定型書式の登録・修正・削除は、現場・現場２・現場３と主管理者が行えます。';
+  return;
+ }
+ const rec=selectedSavedFixedLabel();
+ if(!rec){
+  $('#labelfixederror').textContent='削除できるのは登録した書式だけです。組み込みの書式は削除できません。';
+  return;
+ }
+ if(!confirm(`「${rec.name}」を削除します。この書式は共有なので、他の利用者の一覧からも消えます。削除してよろしいですか？`))return;
+ try{
+  await api('/api/fixed-label-formats/delete',{id:rec.id,version:rec.version});
+  if(fixedLabelEditing&&fixedLabelEditing.id===rec.id){
+   fixedLabelEditing=null;
+   const status=$('#fixedregstatus');
+   if(status)status.textContent='削除した書式の修正はできません。内容を残すなら、新しい保存名で登録してください。';
+  }
+  const store=$('#fixedstore');
+  if(store)store.value='';
+  const dialog=document.querySelector('#fixedlabelpreview');
+  if(dialog&&dialog.open)dialog.close();
+  await loadFixedLabelFormats();
+  toast('定型書式を削除しました。');
+ }catch(e){
+  $('#labelfixederror').textContent=e.message;
+ }
+}
 
 function openHandwriteLabelPreview(customerName,sheetCount){
  let dialog=document.querySelector('#handwritelabelpreview');

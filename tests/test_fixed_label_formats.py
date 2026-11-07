@@ -187,14 +187,52 @@ class FixedLabelFormatStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._save({'name': '欠け', 'kind': 'tiers', 'payload': {'lines': ['あ', 'い', '']}})
 
-    def test_no_delete_and_missing_id(self):
-        _, saved = self._save(_tiers())
+    def test_delete_saved_format_only(self):
+        _, keep = self._save(_tiers('残す書式'))
+        _, saved = self._save(_depts('消す書式'))
+        orders_before = self.c.execute('SELECT payload FROM orders').fetchone()['payload']
+        labels_before = self.c.execute('SELECT name,payload FROM label_sets').fetchone()
         status, body = forms.handle(
-            _handler(_user()), self.c, '/api/fixed-label-formats/delete',
+            _handler(_user('warehouse', 9)), self.c, '/api/fixed-label-formats/delete',
             {'id': saved['id'], 'version': saved['version']},
         )
+        self.assertEqual(status, 403)
+        self.assertIn('現場・現場２・現場３と主管理者', body['error'])
+        status, body = forms.handle(
+            _handler(_user('sales', 9)), self.c, '/api/fixed-label-formats/delete',
+            {'id': saved['id'], 'version': saved['version']},
+        )
+        self.assertEqual(status, 403)
+        status, body = forms.handle(
+            _handler(_user()), self.c, '/api/fixed-label-formats/delete',
+            {'id': saved['id'], 'version': saved['version'] + 1},
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(self.c.execute('SELECT name FROM fixed_label_formats WHERE id=?', (saved['id'],)).fetchone()['name'], '消す書式')
+        status, body = forms.handle(
+            _handler(_user()), self.c, '/api/fixed-label-formats/delete',
+            {'id': 999, 'version': 1},
+        )
         self.assertEqual(status, 404)
-        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM fixed_label_formats').fetchone()[0], 1)
+        status, body = forms.handle(
+            _handler(_user()), self.c, '/api/fixed-label-formats/delete',
+            {'version': 1},
+        )
+        self.assertEqual(status, 404)
+        status, body = forms.handle(
+            _handler(_user('floor2', 3)), self.c, '/api/fixed-label-formats/delete',
+            {'id': saved['id'], 'version': saved['version']},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body['name'], '消す書式')
+        self.assertIsNone(self.c.execute('SELECT id FROM fixed_label_formats WHERE id=?', (saved['id'],)).fetchone())
+        self.assertEqual(self.c.execute('SELECT name FROM fixed_label_formats').fetchone()['name'], '残す書式')
+        self.assertEqual(self.c.execute('SELECT payload FROM orders').fetchone()['payload'], orders_before)
+        self.assertEqual(self.c.execute('SELECT name,payload FROM label_sets').fetchone()['name'], labels_before['name'])
+        self.assertEqual(self.c.execute('SELECT name,payload FROM label_sets').fetchone()['payload'], labels_before['payload'])
+        action = self.c.execute("SELECT action,target FROM audit ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertEqual(action['action'], '定型書式を削除')
+        self.assertEqual(action['target'], '消す書式')
         status, body = self._save({
             'id': 999,
             'version': 1,
@@ -203,6 +241,12 @@ class FixedLabelFormatStoreTest(unittest.TestCase):
             'payload': {'lines': ['あ', 'い', 'う']},
         })
         self.assertEqual(status, 404)
+        status, body = forms.handle(
+            _handler(_user()), self.c, '/api/fixed-label-formats/nope',
+            {'id': keep['id'], 'version': keep['version']},
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(self.c.execute('SELECT COUNT(*) FROM fixed_label_formats').fetchone()[0], 1)
 
     def test_permissions(self):
         for role in ('owner', 'floor', 'floor2', 'floor3'):
@@ -327,7 +371,9 @@ class FixedLabelFormatStoreTest(unittest.TestCase):
         src = (ROOT / 'fixed_label_formats.py').read_text(encoding='utf-8')
         self.assertIn('CREATE TABLE IF NOT EXISTS fixed_label_formats', src)
         self.assertNotIn('DROP TABLE', src)
-        self.assertNotIn('DELETE FROM', src)
+        self.assertIn('DELETE FROM fixed_label_formats WHERE id=? AND version=?', src)
+        self.assertNotIn('DELETE FROM orders', src)
+        self.assertNotIn('DELETE FROM label_sets', src)
 
 
 class FixedLabelFormatWiringTest(unittest.TestCase):
@@ -374,6 +420,7 @@ class FixedLabelFormatWiringTest(unittest.TestCase):
             self.assertIn(token, index)
         self.assertIn('この行を外す', sheet)
         self.assertNotIn('id="fixedregdelete"', index)
+        self.assertIn('id="fixeddelete" hidden>この書式を削除</button>', index)
         save_at = index.index('id="fixedregname"')
         save_name = index[index.rindex('<label>', 0, save_at):index.index('</label>', save_at)]
         self.assertIn('id="fixedregname"', save_name)
@@ -399,7 +446,14 @@ class FixedLabelFormatWiringTest(unittest.TestCase):
         self.assertIn("createTextNode('部署名(店名)')", dept_fn)
         self.assertIn("setAttribute('aria-label','部署名(店名)')", dept_fn)
         self.assertNotIn("createTextNode('部署名')", dept_fn)
-        self.assertNotIn('fixed-label-formats/delete', sheet)
+        delete_fn = sheet[sheet.index('function deleteFixedLabelFormat'):sheet.index('function openHandwriteLabelPreview')]
+        self.assertIn('共有なので、他の利用者の一覧からも消えます', delete_fn)
+        self.assertIn("api('/api/fixed-label-formats/delete'", delete_fn)
+        self.assertLess(delete_fn.index('confirm('), delete_fn.index("api('/api/fixed-label-formats/delete'"))
+        self.assertIn('fixedLabelEditing=null', delete_fn)
+        self.assertIn("store.value=''", delete_fn)
+        self.assertIn('dialog.close()', delete_fn)
+        self.assertIn('組み込みの書式は削除できません', delete_fn)
         self.assertIn("['owner','floor','floor2','floor3']", sheet)
         self.assertIn("currentUser?.role==='warehouse'", sheet)
         self.assertIn('departmentRowChange', sheet)
