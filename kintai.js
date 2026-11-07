@@ -409,11 +409,23 @@
     toast('入社日・退社日・有給休暇起算日を保存しました。');
   }
 
+  let rosterLoad = 0;
+
   async function loadKintaiRoster() {
     if (!canKintai()) return;
+    const token = ++rosterLoad;
     const year = rememberYear(fiscalStartYear());
-    const data = await api('/api/kintai/roster?year=' + encodeURIComponent(year));
-    paintRoster(data);
+    const roster = $('#kintairoster');
+    try {
+      const data = await api('/api/kintai/roster?year=' + encodeURIComponent(year));
+      if (token !== rosterLoad || !roster || roster.hidden) return;
+      paintRoster(data);
+    } catch (err) {
+      if (token === rosterLoad && roster && !roster.hidden) {
+        roster.innerHTML = '<p class="kintaimeta" role="status">読み込めませんでした。</p>';
+      }
+      throw err;
+    }
   }
 
   function summaryRow(label, item, total) {
@@ -789,7 +801,11 @@
       if (!roster) return;
       roster.hidden = !roster.hidden;
       rosterBtn.textContent = roster.hidden ? '全員の累計' : '全員の累計を閉じる';
-      if (!roster.hidden) loadKintaiRoster().catch(e => toast(e.message));
+      if (!roster.hidden) {
+        roster.innerHTML = '<p class="kintaimeta" role="status">読み込み中です。</p>';
+        roster.scrollIntoView({ block: 'nearest' });
+        loadKintaiRoster().catch(e => toast(e.message));
+      }
     };
     const rosterBox = $('#kintairoster');
     if (rosterBox && !rosterBox.dataset.datebound) {

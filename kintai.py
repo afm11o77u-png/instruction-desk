@@ -3361,18 +3361,24 @@ def _person_workbook_bytes(person: dict, settings: dict | None = None) -> bytes 
         return None
 
 
-def month_attendance_detail(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None) -> tuple[float | None, bool]:
-    """日別出勤の合計と、表示中の日が全部確定しているか。"""
+def month_attendance_detail(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None, parsed=None) -> tuple[float | None, bool]:
+    """日別出勤の合計と、表示中の日が全部確定しているか。
+
+    parsed は (sheets, print_areas)。同じファイルを月ごとに読み直さないために渡す。
+    """
     settings = load_local_settings()
     layout = get_layout(layout_id_for_person(person, settings))
-    if blob is None:
-        blob = _person_workbook_bytes(person, settings)
-    if blob is None:
-        return None, False
     if saved is None:
         saved = _load_saved_work_days(c, int(person['id']))
     try:
-        view = daily_rows_from_workbook(blob, year, month, layout)
+        if parsed is None:
+            if blob is None:
+                blob = _person_workbook_bytes(person, settings)
+            if blob is None:
+                return None, False
+            view = daily_rows_from_workbook(blob, year, month, layout)
+        else:
+            view = _daily_rows_from_parsed(parsed[0], parsed[1], year, month, layout)
     except ValueError:
         return None, False
     return _overlay_work_days(view['rows'], saved)
@@ -3415,16 +3421,36 @@ def apply_displayed_holidays(month_rows: list[dict]) -> None:
         )
 
 
+def _parsed_workbook(blob: bytes, layout: dict):
+    """シートと印刷範囲を1回だけ読む。壊れたファイルは ValueError。"""
+    sheets = read_xlsx_grid(blob)
+    areas = None
+    if (layout.get('kind') or 'fixture-days') != 'fixture-days':
+        areas = read_print_areas(blob)
+    return sheets, areas
+
+
 def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
     if not months:
         return
     settings = load_local_settings()
+    layout = get_layout(layout_id_for_person(person, settings))
     blob = _person_workbook_bytes(person, settings)
     saved = _load_saved_work_days(c, int(person['id']))
+    parsed = None
+    if blob is not None:
+        try:
+            parsed = _parsed_workbook(blob, layout)
+        except ValueError:
+            parsed = None
     for item in months:
-        total, complete = month_attendance_detail(
-            c, person, int(item['year']), int(item['month']), blob=blob, saved=saved,
-        )
+        if parsed is None:
+            total, complete = None, False
+        else:
+            total, complete = month_attendance_detail(
+                c, person, int(item['year']), int(item['month']),
+                saved=saved, parsed=parsed,
+            )
         item['workDays'] = total
         item['workDaysComplete'] = complete
         item['workDaysFrom'] = 'daily'
@@ -3525,9 +3551,14 @@ def _sheet_actual_rows(grid, layout: dict) -> list[dict]:
 
 def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -> dict:
     """月シートの日別行を、見出しのある列のキャッシュのまま返す。月次集計はしない。"""
+    sheets, areas = _parsed_workbook(blob, layout)
+    return _daily_rows_from_parsed(sheets, areas, year, month, layout)
+
+
+def _daily_rows_from_parsed(sheets, print_areas, year: int, month: int, layout: dict) -> dict:
+    """読み済みのブックから日別行を返す。ファイルは開かない。"""
     if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
         raise ValueError('対象月を確認してください。')
-    sheets = read_xlsx_grid(blob)
     kind = layout.get('kind') or 'fixture-days'
     if kind == 'fixture-days':
         name = layout['sheet_name_format'].format(yyyy=year, mm=month, month=month)
@@ -3578,7 +3609,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
     if grid is None:
         found = '、'.join(list(sheets.keys())[:8]) or '（なし）'
         raise ValueError(f'月シート「{sheet_name}」がありません。ファイル内: {found}')
-    printed = read_print_areas(blob).get(sheet_name)
+    printed = (print_areas or {}).get(sheet_name)
     print_area = printed[1] if printed and printed[0] == 'ok' else None
     columns = _daily_sheet_columns(grid, layout, print_area)
     period_start, period_end = closing_period(year, month)
