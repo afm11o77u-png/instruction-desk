@@ -57,7 +57,7 @@
     result.rows.forEach((row, index) => {
       const checked = checkedValues(row);
       const cell = $('totattrow' + index);
-      cell.textContent = checked.error || [row.note, row.edited ? '手修正済み' : '', row.filled ? '固定休憩を補完' : '', checked.overnight ? '退勤は翌日として貼付' : ''].filter(Boolean).join('／');
+      cell.textContent = [checked.error, row.note, row.edited ? '手修正済み' : '', row.filled ? '固定休憩を補完' : '', checked.overnight ? '退勤は翌日として貼付' : ''].filter(Boolean).join('／');
       cell.style.color = checked.error ? '#a32525' : '';
       if (checked.error) errors += 1;
     });
