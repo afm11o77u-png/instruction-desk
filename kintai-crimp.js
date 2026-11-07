@@ -19,8 +19,13 @@
       sel.dataset.ready = '1';
     }
     data = await api('/api/kintai/crimp?month=' + encodeURIComponent(month.value));
+    const showInputter = !!data.canAdmin;
     $('#crimptotal').textContent = `月合計 ${fmt(data.total)}`;
-    $('#crimptable tbody').innerHTML = data.rows.map(r => `<tr data-day="${esc(r.day)}"><td>${esc(r.day)}</td><td>${fmt(r.reading)}</td><td>${r.diff === null ? '—' : fmt(r.diff)}</td><td>${esc(r.userName)}</td><td>${data.canAdmin ? '<button type="button" class="quiet" data-crimp-edit>修正</button><button type="button" class="quiet" data-crimp-del>削除</button>' : ''}</td></tr>`).join('');
+    $('#crimptable tbody').innerHTML = data.rows.map(r => {
+      const name = showInputter ? esc(r.userName || '') : '';
+      return `<tr data-day="${esc(r.day)}"><td>${esc(r.day)}</td><td>${fmt(r.reading)}</td><td>${r.diff === null ? '—' : fmt(r.diff)}</td><td class="crimp-inputter"${showInputter ? '' : ' hidden'}>${name}</td><td>${showInputter ? '<button type="button" class="quiet" data-crimp-edit>修正</button><button type="button" class="quiet" data-crimp-del>削除</button>' : ''}</td></tr>`;
+    }).join('');
+    document.querySelectorAll('#crimptable .crimp-inputter').forEach(el => { el.hidden = !showInputter; });
   }
 
   async function previousReading(day) {

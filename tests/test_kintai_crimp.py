@@ -1,6 +1,7 @@
 """圧着カウンター: 保存・差分・月合計・権限・移行の冪等性。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -69,10 +70,15 @@ class CrimpTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual([r['diff'] for r in res['rows']], [300, 400])
         self.assertEqual(res['total'], 700)
-        self.assertEqual(res['rows'][0]['userName'], '現場花子')
-        self.assertEqual(res['rows'][0]['loginName'], 'floor3太郎')
         self.assertFalse(res['canAdmin'])
+        self.assertNotIn('userName', res['rows'][0])
+        self.assertNotIn('loginName', res['rows'][0])
+        stored = self.c.execute(
+            "SELECT user_name, worker_name FROM kintai_crimp_readings WHERE day='2026-11-02'"
+        ).fetchone()
+        self.assertEqual((stored['worker_name'], stored['user_name']), ('現場花子', 'floor3太郎'))
         self.assertIsNone(self.get(OWNER, '2026-10')[1]['rows'][0]['diff'])
+        self.assertEqual(self.get(OWNER, '2026-10')[1]['rows'][0]['userName'], '現場花子')
 
     def test_same_day_reentry_updates(self):
         self.post(FLOOR3, {'day': '2026-11-02', 'reading': 10})
@@ -80,6 +86,94 @@ class CrimpTest(unittest.TestCase):
         rows = self.get(OWNER, '2026-11')[1]['rows']
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]['reading'], rows[0]['userName']), (12, '主任次郎'))
+
+    def test_inputter_name_only_for_owner_or_manage_flag(self):
+        """入力者名は主管理者か管理者フラグ（manage）だけ。一般のAPIにも出さない。"""
+        self.assertEqual(self.post(FLOOR3, {'day': '2026-10-31', 'reading': 1000})[0], 200)
+        code, saved = self.post(FLOOR3, {'day': '2026-11-02', 'reading': 1010})
+        self.assertEqual(code, 200)
+        self.assertNotIn('現場花子', json.dumps(saved, ensure_ascii=False))
+        self.assertNotIn('floor3太郎', json.dumps(saved, ensure_ascii=False))
+        stored = self.c.execute(
+            'SELECT user_id, user_name, worker_id, worker_name, reading FROM kintai_crimp_readings WHERE day=?',
+            ('2026-11-02',),
+        ).fetchone()
+        self.assertEqual(stored['reading'], 1010)
+        self.assertEqual(stored['worker_id'], 1)
+        self.assertEqual(stored['worker_name'], '現場花子')
+        self.assertEqual(stored['user_id'], FLOOR3['id'])
+        self.assertEqual(stored['user_name'], 'floor3太郎')
+
+        def blob(user):
+            status, res = self.get(user, '2026-11')
+            return status, res, json.dumps(res, ensure_ascii=False)
+
+        def assert_hidden(user):
+            status, res, text = blob(user)
+            self.assertEqual(status, 200, text)
+            row = res['rows'][0]
+            self.assertEqual(row['reading'], 1010)
+            self.assertEqual(row['diff'], 10)
+            self.assertEqual(res['total'], 10)
+            self.assertFalse(res['canAdmin'])
+            for key in ('userName', 'loginName', 'workerName', 'userId', 'workerId', 'user_name', 'worker_name'):
+                self.assertNotIn(key, row)
+                self.assertNotIn(key, res)
+            self.assertNotIn('現場花子', text)
+            self.assertNotIn('floor3太郎', text)
+            self.assertNotIn('主任次郎', text)
+
+        def assert_visible(user):
+            status, res, text = blob(user)
+            self.assertEqual(status, 200, text)
+            row = res['rows'][0]
+            self.assertEqual(row['reading'], 1010)
+            self.assertEqual(row['diff'], 10)
+            self.assertTrue(res['canAdmin'])
+            self.assertEqual(row['userName'], '現場花子')
+            self.assertEqual(row['loginName'], 'floor3太郎')
+            self.assertNotIn('workerId', row)
+            self.assertNotIn('userId', row)
+
+        # 主管理者（manage が無くても可）。sqlite の行でも同じ。
+        assert_visible(OWNER)
+        assert_visible(U('owner', manage=0, overview=0, mark_kintai=0))
+        owner_row = self.c.execute("SELECT * FROM users WHERE role='owner'").fetchone()
+        assert_visible(owner_row)
+
+        # 管理者フラグは manage。overview が 0 でも見える。チェックは両方立つが、判定は manage。
+        assert_visible(U('sales', manage=1, overview=0, mark_kintai=0))
+        assert_visible(U('floor', manage=1, overview=1, mark_kintai=0))
+        self.c.execute('UPDATE users SET manage=1, overview=0, mark_kintai=0 WHERE id=4')
+        assert_visible(self.c.execute('SELECT * FROM users WHERE id=4').fetchone())
+
+        # 一般。マーク管理や overview だけでは見えない。数量と保存は維持。
+        assert_hidden(FLOOR3)
+        assert_hidden(U('floor3', manage=0, overview=0, mark_kintai=1))
+        assert_hidden(U('sales', manage=0, overview=0, mark_kintai=1))
+        assert_hidden(U('floor', manage=0, overview=0, mark_kintai=1))
+        assert_hidden(U('sales', manage=0, overview=1, mark_kintai=0))
+        self.c.execute(
+            "INSERT INTO users(id,login,name,role,manage,overview,active,mark_kintai) VALUES(?,?,?,?,?,?,?,?)",
+            (11, 'g', '一般五郎', 'floor3', 0, 0, 1, 1),
+        )
+        assert_hidden(self.c.execute('SELECT * FROM users WHERE id=11').fetchone())
+
+        # 権限の無い人は 403。本文に入力者名は無い。
+        status, res = self.get(U('floor'), '2026-11')
+        self.assertEqual(status, 403)
+        self.assertNotIn('現場花子', json.dumps(res, ensure_ascii=False))
+
+        # 修正・削除の範囲は変えない（overview のみは不可、manage は可）。
+        self.assertEqual(self.post(U('sales', overview=1, manage=0), {'day': '2026-11-02', 'reading': 9, 'edit': True})[0], 403)
+        self.assertEqual(self.post(U('sales', mark_kintai=1), {'day': '2026-11-02'}, '/api/kintai/crimp/delete')[0], 403)
+        self.assertEqual(self.c.execute('SELECT reading FROM kintai_crimp_readings WHERE day=?', ('2026-11-02',)).fetchone()['reading'], 1010)
+        # 入力候補の一覧は記録の閲覧ではなく、保存に必要なので一般にも残す。過去の紐づけは含めない。
+        p = '/api/kintai/crimp/workers'
+        status, workers = kintai.handle_get(_H(FLOOR3, p), self.c, p)
+        self.assertEqual(status, 200)
+        self.assertEqual(sorted(w['name'] for w in workers), ['主任次郎', '現場花子'])
+        self.assertTrue(all(set(w) == {'id', 'name'} for w in workers))
 
     def test_admin_only_edit_delete(self):
         self.post(FLOOR3, {'day': '2026-11-02', 'reading': 10})
@@ -124,6 +218,11 @@ class CrimpTest(unittest.TestCase):
         js = (ROOT / 'kintai-crimp.js').read_text(encoding='utf-8')
         self.assertIn('confirm(', js)
         self.assertIn('id="crimpworker" required', html)
+        self.assertIn('<th class="crimp-inputter" hidden>入力者</th>', html)
+        self.assertIn('const showInputter = !!data.canAdmin;', js)
+        self.assertIn("const name = showInputter ? esc(r.userName || '') : '';", js)
+        self.assertNotIn('loginName', js)
+        self.assertNotIn('${esc(r.userName)}', js)
 
 
 if __name__ == '__main__':

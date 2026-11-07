@@ -29,6 +29,12 @@ def workers(c) -> list[dict]:
 
 
 def can_admin(user) -> bool:
+    """主管理者（role=owner）または管理者フラグ（users.manage）。
+
+    利用者管理の「管理者」チェックは manage と overview を同時に立てる。
+    ここでの管理者フラグは manage 列だけ（在庫の管理者フラグ、修正・削除と同じ）。
+    overview のみ、マーク管理（mark_kintai）のみでは管理者にしない。
+    """
     try:
         return bool(user) and (user['role'] == 'owner' or bool(user['manage']))
     except (KeyError, IndexError, TypeError):
@@ -60,8 +66,11 @@ def list_month(c, ym: str | None, user=None) -> dict:
         ym = dt.date.today().strftime('%Y-%m')
     if not re.fullmatch(r'\d{4}-\d{2}', ym):
         raise ValueError('対象月は YYYY-MM 形式で指定してください。')
+    show_name = can_admin(user)
+    # 一般の応答を組み立てるとき、氏名列は読まない（レスポンスに載せない）。
+    name_cols = ', user_name, worker_name' if show_name else ''
     rows = c.execute(
-        'SELECT day, reading, user_name, worker_name, updated_at FROM kintai_crimp_readings WHERE day <= ? ORDER BY day',
+        f'SELECT day, reading{name_cols}, updated_at FROM kintai_crimp_readings WHERE day <= ? ORDER BY day',
         (ym + '-31',),
     ).fetchall()
     prev = None
@@ -70,10 +79,15 @@ def list_month(c, ym: str | None, user=None) -> dict:
         diff = None if prev is None else r['reading'] - prev
         prev = r['reading']
         if r['day'].startswith(ym):
-            out.append({'day': r['day'], 'reading': r['reading'], 'diff': diff,
-                        'userName': r['worker_name'] or r['user_name'], 'loginName': r['user_name'], 'updatedAt': r['updated_at']})
+            # 数量・日付は全員。入力者名（選択した作業者と保存操作のログイン名）は
+            # 主管理者か管理者フラグがある閲覧者だけ。id も返さない。記録列は残す。
+            item = {'day': r['day'], 'reading': r['reading'], 'diff': diff, 'updatedAt': r['updated_at']}
+            if show_name:
+                item['userName'] = r['worker_name'] or r['user_name']
+                item['loginName'] = r['user_name']
+            out.append(item)
     total = sum(x['diff'] for x in out if x['diff'] is not None)
-    return {'month': ym, 'rows': out, 'total': total, 'canAdmin': can_admin(user)}
+    return {'month': ym, 'rows': out, 'total': total, 'canAdmin': show_name}
 
 
 def previous_reading(c, day: str):
