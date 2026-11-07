@@ -2700,13 +2700,13 @@ def _clock_header(label: str) -> bool:
 
 # 日別で出す列。表示名はこの順で固定。元見出しの（00：00）やふりがなは出さない。
 # match は正規化後の完全一致。前の候補が1列だけならそれを使い、複数なら後の候補を見ない。
+# 年間カレンダー時間の列は日別では出さない。日付の正は年間カレンダーのまま。
 # 合計はここには含めない。右側の行ラベルとその右の数値を、計算せずに出す。
 DAILY_VIEW_FIELDS = (
     {'key': 'leave', 'label': '有休', 'match': ('休み',), 'fallback': 'leave_col', 'clock': False},
     {'key': 'start', 'label': '始業時間', 'match': ('始業時間',), 'fallback': 'start_col', 'clock': True},
     {'key': 'breakTime', 'label': '休憩時間', 'match': ('休憩時間',), 'clock': True},
     {'key': 'end', 'label': '終業時間', 'match': ('終業時間',), 'clock': True},
-    {'key': 'calendarHours', 'label': '年間', 'match': ('年間ｶﾚﾝﾀﾞｰ時間', '年間カレンダー時間'), 'hours': True},
     {'key': 'actual', 'label': '実労働時間', 'match': ('実労働時間',), 'hours': True},
     {'key': 'earlyNight', 'label': '早朝深夜', 'match': ('早朝深夜勤務時間',), 'hours': True},
     {'key': 'dayOvertime', 'label': '日残業', 'match': ('日残業',), 'hours': True},
@@ -2868,7 +2868,7 @@ def _total_column(grid, layout: dict, used_cols: set[int], print_area=None) -> d
 
 
 def _daily_sheet_columns(grid, layout: dict, print_area=None) -> list[dict]:
-    """指定の11列だけ。変換・判定列は出さない。合計は右側のラベルと数値。"""
+    """指定の列だけ。年間の列は出さない。変換・判定列も出さない。合計は右側のラベルと数値。"""
     found = _daily_header_index(grid, layout)
     columns = [{'key': 'date', 'label': '日付'}]
     for field in DAILY_VIEW_FIELDS:
