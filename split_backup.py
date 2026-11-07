@@ -38,7 +38,7 @@ CATEGORIES = {
         'label': '指示書デスク',
         'tables': (
             'orders', 'history', 'templates', 'template_repairs', 'placement_corrections',
-            'label_sets', 'picking_lists', 'picking_sources', 'picking_history',
+            'label_sets', 'fixed_label_formats', 'picking_lists', 'picking_sources', 'picking_history',
             'carry_inputs', 'carry_checks', 'carry_prints',
         ),
         'files': (),

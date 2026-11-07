@@ -1,4 +1,5 @@
-/* 定型書式印刷：印刷専用の書式レジストリ。業務データへの登録・更新はしない。 */
+/* 定型書式の印刷HTML。組み込み書式と、登録した書式（3段・部署チェック）のプレビューを作る。
+ * このファイルは指示書を更新しない。書式の保存は fixed_label_formats.py が行う。 */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -66,7 +67,15 @@
     '.hm .memo{display:flex;align-items:flex-start;gap:1.5mm;margin-top:2.5mm;flex:0 0 auto}' +
     '.hm .memo .label{font-size:8.5pt;font-weight:700;padding-top:2mm;white-space:nowrap}' +
     '.hm .memo .memobox{flex:1 1 auto;height:12mm;border:1px solid #000}' +
-    '.hm .maker{text-align:right;font-size:6pt;line-height:1;margin-top:.8mm;flex:0 0 auto}';
+    '.hm .maker{text-align:right;font-size:6pt;line-height:1;margin-top:.8mm;flex:0 0 auto}' +
+    /* 登録した3段書式。各段の空白（納品日　月　日）は潰さない */
+    '.cell.tiers{justify-content:center;align-items:center;gap:4mm;padding:10mm 8mm}' +
+    '.cell.tiers .tierline{text-align:center;font-weight:700;line-height:1.35;letter-spacing:.06em;' +
+    'white-space:pre-wrap;overflow-wrap:anywhere;width:100%}' +
+    '.checkrow.cols2{grid-template-columns:repeat(2,minmax(0,1fr))}' +
+    '.checkrow.cols3{grid-template-columns:repeat(3,minmax(0,1fr))}' +
+    '.cell.depts .check{white-space:normal;overflow-wrap:anywhere}' +
+    '.cell.depts .checks.tight{gap:1.6mm;margin-bottom:2mm}';
 
   function escText(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -115,11 +124,7 @@
           row('four', ['製造部', '設備保全課', '商品部', '新規事業部']) +
           row('five', ['衛生', '清掃', '営業部', '貸出用', '工場長']) +
           '</div>' +
-          '<div class="idblock">' +
-          '<div class="no"><span class="label">NO.</span><span class="line"></span></div>' +
-          '<div class="name-row"><div class="sama">様</div></div>' +
-          '</div>' +
-          '<div class="footer">新規　交換　その他</div>' +
+          fixedLabelNameBlockHtml() +
           '</section>'
         );
       },
@@ -249,6 +254,241 @@
     return false;
   }
 
+  const FIXED_LABEL_NAME_LIMIT = 80;
+  const FIXED_LABEL_TIER_LIMIT = 40;
+  const FIXED_LABEL_CUSTOMER_LIMIT = 40;
+  const FIXED_LABEL_DEPT_LIMIT = 16;
+  const FIXED_LABEL_DEPT_MAX = 24;
+
+  function fixedLabelBuiltinNames() {
+    return FIXED_LABEL_FORMATS.map((f) => f.name);
+  }
+
+  /* NO.＿＿＿・様・新規　交換　その他。組み込みのだるま食品銭函工場と同じ並び。 */
+  function fixedLabelNameBlockHtml() {
+    return (
+      '<div class="idblock">' +
+      '<div class="no"><span class="label">NO.</span><span class="line"></span></div>' +
+      '<div class="name-row"><div class="sama">様</div></div>' +
+      '</div>' +
+      '<div class="footer">新規　交換　その他</div>'
+    );
+  }
+
+  function cleanFixedLabelText(value) {
+    if (typeof value !== 'string') return null;
+    return value
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\uFEFF]/g, '')
+      .replace(/[\r\n]/g, '')
+      .replace(/^[ \t]+|[ \t]+$/g, '');
+  }
+
+  function isBlankFixedLabelText(value) {
+    return !String(value || '').replace(/[\s\u3000]+/g, '');
+  }
+
+  function normalizeFixedLabelPayload(kind, payload) {
+    const body = payload && typeof payload === 'object' ? payload : null;
+    if (kind === 'tiers') {
+      const raw = body && body.lines;
+      if (!Array.isArray(raw) || raw.length !== 3) {
+        return { ok: false, error: '上段・中段・下段の3つを入力してください。' };
+      }
+      const lines = [];
+      for (const item of raw) {
+        const text = cleanFixedLabelText(item);
+        if (text == null) return { ok: false, error: '各段を文字で入力してください。' };
+        if (isBlankFixedLabelText(text)) return { ok: false, error: '上段・中段・下段をすべて入力してください。' };
+        if (Array.from(text).length > FIXED_LABEL_TIER_LIMIT) {
+          return { ok: false, error: `各段は${FIXED_LABEL_TIER_LIMIT}文字以内で入力してください。` };
+        }
+        lines.push(text);
+      }
+      return { ok: true, kind, payload: { lines } };
+    }
+    if (kind === 'departments') {
+      const customer = cleanFixedLabelText(body && body.customer);
+      if (customer == null) return { ok: false, error: '顧客名を文字で入力してください。' };
+      if (isBlankFixedLabelText(customer)) return { ok: false, error: '顧客名を入力してください。' };
+      if (Array.from(customer).length > FIXED_LABEL_CUSTOMER_LIMIT) {
+        return { ok: false, error: `顧客名は${FIXED_LABEL_CUSTOMER_LIMIT}文字以内で入力してください。` };
+      }
+      const raw = body && body.departments;
+      if (!Array.isArray(raw) || !raw.length) return { ok: false, error: '部署名を1件以上入力してください。' };
+      if (raw.length > FIXED_LABEL_DEPT_MAX) {
+        return { ok: false, error: `部署は${FIXED_LABEL_DEPT_MAX}件までです。` };
+      }
+      const departments = [];
+      for (const item of raw) {
+        const text = cleanFixedLabelText(item);
+        if (text == null) return { ok: false, error: '部署名を文字で入力してください。' };
+        if (isBlankFixedLabelText(text)) {
+          return { ok: false, error: '空の部署名があります。行を外すか、部署名を入力してください。' };
+        }
+        if (Array.from(text).length > FIXED_LABEL_DEPT_LIMIT) {
+          return { ok: false, error: `部署名は${FIXED_LABEL_DEPT_LIMIT}文字以内で入力してください。` };
+        }
+        departments.push(text);
+      }
+      return { ok: true, kind, payload: { customer, departments } };
+    }
+    return { ok: false, error: '書式の種類を選んでください。' };
+  }
+
+  function validateFixedLabelDraft(input) {
+    const name = cleanFixedLabelText(input && input.name);
+    if (name == null || isBlankFixedLabelText(name) || Array.from(name).length > FIXED_LABEL_NAME_LIMIT) {
+      return { ok: false, error: '保存名を1～80文字で入力してください。' };
+    }
+    if (fixedLabelBuiltinNames().includes(name)) {
+      return { ok: false, error: 'この名前は組み込みの書式で使われています。別の名前にしてください。' };
+    }
+    const body = normalizeFixedLabelPayload(input && input.kind, input && input.payload);
+    if (!body.ok) return body;
+    return { ok: true, name, kind: body.kind, payload: body.payload };
+  }
+
+  function tierFontSize(lines) {
+    const n = lines.reduce((max, line) => Math.max(max, Array.from(line).length), 0);
+    if (n <= 6) return 28;
+    if (n <= 10) return 24;
+    if (n <= 16) return 18;
+    if (n <= 24) return 15;
+    return 13;
+  }
+
+  function customerTitleSize(name) {
+    const n = Array.from(name).length;
+    if (n <= 10) return 26;
+    if (n <= 16) return 20;
+    if (n <= 24) return 16;
+    return 13;
+  }
+
+  function departmentLayout(departments) {
+    const list = departments.map((item) => String(item));
+    const maxLen = list.reduce((max, item) => Math.max(max, Array.from(item).length), 0);
+    let cols = 4;
+    if (maxLen >= 12) cols = 2;
+    else if (maxLen >= 8) cols = 3;
+    const rows = [];
+    for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols));
+    let font = 13.5;
+    if (rows.length >= 6 || maxLen >= 12) font = 10.5;
+    else if (rows.length >= 4 || maxLen >= 8) font = 12;
+    return { cols, rows, font, maxLen };
+  }
+
+  function departmentRowChange(count, action) {
+    const n = Number(count);
+    const current = Number.isInteger(n) && n > 0 ? n : 0;
+    if (action === 'add') {
+      if (current >= FIXED_LABEL_DEPT_MAX) {
+        return { ok: false, count: current, error: `部署は${FIXED_LABEL_DEPT_MAX}件までです。` };
+      }
+      return { ok: true, count: current + 1 };
+    }
+    if (action === 'remove') {
+      if (current <= 1) return { ok: true, count: 1, cleared: true };
+      return { ok: true, count: current - 1 };
+    }
+    return { ok: false, count: current, error: '操作を確認してください。' };
+  }
+
+  function tierCellHtml(lines) {
+    const body = normalizeFixedLabelPayload('tiers', { lines });
+    if (!body.ok) throw new Error(body.error);
+    const size = tierFontSize(body.payload.lines);
+    const html = body.payload.lines
+      .map((line) => `<div class="tierline" style="font-size:${size}pt">${escText(line)}</div>`)
+      .join('');
+    return `<section class="cell tiers">${html}</section>`;
+  }
+
+  function departmentCheckRowHtml(items, cols, font) {
+    const cls = cols === 4 ? 'four' : `cols${cols}`;
+    const cells = items
+      .map((text) => `<div class="check" style="font-size:${font}pt"><span class="box">□</span>${escText(text)}</div>`)
+      .join('');
+    return `<div class="checkrow ${cls}">${cells}</div>`;
+  }
+
+  function departmentCellHtml(customer, departments) {
+    const body = normalizeFixedLabelPayload('departments', { customer, departments });
+    if (!body.ok) throw new Error(body.error);
+    const layout = departmentLayout(body.payload.departments);
+    const titleSize = customerTitleSize(body.payload.customer);
+    const rows = layout.rows.map((row) => departmentCheckRowHtml(row, layout.cols, layout.font)).join('');
+    const tight = layout.rows.length >= 5 ? ' tight' : '';
+    return (
+      '<section class="cell depts">' +
+      `<div class="title" style="font-size:${titleSize}pt">${escText(body.payload.customer)}</div>` +
+      `<div class="checks${tight}">${rows}</div>` +
+      fixedLabelNameBlockHtml() +
+      '</section>'
+    );
+  }
+
+  function validateSavedFixedLabelPrintInput(record, sheetCount) {
+    const sheets = normalizeFixedLabelSheetCount(sheetCount);
+    if (sheets == null) return { ok: false, error: '印刷する用紙枚数は1以上の整数で入力してください。' };
+    if (!record || typeof record !== 'object') return { ok: false, error: '書式を選んでください。' };
+    const body = normalizeFixedLabelPayload(record.kind, record.payload);
+    if (!body.ok) return body;
+    const name = cleanFixedLabelText(record.name);
+    return {
+      ok: true,
+      sheetCount: sheets,
+      record: {
+        name: name && !isBlankFixedLabelText(name) ? name : '定型書式',
+        kind: body.kind,
+        payload: body.payload,
+      },
+    };
+  }
+
+  function savedFixedLabelPageHtml(record) {
+    const cell = record.kind === 'tiers'
+      ? tierCellHtml(record.payload.lines)
+      : departmentCellHtml(record.payload.customer, record.payload.departments);
+    return `<div class="page">${cell}${cell}${cell}${cell}</div>`;
+  }
+
+  function savedFixedLabelPagesHtml(record, sheetCount) {
+    const checked = validateSavedFixedLabelPrintInput(record, sheetCount);
+    if (!checked.ok) throw new Error(checked.error);
+    const page = savedFixedLabelPageHtml(checked.record);
+    return Array.from({ length: checked.sheetCount }, () => page).join('');
+  }
+
+  function savedFixedLabelPreviewHtml(record, sheetCount, css) {
+    const style = css || FIXED_LABEL_CSS;
+    const pages = savedFixedLabelPagesHtml(record, sheetCount);
+    return (
+      '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>定型書式印刷</title><style>' +
+      style +
+      '@media screen{body{background:#eee;padding:12px}.page{background:white;margin:0 auto 12px;' +
+      'box-shadow:0 1px 4px rgba(0,0,0,.12)}}' +
+      '</style></head><body>' +
+      pages +
+      '</body></html>'
+    );
+  }
+
+  function savedFixedLabelSelectValue(id) {
+    const n = Number(id);
+    if (!Number.isInteger(n) || n < 1) return '';
+    return `saved:${n}`;
+  }
+
+  function parseSavedFixedLabelSelectValue(value) {
+    const matched = /^saved:(\d+)$/.exec(String(value == null ? '' : value).trim());
+    if (!matched) return null;
+    const id = Number(matched[1]);
+    if (!Number.isInteger(id) || id < 1) return null;
+    return id;
+  }
+
   return {
     FIXED_LABEL_CSS,
     FIXED_LABEL_FORMATS,
@@ -261,5 +501,20 @@
     fixedLabelPreviewHtml,
     fixedLabelIsPrintOnly,
     fixedLabelMutatesOrders,
+    FIXED_LABEL_NAME_LIMIT,
+    FIXED_LABEL_TIER_LIMIT,
+    FIXED_LABEL_CUSTOMER_LIMIT,
+    FIXED_LABEL_DEPT_LIMIT,
+    FIXED_LABEL_DEPT_MAX,
+    fixedLabelBuiltinNames,
+    validateFixedLabelDraft,
+    validateSavedFixedLabelPrintInput,
+    tierCellHtml,
+    departmentCellHtml,
+    departmentLayout,
+    departmentRowChange,
+    savedFixedLabelPreviewHtml,
+    savedFixedLabelSelectValue,
+    parseSavedFixedLabelSelectValue,
   };
 });

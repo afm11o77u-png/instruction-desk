@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from auth import AuthMixin, schema, can_open_stock, stock_can_write
 import templates
 import label_sets
+import fixed_label_formats
 import picking
 import placement
 import split_backup
@@ -63,6 +64,7 @@ def initialize():
         names.bind(DATA)
         names.schema(c)
         label_sets.initialize(c)
+        fixed_label_formats.initialize(c)
         display_modes.initialize(c)
         picking.initialize(c)
         picking.backfill_picking_flags(c)
@@ -972,6 +974,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/api/label-sets':
             with connect() as c: result=label_sets.handle(self,c,path)
             return self.reply(*result)
+        if path=='/api/fixed-label-formats':
+            with connect() as c: result=fixed_label_formats.handle(self,c,path)
+            return self.reply(*result)
         if path=='/api/display-modes':
             with connect() as c: result=display_modes.handle_get(self,c)
             return self.reply(*result)
@@ -1233,6 +1238,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     result=label_sets.handle(self,c,route,d)
+                return self.reply(*result)
+            if route.startswith('/api/fixed-label-formats/'):
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    result=fixed_label_formats.handle(self,c,route,d)
                 return self.reply(*result)
             if self.path=='/api/display-modes':
                 with connect() as c:
