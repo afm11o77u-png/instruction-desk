@@ -159,7 +159,12 @@ class AttendanceDaysStoreTest(unittest.TestCase):
         feb = next(m for m in overview['rows'][0]['months'] if m['month'] == 2 and m['year'] == 2026)
         self.assertEqual(march['workDays'], 3.0)
         self.assertEqual(march['workDaysFrom'], 'daily')
-        self.assertEqual(march['holidayDays'], 1)
+        self.assertFalse(march['workDaysComplete'])
+        self.assertIsNone(march['holidayDays'])
+        self.assertEqual(self.c.execute(
+            'SELECT holiday_days FROM kintai_monthly WHERE person_id=? AND year=2026 AND month=3',
+            (self.person['id'],),
+        ).fetchone()['holiday_days'], 1)
         self.assertIsNone(feb['workDays'])
         other = kintai.person_daily_sheet(self.c, self.other['id'], 2026, 3)
         other_hit = next(row for row in other['rows'] if row['date'] == '2026/02/16')
