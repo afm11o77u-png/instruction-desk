@@ -804,3 +804,8 @@ body.catalog-kintai main>header .headactions{display:none}
 #memodesk .memo-body{flex:1;line-height:1.7;overflow:auto}
 #memodesk .memo-body h2{margin-top:0}
 #memodesk .memo-body .memo-red{color:#d00000}
+
+/* 日別の合計と月シートの実績を並べる。 */
+.kintai-daily-summaries { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.kintai-daily-summaries > section { min-width: 0; max-width: 100%; }
+.kintai-daily-summaries .kintai-daily-totals { width: auto; }
