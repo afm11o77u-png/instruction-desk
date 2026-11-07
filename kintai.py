@@ -2405,22 +2405,29 @@ def _blank_month(year: int, month: int) -> dict:
 
 
 def annotate_running_totals(month_rows: list[dict]) -> None:
-    """年度の並びで、取れている月次だけを足す。未取得の月以降の累計は空欄。残数・付与・起算日は作らない。"""
+    """年度の並びで、取れている月次だけを足す。未取得の月以降の累計は空欄。
+
+    入社前の月（workSkip / holidaySkip）は足さない。そこで累計は止めない。
+    有給取得の累計は取込値のまま足す。残数・付与・起算日は作らない。
+    """
     state = {
-        'holidayDays': ['holidayCumulative', Decimal('0'), True],
-        'paidLeaveDays': ['paidLeaveCumulative', Decimal('0'), True],
-        'workDays': ['workCumulative', Decimal('0'), True],
+        'holidayDays': {'dest': 'holidayCumulative', 'total': Decimal('0'), 'open': True, 'skip': 'holidaySkip', 'started': False},
+        'paidLeaveDays': {'dest': 'paidLeaveCumulative', 'total': Decimal('0'), 'open': True, 'skip': None, 'started': False},
+        'workDays': {'dest': 'workCumulative', 'total': Decimal('0'), 'open': True, 'skip': 'workSkip', 'started': False},
     }
     for item in month_rows:
-        for source, (dest, total, open_) in state.items():
+        for source, pack in state.items():
+            if pack['skip'] and item.get(pack['skip']):
+                item[pack['dest']] = None if not pack['started'] else float(pack['total'].quantize(Decimal('0.01')))
+                continue
             value = item.get(source)
-            if open_ and value is not None:
-                total += Decimal(str(value))
-                state[source][1] = total
-                item[dest] = float(total.quantize(Decimal('0.01')))
+            if pack['open'] and value is not None:
+                pack['total'] += Decimal(str(value))
+                pack['started'] = True
+                item[pack['dest']] = float(pack['total'].quantize(Decimal('0.01')))
             else:
-                state[source][2] = False
-                item[dest] = None
+                pack['open'] = False
+                item[pack['dest']] = None
 
 
 def _person_fiscal_months(c, person: dict, fiscal_start_year: int) -> list[dict]:
@@ -2516,9 +2523,19 @@ def apply_annual_holiday_remaining(person: dict, fiscal_start_year: int, month_r
         item['holidayRemaining'] = _annual_remaining(allowance, item.get('holidayCumulative'))
 
 
+_CUMULATIVE_SKIP = {
+    'holidayCumulative': 'holidaySkip',
+    'workCumulative': 'workSkip',
+}
+
+
 def _prefix_total(month_rows: list[dict], key: str):
+    """最初の未確定で止める。入社前で除外した月は飛ばして、その後を見る。"""
+    skip_key = _CUMULATIVE_SKIP.get(key)
     found = None
     for item in month_rows:
+        if skip_key and item.get(skip_key):
+            continue
         value = item.get(key)
         if value is None:
             break
@@ -3312,20 +3329,33 @@ def _load_saved_work_days(c, person_id: int) -> dict[str, float]:
     return {str(row['day']): float(row['days']) for row in rows}
 
 
-def _overlay_work_days(rows: list[dict], saved: dict[str, float]) -> tuple[float | None, bool]:
-    """保存値を日付に重ねる。戻り値は（確定している日の合計, 表示中の日が全部確定か）。
+def _row_day(row: dict) -> date | None:
+    try:
+        return date.fromisoformat(_iso_day(row.get('date')))
+    except ValueError:
+        return None
 
-    未確定の日は合計に足さない。合計そのものは従来どおり出すが、全日が確定していない月は
-    休日数の計算には使わない。
+
+def _overlay_work_days(rows: list[dict], saved: dict[str, float], bounds=None) -> tuple[float | None, bool]:
+    """保存値を日付に重ねる。戻り値は（範囲内で確定している日の合計, その日が全部確定か）。
+
+    bounds が None のときは表示中の日を全部使う。
+    (start, end) のときはその両端を含む日だけを合計する。start が None の月は入社前で、1日も足さない。
+    範囲外の初期値と保存値はセルには残すが、合計と確定判定には入れない。
+    未確定の日は合計に足さない。全日が確定していない月は休日数の計算には使わない。
     """
     total = Decimal('0')
     any_value = False
     unset = False
     for row in rows:
-        try:
-            iso = _iso_day(row.get('date'))
-        except ValueError:
-            iso = ''
+        day = _row_day(row)
+        iso = day.isoformat() if day else ''
+        if bounds is None:
+            in_range = True
+        else:
+            start, end = bounds
+            in_range = start is not None and day is not None and start <= day <= end
+        row['workDaysInRange'] = in_range
         if iso and iso in saved:
             value = saved[iso]
             row['workDays'] = value
@@ -3334,6 +3364,8 @@ def _overlay_work_days(rows: list[dict], saved: dict[str, float]) -> tuple[float
             value = row.get('workDaysDefault')
             row['workDays'] = value
             row['workDaysSaved'] = False
+        if not in_range:
+            continue
         if value is None:
             unset = True
             continue
@@ -3344,9 +3376,9 @@ def _overlay_work_days(rows: list[dict], saved: dict[str, float]) -> tuple[float
     return float(total.quantize(Decimal('0.01'))), not unset
 
 
-def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | None:
+def _with_saved_work_days(rows: list[dict], saved: dict[str, float], bounds=None) -> float | None:
     """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
-    total, _complete = _overlay_work_days(rows, saved)
+    total, _complete = _overlay_work_days(rows, saved, bounds)
     return total
 
 
@@ -3381,7 +3413,7 @@ def month_attendance_detail(c, person: dict, year: int, month: int, blob: bytes 
             view = _daily_rows_from_parsed(parsed[0], parsed[1], year, month, layout)
     except ValueError:
         return None, False
-    return _overlay_work_days(view['rows'], saved)
+    return _overlay_work_days(view['rows'], saved, _attendance_bounds(person, year, month))
 
 
 def month_attendance_total(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None) -> float | None:
@@ -3396,29 +3428,81 @@ def closing_period_days(year: int, month: int) -> int:
     return (end - start).days + 1
 
 
-def displayed_holiday_days(year: int, month: int, work_days, paid_leave_days, complete: bool = True):
-    """休日数 = 締め期間の暦日数 − 出勤日数 − 有給取得日数。
+def holiday_count_window(year: int, month: int, hired) -> dict:
+    """休日数と出勤日数に使う日。入社日が無ければ締め期間の全日。
 
+    scope は full / partial / before-hire。
+    入社日が期間の終了より後なら before-hire（その月は数えない）。
+    入社日が期間の途中なら partial（入社日から期間の終了まで）。
+    未来月を空欄にする規則や、出勤0を未確定にする規則はここには入れない。
+    """
+    start, end = closing_period(year, month)
+    hired_on = _stored_date(hired) if hired not in (None, '') else None
+    if hired_on is None:
+        return {'start': start, 'end': end, 'scope': 'full', 'days': (end - start).days + 1}
+    if hired_on > end:
+        return {'start': None, 'end': None, 'scope': 'before-hire', 'days': 0}
+    count_start = hired_on if hired_on > start else start
+    scope = 'partial' if count_start != start else 'full'
+    return {
+        'start': count_start,
+        'end': end,
+        'scope': scope,
+        'days': (end - count_start).days + 1,
+    }
+
+
+def _attendance_bounds(person: dict, year: int, month: int):
+    """入社日があるときだけ (開始, 終了)。無ければ None で、従来どおり全日。"""
+    if person.get('hired_on') in (None, ''):
+        return None
+    window = holiday_count_window(year, month, person.get('hired_on'))
+    return (window['start'], window['end'])
+
+
+def displayed_holiday_days(year: int, month: int, work_days, paid_leave_days, complete: bool = True, span_days: int | None = None):
+    """休日数 = 対象日数 − 出勤日数 − 有給取得日数。
+
+    対象日数は、指定が無ければ締め期間の暦日数。入社月は入社日以降の日数を渡す。
     出勤が全日確定でない、または有給取得が未取得なら空欄。0 は確定の 0 として引く。
     結果が負でも 0 にはしない。特有休は足さない。
     """
     if not complete or work_days is None or paid_leave_days is None:
         return None
-    span = Decimal(closing_period_days(year, month))
+    span = Decimal(closing_period_days(year, month) if span_days is None else span_days)
     value = span - Decimal(str(work_days)) - Decimal(str(paid_leave_days))
     return float(value.quantize(Decimal('0.01')))
 
 
 def apply_displayed_holidays(month_rows: list[dict]) -> None:
-    """表示用の休日数を、同じ出勤日数と有給取得日数から置く。保存済みの取込値は書き換えない。"""
+    """表示用の休日数を、同じ出勤日数と有給取得日数から置く。保存済みの取込値は書き換えない。
+
+    入社前の月は空欄のまま累計から外す。入社月で有給取得が0でない月合計だけのときは、
+    日に振り分けず空欄にする。
+    """
     for item in month_rows:
+        if item.get('holidaySkip'):
+            item['holidayDays'] = None
+            item['holidayNote'] = '入社前の月は休日数に含めません。'
+            continue
+        paid = item.get('paidLeaveDays')
+        if item.get('holidayScope') == 'partial' and paid is not None and Decimal(str(paid)) != 0:
+            item['holidayDays'] = None
+            item['holidayNote'] = (
+                '入社日より前の日がこの締め期間に含まれるため、'
+                '月合計の有給取得を入社日以降へ振り分けていません。'
+            )
+            continue
+        span = item.get('holidaySpanDays') if item.get('holidayScope') == 'partial' else None
         item['holidayDays'] = displayed_holiday_days(
             int(item['year']),
             int(item['month']),
             item.get('workDays'),
-            item.get('paidLeaveDays'),
+            paid,
             complete=bool(item.get('workDaysComplete')),
+            span_days=span,
         )
+        item['holidayNote'] = ''
 
 
 def _parsed_workbook(blob: bytes, layout: dict):
@@ -3444,16 +3528,31 @@ def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
         except ValueError:
             parsed = None
     for item in months:
+        year, month = int(item['year']), int(item['month'])
+        window = holiday_count_window(year, month, person.get('hired_on'))
+        item['holidayScope'] = window['scope']
+        item['holidaySpanDays'] = window['days']
+        item['countStart'] = window['start'].isoformat() if window['start'] else None
+        item['countEnd'] = window['end'].isoformat() if window['end'] else None
+        item['holidayNote'] = ''
+        if window['scope'] == 'before-hire':
+            item['workDays'] = None
+            item['workDaysComplete'] = False
+            item['workDaysFrom'] = 'daily'
+            item['workSkip'] = True
+            item['holidaySkip'] = True
+            continue
         if parsed is None:
             total, complete = None, False
         else:
             total, complete = month_attendance_detail(
-                c, person, int(item['year']), int(item['month']),
-                saved=saved, parsed=parsed,
+                c, person, year, month, saved=saved, parsed=parsed,
             )
         item['workDays'] = total
         item['workDaysComplete'] = complete
         item['workDaysFrom'] = 'daily'
+        item['workSkip'] = False
+        item['holidaySkip'] = False
 
 
 def save_daily_work_days(c, user, payload: dict) -> dict:
@@ -3687,7 +3786,10 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         raise ValueError(f'ファイルを読めません（{type(e).__name__}: {e}）。') from e
     body = daily_rows_from_workbook(blob, year, month, layout)
     saved = _load_saved_work_days(c, person['id'])
-    total = _with_saved_work_days(body['rows'], saved)
+    hired = person.get('hired_on') or None
+    window = holiday_count_window(year, month, hired)
+    bounds = None if not hired else (window['start'], window['end'])
+    total = _with_saved_work_days(body['rows'], saved, bounds)
     body.update({
         'personId': person['id'],
         'displayName': person['display_name'],
@@ -3701,6 +3803,9 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         'readOnly': True,
         'canEditWorkDays': True,
         'workDaysTotal': total,
+        'countScope': window['scope'] if hired else 'full',
+        'countStart': window['start'].isoformat() if hired and window['start'] else None,
+        'countEnd': window['end'].isoformat() if hired and window['end'] else None,
     })
     return body
 

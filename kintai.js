@@ -307,8 +307,14 @@
       const label = `${m.year}/${String(m.month).padStart(2, '0')}`;
       return `<tr>
         <td class="kintai-month"><button type="button" class="kintai-daylink" data-year="${m.year}" data-month="${m.month}">${esc(label)}</button></td>
-        ${sheetCell(dayText(m.workDays))}
-        ${sheetCell(dayText(m.holidayDays))}
+        ${m.workSkip
+          ? `<td class="kintai-blank" title="入社前の月は出勤日数の累計に含めません。">対象外</td>`
+          : sheetCell(dayText(m.workDays))}
+        ${m.holidaySkip
+          ? `<td class="kintai-blank" title="${esc(m.holidayNote || '入社前の月は休日数に含めません。')}">対象外</td>`
+          : (m.holidayDays == null
+            ? `<td class="kintai-blank" title="${esc(m.holidayNote || '')}"></td>`
+            : sheetCell(dayText(m.holidayDays)))}
         ${sheetCell(dayText(m.holidayCumulative))}
         ${m.holidayRemaining == null
           ? `<td class="kintai-blank" title="${esc(m.holidayAllowanceNote || '')}">${esc(m.holidayAllowanceNote || '')}</td>`
@@ -584,7 +590,11 @@
       const value = r.workDays == null ? '' : String(r.workDays);
       const initial = r.workDaysDefault == null ? '' : String(r.workDaysDefault);
       const date = r.date || '';
-      if (!editable) return `<td class="kintai-workdays-cell">${esc(value)}</td>`;
+      const outside = r.workDaysInRange === false;
+      const outsideTitle = outside ? '入社日より前のため、合計と休日数には入れません。' : '';
+      if (!editable || outside) {
+        return `<td class="kintai-workdays-cell" title="${esc(outsideTitle)}">${esc(value)}</td>`;
+      }
       return `<td class="kintai-workdays-cell"><input class="kintai-workdays" type="number" inputmode="decimal" min="0" max="2" step="0.01" aria-label="${esc(date)}の出勤日数" data-date="${esc(date)}" data-default="${esc(initial)}" data-saved="${r.workDaysSaved ? '1' : '0'}" value="${esc(value)}"></td>`;
     };
     const head = dayCols.map((c, i) => `<th scope="col" title="${esc(tip(c))}"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('') + '<th scope="col">出勤日数</th>';
@@ -601,9 +611,15 @@
     const daysHtml = rows
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="kintaimeta">${data && data.periodStart ? `${esc(data.periodStart)}～${esc(data.periodEnd)}の` : ''}この月シートに対象の日付がありません。</p>`;
-    const totalText = data && data.workDaysTotal != null
-      ? `出勤日数の合計 ${dayText(data.workDaysTotal)}（この月の16日〜15日）`
-      : '';
+    let totalText = '';
+    if (data && data.countScope === 'before-hire') {
+      totalText = '入社前の月です。この月の出勤日数は合計しません。';
+    } else if (data && data.workDaysTotal != null) {
+      const range = data.countScope === 'partial' && data.countStart && data.countEnd
+        ? `${data.countStart}～${data.countEnd}（入社日以降）`
+        : 'この月の16日〜15日';
+      totalText = `出勤日数の合計 ${dayText(data.workDaysTotal)}（${range}）`;
+    }
     const saveBar = rows
       ? `<p class="kintai-workdays-bar">${editable ? '<button type="button" id="kintaiworkdayssave">出勤日数を保存</button>' : ''}<span class="kintaimeta">${esc(totalText)}</span></p>`
       : '';
