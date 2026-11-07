@@ -2549,20 +2549,30 @@ def _clock_header(label: str) -> bool:
 
 
 # 日別で出す列。表示名はこの順で固定。元見出しの（00：00）やふりがなは出さない。
-# 合計は「実労働時間計」の保存値だけ。無いときも足し算しない。
 # match は正規化後の完全一致。前の候補が1列だけならそれを使い、複数なら後の候補を見ない。
+# 合計はここには含めない。右側の行ラベルとその右の数値を、計算せずに出す。
 DAILY_VIEW_FIELDS = (
     {'key': 'leave', 'label': '休み', 'match': ('休み',), 'fallback': 'leave_col', 'clock': False},
     {'key': 'start', 'label': '始業時間', 'match': ('始業時間',), 'fallback': 'start_col', 'clock': True},
     {'key': 'breakTime', 'label': '休憩時間', 'match': ('休憩時間',), 'clock': True},
     {'key': 'end', 'label': '終業時間', 'match': ('終業時間',), 'clock': True},
-    {'key': 'calendarHours', 'label': '年間ｶﾚﾝﾀﾞｰ時間', 'match': ('年間ｶﾚﾝﾀﾞｰ時間', '年間カレンダー時間'), 'clock': False},
+    {'key': 'calendarHours', 'label': '年間', 'match': ('年間ｶﾚﾝﾀﾞｰ時間', '年間カレンダー時間'), 'clock': False},
     {'key': 'actual', 'label': '実労働時間', 'match': ('実労働時間',), 'clock': False},
-    {'key': 'earlyNight', 'label': '早朝深夜勤務時間', 'match': ('早朝深夜勤務時間',), 'clock': False},
+    {'key': 'earlyNight', 'label': '早朝深夜', 'match': ('早朝深夜勤務時間',), 'clock': False},
     {'key': 'dayOvertime', 'label': '日残業', 'match': ('日残業',), 'clock': False},
     {'key': 'nightOvertime', 'label': '深夜残業', 'match': ('深夜残業',), 'clock': False},
-    {'key': 'total', 'label': '合計', 'match': ('実労働時間計', '合計'), 'clock': False},
 )
+# 正社員月シートの右側（画像の AK 列）に、日付行へ縦に繰り返される文言。
+# 列を決めるためだけに使う。見つかった列は、知らない文言も含めてそのまま出す。
+DAILY_TOTAL_LABELS = frozenset({
+    '実労働時間計',
+    '予定時間計',
+    '法定内労働計',
+    '日残業計',
+    '週残業計',
+    '深夜残業計',
+    '早朝深夜勤務計',
+})
 DAILY_MISSING_COLUMN = '（列なし）'
 DAILY_AMBIGUOUS_COLUMN = '（列が複数）'
 _HEADING_KATAKANA_TAIL = re.compile(r'[ァ-ヶーｦ-ﾟｰ]+$')
@@ -2610,8 +2620,55 @@ def _pick_daily_column(found: dict[int, dict], matchers: tuple[str, ...]) -> tup
     return None, ''
 
 
+def _daily_total_block(grid, layout: dict, used_cols: set[int]) -> tuple[int, int] | None | str:
+    """日付行に集計ラベルが縦に並ぶ列と、その右の数値列。週計は計算しない。"""
+    first = int(layout.get('day_first_row') or 5)
+    last = int(layout.get('day_last_row') or first)
+    hits = []
+    for col in range(1, _grid_max_col(grid) + 1):
+        if col in used_cols:
+            continue
+        count = 0
+        for row in range(first, last + 1):
+            value = _cell(grid, row, col)
+            if isinstance(value, str) and _heading_core(value) in DAILY_TOTAL_LABELS:
+                count += 1
+        if count >= 2:
+            hits.append(col)
+    if len(hits) > 1:
+        return DAILY_AMBIGUOUS_COLUMN
+    if not hits:
+        return None
+    label_col = hits[0]
+    value_col = label_col + 1
+    if value_col in used_cols:
+        return None
+    return label_col, value_col
+
+
+def _total_column(grid, layout: dict, used_cols: set[int]) -> dict:
+    found = _daily_total_block(grid, layout, used_cols)
+    column = {
+        'key': 'total',
+        'label': '合計',
+        'sourceLabel': '日付行の集計ラベルとその右の数値',
+        'parts': [
+            {'key': 'totalLabel', 'className': 'kintai-daily-total-label'},
+            {'key': 'totalValue', 'className': 'kintai-daily-total-value'},
+        ],
+    }
+    if found == DAILY_AMBIGUOUS_COLUMN or found is None:
+        column['missing'] = DAILY_AMBIGUOUS_COLUMN if found == DAILY_AMBIGUOUS_COLUMN else DAILY_MISSING_COLUMN
+        return column
+    label_col, value_col = found
+    column['missing'] = ''
+    column['parts'][0]['col'] = label_col
+    column['parts'][1]['col'] = value_col
+    return column
+
+
 def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
-    """指定の11列だけ。変換・判定列は出さない。合計は実労働時間計の保存列。"""
+    """指定の11列だけ。変換・判定列は出さない。合計は右側のラベルと数値。"""
     found = _daily_header_index(grid, layout)
     columns = [{'key': 'date', 'label': '日付'}]
     for field in DAILY_VIEW_FIELDS:
@@ -2650,6 +2707,8 @@ def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
             'missing': '',
             'sourceLabel': source,
         })
+    used = {column['col'] for column in columns if column.get('col')}
+    columns.append(_total_column(grid, layout, used))
     return columns
 
 
@@ -2660,6 +2719,15 @@ def _daily_cell_text(cell, clock: bool) -> str:
 def _fill_daily_item(item: dict, grid, row: int, columns: list[dict]) -> None:
     for column in columns:
         if column['key'] == 'date':
+            continue
+        parts = column.get('parts')
+        if parts:
+            if column.get('missing'):
+                item[parts[0]['key']] = ''
+                item[parts[1]['key']] = column['missing']
+                continue
+            for part in parts:
+                item[part['key']] = _daily_cell_text(_cell(grid, row, part['col']), False)
             continue
         if column.get('missing'):
             item[column['key']] = column['missing']

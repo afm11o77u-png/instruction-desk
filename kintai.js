@@ -491,8 +491,19 @@
       if (c.sourceLabel && c.sourceLabel !== c.label) return `${c.label}（${c.sourceLabel}）`;
       return c.label;
     };
-    const head = cols.map((c, i) => `<th scope="col" title="${esc(tip(c))}"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('');
+    const head = cols.map((c, i) => {
+      const span = (c.parts && c.parts.length) || 1;
+      const spanAttr = span > 1 ? ` colspan="${span}"` : '';
+      return `<th scope="col" title="${esc(tip(c))}"${spanAttr}${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`;
+    }).join('');
     const rows = ((data && data.rows) || []).map(r => `<tr>${cols.map((c, i) => {
+      if (c.parts && c.parts.length) {
+        return c.parts.map(p => {
+          const text = r[p.key] == null ? '' : String(r[p.key]);
+          const cls = p.className ? ` class="${esc(p.className)}"` : '';
+          return `<td${cls} title="${esc(tip(c))}">${esc(text)}</td>`;
+        }).join('');
+      }
       const text = r[c.key] == null ? '' : String(r[c.key]);
       if (i === 0) return `<th scope="row" class="kintai-daily-sticky kintai-month" title="${esc(tip(c))}">${esc(text)}</th>`;
       return `<td title="${esc(tip(c))}">${esc(text)}</td>`;
