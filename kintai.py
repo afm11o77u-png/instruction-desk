@@ -3862,6 +3862,11 @@ def handle_get(h, c, path: str):
         q = _query_map(h)
         year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
         return 200, month_hour_summary(c, year)
+    if path == '/api/kintai/month-summary/xlsx':
+        import kintai_summary_xlsx
+        q = _query_map(h)
+        year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
+        return kintai_summary_xlsx.export(c, year)
     if path == '/api/kintai/daily':
         q = _query_map(h)
         ym = _parse_ym(q.get('ym'))
