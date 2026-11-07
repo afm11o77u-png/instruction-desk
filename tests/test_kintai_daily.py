@@ -24,7 +24,7 @@ def _col_letters(n: int) -> str:
     return s
 
 
-def _xlsx(sheets: dict[str, list[tuple[int, int, object]]]) -> bytes:
+def _xlsx(sheets: dict[str, list[tuple[int, int, object]]], print_areas: dict[str, str] | None = None) -> bytes:
     """シート名 → [(row, col, value)] の最小 xlsx。値は数値か文字列。"""
     names = list(sheets)
     out = BytesIO()
@@ -71,9 +71,29 @@ def _xlsx(sheets: dict[str, list[tuple[int, int, object]]]) -> bytes:
             f'<sheet name="{escape(name)}" sheetId="{i}" r:id="rId{i}"/>'
             for i, name in enumerate(names, 1)
         )
+        defined = ''
+        if print_areas:
+            bits = []
+            for name, formula in print_areas.items():
+                if name not in names:
+                    continue
+                quoted = "'" + name.replace("'", "''") + "'"
+                if formula.startswith('#'):
+                    text = formula
+                else:
+                    text = ','.join(
+                        part if '!' in part else f'{quoted}!{part}'
+                        for part in (piece.strip() for piece in formula.split(','))
+                        if part
+                    )
+                bits.append(
+                    f'<definedName name="_xlnm.Print_Area" localSheetId="{names.index(name)}">{escape(text)}</definedName>'
+                )
+            if bits:
+                defined = '<definedNames>' + ''.join(bits) + '</definedNames>'
         z.writestr(
             'xl/workbook.xml',
-            f'<workbook xmlns="{ss}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{tags}</sheets></workbook>',
+            f'<workbook xmlns="{ss}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{tags}</sheets>{defined}</workbook>',
         )
         for i, name in enumerate(names, 1):
             rows = {}
@@ -529,6 +549,91 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(row['totalLabel'], '日残業計')
         self.assertEqual(row['totalValue'], '0.00')
         self.assertEqual([c['col'] for c in part_view['columns'][-1]['parts']], [90, 91])
+
+    def test_print_area_picks_inside_pair_for_every_month(self):
+        """26.2 は AK だけ。26.3〜27.1 は AK と印刷範囲外の AO がある。範囲内の組だけ使う。"""
+        names = ['実労働時間計', '予定時間計', '法定内労働計', '日残業計', '週残業計', '深夜残業計', '早朝深夜勤務計']
+        sheets = {'集計': []}
+        areas = {}
+        cal = []
+        for (year, month), sheet_name in kintai.SEISHAIN_2026_MONTH_SHEETS.items():
+            cal_col = kintai.SEISHAIN_2026_CAL_COLS[(year, month)]
+            cal.append((3, cal_col, _serial(date(year, month, 1))))
+            cells = [
+                (3, 4, '休み'),
+                (5, 37, names[0]),
+                (5, 38, 45.15),
+                (6, 37, names[1]),
+                (6, 38, 0),
+            ]
+            if (year, month) != (2026, 2):
+                for i, name in enumerate(names):
+                    cells.append((5 + i, 41, name))
+                    cells.append((5 + i, 42, 999))
+            sheets[sheet_name] = cells
+            areas[sheet_name] = '$A$1:$AL$50'
+        sheets['年間ｶﾚﾝﾀﾞｰ'] = cal
+        blob = _xlsx(sheets, areas)
+        for (year, month), sheet_name in kintai.SEISHAIN_2026_MONTH_SHEETS.items():
+            view = kintai.daily_rows_from_workbook(blob, year, month, kintai.SEISHAIN_2026_LAYOUT)
+            total = view['columns'][-1]
+            self.assertEqual([p['col'] for p in total['parts']], [37, 38], sheet_name)
+            self.assertEqual(view['rows'][0]['totalLabel'], '実労働時間計')
+            self.assertEqual(view['rows'][0]['totalValue'], '45.15')
+            self.assertNotIn('999', view['rows'][0].values())
+
+    def test_print_area_edges_do_not_guess(self):
+        names = [(5, '実労働時間計', 11), (6, '予定時間計', 0)]
+
+        def block(col, value):
+            return [(row, col, label) for row, label, _ in names] + [
+                (names[0][0], col + 1, value), (names[1][0], col + 1, 0),
+            ]
+
+        def book(area):
+            return _xlsx({
+                '年間ｶﾚﾝﾀﾞｰ': [(3, 2, _serial(date(2026, 2, 1)))],
+                '26.2': [(3, 4, '休み'), *block(10, 3.5), *block(20, 8)],
+                '集計': [],
+            }, {'26.2': area} if area is not None else None)
+
+        inside = kintai.daily_rows_from_workbook(book('$A$1:$K$50'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual([p['col'] for p in inside['columns'][-1]['parts']], [10, 11])
+        self.assertEqual(inside['rows'][0]['totalValue'], '3.50')
+
+        both = kintai.daily_rows_from_workbook(book('$A$1:$Z$50'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(both['rows'][0]['totalValue'], '（列が複数）')
+
+        none = kintai.daily_rows_from_workbook(book(None), 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(none['rows'][0]['totalValue'], '（列が複数）')
+
+        broken = kintai.daily_rows_from_workbook(book('#REF!'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(broken['rows'][0]['totalValue'], '（列が複数）')
+
+        value_outside = kintai.daily_rows_from_workbook(book('$A$1:$J$50'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(value_outside['rows'][0]['totalValue'], '（列なし）')
+        self.assertNotIn('3.5', value_outside['rows'][0].values())
+        self.assertNotIn('8', value_outside['rows'][0].values())
+
+        rows_outside = kintai.daily_rows_from_workbook(book('$A$1:$Z$4'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(rows_outside['rows'][0]['totalValue'], '（列なし）')
+
+        other = _xlsx({
+            '年間ｶﾚﾝﾀﾞｰ': [
+                (3, 2, _serial(date(2026, 2, 1))),
+                (3, 8, _serial(date(2026, 3, 1))),
+            ],
+            '26.2': [(3, 4, '休み'), *block(10, 4)],
+            '26.3': [(3, 4, '休み'), *block(10, 1), *block(30, 2)],
+            '集計': [],
+        }, {'26.3': "'26.2'!$A$1:$Z$50"})
+        march = kintai.daily_rows_from_workbook(other, 2026, 3, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(march['rows'][0]['totalValue'], '（列が複数）')
+
+        two_ranges = kintai.daily_rows_from_workbook(
+            book('$A$1:$K$50,$L$1:$Z$50'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT,
+        )
+        self.assertEqual(two_ranges['rows'][0]['totalValue'], '（列が複数）')
 
     def test_daily_table_scrolls_and_keeps_date_with_headers(self):
         js = (ROOT / 'kintai.js').read_text(encoding='utf-8')
