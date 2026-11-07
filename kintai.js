@@ -492,26 +492,22 @@
       if (c.sourceLabel && c.sourceLabel !== c.label) return `${c.label}（${c.sourceLabel}）`;
       return c.label;
     };
-    const head = cols.map((c, i) => {
-      const span = (c.parts && c.parts.length) || 1;
-      const spanAttr = span > 1 ? ` colspan="${span}"` : '';
-      return `<th scope="col" title="${esc(tip(c))}"${spanAttr}${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`;
-    }).join('');
-    const rows = ((data && data.rows) || []).map(r => `<tr>${cols.map((c, i) => {
-      if (c.parts && c.parts.length) {
-        return c.parts.map(p => {
-          const text = r[p.key] == null ? '' : String(r[p.key]);
-          const cls = p.className ? ` class="${esc(p.className)}"` : '';
-          return `<td${cls} title="${esc(tip(c))}">${esc(text)}</td>`;
-        }).join('');
-      }
+    const dayCols = cols.filter(c => c.key !== 'total');
+    const head = dayCols.map((c, i) => `<th scope="col" title="${esc(tip(c))}"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('');
+    const rows = ((data && data.rows) || []).map(r => `<tr>${dayCols.map((c, i) => {
       const text = r[c.key] == null ? '' : String(r[c.key]);
       if (i === 0) return `<th scope="row" class="kintai-daily-sticky kintai-month" title="${esc(tip(c))}">${esc(text)}</th>`;
       return `<td title="${esc(tip(c))}">${esc(text)}</td>`;
     }).join('')}</tr>`).join('');
-    body.innerHTML = rows
+    const totals = (data && data.totals) || [];
+    const totalsNote = data && data.totalsNote ? data.totalsNote : '';
+    const totalsHtml = totals.length
+      ? `<h3 class="kintai-section">合計</h3><p class="kintaimeta">この月シートの集計名と数値です。日付の行とは別で、元の順のままです。${totals.length}件</p><table class="kintai-sheet kintai-daily-sheet kintai-daily-totals"><thead><tr><th scope="col">項目</th><th scope="col">数値</th></tr></thead><tbody>${totals.map(t => `<tr><td class="kintai-daily-total-label">${esc(t.label || '')}</td><td class="kintai-daily-total-value">${esc(t.value || '')}</td></tr>`).join('')}</tbody></table>`
+      : (totalsNote ? `<h3 class="kintai-section">合計</h3><p class="kintaimeta">${esc(totalsNote)}</p>` : '');
+    const daysHtml = rows
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="kintaimeta">${data && data.periodStart ? `${esc(data.periodStart)}～${esc(data.periodEnd)}の` : ''}この月シートに対象の日付がありません。</p>`;
+    body.innerHTML = daysHtml + totalsHtml;
   }
 
   async function ensurePeoplePack() {
