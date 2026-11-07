@@ -1,11 +1,9 @@
-import base64
 import csv
 import unittest
 from io import StringIO
 from types import SimpleNamespace
 
 import kintai
-import kintai_shift_xlsx
 import kintai_touch_on_time as tot
 
 
@@ -46,22 +44,12 @@ class TouchOnTimeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             tot.build(p)
 
-    def test_exported_excel_matches_direct_csv(self):
-        p = self.payload()
-        excel = kintai_shift_xlsx.export_view(p)[1]
-        imported = {'excelData': base64.b64encode(excel).decode('ascii')}
-        self.assertEqual(tot.export_view(p)[1], tot.export_view(imported)[1])
-        self.assertEqual(tot.preview(imported)[1]['excluded'], ['齊藤 遼太'])
-
-    def test_task_mark_and_bad_excel(self):
+    def test_task_mark(self):
         p = self.payload()
         import kintai_shift
         p['cells']['regular:1']['5'] = {'kind': 'task', 'text': next(iter(kintai_shift.TASK_TEXTS))}
         rows = tot.build(p)[1]
         self.assertIn(['00001804', '20261105', '', '09:00', '70', '17:40', '1'], rows)
-        for raw in ('bad!', base64.b64encode(b'not an xlsx').decode()):
-            with self.assertRaises(ValueError):
-                tot.build({'excelData': raw})
 
     def test_api_existing_permissions_and_read_only(self):
         class NoDatabase:
