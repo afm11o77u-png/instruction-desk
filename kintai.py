@@ -2643,6 +2643,22 @@ def _display_clock(value) -> str:
     return _display_raw(value)
 
 
+def closing_period(year: int, month: int) -> tuple[date, date]:
+    """全月共通。選択月は前月16日〜当月15日。"""
+    if month == 1:
+        start = date(year - 1, 12, 16)
+    else:
+        start = date(year, month - 1, 16)
+    return start, date(year, month, 15)
+
+
+def _in_closing_period(value, start: date, end: date) -> bool:
+    found = _excel_serial_to_date(value)
+    if found is None:
+        return False
+    return start <= found <= end
+
+
 def _display_date(value) -> str:
     if isinstance(value, dict) and value.get('__missing_cache__'):
         return '（計算結果なし）'
@@ -3011,6 +3027,7 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
     printed = read_print_areas(blob).get(sheet_name)
     print_area = printed[1] if printed and printed[0] == 'ok' else None
     columns = _daily_sheet_columns(grid, layout, print_area)
+    period_start, period_end = closing_period(year, month)
     rows = []
     if layout.get('calendar_sheet'):
         cal_name = layout['calendar_sheet']
@@ -3030,6 +3047,8 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
             month_row = cal_row + offset
             if month_row < layout['day_first_row'] or month_row > layout['day_last_row']:
                 continue
+            if not _in_closing_period(raw, period_start, period_end):
+                continue
             item = {'date': _display_date(raw)}
             _fill_daily_item(item, grid, month_row, columns)
             rows.append(item)
@@ -3041,10 +3060,18 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
             raw = _cell(grid, row, date_col)
             if raw is None or raw == '':
                 continue
+            if not _in_closing_period(raw, period_start, period_end):
+                continue
             item = {'date': _display_date(raw)}
             _fill_daily_item(item, grid, row, columns)
             rows.append(item)
-    return {'sheetName': sheet_name, 'columns': columns, 'rows': rows}
+    return {
+        'sheetName': sheet_name,
+        'columns': columns,
+        'rows': rows,
+        'periodStart': f'{period_start.year}/{period_start.month:02d}/{period_start.day:02d}',
+        'periodEnd': f'{period_end.year}/{period_end.month:02d}/{period_end.day:02d}',
+    }
 
 
 def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:

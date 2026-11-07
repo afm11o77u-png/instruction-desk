@@ -136,7 +136,8 @@ class DailySheetReadTest(unittest.TestCase):
         blob = _xlsx({
             cal: [
                 (3, 2, _serial(date(2026, 2, 1))),
-                (4, 2, _serial(date(2026, 3, 1))),
+                (4, 2, _serial(date(2026, 2, 15))),
+                (5, 2, _serial(date(2026, 3, 1))),
             ],
             '26.2': [
                 (4, 4, '休み'),
@@ -155,9 +156,10 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(view['rows'][0]['date'], '2026/02/01')
         self.assertEqual(view['rows'][0]['start'], '9:00')
         self.assertNotIn('2025', view['rows'][0]['date'])
-        self.assertEqual(view['rows'][1]['date'], '2026/03/01')
+        self.assertEqual(view['rows'][1]['date'], '2026/02/15')
         self.assertEqual(view['rows'][1]['leave'], '1.0有休')
         self.assertEqual(view['rows'][1]['start'], '')
+        self.assertNotIn('2026/03/01', [row['date'] for row in view['rows']])
 
     def test_monthdot_and_part_show_sheet_dates_without_converting_paid_hours(self):
         contract = _xlsx({
@@ -634,6 +636,78 @@ class DailySheetReadTest(unittest.TestCase):
             book('$A$1:$K$50,$L$1:$Z$50'), 2026, 2, kintai.SEISHAIN_2026_LAYOUT,
         )
         self.assertEqual(two_ranges['rows'][0]['totalValue'], '（列が複数）')
+
+    def test_closing_period_is_previous_16_through_15_every_month(self):
+        self.assertEqual(kintai.closing_period(2026, 10), (date(2026, 9, 16), date(2026, 10, 15)))
+        self.assertEqual(kintai.closing_period(2027, 1), (date(2026, 12, 16), date(2027, 1, 15)))
+        self.assertEqual(kintai.closing_period(2024, 2), (date(2024, 1, 16), date(2024, 2, 15)))
+        self.assertEqual(kintai.closing_period(2024, 3), (date(2024, 2, 16), date(2024, 3, 15)))
+        self.assertEqual(kintai.closing_period(2026, 3), (date(2026, 2, 16), date(2026, 3, 15)))
+        self.assertEqual((kintai.closing_period(2024, 3)[1] - kintai.closing_period(2024, 3)[0]).days + 1, 29)
+        self.assertEqual((kintai.closing_period(2026, 3)[1] - kintai.closing_period(2026, 3)[0]).days + 1, 28)
+
+    def test_daily_hides_days_outside_16_to_15_without_moving_totals(self):
+        names = ['実労働時間計', '予定時間計']
+
+        def seishain_october():
+            cal_col = kintai.SEISHAIN_2026_CAL_COLS[(2026, 10)]
+            dates = [date(2026, 9, 11), date(2026, 9, 16), date(2026, 10, 15), date(2026, 10, 16)]
+            cal = [(3 + i, cal_col, _serial(day)) for i, day in enumerate(dates)]
+            cells = [(3, 4, '休み')]
+            # 9/11 は期間外。その行の合計を、9/16 の行へ詰めない
+            cells += [(5, 37, names[0]), (5, 38, 1.03), (6, 37, names[1]), (6, 38, 0)]
+            cells += [(7, 37, '法定内労働計'), (7, 38, 16), (8, 37, '日残業計'), (8, 38, 4.19)]
+            return _xlsx({'年間ｶﾚﾝﾀﾞｰ': cal, '26.10': cells, '集計': []})
+
+        view = kintai.daily_rows_from_workbook(seishain_october(), 2026, 10, kintai.SEISHAIN_2026_LAYOUT)
+        self.assertEqual(view['periodStart'], '2026/09/16')
+        self.assertEqual(view['periodEnd'], '2026/10/15')
+        self.assertEqual([row['date'] for row in view['rows']], ['2026/09/16', '2026/10/15'])
+        self.assertEqual(view['rows'][0]['totalLabel'], '予定時間計')
+        self.assertEqual(view['rows'][0]['totalValue'], '0.00')
+        self.assertEqual(view['rows'][1]['totalLabel'], '法定内労働計')
+        self.assertEqual(view['rows'][1]['totalValue'], '16.00')
+        self.assertNotIn('1.03', [row['totalValue'] for row in view['rows']])
+        self.assertNotIn('4.19', [row['totalValue'] for row in view['rows']])
+
+        def month_sheet(layout, year, month, days):
+            sheet = layout['month_sheets'][(year, month)]
+            cells = []
+            for i, day in enumerate(days):
+                cells.append((5 + i, 1, _serial(day)))
+                cells.append((5 + i, layout['start_col'], 9 / 24))
+            cells += [(5, 37, names[0]), (5, 38, 9), (6, 37, names[1]), (6, 38, 8)]
+            return _xlsx({sheet: cells})
+
+        contract = kintai.MONTHDOT_2026_CONTRACT_LAYOUT
+        part = kintai.MONTHDOT_2026_PART_LAYOUT
+        window = [date(2026, 12, 15), date(2026, 12, 16), date(2027, 1, 15), date(2027, 1, 16)]
+        for layout in (contract, part):
+            shown = kintai.daily_rows_from_workbook(month_sheet(layout, 2027, 1, window), 2027, 1, layout)
+            self.assertEqual([row['date'] for row in shown['rows']], ['2026/12/16', '2027/01/15'])
+            self.assertEqual(shown['rows'][0]['totalLabel'], names[1])
+            self.assertEqual(shown['rows'][0]['totalValue'], '8.00')
+            self.assertEqual(shown['rows'][0]['start'], '9:00')
+
+        def leap_book(year, feb_days):
+            sheet = 'm'
+            cells = [(5 + i, 1, _serial(day)) for i, day in enumerate(feb_days)]
+            cells += [(5, 4, ''), (6, 4, ''), (7, 37, '実労働時間計'), (7, 38, 2), (8, 37, '予定時間計'), (8, 38, 3)]
+            layout = {
+                **kintai.MONTHDOT_2026_CONTRACT_LAYOUT,
+                'month_sheets': {(year, 3): sheet},
+            }
+            return _xlsx({sheet: cells}), layout
+
+        leap_days = [date(2024, 2, 15), date(2024, 2, 16), date(2024, 2, 29), date(2024, 3, 15), date(2024, 3, 16)]
+        plain_days = [date(2026, 2, 15), date(2026, 2, 16), date(2026, 2, 28), date(2026, 3, 15), date(2026, 3, 16)]
+        leap_blob, leap_layout = leap_book(2024, leap_days)
+        plain_blob, plain_layout = leap_book(2026, plain_days)
+        leap_view = kintai.daily_rows_from_workbook(leap_blob, 2024, 3, leap_layout)
+        plain_view = kintai.daily_rows_from_workbook(plain_blob, 2026, 3, plain_layout)
+        self.assertEqual([row['date'] for row in leap_view['rows']], ['2024/02/16', '2024/02/29', '2024/03/15'])
+        self.assertEqual([row['date'] for row in plain_view['rows']], ['2026/02/16', '2026/02/28', '2026/03/15'])
+        self.assertNotIn('2024/02/29', [row['date'] for row in plain_view['rows']])
 
     def test_daily_table_scrolls_and_keeps_date_with_headers(self):
         js = (ROOT / 'kintai.js').read_text(encoding='utf-8')
