@@ -120,10 +120,6 @@
 <span id="shiftmemostatus" class="shift-save-status shift-memo-status" aria-live="polite">メモ未保存</span>
 <button type="button" id="shiftundo">ひとつ戻す</button>
 <button type="button" id="shiftprint">印刷</button>
-<button type="button" id="shiftexport" class="no-print" disabled title="表示中のシフト表をExcel（.xlsx）で出力します。保存はしません。">Excel出力</button>
-<button type="button" id="shifttouchontime" class="no-print" disabled>Touch On Time用CSV</button>
-<button type="button" id="shifttotexcel" class="no-print">ExcelからTouch On Time用CSV</button>
-<input type="file" id="shifttotfile" accept=".xlsx" hidden>
 </div>
 </div>
 <p class="kintaimeta shift-emp-legend no-print" id="shiftemplegend" aria-label="出勤簿区分の色">氏名の背景色：<span class="shift-emp-swatch shift-emp-regular">社員</span><span class="shift-emp-swatch shift-emp-contract">契約社員</span><span class="shift-emp-swatch shift-emp-part">パート</span>（未設定・シフト専用は通常色。印刷には出ません）</p>
@@ -133,6 +129,12 @@
 <table id="shiftgrid" class="shift-grid" aria-label="月別シフト表"></table>
 </div>
 <p id="shiftmeta" class="kintaimeta"></p>
+<div class="shift-tool-row no-print" aria-label="シフト表の出力">
+<button type="button" id="shiftexport" class="no-print" disabled title="表示中のシフト表をExcel（.xlsx）で出力します。保存はしません。">Excel出力</button>
+<button type="button" id="shifttouchontime" class="no-print" disabled>Touch On Time用CSV</button>
+<button type="button" id="shifttotexcel" class="no-print">ExcelからTouch On Time用CSV</button>
+<input type="file" id="shifttotfile" accept=".xlsx" hidden>
+</div>
 </div>
 <div id="kintaicrimp" hidden>
 <section id="crimpcounter" class="crimp-counter no-print"><h3>圧着カウンター</h3><form id="crimpform" class="crimp-form"><label>入力者<select id="crimpworker" required><option value="">選択してください</option></select></label><label>日付<input id="crimpday" type="date" required></label><label>カウンター<input id="crimpreading" type="number" min="0" step="1" inputmode="numeric" required></label><button type="submit" class="primary" id="crimpsave">保存</button></form><label>月<input id="crimpmonth" type="month"></label><p id="crimptotal" class="kintaimeta"></p><table id="crimptable" class="crimp-table"><thead><tr><th>日付</th><th>カウンター</th><th>圧着数</th><th class="crimp-inputter" hidden>入力者</th><th></th></tr></thead><tbody></tbody></table></section>
