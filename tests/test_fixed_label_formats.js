@@ -200,12 +200,18 @@ assert.strictEqual(f.validateSavedFixedLabelPrintInput(slotted, 1, '   ').ok, fa
 const printed = f.savedFixedLabelPreviewHtml(slotted, 1, null, '宮の沢店')
 assert.strictEqual(JSON.stringify(slotted), slottedBefore)
 const storeCell = printed.slice(printed.indexOf('<section class="cell depts">'))
+assert.ok(storeCell.includes('class="title title-row"'))
 assert.ok(storeCell.includes('class="title-customer"'))
 assert.ok(storeCell.includes('>サザエ食品</div>'))
 assert.ok(storeCell.includes('class="title-store"'))
 assert.ok(storeCell.includes('>宮の沢店</div>'))
 assert.ok(storeCell.indexOf('title-customer') < storeCell.indexOf('title-store'))
 assert.ok(storeCell.indexOf('title-store') < storeCell.indexOf('class="checks'))
+assert.ok(!storeCell.includes('title-stack'))
+assert.ok(f.FIXED_LABEL_CSS.includes('flex-direction:row'))
+assert.ok(f.FIXED_LABEL_CSS.includes('gap:1em'))
+assert.ok(f.FIXED_LABEL_CSS.includes('overflow-wrap:anywhere'))
+assert.ok(!plainHtml.includes('class="title title-row"'))
 assert.ok(printed.includes('新規　交換　その他'))
 assert.ok(printed.includes('>NO.</span>'))
 assert.strictEqual(count(printed, /宮の沢店/g), 4)
@@ -256,5 +262,99 @@ assert.strictEqual(f.validateFixedLabelDraft({
   kind: 'departments',
   payload: { customer: 'サザエ食品', departments: ['事務所'] },
 }).payload.storeSlot, undefined)
+
+function deptCell(payload, storeName) {
+  return f.savedFixedLabelPreviewHtml({ name: '確認', kind: 'departments', payload }, 1, null, storeName)
+    .slice(f.savedFixedLabelPreviewHtml({ name: '確認', kind: 'departments', payload }, 1, null, storeName).indexOf('<section'))
+}
+const withNo = deptCell({ customer: 'サザエ食品', departments: ['事務所'] })
+assert.ok(withNo.includes('class="no"'))
+assert.ok(withNo.includes('>NO.</span>'))
+assert.ok(withNo.includes('>様</div>'))
+assert.ok(withNo.includes('新規　交換　その他'))
+assert.ok(withNo.indexOf('class="checks') < withNo.indexOf('class="no"'))
+assert.ok(withNo.indexOf('class="no"') < withNo.indexOf('class="name-row"'))
+
+const withoutNo = deptCell({ customer: 'サザエ食品', departments: ['事務所'], printNo: false })
+assert.ok(!withoutNo.includes('class="no"'))
+assert.ok(!withoutNo.includes('>NO.</span>'))
+assert.ok(withoutNo.includes('class="idblock"'))
+assert.ok(withoutNo.includes('class="name-row"'))
+assert.ok(withoutNo.includes('>様</div>'))
+assert.ok(withoutNo.includes('新規　交換　その他'))
+assert.ok(withoutNo.includes('>□</span>事務所'))
+assert.ok(withoutNo.indexOf('class="checks') < withoutNo.indexOf('class="name-row"'))
+assert.ok(withoutNo.indexOf('class="name-row"') < withoutNo.indexOf('class="footer"'))
+
+const withoutNoStore = deptCell({
+  customer: 'サザエ食品', departments: ['事務所'], printNo: false, storeSlot: true,
+}, '札幌店')
+assert.ok(withoutNoStore.includes('class="title title-row"'))
+assert.ok(withoutNoStore.includes('>札幌店</div>'))
+assert.ok(withoutNoStore.includes('>サザエ食品</div>'))
+assert.ok(withoutNoStore.indexOf('title-customer') < withoutNoStore.indexOf('title-store'))
+assert.ok(!withoutNoStore.includes('class="no"'))
+assert.ok(withoutNoStore.includes('>様</div>'))
+const longName = 'あ'.repeat(40)
+const longHtml = deptCell({
+  customer: longName, departments: ['事務所'], printNo: true, storeSlot: true,
+}, longName)
+assert.ok(longHtml.includes(longName))
+assert.ok(longHtml.includes('class="title title-row"'))
+assert.ok(longHtml.includes('class="no"'))
+assert.ok(f.FIXED_LABEL_CSS.includes('.cell{') && f.FIXED_LABEL_CSS.includes('overflow:hidden'))
+const noStoreNoLine = deptCell({ customer: 'サザエ食品', departments: ['事務所'], printNo: false })
+assert.ok(!noStoreNoLine.includes('class="title title-row"'))
+assert.ok(!noStoreNoLine.includes('class="no"'))
+assert.ok(noStoreNoLine.includes('class="title"'))
+
+const explicitOn = deptCell({ customer: 'サザエ食品', departments: ['事務所'], printNo: true })
+assert.ok(explicitOn.includes('class="no"'))
+
+const savedOff = f.validateFixedLabelDraft({
+  name: 'Noなし',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'], printNo: false },
+})
+assert.strictEqual(savedOff.payload.printNo, false)
+const savedOn = f.validateFixedLabelDraft({
+  name: 'Noあり',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'], printNo: true },
+})
+assert.strictEqual(savedOn.payload.printNo, undefined)
+const legacy = f.validateFixedLabelDraft({
+  name: '旧',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'] },
+})
+assert.strictEqual(legacy.payload.printNo, undefined)
+assert.ok(deptCell(legacy.payload).includes('class="no"'))
+
+const tierNo = f.savedFixedLabelPreviewHtml({
+  name: '三段',
+  kind: 'tiers',
+  payload: { lines: ['上', '中', '下'], printNo: false },
+}, 1)
+assert.ok(!tierNo.includes('class="no"'))
+assert.ok(!tierNo.includes('>NO.</span>'))
+assert.strictEqual(f.validateFixedLabelDraft({
+  name: '三段保存',
+  kind: 'tiers',
+  payload: { lines: ['上', '中', '下'], printNo: false },
+}).payload.printNo, undefined)
+
+const daruma = f.fixedLabelPreviewHtml('daruma-zenibako', 1)
+assert.ok(daruma.includes('class="no"'))
+assert.ok(daruma.includes('>NO.</span>'))
+const ishiyaPage = f.fixedLabelPreviewHtml('ishiya-2242', 1)
+assert.ok(!ishiyaPage.includes('class="no"'))
+assert.ok(!ishiyaPage.includes('class="cell tiers"'))
+
+assert.strictEqual(f.validateFixedLabelDraft({
+  name: '不正',
+  kind: 'departments',
+  payload: { customer: 'サザエ食品', departments: ['事務所'], printNo: 'no' },
+}).ok, false)
 
 console.log('ok')

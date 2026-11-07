@@ -275,6 +275,54 @@ class FixedLabelFormatStoreTest(unittest.TestCase):
                 'payload': {'customer': '顧客', 'departments': ['課'], 'storeSlot': 'yes'},
             })
 
+    def test_print_no_flag_is_optional_and_editable(self):
+        status, saved = self._save(_depts('既定はNoあり'))
+        self.assertEqual(status, 200)
+        self.assertNotIn('printNo', saved['payload'])
+        status, off = self._save({
+            'name': 'Noなし',
+            'kind': 'departments',
+            'payload': {'customer': 'サザエ食品', 'departments': ['事務所'], 'printNo': False, 'storeSlot': True},
+        })
+        self.assertEqual(status, 200)
+        self.assertIs(off['payload']['printNo'], False)
+        self.assertIs(off['payload']['storeSlot'], True)
+        self._reopen()
+        _, rows = forms.handle(_handler(_user()), self.c, '/api/fixed-label-formats', None)
+        again = next(r for r in rows if r['id'] == off['id'])
+        self.assertIs(again['payload']['printNo'], False)
+        status, edited = self._save({
+            'id': off['id'],
+            'version': again['version'],
+            'name': 'Noなし',
+            'kind': 'departments',
+            'payload': {'customer': 'サザエ食品', 'departments': ['事務所'], 'printNo': True, 'storeSlot': True},
+        })
+        self.assertEqual(status, 200)
+        self.assertNotIn('printNo', edited['payload'])
+        self.assertIs(edited['payload']['storeSlot'], True)
+        self.assertEqual(edited['version'], again['version'] + 1)
+        status, tiers = self._save({
+            'name': '三段にNoは付けない',
+            'kind': 'tiers',
+            'payload': {'lines': ['上', '中', '下'], 'printNo': False},
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(tiers['payload'], {'lines': ['上', '中', '下']})
+        self.c.execute(
+            "INSERT INTO fixed_label_formats(name,kind,version,payload,updated_at,updated_by) VALUES(?,?,1,?,datetime('now','localtime'),'')",
+            ('キーなし', 'departments', json.dumps({'customer': '旧顧客', 'departments': ['課']}, ensure_ascii=False)),
+        )
+        _, rows = forms.handle(_handler(_user()), self.c, '/api/fixed-label-formats', None)
+        legacy = next(r for r in rows if r['name'] == 'キーなし')
+        self.assertNotIn('printNo', legacy['payload'])
+        with self.assertRaises(ValueError):
+            self._save({
+                'name': 'No設定が文字',
+                'kind': 'departments',
+                'payload': {'customer': '顧客', 'departments': ['課'], 'printNo': 'off'},
+            })
+
     def test_source_has_no_destructive_sql(self):
         src = (ROOT / 'fixed_label_formats.py').read_text(encoding='utf-8')
         self.assertIn('CREATE TABLE IF NOT EXISTS fixed_label_formats', src)
@@ -339,6 +387,10 @@ class FixedLabelFormatWiringTest(unittest.TestCase):
         self.assertIn('id="fixedprint">プレビューして印刷</button>', index)
         self.assertIn('id="fixedstore"', index)
         self.assertIn('id="fixedregstoreslot"', index)
+        dept_panel = index[index.index('id="fixedregdepts"'):index.index('id="fixedregdeptrows"')]
+        self.assertIn('id="fixedregprintno" checked>No.欄を印刷する', dept_panel)
+        tier_panel = index[index.index('id="fixedregtiers"'):index.index('id="fixedregdepts"')]
+        self.assertNotIn('fixedregprintno', tier_panel)
         self.assertIn('placeholder="例：だるま食品銭函工場"', index)
         preview_fn = sheet[sheet.index('function previewFixedLabelDraft'):sheet.index('function previewFixedLabelDraft') + 900]
         self.assertNotIn('api(', preview_fn)

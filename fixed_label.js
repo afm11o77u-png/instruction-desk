@@ -76,10 +76,12 @@
     '.checkrow.cols3{grid-template-columns:repeat(3,minmax(0,1fr))}' +
     '.cell.depts .check{white-space:normal;overflow-wrap:anywhere}' +
     '.cell.depts .checks.tight{gap:1.6mm;margin-bottom:2mm}' +
-    /* 店舗名は顧客名の直下。店舗名を使わない書式は従来の1行タイトルのまま */
-    '.cell.depts .title-stack{display:flex;flex-direction:column;align-items:center;gap:.8mm}' +
-    '.cell.depts .title-customer,.cell.depts .title-store{font-weight:700;line-height:1.2;' +
-    'letter-spacing:.04em;overflow-wrap:anywhere;white-space:pre-wrap}';
+    /* 店舗名は顧客名と同じ行の右。空のときはこの行を作らず、余白も足さない */
+    '.cell.depts .title-row{display:flex;flex-direction:row;flex-wrap:nowrap;justify-content:center;' +
+    'align-items:baseline;gap:1em;width:100%;max-width:100%;min-width:0}' +
+    '.cell.depts .title-row .title-customer,.cell.depts .title-row .title-store{flex:0 1 auto;min-width:0;' +
+    'max-width:100%;font-weight:700;line-height:1.2;letter-spacing:.04em;overflow-wrap:anywhere;' +
+    'word-break:break-word}';
 
   function escText(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -269,11 +271,13 @@
     return FIXED_LABEL_FORMATS.map((f) => f.name);
   }
 
-  /* NO.＿＿＿・様・新規　交換　その他。組み込みのだるま食品銭函工場と同じ並び。 */
-  function fixedLabelNameBlockHtml() {
+  /* NO.＿＿＿・様・新規　交換　その他。組み込みのだるま食品銭函工場と同じ並び。
+   * printNo が false のときだけ NO. 行を出さない。様とフッターの位置は idblock のまま。 */
+  function fixedLabelNameBlockHtml(options) {
+    const printNo = !options || options.printNo !== false;
     return (
       '<div class="idblock">' +
-      '<div class="no"><span class="label">NO.</span><span class="line"></span></div>' +
+      (printNo ? '<div class="no"><span class="label">NO.</span><span class="line"></span></div>' : '') +
       '<div class="name-row"><div class="sama">様</div></div>' +
       '</div>' +
       '<div class="footer">新規　交換　その他</div>'
@@ -341,6 +345,11 @@
       }
       const payloadOut = { customer, departments };
       if (storeSlot) payloadOut.storeSlot = true;
+      const printNo = body.printNo === undefined ? true : body.printNo;
+      if (printNo !== true && printNo !== false) {
+        return { ok: false, error: 'No.欄の設定を確認してください。' };
+      }
+      if (!printNo) payloadOut.printNo = false;
       return { ok: true, kind, payload: payloadOut };
     }
     return { ok: false, error: '書式の種類を選んでください。' };
@@ -458,22 +467,32 @@
     return `<div class="checkrow ${cls}">${cells}</div>`;
   }
 
+  function sideBySideTitleSize(customer, store) {
+    const n = Array.from(customer).length + Array.from(store).length;
+    if (n <= 10) return 26;
+    if (n <= 16) return 22;
+    if (n <= 22) return 18;
+    if (n <= 30) return 15;
+    if (n <= 40) return 13;
+    return 11;
+  }
+
   function departmentTitleHtml(customer, storeName) {
-    const customerSize = customerTitleSize(customer);
     const store = cleanFixedLabelText(storeName == null ? '' : storeName);
     if (!store || isBlankFixedLabelText(store)) {
+      const customerSize = customerTitleSize(customer);
       return `<div class="title" style="font-size:${customerSize}pt">${escText(customer)}</div>`;
     }
-    const storeSize = Math.min(customerSize, customerTitleSize(store));
+    const size = sideBySideTitleSize(customer, store);
     return (
-      '<div class="title title-stack">' +
-      `<div class="title-customer" style="font-size:${customerSize}pt">${escText(customer)}</div>` +
-      `<div class="title-store" style="font-size:${storeSize}pt">${escText(store)}</div>` +
+      `<div class="title title-row" style="font-size:${size}pt">` +
+      `<div class="title-customer">${escText(customer)}</div>` +
+      `<div class="title-store">${escText(store)}</div>` +
       '</div>'
     );
   }
 
-  function departmentCellHtml(customer, departments, storeName) {
+  function departmentCellHtml(customer, departments, storeName, printNo) {
     const body = normalizeFixedLabelPayload('departments', { customer, departments });
     if (!body.ok) throw new Error(body.error);
     const layout = departmentLayout(body.payload.departments);
@@ -483,7 +502,7 @@
       '<section class="cell depts">' +
       departmentTitleHtml(body.payload.customer, storeName) +
       `<div class="checks${tight}">${rows}</div>` +
-      fixedLabelNameBlockHtml() +
+      fixedLabelNameBlockHtml({ printNo: printNo !== false }) +
       '</section>'
     );
   }
@@ -515,9 +534,10 @@
 
   function savedFixedLabelPageHtml(record, storeName) {
     const useStore = record.kind === 'departments' && record.payload && record.payload.storeSlot ? storeName : '';
+    const printNo = !(record.payload && record.payload.printNo === false);
     const cell = record.kind === 'tiers'
       ? tierCellHtml(record.payload.lines)
-      : departmentCellHtml(record.payload.customer, record.payload.departments, useStore);
+      : departmentCellHtml(record.payload.customer, record.payload.departments, useStore, printNo);
     return `<div class="page">${cell}${cell}${cell}${cell}</div>`;
   }
 
