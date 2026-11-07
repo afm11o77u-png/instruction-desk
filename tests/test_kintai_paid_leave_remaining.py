@@ -6,7 +6,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,7 +38,9 @@ class HoldingMathTest(unittest.TestCase):
             10, '2026-11-07T01:00:00+00:00', paid, today=date(2027, 2, 1),
         )
         self.assertEqual(done, 8.5)
-        self.assertEqual(kintai.paid_leave_acquisition_date('2026-11-15T15:30:00+00:00'), date(2026, 11, 16))
+        self.assertEqual(kintai.JST.utcoffset(None), timedelta(hours=9))
+        self.assertEqual(kintai.paid_leave_acquisition_date('2026-11-15T14:59:00+00:00'), date(2026, 11, 15))
+        self.assertEqual(kintai.paid_leave_acquisition_date('2026-11-15T15:00:00+00:00'), date(2026, 11, 16))
 
     def test_mid_period_usage_and_missing_import_stay_blank(self):
         acquired = '2026-11-07T01:00:00+00:00'

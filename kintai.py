@@ -15,7 +15,6 @@ import sqlite3
 import unicodedata
 import zipfile
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
@@ -2528,7 +2527,9 @@ def _prefix_total(month_rows: list[dict], key: str):
     return found
 
 
-JST = ZoneInfo('Asia/Tokyo')
+# 日本は通年 UTC+9。Windows の標準 Python には IANA tzdata が無く、
+# ZoneInfo('Asia/Tokyo') は起動時に ZoneInfoNotFoundError になる。
+JST = timezone(timedelta(hours=9))
 
 
 def _closing_month_containing(day: date) -> tuple[int, int]:
