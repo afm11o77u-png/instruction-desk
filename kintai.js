@@ -486,11 +486,16 @@
       body.innerHTML = '';
       return;
     }
-    const head = cols.map((c, i) => `<th scope="col"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('');
+    const tip = (c) => {
+      if (c.missing) return `${c.label} ${c.missing}`;
+      if (c.sourceLabel && c.sourceLabel !== c.label) return `${c.label}（${c.sourceLabel}）`;
+      return c.label;
+    };
+    const head = cols.map((c, i) => `<th scope="col" title="${esc(tip(c))}"${i === 0 ? ' class="kintai-daily-sticky"' : ''}>${esc(c.label)}</th>`).join('');
     const rows = ((data && data.rows) || []).map(r => `<tr>${cols.map((c, i) => {
       const text = r[c.key] == null ? '' : String(r[c.key]);
-      if (i === 0) return `<th scope="row" class="kintai-daily-sticky kintai-month">${esc(text)}</th>`;
-      return `<td title="${esc(c.label)}">${esc(text)}</td>`;
+      if (i === 0) return `<th scope="row" class="kintai-daily-sticky kintai-month" title="${esc(tip(c))}">${esc(text)}</th>`;
+      return `<td title="${esc(tip(c))}">${esc(text)}</td>`;
     }).join('')}</tr>`).join('');
     body.innerHTML = rows
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`

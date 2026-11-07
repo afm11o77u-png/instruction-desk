@@ -188,8 +188,9 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintai-daylink{border:0;background:transparent;padding:0;color:#1f4e79;font-weight:700;text-decoration:underline;cursor:pointer}
 #kintaidaily{min-width:0;max-width:100%}
 #kintaidaily .kintai-tablewrap{max-width:100%;min-width:0;overflow:auto}
-.kintai-daily-sheet{border-collapse:separate;border-spacing:0}
-.kintai-daily-sheet thead th{white-space:pre-line;line-height:1.25;vertical-align:bottom}
+.kintai-daily-sheet{width:max-content;max-width:none;border-collapse:separate;border-spacing:0}
+.kintai-daily-sheet th,.kintai-daily-sheet td{padding:1px 3px;white-space:nowrap;font-size:12px;line-height:1.3}
+.kintai-daily-sheet thead th{white-space:nowrap;line-height:1.3;vertical-align:middle}
 .kintai-daily-sheet td{background:#fff;text-align:left}
 .kintai-daily-sheet tbody tr:nth-child(even) td{background:#f7f7f7}
 .kintai-daily-sheet .kintai-daily-sticky{position:sticky;left:0;z-index:2;background:#fff;box-shadow:1px 0 0 #b7c3d0}
