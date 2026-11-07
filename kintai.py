@@ -22,6 +22,7 @@ from xml.etree import ElementTree as ET
 
 import kintai_shift
 import kintai_shift_xlsx
+import kintai_touch_on_time
 import kintai_crimp
 import kintai_bihin
 import kintai_bihin_xlsx
@@ -3282,6 +3283,10 @@ def handle_post(h, c, path: str, d: dict):
         except Exception as e:
             raise ValueError('ファイルデータを読めません。') from e
         return 200, import_paths_from_upload(c, str(filename), blob)
+    if path == '/api/kintai/shift/touch-on-time/preview':
+        return kintai_touch_on_time.preview(d or {})
+    if path == '/api/kintai/shift/touch-on-time/csv':
+        return kintai_touch_on_time.export_view(d or {})
     if path == '/api/kintai/shift/xlsx':
         # 表示中の表をファイルにするだけ。接続 c は使わない（月シート・メモ・出勤簿は読まない・更新しない）。
         return kintai_shift_xlsx.export_view(d or {})
