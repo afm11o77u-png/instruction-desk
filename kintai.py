@@ -2995,9 +2995,12 @@ def _daily_base_columns(layout: dict) -> list[dict]:
 
 
 # 日別の出勤日数。Excelの月計は足さない。保存値がある日はそれを使い、無い日だけ初期値。
-# 初期値: 始業と終業が両方空欄なら 0。両方とも時刻として読めるとき、終業が14:00より前なら 0.5、14:00ちょうど以降は 1。
+# 初期値: 始業と終業が両方空欄なら 0。両方とも時刻として読めるとき、
+# 終業が11:00未満なら 0、11:00以上14:00未満なら 0.5、14:00以上なら 1。
+# 保存済みの日は初期値で上書きしない。
 # 片方だけ空欄、または時刻として読めない日は初期値を置かない（空欄のまま。月合計にも足さない）。
-WORK_DAY_CUTOFF_MINUTES = 14 * 60
+WORK_DAY_HALF_MINUTES = 11 * 60
+WORK_DAY_FULL_MINUTES = 14 * 60
 _WORK_DAY_CLOCK = re.compile(r'^(\d{1,2}):(\d{2})$')
 
 
@@ -3041,7 +3044,9 @@ def default_attendance_days(start, end) -> float | None:
     if start_kind == 'blank' and end_kind == 'blank':
         return 0.0
     if start_kind == 'clock' and end_kind == 'clock':
-        if end_minutes < WORK_DAY_CUTOFF_MINUTES:
+        if end_minutes < WORK_DAY_HALF_MINUTES:
+            return 0.0
+        if end_minutes < WORK_DAY_FULL_MINUTES:
             return 0.5
         return 1.0
     return None

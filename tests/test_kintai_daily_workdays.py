@@ -28,6 +28,8 @@ class AttendanceDaysRuleTest(unittest.TestCase):
         nine = _clock(9, 0)
         self.assertEqual(kintai.default_attendance_days(None, None), 0.0)
         self.assertEqual(kintai.default_attendance_days('', ''), 0.0)
+        self.assertEqual(kintai.default_attendance_days(nine, _clock(10, 59)), 0.0)
+        self.assertEqual(kintai.default_attendance_days(nine, _clock(11, 0)), 0.5)
         self.assertEqual(kintai.default_attendance_days(nine, _clock(13, 59)), 0.5)
         self.assertEqual(kintai.default_attendance_days(nine, _clock(14, 0)), 1.0)
         self.assertEqual(kintai.default_attendance_days(nine, _clock(14, 1)), 1.0)
@@ -35,6 +37,8 @@ class AttendanceDaysRuleTest(unittest.TestCase):
         self.assertEqual(kintai._clock_state(1.20625), ('clock', 28 * 60 + 57))
         self.assertEqual(kintai.default_attendance_days(nine, 1.20625), 1.0)
         self.assertEqual(kintai.default_attendance_days(nine, '28:57'), 1.0)
+        self.assertEqual(kintai.default_attendance_days('9:00', '11：00'), 0.5)
+        self.assertEqual(kintai.default_attendance_days('9:00', '10:59'), 0.0)
         self.assertEqual(kintai.default_attendance_days('9:00', '14：00'), 1.0)
         self.assertEqual(kintai.default_attendance_days('9:00', '13:59'), 0.5)
         # 片方だけ空欄、0、数式キャッシュ無し、日付シリアルは初期値にしない
@@ -46,7 +50,7 @@ class AttendanceDaysRuleTest(unittest.TestCase):
         # datetime は既存表示と同じく時・分だけ。日付を翌日分としては足さない
         self.assertEqual(
             kintai.default_attendance_days(nine, datetime(2026, 3, 2, 4, 57)),
-            0.5,
+            0.0,
         )
 
     def test_sheet_defaults_stay_inside_the_closing_period(self):
@@ -215,7 +219,7 @@ class AttendanceDaysStoreTest(unittest.TestCase):
         blob, layout = _leap_march()
         view = kintai.daily_rows_from_workbook(blob, 2024, 3, layout)
         self.assertEqual([row['date'] for row in view['rows']], ['2024/02/16', '2024/02/29', '2024/03/15'])
-        self.assertEqual(view['rows'][1]['workDays'], 0.5)
+        self.assertEqual(view['rows'][1]['workDays'], 0.0)
         plain, plain_layout = _leap_march(2026)
         plain_view = kintai.daily_rows_from_workbook(plain, 2026, 3, plain_layout)
         self.assertNotIn('2026/02/29', [row['date'] for row in plain_view['rows']])
@@ -228,14 +232,17 @@ class AttendanceDaysStoreTest(unittest.TestCase):
                 (3, 7, '終業時間（00：00）'),
                 (5, 1, _serial(date(2026, 2, 16))),
                 (5, 5, _clock(9, 0)),
-                (5, 7, _clock(10, 0)),
-                (6, 1, _serial(date(2026, 3, 15))),
-                (6, 5, ''),
-                (6, 7, ''),
+                (5, 7, _clock(11, 0)),
+                (6, 1, _serial(date(2026, 2, 17))),
+                (6, 5, _clock(9, 0)),
+                (6, 7, _clock(10, 59)),
+                (7, 1, _serial(date(2026, 3, 15))),
+                (7, 5, ''),
+                (7, 7, ''),
             ],
         })
         view = kintai.daily_rows_from_workbook(blob, 2026, 3, kintai.MONTHDOT_2026_CONTRACT_LAYOUT)
-        self.assertEqual([row['workDays'] for row in view['rows']], [0.5, 0.0])
+        self.assertEqual([row['workDays'] for row in view['rows']], [0.5, 0.0, 0.0])
 
     def test_permissions_match_daily_view(self):
         class Denied:
@@ -263,6 +270,35 @@ class AttendanceDaysStoreTest(unittest.TestCase):
         self.assertEqual(code, 200)
         hit = next(row for row in body['rows'] if row['date'] == '2026/02/17')
         self.assertEqual(hit['workDays'], 0.0)
+        self.assertEqual(hit['workDaysDefault'], 0.5)
+        self.assertTrue(hit['workDaysSaved'])
+        self.assertEqual(self.book.read_bytes(), self.before)
+
+    def test_saved_days_are_not_replaced_by_the_default(self):
+        """11時未満の初期値0でも、保存した1や0.5は上書きしない。"""
+        saved = kintai.save_daily_work_days(self.c, self.user, {
+            'personId': self.person['id'],
+            'year': 2026,
+            'month': 3,
+            'days': [
+                {'date': '2026-02-16', 'days': 0.5},
+                {'date': '2026-02-17', 'days': 1},
+            ],
+        })
+        by_date = {row['date']: row for row in saved['rows']}
+        self.assertEqual(by_date['2026/02/16']['workDaysDefault'], 1.0)
+        self.assertEqual(by_date['2026/02/16']['workDays'], 0.5)
+        self.assertTrue(by_date['2026/02/16']['workDaysSaved'])
+        self.assertEqual(by_date['2026/02/17']['workDaysDefault'], 0.5)
+        self.assertEqual(by_date['2026/02/17']['workDays'], 1.0)
+        self.assertTrue(by_date['2026/02/17']['workDaysSaved'])
+        self.assertEqual(by_date['2026/02/18']['workDays'], 0.0)
+        self.assertFalse(by_date['2026/02/18']['workDaysSaved'])
+        again = kintai.person_daily_sheet(self.c, self.person['id'], 2026, 3)
+        again_by_date = {row['date']: row for row in again['rows']}
+        self.assertEqual(again_by_date['2026/02/16']['workDays'], 0.5)
+        self.assertEqual(again_by_date['2026/02/17']['workDays'], 1.0)
+        self.assertEqual(kintai.default_attendance_days(_clock(9, 0), _clock(10, 59)), 0.0)
         self.assertEqual(self.book.read_bytes(), self.before)
 
 
