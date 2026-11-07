@@ -315,7 +315,8 @@
           : sheetCell(dayText(m.holidayRemaining))}
         ${sheetCell(dayText(m.paidLeaveDays))}
         ${sheetCell(dayText(m.paidLeaveCumulative))}
-        ${blankCells(2)}
+        ${blankCells(1)}
+        ${sheetCell(m.paidLeaveBaseDate || '')}
         ${sheetCell(m.ordinaryHm)}
         ${sheetCell(m.overtimeHm)}
         ${sheetCell(m.totalHm)}
@@ -359,48 +360,53 @@
     if (!body) return;
     const rows = ((data && data.rows) || []).filter(r => passesPeopleFilter(r.retired));
     const editable = !!(data && data.canEditEmploymentDates);
-    const head = ['社員番号', '氏名', '在籍', '雇用区分', '出勤累計', '休日累計', '有給取得累計', '年間休日枠', '年間休日残数', '開始有給残', '有給残数', '入社日', '退職日', '有給休暇起算日'];
+    const head = ['氏名', '在籍状況', '年間休日枠', '開始有給残', '出勤累計', '休日累計', '休日残数', '有給取得累計', '有給残数', '入社日', '退社日', '雇用区分', '有給休暇起算日'];
+    const dateLabel = { hired: '入社日', retired: '退社日', base: '有給休暇起算日' };
     const dateCell = (personId, field, value) => editable
-      ? `<td><input type="date" class="kintai-roster-date" data-person="${personId}" data-field="${field}" value="${esc(value || '')}" aria-label="${field === 'hired' ? '入社日' : '退職日'}"></td>`
+      ? `<td><input type="date" class="kintai-roster-date" data-person="${personId}" data-field="${field}" value="${esc(value || '')}" aria-label="${dateLabel[field]}"></td>`
       : `<td>${esc(value || '')}</td>`;
     const allowanceCell = (r) => r.holidayAllowance == null
       ? `<td class="kintai-blank" title="${esc(r.holidayAllowanceNote || '')}">${esc(r.holidayAllowanceNote || '')}</td>`
       : rosterCell(r.holidayAllowance);
     const bodyRows = rows.map(r => `<tr>
-      <td>${esc(r.employeeCode || '')}</td>
-      <td>${esc(r.displayName || '')}</td>
+      <td>${esc(r.displayName || '')}<br><small>${esc(r.employeeCode || '')}</small></td>
       <td>${r.retired ? '退職' : '在職'}</td>
-      <td>${esc(EMP[r.employment] || r.employment || '')}</td>
+      ${allowanceCell(r)}
+      <td class="kintai-blank"></td>
       ${rosterCell(r.workCumulative)}
       ${rosterCell(r.holidayCumulative)}
-      ${rosterCell(r.paidLeaveCumulative)}
-      ${allowanceCell(r)}
       ${r.holidayRemaining == null ? '<td class="kintai-blank"></td>' : rosterCell(r.holidayRemaining)}
-      ${blankCells(2)}
+      ${rosterCell(r.paidLeaveCumulative)}
+      <td class="kintai-blank"></td>
       ${dateCell(r.personId, 'hired', r.hiredOn)}
       ${dateCell(r.personId, 'retired', r.retiredOn)}
-      <td class="kintai-blank"></td>
+      <td>${esc(EMP[r.employment] || r.employment || '')}</td>
+      ${dateCell(r.personId, 'base', r.paidLeaveBaseDate)}
     </tr>`).join('');
-    body.innerHTML = `<p class="kintaimeta">年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。入社日が無いとき、退職者で退職日が無いときは空欄です。未確定の月を0にはしません。</p>
-      ${editable ? '<p class="kintai-workdays-bar"><button type="button" id="kintairosterdatesave">入社日・退職日を保存</button></p>' : ''}
+    body.innerHTML = `<p class="kintaimeta">入社日・退社日・有給休暇起算日は、人ごとに1組です。年度ごとには分かれません。退社日の保存先は退職日と同じです。有給休暇起算日は表示するだけで、付与や失効、残数の計算には使いません。年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。休日残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。</p>
+      ${editable ? '<p class="kintai-workdays-bar"><button type="button" id="kintairosterdatesave">入社日・退社日・有給休暇起算日を保存</button></p>' : ''}
       <table class="kintai-sheet kintai-person-sheet"><thead><tr>${head.map(name => `<th>${esc(name)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`;
   }
 
   async function saveRosterDates() {
     if (!canKintai()) throw Error('マーク管理の権限がありません。');
     const people = [];
+    const valueOf = (personId, field) => {
+      const el = document.querySelector(`#kintairoster .kintai-roster-date[data-field="${field}"][data-person="${personId}"]`);
+      return el && el.value ? el.value : null;
+    };
     document.querySelectorAll('#kintairoster .kintai-roster-date[data-field="hired"]').forEach(el => {
       const personId = Number(el.dataset.person);
-      const retired = document.querySelector(`#kintairoster .kintai-roster-date[data-field="retired"][data-person="${personId}"]`);
       people.push({
         personId,
         hiredOn: el.value || null,
-        retiredOn: retired && retired.value ? retired.value : null,
+        retiredOn: valueOf(personId, 'retired'),
+        paidLeaveBaseOn: valueOf(personId, 'base'),
       });
     });
     const data = await api('/api/kintai/roster/employment', { year: rememberYear(fiscalStartYear()), people });
     paintRoster(data);
-    toast('入社日・退職日を保存しました。');
+    toast('入社日・退社日・有給休暇起算日を保存しました。');
   }
 
   async function loadKintaiRoster() {

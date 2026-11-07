@@ -327,6 +327,8 @@ def schema(c):
         c.execute('ALTER TABLE kintai_people ADD COLUMN hired_on TEXT')
     if 'retired_on' not in people_cols:
         c.execute('ALTER TABLE kintai_people ADD COLUMN retired_on TEXT')
+    if 'paid_leave_base_on' not in people_cols:
+        c.execute('ALTER TABLE kintai_people ADD COLUMN paid_leave_base_on TEXT')
     c.execute(
         '''CREATE TABLE IF NOT EXISTS kintai_monthly (
             person_id INTEGER NOT NULL,
@@ -2432,6 +2434,9 @@ def _person_fiscal_months(c, person: dict, fiscal_start_year: int) -> list[dict]
     apply_displayed_holidays(rows)
     annotate_running_totals(rows)
     apply_annual_holiday_remaining(person, fiscal_start_year, rows)
+    base = person.get('paid_leave_base_on') or None
+    for item in rows:
+        item['paidLeaveBaseDate'] = base
     return rows
 
 
@@ -2549,7 +2554,7 @@ def list_roster(c, fiscal_start_year: int) -> dict:
             'retiredOn': person.get('retired_on') or None,
             'paidLeaveOpening': None,
             'paidLeaveRemaining': None,
-            'paidLeaveBaseDate': None,
+            'paidLeaveBaseDate': person.get('paid_leave_base_on') or None,
         })
     return {
         'fiscalStartYear': fiscal_start_year,
@@ -2560,7 +2565,7 @@ def list_roster(c, fiscal_start_year: int) -> dict:
 
 
 def save_employment_dates(c, user, payload: dict) -> dict:
-    """全員一覧の入社日・退職日だけを保存する。在籍区分や Excel は変えない。"""
+    """全員一覧の入社日・退社日・有給休暇起算日を人ごとに保存する。在籍区分や Excel は変えない。"""
     if not isinstance(payload, dict):
         raise ValueError('保存内容を確認してください。')
     year = payload.get('year')
@@ -2581,16 +2586,28 @@ def save_employment_dates(c, user, payload: dict) -> dict:
         if person_id in seen:
             raise ValueError('同じ対象者が重複しています。')
         seen.add(person_id)
-        row = c.execute('SELECT id FROM kintai_people WHERE id=? AND active=1', (person_id,)).fetchone()
+        row = c.execute(
+            'SELECT id, paid_leave_base_on FROM kintai_people WHERE id=? AND active=1',
+            (person_id,),
+        ).fetchone()
         if not row:
             raise ValueError('対象者が見つかりません。')
         hired = _stored_date(entry.get('hiredOn'))
         retired = _stored_date(entry.get('retiredOn'))
+        if 'paidLeaveBaseOn' in entry:
+            base = _stored_date(entry.get('paidLeaveBaseOn'))
+        else:
+            base = _stored_date(row['paid_leave_base_on'])
         if hired and retired and retired < hired:
-            raise ValueError('退職日は入社日以降にしてください。')
+            raise ValueError('退社日は入社日以降にしてください。')
         c.execute(
-            'UPDATE kintai_people SET hired_on=?, retired_on=? WHERE id=?',
-            (hired.isoformat() if hired else None, retired.isoformat() if retired else None, person_id),
+            'UPDATE kintai_people SET hired_on=?, retired_on=?, paid_leave_base_on=? WHERE id=?',
+            (
+                hired.isoformat() if hired else None,
+                retired.isoformat() if retired else None,
+                base.isoformat() if base else None,
+                person_id,
+            ),
         )
     return list_roster(c, year)
 
@@ -3957,7 +3974,7 @@ def handle_post(h, c, path: str, d: dict):
         # 日別を開ける人だけ。新しい権限は足さない。Excelファイルは書き換えない。
         return 200, save_daily_work_days(c, h.user, d or {})
     if path == '/api/kintai/roster/employment':
-        # 入社日・退職日。出勤簿を開ける人だけ。読取専用の利用者には開かない。
+        # 入社日・退社日・有給休暇起算日。出勤簿を開ける人だけ。読取専用の利用者には開かない。
         return 200, save_employment_dates(c, h.user, d or {})
     if path == '/api/kintai/probe':
         try:

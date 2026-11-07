@@ -157,6 +157,62 @@ class AnnualRemainingStoreTest(unittest.TestCase):
         self.assertEqual(kintai.handle_post(Floor(), self.c, '/api/kintai/roster/employment', payload)[0], 403)
         self.assertIsNone(self.c.execute('SELECT hired_on FROM kintai_people WHERE id=?', (self.person['id'],)).fetchone()['hired_on'])
 
+    def test_base_date_is_per_person_and_can_be_cleared(self):
+        kintai.save_employment_dates(self.c, self.user, {
+            'year': 2026,
+            'people': [{
+                'personId': self.person['id'],
+                'hiredOn': '2019-04-01',
+                'retiredOn': '2026-06-30',
+                'paidLeaveBaseOn': '2019-10-01',
+            }],
+        })
+        roster_2026 = kintai.list_roster(self.c, 2026)
+        roster_2027 = kintai.list_roster(self.c, 2027)
+        row = next(r for r in roster_2026['rows'] if r['personId'] == self.person['id'])
+        later = next(r for r in roster_2027['rows'] if r['personId'] == self.person['id'])
+        other = next(r for r in roster_2026['rows'] if r['personId'] == self.other['id'])
+        self.assertEqual(row['paidLeaveBaseDate'], '2019-10-01')
+        self.assertEqual(row['retiredOn'], '2026-06-30')
+        self.assertEqual(later['paidLeaveBaseDate'], row['paidLeaveBaseDate'])
+        self.assertEqual(later['hiredOn'], row['hiredOn'])
+        self.assertIsNone(other['paidLeaveBaseDate'])
+        feb = self.months()[(2026, 2)]
+        self.assertEqual(feb['paidLeaveBaseDate'], '2019-10-01')
+        self.assertEqual(feb['holidayAllowance'], kintai.annual_holiday_allowance(
+            2026, 'regular', date(2019, 4, 1), date(2026, 6, 30), False,
+        )[0])
+        self.assertIsNone(feb.get('paidLeaveRemaining'))
+        cleared = kintai.save_employment_dates(self.c, self.user, {
+            'year': 2026,
+            'people': [{
+                'personId': self.person['id'],
+                'hiredOn': None,
+                'retiredOn': None,
+                'paidLeaveBaseOn': None,
+            }],
+        })
+        cleared_row = next(r for r in cleared['rows'] if r['personId'] == self.person['id'])
+        self.assertIsNone(cleared_row['hiredOn'])
+        self.assertIsNone(cleared_row['retiredOn'])
+        self.assertIsNone(cleared_row['paidLeaveBaseDate'])
+        self.assertIsNone(self.months()[(2026, 2)]['paidLeaveBaseDate'])
+        self.assertEqual(self.months()[(2026, 2)]['holidayAllowanceNote'], '入社日が未入力です')
+        with self.assertRaises(ValueError):
+            kintai.save_employment_dates(self.c, self.user, {
+                'year': 2026,
+                'people': [{
+                    'personId': self.person['id'],
+                    'hiredOn': '2020-04-01',
+                    'retiredOn': None,
+                    'paidLeaveBaseOn': '2020-13-01',
+                }],
+            })
+        self.assertIsNone(self.c.execute(
+            'SELECT paid_leave_base_on FROM kintai_people WHERE id=?',
+            (self.person['id'],),
+        ).fetchone()['paid_leave_base_on'])
+
 
 def _february_only() -> bytes:
     return _xlsx({'2026.2': [
