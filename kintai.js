@@ -315,7 +315,9 @@
           : sheetCell(dayText(m.holidayRemaining))}
         ${sheetCell(dayText(m.paidLeaveDays))}
         ${sheetCell(dayText(m.paidLeaveCumulative))}
-        ${blankCells(1)}
+        ${m.paidLeaveRemaining == null
+          ? `<td class="kintai-blank" title="${esc(m.paidLeaveRemainingNote || '')}"></td>`
+          : `<td title="取得した現保有数から、取得日の翌日以降に始まる締め期間の有給取得を引いた数です。取得日を含む期間は引きません。">${esc(dayText(m.paidLeaveRemaining))}</td>`}
         ${sheetCell(m.paidLeaveBaseDate || '')}
         ${sheetCell(m.ordinaryHm)}
         ${sheetCell(m.overtimeHm)}
@@ -377,13 +379,15 @@
       ${rosterCell(r.holidayCumulative)}
       ${r.holidayRemaining == null ? '<td class="kintai-blank"></td>' : rosterCell(r.holidayRemaining)}
       ${rosterCell(r.paidLeaveCumulative)}
-      <td title="${esc(r.paidLeaveBalanceUpdatedAt ? '有給管理簿の最新読取値（年度末の残数ではありません）' : '')}">${r.paidLeaveRemaining == null ? '' : esc(r.paidLeaveRemaining)}</td>
+      ${r.paidLeaveRemaining == null
+        ? `<td class="kintai-blank" title="${esc(r.paidLeaveRemainingNote || '')}"></td>`
+        : `<td title="取得した現保有数から、取得日の翌日以降に始まる締め期間の有給取得を引いた数です。取得日を含む期間は引きません。">${esc(dayText(r.paidLeaveRemaining))}</td>`}
       ${dateCell(r.personId, 'hired', r.hiredOn)}
       ${dateCell(r.personId, 'retired', r.retiredOn)}
       <td>${esc(EMP[r.employment] || r.employment || '')}</td>
       ${dateCell(r.personId, 'base', r.paidLeaveBaseDate)}
     </tr>`).join('');
-    body.innerHTML = `<p class="kintaimeta">入社日・退社日・有給休暇起算日は、人ごとに1組です。年度ごとには分かれません。退社日の保存先は退職日と同じです。有給休暇起算日は表示するだけで、付与や失効、残数の計算には使いません。年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。休日残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。</p>
+    body.innerHTML = `<p class="kintaimeta">入社日・退社日・有給休暇起算日は、人ごとに1組です。年度ごとには分かれません。退社日の保存先は退職日と同じです。有給休暇起算日は表示するだけで、付与や失効、残数の計算には使いません。年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。休日残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。有給残数は、管理簿の現保有数から、取得日の翌日以降に始まる締め期間の有給取得を引いた数です。取得日を含む期間は引きません。</p>
       ${editable ? '<p class="kintai-workdays-bar"><button type="button" id="kintairosterdatesave">入社日・退社日・有給休暇起算日を保存</button></p>' : ''}
       <table class="kintai-sheet kintai-person-sheet"><thead><tr>${head.map(name => `<th>${esc(name)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`;
   }

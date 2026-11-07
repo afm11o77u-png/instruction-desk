@@ -14,7 +14,8 @@ import re
 import sqlite3
 import unicodedata
 import zipfile
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from decimal import Decimal, ROUND_HALF_UP
 from io import BytesIO
 from pathlib import Path
@@ -2438,6 +2439,7 @@ def _person_fiscal_months(c, person: dict, fiscal_start_year: int) -> list[dict]
     base = person.get('paid_leave_base_on') or None
     for item in rows:
         item['paidLeaveBaseDate'] = base
+    apply_paid_leave_remaining(c, person, rows)
     return rows
 
 
@@ -2526,6 +2528,102 @@ def _prefix_total(month_rows: list[dict], key: str):
     return found
 
 
+JST = ZoneInfo('Asia/Tokyo')
+
+
+def _closing_month_containing(day: date) -> tuple[int, int]:
+    """その日が属する締め月。16日以降は翌月度。"""
+    if day.day >= 16:
+        if day.month == 12:
+            return day.year + 1, 1
+        return day.year, day.month + 1
+    return day.year, day.month
+
+
+def _next_year_month(year: int, month: int) -> tuple[int, int]:
+    if month == 12:
+        return year + 1, 1
+    return year, month + 1
+
+
+def paid_leave_acquisition_date(updated_at) -> date | None:
+    """現保有数を読み取った日本時間の日付。有給休暇起算日とは別。"""
+    if not updated_at:
+        return None
+    text = str(updated_at).strip().replace('Z', '+00:00')
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(JST).date()
+
+
+def paid_leave_holding_remaining(balance, updated_at, paid_by_month: dict, today: date | None = None):
+    """取得した現保有数から、取得日より後に始まる締め期間の有給取得だけを引く。
+
+    日別の有休欄は使わない。月合計を日に割り振らない。
+    取得日を含む締め期間は、有給取得が確定の0のときだけ引かずに済む。
+    それ以外はその期間を取得日の前後に分けられないので残数は空欄。
+    まだ終わっていない未取込の月は、使用0とはせず、架空の使用も引かない。
+    戻り値は (残数または None, 空欄の理由)。
+    """
+    if balance is None or not updated_at:
+        return None, ''
+    acquired = paid_leave_acquisition_date(updated_at)
+    if acquired is None:
+        return None, ''
+    today = today or datetime.now(JST).date()
+    sy, sm = _closing_month_containing(acquired)
+    if (sy, sm) not in paid_by_month or paid_by_month[(sy, sm)] is None:
+        return None, '取得日を含む締め期間の有給取得が未取込のため、取得日より後の使用を分けられません。'
+    if Decimal(str(paid_by_month[(sy, sm)])) != 0:
+        return None, '取得日が締め期間の途中のため、その月の有給取得を取得日より後へ分けられません。'
+    used = Decimal('0')
+    end_y, end_m = _closing_month_containing(today)
+    for year, month in paid_by_month:
+        if (year, month) > (end_y, end_m):
+            end_y, end_m = year, month
+    year, month = _next_year_month(sy, sm)
+    while (year, month) <= (end_y, end_m):
+        _start, end = closing_period(year, month)
+        paid = paid_by_month.get((year, month))
+        if paid is None:
+            if end < today:
+                return None, '取得日より後で、すでに終わった締め期間の有給取得が未取込です。'
+        else:
+            used += Decimal(str(paid))
+        year, month = _next_year_month(year, month)
+    value = (Decimal(str(balance)) - used).quantize(Decimal('0.01'))
+    return float(value), ''
+
+
+def _paid_leave_by_month(c, person_id: int) -> dict[tuple[int, int], float | None]:
+    rows = c.execute(
+        'SELECT year, month, paid_leave_days FROM kintai_monthly WHERE person_id=?',
+        (person_id,),
+    )
+    return {(int(row['year']), int(row['month'])): row['paid_leave_days'] for row in rows}
+
+
+def apply_paid_leave_remaining(c, person: dict, month_rows: list[dict]) -> None:
+    """個人の月表と全員一覧で同じ残数を置く。付与・失効は計算しない。"""
+    kintai_leave_balance.ensure_schema(c)
+    snap = c.execute(
+        'SELECT balance, updated_at FROM kintai_leave_cells WHERE person_id=?',
+        (int(person['id']),),
+    ).fetchone()
+    value, note = paid_leave_holding_remaining(
+        snap['balance'] if snap else None,
+        snap['updated_at'] if snap else '',
+        _paid_leave_by_month(c, int(person['id'])),
+    )
+    for item in month_rows:
+        item['paidLeaveRemaining'] = value
+        item['paidLeaveRemainingNote'] = note
+
+
 def list_roster(c, fiscal_start_year: int) -> dict:
     """全員の年度累計。取込済みの出勤・休日・有給だけ。枠・残数・起算日・入社日は持っていない。"""
     if type(fiscal_start_year) is not int or not 2000 <= fiscal_start_year <= 2100:
@@ -2555,7 +2653,8 @@ def list_roster(c, fiscal_start_year: int) -> dict:
             'hiredOn': person.get('hired_on') or None,
             'retiredOn': person.get('retired_on') or None,
             'paidLeaveOpening': None,
-            'paidLeaveRemaining': balances.get(person['id'], {}).get('balance'),
+            'paidLeaveRemaining': months[0].get('paidLeaveRemaining') if months else None,
+            'paidLeaveRemainingNote': months[0].get('paidLeaveRemainingNote') or '' if months else '',
             'paidLeaveBalanceUpdatedAt': balances.get(person['id'], {}).get('updatedAt'),
             'paidLeaveBaseDate': person.get('paid_leave_base_on') or None,
         })
