@@ -1,14 +1,10 @@
 """Touch On Time CSV export from the displayed shift sheet. No database writes."""
 import csv
-import base64
 import re
-from datetime import date, timedelta
-from io import StringIO, BytesIO
-from xml.etree import ElementTree as ET
-from zipfile import ZipFile, BadZipFile
+from datetime import date
+from io import StringIO
 
 import kintai_shift_xlsx
-import kintai_shift
 
 # Explicitly approved department members; external employee codes are text.
 STAFF = {
@@ -28,71 +24,7 @@ HEADER = ['#従業員コード※', '勤務日※', '出勤所属コード', '�
           '休憩予定時間', '退勤予定', '勤務日種別コード']
 
 
-def from_excel(encoded):
-    """Read this application's exported shift workbook, without executing formulas."""
-    if not isinstance(encoded, str) or len(encoded) > 4_000_000:
-        raise ValueError('Excelファイルは3MB以下にしてください。')
-    ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
-    try:
-        blob = base64.b64decode(encoded, validate=True)
-        with ZipFile(BytesIO(blob)) as z:
-            if sum(i.file_size for i in z.infolist()) > 20_000_000:
-                raise ValueError('Excelファイルが大きすぎます。')
-            shared = []
-            if 'xl/sharedStrings.xml' in z.namelist():
-                shared = [''.join(e.itertext()) for e in ET.fromstring(z.read('xl/sharedStrings.xml'))]
-            root = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
-            values = {}
-            for cell in root.iter(ns + 'c'):
-                if cell.find(ns + 'f') is not None:
-                    raise ValueError('数式を含むファイルは変換できません。シフト表からExcelを出力し直してください。')
-                raw = cell.findtext(ns + 'v') or ''
-                if cell.get('t') == 'inlineStr':
-                    raw = ''.join(t.text or '' for t in cell.iter(ns + 't'))
-                elif cell.get('t') == 's':
-                    raw = shared[int(raw)]
-                values[cell.get('r')] = raw
-    except (BadZipFile, KeyError, IndexError, ET.ParseError, TypeError, ValueError) as error:
-        raise ValueError('シフト表から出力した.xlsxファイルを選択してください。' + str(error)) from error
-    match = re.search(r'(20\d{2})年\s*(\d{1,2})月', values.get('A1', ''))
-    if not match or values.get('B4') != '氏名':
-        raise ValueError('このシフト表から出力したExcelファイルを選択してください。')
-    year, month = map(int, match.groups())
-    days = kintai_shift.month_calendar(year, month)
-    for day in range(1, len(days) + 1):
-        col = kintai_shift_xlsx._col(day + 1)
-        raw = values.get(col + '4', '')
-        expected = date(year, month, day)
-        try:
-            actual = date(1899, 12, 30) + timedelta(days=float(raw))
-        except (ValueError, OverflowError):
-            try:
-                actual = date.fromisoformat(raw[:10])
-            except ValueError as error:
-                raise ValueError('Excelの日付見出しを確認してください。') from error
-        if actual != expected:
-            raise ValueError('Excelの日付と対象月が一致しません。')
-    people, cells = [], {}
-    for row in range(6, 406):
-        name = values.get(f'B{row}', '').strip()
-        if not name:
-            continue
-        key = f'shift:excel{row}'
-        people.append({'key': key, 'displayName': name, 'source': 'shift'})
-        marks = {}
-        for day in range(1, len(days) + 1):
-            text = values.get(kintai_shift_xlsx._col(day + 1) + str(row), '').strip()
-            if not text:
-                continue
-            kind = 'off' if text == '×' else 'unknown' if text in ('?', '？') else 'task' if text in kintai_shift.TASK_TEXTS else 'time'
-            marks[str(day)] = {'kind': kind, 'text': text}
-        cells[key] = marks
-    return {'year': year, 'month': month, 'people': people, 'cells': cells}
-
-
 def build(payload):
-    if payload.get('excelData') is not None:
-        payload = from_excel(payload['excelData'])
     view = kintai_shift_xlsx.build_view(payload)
     rows, members, excluded, seen = [], [], [], set()
     for person in view['people']:
