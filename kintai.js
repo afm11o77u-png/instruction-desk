@@ -10,7 +10,7 @@
   let peopleFilter = 'all'; // all | active | retired
   // 出勤簿（個人）の列。累計・残数・起算日・給与などは集計ルール未定のため空欄。
   const PERSON_COLUMNS = [
-    '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数',
+    '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数', '計算残数',
     '有給休暇起算日', '普通勤務時間', '残業時間', '勤務時間計', '通常勤務給与', '残業給', '有給付与日数', '有給失効日数', 'その他休暇等', '備考',
   ];
   // 月別集計（全員合計）。給与列は未集計。
@@ -315,9 +315,14 @@
           : sheetCell(dayText(m.holidayRemaining))}
         ${sheetCell(dayText(m.paidLeaveDays))}
         ${sheetCell(dayText(m.paidLeaveCumulative))}
-        ${m.paidLeaveRemaining == null
-          ? `<td class="kintai-blank" title="${esc(m.paidLeaveRemainingNote || '')}"></td>`
-          : `<td title="取得した現保有数から、取得日の翌日以降に始まる締め期間の有給取得を引いた数です。取得日を含む期間は引きません。">${esc(dayText(m.paidLeaveRemaining))}</td>`}
+        ${m.paidLeaveShowsRead
+          ? `<td title="${esc(m.paidLeaveRemainingNote || 'この取得日に読み取った現保有数です。')}">${esc(dayText(m.paidLeaveRemaining))}</td>`
+          : '<td class="kintai-blank"></td>'}
+        ${m.paidLeaveShowsRead
+          ? (m.paidLeaveComputedRemaining == null
+            ? `<td class="kintai-blank" title="${esc(m.paidLeaveComputedNote || '')}"></td>`
+            : `<td title="${esc(m.paidLeaveComputedNote || '')}">${esc(dayText(m.paidLeaveComputedRemaining))}</td>`)
+          : '<td class="kintai-blank"></td>'}
         ${sheetCell(m.paidLeaveBaseDate || '')}
         ${sheetCell(m.ordinaryHm)}
         ${sheetCell(m.overtimeHm)}
@@ -345,7 +350,16 @@
     }
     const empLabel = p.retired ? '退職' : (EMP[p.employment] || p.employment);
     if (status) {
-      status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／${pack.fiscalLabel || ''}／取込: ${p.lastStatus || '未取得'}`;
+      const hold = (p.months || [])[0] || {};
+      const readText = hold.paidLeaveReadBalance == null
+        ? ''
+        : `／取得した現保有数 ${dayText(hold.paidLeaveReadBalance)}（取得日 ${hold.paidLeaveAcquiredOn || ''}）`;
+      const computedText = hold.paidLeaveReadBalance == null
+        ? ''
+        : (hold.paidLeaveComputedRemaining == null
+          ? `／計算残数は空欄${hold.paidLeaveComputedNote ? '：' + hold.paidLeaveComputedNote : ''}`
+          : `／計算残数 ${dayText(hold.paidLeaveComputedRemaining)}（終わった締め期間だけ。日ごとには未対応）`);
+      status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／${pack.fiscalLabel || ''}／取込: ${p.lastStatus || '未取得'}${readText}${computedText}`;
       if (p.lastError) status.innerHTML = `${esc(status.textContent)}${errorBlockHtml(p.lastError, false)}`;
     }
     if (body) body.innerHTML = personSheetHtml(p);
@@ -362,7 +376,7 @@
     if (!body) return;
     const rows = ((data && data.rows) || []).filter(r => passesPeopleFilter(r.retired));
     const editable = !!(data && data.canEditEmploymentDates);
-    const head = ['氏名', '在籍状況', '年間休日枠', '開始有給残', '出勤累計', '休日累計', '休日残数', '有給取得累計', '有給残数', '入社日', '退社日', '雇用区分', '有給休暇起算日'];
+    const head = ['氏名', '在籍状況', '年間休日枠', '開始有給残', '出勤累計', '休日累計', '休日残数', '有給取得累計', '有給残数', '取得日', '計算残数', '入社日', '退社日', '雇用区分', '有給休暇起算日'];
     const dateLabel = { hired: '入社日', retired: '退社日', base: '有給休暇起算日' };
     const dateCell = (personId, field, value) => editable
       ? `<td><input type="date" class="kintai-roster-date" data-person="${personId}" data-field="${field}" value="${esc(value || '')}" aria-label="${dateLabel[field]}"></td>`
@@ -380,14 +394,18 @@
       ${r.holidayRemaining == null ? '<td class="kintai-blank"></td>' : rosterCell(r.holidayRemaining)}
       ${rosterCell(r.paidLeaveCumulative)}
       ${r.paidLeaveRemaining == null
-        ? `<td class="kintai-blank" title="${esc(r.paidLeaveRemainingNote || '')}"></td>`
-        : `<td title="取得した現保有数から、取得日の翌日以降に始まる締め期間の有給取得を引いた数です。取得日を含む期間は引きません。">${esc(dayText(r.paidLeaveRemaining))}</td>`}
+        ? '<td class="kintai-blank" title="管理簿から読み取った現保有数はまだありません。"></td>'
+        : `<td title="管理簿から読み取った現保有数です。取得日より前の月の残数ではありません。">${esc(dayText(r.paidLeaveRemaining))}</td>`}
+      <td>${esc(r.paidLeaveAcquiredOn || '')}</td>
+      ${r.paidLeaveComputedRemaining == null
+        ? `<td class="kintai-blank" title="${esc(r.paidLeaveComputedNote || '')}"></td>`
+        : `<td title="${esc(r.paidLeaveComputedNote || '')}">${esc(dayText(r.paidLeaveComputedRemaining))}</td>`}
       ${dateCell(r.personId, 'hired', r.hiredOn)}
       ${dateCell(r.personId, 'retired', r.retiredOn)}
       <td>${esc(EMP[r.employment] || r.employment || '')}</td>
       ${dateCell(r.personId, 'base', r.paidLeaveBaseDate)}
     </tr>`).join('');
-    body.innerHTML = `<p class="kintaimeta">入社日・退社日・有給休暇起算日は、人ごとに1組です。年度ごとには分かれません。退社日の保存先は退職日と同じです。有給休暇起算日は表示するだけで、付与や失効、残数の計算には使いません。年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。休日残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。有給残数は、管理簿の現保有数から、取得日の翌日以降に始まる締め期間の有給取得を引いた数です。取得日を含む期間は引きません。</p>
+    body.innerHTML = `<p class="kintaimeta">入社日・退社日・有給休暇起算日は、人ごとに1組です。年度ごとには分かれません。退社日の保存先は退職日と同じです。有給休暇起算日は表示するだけで、付与や失効、残数の計算には使いません。年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。休日残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。有給残数は、管理簿から読み取った現保有数です。取得日より前の月の残数としては出しません。計算残数は、その値から、取得日より後に終わり切った締め期間の有給取得だけを引いた数です。取得日を含む期間は日に分けられないので、そこに有給取得があると計算残数は空欄です。まだ終わっていない月は、取込済みでも先に引きません。日ごとの減算には未対応です。</p>
       ${editable ? '<p class="kintai-workdays-bar"><button type="button" id="kintairosterdatesave">入社日・退社日・有給休暇起算日を保存</button></p>' : ''}
       <table class="kintai-sheet kintai-person-sheet"><thead><tr>${head.map(name => `<th>${esc(name)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`;
   }

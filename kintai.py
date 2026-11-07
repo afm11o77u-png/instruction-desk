@@ -2560,14 +2560,21 @@ def paid_leave_acquisition_date(updated_at) -> date | None:
     return moment.astimezone(JST).date()
 
 
+_PAID_COMPUTED_LIMIT = (
+    '終わった締め期間の有給取得だけを引いた数です。'
+    '取得日を含む期間と、まだ終わっていない月は含みません。日ごとの減算には未対応です。'
+)
+
+
 def paid_leave_holding_remaining(balance, updated_at, paid_by_month: dict, today: date | None = None):
-    """取得した現保有数から、取得日より後に始まる締め期間の有給取得だけを引く。
+    """取得した現保有数から、取得日より後に終わり切った締め期間の有給取得だけを引く。
 
     日別の有休欄は使わない。月合計を日に割り振らない。
-    取得日を含む締め期間は、有給取得が確定の0のときだけ引かずに済む。
-    それ以外はその期間を取得日の前後に分けられないので残数は空欄。
-    まだ終わっていない未取込の月は、使用0とはせず、架空の使用も引かない。
-    戻り値は (残数または None, 空欄の理由)。
+    取得日を含む締め期間は、有給取得が確定の0のときだけ「引く使用がない」と扱う。
+    0でない、または未取込なら、この計算残数は空欄。基準の現保有数自体は消さない。
+    まだ終わっていない月は、取込済みでも先に引かない。
+    終わった月の取込が欠けていれば、そこを飛ばして数を作らない。
+    戻り値は (計算残数または None, 説明)。
     """
     if balance is None or not updated_at:
         return None, ''
@@ -2577,26 +2584,22 @@ def paid_leave_holding_remaining(balance, updated_at, paid_by_month: dict, today
     today = today or datetime.now(JST).date()
     sy, sm = _closing_month_containing(acquired)
     if (sy, sm) not in paid_by_month or paid_by_month[(sy, sm)] is None:
-        return None, '取得日を含む締め期間の有給取得が未取込のため、取得日より後の使用を分けられません。'
+        return None, '取得日を含む締め期間の有給取得が未取込のため、取得日より後の使用を分けられません。日ごとの減算には未対応です。'
     if Decimal(str(paid_by_month[(sy, sm)])) != 0:
-        return None, '取得日が締め期間の途中のため、その月の有給取得を取得日より後へ分けられません。'
+        return None, '取得日を含む締め期間に有給取得があるため、その使用を取得日の前後に分けられません。日ごとの減算には未対応です。'
     used = Decimal('0')
-    end_y, end_m = _closing_month_containing(today)
-    for year, month in paid_by_month:
-        if (year, month) > (end_y, end_m):
-            end_y, end_m = year, month
     year, month = _next_year_month(sy, sm)
-    while (year, month) <= (end_y, end_m):
+    while True:
         _start, end = closing_period(year, month)
+        if not end < today:
+            break
         paid = paid_by_month.get((year, month))
         if paid is None:
-            if end < today:
-                return None, '取得日より後で、すでに終わった締め期間の有給取得が未取込です。'
-        else:
-            used += Decimal(str(paid))
+            return None, '取得日より後で、すでに終わった締め期間の有給取得が未取込です。欠けた月を飛ばして残数は出しません。'
+        used += Decimal(str(paid))
         year, month = _next_year_month(year, month)
     value = (Decimal(str(balance)) - used).quantize(Decimal('0.01'))
-    return float(value), ''
+    return float(value), _PAID_COMPUTED_LIMIT
 
 
 def _paid_leave_by_month(c, person_id: int) -> dict[tuple[int, int], float | None]:
@@ -2614,14 +2617,27 @@ def apply_paid_leave_remaining(c, person: dict, month_rows: list[dict]) -> None:
         'SELECT balance, updated_at FROM kintai_leave_cells WHERE person_id=?',
         (int(person['id']),),
     ).fetchone()
+    balance = snap['balance'] if snap else None
+    updated = snap['updated_at'] if snap else ''
+    acquired = paid_leave_acquisition_date(updated) if balance is not None else None
     value, note = paid_leave_holding_remaining(
-        snap['balance'] if snap else None,
-        snap['updated_at'] if snap else '',
-        _paid_leave_by_month(c, int(person['id'])),
+        balance, updated, _paid_leave_by_month(c, int(person['id'])),
     )
+    acquired_ym = _closing_month_containing(acquired) if acquired else None
     for item in month_rows:
-        item['paidLeaveRemaining'] = value
-        item['paidLeaveRemainingNote'] = note
+        item['paidLeaveReadBalance'] = balance
+        item['paidLeaveAcquiredOn'] = acquired.isoformat() if acquired else None
+        item['paidLeaveComputedRemaining'] = value
+        item['paidLeaveComputedNote'] = note
+        # 有給残数のマスは、取得日を含む月だけに基準値を出す。過去月の残数にはしない。
+        if acquired_ym and (int(item['year']), int(item['month'])) == acquired_ym:
+            item['paidLeaveRemaining'] = balance
+            item['paidLeaveRemainingNote'] = 'この取得日に読み取った現保有数です。この月より前の残数ではありません。'
+            item['paidLeaveShowsRead'] = True
+        else:
+            item['paidLeaveRemaining'] = None
+            item['paidLeaveRemainingNote'] = ''
+            item['paidLeaveShowsRead'] = False
 
 
 def list_roster(c, fiscal_start_year: int) -> dict:
@@ -2653,8 +2669,10 @@ def list_roster(c, fiscal_start_year: int) -> dict:
             'hiredOn': person.get('hired_on') or None,
             'retiredOn': person.get('retired_on') or None,
             'paidLeaveOpening': None,
-            'paidLeaveRemaining': months[0].get('paidLeaveRemaining') if months else None,
-            'paidLeaveRemainingNote': months[0].get('paidLeaveRemainingNote') or '' if months else '',
+            'paidLeaveRemaining': months[0].get('paidLeaveReadBalance') if months else None,
+            'paidLeaveAcquiredOn': months[0].get('paidLeaveAcquiredOn') if months else None,
+            'paidLeaveComputedRemaining': months[0].get('paidLeaveComputedRemaining') if months else None,
+            'paidLeaveComputedNote': months[0].get('paidLeaveComputedNote') or '' if months else '',
             'paidLeaveBalanceUpdatedAt': balances.get(person['id'], {}).get('updatedAt'),
             'paidLeaveBaseDate': person.get('paid_leave_base_on') or None,
         })

@@ -115,7 +115,7 @@ class KintaiPageSplitTest(unittest.TestCase):
         person = _slice(js, 'const PERSON_COLUMNS', 'const SUMMARY_COLUMNS')
         summary = _slice(js, 'const SUMMARY_COLUMNS', 'function $(')
         person_cols = [
-            '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数',
+            '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数', '計算残数',
             '有給休暇起算日', '普通勤務時間', '残業時間', '勤務時間計', '通常勤務給与', '残業給',
             '有給付与日数', '有給失効日数', 'その他休暇等', '備考',
         ]
@@ -140,6 +140,8 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn('holidayCumulative', render)
         self.assertIn('paidLeaveCumulative', render)
         self.assertIn('paidLeaveRemaining', render)
+        self.assertIn('paidLeaveComputedRemaining', render)
+        self.assertIn('paidLeaveShowsRead', render)
         self.assertIn('paidLeaveBaseDate', render)
         self.assertIn('holidayRemaining', render)
         self.assertNotIn('blankCells(1)', render)

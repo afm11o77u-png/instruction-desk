@@ -28,8 +28,16 @@ class HoldingMathTest(unittest.TestCase):
         value, note = kintai.paid_leave_holding_remaining(
             10, '2026-11-07T01:00:00+00:00', paid, today=date(2026, 11, 7),
         )
-        self.assertEqual(note, '')
-        self.assertEqual(value, 8.5)
+        self.assertIn('終わった締め期間', note)
+        self.assertEqual(value, 10)
+        later, _ = kintai.paid_leave_holding_remaining(
+            10, '2026-11-07T01:00:00+00:00', paid, today=date(2026, 12, 20),
+        )
+        self.assertEqual(later, 9)
+        done, _ = kintai.paid_leave_holding_remaining(
+            10, '2026-11-07T01:00:00+00:00', paid, today=date(2027, 2, 1),
+        )
+        self.assertEqual(done, 8.5)
         self.assertEqual(kintai.paid_leave_acquisition_date('2026-11-15T15:30:00+00:00'), date(2026, 11, 16))
 
     def test_mid_period_usage_and_missing_import_stay_blank(self):
@@ -38,7 +46,7 @@ class HoldingMathTest(unittest.TestCase):
             10, acquired, {(2026, 11): 1.5, (2026, 12): 1}, today=date(2026, 11, 7),
         )
         self.assertIsNone(value)
-        self.assertIn('途中', note)
+        self.assertIn('分けられません', note)
         value, note = kintai.paid_leave_holding_remaining(
             10, acquired, {}, today=date(2026, 11, 7),
         )
@@ -55,14 +63,18 @@ class HoldingMathTest(unittest.TestCase):
         value, note = kintai.paid_leave_holding_remaining(
             10, '2026-11-07T01:00:00+00:00', paid, today=date(2026, 11, 7),
         )
-        self.assertEqual(note, '')
-        self.assertEqual(value, -2)
+        self.assertIn('終わった締め期間', note)
+        self.assertEqual(value, 10)
+        later, _ = kintai.paid_leave_holding_remaining(
+            10, '2026-11-07T01:00:00+00:00', paid, today=date(2026, 12, 20),
+        )
+        self.assertEqual(later, -2)
         self.assertIsNone(kintai.paid_leave_holding_remaining(None, '2026-11-07T01:00:00+00:00', paid)[0])
         zero, note = kintai.paid_leave_holding_remaining(
             0, '2026-11-07T01:00:00+00:00', {(2026, 11): 0}, today=date(2026, 11, 7),
         )
         self.assertEqual(zero, 0)
-        self.assertEqual(note, '')
+        self.assertIn('日ごとの減算には未対応', note)
 
     def test_year_crossing_uses_months_after_the_read_date(self):
         paid = {
@@ -74,7 +86,7 @@ class HoldingMathTest(unittest.TestCase):
         value, note = kintai.paid_leave_holding_remaining(
             10, '2026-11-07T01:00:00+00:00', paid, today=date(2027, 3, 1),
         )
-        self.assertEqual(note, '')
+        self.assertIn('日ごとの減算には未対応', note)
         self.assertEqual(value, 7.5)
         missing = dict(paid)
         del missing[(2027, 2)]
@@ -87,16 +99,16 @@ class HoldingMathTest(unittest.TestCase):
             10, '2026-11-07T01:00:00+00:00', {(2026, 11): 0, (2026, 12): 2}, today=date(2026, 11, 7),
         )
         second, note = kintai.paid_leave_holding_remaining(
-            6, '2026-12-01T01:00:00+00:00', {(2026, 12): 0, (2027, 1): 1}, today=date(2026, 12, 20),
+            6, '2026-12-01T01:00:00+00:00', {(2026, 12): 0, (2027, 1): 1}, today=date(2027, 2, 1),
         )
-        self.assertEqual(first, 8)
+        self.assertEqual(first, 10)
         self.assertEqual(second, 5)
-        self.assertEqual(note, '')
+        self.assertIn('日ごとの減算には未対応', note)
         blocked, blocked_note = kintai.paid_leave_holding_remaining(
             6, '2026-12-01T01:00:00+00:00', {(2026, 12): 2, (2027, 1): 1}, today=date(2026, 12, 20),
         )
         self.assertIsNone(blocked)
-        self.assertIn('途中', blocked_note)
+        self.assertIn('分けられません', blocked_note)
 
 
 class HoldingScreenTest(unittest.TestCase):
@@ -147,13 +159,36 @@ class HoldingScreenTest(unittest.TestCase):
         overview = kintai.list_overview(self.c, 2026, person_id=self.person['id'])
         months = overview['rows'][0]['months']
         self.assertTrue(months)
-        self.assertTrue(all(m['paidLeaveRemaining'] == 8.5 for m in months))
+        acquired = kintai.paid_leave_acquisition_date(self.c.execute(
+            'SELECT updated_at FROM kintai_leave_cells WHERE person_id=?', (self.person['id'],),
+        ).fetchone()['updated_at'])
+        self.assertTrue(all(m['paidLeaveReadBalance'] == 10 for m in months))
+        self.assertTrue(all(m['paidLeaveAcquiredOn'] == acquired.isoformat() for m in months))
+        for item in months:
+            start, end = kintai.closing_period(int(item['year']), int(item['month']))
+            if end < acquired:
+                self.assertIsNone(item['paidLeaveRemaining'])
+                self.assertFalse(item['paidLeaveShowsRead'])
+            if start <= acquired <= end:
+                self.assertEqual(item['paidLeaveRemaining'], 10)
+                self.assertTrue(item['paidLeaveShowsRead'])
         roster = kintai.list_roster(self.c, 2026)
         row = next(r for r in roster['rows'] if r['personId'] == self.person['id'])
         later = kintai.list_roster(self.c, 2027)
         later_row = next(r for r in later['rows'] if r['personId'] == self.person['id'])
-        self.assertEqual(row['paidLeaveRemaining'], 8.5)
+        self.assertEqual(row['paidLeaveRemaining'], 10)
+        self.assertEqual(row['paidLeaveAcquiredOn'], acquired.isoformat())
         self.assertEqual(later_row['paidLeaveRemaining'], row['paidLeaveRemaining'])
+        self.assertEqual(later_row['paidLeaveComputedRemaining'], row['paidLeaveComputedRemaining'])
+        self.c.execute(
+            'UPDATE kintai_monthly SET paid_leave_days=2 WHERE person_id=? AND year=? AND month=?',
+            (self.person['id'], self.straddle[0], self.straddle[1]),
+        )
+        self.c.commit()
+        held = next(r for r in kintai.list_roster(self.c, 2026)['rows'] if r['personId'] == self.person['id'])
+        self.assertEqual(held['paidLeaveRemaining'], 10)
+        self.assertIsNone(held['paidLeaveComputedRemaining'])
+        self.assertIn('分けられません', held['paidLeaveComputedNote'])
         blob = base64.b64encode(daily_fix._xlsx({'別シート': [(1, 1, 1)]})).decode()
         with self.assertRaises(ValueError):
             leave.handle(self.c, {
@@ -161,7 +196,8 @@ class HoldingScreenTest(unittest.TestCase):
                 'people': [{'personId': self.person['id'], 'cell': 'K11'}],
             }, kintai.read_xlsx_grid)
         kept = next(r for r in kintai.list_roster(self.c, 2026)['rows'] if r['personId'] == self.person['id'])
-        self.assertEqual(kept['paidLeaveRemaining'], 8.5)
+        self.assertEqual(kept['paidLeaveRemaining'], 10)
+        self.assertEqual(kept['paidLeaveAcquiredOn'], acquired.isoformat())
         self.assertEqual(self.c.execute(
             'SELECT balance FROM kintai_leave_cells WHERE person_id=?', (self.person['id'],),
         ).fetchone()['balance'], 10)
