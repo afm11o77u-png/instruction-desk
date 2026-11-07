@@ -78,6 +78,12 @@ class LeaveBalanceTests(unittest.TestCase):
         except ImportError:
             self.skipTest('Install requirements-kintai-leave.txt for encrypted tests')
         source = _xlsx({'集計':[(3,11,22.5)]})
+        # 暗号化ライブラリの小容量OLE生成制約を避け、通常のExcelサイズにする。
+        import zipfile
+        padded = BytesIO(source)
+        with zipfile.ZipFile(padded, 'a') as book:
+            book.writestr('test-padding.bin', bytes(range(256)) * 32)
+        source = padded.getvalue()
         encrypted = BytesIO()
         OOXMLFile(BytesIO(source)).encrypt('test-only-password', encrypted)
         p = self.payload(blob=encrypted.getvalue())
