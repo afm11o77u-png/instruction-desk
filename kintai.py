@@ -3283,6 +3283,12 @@ def handle_post(h, c, path: str, d: dict):
         except Exception as e:
             raise ValueError('ファイルデータを読めません。') from e
         return 200, import_paths_from_upload(c, str(filename), blob)
+    if path == '/api/kintai/tot-attendance/parse':
+        import kintai_tot_attendance
+        return kintai_tot_attendance.import_preview(d or {})
+    if path == '/api/kintai/tot-attendance/prepare':
+        import kintai_tot_attendance
+        return kintai_tot_attendance.prepare(d or {}, read_xlsx_grid)
     if path == '/api/kintai/shift/touch-on-time/preview':
         return kintai_touch_on_time.preview(d or {})
     if path == '/api/kintai/shift/touch-on-time/csv':
