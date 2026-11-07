@@ -555,6 +555,8 @@ function readFixedLabelDraft(){
   const departments=[...($('#fixedregdeptrows')?.querySelectorAll('input')||[])].map(el=>el.value);
   const payload={customer:$('#fixedregcustomer')?.value||'',departments};
   if($('#fixedregstoreslot')?.checked)payload.storeSlot=true;
+  const noBox=$('#fixedregprintno');
+  if(noBox&&!noBox.checked)payload.printNo=false;
   return {name,kind,payload,storeName:$('#fixedregstore')?.value||''};
  }
  return {name,kind,payload:{lines:[
@@ -601,6 +603,7 @@ function loadFixedLabelIntoEditor(){
   if($('#fixedregline3'))$('#fixedregline3').value=kind==='tiers'?(lines[2]||''):'';
   if($('#fixedregcustomer'))$('#fixedregcustomer').value=kind==='departments'?(rec.payload&&rec.payload.customer||''):'';
   if($('#fixedregstoreslot'))$('#fixedregstoreslot').checked=kind==='departments'&&!!(rec.payload&&rec.payload.storeSlot);
+  if($('#fixedregprintno'))$('#fixedregprintno').checked=kind!=='departments'||!(rec.payload&&rec.payload.printNo===false);
   if($('#fixedregstore'))$('#fixedregstore').value='';
   resetFixedDeptRows(kind==='departments'&&rec.payload&&Array.isArray(rec.payload.departments)?rec.payload.departments:['']);
   syncFixedRegKind();

@@ -192,6 +192,12 @@ def _payload(kind, payload):
     out = {'customer': customer, 'departments': cleaned}
     if store_slot:
         out['storeSlot'] = True
+    # キーが無い、または true のときは従来どおり NO. を出す。false のときだけ残す。
+    print_no = payload.get('printNo', True)
+    if print_no not in (True, False):
+        raise ValueError('No.欄の設定を確認してください。')
+    if print_no is False:
+        out['printNo'] = False
     return out
 
 
