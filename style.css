@@ -204,6 +204,8 @@ body:has(#nameinfodesk:not([hidden])){overflow:hidden}body:has(#nameinfodesk:not
 .kintai-daily-sheet th,.kintai-daily-sheet td{padding:4px 6px;white-space:nowrap;font-size:14px;line-height:1.45}
 .kintai-daily-sheet thead th{white-space:nowrap;font-size:14px;line-height:1.45;vertical-align:middle}
 .kintai-daily-sheet td{background:#fff;text-align:left}
+.kintai-daily-sheet .kintai-workdays{width:4.5rem;min-width:0;font-size:14px;text-align:right;background:transparent}
+.kintai-workdays-bar{display:flex;gap:12px;align-items:center;margin:8px 0 16px}
 .kintai-daily-total-label{text-align:left}
 .kintai-daily-total-value{text-align:right}
 .kintai-daily-sheet tbody tr:nth-child(even) td{background:#f7f7f7}
