@@ -294,7 +294,7 @@ body.catalog-kintai main>header .headactions{display:none}
 .shift-grid td.shift-off{font-weight:800;color:#333}
 /* ×の赤は日曜・祝日だけ（平日・土曜は列の色のまま） */
 .shift-grid td.shift-sun.shift-off{color:#9d3434}
-.shift-grid td.shift-unknown{font-weight:800;color:#6a5a2a;background:#faf6ea;font-size:12px}
+.shift-grid td.shift-unknown{font-weight:800;color:#6a5a2a;font-size:12px}
 .shift-grid td.shift-unknown .shift-unknown-mark{display:inline;font-size:12px;font-weight:800}
 .shift-grid td.shift-task{font-weight:800;color:#1f5c45;background:#eef7f1;font-size:12px}
 .shift-grid td.shift-task .shift-task-mark{display:inline;font-size:12px;font-weight:800}
@@ -465,7 +465,7 @@ body.catalog-kintai main>header .headactions{display:none}
   }
   /* ×／不明／作業／時刻: 既定は白黒寄り。カラー用は後段で赤系・緑系へ。時刻は「15:00」1行（まで無し）。字号拡大は pt（scale変形なし） */
   body.printing-shift .shift-grid td.shift-off{font-size:11pt;font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  body.printing-shift .shift-grid td.shift-unknown{font-size:11pt;font-weight:800;color:#555!important;background-color:#fff!important;background-image:none!important;text-align:center;line-height:1.15;white-space:nowrap!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body.printing-shift .shift-grid td.shift-unknown{font-size:11pt;font-weight:800;color:#555!important;text-align:center;line-height:1.15;white-space:nowrap!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body.printing-shift .shift-grid td.shift-unknown .shift-unknown-mark{display:inline;font-size:11pt;font-weight:800;text-align:center}
   body.printing-shift .shift-grid td.shift-task{font-size:11pt;font-weight:800;color:#333!important;background-color:#fff!important;background-image:none!important;text-align:center;line-height:1.15;white-space:nowrap!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body.printing-shift .shift-grid td.shift-task .shift-task-mark{display:inline;font-size:11pt;font-weight:800;text-align:center}
