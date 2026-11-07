@@ -177,11 +177,10 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(view['rows'][0]['start'], '8:30')
         self.assertEqual(view['rows'][1]['leave'], '0.5有休')
         self.assertEqual([c['key'] for c in view['columns']], [
-            'date', 'leave', 'start', 'breakTime', 'end', 'calendarHours',
+            'date', 'leave', 'start', 'breakTime', 'end',
             'actual', 'earlyNight', 'dayOvertime', 'nightOvertime', 'total',
         ])
-        # 見出しが無い時間列は、隣の数値を流用しない
-        self.assertEqual(view['rows'][0]['calendarHours'], '（列なし）')
+        self.assertNotIn('calendarHours', view['rows'][0])
         self.assertEqual(view['totalsNote'], '（列なし）')
         self.assertEqual(view['totals'], [])
         self.assertNotIn('totalLabel', view['rows'][0])
@@ -201,7 +200,7 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertNotIn('0.5', row.values())
 
     def test_headed_columns_follow_excel_order_and_keep_blanks(self):
-        """表示名は11個だけ。合計は実労働時間計の保存値で、実労働時間との足し算ではない。"""
+        """年間の列は出さない。合計は実労働時間計の保存値で、実労働時間との足し算ではない。"""
         break_serial = 70 / (24 * 60)  # 1:10
         blob = _xlsx({
             '年間ｶﾚﾝﾀﾞｰ': [
@@ -255,12 +254,13 @@ class DailySheetReadTest(unittest.TestCase):
         view = kintai.daily_rows_from_workbook(blob, 2026, 2, kintai.SEISHAIN_2026_LAYOUT)
         labels = [c['label'] for c in view['columns']]
         self.assertEqual(labels, [
-            '日付', '有休', '始業時間', '休憩時間', '終業時間', '年間',
+            '日付', '有休', '始業時間', '休憩時間', '終業時間',
             '実労働時間', '早朝深夜', '日残業', '深夜残業', '合計',
         ])
         self.assertNotIn('（00', ''.join(labels))
         by_key = {c['key']: c for c in view['columns']}
-        self.assertEqual(by_key['calendarHours']['col'], 8)
+        self.assertNotIn('calendarHours', by_key)
+        self.assertEqual(labels[4:6], ['終業時間', '実労働時間'])
         self.assertEqual(by_key['earlyNight']['col'], 25)
         self.assertEqual(by_key['total']['parts'][0]['col'], 37)
         self.assertEqual(by_key['total']['parts'][1]['col'], 38)
@@ -273,7 +273,8 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(row['breakTime'], '1:10')
         self.assertEqual(row['end'], '')
         self.assertNotEqual(row['end'], '0')
-        self.assertEqual(row['calendarHours'], '8.00')
+        self.assertNotIn('calendarHours', row)
+        self.assertNotIn('8.00', row.values())
         self.assertEqual(row['actual'], '8.50')
         self.assertEqual(row['earlyNight'], '0.00')
         self.assertNotIn('1', row.values())
@@ -346,7 +347,7 @@ class DailySheetReadTest(unittest.TestCase):
         })
         view = kintai.daily_rows_from_workbook(blob, 2026, 2, kintai.MONTHDOT_2026_PART_LAYOUT)
         self.assertEqual([c['label'] for c in view['columns']], [
-            '日付', '有休', '始業時間', '休憩時間', '終業時間', '年間',
+            '日付', '有休', '始業時間', '休憩時間', '終業時間',
             '実労働時間', '早朝深夜', '日残業', '深夜残業', '合計',
         ])
         by_key = {c['key']: c for c in view['columns']}
@@ -355,7 +356,7 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(by_key['end']['col'], 10)
         self.assertEqual(by_key['total']['parts'][0]['col'], 70)
         self.assertEqual(by_key['total']['parts'][1]['col'], 71)
-        self.assertEqual(by_key['calendarHours']['missing'], '（列なし）')
+        self.assertNotIn('calendarHours', by_key)
         row = view['rows'][0]
         self.assertEqual(row['start'], '8:56')
         self.assertEqual(row['breakTime'], '1:10')
@@ -367,7 +368,7 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertEqual(view['totals'][0]['label'], '実労働時間計')
         self.assertEqual(view['totals'][0]['value'], '7.50')
         self.assertNotIn('99', [item['value'] for item in view['totals']])
-        self.assertEqual(row['calendarHours'], '（列なし）')
+        self.assertNotIn('calendarHours', row)
         self.assertNotIn('0.5有休', row.values())
         self.assertNotEqual(row['breakTime'], '1105')
         self.assertNotIn('1105', row.values())
@@ -797,6 +798,9 @@ class DailySheetReadTest(unittest.TestCase):
         self.assertNotIn('padding:1px 3px', daily_css)
         self.assertIn('white-space:nowrap', daily_css)
         self.assertIn('.kintai-daily-sticky{position:sticky;left:0', daily_css)
+        self.assertIn('終業時間、実労働時間', html)
+        self.assertNotIn('終業時間、年間', html)
+        self.assertIn('年間の列は出しません', html)
         self.assertIn('合計は日付の横ではなく', html)
         self.assertIn('週残業計', html)
         self.assertIn('（列なし）', html)
@@ -906,7 +910,7 @@ class DailySheetApiTest(unittest.TestCase):
         self.assertTrue(view['readOnly'])
         labels = [c['label'] for c in view['columns']]
         self.assertEqual(labels, [
-            '日付', '有休', '始業時間', '休憩時間', '終業時間', '年間',
+            '日付', '有休', '始業時間', '休憩時間', '終業時間',
             '実労働時間', '早朝深夜', '日残業', '深夜残業', '合計',
         ])
         hit = view['rows'][0]
@@ -919,12 +923,14 @@ class DailySheetApiTest(unittest.TestCase):
         self.assertEqual(view['totals'][0]['label'], '実労働時間計')
         self.assertEqual(view['totals'][0]['value'], '17.03')
         self.assertNotEqual(view['totals'][0]['value'], hit['actual'])
-        self.assertEqual(hit['calendarHours'], '（列なし）')
+        self.assertNotIn('calendarHours', hit)
         code, body = kintai.handle_get(type('H', (), {
             'user': {'id': 1, 'role': 'owner', 'mark_kintai': 0, 'manage': 0, 'overview': 0},
             'path': f"/api/kintai/daily?personId={self.person['id']}&year=2026&month=2",
         })(), self.c, '/api/kintai/daily')
         self.assertEqual(code, 200)
+        self.assertNotIn('年間', [c['label'] for c in body['columns']])
+        self.assertNotIn('calendarHours', body['rows'][0])
         self.assertEqual(body['totals'][0]['label'], '実労働時間計')
         self.assertEqual(body['totals'][0]['value'], '17.03')
         self.assertNotIn('totalLabel', body['rows'][0])
