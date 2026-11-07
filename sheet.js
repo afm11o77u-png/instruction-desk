@@ -266,7 +266,7 @@ function setLabelDeskMode(mode){
  const handwritePanel=$('#labelhandwritepanel');if(handwritePanel)handwritePanel.hidden=!handwrite;
  if(notice){ensureNoticeDefaults();if(!$('#noticedate').value)$('#noticedate').value=today()}
  if(ticket){syncLabelTicketKind();ensureLabelTicketShortageRows()}
- if(fixed)fillFixedLabelFormatSelect();
+ if(fixed){fillFixedLabelFormatSelect();syncFixedLabelRegisterUi();loadFixedLabelFormats()}
 }
 $('#labelmodeaddress').onclick=()=>setLabelDeskMode('address');
 $('#labelmodenotice').onclick=()=>setLabelDeskMode('notice');
@@ -401,25 +401,39 @@ $('#ticketreset')?.addEventListener('click',()=>{
 $('#ticketprint')?.addEventListener('click',printManualBoxTicket);
 if($('#labelticketpeople'))resetLabelTicketForm();
 
+let savedFixedLabelFormats=[];
+let fixedLabelEditing=null;
+let fixedLabelLoadEpoch=0;
+function canWriteFixedLabelFormats(){return ['owner','floor','floor2','floor3'].includes(currentUser?.role)}
+function canViewFixedLabelFormats(){return canWriteFixedLabelFormats()||currentUser?.role==='warehouse'}
 function fillFixedLabelFormatSelect(){
  const sel=$('#fixedformat');if(!sel)return;
  const formats=typeof listFixedLabelFormats==='function'?listFixedLabelFormats():[];
+ const saved=(Array.isArray(savedFixedLabelFormats)?savedFixedLabelFormats:[]).filter(f=>f&&f.id!=null);
  const previous=sel.value;
  sel.replaceChildren();
- if(!formats.length){
-  const opt=document.createElement('option');opt.value='';opt.textContent='書式がありません';sel.append(opt);return;
+ const addOption=(parent,value,label)=>{const opt=document.createElement('option');opt.value=value;opt.textContent=label;parent.append(opt)};
+ if(!formats.length&&!saved.length){addOption(sel,'','書式がありません');return}
+ if(formats.length){
+  const group=document.createElement('optgroup');group.label='組み込み';
+  formats.forEach(f=>addOption(group,f.id,f.name));
+  sel.append(group);
  }
- formats.forEach(f=>{const opt=document.createElement('option');opt.value=f.id;opt.textContent=f.name;sel.append(opt)});
- if(previous&&formats.some(f=>f.id===previous))sel.value=previous;
+ if(saved.length){
+  const group=document.createElement('optgroup');group.label='登録した書式';
+  saved.forEach(f=>addOption(group,typeof savedFixedLabelSelectValue==='function'?savedFixedLabelSelectValue(f.id):('saved:'+f.id),f.name||''));
+  sel.append(group);
+ }
+ if(previous&&[...sel.options].some(o=>o.value===previous))sel.value=previous;
 }
-function openFixedLabelPreview(formatId,sheetCount){
+function openFixedLabelPreview(formatId,sheetCount,extra){
  let dialog=document.querySelector('#fixedlabelpreview');
  if(!dialog){dialog=document.createElement('dialog');dialog.id='fixedlabelpreview';dialog.style.cssText='width:min(1100px,95vw);padding:18px;border:0;border-radius:12px';document.body.append(dialog)}
- const formatName=(typeof getFixedLabelFormat==='function'&&getFixedLabelFormat(formatId)?.name)||'定型書式';
+ const formatName=(extra&&extra.name)||(typeof getFixedLabelFormat==='function'&&getFixedLabelFormat(formatId)?.name)||'定型書式';
  dialog.innerHTML=`<h2>定型書式印刷</h2><p><span id="fixedlabelnotice"></span>${esc(formatName)}　A4横・余白なし（上下左右0mm）・倍率100％・${sheetCount}枚。Chrome／Edgeでは印刷画面の「その他の設定」→「ヘッダーとフッター」をオフにしてください（アプリから強制解除はできません）。印刷画面の部数は1部にしてください。破線に沿って切り取ってください。</p><div style="display:flex;gap:12px;margin-bottom:12px"><button type="button" class="primary" id="fixedlabelprintbtn">印刷</button><button type="button" id="fixedlabelclose">閉じる</button></div><iframe title="定型書式の印刷プレビュー" style="width:100%;height:55vh;border:1px solid #ccc"></iframe>`;
  dialog.querySelector('#fixedlabelnotice').textContent='印刷専用です。案件は登録していません。';
  const frame=dialog.querySelector('iframe');
- frame.srcdoc=fixedLabelPreviewHtml(formatId,sheetCount);
+ frame.srcdoc=(extra&&extra.html)||fixedLabelPreviewHtml(formatId,sheetCount);
  dialog.querySelector('#fixedlabelprintbtn').disabled=true;frame.onload=()=>{dialog.querySelector('#fixedlabelprintbtn').disabled=false};
  dialog.querySelector('#fixedlabelprintbtn').onclick=()=>{frame.contentWindow.focus();frame.contentWindow.print()};
  dialog.querySelector('#fixedlabelclose').onclick=()=>dialog.close();dialog.showModal();
@@ -430,13 +444,175 @@ function printFixedLabel(){
   $('#labelfixederror').textContent='定型書式の印刷部品を読み込めませんでした。再起動してからやり直してください。';
   return;
  }
- const checked=validateFixedLabelPrintInput({formatId:$('#fixedformat')?.value||'',sheetCount:$('#fixedsheets')?.value});
+ const formatId=$('#fixedformat')?.value||'';
+ const sheetRaw=$('#fixedsheets')?.value;
+ const savedId=typeof parseSavedFixedLabelSelectValue==='function'?parseSavedFixedLabelSelectValue(formatId):null;
+ if(savedId){
+  if(typeof validateSavedFixedLabelPrintInput!=='function'||typeof savedFixedLabelPreviewHtml!=='function'){
+   $('#labelfixederror').textContent='定型書式の印刷部品を読み込めませんでした。再起動してからやり直してください。';
+   return;
+  }
+  const rec=(savedFixedLabelFormats||[]).find(f=>f.id===savedId);
+  if(!rec){$('#labelfixederror').textContent='書式を選び直してください。';return}
+  const checked=validateSavedFixedLabelPrintInput(rec,sheetRaw);
+  if(!checked.ok){$('#labelfixederror').textContent=checked.error;return}
+  // 印刷専用：api()/orders への保存・登録は呼ばない
+  openFixedLabelPreview(formatId,checked.sheetCount,{name:checked.record.name||rec.name,html:savedFixedLabelPreviewHtml(rec,checked.sheetCount)});
+  return;
+ }
+ const checked=validateFixedLabelPrintInput({formatId,sheetCount:sheetRaw});
  if(!checked.ok){$('#labelfixederror').textContent=checked.error;return}
  // 印刷専用：api()/orders への保存・登録は呼ばない
  openFixedLabelPreview(checked.formatId,checked.sheetCount);
 }
 fillFixedLabelFormatSelect();
 $('#fixedprint')?.addEventListener('click',printFixedLabel);
+
+function syncFixedLabelRegisterUi(){
+ const box=$('#fixedlabelregister');
+ if(!box)return;
+ box.hidden=!canWriteFixedLabelFormats();
+ if(!box.hidden)ensureFixedDeptRows();
+}
+function syncFixedRegKind(){
+ const kind=document.querySelector('input[name="fixedregkind"]:checked')?.value||'tiers';
+ const tiers=$('#fixedregtiers');
+ const depts=$('#fixedregdepts');
+ if(tiers)tiers.hidden=kind!=='tiers';
+ if(depts)depts.hidden=kind!=='departments';
+ if(kind==='departments')ensureFixedDeptRows();
+}
+function syncFixedDeptAddButton(){
+ const btn=$('#fixedregdeptadd');if(!btn)return;
+ const n=$('#fixedregdeptrows')?.children.length||0;
+ const max=typeof FIXED_LABEL_DEPT_MAX==='number'?FIXED_LABEL_DEPT_MAX:24;
+ btn.disabled=n>=max;
+}
+function ensureFixedDeptRows(){
+ const box=$('#fixedregdeptrows');
+ if(box&&!box.children.length)addFixedDeptRow('');
+}
+function addFixedDeptRow(value){
+ const box=$('#fixedregdeptrows');if(!box)return false;
+ const planned=typeof departmentRowChange==='function'?departmentRowChange(box.children.length,'add'):{ok:box.children.length<24,count:box.children.length+1};
+ if(!planned.ok){$('#fixedregerror').textContent=planned.error||'部署を追加できません。';return false}
+ const row=document.createElement('div');
+ row.className='fixedregdeptrow';
+ const label=document.createElement('label');
+ label.append(document.createTextNode('部署名'));
+ const input=document.createElement('input');
+ input.maxLength=typeof FIXED_LABEL_DEPT_LIMIT==='number'?FIXED_LABEL_DEPT_LIMIT:16;
+ input.autocomplete='off';
+ input.setAttribute('aria-label','部署名');
+ input.value=value||'';
+ label.append(input);
+ const remove=document.createElement('button');
+ remove.type='button';
+ remove.className='quiet fixedregdeptremove';
+ remove.textContent='この行を外す';
+ remove.addEventListener('click',()=>{
+  const change=typeof departmentRowChange==='function'?departmentRowChange(box.children.length,'remove'):{ok:true,cleared:box.children.length<=1};
+  if(change.cleared){input.value='';return}
+  row.remove();
+  syncFixedDeptAddButton();
+ });
+ row.append(label,remove);
+ box.append(row);
+ syncFixedDeptAddButton();
+ return true;
+}
+function resetFixedDeptRows(values){
+ const box=$('#fixedregdeptrows');if(!box)return;
+ box.replaceChildren();
+ const list=Array.isArray(values)&&values.length?values:[''];
+ list.forEach(value=>addFixedDeptRow(value));
+}
+function readFixedLabelDraft(){
+ const kind=document.querySelector('input[name="fixedregkind"]:checked')?.value||'tiers';
+ const name=$('#fixedregname')?.value||'';
+ if(kind==='departments'){
+  const departments=[...($('#fixedregdeptrows')?.querySelectorAll('input')||[])].map(el=>el.value);
+  return {name,kind,payload:{customer:$('#fixedregcustomer')?.value||'',departments}};
+ }
+ return {name,kind,payload:{lines:[
+  $('#fixedregline1')?.value||'',
+  $('#fixedregline2')?.value||'',
+  $('#fixedregline3')?.value||'',
+ ]}};
+}
+async function loadFixedLabelFormats(selectId){
+ if(!canViewFixedLabelFormats())return;
+ const epoch=++fixedLabelLoadEpoch;
+ try{
+  const rows=await api('/api/fixed-label-formats');
+  if(epoch!==fixedLabelLoadEpoch)return;
+  savedFixedLabelFormats=Array.isArray(rows)?rows:[];
+  fillFixedLabelFormatSelect();
+  const sel=$('#fixedformat');
+  if(sel&&selectId&&[...sel.options].some(o=>o.value===String(selectId)))sel.value=String(selectId);
+ }catch(e){
+  if(epoch!==fixedLabelLoadEpoch)return;
+  const err=$('#labelfixederror');
+  if(err)err.textContent=e.message||'定型書式の一覧を読み込めませんでした。';
+ }
+}
+function loadFixedLabelIntoEditor(){
+ try{
+  $('#fixedregerror').textContent='';
+  if(!canWriteFixedLabelFormats())throw Error('定型書式の登録と修正は、現場・現場２・現場３と主管理者が行えます。');
+  const formatId=$('#fixedformat')?.value||'';
+  const savedId=typeof parseSavedFixedLabelSelectValue==='function'?parseSavedFixedLabelSelectValue(formatId):null;
+  if(!savedId)throw Error('組み込みの書式は修正できません。新しい名前で登録してください。');
+  const rec=(savedFixedLabelFormats||[]).find(f=>f.id===savedId);
+  if(!rec)throw Error('書式を選び直してください。');
+  if(($('#fixedregname')?.value||'').trim()&&(!fixedLabelEditing||fixedLabelEditing.id!==rec.id)&&!confirm('編集欄の入力を、選んだ書式の内容に置き換えますか？'))return;
+  fixedLabelEditing={id:rec.id,version:rec.version,name:rec.name};
+  $('#fixedregname').value=rec.name||'';
+  const kind=rec.kind==='departments'?'departments':'tiers';
+  const radio=document.querySelector(`input[name="fixedregkind"][value="${kind}"]`);
+  if(radio)radio.checked=true;
+  const lines=rec.payload&&Array.isArray(rec.payload.lines)?rec.payload.lines:[];
+  if($('#fixedregline1'))$('#fixedregline1').value=kind==='tiers'?(lines[0]||''):'';
+  if($('#fixedregline2'))$('#fixedregline2').value=kind==='tiers'?(lines[1]||''):'';
+  if($('#fixedregline3'))$('#fixedregline3').value=kind==='tiers'?(lines[2]||''):'';
+  if($('#fixedregcustomer'))$('#fixedregcustomer').value=kind==='departments'?(rec.payload&&rec.payload.customer||''):'';
+  resetFixedDeptRows(kind==='departments'&&rec.payload&&Array.isArray(rec.payload.departments)?rec.payload.departments:['']);
+  syncFixedRegKind();
+  const status=$('#fixedregstatus');
+  if(status)status.textContent=`修正対象：「${rec.name}」`;
+ }catch(e){
+  $('#fixedregerror').textContent=e.message;
+ }
+}
+async function saveFixedLabelFormat(update){
+ try{
+  $('#fixedregerror').textContent='';
+  if(!canWriteFixedLabelFormats())throw Error('定型書式の登録と修正は、現場・現場２・現場３と主管理者が行えます。');
+  if(update&&!fixedLabelEditing)throw Error('修正する書式を「編集欄に読み込む」で選んでください。');
+  if(typeof validateFixedLabelDraft!=='function')throw Error('定型書式の印刷部品を読み込めませんでした。再起動してからやり直してください。');
+  const checked=validateFixedLabelDraft(readFixedLabelDraft());
+  if(!checked.ok)throw Error(checked.error);
+  if(update&&!confirm(`「${fixedLabelEditing.name}」を今の入力で修正しますか？`))return;
+  const body={name:checked.name,kind:checked.kind,payload:checked.payload};
+  if(update){body.id=fixedLabelEditing.id;body.version=fixedLabelEditing.version}
+  const saved=await api('/api/fixed-label-formats/save',body);
+  fixedLabelEditing={id:saved.id,version:saved.version,name:saved.name};
+  if($('#fixedregname'))$('#fixedregname').value=saved.name||'';
+  const status=$('#fixedregstatus');
+  if(status)status.textContent=`${update?'修正しました：「':'登録しました：「'}${saved.name}」`;
+  const selectId=typeof savedFixedLabelSelectValue==='function'?savedFixedLabelSelectValue(saved.id):('saved:'+saved.id);
+  await loadFixedLabelFormats(selectId);
+  toast(update?'定型書式を修正しました。':'定型書式を登録しました。');
+ }catch(e){
+  $('#fixedregerror').textContent=e.message;
+ }
+}
+document.querySelectorAll('input[name="fixedregkind"]').forEach(el=>el.addEventListener('change',syncFixedRegKind));
+$('#fixedregdeptadd')?.addEventListener('click',()=>{ $('#fixedregerror').textContent=''; addFixedDeptRow(''); });
+$('#fixedregload')?.addEventListener('click',loadFixedLabelIntoEditor);
+$('#fixedregsave')?.addEventListener('click',()=>saveFixedLabelFormat(false));
+$('#fixedregupdate')?.addEventListener('click',()=>saveFixedLabelFormat(true));
+syncFixedRegKind();
 
 function openHandwriteLabelPreview(customerName,sheetCount){
  let dialog=document.querySelector('#handwritelabelpreview');
