@@ -310,7 +310,9 @@
         ${sheetCell(dayText(m.workDays))}
         ${sheetCell(dayText(m.holidayDays))}
         ${sheetCell(dayText(m.holidayCumulative))}
-        ${blankCells(1)}
+        ${m.holidayRemaining == null
+          ? `<td class="kintai-blank" title="${esc(m.holidayAllowanceNote || '')}">${esc(m.holidayAllowanceNote || '')}</td>`
+          : sheetCell(dayText(m.holidayRemaining))}
         ${sheetCell(dayText(m.paidLeaveDays))}
         ${sheetCell(dayText(m.paidLeaveCumulative))}
         ${blankCells(2)}
@@ -356,7 +358,14 @@
     const body = $('#kintairoster');
     if (!body) return;
     const rows = ((data && data.rows) || []).filter(r => passesPeopleFilter(r.retired));
-    const head = ['社員番号', '氏名', '在籍', '雇用区分', '出勤累計', '休日累計', '有給取得累計', '年間休日枠', '休日残数', '開始有給残', '有給残数', '入社日', '退職日', '有給休暇起算日'];
+    const editable = !!(data && data.canEditEmploymentDates);
+    const head = ['社員番号', '氏名', '在籍', '雇用区分', '出勤累計', '休日累計', '有給取得累計', '年間休日枠', '年間休日残数', '開始有給残', '有給残数', '入社日', '退職日', '有給休暇起算日'];
+    const dateCell = (personId, field, value) => editable
+      ? `<td><input type="date" class="kintai-roster-date" data-person="${personId}" data-field="${field}" value="${esc(value || '')}" aria-label="${field === 'hired' ? '入社日' : '退職日'}"></td>`
+      : `<td>${esc(value || '')}</td>`;
+    const allowanceCell = (r) => r.holidayAllowance == null
+      ? `<td class="kintai-blank" title="${esc(r.holidayAllowanceNote || '')}">${esc(r.holidayAllowanceNote || '')}</td>`
+      : rosterCell(r.holidayAllowance);
     const bodyRows = rows.map(r => `<tr>
       <td>${esc(r.employeeCode || '')}</td>
       <td>${esc(r.displayName || '')}</td>
@@ -365,10 +374,33 @@
       ${rosterCell(r.workCumulative)}
       ${rosterCell(r.holidayCumulative)}
       ${rosterCell(r.paidLeaveCumulative)}
-      ${blankCells(7)}
+      ${allowanceCell(r)}
+      ${r.holidayRemaining == null ? '<td class="kintai-blank"></td>' : rosterCell(r.holidayRemaining)}
+      ${blankCells(2)}
+      ${dateCell(r.personId, 'hired', r.hiredOn)}
+      ${dateCell(r.personId, 'retired', r.retiredOn)}
+      <td class="kintai-blank"></td>
     </tr>`).join('');
-    body.innerHTML = `<p class="kintaimeta">休日数は、前月16日〜当月15日の日数から出勤日数と有給取得日数を引いた数です。累計は、その月の値を年度の初めから足しています。未確定の月があると、そこから先は空欄です。年間休日枠・残数・有給の開始残と残数・入社日・退職日・起算日は空欄です。</p>
+    body.innerHTML = `<p class="kintaimeta">年間休日枠は、正社員と契約社員の2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を1日単位で切り上げます。残数は、その枠から2月度以降の休日累計（各月は16日〜15日）を引いた数です。入社日が無いとき、退職者で退職日が無いときは空欄です。未確定の月を0にはしません。</p>
+      ${editable ? '<p class="kintai-workdays-bar"><button type="button" id="kintairosterdatesave">入社日・退職日を保存</button></p>' : ''}
       <table class="kintai-sheet kintai-person-sheet"><thead><tr>${head.map(name => `<th>${esc(name)}</th>`).join('')}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+  }
+
+  async function saveRosterDates() {
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
+    const people = [];
+    document.querySelectorAll('#kintairoster .kintai-roster-date[data-field="hired"]').forEach(el => {
+      const personId = Number(el.dataset.person);
+      const retired = document.querySelector(`#kintairoster .kintai-roster-date[data-field="retired"][data-person="${personId}"]`);
+      people.push({
+        personId,
+        hiredOn: el.value || null,
+        retiredOn: retired && retired.value ? retired.value : null,
+      });
+    });
+    const data = await api('/api/kintai/roster/employment', { year: rememberYear(fiscalStartYear()), people });
+    paintRoster(data);
+    toast('入社日・退職日を保存しました。');
   }
 
   async function loadKintaiRoster() {
@@ -685,6 +717,14 @@
       rosterBtn.textContent = roster.hidden ? '全員の累計' : '全員の累計を閉じる';
       if (!roster.hidden) loadKintaiRoster().catch(e => toast(e.message));
     };
+    const rosterBox = $('#kintairoster');
+    if (rosterBox && !rosterBox.dataset.datebound) {
+      rosterBox.dataset.datebound = '1';
+      rosterBox.addEventListener('click', (e) => {
+        if (!e.target.closest('#kintairosterdatesave')) return;
+        saveRosterDates().catch(err => toast(err.message));
+      });
+    }
     if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
     if (dailyPerson) dailyPerson.onchange = () => {
       pinnedPersonId = dailyPerson.value ? Number(dailyPerson.value) : null;

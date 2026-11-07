@@ -323,6 +323,10 @@ def schema(c):
     people_cols = {r['name'] for r in c.execute('PRAGMA table_info(kintai_people)')}
     if 'retired' not in people_cols:
         c.execute('ALTER TABLE kintai_people ADD COLUMN retired INTEGER NOT NULL DEFAULT 0')
+    if 'hired_on' not in people_cols:
+        c.execute('ALTER TABLE kintai_people ADD COLUMN hired_on TEXT')
+    if 'retired_on' not in people_cols:
+        c.execute('ALTER TABLE kintai_people ADD COLUMN retired_on TEXT')
     c.execute(
         '''CREATE TABLE IF NOT EXISTS kintai_monthly (
             person_id INTEGER NOT NULL,
@@ -2427,7 +2431,83 @@ def _person_fiscal_months(c, person: dict, fiscal_start_year: int) -> list[dict]
     _fill_displayed_work_days(c, person, rows)
     apply_displayed_holidays(rows)
     annotate_running_totals(rows)
+    apply_annual_holiday_remaining(person, fiscal_start_year, rows)
     return rows
+
+
+# 年間休日枠は 2月1日〜翌年1月31日の在籍。引く休日累計は、2月度から各月までの
+# 16日〜15日の休日数の合計で、日割や按分はしない。分母はうるう年でも 365。
+ANNUAL_HOLIDAY_EMPLOYMENTS = frozenset({'regular', 'contract'})
+ANNUAL_HOLIDAY_BASE_DAYS = 110
+ANNUAL_HOLIDAY_YEAR_DAYS = 365
+
+
+def fiscal_enrollment_window(fiscal_start_year: int) -> tuple[date, date]:
+    """在籍日数を数える年度。勤怠の16日〜15日とは別。"""
+    return date(fiscal_start_year, 2, 1), date(fiscal_start_year + 1, 1, 31)
+
+
+def _stored_date(value) -> date | None:
+    if value is None or value == '':
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip().replace('/', '-')
+    try:
+        return date.fromisoformat(text)
+    except ValueError as e:
+        raise ValueError('日付は YYYY-MM-DD で指定してください。') from e
+
+
+def enrollment_days(fiscal_start_year: int, hired, retired, retired_flag: bool) -> tuple[int | None, str]:
+    """年度内の在籍日数。入社日が無い、または退職者なのに退職日が無いときは数えない。"""
+    hired_on = _stored_date(hired)
+    retired_on = _stored_date(retired)
+    if hired_on is None:
+        return None, '入社日が未入力です'
+    if retired_flag and retired_on is None:
+        return None, '退職日が未入力です'
+    window_start, window_end = fiscal_enrollment_window(fiscal_start_year)
+    start = max(window_start, hired_on)
+    end = window_end if retired_on is None else min(window_end, retired_on)
+    if end < start:
+        return 0, ''
+    return (end - start).days + 1, ''
+
+
+def annual_holiday_allowance(fiscal_start_year: int, employment: str, hired, retired, retired_flag: bool) -> tuple[int | None, str]:
+    """110日×年度内在籍日数÷365 を1日単位で切り上げる。パート等は対象外。"""
+    if employment not in ANNUAL_HOLIDAY_EMPLOYMENTS:
+        return None, '正社員と契約社員以外は年間休日枠の対象外です'
+    days, reason = enrollment_days(fiscal_start_year, hired, retired, retired_flag)
+    if days is None:
+        return None, reason
+    if days == 0:
+        return 0, ''
+    return (ANNUAL_HOLIDAY_BASE_DAYS * days + ANNUAL_HOLIDAY_YEAR_DAYS - 1) // ANNUAL_HOLIDAY_YEAR_DAYS, ''
+
+
+def _annual_remaining(allowance, cumulative):
+    if allowance is None or cumulative is None:
+        return None
+    return float((Decimal(allowance) - Decimal(str(cumulative))).quantize(Decimal('0.01')))
+
+
+def apply_annual_holiday_remaining(person: dict, fiscal_start_year: int, month_rows: list[dict]) -> None:
+    """各月の年間休日残数は、年間枠からその月までの休日累計を引く。未確定の累計は空欄。"""
+    allowance, note = annual_holiday_allowance(
+        fiscal_start_year,
+        str(person.get('employment') or ''),
+        person.get('hired_on'),
+        person.get('retired_on'),
+        bool(person.get('retired') or 0),
+    )
+    for item in month_rows:
+        item['holidayAllowance'] = allowance
+        item['holidayAllowanceNote'] = note
+        item['holidayRemaining'] = _annual_remaining(allowance, item.get('holidayCumulative'))
 
 
 def _prefix_total(month_rows: list[dict], key: str):
@@ -2459,19 +2539,60 @@ def list_roster(c, fiscal_start_year: int) -> dict:
             'workCumulative': _prefix_total(months, 'workCumulative'),
             'holidayCumulative': _prefix_total(months, 'holidayCumulative'),
             'paidLeaveCumulative': _prefix_total(months, 'paidLeaveCumulative'),
-            'holidayAllowance': None,
-            'holidayRemaining': None,
+            'holidayAllowance': months[0]['holidayAllowance'] if months else None,
+            'holidayAllowanceNote': months[0].get('holidayAllowanceNote') or '' if months else '',
+            'holidayRemaining': _annual_remaining(
+                months[0]['holidayAllowance'] if months else None,
+                _prefix_total(months, 'holidayCumulative'),
+            ),
+            'hiredOn': person.get('hired_on') or None,
+            'retiredOn': person.get('retired_on') or None,
             'paidLeaveOpening': None,
             'paidLeaveRemaining': None,
-            'hiredOn': None,
-            'retiredOn': None,
             'paidLeaveBaseDate': None,
         })
     return {
         'fiscalStartYear': fiscal_start_year,
         'fiscalLabel': fiscal_label(fiscal_start_year),
+        'canEditEmploymentDates': True,
         'rows': rows,
     }
+
+
+def save_employment_dates(c, user, payload: dict) -> dict:
+    """全員一覧の入社日・退職日だけを保存する。在籍区分や Excel は変えない。"""
+    if not isinstance(payload, dict):
+        raise ValueError('保存内容を確認してください。')
+    year = payload.get('year')
+    people = payload.get('people')
+    if type(year) is not int or not 2000 <= year <= 2100:
+        raise ValueError('年度の開始年を確認してください。')
+    if not isinstance(people, list):
+        raise ValueError('対象者の日付がありません。')
+    if user is None:
+        raise ValueError('保存にはログインが必要です。')
+    seen = set()
+    for entry in people:
+        if not isinstance(entry, dict):
+            raise ValueError('対象者の日付を確認してください。')
+        person_id = entry.get('personId')
+        if type(person_id) is not int or person_id <= 0:
+            raise ValueError('対象者を選択してください。')
+        if person_id in seen:
+            raise ValueError('同じ対象者が重複しています。')
+        seen.add(person_id)
+        row = c.execute('SELECT id FROM kintai_people WHERE id=? AND active=1', (person_id,)).fetchone()
+        if not row:
+            raise ValueError('対象者が見つかりません。')
+        hired = _stored_date(entry.get('hiredOn'))
+        retired = _stored_date(entry.get('retiredOn'))
+        if hired and retired and retired < hired:
+            raise ValueError('退職日は入社日以降にしてください。')
+        c.execute(
+            'UPDATE kintai_people SET hired_on=?, retired_on=? WHERE id=?',
+            (hired.isoformat() if hired else None, retired.isoformat() if retired else None, person_id),
+        )
+    return list_roster(c, year)
 
 
 def list_overview(
@@ -3835,6 +3956,9 @@ def handle_post(h, c, path: str, d: dict):
     if path == '/api/kintai/daily/work-days':
         # 日別を開ける人だけ。新しい権限は足さない。Excelファイルは書き換えない。
         return 200, save_daily_work_days(c, h.user, d or {})
+    if path == '/api/kintai/roster/employment':
+        # 入社日・退職日。出勤簿を開ける人だけ。読取専用の利用者には開かない。
+        return 200, save_employment_dates(c, h.user, d or {})
     if path == '/api/kintai/probe':
         try:
             return 200, probe_person(c, d.get('personId'))
