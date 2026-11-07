@@ -140,9 +140,9 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn('holidayCumulative', render)
         self.assertIn('paidLeaveCumulative', render)
         self.assertNotIn('paidLeaveRemaining', render)
-        self.assertNotIn('paidLeaveBaseDate', render)
+        self.assertIn('paidLeaveBaseDate', render)
         self.assertIn('holidayRemaining', render)
-        self.assertIn('blankCells(2)', render)
+        self.assertIn('blankCells(1)', render)
         self.assertIn('blankCells(6)', render)
         self.assertNotIn('salary', js.lower())
 
