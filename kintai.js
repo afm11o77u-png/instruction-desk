@@ -523,7 +523,11 @@
     const saveBar = rows
       ? `<p class="kintai-workdays-bar">${editable ? '<button type="button" id="kintaiworkdayssave">出勤日数を保存</button>' : ''}<span class="kintaimeta">${esc(totalText)}</span></p>`
       : '';
-    body.innerHTML = daysHtml + saveBar + totalsHtml;
+    const actuals = (data && data.actuals) || [];
+    const actualsHtml = actuals.length
+      ? `<section><h3 class="kintai-section">実績</h3><p class="kintaimeta">元のExcelに保存されている実績値です。</p><table class="kintai-sheet kintai-daily-sheet kintai-daily-totals"><thead><tr><th scope="col">項目</th><th scope="col">時間</th></tr></thead><tbody>${actuals.map(t => `<tr><td class="kintai-daily-total-label">${esc(t.label || '')}</td><td class="kintai-daily-total-value">${esc(t.value ?? '')}</td></tr>`).join('')}</tbody></table></section>`
+      : '';
+    body.innerHTML = daysHtml + saveBar + `<div class="kintai-daily-summaries"><section>${totalsHtml}</section>${actualsHtml}</div>`;
   }
 
   async function saveDailyWorkDays() {
