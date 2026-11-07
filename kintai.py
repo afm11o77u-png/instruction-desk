@@ -2628,15 +2628,15 @@ def _display_raw(value) -> str:
 
 
 def _display_clock(value) -> str:
-    """始業の数値だけ、0より大きく1未満なら Excel の時刻シリアルとして時:分にする。
+    """時刻列のExcelシリアルを48時間まで時:分で表示する。
 
-    1以上はそのまま（時間数か日付かはファイルの書式を足さない）。文字列もそのまま。
+    翌日にまたがる1.20625は28:57。通常の日付シリアルや文字列は変更しない。
     """
     if isinstance(value, datetime):
         return f'{value.hour}:{value.minute:02d}'
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         number = float(value)
-        if 0 < number < 1:
+        if 0 < number <= 2:
             minutes = int(round(number * 24 * 60))
             hour, minute = divmod(minutes, 60)
             return f'{hour}:{minute:02d}'
