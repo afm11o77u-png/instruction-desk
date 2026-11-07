@@ -867,6 +867,125 @@ def _shared_strings(book):
     return [_text_without_phonetic(si) for si in root.findall(f'{NS}si')]
 
 
+def _sheet_names_in_order(wb) -> list[str]:
+    return [sh.attrib.get('name') or '' for sh in wb.find(f'{NS}sheets')]
+
+
+def _split_print_formula(formula: str) -> list[str]:
+    parts = []
+    buf = []
+    quoted = False
+    i = 0
+    text = formula.strip()
+    if text.startswith('='):
+        text = text[1:].strip()
+    while i < len(text):
+        ch = text[i]
+        if ch == "'":
+            buf.append(ch)
+            if quoted and i + 1 < len(text) and text[i + 1] == "'":
+                buf.append("'")
+                i += 2
+                continue
+            quoted = not quoted
+            i += 1
+            continue
+        if ch == ',' and not quoted:
+            parts.append(''.join(buf).strip())
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    tail = ''.join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _unquote_sheet_name(token: str) -> str:
+    if len(token) >= 2 and token[0] == "'" and token[-1] == "'":
+        return token[1:-1].replace("''", "'")
+    return token
+
+
+def _print_rect(token: str, sheet_name: str) -> tuple[str, tuple[int, int, int, int] | None]:
+    """このシート向けの範囲。other=他シート、bad=壊れている、ok=矩形。"""
+    if not token or token.startswith('#'):
+        return 'bad', None
+    body = token
+    if '!' in token:
+        sheet_token, body = token.rsplit('!', 1)
+        owner = _unquote_sheet_name(sheet_token.strip())
+        if ':' in owner:
+            return 'bad', None
+        if owner != sheet_name:
+            return 'other', None
+    body = body.replace('$', '').upper()
+    m = re.fullmatch(r'([A-Z]{1,3})(\d+):([A-Z]{1,3})(\d+)', body)
+    if not m:
+        return 'bad', None
+    c1 = _parse_cell_ref(m.group(1) + m.group(2))[0]
+    c2 = _parse_cell_ref(m.group(3) + m.group(4))[0]
+    r1, r2 = int(m.group(2)), int(m.group(4))
+    if not c1 or not c2 or r1 < 1 or r2 < 1:
+        return 'bad', None
+    if r1 > r2:
+        r1, r2 = r2, r1
+    if c1 > c2:
+        c1, c2 = c2, c1
+    return 'ok', (r1, c1, r2, c2)
+
+
+def read_print_areas(blob: bytes) -> dict[str, tuple[str, list[tuple[int, int, int, int]]]]:
+    """シート名 → ('ok', 矩形) または ('unusable', [])。定義が無いシートは含めない。"""
+    try:
+        book = zipfile.ZipFile(BytesIO(blob))
+        wb = ET.fromstring(book.read('xl/workbook.xml'))
+    except (zipfile.BadZipFile, KeyError, ET.ParseError):
+        return {}
+    names = _sheet_names_in_order(wb)
+    defined = wb.find(f'{NS}definedNames')
+    if defined is None:
+        return {}
+    out: dict[str, tuple[str, list]] = {}
+    for node in defined.findall(f'{NS}definedName'):
+        if node.attrib.get('name') != '_xlnm.Print_Area':
+            continue
+        local = node.attrib.get('localSheetId')
+        if local is None or not str(local).isdigit():
+            continue
+        index = int(local)
+        if index < 0 or index >= len(names):
+            continue
+        sheet = names[index]
+        status, rects = 'ok', []
+        tokens = _split_print_formula(node.text or '')
+        if not tokens:
+            status = 'unusable'
+        for token in tokens:
+            kind, rect = _print_rect(token, sheet)
+            if kind == 'other':
+                continue
+            if kind != 'ok' or rect is None:
+                status = 'unusable'
+                rects = []
+                break
+            rects.append(rect)
+        if status == 'ok' and not rects:
+            continue
+        prev = out.get(sheet)
+        if prev and prev[0] == 'unusable':
+            continue
+        if status == 'unusable':
+            out[sheet] = ('unusable', [])
+        elif prev and prev[0] == 'ok':
+            out[sheet] = ('ok', prev[1] + rects)
+        else:
+            out[sheet] = ('ok', rects)
+    return out
+
+
 def _sheet_map(book):
     wb = ET.fromstring(book.read('xl/workbook.xml'))
     rels = ET.fromstring(book.read('xl/_rels/workbook.xml.rels'))
@@ -2666,34 +2785,53 @@ def _pick_daily_column(found: dict[int, dict], matchers: tuple[str, ...]) -> tup
     return None, ''
 
 
-def _daily_total_block(grid, layout: dict, used_cols: set[int]) -> tuple[int, int] | None | str:
-    """日付行に集計ラベルが縦に並ぶ列と、その右の数値列。週計は計算しない。"""
+def _total_label_rows(grid, col: int, first: int, last: int) -> list[int]:
+    rows = []
+    for row in range(first, last + 1):
+        value = _cell(grid, row, col)
+        if isinstance(value, str) and _total_label_key(value) in DAILY_TOTAL_LABELS:
+            rows.append(row)
+    return rows
+
+
+def _pair_inside_print(label_col: int, value_col: int, rows: list[int], rects) -> bool:
+    """ラベル列と右の数値列が、同じ印刷範囲の矩形に入っている。"""
+    for r1, c1, r2, c2 in rects:
+        if not (c1 <= label_col <= c2 and c1 <= value_col <= c2):
+            continue
+        if sum(1 for row in rows if r1 <= row <= r2) >= 2:
+            return True
+    return False
+
+
+def _daily_total_block(grid, layout: dict, used_cols: set[int], print_area) -> tuple[int, int] | None | str:
+    """日付行の集計ラベル列。印刷範囲があるときは、ラベルと右の数値がその中に入る組だけ。"""
     first = int(layout.get('day_first_row') or 5)
     last = int(layout.get('day_last_row') or first)
-    hits = []
+    pairs = []
     for col in range(1, _grid_max_col(grid) + 1):
-        if col in used_cols:
+        if col in used_cols or (col + 1) in used_cols:
             continue
-        count = 0
-        for row in range(first, last + 1):
-            value = _cell(grid, row, col)
-            if isinstance(value, str) and _total_label_key(value) in DAILY_TOTAL_LABELS:
-                count += 1
-        if count >= 2:
-            hits.append(col)
-    if len(hits) > 1:
+        rows = _total_label_rows(grid, col, first, last)
+        if len(rows) < 2:
+            continue
+        pairs.append((col, col + 1, rows))
+    if print_area is None:
+        if len(pairs) == 1:
+            return pairs[0][0], pairs[0][1]
+        if len(pairs) > 1:
+            return DAILY_AMBIGUOUS_COLUMN
+        return None
+    inside = [pair for pair in pairs if _pair_inside_print(pair[0], pair[1], pair[2], print_area)]
+    if len(inside) == 1:
+        return inside[0][0], inside[0][1]
+    if len(inside) > 1:
         return DAILY_AMBIGUOUS_COLUMN
-    if not hits:
-        return None
-    label_col = hits[0]
-    value_col = label_col + 1
-    if value_col in used_cols:
-        return None
-    return label_col, value_col
+    return None
 
 
-def _total_column(grid, layout: dict, used_cols: set[int]) -> dict:
-    found = _daily_total_block(grid, layout, used_cols)
+def _total_column(grid, layout: dict, used_cols: set[int], print_area=None) -> dict:
+    found = _daily_total_block(grid, layout, used_cols, print_area)
     column = {
         'key': 'total',
         'label': '合計',
@@ -2713,7 +2851,7 @@ def _total_column(grid, layout: dict, used_cols: set[int]) -> dict:
     return column
 
 
-def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
+def _daily_sheet_columns(grid, layout: dict, print_area=None) -> list[dict]:
     """指定の11列だけ。変換・判定列は出さない。合計は右側のラベルと数値。"""
     found = _daily_header_index(grid, layout)
     columns = [{'key': 'date', 'label': '日付'}]
@@ -2755,7 +2893,7 @@ def _daily_sheet_columns(grid, layout: dict) -> list[dict]:
             'sourceLabel': source,
         })
     used = {column['col'] for column in columns if column.get('col')}
-    columns.append(_total_column(grid, layout, used))
+    columns.append(_total_column(grid, layout, used, print_area))
     return columns
 
 
@@ -2870,7 +3008,9 @@ def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -
     if grid is None:
         found = '、'.join(list(sheets.keys())[:8]) or '（なし）'
         raise ValueError(f'月シート「{sheet_name}」がありません。ファイル内: {found}')
-    columns = _daily_sheet_columns(grid, layout)
+    printed = read_print_areas(blob).get(sheet_name)
+    print_area = printed[1] if printed and printed[0] == 'ok' else None
+    columns = _daily_sheet_columns(grid, layout, print_area)
     rows = []
     if layout.get('calendar_sheet'):
         cal_name = layout['calendar_sheet']
