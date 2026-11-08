@@ -115,7 +115,7 @@ NOTES = (
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
     '今の商品マスタでカテゴリが部品・資材または加工サービスのものは、旧QR対応の対象外です。品番が空でも、その品名が部品・資材または加工サービスだけにあるときは対象外です。制服やカテゴリ未設定と同じ品名があるときは外しません。品名の言葉だけでは外しません。',
-    '品番が空で、品名が部品・加工の候補になる行は品名ごとにまとめます。件数を確認してから対応不要にできます。制服と分かる品名や、品番がある未一致はまとめません。対応不要は旧IDとその品名・顧客・メーカー・サイズで覚え、同じ内容の再取込では繰り返しません。品名が変わった行や別の旧IDには使いません。',
+    '品番が空で、品名が部品・資材または加工そのものと分かる行は、最初から対象外です。操作は不要です。末尾の括弧が加工指定で、括弧の外が制服の品名（白衣(スナッパー加工) など）は対象外にしません。制服の品名に刺繍などが付くだけ（白衣・刺繍）も外しません。品番が制服の商品に当たるときは制服を優先します。品名だけでは部品か制服か決められない行は未一致のままです。',
     '同じ旧在庫行IDが別の対応で登録済みのときは、明示するまで上書きしません。同じ対応の再取込は増やしません。',
     '場所やサイズが空の行は、その項目を未指定として残せます。候補が複数のときはどれか一つに決めません。',
 )
@@ -1110,17 +1110,68 @@ _SCOPE_REASONS = {
 }
 
 
+# 加工サービスと分かる作業語。刺繍だけが制服名に付く場合は、これがない限り外さない。
+_SERVICE_WORDS = (
+    '取付', '取り付', '加工', '作製', '直し', '裾上げ', '丈上げ', '丈詰',
+    '補修', '修理', '交換', '外し', 'カン止', '型代', '潰し',
+)
+
+
+def _leading_mark_stripped(item_name):
+    text = unicodedata.normalize('NFKC', stock.text(item_name))
+    return text.lstrip('*').strip()
+
+
+def _first_word(item_name, words):
+    text = unicodedata.normalize('NFKC', stock.text(item_name))
+    for word in words:
+        token = unicodedata.normalize('NFKC', word)
+        if token and token in text:
+            return word
+    return ''
+
+
+def _uniform_with_processing_note(item_name):
+    """末尾の括弧が加工指定で、括弧の外が制服なら、部品・加工の自動除外にしない。"""
+    from legacy_code_assign import blank_code_kind
+    text = _leading_mark_stripped(item_name)
+    matched = re.fullmatch(r'(.+?)\(([^()]*)\)', text)
+    if not matched:
+        return False
+    return blank_code_kind(matched.group(1)) == 'garment'
+
+
+def _keyword_out_of_scope_reason(item_name):
+    """品番が空のとき、部品・加工そのものの品名だけを対象外の理由にする。
+
+    区分不明、制服、末尾括弧の加工指定が付いた制服、刺繍などが付くだけの制服名は空を返す。
+    """
+    from legacy_code_assign import GARMENT_WORDS, NON_GARMENT_WORDS, PROCESSING_WORDS, blank_code_kind
+    if _uniform_with_processing_note(item_name):
+        return ''
+    kind = blank_code_kind(item_name)
+    if kind == 'parts':
+        word = _first_word(item_name, NON_GARMENT_WORDS) or '部品'
+        return f'品番が空で、品名が部品・資材（{word}）のため対象外です。登録しません。'
+    if kind != 'processing':
+        return ''
+    garment = _first_word(item_name, GARMENT_WORDS)
+    service = _first_word(item_name, _SERVICE_WORDS)
+    if garment and not service:
+        return ''
+    word = service or _first_word(item_name, PROCESSING_WORDS) or '加工'
+    return f'品番が空で、品名が加工（{word}）のため対象外です。登録しません。'
+
+
 def _scope_hint(item_num, item_name):
-    """品番が空の行だけ、品名から候補を分ける。制服の品名は候補にしない。自動除外はしない。"""
+    """品番が空で、自動対象外にならない行だけを候補に分ける。"""
     if stock.text(item_num) or not _name_key(item_name):
+        return '', ''
+    if _keyword_out_of_scope_reason(item_name):
         return '', ''
     from legacy_code_assign import blank_code_kind
     kind = blank_code_kind(item_name)
-    if kind == 'processing':
-        return 'processing', _SCOPE_REASONS['processing']
-    if kind == 'parts':
-        return 'parts', _SCOPE_REASONS['parts']
-    if kind == 'garment':
+    if kind in ('processing', 'parts', 'garment'):
         return '', ''
     return 'unknown_blank', _SCOPE_REASONS['unknown_blank']
 
@@ -1156,6 +1207,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
     if not stock.text(item_num):
         if _name_is_only_nonuniform(catalog, item_name):
             return [], [OUT_OF_SCOPE_REASON], STATUS_OUT_OF_SCOPE
+        keyword = _keyword_out_of_scope_reason(item_name)
+        if keyword:
+            return [], [keyword], STATUS_OUT_OF_SCOPE
         reasons.append('品番が空です。商品は推測しません。')
         return [], reasons, ''
     exact_products, dropped_exact = _drop_nonuniform(exact_all)
@@ -1433,7 +1487,7 @@ def classify_rows(c, parsed):
             status = STATUS_INVALID
         elif scope == STATUS_OUT_OF_SCOPE:
             status = STATUS_OUT_OF_SCOPE
-            reasons = [OUT_OF_SCOPE_REASON]
+            reasons = match_reasons or [OUT_OF_SCOPE_REASON]
             candidates = []
         else:
             status = _status_for(candidates, reasons)
@@ -1711,7 +1765,7 @@ def build_preview(c, body):
             '完全一致だけを初期選択にします。要確認・候補が複数・未一致は自動では確定しません。',
             '新品中古が空欄または null の行は、新品にしません。',
             '未一致から商品・顧客・取扱・場所は作りません。',
-            '部品・資材と加工サービスは対象外です。未一致とは分け、登録しません。',
+            '部品・資材と加工は最初から対象外です。操作は不要で、登録しません。',
         ],
     }
 

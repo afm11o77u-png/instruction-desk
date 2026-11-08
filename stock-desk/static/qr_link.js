@@ -18,9 +18,9 @@
     {id:'exact', title:'完全一致', statuses:['exact'], kind:'aside', mode:'details-closed',
       hint:'初期選択のまま登録します。確認するとき開いてください。'},
     {id:'unmatched', title:'未一致', statuses:['unmatched'], kind:'separate', mode:'details-open',
-      hint:'品番がある未一致と、制服の可能性がある品名はここに残します。部品・加工の候補は品名ごとにまとめ、件数を確認してから対応不要にします。'},
-    {id:'out', title:'対象外', statuses:['out_of_scope'], kind:'aside', mode:'details-closed',
-      hint:'部品・資材と加工サービス、および対応不要にした行です。未一致ではありません。登録せず、商品も作りません。保存した対応不要は、同じ品名の同じ旧IDを再取込しても戻します。'},
+      hint:'品番がある未一致と、制服の品名、区分が分からない品名を残します。部品・加工は対象外の一覧です。'},
+    {id:'out', title:'対象外', statuses:['out_of_scope'], kind:'aside', mode:'details-open',
+      hint:'部品・資材と加工は最初から対象外です。一覧を見るだけで、対応不要の操作はありません。登録せず、商品も作りません。'},
     {id:'unchanged', title:'登録済み', statuses:['unchanged'], kind:'aside', mode:'details-closed',
       hint:'同じ対応が登録済みです。変えるときだけ開いて指定してください。'},
   ]
