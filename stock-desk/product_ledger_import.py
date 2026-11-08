@@ -6533,6 +6533,11 @@ def classify_row(
     if not customer_name and not product_name and not code_raw:
         return _excluded_row(row_no, item, reason=f'{row_no}行目：顧客・商品名・品番が空です。')
 
+    import qr_link_import
+    tape_reason = qr_link_import.reflective_tape_reason(code_raw, product_name)
+    if tape_reason:
+        return _excluded_row(row_no, item, reason=f'{row_no}行目：{tape_reason}')
+
     if not customer_name:
         # 顧客なしは取扱を作れない
         cust = {
@@ -7050,6 +7055,8 @@ def build_sku_groups(c, classified):
     """
     by_code = defaultdict(list)
     for row in classified:
+        if row.get('status') == STATUS_EXCLUDED:
+            continue
         code = stock.text((row.get('csv') or {}).get('code'))
         if stock_product_merge.is_normal_product_code(code):
             by_code[code].append(row)

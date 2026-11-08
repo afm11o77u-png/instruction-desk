@@ -1186,6 +1186,11 @@ def classify_row(
     product_name = stock.text(item.get('商品名'))
     qty, cost, qreasons = parse_row_qty_cost(item, row_no)
 
+    import qr_link_import
+    tape_reason = qr_link_import.reflective_tape_reason(item.get('商品コード'), product_name)
+    if tape_reason:
+        return _excluded_row(row_no, item, qty=qty, cost=cost, reason=f'{row_no}行目：{tape_reason}')
+
     # 商品名空欄かつ在庫=数値0 → 対象外（エラーでない）。空欄/不正値を0扱いしない。
     if not product_name:
         if qty == 0 and not qreasons:

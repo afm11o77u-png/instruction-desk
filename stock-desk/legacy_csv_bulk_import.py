@@ -1603,6 +1603,41 @@ def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_ma
 def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
     """段階2: 永続マップだけで1行の初期在庫予定を組み立てる（判定UIを再実行しない）。"""
     payload = _aux_item_payload(row_no, item)
+    import qr_link_import
+    tape_reason = qr_link_import.reflective_tape_reason(payload.get('code'), payload.get('productName'))
+    if tape_reason:
+        qty, cost, _qreasons = legacy.parse_row_qty_cost(item, row_no)
+        condition, _creasons = legacy.parse_row_condition(item, row_no)
+        return {
+            'rowNo': row_no,
+            'status': legacy.STATUS_EXCLUDED,
+            'statusLabel': OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED],
+            'qty': qty,
+            'unitCost': cost,
+            'condition': condition,
+            'conditionLabel': stock.condition_label(condition) if condition else '',
+            'reasons': [tape_reason],
+            'csv': payload,
+            'target': {
+                'productName': payload.get('productName') or '',
+                'productCode': payload.get('code') or '',
+                'customer': payload.get('customer') or '',
+                'supplier': payload.get('supplier') or '',
+                'size': payload.get('size') or '',
+            },
+            'place': None,
+            'stock': None,
+            'matchedLedger': False,
+            'complement': False,
+            'heldWithProduct': False,
+            'selected': False,
+            'fromPersistedMap': True,
+            'qrAction': 'skip',
+            'qrOutOfScope': True,
+            'serviceExcluded': False,
+            'productRegistrationExcluded': False,
+            'productRegistrationExcludedLabel': '',
+        }
     qty, cost, qreasons = legacy.parse_row_qty_cost(item, row_no)
     condition, creasons = legacy.parse_row_condition(item, row_no)
     place = legacy.location_resolve(c, item.get('拠点'), item.get('棚'), default_site)

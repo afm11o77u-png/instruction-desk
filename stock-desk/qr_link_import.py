@@ -1162,6 +1162,29 @@ def _hem_tape_reason(item_name):
     return '品名が部品・資材（裾上げテープ）のため対象外です。登録しません。'
 
 
+_REFLECTIVE_TAPE_CODE = '3m9910'
+_REFLECTIVE_TAPE_NAME = re.compile(r'反射テープ(?:\d+(?:\.\d+)?mm)?\Z')
+
+
+def is_reflective_tape_row(code, name):
+    """品番 3M9910 かつ品名が反射テープ（幅の mm 表記だけ可）か。
+
+    反射ベスト、反射加工、裾上げテープ、別品番のテープ、品番だけの一致は含めない。
+    """
+    code_key = unicodedata.normalize('NFKC', stock.text(code)).strip().casefold()
+    if code_key != _REFLECTIVE_TAPE_CODE:
+        return False
+    text = _leading_mark_stripped(name)
+    compact = re.sub(r'[\s\u3000]+', '', text)
+    return _REFLECTIVE_TAPE_NAME.fullmatch(compact) is not None
+
+
+def reflective_tape_reason(code, name):
+    if not is_reflective_tape_row(code, name):
+        return ''
+    return '品番「3M9910」の品名が反射テープのため対象外です。商品・在庫・旧QRは登録しません。'
+
+
 def _keyword_out_of_scope_reason(item_name):
     """品番が空のとき、部品・加工そのものの品名だけを対象外の理由にする。
 
@@ -1222,6 +1245,9 @@ def _scope_group_key(hint, item_name):
 
 def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_name,
                       item_size, condition, site_name, shelf_name):
+    tape = reflective_tape_reason(item_num, item_name)
+    if tape:
+        return [], [tape], STATUS_OUT_OF_SCOPE
     reasons = []
     exact_all, norm_all = _product_hits(catalog, item_num)
     partial_products = []
