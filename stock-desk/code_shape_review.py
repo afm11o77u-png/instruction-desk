@@ -1,13 +1,15 @@
 """商品取り込み時の品番の形の確認。
 
-ミドリ安全以外: 既存の品番のうしろに、英数字以外の文字が付いた候補だけを
-「品番のみへまとめるか」の確認にする。自動ではまとめない。
-ハイフンや英数字だけの枝番（AZ-8618-003 など）は正式な品番として剥がさない。
+通常ルールの対象は、ミドリ安全の制服を除く商品。非ミドリ安全の制服は落とさない。
+既存の品番のうしろに英数字以外の文字が付いた候補だけを、品番のみへまとめる確認にする。
+自動ではまとめない。AZ-8618-003 のような英数字の枝番は剥がさない。
 短い品番がファイルにも既存マスタにも無いときは、品番を推測せず確認対象にする。
 
 ミドリ安全（仕入先名にこの文字列を含む）の制服:
-末尾が上または下の品番をすべて確認対象にする。同じ基本品番の上下なしも同じ群に入れる。
-上と下を同じ商品へ自動では潰さない。登録先は利用者が選ぶ。
+上または下を含む品番は、末尾かどうかにかかわらずすべて確認対象にする。
+末尾の上・下で基本品番が切れるものだけ、同じ基本品番の上下なしも同じ確認に入れる。
+途中に上または下がある正式品番は、自動ではまとめず、その品番のまま登録する確認にする。
+上と下を同じ商品へ自動では潰さない。
 
 確定した対応は code_shape_links に残す。初期在庫と旧QRを同時に取り込む処理は未実装。
 """
@@ -234,7 +236,10 @@ def build_groups(c, classified):
             midori_buckets[base]['codes'].add(code)
             used.add(code)
         elif ('上' in code or '下' in code):
-            groups.append(_undetermined_group(code, rows, existing, saved, 'midori'))
+            # 末尾以外の上・下。正式品番として残し、自動ではまとめない。
+            groups.append(_undetermined_group(
+                code, rows, existing, saved, 'midori', embedded_mark=True,
+            ))
             used.add(code)
     for base, bucket in midori_buckets.items():
         plain_rows = [
@@ -256,7 +261,8 @@ def build_groups(c, classified):
             'baseCode': base,
             'supplierScope': 'midori',
             'note': (
-                'ミドリ安全の制服です。上・下・基本品番を同じ確認に出します。'
+                'ミドリ安全の制服です。上または下を含む品番を確認します。'
+                '末尾の上・下で基本品番が分かるときは、上下なしの品番も同じ確認に入れます。'
                 '上と下を同じ商品へ自動ではまとめません。登録先を選んでください。'
             ),
             'previousLinks': [
@@ -274,6 +280,7 @@ def build_groups(c, classified):
     for code, rows in by_code.items():
         if code in used:
             continue
+        # 通常ルールはミドリ安全の制服だけを除く。非ミドリ安全の制服はここで確認する。
         if any(row['midoriUniform'] for row in rows):
             continue
         base, extra = extension_of(code, known_for_extend - {code})
@@ -315,17 +322,25 @@ def build_groups(c, classified):
     return groups
 
 
-def _undetermined_group(code, rows, existing, saved, scope):
+def _undetermined_group(code, rows, existing, saved, scope, embedded_mark=False):
     member = _member(code, 'undetermined', rows, existing)
+    if embedded_mark:
+        note = (
+            f'品番「{code}」は途中に上または下があります。'
+            '正式品番として自動ではまとめず、この品番のまま登録する確認です。'
+            '英数字の枝番は切り落としません。'
+        )
+    else:
+        note = (
+            f'品番「{code}」は追加文字があるように見えますが、元の品番を確定できません。'
+            '推測で短くしません。この品番のまま登録するか、今回の登録から外してください。'
+        )
     return {
         'id': f'unknown:{scope}:{code}',
         'kind': 'undetermined',
         'baseCode': '',
         'supplierScope': scope,
-        'note': (
-            f'品番「{code}」は追加文字があるように見えますが、元の品番を確定できません。'
-            '推測で短くしません。この品番のまま登録するか、今回の登録から外してください。'
-        ),
+        'note': note,
         'previousLinks': [saved[(code, scope)]] if (code, scope) in saved else [],
         'members': [member],
         'sizeUnion': list(member['sizes']),

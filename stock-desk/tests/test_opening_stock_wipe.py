@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 import opening_stock_wipe as wipe  # noqa: E402
 import qr_link_import  # noqa: E402
 import stock  # noqa: E402
+import stock_qr  # noqa: E402
 
 
 def newdb():
@@ -74,6 +75,9 @@ class OpeningStockWipeTest(unittest.TestCase):
             self.assertTrue(preview['canWipe'])
             self.assertEqual(preview['counts']['openingLots'], 1)
             self.assertIn('旧QRの対応', preview['kept'])
+            opening_lot_id = c.execute(
+                'SELECT id FROM lots WHERE batch_id IS NOT NULL'
+            ).fetchone()['id']
             result = wipe.execute_wipe(c, OWNER, db_path=str(path))
             c.commit()
             self.assertTrue(result['ok'])
@@ -82,6 +86,39 @@ class OpeningStockWipeTest(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], 1)
             self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 1)
             self.assertEqual(c.execute('SELECT qty_remaining FROM lots').fetchone()['qty_remaining'], 1)
+            found = qr_link_import.lookup_qr(c, {'id': 'old-1', 'customer_id': 'c', 'maker_id': 'm'})
+            self.assertTrue(found['found'])
+            self.assertEqual(found['lotCount'], 0)
+            self.assertEqual(found['lots'], [])
+            self.assertIsNone(found['pickedLotId'])
+            self.assertFalse(c.execute('SELECT 1 FROM lots WHERE id=?', (opening_lot_id,)).fetchone())
+            issued = stock_qr.show(c, {
+                '_canWrite': True,
+                '_actor': {'name': 'seed', 'role': 'owner'},
+                'customerProductId': c.execute('SELECT id FROM customer_products').fetchone()['id'],
+                'size': 'M',
+                'condition': 'new',
+            })
+            c.commit()
+            again = stock_qr.lookup(c, issued['publicId'])
+            self.assertEqual(again['lotCount'], 0)
+            self.assertEqual(again['lots'], [])
+            self.assertFalse(again['qtyChanged'])
+            loc = c.execute('SELECT id FROM locations WHERE parent_id IS NOT NULL').fetchone()
+            stock.register_opening(c, {
+                '_canWrite': True, '_actor': {'name': 'seed', 'role': 'owner'},
+                'token': 'open-wipe-seed-2',
+                'customerProductId': c.execute('SELECT id FROM customer_products').fetchone()['id'],
+                'locationId': loc['id'], 'condition': 'new',
+                'basisDate': '2026-03-01', 'receivedUnknown': True, 'payoutOrder': 1,
+                'allowZero': True,
+                'lines': [{'size': 'M', 'qty': 4, 'unitCost': 100}],
+            })
+            c.commit()
+            after = qr_link_import.lookup_qr(c, {'id': 'old-1', 'customer_id': 'c', 'maker_id': 'm'})
+            self.assertEqual(after['lotCount'], 1)
+            self.assertEqual(after['lots'][0]['qtyRemaining'], 4)
+            self.assertNotEqual(after['lots'][0]['lotId'], opening_lot_id)
         finally:
             c.close()
             folder.cleanup()

@@ -32,6 +32,22 @@ def tiny_ledger_rows(rows):
     return '\n'.join(['顧客,仕入先,商品コード,商品名,サイズ'] + rows)
 
 
+def _row(row_no, code, supplier, category, name, size):
+    return {
+        'rowNo': row_no,
+        'status': 'create',
+        'csv': {
+            'sourceCode': code,
+            'code': code,
+            'supplier': supplier,
+            'productName': name,
+            'size': size,
+            'color': '',
+        },
+        'product': {'category': category, 'name': name, 'size': size},
+    }
+
+
 def _body(text):
     return {'file': csv_b64_from_text(text), 'name': 'shape.csv', '_canWrite': True, '_actor': {'name': '確認'}}
 
@@ -149,6 +165,59 @@ class CodeShapeDetectTest(unittest.TestCase):
             c.commit()
             codes = sorted(r['code'] for r in c.execute('SELECT code FROM products'))
             self.assertEqual(codes, ['CD1', 'CD1上', 'CD1下'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_non_midori_uniform_stays_and_embedded_mark_is_not_cut(self):
+        folder, path, c = newdb()
+        try:
+            rows = [
+                _row(2, '7-522', '一般衣料㈱', '制服', '作業ズボン', 'M'),
+                _row(3, '7-522青', '一般衣料㈱', '制服', '作業ズボン', 'LL'),
+                _row(4, 'AZ-8618', '一般衣料㈱', '制服', '白衣', 'S'),
+                _row(5, 'AZ-8618-003', '一般衣料㈱', '制服', '白衣', 'M'),
+                _row(6, 'AB上12', 'ミドリ安全北海道㈱', '制服', '反射ベスト', 'F'),
+                _row(7, 'CD1', 'ミドリ安全北海道㈱', '制服', '白衣', 'S'),
+                _row(8, 'CD1上', '㈱ミドリ安全', '制服', '白衣', 'M'),
+                _row(9, '7-522下', 'ミドリ安全㈱', '部品・資材', '部材', 'F'),
+            ]
+            groups = {g['id']: g for g in shape.build_groups(c, rows)}
+            extend = groups['extend:7-522']
+            self.assertEqual({m['code'] for m in extend['members']}, {'7-522', '7-522青', '7-522下'})
+            self.assertNotIn('extend:AZ-8618', groups)
+            embedded = groups['unknown:midori:AB上12']
+            self.assertIn('途中に上または下', embedded['note'])
+            self.assertNotIn('AB12', {m['code'] for m in embedded['members']})
+            midori = groups['midori:CD1']
+            self.assertEqual({m['code'] for m in midori['members']}, {'CD1', 'CD1上'})
+            text = tiny_ledger_rows([
+                '顧客A,ミドリ安全北海道㈱,AB上12,反射ベスト,F',
+                '顧客A,一般衣料㈱,AZ-8618,白衣,S',
+                '顧客A,一般衣料㈱,AZ-8618-003,白衣,M',
+            ])
+            body = _body(text)
+            preview = pli.build_preview(c, body)
+            ids = {g['id'] for g in preview['codeShapeGroups']}
+            self.assertIn('unknown:midori:AB上12', ids)
+            self.assertNotIn('extend:AZ-8618', ids)
+            decisions = {
+                g['id']: {'action': 'keep_separate'}
+                for g in preview['codeShapeGroups']
+            }
+            pli.commit_preview(c, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'shape-embedded-1',
+                'codeShapeDecisions': decisions,
+            }, db_path=str(path))
+            c.commit()
+            codes = sorted(r['code'] for r in c.execute('SELECT code FROM products'))
+            self.assertIn('AB上12', codes)
+            self.assertNotIn('AB12', codes)
+            self.assertIn('AZ-8618', codes)
+            self.assertIn('AZ-8618-003', codes)
         finally:
             c.close()
             folder.cleanup()
