@@ -8905,6 +8905,7 @@ def search(handler, c):
         args.append(f'%{q}%')
     rows = c.execute(f'SELECT * FROM name_customers {where} ORDER BY source_name, id', args).fetchall()
     items = []
+    assignee_rows = {}
     for row in rows:
         counts = c.execute(
             f'SELECT COUNT(*) n, SUM(needs_review) review FROM name_formats WHERE customer_id=? AND retired=0 AND {NOT_SOFT_DELETED}',
@@ -8920,6 +8921,7 @@ def search(handler, c):
             if label not in assignees: assignees.append(label)
             if state['status'] == '了承': approved += 1
             else: unapproved += 1
+            _add_assignee_confirmation(assignee_rows, state)
         items.append({
             'id': row['id'], 'sourceName': row['source_name'], 'reading': row['reading'],
             'linkedName': row['linked_name'], 'linkStatus': row['link_status'],
@@ -8929,7 +8931,55 @@ def search(handler, c):
         })
     summary = c.execute("SELECT value FROM settings WHERE key='name_import'").fetchone()
     meta = json.loads(summary['value']) if summary else {}
-    return 200, {'total': len(items), 'items': items, 'missingFonts': meta.get('missingFonts') or [], 'resolvedFonts': meta.get('resolvedFonts') or {}}
+    summary_rows = sorted(assignee_rows.values(), key=lambda item: (
+        0 if item['kind'] == 'unset' else 1 if item['kind'] == 'missing' else 2,
+        item['name'],
+        item['assigneeId'] or 0,
+    ))
+    approved_total = sum(item['approved'] for item in summary_rows)
+    unapproved_total = sum(item['unapproved'] for item in summary_rows)
+    return 200, {
+        'total': len(items), 'items': items,
+        'missingFonts': meta.get('missingFonts') or [],
+        'resolvedFonts': meta.get('resolvedFonts') or {},
+        'assigneeSummary': {
+            'scope': 'filtered' if q else 'all',
+            'scopeLabel': '検索で表示中の顧客の形式' if q else '登録中の全顧客の形式',
+            'rows': summary_rows,
+            'approved': approved_total,
+            'unapproved': unapproved_total,
+            'formatCount': approved_total + unapproved_total,
+        },
+    }
+
+
+def _add_assignee_confirmation(buckets, state):
+    """形式1件を担当者1人に足す。了承は status が了承のときだけ。"""
+    aid = state.get('assigneeId')
+    name = state.get('assigneeName') or ''
+    if aid and name:
+        key = ('user', aid)
+        label = name if state.get('assigneeActive') else f'{name}（停止中）'
+        kind = 'user'
+    elif aid:
+        key = ('missing', aid)
+        label = '担当者不明'
+        kind = 'missing'
+    else:
+        key = ('unset', 0)
+        label = '担当未設定'
+        kind = 'unset'
+    row = buckets.get(key)
+    if not row:
+        row = {
+            'assigneeId': aid, 'name': label, 'kind': kind,
+            'approved': 0, 'unapproved': 0,
+        }
+        buckets[key] = row
+    if state.get('status') == '了承':
+        row['approved'] += 1
+    else:
+        row['unapproved'] += 1
 
 def customer(handler, c, customer_id):
     blocked = _require(handler.user)

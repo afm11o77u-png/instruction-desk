@@ -44,7 +44,7 @@ def state(c,fid,user):
  assigned=bool(r and r['assignee_id'] and r['active'])
  confirmed=bool(assigned and r['confirmed_by']==r['assignee_id'] and r['confirmed_digest']==token)
  status='了承' if confirmed else ('再確認待ち' if r and r['confirmed_at'] else '未了承')
- return {'assigneeId':r['assignee_id'] if r else None,'assigneeName':r['name'] if r and r['name'] else '', 'sourceLabel':r['source_label'] if r else '', 'status':status,'confirmedAt':r['confirmed_at'] if confirmed else None,'confirmedName':r['confirmed_name'] if confirmed else None,'previousConfirmedAt':r['confirmed_at'] if r else None,'canConfirm':bool(assigned and user and user['active'] and not user['must_change'] and user['id']==r['assignee_id'] and not confirmed),'digest':token}
+ return {'assigneeId':r['assignee_id'] if r else None,'assigneeName':r['name'] if r and r['name'] else '','assigneeActive':bool(r and r['active']),'sourceLabel':r['source_label'] if r else '', 'status':status,'confirmedAt':r['confirmed_at'] if confirmed else None,'confirmedName':r['confirmed_name'] if confirmed else None,'previousConfirmedAt':r['confirmed_at'] if r else None,'canConfirm':bool(assigned and user and user['active'] and not user['must_change'] and user['id']==r['assignee_id'] and not confirmed),'digest':token}
 
 def action(handler,c,d):
  user=handler.session_user(c)

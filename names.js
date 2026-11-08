@@ -81,13 +81,26 @@ function nameSwatches(colors,fixed,mixColors){
  if(fixed)return `<span class="nameswatch"><i style="background:${paperSwatch(fixed,mixColors)}"></i>${esc(fixed)}${nameIsMix(fixed)?nameMixParen(mixColors):''}</span>`;
  return '色の指定はありません';
 }
+function nameAssigneeSummaryHtml(summary){
+ const rows=(summary&&summary.rows)||[];
+ const scope=(summary&&summary.scopeLabel)||'登録中の全顧客の形式';
+ const note=`${scope}を、1形式につき1件だけ数えています。了承は、担当者本人の確認が今の内容と一致するときだけです。再確認待ちは了承にせず、未了承に数えます。`;
+ if(!rows.length){
+  return `<section class="name-assignee-summary" aria-label="担当別の了承"><h2>担当別の了承</h2><p>${esc(note)}</p><p>形式はありません。</p></section>`;
+ }
+ const body=rows.map(row=>{
+  const unset=row.kind==='unset'||row.kind==='missing';
+  return `<tr class="${unset?'is-unset':''}"><th scope="row">${esc(row.name)}</th><td>${Number(row.approved)||0}</td><td>${Number(row.unapproved)||0}</td></tr>`;
+ }).join('');
+ return `<section class="name-assignee-summary" aria-label="担当別の了承"><h2>担当別の了承</h2><p>${esc(note)}</p><table><thead><tr><th>担当</th><th>了承</th><th>未了承</th></tr></thead><tbody>${body}</tbody></table></section>`;
+}
 function paintNameCustomers(data){
  const box=$('#namecustomers');
  const items=data.items||[];
  const fonts=(data.missingFonts||[]).filter(name=>!String(name).normalize('NFKC').toUpperCase().startsWith('HG丸ゴシック'));
  const fontNote=fonts.length?`このパソコンにない書体：${fonts.join('、')}。その形式は要確認です。`:''
  $('#namestatus').textContent=items.length?`${items.length}件の顧客です。${fontNote}`:(fontNote||'該当する顧客はありません。');
- box.innerHTML=items.map(item=>{
+ box.innerHTML=nameAssigneeSummaryHtml(data.assigneeSummary)+items.map(item=>{
   const people=(item.assignees||[]).filter(Boolean);
   const who=people.length?people.join('、'):'担当未設定';
   return `<button type="button" class="namecustomer" data-id="${item.id}"><b>${esc(item.sourceName)}</b><span>担当：${esc(who)}</span><span>了承 ${item.approvedCount||0}　未了承 ${item.unapprovedCount||0}</span><span>${item.formatCount}形式${item.reviewCount?`　要確認 ${item.reviewCount}`:''}</span><span>${item.linkStatus==='対応'?'指示書デスクの顧客名と一致':'未対応'}</span></button>`;
