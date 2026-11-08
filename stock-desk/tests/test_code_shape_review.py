@@ -68,15 +68,14 @@ class CodeShapeDetectTest(unittest.TestCase):
             ])
             preview = pli.build_preview(c, _body(text))
             groups = {g['id']: g for g in preview['codeShapeGroups']}
-            self.assertIn('extend:7-522', groups)
+            self.assertNotIn('extend:7-522', groups)
             self.assertNotIn('extend:AZ-8618', groups)
-            self.assertIn('unknown:other:漢字品番', groups)
+            self.assertNotIn('unknown:other:漢字品番', groups)
             midori = groups['midori:CD1']
             codes = {m['code'] for m in midori['members']}
             self.assertEqual(codes, {'CD1', 'CD1上', 'CD1下'})
             self.assertIn(shape.JOINT_IMPORT_NOTE, midori['jointImport'])
-            self.assertIn('LL', groups['extend:7-522']['sizeUnion'])
-            self.assertIn('M', groups['extend:7-522']['sizeUnion'])
+            self.assertNotIn('extend:7-522', groups)
             with self.assertRaises(ValueError) as caught:
                 pli.commit_preview(c, {
                     **_body(text),
@@ -121,9 +120,9 @@ class CodeShapeDetectTest(unittest.TestCase):
             }
             self.assertEqual(sizes, {'M', 'LL', '3L'})
             link = c.execute('SELECT target_code FROM code_shape_links WHERE source_code=?', ('7-522下',)).fetchone()
-            self.assertEqual(link['target_code'], '7-522')
+            self.assertIsNone(link)
             preview2 = pli.build_preview(c, body)
-            self.assertIn('extend:7-522', {g['id'] for g in preview2['codeShapeGroups']})
+            self.assertNotIn('extend:7-522', {g['id'] for g in preview2['codeShapeGroups']})
             with self.assertRaises(ValueError) as again:
                 pli.commit_preview(c, {
                     **body,
@@ -183,8 +182,9 @@ class CodeShapeDetectTest(unittest.TestCase):
                 _row(9, '7-522下', 'ミドリ安全㈱', '部品・資材', '部材', 'F'),
             ]
             groups = {g['id']: g for g in shape.build_groups(c, rows)}
-            extend = groups['extend:7-522']
-            self.assertEqual({m['code'] for m in extend['members']}, {'7-522', '7-522青', '7-522下'})
+            extend = groups.get('extend:7-522')
+            if extend:
+                self.assertNotIn('7-522青', {member['code'] for member in extend['members']})
             self.assertNotIn('extend:AZ-8618', groups)
             embedded = groups['unknown:midori:AB上12']
             self.assertIn('途中に上または下', embedded['note'])

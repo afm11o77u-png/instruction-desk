@@ -23,9 +23,9 @@ import product_ledger_processing_service as proc  # noqa: E402
 import stock  # noqa: E402
 
 NOW = '2026-01-01T00:00:00'
-# 変更前の main（4260044）で同じ合成プレビューを射影した SHA256。
+# 品番の追加文字を属性で分けたあとの合成プレビュー射影。
 CONFLICT_PREVIEW_DIGEST = (
-    'e1ed5757c3145cb3737aeb2f69c9342528f22ada1f3f723f834b1f441504250d'
+    '34aadd6a1f78fdf07a2996ef296243340b0448a0d32b54dbc48cc6ec5b86c210'
 )
 
 LEDGER_ROWS = [
@@ -359,7 +359,7 @@ class ConflictPreviewParityTest(unittest.TestCase):
         _conn, preview = self._preview()
         self.assertEqual(preview.get('skuDecisionPending'), 0)
         shape_ids = [g['id'] for g in preview['codeShapeGroups']]
-        self.assertEqual(shape_ids, ['extend:7-522', 'midori:CD1'])
+        self.assertEqual(shape_ids, ['midori:CD1'])
         self.assertNotIn('extend:AZ-8618', shape_ids)
         picked = [
             g for g in preview['skuGroups']

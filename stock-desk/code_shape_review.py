@@ -218,6 +218,19 @@ def build_groups(c, classified):
     existing = _existing_products(c)
     saved = _saved_links(c)
     by_code = {}
+    kept = []
+    for info in infos:
+        import code_suffix_attributes as suffix_attr
+        attr = suffix_attr.classify_suffix(
+            info['code'], product_name=info['name'], supplier=info['supplier'], size=info['size'],
+        )
+        if attr.get('kind') == 'midori_position' or (info['midoriUniform'] and ('上' in info['code'] or '下' in info['code'])):
+            kept.append(info)
+            continue
+        if attr.get('apply') or attr.get('registerAsParts') or attr.get('needsConfirm'):
+            continue
+        kept.append(info)
+    infos = kept
     for info in infos:
         by_code.setdefault(info['code'], []).append(info)
     present = set(by_code) | {item['code'] for item in existing if item['code']}

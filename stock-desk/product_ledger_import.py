@@ -6517,10 +6517,24 @@ def classify_row(
     source_code = stock.text(pos_info.get('sourceCode') or code_raw)
     base_code = stock.text(pos_info.get('baseCode') or code)
     position = stock.text(pos_info.get('position') or '')
+    import code_suffix_attributes as suffix_attr
+    suffix = suffix_attr.classify_suffix(
+        code_raw, product_name=product_name, supplier=supplier_name, size=size_label,
+    )
+    if suffix.get('apply') and suffix.get('baseCode'):
+        source_code = code_raw or source_code
+        code = suffix['baseCode']
+        base_code = suffix['baseCode']
+        if suffix.get('position'):
+            position = suffix['position']
+        if suffix.get('size'):
+            size_label = stock.canonical_size_label(suffix['size'])
     group_key = match_group_key(
         customer=customer_name, code=code, product_name=product_name, supplier=supplier_name,
     )
     reasons = []
+    if suffix.get('needsConfirm') and suffix.get('reason'):
+        reasons.append(suffix['reason'])
     # 見出し「商品コード／商品名」は列名で対応（位置推測で入替しない）。
     # 値が逆に見えるときだけ案内し、黙って入れ替えない。
     if code_name_columns_look_swapped(code_raw, product_name):
@@ -6589,6 +6603,9 @@ def classify_row(
         selected_product_id=selected_product_id,
         force_create=force_create_product,
     )
+    if suffix.get('registerAsParts'):
+        product['category'] = stock.CATEGORY_PARTS
+        product['proposedCategory'] = stock.CATEGORY_PARTS
     if code and code != source_code:
         product['code'] = code
         product['codeOverride'] = code
@@ -6596,6 +6613,9 @@ def classify_row(
         product['baseCode'] = base_code
         product['position'] = position
         product['codeDisplay'] = stock.product_code_display(code, product.get('category') or '')
+        if suffix.get('color'):
+            product['officialColor'] = suffix['color']
+            product['applyOfficialName'] = True
     if pos_info.get('conflict') or pos_info.get('needsConfirm'):
         product['action'] = 'review'
         product.setdefault('reasons', []).append(
@@ -6716,7 +6736,9 @@ def classify_row(
     else:
         status = STATUS_REUSE
 
-    can_commit = status in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD)
+    if suffix.get('needsConfirm'):
+        status = STATUS_REVIEW
+    can_commit = status in (STATUS_CREATE, STATUS_REUSE, STATUS_SIZE_ADD) and not suffix.get('needsConfirm')
     row = {
         'rowNo': row_no,
         'status': status,
@@ -6744,6 +6766,7 @@ def classify_row(
         'reasons': reasons,
         'canCommit': can_commit,
         'fromImportMap': bool(product.get('fromImportMap')),
+        'suffixAttribute': suffix,
     }
     # メーカー採用で上下が補足に残っていれば品番側へ移し補足から除く
     override_for_paren = dict(raw_override) if raw_override else None
@@ -6752,7 +6775,29 @@ def classify_row(
         override_for_paren.setdefault('plannedRegisteredSku', code)
         if stock.text(override_for_paren.get('supplement') or '') in position_sku.POSITION_TOKENS:
             override_for_paren['supplement'] = ''
-    return attach_paren_classification(row, override_for_paren)
+    row = attach_paren_classification(row, override_for_paren)
+    handle = dict(row.get('handle') or {})
+    if suffix.get('processingName') and not stock.text(handle.get('embroidery') or ''):
+        handle['embroidery'] = suffix['processingName']
+        handle['embroideryLabel'] = suffix['processingName']
+        row['handle'] = handle
+    if suffix.get('color'):
+        pc = dict(row.get('parenClassification') or {})
+        if not stock.text(pc.get('color') or ''):
+            pc['color'] = suffix['color']
+            row['parenClassification'] = pc
+        prov = dict(row.get('specProvenance') or {})
+        prov.setdefault('color', suffix['color'])
+        prov.setdefault('sourceCode', source_code)
+        if suffix.get('note'):
+            prov['codeNote'] = suffix['note']
+        row['specProvenance'] = prov
+    elif suffix.get('note'):
+        prov = dict(row.get('specProvenance') or {})
+        prov['codeNote'] = suffix['note']
+        prov.setdefault('sourceCode', source_code)
+        row['specProvenance'] = prov
+    return row
 
 
 def _row_variant(row):
@@ -6991,6 +7036,28 @@ def _row_explicit_colors(row):
     if stock.text(pc.get('color') or ''):
         out.append(stock.text(pc.get('color')))
     return out
+
+
+def _settle_suffix_colors(classified):
+    """同じ品番の複数色は商品を分けない。色は行の対応に残し、商品の色欄は一つに潰さない。"""
+    by_code = defaultdict(list)
+    for row in classified or []:
+        attr = row.get('suffixAttribute') or {}
+        if attr.get('apply') and attr.get('color'):
+            by_code[stock.text((row.get('csv') or {}).get('code') or '')].append(row)
+    for rows in by_code.values():
+        colors = []
+        for row in rows:
+            col = stock.text((row.get('suffixAttribute') or {}).get('color') or '')
+            if col and col not in colors:
+                colors.append(col)
+        if len(colors) < 2:
+            continue
+        for row in rows:
+            prod = dict(row.get('product') or {})
+            prod['officialColor'] = ''
+            prod['proposedColor'] = ''
+            row['product'] = prod
 
 
 def mark_multi_color_groups(sku_groups, classified):
@@ -10102,6 +10169,7 @@ def build_preview(c, body):
         body.get('rowClassifications') if isinstance(body.get('rowClassifications'), dict) else {}
     )
     t_judge = time.perf_counter()
+    import code_suffix_attributes as suffix_attr
 
     # 品番グループへの商品選択を行へ展開
     group_product = {}
@@ -10166,6 +10234,8 @@ def build_preview(c, body):
         if chosen is not None:
             row_c['chosenProcessServiceIds'] = chosen
         classified.append(row_c)
+
+    _settle_suffix_colors(classified)
 
     # 照合グループ件数
     group_counts = defaultdict(int)
@@ -10515,6 +10585,38 @@ def build_preview(c, body):
                 opening_stock['basisDateError'] = str(e)
 
     total_ms = round((time.perf_counter() - t_all) * 1000, 2)
+    by_code = defaultdict(list)
+    for row in classified:
+        by_code[stock.text((row.get('csv') or {}).get('code') or '')].append(row)
+    for group in sku_groups:
+        if not group.get('nameWordingDiff') or group.get('reviewReasons') or group.get('colorDiffPossible'):
+            continue
+        rows = by_code.get(stock.text(group.get('code') or '')) or []
+        if not any((row.get('suffixAttribute') or {}).get('apply') for row in rows):
+            continue
+        group['needsDecision'] = False
+        group['plannedSingleProduct'] = True
+        group['nameWordingDiff'] = False
+        group['status'] = 'auto'
+        group['skuDecisionNeeded'] = False
+        group['reviewTier'] = REVIEW_TIER_AUTO
+    relaxed = {
+        stock.text(group.get('code') or '')
+        for group in sku_groups
+        if group.get('status') == 'auto' and not group.get('needsDecision')
+    }
+    for row in classified:
+        if stock.text((row.get('csv') or {}).get('code') or '') in relaxed:
+            row['skuDecisionNeeded'] = False
+        attr = row.get('suffixAttribute') or {}
+        if not attr.get('needsConfirm'):
+            continue
+        row['status'] = STATUS_REVIEW
+        row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+        row['canCommit'] = False
+        reason = stock.text(attr.get('reason') or '')
+        if reason and reason not in (row.get('reasons') or []):
+            row['reasons'] = list(row.get('reasons') or []) + [reason]
     return {
         'importMode': mode,
         'productPhase': phase,
@@ -10528,6 +10630,7 @@ def build_preview(c, body):
         'rows': classified,
         'skuGroups': sku_groups,
         'codeShapeGroups': _code_shape_groups(c, classified),
+        'processingCandidates': suffix_attr.collect_processing_candidates(classified),
         'autoLineSpecCodes': auto_line_codes,
         'processServices': registered_process_services(c),
         'skuGroupCount': len(sku_groups),
@@ -11885,6 +11988,8 @@ def commit_preview(c, body, *, db_path=None):
                 f' before={before_stock} after={after_stock}'
             )
 
+        import code_suffix_attributes as suffix_attr
+        suffix_registration = suffix_attr.register_pending_with_k2(c, classified)
         result = {
             'runId': run_id,
             'already': False,
@@ -11908,6 +12013,7 @@ def commit_preview(c, body, *, db_path=None):
             'committedAt': stock.stamp(),
             'note': IMPORT_NOTE,
             'codeShapeLinksSaved': _code_shape_save(c, code_shape_groups, body.get('codeShapeDecisions')),
+            'processingCandidatesRegistered': suffix_registration,
             'codeShapeJointImport': False,
             'timingsMs': preview.get('timingsMs') or {},
         }

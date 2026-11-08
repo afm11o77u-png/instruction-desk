@@ -55,6 +55,19 @@ def _merge_size(c, plan):
     return size
 
 
+def _opening_color_key(csv):
+    """同じ商品にまとめても、色が違う在庫は数量を合算しない。"""
+    import code_suffix_attributes as suffix_attr
+    csv = csv or {}
+    attr = suffix_attr.classify_suffix(
+        csv.get('code') or '',
+        product_name=csv.get('productName') or '',
+        supplier=csv.get('supplier') or '',
+        size=csv.get('size') or '',
+    )
+    return stock.text(attr.get('color') or '')
+
+
 def _opening_merge_key(plan, c=None):
     t = plan.get('target') or {}
     csv = plan.get('csv') or {}
@@ -72,6 +85,7 @@ def _opening_merge_key(plan, c=None):
         stock.text(place.get('siteName') or ''),
         stock.text(place.get('shelfName') or ''),
         plan.get('condition'),
+        _opening_color_key(csv),
     )
 
 
