@@ -10892,12 +10892,68 @@ def _code_shape_save(c, groups, decisions):
     return code_shape_review.save_links(c, groups, decisions)
 
 
+def _service_only_empty_customer(row):
+    """加工サービスそのもので、顧客名だけが空の行。
+
+    取扱は作らない。表記差・停止・仕入先の未選択・既存区分の衝突は対象外。
+    衣服本体の加工指定や部品・制服には使わない。
+    """
+    cust = row.get('customer') if isinstance(row.get('customer'), dict) else {}
+    supp = row.get('supplier') if isinstance(row.get('supplier'), dict) else {}
+    prod = row.get('product') if isinstance(row.get('product'), dict) else {}
+    handle = row.get('handle') if isinstance(row.get('handle'), dict) else {}
+    ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    if cust.get('candidates') or supp.get('action') == 'review':
+        return False
+    if prod.get('categoryConflict'):
+        return False
+    if stock.text((row.get('csv') or {}).get('customer') or ''):
+        return False
+    reasons = ' '.join(
+        stock.text(item) for item in list(cust.get('reasons') or []) + list(row.get('reasons') or [])
+    )
+    if '表記差' in reasons or '停止中' in reasons:
+        return False
+    if not (prod.get('processingServiceProduct') or handle.get('skipForProcessingService')):
+        return False
+    if not ps.get('identifiable') or ps.get('needsConfirm'):
+        return False
+    if ps.get('isPhysicalParts'):
+        return False
+    return True
+
+
 def _hold_unresolved_person(row):
     """顧客・仕入先が未解決の行は、後段で canCommit が付いても登録しない。
 
     空の仕入先（未設定のまま登録できる）は action が missing なので対象外。
     顧客が空、または表記差の候補が未選択のときは取扱を作れない。
+    ただし加工サービスそのもので顧客名が空の行は、加工だけ登録し取扱は作らない。
     """
+    if _service_only_empty_customer(row):
+        cust = dict(row.get('customer') or {})
+        cust['action'] = 'omit'
+        cust['reasons'] = []
+        cust['omitHandle'] = True
+        row['customer'] = cust
+        row['registerServiceWithoutCustomer'] = True
+        row['reasons'] = [
+            item for item in (row.get('reasons') or [])
+            if '顧客が空' not in stock.text(item) and '顧客名が空' not in stock.text(item)
+        ]
+        prod = row.get('product') or {}
+        if row['reasons'] or prod.get('action') not in ('create', 'reuse'):
+            row['status'] = STATUS_REVIEW
+            row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+            row['canCommit'] = False
+            return row
+        if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+            row['canCommit'] = False
+            return row
+        row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+        row['statusLabel'] = STATUS_LABELS[row['status']]
+        row['canCommit'] = True
+        return row
     cust = row.get('customer') if isinstance(row.get('customer'), dict) else {}
     supp = row.get('supplier') if isinstance(row.get('supplier'), dict) else {}
     if cust.get('action') != 'review' and supp.get('action') != 'review':
@@ -12593,12 +12649,16 @@ def commit_preview(c, body, *, db_path=None):
         for row in commit_rows:
             row_no = row['rowNo']
             try:
-                cust_id, created = _commit_person(
-                    c, 'customers', stock.save_customer, row.get('customer'),
-                    row['csv']['customer'],
-                )
-                if created:
-                    result_counts['customersCreated'] += 1
+                if row.get('registerServiceWithoutCustomer'):
+                    # 顧客名は空のまま。架空の顧客も取扱も作らない。
+                    cust_id, created = None, False
+                else:
+                    cust_id, created = _commit_person(
+                        c, 'customers', stock.save_customer, row.get('customer'),
+                        row['csv']['customer'],
+                    )
+                    if created:
+                        result_counts['customersCreated'] += 1
 
                 sup_id = None
                 csv_supplier = stock.text(row['csv'].get('supplier') or '')

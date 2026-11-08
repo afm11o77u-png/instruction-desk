@@ -450,10 +450,19 @@
     const chosen=chosenCategoryForAccept(st,row)
     return !!chosen&&chosen===existing
   }
+  function serviceWithoutCustomer(row){
+    return !!(row&&row.registerServiceWithoutCustomer)
+  }
   function personUnresolved(row){
     const cust=row&&row.customer||{}
     const sup=row&&row.supplier||{}
     const reasons=(row&&row.reasons||[]).join('\n')
+    if(serviceWithoutCustomer(row)){
+      if(sup.action==='review')return true
+      if((cust.candidates||[]).length)return true
+      if(/表記差の候補があります|停止中/.test(reasons))return true
+      return false
+    }
     if(cust.action==='review'||sup.action==='review')return true
     if(/顧客が空|顧客名が空/.test(reasons))return true
     if(/顧客/.test(reasons)&&/表記差の候補があります/.test(reasons))return true
@@ -484,7 +493,7 @@
     const csvCustomer=String((row&&row.csv||{}).customer||'').trim()
     const typedCustomer=String(sel.customerName||'').trim()
     const customerEmpty=(cust.action==='review'&&!(cust.candidates||[]).length&&!csvCustomer)||/顧客が空|顧客名が空/.test(reasons)
-    if(customerEmpty&&!typedCustomer&&!sel.customerId){
+    if(customerEmpty&&!typedCustomer&&!sel.customerId&&!serviceWithoutCustomer(row)){
       return '顧客名が空です。顧客名を入力してください。空のままでは登録せず、似た名前へは結合しません。'
     }
     const handle=row&&row.handle||{}
@@ -599,6 +608,9 @@
     const cust=row.customer||{}
     const reasons=(row.reasons||[]).join('\n')
     const csvCustomer=String((row.csv||{}).customer||'').trim()
+    if(serviceWithoutCustomer(row)){
+      return `<p class="excelhint">顧客が空です。加工サービスだけ登録します。顧客と取扱は作りません。</p>`
+    }
     const empty=(cust.action==='review'&&!(cust.candidates||[]).length&&!csvCustomer)||(/顧客が空|顧客名が空/.test(reasons)&&!csvCustomer)
     if(!empty)return ''
     const sel=(st.selections||{})[String(row.rowNo)]||{}
@@ -635,7 +647,8 @@
       pc.color?`色 ${pc.color}`:'',
       csv.supplier?`仕入先 ${csv.supplier}`:''
     ].filter(Boolean)
-    return `<p class="excelhint">登録予定: ${esc(bits.join(' / '))}</p>`
+    const alone=serviceWithoutCustomer(row)?' 顧客なし。加工サービスだけ登録し、取扱は作りません。':''
+    return `<p class="excelhint">登録予定: ${esc(bits.join(' / '))}${esc(alone)}</p>`
   }
   function acceptControlHtml(st,row){
     if(!row)return ''
@@ -1634,6 +1647,7 @@
           ${p.vendorMessage?`<li>${esc(p.vendorMessage)}</li>`:''}
           <li>補足／個別仕様: 内部照合用（通常画面には別名一覧を出しません）</li>
           <li>区分: 加工サービス　品番なし（対象品番 ${codes||'—'}${more}）</li>
+          ${((st.preview&&st.preview.rows)||[]).some(r=>r&&r.registerServiceWithoutCustomer&&((r.processingService||{}).serviceName||'')===(p.serviceName||''))?`<li>顧客: なし。加工サービスだけ登録し、顧客と取扱は作りません。</li>`:''}
         </ul>
         <p class="excelhint">一覧・登録の表示名は加工名をそのまま使います。登録時表示名の別入力はありません。</p>
         ${samples?`<details class="sku-processing-specs"><summary>元行の補足・個別仕様（内部照合用）</summary><ul>${samples}</ul></details>`:''}
@@ -7950,6 +7964,8 @@
       unifiedRowDetailHtml,
       parenCell,
       reviewFingerprint,
+      processingServiceAutoHtml,
+      serviceWithoutCustomer,
       acceptBlocker,
       acceptControlHtml,
       chosenCategoryForAccept,
