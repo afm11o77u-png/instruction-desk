@@ -406,25 +406,40 @@
     if(cust.action==='review'&&(cust.candidates||[]).length)return true
     return false
   }
-  function reviewFingerprint(r){
-    const reasons=(r&&r.reasons||[]).map(x=>String(x||'').trim()).filter(Boolean)
+  function registerKindLabel(kind){
+    if(kind==='商品')return '制服'
+    if(kind==='部品・資材')return '部品'
+    if(kind==='加工サービス')return '加工'
+    return kind||'制服'
+  }
+  function rowChoiceKey(r){
+    const c=(r&&r.csv)||{}
+    return [r&&r.rowNo,c.customer||'',c.supplier||'',c.code||'',c.productName||'',c.size||''].join('\u0001')
+  }
+  function reviewFingerprint(st,r){
+    const edit=(st&&st.rowClassifications&&st.rowClassifications[String(r&&r.rowNo)])||{}
+    const pc=(r&&r.parenClassification)||{}
+    const kind=(st?effectiveRegisterKind(st,r):'')||pc.registerKind||''
     const code=String((r&&r.csv||{}).code||'')
-    const cat=String((r&&r.product||{}).category||'')
-    const kind=String((r&&r.parenClassification||{}).registerKind||'')
-    return reasons.join('\n')+'\u0001'+code+'\u0001'+cat+'\u0001'+kind
+    const name=edit.plannedName!=null?edit.plannedName:(pc.plannedName||(r&&r.csv||{}).productName||'')
+    const color=edit.color!=null?edit.color:(pc.color||'')
+    const supplier=String((r&&r.csv||{}).supplier||'')
+    return [kind,code,name,color,supplier].join('\u0001')
   }
   function reviewAcceptActionsHtml(st,item){
     if(!item||item.kind==='sku'||isOpeningMode(st))return ''
     const rows=(item.rows||[]).filter(r=>r&&r.status==='needs_review'&&!reviewRowBlocked(r))
     if(!rows.length)return ''
     return rows.map(r=>{
-      const fp=reviewFingerprint(r)
+      const fp=reviewFingerprint(st,r)
       const edit=(st.rowClassifications||{})[String(r.rowNo)]||{}
       const accepted=!!(edit.reviewAccepted&&edit.reviewFingerprint===fp)
+      const kind=effectiveRegisterKind(st,r)
       const planBits=[
-        ((r.parenClassification||{}).registerKind)||((r.product||{}).category)||'商品',
+        `区分 ${registerKindLabel(kind)}`,
         (r.csv||{}).code?`品番 ${(r.csv||{}).code}`:'品番なし',
         (r.csv||{}).productName?`名称 ${(r.csv||{}).productName}`:'',
+        ((r.parenClassification||{}).color)?`色 ${(r.parenClassification||{}).color}`:'',
         (r.csv||{}).supplier?`仕入先 ${(r.csv||{}).supplier}`:''
       ].filter(Boolean)
       if(accepted){
@@ -4038,13 +4053,29 @@
     const kind=effectiveRegisterKind(st,r)
     const manual=!!(edit.registerKind||pc.registerKindManual)
     const kindOpts=REGISTER_KINDS.map(k=>
-      `<option value="${esc(k)}" ${kind===k?'selected':''}>${esc(k)}</option>`
+      `<option value="${esc(k)}" ${kind===k?'selected':''}>${esc(registerKindLabel(k))}</option>`
     ).join('')
+    const changed=kind!==autoKind
+    const fp=reviewFingerprint(st,r)
+    const accepted=!!(edit.reviewAccepted&&edit.reviewFingerprint===fp)
+    const planBits=[
+      `区分 ${registerKindLabel(kind)}`,
+      (r.csv||{}).code?`品番 ${(r.csv||{}).code}`:'品番なし',
+      `商品名 ${edit.plannedName!=null?edit.plannedName:(pc.plannedName||(r.csv||{}).productName||'—')}`,
+      `色 ${color||'—'}`,
+      `仕入先 ${(r.csv||{}).supplier||'—'}`
+    ]
     const kindHead=`<div class="pl-register-kind-head">
       <label>登録区分<select data-pl-register-kind="${r.rowNo}" ${disabled}>${kindOpts}</select></label>
-      <span class="excelhint">${manual?'手動（自動より優先）':`自動検出: ${esc(autoKind)}`}</span>
-      <p class="excelhint">加工・素材欄への入力だけでは区分は切り替わりません。</p>
-      ${(r.processingService&&r.processingService.k2GarmentCandidate)?'<p class="excelhint pl-k2-garment-note">K2スタッフ工房の衣服らしい行です。既定は加工サービス。制服として登録するなら「商品」、不要なら「この行を登録しない」。</p>':''}
+      <span class="excelhint">${changed?'選択中（自動判定を上書き）':`自動: ${esc(registerKindLabel(autoKind))}`}</span>
+      <p class="excelhint">制服・部品・加工のどれで登録するかを選びます。選んだ区分だけ登録し、他の区分へは重ねて登録しません。加工欄や素材欄への入力だけでは区分は変わりません。</p>
+      ${changed?`<div class="pl-review-accept">
+        <p class="excelhint">登録予定: ${esc(planBits.join(' / '))}</p>
+        ${accepted
+          ?'<p class="excelhint">この内容で了承済みです。次は「選択を反映して再照合」です。区分や品番・商品名・色・仕入先を変えると、もう一度了承が必要です。</p>'
+          :`<button type="button" class="primary" data-pl-review-accept="${r.rowNo}" data-fp="${esc(fp)}" ${disabled}>この内容で了承</button>`}
+      </div>`:''}
+      ${(r.processingService&&r.processingService.k2GarmentCandidate&&!changed)?'<p class="excelhint pl-k2-garment-note">品番があっても加工候補のままです。制服にするなら「制服」を選び、登録予定を了承して再照合してください。</p>':''}
     </div>`
     const unusedNote=unusedFieldsNoteHtml(kind,edit,pc)
     const uncBlock=unclassifiedBlockHtml(st,r,uncText,disabled)
@@ -5805,7 +5836,18 @@
       setRowClassification(st,el.getAttribute('data-pl-unc-move'),{unclassifiedMove:el.value})
     })
     document.querySelectorAll('[data-pl-register-kind]').forEach(el=>{
-      setRowClassification(st,el.getAttribute('data-pl-register-kind'),{registerKind:el.value})
+      const rowNo=el.getAttribute('data-pl-register-kind')
+      const cur=(st.rowClassifications||{})[String(rowNo)]||{}
+      if(!cur.registerKindUser)return
+      if(cur.registerKind===el.value)return
+      const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
+      setRowClassification(st,rowNo,{
+        registerKind:el.value,
+        registerKindUser:true,
+        choiceKey:row?rowChoiceKey(row):cur.choiceKey||'',
+        reviewAccepted:false,
+        reviewFingerprint:''
+      })
     })
     document.querySelectorAll('[data-pl-paren-ok]').forEach(el=>{
       setRowClassification(st,el.getAttribute('data-pl-paren-ok'),{confirmed:!!el.checked,acceptProposal:!!el.checked})
@@ -7030,8 +7072,20 @@
     })
     document.querySelectorAll('[data-pl-register-kind]').forEach(el=>{
       el.onchange=()=>{
-        // 区分変更は編集状態のみ（再照合なし・chase-scrollなし）。入力値は消さない
-        setRowClassification(st,el.getAttribute('data-pl-register-kind'),{registerKind:el.value})
+        const rowNo=el.getAttribute('data-pl-register-kind')
+        const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
+        const cur=(st.rowClassifications||{})[String(rowNo)]||{}
+        const patch={
+          registerKind:el.value,
+          registerKindUser:true,
+          choiceKey:row?rowChoiceKey(row):'',
+          pendingRematch:true
+        }
+        if(cur.registerKind!==el.value){
+          patch.reviewAccepted=false
+          patch.reviewFingerprint=''
+        }
+        setRowClassification(st,rowNo,patch)
         paintDialog({preserveScroll:true})
       }
     })
@@ -7305,12 +7359,15 @@
         if(st.busy)return
         const rowNo=el.getAttribute('data-pl-review-accept')
         const fp=el.getAttribute('data-fp')||''
+        const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
         setRowClassification(st,rowNo,{
           reviewAccepted:true,
           reviewFingerprint:fp,
           userActed:true,
           confirmed:true,
-          acceptProposal:true
+          acceptProposal:true,
+          choiceKey:row?rowChoiceKey(row):((st.rowClassifications||{})[String(rowNo)]||{}).choiceKey||'',
+          pendingRematch:true
         })
         paintDialog({preserveScroll:true})
         st.toast('この内容で了承しました。選択を反映して再照合すると登録予定へ反映します。')
@@ -7492,6 +7549,9 @@
       processingUnifiedKey,
       unifiedListRowsHtml,
       unifiedRowDetailHtml,
+      parenCell,
+      reviewFingerprint,
+      rowChoiceKey,
       unifiedPlanHtml,
       unifiedIssuesHtml,
       buildPlannedStatusFields,
