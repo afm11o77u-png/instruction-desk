@@ -396,6 +396,18 @@ tr.is-shortage, article.dm-card.is-shortage{background:rgba(180,40,40,.06)}
   box-shadow:0 8px 24px #1e332833;
 }
 .stock-op-menu .stock-row-btn{display:block;width:100%;text-align:left}
+/* 操作メニューの対象行。文字色は本文のまま、背景だけ緑のテーマに寄せる。 */
+tr.is-op-target td,
+.list-grid article.dm-card.is-op-target{
+  background:#d3ebda;
+  box-shadow:inset 3px 0 0 var(--green);
+}
+tr.is-op-target:hover td,
+.list-grid article.dm-card.is-op-target:hover{
+  background:#c5e3cd;
+}
+tr.is-op-target .qty.is-shortage,
+.list-grid article.dm-card.is-op-target .qty.is-shortage{color:#a33}
 .stock-qr-image{display:block;width:220px;height:220px;margin:8px 0;image-rendering:pixelated;background:#fff;border:1px solid var(--line)}
 .stock-qr-id{font-family:ui-monospace,monospace;word-break:break-all}
 dialog.stock-qr-dialog{width:min(440px,94vw)}

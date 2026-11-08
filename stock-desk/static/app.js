@@ -310,10 +310,17 @@ async function openOrderFromStockRow(row){
   PurchaseOrders.openEditor(null,{customerId:row.customerId,supplierId:product&&product.supplierId||null,customerProductId:row.customerProductId,size:row.size||''})
   if(product&&!product.supplierId)toast('通常仕入先が未設定です')
 }
+function stockOpTargetEl(btn){
+  return btn&&btn.closest?btn.closest('tr, article.dm-card'):null
+}
+function clearStockOpTarget(){
+  document.querySelectorAll('.is-op-target').forEach(el=>el.classList.remove('is-op-target'))
+}
 function closeStockOpMenu(){
   const menu=document.getElementById('stockOpMenu')
   if(menu)menu.remove()
   document.querySelectorAll('[data-stock-op][aria-expanded="true"]').forEach(b=>b.setAttribute('aria-expanded','false'))
+  clearStockOpTarget()
 }
 function placeStockOpMenu(menu,btn){
   const r=btn.getBoundingClientRect()
@@ -434,6 +441,8 @@ function openStockOpMenu(btn,row){
   menu.innerHTML=stockOpMenuItemsHtml(row)
   document.body.appendChild(menu)
   placeStockOpMenu(menu,btn)
+  const target=stockOpTargetEl(btn)
+  if(target)target.classList.add('is-op-target')
   btn.setAttribute('aria-expanded','true')
   menu.querySelector('[data-stock-in]').onclick=()=>{closeStockOpMenu();openStockMoveFromRow(row,'入庫')}
   menu.querySelector('[data-stock-out]').onclick=()=>{closeStockOpMenu();openStockMoveFromRow(row,'出庫')}
@@ -2350,15 +2359,18 @@ function renderProductStockList(groups){
   return groups.map(g=>`<article class="product-stock-group">
     ${stockGroupHeading(g)}
     <div class="tablewrap"><table class="product-stock-table stock-fixed-table">${stockColgroup('product')}<thead><tr><th>顧客</th><th>加工</th><th>サイズ</th><th>保管場所</th><th class="num">数量（新品／中古／合計）</th><th class="num">在庫金額</th><th></th></tr></thead><tbody>
-      ${(g.rows||[]).map(r=>`<tr class="${stockRowClass(r)}">
-        <td class="dm-primary">${esc(r.customerName)}</td>
-        <td>${esc(r.embroideryLabel)}</td>
-        <td>${esc(r.size)}</td>
-        <td>${esc(r.locationLabel)}</td>
-        <td class="${stockQtyClass(r)}">${conditionQtyText(r)}${Number(r.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}${priceBreakdownHtml(r.prices)}</td>
-        <td class="money">${stockAmountText(r)}</td>
-        <td>${stockActionButtonsHtml(r)}</td>
-      </tr>`).join('')||'<tr><td colspan="7">在庫はありません。</td></tr>'}
+      ${(g.rows||[]).map(r=>{
+        const row={...r,productId:r.productId??g.productId,code:r.code||g.code,productName:r.productName||g.productName,color:r.color||g.color}
+        return `<tr class="${stockRowClass(row)}">
+        <td class="dm-primary">${esc(row.customerName)}</td>
+        <td>${esc(row.embroideryLabel)}</td>
+        <td>${esc(row.size)}</td>
+        <td>${esc(row.locationLabel)}</td>
+        <td class="${stockQtyClass(row)}">${conditionQtyText(row)}${Number(row.qty)<0?' <span class="shortage-tag">在庫不足</span>':''}${priceBreakdownHtml(row.prices)}</td>
+        <td class="money">${stockAmountText(row)}</td>
+        <td>${stockActionButtonsHtml(row)}</td>
+      </tr>`
+      }).join('')||'<tr><td colspan="7">在庫はありません。</td></tr>'}
     </tbody></table></div>
   </article>`).join('')
 }
