@@ -5,9 +5,20 @@ function resetMemos(){memoDialog.close();memoDialog.replaceChildren()}
 // [red]…[/red] で囲んだ部分は赤字（複数行にまたがる場合は行ごとに囲む）。
 function memoInline(s){return esc(s).replace(/\[red\]([\s\S]*?)\[\/red\]/g,'<span class="memo-red">$1</span>')}
 function memoHtml(md){
- const out=[];let list=null;
+ const out=[];let list=null;let code=null;
  const close=()=>{if(list){out.push(`</${list}>`);list=null}};
+ const closeCode=()=>{
+  if(!code)return;
+  out.push(`<div class="memo-code"><button type="button" class="quiet memo-copy">コピー</button><pre><code>${esc(code.join('\n'))}</code></pre></div>`);
+  code=null;
+ };
  for(const raw of md.split('\n')){
+  if(code){
+   if(raw.trim()==='```'){closeCode();continue}
+   code.push(raw);
+   continue;
+  }
+  if(raw.trim().startsWith('```')){close();code=[];continue}
   const line=raw.trimEnd();let m;
   if(!line){close();continue}
   if((m=line.match(/^(#{1,3}) (.*)$/))){close();const n=m[1].length+1;out.push(`<h${n}>${memoInline(m[2])}</h${n}>`);continue}
@@ -15,19 +26,37 @@ function memoHtml(md){
   if((m=line.match(/^[-*] (.*)$/))){if(list!=='ul'){close();out.push('<ul>');list='ul'}out.push(`<li>${memoInline(m[1])}</li>`);continue}
   close();out.push(`<p>${memoInline(line)}</p>`)
  }
- close();return out.join('')
+ closeCode();close();return out.join('')
+}
+function bindMemoCopy(){
+ memoDialog.querySelectorAll('.memo-copy').forEach(b=>{
+  b.onclick=async()=>{
+   const code=b.parentElement.querySelector('code');
+   const text=code?code.innerText:'';
+   try{await navigator.clipboard.writeText(text);toast('コピーしました。')}
+   catch(e){toast('コピーできませんでした。')}
+  };
+ });
 }
 async function showMemo(id){
  const m=await api('/api/memos/'+encodeURIComponent(id));
  memoDialog.querySelectorAll('[data-memo]').forEach(b=>b.classList.toggle('active',b.dataset.memo===id));
  memoDialog.querySelector('#memo-body').innerHTML=memoHtml(m.markdown);
+ bindMemoCopy();
 }
-async function openMemos(){
+async function openMemos(opts){
  if(currentUser?.role!=='owner')return;
+ opts=opts||{};
  const list=await api('/api/memos');
- memoDialog.innerHTML=`<div class="dialoghead"><h2>構想メモ</h2><button type="button" class="quiet" id="memo-close">閉じる ×</button></div><div class="dialogbody memo-layout"><nav class="memo-list">${list.map(m=>`<button type="button" class="nav" data-memo="${esc(m.id)}">${esc(m.title)}</button>`).join('')||'<p>メモはありません。</p>'}</nav><article id="memo-body" class="memo-body"></article></div>`;
+ const shown=opts.only?list.filter(m=>m.id===opts.only):list;
+ const title=opts.title||'構想メモ';
+ memoDialog.innerHTML=`<div class="dialoghead"><h2>${esc(title)}</h2><button type="button" class="quiet" id="memo-close">閉じる ×</button></div><div class="dialogbody memo-layout"><nav class="memo-list">${shown.map(m=>`<button type="button" class="nav" data-memo="${esc(m.id)}">${esc(m.title)}</button>`).join('')||'<p>メモはありません。</p>'}</nav><article id="memo-body" class="memo-body"></article></div>`;
  memoDialog.querySelector('#memo-close').onclick=()=>memoDialog.close();
  memoDialog.querySelectorAll('[data-memo]').forEach(b=>b.onclick=()=>showMemo(b.dataset.memo).catch(e=>toast(e.message)));
  memoDialog.showModal();
- if(list.length)await showMemo(list[0].id);
+ if(opts.only)await showMemo(opts.only);
+ else if(shown.length)await showMemo(shown[0].id);
+}
+function openOldDataMemo(){
+ return openMemos({only:'03-kyudata-toridashi',title:'旧データの取り出し方'});
 }
