@@ -39,7 +39,7 @@
   const MODE_CHOOSE=''
   const MODE_PRODUCTS='products'
   const MODE_OPENING='opening_stock'
-  const AUX_JUDGMENT_ONLY_COPY='初期在庫CSVは商品選定の判断にだけ使います。在庫は登録しません'
+  const AUX_JUDGMENT_ONLY_COPY='旧在庫JSONは商品選定の判断にだけ使います。在庫は登録しません'
   let ui=null
 
   /** 加工サービス統合キー。HTML data 属性でも壊れない区切り（NUL は属性値で切れるため使わない） */
@@ -1027,10 +1027,6 @@
     body.name=st.fileName
     body.file=st.fileB64
     body.registerOpeningStock=false
-    if(st.auxFileB64){
-      body.auxFile=st.auxFileB64
-      body.auxName=st.auxFileName||'初期在庫.csv'
-    }
     if(st.legacyStockB64){
       body.legacyStockFile=st.legacyStockB64
       body.legacyStockName=st.legacyStockName||'old-stock.json'
@@ -5519,7 +5515,7 @@
         <button type="button" class="quiet" id="plModeProducts" ${st.busy?'disabled':''}>商品を登録（まとめて）</button>
         <button type="button" class="primary" id="plModeOpening" ${st.busy?'disabled':''}>初期在庫を登録</button>
       </div>
-      <p class="excelhint">商品登録の初期在庫CSVまたは旧在庫JSONは、通常仕入先とメイン候補の判定にだけ使います。在庫は書きません。初期在庫の本登録は「初期在庫を登録」で行い、旧在庫JSONなら旧IDと旧QRも同時です。同じ在庫をCSVとJSONの両方では登録しません。</p>
+      <p class="excelhint">商品・部品・加工の登録では商品台帳CSVが必須です。旧在庫JSONは任意で、通常仕入先とメイン候補の判定にだけ使い、在庫は書きません。初期在庫そのものは「初期在庫を登録」で、初期在庫CSVか旧在庫JSONのどちらかから登録します。</p>
     </div>`
   }
 
@@ -5560,22 +5556,12 @@
     }
     const label=st.fileName?'台帳CSVを変更':'商品台帳CSVを選ぶ（必須）'
     const sizeHint=st.fileName&&st.fileSize?`（${Number(st.fileSize).toLocaleString('ja-JP')} バイト）`:''
-    const auxLabel=st.auxFileName?'初期在庫CSVを変更':'初期在庫CSV（任意・判定補助）'
-    const auxHint=st.auxFileName&&st.auxFileSize?`（${Number(st.auxFileSize).toLocaleString('ja-JP')} バイト）`:''
-    const auxMeta=st.preview&&st.preview.auxOpeningStock
-    const auxSelected=!!st.auxFileB64
     const jsonSelected=!!st.legacyStockB64
     return `<div class="product-ledger-files">
       <div class="bar product-ledger-filebar">
         <input type="file" id="plFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
         <button type="button" id="plPickFile" ${st.busy?'disabled':''}>${esc(label)}</button>
         <span class="excelhint product-ledger-filename" id="plFileLabel">${esc(st.fileName||'未選択')}${sizeHint?` ${esc(sizeHint)}`:''}${st.preview?`（${esc(st.preview.encoding||'')}）`:''}</span>
-      </div>
-      <div class="bar product-ledger-filebar">
-        <input type="file" id="plAuxFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
-        <button type="button" id="plPickAux" ${st.busy?'disabled':''}>${esc(auxLabel)}</button>
-        <span class="excelhint product-ledger-filename">${esc(st.auxFileName||'未選択（台帳のみ可）')}${auxHint?` ${esc(auxHint)}`:''}${auxMeta?`（${esc(auxMeta.encoding||'')} / ${auxMeta.rowCount||0}行）`:''}</span>
-        ${st.auxFileB64?`<button type="button" id="plClearAux" class="quiet" ${st.busy?'disabled':''}>初期在庫CSVを外す</button>`:''}
       </div>
       <div class="bar product-ledger-filebar">
         <input type="file" id="plLegacyStock" class="product-ledger-file-input" accept=".json,application/json" ${st.busy?'disabled':''}>
@@ -5589,10 +5575,8 @@
         <span class="excelhint product-ledger-filename">${esc(st.legacyCustomerName||'未選択')}${st.legacyCustomerSize?` （${Number(st.legacyCustomerSize).toLocaleString('ja-JP')} バイト）`:''}</span>
       </div>
       ${jsonSelected
-        ?`<p class="notice" role="status"><strong>旧在庫JSONは商品選定の判断にだけ使います。在庫は登録しません。</strong>通常仕入先・メイン候補の規則は初期在庫CSVと同じです。顧客名で絞るには旧顧客JSONも選んでください。初期在庫の本登録は、登録後に「初期在庫を登録」で同じ旧在庫JSONから行い、初期在庫CSVでは重ねて登録しないでください。</p>`
-        :auxSelected
-        ?`<p class="notice" role="status"><strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。メイン商品名・仕入先・仕様の選定にだけ使い、在庫数量・単価・入出庫履歴は書きません。初期在庫を旧在庫JSONで登録する場合は、このCSVを在庫登録には使わないでください。</p>`
-        :`<p class="excelhint">初期在庫CSVも旧在庫JSONも選ばない場合は、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
+        ?`<p class="notice" role="status"><strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。通常仕入先・メイン候補の規則はこれまでと同じです。顧客名で絞るには旧顧客JSONも選んでください。在庫数量・単価・旧QRはこの画面では書きません。</p>`
+        :`<p class="excelhint">旧在庫JSONを選ばない場合は、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
       <div class="bar">
         <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
         <button type="button" id="plBackMode" class="quiet" ${st.busy?'disabled':''}>段階選択に戻る</button>
@@ -6098,7 +6082,7 @@
     const title=openingOnly?'旧CSV一括取り込み（初期在庫を登録）':`旧CSV一括取り込み（商品を登録${phaseName?'：'+phaseName:''}）`
     const lead=openingOnly
       ?'初期在庫CSVだけで登録します。登録先は商品登録時の永続マップから原文キーで解決します。曖昧・削除済み・未登録は理由を示し、別商品へ推測登録しません。プレビューまではDBを変更しません。'
-      :`商品台帳CSVから商品と顧客取扱を登録します。初期在庫CSVは任意で、<strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。通常品番は<strong>1品番=1商品</strong>です。プレビューまではDBを変更しません。`
+      :`商品台帳CSVから商品と顧客取扱を登録します。旧在庫JSONは任意で、<strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。通常品番は<strong>1品番=1商品</strong>です。プレビューまではDBを変更しません。`
     const previewBody=st.preview?(openingOnly
       ?`<p class="excelhint">${esc(st.preview.note||'')}</p>
           ${timingsHtml(st)}
@@ -6473,8 +6457,8 @@
           paintPreview()
           return
         }
-        if(st.auxFileB64){
-          try{assertUploadSize(st.auxFile,st.auxFileB64)}catch(e){
+        if(st.legacyStockB64){
+          try{assertUploadSize(st.legacyStockFile,st.legacyStockB64)}catch(e){
             const msg=apiErrorMessage(e,OVERSIZE_MSG)
             st.previewError=msg
             st.toast(msg,8000)
