@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import re
+import sqlite3
 import time
 import unicodedata
 from collections import defaultdict
@@ -5311,7 +5312,31 @@ def attach_content_split_plans(c, sku_groups, sku_decisions, *, classified=None)
         apply_content_split_name_plan_display(group)
 
 
+# 接続ごとの印。同じ接続で行のたび CREATE / PRAGMA を繰り返さない。
+# 印はDBファイルには残さない。別接続や古いDBの最初の1回は索引とカラム追加を行う。
+_SCHEMA_REVISION = 1
+_SCHEMA_MARK = f'pli_ledger_schema_rev_{_SCHEMA_REVISION}'
+
+
+def _schema_mark_present(c):
+    try:
+        row = c.execute(f'SELECT {_SCHEMA_MARK}() AS rev').fetchone()
+    except sqlite3.OperationalError:
+        return False
+    if row is None:
+        return False
+    rev = row['rev'] if isinstance(row, sqlite3.Row) else row[0]
+    return rev == _SCHEMA_REVISION
+
+
+def _mark_schema_ready(c):
+    revision = _SCHEMA_REVISION
+    c.create_function(_SCHEMA_MARK, 0, lambda: revision, deterministic=True)
+
+
 def ensure_schema(c):
+    if _schema_mark_present(c):
+        return
     c.execute('''CREATE TABLE IF NOT EXISTS product_ledger_import_runs (
       id INTEGER PRIMARY KEY,
       file_sha256 TEXT NOT NULL,
@@ -5382,7 +5407,12 @@ def ensure_schema(c):
         'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file '
         'ON product_ledger_row_maps(file_sha256, source_row_no)'
     )
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_code '
+        'ON product_ledger_row_maps(csv_product_code, id DESC)'
+    )
     maker_sku_lookup.ensure_schema(c)
+    _mark_schema_ready(c)
 
 
 def db_fingerprint(c):
