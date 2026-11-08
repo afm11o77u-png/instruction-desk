@@ -426,30 +426,46 @@
     const supplier=String((r&&r.csv||{}).supplier||'')
     return [kind,code,name,color,supplier].join('\u0001')
   }
+  function rowCategoryConflict(r){
+    const prod=r&&r.product||{}
+    if(prod.categoryConflict)return true
+    return /既存カテゴリ/.test((r&&r.reasons||[]).join('\n'))
+  }
   function reviewAcceptActionsHtml(st,item){
     if(!item||item.kind==='sku'||isOpeningMode(st))return ''
-    const rows=(item.rows||[]).filter(r=>r&&r.status==='needs_review'&&!reviewRowBlocked(r))
+    const all=(item.rows||[]).filter(r=>r&&r.status==='needs_review')
+    if(!all.length)return ''
+    const conflicts=all.filter(rowCategoryConflict)
+    if(conflicts.length){
+      return `<p class="excelhint pl-category-conflict-guide">既存のカテゴリは、この画面の了承や再照合では変わりません。商品一覧でその商品を開き、カテゴリを保存してから取り込むか、この行は「今回登録しない」を選んでください。</p>`
+    }
+    const rows=all.filter(r=>!reviewRowBlocked(r))
     if(!rows.length)return ''
-    return rows.map(r=>{
-      const fp=reviewFingerprint(st,r)
-      const edit=(st.rowClassifications||{})[String(r.rowNo)]||{}
-      const accepted=!!(edit.reviewAccepted&&edit.reviewFingerprint===fp)
-      const kind=effectiveRegisterKind(st,r)
-      const planBits=[
-        `区分 ${registerKindLabel(kind)}`,
-        (r.csv||{}).code?`品番 ${(r.csv||{}).code}`:'品番なし（入力不要）',
-        (r.csv||{}).productName?`名称 ${(r.csv||{}).productName}`:'',
-        ((r.parenClassification||{}).color)?`色 ${(r.parenClassification||{}).color}`:'',
-        (r.csv||{}).supplier?`仕入先 ${(r.csv||{}).supplier}`:''
-      ].filter(Boolean)
-      if(accepted){
-        return `<p class="excelhint">この内容で了承済みです。次は「選択を反映して再照合」で登録予定へ反映してください。</p>`
-      }
-      return `<div class="pl-review-accept">
-        <p class="excelhint">登録予定: ${esc(planBits.join(' / '))}</p>
-        <button type="button" class="primary" data-pl-review-accept="${r.rowNo}" data-fp="${esc(fp)}" ${st.busy?'disabled':''}>この内容で了承</button>
-      </div>`
-    }).join('')
+    const sample=rows[0]
+    const fp=reviewFingerprint(st,sample)
+    const edit=(st.rowClassifications||{})[String(sample.rowNo)]||{}
+    const accepted=rows.every(r=>{
+      const cur=(st.rowClassifications||{})[String(r.rowNo)]||{}
+      return !!(cur.reviewAccepted&&cur.reviewFingerprint===reviewFingerprint(st,r))
+    })
+    const kind=effectiveRegisterKind(st,sample)
+    const csv=sample.csv||{}
+    const pc=sample.parenClassification||{}
+    const planBits=[
+      `区分 ${registerKindLabel(kind)}`,
+      csv.code?`品番 ${csv.code}`:'品番なし（入力不要）',
+      csv.productName?`名称 ${edit.plannedName!=null?edit.plannedName:(pc.plannedName||csv.productName)}`:'',
+      pc.color?`色 ${pc.color}`:'',
+      csv.supplier?`仕入先 ${csv.supplier}`:''
+    ].filter(Boolean)
+    if(accepted){
+      return `<p class="excelhint">この内容で了承済みです。次は「選択を反映して再照合」で登録予定へ反映してください。</p>`
+    }
+    const buttons=rows.map(r=>`<button type="button" class="primary" data-pl-review-accept="${r.rowNo}" data-fp="${esc(reviewFingerprint(st,r))}" ${st.busy?'disabled':''}>この内容で了承</button>`).join(' ')
+    return `<div class="pl-review-accept">
+      <p class="excelhint">登録予定: ${esc(planBits.join(' / '))}</p>
+      ${buttons}
+    </div>`
   }
   function skipRegisterActionsHtml(st,item){
     if(!item||isOpeningMode(st))return ''
@@ -2683,7 +2699,7 @@
     if(issue.type==='paren_confirm')return 'name'
     if(issue.type==='product_pick')return 'name'
     if(issue.type==='handle_pick')return 'supplier'
-    if(issue.type==='category')return 'sku'
+    if(issue.type==='category')return 'kind'
     return ''
   }
 
@@ -4101,10 +4117,10 @@
       <label>登録区分<select data-pl-register-kind="${r.rowNo}" ${disabled}>${kindOpts}</select></label>
       <span class="excelhint">${changed?'選択中（自動判定を上書き）':`自動: ${esc(registerKindLabel(autoKind))}`}</span>
       <p class="excelhint">制服・部品・加工のどれで登録するかを選びます。選んだ区分だけ登録し、他の区分へは重ねて登録しません。加工欄や素材欄への入力だけでは区分は変わりません。</p>
-      ${changed?`<div class="pl-review-accept">
+      ${(!rowCategoryConflict(r)&&changed)?`<div class="pl-review-accept">
         <p class="excelhint">登録予定: ${esc(planBits.join(' / '))}</p>
         ${accepted
-          ?'<p class="excelhint">この内容で了承済みです。次は「選択を反映して再照合」です。区分や品番・商品名・色・仕入先を変えると、もう一度了承が必要です。</p>'
+          ?''
           :`<button type="button" class="primary" data-pl-review-accept="${r.rowNo}" data-fp="${esc(fp)}" ${disabled}>この内容で了承</button>`}
       </div>`:''}
       ${(r.processingService&&r.processingService.k2GarmentCandidate&&!changed)?'<p class="excelhint pl-k2-garment-note">品番があっても加工候補のままです。制服にするなら「制服」を選び、登録予定を了承して再照合してください。</p>':''}
