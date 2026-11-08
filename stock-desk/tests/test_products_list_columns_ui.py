@@ -43,6 +43,10 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         self.assertLess(body.index('class="prod-cat"'), body.index('class="prod-name"'))
         self.assertLess(body.index('r.links.map'), body.index('r.sizes.map(esc).join'))
         self.assertIn('class="products-list"', body)
+        self.assertIn('function productListTitle(r)', APP_JS)
+        self.assertIn("if(r.code&&code)return `${code} / ${name}`", APP_JS)
+        self.assertIn('${esc(productListTitle(r))}', body)
+        self.assertNotIn('${codeShow} ${esc(r.name)}', body)
 
     def test_grid_card_order_handling_before_size(self):
         body = _fn(APP_JS, 'products')
@@ -82,6 +86,36 @@ class ProductsListColumnsUiTest(unittest.TestCase):
         self.assertIn('table.directory .sid{display:inline-block;width:2em', STYLE_CSS)
         dm = (ROOT / 'static' / 'display-mode.css').read_text(encoding='utf-8')
         self.assertIn('table.products-list td.prod-id{font-size:11px}', dm)
+
+    def test_list_title_separates_saved_code_only(self):
+        import subprocess
+        fn = _fn(APP_JS, 'productCodeShow') + '\n' + _fn(APP_JS, 'productListTitle')
+        script = fn + r'''
+const cases = [
+  [{code:'3M9910', codeDisplay:'3M9910', name:'反射テープ 10mm', color:'', category:'制服'}, '3M9910 / 反射テープ 10mm'],
+  [{code:'CD633', codeDisplay:'CD633', name:'パンツ', color:'白', category:'制服'}, 'CD633 / パンツ 白'],
+  [{code:'', codeDisplay:'', name:'生地', color:'', category:'部品・資材'}, '生地'],
+  [{code:'', codeDisplay:'', name:'裾上げ', color:'', category:'加工サービス'}, '裾上げ'],
+  [{code:'', codeDisplay:'品番なし（要確認）', name:'白衣', color:'', category:'制服'}, '品番なし（要確認） 白衣'],
+  [{code:'', name:'白衣', color:'白', category:''}, '品番なし 白衣 白'],
+]
+for (const [row, want] of cases) {
+  const got = productListTitle(row)
+  if (got !== want) {
+    console.error(JSON.stringify({got, want}))
+    process.exit(1)
+  }
+  if (!row.code && got.includes(' / ')) {
+    console.error('slash without code '+got)
+    process.exit(1)
+  }
+}
+'''
+        proc = subprocess.run(['node', '-e', script], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr or proc.stdout)
+        body = _fn(APP_JS, 'products')
+        self.assertIn('${r.code}${r.codeDisplay', body)
+        self.assertNotIn('productListTitle', body[body.index('const text='):body.index('return text.includes')])
 
 
 if __name__ == '__main__':

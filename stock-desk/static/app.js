@@ -1006,6 +1006,13 @@ function productCodeShow(r){
   if(['部品・資材','加工サービス'].includes(r.category||''))return ''
   return r.codeDisplay||'品番なし'
 }
+/** 商品一覧の見出し。保存された品番があるときだけ品番と商品名を / で区切る。 */
+function productListTitle(r){
+  const code=productCodeShow(r)
+  const name=[r.name||'', r.color||''].filter(s=>String(s).trim()).join(' ')
+  if(r.code&&code)return `${code} / ${name}`
+  return code?`${code} ${name}`:name
+}
 function products(){
   const supplierId=resolveProductSupplierFilter()
   const categoryFilter=resolveProductCategoryFilter()
@@ -1035,18 +1042,17 @@ function products(){
     </div>`:''}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>No.</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
-      const codeShow=esc(productCodeShow(r))
       const makerBit=r.makerCode&&r.makerCode!==r.code?` <span class="sub">メーカー ${esc(r.makerCode)}</span>`:''
       const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
       const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
       const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
-      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id" title="内部ID ${r.id}">${esc(r.displayNo||String(r.id))}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${codeShow} ${esc(r.name)} ${esc(r.color)}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':`${stockOpenBtn(r.id)}<button type="button" class="quiet prod-price" data-price-id="${r.id}">単価</button>`}</td></tr>`
+      return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id" title="内部ID ${r.id}">${esc(r.displayNo||String(r.id))}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${esc(productListTitle(r))}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':`${stockOpenBtn(r.id)}<button type="button" class="quiet prod-price" data-price-id="${r.id}">単価</button>`}</td></tr>`
     }).join('')||'<tr><td colspan="6">該当する商品はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>{
     const maker=r.makerCode&&r.makerCode!==r.code?`　メーカー ${esc(r.makerCode)}`:''
-    return `<article class="dm-card"><div class="dm-primary">${esc(productCodeShow(r))} ${esc(r.name)} ${esc(r.color)}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}${codeNeedsBadge(r)}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
+    return `<article class="dm-card"><div class="dm-primary">${esc(productListTitle(r))}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}${codeNeedsBadge(r)}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
   }).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows.filter(r=>!r.mergedIntoId),'商品',productForm,body=>api('/api/products',body),'products')
   document.querySelectorAll('#main [data-price-id]').forEach(b=>{
