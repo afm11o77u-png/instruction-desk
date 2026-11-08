@@ -6867,11 +6867,16 @@ def classify_row(
 
 
 def _review_fingerprint(row):
-    reasons = [stock.text(r) for r in (row.get('reasons') or []) if stock.text(r)]
-    code = stock.text((row.get('csv') or {}).get('code') or '')
-    cat = stock.text((row.get('product') or {}).get('category') or '')
-    kind = stock.text((row.get('parenClassification') or {}).get('registerKind') or '')
-    return '\n'.join(reasons) + '\u0001' + code + '\u0001' + cat + '\u0001' + kind
+    """了承の対象は登録予定（区分・品番・名称・色・仕入先）。区分を変えると一致しない。"""
+    csv = row.get('csv') or {}
+    pc = row.get('parenClassification') or {}
+    prod = row.get('product') or {}
+    kind = stock.text(pc.get('registerKind') or row.get('registerKindChoice') or '')
+    code = stock.text(csv.get('code') or '')
+    name = stock.text(pc.get('plannedName') or prod.get('officialName') or csv.get('productName') or '')
+    color = stock.text(pc.get('color') or prod.get('proposedColor') or prod.get('officialColor') or '')
+    supplier = stock.text(csv.get('supplier') or '')
+    return '\u0001'.join([kind, code, name, color, supplier])
 
 
 def _review_acceptance_blocked(row):
@@ -6879,6 +6884,8 @@ def _review_acceptance_blocked(row):
     for block in (row.get('supplier'), row.get('customer'), row.get('product')):
         if not isinstance(block, dict):
             continue
+        if block.get('categoryConflict'):
+            return True
         if block.get('action') == 'review' and (block.get('candidates') or block.get('reasons')):
             return True
     for reason in row.get('reasons') or []:
@@ -6886,6 +6893,30 @@ def _review_acceptance_blocked(row):
         if any(mark in text for mark in ('候補から選', '停止中', '複数あります', '矛盾しています', '登録できません')):
             return True
     return False
+
+
+def _hold_unaccepted_kind_choice(row):
+    """区分を変えた行は、その登録予定の了承があるときだけ登録できる。"""
+    choice = stock.text(row.get('registerKindChoice') or '')
+    if not choice or row.get('reviewAccepted'):
+        return row
+    auto = stock.text((row.get('parenClassification') or {}).get('autoRegisterKind') or '')
+    if choice == auto:
+        return row
+    if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+        return row
+    if _review_acceptance_blocked(row):
+        row['status'] = STATUS_REVIEW
+        row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+        row['canCommit'] = False
+        return row
+    row['status'] = STATUS_REVIEW
+    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+    row['canCommit'] = False
+    msg = '登録区分を変更しました。登録予定を確認し「この内容で了承」してから再照合してください。'
+    if msg not in (row.get('reasons') or []):
+        row['reasons'] = list(row.get('reasons') or []) + [msg]
+    return row
 
 
 def _apply_review_acceptance(row, override):
@@ -7234,6 +7265,8 @@ def build_sku_groups(c, classified):
     for row in classified:
         if row.get('status') == STATUS_EXCLUDED:
             continue
+        if row.get('registerKindChoice') in ('部品・資材', '加工サービス'):
+            continue
         code = stock.text((row.get('csv') or {}).get('code'))
         if stock_product_merge.is_normal_product_code(code):
             by_code[code].append(row)
@@ -7472,6 +7505,247 @@ def build_sku_groups(c, classified):
     return groups
 
 
+_REGISTER_KIND_VALUES = ('商品', '部品・資材', '加工サービス')
+
+
+def row_register_choice_key(row):
+    """区分選択を行へ戻すときの識別。行番号だけだと別行へ当たることがある。"""
+    csv = row.get('csv') or {}
+    return '\u0001'.join([
+        str(row.get('rowNo') or ''),
+        stock.text(csv.get('customer')),
+        stock.text(csv.get('supplier')),
+        stock.text(csv.get('code')),
+        stock.text(csv.get('productName')),
+        stock.text(csv.get('size')),
+    ])
+
+
+def _register_kind_override(row, overrides):
+    ov = (
+        overrides.get(str(row.get('rowNo')))
+        or overrides.get(row.get('rowNo'))
+        or {}
+    )
+    if not isinstance(ov, dict):
+        return '', {}
+    kind = stock.text(ov.get('registerKind') or '')
+    if kind not in _REGISTER_KIND_VALUES:
+        return '', ov
+    sent = stock.text(ov.get('choiceKey') or '')
+    if sent and sent != row_register_choice_key(row):
+        return '', ov
+    return kind, ov
+
+
+def _auto_register_kind(row):
+    pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
+    ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    if row.get('physicalPartsView') or pc.get('physicalPartsView') or ps.get('isPhysicalParts'):
+        return '部品・資材'
+    if (
+        row.get('processingServiceView')
+        or pc.get('processingServiceView')
+        or ps.get('k2GarmentCandidate')
+        or (ps.get('isProcessingService') and not ps.get('isPhysicalParts'))
+        or (ps.get('isProcessingVendor') and not ps.get('isPhysicalParts') and not row.get('k2UniformProduct'))
+    ):
+        return '加工サービス'
+    return '商品'
+
+
+def _clear_row_service_plan(row):
+    """この行自身を加工サービス商品にしない。衣服に付く括弧内の加工指定は名前に残す。"""
+    ps = dict(row.get('processingService') or {})
+    ps['isProcessingService'] = False
+    ps['identifiable'] = False
+    ps['needsConfirm'] = False
+    ps['serviceName'] = ''
+    ps['displayName'] = ''
+    row['processingService'] = ps
+    row['processingServiceView'] = False
+    row['processingServicePlanKey'] = ''
+    prod = dict(row.get('product') or {})
+    prod['processingServiceProduct'] = False
+    prod['processingServiceSplit'] = False
+    row['product'] = prod
+    return prod
+
+
+def _block_existing_category_rewrite(row, target_category):
+    """既存商品の区分は変えない。違う区分が既にある品番は、了承では上書きしない。"""
+    prod = dict(row.get('product') or {})
+    if prod.get('action') != 'reuse' or not prod.get('id'):
+        return False
+    existing = stock.text(prod.get('category') or '')
+    if not existing or existing == target_category:
+        return False
+    prod['categoryConflict'] = True
+    prod['category'] = existing
+    prod['proposedCategory'] = target_category
+    prod['categoryAction'] = 'confirm'
+    row['product'] = prod
+    row['status'] = STATUS_REVIEW
+    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+    row['canCommit'] = False
+    msg = f'既存カテゴリ「{existing}」は変更しません。'
+    if msg not in (row.get('reasons') or []):
+        row['reasons'] = list(row.get('reasons') or []) + [msg]
+    return True
+
+
+def _apply_uniform_choice(row, *, manual):
+    csv = row.get('csv') or {}
+    code = stock.text(csv.get('code') or '')
+    if _block_existing_category_rewrite(row, stock.CATEGORY_UNIFORM):
+        row['registerKindChoice'] = '商品' if manual else ''
+        _clear_row_service_plan(row)
+        return
+    prod = _clear_row_service_plan(row)
+    prod['category'] = stock.CATEGORY_UNIFORM
+    prod['proposedCategory'] = stock.CATEGORY_UNIFORM
+    prod['blankSku'] = not bool(code)
+    if code:
+        prod['code'] = code
+        prod['codeOverride'] = code
+    row['product'] = prod
+    row['physicalPartsView'] = False
+    row['k2GarmentAsProduct'] = True
+    if proc_svc.is_k2_staff_workshop(csv.get('supplier') or ''):
+        row['k2UniformProduct'] = True
+        ps = dict(row.get('processingService') or {})
+        ps['k2UniformProduct'] = True
+        ps['k2GarmentAsProduct'] = True
+        row['processingService'] = ps
+    if manual:
+        row['registerKindChoice'] = '商品'
+    pc = dict(row.get('parenClassification') or {})
+    pc['registerKind'] = '商品'
+    pc['registerKindManual'] = bool(manual)
+    pc['autoRegisterKind'] = pc.get('autoRegisterKind') or '加工サービス'
+    row['parenClassification'] = pc
+
+
+def _apply_parts_choice(row):
+    csv = row.get('csv') or {}
+    code = stock.text(csv.get('code') or '')
+    if _block_existing_category_rewrite(row, stock.CATEGORY_PARTS):
+        row['registerKindChoice'] = '部品・資材'
+        row['suppressCompanionService'] = True
+        _clear_row_service_plan(row)
+        return
+    prod = _clear_row_service_plan(row)
+    prod['category'] = stock.CATEGORY_PARTS
+    prod['proposedCategory'] = stock.CATEGORY_PARTS
+    prod['blankSku'] = not bool(code)
+    if code:
+        prod['code'] = code
+        prod['codeOverride'] = code
+    row['product'] = prod
+    row['physicalPartsView'] = True
+    row['suppressCompanionService'] = True
+    row['registerKindChoice'] = '部品・資材'
+    row['registerKindIsolated'] = True
+    pc = dict(row.get('parenClassification') or {})
+    pc['physicalPartsView'] = True
+    pc['processingServiceView'] = False
+    pc['registerKind'] = '部品・資材'
+    pc['registerKindManual'] = True
+    row['parenClassification'] = pc
+
+
+def _apply_process_choice(row):
+    csv = row.get('csv') or {}
+    name = stock.text(csv.get('productName') or '')
+    prod = dict(row.get('product') or {})
+    if (
+        prod.get('action') == 'reuse'
+        and stock.text(prod.get('category') or '') not in ('', stock.CATEGORY_PROCESS_SERVICE)
+    ):
+        # 既存の制服・部品は残し、加工は別商品としてだけ登録する
+        prod['id'] = None
+        prod['action'] = 'create'
+        row['product'] = prod
+    ps = dict(row.get('processingService') or {})
+    service = stock.text(ps.get('serviceName') or '')
+    if not service or ps.get('serviceNameSource') == 'k2_raw_name':
+        service = (
+            proc_svc.garment_paren_processing_name(name)
+            or proc_svc.unify_processing_service_name(name)
+            or name
+        )
+    vendor = stock.text(ps.get('vendorName') or '') or stock.text(csv.get('supplier') or '')
+    ps['isProcessingService'] = True
+    ps['isPhysicalParts'] = False
+    ps['identifiable'] = bool(service and vendor)
+    ps['needsConfirm'] = not bool(service and vendor)
+    ps['serviceName'] = service
+    ps['displayName'] = service
+    ps['vendorName'] = vendor
+    row['processingService'] = ps
+    row['processingServiceView'] = True
+    row['physicalPartsView'] = False
+    row['suppressCompanionService'] = True
+    row['suppressGarmentProduct'] = True
+    row['registerKindChoice'] = '加工サービス'
+    row['registerKindIsolated'] = True
+    prod = dict(row.get('product') or {})
+    prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+    prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+    prod['processingServiceProduct'] = True
+    prod['code'] = ''
+    prod['codeOverride'] = ''
+    prod['blankSku'] = True
+    prod['officialName'] = service
+    row['product'] = prod
+    pc = dict(row.get('parenClassification') or {})
+    pc['processingServiceView'] = True
+    pc['physicalPartsView'] = False
+    pc['registerKind'] = '加工サービス'
+    pc['registerKindManual'] = True
+    row['parenClassification'] = pc
+
+
+def apply_register_kind_choice(classified, row_classifications=None):
+    """詳細で選んだ制服・部品・加工を、加工分離より前に反映する。
+
+    選んだ区分以外の商品は作らない。衣服本体に付く括弧内の加工指定は、
+    制服のままなら取扱側に残す。選択の識別が行と違うときは適用しない。
+    """
+    overrides = row_classifications if isinstance(row_classifications, dict) else {}
+    for row in classified or []:
+        if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+            continue
+        auto_kind = _auto_register_kind(row)
+        pc = dict(row.get('parenClassification') or {})
+        pc['autoRegisterKind'] = auto_kind
+        row['parenClassification'] = pc
+        kind, _ov = _register_kind_override(row, overrides)
+        if kind and kind != auto_kind:
+            if kind == '商品':
+                _apply_uniform_choice(row, manual=True)
+            elif kind == '部品・資材':
+                _apply_parts_choice(row)
+            else:
+                _apply_process_choice(row)
+            continue
+        if kind == '商品' and auto_kind == '商品':
+            pc = dict(row.get('parenClassification') or {})
+            pc['registerKind'] = '商品'
+            row['parenClassification'] = pc
+        prod = row.get('product') or {}
+        ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+        # 前回この行を制服として登録済みなら、再取込で加工サービスを足さない
+        if (
+            not kind
+            and prod.get('action') == 'reuse'
+            and stock.text(prod.get('category') or '') == stock.CATEGORY_UNIFORM
+            and (ps.get('k2GarmentCandidate') or ps.get('serviceNameSource') == 'k2_raw_name')
+            and not proc_svc.unify_processing_service_name((row.get('csv') or {}).get('productName') or '')
+        ):
+            _apply_uniform_choice(row, manual=False)
+
+
 def apply_manual_register_kind(classified, row_classifications=None):
     """手動の登録区分を優先（加工／素材の入力だけでは区分を切り替えない）。
 
@@ -7481,16 +7755,13 @@ def apply_manual_register_kind(classified, row_classifications=None):
     overrides = row_classifications if isinstance(row_classifications, dict) else {}
     for row in classified or []:
         pc = dict(row.get('parenClassification') or {})
-        ov = (
-            overrides.get(str(row.get('rowNo')))
-            or overrides.get(row.get('rowNo'))
-            or {}
-        )
-        kind = stock.text(
-            (ov.get('registerKind') if isinstance(ov, dict) else '')
-            or pc.get('registerKind')
-            or ''
-        )
+        kind, ov = _register_kind_override(row, overrides)
+        if not kind and not (
+            isinstance(ov, dict)
+            and stock.text(ov.get('choiceKey') or '')
+            and stock.text(ov.get('registerKind') or '')
+        ):
+            kind = stock.text(pc.get('registerKind') or '')
         auto_kind = '商品'
         ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
         if row.get('physicalPartsView') or pc.get('physicalPartsView') or ps.get('isPhysicalParts'):
@@ -7501,7 +7772,10 @@ def apply_manual_register_kind(classified, row_classifications=None):
             or (ps.get('isProcessingVendor') and not ps.get('isPhysicalParts'))
         ):
             auto_kind = '加工サービス'
-        pc['autoRegisterKind'] = auto_kind
+        if pc.get('autoRegisterKind') in ('商品', '部品・資材', '加工サービス'):
+            auto_kind = pc['autoRegisterKind']
+        else:
+            pc['autoRegisterKind'] = auto_kind
         if kind not in ('商品', '部品・資材', '加工サービス'):
             kind = auto_kind
             pc['registerKindManual'] = False
@@ -7517,7 +7791,17 @@ def apply_manual_register_kind(classified, row_classifications=None):
             pc['physicalPartsView'] = True
             pc['processingServiceView'] = False
             prod = dict(row.get('product') or {})
-            if (prod.get('blankSku') or not stock.text((row.get('csv') or {}).get('code') or '')
+            if pc.get('registerKindManual') or row.get('registerKindChoice') == '部品・資材':
+                code = stock.text((row.get('csv') or {}).get('code') or '')
+                prod['category'] = stock.CATEGORY_PARTS
+                prod['proposedCategory'] = stock.CATEGORY_PARTS
+                prod['processingServiceProduct'] = False
+                prod['blankSku'] = not bool(code)
+                if code:
+                    prod['code'] = code
+                    prod['codeOverride'] = code
+                row['product'] = prod
+            elif (prod.get('blankSku') or not stock.text((row.get('csv') or {}).get('code') or '')
                     or (ps.get('makerParts') and not pc.get('registerKindManual'))):
                 prod['category'] = stock.CATEGORY_PARTS
                 prod['proposedCategory'] = stock.CATEGORY_PARTS
@@ -7548,7 +7832,19 @@ def apply_manual_register_kind(classified, row_classifications=None):
             pc['processingServiceView'] = False
             prod = dict(row.get('product') or {})
             # 品番なしで商品を選んだ場合は空カテゴリ（部品へ強制しない）
-            if prod.get('blankSku') and prod.get('category') in (
+            if row.get('registerKindChoice') == '商品' or (
+                pc.get('registerKindManual') and kind == '商品'
+            ):
+                code = stock.text((row.get('csv') or {}).get('code') or '')
+                prod['category'] = stock.CATEGORY_UNIFORM
+                prod['proposedCategory'] = stock.CATEGORY_UNIFORM
+                prod['processingServiceProduct'] = False
+                prod['blankSku'] = not bool(code)
+                if code:
+                    prod['code'] = code
+                    prod['codeOverride'] = code
+                row['product'] = prod
+            elif prod.get('blankSku') and prod.get('category') in (
                 stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE,
             ):
                 if row.get('k2GarmentAsProduct'):
@@ -7557,8 +7853,8 @@ def apply_manual_register_kind(classified, row_classifications=None):
                     prod['processingServiceProduct'] = False
                     row['product'] = prod
                 elif pc.get('registerKindManual'):
-                    prod['category'] = ''
-                    prod['proposedCategory'] = ''
+                    prod['category'] = stock.CATEGORY_UNIFORM
+                    prod['proposedCategory'] = stock.CATEGORY_UNIFORM
                     row['product'] = prod
         row['parenClassification'] = pc
 
@@ -7907,6 +8203,8 @@ def apply_processing_service_split(c, classified, sku_groups):
         code = stock.text(csv.get('code') or '')
         group = by_code.get(code)
 
+        if row.get('registerKindChoice') in ('商品', '部品・資材'):
+            continue
         if info.get('identifiable') and info.get('isProcessingService'):
             key = proc_svc.service_dedupe_key(info['serviceName'], info['vendorName'])
             plan = service_plans.get(key)
@@ -8520,6 +8818,10 @@ def _row_companion_service_name(row):
     if prod.get('processingServiceProduct') or prod.get('processingServiceSplit'):
         return ''
     csv = row.get('csv') or {}
+    if row.get('suppressCompanionService') or row.get('registerKindChoice') in (
+        '部品・資材', '加工サービス',
+    ):
+        return ''
     if proc_svc.is_processing_vendor(stock.text(csv.get('supplier') or '')):
         return ''
     pc = row.get('parenClassification') or {}
@@ -10502,6 +10804,7 @@ def build_preview(c, body):
         row['matchGroupCount'] = group_counts[row['matchGroupKey']]
 
     attach_processing_service_detection(classified)
+    apply_register_kind_choice(classified, row_classifications)
     apply_k2_garment_choice(classified, row_classifications)
     sku_groups = build_sku_groups(c, classified)
     processing_split_meta = apply_processing_service_split(c, classified, sku_groups)
@@ -10934,6 +11237,7 @@ def build_preview(c, body):
             or {}
         )
         _apply_review_acceptance(row, ov if isinstance(ov, dict) else {})
+        _hold_unaccepted_kind_choice(row)
     return {
         'importMode': mode,
         'productPhase': phase,
@@ -12133,6 +12437,7 @@ def commit_preview(c, body, *, db_path=None):
                 if (
                     stock_product_merge.is_normal_product_code(code_t)
                     and not prod_info.get('id')
+                    and not row.get('registerKindIsolated')
                     and code_t in created_by_code
                 ):
                     prod_info['id'] = created_by_code[code_t]
