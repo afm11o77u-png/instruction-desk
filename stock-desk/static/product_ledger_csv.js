@@ -15,9 +15,13 @@
   }
   const PAGE_SIZE=80
   const SKU_PAGE_SIZE=40
-  // Keep in sync with stock-desk/upload_limits.py (POST body 12MB; raw CSV decode 8MB).
+  // Keep in sync with stock-desk/upload_limits.py.
+  // CSVは1ファイル8MB・送信12MB。旧在庫/旧顧客JSONは1ファイル12MB。
+  // 照合と登録は台帳CSVとJSONを同じ送信に載せるので、合算上限は別（無制限ではない）。
   const MAX_RAW_FILE_BYTES=8_000_000
+  const MAX_RAW_JSON_BYTES=12_000_000
   const MAX_POST_BODY_BYTES=12_000_000
+  const MAX_BUNDLE_BODY_BYTES=43666668
   const OVERSIZE_MSG='ファイル容量が上限を超えています'
   const TIER_LABELS={auto:'自動まとめ',bulk:'一括承認候補',individual:'個別確認'}
   // unified=確認リスト（旧・個別確認＋行要確認の統合）。sourceRows=元行一覧（詳細確認用・既定折りたたみ）
@@ -1111,9 +1115,26 @@
     catch(_){return (b64||'').length+((fileName||'').length)+64}
   }
 
-  function assertUploadSize(file,b64){
-    if(file&&file.size>MAX_RAW_FILE_BYTES)throw Error(OVERSIZE_MSG)
-    if(b64&&estimatePostBodyBytes(file&&file.name||'',b64)>MAX_POST_BODY_BYTES)throw Error(OVERSIZE_MSG)
+  function assertUploadSize(file,b64,kind){
+    const json=kind==='json'
+    if(file&&file.size>(json?MAX_RAW_JSON_BYTES:MAX_RAW_FILE_BYTES))throw Error(OVERSIZE_MSG)
+    const postCap=json?MAX_BUNDLE_BODY_BYTES:MAX_POST_BODY_BYTES
+    if(b64&&estimatePostBodyBytes(file&&file.name||'',b64)>postCap)throw Error(OVERSIZE_MSG)
+  }
+  function selectedUploadBytes(st){
+    let n=256
+    if(!isOpeningMode(st)&&st.fileB64)n+=estimatePostBodyBytes(st.fileName,st.fileB64)
+    if(st.auxFileB64)n+=estimatePostBodyBytes(st.auxFileName,st.auxFileB64)
+    if(st.legacyStockB64)n+=estimatePostBodyBytes(st.legacyStockName,st.legacyStockB64)
+    if(st.legacyCustomerB64)n+=estimatePostBodyBytes(st.legacyCustomerName,st.legacyCustomerB64)
+    return n
+  }
+  function assertSelectedUploads(st){
+    if(!isOpeningMode(st))assertUploadSize(st.file,st.fileB64,'csv')
+    if(st.auxFileB64)assertUploadSize(st.auxFile,st.auxFileB64,'csv')
+    if(st.legacyStockB64)assertUploadSize(st.legacyStockFile,st.legacyStockB64,'json')
+    if(st.legacyCustomerB64)assertUploadSize(st.legacyCustomerFile,st.legacyCustomerB64,'json')
+    if(selectedUploadBytes(st)>MAX_BUNDLE_BODY_BYTES)throw Error(OVERSIZE_MSG)
   }
 
   const SESSION_EXPIRED_MSG='ログインが切れました。別のタブでログインし直してから、もう一度押してください（選択は残っています）。'
@@ -6192,7 +6213,7 @@
       const b64=await readFileAsBase64(f)
       // 台帳+補助の合算が上限を超えないよう概算
       const combined=estimatePostBodyBytes(st.fileName||'',st.fileB64||'')+estimatePostBodyBytes(f.name,b64)
-      if(combined>MAX_POST_BODY_BYTES)throw Error(OVERSIZE_MSG)
+      if(combined>MAX_BUNDLE_BODY_BYTES)throw Error(OVERSIZE_MSG)
       st.auxFile=f
       st.auxFileName=f.name
       st.auxFileSize=f.size||0
@@ -6429,8 +6450,7 @@
       if(isOpeningMode(st)){
         if(!st.legacyStockB64){st.toast('旧在庫JSONを選んでください。');return}
         try{
-          assertUploadSize(st.legacyStockFile,st.legacyStockB64)
-          if(st.legacyCustomerB64)assertUploadSize(st.legacyCustomerFile,st.legacyCustomerB64)
+          assertSelectedUploads(st)
         }catch(e){
           const msg=apiErrorMessage(e,OVERSIZE_MSG)
           st.previewError=msg
@@ -6440,21 +6460,12 @@
         }
       }else{
         if(!st.fileB64){st.toast('CSVファイルを選んでください。');return}
-        try{assertUploadSize(st.file,st.fileB64)}catch(e){
+        try{assertSelectedUploads(st)}catch(e){
           const msg=apiErrorMessage(e,OVERSIZE_MSG)
           st.previewError=msg
           st.toast(msg,8000)
           paintPreview()
           return
-        }
-        if(st.legacyStockB64){
-          try{assertUploadSize(st.legacyStockFile,st.legacyStockB64)}catch(e){
-            const msg=apiErrorMessage(e,OVERSIZE_MSG)
-            st.previewError=msg
-            st.toast(msg,8000)
-            paintPreview()
-            return
-          }
         }
         // フォーム値を吸い上げ（除外ローカル反映と同じ経路）
         harvestFormEdits(st)
@@ -7324,12 +7335,7 @@
         if(!confirm(summary+ocLine))return
         if(!st.basisDate){st.toast('在庫基準日を指定してください。');return}
         if(!st.legacyStockB64){st.toast('旧在庫JSONを選んでください。');return}
-        if(st.legacyStockB64){
-          try{assertUploadSize(st.legacyStockFile,st.legacyStockB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
-        }
-        if(st.legacyCustomerB64){
-          try{assertUploadSize(st.legacyCustomerFile,st.legacyCustomerB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
-        }
+        try{assertSelectedUploads(st)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }else{
         if(productsRegisterBlocked(st)){
           if(pendingRematchCount(st)>0){
@@ -7350,7 +7356,7 @@
         const stockNote=`\n\n${AUX_JUDGMENT_ONLY_COPY}。在庫数量・金額・履歴は変更しません。`
         const summary=`【商品を登録】新規商品 ${p.productsToCreate||0} / 再利用 ${p.productsToReuse||0} / 統合 ${p.productsToMerge||0} / サイズ追加 ${p.sizesToAdd||0} / 取扱新規 ${p.handlesToCreate||0}\n（CSV行 ${p.csvRows||0} ※行数と新規商品数は別です）${statusBlock}${deferBlock}${stockNote}\n\nよろしいですか？`
         if(!confirm(summary))return
-        try{assertUploadSize(st.file,st.fileB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+        try{assertSelectedUploads(st)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }
       st.busy=true;st.progressLabel='登録処理中…';paintDialog()
       try{

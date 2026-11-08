@@ -94,6 +94,9 @@ class ProductLedgerUiSourceTest(unittest.TestCase):
         self.assertIn('履歴を確認できませんでした', js)
         self.assertIn('ファイル容量が上限を超えています', js)
         self.assertIn('MAX_POST_BODY_BYTES=12_000_000', js)
+        self.assertIn('MAX_RAW_JSON_BYTES=12_000_000', js)
+        self.assertIn('MAX_BUNDLE_BODY_BYTES=43666668', js)
+        self.assertIn('assertSelectedUploads(st)', js)
         # Must not claim "no prior import" when history fetch failed
         self.assertIn('historyError', js)
         self.assertIn('このファイルの過去取込記録はありません', js)
@@ -126,8 +129,11 @@ class UploadLimitsSyncTest(unittest.TestCase):
             '/api/product-ledger-csv/commit',
         ):
             self.assertIn(path, ul.LARGE_BODY_PATHS)
-            self.assertEqual(ul.body_limit_for(path), 12_000_000)
-            self.assertEqual(stock_server.body_limit_for(path), 12_000_000)
+        self.assertEqual(ul.body_limit_for('/api/product-ledger-csv/history'), 12_000_000)
+        self.assertEqual(stock_server.body_limit_for('/api/product-ledger-csv/history'), 12_000_000)
+        self.assertEqual(ul.body_limit_for('/api/product-ledger-csv/preview'), ul.LEDGER_BUNDLE_MAX_BYTES)
+        self.assertEqual(stock_server.body_limit_for('/api/product-ledger-csv/commit'), ul.LEDGER_BUNDLE_MAX_BYTES)
+        self.assertGreater(ul.LEDGER_BUNDLE_MAX_BYTES, 12_000_000)
         self.assertEqual(ul.OVERSIZE_BODY_ERROR, 'ファイル容量が上限を超えています')
         self.assertEqual(stock_server.OVERSIZE_BODY_ERROR, ul.OVERSIZE_BODY_ERROR)
         self.assertIs(stock_server.LARGE_BODY_PATHS, ul.LARGE_BODY_PATHS)

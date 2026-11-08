@@ -15,6 +15,7 @@ import legacy_csv_bulk_import as bulk
 import legacy_csv_import as legacy
 import qr_link_import
 import stock
+import upload_limits
 
 QTY_SOURCE_SAME = 'stock_count と calc_stock_count が同じ値'
 QTY_EMPTY = '数量が空のため登録しません。0にはしません。'
@@ -66,6 +67,8 @@ def _decode(body):
         blob = base64.b64decode(raw, validate=True)
     except Exception as e:
         raise ValueError('旧在庫JSONを読み取れません。') from e
+    if len(blob) > upload_limits.RAW_LEGACY_JSON_MAX_BYTES:
+        raise ValueError(upload_limits.OVERSIZE_BODY_ERROR)
     try:
         doc = json.loads(blob.decode('utf-8'))
     except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -228,6 +231,11 @@ def decode_customer_file(body):
         return None
     try:
         blob = base64.b64decode(raw, validate=True)
+    except Exception as e:
+        raise ValueError('旧顧客JSONを読み取れません。') from e
+    if len(blob) > upload_limits.RAW_LEGACY_JSON_MAX_BYTES:
+        raise ValueError(upload_limits.OVERSIZE_BODY_ERROR)
+    try:
         doc = json.loads(blob.decode('utf-8'))
     except Exception as e:
         raise ValueError('旧顧客JSONを読み取れません。') from e
