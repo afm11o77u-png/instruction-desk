@@ -1156,6 +1156,207 @@ class QrLinkMatchTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def _seed_hats(self, c, specs, *, customer='顧客H', code='別注(顧客H)', supplier='メーカーA'):
+        cu = stock.save_customer(c, {'name': customer, 'active': True})
+        su = stock.save_supplier(c, {'name': supplier, 'active': True})
+        stock.save_location(c, {'siteName': '本社', 'shelfName': 'A-1', 'active': True})
+        products = []
+        for name, color, sizes in specs:
+            products.append(stock.save_product(c, {
+                'code': code, 'name': name, 'color': color, 'supplierId': su['id'],
+                'active': True, 'sizes': sizes,
+                '_allowHistoricalDuplicateCode': True,
+                'links': [{
+                    'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True,
+                }],
+            }))
+        c.commit()
+        return {'customer': cu, 'supplier': su, 'products': products}
+
+    def test_clean_and_semi_clean_hats_are_not_the_same(self):
+        """清浄帽子と準清浄帽子は、品名の含有では結ばない。"""
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            self._seed_hats(c, [
+                ('清浄帽子 緑', '緑', ['L']),
+                ('準清浄帽子 緑', '緑', ['L']),
+            ], customer=customer)
+            jun = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(jun['status'], 'exact')
+            self.assertTrue(jun['includeDefault'])
+            self.assertEqual([item['productName'] for item in jun['candidates']], ['準清浄帽子 緑'])
+            self.assertEqual(jun['candidates'][0]['nameMatch'], 'hat')
+            self.assertIn('帽子の種類と色が一致します', jun['candidates'][0]['matchNote'])
+            self.assertIn('＊緑準清浄帽子', jun['candidates'][0]['matchNote'])
+            sei = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(sei['status'], 'exact')
+            self.assertEqual([item['productName'] for item in sei['candidates']], ['清浄帽子 緑'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            self._seed_hats(c, [('清浄帽子 緑', '緑', ['L'])], customer=customer)
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertNotEqual(row['status'], 'exact')
+            self.assertFalse(any(item['productName'] == '清浄帽子 緑' for item in row['candidates']))
+            self.assertTrue(any('清浄帽子と準清浄帽子は別商品' in str(r) for r in row['reasons']))
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            self._seed_hats(c, [('準清浄帽子', 'グリーン', ['L'])], customer=customer, code='HAT1')
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='HAT1',
+                itemName='緑清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertNotEqual(row['status'], 'exact')
+            self.assertFalse(row['candidates'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_jun_hat_green_synonym_respects_other_conditions(self):
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            self._seed_hats(c, [('準清浄帽子', 'グリーン', ['L'])], customer=customer)
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L', isUsed='中古',
+            )])))['rows'][0]
+            self.assertEqual(row['status'], 'exact')
+            self.assertEqual(row['candidates'][0]['productName'], '準清浄帽子')
+            self.assertEqual(row['candidates'][0]['condition'], 'used')
+            self.assertEqual(row['legacy']['condition'], 'used')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            self._seed_hats(c, [
+                ('準清浄帽子', 'グリーン', ['L']),
+                ('準清浄帽子 白', '白', ['L']),
+            ], customer=customer)
+            white = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual([item['productName'] for item in white['candidates']], ['準清浄帽子'])
+            self.assertNotIn('準清浄帽子 白', [item['productName'] for item in white['candidates']])
+            other_size = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='M',
+            )])))['rows'][0]
+            self.assertNotEqual(other_size['status'], 'exact')
+            other_customer = ql.build_preview(c, body_of(xlsx([filled(
+                customerName='他の顧客', makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertNotEqual(other_customer['status'], 'exact')
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            cu = stock.save_customer(c, {'name': customer, 'active': True})
+            stock.save_customer(c, {'name': '他の顧客', 'active': True})
+            stock.save_supplier(c, {'name': 'メーカーA', 'active': True})
+            other = stock.save_supplier(c, {'name': '別の縫製', 'active': True})
+            stock.save_location(c, {'siteName': '本社', 'shelfName': 'A-1', 'active': True})
+            stock.save_product(c, {
+                'code': '別注(顧客H)', 'name': '準清浄帽子', 'color': 'グリーン',
+                'supplierId': other['id'], 'active': True, 'sizes': ['L'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
+            })
+            c.commit()
+            wrong_supplier = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(wrong_supplier['status'], 'review')
+            self.assertFalse(wrong_supplier['includeDefault'])
+            self.assertEqual(wrong_supplier['candidates'][0]['supplierMatch'], 'diff')
+            self.assertIn('メーカーが違います', wrong_supplier['candidates'][0]['matchNote'])
+        finally:
+            c.close()
+            folder.cleanup()
+
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            self._seed_hats(c, [
+                ('準清浄帽子', 'グリーン', ['L']),
+                ('準清浄帽子 緑', '緑', ['L']),
+            ], customer=customer)
+            many = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='＊緑準清浄帽子', itemSize='L',
+            )])))['rows'][0]
+            self.assertEqual(many['status'], 'ambiguous')
+            self.assertFalse(many['includeDefault'])
+            self.assertEqual(len(many['candidates']), 2)
+            blob = xlsx([
+                filled(legacyStockId=OLD + 'N', customerName=customer, makerName='メーカーA',
+                       itemNum='別注', itemName='＊緑準清浄帽子', itemSize='L', isUsed='新品'),
+                filled(legacyStockId=OLD + 'U', customerName=customer, makerName='メーカーA',
+                       itemNum='別注', itemName='＊緑準清浄帽子', itemSize='L', isUsed='中古'),
+            ])
+            # 候補が複数のままなので、このファイルは自動確定しない。数量もまとめていない。
+            preview = ql.build_preview(c, body_of(blob))
+            self.assertEqual(len(preview['rows']), 2)
+            self.assertTrue(all(not row['includeDefault'] for row in preview['rows']))
+            self.assertEqual(
+                {row['legacy']['condition'] for row in preview['rows']},
+                {'new', 'used'},
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_green_synonym_is_not_applied_to_other_products(self):
+        folder, path, c = newdb()
+        try:
+            customer = '顧客H'
+            cu = stock.save_customer(c, {'name': customer, 'active': True})
+            su = stock.save_supplier(c, {'name': 'メーカーA', 'active': True})
+            stock.save_location(c, {'siteName': '本社', 'shelfName': 'A-1', 'active': True})
+            stock.save_product(c, {
+                'code': '別注(顧客H)', 'name': '作業衣', 'color': 'グリーン',
+                'supplierId': su['id'], 'active': True, 'sizes': ['L'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
+            })
+            c.commit()
+            row = ql.build_preview(c, body_of(xlsx([filled(
+                customerName=customer, makerName='メーカーA', itemNum='別注',
+                itemName='緑の服', itemSize='L',
+            )])))['rows'][0]
+            self.assertNotEqual(row['status'], 'exact')
+            self.assertFalse(row['includeDefault'])
+            self.assertNotEqual(row['candidates'][0]['nameMatch'], 'supplier_color')
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_duplicate_reimport_and_conflict(self):
         folder, path, c = newdb()
         try:

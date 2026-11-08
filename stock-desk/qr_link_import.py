@@ -608,7 +608,61 @@ def _current_name_in_legacy(legacy_name, current_name):
     old = _name_contain_key(legacy_name)
     if not cur or not old or len(cur) < _NAME_CONTAIN_MIN or cur == old:
         return False
-    return cur in old
+    if cur not in old:
+        return False
+    # 準清浄帽子の中に清浄帽子が含まれる、では別商品を結ばない。
+    if _hat_kinds_conflict(legacy_name, current_name):
+        return False
+    return True
+
+
+def _hat_kind(name):
+    """清浄帽子と準清浄帽子は別。準を先に見る。"""
+    compact = re.sub(r'[\s\u3000]+', '', _name_contain_key(name))
+    if '準清浄帽子' in compact:
+        return 'jun'
+    if '清浄帽子' in compact:
+        return 'sei'
+    return ''
+
+
+def _hat_kinds_conflict(legacy_name, current_name):
+    left, right = _hat_kind(legacy_name), _hat_kind(current_name)
+    return bool(left and right and left != right)
+
+
+def _hat_color_keys(name, color_field):
+    """帽子の色。準清浄帽子だけ緑とグリーンを同じ色にする。蛍光グリーンは別。"""
+    kind = _hat_kind(name)
+    if not kind:
+        return set()
+    blob = unicodedata.normalize('NFKC', f'{color_field or ""} {name or ""}')
+    compact = re.sub(r'[\s\u3000]+', '', blob).replace('準清浄帽子', '').replace('清浄帽子', '')
+    keys = set()
+    if '蛍光グリーン' in compact:
+        keys.add('蛍光グリーン')
+        compact = compact.replace('蛍光グリーン', '')
+    if 'グリーン' in compact:
+        keys.add('緑' if kind == 'jun' else 'グリーン')
+        compact = compact.replace('グリーン', '')
+    if '緑' in compact:
+        keys.add('緑')
+    for word in ('ピンク', 'ブルー', 'サックス', '白', '黒', '赤', '紺', '黄'):
+        if word in compact:
+            keys.add(word)
+    return keys
+
+
+def _hat_product_match(legacy_name, product):
+    """種類が同じ帽子で、色も揃うときだけ。色が無い側は揃ったことにしない。"""
+    left, right = _hat_kind(legacy_name), _hat_kind(product.get('name'))
+    if not left or left != right:
+        return False
+    legacy_colors = _hat_color_keys(legacy_name, '')
+    product_colors = _hat_color_keys(product.get('name'), product.get('color'))
+    if not legacy_colors or not product_colors:
+        return False
+    return legacy_colors == product_colors
 
 
 def _partial_name_relation(legacy_name, current_name):
@@ -787,13 +841,25 @@ def _color_tokens(color):
     return [part.strip() for part in _COLOR_SPLIT_RE.split(text) if part.strip()]
 
 
-def _color_tokens_in_legacy(color, legacy_name):
+def _color_token_in_legacy(token, legacy, product_name):
+    if token in legacy:
+        if token == 'グリーン' and '蛍光グリーン' in legacy and 'グリーン' not in legacy.replace('蛍光グリーン', ''):
+            return False
+        return True
+    # 準清浄帽子だけ、緑とグリーンを同じ色として旧品名と照らす。他商品には広げない。
+    if _hat_kind(product_name) != 'jun' or token not in ('緑', 'グリーン'):
+        return False
+    stripped = legacy.replace('蛍光グリーン', '')
+    return '緑' in stripped or 'グリーン' in stripped
+
+
+def _color_tokens_in_legacy(color, legacy_name, product_name=''):
     """色が空なら満たさない。各語が旧品名に含まれるときだけ真。"""
     tokens = _color_tokens(color)
     if not tokens:
         return False
     legacy = unicodedata.normalize('NFKC', stock.text(legacy_name))
-    return all(token in legacy for token in tokens)
+    return all(_color_token_in_legacy(token, legacy, product_name) for token in tokens)
 
 
 def _mark_name_pick(items, pick):
@@ -826,20 +892,37 @@ def _partial_product_hits(catalog, item_num, item_name, maker_name=''):
         hits.append(item)
     if not hits:
         return []
+    kept = [item for item in hits if not _hat_kinds_conflict(item_name, item.get('name'))]
+    if not kept:
+        catalog['_hat_reject'] = '清浄帽子と準清浄帽子は別商品です。'
+        return []
+    hits = kept
     named = [item for item in hits if _partial_name_match(item_name, item['name']) == 'exact']
     if named:
         return named
+    hat_hits = [item for item in hits if _hat_product_match(item_name, item)]
+    if hat_hits:
+        return _mark_name_pick(hat_hits, 'hat')
     by_supplier_color = [
         item for item in hits
-        if _supplier_match(item, maker_name) == 'exact'
-        and _color_tokens_in_legacy(item.get('color') or '', item_name)
+        if not _hat_kinds_conflict(item_name, item.get('name'))
+        and _supplier_match(item, maker_name) == 'exact'
+        and _color_tokens_in_legacy(item.get('color') or '', item_name, item.get('name') or '')
     ]
     if by_supplier_color:
         return _mark_name_pick(by_supplier_color, 'supplier_color')
-    contained = [item for item in hits if _current_name_in_legacy(item_name, item['name'])]
+    contained = [
+        item for item in hits
+        if _current_name_in_legacy(item_name, item.get('name'))
+        and not (
+            _hat_kind(item_name)
+            and _hat_kind(item.get('name'))
+            and not _hat_product_match(item_name, item)
+        )
+    ]
     if contained:
         return contained
-    return hits
+    return [item for item in hits if not _hat_kinds_conflict(item_name, item.get('name'))]
 
 
 def _candidate_key(product_id, customer_id, handle_id, size, condition, location_id):
@@ -854,11 +937,13 @@ def _auto_ok(cand):
     # 加工の取扱が決まらなかった候補は自動確定しない。
     if cand.get('_processingPick') == 'leftover':
         return False
+    if cand.get('_hatConflict'):
+        return False
     if cand['codeMatch'] == 'partial':
         if cand['nameMatch'] == 'supplier_color':
             if cand['supplierMatch'] != 'exact':
                 return False
-        elif cand['nameMatch'] not in ('exact', 'contained'):
+        elif cand['nameMatch'] not in ('exact', 'contained', 'hat'):
             return False
     elif cand['codeMatch'] != 'exact':
         return False
@@ -891,6 +976,8 @@ def _match_note(cand, legacy=None):
         bits.append('品番が部分一致します' + _pair(legacy.get('itemNum'), cand.get('code')))
     if cand['nameMatch'] == 'contained':
         bits.append('品名が含まれます' + _pair(legacy.get('itemName'), cand.get('productName')))
+    elif cand['nameMatch'] == 'hat':
+        bits.append('帽子の種類と色が一致します' + _pair(legacy.get('itemName'), cand.get('productName')))
     elif cand['nameMatch'] == 'supplier_color':
         bits.append(
             '仕入先と色が一致します（仕入先：'
@@ -966,8 +1053,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
         return [], reasons
     if not exact_products and not norm_products:
         partial_products = _partial_product_hits(catalog, item_num, item_name, maker_name)
+    hat_reject = catalog.pop('_hat_reject', None)
     if not exact_products and not norm_products and not partial_products:
-        reasons.append(f'品番「{stock.text(item_num)}」の商品がありません。新しくは作りません。')
+        reasons.append(hat_reject or f'品番「{stock.text(item_num)}」の商品がありません。新しくは作りません。')
         return [], reasons
     exact_customers, form_customers = _customer_hits(catalog, customer_name)
     if not stock.text(customer_name):
@@ -992,12 +1080,20 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
         + [(item, 'partial') for item in partial_products]
     )
     candidates = []
+    skipped_hat = False
+    saw_other = False
     for product, code_match in products:
+        if _hat_kinds_conflict(item_name, product.get('name')):
+            skipped_hat = True
+            continue
+        saw_other = True
         size_kind, size_labels = _size_hits(item_size, product['sizes'])
         if size_kind == 'missing':
             continue
         if code_match == 'partial' and product.get('_namePick') == 'supplier_color':
             name_match = 'supplier_color'
+        elif code_match == 'partial' and product.get('_namePick') == 'hat':
+            name_match = 'hat'
         elif code_match == 'partial':
             name_match = _partial_name_relation(item_name, product['name'])
         else:
@@ -1070,7 +1166,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
                         )
                         candidates.append(cand)
     if products:
-        if not candidates and not any('見つかりません' in r or 'ありません' in r for r in reasons):
+        if not candidates and skipped_hat and not saw_other and not any('見つかりません' in r or 'ありません' in r for r in reasons):
+            reasons.append('清浄帽子と準清浄帽子は別商品です。')
+        elif not candidates and not any('見つかりません' in r or 'ありません' in r for r in reasons):
             if _size_hits(item_size, [label for p, _k in products for label in p['sizes']])[0] == 'missing' and stock.text(item_size):
                 reasons.append(f'サイズ「{stock.text(item_size)}」は商品にありません。サイズは追加しません。')
             else:
