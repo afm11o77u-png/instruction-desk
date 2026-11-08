@@ -458,6 +458,16 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         except ValueError as e:
             return 400, {'error': str(e) or '対応不要を確認してください。', 'qtyChanged': False}
         return 200, result
+    if path == '/api/stock-qr/read':
+        import stock_qr
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_qr.read_scan(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or 'QRを確認してください。', 'qtyChanged': False}
+        except RuntimeError as e:
+            print(f'stock-qr read failed: {e}', flush=True)
+            return 400, {'error': '読み取りを中止しました。在庫数量は変えていません。', 'qtyChanged': False}
     if path == '/api/stock-qr':
         import stock_qr
         try:
