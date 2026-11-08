@@ -62,6 +62,7 @@
         file:null,fileB64:'',fileName:'',fileSize:0,
         auxFile:null,auxFileB64:'',auxFileName:'',auxFileSize:0,
         legacyStockFile:null,legacyStockB64:'',legacyStockName:'',legacyStockSize:0,
+        legacyCustomerFile:null,legacyCustomerB64:'',legacyCustomerName:'',legacyCustomerSize:0,
         legacyCustomerLinks:{},
         basisDate:'',defaultSiteName:'未確認',
         openingSelections:{},openingUsageFilter:'',
@@ -106,6 +107,9 @@
     if(ui.confirmedQ==null)ui.confirmedQ=''
     if(ui.previewReqSeq==null)ui.previewReqSeq=0
     if(!ui.legacyCustomerLinks)ui.legacyCustomerLinks={}
+    if(ui.legacyCustomerB64==null)ui.legacyCustomerB64=''
+    if(ui.legacyCustomerName==null)ui.legacyCustomerName=''
+    if(ui.legacyCustomerSize==null)ui.legacyCustomerSize=0
     if(!ui.basisDate)ui.basisDate=todayISO()
     if(!ui.defaultSiteName)ui.defaultSiteName='未確認'
     return ui
@@ -118,6 +122,7 @@
     st.file=null;st.fileB64='';st.fileName='';st.fileSize=0
     st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
     st.legacyStockFile=null;st.legacyStockB64='';st.legacyStockName='';st.legacyStockSize=0
+    st.legacyCustomerFile=null;st.legacyCustomerB64='';st.legacyCustomerName='';st.legacyCustomerSize=0
     st.legacyCustomerLinks={}
     st.history=null;st.historyError='';st.preview=null;st.previewError='';st.result=null
     st.selections={};st.skuDecisions={};st.codeShapeDecisions={};st.appliedSkuDecisions={};st.rowClassifications={};st.rowExclusions={}
@@ -1009,6 +1014,12 @@
         body.legacyStockFile=st.legacyStockB64
         body.legacyStockName=st.legacyStockName||'old-stock.json'
         body.legacyCustomerLinks=st.legacyCustomerLinks||{}
+        if(st.legacyCustomerB64){
+          body.legacyCustomerFile=st.legacyCustomerB64
+          body.legacyCustomerName=st.legacyCustomerName||'old-customers.json'
+        }
+        const fileFp=st.preview&&st.preview.openingStock&&st.preview.openingStock.sourceFingerprint
+        if(fileFp)body.legacySourceFingerprint=fileFp
       }
       return body
     }
@@ -5345,27 +5356,47 @@
     const rows=(os&&os.legacyCustomers)||[]
     if(!rows.length)return ''
     const choices=(os.customerChoices||[]).filter(c=>c.active!==false)
-    const body=rows.map(row=>{
-      const selected=String((st.legacyCustomerLinks||{})[row.legacyCustomerId]||row.customerId||'')
+    const pending=rows.filter(row=>!row.confirmed)
+    const confirmed=rows.filter(row=>row.confirmed)
+    const selectFor=(row,selectedId)=>{
+      const selected=selectedId!=null?String(selectedId):String((st.legacyCustomerLinks||{})[row.legacyCustomerId]||'')
       const options=['<option value="">選んでください</option>'].concat(choices.map(c=>
         `<option value="${esc(String(c.id))}" ${selected===String(c.id)?'selected':''}>${esc(c.name)}</option>`
       )).join('')
-      return `<tr>
+      return `<select data-legacy-customer="${esc(row.legacyCustomerId)}" ${st.busy?'disabled':''}>${options}</select>`
+    }
+    const sourceLabel=row=>row.source==='json'
+      ?'旧顧客JSONの名前'
+      :(row.source==='saved'?'保存済みの対応':(row.source==='manual'?'手動選択':'対応済み'))
+    const pendingBody=pending.map(row=>`<tr class="legacy-customer-pending">
         <td>${esc(row.legacyCustomerId)}</td>
+        <td>${esc(row.jsonName||'—')}</td>
         <td class="num">${row.rowCount||0}</td>
-        <td><select data-legacy-customer="${esc(row.legacyCustomerId)}" ${st.busy?'disabled':''}>${options}</select></td>
-        <td>${row.confirmed?'確認済み':esc(row.reason||'未確認')}</td>
-      </tr>`
-    }).join('')
-    const summary=os.legacySummary||{}
+        <td>${selectFor(row)}</td>
+        <td>${esc(row.reason||'未確認')}</td>
+      </tr>`).join('')
+    const confirmedBody=confirmed.map(row=>`<tr>
+        <td>${esc(row.legacyCustomerId)}</td>
+        <td>${esc(row.jsonName||'—')}</td>
+        <td>${esc(row.customerName||'')}</td>
+        <td>${esc(sourceLabel(row))}${row.note?`<div class="excelhint">${esc(row.note)}</div>`:''}</td>
+      </tr>`).join('')
+    const fileNote=os.customerFileName?`旧顧客JSON「${os.customerFileName}」の名前で照合しました。`:''
     return `<section class="legacy-customer-links">
       <h4>旧顧客IDの対応</h4>
-      <p class="excelhint">JSONに顧客名はありません。旧顧客IDごとに、今の顧客マスタから選んで再照合してください。選ぶまでその顧客の行は登録できません。顧客は新しく作りません。IDの数字が同じというだけでは結びつけません。数量は stock_count と calc_stock_count が同じときだけ使い、空と負の数は登録しません。部品・資材と加工サービスには旧QR対応を作りません。</p>
-      ${summary.customerPending?`<p class="notice">未確認の旧顧客IDが ${summary.customerPending} 件あります。</p>`:''}
+      <p class="excelhint">旧在庫の customer_id を旧顧客JSONの id に合わせ、その名前と登録済み顧客の名前が完全に1件だけ一致したときだけ自動で対応します。一致しないもの、複数候補、停止中、保存済みの対応と食い違うものだけ選んでください。自動で一致したIDをすべて開き直す必要はありません。顧客は新しく作らず、住所や電話は使いません。IDの数字が同じだけでは結びつけません。</p>
+      ${fileNote?`<p class="excelhint">${esc(fileNote)}</p>`:''}
+      ${pending.length?`<p class="notice">確認が必要な旧顧客IDが ${pending.length} 件あります。この表だけ選んで再照合してください。</p>
       <div class="legacy-csv-table-wrap"><table class="data">
-        <thead><tr><th>旧顧客ID</th><th>行数</th><th>既存の顧客</th><th>状態</th></tr></thead>
-        <tbody>${body}</tbody>
-      </table></div>
+        <thead><tr><th>旧顧客ID</th><th>旧顧客JSONの名前</th><th>行数</th><th>既存の顧客</th><th>理由</th></tr></thead>
+        <tbody>${pendingBody}</tbody>
+      </table></div>`:'<p class="excelhint">確認が必要な旧顧客IDはありません。</p>'}
+      ${confirmed.length?`<details class="legacy-customer-confirmed"><summary>自動または保存済みで対応できた旧顧客ID ${confirmed.length} 件</summary>
+        <div class="legacy-csv-table-wrap"><table class="data">
+          <thead><tr><th>旧顧客ID</th><th>旧JSONの名前</th><th>登録先</th><th>由来</th></tr></thead>
+          <tbody>${confirmedBody}</tbody>
+        </table></div>
+      </details>`:''}
     </section>`
   }
 
@@ -5491,7 +5522,7 @@
       const auxMeta=st.preview&&st.preview.auxOpeningStock
       return `<div class="product-ledger-files">
         <p class="notice" role="status">商品台帳CSVの再選択は不要です。商品登録時に保存した原文→登録先マップで照合します（メイン名選定のやり直しなし）。</p>
-        <p class="excelhint">初期在庫CSVはこれまで通り数量だけを登録します。旧在庫JSONは、同じ行の数量・登録先・サイズ・新品中古・場所と、旧在庫行ID・旧QR（id / customer_id / maker_id）を同時に登録します。CSVとJSONは同時には使いません。顧客名はJSONに無いので、照合後に旧顧客IDへ既存の顧客を選んでください。未確認の顧客があるファイルは登録しません。</p>
+        <p class="excelhint">初期在庫CSVはこれまで通り数量だけを登録します。旧在庫JSONは、同じ行の数量・登録先・サイズ・新品中古・場所と、旧在庫行ID・旧QR（id / customer_id / maker_id）を同時に登録します。CSVとJSONは同時には使いません。旧顧客JSONを一緒に選ぶと、名前が登録済み顧客と一意に一致した旧顧客IDは自動で対応します。一致しないものだけ選んでください。顧客は新しく作りません。</p>
         <div class="bar product-ledger-filebar">
           <input type="file" id="plAuxFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
           <button type="button" id="plPickAux" ${st.busy?'disabled':''}>${esc(auxLabel)}</button>
@@ -5501,6 +5532,11 @@
           <input type="file" id="plLegacyStock" class="product-ledger-file-input" accept=".json,application/json" ${st.busy?'disabled':''}>
           <button type="button" id="plPickLegacy" ${st.busy?'disabled':''}>${st.legacyStockName?'旧在庫JSONを変更':'旧在庫JSONを選ぶ'}</button>
           <span class="excelhint product-ledger-filename">${esc(st.legacyStockName||'未選択')}${st.legacyStockSize?` （${Number(st.legacyStockSize).toLocaleString('ja-JP')} バイト）`:''}</span>
+        </div>
+        <div class="bar product-ledger-filebar">
+          <input type="file" id="plLegacyCustomer" class="product-ledger-file-input" accept=".json,application/json" ${st.busy?'disabled':''}>
+          <button type="button" id="plPickLegacyCustomer" ${st.busy?'disabled':''}>${st.legacyCustomerName?'旧顧客JSONを変更':'旧顧客JSONを選ぶ（任意）'}</button>
+          <span class="excelhint product-ledger-filename">${esc(st.legacyCustomerName||'未選択')}${st.legacyCustomerSize?` （${Number(st.legacyCustomerSize).toLocaleString('ja-JP')} バイト）`:''}</span>
         </div>
         <div class="bar">
           <label>在庫基準日<input id="plBasis" type="date" value="${esc(st.basisDate||'')}" ${st.busy?'disabled':''}></label>
@@ -6287,12 +6323,30 @@
       try{legacyFile.value=''}catch(_){}
       paintDialog({preserveScroll:true})
     }
+    const legacyCustomerFile=$('#plLegacyCustomer')
+    const pickLegacyCustomer=$('#plPickLegacyCustomer')
+    if(pickLegacyCustomer&&legacyCustomerFile){
+      pickLegacyCustomer.onclick=()=>{if(!st.busy)legacyCustomerFile.click()}
+    }
+    if(legacyCustomerFile)legacyCustomerFile.onchange=async()=>{
+      const f=legacyCustomerFile.files&&legacyCustomerFile.files[0]
+      if(!f)return
+      const b64=await readFileAsBase64(f)
+      st.legacyCustomerFile=f
+      st.legacyCustomerB64=b64
+      st.legacyCustomerName=f.name
+      st.legacyCustomerSize=f.size
+      st.preview=null
+      st.previewError=''
+      try{legacyCustomerFile.value=''}catch(_){}
+      paintDialog({preserveScroll:true})
+    }
     document.querySelectorAll('[data-legacy-customer]').forEach(el=>{
       el.onchange=()=>{
         const id=el.getAttribute('data-legacy-customer')
         if(!st.legacyCustomerLinks)st.legacyCustomerLinks={}
         if(el.value)st.legacyCustomerLinks[id]=Number(el.value)
-        else delete st.legacyCustomerLinks[id]
+        else st.legacyCustomerLinks[id]=''
       }
     })
     const clearAux=$('#plClearAux')
@@ -7262,6 +7316,9 @@
         if(st.legacyStockB64){
           try{assertUploadSize(st.legacyStockFile,st.legacyStockB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
         }
+        if(st.legacyCustomerB64){
+          try{assertUploadSize(st.legacyCustomerFile,st.legacyCustomerB64)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
+        }
       }else{
         if(productsRegisterBlocked(st)){
           if(pendingRematchCount(st)>0){
@@ -7297,8 +7354,10 @@
         if(typeof st.boot==='function')await st.boot()
         st.toast(isOpeningMode(st)?'初期在庫の登録が完了しました':'商品登録が完了しました（在庫は書いていません）')
       }catch(e){
-        if(e&&e.payload&&e.payload.code==='stale_preview'){
-          st.toast('データが変わったため、もう一度照合してください。')
+        if(e&&e.payload&&(e.payload.code==='stale_preview'||e.payload.code==='stale_files')){
+          st.toast(e.payload.code==='stale_files'
+            ?'選んだJSONが差し替わっています。もう一度照合してください。'
+            :'データが変わったため、もう一度照合してください。')
           st.preview=null
         }else if(e&&e.payload&&e.payload.code==='backup_failed'){
           st.toast(apiErrorMessage(e,'登録前のバックアップに失敗したため、登録を中止しました'))

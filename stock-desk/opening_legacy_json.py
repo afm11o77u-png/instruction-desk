@@ -2,7 +2,8 @@
 
 商品取り込みの判定はやり直さない。登録先は商品登録時の品番行マップだけを使う。
 旧在庫行IDは移行元のIDとして残し、新システムの商品IDでは置き換えない。
-顧客名はJSONに無い。旧顧客IDは、既存顧客への明示確認が無い限り登録しない。
+旧顧客JSONを一緒に渡したときだけ、その名前と登録済み顧客名の完全一致で対応する。
+顧客は新しく作らず、住所や電話は使わない。一致しない旧顧客IDは明示確認が必要。
 """
 from __future__ import annotations
 
@@ -147,43 +148,219 @@ def _source_signature(row):
     )
 
 
+def decode_customer_file(body):
+    """旧顧客JSON。無ければ None。不正なら例外（この時点では在庫を書かない）。"""
+    raw = body.get('legacyCustomerFile') if isinstance(body, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        blob = base64.b64decode(raw, validate=True)
+        doc = json.loads(blob.decode('utf-8'))
+    except Exception as e:
+        raise ValueError('旧顧客JSONを読み取れません。') from e
+    if not isinstance(doc, dict) or doc.get('result') is not True or not isinstance(doc.get('data'), list):
+        raise ValueError('旧顧客JSONは {"result":true,"data":[...]} の形にしてください。')
+    by_id = {}
+    for item in doc['data']:
+        if not isinstance(item, dict):
+            raise ValueError('旧顧客JSONの行がオブジェクトではありません。')
+        cid = item.get('id')
+        if not isinstance(cid, str) or not cid.strip():
+            raise ValueError('旧顧客JSONのidは空でない文字にしてください。数値にはしません。')
+        cid = cid.strip()
+        name = item.get('name')
+        if not isinstance(name, str) or not stock.text(name):
+            by_id[cid] = {'conflict': True, 'kind': 'empty', 'names': []}
+            continue
+        name = stock.text(name)
+        prev = by_id.get(cid)
+        if prev is None:
+            by_id[cid] = {'conflict': False, 'kind': 'ok', 'name': name, 'names': [name]}
+            continue
+        if prev.get('conflict'):
+            if name not in prev['names']:
+                prev['names'].append(name)
+            continue
+        if prev.get('name') == name:
+            continue
+        by_id[cid] = {'conflict': True, 'kind': 'names', 'names': [prev['name'], name]}
+    return {
+        'byId': by_id,
+        'fileSha256': hashlib.sha256(blob).hexdigest(),
+        'fileName': stock.text(body.get('legacyCustomerName') or 'old-customers.json') or 'old-customers.json',
+        'rowCount': len(doc['data']),
+    }
+
+
+def source_fingerprint(stock_sha, customer_sha=''):
+    return hashlib.sha256(f'{stock_sha}|{customer_sha or ""}'.encode()).hexdigest()[:40]
+
+
+def _load_customer(c, customer_id):
+    return c.execute(
+        'SELECT id, name, active FROM customers WHERE id=?', (customer_id,)
+    ).fetchone()
+
+
+def _manual_choice(c, raw):
+    if raw in (None, ''):
+        return {'customerId': None, 'name': '', 'reason': CUSTOMER_UNCONFIRMED, 'source': 'manual'}
+    try:
+        customer_id = int(raw)
+    except (TypeError, ValueError):
+        return {'customerId': None, 'name': '', 'reason': CUSTOMER_MISSING, 'source': 'manual'}
+    row = _load_customer(c, customer_id)
+    if not row:
+        return {'customerId': None, 'name': '', 'reason': CUSTOMER_MISSING, 'source': 'manual'}
+    if not row['active']:
+        return {
+            'customerId': row['id'], 'name': row['name'], 'reason': CUSTOMER_INACTIVE, 'source': 'manual',
+        }
+    return {'customerId': row['id'], 'name': row['name'], 'reason': '', 'source': 'manual'}
+
+
+def _match_json_name(c, name):
+    """登録名の完全一致だけ自動にする。表記ゆれや株式会社の除去では決めない。"""
+    name = stock.text(name)
+    matches, how = legacy.find_person_matches(c, 'customers', name)
+    candidates = [
+        {'id': row['id'], 'name': row['name'], 'active': bool(row['active'])}
+        for row in matches
+    ]
+    if how == 'exact' and len(matches) == 1 and matches[0]['active']:
+        return {
+            'customerId': matches[0]['id'],
+            'name': matches[0]['name'],
+            'jsonName': name,
+            'candidates': candidates,
+            'reason': '',
+            'source': 'json',
+        }
+    if how == 'exact' and len(matches) == 1 and not matches[0]['active']:
+        return {
+            'customerId': None, 'name': '', 'jsonName': name, 'candidates': candidates,
+            'reason': f'旧顧客JSONの名前「{name}」は停止中の顧客です。確認してください。',
+            'source': 'json-review',
+        }
+    if how == 'exact' and len(matches) > 1:
+        return {
+            'customerId': None, 'name': '', 'jsonName': name, 'candidates': candidates,
+            'reason': f'旧顧客JSONの名前「{name}」は同名の顧客が複数あります。選んでください。',
+            'source': 'json-review',
+        }
+    if how == 'form_variant':
+        shown = '、'.join(row['name'] for row in matches[:5])
+        return {
+            'customerId': None, 'name': '', 'jsonName': name, 'candidates': candidates,
+            'reason': (
+                f'旧顧客JSONの名前「{name}」は表記が違う候補（{shown}）があります。'
+                '自動では対応づけません。'
+            ),
+            'source': 'json-review',
+        }
+    return {
+        'customerId': None, 'name': '', 'jsonName': name, 'candidates': [],
+        'reason': f'旧顧客JSONの名前「{name}」に一致する登録済み顧客がありません。',
+        'source': 'json-review',
+    }
+
+
+def _json_suggestion(c, catalog, legacy_id):
+    entry = catalog['byId'].get(legacy_id)
+    if entry is None:
+        return {
+            'customerId': None, 'name': '', 'jsonName': '', 'candidates': [],
+            'reason': '旧顧客JSONにこの旧顧客IDがありません。',
+            'source': 'missing',
+        }
+    if entry.get('conflict'):
+        if entry.get('kind') == 'empty':
+            reason = '旧顧客JSONの名前が空です。'
+        else:
+            shown = '、'.join(entry.get('names') or [])
+            reason = f'旧顧客JSONの同じidに違う名前（{shown}）があります。'
+        return {
+            'customerId': None, 'name': '', 'jsonName': '', 'candidates': [],
+            'reason': reason, 'source': 'json-invalid',
+        }
+    return _match_json_name(c, entry['name'])
+
+
 def _customer_map(c, body, legacy_ids):
     requested = body.get('legacyCustomerLinks') if isinstance(body.get('legacyCustomerLinks'), dict) else {}
     saved = {
         r['legacy_customer_id']: r['customer_id']
         for r in c.execute('SELECT legacy_customer_id, customer_id FROM legacy_customer_links')
     }
+    catalog = decode_customer_file(body)
     resolved = {}
     for legacy_id in legacy_ids:
+        suggestion = _json_suggestion(c, catalog, legacy_id) if catalog is not None else None
         if legacy_id in requested:
-            raw = requested.get(legacy_id)
-        elif legacy_id in saved:
-            raw = saved[legacy_id]
-        else:
-            resolved[legacy_id] = {'customerId': None, 'name': '', 'reason': CUSTOMER_UNCONFIRMED}
+            chosen = _manual_choice(c, requested.get(legacy_id))
+            chosen['jsonName'] = (suggestion or {}).get('jsonName') or ''
+            chosen['candidates'] = (suggestion or {}).get('candidates') or []
+            if (
+                not chosen.get('reason')
+                and suggestion
+                and suggestion.get('customerId')
+                and suggestion['customerId'] != chosen.get('customerId')
+            ):
+                other = _load_customer(c, suggestion['customerId'])
+                other_name = other['name'] if other else ''
+                chosen['note'] = (
+                    f'手動で選んだ顧客を使います。旧顧客JSONの名前は「{other_name}」に一致します。'
+                )
+            resolved[legacy_id] = chosen
             continue
-        if raw in (None, ''):
-            resolved[legacy_id] = {'customerId': None, 'name': '', 'reason': CUSTOMER_UNCONFIRMED}
+        if catalog is None:
+            if legacy_id not in saved:
+                resolved[legacy_id] = {
+                    'customerId': None, 'name': '', 'reason': CUSTOMER_UNCONFIRMED, 'source': '',
+                }
+                continue
+            chosen = _manual_choice(c, saved[legacy_id])
+            chosen['source'] = 'saved' if not chosen.get('reason') else 'saved'
+            resolved[legacy_id] = chosen
             continue
-        try:
-            customer_id = int(raw)
-        except (TypeError, ValueError):
-            resolved[legacy_id] = {'customerId': None, 'name': '', 'reason': CUSTOMER_MISSING}
+        saved_id = saved.get(legacy_id)
+        if suggestion and not suggestion.get('reason') and suggestion.get('customerId'):
+            if saved_id and saved_id != suggestion['customerId']:
+                saved_row = _load_customer(c, saved_id)
+                resolved[legacy_id] = {
+                    'customerId': None,
+                    'name': '',
+                    'jsonName': suggestion.get('jsonName') or '',
+                    'candidates': [
+                        {'id': saved_id, 'name': saved_row['name'] if saved_row else '', 'active': bool(saved_row['active']) if saved_row else False},
+                        {'id': suggestion['customerId'], 'name': suggestion.get('name') or '', 'active': True},
+                    ],
+                    'reason': (
+                        f'保存済みの対応は「{saved_row["name"] if saved_row else ""}」、'
+                        f'旧顧客JSONの名前「{suggestion.get("jsonName") or ""}」は'
+                        f'「{suggestion.get("name") or ""}」に一致します。上書きせず、選んでください。'
+                    ),
+                    'source': 'saved-conflict',
+                }
+            else:
+                info = dict(suggestion)
+                info['source'] = 'saved' if saved_id else 'json'
+                resolved[legacy_id] = info
             continue
-        # 旧IDの文字列と customers.id が同じでも、明示されていない顧客には合わせない。
-        row = c.execute(
-            'SELECT id, name, active FROM customers WHERE id=?', (customer_id,)
-        ).fetchone()
-        if not row:
-            resolved[legacy_id] = {'customerId': None, 'name': '', 'reason': CUSTOMER_MISSING}
+        if saved_id and suggestion and suggestion.get('reason'):
+            saved_row = _load_customer(c, saved_id)
+            suggestion = dict(suggestion)
+            suggestion['reason'] = (
+                f'{suggestion["reason"]} 保存済みの対応「{saved_row["name"] if saved_row else ""}」は自動では使いません。'
+            )
+            suggestion['customerId'] = None
+            suggestion['name'] = ''
+            resolved[legacy_id] = suggestion
             continue
-        if not row['active']:
-            resolved[legacy_id] = {
-                'customerId': row['id'], 'name': row['name'], 'reason': CUSTOMER_INACTIVE,
-            }
-            continue
-        resolved[legacy_id] = {'customerId': row['id'], 'name': row['name'], 'reason': ''}
-    return resolved
+        resolved[legacy_id] = suggestion or {
+            'customerId': None, 'name': '', 'reason': CUSTOMER_UNCONFIRMED, 'source': '',
+        }
+    return resolved, catalog
 
 
 def _blocked_plan(row_no, item, reasons, *, legacy_info, qty, status=None):
@@ -373,7 +550,7 @@ def build_plans(c, body):
             continue
         parsed.append((index, row, legacy_row, qty, reasons))
 
-    customers = _customer_map(c, body, legacy_customer_ids)
+    customers, customer_catalog = _customer_map(c, body, legacy_customer_ids)
     plans = []
     for item in parsed:
         if item[1] is None and len(item) == 3:
@@ -481,8 +658,11 @@ def build_plans(c, body):
         'duplicates': sum(1 for plan in plans if plan.get('legacyDuplicate')),
         'qrSkipped': sum(1 for plan in plans if plan.get('qrOutOfScope')),
         'note': QR_FORMAT_NOTE,
+        'customerFileName': (customer_catalog or {}).get('fileName') or '',
+        'customerAuto': sum(1 for info in customers.values() if info.get('source') in ('json', 'saved') and not info.get('reason')),
+        'customerReview': len(pending),
     }
-    return uploaded, plans, customers, summary
+    return uploaded, plans, customers, summary, customer_catalog
 
 
 def customer_rows(customers, counts):
@@ -493,6 +673,10 @@ def customer_rows(customers, counts):
             'rowCount': counts.get(legacy_id, 0),
             'customerId': info.get('customerId'),
             'customerName': info.get('name') or '',
+            'jsonName': info.get('jsonName') or '',
+            'source': info.get('source') or '',
+            'note': info.get('note') or '',
+            'candidates': info.get('candidates') or [],
             'confirmed': not info.get('reason'),
             'reason': info.get('reason') or '',
         })
@@ -500,7 +684,7 @@ def customer_rows(customers, counts):
 
 
 def build_opening_stock(c, body):
-    uploaded, plans, customers, summary = build_plans(c, body)
+    uploaded, plans, customers, summary, customer_catalog = build_plans(c, body)
     counts = {}
     customer_counts = {}
     for plan in plans:
@@ -528,10 +712,19 @@ def build_opening_stock(c, body):
         'note': (
             '旧在庫JSONの数量と、旧在庫行ID・旧QRを同時に登録します。'
             '登録先は商品登録時の品番行マップです。候補が曖昧な行は登録しません。'
+            + (
+                ' 旧顧客JSONの名前が登録済み顧客と一意に一致したIDは自動で対応します。一致しないものだけ選んでください。'
+                if customer_catalog else ''
+            )
             + QR_FORMAT_NOTE
         ),
         'fileName': uploaded['fileName'],
         'fileSha256': uploaded['fileSha256'],
+        'customerFileName': (customer_catalog or {}).get('fileName') or '',
+        'customerFileSha256': (customer_catalog or {}).get('fileSha256') or '',
+        'sourceFingerprint': source_fingerprint(
+            uploaded['fileSha256'], (customer_catalog or {}).get('fileSha256') or '',
+        ),
         'uploaded': uploaded,
     }
 
