@@ -437,7 +437,7 @@
       const kind=effectiveRegisterKind(st,r)
       const planBits=[
         `区分 ${registerKindLabel(kind)}`,
-        (r.csv||{}).code?`品番 ${(r.csv||{}).code}`:'品番なし',
+        (r.csv||{}).code?`品番 ${(r.csv||{}).code}`:'品番なし（入力不要）',
         (r.csv||{}).productName?`名称 ${(r.csv||{}).productName}`:'',
         ((r.parenClassification||{}).color)?`色 ${(r.parenClassification||{}).color}`:'',
         (r.csv||{}).supplier?`仕入先 ${(r.csv||{}).supplier}`:''
@@ -764,10 +764,9 @@
     }
     if(issue.type==='product_pick')return !!(sel.productId||sel.forceCreate)
     if(issue.type==='handle_pick')return !!sel.handleId
-    if(issue.type==='category'){
-      const edit=(st.rowClassifications&&st.rowClassifications[key])||{}
-      if(edit.registerKind)return true
-      return sel.category!=null&&String(sel.category)!==''
+    if(issue.type==='plan_accept'||issue.type==='category'){
+      const fp=reviewFingerprint(st,r)
+      return !!(edit.reviewAccepted&&edit.reviewFingerprint===fp)
     }
     return false
   }
@@ -802,6 +801,7 @@
         fieldKey:colorOnly?'color':'name'
       })
     }
+    const parenDetail=(pc.needsConfirm||r.parenNeedsConfirm)?(r.reasons||[]).join(' '):''
     if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length&&!r.skuDecisionNeeded){
       const identifiable=!!(ps.isProcessingService&&ps.identifiable&&!ps.needsConfirm)
       if(!identifiable)issues.push({type:'product_pick',label:'商品の選択',detail:'',fieldKey:'name'})
@@ -809,8 +809,32 @@
     if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
       issues.push({type:'handle_pick',label:'取扱の選択',detail:'',fieldKey:'supplier'})
     }
-    if(r.status==='needs_review'&&r.product&&r.product.blankSku){
-      issues.push({type:'category',label:'区分の確認',detail:'',fieldKey:'sku'})
+    const serverReasons=(r.reasons||[]).map(x=>String(x||'').trim()).filter(Boolean)
+    if(r.status==='needs_review'){
+      serverReasons.forEach(lab=>{
+        if(parenDetail&&parenDetail.includes(lab))return
+        issues.push({type:'server_reason',label:lab,detail:'',fieldKey:''})
+      })
+    }
+    const blank=!!(r.product&&r.product.blankSku)
+    const cat=String((r.product&&r.product.category)||'')
+    const categoryDecided=cat==='部品・資材'||cat==='加工サービス'||cat==='制服'
+    if(r.status==='needs_review'&&blank&&!reviewRowBlocked(r)&&!(r.product&&r.product.categoryConflict)){
+      if(categoryDecided){
+        issues.push({
+          type:'plan_accept',
+          label:'登録予定の了承',
+          detail:'品番は空のままで登録できます。区分・商品名・色・仕入先を確認し、この内容で了承してから再照合してください。',
+          fieldKey:'kind'
+        })
+      }else{
+        issues.push({
+          type:'category',
+          label:'区分の確認',
+          detail:'制服・部品・加工のいずれかを選び、この内容で了承してください。品番の入力は不要です。',
+          fieldKey:'kind'
+        })
+      }
     }
     if(r.processLinkMissing){
       issues.push({type:'process_link',label:'加工サービス未登録',detail:r.processLinkMissing,fieldKey:'procName'})
@@ -2632,6 +2656,7 @@
   }
   const PLAN_FIELD_LABELS={
     sku:'品番',
+    kind:'区分',
     name:'商品名',
     color:'色',
     supplier:'仕入先',
@@ -3890,10 +3915,17 @@
       const opts=r.handle.candidates.map(c=>`<option value="${c.id}" ${Number(sel.handleId)===Number(c.id)?'selected':''}>${esc(c.embroideryLabel||(c.embroidery==='加工未整理'?'加工なし':c.embroidery)||'')}</option>`).join('')
       bits.push(`<label>取扱<select data-pl-handle="${r.rowNo}" ${st.busy?'disabled':''}><option value="">選択…</option>${opts}</select></label>`)
     }
+    const sup=r.supplier||{}
+    if(r.status==='needs_review'&&sup.action==='review'&&(sup.candidates||[]).length){
+      const opts=sup.candidates.map(c=>`<option value="${c.id}" ${Number(sel.supplierId)===Number(c.id)?'selected':''}>${esc(c.name||'')}${c.active===false?'（停止中）':''}</option>`).join('')
+      bits.push(`<label>仕入先の候補<select data-pl-supplier="${r.rowNo}" ${st.busy?'disabled':''}><option value="">選択…</option>${opts}</select></label>`)
+      bits.push('<p class="excelhint">表記の違う仕入先候補があります。使う仕入先を選んで再照合してください。了承だけでは選びません。</p>')
+    }
     if(r.product&&r.product.blankSku){
       const cur=sel.category!=null?sel.category:(r.product.category||'')
       const opts=(st.preview&&st.preview.categoryOptions)||['','制服','部品・資材','加工サービス']
       bits.push(`<label>区分<select data-pl-cat="${r.rowNo}" ${st.busy?'disabled':''}>${opts.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>`)
+      bits.push('<p class="excelhint">品番なしの部品・加工は、品番を新しく入れなくても登録できます。区分を確認し「この内容で了承」して再照合してください。</p>')
     }
     // メーカー情報で補正: 要確認かつ具体的なメーカー品番がある行だけ
     const mk=r.makerCorrection||{}
@@ -7004,8 +7036,34 @@
     })
     document.querySelectorAll('[data-pl-cat]').forEach(el=>{
       el.onchange=()=>{
-        applySelectionToGroup(st,el.getAttribute('data-pl-cat'),{category:el.value})
-        paintDialog()
+        const rowNo=el.getAttribute('data-pl-cat')
+        const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
+        const cur=(st.rowClassifications||{})[String(rowNo)]||{}
+        applySelectionToGroup(st,rowNo,{category:el.value})
+        const kindMap={'制服':'商品','部品・資材':'部品・資材','加工サービス':'加工サービス','':''}
+        const kind=kindMap[el.value]
+        if(kind){
+          setRowClassification(st,rowNo,{
+            registerKind:kind,
+            registerKindUser:true,
+            choiceKey:row?rowChoiceKey(row):cur.choiceKey||'',
+            reviewAccepted:false,
+            reviewFingerprint:''
+          })
+        }
+        paintDialog({preserveScroll:true})
+      }
+    })
+    document.querySelectorAll('[data-pl-supplier]').forEach(el=>{
+      el.onchange=()=>{
+        const rowNo=el.getAttribute('data-pl-supplier')
+        const key=String(rowNo)
+        st.selections[key]={...(st.selections[key]||{}),supplierId:el.value?Number(el.value):null}
+        const cur=(st.rowClassifications||{})[key]||{}
+        if(cur.reviewAccepted){
+          setRowClassification(st,rowNo,{reviewAccepted:false,reviewFingerprint:''})
+        }
+        paintDialog({preserveScroll:true})
       }
     })
     document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
@@ -7360,12 +7418,15 @@
         const rowNo=el.getAttribute('data-pl-review-accept')
         const fp=el.getAttribute('data-fp')||''
         const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
+        const kind=row?effectiveRegisterKind(st,row):''
         setRowClassification(st,rowNo,{
           reviewAccepted:true,
           reviewFingerprint:fp,
           userActed:true,
           confirmed:true,
           acceptProposal:true,
+          registerKind:kind||undefined,
+          registerKindUser:!!kind,
           choiceKey:row?rowChoiceKey(row):((st.rowClassifications||{})[String(rowNo)]||{}).choiceKey||'',
           pendingRematch:true
         })
