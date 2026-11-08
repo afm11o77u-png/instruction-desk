@@ -9977,6 +9977,21 @@ def build_opening_stock_preview(c, body):
     }
 
 
+def _code_shape_groups(c, classified):
+    import code_shape_review
+    return code_shape_review.build_groups(c, classified)
+
+
+def _code_shape_overrides(c, classified, groups, decisions):
+    import code_shape_review
+    return code_shape_review.row_overrides(groups, decisions, classified)
+
+
+def _code_shape_save(c, groups, decisions):
+    import code_shape_review
+    return code_shape_review.save_links(c, groups, decisions)
+
+
 def build_preview(c, body):
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
@@ -10422,6 +10437,7 @@ def build_preview(c, body):
         'rowCount': len(classified),
         'rows': classified,
         'skuGroups': sku_groups,
+        'codeShapeGroups': _code_shape_groups(c, classified),
         'autoLineSpecCodes': auto_line_codes,
         'processServices': registered_process_services(c),
         'skuGroupCount': len(sku_groups),
@@ -11307,6 +11323,10 @@ def commit_preview(c, body, *, db_path=None):
             f'品番比較で未決定が {pending_sku} 件あります。'
             f'【同じ商品としてまとめる】【別物のため個別に整理する】【今回は保留する】を選んでください。'
         )
+    code_shape_groups = _code_shape_groups(c, classified)
+    code_shape_overrides = _code_shape_overrides(
+        c, classified, code_shape_groups, body.get('codeShapeDecisions'),
+    )
     if any(
         r.get('skuDecisionNeeded')
         for r in classified
@@ -11530,6 +11550,13 @@ def commit_preview(c, body, *, db_path=None):
                     prod_info['codeOverride'] = ''
                     prod_info['blankSku'] = True
                     prod_info['category'] = stock.CATEGORY_PROCESS_SERVICE
+                shape_target = code_shape_overrides.get(row_no)
+                if shape_target:
+                    prod_info['code'] = shape_target
+                    prod_info['codeOverride'] = shape_target
+                    prod_info['id'] = None
+                    if prod_info.get('size'):
+                        prod_info['sizeAction'] = 'add'
                 code_t = stock.text(prod_info.get('codeOverride') if prod_info.get('codeOverride') is not None else row['csv']['code'])
                 if prod_info.get('processingServiceProduct'):
                     code_t = ''
@@ -11747,6 +11774,8 @@ def commit_preview(c, body, *, db_path=None):
             'actorName': actor,
             'committedAt': stock.stamp(),
             'note': IMPORT_NOTE,
+            'codeShapeLinksSaved': _code_shape_save(c, code_shape_groups, body.get('codeShapeDecisions')),
+            'codeShapeJointImport': False,
             'timingsMs': preview.get('timingsMs') or {},
         }
         c.execute(

@@ -31,6 +31,7 @@ WRITE_PATHS = {
     '/api/product-ledger-csv/maker-lookup/adopt',
     '/api/products/merge',
     '/api/products/registry-wipe',
+    '/api/opening-stock/wipe',
     '/api/products/display-no/renumber',
     '/api/inbound', '/api/outbound', '/api/inbound/correct',
     '/api/stocktake', '/api/history/correct',
@@ -147,6 +148,15 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             return 200, proc_svc.inventory_process_service_migration(
                 c, include_leave=include_leave,
             )
+    if path == '/api/opening-stock/wipe/preview':
+        import opening_stock_wipe
+        try:
+            with stock.connect(db_path) as c:
+                return 200, opening_stock_wipe.preview_wipe(c, {'_actor': actor or {}, '_canWrite': bool(can_write)})
+        except PermissionError as e:
+            return 403, {'error': str(e), 'deleted': False}
+        except (ValueError, TypeError, KeyError) as e:
+            return 400, {'error': str(e) or '削除内容を確認してください。', 'deleted': False}
     if path == '/api/products/registry-wipe/preview':
         import product_registry_wipe
         try:
@@ -729,6 +739,34 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
             c.execute('BEGIN IMMEDIATE')
             counts = stock.renumber_display_no(c, (payload or {}).get('order') or [])
         return 200, {'ok': True, 'counts': counts}
+    if path == '/api/opening-stock/wipe':
+        import opening_stock_wipe
+        if not can_write:
+            return 403, {'error': '閲覧専用のため、初期在庫の全削除はできません。', 'deleted': False}
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = opening_stock_wipe.execute_wipe(c, payload, db_path=db_path)
+        except PermissionError as e:
+            return 403, {'error': str(e), 'deleted': False}
+        except opening_stock_wipe.OpeningWipeBlocked as e:
+            return 409, e.payload
+        except stock.BackupError as e:
+            return 400, {
+                'error': '削除前のバックアップに失敗したため、削除を中止しました。初期在庫は変わっていません。',
+                'code': 'backup_failed',
+                'deleted': False,
+            }
+        except ValueError as e:
+            return 400, {'error': str(e) or '削除内容を確認してください。', 'deleted': False}
+        except (RuntimeError, sqlite3.IntegrityError, OSError, sqlite3.Error) as e:
+            print(f'opening stock wipe failed: {type(e).__name__}: {e}', flush=True)
+            return 400, {
+                'error': '初期在庫の全削除を中止しました。変更は完了していません。',
+                'code': 'wipe_failed',
+                'deleted': False,
+            }
+        return 200, result
     if path == '/api/products/registry-wipe':
         import product_registry_wipe
         if not can_write:
