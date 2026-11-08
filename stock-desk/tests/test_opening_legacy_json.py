@@ -103,14 +103,21 @@ def opening_body(rows, conn, links=None, token='open-json-1'):
     }
 
 
-def commit_json(conn, path, rows, links=None, token='open-json-1'):
-    body = opening_body(rows, conn, links, token)
-    preview = pli.build_preview(conn, body)
-    result = pli.commit_preview(conn, {
+def with_fp(body, preview, **extra):
+    opening = preview.get('openingStock') or {}
+    return {
         **body,
         'previewFingerprint': preview['previewFingerprint'],
         'previewAt': preview['previewAt'],
-    }, db_path=str(path))
+        'legacySourceFingerprint': opening.get('sourceFingerprint') or '',
+        **extra,
+    }
+
+
+def commit_json(conn, path, rows, links=None, token='open-json-1'):
+    body = opening_body(rows, conn, links, token)
+    preview = pli.build_preview(conn, body)
+    result = pli.commit_preview(conn, with_fp(body, preview), db_path=str(path))
     conn.commit()
     return preview, result
 
@@ -314,12 +321,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         body = opening_body([row(), row(id='stock-2', stock_count=1, calc_stock_count=1)], conn, links={})
         preview = pli.build_preview(conn, body)
         with self.assertRaises(ValueError) as caught:
-            pli.commit_preview(conn, {
-                **body,
-                'previewFingerprint': preview['previewFingerprint'],
-                'previewAt': preview['previewAt'],
-                'token': 'no-customer',
-            }, db_path=str(path))
+            pli.commit_preview(conn, with_fp(body, preview, token='no-customer'), db_path=str(path))
         self.assertIn('旧顧客ID', str(caught.exception))
         conn.rollback()
         self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
@@ -328,12 +330,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         body_same = opening_body([row(customer_id=str(lone))], conn, links={})
         preview_same = pli.build_preview(conn, body_same)
         with self.assertRaises(ValueError):
-            pli.commit_preview(conn, {
-                **body_same,
-                'previewFingerprint': preview_same['previewFingerprint'],
-                'previewAt': preview_same['previewAt'],
-                'token': 'id-equal',
-            }, db_path=str(path))
+            pli.commit_preview(conn, with_fp(body_same, preview_same, token='id-equal'), db_path=str(path))
         conn.rollback()
         self.assertEqual(conn.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
         good = opening_body([row(), row(id='stock-2')], conn)
@@ -346,12 +343,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         olj.save_links = fail_links
         try:
             with self.assertRaises(ValueError):
-                pli.commit_preview(conn, {
-                    **good,
-                    'previewFingerprint': preview_good['previewFingerprint'],
-                    'previewAt': preview_good['previewAt'],
-                    'token': 'rollback',
-                }, db_path=str(path))
+                pli.commit_preview(conn, with_fp(good, preview_good, token='rollback'), db_path=str(path))
         finally:
             olj.save_links = original
         conn.rollback()
@@ -552,6 +544,176 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             pli.build_preview(conn, both)
         self.assertIn('同時', str(caught.exception))
+
+
+def customer_doc(rows):
+    return {'result': True, 'data': rows}
+
+
+class CustomerJsonMatchTest(unittest.TestCase):
+    def test_unique_name_is_automatic_and_reused(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        phone_before = conn.execute('SELECT phone FROM customers WHERE name=?', ('顧客A',)).fetchone()['phone']
+        body = opening_body([row()], conn, links={})
+        body['legacyCustomerFile'] = b64(customer_doc([
+            {'id': 'cust-old-1', 'name': '顧客A', 'addr_city': '使わない', 'phone': '000'},
+            {'id': 'cust-old-1', 'name': '顧客A', 'phone': '111'},
+        ]))
+        body['legacyCustomerName'] = 'customers.json'
+        preview = pli.build_preview(conn, body)
+        shown = preview['openingStock']['legacyCustomers'][0]
+        self.assertTrue(shown['confirmed'])
+        self.assertEqual(shown['source'], 'json')
+        self.assertEqual(shown['jsonName'], '顧客A')
+        self.assertEqual(shown['customerId'], customer_id(conn))
+        blocked = dict(body)
+        blocked['legacyCustomerLinks'] = {'cust-old-1': ''}
+        blocked_preview = pli.build_preview(conn, blocked)
+        self.assertFalse(blocked_preview['openingStock']['legacyCustomers'][0]['confirmed'])
+        result = pli.commit_preview(conn, with_fp(body, preview, token='auto-customer'), db_path=str(path))
+        conn.commit()
+        self.assertEqual(result['counts']['openingCreated'], 1)
+        self.assertEqual(conn.execute('SELECT phone FROM customers WHERE name=?', ('顧客A',)).fetchone()['phone'], phone_before)
+        again = pli.build_preview(conn, opening_body([row()], conn, links={}))
+        self.assertTrue(again['openingStock']['legacyCustomers'][0]['confirmed'])
+        self.assertEqual(again['openingStock']['legacyCustomers'][0]['source'], 'saved')
+
+    def test_missing_ambiguous_empty_and_stopped_need_choice(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        conn.execute("UPDATE customers SET active=0 WHERE name='顧客A'")
+        conn.execute(
+            '''INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at)
+               VALUES('株式会社顧客B','','','','',1,'t','t')'''
+        )
+        conn.commit()
+        rows = [
+            row(id='s-miss', customer_id='missing-id'),
+            row(id='s-empty', customer_id='empty-name'),
+            row(id='s-dup', customer_id='dup-name'),
+            row(id='s-same', customer_id='same-name'),
+            row(id='s-stop', customer_id='stopped-name'),
+            row(id='s-none', customer_id='unknown-name'),
+            row(id='s-form', customer_id='form-name'),
+        ]
+        body = opening_body(rows, conn, links={})
+        body['legacyCustomerFile'] = b64(customer_doc([
+            {'id': 'empty-name', 'name': '   '},
+            {'id': 'dup-name', 'name': '顧客A'},
+            {'id': 'dup-name', 'name': '顧客B'},
+            {'id': 'same-name', 'name': '同名'},
+            {'id': 'stopped-name', 'name': '顧客A'},
+            {'id': 'unknown-name', 'name': '存在しない顧客'},
+            {'id': 'form-name', 'name': '㈱顧客B'},
+        ]))
+        customers_before = conn.execute('SELECT COUNT(*) n FROM customers').fetchone()['n']
+        real_match = olj.legacy.find_person_matches
+
+        def same_name_twice(c, table, name):
+            if stock.text(name) == '同名':
+                return [
+                    {'id': 9001, 'name': '同名', 'active': 1},
+                    {'id': 9002, 'name': '同名', 'active': 1},
+                ], 'exact'
+            return real_match(c, table, name)
+
+        olj.legacy.find_person_matches = same_name_twice
+        try:
+            preview = pli.build_preview(conn, body)
+        finally:
+            olj.legacy.find_person_matches = real_match
+        by_legacy = {r['legacyCustomerId']: r for r in preview['openingStock']['legacyCustomers']}
+        self.assertIn('ありません', by_legacy['missing-id']['reason'])
+        self.assertIn('空', by_legacy['empty-name']['reason'])
+        self.assertIn('違う名前', by_legacy['dup-name']['reason'])
+        self.assertIn('同名の顧客が複数', by_legacy['same-name']['reason'])
+        self.assertIn('停止中', by_legacy['stopped-name']['reason'])
+        self.assertIn('一致する登録済み顧客がありません', by_legacy['unknown-name']['reason'])
+        self.assertIn('自動では対応づけません', by_legacy['form-name']['reason'])
+        self.assertTrue(all(not item['confirmed'] for item in by_legacy.values()))
+        with self.assertRaises(ValueError):
+            pli.commit_preview(conn, with_fp(body, preview, token='need-choice'), db_path=str(path))
+        conn.rollback()
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM customers').fetchone()['n'], customers_before)
+
+    def test_saved_conflict_is_not_overwritten_and_manual_wins(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        conn.execute(
+            '''INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at)
+               VALUES('顧客B','','','','',1,'t','t')'''
+        )
+        conn.commit()
+        olj.ensure_schema(conn)
+        conn.execute(
+            'INSERT INTO legacy_customer_links(legacy_customer_id, customer_id, created_at, updated_at) VALUES(?,?,?,?)',
+            ('cust-old-1', customer_id(conn, '顧客A'), 't', 't'),
+        )
+        conn.commit()
+        body = opening_body([row()], conn, links={})
+        body['legacyCustomerFile'] = b64(customer_doc([{'id': 'cust-old-1', 'name': '顧客B'}]))
+        preview = pli.build_preview(conn, body)
+        shown = preview['openingStock']['legacyCustomers'][0]
+        self.assertFalse(shown['confirmed'])
+        self.assertIn('上書きせず', shown['reason'])
+        self.assertEqual(conn.execute(
+            'SELECT customer_id FROM legacy_customer_links WHERE legacy_customer_id=?',
+            ('cust-old-1',),
+        ).fetchone()['customer_id'], customer_id(conn, '顧客A'))
+        differ = opening_body([row()], conn, links={'cust-old-1': customer_id(conn, '顧客A')})
+        differ['legacyCustomerFile'] = body['legacyCustomerFile']
+        differ_preview = pli.build_preview(conn, differ)
+        kept = differ_preview['openingStock']['legacyCustomers'][0]
+        self.assertTrue(kept['confirmed'])
+        self.assertEqual(kept['customerId'], customer_id(conn, '顧客A'))
+        self.assertIn('手動で選んだ顧客', kept['note'])
+        chosen = opening_body([row()], conn, links={'cust-old-1': customer_id(conn, '顧客B')})
+        chosen['legacyCustomerFile'] = body['legacyCustomerFile']
+        chosen_preview = pli.build_preview(conn, chosen)
+        manual = chosen_preview['openingStock']['legacyCustomers'][0]
+        self.assertTrue(manual['confirmed'])
+        self.assertEqual(manual['customerId'], customer_id(conn, '顧客B'))
+        self.assertEqual(manual['note'], '')
+        pli.commit_preview(conn, with_fp(chosen, chosen_preview, token='manual-wins'), db_path=str(path))
+        conn.commit()
+        self.assertEqual(conn.execute(
+            'SELECT customer_id FROM legacy_customer_links WHERE legacy_customer_id=?',
+            ('cust-old-1',),
+        ).fetchone()['customer_id'], customer_id(conn, '顧客B'))
+
+    def test_bad_customer_json_and_file_swap_do_not_write(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        bad = opening_body([row()], conn, links={})
+        bad['legacyCustomerFile'] = b64({'result': False, 'data': []})
+        with self.assertRaises(ValueError) as caught:
+            pli.build_preview(conn, bad)
+        self.assertIn('旧顧客JSON', str(caught.exception))
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
+        first = opening_body([row()], conn, links={})
+        first['legacyCustomerFile'] = b64(customer_doc([{'id': 'cust-old-1', 'name': '顧客A'}]))
+        preview = pli.build_preview(conn, first)
+        swapped = dict(first)
+        swapped['legacyCustomerFile'] = b64(customer_doc([{'id': 'cust-old-1', 'name': 'いない'}]))
+        with self.assertRaises(stock.StockConflict) as conflict:
+            pli.commit_preview(conn, with_fp(swapped, preview, token='swapped-file'), db_path=str(path))
+        self.assertEqual(conflict.exception.payload.get('code'), 'stale_files')
+        stock_swapped = dict(first)
+        stock_swapped['legacyStockFile'] = b64(doc([row(id='other-stock', name='別商品')]))
+        with self.assertRaises(stock.StockConflict):
+            pli.commit_preview(conn, with_fp(stock_swapped, preview, token='swapped-stock'), db_path=str(path))
+        conn.rollback()
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
 
 
 if __name__ == '__main__':

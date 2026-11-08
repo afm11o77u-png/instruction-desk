@@ -11151,6 +11151,14 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
     opening_for_source = preview.get('openingStock') or {}
     if opening_for_source.get('fromLegacyJson'):
         import opening_legacy_json
+        sent_files = stock.text(body.get('legacySourceFingerprint'))
+        actual_files = opening_for_source.get('sourceFingerprint') or ''
+        if not sent_files or sent_files != actual_files:
+            raise stock.StockConflict({
+                'error': '旧在庫JSONまたは旧顧客JSONが差し替わっています。もう一度照合してください。',
+                'code': 'stale_files',
+                'registered': False,
+            })
         opening_legacy_json.assert_customers_confirmed(opening_for_source)
         aux_uploaded = {
             'fileName': opening_for_source.get('fileName') or '',
