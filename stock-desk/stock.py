@@ -454,6 +454,8 @@ def needs_migration(c):
         return True
     if 'qr_stock_links' not in tables or 'qr_link_import_runs' not in tables:
         return True
+    if 'qr_link_dismissals' not in tables:
+        return True
     if 'stock_qr_codes' not in tables:
         return True
     if 'stock_close_records' not in tables or 'stock_update_hold' not in tables:

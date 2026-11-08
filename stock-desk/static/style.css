@@ -1042,6 +1042,9 @@ dialog.qr-link-dialog .qr-link-section-aside{
   background:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;
 }
 dialog.qr-link-dialog .qr-link-section-aside{background:#f7faf7}
+.qr-scope-group{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:0 0 8px;background:#f4faf6}
+.qr-scope-group p{margin:0 0 4px}
+dialog.qr-link-dialog .dialogbody{padding-bottom:72px}
 dialog.qr-link-dialog .qr-link-preview .dialogactions{
   position:sticky;bottom:0;z-index:2;background:#fff;
 }

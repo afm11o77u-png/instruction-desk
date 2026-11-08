@@ -115,6 +115,7 @@ NOTES = (
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
     '今の商品マスタでカテゴリが部品・資材または加工サービスのものは、旧QR対応の対象外です。品番が空でも、その品名が部品・資材または加工サービスだけにあるときは対象外です。制服やカテゴリ未設定と同じ品名があるときは外しません。品名の言葉だけでは外しません。',
+    '品番が空で、品名が部品・加工の候補になる行は品名ごとにまとめます。件数を確認してから対応不要にできます。制服と分かる品名や、品番がある未一致はまとめません。対応不要は旧IDとその品名・顧客・メーカー・サイズで覚え、同じ内容の再取込では繰り返しません。品名が変わった行や別の旧IDには使いません。',
     '同じ旧在庫行IDが別の対応で登録済みのときは、明示するまで上書きしません。同じ対応の再取込は増やしません。',
     '場所やサイズが空の行は、その項目を未指定として残せます。候補が複数のときはどれか一つに決めません。',
 )
@@ -183,6 +184,13 @@ def ensure_schema(c):
         'CREATE INDEX IF NOT EXISTS qr_stock_links_customer '
         'ON qr_stock_links(legacy_customer_id, legacy_maker_id)'
     )
+    c.execute('''CREATE TABLE IF NOT EXISTS qr_link_dismissals (
+      legacy_stock_id TEXT NOT NULL PRIMARY KEY,
+      row_fingerprint TEXT NOT NULL,
+      item_name TEXT NOT NULL DEFAULT '',
+      scope_hint TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL
+    )''')
 
 
 def template_bytes():
@@ -554,6 +562,9 @@ def _load_catalog(c):
     links = {}
     for row in c.execute('SELECT * FROM qr_stock_links'):
         links[row['legacy_stock_id']] = row
+    dismissals = {}
+    for row in c.execute('SELECT * FROM qr_link_dismissals'):
+        dismissals[row['legacy_stock_id']] = row
     return {
         'products': products,
         'by_exact': by_exact,
@@ -562,6 +573,7 @@ def _load_catalog(c):
         'handles': handles,
         'locations': locations,
         'links': links,
+        'dismissals': dismissals,
     }
 
 
@@ -1086,6 +1098,56 @@ def _name_is_only_nonuniform(catalog, item_name):
     return all(_is_nonuniform_product(item) for item in matched)
 
 
+_SCOPE_LABELS = {
+    'processing': '加工の候補',
+    'parts': '部品・資材の候補',
+    'unknown_blank': '区分不明',
+}
+_SCOPE_REASONS = {
+    'processing': '品番が空です。品名に加工を示す語があるため、加工の候補です。自動では外していません。',
+    'parts': '品番が空です。品名に部品・資材を示す語があるため、部品の候補です。自動では外していません。',
+    'unknown_blank': '品番が空です。品名だけでは部品か制服か決められません。',
+}
+
+
+def _scope_hint(item_num, item_name):
+    """品番が空の行だけ、品名から候補を分ける。制服の品名は候補にしない。自動除外はしない。"""
+    if stock.text(item_num) or not _name_key(item_name):
+        return '', ''
+    from legacy_code_assign import blank_code_kind
+    kind = blank_code_kind(item_name)
+    if kind == 'processing':
+        return 'processing', _SCOPE_REASONS['processing']
+    if kind == 'parts':
+        return 'parts', _SCOPE_REASONS['parts']
+    if kind == 'garment':
+        return '', ''
+    return 'unknown_blank', _SCOPE_REASONS['unknown_blank']
+
+
+def _row_fingerprint(legacy):
+    """旧IDと、その行の顧客・メーカー・品番・品名・サイズ・状態。数量や単価は入れない。"""
+    raw = '\n'.join([
+        stock.text(legacy.get('stockId')),
+        stock.text(legacy.get('customerId')),
+        stock.text(legacy.get('makerId')),
+        stock.text(legacy.get('itemNum')),
+        _name_key(legacy.get('itemName')),
+        stock.text(legacy.get('itemSize')),
+        stock.text(legacy.get('condition')),
+    ])
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+
+def _scope_group_key(hint, item_name):
+    if hint not in _SCOPE_LABELS:
+        return ''
+    name = _name_key(item_name)
+    if not name:
+        return ''
+    return hint + '|' + name
+
+
 def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_name,
                       item_size, condition, site_name, shelf_name):
     reasons = []
@@ -1387,6 +1449,7 @@ def classify_rows(c, parsed):
                     if line not in reasons:
                         reasons.append(line)
         existing = catalog['links'].get(values['legacyStockId']) if values['legacyStockId'] else None
+        hint, hint_reason = _scope_hint(values['itemNum'], values['itemName'])
         rows.append({
             'rowNo': row_no,
             'status': status,
@@ -1395,6 +1458,10 @@ def classify_rows(c, parsed):
             'candidates': candidates,
             'existing': _existing_public(existing),
             '_existing_row': existing,
+            'scopeHint': hint if status == STATUS_UNMATCHED else '',
+            'scopeReason': hint_reason if status == STATUS_UNMATCHED else '',
+            'rowFingerprint': _row_fingerprint(legacy),
+            'dismissSaved': False,
         })
         if values['legacyStockId']:
             seen[values['legacyStockId']].append(rows[-1])
@@ -1436,6 +1503,23 @@ def classify_rows(c, parsed):
                 row['reasons'] = list(row['reasons']) + [
                     'この旧QRは別の対応で登録済みです。変えるときだけ指定してください。'
                 ]
+        if row['status'] == STATUS_UNMATCHED:
+            saved = catalog['dismissals'].get(row['legacy']['stockId'])
+            fp = row['rowFingerprint']
+            if saved and saved['row_fingerprint'] == fp:
+                row['status'] = STATUS_OUT_OF_SCOPE
+                row['reasons'] = [
+                    '以前に、この旧IDのこの品名を対応不要にしました。再取込でも登録しません。'
+                ]
+                row['dismissSaved'] = True
+                row['candidates'] = []
+            elif saved:
+                row['reasons'] = list(row['reasons']) + [
+                    '保存した対応不要は、品名か顧客などが違うため使っていません。'
+                ]
+        if row['status'] != STATUS_UNMATCHED and not row.get('dismissSaved'):
+            row['scopeHint'] = ''
+            row['scopeReason'] = ''
         row['statusLabel'] = STATUS_LABELS[row['status']]
         row['includeDefault'] = row['status'] == STATUS_EXACT
         row['canCommit'] = row['status'] in (STATUS_EXACT, STATUS_REVIEW, STATUS_AMBIGUOUS) or (
@@ -1466,6 +1550,137 @@ def _row_public(row):
         'existing': row['existing'],
         'includeDefault': row['includeDefault'],
         'canCommit': row['canCommit'],
+        'scopeHint': row.get('scopeHint') or '',
+        'scopeReason': row.get('scopeReason') or '',
+        'scopeGroup': _scope_group_key(row.get('scopeHint') or '', (row.get('legacy') or {}).get('itemName')),
+        'rowFingerprint': row.get('rowFingerprint') or '',
+        'dismissSaved': bool(row.get('dismissSaved')),
+    }
+
+
+def _scope_groups(rows):
+    buckets = {}
+    for row in rows:
+        hint = row.get('scopeHint') or ''
+        key = row.get('scopeGroup') or _scope_group_key(hint, (row.get('legacy') or {}).get('itemName'))
+        if not key:
+            continue
+        if row['status'] == STATUS_UNMATCHED or row.get('dismissSaved'):
+            bucket = buckets.setdefault(key, {
+                'key': key,
+                'itemName': (row.get('legacy') or {}).get('itemName') or '',
+                'scopeHint': hint,
+                'scopeLabel': _SCOPE_LABELS.get(hint, ''),
+                'reason': row.get('scopeReason') or _SCOPE_REASONS.get(hint, ''),
+                'count': 0,
+                'openCount': 0,
+                'savedCount': 0,
+            })
+            bucket['count'] += 1
+            if row.get('dismissSaved'):
+                bucket['savedCount'] += 1
+            elif row['status'] == STATUS_UNMATCHED:
+                bucket['openCount'] += 1
+    groups = []
+    for bucket in buckets.values():
+        bucket['saved'] = bucket['savedCount'] == bucket['count'] and bucket['count'] > 0
+        groups.append(bucket)
+    groups.sort(key=lambda item: (-item['openCount'], -item['count'], item['itemName']))
+    return groups
+
+
+def _rows_for_group(rows, group_key):
+    found = []
+    for row in rows:
+        key = _scope_group_key(row.get('scopeHint') or '', (row.get('legacy') or {}).get('itemName'))
+        if key and key == group_key:
+            found.append(row)
+    return found
+
+
+def dismiss_group(c, body):
+    """品名グループの未一致だけを対応不要として覚える。在庫と旧QRの読取は変えない。"""
+    stock._require_write(body)
+    ensure_schema(c)
+    one = stock.text(body.get('legacyStockId'))
+    key = stock.text(body.get('groupKey'))
+    if not one and (not key or '|' not in key):
+        raise ValueError('対応不要にする品名を指定してください。')
+    uploaded = _decode_upload(body)
+    rows = classify_rows(c, uploaded['parsed'])
+    if one:
+        targets = [
+            row for row in rows
+            if row['legacy']['stockId'] == one and row['status'] == STATUS_UNMATCHED
+        ]
+        if len(targets) != 1:
+            raise ValueError('この行は未一致ではないため、対応不要にしません。')
+    else:
+        targets = [
+            row for row in _rows_for_group(rows, key)
+            if row['status'] == STATUS_UNMATCHED and row.get('scopeHint')
+        ]
+    if not targets:
+        raise ValueError('対応不要にできる行がありません。一致した制服や、品番がある未一致はまとめて外しません。')
+    before = stock_snapshot(c)
+    t = stock.stamp()
+    for row in targets:
+        c.execute(
+            '''INSERT INTO qr_link_dismissals(
+                 legacy_stock_id, row_fingerprint, item_name, scope_hint, created_at
+               ) VALUES(?,?,?,?,?)
+               ON CONFLICT(legacy_stock_id) DO UPDATE SET
+                 row_fingerprint=excluded.row_fingerprint,
+                 item_name=excluded.item_name,
+                 scope_hint=excluded.scope_hint,
+                 created_at=excluded.created_at''',
+            (
+                row['legacy']['stockId'], row['rowFingerprint'], row['legacy']['itemName'],
+                row.get('scopeHint') or 'manual', t,
+            ),
+        )
+    if stock_snapshot(c) != before:
+        raise ValueError('在庫数量・金額が変わったため、対応不要の保存を中止しました。')
+    return {
+        'dismissed': len(targets),
+        'itemName': targets[0]['legacy']['itemName'],
+        'scopeHint': targets[0]['scopeHint'],
+        'scopeLabel': _SCOPE_LABELS.get(targets[0]['scopeHint'], ''),
+        'qtyChanged': False,
+    }
+
+
+def restore_group(c, body):
+    """同じファイルにある、保存した対応不要を品名ごとに戻す。旧QRの読取は消さない。"""
+    stock._require_write(body)
+    ensure_schema(c)
+    one = stock.text(body.get('legacyStockId'))
+    key = stock.text(body.get('groupKey'))
+    if not one and not key:
+        raise ValueError('戻す品名を指定してください。')
+    uploaded = _decode_upload(body)
+    rows = classify_rows(c, uploaded['parsed'])
+    if one:
+        targets = [
+            row for row in rows
+            if row['legacy']['stockId'] == one and row.get('dismissSaved')
+        ]
+    else:
+        targets = [row for row in _rows_for_group(rows, key) if row.get('dismissSaved')]
+    if not targets:
+        raise ValueError('戻せる対応不要がありません。')
+    before = stock_snapshot(c)
+    for row in targets:
+        c.execute(
+            'DELETE FROM qr_link_dismissals WHERE legacy_stock_id=? AND row_fingerprint=?',
+            (row['legacy']['stockId'], row['rowFingerprint']),
+        )
+    if stock_snapshot(c) != before:
+        raise ValueError('在庫数量・金額が変わったため、対応不要の取消を中止しました。')
+    return {
+        'restored': len(targets),
+        'itemName': targets[0]['legacy']['itemName'],
+        'qtyChanged': False,
     }
 
 
@@ -1488,6 +1703,7 @@ def build_preview(c, body):
         'counts': {STATUS_LABELS[k]: counts[k] for k in STATUS_LABELS},
         'countsRaw': counts,
         'rows': [_row_public(row) for row in rows],
+        'scopeGroups': _scope_groups(rows),
         'notices': [
             'この段階ではデータベースを変更していません。',
             '登録するのは旧QRと現在の商品・顧客・サイズ・状態・場所の対応だけです。',
