@@ -115,7 +115,7 @@ NOTES = (
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
     '今の商品マスタでカテゴリが部品・資材または加工サービスのものは、旧QR対応の対象外です。品番が空でも、その品名が部品・資材または加工サービスだけにあるときは対象外です。制服やカテゴリ未設定と同じ品名があるときは外しません。品名の言葉だけでは外しません。',
-    '品番が空で、品名が部品・資材または加工そのものと分かる行は、最初から対象外です。操作は不要です。末尾の括弧が加工指定で、括弧の外が制服の品名（白衣(スナッパー加工) など）は対象外にしません。制服の品名に刺繍などが付くだけ（白衣・刺繍）も外しません。品番が制服の商品に当たるときは制服を優先します。品名だけでは部品か制服か決められない行は未一致のままです。',
+    '品番が空で、品名が部品・資材または加工そのものと分かる行は、最初から対象外です。裾上げテープは部品・資材です。空白や「げ」の有無、半角カナの違いは同じ資材です。品番があっても、その品番が制服の商品に当たらないときは対象外です。白衣(裾上げ) のような制服の裾上げ指定や、テープを含むだけの別の品名は対象外にしません。',
     '同じ旧在庫行IDが別の対応で登録済みのときは、明示するまで上書きしません。同じ対応の再取込は増やしません。',
     '場所やサイズが空の行は、その項目を未指定として残せます。候補が複数のときはどれか一つに決めません。',
 )
@@ -1141,6 +1141,27 @@ def _uniform_with_processing_note(item_name):
     return blank_code_kind(matched.group(1)) == 'garment'
 
 
+_HEM_TAPE_NAME = re.compile(
+    r'(?:裾上げ|裾上|スソアゲ|スソ上げ|すそ上げ|すそあげ)用?テープ\Z'
+)
+
+
+def _is_hem_tape_name(item_name):
+    """裾上げテープという資材名か。表記差だけを吸収し、制服の裾上げ指定は含めない。"""
+    text = _leading_mark_stripped(item_name)
+    compact = re.sub(r'[\s・･\-－]+', '', text)
+    compact = re.sub(r'^[0-9]+', '', compact)
+    compact = re.sub(r'^[（(「【\[]+', '', compact)
+    compact = re.sub(r'[）)」】\]]+$', '', compact)
+    return _HEM_TAPE_NAME.fullmatch(compact) is not None
+
+
+def _hem_tape_reason(item_name):
+    if not _is_hem_tape_name(item_name):
+        return ''
+    return '品名が部品・資材（裾上げテープ）のため対象外です。登録しません。'
+
+
 def _keyword_out_of_scope_reason(item_name):
     """品番が空のとき、部品・加工そのものの品名だけを対象外の理由にする。
 
@@ -1167,7 +1188,7 @@ def _scope_hint(item_num, item_name):
     """品番が空で、自動対象外にならない行だけを候補に分ける。"""
     if stock.text(item_num) or not _name_key(item_name):
         return '', ''
-    if _keyword_out_of_scope_reason(item_name):
+    if _hem_tape_reason(item_name) or _keyword_out_of_scope_reason(item_name):
         return '', ''
     from legacy_code_assign import blank_code_kind
     kind = blank_code_kind(item_name)
@@ -1207,6 +1228,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
     if not stock.text(item_num):
         if _name_is_only_nonuniform(catalog, item_name):
             return [], [OUT_OF_SCOPE_REASON], STATUS_OUT_OF_SCOPE
+        hem_tape = _hem_tape_reason(item_name)
+        if hem_tape:
+            return [], [hem_tape], STATUS_OUT_OF_SCOPE
         keyword = _keyword_out_of_scope_reason(item_name)
         if keyword:
             return [], [keyword], STATUS_OUT_OF_SCOPE
@@ -1223,6 +1247,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
     if not exact_products and not norm_products and not partial_products:
         if dropped_exact or dropped_norm or dropped_partial:
             return [], [OUT_OF_SCOPE_REASON], STATUS_OUT_OF_SCOPE
+        hem_tape = _hem_tape_reason(item_name)
+        if hem_tape:
+            return [], [hem_tape], STATUS_OUT_OF_SCOPE
         reasons.append(hat_reject or f'品番「{stock.text(item_num)}」の商品がありません。新しくは作りません。')
         return [], reasons, ''
     exact_customers, form_customers = _customer_hits(catalog, customer_name)

@@ -1760,6 +1760,69 @@ class QrLinkScopeGroupTest(unittest.TestCase):
             c.close()
             folder.cleanup()
 
+    def test_hem_tape_is_parts_even_with_unmatched_code(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c, code='CD-636', name='白衣')
+            c.execute(
+                "UPDATE products SET category=? WHERE code='CD-636'",
+                (stock.CATEGORY_UNIFORM,),
+            )
+            cu = c.execute('SELECT id FROM customers').fetchone()
+            su = c.execute('SELECT id FROM suppliers').fetchone()
+            stock.save_product(c, {
+                'code': 'BLK-1', 'name': '作業帽', 'color': '', 'category': '',
+                'supplierId': su['id'], 'active': True, 'sizes': ['F'],
+                'links': [{'customerId': cu['id'], 'embroidery': '', 'isStandard': True, 'active': True}],
+            })
+            c.commit()
+            before = snap(c)
+            rows = [
+                filled(legacyStockId=OLD + 'T', itemNum='01', itemName='裾上げテープ', itemSize=''),
+                filled(legacyStockId=OLD + 'N', itemNum='', itemName='裾上げテープ', itemSize=''),
+                filled(legacyStockId=OLD + 'V', itemNum='01', itemName='０１ 裾上テープ', itemSize=''),
+                filled(legacyStockId=OLD + 'K', itemNum='', itemName='ｽｿｱｹﾞﾃｰﾌﾟ', itemSize=''),
+                filled(legacyStockId=OLD + 'S', itemNum='', itemName='＊裾上げ・テープ', itemSize=''),
+                filled(legacyStockId=OLD + 'H', itemNum='', itemName='すそ上げテープ', itemSize=''),
+                filled(legacyStockId=OLD + 'P', itemNum='', itemName='白衣(裾上げ)', itemSize=''),
+                filled(legacyStockId=OLD + 'Q', itemNum='', itemName='白衣・裾上げ', itemSize=''),
+                filled(legacyStockId=OLD + 'M', itemNum='', itemName='マスキングテープ', itemSize=''),
+                filled(legacyStockId=OLD + 'U', itemNum='CD-636', itemName='裾上げテープ', itemSize='F'),
+                filled(legacyStockId=OLD + 'B', itemNum='BLK-1', itemName='裾上げテープ', itemSize='F'),
+            ]
+            blob = xlsx(rows)
+            preview = ql.build_preview(c, body_of(blob))
+            by_id = {row['legacy']['stockId']: row for row in preview['rows']}
+            for key in (OLD + 'T', OLD + 'N', OLD + 'V', OLD + 'K', OLD + 'S', OLD + 'H'):
+                self.assertEqual(by_id[key]['status'], 'out_of_scope', key)
+                self.assertIn('裾上げテープ', by_id[key]['reasons'][0])
+                self.assertNotIn('加工（裾上げ）', by_id[key]['reasons'][0])
+                self.assertFalse(by_id[key]['canCommit'])
+                self.assertEqual(by_id[key]['scopeHint'], '')
+            self.assertEqual(by_id[OLD + 'P']['status'], 'unmatched')
+            self.assertNotIn('裾上げテープ', ' '.join(by_id[OLD + 'P']['reasons']))
+            self.assertNotIn('部品・資材（裾上げテープ）', ' '.join(by_id[OLD + 'Q']['reasons']))
+            self.assertEqual(by_id[OLD + 'M']['status'], 'unmatched')
+            self.assertEqual(by_id[OLD + 'M']['scopeHint'], 'unknown_blank')
+            self.assertEqual(by_id[OLD + 'U']['status'], 'exact')
+            self.assertEqual(by_id[OLD + 'U']['candidates'][0]['code'], 'CD-636')
+            self.assertEqual(by_id[OLD + 'B']['status'], 'exact')
+            self.assertEqual(by_id[OLD + 'B']['candidates'][0]['code'], 'BLK-1')
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_link_dismissals').fetchone()['n'], 0)
+            with self.assertRaises(ValueError) as caught:
+                ql.commit_preview(c, body_of(
+                    blob, previewFingerprint=preview['previewFingerprint'],
+                    token='qr-hem-tape-bypass',
+                    selections={str(by_id[OLD + 'T']['rowNo']): {'include': True}},
+                ), db_path=str(path))
+            self.assertIn('対象外', str(caught.exception))
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+            self.assertEqual(snap(c)['qty'], before['qty'])
+            self.assertEqual(snap(c)['amount'], before['amount'])
+        finally:
+            c.close()
+            folder.cleanup()
+
     def test_dismiss_refuses_exact_uniform_row(self):
         folder, path, c = newdb()
         try:
