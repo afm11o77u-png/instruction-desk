@@ -572,6 +572,16 @@ def build_plans(c, body):
         legacy_row = _legacy_payload(row, '')
         qty, qty_note = _qty_decision(row)
         legacy_row['qtyNote'] = qty_note
+        tape_reason = qr_link_import.reflective_tape_reason(legacy_row['itemNum'], legacy_row['itemName'])
+        if tape_reason:
+            plan = _blocked_plan(index, row, [tape_reason], legacy_info=legacy_row, qty=qty)
+            plan['status'] = legacy.STATUS_EXCLUDED
+            plan['statusLabel'] = bulk.OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED]
+            plan['qrAction'] = 'skip'
+            plan['qrOutOfScope'] = True
+            plan['reasons'] = [tape_reason]
+            prepared.append({'blocked': plan})
+            continue
         reasons = [qty_note]
         if not legacy_row['stockId'] or not legacy_row['customerId'] or not legacy_row['makerId']:
             reasons.append('旧在庫行ID・旧顧客ID・旧メーカーIDは文字として必要です。数値にはしません。')
