@@ -773,6 +773,26 @@ def _no_processing_keys():
     return {_norm_token(unify_import_notation(w)) for w in _NO_PROCESSING_WORDS}
 
 
+_DISCONTINUED_NOTES = ('不使用', '使用しない', '廃番')
+
+
+def _discontinued_note_keys():
+    return {_norm_token(unify_import_notation(w)) for w in _DISCONTINUED_NOTES}
+
+
+def is_embroidery_price_condition(text: str) -> bool:
+    """刺繍代込みのように、刺繍と価格条件が一体の表記か。
+
+    通常の刺繍・LEOC刺繍とは別。価格の計算方法はここでは決めない。
+    """
+    folded = unicodedata.normalize('NFKC', (text or '').strip())
+    if not folded:
+        return False
+    if '刺繍' not in folded and 'ししゅう' not in folded.casefold():
+        return False
+    return ('代込' in folded) or ('価格込' in folded)
+
+
 _NEGATION_SUFFIXES = ('無し', 'なし', 'ナシ', '無', '不要')
 
 
@@ -802,6 +822,14 @@ def classify_paren_segment(segment: str, *, pants: bool = False):
     if key in _no_processing_keys():
         return {'kind': 'hem_ignore', 'value': raw, 'matched': key, 'original': source,
                 'noProcessing': True}
+    # 廃番・不使用は注記。表示名からは外し、部品の「用」にはしない。
+    if key in _discontinued_note_keys():
+        return {'kind': 'discontinued', 'value': raw, 'matched': key, 'original': source}
+    if is_embroidery_price_condition(raw):
+        return {
+            'kind': 'unknown', 'value': raw, 'matched': '', 'original': source,
+            'priceCondition': True,
+        }
     # 「反射材無し」等の否定仕様は、付きの品と区別する商品名の一部。加工にせず名に残す（要確認なし）
     if is_negation_spec(raw):
         return {'kind': 'unknown', 'value': raw, 'matched': '', 'original': source,
@@ -1083,6 +1111,9 @@ def classify_product_name(product_name: str):
     paren_hits = []  # 括弧ごとの part hit リスト
     colorway_notices = []
     hem_ignored = False
+    note_removed = False
+    price_hold = False
+    note_notices = []
     usage_kind = ''
     for content in contents:
         hits_for_paren = _classify_paren_parts(content, pants=pants)
@@ -1121,6 +1152,15 @@ def classify_product_name(product_name: str):
                 usage_kind = USAGE_KIND_SALES
             elif kind == 'hem_ignore':
                 hem_ignored = True
+            elif kind == 'discontinued':
+                note_removed = True
+                notice = f"注記「{hit.get('value') or ''}」は表示名から外します。原文は残します。"
+                if notice not in note_notices:
+                    note_notices.append(notice)
+            elif hit.get('priceCondition'):
+                price_hold = True
+                if hit['value'] not in unclassified:
+                    unclassified.append(hit['value'])
             elif hit.get('negationSpec'):
                 pass  # 商品名に残すだけ（通知・要確認なし）
             else:
@@ -1131,7 +1171,7 @@ def classify_product_name(product_name: str):
     base = strip_parens(unified)
     base = unify_import_notation(base)
     reasons = []
-    info_notices = list(colorway_notices)
+    info_notices = list(colorway_notices) + list(note_notices)
     needs = False
 
     # 複数色・複数素材は自動確定しない（商品.color / material は単一）
@@ -1221,7 +1261,7 @@ def classify_product_name(product_name: str):
     # 販売用途マーカー除去だけでも予定名を採用する（要確認にはしない）
     auto = (not needs) and bool(
         colors or processings or materials or parts_usages or unclassified
-        or hem_ignored or usage_kind
+        or hem_ignored or usage_kind or note_removed
     )
 
     return {

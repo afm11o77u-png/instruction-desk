@@ -378,6 +378,99 @@ def is_elms_embroidery_alias(service_name: str) -> bool:
     return sk in {normalize_service_key(a) for a in _ELMS_EMBROIDERY_ALIASES}
 
 
+def is_embroidery_class_name(service_name: str) -> bool:
+    """既存の刺繍類か。刺繍なしは対象外。
+
+    LEOC刺繍の LEOC は刺繍する文字であり、顧客名・仕入先名ではない。
+    """
+    raw = stock.text(service_name)
+    if not raw:
+        return False
+    folded = unicodedata.normalize('NFKC', raw)
+    if '刺繍なし' in folded or folded in ('なし', '加工なし'):
+        return False
+    if paren_classify.is_embroidery_price_condition(raw):
+        return False
+    if is_elms_embroidery_alias(raw):
+        return True
+    if '刺繍' in folded or 'ししゅう' in folded.casefold():
+        return True
+    unified = unify_processing_service_name(raw)
+    return bool(unified and '刺繍' in unified and 'なし' not in unified)
+
+
+def elms_supplier_matches(c):
+    """登録済み仕入先からエルムを名前で探す。IDは新しく作らない。"""
+    rows = []
+    for row in c.execute('SELECT id, name, active FROM suppliers'):
+        if row['active'] and is_elms_corporation_vendor(row['name']):
+            rows.append({'id': row['id'], 'name': row['name']})
+    if len(rows) == 1:
+        return {'status': 'unique', 'id': rows[0]['id'], 'name': rows[0]['name'], 'candidates': rows}
+    if not rows:
+        return {'status': 'missing', 'id': None, 'name': '', 'candidates': []}
+    return {'status': 'ambiguous', 'id': None, 'name': '', 'candidates': rows}
+
+
+def embroidery_vendor_plan(c, service_name: str) -> dict:
+    """刺繍類の加工先。決まらなければ確認。別業者の既存サービスは消さない。"""
+    name = stock.text(service_name)
+    found = elms_supplier_matches(c)
+    # 顧客固有名も共通サービス「刺繍」へつなぐ。固有名の加工サービスは新しく作らない。
+    service_name_out = ELMS_EMBROIDERY_SERVICE_NAME
+    existing = find_existing_processing_service_any_vendor(c, service_name_out)
+    if not existing and name != service_name_out:
+        existing = find_existing_processing_service_any_vendor(c, name)
+    existing_vendor = ''
+    existing_is_elms = False
+    existing_name = ''
+    if existing:
+        existing_name = stock.text(existing.get('name') or '')
+        sid = existing.get('supplier_id') or existing.get('supplierId')
+        if sid:
+            sup = c.execute('SELECT name FROM suppliers WHERE id=?', (sid,)).fetchone()
+            existing_vendor = stock.text(sup['name'] if sup else '')
+            existing_is_elms = is_elms_corporation_vendor(existing_vendor)
+    base = {
+        'embroidery': True,
+        'serviceName': service_name_out,
+        'customerProcessingName': name,
+        'existingVendor': existing_vendor,
+        'existingKept': bool(existing and not existing_is_elms),
+    }
+    if found['status'] == 'unique':
+        note = f'刺繍類の加工先はエルムです。仕入先「{found["name"]}」を使います。他の加工は変えません。'
+        if base['existingKept']:
+            kept_name = existing_name or name
+            note += f'既存の「{kept_name}」（{existing_vendor}）は残し、加工先は書き換えません。'
+        return {
+            **base,
+            'status': 'unique',
+            'vendorName': found['name'],
+            'supplierId': found['id'],
+            'needsConfirm': False,
+            'message': note,
+        }
+    if found['status'] == 'ambiguous':
+        labels = '、'.join(item['name'] for item in found['candidates'])
+        return {
+            **base,
+            'status': 'ambiguous',
+            'vendorName': '',
+            'supplierId': None,
+            'needsConfirm': True,
+            'message': f'エルムに当たる仕入先が複数あります（{labels}）。どれを使うか確認してください。K2にはしません。',
+        }
+    return {
+        **base,
+        'status': 'missing',
+        'vendorName': '',
+        'supplierId': None,
+        'needsConfirm': True,
+        'message': 'エルムの仕入先が未登録です。K2にはしません。仕入先を確認してください。',
+    }
+
+
 def elms_embroidery_canonical_name(service_name: str = '') -> str:
     """エルムス刺繍サービスの統一表示名。別名でも常に「刺繍」。"""
     if service_name and not is_elms_embroidery_alias(service_name):
@@ -651,6 +744,8 @@ def unify_processing_service_name(raw_name: str) -> str:
     """
     raw = strip_service_markers(unicodedata.normalize('NFKC', stock.text(raw_name) or ''))
     if not raw:
+        return ''
+    if paren_classify.is_embroidery_price_condition(raw):
         return ''
     # 「未加工」「加工なし」等は加工が無い意味（加工サービス名にしない）
     import product_ledger_paren as _paren

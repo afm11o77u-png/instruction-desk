@@ -1141,8 +1141,8 @@ class ProcessingServiceImportTest(unittest.TestCase):
                 '_canWrite': True, '_actor': {'name': 't'},
                 'rowClassifications': {
                     '2': {
-                        'processing': '刺繍加工',
-                        'plannedName': '刺繍加工',
+                        'processing': '丈直し',
+                        'plannedName': '丈直し',
                         'userEdited': True,
                         'confirmed': True,
                     },
@@ -1150,12 +1150,13 @@ class ProcessingServiceImportTest(unittest.TestCase):
             })
             plans = [p for p in (preview.get('processingServicePlans') or []) if p.get('autoRegister')]
             self.assertEqual(len(plans), 1)
-            self.assertEqual(plans[0]['serviceName'], '刺繍加工')
-            self.assertEqual(plans[0]['displayName'], '刺繍加工')
+            self.assertEqual(plans[0]['serviceName'], '丈直し')
+            self.assertEqual(plans[0]['displayName'], '丈直し')
+            self.assertEqual(plans[0]['vendorName'], 'K2スタッフ工房')
             row = (preview.get('rows') or [None])[0]
             pc = row.get('parenClassification') or {}
-            self.assertEqual(pc.get('processing'), '刺繍加工')
-            self.assertEqual(pc.get('plannedName'), '刺繍加工')
+            self.assertEqual(pc.get('processing'), '丈直し')
+            self.assertEqual(pc.get('plannedName'), '丈直し')
         finally:
             c.close()
             folder.cleanup()

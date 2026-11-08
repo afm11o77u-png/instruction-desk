@@ -1135,11 +1135,14 @@ def is_material_row(code, name):
 
 
 def _material_row_to_parts(item):
-    """生地行は品番を外して品番なし＝部品・資材にする（名前ごとに別の部品）。元の品番は残す。"""
+    """品番が「生地」だけの行は品番なしの部品にする。長い品番はそのまま部品の品番として残す。"""
     code = stock.text(item.get('商品コード'))
     if code and is_material_row(code, item.get('商品名')):
-        item['元品番'] = code
-        item['商品コード'] = ''
+        key = unicodedata.normalize('NFKC', code).strip().lower()
+        compact = re.sub(r'[\s\u3000]+', '', key)
+        if key in _GENERIC_MATERIAL_CODES or compact in ('生地', '芯地', '裏地'):
+            item['元品番'] = code
+            item['商品コード'] = ''
 
 
 def parse_csv_text(text):
@@ -5759,8 +5762,17 @@ def _finalize_matched_product(
     # 「衣服（加工）」行が前回の取込で加工サービスに結ばれている場合は同じもの（再実行で要確認にしない）
     if stock.text(prod['category']) == stock.CATEGORY_PROCESS_SERVICE:
         comp = proc_svc.garment_paren_processing_name(name)
-        if comp and proc_svc.normalize_service_key(comp) == proc_svc.normalize_service_key(prod['name']):
-            name = stock.text(prod['name'])
+        prod_name = stock.text(prod['name'])
+        # エルムの刺繍サービスは商品名が「刺繍」。再取込の原文名（ハンチング帽刺繍等）は同じサービス。
+        if (
+            prod_name == proc_svc.ELMS_EMBROIDERY_SERVICE_NAME
+            and proc_svc.is_embroidery_class_name(name)
+            and not paren_classify.is_embroidery_price_condition(name)
+        ):
+            name = prod_name
+            proposed_category = stock.CATEGORY_PROCESS_SERVICE
+        elif comp and proc_svc.normalize_service_key(comp) == proc_svc.normalize_service_key(prod_name):
+            name = prod_name
             proposed_category = stock.CATEGORY_PROCESS_SERVICE
     if not prod['active']:
         info['action'] = 'review'
@@ -6777,10 +6789,19 @@ def classify_row(
             override_for_paren['supplement'] = ''
     row = attach_paren_classification(row, override_for_paren)
     handle = dict(row.get('handle') or {})
-    if suffix.get('processingName') and not stock.text(handle.get('embroidery') or ''):
-        handle['embroidery'] = suffix['processingName']
-        handle['embroideryLabel'] = suffix['processingName']
-        row['handle'] = handle
+    if suffix.get('processingName') and proc_svc.is_embroidery_class_name(suffix['processingName']):
+        pc = dict(row.get('parenClassification') or {})
+        # 商品名側で既に取った加工名は潰さない。品番側だけにある刺繍類を取扱へ載せる。
+        if not stock.text(pc.get('processing') or ''):
+            pc['processing'] = suffix['processingName']
+            row['parenClassification'] = pc
+        current = stock.text(handle.get('embroidery') or '')
+        if current in ('', PENDING_EMBROIDERY):
+            handle['embroidery'] = suffix['processingName']
+            handle['embroideryLabel'] = suffix['processingName']
+            handle['pendingEmbroiderySort'] = False
+            handle['fromParenClassification'] = True
+            row['handle'] = handle
     if suffix.get('color'):
         pc = dict(row.get('parenClassification') or {})
         if not stock.text(pc.get('color') or ''):
@@ -6797,6 +6818,50 @@ def classify_row(
         prov['codeNote'] = suffix['note']
         prov.setdefault('sourceCode', source_code)
         row['specProvenance'] = prov
+    return _apply_review_acceptance(row, raw_override)
+
+
+def _review_fingerprint(row):
+    reasons = [stock.text(r) for r in (row.get('reasons') or []) if stock.text(r)]
+    code = stock.text((row.get('csv') or {}).get('code') or '')
+    cat = stock.text((row.get('product') or {}).get('category') or '')
+    kind = stock.text((row.get('parenClassification') or {}).get('registerKind') or '')
+    return '\n'.join(reasons) + '\u0001' + code + '\u0001' + cat + '\u0001' + kind
+
+
+def _review_acceptance_blocked(row):
+    """仕入先の選択や競合など、了承だけでは越えてはいけない確認。"""
+    for block in (row.get('supplier'), row.get('customer'), row.get('product')):
+        if not isinstance(block, dict):
+            continue
+        if block.get('action') == 'review' and (block.get('candidates') or block.get('reasons')):
+            return True
+    for reason in row.get('reasons') or []:
+        text = stock.text(reason)
+        if any(mark in text for mark in ('候補から選', '停止中', '複数あります', '矛盾しています', '登録できません')):
+            return True
+    return False
+
+
+def _apply_review_acceptance(row, override):
+    """明示の了承だけを反映する。詳細を開いただけ、無変更の再照合では確定しない。"""
+    if not isinstance(override, dict) or not override.get('reviewAccepted'):
+        return row
+    if stock.text(override.get('reviewFingerprint') or '') != _review_fingerprint(row):
+        return row
+    if _review_acceptance_blocked(row):
+        return row
+    if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+        return row
+    prod = row.get('product') or {}
+    if prod.get('action') not in ('create', 'reuse', 'missing'):
+        return row
+    if (row.get('customer') or {}).get('action') == 'review':
+        return row
+    row['status'] = STATUS_CREATE if prod.get('action') != 'reuse' else STATUS_REUSE
+    row['statusLabel'] = STATUS_LABELS[row['status']]
+    row['canCommit'] = True
+    row['reviewAccepted'] = True
     return row
 
 
@@ -8048,6 +8113,7 @@ def apply_processing_service_split(c, classified, sku_groups):
                 r['skuAutoMerged'] = True
 
     plans = list(service_plans.values())
+    _apply_embroidery_vendor_plans(c, plans, classified)
     plans.sort(key=lambda p: (p.get('vendorName') or '', p.get('serviceName') or ''))
     return {
         'processingServicePlans': plans,
@@ -8055,6 +8121,133 @@ def apply_processing_service_split(c, classified, sku_groups):
         'reuseCount': sum(1 for p in plans if p.get('action') == 'reuse'),
         'createCount': sum(1 for p in plans if p.get('action') == 'create'),
     }
+
+
+def _apply_embroidery_vendor_plans(c, plans, classified=None):
+    """刺繍類の加工先をエルムにする。無関係な加工と、別業者の既存サービスは変えない。"""
+    for plan in plans or []:
+        name = stock.text(plan.get('serviceName') or '')
+        if not proc_svc.is_embroidery_class_name(name):
+            continue
+        original_vendor = stock.text(plan.get('vendorName') or '')
+        row_names_elms = bool(
+            plan.get('elmsEmbroideryRule')
+            or proc_svc.is_elms_corporation_vendor(original_vendor)
+        )
+        decided = proc_svc.embroidery_vendor_plan(c, name)
+        plan['embroideryVendor'] = True
+        plan['vendorStatus'] = decided['status']
+        plan['vendorMessage'] = decided['message']
+        plan['existingVendorKept'] = decided['existingKept']
+        # 登録する加工サービス名は共通の「刺繍」。顧客固有名は取扱に残す。
+        plan['customerProcessingName'] = decided.get('customerProcessingName') or name
+        plan['serviceName'] = decided['serviceName']
+        plan['displayName'] = decided['serviceName']
+        customer_name = stock.text(plan.get('customerProcessingName') or '')
+        if customer_name and customer_name != plan['serviceName']:
+            plan['vendorMessage'] = (
+                f'加工内容「{customer_name}」は取扱に残します。'
+                f'共通の加工サービスは「刺繍」です。'
+                + (plan.get('vendorMessage') or '')
+            )
+        plan['elmsEmbroideryRule'] = (
+            decided['serviceName'] == proc_svc.ELMS_EMBROIDERY_SERVICE_NAME
+        )
+        if decided['needsConfirm'] and not (row_names_elms and decided['status'] == 'missing'):
+            # 行自身がエルムと読める場合を除き、未登録・複数候補は確認。K2へは戻さない。
+            plan['autoRegister'] = False
+            plan['needsConfirm'] = True
+            plan['vendorName'] = ''
+            plan['supplierId'] = None
+            continue
+        if decided['needsConfirm'] and row_names_elms:
+            # 仕入先欄がエルム。マスタが空でも、その行の名前で刺繍サービスを作る（IDは推測しない）。
+            plan['needsConfirm'] = False
+            plan['vendorStatus'] = 'row'
+            plan['vendorName'] = proc_svc.ELMS_VENDOR_DISPLAY
+            plan['supplierId'] = None
+            plan['elmsEmbroideryRule'] = True
+            plan['vendorMessage'] = 'この行の仕入先はエルムです。共通の加工サービス「刺繍」として登録します。'
+        else:
+            plan['needsConfirm'] = False
+            plan['vendorName'] = decided['vendorName']
+            plan['supplierId'] = decided['supplierId']
+        resolved_vendor = stock.text(plan.get('vendorName') or '')
+        plan['displayLabel'] = plan['serviceName']
+        if resolved_vendor:
+            plan['displayLabel'] = f"{plan['serviceName']}／{resolved_vendor}"
+        existing = proc_svc.find_existing_processing_service(
+            c, plan['serviceName'], resolved_vendor,
+        )
+        if existing:
+            plan['action'] = 'reuse'
+            plan['productId'] = existing['id']
+        else:
+            plan['action'] = 'create'
+            plan['productId'] = None
+        plan['autoRegister'] = True
+    _sync_embroidery_vendor_rows(plans, classified)
+
+
+def _sync_embroidery_vendor_rows(plans, classified):
+    """計画の刺繍先を行へ戻す。未確定の刺繍サービスはK2のまま登録しない。"""
+    by_key = {
+        stock.text(plan.get('dedupeKey') or ''): plan
+        for plan in plans or []
+        if plan.get('embroideryVendor') and stock.text(plan.get('dedupeKey') or '')
+    }
+    if not by_key:
+        return
+    for row in classified or []:
+        if not isinstance(row, dict):
+            continue
+        plan = by_key.get(stock.text(row.get('processingServicePlanKey') or ''))
+        if not plan:
+            continue
+        info = row.get('processingService') if isinstance(row.get('processingService'), dict) else None
+        prod = dict(row.get('product') or {})
+        service_name = stock.text(plan.get('serviceName') or '')
+        vendor_name = stock.text(plan.get('vendorName') or '')
+        if info is not None:
+            info['embroideryVendor'] = True
+            info['vendorStatus'] = plan.get('vendorStatus') or ''
+            info['vendorMessage'] = plan.get('vendorMessage') or ''
+            info['vendorName'] = vendor_name
+            info['existingVendorKept'] = bool(plan.get('existingVendorKept'))
+            if plan.get('elmsEmbroideryRule') and service_name:
+                info['elmsEmbroideryRule'] = True
+                info['serviceName'] = service_name
+                info['displayName'] = service_name
+        prov = row.get('specProvenance') if isinstance(row.get('specProvenance'), dict) else None
+        if prov is not None:
+            prov['processingVendor'] = vendor_name
+            if plan.get('elmsEmbroideryRule') and service_name:
+                prov['processing'] = service_name
+                prov['processingServiceName'] = service_name
+                prov['processingDisplayName'] = service_name
+        if plan.get('needsConfirm'):
+            row['processingServiceNeedsConfirm'] = True
+            msg = stock.text(plan.get('vendorMessage') or '') or '刺繍類の加工先を確認してください。'
+            reasons = list(row.get('reasons') or [])
+            if msg not in reasons:
+                reasons.append(msg)
+            row['reasons'] = reasons
+            # 加工サービスだけの行は、業者未確定のままK2等へ作らない
+            if prod.get('processingServiceProduct'):
+                prod['primarySupplierName'] = ''
+                prod['id'] = None
+                row['product'] = prod
+                row['status'] = STATUS_REVIEW
+                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                row['canCommit'] = False
+            continue
+        if prod.get('processingServiceProduct') and vendor_name:
+            prod['primarySupplierName'] = vendor_name
+            if plan.get('elmsEmbroideryRule') and service_name:
+                prod['officialName'] = service_name
+                prod['applyOfficialName'] = True
+                prod['skipDisplayNameAliases'] = True
+            row['product'] = prod
 
 
 def _note_processing_vendor(plan, vendor):
@@ -8294,7 +8487,24 @@ def _ensure_companion_processing_service(c, name, ids_by_key):
     """衣服行に付く加工サービスを確保（同名は1件にまとめる）。
 
     行の仕入先は衣服の仕入先で加工をした業者ではないため、メイン仕入先は付けない。
+    刺繍類はエルムが一つに決まるときだけ、その仕入先で確保する。
     """
+    if proc_svc.is_embroidery_class_name(name):
+        decided = proc_svc.embroidery_vendor_plan(c, name)
+        key = proc_svc.service_dedupe_key(decided['serviceName'], decided.get('vendorName') or '')
+        if key in ids_by_key and ids_by_key[key]:
+            return ids_by_key[key], False
+        if decided['needsConfirm']:
+            return None, False
+        service_name = decided['serviceName'] or proc_svc.ELMS_EMBROIDERY_SERVICE_NAME
+        pid, created = _ensure_processing_service_product(c, {
+            'serviceName': service_name,
+            'vendorName': decided['vendorName'],
+            'elmsEmbroideryRule': service_name == proc_svc.ELMS_EMBROIDERY_SERVICE_NAME,
+            'targetGarmentCodes': [],
+        })
+        ids_by_key[key] = pid
+        return pid, created
     key = proc_svc.service_dedupe_key(name, '')
     if key in ids_by_key:
         return ids_by_key[key], False
@@ -10611,12 +10821,32 @@ def build_preview(c, body):
         attr = row.get('suffixAttribute') or {}
         if not attr.get('needsConfirm'):
             continue
+        ps = row.get('processingService') or {}
+        if (
+            ps.get('isProcessingService')
+            and ps.get('identifiable')
+            and not ps.get('needsConfirm')
+        ):
+            # 加工名として特定済みの行は、品番欄の同じ語を未知注記として止めない。
+            prod = row.get('product') or {}
+            if prod.get('action') in ('create', 'reuse') and row.get('status') == STATUS_REVIEW:
+                row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                row['statusLabel'] = STATUS_LABELS[row['status']]
+                row['canCommit'] = True
+            continue
         row['status'] = STATUS_REVIEW
         row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
         row['canCommit'] = False
         reason = stock.text(attr.get('reason') or '')
         if reason and reason not in (row.get('reasons') or []):
             row['reasons'] = list(row.get('reasons') or []) + [reason]
+    for row in classified:
+        ov = (
+            row_classifications.get(str(row.get('rowNo')))
+            or row_classifications.get(row.get('rowNo'))
+            or {}
+        )
+        _apply_review_acceptance(row, ov if isinstance(ov, dict) else {})
     return {
         'importMode': mode,
         'productPhase': phase,
@@ -10630,7 +10860,7 @@ def build_preview(c, body):
         'rows': classified,
         'skuGroups': sku_groups,
         'codeShapeGroups': _code_shape_groups(c, classified),
-        'processingCandidates': suffix_attr.collect_processing_candidates(classified),
+        'processingCandidates': suffix_attr.annotate_candidate_vendors(c, suffix_attr.collect_processing_candidates(classified)),
         'autoLineSpecCodes': auto_line_codes,
         'processServices': registered_process_services(c),
         'skuGroupCount': len(sku_groups),
@@ -11761,9 +11991,12 @@ def commit_preview(c, body, *, db_path=None):
                     if created:
                         result_counts['suppliersCreated'] += 1
                 elif csv_supplier and proc_svc.is_processing_vendor(csv_supplier):
-                    # 業者マスタ自体は作成（サービス確保で済んでいることが多い）
+                    # エルムの表記差では仕入先を増やさない。正式名が一つに決まる行は既存の表示名を使う。
+                    vendor_to_save = csv_supplier
+                    if proc_svc.is_elms_corporation_vendor(csv_supplier):
+                        vendor_to_save = proc_svc.ELMS_VENDOR_DISPLAY
                     _ensure_person(
-                        c, 'suppliers', stock.save_supplier, csv_supplier, create=True,
+                        c, 'suppliers', stock.save_supplier, vendor_to_save, create=True,
                     )
 
                 sel = selections.get(str(row_no)) or selections.get(row_no) or {}
@@ -11816,11 +12049,13 @@ def commit_preview(c, body, *, db_path=None):
                     companion_id, comp_created = _ensure_companion_processing_service(
                         c, companion, processing_ids_by_key,
                     )
-                    if comp_created:
+                    if companion_id and comp_created:
                         result_counts['processingServicesCreated'] += 1
                         result_counts['productsCreated'] += 1
-                    else:
+                    elif companion_id:
                         result_counts['processingServicesReused'] += 1
+                    elif proc_svc.is_embroidery_class_name(companion):
+                        result_counts['embroideryVendorConfirm'] = result_counts.get('embroideryVendorConfirm', 0) + 1
                     if row.get('phasePartsOnly'):
                         # 原文→商品の対応は商品段階で衣服へ付ける（ここで加工サービスへ結ぶと再照合で取り違える）
                         result_counts['committedRows'] += 1
