@@ -18,7 +18,9 @@
     {id:'exact', title:'完全一致', statuses:['exact'], kind:'aside', mode:'details-closed',
       hint:'初期選択のまま登録します。確認するとき開いてください。'},
     {id:'unmatched', title:'未一致', statuses:['unmatched'], kind:'separate', mode:'details-open',
-      hint:'一致する商品がありません。未一致から商品は作りません。'},
+      hint:'一致する商品がありません。未一致から商品は作りません。部品・加工と決められない行は、対応不要にすると下の対象外へ移ります。'},
+    {id:'out', title:'対象外', statuses:['out_of_scope'], kind:'aside', mode:'details-closed',
+      hint:'部品・資材と加工サービス、および対応不要にした行です。未一致ではありません。登録せず、商品も作りません。'},
     {id:'unchanged', title:'登録済み', statuses:['unchanged'], kind:'aside', mode:'details-closed',
       hint:'同じ対応が登録済みです。変えるときだけ開いて指定してください。'},
   ]
@@ -82,7 +84,7 @@
     }):''
     return `<div class="dialoghead"><h2>旧QR対応</h2><button type="button" id="qrClose" class="quiet">閉じる</button></div>
       <div class="dialogbody">
-        <p class="excelhint">既存のQR（旧在庫行ID・旧顧客ID・旧メーカーID）を、今の商品・顧客・サイズ・新品中古・場所へ対応づけます。在庫数量・単価・金額は変えません。未一致から商品は作りません。</p>
+        <p class="excelhint">既存のQR（旧在庫行ID・旧顧客ID・旧メーカーID）を、今の商品・顧客・サイズ・新品中古・場所へ対応づけます。在庫数量・単価・金額は変えません。未一致から商品は作りません。部品・資材と加工サービスは対象外です。</p>
         ${progress}
         ${err}
         <div class="bar">
@@ -137,7 +139,20 @@
     return `<section class="${cls}" data-qr-section="${def.id}"><h3>${esc(title)}</h3>${body}</section>`
   }
 
+  function displayRows(rows){
+    const dismissed=st&&st.dismissed||{}
+    return (rows||[]).map(row=>{
+      if(row.status==='unmatched'&&dismissed[row.rowNo]){
+        return Object.assign({}, row, {
+          status:'out_of_scope', statusLabel:'対応不要', userDismissed:true,
+        })
+      }
+      return row
+    })
+  }
+
   function sectionsHtml(rows, busy){
+    rows=displayRows(rows)
     const known={}
     SECTIONS.forEach(def=>(def.statuses||[]).forEach(s=>{known[s]=true}))
     const parts=SECTIONS.map(def=>sectionBlock(def, rowsFor(rows, def.statuses||[]), busy)).filter(Boolean)
@@ -155,8 +170,13 @@
     opts=opts||{}
     const writable=!!opts.writable
     const busy=!!opts.busy
-    const rows=p.rows||[]
-    const counts=Object.entries(p.counts||{}).filter(([,n])=>n).map(([k,n])=>`${esc(k)} ${n}`).join('、')
+    const rows=displayRows(p.rows||[])
+    const tally={}
+    rows.forEach(row=>{
+      const key=row.statusLabel||row.status
+      tally[key]=(tally[key]||0)+1
+    })
+    const counts=Object.entries(tally).filter(([,n])=>n).map(([k,n])=>`${esc(k)} ${n}`).join('、')
     const notices=(p.notices||[]).map(n=>`<li>${esc(n)}</li>`).join('')
     const body=rows.length?sectionsHtml(rows, busy):'<p class="excelhint">行がありません。</p>'
     const commitDis=(!writable||busy)?' disabled':''
@@ -202,9 +222,13 @@
     }else if(row.status==='exact'&&row.candidates&&row.candidates[0]){
       pick=`<div>${esc(row.candidates[0].label)}</div>`
     }
-    const check=row.canCommit
+    let check=row.canCommit
       ?`<label><input type="checkbox" data-qr-include="${row.rowNo}"${row.includeDefault?' checked':''}${dis}> 登録</label>`
       :''
+    if((row.status==='unmatched'||row.userDismissed)&&!row.canCommit){
+      const on=row.userDismissed?' checked':''
+      check=`<label><input type="checkbox" data-qr-dismiss="${row.rowNo}"${on}${dis}> 対応不要</label>`
+    }
     return `<tr>
       <td>${row.rowNo}</td>
       <td>${esc(row.statusLabel||row.status)}</td>
@@ -240,6 +264,15 @@
     if(previewBtn)previewBtn.onclick=runPreview
     const commitBtn=el.querySelector('#qrCommit')
     if(commitBtn)commitBtn.onclick=runCommit
+    el.querySelectorAll('[data-qr-dismiss]').forEach(box=>{
+      box.onchange=()=>{
+        if(!st.dismissed)st.dismissed={}
+        const no=box.getAttribute('data-qr-dismiss')
+        if(box.checked)st.dismissed[no]=true
+        else delete st.dismissed[no]
+        paint()
+      }
+    })
   }
 
   function applyBusyDom(){
@@ -358,6 +391,7 @@
       session.file=file
       session.progressLabel=LABEL_MATCHING
       applyBusyDom()
+      session.dismissed={}
       session.preview=await session.api('/api/qr-link/preview',{
         file:file.file,name:file.name,actorName:session.actorName||'',
       })

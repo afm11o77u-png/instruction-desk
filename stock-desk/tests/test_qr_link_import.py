@@ -1529,5 +1529,159 @@ class QrLinkMatchTest(unittest.TestCase):
         self.assertNotIn('register_outbound', src)
 
 
+class QrLinkNonUniformScopeTest(unittest.TestCase):
+    def _product(self, c, *, code, name, category, customer='顧客A'):
+        cu = c.execute('SELECT id FROM customers WHERE name=?', (customer,)).fetchone()
+        if not cu:
+            cu = stock.save_customer(c, {'name': customer, 'active': True})
+            cu_id = cu['id']
+        else:
+            cu_id = cu['id']
+        su = c.execute('SELECT id FROM suppliers').fetchone()
+        if not su:
+            su = stock.save_supplier(c, {'name': 'メーカーA', 'active': True})
+            su_id = su['id']
+        else:
+            su_id = su['id']
+        pr = stock.save_product(c, {
+            'code': code, 'name': name, 'color': '', 'category': category,
+            'supplierId': su_id, 'active': True, 'sizes': ['F'],
+            'links': [{'customerId': cu_id, 'embroidery': '', 'isStandard': True, 'active': True}],
+        })
+        c.commit()
+        return pr
+
+    def test_parts_and_processing_are_out_of_scope_not_unmatched(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c)
+            self._product(c, code='BTN-18', name='ボタン 18mm', category=stock.CATEGORY_PARTS)
+            self._product(c, code='', name='身頃刺繍', category=stock.CATEGORY_PROCESS_SERVICE)
+            before = snap(c)
+            blob = xlsx([
+                filled(legacyStockId=OLD + 'P', itemNum='BTN-18', itemName='ボタン 18mm'),
+                filled(legacyStockId=OLD + 'S', itemNum='', itemName='身頃刺繍', itemSize=''),
+                filled(legacyStockId=OLD + 'U', itemNum='', itemName='刺繍だけの推測', itemSize=''),
+                filled(),
+            ])
+            preview = ql.build_preview(c, body_of(blob))
+            by_id = {row['legacy']['stockId']: row for row in preview['rows']}
+            parts = by_id[OLD + 'P']
+            service = by_id[OLD + 'S']
+            unknown = by_id[OLD + 'U']
+            uniform = by_id[OLD]
+            self.assertEqual(parts['status'], 'out_of_scope')
+            self.assertFalse(parts['canCommit'])
+            self.assertEqual(parts['candidates'], [])
+            self.assertIn('対象外', parts['reasons'][0])
+            self.assertEqual(service['status'], 'out_of_scope')
+            self.assertNotEqual(service['status'], 'unmatched')
+            self.assertEqual(unknown['status'], 'unmatched')
+            self.assertIn('品番が空です', unknown['reasons'][0])
+            self.assertEqual(uniform['status'], 'exact')
+            self.assertEqual(preview['countsRaw']['out_of_scope'], 2)
+            self.assertEqual(preview['countsRaw']['unmatched'], 1)
+            self.assertEqual(preview['countsRaw']['exact'], 1)
+            with self.assertRaises(ValueError) as caught:
+                ql.commit_preview(c, body_of(
+                    blob, previewFingerprint=preview['previewFingerprint'],
+                    token='qr-bypass-parts-1',
+                    selections={str(parts['rowNo']): {'include': True}},
+                ), db_path=str(path))
+            self.assertIn('対象外', str(caught.exception))
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+            self.assertEqual(snap(c), before)
+            result = ql.commit_preview(c, body_of(
+                blob, previewFingerprint=preview['previewFingerprint'],
+                token='qr-uniform-keep-1',
+            ), db_path=str(path))
+            c.commit()
+            self.assertEqual(result['created'], 1)
+            self.assertTrue(result['stockUnchanged'])
+            self.assertEqual(
+                c.execute('SELECT legacy_stock_id FROM qr_stock_links').fetchone()['legacy_stock_id'],
+                OLD,
+            )
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_blank_category_and_shared_name_stay_in_scope(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c)
+            self._product(c, code='', name='白衣', category=stock.CATEGORY_UNIFORM)
+            self._product(c, code='', name='白衣', category=stock.CATEGORY_PROCESS_SERVICE)
+            blob = xlsx([
+                filled(legacyStockId=OLD + 'N', itemNum='', itemName='白衣', itemSize=''),
+            ])
+            preview = ql.build_preview(c, body_of(blob))
+            row = preview['rows'][0]
+            self.assertEqual(row['status'], 'unmatched')
+            self.assertNotEqual(row['status'], 'out_of_scope')
+            code, body = stock_server.api_post(
+                str(path), 'desk', '/api/qr-link/commit',
+                body_of(
+                    blob, previewFingerprint=preview['previewFingerprint'],
+                    token='qr-bypass-http-1',
+                    selections={str(row['rowNo']): {'include': True}},
+                ),
+                can_write=True,
+            )
+            self.assertEqual(code, 400)
+            self.assertIn('未一致', body['error'])
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_saved_parts_link_stays_readable(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c)
+            self._product(c, code='TAPE-1', name='襟上げテープ', category=stock.CATEGORY_PARTS)
+            t = stock.stamp()
+            product_id = c.execute(
+                "SELECT id FROM products WHERE code='TAPE-1'"
+            ).fetchone()['id']
+            handle = c.execute(
+                'SELECT id, customer_id FROM customer_products WHERE product_id=?',
+                (product_id,),
+            ).fetchone()
+            c.execute(
+                '''INSERT INTO qr_stock_links(
+                     legacy_stock_id, legacy_customer_id, legacy_maker_id, customer_name,
+                     item_num, item_name, customer_id, product_id, customer_product_id,
+                     size_label, condition, match_kind, created_at, updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (
+                    OLD + 'K', CUST, MAKER, '顧客A', 'TAPE-1', '襟上げテープ',
+                    handle['customer_id'], product_id, handle['id'], 'F', 'new', 'manual', t, t,
+                ),
+            )
+            c.commit()
+            blob = xlsx([
+                filled(legacyStockId=OLD + 'K', itemNum='TAPE-1', itemName='襟上げテープ'),
+            ])
+            preview = ql.build_preview(c, body_of(blob))
+            self.assertEqual(preview['rows'][0]['status'], 'unchanged')
+            self.assertNotEqual(preview['rows'][0]['status'], 'unmatched')
+            found = ql.lookup_qr(c, {'id': OLD + 'K', 'customer_id': CUST, 'maker_id': MAKER})
+            self.assertTrue(found['found'])
+            self.assertEqual(found['link']['itemNum'], 'TAPE-1')
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_ui_splits_out_of_scope_from_unmatched(self):
+        js = (ROOT / 'static' / 'qr_link.js').read_text(encoding='utf-8')
+        self.assertIn("statuses:['out_of_scope']", js)
+        self.assertIn('対象外', js)
+        self.assertIn('data-qr-dismiss', js)
+        self.assertIn('対応不要', js)
+        self.assertLess(js.find("statuses:['unmatched']"), js.find("statuses:['out_of_scope']"))
+
+
 if __name__ == '__main__':
     unittest.main()
