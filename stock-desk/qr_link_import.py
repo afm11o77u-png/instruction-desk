@@ -33,6 +33,7 @@ STATUS_EXACT = 'exact'
 STATUS_REVIEW = 'review'
 STATUS_AMBIGUOUS = 'ambiguous'
 STATUS_UNMATCHED = 'unmatched'
+STATUS_OUT_OF_SCOPE = 'out_of_scope'
 STATUS_INVALID = 'invalid'
 STATUS_DUPLICATE = 'duplicate'
 STATUS_UNCHANGED = 'unchanged'
@@ -43,6 +44,7 @@ STATUS_LABELS = {
     STATUS_REVIEW: '要確認',
     STATUS_AMBIGUOUS: '候補が複数',
     STATUS_UNMATCHED: '未一致',
+    STATUS_OUT_OF_SCOPE: '対象外',
     STATUS_INVALID: '不正',
     STATUS_DUPLICATE: '同じ旧ID',
     STATUS_UNCHANGED: '登録済み',
@@ -112,6 +114,7 @@ NOTES = (
     '顧客名の㈱と株式会社、空白だけの違いで複数になるときは、選ぶまで登録しません。',
     '参考数量・参考単価・入荷日はメモです。在庫数量・金額・入出庫履歴は変えません。',
     '未一致の行から商品・顧客・取扱・場所は作りません。',
+    '今の商品マスタでカテゴリが部品・資材または加工サービスのものは、旧QR対応の対象外です。品番が空でも、その品名が部品・資材または加工サービスだけにあるときは対象外です。制服やカテゴリ未設定と同じ品名があるときは外しません。品名の言葉だけでは外しません。',
     '同じ旧在庫行IDが別の対応で登録済みのときは、明示するまで上書きしません。同じ対応の再取込は増やしません。',
     '場所やサイズが空の行は、その項目を未指定として残せます。候補が複数のときはどれか一つに決めません。',
 )
@@ -489,7 +492,8 @@ def _load_catalog(c):
     by_exact = defaultdict(list)
     by_norm = defaultdict(list)
     for row in c.execute(
-        '''SELECT p.id, p.code, p.name, p.color, p.active, p.supplier_id, s.name AS supplier_name
+        '''SELECT p.id, p.code, p.name, p.color, p.category, p.active, p.supplier_id,
+                  s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
            WHERE p.merged_into_id IS NULL
            ORDER BY p.id'''
@@ -499,6 +503,7 @@ def _load_catalog(c):
             'code': row['code'] or '',
             'name': row['name'] or '',
             'color': row['color'] or '',
+            'category': row['category'] or '',
             'active': bool(row['active']),
             'supplierId': row['supplier_id'],
             'supplierName': row['supplier_name'] or '',
@@ -550,6 +555,7 @@ def _load_catalog(c):
     for row in c.execute('SELECT * FROM qr_stock_links'):
         links[row['legacy_stock_id']] = row
     return {
+        'products': products,
         'by_exact': by_exact,
         'by_norm': by_norm,
         'customers': customers,
@@ -1043,37 +1049,83 @@ def _candidate_reason_lines(candidates):
     return lines
 
 
+OUT_OF_SCOPE_REASON = '部品・資材または加工サービスのため、旧QR対応の対象外です。登録しません。'
+_NAME_SPACE = re.compile(r'[\s\u3000]+')
+
+
+def _name_key(value):
+    return _NAME_SPACE.sub('', unicodedata.normalize('NFKC', stock.text(value)))
+
+
+def _is_nonuniform_product(product):
+    """マスタのカテゴリだけを見る。空欄と制服は対象のまま。品名の語では判定しない。"""
+    return stock.text(product.get('category')) in (
+        stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE,
+    )
+
+
+def _drop_nonuniform(products):
+    keep, dropped = [], []
+    for product in products:
+        (dropped if _is_nonuniform_product(product) else keep).append(product)
+    return keep, dropped
+
+
+def _name_is_only_nonuniform(catalog, item_name):
+    """品名が部品・資材または加工サービスだけと一致するときだけ真。
+
+    制服やカテゴリ未設定に同じ品名があれば、制服を外さないため偽。
+    一致する商品が無ければ偽（名前の推測では外さない）。
+    """
+    key = _name_key(item_name)
+    if not key:
+        return False
+    matched = [item for item in catalog['products'] if _name_key(item['name']) == key]
+    if not matched:
+        return False
+    return all(_is_nonuniform_product(item) for item in matched)
+
+
 def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_name,
                       item_size, condition, site_name, shelf_name):
     reasons = []
-    exact_products, norm_products = _product_hits(catalog, item_num)
+    exact_all, norm_all = _product_hits(catalog, item_num)
     partial_products = []
     if not stock.text(item_num):
+        if _name_is_only_nonuniform(catalog, item_name):
+            return [], [OUT_OF_SCOPE_REASON], STATUS_OUT_OF_SCOPE
         reasons.append('品番が空です。商品は推測しません。')
-        return [], reasons
-    if not exact_products and not norm_products:
+        return [], reasons, ''
+    exact_products, dropped_exact = _drop_nonuniform(exact_all)
+    norm_products, dropped_norm = _drop_nonuniform(norm_all)
+    dropped_partial = []
+    # 品番が部品・加工だけに当たったときは、制服への部分一致へ落とさない。
+    if not exact_all and not norm_all:
         partial_products = _partial_product_hits(catalog, item_num, item_name, maker_name)
+        partial_products, dropped_partial = _drop_nonuniform(partial_products)
     hat_reject = catalog.pop('_hat_reject', None)
     if not exact_products and not norm_products and not partial_products:
+        if dropped_exact or dropped_norm or dropped_partial:
+            return [], [OUT_OF_SCOPE_REASON], STATUS_OUT_OF_SCOPE
         reasons.append(hat_reject or f'品番「{stock.text(item_num)}」の商品がありません。新しくは作りません。')
-        return [], reasons
+        return [], reasons, ''
     exact_customers, form_customers = _customer_hits(catalog, customer_name)
     if not stock.text(customer_name):
         reasons.append('顧客名が空です。顧客は推測しません。')
-        return [], reasons
+        return [], reasons, ''
     if exact_customers:
         customers = [(row, 'exact') for row in exact_customers]
     else:
         customers = [(row, 'form') for row in form_customers]
     if not customers:
         reasons.append(f'顧客「{stock.text(customer_name)}」がありません。新しくは作りません。')
-        return [], reasons
+        return [], reasons, ''
     if len(exact_customers) > 1:
         reasons.append('空白を除くと同じ顧客名が複数あります。選んでください。')
     loc_kind, loc_rows = _location_hits(catalog, site_name, shelf_name)
     if loc_kind == 'missing':
         reasons.append('拠点または棚が見つかりません。場所は作りません。')
-        return [], reasons
+        return [], reasons, ''
     products = (
         [(item, 'exact') for item in exact_products]
         + [(item, 'normalized') for item in norm_products]
@@ -1176,8 +1228,8 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
     # 候補が多すぎるときは確定させない
     if len(candidates) > 30:
         reasons.append('候補が多すぎます。品番・顧客名・サイズ・場所を絞ってください。')
-        return [], reasons
-    return candidates, reasons
+        return [], reasons, ''
+    return candidates, reasons, ''
 
 
 def _lot_count(c, handle_id, size, condition, location_id):
@@ -1299,8 +1351,9 @@ def classify_rows(c, parsed):
         fatal = bool(reasons)
         candidates = []
         match_reasons = []
+        scope = ''
         if not fatal and condition is not None:
-            candidates, match_reasons = _build_candidates(
+            candidates, match_reasons, scope = _build_candidates(
                 c, catalog,
                 item_num=values['itemNum'],
                 item_name=values['itemName'],
@@ -1316,6 +1369,10 @@ def classify_rows(c, parsed):
             candidates = []
         if fatal or condition is None:
             status = STATUS_INVALID
+        elif scope == STATUS_OUT_OF_SCOPE:
+            status = STATUS_OUT_OF_SCOPE
+            reasons = [OUT_OF_SCOPE_REASON]
+            candidates = []
         else:
             status = _status_for(candidates, reasons)
             if status == STATUS_EXACT:
@@ -1356,6 +1413,12 @@ def classify_rows(c, parsed):
         existing = row.pop('_existing_row')
         if row['status'] in (STATUS_INVALID, STATUS_DUPLICATE):
             pass
+        elif existing is not None and row['status'] == STATUS_OUT_OF_SCOPE:
+            row['status'] = STATUS_UNCHANGED
+            row['reasons'] = [
+                '登録済みの対応はそのまま残します。部品・資材または加工サービスなので、新しい対応は作りません。'
+            ]
+            row['candidates'] = []
         elif existing is not None:
             same = any(
                 _same_target(existing, cand, row['legacy']['customerId'], row['legacy']['makerId'])
@@ -1432,6 +1495,7 @@ def build_preview(c, body):
             '完全一致だけを初期選択にします。要確認・候補が複数・未一致は自動では確定しません。',
             '新品中古が空欄または null の行は、新品にしません。',
             '未一致から商品・顧客・取扱・場所は作りません。',
+            '部品・資材と加工サービスは対象外です。未一致とは分け、登録しません。',
         ],
     }
 
@@ -1474,6 +1538,10 @@ def _sel_for(selections, row_no):
 def _wants(row, sel):
     status = row['status']
     include = sel.get('include')
+    if status == STATUS_OUT_OF_SCOPE:
+        if include:
+            raise ValueError(f'{row["rowNo"]}行目は対象外のため登録できません。')
+        return False
     if status == STATUS_EXACT:
         return include is not False
     if status == STATUS_UNCHANGED:
