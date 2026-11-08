@@ -6542,7 +6542,7 @@ def code_name_columns_look_swapped(code, product_name):
 def classify_row(
     c, row_no, item, *,
     selected_product_id=None, selected_handle_id=None, selected_category=None,
-    selected_supplier_id=None,
+    selected_supplier_id=None, selected_customer_id=None,
     force_create_product=False,
     paren_override=None,
 ):
@@ -6618,26 +6618,11 @@ def classify_row(
         }
     else:
         cust = _person_preview(c, 'customers', '顧客', customer_name, row_no)
+        cust = _apply_chosen_person(cust, selected_customer_id)
 
     if supplier_name:
         supp = _person_preview(c, 'suppliers', '仕入先', supplier_name, row_no)
-        chosen_id = selected_supplier_id
-        if chosen_id not in (None, ''):
-            try:
-                chosen_id = int(chosen_id)
-            except (TypeError, ValueError):
-                chosen_id = None
-            hit = next((
-                cand for cand in (supp.get('candidates') or [])
-                if int(cand.get('id') or 0) == chosen_id
-            ), None) if chosen_id else None
-            if hit and supp.get('action') == 'review':
-                supp = dict(supp)
-                supp['action'] = 'reuse'
-                supp['id'] = hit['id']
-                supp['name'] = hit.get('name') or supplier_name
-                supp['reasons'] = []
-                supp['supplierChosen'] = True
+        supp = _apply_chosen_person(supp, selected_supplier_id)
     else:
         supp = {
             'action': 'missing', 'id': None, 'name': '', 'candidates': [],
@@ -6897,8 +6882,87 @@ def _review_fingerprint(row):
     return '\u0001'.join([kind, code, name, color, supplier])
 
 
+_KIND_TO_CATEGORY = {
+    '商品': stock.CATEGORY_UNIFORM,
+    '部品・資材': stock.CATEGORY_PARTS,
+    '加工サービス': stock.CATEGORY_PROCESS_SERVICE,
+}
+
+
+def _override_category(override):
+    if not isinstance(override, dict):
+        return ''
+    return _KIND_TO_CATEGORY.get(stock.text(override.get('registerKind') or ''), '')
+
+
+def _apply_chosen_person(info, selected_id):
+    """表記差の候補を、選んだ既存の会社として使う。未選択・停止中は review のまま。"""
+    if not isinstance(info, dict) or info.get('action') != 'review':
+        return info
+    if selected_id in (None, ''):
+        return info
+    try:
+        chosen_id = int(selected_id)
+    except (TypeError, ValueError):
+        return info
+    hit = next((
+        cand for cand in (info.get('candidates') or [])
+        if int(cand.get('id') or 0) == chosen_id
+    ), None)
+    if not hit:
+        return info
+    info = dict(info)
+    label = stock.text(info.get('label') or '') or '相手'
+    if hit.get('active') is False:
+        info['id'] = hit['id']
+        info['reasons'] = list(info.get('reasons') or []) + [
+            f'選んだ{label}「{hit.get("name") or ""}」は停止中です。'
+            f'別の候補を選ぶか、この行は登録しないでください。'
+        ]
+        return info
+    info['action'] = 'reuse'
+    info['id'] = hit['id']
+    info['name'] = hit.get('name') or info.get('name')
+    info['reasons'] = []
+    info['personChosen'] = True
+    return info
+
+
+def _clear_matching_category_conflict(row, override):
+    """編集中の区分が既存区分と同じなら、古い提案文の衝突は了承の妨げにしない。"""
+    prod = dict(row.get('product') or {})
+    existing = stock.text(prod.get('category') or '')
+    chosen = _override_category(override)
+    if not prod.get('id') or not existing or not chosen or existing != chosen:
+        return row
+    if not prod.get('categoryConflict') and not any(
+        '既存カテゴリ' in str(reason) for reason in (row.get('reasons') or [])
+    ):
+        return row
+    other = [
+        reason for reason in (prod.get('reasons') or [])
+        if '既存カテゴリ' not in str(reason)
+    ]
+    prod['categoryConflict'] = False
+    prod['proposedCategory'] = existing
+    prod['categoryAction'] = 'keep'
+    prod['reasons'] = other
+    if prod.get('action') == 'review' and not prod.get('candidates') and not other:
+        prod['action'] = 'reuse' if prod.get('id') else 'create'
+    row['product'] = prod
+    row['reasons'] = [
+        reason for reason in (row.get('reasons') or [])
+        if '既存カテゴリ' not in str(reason)
+    ]
+    return row
+
+
 def _review_acceptance_blocked(row):
-    """仕入先の選択や競合など、了承だけでは越えてはいけない確認。"""
+    """候補未選択・停止・真の区分不一致など、了承だけでは越えてはいけない確認。
+
+    既存区分と編集中の区分が同じなら、表示に残った古い提案文だけでは止めない。
+    再照合待ちそのものはここへ来ない（呼び出し側が了承の明示を見る）。
+    """
     for block in (row.get('supplier'), row.get('customer'), row.get('product')):
         if not isinstance(block, dict):
             continue
@@ -6908,6 +6972,8 @@ def _review_acceptance_blocked(row):
             return True
     for reason in row.get('reasons') or []:
         text = stock.text(reason)
+        if '既存カテゴリ' in text:
+            continue
         if any(mark in text for mark in ('候補から選', '停止中', '複数あります', '矛盾しています', '登録できません')):
             return True
     return False
@@ -6943,7 +7009,10 @@ def _apply_review_acceptance(row, override):
         return row
     if stock.text(override.get('reviewFingerprint') or '') != _review_fingerprint(row):
         return row
+    # 指紋が一致した了承だけ、既存区分と同じ選択で古い提案文の衝突を外す。
+    row = _clear_matching_category_conflict(row, override)
     if _review_acceptance_blocked(row):
+        row['acceptanceIgnored'] = True
         return row
     if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
         return row
@@ -10894,6 +10963,7 @@ def build_preview(c, body):
             selected_handle_id=sel.get('handleId'),
             selected_category=sel.get('category') if 'category' in sel else None,
             selected_supplier_id=sel.get('supplierId'),
+            selected_customer_id=sel.get('customerId'),
             force_create_product=force,
             paren_override=paren_ov,
         )
@@ -11419,6 +11489,27 @@ def build_preview(c, body):
 
 def _ensure_person(c, table, save_fn, name, *, create):
     return legacy._ensure_person(c, table, save_fn, name, create=create)
+
+
+def _commit_person(c, table, save_fn, block, csv_name):
+    """再利用は選んだ既存IDを使う。表記が違うCSV名では別会社を作らない。"""
+    block = block if isinstance(block, dict) else {}
+    chosen = block.get('id')
+    if block.get('action') == 'reuse' and chosen not in (None, ''):
+        try:
+            chosen_id = int(chosen)
+        except (TypeError, ValueError):
+            chosen_id = 0
+        row = c.execute(
+            f'SELECT id,active FROM {table} WHERE id=?', (chosen_id,),
+        ).fetchone() if chosen_id else None
+        label = '顧客' if table == 'customers' else '仕入先'
+        if not row or not row['active']:
+            raise ValueError(f'停止中または不明な{label}は登録に使いません。')
+        return row['id'], False
+    return _ensure_person(
+        c, table, save_fn, csv_name, create=block.get('action') == 'create',
+    )
 
 
 def _save_product_sizes_only(c, pid, size_label):
@@ -12473,9 +12564,9 @@ def commit_preview(c, body, *, db_path=None):
         for row in commit_rows:
             row_no = row['rowNo']
             try:
-                cust_id, created = _ensure_person(
-                    c, 'customers', stock.save_customer, row['csv']['customer'],
-                    create=row['customer']['action'] == 'create',
+                cust_id, created = _commit_person(
+                    c, 'customers', stock.save_customer, row.get('customer'),
+                    row['csv']['customer'],
                 )
                 if created:
                     result_counts['customersCreated'] += 1
@@ -12489,9 +12580,9 @@ def commit_preview(c, body, *, db_path=None):
                     or (row.get('processingService') or {}).get('k2UniformProduct')
                 )
                 if link_supplier:
-                    sup_id, created = _ensure_person(
-                        c, 'suppliers', stock.save_supplier, csv_supplier,
-                        create=row['supplier']['action'] == 'create',
+                    sup_id, created = _commit_person(
+                        c, 'suppliers', stock.save_supplier, row.get('supplier'),
+                        csv_supplier,
                     )
                     if created:
                         result_counts['suppliersCreated'] += 1
