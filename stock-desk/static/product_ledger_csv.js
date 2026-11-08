@@ -71,7 +71,7 @@
         sectionPages:{unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1,confirmed:1,rowExcluded:1},
         expandedUnified:{},expandedConfirmed:{},reselectCodes:{},
         confirmedQ:'',
-        selections:{},skuDecisions:{},appliedSkuDecisions:{},rowClassifications:{},rowExclusions:{},commitToken:'',busy:false,open:false,
+        selections:{},skuDecisions:{},codeShapeDecisions:{},appliedSkuDecisions:{},rowClassifications:{},rowExclusions:{},commitToken:'',busy:false,open:false,
         makerLookup:null,bulkMakerLookup:null,_bulkMakerPoll:null,
         api:null,toast:null,boot:null,stockCanWrite:null,actorName:''
       }
@@ -115,7 +115,7 @@
     st.file=null;st.fileB64='';st.fileName='';st.fileSize=0
     st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0
     st.history=null;st.historyError='';st.preview=null;st.previewError='';st.result=null
-    st.selections={};st.skuDecisions={};st.appliedSkuDecisions={};st.rowClassifications={};st.rowExclusions={}
+    st.selections={};st.skuDecisions={};st.codeShapeDecisions={};st.appliedSkuDecisions={};st.rowClassifications={};st.rowExclusions={}
     st.rowExcludeSnapshots={}
     st.selectedCodes={};st.expandedCodes={};st.openingSelections={}
     st.makerLookup=null;st.bulkMakerLookup=null
@@ -944,7 +944,7 @@
   function productsRegisterBlocked(st){
     const c=judgmentStatusCounts(st)
     // 確認リスト未解決=0 かつ 一括承認候補の未承認=0、かつ未反映の方針変更なしで登録可
-    return (c.unresolved>0)||(c.unapproved>0)||(pendingRematchCount(st)>0)
+    return (c.unresolved>0)||(c.unapproved>0)||(pendingRematchCount(st)>0)||(codeShapeUnresolved(st)>0)
   }
 
   function pageSlice(st,key,items){
@@ -987,6 +987,7 @@
       importMode:st.importMode||MODE_PRODUCTS,
       productPhase:isProductsMode(st)?(st.productPhase||''):'',
       selections:st.selections,skuDecisions:st.skuDecisions,
+      codeShapeDecisions:st.codeShapeDecisions||{},
       rowClassifications:st.rowClassifications||{},
       rowExclusions:st.rowExclusions||{},
       _canWrite:true,_actor:{name:st.actorName||''}
@@ -3510,6 +3511,69 @@
     </section>`
   }
 
+  function codeShapeDecisionOf(st, group){
+    return (st.codeShapeDecisions&&st.codeShapeDecisions[group.id])||{}
+  }
+
+  function codeShapeComplete(group, decision){
+    const action=decision&&decision.action
+    const codes=(group.members||[]).map(m=>m.code)
+    if(group.kind==='code_extension')return action==='merge_to_base'||action==='keep_separate'
+    if(group.kind==='undetermined')return action==='keep_separate'
+    if(group.kind==='midori_vertical'){
+      if(action!=='choose')return false
+      const targets=decision.targets||{}
+      return codes.every(code=>codes.indexOf(targets[code])>=0)
+    }
+    return false
+  }
+
+  function codeShapeUnresolved(st){
+    const groups=(st.preview&&st.preview.codeShapeGroups)||[]
+    return groups.filter(g=>!codeShapeComplete(g, codeShapeDecisionOf(st,g))).length
+  }
+
+  function codeShapeHtml(st){
+    const groups=(st.preview&&st.preview.codeShapeGroups)||[]
+    if(!groups.length)return ''
+    const blocks=groups.map(g=>{
+      const decision=codeShapeDecisionOf(st,g)
+      const members=(g.members||[]).map(m=>{
+        const existing=(m.existing||[]).map(ex=>`既存 ${esc(ex.name)} / ${esc(ex.supplier||'仕入先未設定')} / ${(ex.sizes||[]).join('、')||'サイズなし'}`).join('、')
+        return `<li><strong>${esc(m.code)}</strong>（${esc(m.role)}）
+          仕入先 ${esc((m.suppliers||[]).join('、')||'—')}
+          商品名 ${esc((m.names||[]).join('、')||'—')}
+          色 ${esc((m.colors||[]).join('、')||'—')}
+          サイズ ${esc((m.sizes||[]).join('、')||'—')}
+          ${existing?`<span class="sub">${existing}</span>`:''}</li>`
+      }).join('')
+      let controls=''
+      if(g.kind==='code_extension'){
+        controls=`<label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="merge_to_base" ${decision.action==='merge_to_base'?'checked':''}> 品番「${esc(g.baseCode)}」のみへまとめる（サイズはすべて引き継ぐ）</label>
+          <label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="keep_separate" ${decision.action==='keep_separate'?'checked':''}> 別々の品番のまま登録する</label>`
+      }else if(g.kind==='undetermined'){
+        controls=`<label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="keep_separate" ${decision.action==='keep_separate'?'checked':''}> この品番のまま登録する（短く推測しない）</label>`
+      }else{
+        const codes=(g.members||[]).map(m=>m.code)
+        controls=(g.members||[]).map(m=>{
+          const current=(decision.targets||{})[m.code]||''
+          const options=['<option value="">登録先を選ぶ</option>'].concat(codes.map(code=>`<option value="${esc(code)}" ${current===code?'selected':''}>${esc(code)}</option>`)).join('')
+          return `<label>${esc(m.code)} の登録先 <select data-code-shape-target="${esc(g.id)}" data-code-shape-source="${esc(m.code)}">${options}</select></label>`
+        }).join(' ')
+      }
+      return `<section class="notice" data-code-shape-group="${esc(g.id)}">
+        <p><strong>${esc(g.baseCode||g.id)}</strong> ${esc(g.note||'')}</p>
+        <p class="excelhint">サイズの和集合: ${esc((g.sizeUnion||[]).join('、')||'—')}</p>
+        <ul>${members}</ul>
+        <div class="bar">${controls}</div>
+        <p class="excelhint">${esc(g.jointImport||'')}</p>
+      </section>`
+    }).join('')
+    return `<div class="code-shape-review"><h3>品番の形の確認</h3>
+      <p class="excelhint">未決定のままでは登録しません。初期在庫と旧QRの一体取り込みは今回ありません。</p>
+      ${blocks}</div>`
+  }
+
   function skuGroupsHtml(st){
     const part=partitionJudgmentGroups(st)
     const counts=judgmentStatusCounts(st)
@@ -5957,6 +6021,7 @@
           <p class="excelhint">${esc(plannedLine(st))}</p>
           ${outcomeSummaryHtml(st)}
           ${pendingRematchBannerHtml(st)}
+          ${codeShapeHtml(st)}
           ${skuGroupsHtml(st)}
           <div class="bar product-ledger-preview-actions">
             <button type="button" id="plRePreview" class="${pendingRematchCount(st)?'primary':''}" ${st.busy?'disabled':''}>選択を反映して再照合</button>
@@ -7081,6 +7146,27 @@
         st.toast(procName
           ?`行 ${row.rowNo} を加工名「${procName}」で登録対象に戻しました（再照合でも勝手に除外しません）`
           :`行 ${row.rowNo} を登録対象に戻しました`)
+      }
+    })
+    document.querySelectorAll('[data-code-shape-action]').forEach(input=>{
+      input.onchange=()=>{
+        const id=input.getAttribute('data-code-shape')
+        if(!st.codeShapeDecisions)st.codeShapeDecisions={}
+        st.codeShapeDecisions[id]={action:input.getAttribute('data-code-shape-action')}
+        paintDialog({preserveScroll:true})
+      }
+    })
+    document.querySelectorAll('[data-code-shape-target]').forEach(select=>{
+      select.onchange=()=>{
+        const id=select.getAttribute('data-code-shape-target')
+        const source=select.getAttribute('data-code-shape-source')
+        if(!st.codeShapeDecisions)st.codeShapeDecisions={}
+        const prev=st.codeShapeDecisions[id]||{action:'choose',targets:{}}
+        const targets={...(prev.targets||{})}
+        if(select.value)targets[source]=select.value
+        else delete targets[source]
+        st.codeShapeDecisions[id]={action:'choose',targets}
+        paintDialog({preserveScroll:true})
       }
     })
     const commit=$('#plCommit')

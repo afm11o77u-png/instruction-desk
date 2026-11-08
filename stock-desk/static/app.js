@@ -1030,6 +1030,7 @@ function products(){
       <h3 class="verify-zone-title">検証用</h3>
       <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む選んだ区分の商品登録が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
       <div class="bar merge-entry"><button type="button" class="danger product-wipe-scope" data-scope="parts">部品を削除</button><button type="button" class="danger product-wipe-scope" data-scope="process">加工を削除</button><button type="button" class="danger product-wipe-scope" data-scope="uniform">制服を削除</button><span class="excelhint">取扱も一緒に消えます。在庫などの参照があると中止します。制服はカテゴリ空欄も含みます。</span></div>
+      <div class="bar merge-entry"><button type="button" class="danger" id="openingWipeOpen">初期在庫を削除</button><span class="excelhint">初期在庫だけが対象です。検索や絞り込みは無視します。後から入出庫・貸出・発注で使われた初期在庫があると、一件も消さず中止します。通常の入出庫、発注、旧QR、新QR、商品マスタ、勤怠は残します。</span></div>
       <div class="bar merge-entry"><button type="button" id="displayNoRenumber">No.振り直し</button></div>
     </div>`:''}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>No.</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
@@ -1096,6 +1097,17 @@ function products(){
     const order=[...sortProductRows(live,'codeAsc'),...sortProductRows(rest,'codeAsc')].map(r=>r.id)
     try{await api('/api/products/display-no/renumber',{order});toast('振り直しました');await boot()}
     catch(e){toast(e.message||'失敗しました')}
+  }
+  const openingWipe=document.getElementById('openingWipeOpen')
+  if(openingWipe)openingWipe.onclick=()=>{
+    if(typeof OpeningStockWipe==='undefined'||!OpeningStockWipe.open){toast('初期在庫の削除画面を読み込めませんでした。');return}
+    OpeningStockWipe.open({
+      api,
+      toast,
+      boot,
+      isOwner:stockIsOwner,
+      actorName:(state.data&&state.data.actorName)||'',
+    })
   }
   document.querySelectorAll('.product-wipe-scope').forEach(btn=>{btn.onclick=()=>{
     if(typeof ProductRegistryWipe==='undefined'||!ProductRegistryWipe.open){toast('削除画面を読み込めませんでした。');return}
