@@ -6947,11 +6947,25 @@ def _apply_review_acceptance(row, override):
         return row
     if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
         return row
-    prod = row.get('product') or {}
-    if prod.get('action') not in ('create', 'reuse', 'missing'):
-        return row
     if (row.get('customer') or {}).get('action') == 'review':
         return row
+    prod = row.get('product') or {}
+    if prod.get('action') not in ('create', 'reuse', 'missing'):
+        # 品番なしで区分は決まっていて、候補も停止もカテゴリ衝突もない行。
+        # 了承で登録へ進める。候補選択や既存カテゴリの保護はここでは越えない。
+        cat = stock.text(prod.get('category') or '')
+        if not (
+            prod.get('blankSku')
+            and cat in (
+                stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE, stock.CATEGORY_UNIFORM,
+            )
+            and not prod.get('categoryConflict')
+            and not prod.get('candidates')
+        ):
+            return row
+        prod = dict(prod)
+        prod['action'] = 'reuse' if prod.get('id') else 'create'
+        row['product'] = prod
     row['status'] = STATUS_CREATE if prod.get('action') != 'reuse' else STATUS_REUSE
     row['statusLabel'] = STATUS_LABELS[row['status']]
     row['canCommit'] = True
