@@ -227,6 +227,9 @@ def build_groups(c, classified):
         if attr.get('kind') == 'midori_position' or (info['midoriUniform'] and ('上' in info['code'] or '下' in info['code'])):
             kept.append(info)
             continue
+        if attr.get('kind') == 'price_condition':
+            # 刺繍代込みは元の品番のまま別商品。通常品番への確認まとめには入れない。
+            continue
         if attr.get('apply') or attr.get('registerAsParts') or attr.get('needsConfirm'):
             continue
         kept.append(info)

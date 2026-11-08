@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 import code_suffix_attributes as suffix  # noqa: E402
 import product_ledger_import as pli  # noqa: E402
+import product_ledger_processing_service as proc  # noqa: E402
 import stock  # noqa: E402
 
 
@@ -50,6 +51,18 @@ class ClassifyTest(unittest.TestCase):
         self.assertTrue(embroidery['apply'])
         self.assertEqual(embroidery['baseCode'], '6-615')
         self.assertEqual(embroidery['processingName'], '刺繍')
+        leoc = suffix.classify_suffix(
+            '6-951(LEOC刺繍)', product_name='コックコート', supplier='住商モンブラン', size='L',
+        )
+        self.assertTrue(leoc['apply'])
+        self.assertFalse(leoc['needsConfirm'])
+        self.assertEqual(leoc['baseCode'], '6-951')
+        self.assertEqual(leoc['kind'], 'processing')
+        self.assertEqual(leoc['processingName'], 'LEOC刺繍')
+        wide = suffix.classify_suffix('6-951（LEOC刺繍）', product_name='コックコート')
+        self.assertEqual(wide['baseCode'], '6-951')
+        self.assertEqual(wide['processingName'], 'LEOC刺繍')
+        self.assertFalse(suffix.classify_suffix('6-951(刺繍なし)')['apply'])
         parts = suffix.classify_suffix('BW554-73用Dカン', product_name='Dカン', supplier='住商モンブラン', size='-')
         self.assertTrue(parts['registerAsParts'])
         self.assertFalse(parts['apply'])
@@ -68,6 +81,44 @@ class ClassifyTest(unittest.TestCase):
         change = suffix.classify_suffix('MH60B下無くなり次第F15BO78へ', product_name='帽')
         self.assertTrue(change['needsConfirm'])
         self.assertTrue(suffix.classify_suffix('7-731(廃番→7-733)')['needsConfirm'])
+        unused = suffix.classify_suffix(
+            'APK205-10 (不使用)', product_name='シャツコート(不使用)', supplier='KAZEN WLD(株)',
+        )
+        self.assertTrue(unused['apply'])
+        self.assertEqual(unused['kind'], 'note')
+        self.assertEqual(unused['baseCode'], 'APK205-10')
+        self.assertEqual(unused['note'], '不使用')
+        self.assertFalse(unused['registerAsParts'])
+        wide_unused = suffix.classify_suffix(
+            'APK205-10（不使用）', product_name='シャツコート（不使用）',
+        )
+        self.assertEqual(wide_unused['baseCode'], 'APK205-10')
+        self.assertFalse(wide_unused['registerAsParts'])
+        bare_you = suffix.classify_suffix('APK205-10用', product_name='シャツコート')
+        self.assertFalse(bare_you['registerAsParts'])
+        self.assertNotIn('部品のように見えます', bare_you.get('reason') or '')
+        star = suffix.classify_suffix('*小前', product_name='*小前', supplier='(株)サーヴォ')
+        self.assertFalse(star['registerAsParts'])
+        self.assertNotEqual(star['kind'], 'parts')
+        fabric = suffix.classify_suffix(
+            'NT7003難燃作業衣 生地', product_name='NT7003難燃作業衣 生地',
+            supplier='ミドリ安全北海道 釧路営業所',
+        )
+        self.assertTrue(fabric['registerAsParts'])
+        self.assertFalse(fabric['needsConfirm'])
+        self.assertEqual(fabric['baseCode'], 'NT7003難燃作業衣 生地')
+        self.assertFalse(fabric['apply'])
+        inclusive = suffix.classify_suffix(
+            'AS7300-1 (刺繍代込み)', product_name='シャツ', supplier='仕入A',
+        )
+        self.assertEqual(inclusive['kind'], 'price_condition')
+        self.assertFalse(inclusive['needsConfirm'])
+        self.assertFalse(inclusive['apply'])
+        self.assertEqual(inclusive['baseCode'], 'AS7300-1 (刺繍代込み)')
+        self.assertFalse(inclusive['processingName'])
+        self.assertFalse(proc.is_embroidery_class_name('刺繍代込み'))
+        self.assertTrue(proc.is_embroidery_class_name('LEOC刺繍'))
+        self.assertTrue(proc.is_embroidery_class_name('刺繍'))
 
 
 class ImportTest(unittest.TestCase):
@@ -159,6 +210,54 @@ class ImportTest(unittest.TestCase):
                     'token': 'suffix-dim-1',
                 }, db_path=str(path))
             self.assertEqual(conn.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], 0)
+        finally:
+            conn.close()
+            folder.cleanup()
+
+    def test_embroidery_price_included_registers_as_its_own_code(self):
+        folder, path, conn = newdb()
+        try:
+            text = (
+                '顧客,仕入先,商品コード,商品名,サイズ,仕入単価\n'
+                '顧客A,仕入A,AS7300-1,シャツ,L,1200\n'
+                '顧客A,仕入A,AS7300-1 (刺繍代込み),シャツ,L,1800\n'
+            )
+            body = {
+                'importMode': 'products', 'name': 'price.csv',
+                'file': base64.b64encode(text.encode('utf-8-sig')).decode('ascii'),
+                '_canWrite': True, '_actor': {'name': '確認'},
+            }
+            preview = pli.build_preview(conn, body)
+            by_code = {r['csv']['code']: r for r in preview['rows']}
+            plain = by_code['AS7300-1']
+            held = by_code['AS7300-1 (刺繍代込み)']
+            self.assertTrue(plain['canCommit'])
+            self.assertTrue(held['canCommit'])
+            self.assertEqual(held['csv']['code'], 'AS7300-1 (刺繍代込み)')
+            self.assertNotEqual(held['csv']['code'], plain['csv']['code'])
+            names = [c.get('serviceName') for c in preview.get('processingCandidates') or []]
+            self.assertNotIn('刺繍', names)
+            self.assertNotIn('刺繍代込み', names)
+            pli.commit_preview(conn, {
+                **body,
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'suffix-price-own-code-1',
+            }, db_path=str(path))
+            conn.commit()
+            codes = {
+                r['code'] for r in conn.execute(
+                    "SELECT code FROM products WHERE merged_into_id IS NULL"
+                )
+            }
+            self.assertIn('AS7300-1', codes)
+            self.assertIn('AS7300-1 (刺繍代込み)', codes)
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) n FROM products WHERE category='加工サービス'"
+                ).fetchone()['n'],
+                0,
+            )
         finally:
             conn.close()
             folder.cleanup()
