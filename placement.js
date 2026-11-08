@@ -166,7 +166,7 @@ let stockSection='list'
 function normalizeStockSection(section){
   // Legacy 入庫・出庫 section → 在庫一覧
   if(section==='move')return 'list'
-  return section==='setup'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='close'?section:'list'
+  return section==='setup'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='close'||section==='qrread'?section:'list'
 }
 function syncStockNav(section){
   stockSection=normalizeStockSection(section)
@@ -349,7 +349,7 @@ document.querySelectorAll('#kintainav .nav').forEach(b=>b.onclick=async()=>{
     await showCatalog('kintai');
   }else await showKintaiSection(b.dataset.kintaiSection);
 });
-window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='history'||e.data.section==='period'||e.data.section==='orders'||e.data.section==='stocktake'||e.data.section==='close'))syncStockNav(normalizeStockSection(e.data.section))});
+window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='history'||e.data.section==='period'||e.data.section==='orders'||e.data.section==='stocktake'||e.data.section==='close'||e.data.section==='qrread'))syncStockNav(normalizeStockSection(e.data.section))});
 
 const placementAllButton=document.createElement('button');
 placementAllButton.type='button';

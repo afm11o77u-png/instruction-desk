@@ -20,6 +20,8 @@ import stock
 
 PREFIX = 'nqr1.'
 PUBLIC_RE = re.compile(r'^nqr1\.[0-9a-f]{32}\Z')
+MAX_SCAN_LEN = 400
+_UNSAFE_SCHEME = re.compile(r'^(?:https?:|javascript:|data:)', re.I)
 
 
 def ensure_schema(c):
@@ -224,6 +226,45 @@ def _lookup_new(c, public_id):
     body = _payload(c, cp, row, created=False)
     body['mismatch'] = ''
     return body
+
+
+def parse_scan(value):
+    """読み取った文字列を不信な入力として受け取る。URLや実行文にはしない。"""
+    if not isinstance(value, str):
+        raise ValueError('QRの文字列を入力してください。')
+    text = value.replace('\r', '').replace('\n', '').strip()
+    if not text:
+        raise ValueError('QRの文字列を入力してください。')
+    if len(text) > MAX_SCAN_LEN:
+        raise ValueError('QRの文字列が長すぎます。')
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        raise ValueError('QRの文字列に使えない文字があります。')
+    if _UNSAFE_SCHEME.match(text):
+        raise ValueError('URLや実行用の文字列は在庫QRとして扱いません。')
+    return text
+
+
+def read_scan(c, body):
+    """旧QRと新QRを解決する。在庫数量は変えない。ロットは1件に決めない。"""
+    raw = body.get('qr') if isinstance(body, dict) else None
+    text = parse_scan(raw if isinstance(raw, str) else '')
+    before = _qty_snapshot(c)
+    found = lookup(c, text)
+    after = _qty_snapshot(c)
+    if after != before:
+        raise RuntimeError('読み取りで在庫数量が変わりました。')
+    found['qrKind'] = 'new' if is_new_qr(text) else 'legacy'
+    found['qtyChanged'] = False
+    found['pickedLotId'] = None
+    found['scanLength'] = len(text)
+    return found
+
+
+def _qty_snapshot(c):
+    row = c.execute(
+        'SELECT COUNT(*) AS n, COALESCE(SUM(qty_remaining),0) AS q FROM lots'
+    ).fetchone()
+    return int(row['n']), int(row['q'])
 
 
 def lookup(c, qr):

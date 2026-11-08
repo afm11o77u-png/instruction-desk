@@ -14,7 +14,7 @@ function conditionSelectHtml(id,value,opts){
   const all=allowAll?`<option value="" ${cur===''?'selected':''}>すべて</option>`:''
   return `<select id="${id}" aria-label="状態">${all}${CONDITION_OPTS.map(([v,l])=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`).join('')}</select>`
 }
-const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake','close'])
+const STOCK_SECTIONS=new Set(['list','history','setup','period','orders','stocktake','close','qrread'])
 /** Legacy ?section=move / 保存済みURL → 在庫一覧へ案内 */
 let moveRedirectNotice=false
 function normalizeSection(section){
@@ -634,6 +634,9 @@ function applySectionState(section,setupTab){
   }else if(state.section==='close'){
     state.tab='close'
     state.mode='stock'
+  }else if(state.section==='qrread'){
+    state.tab='qrread'
+    state.mode='stock'
   }else{
     const next=SETUP_TAB_IDS.has(setupTab)?setupTab:(SETUP_TAB_IDS.has(state.setupTab)?state.setupTab:loadSetupTab())
     state.setupTab=next
@@ -648,6 +651,7 @@ function notifyParentSection(){
 }
 async function setStockSection(section,{setupTab,silent}={}){
   const next=normalizeSection(section)
+  if(state.section==='qrread'&&next!=='qrread'&&window.QrRead)QrRead.stop()
   if(next===state.section&&!(setupTab&&SETUP_TAB_IDS.has(setupTab)&&setupTab!==state.tab)){
     if(!silent)notifyParentSection()
     return true
@@ -744,16 +748,19 @@ function paint(){
   }else if(state.section==='close'){
     state.tab='close'
     state.mode='stock'
+  }else if(state.section==='qrread'){
+    state.tab='qrread'
+    state.mode='stock'
   }else{
     state.tab='list'
     state.mode='stock'
   }
   document.querySelectorAll('.switch button[data-mode]').forEach(b=>{
     const want=b.dataset.mode==='masters'?'setup':'list'
-    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake'||state.section==='close')))
+    b.classList.toggle('active',want===state.section||(want==='list'&&(state.section==='history'||state.section==='period'||state.section==='orders'||state.section==='stocktake'||state.section==='close'||state.section==='qrread')))
   })
   const title=$('#stocktitle')
-  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',close:'月末締め',list:'在庫一覧'}
+  const titles={setup:SETUP_TAB_LABEL[state.tab]||'顧客',history:'在庫履歴',period:'期間入出荷集計',orders:'発注',stocktake:'棚卸',close:'月末締め',qrread:'QR読み取り',list:'在庫一覧'}
   if(title)title.textContent=titles[state.section]||titles.list
   const tabs=$('#tabs')
   if(state.section==='setup'){
@@ -770,7 +777,7 @@ function paint(){
   syncStockListDisplaySlot(state.section)
   // 旧「旧CSV取込」タブは廃止。残っている localStorage 値は商品タブへ寄せる
   if(state.tab==='legacyCsv'){state.tab='products';state.setupTab='products';saveSetupTab('products')}
-  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>'),close:()=>typeof StockClose!=='undefined'?StockClose.page():($('#main').innerHTML='<p>月末締めの画面を読み込めませんでした。</p>')}[state.tab]
+  const view={customers:customers,suppliers:suppliers,products:products,locations:locations,opening:opening,list:stockList,move:movePage,history:historyPage,period:periodPage,orders:()=>typeof PurchaseOrders!=='undefined'?PurchaseOrders.page():($('#main').innerHTML='<p>発注画面を読み込めませんでした。</p>'),stocktake:()=>typeof Stocktake!=='undefined'?Stocktake.page():($('#main').innerHTML='<p>棚卸画面を読み込めませんでした。</p>'),close:()=>typeof StockClose!=='undefined'?StockClose.page():($('#main').innerHTML='<p>月末締めの画面を読み込めませんでした。</p>'),qrread:()=>typeof QrRead!=='undefined'?QrRead.page():($('#main').innerHTML='<p>QR読み取り画面を読み込めませんでした。</p>')}[state.tab]
   view()
   // 表示コントロール再マウント後も「旧CSV一括取り込み」を表示の左に維持
   if(state.section==='setup')syncLegacyCsvBulkEntry('setup')
