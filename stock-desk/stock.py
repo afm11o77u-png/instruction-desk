@@ -276,6 +276,8 @@ CREATE INDEX IF NOT EXISTS product_ledger_row_maps_row_key
   ON product_ledger_row_maps(row_map_key, id DESC);
 CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file
   ON product_ledger_row_maps(file_sha256, source_row_no);
+CREATE INDEX IF NOT EXISTS product_ledger_row_maps_code
+  ON product_ledger_row_maps(csv_product_code, id DESC);
 """
 
 
@@ -853,6 +855,10 @@ def migrate_schema(c):
     c.execute(
         'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_file '
         'ON product_ledger_row_maps(file_sha256, source_row_no)'
+    )
+    c.execute(
+        'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_code '
+        'ON product_ledger_row_maps(csv_product_code, id DESC)'
     )
     customer_cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
     if 'office_code' not in customer_cols:

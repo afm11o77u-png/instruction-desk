@@ -228,17 +228,110 @@ def prefer_service_display_name(current: str, candidate: str) -> str:
     return cand if cand.count('ー') > cur.count('ー') else cur
 
 
+# 同じ文字列の正規化を取り込み中に繰り返さない。上限を超えたら捨てて作り直す（結果は同じ）。
+# 別名表・候補・表記ゆれ表を別オブジェクトへ差し替えたときは破棄する。
+# 辞書の中身だけをその場で書き換えた場合は拾わない（定義はモジュール定数）。
+_NORM_CACHE_MAX = 16384
+_NORM_KEY_MAX_LEN = 512
+_norm_cache: dict[str, str] = {}
+_verb_cache: dict[str, str] = {}
+_compiled_epoch = None
+_compiled_index = None
+
+
+def _service_tables_epoch():
+    return (
+        id(_SERVICE_NAME_ALIASES),
+        id(_SERVICE_NAME_CANDIDATES),
+        id(_ATTACH_VERB_CANON),
+        id(_PHYSICAL_PARTS_MARKERS),
+        id(_WORK_SUFFIXES),
+    )
+
+
+def clear_service_name_cache():
+    """キャッシュを捨てる。テストで別名表を差し替えた直後に使う。"""
+    global _compiled_epoch, _compiled_index
+    _norm_cache.clear()
+    _verb_cache.clear()
+    _compiled_epoch = None
+    _compiled_index = None
+
+
+def _canonicalize_attach_verbs_body(value) -> str:
+    t = unicodedata.normalize('NFKC', stock.text(value) or '')
+    t = re.sub(r'[\s\u3000]+', '', t)
+    for src, dst in _ATTACH_VERB_CANON:
+        t = t.replace(src, dst)
+    return t
+
+
+def _normalize_service_key_body(value) -> str:
+    """照合用キーの本体。キャッシュを通さない。"""
+    t = unicodedata.normalize('NFKC', stock.text(value) or '')
+    t = re.sub(r'[\s\u3000]+', '', t)
+    t = strip_service_markers(t)
+    t = _canonicalize_attach_verbs_body(t)
+    t = _fold_word_end_long_vowel(t)
+    return t.casefold()
+
+
+def _ensure_service_index():
+    """別名表と候補語の正規化結果を1回だけ組む。"""
+    global _compiled_epoch, _compiled_index
+    epoch = _service_tables_epoch()
+    if _compiled_index is not None and _compiled_epoch == epoch:
+        return _compiled_index
+    _norm_cache.clear()
+    _verb_cache.clear()
+    alias_by_key = {}
+    for key, display in _SERVICE_NAME_ALIASES.items():
+        alias_by_key[_normalize_service_key_body(key)] = display
+    _compiled_index = {
+        'alias_by_key': alias_by_key,
+        'value_keys': tuple(
+            (_normalize_service_key_body(display), display)
+            for display in _SERVICE_NAME_ALIASES.values()
+        ),
+        'candidates': tuple(
+            (term, _normalize_service_key_body(term))
+            for term in _SERVICE_NAME_CANDIDATES
+        ),
+        'marker_keys': tuple(
+            _normalize_service_key_body(marker) for marker in _PHYSICAL_PARTS_MARKERS
+        ),
+        'work_keys': tuple(
+            _normalize_service_key_body(suffix) for suffix in _WORK_SUFFIXES
+        ),
+        'service_word_keys': tuple(
+            _normalize_service_key_body(word)
+            for word in ('加工', '刺繍', 'プリント', '縫製')
+        ),
+    }
+    _compiled_epoch = epoch
+    return _compiled_index
+
+
+def _remember(cache: dict, key: str, result: str) -> str:
+    if len(cache) >= _NORM_CACHE_MAX:
+        cache.clear()
+    cache[key] = result
+    return result
+
+
 def normalize_service_key(value: str) -> str:
     """照合用キー。全角半角・空白・前後の印・取付／取り付け等の表記差を揃えて重複登録を防ぐ。
 
     「ポケット加工」と「ポケット付け」のように語が違うものは別のまま（加工の有無で寄せない）。
+    文字列以外と極端に長い入力はキャッシュしない（結果の計算は同じ）。
     """
-    t = unicodedata.normalize('NFKC', stock.text(value) or '')
-    t = re.sub(r'[\s\u3000]+', '', t)
-    t = strip_service_markers(t)
-    t = canonicalize_attach_verbs(t)
-    t = _fold_word_end_long_vowel(t)
-    return t.casefold()
+    _ensure_service_index()
+    if isinstance(value, str) and len(value) <= _NORM_KEY_MAX_LEN:
+        try:
+            return _norm_cache[value]
+        except KeyError:
+            return _remember(_norm_cache, value, _normalize_service_key_body(value))
+    return _normalize_service_key_body(value)
 
 
 def is_elms_corporation_vendor(supplier_name: str) -> bool:
@@ -374,41 +467,44 @@ def is_physical_parts_name(product_name: str) -> bool:
     core = normalize_service_key(base) or normalize_service_key(product_name)
     if not core:
         return False
+    index = _ensure_service_index()
     # 本体側に加工サービス語があるときだけ部品扱いしない（括弧用途の『加工用』は見ない）
-    if any(normalize_service_key(a) in core for a in ('加工', '刺繍', 'プリント', '縫製')):
+    if any(word in core for word in index['service_word_keys']):
         return False
     # 末尾が作業語（裏地補修・ファスナー交換・ボタン付け等）は修理／加工サービス
-    if any(core.endswith(normalize_service_key(w)) for w in _WORK_SUFFIXES):
+    if any(core.endswith(suffix) for suffix in index['work_keys']):
         return False
-    for marker in _PHYSICAL_PARTS_MARKERS:
-        mk = normalize_service_key(marker)
-        if core == mk or core.startswith(mk) or core.endswith(mk):
+    for marker in index['marker_keys']:
+        if core == marker or core.startswith(marker) or core.endswith(marker):
             return True
     return False
 
 
 def _alias_map():
-    return {normalize_service_key(k): v for k, v in _SERVICE_NAME_ALIASES.items()}
+    return _ensure_service_index()['alias_by_key']
 
 
 def _canonical_from_term(term: str) -> str:
-    aliases = _alias_map()
+    index = _ensure_service_index()
+    aliases = index['alias_by_key']
     tk = normalize_service_key(term)
     if tk in aliases:
         return aliases[tk]
-    for k, v in _SERVICE_NAME_ALIASES.items():
-        if normalize_service_key(v) == tk:
-            return v
+    for normalized, display in index['value_keys']:
+        if normalized == tk:
+            return display
     return stock.text(term)
 
 
 def canonicalize_attach_verbs(value: str) -> str:
     """取り付け／取付け → 取付、縫い付け → 縫付 など表記差を揃える。"""
-    t = unicodedata.normalize('NFKC', stock.text(value) or '')
-    t = re.sub(r'[\s\u3000]+', '', t)
-    for src, dst in _ATTACH_VERB_CANON:
-        t = t.replace(src, dst)
-    return t
+    _ensure_service_index()
+    if isinstance(value, str) and len(value) <= _NORM_KEY_MAX_LEN:
+        try:
+            return _verb_cache[value]
+        except KeyError:
+            return _remember(_verb_cache, value, _canonicalize_attach_verbs_body(value))
+    return _canonicalize_attach_verbs_body(value)
 
 
 def _strip_parens_keep_inner(value: str):
@@ -457,13 +553,13 @@ def _looks_like_service_core(core: str) -> bool:
 
 def _resolve_service_core(core: str) -> str:
     """核テキストを統一加工名へ。不明なら空。原文にない具体化はしない。"""
-    aliases = _alias_map()
+    index = _ensure_service_index()
+    aliases = index['alias_by_key']
     cleaned = canonicalize_attach_verbs(core)
     sk = normalize_service_key(cleaned)
     if sk in aliases:
         return aliases[sk]
-    for term in _SERVICE_NAME_CANDIDATES:
-        tk = normalize_service_key(term)
+    for term, tk in index['candidates']:
         if sk == tk or (tk and sk.endswith(tk) and _looks_like_service_core(
             cleaned[-(len(term)):] if len(cleaned) >= len(term) else cleaned
         )):
@@ -599,9 +695,8 @@ def unify_processing_service_name(raw_name: str) -> str:
             if resolved:
                 return resolved
             # 衣服種を残したまま末尾だけ加工語のとき（コックコート七分袖加工）
-            for term in _SERVICE_NAME_CANDIDATES:
-                tk = normalize_service_key(term)
-                sk = normalize_service_key(resolve_target)
+            sk = normalize_service_key(resolve_target)
+            for term, tk in _ensure_service_index()['candidates']:
                 if tk and sk.endswith(tk):
                     return _canonical_from_term(term)
 
@@ -617,7 +712,7 @@ def _extract_composition_label(raw: str) -> str:
     if len(bits) < 2:
         return ''
     unified = []
-    alias_map = {normalize_service_key(k): v for k, v in _SERVICE_NAME_ALIASES.items()}
+    alias_map = _alias_map()
     for b in bits:
         cleaned = _KIND_STRIP_RE.sub('', b)
         cleaned = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', cleaned))
