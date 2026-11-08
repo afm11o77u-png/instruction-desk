@@ -45,6 +45,9 @@
       `メーカー補正 ${c.makerSkuCorrections||0}`,
       `台帳CSVマップ ${c.productLedgerRowMaps||0}`,
       `旧CSV商品マップ ${c.legacyCsvRowMaps||0}`,
+      `現単価 ${c.priceBase||0}`,
+      `特値 ${c.priceSpecial||0}`,
+      `新QR ${c.stockQrCodes||0}`,
     ].join('　')
   }
 

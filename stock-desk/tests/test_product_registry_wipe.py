@@ -586,3 +586,129 @@ class ScopedStockCascadeTest(unittest.TestCase):
                 wipe.execute_wipe(c, {'_canWrite': True, '_actor': {'role': 'staff'}, 'scope': 'uniform', 'withStock': True})
         finally:
             c.close(); folder.cleanup()
+
+
+class AttachedPriceAndQrTest(unittest.TestCase):
+    """現単価・特値・新QRは商品への外部キーで削除を止めていた。対象分だけ一緒に消し、他区分は残す。"""
+
+    ACTOR = {'id': 1, 'name': '主管理テスト', 'role': 'owner'}
+
+    def _product(self, c, *, code, name, category, customer_id, supplier_id):
+        return stock.save_product(c, {
+            'code': code, 'name': name, 'color': '', 'category': category,
+            'supplierId': supplier_id, 'active': True, 'sizes': ['M'],
+            'links': [{'customerId': customer_id, 'embroidery': '', 'isStandard': True, 'active': True}],
+        })
+
+    def test_uniform_wipe_drops_its_prices_and_new_qr_only(self):
+        folder, path, c = newdb()
+        try:
+            cu = stock.save_customer(c, {'name': '顧客A', 'active': True})
+            su = stock.save_supplier(c, {'name': '仕入A', 'active': True})
+            uniform = self._product(c, code='U-1', name='制服甲', category='制服', customer_id=cu['id'], supplier_id=su['id'])
+            part = self._product(c, code='', name='部品甲', category='部品・資材', customer_id=cu['id'], supplier_id=su['id'])
+            service = self._product(c, code='', name='加工甲', category='加工サービス', customer_id=cu['id'], supplier_id=su['id'])
+            now = 't'
+            for product_id, price in ((uniform['id'], 1200), (part['id'], 300)):
+                c.execute(
+                    '''INSERT INTO price_base(supplier_id,product_id,size_label,price,status,reason,source,updated_at)
+                       VALUES(?,?,?,?,?,?,?,?)''',
+                    (su['id'], product_id, 'M', price, 'ok', '', 'manual', now),
+                )
+            c.execute(
+                '''INSERT INTO price_special(customer_id,supplier_id,product_id,size_label,price,note,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?)''',
+                (cu['id'], su['id'], uniform['id'], 'M', 900, '', now, now),
+            )
+            handle = c.execute(
+                'SELECT id FROM customer_products WHERE product_id=?', (uniform['id'],)
+            ).fetchone()['id']
+            c.execute(
+                '''INSERT INTO stock_qr_codes(public_id,customer_product_id,size_label,condition,created_at)
+                   VALUES(?,?,?,?,?)''',
+                ('nqr1.' + ('a' * 32), handle, 'M', 'new', now),
+            )
+            c.execute(
+                '''INSERT INTO qr_stock_links(
+                     legacy_stock_id, qr_raw, product_id, customer_product_id, created_at, updated_at)
+                   VALUES('old-1','{}',?,?,?,?)''',
+                (uniform['id'], handle, now, now),
+            )
+            c.commit()
+            preview = wipe.preview_wipe(c, owner_body(scope='uniform'))
+            self.assertEqual(preview['counts']['priceBase'], 1)
+            self.assertEqual(preview['counts']['priceSpecial'], 1)
+            self.assertEqual(preview['counts']['stockQrCodes'], 1)
+            self.assertTrue(preview['canWipe'])
+            self.assertFalse(preview['withStock'])
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path):
+                code, res = stock_server.api_post(
+                    str(path), 'desk', '/api/products/registry-wipe',
+                    owner_body(scope='uniform', withStock=False, stockCounts=preview['stockCounts']),
+                    can_write=True, actor=self.ACTOR,
+                )
+            self.assertEqual(code, 200, res)
+            self.assertTrue(res.get('deleted'))
+            self.assertEqual(res['counts']['products'], 1)
+            self.assertEqual(res['counts']['priceBase'], 1)
+            self.assertEqual(res['counts']['stockQrCodes'], 1)
+            with stock.connect(path) as c2:
+                names = [r['name'] for r in c2.execute('SELECT name FROM products ORDER BY id')]
+                self.assertEqual(names, ['部品甲', '加工甲'])
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM price_base').fetchone()['n'], 1)
+                self.assertEqual(c2.execute('SELECT product_id FROM price_base').fetchone()['product_id'], part['id'])
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM price_special').fetchone()['n'], 0)
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM stock_qr_codes').fetchone()['n'], 0)
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 1)
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM customers').fetchone()['n'], 1)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_stock_blocker_still_rolls_back_prices(self):
+        folder, path, c = newdb()
+        try:
+            sample_data.seed(c)
+            c.commit()
+            uniform_ids = wipe.scope_product_ids(c, 'uniform')
+            self.assertTrue(uniform_ids)
+            pid = sorted(uniform_ids)[0]
+            c.execute(
+                '''INSERT INTO price_base(supplier_id,product_id,size_label,price,status,reason,source,updated_at)
+                   VALUES(0,?,?,?,?,?,?,?)''',
+                (pid, 'M', 500, 'ok', '', 'manual', 't'),
+            )
+            c.commit()
+            before = c.execute('SELECT COUNT(*) n FROM products').fetchone()['n']
+            code, res = stock_server.api_post(
+                str(path), 'desk', '/api/products/registry-wipe',
+                owner_body(scope='uniform'),
+                can_write=True, actor=self.ACTOR,
+            )
+            self.assertEqual(code, 409, res)
+            self.assertFalse(res.get('deleted'))
+            with stock.connect(path) as c2:
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], before)
+                self.assertEqual(c2.execute('SELECT COUNT(*) n FROM price_base WHERE product_id=?', (pid,)).fetchone()['n'], 1)
+                self.assertGreater(c2.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_opening_wipe_keeps_products(self):
+        import opening_stock_wipe as opening
+        folder, path, c = newdb()
+        try:
+            sample_data.seed(c)
+            c.commit()
+            before = c.execute('SELECT COUNT(*) n FROM products').fetchone()['n']
+            self.assertGreater(before, 0)
+            body = owner_body(confirmText=opening.CONFIRM_TEXT)
+            with mock.patch.object(stock, 'backup_sqlite', return_value=path):
+                result = opening.execute_wipe(c, body, db_path=path)
+            c.commit()
+            self.assertTrue(result.get('deleted'))
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], before)
+        finally:
+            c.close()
+            folder.cleanup()

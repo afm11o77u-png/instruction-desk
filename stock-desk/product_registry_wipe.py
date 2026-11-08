@@ -429,6 +429,9 @@ def count_targets(c, scope=''):
         'productLedgerRowMaps': safe('product_ledger_row_maps'),
         'makerSkuCorrections': safe('maker_sku_corrections'),
         'legacyCsvRowMaps': legacy_maps,
+        'priceBase': safe('price_base'),
+        'priceSpecial': safe('price_special'),
+        'stockQrCodes': safe('stock_qr_codes'),
     }
 
 
@@ -464,6 +467,9 @@ def _count_scoped(c, ids):
             'product_ledger_row_maps', f'product_id IN {p} OR customer_product_id IN {h}'),
         'makerSkuCorrections': 0,
         'legacyCsvRowMaps': safe('legacy_csv_row_maps', f'product_id IN {p}'),
+        'priceBase': safe('price_base', f'product_id IN {p}'),
+        'priceSpecial': safe('price_special', f'product_id IN {p}'),
+        'stockQrCodes': safe('stock_qr_codes', f'customer_product_id IN {h}'),
     }
 
 
@@ -492,6 +498,9 @@ def _delete_scoped(c, ids):
     run('productLedgerRowMaps', 'product_ledger_row_maps',
         f'product_id IN {p} OR customer_product_id IN {h}')
     run('legacyCsvRowMaps', 'legacy_csv_row_maps', f'product_id IN {p}')
+    run('priceBase', 'price_base', f'product_id IN {p}')
+    run('priceSpecial', 'price_special', f'product_id IN {p}')
+    run('stockQrCodes', 'stock_qr_codes', f'customer_product_id IN {h}')
     run('productSuppliers', 'product_suppliers', f'product_id IN {p}')
     run('productSizes', 'product_sizes', f'product_id IN {p}')
     # 加工を消すとき、制服などの取扱からの加工リンクだけ外す（取扱そのものは残す）
@@ -576,6 +585,12 @@ def _delete_registry(c):
             'legacyCsvRowMaps',
             'DELETE FROM legacy_csv_row_maps WHERE product_id IS NOT NULL',
         )
+    if 'price_base' in tables:
+        run_delete('priceBase', 'DELETE FROM price_base')
+    if 'price_special' in tables:
+        run_delete('priceSpecial', 'DELETE FROM price_special')
+    if 'stock_qr_codes' in tables:
+        run_delete('stockQrCodes', 'DELETE FROM stock_qr_codes')
     if 'product_suppliers' in tables:
         run_delete('productSuppliers', 'DELETE FROM product_suppliers')
     if 'product_sizes' in tables:
