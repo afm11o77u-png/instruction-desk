@@ -18,9 +18,9 @@
     {id:'exact', title:'完全一致', statuses:['exact'], kind:'aside', mode:'details-closed',
       hint:'初期選択のまま登録します。確認するとき開いてください。'},
     {id:'unmatched', title:'未一致', statuses:['unmatched'], kind:'separate', mode:'details-open',
-      hint:'一致する商品がありません。未一致から商品は作りません。部品・加工と決められない行は、対応不要にすると下の対象外へ移ります。'},
+      hint:'品番がある未一致と、制服の可能性がある品名はここに残します。部品・加工の候補は品名ごとにまとめ、件数を確認してから対応不要にします。'},
     {id:'out', title:'対象外', statuses:['out_of_scope'], kind:'aside', mode:'details-closed',
-      hint:'部品・資材と加工サービス、および対応不要にした行です。未一致ではありません。登録せず、商品も作りません。'},
+      hint:'部品・資材と加工サービス、および対応不要にした行です。未一致ではありません。登録せず、商品も作りません。保存した対応不要は、同じ品名の同じ旧IDを再取込しても戻します。'},
     {id:'unchanged', title:'登録済み', statuses:['unchanged'], kind:'aside', mode:'details-closed',
       hint:'同じ対応が登録済みです。変えるときだけ開いて指定してください。'},
   ]
@@ -126,11 +126,30 @@
     </table></div>`
   }
 
+  function groupCards(groups, busy, mode){
+    const list=(groups||[]).filter(g=>mode==='open'?g.openCount:g.savedCount)
+    if(!list.length)return ''
+    return `<div class="qr-scope-groups">${list.map(g=>{
+      const n=mode==='open'?g.openCount:g.savedCount
+      const button=mode==='open'
+        ?`<button type="button" data-qr-dismiss-group="${esc(g.key)}" data-qr-group-name="${esc(g.itemName)}" data-qr-group-count="${n}"${busy?' disabled':''}>${n}件を対応不要にする</button>`
+        :`<button type="button" data-qr-restore-group="${esc(g.key)}" data-qr-group-name="${esc(g.itemName)}" data-qr-group-count="${n}"${busy?' disabled':''}>${n}件を未一致に戻す</button>`
+      return `<div class="qr-scope-group"><p><strong>${esc(g.scopeLabel)}</strong>　${esc(g.itemName)}　${n}件</p><p class="excelhint">${esc(g.reason)}</p>${button}</div>`
+    }).join('')}</div>`
+  }
+
   function sectionBlock(def, rows, busy){
-    if(!rows.length&&def.id!=='main')return ''
+    const groups=(st&&st.preview&&st.preview.scopeGroups)||[]
+    const grouped=def.id==='unmatched'?groupCards(groups, busy, 'open'):def.id==='out'?groupCards(groups, busy, 'saved'):''
+    const shown=def.id==='unmatched'
+      ?rows.filter(row=>!row.scopeHint)
+      :def.id==='out'
+        ?rows.filter(row=>!(row.dismissSaved&&row.scopeHint))
+        :rows
+    if(!shown.length&&!grouped&&def.id!=='main')return ''
     const hint=def.id==='main'?mainHint(rows):def.hint
     const title=(def.id==='main'&&!rows.length)?def.title:`${def.title} ${rows.length}`
-    const body=`<p class="excelhint">${esc(hint)}</p>${rows.length?tableHtml(rows, busy):''}`
+    const body=`<p class="excelhint">${esc(hint)}</p>${grouped}${shown.length?tableHtml(shown, busy):''}`
     const cls=`qr-link-section qr-link-section-${def.kind}`
     if(def.mode==='details-closed'||def.mode==='details-open'){
       const open=def.mode==='details-open'?' open':''
@@ -139,20 +158,7 @@
     return `<section class="${cls}" data-qr-section="${def.id}"><h3>${esc(title)}</h3>${body}</section>`
   }
 
-  function displayRows(rows){
-    const dismissed=st&&st.dismissed||{}
-    return (rows||[]).map(row=>{
-      if(row.status==='unmatched'&&dismissed[row.rowNo]){
-        return Object.assign({}, row, {
-          status:'out_of_scope', statusLabel:'対応不要', userDismissed:true,
-        })
-      }
-      return row
-    })
-  }
-
   function sectionsHtml(rows, busy){
-    rows=displayRows(rows)
     const known={}
     SECTIONS.forEach(def=>(def.statuses||[]).forEach(s=>{known[s]=true}))
     const parts=SECTIONS.map(def=>sectionBlock(def, rowsFor(rows, def.statuses||[]), busy)).filter(Boolean)
@@ -170,7 +176,7 @@
     opts=opts||{}
     const writable=!!opts.writable
     const busy=!!opts.busy
-    const rows=displayRows(p.rows||[])
+    const rows=p.rows||[]
     const tally={}
     rows.forEach(row=>{
       const key=row.statusLabel||row.status
@@ -225,9 +231,10 @@
     let check=row.canCommit
       ?`<label><input type="checkbox" data-qr-include="${row.rowNo}"${row.includeDefault?' checked':''}${dis}> 登録</label>`
       :''
-    if((row.status==='unmatched'||row.userDismissed)&&!row.canCommit){
-      const on=row.userDismissed?' checked':''
-      check=`<label><input type="checkbox" data-qr-dismiss="${row.rowNo}"${on}${dis}> 対応不要</label>`
+    if(!row.canCommit&&row.status==='unmatched'&&!row.scopeHint){
+      check=`<label><input type="checkbox" data-qr-dismiss-one="${esc(leg.stockId)}"${dis}> 対応不要</label>`
+    }else if(!row.canCommit&&row.dismissSaved){
+      check=`<label><input type="checkbox" data-qr-restore-one="${esc(leg.stockId)}" checked${dis}> 対応不要</label>`
     }
     return `<tr>
       <td>${row.rowNo}</td>
@@ -264,13 +271,22 @@
     if(previewBtn)previewBtn.onclick=runPreview
     const commitBtn=el.querySelector('#qrCommit')
     if(commitBtn)commitBtn.onclick=runCommit
-    el.querySelectorAll('[data-qr-dismiss]').forEach(box=>{
+    el.querySelectorAll('[data-qr-dismiss-group]').forEach(btn=>{
+      btn.onclick=()=>runDismissGroup(btn.getAttribute('data-qr-dismiss-group'), btn.getAttribute('data-qr-group-name'), btn.getAttribute('data-qr-group-count'))
+    })
+    el.querySelectorAll('[data-qr-restore-group]').forEach(btn=>{
+      btn.onclick=()=>runRestoreGroup(btn.getAttribute('data-qr-restore-group'), btn.getAttribute('data-qr-group-name'), btn.getAttribute('data-qr-group-count'))
+    })
+    el.querySelectorAll('[data-qr-dismiss-one]').forEach(box=>{
       box.onchange=()=>{
-        if(!st.dismissed)st.dismissed={}
-        const no=box.getAttribute('data-qr-dismiss')
-        if(box.checked)st.dismissed[no]=true
-        else delete st.dismissed[no]
-        paint()
+        if(!box.checked)return
+        runDismissOne(box.getAttribute('data-qr-dismiss-one'))
+      }
+    })
+    el.querySelectorAll('[data-qr-restore-one]').forEach(box=>{
+      box.onchange=()=>{
+        if(box.checked)return
+        runRestoreOne(box.getAttribute('data-qr-restore-one'))
       }
     })
   }
@@ -364,6 +380,95 @@
 
   function clearTransient(){
     dlg().querySelectorAll('.qr-link-error,.qr-link-result').forEach(n=>n.remove())
+  }
+
+  async function refreshPreview(session){
+    session.preview=await session.api('/api/qr-link/preview',{
+      file:session.file.file,name:session.file.name,actorName:session.actorName||'',
+    })
+  }
+
+  async function runDismissGroup(groupKey, name, count){
+    if(st.busy||!st.file)return
+    const n=Number(count)||0
+    if(!window.confirm(`「${name}」${n}件を対応不要にします。登録はしません。同じ品名の同じ旧IDは、次に読み込んでも対象外のままです。`))return
+    const session=st
+    session.busy=true
+    session.error=''
+    session.progressLabel=LABEL_SAVING
+    paint()
+    try{
+      const result=await session.api('/api/qr-link/dismiss',{
+        file:session.file.file,name:session.file.name,groupKey:groupKey,actorName:session.actorName||'',
+      })
+      await refreshPreview(session)
+      if(session.toast)session.toast(`「${result.itemName}」${result.dismissed}件を対応不要にしました。`)
+    }catch(e){
+      session.error=e.message||'対応不要にできませんでした。'
+    }
+    session.busy=false
+    session.progressLabel=''
+    paint()
+  }
+
+  async function runRestoreGroup(groupKey, name, count){
+    if(st.busy||!st.file)return
+    const n=Number(count)||0
+    if(!window.confirm(`「${name}」${n}件を未一致に戻します。`))return
+    const session=st
+    session.busy=true
+    session.error=''
+    session.progressLabel=LABEL_SAVING
+    paint()
+    try{
+      const result=await session.api('/api/qr-link/dismiss-restore',{
+        file:session.file.file,name:session.file.name,groupKey:groupKey,actorName:session.actorName||'',
+      })
+      await refreshPreview(session)
+      if(session.toast)session.toast(`「${result.itemName}」${result.restored}件を未一致に戻しました。`)
+    }catch(e){
+      session.error=e.message||'戻せませんでした。'
+    }
+    session.busy=false
+    session.progressLabel=''
+    paint()
+  }
+
+  async function runDismissOne(stockId){
+    if(st.busy||!st.file)return
+    if(!window.confirm('この1件を対応不要にします。登録はしません。'))return
+    const session=st
+    session.busy=true
+    session.error=''
+    paint()
+    try{
+      await session.api('/api/qr-link/dismiss',{
+        file:session.file.file,name:session.file.name,legacyStockId:stockId,actorName:session.actorName||'',
+      })
+      await refreshPreview(session)
+    }catch(e){
+      session.error=e.message||'対応不要にできませんでした。'
+    }
+    session.busy=false
+    paint()
+  }
+
+  async function runRestoreOne(stockId){
+    if(st.busy||!st.file)return
+    const session=st
+    session.busy=true
+    session.error=''
+    paint()
+    try{
+      await session.api('/api/qr-link/dismiss-restore',{
+        file:session.file.file,name:session.file.name,legacyStockId:stockId,actorName:session.actorName||'',
+      })
+      await refreshPreview(session)
+    }catch(e){
+      session.error=e.message||'戻せませんでした。'
+    }
+    session.busy=false
+    paint()
   }
 
   async function runPreview(){

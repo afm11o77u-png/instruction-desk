@@ -1678,9 +1678,100 @@ class QrLinkNonUniformScopeTest(unittest.TestCase):
         js = (ROOT / 'static' / 'qr_link.js').read_text(encoding='utf-8')
         self.assertIn("statuses:['out_of_scope']", js)
         self.assertIn('対象外', js)
-        self.assertIn('data-qr-dismiss', js)
+        self.assertIn('data-qr-dismiss-group', js)
+        self.assertIn('件を対応不要にする', js)
         self.assertIn('対応不要', js)
         self.assertLess(js.find("statuses:['unmatched']"), js.find("statuses:['out_of_scope']"))
+
+
+class QrLinkScopeGroupTest(unittest.TestCase):
+    def test_name_groups_bulk_dismiss_restore_and_reload(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c)
+            before = snap(c)
+            rows = []
+            for i, name in enumerate(['身頃刺繍', '身頃刺繍', '身頃刺繍', 'ワッペン', '白衣', '襟上げテープ']):
+                rows.append(filled(
+                    legacyStockId=OLD + str(i),
+                    itemNum='',
+                    itemName=name,
+                    itemSize='',
+                ))
+            rows.append(filled())
+            blob = xlsx(rows)
+            preview = ql.build_preview(c, body_of(blob))
+            by_name = {}
+            for row in preview['rows']:
+                by_name.setdefault(row['legacy']['itemName'], []).append(row)
+            self.assertTrue(all(row['status'] == 'unmatched' for row in by_name['身頃刺繍']))
+            self.assertTrue(all(row['scopeHint'] == 'processing' for row in by_name['身頃刺繍']))
+            self.assertEqual(by_name['ワッペン'][0]['scopeHint'], 'parts')
+            self.assertEqual(by_name['白衣'][0]['scopeHint'], '')
+            self.assertEqual(by_name['白衣'][0]['status'], 'unmatched')
+            self.assertEqual(by_name['襟上げテープ'][0]['scopeHint'], 'unknown_blank')
+            self.assertEqual(preview['rows'][-1]['status'], 'exact')
+            groups = {g['itemName']: g for g in preview['scopeGroups']}
+            self.assertEqual(groups['身頃刺繍']['openCount'], 3)
+            self.assertEqual(groups['ワッペン']['openCount'], 1)
+            self.assertNotIn('白衣', groups)
+            self.assertIn('襟上げテープ', groups)
+            embroidery_key = groups['身頃刺繍']['key']
+            result = ql.dismiss_group(c, body_of(blob, groupKey=embroidery_key))
+            c.commit()
+            self.assertEqual(result['dismissed'], 3)
+            self.assertFalse(result['qtyChanged'])
+            self.assertEqual(snap(c), before)
+            again = ql.build_preview(c, body_of(blob))
+            again_by = {row['legacy']['stockId']: row for row in again['rows']}
+            for i in range(3):
+                self.assertEqual(again_by[OLD + str(i)]['status'], 'out_of_scope')
+                self.assertTrue(again_by[OLD + str(i)]['dismissSaved'])
+            self.assertEqual(again_by[OLD + '3']['status'], 'unmatched')
+            self.assertEqual(again_by[OLD + '4']['status'], 'unmatched')
+            self.assertEqual(again_by[OLD]['status'], 'exact')
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+            changed = xlsx([filled(
+                legacyStockId=OLD + '0', itemNum='', itemName='白衣', itemSize='',
+            )])
+            changed_preview = ql.build_preview(c, body_of(changed))
+            self.assertEqual(changed_preview['rows'][0]['status'], 'unmatched')
+            self.assertFalse(changed_preview['rows'][0]['dismissSaved'])
+            with self.assertRaises(ValueError):
+                ql.dismiss_group(c, body_of(blob, groupKey='processing|白衣'))
+            restored = ql.restore_group(c, body_of(blob, groupKey=embroidery_key))
+            c.commit()
+            self.assertEqual(restored['restored'], 3)
+            back = ql.build_preview(c, body_of(blob))
+            back_by = {row['legacy']['stockId']: row for row in back['rows']}
+            self.assertEqual(back_by[OLD + '0']['status'], 'unmatched')
+            self.assertEqual(back_by[OLD + '1']['scopeHint'], 'processing')
+            found = ql.lookup_qr(c, {'id': OLD, 'customer_id': CUST, 'maker_id': MAKER})
+            self.assertFalse(found['found'])
+            self.assertEqual(snap(c), before)
+        finally:
+            c.close()
+            folder.cleanup()
+
+    def test_dismiss_refuses_exact_uniform_row(self):
+        folder, path, c = newdb()
+        try:
+            seed_cap(c)
+            blob = xlsx([filled()])
+            with self.assertRaises(ValueError) as caught:
+                ql.dismiss_group(c, body_of(blob, legacyStockId=OLD))
+            self.assertIn('未一致ではない', str(caught.exception))
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_link_dismissals').fetchone()['n'], 0)
+            code, body = stock_server.api_post(
+                str(path), 'desk', '/api/qr-link/dismiss',
+                body_of(blob, legacyStockId=OLD),
+                can_write=True,
+            )
+            self.assertEqual(code, 400)
+            self.assertEqual(c.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+        finally:
+            c.close()
+            folder.cleanup()
 
 
 if __name__ == '__main__':

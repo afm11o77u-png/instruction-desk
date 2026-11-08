@@ -25,6 +25,8 @@ WRITE_PATHS = {
     '/api/opening', '/api/opening/correct', '/api/import',
     '/api/legacy-csv/commit',
     '/api/qr-link/commit',
+    '/api/qr-link/dismiss',
+    '/api/qr-link/dismiss-restore',
     '/api/product-ledger-csv/commit',
     '/api/product-ledger-csv/maker-lookup/adopt',
     '/api/products/merge',
@@ -433,6 +435,18 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'code': 'commit_failed',
                 'registered': False,
             }
+        return 200, result
+    if path in ('/api/qr-link/dismiss', '/api/qr-link/dismiss-restore'):
+        import qr_link_import
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                if path.endswith('/dismiss-restore'):
+                    result = qr_link_import.restore_group(c, payload)
+                else:
+                    result = qr_link_import.dismiss_group(c, payload)
+        except ValueError as e:
+            return 400, {'error': str(e) or '対応不要を確認してください。', 'qtyChanged': False}
         return 200, result
     if path == '/api/stock-qr':
         import stock_qr
