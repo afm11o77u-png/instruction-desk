@@ -482,10 +482,13 @@ def find_custom_order_products_for_customer(c, product_name, *, customer_id=None
            FROM products p
            LEFT JOIN suppliers s ON s.id=p.supplier_id
            JOIN customer_products cp ON cp.product_id=p.id AND cp.active=1
-           WHERE ''' + _custom_code_where(code)[0] + ''' AND p.name=? AND cp.customer_id=?
+           WHERE ''' + _custom_code_where(code)[0] + ''' AND (p.name=? OR EXISTS (
+                  SELECT 1 FROM product_match_aliases a
+                  WHERE a.product_id=p.id AND a.kind='name' AND a.value=?
+                )) AND cp.customer_id=?
              AND p.merged_into_id IS NULL
            ORDER BY p.id''',
-        (*_custom_code_where(code)[1], name, customer_id),
+        (*_custom_code_where(code)[1], name, name, customer_id),
     ))
 
 
@@ -497,9 +500,12 @@ def find_custom_order_products_by_name(c, product_name, code=None):
     return list(c.execute(
         '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
            FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-           WHERE ''' + _custom_code_where(code)[0] + ''' AND p.name=? AND p.merged_into_id IS NULL
+           WHERE ''' + _custom_code_where(code)[0] + ''' AND (p.name=? OR EXISTS (
+                  SELECT 1 FROM product_match_aliases a
+                  WHERE a.product_id=p.id AND a.kind='name' AND a.value=?
+                )) AND p.merged_into_id IS NULL
            ORDER BY p.id''',
-        (*_custom_code_where(code)[1], name),
+        (*_custom_code_where(code)[1], name, name),
     ))
 
 
@@ -592,17 +598,23 @@ def find_blank_sku_products(c, name, supplier_id):
         rows = c.execute(
             '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
                FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-               WHERE p.code='' AND p.name=? AND p.supplier_id IS NULL
+               WHERE p.code='' AND (p.name=? OR EXISTS (
+                      SELECT 1 FROM product_match_aliases a
+                      WHERE a.product_id=p.id AND a.kind='name' AND a.value=?
+                    )) AND p.supplier_id IS NULL
                  AND p.merged_into_id IS NULL ORDER BY p.id''',
-            (name,),
+            (name, name),
         )
     else:
         rows = c.execute(
             '''SELECT p.id,p.code,p.name,p.color,p.category,p.supplier_id,p.active,s.name AS supplier_name
                FROM products p LEFT JOIN suppliers s ON s.id=p.supplier_id
-               WHERE p.code='' AND p.name=? AND p.supplier_id=?
+               WHERE p.code='' AND (p.name=? OR EXISTS (
+                      SELECT 1 FROM product_match_aliases a
+                      WHERE a.product_id=p.id AND a.kind='name' AND a.value=?
+                    )) AND p.supplier_id=?
                  AND p.merged_into_id IS NULL ORDER BY p.id''',
-            (name, supplier_id),
+            (name, name, supplier_id),
         )
     return list(rows)
 

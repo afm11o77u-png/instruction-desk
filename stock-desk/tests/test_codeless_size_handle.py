@@ -211,12 +211,17 @@ class K2StaffWorkshopTest(unittest.TestCase):
     def test_garment_like_defaults_processing_with_choice(self):
         for n in ('衣装係ベスト', 'エプロン　ピンク', '赤エプロン', 'ブルゾン　紺×緑'):
             r = self._c(n, '要確認')
-            self.assertTrue(r.get('isProcessingService'), n)
-            self.assertTrue(r.get('k2GarmentCandidate'), n)
+            self.assertFalse(r.get('isProcessingService'), n)
+            self.assertTrue(r.get('k2UniformProduct'), n)
+            self.assertFalse(r.get('k2GarmentCandidate'), n)
 
     def test_choice_product_makes_uniform(self):
         import product_ledger_import as pli, stock
-        ps = self._c('衣装係ベスト', '要確認')
+        ps = {
+            'isProcessingService': True,
+            'k2GarmentCandidate': True,
+            'serviceName': '衣装係ベスト',
+        }
         rows = [{'rowNo': 5, 'processingService': ps, 'product': {'category': '加工サービス'}}]
         pli.apply_k2_garment_choice(rows, {'5': {'registerKind': '商品'}})
         self.assertTrue(rows[0]['k2GarmentAsProduct'])

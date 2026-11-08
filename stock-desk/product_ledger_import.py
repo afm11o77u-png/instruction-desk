@@ -5745,6 +5745,22 @@ def _load_product(c, product_id):
     ).fetchone()
 
 
+def _saved_name_alias(c, product_id, name):
+    """この商品に、再取込の原文名が照合別名として残っているか。"""
+    key = stock.text(name)
+    if not key or not product_id:
+        return False
+    try:
+        row = c.execute(
+            '''SELECT 1 FROM product_match_aliases
+               WHERE product_id=? AND kind='name' AND value=? LIMIT 1''',
+            (product_id, key),
+        ).fetchone()
+    except Exception:
+        return False
+    return bool(row)
+
+
 def _finalize_matched_product(
     c, info, prod, name, size_label, supplier_id, *,
     proposed_category, selected_category, apply_category=False,
@@ -5782,7 +5798,10 @@ def _finalize_matched_product(
         )
         return info
     if stock.text(prod['name']) != name:
-        if names_equivalent_core(prod['name'], name):
+        if _saved_name_alias(c, prod['id'], name):
+            # 注記除去や色を色欄へ移したあとの原文。同じ商品の再取込であり、別の別注とは混ぜない。
+            name = stock.text(prod['name'])
+        elif names_equivalent_core(prod['name'], name):
             # 標記・空白/全角半角・明示シノニムのみ → 同一商品。原文は別名に残す。
             if names_differ_only_by_used_marker(prod['name'], name):
                 info['usedMarkerNameDiff'] = True
@@ -5863,10 +5882,15 @@ def _product_preview(
     star = used_marker_possible(name)
     # 台帳取込の品番空欄は一律「部品・資材」（旧・品番なし制服例外は使わない）。
     # 登録後のカテゴリ変更は選択／編集で可能。
-    proposed_category = (
-        stock.CATEGORY_PARTS if blank_sku
-        else stock.CATEGORY_UNIFORM  # 品番のある通常商品・別注は制服
-    )
+    blank_kind = legacy_code_assign.blank_code_kind(name) if blank_sku else ''
+    if blank_sku and blank_kind == 'processing':
+        proposed_category = stock.CATEGORY_PROCESS_SERVICE
+    elif blank_sku and blank_kind == 'garment':
+        proposed_category = stock.CATEGORY_UNIFORM
+    elif blank_sku:
+        proposed_category = stock.CATEGORY_PARTS
+    else:
+        proposed_category = stock.CATEGORY_UNIFORM  # 品番のある通常商品・要確認・別注は制服
     if selected_category is not None and selected_category != '':
         try:
             proposed_category = stock.normalize_category(selected_category) or proposed_category
@@ -6278,6 +6302,27 @@ def attach_paren_classification(row, override=None):
         )
         and not scoped
     )
+    # 廃番注記だけ外す場合と、部品の色語を色欄へ移す場合は予定名を使う。
+    # 要確認の制服は色語を商品名に残し、別のエプロンやベストを一つにまとめない。
+    notices = [str(item) for item in (plan.get('infoNotices') or [])]
+    note_only = (
+        plan.get('autoClassified')
+        and not plan.get('color')
+        and not plan.get('processing')
+        and any('表示名から外します' in item for item in notices)
+        and stock.text(plan.get('plannedName') or '')
+        and stock.text(plan.get('plannedName') or '') != original
+    )
+    parts_color_name = (
+        not stock.text(code)
+        and plan.get('color')
+        and plan.get('autoClassified')
+        and stock.text(plan.get('plannedName') or '')
+        and stock.text(plan.get('plannedName') or '') != original
+        and legacy_code_assign.blank_code_kind(original) == 'parts'
+    )
+    if note_only or parts_color_name:
+        keep_original_name = False
     if plan.get('plannedName'):
         prod['csvOriginalName'] = original
         if plan['plannedName'] != original:
@@ -7599,6 +7644,8 @@ def attach_processing_service_detection(classified):
         if info.get('identifiable') and info.get('serviceName'):
             info['displayName'] = info['serviceName']
         row['processingService'] = info
+        if info.get('k2UniformProduct'):
+            row['k2UniformProduct'] = True
         if info.get('k2AutoExclude') and not info.get('identifiable'):
             # 確認待ちに残さず、後段の自動除外適用へ（ここではフラグのみ）
             row['processingServiceNeedsConfirm'] = False
@@ -10826,8 +10873,14 @@ def build_preview(c, body):
             ps.get('isProcessingService')
             and ps.get('identifiable')
             and not ps.get('needsConfirm')
-        ):
-            # 加工名として特定済みの行は、品番欄の同じ語を未知注記として止めない。
+        ) or row.get('k2UniformProduct') or ps.get('k2UniformProduct'):
+            # 加工として特定済み、またはK2製作の制服。品番欄の語を未知注記として止めない。
+            reason = stock.text(attr.get('reason') or '')
+            if reason:
+                row['reasons'] = [item for item in (row.get('reasons') or []) if item != reason]
+            attr = dict(attr)
+            attr['needsConfirm'] = False
+            row['suffixAttribute'] = attr
             prod = row.get('product') or {}
             if prod.get('action') in ('create', 'reuse') and row.get('status') == STATUS_REVIEW:
                 row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
@@ -10840,6 +10893,40 @@ def build_preview(c, body):
         reason = stock.text(attr.get('reason') or '')
         if reason and reason not in (row.get('reasons') or []):
             row['reasons'] = list(row.get('reasons') or []) + [reason]
+    for row in classified:
+        ps = row.get('processingService') or {}
+        if not (
+            ps.get('isProcessingService') and ps.get('identifiable') and not ps.get('needsConfirm')
+        ):
+            continue
+        if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+            continue
+        prod = dict(row.get('product') or {})
+        if prod.get('processingServiceProduct'):
+            # 加工サービスとして登録する行は、衣服候補の選択では止めない。
+            if prod.get('action') not in ('create', 'reuse'):
+                prod['action'] = 'reuse' if prod.get('id') else 'create'
+            prod['candidates'] = []
+            row['product'] = prod
+        kept = []
+        for reason in row.get('reasons') or []:
+            text = stock.text(reason)
+            if '追加文字' in text and '属性に分けられません' in text:
+                continue
+            kept.append(reason)
+        row['reasons'] = kept
+        if row.get('status') != STATUS_REVIEW or _review_acceptance_blocked(row):
+            continue
+        if (row.get('customer') or {}).get('action') == 'review':
+            continue
+        if (row.get('supplier') or {}).get('action') == 'review':
+            continue
+        action = (row.get('product') or {}).get('action')
+        if action not in ('create', 'reuse'):
+            continue
+        row['status'] = STATUS_CREATE if action == 'create' else STATUS_REUSE
+        row['statusLabel'] = STATUS_LABELS[row['status']]
+        row['canCommit'] = True
     for row in classified:
         ov = (
             row_classifications.get(str(row.get('rowNo')))
@@ -11982,7 +12069,11 @@ def commit_preview(c, body, *, db_path=None):
                 sup_id = None
                 csv_supplier = stock.text(row['csv'].get('supplier') or '')
                 # 加工業者は本体商品の通常仕入先／サブにしない（サービス商品側で確保済み）
-                link_supplier = csv_supplier and not proc_svc.is_processing_vendor(csv_supplier)
+                link_supplier = csv_supplier and (
+                    not proc_svc.is_processing_vendor(csv_supplier)
+                    or row.get('k2UniformProduct')
+                    or (row.get('processingService') or {}).get('k2UniformProduct')
+                )
                 if link_supplier:
                     sup_id, created = _ensure_person(
                         c, 'suppliers', stock.save_supplier, csv_supplier,
@@ -11994,10 +12085,17 @@ def commit_preview(c, body, *, db_path=None):
                     # エルムの表記差では仕入先を増やさない。正式名が一つに決まる行は既存の表示名を使う。
                     vendor_to_save = csv_supplier
                     if proc_svc.is_elms_corporation_vendor(csv_supplier):
-                        vendor_to_save = proc_svc.ELMS_VENDOR_DISPLAY
-                    _ensure_person(
-                        c, 'suppliers', stock.save_supplier, vendor_to_save, create=True,
-                    )
+                        found = proc_svc.elms_supplier_matches(c)
+                        if found.get('status') == 'unique':
+                            vendor_to_save = found.get('name') or proc_svc.ELMS_VENDOR_DISPLAY
+                        elif found.get('status') == 'missing':
+                            vendor_to_save = proc_svc.ELMS_VENDOR_DISPLAY
+                        else:
+                            vendor_to_save = ''
+                    if vendor_to_save:
+                        _ensure_person(
+                            c, 'suppliers', stock.save_supplier, vendor_to_save, create=True,
+                        )
 
                 sel = selections.get(str(row_no)) or selections.get(row_no) or {}
                 prod_info = dict(row['product'] or {})

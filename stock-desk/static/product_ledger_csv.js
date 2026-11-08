@@ -788,7 +788,8 @@
       })
     }
     if(r.status==='needs_review'&&r.product&&r.product.candidates&&r.product.candidates.length&&!r.skuDecisionNeeded){
-      issues.push({type:'product_pick',label:'商品の選択',detail:'',fieldKey:'name'})
+      const identifiable=!!(ps.isProcessingService&&ps.identifiable&&!ps.needsConfirm)
+      if(!identifiable)issues.push({type:'product_pick',label:'商品の選択',detail:'',fieldKey:'name'})
     }
     if(r.status==='needs_review'&&r.handle&&r.handle.candidates&&r.handle.candidates.length){
       issues.push({type:'handle_pick',label:'取扱の選択',detail:'',fieldKey:'supplier'})

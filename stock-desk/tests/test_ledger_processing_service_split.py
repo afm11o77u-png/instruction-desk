@@ -88,15 +88,15 @@ class ProcessingServiceUnitTest(unittest.TestCase):
         )
         self.assertFalse(other['isProcessingService'])
         self.assertFalse(other['elmsEmbroideryRule'])
-        # K2 の衣服らしい名は既定で加工（行ごとに商品へ切替可）。エルムス強制は流用しない
+        # 品番のないK2製作の衣服は商品。エルムス強制は流用しない
         k2 = ps.classify_processing_service_row(
             supplier='K2スタッフ工房', product_name='エプロン', code='',
         )
         self.assertFalse(k2['needsConfirm'])
         self.assertFalse(k2.get('k2AutoExclude'))
         self.assertFalse(k2.get('elmsEmbroideryRule'))
-        self.assertTrue(k2.get('k2GarmentCandidate'))
-        self.assertEqual(k2.get('serviceName'), 'エプロン')
+        self.assertTrue(k2.get('k2UniformProduct'))
+        self.assertFalse(k2.get('isProcessingService'))
 
     def test_pocket_attach_without_kako_char(self):
         """『加工』文字がなくてもポケット取付は認識。表記差は同一名へ。"""
@@ -172,15 +172,15 @@ class ProcessingServiceUnitTest(unittest.TestCase):
             ps.service_dedupe_key('ポケット付替', 'K2スタッフ工房'),
             ps.service_dedupe_key('ポケット取付', 'K2スタッフ工房'),
         )
-        # 衣服種だけの名称は辞書上は加工名にしない。K2では既定加工＋行ごとの選択
+        # 衣服種だけの名称は加工名にしない。K2製作の制服として商品にする
         for bare in ('帽子', 'パンツ', 'エプロン'):
             self.assertEqual(ps.unify_processing_service_name(bare), '', msg=bare)
             r = ps.classify_processing_service_row(
                 supplier='K2スタッフ工房', product_name=bare, code='',
             )
-            self.assertTrue(r.get('k2GarmentCandidate'), msg=bare)
+            self.assertTrue(r.get('k2UniformProduct'), msg=bare)
+            self.assertFalse(r.get('isProcessingService'), msg=bare)
             self.assertFalse(r.get('k2AutoExclude'), msg=bare)
-            self.assertNotEqual(r.get('serviceName'), '加工', msg=bare)
 
     def test_sleeve_hem_snapper_shared(self):
         self.assertEqual(ps.unify_processing_service_name('袖加工'), '袖加工')

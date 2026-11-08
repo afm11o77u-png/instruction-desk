@@ -27,6 +27,7 @@ _NOTE_KIND = {
     '廃番': 'discontinued',
     '使用しない': 'discontinued',
     '不使用': 'discontinued',
+    '現在不使用': 'discontinued',
 }
 _PART_WORDS = ('Dカン', 'Ｄカン', '生地', 'ボタン', '釦', 'ファスナー', 'バックル', '名札')
 _DIM_RE = re.compile(r'^(\d+(?:\.\d+)?)(mm|㎜|cm|㎝)$', re.I)
@@ -169,6 +170,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     raw = stock.text(code)
     if not raw:
         return _empty()
+    if raw in ('要確認', '別注') or (raw.startswith('別注(') and raw.endswith(')')):
+        return _empty(kind='plain', baseCode=raw)
     name = stock.text(product_name)
     if _is_midori(supplier) and ('上' in raw or '下' in raw):
         return _empty(kind='midori_position', baseCode=raw)
