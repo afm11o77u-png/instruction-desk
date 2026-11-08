@@ -1971,15 +1971,23 @@ def register_opening(c, body):
         payout = 0
     allow_zero = body.get('allowZero') in (True, 1, '1')
     allow_negative = body.get('allowNegative') in (True, 1, '1')
-    sizes = {r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (cp['product_id'],))}
+    labels = [r['label'] for r in c.execute(
+        'SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order, id', (cp['product_id'],)
+    )]
     cleaned = []
     seen = set()
     for raw in body.get('lines') or []:
         if not isinstance(raw, dict):
             raise ValueError('数量の表が不正です。')
         size = raw.get('size')
-        if not isinstance(size, str) or size.strip() not in sizes or size != size.strip():
+        kind, chosen = choose_stored_size(size if isinstance(size, str) else '', labels)
+        if not isinstance(size, str) or size != size.strip() or kind not in ('exact', 'one'):
+            if kind == 'ambiguous':
+                raise ValueError(
+                    '同じサイズの全角表記と半角表記が別々に残っています。在庫は合算しません。'
+                )
             raise ValueError('商品に登録したサイズだけを入力してください。新しいサイズは商品台帳で追加します。')
+        size = chosen
         qty = parse_qty(raw.get('qty'), f'{size}の数量', allow_zero=allow_zero, allow_negative=allow_negative)
         cost = parse_money(raw.get('unitCost'), f'{size}の仕入単価')
         key = (size, cost)
@@ -3298,14 +3306,69 @@ def resolve_active_location(c, location_id):
     return loc
 
 
+def fold_size_ascii(value):
+    """全角のASCII英数字だけを半角にする。
+
+    Ｓ→S、Ｌ→L、２L→2L、７６→76。LL と 2L、XL などの別呼称は揃えない。
+    空白、大文字小文字、ハイフン、単位、丸数字、カナ、記号は変えない。
+    """
+    if value is None:
+        return ''
+    text_value = value if isinstance(value, str) else str(value)
+    out = []
+    for ch in text_value:
+        code = ord(ch)
+        if 0xFF10 <= code <= 0xFF19:
+            out.append(chr(ord('0') + code - 0xFF10))
+        elif 0xFF21 <= code <= 0xFF3A:
+            out.append(chr(ord('A') + code - 0xFF21))
+        elif 0xFF41 <= code <= 0xFF5A:
+            out.append(chr(ord('a') + code - 0xFF41))
+        else:
+            out.append(ch)
+    return ''.join(out)
+
+
+def canonical_size_label(value):
+    """取り込みで保存するサイズ。前後の空白だけ除き、全角ASCII英数字を半角にする。"""
+    raw = value if isinstance(value, str) else ('' if value is None else str(value))
+    return fold_size_ascii(raw.strip())
+
+
+def choose_stored_size(wanted, labels):
+    """保存済みサイズから1件を選ぶ。全角と半角が両方あるときは合算しない。"""
+    key = fold_size_ascii(wanted)
+    if not key:
+        return 'missing', ''
+    hits = [label for label in labels if fold_size_ascii(label) == key]
+    if not hits:
+        return 'missing', ''
+    exact = [label for label in hits if label == wanted]
+    if len(hits) > 1 and not exact:
+        return 'ambiguous', hits
+    if exact:
+        return 'exact', exact[0]
+    return 'one', hits[0]
+
+
 def resolve_size_label(c, product_id, size):
     if not isinstance(size, str) or size != size.strip() or not size.strip():
         raise ValueError('商品に登録したサイズだけを入力してください。')
-    label = size.strip()
-    row = c.execute('SELECT label FROM product_sizes WHERE product_id=? AND label=?', (product_id, label)).fetchone()
-    if not row:
+    labels = [
+        row['label'] for row in c.execute(
+            'SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order, id',
+            (product_id,),
+        )
+    ]
+    kind, chosen = choose_stored_size(size, labels)
+    if kind == 'ambiguous':
+        raise ValueError(
+            '同じサイズの全角表記と半角表記が別々に残っています。'
+            '在庫は合算しません。取り込み直すときは、先に商品と在庫を消してから登録してください。'
+        )
+    if kind not in ('exact', 'one'):
         raise ValueError('商品に登録したサイズだけを入力してください。新しいサイズは商品台帳で追加します。')
-    return label
+    return chosen
 
 
 def lots_for_target(c, customer_product_id, size_label, location_id, condition=CONDITION_NEW, *, positive_only=True):

@@ -757,12 +757,13 @@ def _size_hits(raw, labels):
     text = stock.text(raw)
     if not text:
         return 'blank', list(labels)
-    if text in labels:
-        return 'exact', [text]
-    norm = unicodedata.normalize('NFKC', text)
-    hits = [label for label in labels if unicodedata.normalize('NFKC', label) == norm and label != text]
-    if hits:
-        return 'normalized', hits
+    kind, chosen = stock.choose_stored_size(text, labels)
+    if kind == 'exact':
+        return 'exact', [chosen]
+    if kind == 'one':
+        return 'normalized', [chosen]
+    if kind == 'ambiguous':
+        return 'ambiguous', list(chosen)
     return 'missing', []
 
 
@@ -1309,6 +1310,9 @@ def _build_candidates(c, catalog, *, item_num, item_name, maker_name, customer_n
             continue
         saw_other = True
         size_kind, size_labels = _size_hits(item_size, product['sizes'])
+        if size_kind == 'ambiguous':
+            reasons.append('同じサイズの全角表記と半角表記が別々にあります。在庫は合算しません。')
+            continue
         if size_kind == 'missing':
             continue
         if code_match == 'partial' and product.get('_namePick') == 'supplier_color':

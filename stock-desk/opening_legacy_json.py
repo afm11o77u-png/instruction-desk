@@ -146,7 +146,7 @@ def judgment_aux_upload(body):
             '顧客': customer,
             '商品名': stock.text(row.get('name')),
             '商品コード': stock.text(row.get('item_num')),
-            'サイズ': stock.text(row.get('item_size')),
+            'サイズ': stock.canonical_size_label(row.get('item_size')),
             '仕入単価': str(price) if type(price) is int and not isinstance(price, bool) else '',
             '在庫': _agreed_qty_text(row),
             '拠点': stock.text(row.get('factory_name')),
@@ -212,7 +212,7 @@ def _source_signature(row):
         norm(row.get('item_id')),
         norm(row.get('item_num')),
         norm(row.get('name')),
-        norm(row.get('item_size')),
+        stock.canonical_size_label(row.get('item_size')),
         row.get('is_used') if isinstance(row.get('is_used'), bool) or row.get('is_used') is None else norm(row.get('is_used')),
         row.get('stock_count') if type(row.get('stock_count')) is int else norm(row.get('stock_count')),
         row.get('calc_stock_count') if type(row.get('calc_stock_count')) is int else norm(row.get('calc_stock_count')),
@@ -459,7 +459,7 @@ def _blocked_plan(row_no, item, reasons, *, legacy_info, qty, status=None):
             'customer': '',
             'code': stock.text(item.get('item_num')),
             'productName': stock.text(item.get('name')),
-            'size': stock.text(item.get('item_size')),
+            'size': stock.canonical_size_label(item.get('item_size')),
             'supplier': stock.text(item.get('maker_name')),
             'site': stock.text(item.get('factory_name')),
             'shelf': stock.text(item.get('shelf_name')),
@@ -486,7 +486,7 @@ def _legacy_payload(row, qty_note):
         'itemId': _text_id(row.get('item_id')),
         'itemNum': stock.text(row.get('item_num')),
         'itemName': stock.text(row.get('name')),
-        'itemSize': stock.text(row.get('item_size')),
+        'itemSize': stock.canonical_size_label(row.get('item_size')),
         'makerName': stock.text(row.get('maker_name')),
         'factoryId': _text_id(row.get('factory_id')),
         'factoryName': stock.text(row.get('factory_name')),
@@ -526,7 +526,9 @@ def _same_link_target(link, plan):
     handle = target.get('handleId') or target.get('customerProductId')
     if link['customer_product_id'] and handle and link['customer_product_id'] != handle:
         return False
-    if (link['size_label'] or '') != stock.text(target.get('size') or (plan.get('csv') or {}).get('size')):
+    if stock.fold_size_ascii(link['size_label'] or '') != stock.fold_size_ascii(
+        stock.text(target.get('size') or (plan.get('csv') or {}).get('size'))
+    ):
         return False
     if (link['condition'] or '') != (plan.get('condition') or ''):
         return False
@@ -915,7 +917,7 @@ def save_links(c, plans, *, uploaded, run_id, default_site):
                 legacy_row.get('factoryId') or '', legacy_row.get('factoryName') or '',
                 legacy_row.get('shelfId') or '', legacy_row.get('shelfName') or '',
                 '', legacy_row['qr'], target.get('customerId'), target.get('productId'),
-                handle_id, stock.text(target.get('size') or legacy_row.get('itemSize')),
+                handle_id, stock.canonical_size_label(target.get('size') or legacy_row.get('itemSize')),
                 plan.get('condition') or '', location_id, 'opening_json',
                 uploaded['fileSha256'], uploaded['fileName'], plan['rowNo'], run_id, t, t,
             ),
