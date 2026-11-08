@@ -7604,34 +7604,85 @@ def _clear_row_service_plan(row):
     return prod
 
 
-def _block_existing_category_rewrite(row, target_category):
-    """既存商品の区分は変えない。違う区分が既にある品番は、了承では上書きしない。"""
+def _existing_category_locked(row):
+    """衝突中の category は既存区分。id がある再利用も既存区分として扱う。"""
+    prod = row.get('product') or {}
+    if not prod.get('id'):
+        return ''
+    if prod.get('categoryConflict') or prod.get('action') in ('reuse', 'review'):
+        return stock.text(prod.get('category') or '')
+    return ''
+
+
+def _keep_existing_category(row, target_category):
+    """選んだ区分と既存が同じなら衝突を外して既存のまま使う。違えば上書きしない。
+
+    戻り値: match / block / ''（既存の制約なし）
+    """
+    existing = _existing_category_locked(row)
+    if not existing:
+        return ''
     prod = dict(row.get('product') or {})
-    if prod.get('action') != 'reuse' or not prod.get('id'):
-        return False
-    existing = stock.text(prod.get('category') or '')
-    if not existing or existing == target_category:
-        return False
-    prod['categoryConflict'] = True
+    if existing == target_category:
+        prod['category'] = existing
+        prod['proposedCategory'] = existing
+        prod['categoryConflict'] = False
+        prod['categoryAction'] = 'keep'
+        prod['action'] = 'reuse'
+        row['product'] = prod
+        row['reasons'] = [
+            reason for reason in (row.get('reasons') or [])
+            if '既存カテゴリ' not in str(reason)
+        ]
+        if (
+            not _review_acceptance_blocked(row)
+            and (row.get('customer') or {}).get('action') != 'review'
+        ):
+            row['status'] = STATUS_REUSE
+            row['statusLabel'] = STATUS_LABELS[STATUS_REUSE]
+            row['canCommit'] = True
+        return 'match'
     prod['category'] = existing
     prod['proposedCategory'] = target_category
+    prod['categoryConflict'] = True
     prod['categoryAction'] = 'confirm'
+    prod['action'] = 'review'
     row['product'] = prod
     row['status'] = STATUS_REVIEW
     row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
     row['canCommit'] = False
-    msg = f'既存カテゴリ「{existing}」は変更しません。'
-    if msg not in (row.get('reasons') or []):
-        row['reasons'] = list(row.get('reasons') or []) + [msg]
-    return True
+    msg = (
+        f'既存カテゴリ「{existing}」は変更しません。'
+        f'取込の区分を「{existing}」に合わせるか、この行は登録しないでください。'
+    )
+    row['reasons'] = [
+        reason for reason in (row.get('reasons') or [])
+        if '既存カテゴリ' not in str(reason)
+    ] + [msg]
+    return 'block'
+
+
+def _block_existing_category_rewrite(row, target_category):
+    """既存商品の区分は変えない。違う区分が既にある品番は、了承では上書きしない。"""
+    return _keep_existing_category(row, target_category) == 'block'
 
 
 def _apply_uniform_choice(row, *, manual):
     csv = row.get('csv') or {}
     code = stock.text(csv.get('code') or '')
-    if _block_existing_category_rewrite(row, stock.CATEGORY_UNIFORM):
+    kept = _keep_existing_category(row, stock.CATEGORY_UNIFORM)
+    if kept == 'block':
         row['registerKindChoice'] = '商品' if manual else ''
-        _clear_row_service_plan(row)
+        return
+    if kept == 'match':
+        if manual:
+            row['registerKindChoice'] = '商品'
+        pc = dict(row.get('parenClassification') or {})
+        pc['registerKind'] = '商品'
+        pc['registerKindManual'] = bool(manual)
+        row['parenClassification'] = pc
+        row['processingServiceView'] = False
+        row['physicalPartsView'] = False
         return
     prod = _clear_row_service_plan(row)
     prod['category'] = stock.CATEGORY_UNIFORM
@@ -7661,10 +7712,21 @@ def _apply_uniform_choice(row, *, manual):
 def _apply_parts_choice(row):
     csv = row.get('csv') or {}
     code = stock.text(csv.get('code') or '')
-    if _block_existing_category_rewrite(row, stock.CATEGORY_PARTS):
+    kept = _keep_existing_category(row, stock.CATEGORY_PARTS)
+    if kept in ('block', 'match'):
         row['registerKindChoice'] = '部品・資材'
         row['suppressCompanionService'] = True
-        _clear_row_service_plan(row)
+        row['physicalPartsView'] = True
+        row['processingServiceView'] = False
+        ps = dict(row.get('processingService') or {})
+        ps['isProcessingService'] = False
+        row['processingService'] = ps
+        pc = dict(row.get('parenClassification') or {})
+        pc['registerKind'] = '部品・資材'
+        pc['registerKindManual'] = True
+        pc['physicalPartsView'] = True
+        pc['processingServiceView'] = False
+        row['parenClassification'] = pc
         return
     prod = _clear_row_service_plan(row)
     prod['category'] = stock.CATEGORY_PARTS
@@ -7689,6 +7751,17 @@ def _apply_parts_choice(row):
 def _apply_process_choice(row):
     csv = row.get('csv') or {}
     name = stock.text(csv.get('productName') or '')
+    kept = _keep_existing_category(row, stock.CATEGORY_PROCESS_SERVICE)
+    if kept == 'block':
+        row['registerKindChoice'] = '加工サービス'
+        return
+    if kept == 'match':
+        row['registerKindChoice'] = '加工サービス'
+        pc = dict(row.get('parenClassification') or {})
+        pc['registerKind'] = '加工サービス'
+        pc['registerKindManual'] = True
+        row['parenClassification'] = pc
+        return
     prod = dict(row.get('product') or {})
     if (
         prod.get('action') == 'reuse'
@@ -7753,7 +7826,8 @@ def apply_register_kind_choice(classified, row_classifications=None):
         pc['autoRegisterKind'] = auto_kind
         row['parenClassification'] = pc
         kind, _ov = _register_kind_override(row, overrides)
-        if kind and kind != auto_kind:
+        conflicted = bool((row.get('product') or {}).get('categoryConflict'))
+        if kind and (kind != auto_kind or conflicted):
             if kind == '商品':
                 _apply_uniform_choice(row, manual=True)
             elif kind == '部品・資材':
@@ -7816,7 +7890,10 @@ def apply_manual_register_kind(classified, row_classifications=None):
                 isinstance(ov, dict) and stock.text(ov.get('registerKind') or '')
             )
         pc['registerKind'] = kind
-        # 手動が勝つ。入力欄の値は消さない
+        # 手動が勝つ。入力欄の値は消さない。既存区分と違う選択はここでは上書きしない。
+        if (row.get('product') or {}).get('categoryConflict'):
+            row['parenClassification'] = pc
+            continue
         if kind == '部品・資材':
             row['physicalPartsView'] = True
             row['processingServiceView'] = False

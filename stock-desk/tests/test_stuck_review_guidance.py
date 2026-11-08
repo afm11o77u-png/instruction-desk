@@ -162,8 +162,8 @@ class CategoryConflictGuideTest(unittest.TestCase):
             out = render(st)
             self.assertNotIn('再照合」で登録予定へ反映', out['html'])
             self.assertNotIn('→ 品番', out['html'])
-            self.assertGreaterEqual(out['html'].count('商品一覧でその商品を開き'), 1)
-            self.assertEqual(out['html'].count('商品一覧でその商品を開き'), len(out['items']))
+            self.assertIn('既存カテゴリ「加工サービス」は変更しません', out['html'])
+            self.assertIn('この内容で了承', out['html'])
             self.assertIn('既存カテゴリ', out['html'])
             self.assertFalse(items_stub)
         finally:
