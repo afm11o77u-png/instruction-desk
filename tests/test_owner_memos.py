@@ -64,12 +64,37 @@ class OwnerMemosTest(unittest.TestCase):
         index = (ROOT / 'index.html').read_text(encoding='utf-8')
         footer = index[index.index('id="sidebarfooter"'):index.index('</aside>')]
         self.assertIn('id="memo-open" hidden>構想メモ<', footer)
+        self.assertLess(footer.index('id="memo-open"'), footer.index('id="olddata-open"'))
+        self.assertIn('id="olddata-open" hidden>旧データの取り出し方<', footer)
         self.assertIn('src="/memos.js"', index)
         self.assertIn("'/memos.js':'memos.js'", (ROOT / 'server.py').read_text(encoding='utf-8'))
         acct = (ROOT / 'account.js').read_text(encoding='utf-8')
         self.assertIn("memoNav.hidden=role!=='owner'", acct)
+        self.assertIn("oldDataNav.hidden=role!=='owner'", acct)
+        self.assertIn('openOldDataMemo', acct)
         js = (ROOT / 'memos.js').read_text(encoding='utf-8')
         self.assertNotIn('method', js)
+        self.assertIn('memo-copy', js)
+        self.assertIn('03-kyudata-toridashi', js)
+
+    def test_old_data_memo_has_no_invented_command(self):
+        code, memo = _H(U('owner')).auth_get('/api/memos/03-kyudata-toridashi', self.c)
+        self.assertEqual(code, 200)
+        md = memo['markdown']
+        self.assertIn('Copy response', md)
+        self.assertIn('calc_stock_count', md)
+        self.assertIn('旧在庫データ.json', md)
+        self.assertIn("document.querySelectorAll('table')[1]", md)
+        self.assertIn('2128', md)
+        self.assertIn('保存したデータ行数', md)
+        self.assertIn('旧顧客JSONの、どの通信を選ぶか', md)
+        self.assertNotIn('成功を確認しました', md)
+        self.assertNotIn('コマンドを載せていません', md)
+        self.assertNotIn('http://', md)
+        self.assertNotIn('https://', md)
+        self.assertNotIn('fetch(', md)
+        self.assertNotIn('curl ', md)
+        self.assertNotIn('/api/', md)
 
 
 if __name__ == '__main__':
