@@ -5420,7 +5420,7 @@ def db_fingerprint(c):
     parts = []
     tables = (
         'customers', 'suppliers', 'products', 'product_sizes', 'product_suppliers',
-        'customer_products', 'lots', 'product_ledger_row_maps',
+        'customer_products', 'lots', 'product_ledger_row_maps', 'qr_stock_links',
     )
     for table in tables:
         exists = c.execute(
@@ -9917,23 +9917,43 @@ def apply_office_codes(c, plan):
 
 
 def build_opening_stock_preview(c, body):
-    """段階2: 初期在庫CSVのみ。商品台帳CSVは不要。永続マップで登録先を解決。"""
+    """段階2: 初期在庫CSV、または旧在庫JSON。商品台帳CSVは不要。永続マップで登録先を解決。"""
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
+    import opening_legacy_json
+    if opening_legacy_json.has_file(body) and (
+        body.get('auxFile') or body.get('aux_file')
+    ):
+        raise ValueError('初期在庫CSVと旧在庫JSONは同時には登録しません。どちらか一方にしてください。')
     t_all = time.perf_counter()
     t0 = time.perf_counter()
-    aux_uploaded = decode_aux_upload(body)
-    parse_ms = round((time.perf_counter() - t0) * 1000, 2)
-    if not aux_uploaded:
-        raise ValueError('初期在庫CSVを選んでください。')
-    opening_stock = bulk.build_opening_stock_plans_from_maps(
-        c,
-        aux_uploaded=aux_uploaded,
-        default_site_name=stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME,
-        opening_selections=(
-            body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {}
-        ),
-    )
+    if opening_legacy_json.has_file(body):
+        opening_stock = opening_legacy_json.build_opening_stock(c, body)
+        uploaded_meta = opening_stock.pop('uploaded', {}) or {}
+        aux_uploaded = {
+            'fileName': opening_stock['fileName'],
+            'fileSha256': opening_stock['fileSha256'],
+            'fileSize': uploaded_meta.get('fileSize') or 0,
+            'encoding': 'utf-8',
+            'rows': [],
+            'rowCount': len(opening_stock.get('plans') or []),
+        }
+        parse_ms = round((time.perf_counter() - t0) * 1000, 2)
+    else:
+        aux_uploaded = decode_aux_upload(body)
+        parse_ms = round((time.perf_counter() - t0) * 1000, 2)
+        if not aux_uploaded:
+            raise ValueError('初期在庫CSVを選んでください。')
+        opening_stock = None
+    if opening_stock is None:
+        opening_stock = bulk.build_opening_stock_plans_from_maps(
+            c,
+            aux_uploaded=aux_uploaded,
+            default_site_name=stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME,
+            opening_selections=(
+                body.get('openingSelections') if isinstance(body.get('openingSelections'), dict) else {}
+            ),
+        )
     if body.get('basisDate'):
         try:
             opening_stock['basisDate'] = stock.parse_date(body.get('basisDate'), '在庫基準日')
@@ -9965,11 +9985,12 @@ def build_opening_stock_preview(c, body):
             'fileSha256': aux_uploaded['fileSha256'],
             'fileSize': aux_uploaded['fileSize'],
             'encoding': aux_uploaded['encoding'],
-            'rowCount': len(aux_uploaded['rows']),
+            'rowCount': aux_uploaded.get('rowCount', len(aux_uploaded['rows'])),
             'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
             'willRegisterOpeningStock': True,
             'judgmentOnly': False,
             'note': opening_stock.get('note') or '',
+            'fromLegacyJson': bool(opening_stock.get('fromLegacyJson')),
         },
         'openingStock': opening_stock,
         'openingStockSummary': bulk.summarize_opening_for_preview(opening_stock),
@@ -11127,9 +11148,20 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
         return reused
     preview_fp = _assert_fresh_preview(c, body, preview)
 
-    aux_uploaded = decode_aux_upload(body)
-    if not aux_uploaded:
-        raise ValueError('初期在庫CSVを選んでください。')
+    opening_for_source = preview.get('openingStock') or {}
+    if opening_for_source.get('fromLegacyJson'):
+        import opening_legacy_json
+        opening_legacy_json.assert_customers_confirmed(opening_for_source)
+        aux_uploaded = {
+            'fileName': opening_for_source.get('fileName') or '',
+            'fileSha256': opening_for_source.get('fileSha256') or '',
+            'fileSize': 0,
+            'rows': [],
+        }
+    else:
+        aux_uploaded = decode_aux_upload(body)
+        if not aux_uploaded:
+            raise ValueError('初期在庫CSVを選んでください。')
     opening_stock = preview.get('openingStock') or {}
     opening_plans = list(opening_stock.get('plans') or [])
     opening_selections = (
@@ -11141,16 +11173,20 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
         if st in (legacy.STATUS_CREATE, legacy.STATUS_REUSE):
             opening_commitable = True
             break
+        if p.get('qrAction') == 'insert':
+            opening_commitable = True
+            break
         if st == legacy.STATUS_QTY_DIFF:
             sel = opening_selections.get(str(p['rowNo'])) or opening_selections.get(p['rowNo']) or {}
             if sel.get('updateQty'):
                 opening_commitable = True
                 break
     if not opening_commitable and not body.get('allowEmptyCommit'):
-        raise ValueError(
-            '登録できる初期在庫行がありません。'
-            '曖昧・未登録・削除済みの行は理由を確認し、商品登録や補完を先に行ってください。'
-        )
+        if not opening_for_source.get('fromLegacyJson'):
+            raise ValueError(
+                '登録できる初期在庫行がありません。'
+                '曖昧・未登録・削除済みの行は理由を確認し、商品登録や補完を先に行ってください。'
+            )
     if not body.get('basisDate'):
         raise ValueError('初期在庫を登録するには在庫基準日を指定してください。')
     basis_date = stock.parse_date(body.get('basisDate'), '在庫基準日')
@@ -11237,6 +11273,24 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
         result_counts['openingHeld'] = opening_counts.get('held', 0)
         result_counts['openingComplementSkipped'] = opening_counts.get('complementSkipped', 0)
         result_counts['officeCodesSet'] = apply_office_codes(c, preview.get('officeCodePlan'))
+        if opening_for_source.get('fromLegacyJson'):
+            import opening_legacy_json
+            link_counts = opening_legacy_json.save_links(
+                c,
+                opening_plans,
+                uploaded=aux_uploaded,
+                run_id=run_id,
+                default_site=stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME,
+            )
+            opening_legacy_json.remember_customers(c, {
+                row['legacyCustomerId']: {
+                    'customerId': row.get('customerId'),
+                    'reason': '' if row.get('confirmed') else (row.get('reason') or '未確認'),
+                }
+                for row in (opening_for_source.get('legacyCustomers') or [])
+            })
+            result_counts['legacyQrInserted'] = link_counts['inserted']
+            result_counts['legacyQrKept'] = link_counts['kept']
         after_stock = stock_snapshot(c)
         result = {
             'runId': run_id,
