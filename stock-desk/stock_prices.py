@@ -135,6 +135,23 @@ def _price(value):
 
 # ---------- 参照（特値 → 基準単価） ----------
 
+def _stored_price_size(c, product_id, supplier_id, size):
+    """全角ASCII英数字の差だけ吸収する。両方残っているサイズは合算しない。"""
+    wanted = stock.text(size)
+    rows = c.execute(
+        '''SELECT size_label FROM price_base
+           WHERE product_id=? AND supplier_id=? AND size_label IS NOT NULL
+           UNION
+           SELECT size_label FROM price_special
+           WHERE product_id=? AND supplier_id=? AND size_label IS NOT NULL''',
+        (int(product_id), int(supplier_id or 0), int(product_id), int(supplier_id or 0)),
+    ).fetchall()
+    kind, chosen = stock.choose_stored_size(wanted, [row['size_label'] for row in rows])
+    if kind in ('exact', 'one'):
+        return chosen
+    return wanted
+
+
 def lookup(c, *, customer_id, product_id, size_label, supplier_id=None):
     """顧客の特値があれば特値、なければ基準単価。納品確認の初期値用。"""
     size = stock.text(size_label)
@@ -143,6 +160,7 @@ def lookup(c, *, customer_id, product_id, size_label, supplier_id=None):
         row = c.execute('SELECT supplier_id FROM products WHERE id=?', (pid,)).fetchone()
         supplier_id = (row['supplier_id'] if row else None) or 0
     sid = int(supplier_id or 0)
+    size = _stored_price_size(c, pid, sid, size)
     if customer_id not in (None, ''):
         sp = c.execute(
             '''SELECT price,size_label FROM price_special

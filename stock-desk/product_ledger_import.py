@@ -5842,7 +5842,7 @@ def _product_preview(
     name = stock.text(name_raw if isinstance(name_raw, str) else ('' if name_raw is None else str(name_raw)))
     size_raw = item.get('サイズ')
     size = size_raw if isinstance(size_raw, str) else ('' if size_raw is None else str(size_raw))
-    size_label = size.strip()
+    size_label = stock.canonical_size_label(size)
     blank_sku = not code
     if blank_sku:
         # 品番なし（部品・資材／加工サービス）は CSV のサイズを使わず内部既定サイズ1つ
@@ -6494,7 +6494,7 @@ def classify_row(
     product_name = stock.text(item.get('商品名'))
     size_raw = item.get('サイズ')
     size = size_raw if isinstance(size_raw, str) else ('' if size_raw is None else str(size_raw))
-    size_label = size.strip()
+    size_label = stock.canonical_size_label(size)
     raw_override = paren_override if isinstance(paren_override, dict) else {}
     maker_pos = ''
     if stock.text(raw_override.get('position') or '') in position_sku.POSITION_TOKENS:
@@ -10590,7 +10590,9 @@ def _ensure_person(c, table, save_fn, name, *, create):
 def _save_product_sizes_only(c, pid, size_label):
     current = stock.product_row(c, pid)
     labels = list(current['sizes'])
-    if not size_label or size_label in labels:
+    size_label = stock.canonical_size_label(size_label)
+    kind, _chosen = stock.choose_stored_size(size_label, labels)
+    if not size_label or kind in ('exact', 'one', 'ambiguous'):
         return False
     if stock.text(current.get('category') or '') in stock.CODELESS_CATEGORIES and labels:
         return False  # 部品・加工サービスはサイズを増やさない（内部既定サイズ1つ）

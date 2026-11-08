@@ -232,7 +232,7 @@ def _aux_item_payload(row_no, item):
         'supplier': stock.text(item.get('仕入先')),
         'customer': stock.text(item.get('顧客')),
         'productName': stock.text(item.get('商品名')),
-        'size': size.strip(),
+        'size': stock.canonical_size_label(size),
         'conditionRaw': stock.text(item.get('新古')),
         'site': stock.text(item.get('拠点')),
         'shelf': stock.text(item.get('棚')),
@@ -990,14 +990,17 @@ def _codeless_stock_size(c, product_id, size_label):
 
 def _ensure_product_size(c, product_id, size_label):
     """初期在庫CSVのサイズが商品に無いときだけ追加（名・色は触らない）。"""
-    size = stock.text(size_label)
+    size = stock.canonical_size_label(size_label)
     if not product_id or not size:
         return False
-    exists = c.execute(
-        'SELECT 1 FROM product_sizes WHERE product_id=? AND label=?',
-        (product_id, size),
-    ).fetchone()
-    if exists:
+    labels = [
+        row['label'] for row in c.execute(
+            'SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order, id',
+            (product_id,),
+        )
+    ]
+    kind, _chosen = stock.choose_stored_size(size, labels)
+    if kind in ('exact', 'one', 'ambiguous'):
         return False
     current = stock.product_row(c, product_id)
     labels = list(current['sizes'])
@@ -1268,7 +1271,7 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
     aux_size = size if isinstance(size, str) else ('' if size is None else str(size))
     aux_size = aux_size.strip()
     # サイズが双方あるときは一致必須（空はワイルドカード扱い）
-    if map_size and aux_size and map_size != aux_size:
+    if map_size and aux_size and stock.fold_size_ascii(map_size) != stock.fold_size_ascii(aux_size):
         return False
     return True
 
