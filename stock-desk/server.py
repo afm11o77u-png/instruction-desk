@@ -154,6 +154,13 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
             return 403, {'error': str(e), 'deleted': False}
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '削除内容を確認してください。', 'deleted': False}
+    if path == '/api/stock-qr/lookup':
+        import stock_qr
+        try:
+            with stock.connect(db_path) as c:
+                return 200, stock_qr.lookup(c, (query.get('qr') or [''])[0])
+        except ValueError as e:
+            return 400, {'error': str(e) or 'QRを確認してください。', 'qtyChanged': False}
     if path == '/api/stock':
         try:
             with stock.connect(db_path) as c:
@@ -426,6 +433,17 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'code': 'commit_failed',
                 'registered': False,
             }
+        return 200, result
+    if path == '/api/stock-qr':
+        import stock_qr
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                result = stock_qr.show(c, payload)
+        except PermissionError as e:
+            return 403, {'error': str(e), 'issued': False, 'qtyChanged': False}
+        except ValueError as e:
+            return 400, {'error': str(e) or 'QRの対象を確認してください。', 'issued': False, 'qtyChanged': False}
         return 200, result
     if path == '/api/product-ledger-csv/preview':
         import product_ledger_import
