@@ -22,7 +22,11 @@ QTY_MISMATCH = 'stock_count と calc_stock_count が違うため、どちらも�
 CUSTOMER_UNCONFIRMED = '旧顧客IDの対応が未確認です。既存の顧客を選んでください。新しくは作りません。'
 CUSTOMER_INACTIVE = '選んだ顧客は停止中です。停止中の顧客には登録しません。'
 CUSTOMER_MISSING = '選んだ顧客が見つかりません。'
-DUPLICATE_ID = '同じ旧在庫行IDがこのファイルに複数あります。先の行だけを見ます。'
+DUPLICATE_ID = '同じ旧在庫行IDが、同じ内容でこのファイルに複数あります。数量は一度だけ登録し、二重にはしません。'
+CONTENT_CONFLICT = (
+    '同じ旧在庫行IDの内容がこのファイル内で違います。'
+    '数量・顧客・メーカー・商品・サイズ・新品中古・場所が一致しないため、このIDは登録しません。'
+)
 LINK_CONFLICT = 'この旧在庫行IDは別の在庫に対応済みです。別の在庫へ付け替えません。'
 QR_FORMAT_NOTE = '旧QRは {"id","customer_id","maker_id"} です。列の3つのIDから組み立て、別の形式は作りません。'
 MAX_ROWS = 100000
@@ -105,12 +109,42 @@ def _qty_decision(row):
 
 
 def _condition_text(row):
+    """is_used が null のときは新品にしない。空のまま既存の初期在庫ルールへ渡す。
+
+    品名先頭の ＊ は、その既存ルールが中古として優先する（新品列より ＊ が勝つ）。
+    """
     used = row.get('is_used')
     if used is True:
         return '中古'
     if used is False:
         return '新品'
     return ''
+
+
+def _source_signature(row):
+    """同一旧IDの内容が同じか。数量・顧客・メーカー・商品・サイズ・状態・場所・単価を見る。"""
+    def norm(value):
+        if value is None or isinstance(value, (bool, int)):
+            return value
+        return stock.text(value)
+
+    return (
+        norm(row.get('customer_id')),
+        norm(row.get('maker_id')),
+        norm(row.get('maker_name')),
+        norm(row.get('item_id')),
+        norm(row.get('item_num')),
+        norm(row.get('name')),
+        norm(row.get('item_size')),
+        row.get('is_used') if isinstance(row.get('is_used'), bool) or row.get('is_used') is None else norm(row.get('is_used')),
+        row.get('stock_count') if type(row.get('stock_count')) is int else norm(row.get('stock_count')),
+        row.get('calc_stock_count') if type(row.get('calc_stock_count')) is int else norm(row.get('calc_stock_count')),
+        row.get('price') if type(row.get('price')) is int else norm(row.get('price')),
+        norm(row.get('factory_id')),
+        norm(row.get('factory_name')),
+        norm(row.get('shelf_id')),
+        norm(row.get('shelf_name')),
+    )
 
 
 def _customer_map(c, body, legacy_ids):
@@ -276,15 +310,14 @@ def build_plans(c, body):
     ensure_schema(c)
     uploaded = _decode(body)
     default_site = stock.text(body.get('defaultSiteName')) or stock.UNCONFIRMED_SITE_NAME
-    parsed = []
-    seen_ids = set()
-    legacy_customer_ids = []
+    prepared = []
+    signatures = {}
     for index, row in enumerate(uploaded['rows'], start=1):
         if not isinstance(row, dict):
-            parsed.append((index, None, _blocked_plan(
+            prepared.append({'blocked': _blocked_plan(
                 index, {}, [f'{index}件目はオブジェクトではありません。'],
                 legacy_info={}, qty=None,
-            )))
+            )})
             continue
         legacy_row = _legacy_payload(row, '')
         qty, qty_note = _qty_decision(row)
@@ -292,15 +325,43 @@ def build_plans(c, body):
         reasons = [qty_note]
         if not legacy_row['stockId'] or not legacy_row['customerId'] or not legacy_row['makerId']:
             reasons.append('旧在庫行ID・旧顧客ID・旧メーカーIDは文字として必要です。数値にはしません。')
-            parsed.append((index, None, _blocked_plan(index, row, reasons, legacy_info=legacy_row, qty=qty)))
+            prepared.append({'blocked': _blocked_plan(index, row, reasons, legacy_info=legacy_row, qty=qty)})
             continue
-        if legacy_row['stockId'] in seen_ids:
+        signature = _source_signature(row)
+        signatures.setdefault(legacy_row['stockId'], set()).add(signature)
+        prepared.append({
+            'index': index, 'row': row, 'legacy': legacy_row,
+            'qty': qty, 'reasons': reasons, 'signature': signature,
+        })
+    conflict_ids = {stock_id for stock_id, found in signatures.items() if len(found) > 1}
+    seen_same = set()
+    parsed = []
+    legacy_customer_ids = []
+    for item in prepared:
+        if 'blocked' in item:
+            parsed.append((item['blocked']['rowNo'], None, item['blocked']))
+            continue
+        index = item['index']
+        row = item['row']
+        legacy_row = item['legacy']
+        qty = item['qty']
+        reasons = list(item['reasons'])
+        if legacy_row['stockId'] in conflict_ids:
+            reasons.append(CONTENT_CONFLICT)
+            plan = _blocked_plan(index, row, reasons, legacy_info=legacy_row, qty=qty)
+            plan['legacyContentConflict'] = True
+            plan['legacyConflict'] = True
+            parsed.append((index, None, plan))
+            if legacy_row['customerId'] not in legacy_customer_ids:
+                legacy_customer_ids.append(legacy_row['customerId'])
+            continue
+        if legacy_row['stockId'] in seen_same:
             reasons.append(DUPLICATE_ID)
             plan = _blocked_plan(index, row, reasons, legacy_info=legacy_row, qty=qty)
             plan['legacyDuplicate'] = True
             parsed.append((index, None, plan))
             continue
-        seen_ids.add(legacy_row['stockId'])
+        seen_same.add(legacy_row['stockId'])
         if legacy_row['customerId'] not in legacy_customer_ids:
             legacy_customer_ids.append(legacy_row['customerId'])
         if qty is None:

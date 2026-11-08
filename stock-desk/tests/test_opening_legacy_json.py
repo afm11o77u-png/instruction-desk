@@ -140,6 +140,9 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(found['lotCount'], 1)
         self.assertIsNone(found['pickedLotId'])
         self.assertEqual(conn.execute('SELECT qty_remaining FROM lots').fetchone()['qty_remaining'], before)
+        saved = pli.build_preview(conn, opening_body([row()], conn, links={}))
+        self.assertTrue(saved['openingStock']['legacyCustomers'][0]['confirmed'])
+        self.assertEqual(saved['openingStock']['legacyCustomers'][0]['customerId'], customer_id(conn))
         again, _ = commit_json(conn, path, [row()], token='open-json-2')
         self.assertEqual(again['openingStock']['plans'][0]['status'], 'unchanged')
         self.assertEqual(conn.execute('SELECT SUM(qty_remaining) q FROM lots').fetchone()['q'], 4)
@@ -168,19 +171,77 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(link['item_num'], '7-522下')
         self.assertEqual(conn.execute('SELECT COUNT(*) n FROM products').fetchone()['n'], 1)
 
-    def test_duplicate_old_id_does_not_double_qty(self):
+    def test_identical_old_id_is_not_double_counted(self):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
         register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
-        preview, _result = commit_json(conn, path, [
-            row(stock_count=3, calc_stock_count=3),
-            row(stock_count=9, calc_stock_count=9),
-        ])
-        statuses = [p['status'] for p in preview['openingStock']['plans']]
-        self.assertIn('needs_review', statuses)
+        same = row(stock_count=3, calc_stock_count=3)
+        preview, _result = commit_json(conn, path, [same, dict(same)])
+        flags = [p.get('legacyDuplicate') for p in preview['openingStock']['plans']]
+        self.assertEqual(flags, [None, True])
+        self.assertIn(olj.DUPLICATE_ID, ' '.join(preview['openingStock']['plans'][1]['reasons']))
+        self.assertNotIn(olj.CONTENT_CONFLICT, ' '.join(
+            ' '.join(p.get('reasons') or []) for p in preview['openingStock']['plans']
+        ))
         self.assertEqual(conn.execute('SELECT SUM(qty_remaining) q FROM lots').fetchone()['q'], 3)
         self.assertEqual(conn.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 1)
+
+    def test_same_old_id_with_different_content_blocks_every_row(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, [
+            '顧客A,仕入先X,P001,パンツ,L',
+            '顧客A,仕入先X,P002,シャツ,M',
+        ])
+        cases = [
+            row(id='stock-qty', stock_count=3, calc_stock_count=3),
+            row(id='stock-qty', stock_count=9, calc_stock_count=9),
+            row(id='stock-place', factory_name='本社', shelf_name='棚1'),
+            row(id='stock-place', factory_name='別倉庫', shelf_name='奥'),
+            row(id='stock-size', item_size='L'),
+            row(id='stock-size', item_num='P002', name='シャツ', item_size='M'),
+        ]
+        preview, result = commit_json(conn, path, cases, token='content-conflict')
+        grouped = {}
+        for plan in preview['openingStock']['plans']:
+            grouped.setdefault((plan.get('legacy') or {}).get('stockId'), []).append(plan)
+        for stock_id, plans in grouped.items():
+            self.assertGreaterEqual(len(plans), 2, stock_id)
+            for plan in plans:
+                self.assertTrue(plan.get('legacyContentConflict'), stock_id)
+                self.assertTrue(plan.get('legacyConflict'), stock_id)
+                self.assertIn(olj.CONTENT_CONFLICT, ' '.join(plan.get('reasons') or []))
+                self.assertNotEqual(plan['status'], 'create')
+        self.assertEqual(result['counts'].get('openingCreated', 0), 0)
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+
+    def test_is_used_null_stays_unset_and_star_name_stays_used(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, [
+            '顧客A,仕入先X,P001,パンツ,L',
+            '顧客A,仕入先X,W001,＊白衣,L',
+        ])
+        preview, _result = commit_json(conn, path, [
+            row(id='stock-null', is_used=None),
+            row(id='stock-star', item_num='W001', name='＊白衣', is_used=None, stock_count=1, calc_stock_count=1),
+            row(id='stock-star-new', item_num='W001', name='＊白衣', is_used=False, stock_count=1, calc_stock_count=1),
+        ], token='condition-rules')
+        by_id = {(p.get('legacy') or {}).get('stockId'): p for p in preview['openingStock']['plans']}
+        self.assertIsNone(by_id['stock-null']['condition'])
+        self.assertEqual(by_id['stock-null']['status'], 'needs_review')
+        self.assertIn('新古が空', ' '.join(by_id['stock-null']['reasons']))
+        self.assertEqual(by_id['stock-star']['condition'], 'used')
+        self.assertEqual(by_id['stock-star-new']['condition'], 'used')
+        codes = {
+            r['condition'] for r in conn.execute('SELECT condition FROM lots')
+        }
+        self.assertNotIn('new', codes)
+        self.assertEqual(codes, {'used'})
 
     def test_changed_reimport_does_not_move_link(self):
         folder, path, conn = newdb()
@@ -394,6 +455,72 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(result['counts'].get('openingCreated', 0), 0)
         self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 0)
         self.assertEqual(conn.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 0)
+
+    def test_wipe_reimport_replaces_lot_without_keeping_old_id(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        commit_json(conn, path, [row()])
+        old_lot = conn.execute('SELECT id FROM lots').fetchone()['id']
+        wipe.execute_wipe(conn, {**OWNER, 'confirmText': '初期在庫を全削除'}, db_path=str(path))
+        conn.commit()
+        self.assertIsNone(conn.execute('SELECT id FROM lots WHERE id=?', (old_lot,)).fetchone())
+        leftover = [
+            json.loads(r['lot_ids_json'] or '[]')
+            for r in conn.execute('SELECT lot_ids_json FROM legacy_csv_row_maps')
+        ]
+        self.assertTrue(all(old_lot not in ids for ids in leftover))
+        commit_json(conn, path, [row()], token='wipe-again')
+        new_ids = [r['id'] for r in conn.execute('SELECT id FROM lots')]
+        self.assertEqual(len(new_ids), 1)
+        self.assertEqual(conn.execute('SELECT SUM(qty_remaining) q FROM lots').fetchone()['q'], 4)
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 1)
+        mapped = [
+            json.loads(r['lot_ids_json'] or '[]')
+            for r in conn.execute('SELECT lot_ids_json FROM legacy_csv_row_maps')
+        ]
+        live = {r['id'] for r in conn.execute('SELECT id FROM lots')}
+        self.assertTrue(all(lot_id in live for ids in mapped for lot_id in ids))
+        self.assertTrue(any(new_ids[0] in ids for ids in mapped))
+
+    def test_csv_stock_same_key_is_not_doubled_by_json(self):
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        opening = '新古,仕入先,顧客,商品名,商品コード,サイズ,仕入単価,在庫,拠点,棚\n新品,仕入先X,顧客A,パンツ,P001,L,1000,4,本社,棚1'
+        body = {
+            'importMode': 'opening_stock',
+            'auxFile': base64.b64encode(opening.encode()).decode('ascii'),
+            'auxName': 'opening.csv',
+            'basisDate': '2026-01-01',
+            'defaultSiteName': '未確認',
+            '_canWrite': True,
+            '_actor': {'name': '確認'},
+            'token': 'csv-before-json',
+        }
+        preview = pli.build_preview(conn, body)
+        pli.commit_preview(conn, {
+            **body,
+            'previewFingerprint': preview['previewFingerprint'],
+            'previewAt': preview['previewAt'],
+        }, db_path=str(path))
+        conn.commit()
+        json_preview, json_result = commit_json(conn, path, [row()], token='json-after-csv')
+        self.assertEqual(json_preview['openingStock']['plans'][0]['status'], 'unchanged')
+        self.assertEqual(json_result['counts'].get('openingCreated', 0), 0)
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM lots').fetchone()['n'], 1)
+        self.assertEqual(conn.execute('SELECT SUM(qty_remaining) q FROM lots').fetchone()['q'], 4)
+        self.assertEqual(conn.execute('SELECT COUNT(*) n FROM qr_stock_links').fetchone()['n'], 1)
+        different = commit_json(conn, path, [row(
+            id='stock-other-qty', stock_count=9, calc_stock_count=9,
+        )], token='json-qty-diff')
+        self.assertEqual(different[0]['openingStock']['plans'][0]['status'], 'qty_diff')
+        self.assertEqual(conn.execute('SELECT SUM(qty_remaining) q FROM lots').fetchone()['q'], 4)
+        self.assertIsNone(conn.execute(
+            "SELECT id FROM qr_stock_links WHERE legacy_stock_id='stock-other-qty'"
+        ).fetchone())
 
     def test_csv_opening_still_registers_without_qr_link(self):
         folder, path, conn = newdb()
