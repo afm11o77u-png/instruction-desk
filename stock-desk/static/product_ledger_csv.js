@@ -399,11 +399,11 @@
     const reasons=(r&&r.reasons||[]).join('\n')
     if(/候補から選|停止中|複数あります|矛盾しています|登録できません/.test(reasons))return true
     const sup=r&&r.supplier||{}
-    if(sup.action==='review'&&(sup.candidates||[]).length)return true
+    if(sup.action==='review')return true
     const prod=r&&r.product||{}
     if(prod.action==='review'&&(prod.candidates||[]).length)return true
     const cust=r&&r.customer||{}
-    if(cust.action==='review'&&(cust.candidates||[]).length)return true
+    if(cust.action==='review')return true
     const handle=r&&r.handle||{}
     if((handle.candidates||[]).length)return true
     return false
@@ -450,6 +450,16 @@
     const chosen=chosenCategoryForAccept(st,row)
     return !!chosen&&chosen===existing
   }
+  function personUnresolved(row){
+    const cust=row&&row.customer||{}
+    const sup=row&&row.supplier||{}
+    const reasons=(row&&row.reasons||[]).join('\n')
+    if(cust.action==='review'||sup.action==='review')return true
+    if(/顧客が空|顧客名が空/.test(reasons))return true
+    if(/顧客/.test(reasons)&&/表記差の候補があります/.test(reasons))return true
+    if(/仕入先/.test(reasons)&&/表記差の候補があります/.test(reasons))return true
+    return false
+  }
   function acceptBlocker(st,row,chosenCategory){
     // 再照合待ちや、既存区分と一致している古い提案文はブロッカーにしない。
     const reasons=(row&&row.reasons||[]).join('\n')
@@ -462,12 +472,20 @@
       return '商品の候補が複数あります。候補を選んでから了承してください。'
     }
     const sup=row&&row.supplier||{}
-    if(sup.action==='review'&&(sup.candidates||[]).length&&!sel.supplierId){
+    const supplierVariant=(sup.action==='review'&&(sup.candidates||[]).length)||(/仕入先/.test(reasons)&&/表記差の候補があります/.test(reasons))
+    if(supplierVariant&&!sel.supplierId){
       return '仕入先の表記差候補が未選択です。候補を選んでください。別会社としては作りません。'
     }
     const cust=row&&row.customer||{}
-    if(cust.action==='review'&&(cust.candidates||[]).length&&!sel.customerId){
+    const customerVariant=(cust.action==='review'&&(cust.candidates||[]).length)||(/顧客/.test(reasons)&&/表記差の候補があります/.test(reasons))
+    if(customerVariant&&!sel.customerId){
       return '顧客の表記差候補が未選択です。候補を選んでください。別会社としては作りません。'
+    }
+    const csvCustomer=String((row&&row.csv||{}).customer||'').trim()
+    const typedCustomer=String(sel.customerName||'').trim()
+    const customerEmpty=(cust.action==='review'&&!(cust.candidates||[]).length&&!csvCustomer)||/顧客が空|顧客名が空/.test(reasons)
+    if(customerEmpty&&!typedCustomer&&!sel.customerId){
+      return '顧客名が空です。顧客名を入力してください。空のままでは登録せず、似た名前へは結合しません。'
     }
     const handle=row&&row.handle||{}
     if((handle.candidates||[]).length&&!sel.handleId){
@@ -522,7 +540,8 @@
       if(!cur||!cur.reviewAccepted)return
       const blocked=!!acceptBlocker(st,r,chosenCategoryForAccept(st,r))
       const stillHeld=r.status==='needs_review'&&!r.canCommit
-      if(blocked||stillHeld){
+      // 顧客表記差・顧客空は canCommit が残っていても了承済みにしない。
+      if(blocked||stillHeld||r.acceptanceIgnored||personUnresolved(r)){
         st.rowClassifications[key]=Object.assign({},cur,{
           reviewAccepted:false,reviewFingerprint:'',pendingRematch:false
         })
@@ -563,7 +582,12 @@
   }
   function personCandidateSelectHtml(st,row,kind){
     const block=kind==='customer'?(row.customer||{}):(row.supplier||{})
-    if(block.action!=='review'||!(block.candidates||[]).length)return ''
+    const reasons=(row.reasons||[]).join('\n')
+    const mentioned=kind==='customer'
+      ?(/顧客/.test(reasons)&&/表記差の候補があります/.test(reasons))
+      :(/仕入先/.test(reasons)&&/表記差の候補があります/.test(reasons))
+    if(!(block.candidates||[]).length)return ''
+    if(block.action!=='review'&&!mentioned)return ''
     const sel=(st.selections||{})[String(row.rowNo)]||{}
     const current=kind==='customer'?sel.customerId:sel.supplierId
     const attr=kind==='customer'?'data-pl-customer':'data-pl-supplier'
@@ -571,8 +595,18 @@
     const opts=(block.candidates||[]).map(c=>`<option value="${c.id}" ${Number(current)===Number(c.id)?'selected':''}>${esc(c.name||'')}${c.active===false?'（停止中）':''}</option>`).join('')
     return `<label>${label}<select ${attr}="${row.rowNo}" ${st.busy?'disabled':''}><option value="">選択…</option>${opts}</select></label>`
   }
+  function customerNameInputHtml(st,row){
+    const cust=row.customer||{}
+    const reasons=(row.reasons||[]).join('\n')
+    const csvCustomer=String((row.csv||{}).customer||'').trim()
+    const empty=(cust.action==='review'&&!(cust.candidates||[]).length&&!csvCustomer)||(/顧客が空|顧客名が空/.test(reasons)&&!csvCustomer)
+    if(!empty)return ''
+    const sel=(st.selections||{})[String(row.rowNo)]||{}
+    return `<label>顧客名<input data-pl-customer-name="${row.rowNo}" value="${esc(sel.customerName||'')}" ${st.busy?'disabled':''} placeholder="顧客名を入力（自動では埋めません）"></label>
+      <p class="excelhint">顧客が空の行は取扱を作れません。入力した名前だけを使い、似た顧客へは結合しません。</p>`
+  }
   function acceptPickHtml(st,row){
-    const bits=[personCandidateSelectHtml(st,row,'supplier'),personCandidateSelectHtml(st,row,'customer')]
+    const bits=[personCandidateSelectHtml(st,row,'supplier'),personCandidateSelectHtml(st,row,'customer'),customerNameInputHtml(st,row)]
     const prod=row.product||{}
     const sel=(st.selections||{})[String(row.rowNo)]||{}
     if(row.status==='needs_review'&&(prod.candidates||[]).length&&!row.skuDecisionNeeded){
@@ -608,7 +642,7 @@
     const blocker=acceptBlocker(st,row,chosenCategoryForAccept(st,row))
     const edit=(st.rowClassifications||{})[String(row.rowNo)]||{}
     const fp=reviewFingerprint(st,row)
-    const accepted=!!(edit.reviewAccepted&&edit.reviewFingerprint===fp)&&!blocker
+    const accepted=!!(edit.reviewAccepted&&edit.reviewFingerprint===fp)&&!blocker&&!personUnresolved(row)&&!row.acceptanceIgnored
     const picks=acceptPickHtml(st,row)
     if(accepted){
       return `<div class="pl-review-accept" data-pl-accept-state="accepted">${acceptPlanLine(st,row)}${picks}<p class="excelhint">この内容で了承済みです。次は「選択を反映して再照合」で登録予定へ反映してください。</p></div>`
@@ -625,7 +659,7 @@
     if(!item||item.kind==='sku'||isOpeningMode(st))return ''
     const rows=(item.rows||[]).filter(r=>r&&r.status==='needs_review')
     if(!rows.length)return ''
-    const anyBlocked=rows.some(r=>acceptBlocker(st,r,chosenCategoryForAccept(st,r)))
+    const anyBlocked=rows.some(r=>acceptBlocker(st,r,chosenCategoryForAccept(st,r))||personUnresolved(r)||r.acceptanceIgnored||(r.status==='needs_review'&&!r.canCommit&&personUnresolved(r)))
     const allAccepted=!anyBlocked&&rows.every(r=>{
       const cur=(st.rowClassifications||{})[String(r.rowNo)]||{}
       return !!(cur.reviewAccepted&&cur.reviewFingerprint===reviewFingerprint(st,r))
@@ -7315,6 +7349,21 @@
     }
     bindPersonChoice('data-pl-supplier','supplierId')
     bindPersonChoice('data-pl-customer','customerId')
+    document.querySelectorAll('[data-pl-customer-name]').forEach(el=>{
+      el.onchange=()=>{
+        const rowNo=el.getAttribute('data-pl-customer-name')
+        applySelectionToGroup(st,rowNo,{customerName:String(el.value||'').trim(),customerId:null})
+        const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
+        const peers=row?((st.preview.rows)||[]).filter(r=>r.matchGroupKey===row.matchGroupKey):[]
+        ;(peers.length?peers:[{rowNo}]).forEach(r=>{
+          const cur=(st.rowClassifications||{})[String(r.rowNo)]||{}
+          if(cur.reviewAccepted){
+            setRowClassification(st,r.rowNo,{reviewAccepted:false,reviewFingerprint:'',pendingRematch:false})
+          }
+        })
+        paintDialog({preserveScroll:true})
+      }
+    })
     document.querySelectorAll('[data-pl-paren-name]').forEach(el=>{
       el.onchange=()=>setRowClassification(st,el.getAttribute('data-pl-paren-name'),{plannedName:el.value})
     })

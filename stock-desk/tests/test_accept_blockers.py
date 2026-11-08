@@ -287,5 +287,100 @@ class NotationUiTest(unittest.TestCase):
         self.assertFalse(out['state']['rowClassifications']['13'].get('reviewAccepted'))
 
 
+class CustomerBlockRecoveryTest(unittest.TestCase):
+    def test_leftover_accept_shows_customer_choice_not_success(self):
+        folder, path, conn = newdb()
+        try:
+            stock.save_customer(conn, {'name': '石屋商事事務所', 'active': True})
+            stock.save_supplier(conn, {'name': '石屋商事㈱', 'active': True})
+            conn.commit()
+            lines = [
+                '石屋商事 事務所,石屋商事㈱,,青リボン,-',
+                '石屋商事 事務所,石屋商事㈱,,青リボン,M',
+                ' ,KAZEN WLD㈱,,長白衣ボタン,-',
+            ]
+            first, body = preview(conn, lines)
+            ribbon = [r for r in first['rows'] if 'リボン' in r['csv']['productName']]
+            button = next(r for r in first['rows'] if 'ボタン' in r['csv']['productName'])
+            self.assertEqual(len(ribbon), 2)
+            self.assertTrue(ribbon[0]['customer']['candidates'])
+            self.assertFalse(ribbon[0]['canCommit'])
+            self.assertIn('顧客が空', ' '.join(button.get('reasons') or []))
+            self.assertFalse(button['canCommit'])
+            classifications = {}
+            for row in first['rows']:
+                classifications[str(row['rowNo'])] = {
+                    'reviewAccepted': True,
+                    'reviewFingerprint': pli._review_fingerprint(row),
+                    'userActed': True,
+                    'registerKind': '部品・資材',
+                    'registerKindUser': True,
+                }
+            st = base_state(first['rows'], rowClassifications=classifications)
+            out = render(st)
+            html = out['html']
+            self.assertNotIn('了承済み', html)
+            self.assertIn('顧客の候補', html)
+            self.assertIn('石屋商事事務所', html)
+            self.assertIn('顧客名', html)
+            self.assertIn('disabled', html)
+            self.assertFalse(any(
+                (out['state']['rowClassifications'].get(str(r['rowNo'])) or {}).get('reviewAccepted')
+                for r in first['rows']
+            ))
+            # サイズが複数でも、1行だけ選んでもう1行が未選択なら登録しない。
+            only_first, _ = preview(conn, lines, selections={
+                str(ribbon[0]['rowNo']): {'customerId': ribbon[0]['customer']['candidates'][0]['id']},
+            }, rowClassifications={
+                str(ribbon[0]['rowNo']): {
+                    'reviewAccepted': True,
+                    'reviewFingerprint': pli._review_fingerprint(ribbon[0]),
+                    'userActed': True,
+                },
+            })
+            second = next(r for r in only_first['rows'] if r['rowNo'] == ribbon[1]['rowNo'])
+            self.assertEqual(second['customer']['action'], 'review')
+            self.assertFalse(second['canCommit'])
+            chosen_id = ribbon[0]['customer']['candidates'][0]['id']
+            ready, body = preview(conn, lines, selections={
+                str(ribbon[0]['rowNo']): {'customerId': chosen_id},
+                str(ribbon[1]['rowNo']): {'customerId': chosen_id},
+                str(button['rowNo']): {'customerName': '新しい顧客'},
+            }, rowClassifications={
+                str(r['rowNo']): {
+                    'reviewAccepted': True,
+                    'reviewFingerprint': pli._review_fingerprint(r),
+                    'registerKind': '部品・資材',
+                    'registerKindUser': True,
+                    'userActed': True,
+                }
+                for r in first['rows']
+            })
+            for row in ready['rows']:
+                self.assertTrue(row['canCommit'], row.get('reasons'))
+            result = pli.commit_preview(conn, {
+                **body,
+                'previewFingerprint': ready['previewFingerprint'],
+                'previewAt': ready['previewAt'],
+                'token': 'customer-block-1',
+            }, db_path=str(path))
+            conn.commit()
+            self.assertFalse(result.get('error'), result)
+            names = [r['name'] for r in conn.execute('SELECT name FROM customers ORDER BY id')]
+            self.assertIn('石屋商事事務所', names)
+            self.assertNotIn('石屋商事 事務所', names)
+            self.assertIn('新しい顧客', names)
+            again, _ = preview(conn, lines, selections={
+                str(ribbon[0]['rowNo']): {'customerId': chosen_id},
+                str(ribbon[1]['rowNo']): {'customerId': chosen_id},
+                str(button['rowNo']): {'customerName': '新しい顧客'},
+            })
+            for row in again['rows']:
+                self.assertNotEqual(row['status'], 'needs_review', row.get('reasons'))
+        finally:
+            conn.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()

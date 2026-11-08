@@ -6543,10 +6543,16 @@ def classify_row(
     c, row_no, item, *,
     selected_product_id=None, selected_handle_id=None, selected_category=None,
     selected_supplier_id=None, selected_customer_id=None,
+    selected_customer_name=None,
     force_create_product=False,
     paren_override=None,
 ):
     customer_name = stock.text(item.get('顧客'))
+    # 空欄の顧客だけ、画面で明示した名前を使う。表記がある行は候補選択で決める。
+    if not customer_name:
+        typed_customer = stock.text(selected_customer_name or '')
+        if typed_customer:
+            customer_name = typed_customer
     supplier_name = stock.text(item.get('仕入先'))
     code_raw = stock.text(item.get('商品コード'))
     product_name = stock.text(item.get('商品名'))
@@ -10886,6 +10892,27 @@ def _code_shape_save(c, groups, decisions):
     return code_shape_review.save_links(c, groups, decisions)
 
 
+def _hold_unresolved_person(row):
+    """顧客・仕入先が未解決の行は、後段で canCommit が付いても登録しない。
+
+    空の仕入先（未設定のまま登録できる）は action が missing なので対象外。
+    顧客が空、または表記差の候補が未選択のときは取扱を作れない。
+    """
+    cust = row.get('customer') if isinstance(row.get('customer'), dict) else {}
+    supp = row.get('supplier') if isinstance(row.get('supplier'), dict) else {}
+    if cust.get('action') != 'review' and supp.get('action') != 'review':
+        return row
+    if row.get('status') in (STATUS_EXCLUDED, STATUS_HOLD):
+        row['canCommit'] = False
+        row['reviewAccepted'] = False
+        return row
+    row['status'] = STATUS_REVIEW
+    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+    row['canCommit'] = False
+    row['reviewAccepted'] = False
+    return row
+
+
 def build_preview(c, body):
     ensure_schema(c)
     stock_product_merge.migrate_product_merge(c)
@@ -10964,6 +10991,7 @@ def build_preview(c, body):
             selected_category=sel.get('category') if 'category' in sel else None,
             selected_supplier_id=sel.get('supplierId'),
             selected_customer_id=sel.get('customerId'),
+            selected_customer_name=sel.get('customerName'),
             force_create_product=force,
             paren_override=paren_ov,
         )
@@ -11418,6 +11446,7 @@ def build_preview(c, body):
         )
         _apply_review_acceptance(row, ov if isinstance(ov, dict) else {})
         _hold_unaccepted_kind_choice(row)
+        _hold_unresolved_person(row)
     return {
         'importMode': mode,
         'productPhase': phase,
