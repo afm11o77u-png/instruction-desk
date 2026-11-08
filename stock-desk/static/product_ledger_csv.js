@@ -1031,6 +1031,14 @@
       body.auxFile=st.auxFileB64
       body.auxName=st.auxFileName||'初期在庫.csv'
     }
+    if(st.legacyStockB64){
+      body.legacyStockFile=st.legacyStockB64
+      body.legacyStockName=st.legacyStockName||'old-stock.json'
+      if(st.legacyCustomerB64){
+        body.legacyCustomerFile=st.legacyCustomerB64
+        body.legacyCustomerName=st.legacyCustomerName||'old-customers.json'
+      }
+    }
     return body
   }
 
@@ -5511,7 +5519,7 @@
         <button type="button" class="quiet" id="plModeProducts" ${st.busy?'disabled':''}>商品を登録（まとめて）</button>
         <button type="button" class="primary" id="plModeOpening" ${st.busy?'disabled':''}>初期在庫を登録</button>
       </div>
-      <p class="excelhint">商品登録では初期在庫CSVを判定補助に使えても在庫は書きません。初期在庫登録は商品台帳CSVの再選択不要です。</p>
+      <p class="excelhint">商品登録の初期在庫CSVまたは旧在庫JSONは、通常仕入先とメイン候補の判定にだけ使います。在庫は書きません。初期在庫の本登録は「初期在庫を登録」で行い、旧在庫JSONなら旧IDと旧QRも同時です。同じ在庫をCSVとJSONの両方では登録しません。</p>
     </div>`
   }
 
@@ -5556,6 +5564,7 @@
     const auxHint=st.auxFileName&&st.auxFileSize?`（${Number(st.auxFileSize).toLocaleString('ja-JP')} バイト）`:''
     const auxMeta=st.preview&&st.preview.auxOpeningStock
     const auxSelected=!!st.auxFileB64
+    const jsonSelected=!!st.legacyStockB64
     return `<div class="product-ledger-files">
       <div class="bar product-ledger-filebar">
         <input type="file" id="plFile" class="product-ledger-file-input" accept=".csv,text/csv" ${st.busy?'disabled':''}>
@@ -5568,9 +5577,22 @@
         <span class="excelhint product-ledger-filename">${esc(st.auxFileName||'未選択（台帳のみ可）')}${auxHint?` ${esc(auxHint)}`:''}${auxMeta?`（${esc(auxMeta.encoding||'')} / ${auxMeta.rowCount||0}行）`:''}</span>
         ${st.auxFileB64?`<button type="button" id="plClearAux" class="quiet" ${st.busy?'disabled':''}>初期在庫CSVを外す</button>`:''}
       </div>
-      ${auxSelected
-        ?`<p class="notice" role="status"><strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。メイン商品名・仕入先・仕様の選定にだけ使い、在庫数量・単価・入出庫履歴は書きません。</p>`
-        :`<p class="excelhint">初期在庫CSVを選ばない場合も、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
+      <div class="bar product-ledger-filebar">
+        <input type="file" id="plLegacyStock" class="product-ledger-file-input" accept=".json,application/json" ${st.busy?'disabled':''}>
+        <button type="button" id="plPickLegacy" ${st.busy?'disabled':''}>${st.legacyStockName?'旧在庫JSONを変更':'旧在庫JSON（任意・判定補助）'}</button>
+        <span class="excelhint product-ledger-filename">${esc(st.legacyStockName||'未選択')}${st.legacyStockSize?` （${Number(st.legacyStockSize).toLocaleString('ja-JP')} バイト）`:''}</span>
+        ${st.legacyStockB64?`<button type="button" id="plClearAuxLegacy" class="quiet" ${st.busy?'disabled':''}>旧在庫JSONを外す</button>`:''}
+      </div>
+      <div class="bar product-ledger-filebar">
+        <input type="file" id="plLegacyCustomer" class="product-ledger-file-input" accept=".json,application/json" ${st.busy?'disabled':''}>
+        <button type="button" id="plPickLegacyCustomer" ${st.busy?'disabled':''}>${st.legacyCustomerName?'旧顧客JSONを変更':'旧顧客JSON（任意・顧客名の照合）'}</button>
+        <span class="excelhint product-ledger-filename">${esc(st.legacyCustomerName||'未選択')}${st.legacyCustomerSize?` （${Number(st.legacyCustomerSize).toLocaleString('ja-JP')} バイト）`:''}</span>
+      </div>
+      ${jsonSelected
+        ?`<p class="notice" role="status"><strong>旧在庫JSONは商品選定の判断にだけ使います。在庫は登録しません。</strong>通常仕入先・メイン候補の規則は初期在庫CSVと同じです。顧客名で絞るには旧顧客JSONも選んでください。初期在庫の本登録は、登録後に「初期在庫を登録」で同じ旧在庫JSONから行い、初期在庫CSVでは重ねて登録しないでください。</p>`
+        :auxSelected
+        ?`<p class="notice" role="status"><strong>${esc(AUX_JUDGMENT_ONLY_COPY)}</strong>。メイン商品名・仕入先・仕様の選定にだけ使い、在庫数量・単価・入出庫履歴は書きません。初期在庫を旧在庫JSONで登録する場合は、このCSVを在庫登録には使わないでください。</p>`
+        :`<p class="excelhint">初期在庫CSVも旧在庫JSONも選ばない場合は、商品・取扱などの台帳登録のみです（在庫数量は書き込みません）。</p>`}
       <div class="bar">
         <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
         <button type="button" id="plBackMode" class="quiet" ${st.busy?'disabled':''}>段階選択に戻る</button>
@@ -6088,7 +6110,7 @@
           </div>`
       :`<p class="excelhint">${esc(st.preview.note||'')}</p>
           ${timingsHtml(st)}
-          ${st.preview.auxOpeningStock?`<p class="excelhint">初期在庫CSV（判定補助）: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
+          ${st.preview.auxOpeningStock?`<p class="excelhint">${st.preview.auxOpeningStock.fromLegacyJson?'旧在庫JSON（判定補助）':'初期在庫CSV（判定補助）'}: ${esc(st.preview.auxOpeningStock.fileName||'')}　${esc(st.preview.auxOpeningStock.note||'')}</p>`:''}
           ${st.preview.phaseHiddenRows?`<p class="excelhint">この段階の対象外 ${Number(st.preview.phaseHiddenRows)} 行</p>`:''}
           <p><strong>${countLine(st.preview.countsRaw)}</strong>
            　確認リスト未解決 ${statusCounts?statusCounts.unresolved:0}件　確認事項 ${statusCounts?statusCounts.issueCount:0}
@@ -6201,6 +6223,10 @@
       st.auxFileName=f.name
       st.auxFileSize=f.size||0
       st.auxFileB64=b64
+      st.legacyStockFile=null
+      st.legacyStockB64=''
+      st.legacyStockName=''
+      st.legacyStockSize=0
       st.preview=null
       st.previewError=''
       st.result=null
@@ -6318,6 +6344,12 @@
       st.legacyStockB64=b64
       st.legacyStockName=f.name
       st.legacyStockSize=f.size
+      if(!isOpeningMode(st)){
+        st.auxFile=null
+        st.auxFileB64=''
+        st.auxFileName=''
+        st.auxFileSize=0
+      }
       st.preview=null
       st.previewError=''
       try{legacyFile.value=''}catch(_){}
@@ -6349,6 +6381,13 @@
         else st.legacyCustomerLinks[id]=''
       }
     })
+    const clearLegacy=$('#plClearAuxLegacy')
+    if(clearLegacy)clearLegacy.onclick=()=>{
+      st.legacyStockFile=null;st.legacyStockB64='';st.legacyStockName='';st.legacyStockSize=0
+      st.legacyCustomerFile=null;st.legacyCustomerB64='';st.legacyCustomerName='';st.legacyCustomerSize=0
+      st.preview=null;st.previewError='';st.result=null
+      paintDialog({preserveScroll:true})
+    }
     const clearAux=$('#plClearAux')
     if(clearAux)clearAux.onclick=()=>{
       st.auxFile=null;st.auxFileB64='';st.auxFileName='';st.auxFileSize=0

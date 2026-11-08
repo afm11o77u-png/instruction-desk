@@ -93,6 +93,79 @@ def _text_id(value):
     return ''
 
 
+def _agreed_qty_text(row):
+    """商品判定の「在庫」列へ渡す文字。両方が同じ整数のときだけその数。空や不一致は空（0にしない）。"""
+    stock_count = row.get('stock_count')
+    calc = row.get('calc_stock_count')
+    if type(stock_count) is bool or type(calc) is bool:
+        return ''
+    if type(stock_count) is int and type(calc) is int and stock_count == calc:
+        return str(stock_count)
+    return ''
+
+
+def judgment_aux_upload(body):
+    """商品登録の判定補助。旧在庫JSONを初期在庫CSVと同じ列の行にする。在庫は書かない。"""
+    uploaded = _decode(body)
+    catalog = decode_customer_file(body)
+    names = (catalog or {}).get('byId') or {}
+    signatures = {}
+    conflict_ids = set()
+    for row in uploaded['rows']:
+        if not isinstance(row, dict):
+            raise ValueError('旧在庫JSONの行がオブジェクトではありません。')
+        sid = _text_id(row.get('id'))
+        if not sid:
+            continue
+        sig = _source_signature(row)
+        prev = signatures.get(sid)
+        if prev is None:
+            signatures[sid] = sig
+        elif prev != sig:
+            conflict_ids.add(sid)
+    rows = []
+    seen = set()
+    for index, row in enumerate(uploaded['rows'], start=1):
+        sid = _text_id(row.get('id'))
+        if sid and (sid in conflict_ids or sid in seen):
+            continue
+        if sid:
+            seen.add(sid)
+        customer = ''
+        cid = _text_id(row.get('customer_id'))
+        entry = names.get(cid) if cid else None
+        if entry and not entry.get('conflict') and entry.get('name'):
+            customer = entry['name']
+        price = row.get('price')
+        rows.append((index, {
+            '新古': _condition_text(row),
+            '仕入先': stock.text(row.get('maker_name')),
+            '顧客': customer,
+            '商品名': stock.text(row.get('name')),
+            '商品コード': stock.text(row.get('item_num')),
+            'サイズ': stock.text(row.get('item_size')),
+            '仕入単価': str(price) if type(price) is int and not isinstance(price, bool) else '',
+            '在庫': _agreed_qty_text(row),
+            '拠点': stock.text(row.get('factory_name')),
+            '棚': stock.text(row.get('shelf_name')),
+        }))
+    if not rows:
+        raise ValueError('旧在庫JSONに、商品判定に使える行がありません。')
+    import legacy_code_assign
+    legacy_code_assign.assign_rows(rows)
+    return {
+        'fileName': uploaded['fileName'],
+        'fileSha256': uploaded['fileSha256'],
+        'fileSize': uploaded['fileSize'],
+        'encoding': uploaded['encoding'],
+        'fields': ['新古', '仕入先', '顧客', '商品名', '商品コード', 'サイズ', '仕入単価', '在庫', '拠点', '棚'],
+        'rows': rows,
+        'ignoredColumns': [],
+        'fromLegacyJson': True,
+        'customerFileName': (catalog or {}).get('fileName') or '',
+    }
+
+
 def _qty_decision(row):
     stock_count = row.get('stock_count')
     calc = row.get('calc_stock_count')

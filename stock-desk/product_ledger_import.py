@@ -1218,9 +1218,18 @@ def decode_upload(body):
 
 
 def decode_aux_upload(body):
-    """初期在庫用CSV（任意）。プレビューではDBを触らず列検証のみ。"""
+    """初期在庫CSV、または商品判定用の旧在庫JSON。プレビューではDBを触らない。"""
     if not isinstance(body, dict):
         return None
+    import opening_legacy_json
+    if opening_legacy_json.has_file(body):
+        aux_raw = body.get('auxFile') or body.get('openingStockFile')
+        if isinstance(aux_raw, str) and aux_raw.strip():
+            raise ValueError(
+                '初期在庫CSVと旧在庫JSONは同時には使えません。'
+                '商品の判定補助も、初期在庫の登録も、どちらか一方にしてください。'
+            )
+        return opening_legacy_json.judgment_aux_upload(body)
     cache = _request_decode_cache(body)
     raw = body.get('auxFile') or body.get('openingStockFile')
     raw_key = raw if isinstance(raw, str) else ''
@@ -2901,6 +2910,18 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
                 '商品名・仕入先・色・加工・素材をセットで採用します。'
                 '台帳に無い初期在庫だけの商品は補完候補として示し、自動では登録しません。'
             )
+        elif aux_uploaded.get('fromLegacyJson'):
+            note = (
+                f'{AUX_JUDGMENT_ONLY_NOTE}。'
+                '旧在庫JSONを、初期在庫CSVと同じ規則の判定補助に使います。'
+                '在庫数量・単価・初期在庫・入出庫履歴・旧QRは登録しません。'
+                '初期在庫の本登録は、商品登録のあと旧在庫JSON（必要なら旧顧客JSON）で行い、'
+                '同じ在庫を初期在庫CSVでは登録しません。'
+                '旧顧客JSONが無い行は顧客名では絞りません。'
+                '非ゼロ在庫（負含む）がある候補が1組のとき、その候補の'
+                '商品名・仕入先・色・加工・素材をセットで採用します。'
+                '補助資料にだけある商品・仕入先は新規作成しません。'
+            )
         else:
             note = (
                 f'{AUX_JUDGMENT_ONLY_NOTE}。'
@@ -2919,6 +2940,7 @@ def attach_aux_primary_judgment(sku_groups, aux_uploaded, *, register_opening=Fa
             'ignoredColumns': aux_uploaded.get('ignoredColumns') or [],
             'willRegisterOpeningStock': bool(register_opening),
             'judgmentOnly': not bool(register_opening),
+            'fromLegacyJson': bool(aux_uploaded.get('fromLegacyJson')),
             'note': note,
         }
 
