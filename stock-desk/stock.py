@@ -454,6 +454,8 @@ def needs_migration(c):
         return True
     if 'qr_stock_links' not in tables or 'qr_link_import_runs' not in tables:
         return True
+    if 'stock_qr_codes' not in tables:
+        return True
     if 'stock_close_records' not in tables or 'stock_update_hold' not in tables:
         return True
     import stock_orders
@@ -912,6 +914,8 @@ def migrate_schema(c):
     stock_prices.migrate(c)
     import qr_link_import
     qr_link_import.ensure_schema(c)
+    import stock_qr
+    stock_qr.ensure_schema(c)
     import stock_close
     stock_close.ensure_schema(c)
 

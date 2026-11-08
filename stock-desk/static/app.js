@@ -251,15 +251,37 @@ function targetFromStockRow(row,conditionOverride){
     amount:row.amount,
   }
 }
-function stockActionButtonsHtml(row,{lotId}={}){
-  if(!stockCanWrite())return '—'
+function stockRowMatchKey(row){
+  return [
+    row.id!=null?'lot:'+row.id:'grp',
+    row.customerProductId??'',
+    row.size??'',
+    row.locationId??'',
+    row.conditionMixed?'mix':(row.condition==null?'':String(row.condition)),
+    row.embroidery??'',
+    row.productId??''
+  ].join('\u001f')
+}
+function stockActionAttrs(row,{lotId}={}){
   const cp=row.customerProductId!=null?row.customerProductId:''
   const size=esc(row.size||'')
   const loc=row.locationId!=null?row.locationId:''
   const cond=row.conditionMixed?'':esc(row.condition||'new')
   const mixed=row.conditionMixed?'1':'0'
   const lot=lotId!=null?` data-lot="${lotId}"`:''
-  return `<button type="button" class="primary stock-row-btn" data-stock-in="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>入庫</button> <button type="button" class="stock-row-btn" data-stock-out="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>出庫</button> <button type="button" class="quiet" data-stock-order="${cp}" data-size="${size}" data-location="${loc}" data-condition="${cond}" data-mixed="${mixed}"${lot}>発注</button>`
+  const key=esc(stockRowMatchKey(row))
+  const qrKnown=row.condition==='new'||row.condition==='used'||row.condition===''
+  const qr=qrKnown?` data-qr-condition="${esc(row.condition)}"`:' data-qr-missing="1"'
+  return {cp,size,loc,cond,mixed,lot,key,qr}
+}
+function stockOpMenuItemsHtml(row,{lotId}={}){
+  const a=stockActionAttrs(row,{lotId})
+  return `<button type="button" class="primary stock-row-btn" role="menuitem" data-stock-in="${a.cp}" data-size="${a.size}" data-location="${a.loc}" data-condition="${a.cond}" data-mixed="${a.mixed}" data-row-key="${a.key}"${a.lot}>入庫</button><button type="button" class="stock-row-btn" role="menuitem" data-stock-out="${a.cp}" data-size="${a.size}" data-location="${a.loc}" data-condition="${a.cond}" data-mixed="${a.mixed}" data-row-key="${a.key}"${a.lot}>出庫</button><button type="button" class="stock-row-btn" role="menuitem" data-stock-qr="${a.cp}" data-size="${a.size}" data-location="${a.loc}" data-condition="${a.cond}" data-mixed="${a.mixed}" data-row-key="${a.key}"${a.qr}${a.lot}>QR表示</button>`
+}
+function stockActionButtonsHtml(row,{lotId}={}){
+  if(!stockCanWrite())return '—'
+  const a=stockActionAttrs(row,{lotId})
+  return `<span class="stock-row-actions"><button type="button" class="stock-row-btn" aria-haspopup="menu" aria-expanded="false" data-stock-op="${a.cp}" data-size="${a.size}" data-location="${a.loc}" data-condition="${a.cond}" data-mixed="${a.mixed}" data-row-key="${a.key}"${a.qr}${a.lot}>操作</button> <button type="button" class="quiet" data-stock-order="${a.cp}" data-size="${a.size}" data-location="${a.loc}" data-condition="${a.cond}" data-mixed="${a.mixed}" data-row-key="${a.key}"${a.lot}>発注</button></span>`
 }
 async function pickConditionIfNeeded(target,actionLabel){
   if(!target)return null
@@ -288,25 +310,149 @@ async function openOrderFromStockRow(row){
   PurchaseOrders.openEditor(null,{customerId:row.customerId,supplierId:product&&product.supplierId||null,customerProductId:row.customerProductId,size:row.size||''})
   if(product&&!product.supplierId)toast('通常仕入先が未設定です')
 }
+function closeStockOpMenu(){
+  const menu=document.getElementById('stockOpMenu')
+  if(menu)menu.remove()
+  document.querySelectorAll('[data-stock-op][aria-expanded="true"]').forEach(b=>b.setAttribute('aria-expanded','false'))
+}
+function placeStockOpMenu(menu,btn){
+  const r=btn.getBoundingClientRect()
+  const gap=4
+  const mw=menu.offsetWidth
+  const mh=menu.offsetHeight
+  // 行の操作ボタンの左に出す。下に出すと次の行のボタンに重なり、別の行を押してしまう。
+  let left=r.left-mw-gap
+  if(left<8)left=Math.min(Math.max(8,r.right+gap),window.innerWidth-mw-8)
+  let top=r.top
+  if(top+mh>window.innerHeight-8)top=Math.max(8,window.innerHeight-mh-8)
+  if(top<8)top=8
+  menu.style.left=left+'px'
+  menu.style.top=top+'px'
+}
+function installStockOpMenuDismiss(){
+  if(installStockOpMenuDismiss.done)return
+  installStockOpMenuDismiss.done=true
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&document.getElementById('stockOpMenu')){
+      e.preventDefault()
+      closeStockOpMenu()
+    }
+  })
+  document.addEventListener('pointerdown',e=>{
+    const menu=document.getElementById('stockOpMenu')
+    if(!menu)return
+    if(menu.contains(e.target))return
+    const op=e.target.closest&&e.target.closest('[data-stock-op]')
+    if(op&&op.getAttribute('aria-expanded')==='true')return
+    closeStockOpMenu()
+  })
+  document.addEventListener('scroll',()=>closeStockOpMenu(),true)
+  window.addEventListener('resize',()=>closeStockOpMenu())
+}
+function stockQrAmbiguousReason(row){
+  if(!row||row.customerProductId==null)return 'この行では顧客と商品の取扱が一つに定まらないため、QRを発行しません。'
+  if(row.size==null||String(row.size)==='')return 'サイズが空のため、QRを発行しません。'
+  if(row.conditionMixed)return '新品と中古が同じ行に混ざっているため、QRを発行しません。在庫明細で状態ごとの行から表示してください。'
+  if(row.condition!=='new'&&row.condition!=='used'&&row.condition!=='')return '新品か中古かがこの行では定まらないため、QRを発行しません。在庫明細で状態ごとの行から表示してください。'
+  if('qtyNew' in row&&'qtyUsed' in row&&(Number(row.qtyNew)||0)+(Number(row.qtyUsed)||0)!==Number(row.qty)){
+    return '新品・中古以外の数量が同じ行にあるため、QRを発行しません。在庫明細で状態ごとの行から表示してください。'
+  }
+  return ''
+}
+function showStockQrMessage(message){
+  const dlg=$('#dialog')
+  dlg.classList.remove('stock-qr-dialog')
+  dlg.innerHTML=`<div class="dialoghead"><h2>在庫QR</h2><button type="button" id="qrStockClose" class="quiet">閉じる</button></div>
+    <div class="dialogbody"><p>${esc(message)}</p><p class="sub">在庫数量は変えていません。</p></div>`
+  if(!dlg.open)dlg.showModal()
+  $('#qrStockClose').onclick=()=>{dlg.close();dlg.innerHTML=''}
+}
+function showStockQrDialog(data){
+  const dlg=$('#dialog')
+  dlg.classList.add('stock-qr-dialog')
+  const img=data.pngBase64?`<img class="stock-qr-image" alt="在庫QR" src="data:image/png;base64,${data.pngBase64}">`:''
+  const imageError=data.imageError?`<p class="notice">${esc(data.imageError)}</p>`:''
+  const again=data.created?'':'<p>以前に発行したQRです。</p>'
+  dlg.innerHTML=`<div class="dialoghead"><h2>在庫QR</h2><button type="button" id="qrStockClose" class="quiet">閉じる</button></div>
+    <div class="dialogbody">
+      <p>顧客　${esc(data.customerName||'')}</p>
+      <p>商品　${esc(data.code||'')} ${esc(data.productName||'')}</p>
+      <p>色　${esc(data.color||'なし')}</p>
+      <p>加工　${esc(data.embroideryLabel||'')}</p>
+      <p>サイズ　${esc(data.size||'')}</p>
+      <p>新品中古　${esc(data.conditionLabel||'')}</p>
+      ${again}
+      ${img}
+      ${imageError}
+      <p class="stock-qr-id">${esc(data.publicId||'')}</p>
+      <p class="sub">このQRの内容はIDだけです。場所や入荷、単価が違っても同じ区分は同じQRです。印刷用のラベルは後日です。在庫数量は変えていません。</p>
+    </div>`
+  if(!dlg.open)dlg.showModal()
+  $('#qrStockClose').onclick=()=>{dlg.close();dlg.innerHTML='';dlg.classList.remove('stock-qr-dialog')}
+}
+const stockQrFlight=new Map()
+async function openStockQr(row){
+  const reason=stockQrAmbiguousReason(row)
+  if(reason){showStockQrMessage(reason);return}
+  const key=[row.customerProductId,row.size,row.condition].join('\u0001')
+  if(!stockQrFlight.has(key)){
+    const job=api('/api/stock-qr',{
+      customerProductId:row.customerProductId,
+      size:row.size,
+      condition:row.condition
+    }).finally(()=>stockQrFlight.delete(key))
+    stockQrFlight.set(key,job)
+  }
+  try{
+    showStockQrDialog(await stockQrFlight.get(key))
+  }catch(e){
+    showStockQrMessage(e.message||'QRを表示できませんでした。')
+  }
+}
+async function openStockMoveFromRow(row,actionLabel){
+  const override=row.conditionMixed?null:(row.condition||'new')
+  let target=targetFromStockRow(row,override)
+  target=await pickConditionIfNeeded(target,actionLabel)
+  if(!target)return
+  if(actionLabel==='入庫')openInboundDialog(target)
+  else openOutboundDialog(target)
+}
+function openStockOpMenu(btn,row){
+  if(!row){toast('この行の対象を特定できません。');return}
+  const existing=document.getElementById('stockOpMenu')
+  if(existing&&existing.dataset.forKey===btn.dataset.rowKey){
+    closeStockOpMenu()
+    return
+  }
+  closeStockOpMenu()
+  installStockOpMenuDismiss()
+  const menu=document.createElement('div')
+  menu.id='stockOpMenu'
+  menu.className='stock-op-menu'
+  menu.setAttribute('role','menu')
+  menu.dataset.forKey=btn.dataset.rowKey||''
+  menu.innerHTML=stockOpMenuItemsHtml(row)
+  document.body.appendChild(menu)
+  placeStockOpMenu(menu,btn)
+  btn.setAttribute('aria-expanded','true')
+  menu.querySelector('[data-stock-in]').onclick=()=>{closeStockOpMenu();openStockMoveFromRow(row,'入庫')}
+  menu.querySelector('[data-stock-out]').onclick=()=>{closeStockOpMenu();openStockMoveFromRow(row,'出庫')}
+  menu.querySelector('[data-stock-qr]').onclick=()=>{closeStockOpMenu();openStockQr(row)}
+}
 function bindStockRowActions(root,rows){
+  closeStockOpMenu()
   const find=btn=>{
-    const cp=btn.dataset.stockIn||btn.dataset.stockOut||btn.dataset.stockOrder
+    const key=btn.dataset.rowKey
+    if(key)return (rows||[]).find(r=>stockRowMatchKey(r)===key)||null
+    const cp=btn.dataset.stockIn||btn.dataset.stockOut||btn.dataset.stockOrder||btn.dataset.stockOp
     const size=btn.dataset.size
     const loc=btn.dataset.location
     const cond=btn.dataset.condition||''
     return (rows||[]).find(r=>String(r.customerProductId)===String(cp)&&String(r.size)===String(size)&&String(r.locationId)===String(loc)&&(cond===''||String(r.condition||'new')===String(cond)||r.conditionMixed))
   }
-  root.querySelectorAll('[data-stock-in]').forEach(b=>b.onclick=async()=>{
-    const row=find(b);if(!row)return
-    let target=targetFromStockRow(row,b.dataset.condition||null)
-    target=await pickConditionIfNeeded(target,'入庫');if(!target)return
-    openInboundDialog(target)
-  })
-  root.querySelectorAll('[data-stock-out]').forEach(b=>b.onclick=async()=>{
-    const row=find(b);if(!row)return
-    let target=targetFromStockRow(row,b.dataset.condition||null)
-    target=await pickConditionIfNeeded(target,'出庫');if(!target)return
-    openOutboundDialog(target)
+  root.querySelectorAll('[data-stock-op]').forEach(b=>b.onclick=ev=>{
+    ev.stopPropagation()
+    openStockOpMenu(b,find(b))
   })
   root.querySelectorAll('[data-stock-order]').forEach(b=>b.onclick=async()=>{
     const row=find(b);if(!row)return

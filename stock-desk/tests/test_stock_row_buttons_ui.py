@@ -17,16 +17,32 @@ class StockRowButtonsUiTest(unittest.TestCase):
         self.assertIn('class="stock-row-btn"', APP_JS)
         self.assertIn('data-stock-in=', APP_JS)
         self.assertIn('data-stock-out=', APP_JS)
-        # 入庫だけが巨大化しないよう、primary でも同じクラスを付ける
-        m = re.search(
+        # 入庫・出庫は操作メニューの中。高さは同じ stock-row-btn。
+        menu = re.search(
+            r'function stockOpMenuItemsHtml\([^)]*\)\{.*?return `([^`]+)`',
+            APP_JS,
+            re.S,
+        )
+        self.assertIsNotNone(menu)
+        items = menu.group(1)
+        self.assertIn('primary stock-row-btn', items)
+        self.assertRegex(items, r'class="stock-row-btn"[^>]*data-stock-out=')
+        self.assertIn('>入庫</button>', items)
+        self.assertIn('>出庫</button>', items)
+        self.assertIn('>QR表示</button>', items)
+        row = re.search(
             r'function stockActionButtonsHtml\([^)]*\)\{.*?return `([^`]+)`',
             APP_JS,
             re.S,
         )
-        self.assertIsNotNone(m)
-        html = m.group(1)
-        self.assertIn('primary stock-row-btn', html)
-        self.assertRegex(html, r'class="stock-row-btn"[^>]*data-stock-out=')
+        self.assertIsNotNone(row)
+        html = row.group(1)
+        self.assertIn('>操作</button>', html)
+        self.assertIn('>発注</button>', html)
+        self.assertNotIn('data-stock-in=', html)
+        self.assertNotIn('>QR表示</button>', html)
+        self.assertNotIn('>入庫</button>', html)
+        self.assertNotIn('>出庫</button>', html)
 
     def test_css_unifies_padding_including_primary(self):
         self.assertIn('.stock-row-btn{', CSS)
