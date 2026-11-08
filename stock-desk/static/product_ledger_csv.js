@@ -426,6 +426,51 @@
     const supplier=String((r&&r.csv||{}).supplier||'')
     return [kind,code,name,color,supplier].join('\u0001')
   }
+  function registerKindToCategory(kind){
+    if(kind==='商品')return '制服'
+    if(kind==='部品・資材')return '部品・資材'
+    if(kind==='加工サービス')return '加工サービス'
+    return ''
+  }
+  function acceptBlocker(st,row,chosenCategory){
+    const reasons=(row&&row.reasons||[]).join('\n')
+    if(/停止中/.test(reasons))return '停止中のため、了承では登録できません。'
+    const sel=(st.selections||{})[String(row&&row.rowNo)]||{}
+    const prod=row&&row.product||{}
+    if((prod.candidates||[]).length&&!sel.productId&&!sel.forceCreate){
+      return '商品の候補が複数あります。候補を選んでから了承してください。'
+    }
+    const sup=row&&row.supplier||{}
+    if(sup.action==='review'&&(sup.candidates||[]).length&&!sel.supplierId){
+      return '仕入先の候補を選んでから了承してください。了承だけでは選びません。'
+    }
+    if(rowCategoryConflict(row)){
+      const existing=String(prod.category||'')
+      if(chosenCategory&&existing&&chosenCategory!==existing){
+        return `既存カテゴリ「${existing}」は変更しません。区分を「${existing}」に合わせるか、この行は登録しないでください。`
+      }
+    }
+    return ''
+  }
+  function readDetailChoice(rowNo){
+    let kindEl=null
+    let catEl=null
+    try{
+      kindEl=document.querySelector(`[data-pl-register-kind="${CSS.escape(String(rowNo))}"]`)
+      catEl=document.querySelector(`[data-pl-cat="${CSS.escape(String(rowNo))}"]`)
+    }catch(e){
+      kindEl=null
+      catEl=null
+    }
+    let kind=kindEl&&kindEl.value||''
+    let category=catEl&&catEl.value||''
+    if(!kind&&category){
+      const back={'制服':'商品','部品・資材':'部品・資材','加工サービス':'加工サービス'}
+      kind=back[category]||''
+    }
+    if(kind&&!category)category=registerKindToCategory(kind)
+    return {kind,category}
+  }
   function rowCategoryConflict(r){
     const prod=r&&r.product||{}
     if(prod.categoryConflict)return true
@@ -435,11 +480,7 @@
     if(!item||item.kind==='sku'||isOpeningMode(st))return ''
     const all=(item.rows||[]).filter(r=>r&&r.status==='needs_review')
     if(!all.length)return ''
-    const conflicts=all.filter(rowCategoryConflict)
-    if(conflicts.length){
-      return `<p class="excelhint pl-category-conflict-guide">既存のカテゴリは、この画面の了承や再照合では変わりません。商品一覧でその商品を開き、カテゴリを保存してから取り込むか、この行は「今回登録しない」を選んでください。</p>`
-    }
-    const rows=all.filter(r=>!reviewRowBlocked(r))
+    const rows=all
     if(!rows.length)return ''
     const sample=rows[0]
     const fp=reviewFingerprint(st,sample)
@@ -458,12 +499,15 @@
       pc.color?`色 ${pc.color}`:'',
       csv.supplier?`仕入先 ${csv.supplier}`:''
     ].filter(Boolean)
-    if(accepted){
+    const chosen=registerKindToCategory(kind)
+    const blocker=acceptBlocker(st,sample,chosen)
+    if(accepted&&!blocker){
       return `<p class="excelhint">この内容で了承済みです。次は「選択を反映して再照合」で登録予定へ反映してください。</p>`
     }
     const buttons=rows.map(r=>`<button type="button" class="primary" data-pl-review-accept="${r.rowNo}" data-fp="${esc(reviewFingerprint(st,r))}" ${st.busy?'disabled':''}>この内容で了承</button>`).join(' ')
     return `<div class="pl-review-accept">
       <p class="excelhint">登録予定: ${esc(planBits.join(' / '))}</p>
+      ${blocker?`<p class="excelhint">${esc(blocker)}</p>`:''}
       ${buttons}
     </div>`
   }
@@ -3301,6 +3345,7 @@
               <button type="button" data-pl-sku-dec="${esc(g.code)}" data-dec="hold" class="${decision==='hold'?'primary':'quiet'}" title="${esc(DECISION_BLURBS.hold)}" ${st.busy?'disabled':''}>保留</button>
               ${(g.makerCorrection&&g.makerCorrection.showButton)?`<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(g.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
               <button type="button" data-pl-sku-expand="${esc(g.code)}" class="quiet">${skuExpanded?'詳細を閉じる':'詳細を開く'}</button>
+              <button type="button" class="primary" data-pl-review-accept-sku="${esc(g.code)}" ${st.busy?'disabled':''}>この内容で了承</button>
             </div>
             ${skipRegisterActionsHtml(st,item)}
           </td>
@@ -3941,7 +3986,10 @@
       const cur=sel.category!=null?sel.category:(r.product.category||'')
       const opts=(st.preview&&st.preview.categoryOptions)||['','制服','部品・資材','加工サービス']
       bits.push(`<label>区分<select data-pl-cat="${r.rowNo}" ${st.busy?'disabled':''}>${opts.map(v=>`<option value="${esc(v)}" ${cur===v?'selected':''}>${esc(v||'（なし）')}</option>`).join('')}</select></label>`)
-      bits.push('<p class="excelhint">品番なしの部品・加工は、品番を新しく入れなくても登録できます。区分を確認し「この内容で了承」して再照合してください。</p>')
+      bits.push('<p class="excelhint">品番なしの部品・加工は、品番を新しく入れなくても登録できます。下の「この内容で了承」で、いま選んでいる区分を保存します。</p>')
+    }
+    if(r.status==='needs_review'){
+      bits.push(`<div class="pl-review-accept"><button type="button" class="primary" data-pl-review-accept="${r.rowNo}" data-fp="${esc(reviewFingerprint(st,r))}" ${st.busy?'disabled':''}>この内容で了承</button></div>`)
     }
     // メーカー情報で補正: 要確認かつ具体的なメーカー品番がある行だけ
     const mk=r.makerCorrection||{}
@@ -7428,26 +7476,58 @@
         st.toast(`同じ内容の ${peers.length} 行を登録対象から外しました`)
       }
     })
+    function commitRowAccept(row){
+      if(!row)return
+      const choice=readDetailChoice(row.rowNo)
+      const kind=choice.kind||effectiveRegisterKind(st,row)
+      const category=choice.category||registerKindToCategory(kind)
+      const key=String(row.rowNo)
+      if(category)st.selections[key]={...(st.selections[key]||{}),category}
+      const blocker=acceptBlocker(st,row,category)
+      const patch={
+        userActed:true,
+        pendingRematch:true,
+        choiceKey:rowChoiceKey(row),
+        registerKind:kind||undefined,
+        registerKindUser:!!kind
+      }
+      if(blocker){
+        setRowClassification(st,row.rowNo,Object.assign({},patch,{reviewAccepted:false,reviewFingerprint:''}))
+        st.toast(blocker)
+        return
+      }
+      setRowClassification(st,row.rowNo,patch)
+      const fp=reviewFingerprint(st,row)
+      setRowClassification(st,row.rowNo,{
+        reviewAccepted:true,
+        reviewFingerprint:fp,
+        confirmed:true,
+        acceptProposal:true,
+        pendingRematch:true
+      })
+      st.toast('この内容で了承しました。選択を反映して再照合すると登録予定へ反映します。')
+    }
     document.querySelectorAll('[data-pl-review-accept]').forEach(el=>{
       el.onclick=()=>{
         if(st.busy)return
         const rowNo=el.getAttribute('data-pl-review-accept')
-        const fp=el.getAttribute('data-fp')||''
         const row=((st.preview&&st.preview.rows)||[]).find(r=>String(r.rowNo)===String(rowNo))
-        const kind=row?effectiveRegisterKind(st,row):''
-        setRowClassification(st,rowNo,{
-          reviewAccepted:true,
-          reviewFingerprint:fp,
-          userActed:true,
-          confirmed:true,
-          acceptProposal:true,
-          registerKind:kind||undefined,
-          registerKindUser:!!kind,
-          choiceKey:row?rowChoiceKey(row):((st.rowClassifications||{})[String(rowNo)]||{}).choiceKey||'',
-          pendingRematch:true
-        })
+        commitRowAccept(row)
         paintDialog({preserveScroll:true})
+      }
+    })
+    document.querySelectorAll('[data-pl-review-accept-sku]').forEach(el=>{
+      el.onclick=()=>{
+        if(st.busy)return
+        const code=el.getAttribute('data-pl-review-accept-sku')
+        const d=skuDecision(st,code)
+        if(!(d.decision||'')){
+          st.toast('まとめる、色別、内容別、個別整理、保留のいずれかを選んでから了承してください。')
+          return
+        }
+        setSkuDecision(st,code,{reviewAccepted:true})
         st.toast('この内容で了承しました。選択を反映して再照合すると登録予定へ反映します。')
+        paintDialog({preserveScroll:true})
       }
     })
     document.querySelectorAll('[data-pl-target-skip]').forEach(el=>{
