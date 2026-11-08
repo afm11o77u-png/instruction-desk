@@ -6542,6 +6542,7 @@ def code_name_columns_look_swapped(code, product_name):
 def classify_row(
     c, row_no, item, *,
     selected_product_id=None, selected_handle_id=None, selected_category=None,
+    selected_supplier_id=None,
     force_create_product=False,
     paren_override=None,
 ):
@@ -6620,6 +6621,23 @@ def classify_row(
 
     if supplier_name:
         supp = _person_preview(c, 'suppliers', '仕入先', supplier_name, row_no)
+        chosen_id = selected_supplier_id
+        if chosen_id not in (None, ''):
+            try:
+                chosen_id = int(chosen_id)
+            except (TypeError, ValueError):
+                chosen_id = None
+            hit = next((
+                cand for cand in (supp.get('candidates') or [])
+                if int(cand.get('id') or 0) == chosen_id
+            ), None) if chosen_id else None
+            if hit and supp.get('action') == 'review':
+                supp = dict(supp)
+                supp['action'] = 'reuse'
+                supp['id'] = hit['id']
+                supp['name'] = hit.get('name') or supplier_name
+                supp['reasons'] = []
+                supp['supplierChosen'] = True
     else:
         supp = {
             'action': 'missing', 'id': None, 'name': '', 'candidates': [],
@@ -10784,6 +10802,7 @@ def build_preview(c, body):
             selected_product_id=sel.get('productId'),
             selected_handle_id=sel.get('handleId'),
             selected_category=sel.get('category') if 'category' in sel else None,
+            selected_supplier_id=sel.get('supplierId'),
             force_create_product=force,
             paren_override=paren_ov,
         )
