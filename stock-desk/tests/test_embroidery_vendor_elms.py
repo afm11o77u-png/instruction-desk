@@ -102,7 +102,7 @@ class VendorRoutingTest(unittest.TestCase):
             k2 = conn.execute("SELECT id FROM suppliers WHERE name='K2スタッフ工房'").fetchone()
             self.assertEqual(services.get('プリント'), k2['id'])
             self.assertIn('エルム', result['processingCandidatesRegistered'].get('skipped') or '')
-            stock.save_supplier(conn, {'name': '(有)エルムスコーポレーション', 'active': True})
+            stock.save_supplier(conn, {'name': 'エルム', 'active': True})
             stock.save_supplier(conn, {'name': 'エルムス', 'active': True})
             conn.commit()
             text = '顧客,仕入先,商品コード,商品名,サイズ\n' + '\n'.join(self.LINES)

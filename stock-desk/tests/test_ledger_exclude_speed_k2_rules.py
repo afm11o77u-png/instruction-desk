@@ -108,10 +108,10 @@ class K2ClassifyUnitTest(unittest.TestCase):
             product_name='チェック柄ベスト',
             code='',
         )
-        # 衣服名は加工名辞書に入れない。K2では既定加工＋行ごとに商品/登録しないを選択
+        # 品番のない衣服名は加工名にしない。K2製作の制服として商品にする
         self.assertFalse(r.get('k2AutoExclude'))
-        self.assertTrue(r.get('k2GarmentCandidate'))
-        self.assertEqual(r.get('serviceName'), 'チェック柄ベスト')
+        self.assertTrue(r.get('k2UniformProduct'))
+        self.assertFalse(r.get('isProcessingService'))
 
     def test_vendor_normalization(self):
         for s in ('K2スタッフ工房', 'Ｋ２スタッフ工房', 'K2 スタッフ 工房', 'ｋ２ｽﾀｯﾌ工房'):

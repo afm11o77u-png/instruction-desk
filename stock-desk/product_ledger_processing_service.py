@@ -20,6 +20,7 @@ _PROCESSING_VENDOR_DISPLAY = {
     '有エルムスコーポレーション': '(有)エルムスコーポレーション',
     'エルムスコーポレーション': '(有)エルムスコーポレーション',
     'エルムス': '(有)エルムスコーポレーション',
+    'エルム': '(有)エルムスコーポレーション',
 }
 
 K2_VENDOR_DISPLAY = 'K2スタッフ工房'
@@ -50,13 +51,14 @@ _ELMS_EMBROIDERY_ALIASES = (
 _ELMS_VENDOR_KEYS = frozenset({
     'エルムスコーポレーション',
     'エルムス',
+    'エルム',
     '有エルムスコーポレーション',
 })
 
 # 実物部品・資材（加工サービスと区別）
 _PHYSICAL_PARTS_MARKERS = (
     '生地', 'ボタン', '釦', '糸', '芯地', '裏地', 'ファスナー', 'チャック',
-    'ゴム', 'テープ', 'ラベル', 'タグ', 'パッキン', '金具', 'フック',
+    'ゴム', 'テープ', 'ラベル', 'タグ', 'パッキン', '金具', 'フック', 'リボン',
     'ベルト部品', '芯', 'パッド',
 )
 
@@ -405,6 +407,11 @@ def elms_supplier_matches(c):
     for row in c.execute('SELECT id, name, active FROM suppliers'):
         if row['active'] and is_elms_corporation_vendor(row['name']):
             rows.append({'id': row['id'], 'name': row['name']})
+    official = [row for row in rows if stock.text(row['name']) == ELMS_VENDOR_DISPLAY]
+    if len(official) == 1:
+        # 正式名 (有)エルムスコーポレーション が一つあれば、略称があってもそれを使う。
+        # 正式名が二つあるときはここを通さず、下で曖昧にする。
+        return {'status': 'unique', 'id': official[0]['id'], 'name': official[0]['name'], 'candidates': rows}
     if len(rows) == 1:
         return {'status': 'unique', 'id': rows[0]['id'], 'name': rows[0]['name'], 'candidates': rows}
     if not rows:
@@ -721,6 +728,25 @@ def _looks_like_garment_name(name):
     return blank_code_kind(name) == 'garment'
 
 
+def is_k2_made_uniform_name(name: str, code: str = '') -> bool:
+    """品番のないK2製作の実物制服か。正式品番つきの行は対象外。加工名は False。"""
+    raw_code = stock.text(code)
+    if raw_code and raw_code not in ('要確認', '別注') and not (
+        raw_code.startswith('別注(') and raw_code.endswith(')')
+    ):
+        return False
+    raw = stock.text(name)
+    if not raw:
+        return False
+    base = _strip_parens_keep_inner(raw)[0] or raw
+    from legacy_code_assign import blank_code_kind
+    if blank_code_kind(base) != 'garment':
+        return False
+    if unify_processing_service_name(base):
+        return False
+    return True
+
+
 def is_garment_body_name(name):
     """括弧外が衣服名そのもの（七分袖シャツ・反射ベスト・裾上げパンツ等）なら True。
 
@@ -745,6 +771,9 @@ def unify_processing_service_name(raw_name: str) -> str:
     raw = strip_service_markers(unicodedata.normalize('NFKC', stock.text(raw_name) or ''))
     if not raw:
         return ''
+    # 「インターネット付け」は誤記のまま残す（付け→取付へ直さない）
+    if re.sub(r'[\s\u3000]+', '', raw) == 'インターネット付け':
+        return 'インターネット付け'
     if paren_classify.is_embroidery_price_condition(raw):
         return ''
     # 「未加工」「加工なし」等は加工が無い意味（加工サービス名にしない）
@@ -1054,11 +1083,17 @@ def classify_processing_service_row(
         )
     if not result['vendorName'] and not supplier_t:
         missing.append('加工業者')
+    if k2 and name_t and is_k2_made_uniform_name(name_t, code_t):
+        # K2へ製作依頼した実物制服。加工サービスにしない。仕入先はK2のまま。
+        result['isProcessingVendor'] = False
+        result['isProcessingService'] = False
+        result['k2UniformProduct'] = True
+        result['excludeFromGarmentSuppliers'] = False
+        return result
     if k2 and name_t:
         # K2スタッフ工房は修理屋。加工名が辞書に無くても原文名のまま加工サービスで登録
-        # （修理・サイズダウン・アップ・丈直し・反射板調整 等）。
-        # 衣服らしい名前（持ち込み生地のベスト・エプロン等）も既定は加工。
-        # 画面の登録区分（商品／加工サービス）と「この行を登録しない」で行ごとに選べる。
+        # （修理・サイズダウン・アップ・丈直し・丈詰め・反射板調整 等）。
+        # エプロン・ベスト・タオルなど実物制服は上で商品にする。
         service = re.sub(r'[\s\u3000]+', ' ', unicodedata.normalize('NFKC', name_t)).strip()
         result['isProcessingVendor'] = True
         result['isPhysicalParts'] = False
