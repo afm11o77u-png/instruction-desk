@@ -5536,5 +5536,60 @@ class PhasePartsGarmentHoldTest(unittest.TestCase):
             folder.cleanup()
 
 
+    def test_no_embroidery_excluded_and_parts_without_customer_auto_commit(self):
+        folder, path, c = newdb()
+        try:
+            stock.save_supplier(c, {'name': 'ＫＡＺＥＮ ＷＬＤ㈱'})
+
+            text = (
+                '顧客,仕入先,商品コード,商品名,サイズ\n'
+                '"","ＫＡＺＥＮ ＷＬＤ㈱","972-41","＊ジャケット 刺繍無 サックス","2L"\n'
+                '"","ＫＡＺＥＮ ＷＬＤ㈱","","長白衣ボタン","-"\n'
+            )
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text),
+                'fileName': 'test_parts.csv',
+                'importMode': 'products',
+                'productPhase': 'parts',
+                '_canWrite': True,
+                '_actor': {'name': 'test'},
+            })
+
+            rows = preview.get('rows', [])
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row['csv']['productName'], '長白衣ボタン')
+            self.assertEqual(row['status'], pli.STATUS_CREATE)
+            self.assertTrue(row['canCommit'])
+            self.assertEqual(row.get('reasons'), [])
+
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text),
+                'name': 'test_parts.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-parts-btn-1',
+                'productPhase': 'parts',
+                '_canWrite': True,
+                '_actor': {'name': 'test'},
+            }, db_path=str(path))
+            c.commit()
+
+            btn = c.execute(
+                "SELECT id, name, category, supplier_id FROM products WHERE name='長白衣ボタン'"
+            ).fetchone()
+            self.assertIsNotNone(btn)
+            self.assertEqual(btn['category'], '部品・資材')
+            self.assertIsNotNone(btn['supplier_id'])
+
+            jkt = c.execute(
+                "SELECT id FROM products WHERE code='972-41'"
+            ).fetchone()
+            self.assertIsNone(jkt)
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()

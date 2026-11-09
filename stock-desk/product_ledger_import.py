@@ -10902,16 +10902,17 @@ def _code_shape_save(c, groups, decisions):
 
 
 def _service_only_empty_customer(row):
-    """加工サービスそのもので、顧客名だけが空の行。
+    """加工サービスまたは部品・資材そのもので、顧客名だけが空の行。
 
     取扱は作らない。表記差・停止・仕入先の未選択・既存区分の衝突は対象外。
-    衣服本体の加工指定や部品・制服には使わない。
+    衣服本体の加工指定や通常制服には使わない。
     """
     cust = row.get('customer') if isinstance(row.get('customer'), dict) else {}
     supp = row.get('supplier') if isinstance(row.get('supplier'), dict) else {}
     prod = row.get('product') if isinstance(row.get('product'), dict) else {}
     handle = row.get('handle') if isinstance(row.get('handle'), dict) else {}
     ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
+    pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
     if cust.get('candidates') or supp.get('action') == 'review':
         return False
     if prod.get('categoryConflict'):
@@ -10923,6 +10924,18 @@ def _service_only_empty_customer(row):
     )
     if '表記差' in reasons or '停止中' in reasons:
         return False
+
+    # 部品・資材（実物部品・カテゴリ部品）は顧客不要
+    is_parts = (
+        prod.get('category') == stock.CATEGORY_PARTS
+        or prod.get('proposedCategory') == stock.CATEGORY_PARTS
+        or pc.get('registerKind') == '部品・資材'
+        or pc.get('physicalPartsView')
+        or ps.get('isPhysicalParts')
+    )
+    if is_parts:
+        return True
+
     if not (prod.get('processingServiceProduct') or handle.get('skipForProcessingService')):
         return False
     if not ps.get('identifiable') or ps.get('needsConfirm'):
@@ -10933,13 +10946,11 @@ def _service_only_empty_customer(row):
 
 
 def _hold_unresolved_person(row):
-
-
     """顧客・仕入先が未解決の行は、後段で canCommit が付いても登録しない。
 
     空の仕入先（未設定のまま登録できる）は action が missing なので対象外。
     顧客が空、または表記差の候補が未選択のときは取扱を作れない。
-    ただし加工サービスそのもので顧客名が空の行は、加工だけ登録し取扱は作らない。
+    ただし加工サービスや部品・資材そのもので顧客名が空の行は、商品だけ登録し取扱は作らない。
     """
     if row.get('phasePartsOnly'):
         return row
@@ -10950,12 +10961,18 @@ def _hold_unresolved_person(row):
         cust['omitHandle'] = True
         row['customer'] = cust
         row['registerServiceWithoutCustomer'] = True
+        row['registerPartsWithoutCustomer'] = True
         row['reasons'] = [
             item for item in (row.get('reasons') or [])
             if '顧客が空' not in stock.text(item) and '顧客名が空' not in stock.text(item)
+            and '中古標記' not in stock.text(item)
         ]
         prod = row.get('product') or {}
-        if row['reasons'] or prod.get('action') not in ('create', 'reuse'):
+        blocking_reasons = [
+            item for item in (row.get('reasons') or [])
+            if '中古標記' not in stock.text(item)
+        ]
+        if blocking_reasons or prod.get('action') not in ('create', 'reuse'):
             row['status'] = STATUS_REVIEW
             row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
             row['canCommit'] = False
@@ -12812,7 +12829,7 @@ def commit_preview(c, body, *, db_path=None):
 
                 handle_info = dict(row.get('handle') or {})
                 cp_id = None
-                if handle_info.get('skipForProcessingService') or handle_info.get('action') == 'excluded':
+                if not cust_id or handle_info.get('skipForProcessingService') or handle_info.get('action') == 'excluded' or (row.get('customer') or {}).get('omitHandle'):
                     cp_id = None
                 else:
                     if sel.get('handleId'):

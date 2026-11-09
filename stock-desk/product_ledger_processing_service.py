@@ -185,6 +185,9 @@ _KIND_STRIP_RE = re.compile(
 
 _COMPOSITION_SPLIT_RE = re.compile(r'[＋+・･＆&／/]+')
 _SLASH_NAME_RE = re.compile(r'[／/]+')
+_NO_PROCESSING_RE = re.compile(
+    r'(?:刺繍|ししゅう|ネーム|プリント|加工|裾上げ|丈加工|ワッペン|マーク)(?:無[し|い]?|なし|ナシ|不要)'
+)
 
 
 def normalize_vendor_key(value: str) -> str:
@@ -389,7 +392,7 @@ def is_embroidery_class_name(service_name: str) -> bool:
     if not raw:
         return False
     folded = unicodedata.normalize('NFKC', raw)
-    if '刺繍なし' in folded or folded in ('なし', '加工なし'):
+    if _NO_PROCESSING_RE.search(folded) or folded in ('なし', '加工なし', '無加工', '未加工'):
         return False
     if paren_classify.is_embroidery_price_condition(raw):
         return False
@@ -667,6 +670,8 @@ def _resolve_service_core(core: str) -> str:
             if sk == tk or sk.endswith(tk):
                 # 衣服種＋加工語（コックコート七分袖加工）→ 候補語側
                 return _canonical_from_term(term)
+    if _NO_PROCESSING_RE.search(cleaned):
+        return ''
     if '刺繍' in cleaned:
         return '刺繍加工'
     if cleaned.endswith('加工') and len(cleaned) >= 3:
@@ -775,6 +780,8 @@ def unify_processing_service_name(raw_name: str) -> str:
     if re.sub(r'[\s\u3000]+', '', raw) == 'インターネット付け':
         return 'インターネット付け'
     if paren_classify.is_embroidery_price_condition(raw):
+        return ''
+    if _NO_PROCESSING_RE.search(raw):
         return ''
     # 「未加工」「加工なし」等は加工が無い意味（加工サービス名にしない）
     import product_ledger_paren as _paren
@@ -984,6 +991,9 @@ def classify_processing_service_row(
         return result
 
     if physical:
+        return result
+    if _NO_PROCESSING_RE.search(unicodedata.normalize('NFKC', name_t)):
+        result['garmentBody'] = True
         return result
     # 品番ありで括弧外が衣服名なら衣服（商品フェーズで登録）。名前の加工語で加工にしない。
     # K2スタッフ工房は修理屋なので対象外（既定で加工）

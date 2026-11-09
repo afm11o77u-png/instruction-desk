@@ -440,6 +440,8 @@ def _exact_in(terms, key: str):
 
 def _processing_match(seg_key: str, seg_raw: str):
     """加工: 完全一致、または辞書語を含む複合（部分一致だけで色・素材へ流さない）。"""
+    if re.search(r'(?:刺繍|ししゅう|ネーム|プリント|加工|裾上げ|丈加工|ワッペン|マーク)(?:無[し|い]?|なし|ナシ|不要)', seg_key):
+        return None, None
     hit = _exact_in(_PROCESSINGS, seg_key)
     if hit:
         return hit, _display_for('processing', hit, seg_raw)
@@ -767,7 +769,15 @@ def _classify_as_pure_color_span(raw: str):
     }
 
 
-_NO_PROCESSING_WORDS = ('未加工品', '未加工', '無加工', '加工なし', '加工無し', '加工無', 'ノー加工')
+_NO_PROCESSING_WORDS = (
+    '未加工品', '未加工', '無加工', '加工なし', '加工無し', '加工無', 'ノー加工',
+    '刺繍無', '刺繍なし', '刺繍無し', '刺繍ナシ', '刺繍不要',
+    'ネーム無', 'ネームなし', 'ネーム無し', 'ネームナシ', 'ネーム不要',
+    'プリント無', 'プリントなし', 'プリント無し',
+    'ワッペン無', 'ワッペンなし', 'ワッペン無し',
+    '裾上げ無', '裾上げなし', '裾上げ無し',
+    '丈加工無', '丈加工なし', '丈加工無し',
+)
 
 
 def _no_processing_keys():
