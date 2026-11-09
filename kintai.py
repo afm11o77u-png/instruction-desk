@@ -194,7 +194,7 @@ SEISHAIN_2026_LAYOUT = {
         '出勤=集計!行5／有給=行10／普通(J)=法定内①行6／'
         '残業(K)=普通残業行13＋深夜残業行14＋早朝深夜勤務行18（MAX0）／'
         '勤務時間計(L)=普通＋残業。行5=0の月は普通・残業を空白。'
-        '休日(C)は管理表で集計非連動のため、WEBは年間カレンダー日付×月シート休み・始業。'
+        '休日は前月16日～当月15日の締め後に期間日数－出勤－有給で算出。途中・実績なしは未確定。'
         '月シートA列の年は26.3以降ずれるため日付は年間カレンダーを正とする。'
     ),
     'summary_sheet': '集計',
@@ -225,7 +225,7 @@ MONTHDOT_2026_CONTRACT_LAYOUT = {
         '出勤=集計!行5／有給=行10／普通=法定内①行6／'
         '残業=普通残業行13＋深夜残業行14＋早朝深夜勤務行18（負は0）／'
         '勤務時間計=普通＋残業。行5=0の月は普通・残業を空白。'
-        '休日は月シート日付（A列・各42日）×休み(D)・始業(E)。年間カレンダー無し。'
+        '休日は前月16日～当月15日の締め後に期間日数－出勤－有給で算出。途中・実績なしは未確定。'
     ),
     'summary_sheet': '集計',
     'month_sheets': MONTHDOT_2026_MONTH_SHEETS,
@@ -251,7 +251,7 @@ MONTHDOT_2026_PART_LAYOUT = {
         '出勤=集計!行5／有給=行10／普通=法定内①行6／'
         '残業=普通残業行13＋深夜残業行14＋早朝深夜勤務行18（負は0）／'
         '勤務時間計=普通＋残業。行5=0の月は普通・残業を空白。'
-        '休日は月シート日付（A列・各42日）×休み(D)・始業(H)。年間カレンダー無し。'
+        '休日は前月16日～当月15日の締め後に期間日数－出勤－有給で算出。途中・実績なしは未確定。'
     ),
     'summary_sheet': '集計',
     'month_sheets': MONTHDOT_2026_MONTH_SHEETS,
@@ -1231,6 +1231,21 @@ def count_holidays_from_month_sheet(
     return holidays
 
 
+def closed_period_holidays(year, month, work_days, paid_leave_days, as_of=None):
+    """前月16日～当月15日。締め後の実績だけから休日を算出する。"""
+    as_of = as_of or date.today()
+    end = date(year, month, 15)
+    previous = date(year, month, 1) - timedelta(days=1)
+    start = previous.replace(day=16)
+    if as_of <= end or work_days is None or paid_leave_days is None:
+        return None
+    work, paid = float(work_days), float(paid_leave_days)
+    days = (end - start).days + 1
+    if work <= 0 or paid < 0 or work + paid > days:
+        return None
+    return float(days) - work - paid
+
+
 def aggregate_month_from_summary(
     sheets: dict[str, dict],
     year: int,
@@ -1241,7 +1256,7 @@ def aggregate_month_from_summary(
     """集計シート（出勤・有給・法定内①・残業内訳）＋休日。
 
     管理表個人シート: J=行6、K=行13+14+18。行5=0の月は J/K 空白。
-    正社員は年間カレンダー休日、契約・パートは月シート日付で休日。
+    休日は全区分とも前月16日～当月15日の締め後に算出。
     """
     summary_name = layout['summary_sheet']
     month_sheets = layout['month_sheets']
@@ -1279,18 +1294,9 @@ def aggregate_month_from_summary(
             ot_hours = 0.0  # 管理表 MAX(0, …)
         overtime = hours_to_minutes(ot_hours, f'{label} 残業（行{"+".join(str(r) for r in ot_parts)}）')
         total = ordinary + overtime
-    cal_name = layout.get('calendar_sheet')
-    if cal_name:
-        cal = sheets.get(cal_name)
-        if cal is None:
-            raise ValueError(f'「{cal_name}」シートがありません。')
-        holiday_days = count_holidays_summary_shukkinbo(
-            cal, month_grid, year, month, layout, as_of=as_of
-        )
-    else:
-        holiday_days = count_holidays_from_month_sheet(
-            month_grid, year, month, layout, as_of=as_of
-        )
+    holiday_days = closed_period_holidays(
+        year, month, work_days, paid_leave_days, as_of=as_of
+    )
     return {
         'work_days': work_days,
         'holiday_days': holiday_days,
@@ -3462,6 +3468,24 @@ def _overlay_work_days(rows: list[dict], saved: dict[str, float]) -> tuple[float
     return float(total.quantize(Decimal('0.01'))), not unset
 
 
+def _daily_holiday_days_total(rows: list[dict], work_days_total: float | None) -> float | None:
+    """日別の表示行から休日数の合計を算出する: (0の個数) + ((0以外の個数) - (出勤日数の合計値))。"""
+    if work_days_total is None:
+        return None
+    zero_count = Decimal('0')
+    nonzero_count = Decimal('0')
+    for row in rows:
+        value = row.get('workDays')
+        if value is None:
+            continue
+        dec = Decimal(str(value))
+        if dec == 0:
+            zero_count += 1
+        else:
+            nonzero_count += 1
+    holiday = zero_count + (nonzero_count - Decimal(str(work_days_total)))
+    return float(holiday.quantize(Decimal('0.01')))
+
 def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | None:
     """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
     total, _complete = _overlay_work_days(rows, saved)
@@ -3819,6 +3843,7 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         'readOnly': True,
         'canEditWorkDays': True,
         'workDaysTotal': total,
+        'holidayDaysTotal': _daily_holiday_days_total(body['rows'], total),
     })
     return body
 

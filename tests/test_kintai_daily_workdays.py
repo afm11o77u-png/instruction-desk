@@ -132,6 +132,7 @@ class AttendanceDaysStoreTest(unittest.TestCase):
         self.assertTrue(view['readOnly'])
         self.assertTrue(view['canEditWorkDays'])
         self.assertEqual(view['workDaysTotal'], 4.0)
+        self.assertEqual(view['holidayDaysTotal'], 2.0)
         saved = kintai.save_daily_work_days(self.c, self.user, {
             'personId': self.person['id'],
             'year': 2026,
@@ -145,6 +146,7 @@ class AttendanceDaysStoreTest(unittest.TestCase):
         self.assertEqual(hit['actual'], '8.00')
         self.assertEqual(saved['totals'][0]['value'], '17.03')
         self.assertEqual(saved['workDaysTotal'], 3.0)
+        self.assertEqual(saved['holidayDaysTotal'], 3.0)
         again = kintai.person_daily_sheet(self.c, self.person['id'], 2026, 3)
         again_hit = next(row for row in again['rows'] if row['date'] == '2026/02/16')
         self.assertEqual(again_hit['workDays'], 0.0)
@@ -187,6 +189,7 @@ class AttendanceDaysStoreTest(unittest.TestCase):
         self.assertEqual(cleared_hit['workDays'], 1.0)
         self.assertFalse(cleared_hit['workDaysSaved'])
         self.assertEqual(cleared['workDaysTotal'], 4.0)
+        self.assertEqual(cleared['holidayDaysTotal'], 2.0)
 
     def test_year_boundary_and_rejected_dates(self):
         january = kintai.daily_rows_from_workbook(_january_book(), 2027, 1, kintai.SEISHAIN_2026_LAYOUT)

@@ -308,7 +308,7 @@
       return `<tr>
         <td class="kintai-month"><button type="button" class="kintai-daylink" data-year="${m.year}" data-month="${m.month}">${esc(label)}</button></td>
         ${sheetCell(dayText(m.workDays))}
-        ${sheetCell(dayText(m.holidayDays))}
+        ${sheetCell(m.holidayDays == null ? '未確定' : dayText(m.holidayDays))}
         ${sheetCell(dayText(m.holidayCumulative))}
         ${m.holidayRemaining == null
           ? `<td class="kintai-blank" title="${esc(m.holidayAllowanceNote || '')}">${esc(m.holidayAllowanceNote || '')}</td>`
@@ -624,7 +624,19 @@
       ? `<table class="kintai-sheet kintai-daily-sheet"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="kintaimeta">${data && data.periodStart ? `${esc(data.periodStart)}～${esc(data.periodEnd)}の` : ''}この月シートに対象の日付がありません。</p>`;
     const totalText = data && data.workDaysTotal != null
-      ? `出勤日数の合計 ${dayText(data.workDaysTotal)}（この月の16日〜15日）`
+      ? (function () {
+        let h = data.holidayDaysTotal;
+        if (h == null && Array.isArray(data.rows)) {
+          let zeroCount = 0, nonzeroCount = 0;
+          data.rows.forEach(r => {
+            if (r.workDays == null || r.workDays === '') return;
+            const n = Number(r.workDays);
+            if (!Number.isNaN(n)) { if (n === 0) zeroCount += 1; else nonzeroCount += 1; }
+          });
+          h = zeroCount + (nonzeroCount - Number(data.workDaysTotal));
+        }
+        return `出勤日数の合計 ${dayText(data.workDaysTotal)}${h != null ? ` ／ 休日数の合計 ${dayText(h)}` : ''}（この月の16日〜15日）`;
+      })()
       : '';
     const saveBar = rows
       ? `<p class="kintai-workdays-bar">${editable ? '<button type="button" id="kintaiworkdayssave">出勤日数を保存</button>' : ''}<span class="kintaimeta">${esc(totalText)}</span></p>`
