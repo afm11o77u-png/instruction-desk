@@ -637,7 +637,8 @@
           h = zeroCount + (nonzeroCount - Number(data.workDaysTotal));
         }
         const p = data.paidLeaveDaysTotal;
-        return `出勤日数の合計 ${dayText(data.workDaysTotal)}${h != null ? ` ／ 休日数の合計 ${dayText(h)}` : ''}${p != null ? ` ／ 有休の合計 ${dayText(p)}` : ''}（この月の16日〜15日）`;
+        const hm = data.totalHm ? ` ／ 普通勤務時間 ${data.ordinaryHm} ／ 残業時間 ${data.overtimeHm} ／ 勤務時間計 ${data.totalHm}` : '';
+        return `出勤日数の合計 ${dayText(data.workDaysTotal)}${h != null ? ` ／ 休日数の合計 ${dayText(h)}` : ''}${p != null ? ` ／ 有休の合計 ${dayText(p)}` : ''}${hm}（この月の16日〜15日）`;
       })()
       : '';
     const saveBar = rows
@@ -675,7 +676,7 @@
     });
     paintDaily(saved);
     loadKintai().catch(() => {});
-    toast('出勤日数・休日数を保存しました。');
+    toast('出勤日数・休日数・勤務時間を保存しました。');
   }
 
   async function saveDailyPaidLeave() {

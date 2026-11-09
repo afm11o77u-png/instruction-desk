@@ -4059,7 +4059,28 @@ def save_daily_work_days(c, user, payload: dict) -> dict:
             ''',
             (person_id, iso, days, now, actor),
         )
-    return person_daily_sheet(c, person_id, year, month)
+        )
+    updated_sheet = person_daily_sheet(c, person_id, year, month)
+    w_total = updated_sheet.get('workDaysTotal')
+    h_total = updated_sheet.get('holidayDaysTotal')
+    ord_min = updated_sheet.get('ordinaryMinutes')
+    ot_min = updated_sheet.get('overtimeMinutes')
+    c.execute(
+        '''INSERT INTO kintai_monthly(
+               person_id, year, month, work_days, holiday_days, ordinary_minutes, overtime_minutes, imported_at, status
+           )
+           VALUES(?,?,?,?,?,?,?,?,'成功')
+           ON CONFLICT(person_id, year, month) DO UPDATE SET
+             work_days=excluded.work_days,
+             holiday_days=excluded.holiday_days,
+             ordinary_minutes=excluded.ordinary_minutes,
+             overtime_minutes=excluded.overtime_minutes,
+             imported_at=excluded.imported_at,
+             status=excluded.status
+        ''',
+        (person_id, year, month, w_total, h_total, ord_min, ot_min, now),
+    )
+    return updated_sheet
 
 
 def _sheet_actual_rows(grid, layout: dict) -> list[dict]:
@@ -4090,6 +4111,97 @@ def _sheet_actual_rows(grid, layout: dict) -> list[dict]:
             raw = None
         found[name] = {'label': value, 'value': _display_hours(raw)}
     return [found[name] for name in names if name in found]
+
+
+def _raw_float(val) -> float | None:
+    if val is None or val == '' or isinstance(val, bool) or isinstance(val, dict):
+        return None
+    if isinstance(val, (int, float)):
+        v = float(val)
+        return v if v == v else None
+    try:
+        return float(str(val).strip().replace(',', ''))
+    except ValueError:
+        return None
+
+
+def _compute_daily_hours_minutes(sheets, grid, year: int, month: int, layout: dict, columns: list[dict], rows: list[dict]) -> tuple[int, int]:
+    """月シートの週計（法定内労働計・各残業計）および集計シートから普通勤務時間（分）と残業時間（分）を算出する。"""
+    kind = layout.get('kind') or 'fixture-days'
+    if kind == 'fixture-days':
+        ord_m = 0
+        ot_m = 0
+        for r in rows:
+            ov = _raw_float(r.get('ordinary'))
+            tv = _raw_float(r.get('overtime'))
+            if ov is not None and ov > 0:
+                ord_m += int(round(ov))
+            if tv is not None and tv > 0:
+                ot_m += int(round(tv))
+        return ord_m, ot_m
+
+    ord_hours = 0.0
+    ot_hours = 0.0
+    has_ord = False
+    total_col = next((c for c in columns if c.get('key') == 'total'), None)
+    if total_col and not total_col.get('missing'):
+        label_col = total_col['parts'][0].get('col')
+        value_col = total_col['parts'][1].get('col')
+        if label_col and value_col:
+            first = int(layout.get('day_first_row') or 5)
+            last = int(layout.get('day_last_row') or first)
+            for r in range(first, last + 1):
+                lbl = _display_total_label(_cell(grid, r, label_col))
+                val = _raw_float(_cell(grid, r, value_col))
+                if val is None:
+                    continue
+                if lbl == '法定内労働計':
+                    if val > 0:
+                        ord_hours += val
+                    has_ord = True
+                elif lbl in ('日残業計', '週残業計', '深夜残業計', '早朝深夜勤務計'):
+                    if val > 0:
+                        ot_hours += val
+
+    if (not has_ord or (ord_hours == 0.0 and ot_hours == 0.0)) and sheets:
+        summary_name = layout.get('summary_sheet')
+        summary_cols = layout.get('summary_cols') or {}
+        summary = sheets.get(summary_name) if summary_name else None
+        scol = summary_cols.get((year, month))
+        if summary is not None and scol is not None:
+            s_ord = _raw_float(_cell(summary, layout.get('row_ordinary_hours') or 6, scol))
+            s_ot = 0.0
+            for rn in (layout.get('row_overtime_hours_parts') or ()):
+                part = _raw_float(_cell(summary, rn, scol))
+                if part is not None:
+                    s_ot += part
+            if (s_ord is not None and s_ord > 0) or s_ot > 0:
+                ord_hours = max(0.0, s_ord or 0.0)
+                ot_hours = max(0.0, s_ot)
+
+    if ord_hours == 0.0 and ot_hours == 0.0 and rows:
+        act_sum = 0.0
+        day_ot_sum = 0.0
+        night_ot_sum = 0.0
+        early_sum = 0.0
+        for r in rows:
+            a = _raw_float(r.get('actual'))
+            d_ot = _raw_float(r.get('dayOvertime'))
+            n_ot = _raw_float(r.get('nightOvertime'))
+            e_ot = _raw_float(r.get('earlyNight'))
+            if a is not None and a > 0:
+                act_sum += a
+            if d_ot is not None and d_ot > 0:
+                day_ot_sum += d_ot
+            if n_ot is not None and n_ot > 0:
+                night_ot_sum += n_ot
+            if e_ot is not None and e_ot > 0:
+                early_sum += e_ot
+        if act_sum > 0:
+            ot_hours = day_ot_sum + night_ot_sum + early_sum
+            ord_hours = max(0.0, act_sum - (day_ot_sum + night_ot_sum))
+
+    return int(round(max(0.0, ord_hours) * 60)), int(round(max(0.0, ot_hours) * 60))
 
 
 def daily_rows_from_workbook(blob: bytes, year: int, month: int, layout: dict) -> dict:
@@ -4142,7 +4254,9 @@ def _daily_rows_from_parsed(sheets, print_areas, year: int, month: int, layout: 
                 'overtime': _display_raw(_cell(grid, row, layout['overtime_col'])),
             }
             rows.append(item)
-        return {'sheetName': name, 'columns': columns, 'rows': rows}
+            rows.append(item)
+        ord_m, ot_m = _compute_daily_hours_minutes(sheets, grid, year, month, layout, columns, rows)
+        return {'sheetName': name, 'columns': columns, 'rows': rows, 'rawOrdinaryMinutes': ord_m, 'rawOvertimeMinutes': ot_m}
 
     month_sheets = layout.get('month_sheets') or {}
     if (year, month) not in month_sheets:
@@ -4196,6 +4310,7 @@ def _daily_rows_from_parsed(sheets, print_areas, year: int, month: int, layout: 
             _attach_work_day_default(item, grid, row, columns)
             rows.append(item)
     totals, totals_note = _sheet_total_rows(grid, layout, columns)
+    ord_m, ot_m = _compute_daily_hours_minutes(sheets, grid, year, month, layout, columns, rows)
     return {
         'sheetName': sheet_name,
         'columns': columns,
@@ -4203,6 +4318,8 @@ def _daily_rows_from_parsed(sheets, print_areas, year: int, month: int, layout: 
         'totals': totals,
         'totalsNote': totals_note,
         'actuals': _sheet_actual_rows(grid, layout),
+        'rawOrdinaryMinutes': ord_m,
+        'rawOvertimeMinutes': ot_m,
         'periodStart': f'{period_start.year}/{period_start.month:02d}/{period_start.day:02d}',
         'periodEnd': f'{period_end.year}/{period_end.month:02d}/{period_end.day:02d}',
     }
@@ -4246,7 +4363,14 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         'workDaysTotal': total,
         'workDaysTotal': total,
         'holidayDaysTotal': _daily_holiday_days_total(body['rows'], total),
+        'holidayDaysTotal': _daily_holiday_days_total(body['rows'], total),
         'paidLeaveDaysTotal': _daily_paid_leave_total(body['rows']),
+        'ordinaryMinutes': body.get('rawOrdinaryMinutes') if (total and total > 0) or (body.get('rawOrdinaryMinutes') or 0) > 0 or (body.get('rawOvertimeMinutes') or 0) > 0 else None,
+        'overtimeMinutes': body.get('rawOvertimeMinutes') if (total and total > 0) or (body.get('rawOrdinaryMinutes') or 0) > 0 or (body.get('rawOvertimeMinutes') or 0) > 0 else None,
+        'totalMinutes': ((body.get('rawOrdinaryMinutes') or 0) + (body.get('rawOvertimeMinutes') or 0)) if (total and total > 0) or (body.get('rawOrdinaryMinutes') or 0) > 0 or (body.get('rawOvertimeMinutes') or 0) > 0 else None,
+        'ordinaryHm': format_hm(body.get('rawOrdinaryMinutes')) if (total and total > 0) or (body.get('rawOrdinaryMinutes') or 0) > 0 or (body.get('rawOvertimeMinutes') or 0) > 0 else '',
+        'overtimeHm': format_hm(body.get('rawOvertimeMinutes')) if (total and total > 0) or (body.get('rawOrdinaryMinutes') or 0) > 0 or (body.get('rawOvertimeMinutes') or 0) > 0 else '',
+        'totalHm': format_hm((body.get('rawOrdinaryMinutes') or 0) + (body.get('rawOvertimeMinutes') or 0)) if (total and total > 0) or (body.get('rawOrdinaryMinutes') or 0) > 0 or (body.get('rawOvertimeMinutes') or 0) > 0 else '',
     })
     return body
 
