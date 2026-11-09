@@ -17,6 +17,7 @@ import migration
 import kintai
 import kintai_crimp
 import name_exe
+import web_requests
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -57,6 +58,7 @@ def initialize():
         c.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL, at TEXT NOT NULL, action TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
         schema(c)
+        web_requests.schema(c)
         templates.initialize(c)
         placement.bind(DATA)
         placement.schema(c)
@@ -925,6 +927,13 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
         if path=='/inventory' or path.startswith('/inventory/'): return self.serve_inventory('GET')
+        if path == '/api/web-request/settings':
+            with connect() as c:
+                u = self.session_user(c)
+                if not u or (u['role'] != 'owner' and not u['manage']):
+                    return self.reply(403, {'error':'主管理者・管理者だけが利用できます。'})
+                try: return self.reply(200, web_requests.state(c, STOCK_DB))
+                except sqlite3.Error: return self.reply(503, {'error':'在庫の顧客・商品を読み取れません。先に在庫管理を確認してください。'})
         if path.startswith('/api/') and migration.is_busy() and path != '/api/me':
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
         if path == '/api/migration/split-export':
@@ -1106,6 +1115,21 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(403,{'error':'接続元を確認してください。'})
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if route == '/api/web-request/settings':
+            with connect() as c:
+                u = self.session_user(c)
+                if not u or (u['role'] != 'owner' and not u['manage']):
+                    return self.reply(403, {'error':'主管理者・管理者だけが利用できます。'})
+                try:
+                    n = int(self.headers.get('Content-Length') or 0)
+                    if n < 1 or n > 100000: raise ValueError('送信内容を確認してください。')
+                    d = json.loads(self.rfile.read(n))
+                    if not isinstance(d, dict): raise ValueError('送信内容を確認してください。')
+                    return self.reply(200, web_requests.save(c, STOCK_DB, d))
+                except (ValueError, TypeError, KeyError):
+                    return self.reply(400, {'error':'部署・制服・サイズの入力を確認してください。'})
+                except sqlite3.Error:
+                    return self.reply(503, {'error':'設定を保存できませんでした。在庫の登録を確認してください。'})
         if route=='/api/name-labels/exe':
             from urllib.parse import unquote
             with connect() as c: u=self.session_user(c)
