@@ -76,7 +76,7 @@ def _is_midori(supplier):
 
 
 def _formal_code(text):
-    return bool(re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z._\-－/／]*', text or ''))
+    return bool(re.fullmatch(r'[#＃№0-9A-Za-z][0-9A-Za-z._\-－/／#＃№&+]*', text or ''))
 
 
 def _is_color_code(text):

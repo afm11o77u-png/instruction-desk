@@ -152,6 +152,15 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(betchu['baseCode'], 'SD5000AM-50')
         self.assertIn('別注', betchu['note'])
 
+        # #1702, No.1702 prefix
+        hash_code = suffix.classify_suffix('#1702', product_name='つなぎ', supplier='フジ総合安全㈱')
+        self.assertFalse(hash_code['needsConfirm'])
+        self.assertEqual(hash_code['baseCode'], '#1702')
+
+        no_code = suffix.classify_suffix('No.1702', product_name='つなぎ', supplier='フジ総合安全㈱')
+        self.assertFalse(no_code['needsConfirm'])
+        self.assertEqual(no_code['baseCode'], 'No.1702')
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):

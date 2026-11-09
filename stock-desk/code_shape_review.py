@@ -69,7 +69,7 @@ def vertical_split(code):
 
 
 def _has_nonformal_char(extra):
-    return any(not (ch.isascii() and (ch.isalnum() or ch in '-_－./／')) for ch in extra)
+    return any(not (ch.isascii() and (ch.isalnum() or ch in '-_－./／#＃№&+')) for ch in extra)
 
 
 def _known_codes(present):
