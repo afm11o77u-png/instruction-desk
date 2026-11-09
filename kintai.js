@@ -482,7 +482,7 @@
     const data = await api('/api/kintai/month-summary?year=' + encodeURIComponent(year));
     if (data && data.fiscalStartYear) rememberYear(data.fiscalStartYear);
     paintSummary(data);
-    await loadExecReport();
+    try { await loadExecReport(); } catch (e) { paintExecReport(null); }
   }
 
   let execReportData = null;
@@ -748,7 +748,6 @@
     const panel = $('#kintaiexecpanel');
     if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
-  }
 
   function paintPathsImportResult(summary) {
     const box = $('#kintaiimportresult');
@@ -1178,6 +1177,7 @@
     if (execXlsx) execXlsx.onclick = () => exportExecReportXlsx().catch(e => toast(e.message));
     const execPdf = $('#kintaiexecpdf');
     if (execPdf) execPdf.onclick = () => printExecReportPdf().catch(e => toast(e.message));
+    paintExecReport(null);
     if (dailyPerson) dailyPerson.onchange = () => {
       pinnedPersonId = dailyPerson.value ? Number(dailyPerson.value) : null;
       loadKintaiDaily().catch(e => toast(e.message));
