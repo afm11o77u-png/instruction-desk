@@ -8847,6 +8847,15 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                         or stock.text((row.get('processingService') or {}).get('serviceName') or ''))
                 row['skuDecisionNeeded'] = False
                 parts_only.add(row.get('rowNo'))
+                row['registerServiceWithoutCustomer'] = True
+                if not row.get('processingServiceNeedsConfirm'):
+                    row['status'] = STATUS_CREATE if (row.get('product') or {}).get('action') == 'create' else STATUS_REUSE
+                    row['statusLabel'] = STATUS_LABELS[row['status']]
+                    row['canCommit'] = True
+                    row['reasons'] = [
+                        r for r in (row.get('reasons') or [])
+                        if '仕入先' not in stock.text(r) and '顧客' not in stock.text(r) and '表記差' not in stock.text(r)
+                    ]
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
@@ -10924,12 +10933,16 @@ def _service_only_empty_customer(row):
 
 
 def _hold_unresolved_person(row):
+
+
     """顧客・仕入先が未解決の行は、後段で canCommit が付いても登録しない。
 
     空の仕入先（未設定のまま登録できる）は action が missing なので対象外。
     顧客が空、または表記差の候補が未選択のときは取扱を作れない。
     ただし加工サービスそのもので顧客名が空の行は、加工だけ登録し取扱は作らない。
     """
+    if row.get('phasePartsOnly'):
+        return row
     if _service_only_empty_customer(row):
         cust = dict(row.get('customer') or {})
         cust['action'] = 'omit'
@@ -12649,7 +12662,7 @@ def commit_preview(c, body, *, db_path=None):
         for row in commit_rows:
             row_no = row['rowNo']
             try:
-                if row.get('registerServiceWithoutCustomer'):
+                if row.get('phasePartsOnly') or row.get('registerServiceWithoutCustomer'):
                     # 顧客名は空のまま。架空の顧客も取扱も作らない。
                     cust_id, created = None, False
                 else:
@@ -12663,7 +12676,7 @@ def commit_preview(c, body, *, db_path=None):
                 sup_id = None
                 csv_supplier = stock.text(row['csv'].get('supplier') or '')
                 # 加工業者は本体商品の通常仕入先／サブにしない（サービス商品側で確保済み）
-                link_supplier = csv_supplier and (
+                link_supplier = not row.get('phasePartsOnly') and csv_supplier and (
                     not proc_svc.is_processing_vendor(csv_supplier)
                     or row.get('k2UniformProduct')
                     or (row.get('processingService') or {}).get('k2UniformProduct')

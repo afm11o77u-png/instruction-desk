@@ -1110,6 +1110,12 @@
       return {key:processingUnifiedKey(name,vendor),kind:'processing',label,code:''}
     }
     const code=String(csv.code||'')
+    if(r.phasePartsOnly){
+      const name=r.companionProcessingService||ps.serviceName||pc.processing||''
+      const vendor=ps.vendorName||''
+      const label=`${name||'（加工名未定）'}／${vendor||'（業者未定）'}`
+      return {key:processingUnifiedKey(name,vendor),kind:'processing',label,code:''}
+    }
     if(isNormalLedgerCode(code)&&!(r.product&&r.product.blankSku)){
       return {key:`sku-row:${code}`,kind:'sku_row',label:csv.codeDisplay||code,code}
     }
@@ -1186,11 +1192,13 @@
       if(!r||r.status!=='needs_review')return
       if(isRowExcluded(st,r))return
       // 品番比較待ちは SKU 区分（個別／一括）側。下リストへ重複させない
+      if(r.phasePartsOnly&&!r.processingServiceNeedsConfirm)return
       if(r.skuDecisionNeeded)return
       const csv=r.csv||{}
       const code=String(csv.code||'')
       if(code&&coveredSkuCodes.has(code))return
       const meta=unifiedTargetMetaForRow(r)
+      if(st.productPhase==='parts'&&(meta.kind==='sku_row'||meta.kind==='sku'))return
       if(!buckets[meta.key])buckets[meta.key]={meta,rows:[],issueMap:{}}
       buckets[meta.key].rows.push(r)
       collectRowIssues(st,r).forEach(iss=>{

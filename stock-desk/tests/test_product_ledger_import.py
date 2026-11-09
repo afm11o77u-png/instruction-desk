@@ -5479,5 +5479,62 @@ class SynonymColorOmissionMergeTest(unittest.TestCase):
         self.assertEqual(split.get('color'), 'チャコール')
 
 
+class PhasePartsGarmentHoldTest(unittest.TestCase):
+    def test_phase_parts_does_not_hold_garment_row_or_leak_garment_sku(self):
+        folder, path, c = newdb()
+        try:
+            c.execute(
+                "INSERT INTO suppliers (name, created_at, updated_at) VALUES ('KAZEN WLD株式会社', '2026-01-01', '2026-01-01')"
+            )
+            c.commit()
+
+            csv_lines = [
+                '顧客,仕入先,商品コード,商品名,サイズ',
+                'テスト顧客,KAZEN WLD㈱,APK205-10,シャツコート（刺繍あり）,M',
+            ]
+            text = '\n'.join(csv_lines)
+
+            preview = pli.build_preview(c, {
+                'file': csv_b64_from_text(text),
+                'name': 'uniform_with_processing.csv',
+                'productPhase': 'parts',
+                '_canWrite': True,
+                '_actor': {'name': 'test'},
+            })
+
+            # 1. 部品・加工フェーズでは制服SKUグループは出力されない
+            sku_codes = [g['code'] for g in preview.get('skuGroups', [])]
+            self.assertNotIn('APK205-10', sku_codes)
+
+            # 2. 行は phasePartsOnly となり、仕入先表記揺れで needs_review にならない
+            rows = preview.get('rows', [])
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertTrue(row.get('phasePartsOnly'))
+            self.assertTrue(row.get('registerServiceWithoutCustomer'))
+            self.assertNotEqual(row.get('status'), pli.STATUS_REVIEW)
+
+            # 3. commit_preview を実行しても制服製品は作成されない
+            result = pli.commit_preview(c, {
+                'file': csv_b64_from_text(text),
+                'name': 'uniform_with_processing.csv',
+                'previewFingerprint': preview['previewFingerprint'],
+                'previewAt': preview['previewAt'],
+                'token': 'pl-parts-kazen-1',
+                'productPhase': 'parts',
+                '_canWrite': True,
+                '_actor': {'name': 'test'},
+            }, db_path=str(path))
+            c.commit()
+
+            prod = c.execute(
+                "SELECT id FROM products WHERE code='APK205-10'"
+            ).fetchone()
+            self.assertIsNone(prod)
+        finally:
+            c.close()
+            folder.cleanup()
+
+
 if __name__ == '__main__':
     unittest.main()
