@@ -76,7 +76,23 @@ def _is_midori(supplier):
 
 
 def _formal_code(text):
-    return bool(re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z._\-－]*', text or ''))
+    return bool(re.fullmatch(r'[0-9A-Za-z][0-9A-Za-z._\-－/／]*', text or ''))
+
+
+def _is_color_code(text):
+    t = stock.text(text).strip()
+    if not t:
+        return False
+    # C/1, C-10, C-101, C/5, C10, C-1, C1
+    if re.fullmatch(r'[Cc][\-_/／]?[0-9]+[A-Za-z]?', t):
+        return True
+    # Col.1, COL-2, Color 3, COL/1
+    if re.fullmatch(r'(?:Col|COL|color|COLOR)[\.:_\-/／]?[0-9]+[A-Za-z]?', t):
+        return True
+    # #01, #1
+    if re.fullmatch(r'#[0-9]+', t):
+        return True
+    return False
 
 
 def _color_of(text):
@@ -170,6 +186,22 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     raw = stock.text(code)
     if not raw:
         return _empty()
+    is_used = raw.startswith(('*', '＊'))
+    clean_raw = raw.lstrip('*＊ ')
+    if is_used and clean_raw:
+        sub = classify_suffix(clean_raw, product_name=product_name, supplier=supplier, size=size)
+        if not sub.get('needsConfirm'):
+            sub['apply'] = True
+            sub['note'] = '中古' if not sub.get('note') else f"{sub['note']}・中古"
+            return sub
+    if raw.startswith(('別注', '特注')):
+        sub_code = raw[2:].strip(' -_－')
+        if sub_code and _formal_code(sub_code):
+            sub = classify_suffix(sub_code, product_name=product_name, supplier=supplier, size=size)
+            if not sub.get('needsConfirm'):
+                sub['apply'] = True
+                sub['note'] = '別注' if not sub.get('note') else f"{sub['note']}・別注"
+                return sub
     if raw in ('要確認', '別注') or (raw.startswith('別注(') and raw.endswith(')')):
         return _empty(kind='plain', baseCode=raw)
     name = stock.text(product_name)
@@ -228,8 +260,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         hit = paren.classify_paren_segment(tail) or {}
         if hit.get('kind') == 'color' and stock.text(hit.get('original') or '') == tail:
             tail_color = stock.text(hit.get('value') or tail)
-        if tail_color and _formal_code(head):
-            return _empty(apply=True, kind='color', baseCode=head, color=tail_color, note=note)
+        if (tail_color or _is_color_code(tail)) and _formal_code(head):
+            return _empty(apply=True, kind='color', baseCode=head, color=tail_color or tail, note=note)
         if paren.is_embroidery_price_condition(tail):
             return _empty(
                 apply=False, kind='price_condition', needsConfirm=False, baseCode=raw,
@@ -249,6 +281,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 apply=True, kind='processing', baseCode=head,
                 processingName=word, color=color, note=note,
             )
+        if _is_color_code(tail) and _formal_code(head):
+            return _empty(apply=True, kind='color', baseCode=head, color=tail, note=note)
         dim = _dimension(tail)
         if dim and _formal_code(head):
             if '/' in tail or '／' in tail:

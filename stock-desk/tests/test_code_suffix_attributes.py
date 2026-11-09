@@ -120,6 +120,38 @@ class ClassifyTest(unittest.TestCase):
         self.assertTrue(proc.is_embroidery_class_name('LEOC刺繍'))
         self.assertTrue(proc.is_embroidery_class_name('刺繍'))
 
+        # *TC-410 used prefix
+        tc = suffix.classify_suffix('*TC-410', product_name='コックコート', supplier='㈱サーヴォ')
+        self.assertTrue(tc['apply'])
+        self.assertFalse(tc['needsConfirm'])
+        self.assertEqual(tc['baseCode'], 'TC-410')
+        self.assertIn('中古', tc['note'])
+
+        # C/1, C-10 color code in SKU
+        as7300 = suffix.classify_suffix('AS7300 C/1', product_name='シャツ', supplier='チトセ')
+        self.assertTrue(as7300['apply'])
+        self.assertFalse(as7300['needsConfirm'])
+        self.assertEqual(as7300['baseCode'], 'AS7300')
+        self.assertEqual(as7300['color'], 'C/1')
+
+        as5403 = suffix.classify_suffix('AS5403 C-10', product_name='シャツ', supplier='チトセ')
+        self.assertTrue(as5403['apply'])
+        self.assertFalse(as5403['needsConfirm'])
+        self.assertEqual(as5403['baseCode'], 'AS5403')
+        self.assertEqual(as5403['color'], 'C-10')
+
+        # Slash in SKU (APK600-C/5, AS5402C/10)
+        apk = suffix.classify_suffix('APK600-C/5', product_name='エプロン', supplier='KAZEN')
+        self.assertFalse(apk['needsConfirm'])
+        self.assertEqual(apk['baseCode'], 'APK600-C/5')
+
+        # 別注 prefix
+        betchu = suffix.classify_suffix('別注SD5000AM-50', product_name='作業服', supplier='仕入A')
+        self.assertTrue(betchu['apply'])
+        self.assertFalse(betchu['needsConfirm'])
+        self.assertEqual(betchu['baseCode'], 'SD5000AM-50')
+        self.assertIn('別注', betchu['note'])
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):
