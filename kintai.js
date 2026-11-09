@@ -192,6 +192,16 @@
     if (!pack) return;
     if (!chosenYear && pack.fiscalStartYear) chosenYear = Number(pack.fiscalStartYear);
     fillAllYearSelects(pack);
+    const reportMonth = $('#kintaireportmonth');
+    if (reportMonth) {
+      const keep = reportMonth.value;
+      const months = pack.months || [];
+      reportMonth.innerHTML = months.map(m => `<option value="${esc(m.key)}">${m.year}年${m.month}月</option>`).join('');
+      const p = (pack.rows || []).find(r => r.months);
+      const imported = p && [...p.months].reverse().find(m => m.workDays != null || m.totalHm);
+      const fallback = imported ? `${imported.year}-${String(imported.month).padStart(2, '0')}` : (months[0] || {}).key;
+      reportMonth.value = months.some(m => m.key === keep) ? keep : (fallback || '');
+    }
     const filterSel = $('#kintaifilter');
     if (filterSel && !filterSel.dataset.bound) {
       filterSel.value = peopleFilter;
@@ -798,6 +808,33 @@
   }
 
   function bindKintaiControls() {
+    const reportExport = $('#kintaireportexport');
+    if (reportExport) reportExport.onclick = async () => {
+      reportExport.disabled = true;
+      try {
+        const pid = selectedPersonId();
+        const ym = $('#kintaireportmonth').value;
+        if (!pid || !ym) throw Error('対象者と日別対象月を選択してください。');
+        const qs = new URLSearchParams({ year: String(fiscalStartYear()), personId: String(pid), ym });
+        const response = await fetch('/api/kintai/report/xlsx?' + qs, { credentials: 'same-origin' });
+        if (!response.ok) {
+          const error = await response.json();
+          throw Error(error.error || 'Excel出力に失敗しました。');
+        }
+        const blob = await response.blob();
+        const disposition = response.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const a = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = match ? decodeURIComponent(match[1]) : `勤怠通知_${ym}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) { toast(e.message); }
+      finally { reportExport.disabled = false; }
+    };
     const year = $('#kintaiyear');
     const importYear = $('#kintaiimportyear');
     const summaryYear = $('#kintaisummaryyear');

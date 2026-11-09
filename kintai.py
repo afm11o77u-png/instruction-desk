@@ -4059,7 +4059,6 @@ def save_daily_work_days(c, user, payload: dict) -> dict:
             ''',
             (person_id, iso, days, now, actor),
         )
-        )
     updated_sheet = person_daily_sheet(c, person_id, year, month)
     w_total = updated_sheet.get('workDaysTotal')
     h_total = updated_sheet.get('holidayDaysTotal')
@@ -4558,6 +4557,11 @@ def handle_get(h, c, path: str):
         ym = _parse_ym(q.get('ym'))
         month = int(q['month']) if q.get('month') not in (None, '') else None
         return 200, list_overview(c, year, month=month, person_id=person_id, year_month=ym)
+    if path == '/api/kintai/report/xlsx':
+        import kintai_report_xlsx
+        q = _query_map(h)
+        year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
+        return kintai_report_xlsx.export(c, year, int(q.get('personId') or 0), _parse_ym(q.get('ym')))
     if path == '/api/kintai/leave-balance':
         return 200, kintai_leave_balance.bundle(c)
     if path == '/api/kintai/roster':
