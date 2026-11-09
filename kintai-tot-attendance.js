@@ -57,7 +57,7 @@
     result.rows.forEach((row, index) => {
       const checked = checkedValues(row);
       const cell = $('totattrow' + index);
-      cell.textContent = [checked.error, row.note, row.edited ? '手修正済み' : '', row.filled ? '固定休憩を補完' : '', checked.overnight ? '退勤は翌日として貼付' : ''].filter(Boolean).join('／');
+      cell.textContent = [checked.error, row.note, row.edited ? '手修正済み' : '', row.roundedStart ? '始業9:00丸め' : '', row.filled ? '固定休憩を補完' : '', checked.overnight ? '退勤は翌日として貼付' : ''].filter(Boolean).join('／');
       cell.style.color = checked.error ? '#a32525' : '';
       if (checked.error) errors += 1;
     });
@@ -80,7 +80,7 @@
         input.type = 'text'; input.value = row[key]; input.size = 6; input.maxLength = 5;
         input.setAttribute('aria-label', row.date + ' ' + ({ start: '始業', rest: '休憩', end: '終業' })[key]);
         input.oninput = () => {
-          row[key] = input.value.trim(); row.edited = true;
+          row[key] = input.value.trim(); row.edited = true; if (key === 'start') row.roundedStart = false;
           $('totattreview').checked = false;
           refreshValidation();
         };
@@ -191,6 +191,16 @@
           const a = parseTime(row.start), b = parseTime(row.end);
           const duration = b - a + (b < a ? 1440 : 0);
           if (duration > result.defaultBreak) { row.rest = displayTime(result.defaultBreak); row.filled = true; }
+        }
+      });
+      render(result);
+    };
+    if ($('totattroundstart9')) $('totattroundstart9').onclick = () => {
+      if (!result) return;
+      result.rows.forEach(row => {
+        if (row.start && String(row.start).trim() !== '') {
+          row.start = '9:00';
+          row.roundedStart = true;
         }
       });
       render(result);
