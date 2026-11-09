@@ -1353,6 +1353,81 @@ def save_supplier(c, body):
     return supplier_row(c, sid)
 
 
+def _supplier_normalize_key(name: str) -> str:
+    import unicodedata, re
+    s = unicodedata.normalize('NFKC', name or '')
+    s = re.sub(r'[\s\u3000]+', '', s)
+    s = re.sub(r'\([株有]\)|（[株有]）|株式会社|有限会社|株|有', '', s)
+    return s.lower()
+
+
+def _supplier_preference_score(name: str) -> int:
+    score = 0
+    # 環境依存文字 (㈱, ㈲)
+    if '㈱' in name or '㈲' in name:
+        score += 20
+    elif '(株)' in name or '(有)' in name or '（株）' in name or '（有）' in name:
+        score += 5
+    # 半角英数（ASCII英数があるか、全角英数がないか）
+    has_ascii_alnum = any('a' <= ch <= 'z' or 'A' <= ch <= 'Z' or '0' <= ch <= '9' for ch in name)
+    has_full_alnum = any('\uff21' <= ch <= '\uff3a' or '\uff41' <= ch <= '\uff5a' or '\uff10' <= ch <= '\uff19' for ch in name)
+    if has_ascii_alnum and not has_full_alnum:
+        score += 10
+    elif has_full_alnum:
+        score -= 10
+    return score
+
+
+def preview_supplier_duplicates(c, body=None):
+    from collections import defaultdict
+    rows = c.execute('SELECT id, name, address, phone, contact, active FROM suppliers ORDER BY id').fetchall()
+    groups = defaultdict(list)
+    for r in rows:
+        key = _supplier_normalize_key(r['name'])
+        if key:
+            groups[key].append(dict(r))
+    duplicates = []
+    for key, items in groups.items():
+        if len(items) > 1:
+            items_sorted = sorted(items, key=lambda x: (-_supplier_preference_score(x['name']), x['id']))
+            target = items_sorted[0]
+            sources = items_sorted[1:]
+            for s in sources:
+                p_cnt = c.execute('SELECT COUNT(*) FROM products WHERE supplier_id=?', (s['id'],)).fetchone()[0]
+                ps_cnt = c.execute('SELECT COUNT(*) FROM product_suppliers WHERE supplier_id=?', (s['id'],)).fetchone()[0]
+                s['productCount'] = p_cnt + ps_cnt
+            duplicates.append({
+                'key': key,
+                'target': target,
+                'sources': sources,
+            })
+    return {'duplicates': duplicates, 'count': len(duplicates)}
+
+
+def apply_supplier_duplicates_merge(c, body=None):
+    body = body or {}
+    if not body.get('isOwner'):
+        raise ValueError('仕入先の統合は主管理者のみ実行できます。')
+    preview = preview_supplier_duplicates(c, body)
+    merged_count = 0
+    t = stamp()
+    for group in preview['duplicates']:
+        target_id = group['target']['id']
+        for s in group['sources']:
+            source_id = s['id']
+            c.execute('UPDATE products SET supplier_id=?, updated_at=? WHERE supplier_id=?', (target_id, t, source_id))
+            sub_rows = c.execute('SELECT product_id FROM product_suppliers WHERE supplier_id=?', (source_id,)).fetchall()
+            for sr in sub_rows:
+                pid = sr['product_id']
+                if c.execute('SELECT 1 FROM product_suppliers WHERE product_id=? AND supplier_id=?', (pid, target_id)).fetchone():
+                    c.execute('DELETE FROM product_suppliers WHERE product_id=? AND supplier_id=?', (pid, source_id))
+                else:
+                    c.execute('UPDATE product_suppliers SET supplier_id=? WHERE product_id=? AND supplier_id=?', (target_id, pid, source_id))
+            c.execute('DELETE FROM suppliers WHERE id=?', (source_id,))
+            merged_count += 1
+    return {'ok': True, 'mergedCount': merged_count, 'groupsCount': len(preview['duplicates'])}
+
+
 def _sizes(body):
     labels = []
     for raw in body.get('sizes') or []:

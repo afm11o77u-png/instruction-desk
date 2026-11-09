@@ -998,12 +998,74 @@ function customers(){
 function suppliers(){
   const rows=state.data.suppliers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.phone}${r.contact}${r.address}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel supplier-panel">${listNote('仕入先について','仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。')}${bar('仕入先名・電話番号・担当者','','新しく登録','suppliers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+  const unifyBar=stockIsOwner()?`<div class="bar merge-entry"><button type="button" id="supplierUnifyOpen">仕入先の表記揺れを統合</button><span class="excelhint">全角／半角や(株)／㈱などの重複仕入先を検出し、半角・環境依存文字優先で1つに統合します（主管理者のみ）。</span></div>`:''
+  $('#main').innerHTML=`<section class="panel supplier-panel">${listNote('仕入先について','仕入先はメーカーとは別です。商品に入れるのは、ふだん頼む仕入先です。')}${bar('仕入先名・電話番号・担当者','','新しく登録','suppliers')}${unifyBar}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>仕入先</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する仕入先はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div><div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する仕入先はありません。</div>'
   bindList(rows,'仕入先',supplierForm,body=>api('/api/suppliers',body),'suppliers')
+  bindSupplierUnify()
+}
+function bindSupplierUnify(){
+  const btn=$('#supplierUnifyOpen')
+  if(!btn)return
+  btn.onclick=async()=>{
+    const dlg=$('#dlg')
+    if(!dlg)return
+    try{
+      const res=await api('/api/suppliers/unify-preview',{})
+      const duplicates=res.duplicates||[]
+      if(!duplicates.length){
+        toast('重複している仕入先はありません。')
+        return
+      }
+      dlg.innerHTML=`<form method="dialog" class="dialog">
+        <div class="dialogtitle"><h3>仕入先の表記揺れ統合（主管理者）</h3><button type="button" class="close" id="close">×</button></div>
+        <div class="dialogbody">
+          <p class="excelhint">以下の重複仕入先を、半角英数・環境依存文字（㈱・㈲）優先で1つに統合します。紐付いている商品は統合先の仕入先に付け替えられます。</p>
+          <div class="directory-scroll" style="max-height:360px;margin:12px 0;">
+            <table class="directory">
+              <thead><tr><th>統合先（残す仕入先）</th><th>統合元（削除される重複）</th></tr></thead>
+              <tbody>
+                ${duplicates.map(g=>`<tr>
+                  <td><strong>[ID ${g.target.id}] ${esc(g.target.name)}</strong></td>
+                  <td>${g.sources.map(s=>`<div>[ID ${s.id}] ${esc(s.name)} <span class="sub">（商品: ${s.productCount||0}件）</span></div>`).join('')}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <p id="error" class="error"></p>
+        </div>
+        <div class="dialogactions">
+          <button type="button" id="close2">キャンセル</button>
+          <button type="button" class="primary" id="doUnify">統合を実行する（${duplicates.length}組）</button>
+        </div>
+      </form>`
+      if(!dlg.open)dlg.showModal()
+      const close=()=>{dlg.close();dlg.innerHTML=''}
+      $('#close').onclick=close
+      $('#close2').onclick=close
+      dlg.oncancel=ev=>{ev.preventDefault();close()}
+      $('#doUnify').onclick=async()=>{
+        const doBtn=$('#doUnify')
+        doBtn.disabled=true
+        try{
+          const applyRes=await api('/api/suppliers/unify-apply',{})
+          toast(`${applyRes.mergedCount||0}件の重複仕入先を統合しました。`)
+          close()
+          await boot()
+          suppliers()
+        }catch(e){
+          doBtn.disabled=false
+          const err=$('#error')
+          if(err)err.textContent=e.message||'統合に失敗しました。'
+        }
+      }
+    }catch(e){
+      toast(e.message||'重複プレビューの取得に失敗しました。')
+    }
+  }
 }
 /** 品番表示。部品・資材／加工サービスは品番なしが普通なので何も出さない。 */
 // 旧CSV取込で品番が無かった衣服（品番「要確認」）。編集で正しい品番に直してもらう

@@ -854,6 +854,8 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         '/api/prices/code-map': stock_prices.save_code_map,
         '/api/customers': stock.save_customer,
         '/api/suppliers': stock.save_supplier,
+        '/api/suppliers/unify-preview': stock.preview_supplier_duplicates,
+        '/api/suppliers/unify-apply': stock.apply_supplier_duplicates_merge,
         '/api/products': stock.save_product,
         '/api/customer-products': stock.ensure_customer_product,
         '/api/locations': stock.save_location,
