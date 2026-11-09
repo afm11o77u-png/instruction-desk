@@ -11,6 +11,9 @@ MAX_BYTES = 10 * 1024 * 1024
 
 
 def ensure_schema(c):
+    people_cols = {r['name'] for r in c.execute('PRAGMA table_info(kintai_people)')}
+    if people_cols and 'paid_leave_balance' not in people_cols:
+        c.execute('ALTER TABLE kintai_people ADD COLUMN paid_leave_balance REAL')
     c.execute('''CREATE TABLE IF NOT EXISTS kintai_leave_cells (
         person_id INTEGER PRIMARY KEY, cell TEXT NOT NULL,
         balance REAL, note TEXT NOT NULL DEFAULT '',
@@ -137,6 +140,27 @@ def cell_value(grid, cell):
 
 
 def handle(c, payload, read_grid):
+    action = payload.get('action')
+    if action == 'apply':
+        ensure_schema(c)
+        rows = c.execute(
+            '''SELECT p.id, l.balance
+               FROM kintai_people p
+               LEFT JOIN kintai_leave_cells l ON l.person_id=p.id
+               WHERE p.active=1'''
+        ).fetchall()
+        applied = 0
+        for r in rows:
+            bal = r['balance']
+            c.execute(
+                'UPDATE kintai_people SET paid_leave_balance=? WHERE id=?',
+                (bal, r['id']),
+            )
+            if bal is not None:
+                applied += 1
+        out = bundle(c)
+        out['appliedCount'] = applied
+        return out
     entries = mappings(c, payload)
     action = payload.get('action')
     if action == 'save':

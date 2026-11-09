@@ -319,7 +319,7 @@
           ? `<td title="${esc(m.paidLeaveRemainingNote || 'この取得日に読み取った現保有数です。')}">${esc(dayText(m.paidLeaveRemaining))}</td>`
           : '<td class="kintai-blank"></td>'}
         ${m.paidLeaveShowsRead
-          ? (m.paidLeaveComputedRemaining == null
+          ? ((m.paidLeaveComputedShow != null ? !m.paidLeaveComputedShow : false) || m.paidLeaveComputedRemaining == null
             ? `<td class="kintai-blank" title="${esc(m.paidLeaveComputedNote || '')}"></td>`
             : `<td title="${esc(m.paidLeaveComputedNote || '')}">${esc(dayText(m.paidLeaveComputedRemaining))}</td>`)
           : '<td class="kintai-blank"></td>'}
@@ -740,7 +740,9 @@
     leaveLoading = true;
     const status = $('#kintaileavestatus');
     const password = $('#kintaileavepassword');
+    const applyBtn = $('#kintaileaveapply');
     $('#kintaileavesave').disabled = $('#kintaileaveupdate').disabled = true;
+    if (applyBtn) applyBtn.disabled = true;
     try {
       const people = Array.from(document.querySelectorAll('.kintai-leave-cell')).map(el => ({
         personId: Number(el.dataset.person), cell: el.value.trim(),
@@ -758,10 +760,14 @@
         });
         payload.password = password.value;
       }
-      status.textContent = action === 'update' ? '集計シートを読み取っています…' : 'セル位置を保存しています…';
+      status.textContent = action === 'apply' ? '現保有数を出勤簿に反映しています…' : (action === 'update' ? '集計シートを読み取っています…' : 'セル位置を保存しています…');
       const data = await api('/api/kintai/leave-balance', payload);
       paintLeaveBalances(data);
-      status.textContent = action === 'update' ? '現保有数を更新しました。空欄や確認事項がある行は内容を確認してください。' : 'セル位置を保存しました。変更した行の前回値は消去しました。';
+      status.textContent = action === 'apply'
+        ? `読み込んだ現保有数を出勤簿の有給残数に反映しました（${data.appliedCount || 0}名）。`
+        : (action === 'update' ? '現保有数を更新しました。空欄や確認事項がある行は内容を確認してください。' : 'セル位置を保存しました。変更した行の前回値は消去しました。');
+      if (action === 'apply') toast('有給残数を出勤簿に反映しました。');
+      await loadKintai();
       const roster = $('#kintairoster');
       if (roster && !roster.hidden) await loadKintaiRoster();
     } catch (e) {
@@ -770,6 +776,7 @@
       password.value = '';
       leaveLoading = false;
       $('#kintaileavesave').disabled = $('#kintaileaveupdate').disabled = false;
+      if (applyBtn) applyBtn.disabled = false;
     }
   }
 
@@ -829,6 +836,7 @@
       });
       $('#kintaileavesave').onclick = () => saveLeaveBalances('save');
       $('#kintaileaveupdate').onclick = () => saveLeaveBalances('update');
+      if ($('#kintaileaveapply')) $('#kintaileaveapply').onclick = () => saveLeaveBalances('apply');
     }
     const rosterBtn = $('#kintairosteropen');
     if (rosterBtn) rosterBtn.onclick = () => {

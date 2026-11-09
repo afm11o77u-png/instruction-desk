@@ -330,6 +330,8 @@ def schema(c):
         c.execute('ALTER TABLE kintai_people ADD COLUMN retired_on TEXT')
     if 'paid_leave_base_on' not in people_cols:
         c.execute('ALTER TABLE kintai_people ADD COLUMN paid_leave_base_on TEXT')
+    if 'paid_leave_balance' not in people_cols:
+        c.execute('ALTER TABLE kintai_people ADD COLUMN paid_leave_balance REAL')
     c.execute(
         '''CREATE TABLE IF NOT EXISTS kintai_monthly (
             person_id INTEGER NOT NULL,
@@ -2631,6 +2633,50 @@ def _paid_leave_by_month(c, person_id: int) -> dict[tuple[int, int], float | Non
 
 
 def apply_paid_leave_remaining(c, person: dict, month_rows: list[dict]) -> None:
+    """個人の月表と全員一覧で同じ残数を置く。付与・失効は計算しない。"""
+    kintai_leave_balance.ensure_schema(c)
+    registered = person.get('paid_leave_balance')
+    if registered is None and 'paid_leave_balance' not in person:
+        p_row = c.execute(
+            'SELECT paid_leave_balance FROM kintai_people WHERE id=?',
+            (int(person['id']),),
+        ).fetchone()
+        if p_row:
+            registered = p_row['paid_leave_balance']
+    snap = c.execute(
+        'SELECT balance, updated_at FROM kintai_leave_cells WHERE person_id=?',
+        (int(person['id']),),
+    ).fetchone()
+    balance = snap['balance'] if snap else None
+    updated = snap['updated_at'] if snap else ''
+    acquired = paid_leave_acquisition_date(updated) if balance is not None else None
+    effective_balance = float(registered) if registered is not None else balance
+    value, note = paid_leave_holding_remaining(
+        effective_balance, updated, _paid_leave_by_month(c, int(person['id'])),
+    )
+    acquired_ym = _closing_month_containing(acquired) if acquired else None
+    for item in month_rows:
+        item['paidLeaveReadBalance'] = effective_balance
+        item['paidLeaveAcquiredOn'] = acquired.isoformat() if acquired else None
+        item['paidLeaveComputedRemaining'] = value
+        item['paidLeaveComputedNote'] = note
+        is_acquired_month = bool(acquired_ym and (int(item['year']), int(item['month'])) == acquired_ym)
+        item['paidLeaveComputedShow'] = is_acquired_month
+        if registered is not None:
+            item['paidLeaveRemaining'] = float(registered)
+            item['paidLeaveRemainingNote'] = '出勤簿に反映した有給残数です。'
+            item['paidLeaveShowsRead'] = True
+        elif is_acquired_month:
+            item['paidLeaveRemaining'] = balance
+            item['paidLeaveRemainingNote'] = 'この取得日に読み取った現保有数です。この月より前の残数ではありません。'
+            item['paidLeaveShowsRead'] = True
+        else:
+            item['paidLeaveRemaining'] = None
+            item['paidLeaveRemainingNote'] = ''
+            item['paidLeaveShowsRead'] = False
+
+
+def _apply_paid_leave_remaining_legacy(c, person: dict, month_rows: list[dict]) -> None:
     """個人の月表と全員一覧で同じ残数を置く。付与・失効は計算しない。"""
     kintai_leave_balance.ensure_schema(c)
     snap = c.execute(
