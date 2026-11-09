@@ -7338,11 +7338,11 @@ def _unify_midori_vertical_garments(c, classified):
         return
 
     lower_keywords = (
-        "パンツ", "スラックス", "ズボン", "カーゴ", "スカート", "下衣", "白下", "紺下", "黒下",
+        "パンツ", "スラックス", "ズボン", "カーゴ", "スカート", "下衣", "白下", "紺下", "黒下", "白衣下",
     )
     upper_keywords = (
         "上衣", "ジャケット", "ブルゾン", "ジャンパー", "シャツ", "ブラウス",
-        "ベスト", "ケーシー", "ポロシャツ",
+        "ベスト", "ケーシー", "ポロシャツ", "白衣",
     )
 
     for r in classified:
@@ -7366,12 +7366,12 @@ def _unify_midori_vertical_garments(c, classified):
             tokens = counterparts_by_base[code]
             pname = stock.text((r.get("csv") or {}).get("productName") or (r.get("product") or {}).get("name") or "")
             is_lower = any(k in pname for k in lower_keywords)
-            is_upper = any(k in pname for k in upper_keywords)
+            is_upper = any(k in pname for k in upper_keywords) and not ("白衣下" in pname or "下衣" in pname)
 
             # 相方に存在し、商品名と合致する場合のみ付与（両方キーワードがある等曖昧な場合は付与しない）
-            if is_lower and not is_upper and "下" in tokens:
+            if is_lower and not is_upper and "下" in tokens and "上" not in tokens:
                 target_code = tokens["下"]
-            elif is_upper and not is_lower and "上" in tokens:
+            elif is_upper and not is_lower and "上" in tokens and "下" not in tokens:
                 target_code = tokens["上"]
 
         if target_code and target_code != code:

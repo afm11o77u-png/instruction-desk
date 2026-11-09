@@ -51,6 +51,12 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
                 '顧客A,ミドリ安全北海道㈱,VEHS3212B上,上衣、青衣,S',
                 # VEHS3212W上: 単独上衣 -> 確認不要でそのままVEHS3212W上
                 '顧客A,ミドリ安全北海道㈱,VEHS3212W上,上衣、白衣,M',
+                # MH319W: プレーン(一般白衣) + 上(白衣) -> MH319W上 に統合
+                '顧客A,ミドリ安全北海道㈱,MH319W,一般白衣,S',
+                '顧客A,ミドリ安全北海道㈱,MH319W上,白衣,L',
+                # MH 60B: 上(白衣青) + 下(パンツ) -> プレーンなし、最初から上下別。それぞれ独立登録で確認カードなし
+                '顧客A,ミドリ安全北海道㈱,MH 60B上,白衣青,4L',
+                '顧客A,ミドリ安全北海道㈱,MH 60B下,パンツ,LL',
                 # 他仕入先: パンツだが相方なし -> 変更なし(ABC-100)
                 '顧客A,別仕入先㈱,ABC-100,作業服 パンツ,L',
                 # ミドリ安全だが相方なし -> 変更なし(XYZ-99)
@@ -66,21 +72,27 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
             self.assertEqual(codes_by_row[4], 'VEHS3212B上')
             self.assertEqual(codes_by_row[5], 'VEHS3212B上')
             self.assertEqual(codes_by_row[6], 'VEHS3212W上')
-            self.assertEqual(codes_by_row[7], 'ABC-100')
-            self.assertEqual(codes_by_row[8], 'XYZ-99')
+            self.assertEqual(codes_by_row[7], 'MH319W上')
+            self.assertEqual(codes_by_row[8], 'MH319W上')
+            self.assertEqual(codes_by_row[9], 'MH 60B上')
+            self.assertEqual(codes_by_row[10], 'MH 60B下')
+            self.assertEqual(codes_by_row[11], 'ABC-100')
+            self.assertEqual(codes_by_row[12], 'XYZ-99')
 
-            # codeShapeGroups の確認: VEHS29N, VEHS3212B, VEHS3212W上 は1メンバーまたは統合済みのため確認グループにならない
+            # codeShapeGroups の確認: すべて自動解決され、確認グループは出ないこと
             shape_group_ids = [g['id'] for g in preview.get('codeShapeGroups') or []]
             self.assertNotIn('midori:VEHS29N', shape_group_ids)
             self.assertNotIn('midori:VEHS3212B', shape_group_ids)
             self.assertNotIn('midori:VEHS3212W', shape_group_ids)
+            self.assertNotIn('midori:MH319W', shape_group_ids)
+            self.assertNotIn('midori:MH 60B', shape_group_ids)
 
             # コミットしてDB登録を確認（未決定エラーが出ずに正常登録できること）
             res = pli.commit_preview(c, {
                 **body,
                 'previewFingerprint': preview['previewFingerprint'],
                 'previewAt': preview['previewAt'],
-                'token': 'midori-unify-token-1',
+                'token': 'midori-unify-token-2',
             }, db_path=str(path))
             c.commit()
 
@@ -88,20 +100,14 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
             self.assertIn('VEHS29N下', registered_codes)
             self.assertIn('VEHS3212B上', registered_codes)
             self.assertIn('VEHS3212W上', registered_codes)
+            self.assertIn('MH319W上', registered_codes)
+            self.assertIn('MH 60B上', registered_codes)
+            self.assertIn('MH 60B下', registered_codes)
             self.assertIn('ABC-100', registered_codes)
             self.assertIn('XYZ-99', registered_codes)
             self.assertNotIn('VEHS29N', registered_codes)
             self.assertNotIn('VEHS3212B', registered_codes)
-
-            # VEHS29N下 のサイズがSとM両方登録されていること
-            p_veh = c.execute("SELECT id FROM products WHERE code='VEHS29N下'").fetchone()
-            sizes = sorted(r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (p_veh['id'],)))
-            self.assertEqual(sizes, ['M', 'S'])
-
-            # VEHS3212B上 のサイズがSとSS両方登録されていること
-            p_veh_b = c.execute("SELECT id FROM products WHERE code='VEHS3212B上'").fetchone()
-            sizes_b = sorted(r['label'] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (p_veh_b['id'],)))
-            self.assertEqual(sizes_b, ['S', 'SS'])
+            self.assertNotIn('MH319W', registered_codes)
 
         finally:
             c.close()

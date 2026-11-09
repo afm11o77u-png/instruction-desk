@@ -275,6 +275,9 @@ def build_groups(c, classified):
             members.append(_member(code, role, by_code.get(code, []), existing))
         if not members or len(members) <= 1:
             continue
+        # 上と下の両方が最初から存在しプレーンがない場合は、別々の独立商品として登録するため確認不要
+        if all(m['role'] in ('upper', 'lower') for m in members) and not any(m['role'] == 'plain' for m in members):
+            continue
         groups.append({
             'id': 'midori:' + base,
             'kind': 'midori_vertical',
