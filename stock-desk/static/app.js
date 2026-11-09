@@ -1011,7 +1011,7 @@ function bindSupplierUnify(){
   const btn=$('#supplierUnifyOpen')
   if(!btn)return
   btn.onclick=async()=>{
-    const dlg=$('#dlg')
+    const dlg=$('#dialog')
     if(!dlg)return
     try{
       const res=await api('/api/suppliers/unify-preview',{})
@@ -1020,10 +1020,9 @@ function bindSupplierUnify(){
         toast('重複している仕入先はありません。')
         return
       }
-      dlg.innerHTML=`<form method="dialog" class="dialog">
-        <div class="dialogtitle"><h3>仕入先の表記揺れ統合（主管理者）</h3><button type="button" class="close" id="close">×</button></div>
+      dlg.innerHTML=`<form><div class="dialoghead"><h2>仕入先の表記揺れ統合（主管理者）</h2><button type="button" id="close" class="quiet">閉じる</button></div>
         <div class="dialogbody">
-          <p class="excelhint">以下の重複仕入先を、半角英数・環境依存文字（㈱・㈲）優先で1つに統合します。紐付いている商品は統合先の仕入先に付け替えられます。</p>
+          <p class="notice">以下の重複仕入先を、半角英数・環境依存文字（㈱・㈲）優先で1つに統合します。紐付いている商品は統合先の仕入先に付け替えられます。</p>
           <div class="directory-scroll" style="max-height:360px;margin:12px 0;">
             <table class="directory">
               <thead><tr><th>統合先（残す仕入先）</th><th>統合元（削除される重複）</th></tr></thead>
@@ -1035,14 +1034,14 @@ function bindSupplierUnify(){
               </tbody>
             </table>
           </div>
-          <p id="error" class="error"></p>
+          <p id="error"></p>
         </div>
         <div class="dialogactions">
           <button type="button" id="close2">キャンセル</button>
           <button type="button" class="primary" id="doUnify">統合を実行する（${duplicates.length}組）</button>
         </div>
       </form>`
-      if(!dlg.open)dlg.showModal()
+      dlg.showModal()
       const close=()=>{dlg.close();dlg.innerHTML=''}
       $('#close').onclick=close
       $('#close2').onclick=close
