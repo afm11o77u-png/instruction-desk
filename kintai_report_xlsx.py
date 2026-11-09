@@ -1,4 +1,4 @@
-"""個人向け勤怠通知。年度集計と選択月の日別をA4縦1枚に出力する。"""
+"""個人向け勤怠通知。年度の月別集計をA4横1枚に出力する。"""
 from io import BytesIO
 from zipfile import ZipFile, ZIP_DEFLATED
 from xml.sax.saxutils import escape
@@ -8,68 +8,67 @@ from kintai_bihin_xlsx import XLSX, content_disposition, _col
 NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 
 
-def workbook(overview, daily):
+def workbook(overview):
     person = overview['rows'][0]
     rows, merges = [], []
 
-    def row(values, style=0, height=14):
+    def row(values, style=0, height=32):
         n = len(rows) + 1
         cells = []
         for i, value in enumerate(values):
+            cell_style = style[i] if isinstance(style, list) else style
             ref = f'{_col(i)}{n}'
             if value is None or value == '':
-                cells.append(f'<c r="{ref}" s="{style}"/>')
+                cells.append(f'<c r="{ref}" s="{cell_style}"/>')
             elif isinstance(value, (int, float)):
-                cells.append(f'<c r="{ref}" s="{style}"><v>{value}</v></c>')
+                cells.append(f'<c r="{ref}" s="{cell_style}"><v>{value}</v></c>')
             else:
-                cells.append(f'<c r="{ref}" s="{style}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>')
+                cells.append(f'<c r="{ref}" s="{cell_style}" t="inlineStr"><is><t>{escape(str(value))}</t></is></c>')
         rows.append(f'<row r="{n}" ht="{height}" customHeight="1">{"".join(cells)}</row>')
         return n
 
-    def line(text, style=2, height=18):
+    def line(text, style=2, height=26):
         n = row([text], style, height)
-        merges.append(f'A{n}:I{n}')
+        merges.append(f'A{n}:L{n}')
 
-    line('勤怠状況のお知らせ', 3, 26)
+    line('勤怠状況のお知らせ', 3, 38)
     line(f"{person['displayName']} 様（社員番号 {person['employeeCode']}）　{overview['fiscalLabel']}")
     line(f"月別：保存済み集計／最終取込 {person.get('lastImportAt') or '未取得'}", 2, 15)
-    row(['月', '出勤日数', '休日数', '休日累計', '休日残数', '有休取得', '有休累計', '普通時間', '残業時間'], 1, 22)
+    row(['月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得', '有給残数', '有給休暇起算日', '普通勤務時間', '残業時間', '勤務時間計'], 1, 40)
     for m in person['months']:
-        row([f"{m['year']}/{m['month']:02d}"] + [m.get(k) for k in (
+        values = [f"{m['year']}/{m['month']:02d}"] + [m.get(k) for k in (
             'workDays', 'holidayDays', 'holidayCumulative', 'holidayRemaining',
-            'paidLeaveDays', 'paidLeaveCumulative', 'ordinaryHm', 'overtimeHm')])
+            'paidLeaveDays', 'paidLeaveCumulative')]
+        values += [m.get('paidLeaveRemaining') if m.get('paidLeaveShowsRead') else None,
+                   m.get('paidLeaveBaseDate'), m.get('ordinaryHm'), m.get('overtimeHm'), m.get('totalHm')]
+        row(values, [5] + [4 if v is not None and v != '' else 0 for v in values[1:]])
     hold = next((m for m in person['months'] if m.get('paidLeaveReadBalance') is not None), {})
     balance = hold.get('paidLeaveReadBalance')
     line(f"有休現保有数：{balance if balance is not None else '未取得'} 日　取得日：{hold.get('paidLeaveAcquiredOn') or '未取得'}", 2)
-    line(f"日別明細　{daily['year']}年{daily['month']}月分　{daily.get('periodStart', '')}～{daily.get('periodEnd', '')}", 2)
-    # 元シートの勤務・休暇列を保持。合計や備考の長文は印刷明細から除く。
-    columns = [c for c in daily['columns'] if c['key'] not in ('total', 'note', 'remarks', 'workDays', 'breakTime')]
-    if len(columns) > 8:
-        raise ValueError('日別の列数がA4通知の上限を超えています。レイアウトを確認してください。')
-    columns += [{'key': 'workDays', 'label': '出勤日数'}]
-    row([c['label'] for c in columns], 1, 21)
-    if len(daily['rows']) > 31:
-        raise ValueError('日別データが31行を超えています。重複日付などを確認してください。')
-    for d in daily['rows']:
-        row([d.get(c['key']) for c in columns], 0, 13)
-    line('空欄は未取得・未確定。日別は元出勤簿の現在値と保存済み出勤日数（休憩欄は省略）。', 2, 15)
-    line('月別は保存済み集計のため、日別変更後は反映・再取込により差が生じる場合があります。', 2, 15)
+    line('空欄は未取得・未確定です。Web出勤簿と同じ保存済み集計を表示しています。', 2, 22)
     last = len(rows)
-    widths = [12, 9, 9, 9, 9, 9, 9, 11, 11]
+    widths = [12, 10, 9, 11, 12, 12, 12, 10, 17, 14, 12, 14]
     sheet = (f'<worksheet xmlns="{NS}"><sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>'
              '<sheetViews><sheetView workbookViewId="0" showGridLines="0"/></sheetViews>'
              '<cols>' + ''.join(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>' for i, w in enumerate(widths, 1)) + '</cols>'
              f'<sheetData>{"".join(rows)}</sheetData><mergeCells>' + ''.join(f'<mergeCell ref="{m}"/>' for m in merges) + '</mergeCells>'
              '<pageMargins left="0.25" right="0.25" top="0.3" bottom="0.3" header="0.1" footer="0.1"/>'
-             '<pageSetup paperSize="9" orientation="portrait" fitToWidth="1" fitToHeight="1"/></worksheet>')
-    fonts = ''.join(f'<font>{"<b/>" if bold else ""}<sz val="{size}"/><name val="Yu Gothic"/></font>' for size, bold in [(8, False), (8, True), (9, False), (16, True)])
-    styles = (f'<styleSheet xmlns="{NS}"><fonts count="4">{fonts}</fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE6EFEB"/><bgColor indexed="64"/></patternFill></fill></fills>'
-              '<borders count="2"><border/><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/></border></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="4">'
-              + ''.join(f'<xf fontId="{i}" fillId="{2 if i == 1 else 0}" borderId="{1 if i < 2 else 0}" numFmtId="0" xfId="0" applyAlignment="1"><alignment vertical="center" horizontal="{ "center" if i < 2 else "left"}" wrapText="1"/></xf>' for i in range(4))
+             '<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="1"/></worksheet>')
+    # Webの.kintai-sheetと同じ紺見出し、淡黄の数値、青灰の罫線。
+    fonts = ''.join(f'<font>{"<b/>" if bold else ""}{"<u/>" if underline else ""}<color rgb="{color}"/><sz val="{size}"/><name val="BIZ UDPGothic"/></font>'
+                    for size, bold, color, underline in [(13, False, 'FF000000', False), (11, True, 'FFFFFFFF', False),
+                        (12, False, 'FF000000', False), (22, True, 'FF000000', False), (13, True, 'FF1F4E79', True)])
+    border = '<border>' + ''.join(f'<{side} style="thin"><color rgb="FFB7C3D0"/></{side}>' for side in ('left', 'right', 'top', 'bottom')) + '</border>'
+    formats = [(0, 0, 1, 'right'), (1, 2, 1, 'center'), (2, 0, 0, 'left'),
+               (3, 0, 0, 'left'), (0, 3, 1, 'right'), (4, 0, 1, 'left')]
+    styles = (f'<styleSheet xmlns="{NS}"><fonts count="5">{fonts}</fonts><fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
+              + ''.join(f'<fill><patternFill patternType="solid"><fgColor rgb="{color}"/><bgColor indexed="64"/></patternFill></fill>' for color in ('FF1F4E79', 'FFFFF2CC'))
+              + f'</fills><borders count="2"><border/>{border}</borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="6">'
+              + ''.join(f'<xf fontId="{font}" fillId="{fill}" borderId="{border_id}" numFmtId="0" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" horizontal="{align}" wrapText="1"/></xf>' for font, fill, border_id, align in formats)
               + '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
     # 共通の最小OOXMLパッケージを利用し、帳票のシート・書式だけ差し替える。
     from kintai_bihin_xlsx import workbook as base_workbook
-    base = base_workbook({'year': daily['year'], 'month': daily['month'], 'rows': [], 'totals': {}})
+    base = base_workbook({'year': overview['fiscalStartYear'], 'month': 2, 'rows': [], 'totals': {}})
     out = BytesIO()
     with ZipFile(BytesIO(base)) as src, ZipFile(out, 'w', ZIP_DEFLATED) as dest:
         for name in src.namelist():
@@ -79,18 +78,17 @@ def workbook(overview, daily):
             elif name == 'xl/styles.xml':
                 data = styles.encode('utf-8')
             elif name == 'xl/workbook.xml':
-                data = (f'<workbook xmlns="{NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="勤怠通知" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">\'勤怠通知\'!$A$1:$I${last}</definedName></definedNames></workbook>').encode('utf-8')
+                data = (f'<workbook xmlns="{NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="勤怠通知" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm.Print_Area" localSheetId="0">\'勤怠通知\'!$A$1:$L${last}</definedName></definedNames></workbook>').encode('utf-8')
             dest.writestr(name, data)
     return out.getvalue()
 
 
-def export(c, fiscal_year, person_id, ym):
+def export(c, fiscal_year, person_id):
     import kintai
-    if not person_id or not ym:
-        raise ValueError('対象者と日別の対象月を選択してください。')
-    if ym not in kintai.fiscal_months(fiscal_year, 2):
-        raise ValueError('日別の対象月を選択年度の範囲内にしてください。')
+    if not person_id:
+        raise ValueError('対象者を選択してください。')
+    if not 2000 <= fiscal_year <= 2100:
+        raise ValueError('年度を確認してください。')
     overview = kintai.list_overview(c, fiscal_year, person_id=person_id)
-    daily = kintai.person_daily_sheet(c, person_id, *ym)
-    name = f"勤怠通知_{overview['rows'][0]['displayName']}_{ym[0]}-{ym[1]:02d}.xlsx"
-    return 200, workbook(overview, daily), XLSX, {'Content-Disposition': content_disposition(name)}
+    name = f"勤怠通知_{overview['rows'][0]['displayName']}_{fiscal_year}年度.xlsx"
+    return 200, workbook(overview), XLSX, {'Content-Disposition': content_disposition(name)}

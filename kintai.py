@@ -4561,7 +4561,7 @@ def handle_get(h, c, path: str):
         import kintai_report_xlsx
         q = _query_map(h)
         year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
-        return kintai_report_xlsx.export(c, year, int(q.get('personId') or 0), _parse_ym(q.get('ym')))
+        return kintai_report_xlsx.export(c, year, int(q.get('personId') or 0))
     if path == '/api/kintai/leave-balance':
         return 200, kintai_leave_balance.bundle(c)
     if path == '/api/kintai/roster':
