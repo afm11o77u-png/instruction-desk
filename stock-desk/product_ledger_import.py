@@ -7318,6 +7318,9 @@ def _unify_midori_vertical_garments(c, classified):
     if not classified:
         return
 
+    import re
+    change_memo_re = re.compile(r'(?:無くなり次第|代替|→).*$')
+
     # 1. ミドリ安全の行から、末尾に「上」「下」を持つ品番とその基礎品番を収集
     counterparts_by_base = defaultdict(dict)
     for r in classified:
@@ -7329,6 +7332,9 @@ def _unify_midori_vertical_garments(c, classified):
         code = stock.text((r.get("product") or {}).get("code") or (r.get("csv") or {}).get("code") or "")
         if not stock_product_merge.is_normal_product_code(code):
             continue
+        memo_m = change_memo_re.search(code)
+        if memo_m:
+            code = code[:memo_m.start()].strip(" -_－")
         base, token = code_shape_review.vertical_split(code)
         if base and token in ("上", "下"):
             norm_target = f"{base}{token}"
@@ -7342,7 +7348,7 @@ def _unify_midori_vertical_garments(c, classified):
     )
     upper_keywords = (
         "上衣", "ジャケット", "ブルゾン", "ジャンパー", "シャツ", "ブラウス",
-        "ベスト", "ケーシー", "ポロシャツ", "白衣",
+        "ベスト", "ケーシー", "ポロシャツ", "白衣", "コート", "スクラブ", "スモック", "雨具", "カッパ", "ヤッケ",
     )
 
     for r in classified:
@@ -7355,8 +7361,16 @@ def _unify_midori_vertical_garments(c, classified):
         if not stock_product_merge.is_normal_product_code(code):
             continue
 
-        base, token = code_shape_review.vertical_split(code)
+        orig_code = code
         target_code = None
+        memo_m = change_memo_re.search(code)
+        if memo_m:
+            clean_code = code[:memo_m.start()].strip(" -_－")
+            if clean_code:
+                code = clean_code
+                target_code = clean_code
+
+        base, token = code_shape_review.vertical_split(code)
 
         if token in ("上", "下") and base:
             # 既に上・下がついている品番（例: "VEHS29N 下"）はスペースを除去して密着正規化
@@ -7378,7 +7392,7 @@ def _unify_midori_vertical_garments(c, classified):
             elif is_upper and not is_lower and "上" in tokens and "下" not in tokens:
                 target_code = tokens["上"]
 
-        if target_code and target_code != code:
+        if target_code and (target_code != code or target_code != orig_code):
             cust = (r.get("csv") or {}).get("customer") or (r.get("customer") or {}).get("name") or ""
             pname = (r.get("csv") or {}).get("productName") or (r.get("product") or {}).get("name") or ""
 

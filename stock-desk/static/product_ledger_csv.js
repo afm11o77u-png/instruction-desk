@@ -1352,7 +1352,17 @@
       importMode:st.importMode||MODE_PRODUCTS,
       productPhase:isProductsMode(st)?(st.productPhase||''):'',
       selections:st.selections,skuDecisions:st.skuDecisions,
-      codeShapeDecisions:st.codeShapeDecisions||{},
+      codeShapeDecisions:(()=>{
+        const dec={...(st.codeShapeDecisions||{})}
+        const grps=(st.preview&&st.preview.codeShapeGroups)||[]
+        grps.forEach(g=>{
+          if(!dec[g.id]){
+            const d=codeShapeDecisionOf(st,g)
+            if(d&&d.action)dec[g.id]=d
+          }
+        })
+        return dec
+      })(),
       rowClassifications:st.rowClassifications||{},
       rowExclusions:st.rowExclusions||{},
       _canWrite:true,_actor:{name:st.actorName||''}
@@ -3970,7 +3980,16 @@
   function codeShapeHtml(st){
     const groups=(st.preview&&st.preview.codeShapeGroups)||[]
     if(!groups.length)return ''
-    const blocks=groups.map(g=>{
+    // 何もしなくてもそのまま登録できるもの（選択肢が1つしかないundeterminedや、自動完了した上下）は確認カードを出さない
+    const visibleGroups=groups.filter(g=>{
+      if(g.kind==='undetermined')return false
+      if(codeShapeComplete(g, codeShapeDecisionOf(st,g))){
+        if(g.kind==='midori_vertical')return false
+      }
+      return true
+    })
+    if(!visibleGroups.length)return ''
+    const blocks=visibleGroups.map(g=>{
       const decision=codeShapeDecisionOf(st,g)
       const members=(g.members||[]).map(m=>{
         const existing=(m.existing||[]).map(ex=>`既存 ${esc(ex.name)} / ${esc(ex.supplier||'仕入先未設定')} / ${(ex.sizes||[]).join('、')||'サイズなし'}`).join('、')
