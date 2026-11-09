@@ -3938,6 +3938,9 @@
 
   function codeShapeDecisionOf(st, group){
     const d=(st.codeShapeDecisions&&st.codeShapeDecisions[group.id])||{}
+    if(group.kind==='undetermined' && !d.action){
+      return {action:'keep_separate'}
+    }
     if(group.kind==='midori_vertical' && !d.action){
       const defTargets={}
       ;(group.members||[]).forEach(m=>{ defTargets[m.code]=m.code })
@@ -3983,7 +3986,8 @@
         controls=`<label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="merge_to_base" ${decision.action==='merge_to_base'?'checked':''}> 品番「${esc(g.baseCode)}」のみへまとめる（サイズはすべて引き継ぐ）</label>
           <label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="keep_separate" ${decision.action==='keep_separate'?'checked':''}> 別々の品番のまま登録する</label>`
       }else if(g.kind==='undetermined'){
-        controls=`<label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="keep_separate" ${decision.action==='keep_separate'?'checked':''}> この品番のまま登録する（短く推測しない）</label>`
+        const act=decision.action||'keep_separate'
+        controls=`<label><input type="radio" name="code-shape-${esc(g.id)}" data-code-shape="${esc(g.id)}" data-code-shape-action="keep_separate" ${act==='keep_separate'?'checked':''}> この品番のまま登録する（短く推測しない）</label>`
       }else{
         const codes=(g.members||[]).map(m=>m.code)
         controls=(g.members||[]).map(m=>{

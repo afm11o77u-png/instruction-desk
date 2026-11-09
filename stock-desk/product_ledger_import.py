@@ -7366,7 +7366,11 @@ def _unify_midori_vertical_garments(c, classified):
             tokens = counterparts_by_base[code]
             pname = stock.text((r.get("csv") or {}).get("productName") or (r.get("product") or {}).get("name") or "")
             is_lower = any(k in pname for k in lower_keywords)
-            is_upper = any(k in pname for k in upper_keywords) and not ("白衣下" in pname or "下衣" in pname)
+            is_upper = (
+                any(k in pname for k in upper_keywords)
+                or pname.endswith("衣")
+                or any(c + "衣" in pname for c in ("青", "白", "緑", "紺", "黒", "赤", "黄", "作業", "調理", "防寒", "衛生"))
+            ) and not ("白衣下" in pname or "下衣" in pname or is_lower)
 
             # 相方に存在し、商品名と合致する場合のみ付与（両方キーワードがある等曖昧な場合は付与しない）
             if is_lower and not is_upper and "下" in tokens and "上" not in tokens:

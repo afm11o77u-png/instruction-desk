@@ -46,9 +46,9 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
                 # VEHS29N: プレーン(パンツ) + 下(白下) -> VEHS29N下 に統合
                 '顧客A,ミドリ安全北海道㈱,VEHS29N,兼用パンツ 紺,S',
                 '顧客A,ミドリ安全北海道㈱,VEHS29N 下,白下 ネイビー,M',
-                # VEHS3212B: プレーン(上衣) + 上(上衣) -> VEHS3212B上 に統合
-                '顧客A,ミドリ安全北海道㈱,VEHS3212B,兼用上衣 ブルー,SS',
-                '顧客A,ミドリ安全北海道㈱,VEHS3212B上,上衣、青衣,S',
+                # VEHS3212B: プレーン(青衣) + 上(上衣) -> 青衣も上衣判定で VEHS3212B上 に統合
+                '顧客A,ミドリ安全北海道㈱,VEHS3212B,青衣,5L',
+                '顧客A,ミドリ安全北海道㈱,VEHS3212B上,上衣,S',
                 # VEHS3212W上: 単独上衣 -> 確認不要でそのままVEHS3212W上
                 '顧客A,ミドリ安全北海道㈱,VEHS3212W上,上衣、白衣,M',
                 # MH319W: プレーン(一般白衣) + 上(白衣) -> MH319W上 に統合
@@ -57,6 +57,8 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
                 # MH 60B: 上(白衣青) + 下(パンツ) -> プレーンなし、最初から上下別。それぞれ独立登録で確認カードなし
                 '顧客A,ミドリ安全北海道㈱,MH 60B上,白衣青,4L',
                 '顧客A,ミドリ安全北海道㈱,MH 60B下,パンツ,LL',
+                # 途中に上下があるメモ付き品番 -> 自動でkeep_separateが選択され未決定エラーにならない
+                '顧客A,ミドリ安全北海道㈱,MH60B下無くなり次第F15BO78へ,パンツ,3L',
                 # 他仕入先: パンツだが相方なし -> 変更なし(ABC-100)
                 '顧客A,別仕入先㈱,ABC-100,作業服 パンツ,L',
                 # ミドリ安全だが相方なし -> 変更なし(XYZ-99)
@@ -76,10 +78,11 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
             self.assertEqual(codes_by_row[8], 'MH319W上')
             self.assertEqual(codes_by_row[9], 'MH 60B上')
             self.assertEqual(codes_by_row[10], 'MH 60B下')
-            self.assertEqual(codes_by_row[11], 'ABC-100')
-            self.assertEqual(codes_by_row[12], 'XYZ-99')
+            self.assertEqual(codes_by_row[11], 'MH60B下無くなり次第F15BO78へ')
+            self.assertEqual(codes_by_row[12], 'ABC-100')
+            self.assertEqual(codes_by_row[13], 'XYZ-99')
 
-            # codeShapeGroups の確認: すべて自動解決され、確認グループは出ないこと
+            # codeShapeGroups の確認: midoriの上下確認カードは出ないこと
             shape_group_ids = [g['id'] for g in preview.get('codeShapeGroups') or []]
             self.assertNotIn('midori:VEHS29N', shape_group_ids)
             self.assertNotIn('midori:VEHS3212B', shape_group_ids)
@@ -92,7 +95,7 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
                 **body,
                 'previewFingerprint': preview['previewFingerprint'],
                 'previewAt': preview['previewAt'],
-                'token': 'midori-unify-token-2',
+                'token': 'midori-unify-token-3',
             }, db_path=str(path))
             c.commit()
 
@@ -103,6 +106,7 @@ class MidoriVerticalUnifyTest(unittest.TestCase):
             self.assertIn('MH319W上', registered_codes)
             self.assertIn('MH 60B上', registered_codes)
             self.assertIn('MH 60B下', registered_codes)
+            self.assertIn('MH60B下無くなり次第F15BO78へ', registered_codes)
             self.assertIn('ABC-100', registered_codes)
             self.assertIn('XYZ-99', registered_codes)
             self.assertNotIn('VEHS29N', registered_codes)

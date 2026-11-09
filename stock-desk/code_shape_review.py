@@ -399,8 +399,9 @@ def assess(groups, decisions):
             elif action:
                 error = 'この確認では、品番のみへまとめるか、別々のままにするかを選んでください。'
         elif group['kind'] == 'undetermined':
-            if action == 'keep_separate':
+            if action == 'keep_separate' or not action:
                 resolved = True
+                normalized['action'] = 'keep_separate'
             elif action:
                 error = '元の品番が確定しないため、この品番のまま登録する以外は選べません。'
         elif group['kind'] == 'midori_vertical':
