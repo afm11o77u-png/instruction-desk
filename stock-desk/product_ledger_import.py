@@ -11533,6 +11533,10 @@ def build_preview(c, body):
         _apply_review_acceptance(row, ov if isinstance(ov, dict) else {})
         _hold_unaccepted_kind_choice(row)
         _hold_unresolved_person(row)
+    summary = _preview_outcome_summary(classified, sku_groups, planned, decision_meta)
+    summary['userExcludedRows'] = row_exclusion_meta.get('excludedRowCount') or 0
+    summary['autoExcludedRows'] = k2_auto_meta.get('autoExcludedRowCount') or 0
+    summary['registrationExcludedRows'] = planned['registrationExcludedRows']
     return {
         'importMode': mode,
         'productPhase': phase,
