@@ -1705,6 +1705,12 @@
     if (printBtn) printBtn.onclick = () => printBihinCountSheet();
     const exportBtn = $('#bihinexport');
     if (exportBtn) exportBtn.onclick = () => { exportBihinXlsx(); };
+    const execReportBtn = $('#bihinexecreport');
+    if (execReportBtn) execReportBtn.onclick = () => {
+      if (typeof window.openExecReport === 'function') {
+        window.openExecReport(year && month ? ymValue(year, month) : '');
+      }
+    };
     const printGo = $('#bihinprintdialog-go');
     if (printGo) {
       printGo.onclick = () => {

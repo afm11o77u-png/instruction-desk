@@ -27,6 +27,7 @@ import kintai_touch_on_time
 import kintai_crimp
 import kintai_bihin
 import kintai_bihin_xlsx
+import kintai_exec_report
 
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 REL = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}'
@@ -394,6 +395,7 @@ def schema(c):
     kintai_shift.schema(c)
     kintai_crimp.schema(c)
     kintai_bihin.schema(c)
+    kintai_exec_report.ensure_schema(c)
     _seed_people(c)
     _ensure_shift_top_people(c)
 
@@ -4572,6 +4574,16 @@ def handle_get(h, c, path: str):
         q = _query_map(h)
         year = int(q.get('year') or preferred_fiscal_start_year() or DEFAULT_FISCAL_START[0])
         return 200, month_hour_summary(c, year)
+    if path == '/api/kintai/exec-report':
+        q = _query_map(h)
+        ym = _parse_ym(q.get('ym'))
+        y, m = ym if ym else (q.get('year') or date.today().year, q.get('month') or date.today().month)
+        return 200, kintai_exec_report.bundle(c, y, m, q.get('fiscalYear'), month_hour_summary)
+    if path == '/api/kintai/exec-report/xlsx':
+        q = _query_map(h)
+        ym = _parse_ym(q.get('ym'))
+        y, m = ym if ym else (q.get('year') or date.today().year, q.get('month') or date.today().month)
+        return kintai_exec_report.export(c, y, m, q.get('fiscalYear'), month_hour_summary)
     if path == '/api/kintai/daily':
         q = _query_map(h)
         ym = _parse_ym(q.get('ym'))
@@ -4689,6 +4701,9 @@ def handle_post(h, c, path: str, d: dict):
         return 200, save_daily_paid_leave(c, h.user, d or {})
         # 日別を開ける人だけ。新しい権限は足さない。Excelファイルは書き換えない。
         return 200, save_daily_work_days(c, h.user, d or {})
+    if path == '/api/kintai/exec-report':
+        saved = kintai_exec_report.save_contracts(c, h.user, d or {})
+        return 200, kintai_exec_report.bundle(c, saved['year'], saved['month'], (d or {}).get('fiscalYear'), month_hour_summary)
     if path == '/api/kintai/roster/employment':
         # 入社日・退社日・有給休暇起算日。出勤簿を開ける人だけ。読取専用の利用者には開かない。
         return 200, save_employment_dates(c, h.user, d or {})

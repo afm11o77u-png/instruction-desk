@@ -90,6 +90,34 @@
 <p id="kintaisummarystatus"></p>
 <div id="kintaisummarytable" class="kintai-tablewrap"></div>
 <p class="kintai-sheet-note">在職・退職を含む、取込済みの時間だけを足しています。未取込の月は空欄です。通常勤務給与・残業給与・給与計は空欄です。</p>
+<section id="kintaiexecpanel" class="kintai-exec-panel">
+<h3 class="kintai-section">幹部会議報告（月別集計・ユニフォーム契約・備品棚卸）</h3>
+<p class="kintaimeta">月別集計・ユニフォーム契約（新規分／入替分）・備品棚卸の3つを1シートにまとめてExcel（.xlsx）または印刷／PDFで出力します。</p>
+<div class="kintaifilters kintai-exec-toolbar">
+<label>対象月<input id="kintaiexecmonth" type="month" aria-label="幹部会議報告の対象月"></label>
+<button type="button" id="kintaiexecaddslot">＋ 契約枠を追加</button>
+<button type="button" id="kintaiexecsave">契約枠を保存</button>
+<button type="button" class="primary" id="kintaiexecxlsx">幹部会議用Excel出力</button>
+<button type="button" id="kintaiexecpdf">印刷 / PDF保存</button>
+<span id="kintaiexecstatus" class="kintaimeta" aria-live="polite"></span>
+</div>
+<div class="kintai-exec-grids">
+<div class="kintai-exec-box">
+<h4>ユニフォーム契約【新規分】</h4>
+<table class="kintai-sheet kintai-exec-table" aria-label="ユニフォーム契約 新規分">
+<thead><tr><th style="width:3em">No.</th><th>顧客名</th><th>作業期間</th><th>備考</th></tr></thead>
+<tbody id="kintaiexecnewbody"></tbody>
+</table>
+</div>
+<div class="kintai-exec-box">
+<h4>ユニフォーム契約【入替分】</h4>
+<table class="kintai-sheet kintai-exec-table" aria-label="ユニフォーム契約 入替分">
+<thead><tr><th style="width:3em">No.</th><th>顧客名</th><th>作業期間</th><th>備考</th></tr></thead>
+<tbody id="kintaiexecrenbody"></tbody>
+</table>
+</div>
+</div>
+</section>
 </div>
 <div id="kintaishift" hidden>
 <h2 class="shift-print-title" id="shiftprinttitle">シフト表</h2>
@@ -194,6 +222,7 @@
 <button type="button" id="bihinorder">注文</button>
 <button type="button" id="bihinprint">棚卸用紙を印刷</button>
 <button type="button" id="bihinexport" class="no-print" disabled title="保存済みの内容をエクセル（.xlsx）で出力します">エクセル出力</button>
+<button type="button" id="bihinexecreport" class="no-print" title="月別集計・ユニフォーム契約・備品棚卸をまとめた幹部会議報告へ移動します">幹部会議報告（Excel/PDF）</button>
 <button type="button" id="bihinmaster">品目マスタ</button>
 <button type="button" id="bihinordersettings">発注設定</button>
 <button type="button" id="bihinorderhistory">発注履歴</button>

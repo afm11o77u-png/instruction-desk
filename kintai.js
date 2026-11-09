@@ -482,6 +482,272 @@
     const data = await api('/api/kintai/month-summary?year=' + encodeURIComponent(year));
     if (data && data.fiscalStartYear) rememberYear(data.fiscalStartYear);
     paintSummary(data);
+    await loadExecReport();
+  }
+
+  let execReportData = null;
+
+  function defaultExecYm() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+
+  function currentExecYm() {
+    const el = $('#kintaiexecmonth');
+    if (el && /^\d{4}-\d{2}$/.test(el.value)) return el.value;
+    const ym = defaultExecYm();
+    if (el) el.value = ym;
+    return ym;
+  }
+
+  function renderExecContractRows(tbodyId, items, kind) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) return;
+    const list = (items && items.length) ? items : Array.from({ length: 6 }, () => ({ customer: '', period: '', note: '' }));
+    tbody.innerHTML = list.map((it, idx) => `<tr>
+      <td class="kintai-month">${idx + 1}</td>
+      <td><input type="text" class="kintai-exec-input" data-kind="${kind}" data-idx="${idx}" data-field="customer" maxlength="120" value="${esc((it && it.customer) || '')}" placeholder="顧客名"></td>
+      <td><input type="text" class="kintai-exec-input" data-kind="${kind}" data-idx="${idx}" data-field="period" maxlength="120" value="${esc((it && it.period) || '')}" placeholder="例: 11/1〜11/15"></td>
+      <td><input type="text" class="kintai-exec-input" data-kind="${kind}" data-idx="${idx}" data-field="note" maxlength="200" value="${esc((it && it.note) || '')}" placeholder="備考"></td>
+    </tr>`).join('');
+  }
+
+  function collectExecSide(tbodyId) {
+    const tbody = document.getElementById(tbodyId);
+    if (!tbody) return [];
+    return [...tbody.querySelectorAll('tr')].map(tr => {
+      const get = (f) => {
+        const el = tr.querySelector(`input[data-field="${f}"]`);
+        return el ? el.value.trim() : '';
+      };
+      return { customer: get('customer'), period: get('period'), note: get('note') };
+    });
+  }
+
+  function paintExecReport(data) {
+    execReportData = data || null;
+    const el = $('#kintaiexecmonth');
+    if (el && data && data.year && data.month) {
+      el.value = `${data.year}-${String(data.month).padStart(2, '0')}`;
+    }
+    const slotCount = Math.max(
+      6,
+      (data && data.newContracts && data.newContracts.length) || 0,
+      (data && data.renewalContracts && data.renewalContracts.length) || 0
+    );
+    const padSlots = (arr) => {
+      const out = (arr || []).slice();
+      while (out.length < slotCount) out.push({ customer: '', period: '', note: '' });
+      return out;
+    };
+    renderExecContractRows('kintaiexecnewbody', padSlots(data && data.newContracts), 'new');
+    renderExecContractRows('kintaiexecrenbody', padSlots(data && data.renewalContracts), 'renewal');
+    const st = $('#kintaiexecstatus');
+    if (st) {
+      st.textContent = (data && data.updatedAt)
+        ? `契約枠 最終保存: ${data.updatedAt}${data.updatedBy ? '（' + data.updatedBy + '）' : ''}`
+        : '契約枠: 未保存（空枠のままでも出力できます）';
+    }
+  }
+
+  async function loadExecReport(ymOverride) {
+    if (!canKintai()) return;
+    const el = $('#kintaiexecmonth');
+    if (ymOverride && el) el.value = ymOverride;
+    const ym = currentExecYm();
+    const fy = rememberYear(fiscalStartYear());
+    const data = await api(`/api/kintai/exec-report?ym=${encodeURIComponent(ym)}&fiscalYear=${encodeURIComponent(fy)}`);
+    paintExecReport(data);
+    return data;
+  }
+
+  function addExecContractSlot() {
+    const newList = collectExecSide('kintaiexecnewbody');
+    const renList = collectExecSide('kintaiexecrenbody');
+    if (newList.length >= 30) {
+      toast('契約枠は最大30枠までです。');
+      return;
+    }
+    newList.push({ customer: '', period: '', note: '' });
+    renList.push({ customer: '', period: '', note: '' });
+    renderExecContractRows('kintaiexecnewbody', newList, 'new');
+    renderExecContractRows('kintaiexecrenbody', renList, 'renewal');
+  }
+
+  async function saveExecContracts(silent) {
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
+    const ym = currentExecYm();
+    const parts = ym.split('-');
+    const fy = rememberYear(fiscalStartYear());
+    const payload = {
+      year: Number(parts[0]),
+      month: Number(parts[1]),
+      fiscalYear: fy,
+      newContracts: collectExecSide('kintaiexecnewbody'),
+      renewalContracts: collectExecSide('kintaiexecrenbody'),
+    };
+    const data = await api('/api/kintai/exec-report', payload);
+    paintExecReport(data);
+    if (!silent) toast(`${payload.year}年${payload.month}月のユニフォーム契約枠を保存しました。`);
+    return data;
+  }
+
+  async function exportExecReportXlsx() {
+    await saveExecContracts(true);
+    const ym = currentExecYm();
+    const fy = rememberYear(fiscalStartYear());
+    const res = await fetch(`/api/kintai/exec-report/xlsx?ym=${encodeURIComponent(ym)}&fiscalYear=${encodeURIComponent(fy)}`, { credentials: 'same-origin' });
+    if (!res.ok) {
+      let msg = 'エクセル出力に失敗しました。';
+      try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (_) {}
+      throw Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `幹部会議報告_${ym}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast(`幹部会議報告（${ym}）をExcel出力しました。`);
+  }
+
+  function buildExecPrintHtml(data) {
+    const y = data.year;
+    const m = data.month;
+    const summary = data.summary || {};
+    const bihin = data.bihin || {};
+    const newC = data.newContracts || [];
+    const renC = data.renewalContracts || [];
+    const fmtYen = (v) => (v === null || v === undefined || v === '') ? '' : Number(v).toLocaleString('ja-JP');
+    const fmtNum = (v) => (v === null || v === undefined || v === '') ? '' : String(v);
+
+    const sumRows = (summary.months || []).map(sm => {
+      const label = sm.key || `${sm.year}/${String(sm.month).padStart(2, '0')}`;
+      return `<tr>
+        <td class="exec-center">${esc(label)}</td>
+        <td class="exec-center">${esc(sm.ordinaryHm || '')}</td>
+        <td class="exec-center">${esc(sm.overtimeHm || '')}</td>
+        <td class="exec-center">${esc(sm.totalHm || '')}</td>
+        <td></td><td></td><td></td>
+      </tr>`;
+    }).join('');
+    const p = summary.period || {};
+    const sumTotal = `<tr class="exec-total">
+      <td class="exec-center">期間合計</td>
+      <td class="exec-center">${esc(p.ordinaryHm || '')}</td>
+      <td class="exec-center">${esc(p.overtimeHm || '')}</td>
+      <td class="exec-center">${esc(p.totalHm || '')}</td>
+      <td></td><td></td><td></td>
+    </tr>`;
+
+    const contractTable = (title, list) => {
+      const rows = list.map((it, i) => `<tr>
+        <td class="exec-center">${i + 1}</td>
+        <td>${esc(it.customer || '')}</td>
+        <td>${esc(it.period || '')}</td>
+        <td>${esc(it.note || '')}</td>
+      </tr>`).join('');
+      return `<div>
+        <table>
+          <thead>
+            <tr><th colspan="4">${esc(title)}</th></tr>
+            <tr><th style="width:2.4em">No.</th><th>顧客名</th><th style="width:28%">作業期間</th><th style="width:24%">備考</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    };
+
+    const bRows = (bihin.rows || []).map(r => {
+      const uQty = r.usageIncomplete ? '—' : fmtNum(r.usageQty);
+      const uAmt = r.usageIncomplete ? '—' : fmtYen(r.usageAmount);
+      return `<tr>
+        <td>${esc(r.category || '')}</td>
+        <td>${esc(r.name || '')}</td>
+        <td class="exec-center">${esc(r.unit || '')}</td>
+        <td class="exec-num">${esc(fmtNum(r.unitPrice))}</td>
+        <td class="exec-num">${esc(fmtNum(r.openingQty))}</td>
+        <td class="exec-num">${esc(fmtYen(r.openingAmount))}</td>
+        <td class="exec-num">${esc(fmtNum(r.purchaseQty))}</td>
+        <td class="exec-num">${esc(fmtYen(r.purchaseAmount))}</td>
+        <td class="exec-num">${esc(fmtNum(r.closingQty))}</td>
+        <td class="exec-num">${esc(fmtYen(r.closingAmount))}</td>
+        <td class="exec-num">${esc(uQty)}</td>
+        <td class="exec-num">${esc(uAmt)}</td>
+      </tr>`;
+    }).join('');
+    const bt = bihin.totals || {};
+    const bTotal = `<tr class="exec-total">
+      <td colspan="4" class="exec-center">合計</td>
+      <td></td><td class="exec-num">${esc(fmtYen(bt.openingAmount))}</td>
+      <td></td><td class="exec-num">${esc(fmtYen(bt.purchaseAmount))}</td>
+      <td></td><td class="exec-num">${esc(fmtYen(bt.closingAmount))}</td>
+      <td></td><td class="exec-num">${esc(fmtYen(bt.usageAmount))}</td>
+    </tr>`;
+
+    return `<div class="exec-report-print">
+      <h2>幹部会議報告書　${y}年${m}月度</h2>
+      <h3>1. 月別集計（${esc(summary.fiscalLabel || '')}　全員の合計）</h3>
+      <table>
+        <thead><tr><th>月</th><th>普通勤務時間</th><th>残業時間</th><th>勤務時間計</th><th>通常勤務給与</th><th>残業給与</th><th>給与計</th></tr></thead>
+        <tbody>${sumRows}${sumTotal}</tbody>
+      </table>
+      <h3>2. ユニフォーム契約報告（${y}年${m}月度）</h3>
+      <div class="exec-contracts-grid">
+        ${contractTable('【新規分】', newC)}
+        ${contractTable('【入替分】', renC)}
+      </div>
+      <h3>3. 備品棚卸（${y}年${m}月度）</h3>
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2">科目</th><th rowspan="2">品名</th><th rowspan="2">単位</th><th rowspan="2">単価</th>
+            <th colspan="2">月初在庫</th><th colspan="2">当月購入</th><th colspan="2">月末在庫</th><th colspan="2">当月使用</th>
+          </tr>
+          <tr>
+            <th>数量</th><th>金額</th><th>数量</th><th>金額</th><th>数量</th><th>金額</th><th>数量</th><th>金額</th>
+          </tr>
+        </thead>
+        <tbody>${bRows}${bTotal}</tbody>
+      </table>
+    </div>`;
+  }
+
+  async function printExecReportPdf() {
+    const data = await saveExecContracts(true);
+    const sheet = $('#bihincountsheet');
+    if (!sheet) return;
+    sheet.innerHTML = buildExecPrintHtml(data);
+    document.body.classList.add('printing-bihin-count');
+    let styleEl = document.getElementById('bihin-count-print-page-css');
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = 'bihin-count-print-page-css';
+      document.head.appendChild(styleEl);
+    }
+    styleEl.textContent = '@page{size:A4 portrait;margin:10mm}';
+    let cleaned = false;
+    const done = () => {
+      if (cleaned) return;
+      cleaned = true;
+      const el = document.getElementById('bihin-count-print-page-css');
+      if (el) el.remove();
+      document.body.classList.remove('printing-bihin-count');
+      window.removeEventListener('afterprint', done);
+    };
+    window.addEventListener('afterprint', done);
+    setTimeout(() => window.print(), 50);
+  }
+
+  window.openExecReport = async function (ym) {
+    if (typeof showKintaiSection === 'function') showKintaiSection('summary');
+    await loadExecReport(ym);
+    const panel = $('#kintaiexecpanel');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
   }
 
   function paintPathsImportResult(summary) {
@@ -902,6 +1168,16 @@
       });
     }
     if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
+    const execMonth = $('#kintaiexecmonth');
+    if (execMonth) execMonth.onchange = () => loadExecReport().catch(e => toast(e.message));
+    const execAdd = $('#kintaiexecaddslot');
+    if (execAdd) execAdd.onclick = () => addExecContractSlot();
+    const execSave = $('#kintaiexecsave');
+    if (execSave) execSave.onclick = () => saveExecContracts(false).catch(e => toast(e.message));
+    const execXlsx = $('#kintaiexecxlsx');
+    if (execXlsx) execXlsx.onclick = () => exportExecReportXlsx().catch(e => toast(e.message));
+    const execPdf = $('#kintaiexecpdf');
+    if (execPdf) execPdf.onclick = () => printExecReportPdf().catch(e => toast(e.message));
     if (dailyPerson) dailyPerson.onchange = () => {
       pinnedPersonId = dailyPerson.value ? Number(dailyPerson.value) : null;
       loadKintaiDaily().catch(e => toast(e.message));

@@ -816,3 +816,23 @@ body.catalog-kintai main>header .headactions{display:none}
 .kintai-daily-summaries { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
 .kintai-daily-summaries > section { min-width: 0; max-width: 100%; }
 .kintai-daily-summaries .kintai-daily-totals { width: auto; }
+.kintai-exec-panel { margin-top: 24px; padding-top: 16px; border-top: 1px solid #cfe0d2; }
+.kintai-exec-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin: 8px 0 12px; }
+.kintai-exec-grids { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; }
+.kintai-exec-box h4 { margin: 0 0 6px; font-size: 0.95rem; color: #1f4f37; }
+.kintai-exec-table { width: 100%; }
+.kintai-exec-table td { padding: 3px 4px; }
+.kintai-exec-table input { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid #bdd3c2; border-radius: 4px; font: inherit; }
+@media print {
+  body.printing-bihin-count .exec-report-print { font-size: 8.5pt; color: #111; }
+  body.printing-bihin-count .exec-report-print h2 { margin: 0 0 3mm; font-size: 13pt; border-bottom: 1.5pt solid #1f4f37; padding-bottom: 1.5mm; }
+  body.printing-bihin-count .exec-report-print h3 { margin: 3.5mm 0 1.5mm; font-size: 9.5pt; background: #e2efda; padding: 1mm 2mm; border-left: 3pt solid #1f4f37; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.printing-bihin-count .exec-report-print table { width: 100%; border-collapse: collapse; margin-bottom: 2mm; font-size: 8pt; }
+  body.printing-bihin-count .exec-report-print th,
+  body.printing-bihin-count .exec-report-print td { border: 0.4pt solid #666; padding: 1mm 1.5mm; position: static !important; box-shadow: none !important; }
+  body.printing-bihin-count .exec-report-print th { background: #edf4ee !important; font-weight: 700; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.printing-bihin-count .exec-report-print tr.exec-total td { background: #f2f2f2 !important; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.printing-bihin-count .exec-report-print .exec-contracts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
+  body.printing-bihin-count .exec-report-print .exec-num { text-align: right; }
+  body.printing-bihin-count .exec-report-print .exec-center { text-align: center; }
+}
