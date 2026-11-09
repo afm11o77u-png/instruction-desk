@@ -1050,7 +1050,7 @@ function bindSupplierUnify(){
         const doBtn=$('#doUnify')
         doBtn.disabled=true
         try{
-          const applyRes=await api('/api/suppliers/unify-apply',{})
+          const applyRes=await api('/api/suppliers/unify-apply',{isOwner:stockIsOwner()})
           toast(`${applyRes.mergedCount||0}件の重複仕入先を統合しました。`)
           close()
           await boot()

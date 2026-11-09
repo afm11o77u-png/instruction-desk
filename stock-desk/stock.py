@@ -1406,7 +1406,10 @@ def preview_supplier_duplicates(c, body=None):
 
 def apply_supplier_duplicates_merge(c, body=None):
     body = body or {}
-    if not body.get('isOwner'):
+    actor = body.get('_actor') or {}
+    role = actor.get('role') if isinstance(actor, dict) else ''
+    is_owner = bool(body.get('isOwner') or role == 'owner')
+    if not is_owner:
         raise ValueError('仕入先の統合は主管理者のみ実行できます。')
     preview = preview_supplier_duplicates(c, body)
     merged_count = 0
