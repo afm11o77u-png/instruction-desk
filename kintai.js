@@ -308,7 +308,7 @@
       return `<tr>
         <td class="kintai-month"><button type="button" class="kintai-daylink" data-year="${m.year}" data-month="${m.month}">${esc(label)}</button></td>
         ${sheetCell(dayText(m.workDays))}
-        ${sheetCell(m.holidayDays == null ? '未確定' : dayText(m.holidayDays))}
+        ${sheetCell(m.holidayDays == null ? (m.workDays != null ? '未確定' : '') : dayText(m.holidayDays))}
         ${sheetCell(dayText(m.holidayCumulative))}
         ${m.holidayRemaining == null
           ? `<td class="kintai-blank" title="${esc(m.holidayAllowanceNote || '')}">${esc(m.holidayAllowanceNote || '')}</td>`
@@ -672,7 +672,8 @@
       days,
     });
     paintDaily(saved);
-    toast('出勤日数を保存しました。');
+    loadKintai().catch(() => {});
+    toast('出勤日数・休日数を保存しました。');
   }
 
   async function ensurePeoplePack() {

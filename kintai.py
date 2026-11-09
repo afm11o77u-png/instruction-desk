@@ -2425,7 +2425,8 @@ def annotate_running_totals(month_rows: list[dict]) -> None:
                 state[source][1] = total
                 item[dest] = float(total.quantize(Decimal('0.01')))
             else:
-                state[source][2] = False
+                if not item.get('beforeHired'):
+                    state[source][2] = False
                 item[dest] = None
 
 
@@ -2524,6 +2525,18 @@ def apply_annual_holiday_remaining(person: dict, fiscal_start_year: int, month_r
 
 
 def _prefix_total(month_rows: list[dict], key: str):
+    found = None
+    for item in month_rows:
+        value = item.get(key)
+        if value is None:
+            if item.get('beforeHired'):
+                continue
+            break
+        found = value
+    return found
+
+
+def _prefix_total_legacy(month_rows: list[dict], key: str):
     found = None
     for item in month_rows:
         value = item.get(key)
@@ -3436,7 +3449,96 @@ def _load_saved_work_days(c, person_id: int) -> dict[str, float]:
     return {str(row['day']): float(row['days']) for row in rows}
 
 
-def _overlay_work_days(rows: list[dict], saved: dict[str, float]) -> tuple[float | None, bool]:
+def _row_has_attendance_entry(row: dict, iso: str, saved: dict[str, float]) -> bool:
+    """その日に打刻・休み記載・手動保存のいずれかがあるか。"""
+    if iso and iso in saved:
+        return True
+    default = row.get('workDaysDefault')
+    if default is not None and default != 0:
+        return True
+    for key in ('start', 'end', 'leave', 'paidTime'):
+        val = row.get(key)
+        if val is not None and str(val).strip() != '':
+            return True
+    return False
+
+
+def _overlay_work_days(
+    rows: list[dict],
+    saved: dict[str, float],
+    *,
+    person: dict | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    as_of: date | None = None,
+) -> tuple[float | None, bool]:
+    """保存値を日付に重ねる。戻り値は（確定している日の合計, 表示中の日が全部確定か）。
+
+    入社日より前・退社日より後・未入力や未来の日は休日（0）としてカウントしない。
+    """
+    hired_on = _stored_date(person.get('hired_on')) if person else None
+    retired_on = _stored_date(person.get('retired_on')) if person else None
+    today = as_of or datetime.now(JST).date()
+    period_end = closing_period(int(year), int(month))[1] if (year and month) else None
+
+    entered_dates = []
+    for row in rows:
+        try:
+            iso = _iso_day(row.get('date'))
+            d = date.fromisoformat(iso)
+        except ValueError:
+            continue
+        if _row_has_attendance_entry(row, iso, saved):
+            entered_dates.append(d)
+    last_entered_date = max(entered_dates) if entered_dates else None
+
+    total = Decimal('0')
+    any_value = False
+    unset = False
+    for row in rows:
+        try:
+            iso = _iso_day(row.get('date'))
+            day_date = date.fromisoformat(iso)
+        except ValueError:
+            iso = ''
+            day_date = None
+        if iso and iso in saved:
+            value = saved[iso]
+            row['workDays'] = value
+            row['workDaysSaved'] = True
+        else:
+            value = row.get('workDaysDefault')
+            excluded = False
+            if value == 0.0 and not _row_has_attendance_entry(row, iso, saved):
+                if last_entered_date is None:
+                    excluded = True
+                elif hired_on is not None and day_date is not None and day_date < hired_on:
+                    excluded = True
+                elif retired_on is not None and day_date is not None and day_date > retired_on:
+                    excluded = True
+                elif day_date is not None and day_date > today:
+                    excluded = True
+                elif period_end is not None and today <= period_end and day_date is not None and day_date > last_entered_date:
+                    excluded = True
+            if excluded:
+                value = None
+                row['workDaysDefault'] = None
+                row['workDays'] = None
+                row['workDaysSaved'] = False
+                continue
+            row['workDays'] = value
+            row['workDaysSaved'] = False
+        if value is None:
+            unset = True
+            continue
+        total += Decimal(str(value))
+        any_value = True
+    if not any_value:
+        return None, False
+    return float(total.quantize(Decimal('0.01'))), not unset
+
+
+def _overlay_work_days_legacy(rows: list[dict], saved: dict[str, float]) -> tuple[float | None, bool]:
     """保存値を日付に重ねる。戻り値は（確定している日の合計, 表示中の日が全部確定か）。
 
     未確定の日は合計に足さない。合計そのものは従来どおり出すが、全日が確定していない月は
@@ -3486,7 +3588,23 @@ def _daily_holiday_days_total(rows: list[dict], work_days_total: float | None) -
     holiday = zero_count + (nonzero_count - Decimal(str(work_days_total)))
     return float(holiday.quantize(Decimal('0.01')))
 
-def _with_saved_work_days(rows: list[dict], saved: dict[str, float]) -> float | None:
+def _with_saved_work_days(
+    rows: list[dict],
+    saved: dict[str, float],
+    *,
+    person: dict | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    as_of: date | None = None,
+) -> float | None:
+    """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
+    total, _complete = _overlay_work_days(
+        rows, saved, person=person, year=year, month=month, as_of=as_of
+    )
+    return total
+
+
+def _with_saved_work_days_legacy(rows: list[dict], saved: dict[str, float]) -> float | None:
     """保存値を日付に重ね、日別と月別で同じ合計を返す。未確定の日は足さない。"""
     total, _complete = _overlay_work_days(rows, saved)
     return total
@@ -3503,7 +3621,45 @@ def _person_workbook_bytes(person: dict, settings: dict | None = None) -> bytes 
         return None
 
 
+def _month_attendance_and_holiday(
+    c,
+    person: dict,
+    year: int,
+    month: int,
+    blob: bytes | None = None,
+    saved: dict | None = None,
+    parsed=None,
+) -> tuple[float | None, bool, float | None]:
+    settings = load_local_settings()
+    layout = get_layout(layout_id_for_person(person, settings))
+    if saved is None:
+        saved = _load_saved_work_days(c, int(person['id']))
+    try:
+        if parsed is None:
+            if blob is None:
+                blob = _person_workbook_bytes(person, settings)
+            if blob is None:
+                return None, False, None
+            view = daily_rows_from_workbook(blob, year, month, layout)
+        else:
+            view = _daily_rows_from_parsed(parsed[0], parsed[1], year, month, layout)
+    except ValueError:
+        return None, False, None
+    total, complete = _overlay_work_days(
+        view['rows'], saved, person=person, year=year, month=month
+    )
+    holiday_total = _daily_holiday_days_total(view['rows'], total) if complete else None
+    return total, complete, holiday_total
+
+
 def month_attendance_detail(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None, parsed=None) -> tuple[float | None, bool]:
+    total, complete, _holiday = _month_attendance_and_holiday(
+        c, person, year, month, blob=blob, saved=saved, parsed=parsed
+    )
+    return total, complete
+
+
+def _month_attendance_detail_legacy(c, person: dict, year: int, month: int, blob: bytes | None = None, saved: dict | None = None, parsed=None) -> tuple[float | None, bool]:
     """日別出勤の合計と、表示中の日が全部確定しているか。
 
     parsed は (sheets, print_areas)。同じファイルを月ごとに読み直さないために渡す。
@@ -3552,6 +3708,21 @@ def displayed_holiday_days(year: int, month: int, work_days, paid_leave_days, co
 
 
 def apply_displayed_holidays(month_rows: list[dict]) -> None:
+    """表示用の休日数を日別の休日数合計から置く。保存済みの取込値は書き換えない。"""
+    for item in month_rows:
+        if 'dailyHolidayDays' in item:
+            item['holidayDays'] = item.get('dailyHolidayDays') if item.get('workDaysComplete') else None
+        else:
+            item['holidayDays'] = displayed_holiday_days(
+                int(item['year']),
+                int(item['month']),
+                item.get('workDays'),
+                item.get('paidLeaveDays'),
+                complete=bool(item.get('workDaysComplete')),
+            )
+
+
+def _apply_displayed_holidays_legacy(month_rows: list[dict]) -> None:
     """表示用の休日数を、同じ出勤日数と有給取得日数から置く。保存済みの取込値は書き換えない。"""
     for item in month_rows:
         item['holidayDays'] = displayed_holiday_days(
@@ -3573,6 +3744,39 @@ def _parsed_workbook(blob: bytes, layout: dict):
 
 
 def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
+    if not months:
+        return
+    settings = load_local_settings()
+    layout = get_layout(layout_id_for_person(person, settings))
+    blob = _person_workbook_bytes(person, settings)
+    saved = _load_saved_work_days(c, int(person['id']))
+    hired_on = _stored_date(person.get('hired_on')) if person else None
+    parsed = None
+    if blob is not None:
+        try:
+            parsed = _parsed_workbook(blob, layout)
+        except ValueError:
+            parsed = None
+    for item in months:
+        year = int(item['year'])
+        month = int(item['month'])
+        _p_start, period_end = closing_period(year, month)
+        if parsed is None:
+            total, complete, holiday_total = None, False, None
+        else:
+            total, complete, holiday_total = _month_attendance_and_holiday(
+                c, person, year, month,
+                saved=saved, parsed=parsed,
+            )
+        item['workDays'] = total
+        item['workDaysComplete'] = complete
+        item['workDaysFrom'] = 'daily'
+        item['dailyHolidayDays'] = holiday_total
+        item['holidayDays'] = holiday_total if complete else None
+        item['beforeHired'] = bool(hired_on and period_end < hired_on and total is None)
+
+
+def _fill_displayed_work_days_legacy(c, person: dict, months: list[dict]) -> None:
     if not months:
         return
     settings = load_local_settings()
@@ -3829,7 +4033,7 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         raise ValueError(f'ファイルを読めません（{type(e).__name__}: {e}）。') from e
     body = daily_rows_from_workbook(blob, year, month, layout)
     saved = _load_saved_work_days(c, person['id'])
-    total = _with_saved_work_days(body['rows'], saved)
+    total = _with_saved_work_days(body['rows'], saved, person=person, year=year, month=month)
     body.update({
         'personId': person['id'],
         'displayName': person['display_name'],
