@@ -3937,7 +3937,13 @@
   }
 
   function codeShapeDecisionOf(st, group){
-    return (st.codeShapeDecisions&&st.codeShapeDecisions[group.id])||{}
+    const d=(st.codeShapeDecisions&&st.codeShapeDecisions[group.id])||{}
+    if(group.kind==='midori_vertical' && !d.action){
+      const defTargets={}
+      ;(group.members||[]).forEach(m=>{ defTargets[m.code]=m.code })
+      return {action:'choose', targets:defTargets}
+    }
+    return d
   }
 
   function codeShapeComplete(group, decision){
@@ -3981,7 +3987,7 @@
       }else{
         const codes=(g.members||[]).map(m=>m.code)
         controls=(g.members||[]).map(m=>{
-          const current=(decision.targets||{})[m.code]||''
+          const current=(decision.targets||{})[m.code]||m.code
           const options=['<option value="">登録先を選ぶ</option>'].concat(codes.map(code=>`<option value="${esc(code)}" ${current===code?'selected':''}>${esc(code)}</option>`)).join('')
           return `<label>${esc(m.code)} の登録先 <select data-code-shape-target="${esc(g.id)}" data-code-shape-source="${esc(m.code)}">${options}</select></label>`
         }).join(' ')

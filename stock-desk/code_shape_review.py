@@ -96,12 +96,16 @@ def extension_of(code, known):
 def _row_info(row):
     csv = row.get('csv') or {}
     product = row.get('product') or {}
-    code = _norm_code(csv.get('sourceCode') or csv.get('code') or product.get('sourceCode') or product.get('code') or '')
+    code = _norm_code(csv.get('code') or product.get('code') or csv.get('sourceCode') or '')
+    supplier = stock.text(csv.get('supplier') or product.get('primarySupplierName') or '')
+    if is_midori_supplier(supplier):
+        b, tok = vertical_split(code)
+        if b and tok:
+            code = f'{b}{tok}'
     if not stock_product_merge.is_normal_product_code(code):
         return None
     if row.get('status') in ('excluded',):
         return None
-    supplier = stock.text(csv.get('supplier') or product.get('primarySupplierName') or '')
     category = stock.text(product.get('category') or product.get('proposedCategory') or '')
     color = stock.text(csv.get('color') or product.get('color') or '')
     name = stock.text(csv.get('productName') or product.get('name') or '')
@@ -269,7 +273,7 @@ def build_groups(c, classified):
         for code in sorted(bucket['codes']):
             role = 'plain' if code == base else ('upper' if vertical_split(code)[1] == '上' else 'lower')
             members.append(_member(code, role, by_code.get(code, []), existing))
-        if not members:
+        if not members or len(members) <= 1:
             continue
         groups.append({
             'id': 'midori:' + base,
@@ -409,6 +413,10 @@ def assess(groups, decisions):
                     chosen[code] = target
                 resolved = ok
                 normalized['targets'] = chosen
+            elif action == 'keep_separate':
+                normalized['action'] = 'choose'
+                normalized['targets'] = {code: code for code in member_codes}
+                resolved = True
             elif action:
                 error = 'ミドリ安全の上下は、品番ごとに登録先を選んでください。'
         assessed.append({

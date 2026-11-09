@@ -7308,6 +7308,141 @@ def _settle_suffix_colors(classified):
             row['product'] = prod
 
 
+def _unify_midori_vertical_garments(c, classified):
+    """ミドリ安全の制服で、末尾の上・下がついた相方が存在する基礎品番について、
+    商品名から上下を判定して末尾に付与し、同じ品番へ自動統合する。
+    相方が存在しない通常品番や、ミドリ安全以外の品番は一切変更しない。
+    """
+    import code_shape_review
+
+    if not classified:
+        return
+
+    # 1. ミドリ安全の行から、末尾に「上」「下」を持つ品番とその基礎品番を収集
+    counterparts_by_base = defaultdict(dict)
+    for r in classified:
+        if r.get("status") in (STATUS_HOLD, STATUS_EXCLUDED):
+            continue
+        supp = (r.get("csv") or {}).get("supplier") or (r.get("supplier") or {}).get("name") or ""
+        if not code_shape_review.is_midori_supplier(supp):
+            continue
+        code = stock.text((r.get("product") or {}).get("code") or (r.get("csv") or {}).get("code") or "")
+        if not stock_product_merge.is_normal_product_code(code):
+            continue
+        base, token = code_shape_review.vertical_split(code)
+        if base and token in ("上", "下"):
+            norm_target = f"{base}{token}"
+            counterparts_by_base[base][token] = norm_target
+
+    if not counterparts_by_base:
+        return
+
+    lower_keywords = (
+        "パンツ", "スラックス", "ズボン", "カーゴ", "スカート", "下衣", "白下", "紺下", "黒下",
+    )
+    upper_keywords = (
+        "上衣", "ジャケット", "ブルゾン", "ジャンパー", "シャツ", "ブラウス",
+        "ベスト", "ケーシー", "ポロシャツ",
+    )
+
+    for r in classified:
+        if r.get("status") in (STATUS_HOLD, STATUS_EXCLUDED):
+            continue
+        supp = (r.get("csv") or {}).get("supplier") or (r.get("supplier") or {}).get("name") or ""
+        if not code_shape_review.is_midori_supplier(supp):
+            continue
+        code = stock.text((r.get("product") or {}).get("code") or (r.get("csv") or {}).get("code") or "")
+        if not stock_product_merge.is_normal_product_code(code):
+            continue
+
+        base, token = code_shape_review.vertical_split(code)
+        target_code = None
+
+        if token in ("上", "下") and base:
+            # 既に上・下がついている品番（例: "VEHS29N 下"）はスペースを除去して密着正規化
+            target_code = f"{base}{token}"
+        elif code in counterparts_by_base:
+            # プレーン品番（例: "VEHS29N"）で、相方に「上」または「下」が存在する場合
+            tokens = counterparts_by_base[code]
+            pname = stock.text((r.get("csv") or {}).get("productName") or (r.get("product") or {}).get("name") or "")
+            is_lower = any(k in pname for k in lower_keywords)
+            is_upper = any(k in pname for k in upper_keywords)
+
+            # 相方に存在し、商品名と合致する場合のみ付与（両方キーワードがある等曖昧な場合は付与しない）
+            if is_lower and not is_upper and "下" in tokens:
+                target_code = tokens["下"]
+            elif is_upper and not is_lower and "上" in tokens:
+                target_code = tokens["上"]
+
+        if target_code and target_code != code:
+            cust = (r.get("csv") or {}).get("customer") or (r.get("customer") or {}).get("name") or ""
+            pname = (r.get("csv") or {}).get("productName") or (r.get("product") or {}).get("name") or ""
+
+            r["product"] = dict(r.get("product") or {})
+            r["product"]["code"] = target_code
+            r["product"]["sourceCode"] = target_code
+            r["product"]["codeOverride"] = target_code
+            r["product"]["codeDisplay"] = target_code
+            r["csv"] = dict(r.get("csv") or {})
+            r["csv"]["code"] = target_code
+            r["csv"]["registeredCode"] = target_code
+            r["csv"]["plannedRegisteredSku"] = target_code
+            r["csv"]["codeDisplay"] = target_code
+            _, target_pos = code_shape_review.vertical_split(target_code)
+            if target_pos:
+                r["csv"]["position"] = target_pos
+            r["matchGroupKey"] = match_group_key(
+                customer=cust,
+                code=target_code,
+                product_name=pname,
+                supplier=supp,
+            )
+            existing_p = c.execute(
+                "SELECT id, name, category, color FROM products WHERE code = ?",
+                (target_code,),
+            ).fetchone()
+            if existing_p:
+                r["product"]["id"] = existing_p["id"]
+                r["product"]["action"] = "reuse"
+                r["product"]["name"] = existing_p["name"]
+                if existing_p["category"]:
+                    r["product"]["category"] = existing_p["category"]
+
+    # target_code ごとに商品名を統一して完全自動統合を成立させる
+    rows_by_target = defaultdict(list)
+    for r in classified:
+        if r.get("status") in (STATUS_HOLD, STATUS_EXCLUDED):
+            continue
+        c_code = stock.text((r.get("product") or {}).get("code") or "")
+        b, tok = code_shape_review.vertical_split(c_code)
+        if b in counterparts_by_base and tok in ("上", "下"):
+            rows_by_target[c_code].append(r)
+
+    for target_code, t_rows in rows_by_target.items():
+        if len(t_rows) <= 1:
+            continue
+        names = []
+        for r in t_rows:
+            n = stock.text((r.get("csv") or {}).get("productName") or (r.get("product") or {}).get("name") or "")
+            if n and n not in names:
+                names.append(n)
+        if len(names) > 1:
+            best_name = prefer_synonym_display_name(names) or prefer_unmarked_product_name(names) or max(names, key=len)
+            for r in t_rows:
+                r["product"] = dict(r.get("product") or {})
+                r["product"]["name"] = best_name
+                r["csv"] = dict(r.get("csv") or {})
+                r["csv"]["productName"] = best_name
+                cust = (r.get("csv") or {}).get("customer") or (r.get("customer") or {}).get("name") or ""
+                supp = (r.get("csv") or {}).get("supplier") or (r.get("supplier") or {}).get("name") or ""
+                r["matchGroupKey"] = match_group_key(
+                    customer=cust,
+                    code=target_code,
+                    product_name=best_name,
+                    supplier=supp,
+                )
+
+
 def mark_multi_color_groups(sku_groups, classified):
     """自動まとめ扱いでも、行ごとの明示色が複数あれば判断（まとめる／色別）を出す。"""
     rows_by_code = defaultdict(list)
@@ -11091,6 +11226,7 @@ def build_preview(c, body):
         classified.append(row_c)
 
     _settle_suffix_colors(classified)
+    _unify_midori_vertical_garments(c, classified)
 
     # 照合グループ件数
     group_counts = defaultdict(int)
