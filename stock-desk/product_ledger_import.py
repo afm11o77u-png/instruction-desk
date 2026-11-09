@@ -10954,6 +10954,8 @@ def _hold_unresolved_person(row):
     """
     if row.get('phasePartsOnly'):
         return row
+    if row.get('userRowExcluded') or row.get('autoRowExcluded') or row.get('status') in (STATUS_HOLD, STATUS_EXCLUDED):
+        return row
     if _service_only_empty_customer(row):
         cust = dict(row.get('customer') or {})
         cust['action'] = 'omit'

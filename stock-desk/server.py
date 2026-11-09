@@ -516,6 +516,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'registered': False,
             }
         except ValueError as e:
+            print(f'product-ledger commit ValueError: {e}', flush=True)
             return 400, {'error': str(e) or '取込を確認してください。'}
         except RuntimeError as e:
             print(f'product-ledger commit aborted: {type(e).__name__}: {e}', flush=True)
