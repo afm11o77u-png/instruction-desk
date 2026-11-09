@@ -988,12 +988,73 @@ function bindExcel(kind){
 function customers(){
   const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}${r.officeCode||''}`.includes(state.q))
   const blank='<span class="blank">—</span>'
-  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者・営業所コード','','新しく登録','customers')}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
+  const unifyBar=stockIsOwner()?`<div class="bar merge-entry"><button type="button" id="customerUnifyOpen">顧客の表記揺れを統合</button><span class="excelhint">全角／半角や(株)／㈱などの重複顧客を検出し、半角・環境依存文字優先で1つに統合します（主管理者のみ）。</span></div>`:''
+  $('#main').innerHTML=`<section class="panel">${bar('顧客名・カナ・電話番号・担当者・営業所コード','','新しく登録','customers')}${unifyBar}<div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th><th></th></tr></thead><tbody>
     ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}${r.officeCode?`<span class="sub dm-secondary">営業所 ${esc(r.officeCode)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td><td class="act">${stockOpenBtn(r.id)}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}
   </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
   const grid=$('#stocklistgrid')
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}${r.officeCode?`<div class="dm-secondary">営業所 ${esc(r.officeCode)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
   bindList(rows,'顧客',customerForm,body=>api('/api/customers',body),'customers')
+  bindCustomerUnify()
+}
+function bindCustomerUnify(){
+  const btn=$('#customerUnifyOpen')
+  if(!btn)return
+  btn.onclick=async()=>{
+    const dlg=$('#dialog')
+    if(!dlg)return
+    try{
+      const res=await api('/api/customers/unify-preview',{})
+      const duplicates=res.duplicates||[]
+      if(!duplicates.length){
+        toast('重複している顧客はありません。')
+        return
+      }
+      dlg.innerHTML=`<form><div class="dialoghead"><h2>顧客の表記揺れ統合（主管理者）</h2><button type="button" id="close" class="quiet">閉じる</button></div>
+        <div class="dialogbody">
+          <p class="notice">以下の重複顧客を、半角英数・環境依存文字（㈱・㈲）優先で1つに統合します。取扱商品などのデータは統合先の顧客に付け替えられます。</p>
+          <div class="directory-scroll" style="max-height:360px;margin:12px 0;">
+            <table class="directory">
+              <thead><tr><th>統合先（残す顧客）</th><th>統合元（削除される重複）</th></tr></thead>
+              <tbody>
+                ${duplicates.map(g=>`<tr>
+                  <td><strong>[ID ${g.target.id}] ${esc(g.target.name)}</strong></td>
+                  <td>${g.sources.map(s=>`<div>[ID ${s.id}] ${esc(s.name)} <span class="sub">（取扱商品: ${s.productCount||0}件）</span></div>`).join('')}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <p id="error"></p>
+        </div>
+        <div class="dialogactions">
+          <button type="button" id="close2">キャンセル</button>
+          <button type="button" class="primary" id="doUnify">統合を実行する（${duplicates.length}組）</button>
+        </div>
+      </form>`
+      dlg.showModal()
+      const close=()=>{dlg.close();dlg.innerHTML=''}
+      $('#close').onclick=close
+      $('#close2').onclick=close
+      dlg.oncancel=ev=>{ev.preventDefault();close()}
+      $('#doUnify').onclick=async()=>{
+        const doBtn=$('#doUnify')
+        doBtn.disabled=true
+        try{
+          const applyRes=await api('/api/customers/unify-apply',{isOwner:stockIsOwner()})
+          toast(`${applyRes.mergedCount||0}件の重複顧客を統合しました。`)
+          close()
+          await boot()
+          customers()
+        }catch(e){
+          doBtn.disabled=false
+          const err=$('#error')
+          if(err)err.textContent=e.message||'統合に失敗しました。'
+        }
+      }
+    }catch(e){
+      toast(e.message||'重複プレビューの取得に失敗しました。')
+    }
+  }
 }
 function suppliers(){
   const rows=state.data.suppliers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.phone}${r.contact}${r.address}`.includes(state.q))

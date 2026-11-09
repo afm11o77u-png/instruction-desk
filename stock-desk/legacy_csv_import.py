@@ -756,6 +756,12 @@ def _person_preview(c, table, label, name, row_no):
             info['id'] = row['id']
         return info
     if how == 'form_variant':
+        active_matches = [m for m in matches if m['active']]
+        if len(active_matches) == 1:
+            row = active_matches[0]
+            info['action'] = 'reuse'
+            info['id'] = row['id']
+            return info
         info['action'] = 'review'
         info['candidates'] = [{'id': m['id'], 'name': m['name'], 'active': bool(m['active'])} for m in matches]
         info['reasons'].append(

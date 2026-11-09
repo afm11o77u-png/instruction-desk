@@ -1431,6 +1431,90 @@ def apply_supplier_duplicates_merge(c, body=None):
     return {'ok': True, 'mergedCount': merged_count, 'groupsCount': len(preview['duplicates'])}
 
 
+def _customer_normalize_key(name: str) -> str:
+    import unicodedata, re
+    s = unicodedata.normalize('NFKC', name or '')
+    s = re.sub(r'[\s\u3000]+', '', s)
+    s = re.sub(r'\([株有]\)|（[株有]）|株式会社|有限会社|株|有', '', s)
+    return s.lower()
+
+
+def _customer_preference_score(name: str) -> int:
+    score = 0
+    if '㈱' in name or '㈲' in name:
+        score += 20
+    elif '(株)' in name or '(有)' in name or '（株）' in name or '（有）' in name:
+        score += 5
+    has_ascii_alnum = any('a' <= ch <= 'z' or 'A' <= ch <= 'Z' or '0' <= ch <= '9' for ch in name)
+    has_full_alnum = any('\uff21' <= ch <= '\uff3a' or '\uff41' <= ch <= '\uff5a' or '\uff10' <= ch <= '\uff19' for ch in name)
+    if has_ascii_alnum and not has_full_alnum:
+        score += 10
+    elif has_full_alnum:
+        score -= 10
+    if ' ' in name and '　' not in name:
+        score += 5
+    elif '　' in name:
+        score -= 5
+    return score
+
+
+def preview_customer_duplicates(c, body=None):
+    from collections import defaultdict
+    rows = c.execute('SELECT id, name, kana, address, phone, contact, office_code, active FROM customers ORDER BY id').fetchall()
+    groups = defaultdict(list)
+    for r in rows:
+        key = _customer_normalize_key(r['name'])
+        if key:
+            groups[key].append(dict(r))
+    duplicates = []
+    for key, items in groups.items():
+        if len(items) > 1:
+            items_sorted = sorted(items, key=lambda x: (-_customer_preference_score(x['name']), x['id']))
+            target = items_sorted[0]
+            sources = items_sorted[1:]
+            for s in sources:
+                cp_cnt = c.execute('SELECT COUNT(*) FROM customer_products WHERE customer_id=?', (s['id'],)).fetchone()[0]
+                s['productCount'] = cp_cnt
+            duplicates.append({
+                'key': key,
+                'target': target,
+                'sources': sources,
+            })
+    return {'duplicates': duplicates, 'count': len(duplicates)}
+
+
+def apply_customer_duplicates_merge(c, body=None):
+    body = body or {}
+    actor = body.get('_actor') or {}
+    role = actor.get('role') if isinstance(actor, dict) else ''
+    is_owner = bool(body.get('isOwner') or role == 'owner')
+    if not is_owner:
+        raise ValueError('顧客の統合は主管理者のみ実行できます。')
+    preview = preview_customer_duplicates(c, body)
+    merged_count = 0
+    t = stamp()
+    for group in preview['duplicates']:
+        target_id = group['target']['id']
+        for s in group['sources']:
+            source_id = s['id']
+            cp_rows = c.execute('SELECT id, product_id, embroidery FROM customer_products WHERE customer_id=?', (source_id,)).fetchall()
+            for cp in cp_rows:
+                pid = cp['product_id']
+                emb = cp['embroidery']
+                if c.execute('SELECT 1 FROM customer_products WHERE customer_id=? AND product_id=? AND embroidery=?', (target_id, pid, emb)).fetchone():
+                    c.execute('DELETE FROM customer_products WHERE id=?', (cp['id'],))
+                else:
+                    c.execute('UPDATE customer_products SET customer_id=?, updated_at=? WHERE id=?', (target_id, t, cp['id']))
+            cols = {r['name'] for r in c.execute('PRAGMA table_info(inout)')}
+            if 'stock_customer_id' in cols:
+                c.execute('UPDATE inout SET stock_customer_id=? WHERE stock_customer_id=?', (target_id, source_id))
+            if 'use_customer_id' in cols:
+                c.execute('UPDATE inout SET use_customer_id=? WHERE use_customer_id=?', (target_id, source_id))
+            c.execute('DELETE FROM customers WHERE id=?', (source_id,))
+            merged_count += 1
+    return {'ok': True, 'mergedCount': merged_count, 'groupsCount': len(preview['duplicates'])}
+
+
 def _sizes(body):
     labels = []
     for raw in body.get('sizes') or []:
