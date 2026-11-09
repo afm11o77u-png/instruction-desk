@@ -380,6 +380,17 @@ def schema(c):
             PRIMARY KEY (person_id, day)
         )'''
     )
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS kintai_monthly_paid_leave (
+            person_id INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            paid_leave_days REAL NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (person_id, year, month)
+        )'''
+    )
     kintai_shift.schema(c)
     kintai_crimp.schema(c)
     kintai_bihin.schema(c)
@@ -3616,6 +3627,63 @@ def _overlay_work_days_legacy(rows: list[dict], saved: dict[str, float]) -> tupl
     return float(total.quantize(Decimal('0.01'))), not unset
 
 
+_FULLWIDTH_NUM_TRANS = str.maketrans('０１２３４５６７８９．', '0123456789.')
+_PAID_LEAVE_NUM_ONLY_RE = re.compile(r'^\d+(?:\.\d+)?$')
+
+
+def parse_daily_leave_days(text) -> Decimal | None:
+    """日別の有休（休み）列から有休日数をDecimalで返す。該当しなければNone。"""
+    if text is None:
+        return None
+    s = str(text).translate(_FULLWIDTH_NUM_TRANS).strip()
+    if not s:
+        return None
+    m = PAID_LEAVE_RE.search(s)
+    if m:
+        return Decimal(m.group('num'))
+    m2 = re.search(r'(?P<num>\d+(?:\.\d+)?)\s*有給', s)
+    if m2:
+        return Decimal(m2.group('num'))
+    if _PAID_LEAVE_NUM_ONLY_RE.fullmatch(s):
+        return Decimal(s)
+    if s in ('有休', '有給'):
+        return Decimal('1')
+    return None
+
+
+def _daily_paid_leave_total(rows: list[dict]) -> float:
+    """日別の表示行の「有休」列をすべて加算した合計値を返す。"""
+    total = Decimal('0')
+    for row in rows:
+        val = parse_daily_leave_days(row.get('leave'))
+        if val is not None:
+            total += val
+    return float(total.quantize(Decimal('0.01')))
+
+
+def _ensure_monthly_paid_leave_table(c) -> None:
+    c.execute(
+        '''CREATE TABLE IF NOT EXISTS kintai_monthly_paid_leave (
+            person_id INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            paid_leave_days REAL NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (person_id, year, month)
+        )'''
+    )
+
+
+def _load_saved_paid_leave_days(c, person_id: int) -> dict[tuple[int, int], float]:
+    _ensure_monthly_paid_leave_table(c)
+    rows = c.execute(
+        'SELECT year, month, paid_leave_days FROM kintai_monthly_paid_leave WHERE person_id=?',
+        (person_id,),
+    ).fetchall()
+    return {(int(r['year']), int(r['month'])): float(r['paid_leave_days']) for r in rows}
+
+
 def _daily_holiday_days_total(rows: list[dict], work_days_total: float | None) -> float | None:
     """日別の表示行から休日数の合計を算出する: (0の個数) + ((0以外の個数) - (出勤日数の合計値))。"""
     if work_days_total is None:
@@ -3796,6 +3864,43 @@ def _fill_displayed_work_days(c, person: dict, months: list[dict]) -> None:
     layout = get_layout(layout_id_for_person(person, settings))
     blob = _person_workbook_bytes(person, settings)
     saved = _load_saved_work_days(c, int(person['id']))
+    saved_paid = _load_saved_paid_leave_days(c, int(person['id']))
+    hired_on = _stored_date(person.get('hired_on')) if person else None
+    parsed = None
+    if blob is not None:
+        try:
+            parsed = _parsed_workbook(blob, layout)
+        except ValueError:
+            parsed = None
+    for item in months:
+        year = int(item['year'])
+        month = int(item['month'])
+        _p_start, period_end = closing_period(year, month)
+        if parsed is None:
+            total, complete, holiday_total = None, False, None
+        else:
+            total, complete, holiday_total = _month_attendance_and_holiday(
+                c, person, year, month,
+                saved=saved, parsed=parsed,
+            )
+        item['workDays'] = total
+        item['workDaysComplete'] = complete
+        item['workDaysFrom'] = 'daily'
+        item['dailyHolidayDays'] = holiday_total
+        item['holidayDays'] = holiday_total if complete else None
+        if (year, month) in saved_paid:
+            item['paidLeaveDays'] = saved_paid[(year, month)]
+            item['paidLeaveFrom'] = 'daily'
+        item['beforeHired'] = bool(hired_on and period_end < hired_on and total is None)
+
+
+def _fill_displayed_work_days_prev(c, person: dict, months: list[dict]) -> None:
+    if not months:
+        return
+    settings = load_local_settings()
+    layout = get_layout(layout_id_for_person(person, settings))
+    blob = _person_workbook_bytes(person, settings)
+    saved = _load_saved_work_days(c, int(person['id']))
     hired_on = _stored_date(person.get('hired_on')) if person else None
     parsed = None
     if blob is not None:
@@ -3846,6 +3951,52 @@ def _fill_displayed_work_days_legacy(c, person: dict, months: list[dict]) -> Non
         item['workDays'] = total
         item['workDaysComplete'] = complete
         item['workDaysFrom'] = 'daily'
+
+
+def save_daily_paid_leave(c, user, payload: dict) -> dict:
+    """表示中の月・人の日別「有休」列を全て加算し、出勤簿のその月の有給取得日数として保存する。"""
+    if not isinstance(payload, dict):
+        raise ValueError('保存内容を確認してください。')
+    person_id = payload.get('personId')
+    year = payload.get('year')
+    month = payload.get('month')
+    if type(person_id) is not int or person_id <= 0:
+        raise ValueError('対象者を選択してください。')
+    if type(year) is not int or type(month) is not int or not 1 <= month <= 12:
+        raise ValueError('対象月を確認してください。')
+    person = c.execute('SELECT * FROM kintai_people WHERE id=? AND active=1', (person_id,)).fetchone()
+    if not person:
+        raise ValueError('対象者が見つかりません。')
+    current = person_daily_sheet(c, person_id, year, month)
+    paid_total = _daily_paid_leave_total(current['rows'])
+    actor = ''
+    if user:
+        try:
+            actor = str(user['name'] or user['login'] or '')[:80]
+        except (KeyError, IndexError, TypeError):
+            actor = ''
+    now = datetime.now().isoformat(timespec='seconds')
+    _ensure_monthly_paid_leave_table(c)
+    c.execute(
+        '''INSERT INTO kintai_monthly_paid_leave(person_id, year, month, paid_leave_days, updated_at, updated_by)
+           VALUES(?,?,?,?,?,?)
+           ON CONFLICT(person_id, year, month) DO UPDATE SET
+             paid_leave_days=excluded.paid_leave_days,
+             updated_at=excluded.updated_at,
+             updated_by=excluded.updated_by
+        ''',
+        (person_id, year, month, paid_total, now, actor),
+    )
+    c.execute(
+        '''INSERT INTO kintai_monthly(person_id, year, month, paid_leave_days, imported_at, status)
+           VALUES(?,?,?,?,?,'成功')
+           ON CONFLICT(person_id, year, month) DO UPDATE SET
+             paid_leave_days=excluded.paid_leave_days
+        ''',
+        (person_id, year, month, paid_total, now),
+    )
+    current['savedPaidLeaveDays'] = paid_total
+    return current
 
 
 def save_daily_work_days(c, user, payload: dict) -> dict:
@@ -4093,7 +4244,9 @@ def person_daily_sheet(c, person_id: int, year: int, month: int) -> dict:
         'readOnly': True,
         'canEditWorkDays': True,
         'workDaysTotal': total,
+        'workDaysTotal': total,
         'holidayDaysTotal': _daily_holiday_days_total(body['rows'], total),
+        'paidLeaveDaysTotal': _daily_paid_leave_total(body['rows']),
     })
     return body
 
@@ -4402,6 +4555,10 @@ def handle_post(h, c, path: str, d: dict):
             )
         return 200, saved
     if path == '/api/kintai/daily/work-days':
+        # 日別を開ける人だけ。新しい権限は足さない。Excelファイルは書き換えない。
+        return 200, save_daily_work_days(c, h.user, d or {})
+    if path == '/api/kintai/daily/paid-leave':
+        return 200, save_daily_paid_leave(c, h.user, d or {})
         # 日別を開ける人だけ。新しい権限は足さない。Excelファイルは書き換えない。
         return 200, save_daily_work_days(c, h.user, d or {})
     if path == '/api/kintai/roster/employment':

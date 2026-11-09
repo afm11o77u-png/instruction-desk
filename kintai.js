@@ -10,7 +10,7 @@
   let peopleFilter = 'all'; // all | active | retired
   // 出勤簿（個人）の列。累計・残数・起算日・給与などは集計ルール未定のため空欄。
   const PERSON_COLUMNS = [
-    '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数', '計算残数',
+    '月', '出勤日数', '休日数', '累計休日数', '年間休日残数', '有給取得日数', '有給累計取得日数', '有給残数',
     '有給休暇起算日', '普通勤務時間', '残業時間', '勤務時間計', '通常勤務給与', '残業給', '有給付与日数', '有給失効日数', 'その他休暇等', '備考',
   ];
   // 月別集計（全員合計）。給与列は未集計。
@@ -316,12 +316,13 @@
         ${sheetCell(dayText(m.paidLeaveDays))}
         ${sheetCell(dayText(m.paidLeaveCumulative))}
         ${m.paidLeaveShowsRead
-          ? `<td title="${esc(m.paidLeaveRemainingNote || 'この取得日に読み取った現保有数です。')}">${esc(dayText(m.paidLeaveRemaining))}</td>`
+          ? `<td title="${esc(m.paidLeaveRemainingNote || 'この取得日に読み取った現保有数です。')}">${esc(dayText(m.paidLeaveRemaining))}</td>`/*
           : '<td class="kintai-blank"></td>'}
         ${m.paidLeaveShowsRead
-          ? ((m.paidLeaveComputedShow != null ? !m.paidLeaveComputedShow : false) || m.paidLeaveComputedRemaining == null
+
             ? `<td class="kintai-blank" title="${esc(m.paidLeaveComputedNote || '')}"></td>`
-            : `<td title="${esc(m.paidLeaveComputedNote || '')}">${esc(dayText(m.paidLeaveComputedRemaining))}</td>`)
+          : `<td title="${esc(m.paidLeaveComputedNote || '')}">${esc(dayText(m.paidLeaveComputedRemaining))}</td>`) : ''}
+          : '<td class="kintai-blank"></td>'*/
           : '<td class="kintai-blank"></td>'}
         ${sheetCell(m.paidLeaveBaseDate || '')}
         ${sheetCell(m.ordinaryHm)}
@@ -359,7 +360,7 @@
         : (hold.paidLeaveComputedRemaining == null
           ? `／計算残数は空欄${hold.paidLeaveComputedNote ? '：' + hold.paidLeaveComputedNote : ''}`
           : `／計算残数 ${dayText(hold.paidLeaveComputedRemaining)}（終わった締め期間だけ。日ごとには未対応）`);
-      status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／${pack.fiscalLabel || ''}／取込: ${p.lastStatus || '未取得'}${readText}${computedText}`;
+      status.textContent = `${p.displayName}（${p.employeeCode}・${empLabel}）／${pack.fiscalLabel || ''}／取込: ${p.lastStatus || '未取得'}${readText}`;
       if (p.lastError) status.innerHTML = `${esc(status.textContent)}${errorBlockHtml(p.lastError, false)}`;
     }
     if (body) body.innerHTML = personSheetHtml(p);
@@ -376,7 +377,7 @@
     if (!body) return;
     const rows = ((data && data.rows) || []).filter(r => passesPeopleFilter(r.retired));
     const editable = !!(data && data.canEditEmploymentDates);
-    const head = ['氏名', '在籍状況', '年間休日枠', '開始有給残', '出勤累計', '休日累計', '休日残数', '有給取得累計', '有給残数', '取得日', '計算残数', '入社日', '退社日', '雇用区分', '有給休暇起算日'];
+    const head = ['氏名', '在籍状況', '年間休日枠', '開始有給残', '出勤累計', '休日累計', '休日残数', '有給取得累計', '有給残数', '取得日', '入社日', '退社日', '雇用区分', '有給休暇起算日'];
     const dateLabel = { hired: '入社日', retired: '退社日', base: '有給休暇起算日' };
     const dateCell = (personId, field, value) => editable
       ? `<td><input type="date" class="kintai-roster-date" data-person="${personId}" data-field="${field}" value="${esc(value || '')}" aria-label="${dateLabel[field]}"></td>`
@@ -397,9 +398,9 @@
         ? '<td class="kintai-blank" title="管理簿から読み取った現保有数はまだありません。"></td>'
         : `<td title="管理簿から読み取った現保有数です。取得日より前の月の残数ではありません。">${esc(dayText(r.paidLeaveRemaining))}</td>`}
       <td>${esc(r.paidLeaveAcquiredOn || '')}</td>
-      ${r.paidLeaveComputedRemaining == null
+      ${''/*
         ? `<td class="kintai-blank" title="${esc(r.paidLeaveComputedNote || '')}"></td>`
-        : `<td title="${esc(r.paidLeaveComputedNote || '')}">${esc(dayText(r.paidLeaveComputedRemaining))}</td>`}
+        : `<td title="${esc(r.paidLeaveComputedNote || '')}">${esc(dayText(r.paidLeaveComputedRemaining))}</td>`*/}
       ${dateCell(r.personId, 'hired', r.hiredOn)}
       ${dateCell(r.personId, 'retired', r.retiredOn)}
       <td>${esc(EMP[r.employment] || r.employment || '')}</td>
@@ -635,11 +636,12 @@
           });
           h = zeroCount + (nonzeroCount - Number(data.workDaysTotal));
         }
-        return `出勤日数の合計 ${dayText(data.workDaysTotal)}${h != null ? ` ／ 休日数の合計 ${dayText(h)}` : ''}（この月の16日〜15日）`;
+        const p = data.paidLeaveDaysTotal;
+        return `出勤日数の合計 ${dayText(data.workDaysTotal)}${h != null ? ` ／ 休日数の合計 ${dayText(h)}` : ''}${p != null ? ` ／ 有休の合計 ${dayText(p)}` : ''}（この月の16日〜15日）`;
       })()
       : '';
     const saveBar = rows
-      ? `<p class="kintai-workdays-bar">${editable ? '<button type="button" id="kintaiworkdayssave">出勤日数を保存</button>' : ''}<span class="kintaimeta">${esc(totalText)}</span></p>`
+      ? `<p class="kintai-workdays-bar">${editable ? '<button type="button" id="kintaiworkdayssave">出勤日数を保存</button> <button type="button" class="primary" id="kintaipaidleavesave">有休の合計を出勤簿に反映</button>' : ''}<span class="kintaimeta">${esc(totalText)}</span></p>`
       : '';
     const actuals = (data && data.actuals) || [];
     const actualsHtml = actuals.length
@@ -674,6 +676,20 @@
     paintDaily(saved);
     loadKintai().catch(() => {});
     toast('出勤日数・休日数を保存しました。');
+  }
+
+  async function saveDailyPaidLeave() {
+    if (!canKintai()) throw Error('マーク管理の権限がありません。');
+    if (!lastDaily) throw Error('日別を表示してから反映してください。');
+    const saved = await api('/api/kintai/daily/paid-leave', {
+      personId: lastDaily.personId,
+      year: lastDaily.year,
+      month: lastDaily.month,
+    });
+    paintDaily(saved);
+    loadKintai().catch(() => {});
+    const v = saved.savedPaidLeaveDays != null ? saved.savedPaidLeaveDays : saved.paidLeaveDaysTotal;
+    toast(`有給取得日数（${dayText(v)}日）を出勤簿に反映しました。`);
   }
 
   async function ensurePeoplePack() {
@@ -868,10 +884,16 @@
       loadKintaiDaily().catch(e => toast(e.message));
     };
     if (dailyRefresh) dailyRefresh.onclick = () => loadKintaiDaily().catch(e => toast(e.message));
+    const dailyPaidBtn = $('#kintaidailypaidleavesave');
+    if (dailyPaidBtn) dailyPaidBtn.onclick = () => saveDailyPaidLeave().catch(e => toast(e.message));
     const dailyTable = $('#kintaidailytable');
     if (dailyTable && !dailyTable.dataset.workdaybound) {
       dailyTable.dataset.workdaybound = '1';
       dailyTable.addEventListener('click', (e) => {
+        if (e.target.closest('#kintaipaidleavesave')) {
+          saveDailyPaidLeave().catch(err => toast(err.message));
+          return;
+        }
         if (!e.target.closest('#kintaiworkdayssave')) return;
         saveDailyWorkDays().catch(err => toast(err.message));
       });
