@@ -11093,6 +11093,13 @@ def _service_only_empty_customer(row):
     if is_parts:
         return True
 
+    # 通常品番の制服商品で顧客が空の場合（商品マスタのみ登録、取扱なし）
+    # 部品フェーズ（phasePartsOnly）ではなく、商品取り込み時のみ適用
+    if not row.get('phasePartsOnly') and not is_parts:
+        code = stock.text((row.get('csv') or {}).get('code') or '')
+        if stock_product_merge.is_normal_product_code(code) and not prod.get('blankSku'):
+            return True
+
     if not (prod.get('processingServiceProduct') or handle.get('skipForProcessingService')):
         return False
     if not ps.get('identifiable') or ps.get('needsConfirm'):
