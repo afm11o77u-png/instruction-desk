@@ -230,12 +230,18 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(m1['note'], '2023廃番→T-8537')
         self.assertFalse(m1['needsConfirm'])
 
-        # FOLK ブランド名除去 + 色分離 (6013SC16（バーガンディ）FOLK)
+        # FOLK ブランド名除去 + 色分離 (6013SC16（バーガンディ）FOLK, 7101SC11(ココア)FOLK)
         f1 = suffix.classify_suffix('6013SC16（バーガンディ）FOLK', product_name='レディスクラブ', supplier='㈱廣瀬商会')
         self.assertTrue(f1['apply'])
         self.assertEqual(f1['baseCode'], '6013SC16')
         self.assertEqual(f1['color'], 'バーガンディ')
         self.assertFalse(f1['needsConfirm'])
+
+        f2 = suffix.classify_suffix('7101SC11(ココア)FOLK', product_name='レディスクラブ(ココア)', supplier='㈱廣瀬商会')
+        self.assertTrue(f2['apply'])
+        self.assertEqual(f2['baseCode'], '7101SC11')
+        self.assertEqual(f2['color'], 'ココア')
+        self.assertFalse(f2['needsConfirm'])
 
         # 「〜へ変更」メモ付き品番 (6991-099(2601へ変更))
         c_memo = suffix.classify_suffix('6991-099(2601へ変更)', product_name='ブラウス', supplier='アイトス㈱')
