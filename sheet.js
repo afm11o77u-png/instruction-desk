@@ -404,8 +404,8 @@ if($('#labelticketpeople'))resetLabelTicketForm();
 let savedFixedLabelFormats=[];
 let fixedLabelEditing=null;
 let fixedLabelLoadEpoch=0;
-function canWriteFixedLabelFormats(){return ['owner','floor','floor2','floor3'].includes(currentUser?.role)}
-function canViewFixedLabelFormats(){return canWriteFixedLabelFormats()||currentUser?.role==='warehouse'}
+function canWriteFixedLabelFormats(){return typeof currentUser!=='undefined'&&['owner','floor','floor2','floor3'].includes(currentUser?.role)}
+function canViewFixedLabelFormats(){return canWriteFixedLabelFormats()||(typeof currentUser!=='undefined'&&currentUser?.role==='warehouse')}
 function fillFixedLabelFormatSelect(){
  const sel=$('#fixedformat');if(!sel)return;
  const formats=typeof listFixedLabelFormats==='function'?listFixedLabelFormats():[];
