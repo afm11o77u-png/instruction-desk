@@ -186,6 +186,21 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(emerald['baseCode'], '0803')
         self.assertEqual(emerald['color'], 'エメラルドグリーン')
 
+        # 100-M-S-ｍ (fullwidth 'ｍ' in SKU)
+        zenkaku = suffix.classify_suffix('100-M-S-ｍ', product_name='主任・男性長袖シャツ(マイスター)', supplier='㈱マジェックストレード')
+        self.assertFalse(zenkaku['needsConfirm'])
+        self.assertTrue(zenkaku['apply'])
+        self.assertEqual(zenkaku['baseCode'], '100-M-S-m')
+
+        # 116-1133 #053, #063: keep as-is without error
+        w1 = suffix.classify_suffix('116-1133 #053', product_name='ライン', supplier='㈱脇本商事')
+        self.assertFalse(w1['needsConfirm'])
+        self.assertEqual(w1['baseCode'], '116-1133 #053')
+
+        w2 = suffix.classify_suffix('116-1133 #063', product_name='ライン', supplier='㈱脇本商事')
+        self.assertFalse(w2['needsConfirm'])
+        self.assertEqual(w2['baseCode'], '116-1133 #063')
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):

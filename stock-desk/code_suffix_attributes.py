@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 
 import product_ledger_paren as paren
 import product_ledger_processing_service as proc
@@ -87,7 +88,8 @@ def _is_midori(supplier):
 
 
 def _formal_code(text):
-    return bool(re.fullmatch(r'[#＃№0-9A-Za-z][0-9A-Za-z._\-－/／#＃№&+]*', text or ''))
+    norm = unicodedata.normalize('NFKC', text or '')
+    return bool(re.fullmatch(r'[#＃№0-9A-Za-z][0-9A-Za-z._\-－/／#＃№&+]*', norm))
 
 
 def _is_color_code(text):
@@ -100,9 +102,7 @@ def _is_color_code(text):
     # Col.1, COL-2, Color 3, COL/1
     if re.fullmatch(r'(?:Col|COL|color|COLOR)[\.:_\-/／]?[0-9]+[A-Za-z]?', t):
         return True
-    # #01, #1
-    if re.fullmatch(r'#[0-9]+', t):
-        return True
+
     return False
 
 
@@ -233,7 +233,7 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     if wrapped:
         body = stock.text(wrapped.group(1))
         inner = stock.text(wrapped.group(3))
-    if inner and _CHANGE_RE.search(inner):
+    if _CHANGE_RE.search(raw):
         return _empty(
             kind='mixed', needsConfirm=True, baseCode=raw,
             reason=f'品番「{raw}」は変更先や代替のメモがあり、自動では品番を決めません。',
@@ -330,6 +330,14 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                     reason=f'品番「{raw}」の寸法とサイズ欄が違います。確認してください。',
                 )
             return _empty(apply=True, kind='dimension', baseCode=head, size=dim, color=color, note=note)
+        if _formal_code(head) and _formal_code(tail):
+            norm_raw = unicodedata.normalize('NFKC', raw)
+            return _empty(
+                apply=True,
+                kind='plain',
+                baseCode=norm_raw,
+                needsConfirm=False,
+            )
         return _empty(
             kind='unknown', needsConfirm=True, baseCode=raw,
             reason=f'品番「{raw}」の追加文字「{tail}」の意味を確定できません。',
@@ -366,7 +374,12 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 reason=f'品番「{raw}」は部品のように見えますが、基本品番を確定できません。',
             )
     if _formal_code(raw):
-        return _empty(kind='branch' if re.search(r'[-_－][0-9A-Za-z]+$', raw) else 'plain', baseCode=raw)
+        norm = unicodedata.normalize('NFKC', raw)
+        return _empty(
+            apply=bool(norm != raw),
+            kind='branch' if re.search(r'[-_－][0-9A-Za-z]+$', norm) else 'plain',
+            baseCode=norm,
+        )
     return _empty(
         kind='unknown', needsConfirm=True, baseCode=raw,
         reason=f'品番「{raw}」の追加文字を属性に分けられません。',
