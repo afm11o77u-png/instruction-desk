@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
 const source = fs.readFileSync(require.resolve('../sheet.js'), 'utf8');
-const permissions = source.match(/function canWriteFixedLabelFormats\(\).*\nfunction canViewFixedLabelFormats\(\).*/)[0];
+const permissions = source.match(/function canWriteFixedLabelFormats\(\).*\r?\nfunction canViewFixedLabelFormats\(\).*/)[0];
 const context = vm.createContext({});
 vm.runInContext(permissions, context);
 // sheet.js loads before account.js defines currentUser. Initialization must continue.
