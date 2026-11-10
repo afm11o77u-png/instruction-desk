@@ -18,6 +18,7 @@ import kintai
 import kintai_crimp
 import name_exe
 import web_requests
+import customer_accounts
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -59,6 +60,7 @@ def initialize():
         c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
         schema(c)
         web_requests.schema(c)
+        customer_accounts.schema(c)
         templates.initialize(c)
         placement.bind(DATA)
         placement.schema(c)
@@ -926,6 +928,13 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
+        if path=='/api/customer-accounts':
+            with connect() as c:
+                u=self.session_user(c)
+                if not u or u['must_change'] or not (u['role']=='owner' or u['manage']):
+                    return self.reply(403, {'error':'主管理者・管理者だけが利用できます。'})
+                try: return self.reply(200, customer_accounts.state(c, STOCK_DB))
+                except sqlite3.Error: return self.reply(503, {'error':'顧客情報を読み取れません。在庫管理を確認してください。'})
         if path=='/inventory' or path.startswith('/inventory/'): return self.serve_inventory('GET')
         if path == '/api/web-request/settings':
             with connect() as c:
@@ -1088,6 +1097,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')
                 if request_user['role'] != 'owner' and not request_user['manage']:
                     return self.reply(403, 'WEB依頼は主管理者・管理者だけが利用できます。', 'text/plain; charset=utf-8')
+        if path in ('/customer-accounts','/customer-accounts.js','/customer-accounts.css'):
+            with connect() as c:
+                u=self.session_user(c)
+                if not u or u['must_change'] or not (u['role']=='owner' or u['manage']):
+                    return self.reply(403, '主管理者・管理者だけが利用できます。', 'text/plain; charset=utf-8')
+            files[path]='customer-accounts.html' if path=='/customer-accounts' else path[1:]
         if path in files:
             f=ROOT/files[path]
             return self.reply(200,f.read_bytes(),{'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8','jpg':'image/jpeg','png':'image/png'}[f.suffix[1:]])
@@ -1115,6 +1130,25 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(403,{'error':'接続元を確認してください。'})
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if route == '/api/customer-accounts':
+            with connect() as c:
+                u=self.session_user(c)
+                if not u or u['must_change'] or not (u['role']=='owner' or u['manage']):
+                    return self.reply(403, {'error':'主管理者・管理者だけが利用できます。'})
+                try:
+                    n=int(self.headers.get('Content-Length') or 0)
+                    if not 0<n<=10000: raise ValueError('送信内容を確認してください。')
+                    d=json.loads(self.rfile.read(n))
+                    if not isinstance(d,dict): raise ValueError('送信内容を確認してください。')
+                    result=customer_accounts.save(c,STOCK_DB,d,u)
+                    c.commit()
+                    return self.reply(200,result)
+                except sqlite3.IntegrityError:
+                    return self.reply(400, {'error':'このメールアドレスは既に登録されています。'})
+                except (ValueError,TypeError) as e:
+                    return self.reply(400, {'error':str(e)})
+                except sqlite3.Error:
+                    return self.reply(503, {'error':'保存できませんでした。顧客情報を確認してください。'})
         if route == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
