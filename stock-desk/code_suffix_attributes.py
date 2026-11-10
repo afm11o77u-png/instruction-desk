@@ -45,7 +45,7 @@ def is_part_product_name(name):
 _DIM_RE = re.compile(r'^(\d+(?:\.\d+)?)(mm|㎜|cm|㎝)$', re.I)
 _SIZE_WORD = {'大', '小', 'LL', 'L', 'M', 'S', 'XL', '2L', '3L'}
 _WRAP_RE = re.compile(r'^(.*?)(?:\s*)([（(【\[]([^】)）\]]*)[】)）\]])\s*$')
-_CHANGE_RE = re.compile(r'→|無くなり次第|代替')
+_CHANGE_RE = re.compile(r'→|無くなり次第|代替|(?:へ|に)?変更')
 
 
 def _empty(**extra):
@@ -223,6 +223,14 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 sub['apply'] = True
                 sub['note'] = '廃番' if not sub.get('note') else f"{sub['note']}・廃番"
                 return sub
+    # 品番末尾にメーカーブランド名（FOLK等）が付いている場合は除去して再判定
+    folk_m = re.match(r'^(.*?)\s*FOLK\s*$', raw, re.I)
+    if folk_m and folk_m.group(1):
+        clean_code = folk_m.group(1).strip(' -_－')
+        sub = classify_suffix(clean_code, product_name=product_name, supplier=supplier, size=size)
+        if not sub.get('needsConfirm'):
+            sub['apply'] = True
+            return sub
     if raw in ('要確認', '別注') or (raw.startswith('別注(') and raw.endswith(')')):
         return _empty(kind='plain', baseCode=raw)
     name = stock.text(product_name)

@@ -230,6 +230,20 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(m1['note'], '2023廃番→T-8537')
         self.assertFalse(m1['needsConfirm'])
 
+        # FOLK ブランド名除去 + 色分離 (6013SC16（バーガンディ）FOLK)
+        f1 = suffix.classify_suffix('6013SC16（バーガンディ）FOLK', product_name='レディスクラブ', supplier='㈱廣瀬商会')
+        self.assertTrue(f1['apply'])
+        self.assertEqual(f1['baseCode'], '6013SC16')
+        self.assertEqual(f1['color'], 'バーガンディ')
+        self.assertFalse(f1['needsConfirm'])
+
+        # 「〜へ変更」メモ付き品番 (6991-099(2601へ変更))
+        c_memo = suffix.classify_suffix('6991-099(2601へ変更)', product_name='ブラウス', supplier='アイトス㈱')
+        self.assertTrue(c_memo['apply'])
+        self.assertEqual(c_memo['baseCode'], '6991-099')
+        self.assertEqual(c_memo['note'], '2601へ変更')
+        self.assertFalse(c_memo['needsConfirm'])
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):
