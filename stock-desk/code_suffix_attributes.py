@@ -34,6 +34,8 @@ _NOTE_KIND = {
     'CO-COS': 'brand',
     'COCOS': 'brand',
     '3M': 'brand',
+    'セブン': 'brand',
+    'セブンユニフォーム': 'brand',
 }
 _PART_WORDS = (
     'ボタン', '釦', 'ファスナー', 'ジッパー', 'チャック',

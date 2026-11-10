@@ -278,6 +278,13 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(m3['note'], '3M')
         self.assertFalse(m3['needsConfirm'])
 
+        # BA1220-1(セブン)
+        seven = suffix.classify_suffix('BA1220-1(セブン)', product_name='コックコート(長袖)', supplier='㈱札幌白衣')
+        self.assertTrue(seven['apply'])
+        self.assertEqual(seven['baseCode'], 'BA1220-1')
+        self.assertEqual(seven['note'], 'セブン')
+        self.assertFalse(seven['needsConfirm'])
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):
