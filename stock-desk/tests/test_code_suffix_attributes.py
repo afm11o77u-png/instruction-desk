@@ -161,6 +161,31 @@ class ClassifyTest(unittest.TestCase):
         self.assertFalse(no_code['needsConfirm'])
         self.assertEqual(no_code['baseCode'], 'No.1702')
 
+        # ■廃番■ prefix
+        discon1 = suffix.classify_suffix('■廃番■9-970', product_name='コックコート', supplier='仕入A')
+        self.assertTrue(discon1['apply'])
+        self.assertFalse(discon1['needsConfirm'])
+        self.assertEqual(discon1['baseCode'], '9-970')
+        self.assertIn('廃番', discon1['note'])
+
+        discon2 = suffix.classify_suffix('■廃番■MC20', product_name='作業着', supplier='仕入B')
+        self.assertTrue(discon2['apply'])
+        self.assertFalse(discon2['needsConfirm'])
+        self.assertEqual(discon2['baseCode'], 'MC20')
+        self.assertIn('廃番', discon2['note'])
+
+        # 030 15mm (button with dimension)
+        btn = suffix.classify_suffix('030 15mm', product_name='日鉄作業衣用 ボタン', supplier='ミドリ安全北海道㈱ 室蘭営業所', size='-')
+        self.assertFalse(btn['needsConfirm'])
+        self.assertTrue(btn['registerAsParts'])
+        self.assertEqual(btn['baseCode'], '030 15mm')
+
+        # 0803(エメラルドグリーン)
+        emerald = suffix.classify_suffix('0803(エメラルドグリーン)', product_name='ポロシャツ', supplier='仕入C')
+        self.assertFalse(emerald['needsConfirm'])
+        self.assertEqual(emerald['baseCode'], '0803')
+        self.assertEqual(emerald['color'], 'エメラルドグリーン')
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):

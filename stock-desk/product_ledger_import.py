@@ -5882,12 +5882,16 @@ def _product_preview(
     star = used_marker_possible(name)
     # 台帳取込の品番空欄は一律「部品・資材」（旧・品番なし制服例外は使わない）。
     # 登録後のカテゴリ変更は選択／編集で可能。
+    import code_suffix_attributes
+    is_part = code_suffix_attributes.is_part_product_name(name)
     blank_kind = legacy_code_assign.blank_code_kind(name) if blank_sku else ''
     if blank_sku and blank_kind == 'processing':
         proposed_category = stock.CATEGORY_PROCESS_SERVICE
     elif blank_sku and blank_kind == 'garment':
         proposed_category = stock.CATEGORY_UNIFORM
     elif blank_sku:
+        proposed_category = stock.CATEGORY_PARTS
+    elif is_part:
         proposed_category = stock.CATEGORY_PARTS
     else:
         proposed_category = stock.CATEGORY_UNIFORM  # 品番のある通常商品・要確認・別注は制服
@@ -5902,9 +5906,9 @@ def _product_preview(
         'sizeAction': 'ok', 'nameDiff': False,
         'supplierConflict': False, 'supplierKept': False,
         'subSupplierAdd': False, 'subSupplierId': None,
-        'category': proposed_category if (blank_sku or custom_order) else '',
-        'proposedCategory': proposed_category if (blank_sku or custom_order) else '',
-        'categoryAction': 'set' if (blank_sku or custom_order) else 'keep',
+        'category': proposed_category if (blank_sku or custom_order or is_part) else '',
+        'proposedCategory': proposed_category if (blank_sku or custom_order or is_part) else '',
+        'categoryAction': 'set' if (blank_sku or custom_order or is_part) else 'keep',
         'categoryConflict': False,
         'blankSku': blank_sku,
         'customOrder': custom_order,

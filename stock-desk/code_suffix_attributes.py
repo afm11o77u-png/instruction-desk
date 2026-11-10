@@ -29,7 +29,18 @@ _NOTE_KIND = {
     '不使用': 'discontinued',
     '現在不使用': 'discontinued',
 }
-_PART_WORDS = ('Dカン', 'Ｄカン', '生地', 'ボタン', '釦', 'ファスナー', 'バックル', '名札')
+_PART_WORDS = (
+    'ボタン', '釦', 'ファスナー', 'ジッパー', 'チャック',
+    'スナッパ', 'スナッパー', 'Ｄカン', 'Dカン', 'バックル',
+    '生地', '芯地', '裏地', '名札', '肩パット', 'パッド', 'ゴム',
+)
+
+
+def is_part_product_name(name):
+    t = stock.text(name)
+    if not t:
+        return False
+    return any(w in t for w in _PART_WORDS)
 _DIM_RE = re.compile(r'^(\d+(?:\.\d+)?)(mm|㎜|cm|㎝)$', re.I)
 _SIZE_WORD = {'大', '小', 'LL', 'L', 'M', 'S', 'XL', '2L', '3L'}
 _WRAP_RE = re.compile(r'^(.*?)(?:\s*)([（(【\[]([^】)）\]]*)[】)）\]])\s*$')
@@ -202,6 +213,15 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 sub['apply'] = True
                 sub['note'] = '別注' if not sub.get('note') else f"{sub['note']}・別注"
                 return sub
+    discon_m = re.match(r'^(?:[■【\[（(]?\s*(?:廃番|不使用|使用しない)\s*[■】\]）)]?)\s*(.+)$', raw)
+    if discon_m:
+        clean_code = discon_m.group(1).strip(' -_－')
+        if clean_code and _formal_code(clean_code):
+            sub = classify_suffix(clean_code, product_name=product_name, supplier=supplier, size=size)
+            if not sub.get('needsConfirm'):
+                sub['apply'] = True
+                sub['note'] = '廃番' if not sub.get('note') else f"{sub['note']}・廃番"
+                return sub
     if raw in ('要確認', '別注') or (raw.startswith('別注(') and raw.endswith(')')):
         return _empty(kind='plain', baseCode=raw)
     name = stock.text(product_name)
@@ -226,6 +246,16 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 apply=False, kind='price_condition', needsConfirm=False, baseCode=raw,
                 note=inner,
             )
+        # 括弧内が色（0803(エメラルドグリーン), 6-951(青) 等）
+        inner_color = ''
+        hit = paren.classify_paren_segment(inner) or {}
+        if hit.get('kind') == 'color':
+            inner_color = stock.text(hit.get('value') or inner)
+        elif _is_color_code(inner):
+            inner_color = inner
+        if inner_color and _formal_code(body):
+            return _empty(apply=True, kind='color', baseCode=body, color=inner_color, note=note)
+
         # 品番の（LEOC刺繍）は未知の注記ではない。取扱名は固有のまま残す。
         emb = _embroidery_suffix_name(inner)
         if emb and _formal_code(body):
@@ -234,6 +264,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         if kinds is None:
             dim = _dimension(inner)
             if dim:
+                if is_part_product_name(product_name):
+                    return _empty(apply=False, kind='parts', baseCode=raw, registerAsParts=True, size=dim, note=inner)
                 if _size_conflict(dim, size):
                     return _empty(
                         kind='dimension', needsConfirm=True, baseCode=raw,
@@ -285,6 +317,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             return _empty(apply=True, kind='color', baseCode=head, color=tail, note=note)
         dim = _dimension(tail)
         if dim and _formal_code(head):
+            if is_part_product_name(product_name):
+                return _empty(apply=False, kind='parts', baseCode=raw, registerAsParts=True, size=dim, note=note)
             if '/' in tail or '／' in tail:
                 return _empty(
                     kind='dimension', needsConfirm=True, baseCode=raw,
