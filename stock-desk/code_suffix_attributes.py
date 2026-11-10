@@ -89,6 +89,7 @@ def _is_midori(supplier):
 
 def _formal_code(text):
     norm = unicodedata.normalize('NFKC', text or '')
+    norm = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm)
     return bool(re.fullmatch(r'[#＃№0-9A-Za-z][0-9A-Za-z._\-－/／#＃№&+]*', norm))
 
 
@@ -233,6 +234,11 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     if wrapped:
         body = stock.text(wrapped.group(1))
         inner = stock.text(wrapped.group(3))
+        # 括弧内に変更先・廃番等のメモがあり、外側が正規品番なら品番本体を採用してメモを備考へ
+        if _CHANGE_RE.search(inner) and body and _formal_code(body):
+            norm_body = unicodedata.normalize('NFKC', body)
+            norm_body = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_body)
+            return _empty(apply=True, kind='note', baseCode=norm_body, note=inner)
     if _CHANGE_RE.search(raw):
         return _empty(
             kind='mixed', needsConfirm=True, baseCode=raw,

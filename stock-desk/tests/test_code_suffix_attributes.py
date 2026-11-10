@@ -80,7 +80,12 @@ class ClassifyTest(unittest.TestCase):
         self.assertTrue(conflict['needsConfirm'])
         change = suffix.classify_suffix('MH60B下無くなり次第F15BO78へ', product_name='帽')
         self.assertTrue(change['needsConfirm'])
-        self.assertTrue(suffix.classify_suffix('7-731(廃番→7-733)')['needsConfirm'])
+        # 括弧内に移行・廃番メモがある場合は品番本体を採用して備考へ
+        discon_memo = suffix.classify_suffix('7-731(廃番→7-733)')
+        self.assertTrue(discon_memo['apply'])
+        self.assertEqual(discon_memo['baseCode'], '7-731')
+        self.assertEqual(discon_memo['note'], '廃番→7-733')
+        self.assertFalse(discon_memo['needsConfirm'])
         unused = suffix.classify_suffix(
             'APK205-10 (不使用)', product_name='シャツコート(不使用)', supplier='KAZEN WLD(株)',
         )
@@ -200,6 +205,30 @@ class ClassifyTest(unittest.TestCase):
         w2 = suffix.classify_suffix('116-1133 #063', product_name='ライン', supplier='㈱脇本商事')
         self.assertFalse(w2['needsConfirm'])
         self.assertEqual(w2['baseCode'], '116-1133 #063')
+
+        # 特殊ハイフン正規化 (6‐605, 6‐612)
+        h1 = suffix.classify_suffix('6‐605', product_name='コックコート', supplier='住商モンブラン㈱')
+        self.assertFalse(h1['needsConfirm'])
+        h2 = suffix.classify_suffix('6‐612', product_name='コックコート(半袖)', supplier='住商モンブラン㈱')
+        self.assertFalse(h2['needsConfirm'])
+
+        # バーガンディ / ダークグレーー（連続長音符）
+        c1 = suffix.classify_suffix('330-AVP バーガンディ', product_name='ポロシャツ', supplier='トムス㈱')
+        self.assertTrue(c1['apply'])
+        self.assertEqual(c1['baseCode'], '330-AVP')
+        self.assertEqual(c1['color'], 'バーガンディ')
+
+        c2 = suffix.classify_suffix('330-AVP-187 ダークグレーー', product_name='ポロシャツ', supplier='トムス㈱')
+        self.assertTrue(c2['apply'])
+        self.assertEqual(c2['baseCode'], '330-AVP-187')
+        self.assertEqual(c2['color'], 'ダークグレー')
+
+        # 廃番メモ付き品番 (5-871(2023廃番→T-8537))
+        m1 = suffix.classify_suffix('5-871(2023廃番→T-8537)', product_name='エプロン', supplier='住商モンブラン㈱')
+        self.assertTrue(m1['apply'])
+        self.assertEqual(m1['baseCode'], '5-871')
+        self.assertEqual(m1['note'], '2023廃番→T-8537')
+        self.assertFalse(m1['needsConfirm'])
 
 
 class ImportTest(unittest.TestCase):

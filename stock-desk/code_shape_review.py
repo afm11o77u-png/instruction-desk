@@ -70,6 +70,7 @@ def vertical_split(code):
 
 def _has_nonformal_char(extra):
     norm = unicodedata.normalize('NFKC', extra or '')
+    norm = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm)
     return any(not (ch.isascii() and (ch.isalnum() or ch in '-_－./／#＃№&+')) for ch in norm)
 
 
