@@ -467,7 +467,7 @@ def workbook(report: dict) -> bytes:
         )
         z.writestr(
             'xl/workbook.xml',
-            f'<workbook xmlns="{NS}" xmlns:r="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<workbook xmlns="{NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
             f'<sheets><sheet name="{escape(sheet_title)}" sheetId="1" r:id="rId1"/></sheets>'
             '</workbook>',
         )
