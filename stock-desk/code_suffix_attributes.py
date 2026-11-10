@@ -36,6 +36,7 @@ _NOTE_KIND = {
     '3M': 'brand',
     'セブン': 'brand',
     'セブンユニフォーム': 'brand',
+    'SEVEN': 'brand',
 }
 _PART_WORDS = (
     'ボタン', '釦', 'ファスナー', 'ジッパー', 'チャック',
@@ -288,10 +289,12 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         if inner_color and _formal_code(body):
             return _empty(apply=True, kind='color', baseCode=body, color=inner_color, note=note)
 
-        # 品番の（LEOC刺繍）は未知の注記ではない。取扱名は固有のまま残す。
-        emb = _embroidery_suffix_name(inner)
-        if emb and _formal_code(body):
-            return _empty(apply=True, kind='processing', baseCode=body, processingName=emb)
+        # 品番の（LEOC刺繍）や（+ペン差し加工）などの加工指定
+        clean_inner = inner.lstrip('+＋ ')
+        emb = _embroidery_suffix_name(clean_inner)
+        proc_word = emb or _processing_word(clean_inner)
+        if proc_word and _formal_code(body):
+            return _empty(apply=True, kind='processing', baseCode=body, processingName=proc_word)
         kinds = _note_parts(inner)
         if kinds is None:
             dim = _dimension(inner)
