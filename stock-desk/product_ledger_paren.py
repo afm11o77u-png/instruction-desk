@@ -409,7 +409,7 @@ def normalize_color_value(value: str) -> str:
 
 
 def paren_balance_ok(name: str) -> bool:
-    """全角・半角括弧の対応が取れているか（入れ子は非対応＝壊れている扱い）。"""
+    """全角・半角括弧の対応が取れているか。末尾の閉じ忘れは許容（自動補完対象）。"""
     text = name or ''
     depth = 0
     for ch in text:
@@ -421,7 +421,8 @@ def paren_balance_ok(name: str) -> bool:
             depth -= 1
             if depth < 0:
                 return False
-    return depth == 0
+    # 末尾の閉じ忘れ（depth > 0）は自動補完されるため OK
+    return True
 
 
 def extract_paren_segments(name: str):

@@ -244,6 +244,34 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(c_memo['note'], '2601へ変更')
         self.assertFalse(c_memo['needsConfirm'])
 
+        # 9-970廃番
+        d_tail = suffix.classify_suffix('9-970廃番', product_name='ベレー帽', supplier='住商モンブラン㈱')
+        self.assertTrue(d_tail['apply'])
+        self.assertEqual(d_tail['baseCode'], '9-970')
+        self.assertEqual(d_tail['note'], '廃番')
+        self.assertFalse(d_tail['needsConfirm'])
+
+        # 9-629(販売), 9-642(販売)
+        hanbai = suffix.classify_suffix('9-629(販売)', product_name='八角帽子(工房)', supplier='住商モンブラン㈱')
+        self.assertTrue(hanbai['apply'])
+        self.assertEqual(hanbai['baseCode'], '9-629')
+        self.assertEqual(hanbai['note'], '販売')
+        self.assertFalse(hanbai['needsConfirm'])
+
+        # A-7160-1(CO-COS)
+        cocos = suffix.classify_suffix('A-7160-1(CO-COS)', product_name='ストレッチブルゾン', supplier='㈱廣瀬商会')
+        self.assertTrue(cocos['apply'])
+        self.assertEqual(cocos['baseCode'], 'A-7160-1')
+        self.assertEqual(cocos['note'], 'CO-COS')
+        self.assertFalse(cocos['needsConfirm'])
+
+        # 9910(3M)
+        m3 = suffix.classify_suffix('9910(3M)', product_name='反射材', supplier='ミドリ安全北海道㈱ 室蘭営業所')
+        self.assertTrue(m3['apply'])
+        self.assertEqual(m3['baseCode'], '9910')
+        self.assertEqual(m3['note'], '3M')
+        self.assertFalse(m3['needsConfirm'])
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):

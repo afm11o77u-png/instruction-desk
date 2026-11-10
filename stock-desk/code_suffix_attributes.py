@@ -17,6 +17,8 @@ _NOTE_KIND = {
     'デリカ': 'usage',
     '農畜水産': 'usage',
     '駐車場警備': 'usage',
+    '管理': 'usage',
+    '販売': 'usage',
     '日用品': 'department',
     '男': 'gender',
     '女': 'gender',
@@ -29,6 +31,9 @@ _NOTE_KIND = {
     '使用しない': 'discontinued',
     '不使用': 'discontinued',
     '現在不使用': 'discontinued',
+    'CO-COS': 'brand',
+    'COCOS': 'brand',
+    '3M': 'brand',
 }
 _PART_WORDS = (
     'ボタン', '釦', 'ファスナー', 'ジッパー', 'チャック',
@@ -221,6 +226,17 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             sub = classify_suffix(clean_code, product_name=product_name, supplier=supplier, size=size)
             if not sub.get('needsConfirm'):
                 sub['apply'] = True
+                sub['note'] = '廃番' if not sub.get('note') else f"{sub['note']}・廃番"
+                return sub
+    # 品番末尾の「廃番」「不使用」直書き（9-970廃番 等）を分離（括弧付きは後段の wrapped で kind='note' として処理）
+    discon_tail = re.match(r'^(.+?)\s*(?:廃番|使用しない)$', raw)
+    if discon_tail:
+        clean_code = discon_tail.group(1).strip(' -_－')
+        if clean_code and _formal_code(clean_code):
+            sub = classify_suffix(clean_code, product_name=product_name, supplier=supplier, size=size)
+            if not sub.get('needsConfirm'):
+                sub['apply'] = True
+                sub['kind'] = 'note'
                 sub['note'] = '廃番' if not sub.get('note') else f"{sub['note']}・廃番"
                 return sub
     # 品番末尾にメーカーブランド名（FOLK等）が付いている場合は除去して再判定
