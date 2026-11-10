@@ -25,6 +25,27 @@ function paintPlacementCard(card,item){
   card.querySelector('.placementcardprint').onclick=e=>{e.stopPropagation();if(item.hasImage)openPlacementPrint(item)};
 }
 function applyPlacementZoom(){const img=$('#placementfull');const stage=document.querySelector('.placementstage');if(!img.naturalWidth||!stage?.clientWidth||!stage.clientHeight)return;const fit=Math.min(stage.clientWidth/img.naturalWidth,stage.clientHeight/img.naturalHeight);const scale=(Number($('#placementzoom').value)||100)/100;img.style.width=Math.max(1,Math.round(img.naturalWidth*fit*scale))+'px'}
+// A separate image viewer keeps unsaved placement fields intact.
+const placementImageView=document.createElement('dialog');
+placementImageView.id='placementimageview';
+placementImageView.innerHTML='<div class="placementimagebar"><span>貼付け位置の画像</span><button type="button">閉じる ×</button></div><div class="placementimagestage"><div class="placementframe"><img alt="貼付け位置"></div></div><label>拡大 <input type="range" min="100" max="240" value="100" aria-label="全画面画像の拡大率"></label>';
+document.body.append(placementImageView);
+const placementImageZoom=placementImageView.querySelector('input');
+function zoomPlacementImage(){const stage=placementImageView.querySelector('.placementimagestage'),img=stage.querySelector('img');if(!img.naturalWidth)return;const fit=Math.min(stage.clientWidth/img.naturalWidth,stage.clientHeight/img.naturalHeight);img.style.width=Math.round(img.naturalWidth*fit*Number(placementImageZoom.value)/100)+'px';if(placementImageZoom.value==='100'){stage.scrollTop=0;stage.scrollLeft=0}}
+async function closePlacementImage(){if(document.fullscreenElement===placementImageView)await document.exitFullscreen().catch(()=>{});placementImageView.close()}
+placementImageView.querySelector('button').onclick=closePlacementImage;
+placementImageView.addEventListener('cancel',e=>{e.preventDefault();closePlacementImage()});
+placementImageZoom.oninput=zoomPlacementImage;
+placementImageView.querySelector('img').onload=zoomPlacementImage;
+document.addEventListener('fullscreenchange',()=>{if(placementImageView.open)requestAnimationFrame(zoomPlacementImage)});
+window.addEventListener('resize',()=>{if(placementImageView.open)zoomPlacementImage();if($('#placementview').open){fitPlacementStage();applyPlacementZoom()}});
+$('#placementfull').tabIndex=0;
+$('#placementfull').setAttribute('role','button');
+$('#placementfull').setAttribute('aria-label','画像を全画面で表示');
+$('#placementfull').title='クリックで全画面表示';
+function openPlacementImage(){const source=$('#placementfull');if(source.hidden||!source.src)return;placementImageZoom.value='100';placementImageView.querySelector('img').src=source.src;if(!placementImageView.open)placementImageView.showModal();placementImageView.requestFullscreen?.().catch(()=>{});requestAnimationFrame(zoomPlacementImage)}
+$('#placementfull').onclick=openPlacementImage;
+$('#placementfull').onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPlacementImage()}};
 function fitPlacementStage(){const dialog=$('#placementview');const stage=document.querySelector('.placementstage');const zoomLabel=document.querySelector('#placementzoom')?.closest('label');const fileLabel=document.querySelector('#placementviewfile');if(!dialog?.open||!stage||!zoomLabel)return;const before=stage.getBoundingClientRect().top-dialog.getBoundingClientRect().top+dialog.scrollTop;const fileH=fileLabel&&!fileLabel.hidden?fileLabel.getBoundingClientRect().height+10:0;const room=dialog.clientHeight-before-zoomLabel.getBoundingClientRect().height-fileH-12;stage.style.height=Math.max(180,Math.floor(room))+'px'}
 function resetPlacementView(tries){tries=tries||0;const img=$('#placementfull');const stage=document.querySelector('.placementstage');if(img.hidden)return;if((!img.naturalWidth||!stage?.clientHeight)&&tries<8){requestAnimationFrame(()=>resetPlacementView(tries+1));return}const dialog=$('#placementview');if(dialog)dialog.scrollTop=0;$('#placementzoom').value='100';fitPlacementStage();if(stage){stage.scrollTop=0;stage.scrollLeft=0}applyPlacementZoom()}
 function showPlacementImage(item){clearPlacementPreview();const img=$('#placementfull');const file=$('#placementviewimage').files[0];if(file){placementPreviewUrl=URL.createObjectURL(file);$('#placementmissing').hidden=true;img.hidden=false;img.src=placementPreviewUrl;if(img.complete)resetPlacementView();return}$('#placementmissing').hidden=!!item?.hasImage;img.hidden=!item?.hasImage;if(item?.hasImage){img.src=placementUrl(item.id,'image')+'?v='+(item.version||1);if(img.complete)resetPlacementView()}else img.removeAttribute('src')}

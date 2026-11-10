@@ -836,3 +836,15 @@ body.catalog-kintai main>header .headactions{display:none}
   body.printing-bihin-count .exec-report-print .exec-num { text-align: right; }
   body.printing-bihin-count .exec-report-print .exec-center { text-align: center; }
 }
+
+/* Placement image viewer uses the available screen area. */
+#placementview{width:96vw;max-width:none;height:96vh;height:96dvh;max-height:96vh;max-height:96dvh;box-sizing:border-box}
+/* Full-screen placement image and enlargement-only controls. */
+#placementfull{cursor:zoom-in}
+#placementimageview,#placementimageview:fullscreen{width:100vw;max-width:none;height:100vh;height:100dvh;max-height:none;margin:0;padding:12px;box-sizing:border-box;background:#f4faf4}
+#placementimageview[open]{display:flex;flex-direction:column;gap:10px}
+.placementimagebar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none}
+.placementimagestage{flex:1;min-height:0;overflow:auto}
+.placementimagestage img{display:block;max-width:none;height:auto}
+#placementimageview>label{display:flex;align-items:center;gap:12px;flex:none;margin:0}
+#placementimageview input[type=range]{flex:1;min-width:0}
