@@ -199,10 +199,46 @@ def _range_cells(row: int, start_col: int, end_col: int, first_val, style: int) 
     return out
 
 
+
+def _summary_through_month(summary: dict, year: int, month: int) -> dict:
+    """Excelの月別集計と期間合計を報告対象月までに揃える。"""
+    cutoff = (int(year), int(month))
+    months = []
+    for row in summary.get('months') or []:
+        if row.get('year') is not None and row.get('month') is not None:
+            ym = (int(row['year']), int(row['month']))
+        else:
+            ym = tuple(map(int, row['key'].replace('-', '/').split('/')))
+        if ym <= cutoff:
+            months.append(row)
+
+    period = {}
+    for field in ('ordinary', 'overtime', 'total'):
+        values = []
+        for row in months:
+            value = row.get(field + 'Minutes')
+            if value is None and row.get(field + 'Hm'):
+                hours, minutes = map(int, row[field + 'Hm'].split(':'))
+                value = hours * 60 + minutes
+            if value is not None:
+                values.append(value)
+        total = sum(values) if values else None
+        period[field + 'Minutes'] = total
+        period[field + 'Hm'] = f'{total // 60}:{total % 60:02d}' if total is not None else ''
+
+    label = summary.get('fiscalLabel') or ''
+    if months:
+        first = months[0]
+        first_key = first.get('key') or f"{first['year']}/{int(first['month']):02d}"
+        start_year, start_month = map(int, first_key.replace('-', '/').split('/'))
+        label = f'{start_year}年{start_month}月〜{year}年{month}月'
+    return {**summary, 'months': months, 'period': period, 'fiscalLabel': label}
+
+
 def workbook(report: dict) -> bytes:
     y = report['year']
     m = report['month']
-    summary = report.get('summary') or {}
+    summary = _summary_through_month(report.get('summary') or {}, y, m)
     bihin = report.get('bihin') or {}
     new_contracts = report.get('newContracts') or _normalize_slots([])
     ren_contracts = report.get('renewalContracts') or _normalize_slots([])

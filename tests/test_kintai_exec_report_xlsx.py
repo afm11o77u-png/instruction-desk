@@ -31,5 +31,40 @@ class ExecReportXlsxTest(unittest.TestCase):
         self.assertIn('試験顧客', values)
 
 
+    def test_month_rows_and_totals_stop_at_report_month(self):
+        import openpyxl
+        months = [
+            {'year': 2026 if m >= 2 else 2027, 'month': m,
+             'key': f'{2026 if m >= 2 else 2027}/{m:02d}',
+             'ordinaryMinutes': 60, 'overtimeMinutes': 5, 'totalMinutes': 65,
+             'ordinaryHm': '1:00', 'overtimeHm': '0:05', 'totalHm': '1:05'}
+            for m in list(range(2, 13)) + [1]
+        ]
+        for year, month, count in [(2026, 2, 1), (2026, 10, 9), (2027, 1, 12)]:
+            with self.subTest(year=year, month=month):
+                data = report.workbook({
+                    'year': year, 'month': month, 'fiscalStartYear': 2026,
+                    'summary': {'months': months, 'fiscalLabel': '2026年2月〜2027年1月',
+                                'period': {'ordinaryHm': '999:00'}},
+                })
+                sheet = openpyxl.load_workbook(BytesIO(data)).active
+                labels = [row[0].value for row in sheet]
+                self.assertEqual([v for v in labels if v in [m['key'] for m in months]],
+                                 [m['key'] for m in months[:count]])
+                total_row = labels.index('期間合計') + 1
+                self.assertEqual(sheet.cell(total_row, 2).value, f'{count}:00')
+                self.assertEqual(sheet.cell(total_row, 4).value,
+                                 f'{count * 5 // 60}:{count * 5 % 60:02d}')
+                self.assertIn(f'2026年2月〜{year}年{month}月', sheet.cell(2, 1).value)
+
+    def test_empty_month_totals_remain_blank(self):
+        summary = report._summary_through_month({'months': [
+            {'year': 2026, 'month': 2, 'ordinaryMinutes': None, 'ordinaryHm': ''},
+            {'year': 2026, 'month': 3, 'ordinaryMinutes': 60, 'ordinaryHm': '1:00'},
+        ]}, 2026, 2)
+        self.assertEqual(len(summary['months']), 1)
+        self.assertEqual(summary['period']['ordinaryHm'], '')
+
+
 if __name__ == '__main__':
     unittest.main()
