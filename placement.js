@@ -297,7 +297,7 @@ async function openKintaiFromLocation(){
 }
 function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
-  document.querySelectorAll('#kintainav .nav').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
+  document.querySelectorAll('#kintainav [data-kintai-section]').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
   document.querySelectorAll('#kintainav .kintai-nav-group').forEach(group=>{group.hidden=!group.querySelector('.nav:not([hidden])')});
   const att=$('#kintaiattendance');
   const daily=$('#kintaidaily');
@@ -407,7 +407,7 @@ function showDeskCatalog(){showCatalog('desk')}
 function showInfoCatalog(){showCatalog('info')}
 document.querySelectorAll('#modes .mode').forEach(b=>b.onclick=()=>{showCatalog(b.dataset.catalog)});
 document.querySelectorAll('#stocknav .nav').forEach(b=>b.onclick=()=>{if(b.dataset.stockSection===stockSection&&document.body.classList.contains('catalog-stock')){tellStockFrame(stockSection);return}syncStockNav(b.dataset.stockSection);if(!document.body.classList.contains('catalog-stock'))showCatalog('stock');else tellStockFrame(stockSection)});
-document.querySelectorAll('#kintainav .nav').forEach(b=>b.onclick=async()=>{
+document.querySelectorAll('#kintainav [data-kintai-section]').forEach(b=>b.onclick=async()=>{
   if(b.dataset.kintaiSection===kintaiSection&&document.body.classList.contains('catalog-kintai')){
     await showKintaiSection(kintaiSection);
     return;
