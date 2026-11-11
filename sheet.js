@@ -167,10 +167,36 @@ const labelPlaces=['左上','右上','左下','右下'];
 function labelCard(){const el=document.createElement('tr');el.className='labelcard';el.innerHTML='<td class="labelposition"></td><td><input aria-label="顧客名" data-key="customer" maxlength="40" list="customers" autocomplete="off"></td><td class="labelcol-mid"><input aria-label="管理番号" data-key="management" maxlength="20" autocomplete="off"></td><td class="labelcol-mid"><input aria-label="部署名" data-key="department" maxlength="40" autocomplete="off"></td><td><input aria-label="氏名" data-key="employee" maxlength="20" placeholder="様は自動で付きます" autocomplete="off"></td><td><select aria-label="受付内容" data-key="request"><option>新規</option><option>サイズ交換</option><option selected>消耗・破損交換</option><option>追加・補充</option><option>復職</option><option>異動・移動</option><option>その他</option><option>表示なし</option></select></td><td><button type="button" class="quiet labelclear">クリア</button></td>';el.querySelector('.labelclear').onclick=()=>{el.querySelectorAll('input').forEach(input=>input.value='');el.querySelector('[data-key="request"]').value='消耗・破損交換'};return el}
 
 function renumberLabelCards(){[...$('#labelcards').children].forEach((card,i)=>{const page=Math.floor(i/4)+1;card.querySelector('.labelposition').textContent=`${page}枚目・${labelPlaces[i%4]}`})}
-function resetLabelCards(){const box=$('#labelcards');box.replaceChildren();for(let i=0;i<4;i++)box.append(labelCard());renumberLabelCards()}
+let appliedLabelCustomer='';
+function resetLabelCustomerBatch(){
+ appliedLabelCustomer='';
+ $('#labelcustomerbulk').value='';
+}
+function resetLabelCards(){resetLabelCustomerBatch();const box=$('#labelcards');box.replaceChildren();for(let i=0;i<4;i++)box.append(labelCard());renumberLabelCards()}
 function labelOrders(){const list=[...$('#labelcards').querySelectorAll('.labelcard')].map(card=>{const order={};card.querySelectorAll('[data-key]').forEach(el=>order[el.dataset.key]=el.value.trim());const address=['customer','management','department','employee'].some(key=>order[key]);return address?order:null});while(list.length>4&&list.slice(0,4).every(order=>!order))list.splice(0,4);while(list.length>4&&list.slice(-4).every(order=>!order))list.splice(-4,4);return list.some(Boolean)?list:[]}
 resetLabelCards();
-$('#labeladd').onclick=()=>{const box=$('#labelcards');if(box.children.length>=40){toast('一度に印刷できるのは40件までです。');return}for(let i=0;i<4;i++)box.append(labelCard());renumberLabelCards();box.lastElementChild.querySelector('input').focus()};
+$('#labeladd').onclick=()=>{
+ const box=$('#labelcards');
+ if(box.children.length>=40){toast('一度に印刷できるのは40件までです。');return}
+ for(let i=0;i<4;i++){
+  const card=labelCard();
+  card.querySelector('[data-key="customer"]').value=appliedLabelCustomer;
+  box.append(card);
+ }
+ renumberLabelCards();
+ box.lastElementChild.querySelector('input').focus();
+};
+$('#labelcustomerapply').onclick=()=>{
+ const input=$('#labelcustomerbulk');
+ const customer=input.value.trim();
+ if(!customer){toast('一括設定する顧客名を入力してください。');input.focus();return}
+ const fields=[...$('#labelcards').querySelectorAll('[data-key="customer"]')];
+ if(fields.some(field=>field.value.trim()&&field.value.trim()!==customer)&&
+    !confirm('入力済みの顧客名も置き換えますか？'))return;
+ fields.forEach(field=>{field.value=customer});
+ appliedLabelCustomer=customer;
+ toast('全行に顧客名を適用しました。次の用紙にも入力されます。');
+};
 $('#labelreset').onclick=()=>{if(labelOrders().length&&!confirm('入力した宛名をすべて消しますか？'))return;resetLabelCards()};
 $('#labelprint').onclick=()=>{const list=labelOrders();if(!list.length){toast('宛名に入れる内容がありません。');return}if(list.length>40){toast('一度に印刷できるのは40件までです。');return}queuePrint(list,true,true,true,false,currentLabelPattern())};
 const labelKeys=typeof LABEL_PASTE_KEYS!=='undefined'?LABEL_PASTE_KEYS:['customer','management','department','employee','request'];
@@ -232,7 +258,7 @@ $('#labelrequestapply').onclick=()=>{
 };
 let labelSets=[];
 function labelSlots(){return [...$('#labelcards').querySelectorAll('.labelcard')].map(card=>{const slot={};card.querySelectorAll('[data-key]').forEach(el=>slot[el.dataset.key]=el.value.trim());return slot})}
-function normalizeLabelPayload(payload){if(Array.isArray(payload))return{pattern:'4',slots:payload};if(payload&&typeof payload==='object')return{pattern:payload.pattern==='3'?'3':'4',slots:Array.isArray(payload.slots)?payload.slots:[]};return{pattern:'4',slots:[]}}function fillLabelCards(slots){const box=$('#labelcards');const list=Array.isArray(slots)&&slots.length?slots.slice(0,40):[null,null,null,null];while(list.length%4)list.push(null);box.replaceChildren();for(const slot of list){const card=labelCard();if(slot)for(const key of labelKeys){const el=card.querySelector(`[data-key="${key}"]`);if(el)el.value=slot[key]||(key==='request'?'消耗・破損交換':'')}box.append(card)}renumberLabelCards()}
+function normalizeLabelPayload(payload){if(Array.isArray(payload))return{pattern:'4',slots:payload};if(payload&&typeof payload==='object')return{pattern:payload.pattern==='3'?'3':'4',slots:Array.isArray(payload.slots)?payload.slots:[]};return{pattern:'4',slots:[]}}function fillLabelCards(slots){resetLabelCustomerBatch();const box=$('#labelcards');const list=Array.isArray(slots)&&slots.length?slots.slice(0,40):[null,null,null,null];while(list.length%4)list.push(null);box.replaceChildren();for(const slot of list){const card=labelCard();if(slot)for(const key of labelKeys){const el=card.querySelector(`[data-key="${key}"]`);if(el)el.value=slot[key]||(key==='request'?'消耗・破損交換':'')}box.append(card)}renumberLabelCards()}
 function renderLabelSets(selectId){const list=$('#labellist');if(!list)return;const current=selectId??list.value;list.replaceChildren(new Option('選んでください',''));for(const set of labelSets)list.append(new Option(set.name,set.id));if([...list.options].some(option=>option.value===String(current)))list.value=String(current);const chosen=labelSets.find(set=>set.id===+list.value);if(chosen)$('#labelname').value=chosen.name}
 async function loadLabelSets(selectId){if(!currentUser||(currentUser.role!=='owner'&&currentUser.role!=='floor'&&!['floor2','floor3'].includes(currentUser.role)))return;try{labelSets=await api('/api/label-sets');renderLabelSets(selectId);$('#labelmemoryerror').textContent=''}catch(e){$('#labelmemoryerror').textContent=e.message}}
 function chosenLabelSet(){const set=labelSets.find(set=>set.id===+$('#labellist').value);if(!set)throw Error('呼び出す宛名を選んでください。');return set}
