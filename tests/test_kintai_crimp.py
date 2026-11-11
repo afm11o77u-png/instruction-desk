@@ -206,7 +206,9 @@ class CrimpTest(unittest.TestCase):
     def test_ui_wired(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         nav = html[html.index('id="kintainav"'):html.index('id="sidebarfooter"')]
-        self.assertLess(nav.index('data-kintai-section="bihin"'), nav.index('data-kintai-section="crimp">圧着カウンター<'))
+        counter = nav.index('data-kintai-section="crimp">圧着カウンター<')
+        self.assertLess(nav.index('data-kintai-section="shift"'), counter)
+        self.assertLess(counter, nav.index('data-kintai-section="tot"'))
         shift = html[html.index('id="kintaishift"'):html.index('id="kintaicrimp"')]
         self.assertNotIn('crimpcounter', shift)
         self.assertLess(html.index('id="kintaicrimp" hidden'), html.index('id="crimpcounter"'))

@@ -21,10 +21,10 @@ class KintaiPageSplitTest(unittest.TestCase):
         nav = _slice(html, 'id="kintainav"', 'id="sidebarfooter"')
         expected = {
             'シフト準備': ['shift'],
+            '日々の記録': ['crimp'],
             '15日締め': ['tot', 'register', 'daily', 'leave', 'attendance'],
             '月末締め': ['bihin'],
             '10日 幹部会議': ['report', 'summary'],
-            '日々の記録': ['crimp'],
         }
         import re
         groups = re.findall(r'<div class="kintai-nav-group"><div class="navcaption">([^<]+)</div>(.*?)</div>', nav, re.S)
