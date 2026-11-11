@@ -846,5 +846,9 @@ body.catalog-kintai main>header .headactions{display:none}
 .placementimagebar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex:none}
 .placementimagestage{flex:1;min-height:0;overflow:auto}
 .placementimagestage img{display:block;max-width:none;height:auto}
+.placementphoto{position:relative;flex:none;overflow:clip}
+.placementphoto img{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
+.placementimageactions,.placementrotate{display:flex;align-items:center;gap:8px}
+.placementrotate[hidden]{display:none}
 #placementimageview>label{display:flex;align-items:center;gap:12px;flex:none;margin:0}
 #placementimageview input[type=range]{flex:1;min-width:0}
