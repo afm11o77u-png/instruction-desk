@@ -366,6 +366,23 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(bon['kind'], 'note')
         self.assertEqual(bon['note'], 'ボンマックス')
 
+        # 9. スラッシュ併記品番（両側が正規品番の場合はそのまま登録、日本語混ざりは除外）
+        slash = suffix.classify_suffix('SDAW01UA / ANDAKW01-UAC')
+        self.assertEqual(slash['baseCode'], 'SDAW01UA / ANDAKW01-UAC')
+        self.assertEqual(slash['kind'], 'plain')
+        self.assertFalse(slash['needsConfirm'])
+
+        # スラッシュ併記＋末尾カラー
+        slash_color = suffix.classify_suffix('SDAW01UA / ANDAKW01-UAC ブラック')
+        self.assertEqual(slash_color['baseCode'], 'SDAW01UA / ANDAKW01-UAC')
+        self.assertEqual(slash_color['kind'], 'color')
+        self.assertEqual(slash_color['color'], 'ブラック')
+
+        # スラッシュの後に日本語がある場合は品番併記とみなさず要確認
+        slash_proc = suffix.classify_suffix('SDAW01UA / ペン差し加工')
+        self.assertTrue(slash_proc['needsConfirm'])
+        self.assertFalse(slash_proc['apply'])
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):

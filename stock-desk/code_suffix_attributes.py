@@ -131,6 +131,18 @@ def _is_compound_code(text):
     return False
 
 
+def _is_slash_code(text):
+    """'SDAW01UA / ANDAKW01-UAC' のように空白を含むスラッシュで区切られた品番併記"""
+    norm = unicodedata.normalize('NFKC', text or '').strip()
+    norm = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm)
+    if not re.search(r'\s+[/／]|[/／]\s+', norm):
+        return False
+    parts = [p.strip() for p in re.split(r'\s*[/／]\s*', norm)]
+    if len(parts) >= 2 and all(_formal_code(p) and not _is_color_code(p) for p in parts):
+        return True
+    return False
+
+
 def _color_of(text):
     hit = paren.classify_paren_segment(stock.text(text))
     if hit and hit.get('kind') == 'color' and paren._norm_token(text) == (hit.get('matched') or ''):
@@ -140,12 +152,12 @@ def _color_of(text):
     for term in sorted(paren.COLOR_TERMS, key=len, reverse=True):
         if raw.endswith(term) and len(raw) > len(term):
             head = raw[:-len(term)]
-            if _formal_code(head) or _is_compound_code(head):
+            if _formal_code(head) or _is_compound_code(head) or _is_slash_code(head):
                 return term
     for syn, canon in paren.COLOR_SYNONYMS.items():
         if raw.endswith(syn) and len(raw) > len(syn):
             head = raw[:-len(syn)]
-            if _formal_code(head) or _is_compound_code(head):
+            if _formal_code(head) or _is_compound_code(head) or _is_slash_code(head):
                 return canon
     return ''
 
@@ -354,11 +366,21 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         note = inner
     color = _color_of(body)
     base = _strip_color_tail(body, color) if color else body
-    base_ok = _formal_code(base) or _is_compound_code(base)
+    base_ok = _formal_code(base) or _is_compound_code(base) or _is_slash_code(base)
     if color and not base_ok:
         return _empty(
             kind='unknown', needsConfirm=True, baseCode=raw,
             reason=f'品番「{raw}」から色を外した品番を確定できません。',
+        )
+    if _is_slash_code(base):
+        norm_base = unicodedata.normalize('NFKC', base).strip()
+        norm_base = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_base)
+        if color:
+            return _empty(apply=True, kind='color', baseCode=norm_base, color=color, note=note)
+        return _empty(
+            apply=bool(norm_base != raw),
+            kind='plain',
+            baseCode=norm_base,
         )
     space = re.match(r'^(\S+)\s+(.+)$', base)
     if space:
