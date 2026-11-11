@@ -19,35 +19,17 @@ class KintaiPageSplitTest(unittest.TestCase):
     def test_nav_order(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')
         nav = _slice(html, 'id="kintainav"', 'id="sidebarfooter"')
-        rows = []
-        start = 0
-        while True:
-            i = nav.find('class="kintai-entryrow"', start)
-            if i < 0:
-                break
-            end = nav.index('</div>', i)
-            rows.append(nav[i:end])
-            start = end
-        self.assertEqual(len(rows), 2)
-        self.assertIn('>出勤簿<', rows[0])
-        self.assertIn('>登録<', rows[0])
-        self.assertNotIn('>日別<', rows[0])
-        self.assertIn('>日別<', rows[1])
-        self.assertIn('>月別集計<', rows[1])
-        self.assertNotIn('>登録<', rows[1])
-        self.assertLess(nav.index('>月別集計<'), nav.index('>シフト表<'))
-        self.assertLess(nav.index('>シフト表<'), nav.index('>備品棚卸<'))
-        self.assertLess(nav.index('>備品棚卸<'), nav.index('>圧着カウンター<'))
-        self.assertIn('data-kintai-section="attendance"', nav)
-        self.assertIn('data-kintai-section="register"', nav)
-        self.assertIn('data-kintai-section="summary"', nav)
-        css = (ROOT / 'style.css').read_text(encoding='utf-8')
-        rule_at = css.index('#kintainav .kintai-entryrow{')
-        rule = css[rule_at:css.index('}', rule_at)]
-        self.assertIn('flex-flow:row nowrap', rule)
-        child_at = css.index('#kintainav .kintai-entryrow .nav{')
-        child = css[child_at:css.index('}', child_at)]
-        self.assertIn('white-space:nowrap', child)
+        expected = {
+            'シフト準備': ['shift'],
+            '15日締め': ['tot', 'register', 'daily', 'leave', 'attendance'],
+            '月末締め': ['bihin'],
+            '10日 幹部会議': ['report', 'summary'],
+            '日々の記録': ['crimp'],
+        }
+        import re
+        groups = re.findall(r'<div class="kintai-nav-group"><div class="navcaption">([^<]+)</div>(.*?)</div>', nav, re.S)
+        self.assertEqual([(label, re.findall(r'data-kintai-section="([^"]+)"', items))
+                          for label, items in groups], list(expected.items()))
 
     def test_panels_keep_attendance_and_split_import(self):
         html = (ROOT / 'index.html').read_text(encoding='utf-8')

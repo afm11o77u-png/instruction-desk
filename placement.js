@@ -242,6 +242,7 @@ function normalizeKintaiSection(section){
   if(section==='register')return 'register';
   if(section==='summary')return 'summary';
   if(section==='daily')return 'daily';
+  if(['tot','leave','report'].includes(section))return section;
   return 'attendance';
 }
 function kintaiSectionFromLocation(){
@@ -252,7 +253,7 @@ function kintaiSectionFromLocation(){
   if(path==='/kintai'||path==='/kintai/attendance')return 'attendance';
   try{
     const q=new URLSearchParams(location.search).get('kintai');
-    if(q==='register'||q==='summary'||q==='daily'||q==='attendance')return q;
+    if(['register','summary','daily','attendance','tot','leave','report'].includes(q))return q;
   }catch(_){}
   return '';
 }
@@ -267,7 +268,10 @@ function writeKintaiLocation(section){
     else if(section==='daily')path='/kintai/daily';
     else if(cur==='/kintai/register'||cur==='/kintai/summary'||cur==='/kintai/daily')path='/';
     url.pathname=path;
-    url.searchParams.delete('kintai');
+    if(['tot','leave','report'].includes(section)) {
+      url.pathname='/';
+      url.searchParams.set('kintai',section);
+    }else url.searchParams.delete('kintai');
     const next=url.pathname+url.search+url.hash;
     if(next!==location.pathname+location.search+location.hash)history.replaceState(null,'',next);
   }catch(_){}
@@ -294,6 +298,7 @@ async function openKintaiFromLocation(){
 function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
   document.querySelectorAll('#kintainav .nav').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
+  document.querySelectorAll('#kintainav .kintai-nav-group').forEach(group=>{group.hidden=!group.querySelector('.nav:not([hidden])')});
   const att=$('#kintaiattendance');
   const daily=$('#kintaidaily');
   const reg=$('#kintairegister');
@@ -308,8 +313,11 @@ function syncKintaiNav(section){
   if(bihin)bihin.hidden=kintaiSection!=='bihin';
   const crimp=$('#kintaicrimp');
   if(crimp)crimp.hidden=kintaiSection!=='crimp';
+  $('#kintaitot').hidden=kintaiSection!=='tot';
+  $('#kintaileave').hidden=kintaiSection!=='leave';
+  $('#kintaiexecpanel').hidden=kintaiSection!=='report';
 }
-async function showKintaiSection(section){
+async function showKintaiSection(section, reportMonth){
   const next=normalizeKintaiSection(section);
   // シフト表／備品棚卸から他セクションへ移るとき、未保存確認
   if(kintaiSection==='shift'&&next!=='shift'&&typeof confirmKintaiShiftLeave==='function'){
@@ -322,7 +330,7 @@ async function showKintaiSection(section){
   if(typeof listChrome==='function')listChrome();
   const heading=$('#title');
   if(heading&&document.body.classList.contains('catalog-kintai')){
-    const labels={attendance:'出勤簿',register:'登録',summary:'月別集計',daily:'日別'};
+    const labels={attendance:'出勤簿・休日数',register:'共有出勤簿の取込',summary:'月別集計',daily:'日別・出勤日数',shift:'シフト表',bihin:'備品棚卸',crimp:'圧着カウンター',tot:'Touch On Time実績・コピー',leave:'有休残数の取込',report:'幹部会議報告'};
     if(labels[kintaiSection])heading.textContent=labels[kintaiSection];
   }
   writeKintaiLocation(kintaiSection);
@@ -336,7 +344,11 @@ async function showKintaiSection(section){
     if(typeof loadKintaiSummary==='function')loadKintaiSummary().catch(e=>toast(e.message));
   }else if(kintaiSection==='daily'){
     if(typeof loadKintaiDaily==='function')loadKintaiDaily().catch(e=>toast(e.message));
-  }else if(typeof loadKintai==='function'){
+  }else if(kintaiSection==='report'){
+    if(typeof loadExecReport==='function')await loadExecReport(reportMonth).catch(e=>toast(e.message));
+  }else if(kintaiSection==='leave'){
+    if(typeof loadKintaiLeaveBalances==='function')await loadKintaiLeaveBalances().catch(e=>toast(e.message));
+  }else if(kintaiSection!=='tot'&&typeof loadKintai==='function'){
     loadKintai().catch(e=>toast(e.message));
   }
 }

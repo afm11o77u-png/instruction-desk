@@ -1,5 +1,7 @@
 """Excelのシート参照が解決できることを検証する回帰テスト。"""
+import sqlite3
 import unittest
+from unittest.mock import patch
 from io import BytesIO
 from zipfile import ZipFile
 from xml.etree import ElementTree as ET
@@ -64,6 +66,29 @@ class ExecReportXlsxTest(unittest.TestCase):
         ]}, 2026, 2)
         self.assertEqual(len(summary['months']), 1)
         self.assertEqual(summary['period']['ordinaryHm'], '')
+
+    def test_crimp_report_uses_target_month_without_names(self):
+        import openpyxl
+        with sqlite3.connect(':memory:') as conn:
+            conn.row_factory = sqlite3.Row
+            report.kintai_crimp.schema(conn)
+            conn.executemany(
+                'INSERT INTO kintai_crimp_readings(day, reading, user_name, worker_name, updated_at) VALUES(?, ?, ?, ?, ?)',
+                [(day, count, '入力者テスト', '作業者テスト', '') for day, count in [
+                    ('2026-09-30', 100), ('2026-10-05', 128), ('2026-10-31', 200), ('2026-11-01', 220)
+                ]],
+            )
+            with patch.object(report.kintai_bihin, 'get_sheet', return_value={}):
+                data = report.bundle(conn, 2026, 10, None, lambda c, fy: {})
+                empty = report.bundle(conn, 2026, 8, None, lambda c, fy: {})
+            self.assertEqual(data['crimp'], {'start': '2026-10-01', 'end': '2026-10-31', 'total': 100})
+            self.assertIsNone(empty['crimp']['total'])
+            sheet = openpyxl.load_workbook(BytesIO(report.workbook(data))).active
+            cells = [cell.value for row in sheet for cell in row]
+            self.assertIn('4. 圧着数（2026-10-01〜2026-10-31）', cells)
+            self.assertIn(100, cells)
+            self.assertNotIn('入力者テスト', cells)
+            self.assertNotIn('作業者テスト', cells)
 
 
 if __name__ == '__main__':

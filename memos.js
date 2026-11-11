@@ -60,3 +60,7 @@ async function openMemos(opts){
 function openOldDataMemo(){
  return openMemos({only:'03-kyudata-toridashi',title:'旧データの取り出し方'});
 }
+
+function openProcedureMemo(){
+ return openMemos({only:'04-mark-workflow',title:'手順メモ'});
+}

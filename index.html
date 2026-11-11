@@ -1,6 +1,27 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>指示書デスク</title><link rel="icon" href="/favicon.png"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/account.css"><link rel="stylesheet" href="/sheet.css"><link rel="stylesheet" href="/repair.css"><link rel="stylesheet" href="/display-mode.css"></head>
-<body><aside><div class="brand"><span id="brandtitle">指示書デスク</span><div class="brandrow" id="brandimages"><img class="brandlogo" src="/logo.jpg" alt="エンパイアー"><img class="mascots" src="/mascots.png" alt="きらりん、ふわりん"></div></div><div class="modes" id="modes"><button type="button" class="mode on" data-catalog="desk">指示書デスク</button><button type="button" class="mode" data-catalog="info">顧客・商品情報</button><button type="button" id="modestock" class="mode" data-catalog="stock">在庫管理</button></div><a id="requestweb-open" hidden href="/request-web" style="border:1px solid #85a38f;border-radius:8px;padding:7px 12px;margin:8px 0 16px;color:white;text-align:center;text-decoration:none;font-weight:bold">WEB依頼</a><div id="desknav"><div class="navgroup"><div class="navcaption">指示書の作成・確認</div><div class="navrow"><button type="button" class="nav active" data-view="all">指示書一覧</button><button type="button" class="nav" data-view="draft">下書き</button></div></div><div class="navgroup"><div class="navcaption">現場の作業・出荷</div><button type="button" class="nav" data-view="floor">現場の作業一覧</button><button type="button" class="nav" data-view="picking">ピッキングリスト</button><button type="button" class="nav" data-view="ship">出荷仕分け</button></div><div class="navgroup"><div class="navcaption">管理担当持込</div><div class="navrow"><button type="button" class="nav" data-view="carry-in">入力</button><button type="button" class="nav" data-view="carry-out">出力</button></div></div><div class="navgroup"><div class="navcaption">印刷</div><button type="button" class="nav" data-view="labels">宛名書き・管理票印刷</button></div></div><div id="infonav" hidden><button class="nav" data-view="placement">貼付け位置</button><button class="nav" data-view="shipinfo">出荷情報</button><button class="nav" data-view="nameinfo">ネーム情報<span class="exebadge" data-exebadge hidden>NEW</span></button></div><div id="stocknav" hidden><div class="navrow stocknav-top"><button type="button" class="nav active" data-stock-section="list">在庫一覧</button><button type="button" class="nav" data-stock-section="setup">登録・設定</button></div><div class="stocknav-secondary"><button type="button" class="nav stocknav-qrread" data-stock-section="qrread">QR読み取り</button><button type="button" class="nav stocknav-history" data-stock-section="history">在庫履歴</button><button type="button" class="nav stocknav-period" data-stock-section="period">期間入出荷集計</button><button type="button" class="nav stocknav-orders" data-stock-section="orders">発注</button><button type="button" class="nav stocknav-stocktake" data-stock-section="stocktake">棚卸</button><button type="button" class="nav stocknav-close" data-stock-section="close">月末締め</button></div></div><div id="kintainav" hidden><div class="kintai-entryrow"><button type="button" class="nav active" data-kintai-section="attendance">出勤簿</button><button type="button" class="nav" data-kintai-section="register">登録</button></div><div class="kintai-entryrow"><button type="button" class="nav" data-kintai-section="daily">日別</button><button type="button" class="nav" data-kintai-section="summary">月別集計</button></div><button type="button" class="nav" data-kintai-section="shift">シフト表</button><button type="button" class="nav" data-kintai-section="bihin">備品棚卸</button><button type="button" class="nav" data-kintai-section="crimp">圧着カウンター</button></div><div id="sidebarfooter"><details id="desksettings" hidden><summary class="nav">管理メニュー</summary><div class="desksettings-items"><button type="button" class="nav" id="manageusers" hidden>利用者管理</button><a class="nav" id="customerids-open" href="/customer-accounts" hidden>顧客ID管理</a><button type="button" class="nav" id="repair-open" hidden>管理・修正</button><button type="button" class="nav" id="memo-open" hidden>構想メモ</button><button type="button" class="nav" id="olddata-open" hidden>旧データの取り出し方</button></div></details></div></aside>
+<body><aside><div class="brand"><span id="brandtitle">指示書デスク</span><div class="brandrow" id="brandimages"><img class="brandlogo" src="/logo.jpg" alt="エンパイアー"><img class="mascots" src="/mascots.png" alt="きらりん、ふわりん"></div></div><div class="modes" id="modes"><button type="button" class="mode on" data-catalog="desk">指示書デスク</button><button type="button" class="mode" data-catalog="info">顧客・商品情報</button><button type="button" id="modestock" class="mode" data-catalog="stock">在庫管理</button></div><a id="requestweb-open" hidden href="/request-web" style="border:1px solid #85a38f;border-radius:8px;padding:7px 12px;margin:8px 0 16px;color:white;text-align:center;text-decoration:none;font-weight:bold">WEB依頼</a><div id="desknav"><div class="navgroup"><div class="navcaption">指示書の作成・確認</div><div class="navrow"><button type="button" class="nav active" data-view="all">指示書一覧</button><button type="button" class="nav" data-view="draft">下書き</button></div></div><div class="navgroup"><div class="navcaption">現場の作業・出荷</div><button type="button" class="nav" data-view="floor">現場の作業一覧</button><button type="button" class="nav" data-view="picking">ピッキングリスト</button><button type="button" class="nav" data-view="ship">出荷仕分け</button></div><div class="navgroup"><div class="navcaption">管理担当持込</div><div class="navrow"><button type="button" class="nav" data-view="carry-in">入力</button><button type="button" class="nav" data-view="carry-out">出力</button></div></div><div class="navgroup"><div class="navcaption">印刷</div><button type="button" class="nav" data-view="labels">宛名書き・管理票印刷</button></div></div><div id="infonav" hidden><button class="nav" data-view="placement">貼付け位置</button><button class="nav" data-view="shipinfo">出荷情報</button><button class="nav" data-view="nameinfo">ネーム情報<span class="exebadge" data-exebadge hidden>NEW</span></button></div><div id="stocknav" hidden><div class="navrow stocknav-top"><button type="button" class="nav active" data-stock-section="list">在庫一覧</button><button type="button" class="nav" data-stock-section="setup">登録・設定</button></div><div class="stocknav-secondary"><button type="button" class="nav stocknav-qrread" data-stock-section="qrread">QR読み取り</button><button type="button" class="nav stocknav-history" data-stock-section="history">在庫履歴</button><button type="button" class="nav stocknav-period" data-stock-section="period">期間入出荷集計</button><button type="button" class="nav stocknav-orders" data-stock-section="orders">発注</button><button type="button" class="nav stocknav-stocktake" data-stock-section="stocktake">棚卸</button><button type="button" class="nav stocknav-close" data-stock-section="close">月末締め</button></div></div><div id="kintainav" hidden>
+<div class="kintai-nav-group"><div class="navcaption">シフト準備</div>
+<button type="button" class="nav" data-kintai-section="shift">シフト表・予定CSV</button>
+</div>
+<div class="kintai-nav-group"><div class="navcaption">15日締め</div>
+<button type="button" class="nav" data-kintai-section="tot">Touch On Time実績・コピー</button>
+<button type="button" class="nav" data-kintai-section="register">共有出勤簿の取込</button>
+<button type="button" class="nav" data-kintai-section="daily">日別・出勤日数</button>
+<button type="button" class="nav" data-kintai-section="leave">有休残数の取込</button>
+<button type="button" class="nav active" data-kintai-section="attendance">出勤簿・休日数の確認</button>
+</div>
+<div class="kintai-nav-group"><div class="navcaption">月末締め</div>
+<button type="button" class="nav" data-kintai-section="bihin">備品棚卸</button>
+</div>
+<div class="kintai-nav-group"><div class="navcaption">10日 幹部会議</div>
+<button type="button" class="nav" data-kintai-section="report">幹部会議報告・PDF</button>
+<button type="button" class="nav" data-kintai-section="summary">月別集計</button>
+</div>
+<div class="kintai-nav-group"><div class="navcaption">日々の記録</div>
+<button type="button" class="nav" data-kintai-section="crimp">圧着カウンター</button>
+</div>
+</div><div id="sidebarfooter"><details id="desksettings" hidden><summary class="nav">管理メニュー</summary><div class="desksettings-items"><button type="button" class="nav" id="manageusers" hidden>利用者管理</button><a class="nav" id="customerids-open" href="/customer-accounts" hidden>顧客ID管理</a><button type="button" class="nav" id="repair-open" hidden>管理・修正</button><button type="button" class="nav" id="memo-open" hidden>構想メモ</button><button type="button" class="nav" id="procedure-open" hidden>手順メモ</button><button type="button" class="nav" id="olddata-open" hidden>旧データの取り出し方</button></div></details></div></aside>
 <main><section id="stockdesk" hidden><iframe id="stockframe" title="在庫管理"></iframe></section><header><div><h1 id="title">指示書一覧</h1></div><div class="headactions"><button type="button" id="openshipped" hidden>発送済の指示書</button><button type="button" id="opendone" hidden>完了した指示書</button><button type="button" id="closedone" hidden>一覧に戻る</button><button class="primary" id="new">指示書を作成</button><button type="button" class="primary" id="placementnew" hidden>新しく登録</button><button type="button" class="primary" id="shipinfonew" hidden>新しく登録</button><button type="button" class="primary" id="namenew" hidden>新しく登録</button></div></header><section class="stats" id="stats"></section><details id="statsnote" class="list-note statsnote"><summary>件数の見方</summary><p class="list-note-body"></p></details><section id="pickingdesk" hidden><iframe id="pickingframe" title="ピッキングリスト"></iframe></section><section id="nameinfodesk" hidden><p class="namelead">統合ネームラベルの登録を、形式ごとに確認します。商品コードとは結び付けていません。見本の氏名と番号は架空です。</p><form id="namesearch" class="namefilters"><label>顧客<input id="namecustomer" maxlength="80" placeholder="顧客名"></label><button class="primary" type="submit">検索</button><button type="button" id="namedeletedopen" hidden>削除済み</button><button type="button" id="nameexeopen">統合ネームラベル（exe）</button></form><p id="namestatus"></p><div class="namepanes"><div id="namecustomers"></div><div id="nameformats"><p class="nameempty">左の顧客を選ぶと、形式がここに出ます。</p></div></div></section><dialog id="namedetail"><div class="dialoghead"><div><span id="namenumber"></span><h2 id="nametitle">ネーム形式</h2></div><button type="button" id="nameeditbtn" hidden>修正</button><button type="button" class="danger" id="namedeleteformat" hidden>この形式を削除</button><button type="button" class="quiet" id="nameclose">閉じる ×</button></div><div class="dialogbody" id="namebody"></div></dialog><dialog id="nameexe"><div class="dialoghead"><div><h2>統合ネームラベル（Windows版 exe）</h2><p class="namewarn">最新の1件だけを配布します。アップロードと差し替えは主管理者だけです。</p></div><button type="button" class="quiet" id="nameexeclose">閉じる ×</button></div><div class="dialogbody" id="nameexebody"><div id="nameexeinfo"></div><div id="nameexenotesview" class="exenotesview" hidden><h3>更新内容</h3><div class="exenotes" id="nameexenotescurrent"></div></div><p><button type="button" class="primary" id="nameexedownload" hidden>ダウンロード</button></p><details id="nameexehistorywrap" class="exehistory" hidden><summary>更新履歴</summary><div id="nameexehistory"></div></details><div id="nameexeupload" hidden><h3>exeをアップロード（差し替え）</h3><input id="nameexefile" type="file" accept=".exe"><label class="exenoteslabel">更新内容（任意・新しいexeに付きます）<textarea id="nameexeuploadnotes" rows="5" maxlength="4000" placeholder="・修正した点&#10;・追加した機能"></textarea></label><button type="button" id="nameexesend">アップロード</button><p id="nameexestatus" role="status"></p><p id="nameexedrop" class="namewarn"></p><div id="nameexenotesedit" hidden><h3>今の版の更新内容を編集</h3><p class="namewarn">置き場フォルダから自動取込したexeにも、ここで更新内容を付けられます。保存しても更新のお知らせは出し直しません。</p><textarea id="nameexenotes" rows="6" maxlength="4000"></textarea><button type="button" id="nameexenotessave">更新内容を保存</button><p id="nameexenotesstatus" role="status"></p></div><div id="nameexeusers"></div></div></div></dialog><dialog id="namedeleted"><div class="dialoghead"><div><h2>削除済みのネーム情報</h2><p class="namewarn">主管理者だけが確認・復元できます。見本画像ファイルは残っています。</p></div><button type="button" class="quiet" id="namedeletedclose">閉じる ×</button></div><div class="dialogbody" id="namedeletedbody"></div></dialog><dialog id="nameform"><form id="nameedit"><div class="dialoghead"><div><span id="nameformnumber"></span><h2 id="nameformtitle">ネーム情報を登録</h2></div><button type="button" class="quiet" id="nameformclose">閉じる ×</button></div><div class="dialogbody"><p class="namewarn">登録と修正は主管理者だけです。統合ネームラベル本体には反映されません。新しい形式の書体の記載はHG丸ゴシック（太字）です。見本は、選んだ画像を登録します。画像を選んで保存すると、その形式の見本はこの1枚になります。</p><div id="nameformerror" role="alert"></div><div class="nameeditgrid"><label>顧客名<input id="nameformcustomer" maxlength="80" required></label><label>読み<input id="nameformreading" maxlength="80"></label><label>形式名<input id="nameformformat" maxlength="80" required></label><label>サイズ<select id="nameformsize"><option value="small">小</option><option value="large">大</option><option value="unknown">サイズ未指定</option><option value="blank">無地</option></select></label><label>幅 mm<input id="nameformwidth" type="number" min="1" max="200"></label><label>高さ mm<input id="nameformheight" type="number" min="1" max="200"></label><label>貼付け位置<input id="nameformplacement" maxlength="120"></label><label>色の条件の名前<input id="nameformcolorcaption" maxlength="40" placeholder="区分、部署など"></label><label class="nameeditwide">見出し・印字<textarea id="nameformheading" maxlength="400" rows="3"></textarea></label><label class="nameeditwide">用紙の色<textarea id="nameformcolors" rows="4" placeholder="日中 緑&#10;夜間 青&#10;色だけ書くと指定色です"></textarea></label><label class="nameeditwide">部署<textarea id="nameformdepartments" rows="3" placeholder="1行に1部署"></textarea></label><label class="nameeditwide">注意・例外<textarea id="nameformnote" maxlength="400" rows="3"></textarea></label><label class="nameeditwide">要確認<textarea id="nameformpending" maxlength="200" rows="2" placeholder="未確定の内容があるときだけ"></textarea></label><label class="nameeditwide">見本画像<input id="nameformimage" type="file" accept="image/png,image/jpeg,image/webp"></label><p id="nameformfont" class="namewarn"></p></div></div><div class="dialogactions"><button class="primary" type="submit" id="nameformsave">保存</button></div></form></dialog><section id="placementdesk" hidden><form id="placementsearch" class="placementfilters"><label>顧客<span class="placementfind"><input id="placementcustomer" autocomplete="off" placeholder="顧客名"><button type="button" class="placementclear" hidden aria-label="顧客名を消す">×</button><div class="placementpicks" hidden></div></span></label><button class="primary" type="submit">検索</button><button type="button" class="quiet" id="placementboardopen">修正依頼</button></form><datalist id="placementcustomers"></datalist><datalist id="placementparts"></datalist><p id="placementstatus" class="duehint"></p><div id="placementgrid" class="placementgrid"></div><button type="button" id="placementmore" hidden>さらに表示</button><p class="duehint">一覧は縮小画像です。画像を押すと大きな画像を開きます。</p></section><section id="shipinfodesk" hidden><form id="shipinfosearch" class="shipinfofilters"><label>顧客<span class="shipinfofind"><input id="shipinfocustomer" autocomplete="off" placeholder="顧客名"><button type="button" class="placementclear" hidden aria-label="顧客名を消す">×</button><div class="placementpicks" hidden></div></span></label><button class="primary" type="submit">検索</button><button type="button" id="shipinfoexport" hidden>Excelで書き出す</button><button type="button" id="shipinfoimport" hidden>Excelから取り込む</button></form><details class="list-note"><summary>Excel取込の注意</summary><p class="list-note-body">Excelの1行目は見出しです。登録番号がある行は修正、空欄は追加です。ファイルにない行は消えません。</p></details><p id="shipinfostatus" class="duehint"></p><input id="shipinfofile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden><div class="list-stage" id="shipinfoliststage"><div class="shipinfowrap"><table><thead><tr><th>顧客名</th><th>出荷方法</th><th>出荷形態</th><th>出荷形態(マーク)</th><th>集配曜日</th><th>集配時間</th><th>集配号車</th><th>管理担当</th><th>営業担当</th><th>契約開始</th><th>契約終了</th><th></th></tr></thead><tbody id="shipinfobody"></tbody></table></div><div class="list-grid" id="shipinfolistgrid" hidden></div></div><button type="button" id="shipinfomore" hidden>さらに表示</button></section><section id="kintaidesk" hidden>
 <div id="kintaiattendance">
 <p class="kintailead">選んだ人の年度（2月〜翌1月）を、月ごとの行で表示します。元の出勤簿は変更しません。月の日付を押すと、その月シートの日別を開きます。取り込みは「登録」から行います。</p>
@@ -20,20 +41,7 @@
 <p id="kintaistatus"></p>
 <div id="kintaitable" class="kintai-tablewrap"></div>
 <div id="kintairoster" class="kintai-tablewrap" hidden></div>
-<details class="kintaisettings no-print" id="kintaileavepanel">
-<summary>有給の現保有数（管理簿の集計セルから読取）</summary>
-<p>従業員ごとに「集計」シートのセル位置（K3など）を入力してください。「セル位置を保存」で対応を記憶します。管理簿Excelを選び「設定を保存して現保有数を更新」を押すと、各セルの保存済みの値を読み取ります。従業員名とセルの対応を確認してください。</p>
-<div class="kintai-setting-actions">
-<label>有給休暇管理簿Excel<input type="file" id="kintaileavefile" accept=".xlsx"></label>
-<label>Excelを開くパスワード（必要な場合）<input type="password" id="kintaileavepassword" autocomplete="off" maxlength="1024"></label>
-<button type="button" id="kintaileavesave">セル位置を保存</button>
-<button type="button" id="kintaileaveupdate">設定を保存して現保有数を更新</button>
-<button type="button" class="primary" id="kintaileaveapply">読み込んだデータを出勤簿に反映</button>
-</div>
-<p class="kintaimeta">元のExcelは変更しません。ファイル本体とパスワードは保存せず、セル位置・読取値・ファイル名・更新日時だけを保存します。表示は最新の読取時点の残数で、年度別・月別の残数ではありません。Excelの行が移動したらセル位置を直してください。</p>
-<p id="kintaileavestatus" role="status"></p>
-<div class="kintai-tablewrap"><table class="kintai-sheet"><thead><tr><th>従業員</th><th>集計セル</th><th>現保有数</th><th>確認事項</th><th>最終読取</th></tr></thead><tbody id="kintaileaverows"></tbody></table></div>
-</details>
+
 
 <p class="kintai-sheet-note">累計休日数と有給累計取得日数は、取込済みの月の数を年度の初めから足しています。未取得の月以降は空欄です。年間休日残数は、正社員と契約社員の年間休日枠から、その月までの休日累計を引いた数です。枠は2月1日〜翌年1月31日の在籍日数で、110日×在籍日数÷365を切り上げます。入社日が無いときと、退職者で退職日が無いときは空欄です。有給残数は、管理簿から読み取った現保有数です。取得日は読取時の日本時間の日付で、有給休暇起算日とは別です。計算残数は、その値から、取得日より後に終わり切った締め期間の有給取得だけを引いた数です。取得日を含む期間の有給取得が0でない、または未取込のときは計算残数だけ空欄にし、読み取った現保有数は残します。まだ終わっていない月は先に引きません。日ごとの減算には未対応です。個人の月表と全員の累計は同じ基準です。付与・失効・給与は空欄です。有給休暇起算日は全員一覧で人ごとに保存し、各月に同じ日付を出します。付与や失効の計算には使いません。退社日の表示は退社日、保存先は退職日です。出勤日数は、日別で保存した値の月合計です。休日数は、前月16日〜当月15日の日数から、その出勤日数と有給取得日数を引いた数です。出勤が全日そろっていない月や、有給取得が未取得の月は空欄です。有給取得日数・普通勤務時間・残業時間・勤務時間計は、出勤簿の取込値です。</p>
 </div>
@@ -90,9 +98,10 @@
 <p id="kintaisummarystatus"></p>
 <div id="kintaisummarytable" class="kintai-tablewrap"></div>
 <p class="kintai-sheet-note">在職・退職を含む、取込済みの時間だけを足しています。未取込の月は空欄です。通常勤務給与・残業給与・給与計は空欄です。</p>
-<section id="kintaiexecpanel" class="kintai-exec-panel">
-<h3 class="kintai-section">幹部会議報告（月別集計・ユニフォーム契約・備品棚卸）</h3>
-<p class="kintaimeta">月別集計・ユニフォーム契約（新規分／入替分）・備品棚卸の3つを1シートにまとめてExcel（.xlsx）または印刷／PDFで出力します。</p>
+</div>
+<section id="kintaiexecpanel" class="kintai-exec-panel" hidden>
+<h3 class="kintai-section">幹部会議報告</h3>
+<p class="kintaimeta">対象月の月別集計・ユニフォーム契約（新規分／入替分）・備品棚卸・圧着数をまとめて出力します。PDFは「印刷 / PDF保存」から、保存先に幹部会議フォルダーを選びます。</p>
 <div class="kintaifilters kintai-exec-toolbar">
 <label>対象月<input id="kintaiexecmonth" type="month" aria-label="幹部会議報告の対象月"></label>
 <button type="button" id="kintaiexecaddslot">＋ 契約枠を追加</button>
@@ -101,6 +110,7 @@
 <button type="button" id="kintaiexecpdf">印刷 / PDF保存</button>
 <span id="kintaiexecstatus" class="kintaimeta" aria-live="polite"></span>
 </div>
+<p id="kintaiexeccrimp" class="kintaimeta" aria-live="polite"></p>
 <div class="kintai-exec-grids">
 <div class="kintai-exec-box">
 <h4>ユニフォーム契約【新規分】</h4>
@@ -118,7 +128,6 @@
 </div>
 </div>
 </section>
-</div>
 <div id="kintaishift" hidden>
 <h2 class="shift-print-title" id="shiftprinttitle">シフト表</h2>
 <p class="kintailead">月別の勤務予定です。出勤簿の実績には反映しません。空欄＝出勤、×＝休み、？＝不明、ピ＝ピッキング、バ＝バーコード発行、貼＝シール貼り。</p>
@@ -180,7 +189,10 @@
 <button type="button" id="shiftexport" class="no-print" disabled title="表示中のシフト表をExcel（.xlsx）で出力します。保存はしません。">Excel出力</button>
 <button type="button" id="shifttouchontime" class="no-print" disabled>Touch On Time用CSV</button>
 </div>
-<details class="kintaisettings no-print" id="totattpanel">
+
+</div>
+<div id="kintaitot" hidden>
+<details class="kintaisettings no-print" id="totattpanel" open>
 <summary>Touch On TimeのCSVから出勤簿へ貼り付け</summary>
 <p>日別実績CSVから、日付順の「始業・休憩・終業」3列をまとめてコピーします。出勤簿Excelの読み込みは不要です。空欄の日も行を残します。</p>
 <div class="kintai-setting-actions">
@@ -204,6 +216,22 @@
 </div>
 </details>
 </div>
+<div id="kintaileave" hidden>
+<details class="kintaisettings no-print" id="kintaileavepanel" open>
+<summary>有給の現保有数（管理簿の集計セルから読取）</summary>
+<p>従業員ごとに「集計」シートのセル位置（K3など）を入力してください。「セル位置を保存」で対応を記憶します。管理簿Excelを選び「設定を保存して現保有数を更新」を押すと、各セルの保存済みの値を読み取ります。従業員名とセルの対応を確認してください。</p>
+<div class="kintai-setting-actions">
+<label>有給休暇管理簿Excel<input type="file" id="kintaileavefile" accept=".xlsx"></label>
+<label>Excelを開くパスワード（必要な場合）<input type="password" id="kintaileavepassword" autocomplete="off" maxlength="1024"></label>
+<button type="button" id="kintaileavesave">セル位置を保存</button>
+<button type="button" id="kintaileaveupdate">設定を保存して現保有数を更新</button>
+<button type="button" class="primary" id="kintaileaveapply">読み込んだデータを出勤簿に反映</button>
+</div>
+<p class="kintaimeta">元のExcelは変更しません。ファイル本体とパスワードは保存せず、セル位置・読取値・ファイル名・更新日時だけを保存します。表示は最新の読取時点の残数で、年度別・月別の残数ではありません。Excelの行が移動したらセル位置を直してください。</p>
+<p id="kintaileavestatus" role="status"></p>
+<div class="kintai-tablewrap"><table class="kintai-sheet"><thead><tr><th>従業員</th><th>集計セル</th><th>現保有数</th><th>確認事項</th><th>最終読取</th></tr></thead><tbody id="kintaileaverows"></tbody></table></div>
+</details>
+</div>
 <div id="kintaicrimp" hidden>
 <section id="crimpcounter" class="crimp-counter no-print"><h3>圧着カウンター</h3><form id="crimpform" class="crimp-form"><label>入力者<select id="crimpworker" required><option value="">選択してください</option></select></label><label>日付<input id="crimpday" type="date" required></label><label>カウンター<input id="crimpreading" type="number" min="0" step="1" inputmode="numeric" required></label><button type="submit" class="primary" id="crimpsave">保存</button></form><label>月<input id="crimpmonth" type="month"></label><p id="crimptotal" class="kintaimeta"></p><table id="crimptable" class="crimp-table"><thead><tr><th>日付</th><th>カウンター</th><th>圧着数</th><th class="crimp-inputter" hidden>入力者</th><th></th></tr></thead><tbody></tbody></table></section>
 </div>
@@ -222,7 +250,7 @@
 <button type="button" id="bihinorder">注文</button>
 <button type="button" id="bihinprint">棚卸用紙を印刷</button>
 <button type="button" id="bihinexport" class="no-print" disabled title="保存済みの内容をエクセル（.xlsx）で出力します">エクセル出力</button>
-<button type="button" id="bihinexecreport" class="no-print" title="月別集計・ユニフォーム契約・備品棚卸をまとめた幹部会議報告へ移動します">幹部会議報告（Excel/PDF）</button>
+<button type="button" id="bihinexecreport" class="no-print" title="表示中の月の幹部会議報告へ移動します">幹部会議報告（Excel/PDF）</button>
 <button type="button" id="bihinmaster">品目マスタ</button>
 <button type="button" id="bihinordersettings">発注設定</button>
 <button type="button" id="bihinorderhistory">発注履歴</button>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from calendar import monthrange
 from datetime import datetime
 from io import BytesIO
 from urllib.parse import quote
@@ -9,6 +10,7 @@ from xml.sax.saxutils import escape
 from zipfile import ZipFile, ZIP_DEFLATED
 
 import kintai_bihin
+import kintai_crimp
 
 XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
@@ -151,13 +153,20 @@ def bundle(c, year, month, fiscal_start_year, summary_fn) -> dict:
     y, m = kintai_bihin._parse_year_month(year, month)
     fy = _resolve_fy(y, m, fiscal_start_year)
     contracts = load_contracts(c, y, m)
-    summary = summary_fn(c, fy)
+    summary = _summary_through_month(summary_fn(c, fy), y, m)
+    ym = f'{y:04d}-{m:02d}'
+    crimp = kintai_crimp.list_month(c, ym)
     bihin_sheet = kintai_bihin.get_sheet(c, y, m)
     return {
         **contracts,
         'fiscalStartYear': fy,
         'summary': summary,
         'bihin': bihin_sheet,
+        'crimp': {
+            'start': f'{ym}-01',
+            'end': f'{ym}-{monthrange(y, m)[1]:02d}',
+            'total': crimp['total'] if any(row['diff'] is not None for row in crimp['rows']) else None,
+        },
     }
 
 
@@ -428,6 +437,20 @@ def workbook(report: dict) -> bytes:
         tcells.append(_cell(c0 + 1, rn, totals.get(ak), S_TOTAL_INT))
     rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(tcells)}</row>')
     merges.append(f'A{rn}:D{rn}')
+
+    crimp = report.get('crimp')
+    if crimp:
+        rn += 2
+        period_label = f"{crimp['start']}〜{crimp['end']}"
+        section = _cell(0, rn, f'4. 圧着数（{period_label}）', S_SECTION)
+        rows_xml.append(f'<row r="{rn}" ht="22" customHeight="1">{section}</row>')
+        merges.append(f'A{rn}:{_col(NCOLS - 1)}{rn}')
+        rn += 1
+        total = crimp['total'] if crimp['total'] is not None else '集計できる記録なし'
+        cells = _range_cells(rn, 0, 3, '圧着数 合計', S_TOTAL_LABEL)
+        cells.extend(_range_cells(rn, 4, NCOLS - 1, total, S_TOTAL_LABEL))
+        rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(cells)}</row>')
+        merges.extend([f'A{rn}:D{rn}', f'E{rn}:{_col(NCOLS - 1)}{rn}'])
 
     widths = [12, 24, 10, 10, 10, 14, 10, 14, 10, 14, 10, 14]
     cols = ''.join(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>' for i, w in enumerate(widths, 1))

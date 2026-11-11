@@ -852,3 +852,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .placementrotate[hidden]{display:none}
 #placementimageview>label{display:flex;align-items:center;gap:12px;flex:none;margin:0}
 #placementimageview input[type=range]{flex:1;min-width:0}
+
+#kintainav .kintai-nav-group + .kintai-nav-group {margin-top:12px}
+#kintainav .kintai-nav-group .nav {display:block;width:100%;padding-block:8px}
+
+@media print { .exec-crimp-print {break-inside:avoid} }

@@ -482,13 +482,15 @@
     const data = await api('/api/kintai/month-summary?year=' + encodeURIComponent(year));
     if (data && data.fiscalStartYear) rememberYear(data.fiscalStartYear);
     paintSummary(data);
-    try { await loadExecReport(); } catch (e) { paintExecReport(null); }
   }
 
   let execReportData = null;
+  let execLoadVersion = 0;
+  let execContractsDirty = false;
 
   function defaultExecYm() {
-    const d = new Date();
+    const now = new Date();
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   }
 
@@ -526,6 +528,7 @@
 
   function paintExecReport(data) {
     execReportData = data || null;
+    execContractsDirty = false;
     const el = $('#kintaiexecmonth');
     if (el && data && data.year && data.month) {
       el.value = `${data.year}-${String(data.month).padStart(2, '0')}`;
@@ -542,6 +545,9 @@
     };
     renderExecContractRows('kintaiexecnewbody', padSlots(data && data.newContracts), 'new');
     renderExecContractRows('kintaiexecrenbody', padSlots(data && data.renewalContracts), 'renewal');
+    const crimp = $('#kintaiexeccrimp');
+    if (crimp) crimp.textContent = data?.crimp
+      ? `圧着数（${data.crimp.start}〜${data.crimp.end}） ${execCrimpTotal(data.crimp)}` : '';
     const st = $('#kintaiexecstatus');
     if (st) {
       st.textContent = (data && data.updatedAt)
@@ -550,20 +556,33 @@
     }
   }
 
+  function execCrimpTotal(crimp) {
+    return crimp.total == null ? '集計できる記録なし' : `${Number(crimp.total).toLocaleString('ja-JP')}点`;
+  }
+
   async function loadExecReport(ymOverride) {
     if (!canKintai()) return;
     const el = $('#kintaiexecmonth');
     if (ymOverride && el) el.value = ymOverride;
     const ym = currentExecYm();
-    const fy = rememberYear(fiscalStartYear());
-    const data = await api(`/api/kintai/exec-report?ym=${encodeURIComponent(ym)}&fiscalYear=${encodeURIComponent(fy)}`);
-    paintExecReport(data);
+    if (execContractsDirty && execReportData && ym === `${execReportData.year}-${String(execReportData.month).padStart(2, '0')}`) return execReportData;
+    if (execContractsDirty && execReportData && !confirm('未保存の契約枠を破棄して対象月を変更しますか？')) {
+      el.value = `${execReportData.year}-${String(execReportData.month).padStart(2, '0')}`;
+      return execReportData;
+    }
+    const version = ++execLoadVersion;
+    paintExecReport(null);
+    $('#kintaiexecstatus').textContent = '読み込んでいます。';
+    $('#kintaiexeccrimp').textContent = '';
+    const data = await api(`/api/kintai/exec-report?ym=${encodeURIComponent(ym)}`);
+    if (version === execLoadVersion && ym === currentExecYm()) paintExecReport(data);
     return data;
   }
 
   function addExecContractSlot() {
     const newList = collectExecSide('kintaiexecnewbody');
     const renList = collectExecSide('kintaiexecrenbody');
+    if (!execReportData) return;
     if (newList.length >= 30) {
       toast('契約枠は最大30枠までです。');
       return;
@@ -572,31 +591,32 @@
     renList.push({ customer: '', period: '', note: '' });
     renderExecContractRows('kintaiexecnewbody', newList, 'new');
     renderExecContractRows('kintaiexecrenbody', renList, 'renewal');
+    execContractsDirty = true;
   }
 
   async function saveExecContracts(silent) {
     if (!canKintai()) throw Error('マーク管理の権限がありません。');
     const ym = currentExecYm();
     const parts = ym.split('-');
-    const fy = rememberYear(fiscalStartYear());
+    if (execReportData?.year !== Number(parts[0]) || execReportData?.month !== Number(parts[1])) {
+      throw Error('対象月の報告を読み込んでからやり直してください。');
+    }
     const payload = {
       year: Number(parts[0]),
       month: Number(parts[1]),
-      fiscalYear: fy,
       newContracts: collectExecSide('kintaiexecnewbody'),
       renewalContracts: collectExecSide('kintaiexecrenbody'),
     };
     const data = await api('/api/kintai/exec-report', payload);
-    paintExecReport(data);
+    if (ym === currentExecYm()) paintExecReport(data);
     if (!silent) toast(`${payload.year}年${payload.month}月のユニフォーム契約枠を保存しました。`);
     return data;
   }
 
   async function exportExecReportXlsx() {
-    await saveExecContracts(true);
-    const ym = currentExecYm();
-    const fy = rememberYear(fiscalStartYear());
-    const res = await fetch(`/api/kintai/exec-report/xlsx?ym=${encodeURIComponent(ym)}&fiscalYear=${encodeURIComponent(fy)}`, { credentials: 'same-origin' });
+    const data = await saveExecContracts(true);
+    const ym = `${data.year}-${String(data.month).padStart(2, '0')}`;
+    const res = await fetch(`/api/kintai/exec-report/xlsx?ym=${encodeURIComponent(ym)}`, { credentials: 'same-origin' });
     if (!res.ok) {
       let msg = 'エクセル出力に失敗しました。';
       try { const j = await res.json(); if (j && j.error) msg = j.error; } catch (_) {}
@@ -713,6 +733,10 @@
         </thead>
         <tbody>${bRows}${bTotal}</tbody>
       </table>
+      ${data.crimp ? `<section class="exec-crimp-print">
+        <h3>4. 圧着数（${esc(data.crimp.start)}〜${esc(data.crimp.end)}）</h3>
+        <table><tbody><tr><th scope="row">圧着数 合計</th><td class="exec-num">${esc(execCrimpTotal(data.crimp))}</td></tr></tbody></table>
+      </section>` : ''}
     </div>`;
   }
 
@@ -742,9 +766,9 @@
     setTimeout(() => window.print(), 50);
   }
 
+  window.loadExecReport = loadExecReport;
   window.openExecReport = async function (ym) {
-    if (typeof showKintaiSection === 'function') showKintaiSection('summary');
-    await loadExecReport(ym);
+    if (typeof showKintaiSection === 'function') await showKintaiSection('report', ym);
     const panel = $('#kintaiexecpanel');
     if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
@@ -1015,8 +1039,10 @@
     </tr>`).join('');
   }
   async function loadLeaveBalances() {
+    if (!canKintai()) return;
     paintLeaveBalances(await api('/api/kintai/leave-balance'));
   }
+  window.loadKintaiLeaveBalances = loadLeaveBalances;
   async function saveLeaveBalances(action) {
     if (leaveLoading) return;
     leaveLoading = true;
@@ -1133,9 +1159,6 @@
     const leavePanel = $('#kintaileavepanel');
     if (leavePanel && !leavePanel.dataset.bound) {
       leavePanel.dataset.bound = '1';
-      leavePanel.addEventListener('toggle', () => {
-        if (leavePanel.open && !leavePanel.dataset.loaded) loadLeaveBalances().then(() => { leavePanel.dataset.loaded = '1'; }).catch(e => { $('#kintaileavestatus').textContent = e.message; });
-      });
       $('#kintaileaverows').addEventListener('input', e => {
         if (!e.target.matches('.kintai-leave-cell')) return;
         const cells = e.target.closest('tr').cells;
@@ -1169,6 +1192,9 @@
     if (summaryRefresh) summaryRefresh.onclick = () => loadKintaiSummary().catch(e => toast(e.message));
     const execMonth = $('#kintaiexecmonth');
     if (execMonth) execMonth.onchange = () => loadExecReport().catch(e => toast(e.message));
+    $('#kintaiexecpanel')?.addEventListener('input', e => {
+      if (e.target.closest('.kintai-exec-grids')) execContractsDirty = true;
+    });
     const execAdd = $('#kintaiexecaddslot');
     if (execAdd) execAdd.onclick = () => addExecContractSlot();
     const execSave = $('#kintaiexecsave');

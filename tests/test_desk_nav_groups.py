@@ -76,8 +76,8 @@ class DeskNavGroupsTest(unittest.TestCase):
         self.assertIn('data-kintai-section="attendance"', kintai)
         self.assertIn('data-kintai-section="shift"', kintai)
         self.assertIn('data-kintai-section="bihin"', kintai)
-        self.assertIn('>出勤簿<', kintai)
-        self.assertIn('>シフト表<', kintai)
+        self.assertIn('>出勤簿・休日数の確認<', kintai)
+        self.assertIn('>シフト表・予定CSV<', kintai)
         self.assertIn('>備品棚卸<', kintai)
 
     def test_settings_stay_permissioned(self):
