@@ -163,6 +163,7 @@ def bundle(c, year, month, fiscal_start_year, summary_fn) -> dict:
         'summary': summary,
         'bihin': bihin_sheet,
         'crimp': {
+            'rows': [{'day': row['day'], 'reading': row['reading'], 'diff': row['diff']} for row in crimp['rows']],
             'start': f'{ym}-01',
             'end': f'{ym}-{monthrange(y, m)[1]:02d}',
             'total': crimp['total'] if any(row['diff'] is not None for row in crimp['rows']) else None,
@@ -249,8 +250,11 @@ def workbook(report: dict) -> bytes:
     m = report['month']
     summary = _summary_through_month(report.get('summary') or {}, y, m)
     bihin = report.get('bihin') or {}
-    new_contracts = report.get('newContracts') or _normalize_slots([])
-    ren_contracts = report.get('renewalContracts') or _normalize_slots([])
+    def filled_contracts(items):
+        return [item for item in items or [] if any(str(item.get(key) or '').strip() for key in ('customer', 'period', 'note'))]
+
+    new_contracts = filled_contracts(report.get('newContracts'))
+    ren_contracts = filled_contracts(report.get('renewalContracts'))
 
     rows_xml = []
     merges = []
@@ -364,17 +368,17 @@ def workbook(report: dict) -> bytes:
     rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(ch_cells)}</row>')
     rn += 1
 
-    slot_len = max(DEFAULT_SLOTS, len(new_contracts), len(ren_contracts))
+    slot_len = max(1, len(new_contracts), len(ren_contracts))
     for idx in range(slot_len):
         nc = new_contracts[idx] if idx < len(new_contracts) else {'customer': '', 'period': '', 'note': ''}
         rc = ren_contracts[idx] if idx < len(ren_contracts) else {'customer': '', 'period': '', 'note': ''}
         c_row = (
-            _range_cells(rn, 0, 0, idx + 1, S_CENTER)
-            + _range_cells(rn, 1, 2, nc.get('customer') or '', S_TEXT)
+            _range_cells(rn, 0, 0, idx + 1 if idx < len(new_contracts) else '', S_CENTER)
+            + _range_cells(rn, 1, 2, nc.get('customer') or ('記載なし' if not new_contracts and idx == 0 else ''), S_TEXT)
             + _range_cells(rn, 3, 4, nc.get('period') or '', S_TEXT)
             + _range_cells(rn, 5, 5, nc.get('note') or '', S_TEXT)
-            + _range_cells(rn, 6, 6, idx + 1, S_CENTER)
-            + _range_cells(rn, 7, 8, rc.get('customer') or '', S_TEXT)
+            + _range_cells(rn, 6, 6, idx + 1 if idx < len(ren_contracts) else '', S_CENTER)
+            + _range_cells(rn, 7, 8, rc.get('customer') or ('記載なし' if not ren_contracts and idx == 0 else ''), S_TEXT)
             + _range_cells(rn, 9, 10, rc.get('period') or '', S_TEXT)
             + _range_cells(rn, 11, 11, rc.get('note') or '', S_TEXT)
         )
@@ -446,12 +450,38 @@ def workbook(report: dict) -> bytes:
         rows_xml.append(f'<row r="{rn}" ht="22" customHeight="1">{section}</row>')
         merges.append(f'A{rn}:{_col(NCOLS - 1)}{rn}')
         rn += 1
+        # Two parallel day lists keep a full month compact on A4.
+        headers = []
+        for start_col in (0, 6):
+            for offset, label in ((0, '日付'), (2, 'カウンター'), (4, '圧着数')):
+                col = start_col + offset
+                headers.extend(_range_cells(rn, col, col + 1, label, S_HEAD))
+                merges.append(f'{_col(col)}{rn}:{_col(col + 1)}{rn}')
+        rows_xml.append(f'<row r="{rn}" ht="18" customHeight="1">{"".join(headers)}</row>')
+        rn += 1
+        readings = {row['day']: row for row in crimp.get('rows') or []}
+        days = monthrange(y, m)[1]
+        half = (days + 1) // 2
+        for index in range(half):
+            cells = []
+            for start_col, day in ((0, index + 1), (6, index + half + 1)):
+                record = readings.get(f'{y:04d}-{m:02d}-{day:02d}')
+                values = [f'{m}/{day:02d}' if day <= days else '',
+                          record['reading'] if record else '',
+                          record['diff'] if record and record['diff'] is not None else ('—' if record else '')]
+                for offset, value in zip((0, 2, 4), values):
+                    col = start_col + offset
+                    cells.extend(_range_cells(rn, col, col + 1, value, S_CENTER))
+                    merges.append(f'{_col(col)}{rn}:{_col(col + 1)}{rn}')
+            rows_xml.append(f'<row r="{rn}" ht="16" customHeight="1">{"".join(cells)}</row>')
+            rn += 1
         total = crimp['total'] if crimp['total'] is not None else '集計できる記録なし'
         cells = _range_cells(rn, 0, 3, '圧着数 合計', S_TOTAL_LABEL)
         cells.extend(_range_cells(rn, 4, NCOLS - 1, total, S_TOTAL_LABEL))
         rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(cells)}</row>')
         merges.extend([f'A{rn}:D{rn}', f'E{rn}:{_col(NCOLS - 1)}{rn}'])
 
+    paper_size = '8' if rn > 55 else '9'  # 記載が多い月はA3、それ以外はA4。
     widths = [12, 24, 10, 10, 10, 14, 10, 14, 10, 14, 10, 14]
     cols = ''.join(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>' for i, w in enumerate(widths, 1))
     sheet_xml = (
@@ -460,7 +490,7 @@ def workbook(report: dict) -> bytes:
         f'<cols>{cols}</cols><sheetData>{"".join(rows_xml)}</sheetData>'
         f'<mergeCells count="{len(merges)}">' + ''.join(f'<mergeCell ref="{x}"/>' for x in merges) + '</mergeCells>'
         '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.2" footer="0.2"/>'
-        '<pageSetup orientation="portrait" paperSize="9" fitToWidth="1" fitToHeight="0"/></worksheet>'
+        f'<pageSetup orientation="portrait" paperSize="{paper_size}" fitToWidth="1" fitToHeight="1"/></worksheet>'
     )
     border = (
         '<border><left style="thin"><color rgb="FF555555"/></left>'

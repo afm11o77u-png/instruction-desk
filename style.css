@@ -823,18 +823,22 @@ body.catalog-kintai main>header .headactions{display:none}
 .kintai-exec-table { width: 100%; }
 .kintai-exec-table td { padding: 3px 4px; }
 .kintai-exec-table input { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid #bdd3c2; border-radius: 4px; font: inherit; }
+.exec-report-print {width:190mm;margin:0 auto;color:#111;font:8pt/1.35 "BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}
+.exec-report-print h2 {margin:0 0 2mm;font-size:12pt;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm}
+.exec-report-print h3 {margin:2.5mm 0 1mm;font-size:9pt;background:#e2efda;padding:.7mm 1.5mm;border-left:3pt solid #1f4f37;print-color-adjust:exact}
+.exec-report-print table {width:100%;border-collapse:collapse;margin:0 0 1mm;font-size:7.5pt;line-height:1.35}
+.exec-report-print th,.exec-report-print td {border:.4pt solid #666;padding:.65mm .9mm;font-size:inherit;line-height:inherit;white-space:normal;position:static!important;box-shadow:none!important;overflow-wrap:anywhere}
+.exec-report-print th {background:#edf4ee!important;font-weight:700;text-align:center;print-color-adjust:exact}
+.exec-report-print tr.exec-total td {background:#f2f2f2!important;font-weight:700;print-color-adjust:exact}
+.exec-report-print .exec-contracts-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3mm}
+.exec-report-print .exec-num {text-align:right;white-space:nowrap}
+.exec-report-print .exec-center {text-align:center}
+.exec-report-print .exec-crimp-table {table-layout:fixed}
+.exec-report-print .exec-crimp-table th:nth-child(3n+1) {width:12%}
 @media print {
-  body.printing-bihin-count .exec-report-print { font-size: 8.5pt; color: #111; }
-  body.printing-bihin-count .exec-report-print h2 { margin: 0 0 3mm; font-size: 13pt; border-bottom: 1.5pt solid #1f4f37; padding-bottom: 1.5mm; }
-  body.printing-bihin-count .exec-report-print h3 { margin: 3.5mm 0 1.5mm; font-size: 9.5pt; background: #e2efda; padding: 1mm 2mm; border-left: 3pt solid #1f4f37; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body.printing-bihin-count .exec-report-print table { width: 100%; border-collapse: collapse; margin-bottom: 2mm; font-size: 8pt; }
-  body.printing-bihin-count .exec-report-print th,
-  body.printing-bihin-count .exec-report-print td { border: 0.4pt solid #666; padding: 1mm 1.5mm; position: static !important; box-shadow: none !important; }
-  body.printing-bihin-count .exec-report-print th { background: #edf4ee !important; font-weight: 700; text-align: center; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body.printing-bihin-count .exec-report-print tr.exec-total td { background: #f2f2f2 !important; font-weight: 700; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body.printing-bihin-count .exec-report-print .exec-contracts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4mm; }
-  body.printing-bihin-count .exec-report-print .exec-num { text-align: right; }
-  body.printing-bihin-count .exec-report-print .exec-center { text-align: center; }
+  body.printing-exec-report,body.printing-exec-report>#bihincountsheet {page:exec-report-page}
+  body.printing-exec-report>#bihincountsheet {padding:0!important}
+  .exec-report-print {break-inside:avoid}
 }
 
 /* Placement image viewer uses the available screen area. */
@@ -859,3 +863,8 @@ body.catalog-kintai main>header .headactions{display:none}
 @media print { .exec-crimp-print {break-inside:avoid} }
 
 .shift-export-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-left:24px}
+
+.exec-report-print .exec-inventory-table {table-layout:fixed;font-size:6.8pt}
+.exec-report-print .exec-inventory-table td {overflow-wrap:anywhere}
+
+.exec-report-print .exec-contracts-grid th {white-space:nowrap}

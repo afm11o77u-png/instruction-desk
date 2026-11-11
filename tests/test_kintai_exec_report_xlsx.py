@@ -81,14 +81,42 @@ class ExecReportXlsxTest(unittest.TestCase):
             with patch.object(report.kintai_bihin, 'get_sheet', return_value={}):
                 data = report.bundle(conn, 2026, 10, None, lambda c, fy: {})
                 empty = report.bundle(conn, 2026, 8, None, lambda c, fy: {})
-            self.assertEqual(data['crimp'], {'start': '2026-10-01', 'end': '2026-10-31', 'total': 100})
+            self.assertEqual(data['crimp'], {
+                'start': '2026-10-01', 'end': '2026-10-31', 'total': 100,
+                'rows': [{'day': '2026-10-05', 'reading': 128, 'diff': 28},
+                         {'day': '2026-10-31', 'reading': 200, 'diff': 72}],
+            })
             self.assertIsNone(empty['crimp']['total'])
             sheet = openpyxl.load_workbook(BytesIO(report.workbook(data))).active
             cells = [cell.value for row in sheet for cell in row]
             self.assertIn('4. 圧着数（2026-10-01〜2026-10-31）', cells)
             self.assertIn(100, cells)
+            self.assertIn('10/05', cells)
+            self.assertIn('10/31', cells)
+            self.assertIn(128, cells)
+            self.assertIn(28, cells)
+            self.assertNotIn('11/01', cells)
+            self.assertEqual(sheet.page_setup.fitToHeight, 1)
             self.assertNotIn('入力者テスト', cells)
             self.assertNotIn('作業者テスト', cells)
+
+    def test_contract_output_omits_empty_slots_and_keeps_note_only_rows(self):
+        import openpyxl
+        for entries, expected_rows in [([], 1), ([{'customer': '新規顧客'}, {'note': '備考のみ'}], 2)]:
+            with self.subTest(entries=entries):
+                data = report.workbook({
+                    'year': 2026, 'month': 11,
+                    'newContracts': [{'customer': '  '}, *entries, {}, {}],
+                    'renewalContracts': [{}, {}],
+                })
+                sheet = openpyxl.load_workbook(BytesIO(data)).active
+                labels = [row[0].value or '' for row in sheet]
+                start = next(i for i, v in enumerate(labels) if str(v).startswith('2. ユニフォーム'))
+                end = next(i for i, v in enumerate(labels) if str(v).startswith('3. 備品棚卸'))
+                self.assertEqual(end - start, expected_rows + 4)
+                if entries:
+                    values = [cell.value for row in sheet for cell in row]
+                    self.assertIn('備考のみ', values)
 
 
 if __name__ == '__main__':

@@ -664,7 +664,8 @@
     </tr>`;
 
     const contractTable = (title, list) => {
-      const rows = list.map((it, i) => `<tr>
+      const filled = list.filter(it => ['customer', 'period', 'note'].some(key => String(it[key] || '').trim()));
+      const rows = filled.map((it, i) => `<tr>
         <td class="exec-center">${i + 1}</td>
         <td>${esc(it.customer || '')}</td>
         <td>${esc(it.period || '')}</td>
@@ -676,7 +677,7 @@
             <tr><th colspan="4">${esc(title)}</th></tr>
             <tr><th style="width:2.4em">No.</th><th>顧客名</th><th style="width:28%">作業期間</th><th style="width:24%">備考</th></tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody>${rows || '<tr><td colspan="4" class="exec-center">記載なし</td></tr>'}</tbody>
         </table>
       </div>`;
     };
@@ -708,6 +709,27 @@
       <td></td><td class="exec-num">${esc(fmtYen(bt.usageAmount))}</td>
     </tr>`;
 
+    const crimp = data.crimp;
+    let crimpTable = '';
+    if (crimp) {
+      const readings = new Map((crimp.rows || []).map(row => [row.day, row]));
+      const days = Number(crimp.end.slice(-2));
+      const half = Math.ceil(days / 2);
+      const dayCells = day => {
+        if (day > days) return '<td></td><td></td><td></td>';
+        const key = `${crimp.start.slice(0, 8)}${String(day).padStart(2, '0')}`;
+        const record = readings.get(key);
+        const count = record ? (record.diff == null ? '—' : fmtYen(record.diff)) : '';
+        return `<td class="exec-center">${m}/${String(day).padStart(2, '0')}</td><td class="exec-num">${esc(record ? fmtYen(record.reading) : '')}</td><td class="exec-num">${esc(count)}</td>`;
+      };
+      const rows = Array.from({length: half}, (_, index) => `<tr>${dayCells(index + 1)}${dayCells(index + half + 1)}</tr>`).join('');
+      crimpTable = `<section class="exec-crimp-print">
+        <h3>4. 圧着数（${esc(crimp.start)}〜${esc(crimp.end)}）</h3>
+        <table class="exec-crimp-table"><thead><tr><th>日付</th><th>カウンター</th><th>圧着数</th><th>日付</th><th>カウンター</th><th>圧着数</th></tr></thead>
+        <tbody>${rows}<tr class="exec-total"><th colspan="5" scope="row">圧着数 合計</th><td class="exec-num">${esc(execCrimpTotal(crimp))}</td></tr></tbody></table>
+      </section>`;
+    }
+
     return `<div class="exec-report-print">
       <h2>幹部会議報告書　${y}年${m}月度</h2>
       <h3>1. 月別集計（${esc(summary.fiscalLabel || '')}　全員の合計）</h3>
@@ -721,7 +743,8 @@
         ${contractTable('【入替分】', renC)}
       </div>
       <h3>3. 備品棚卸（${y}年${m}月度）</h3>
-      <table>
+      <table class="exec-inventory-table">
+        <colgroup><col style="width:9%"><col style="width:20%"><col style="width:4%"><col style="width:7%">${'<col style="width:7.5%">'.repeat(8)}</colgroup>
         <thead>
           <tr>
             <th rowspan="2">科目</th><th rowspan="2">品名</th><th rowspan="2">単位</th><th rowspan="2">単価</th>
@@ -733,11 +756,30 @@
         </thead>
         <tbody>${bRows}${bTotal}</tbody>
       </table>
-      ${data.crimp ? `<section class="exec-crimp-print">
-        <h3>4. 圧着数（${esc(data.crimp.start)}〜${esc(data.crimp.end)}）</h3>
-        <table><tbody><tr><th scope="row">圧着数 合計</th><td class="exec-num">${esc(execCrimpTotal(data.crimp))}</td></tr></tbody></table>
-      </section>` : ''}
+      ${crimpTable}
     </div>`;
+  }
+
+  async function fitExecReportToPage(report) {
+    await document.fonts.ready;
+    const measure = report.cloneNode(true);
+    measure.style.cssText = 'position:fixed;left:-10000px;top:0;visibility:hidden;width:190mm;zoom:1';
+    document.body.append(measure);
+    try {
+      const pixelsPerMm = measure.getBoundingClientRect().width / 190;
+      const a4Scale = Math.min(1, 265 * pixelsPerMm / measure.getBoundingClientRect().height);
+      const requested = $('#kintaiexecpaper').value;
+      const paper = requested === 'auto' ? (a4Scale < 0.8 ? 'A3' : 'A4') : requested;
+      const width = paper === 'A3' ? 277 : 190;
+      const height = paper === 'A3' ? 380 : 265;
+      measure.style.width = `${width}mm`;
+      const scale = Math.min(1, height * pixelsPerMm / measure.getBoundingClientRect().height);
+      report.style.width = `${width}mm`;
+      report.style.zoom = String(scale);
+      return paper;
+    } finally {
+      measure.remove();
+    }
   }
 
   async function printExecReportPdf() {
@@ -745,21 +787,23 @@
     const sheet = $('#bihincountsheet');
     if (!sheet) return;
     sheet.innerHTML = buildExecPrintHtml(data);
-    document.body.classList.add('printing-bihin-count');
+    const paper = await fitExecReportToPage(sheet.querySelector('.exec-report-print'));
+    $('#kintaiexecstatus').textContent = `${paper}縦・1枚で印刷します。`;
+    document.body.classList.add('printing-bihin-count', 'printing-exec-report');
     let styleEl = document.getElementById('bihin-count-print-page-css');
     if (!styleEl) {
       styleEl = document.createElement('style');
       styleEl.id = 'bihin-count-print-page-css';
       document.head.appendChild(styleEl);
     }
-    styleEl.textContent = '@page{size:A4 portrait;margin:10mm}';
+    styleEl.textContent = `@page exec-report-page{size:${paper} portrait;margin:10mm}`;
     let cleaned = false;
     const done = () => {
       if (cleaned) return;
       cleaned = true;
       const el = document.getElementById('bihin-count-print-page-css');
       if (el) el.remove();
-      document.body.classList.remove('printing-bihin-count');
+      document.body.classList.remove('printing-bihin-count', 'printing-exec-report');
       window.removeEventListener('afterprint', done);
     };
     window.addEventListener('afterprint', done);
