@@ -8,7 +8,7 @@
   const LABEL_PASTE_MAX_ROWS = 40;
   /** 「表示なし」は印刷非表示用の専用値（業務の受付内容と区別する）。 */
   const LABEL_REQUEST_HIDE = '表示なし';
-  const LABEL_REQUEST_OPTIONS = ['新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他', LABEL_REQUEST_HIDE];
+  const LABEL_REQUEST_OPTIONS = ['新規', 'サイズ交換', '消耗・破損交換', '追加・補充', '復職', '異動・移動', 'その他', '不明', LABEL_REQUEST_HIDE];
   const LABEL_REQUEST_DEFAULT = '消耗・破損交換';
 
   /** 宛名の受付内容行を印刷するか。request が「表示なし」のときだけ非表示。 */
@@ -17,7 +17,7 @@
   }
 
   function labelRequestOptionsMessage() {
-    return '新規／サイズ交換／消耗・破損交換／追加・補充／復職／異動・移動／その他／表示なし';
+    return LABEL_REQUEST_OPTIONS.join('／');
   }
 
   function parseLabelClipboard(text) {
