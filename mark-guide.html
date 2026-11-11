@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>マーク管理の説明動画 | 指示書デスク</title>
+<style>
+  * {box-sizing:border-box}
+  body {margin:0;background:#f4f8f4;color:#163628;font:16px/1.5 "Yu Gothic UI",Meiryo,sans-serif}
+  main {max-width:1100px;margin:auto;padding:24px clamp(14px,4vw,40px) 36px}
+  a {color:#1a6747}
+  h1 {font-size:clamp(24px,4vw,36px);margin:12px 0 16px}
+  h2 {font-size:19px;margin:22px 0 8px}
+  video {display:block;width:100%;aspect-ratio:16/9;background:#13281f;border-radius:8px}
+  .player-actions {display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:10px 0 0}
+  button {font:inherit;color:inherit;cursor:pointer;background:white;border:1px solid #c4d8c8;border-radius:6px;padding:7px 11px;text-align:left}
+  button:hover:not(:disabled),button[aria-pressed="true"] {background:#dfefe3}
+  button:disabled {opacity:.6;cursor:default}
+  ol {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));list-style:none;padding:0;margin:0;gap:8px}
+  li button {width:100%;height:100%}
+  time {display:inline-block;min-width:3.1em;font-variant-numeric:tabular-nums;color:#426556}
+  #player-status {color:#9b3626}
+</style>
+</head>
+<body>
+<main>
+  <a href="/?kintai=attendance">← マーク管理に戻る</a>
+  <h1>マーク管理の説明動画</h1>
+  <video id="guide-video" controls playsinline preload="metadata" aria-label="マーク管理の操作説明">
+    <source src="/mark-guide/video.mp4" type="video/mp4">
+    <track kind="captions" src="/mark-guide/subtitles.vtt" srclang="ja" label="日本語" default>
+    このブラウザーでは動画を再生できません。
+  </video>
+  <div class="player-actions">
+    <button type="button" id="caption-toggle" aria-pressed="true">字幕 オン</button>
+    <span id="player-status" role="status"></span>
+  </div>
+  <h2>手順を選ぶ</h2>
+  <ol id="guide-chapters">
+    <li><button type="button" data-start="0.000" disabled><time>0:00</time> マーク管理の使い方</button></li>
+    <li><button type="button" data-start="15.539" disabled><time>0:15</time> 日々の記録 · 圧着カウンター</button></li>
+    <li><button type="button" data-start="36.000" disabled><time>0:36</time> シフト準備 · シフト表と予定CSV</button></li>
+    <li><button type="button" data-start="58.515" disabled><time>0:58</time> 15日締め · 実績CSVを取り込む</button></li>
+    <li><button type="button" data-start="83.458" disabled><time>1:23</time> 15日締め · 共有Excelへ値を貼り付ける</button></li>
+    <li><button type="button" data-start="110.432" disabled><time>1:50</time> 15日締め · 共有出勤簿から更新</button></li>
+    <li><button type="button" data-start="132.653" disabled><time>2:12</time> 15日締め · 出勤日数と休日数</button></li>
+    <li><button type="button" data-start="155.982" disabled><time>2:35</time> 15日締め · 有休残数を反映</button></li>
+    <li><button type="button" data-start="176.597" disabled><time>2:56</time> 月末締め · 備品棚卸</button></li>
+    <li><button type="button" data-start="202.001" disabled><time>3:22</time> 10日 幹部会議 · 報告とPDF保存</button></li>
+  </ol>
+</main>
+<script>
+  const video = document.querySelector('#guide-video');
+  const toggle = document.querySelector('#caption-toggle');
+  const status = document.querySelector('#player-status');
+  const chapters = document.querySelectorAll('#guide-chapters button');
+  const captions = video.textTracks[0];
+  function syncCaptions() {
+    const on = captions.mode === 'showing';
+    toggle.textContent = on ? '字幕 オン' : '字幕 オフ';
+    toggle.setAttribute('aria-pressed', String(on));
+  }
+  toggle.addEventListener('click', () => {
+    captions.mode = captions.mode === 'showing' ? 'disabled' : 'showing';
+    syncCaptions();
+  });
+  video.textTracks.addEventListener('change', syncCaptions);
+  syncCaptions();
+  video.addEventListener('loadedmetadata', () => {
+    chapters.forEach(button => { button.disabled = false; });
+  });
+  chapters.forEach(button => button.addEventListener('click', () => {
+    video.currentTime = Number(button.dataset.start);
+    video.play().catch(() => { status.textContent = '再生ボタンを押してください。'; });
+  }));
+  video.querySelector('source').addEventListener('error', () => {
+    status.textContent = '動画を読み込めませんでした。画面を再読み込みしてください。';
+  });
+</script>
+</body>
+</html>

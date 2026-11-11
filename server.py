@@ -872,6 +872,40 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         self.end_headers()
         with open(path, 'rb') as f:
             shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
+    def serve_mark_guide(self, path):
+        with connect() as c:
+            user = self.session_user(c)
+        if not user or user['must_change'] or user['role'] != 'owner':
+            return self.reply(403, {'error': '説明動画は主管理者だけが見られます。'})
+        files = {
+            '/mark-guide': ('mark-guide.html', 'text/html; charset=utf-8'),
+            '/mark-guide/video.mp4': ('assets/mark-guide.mp4', 'video/mp4'),
+            '/mark-guide/subtitles.vtt': ('assets/mark-guide.vtt', 'text/vtt; charset=utf-8'),
+        }
+        name, content_type = files[path]
+        file = ROOT / name
+        if not file.is_file():
+            return self.reply(404, {'error': '説明動画のファイルが見つかりません。'})
+        if path != '/mark-guide/video.mp4':
+            return self.reply(200, file.read_bytes(), content_type)
+        size = file.stat().st_size
+        range_header = self.headers.get('Range')
+        if not range_header:
+            return self.reply_file(200, file, content_type, {'Accept-Ranges': 'bytes'})
+        match = re.fullmatch(r'bytes=(\d*)-(\d*)', range_header)
+        if match and any(match.groups()):
+            first, last = match.groups()
+            start = int(first) if first else max(0, size - int(last))
+            end = min(size - 1, int(last)) if first and last else size - 1
+            if 0 <= start <= end < size:
+                with file.open('rb') as stream:
+                    stream.seek(start)
+                    data = stream.read(end - start + 1)
+                return self.reply(206, data, content_type, {
+                    'Accept-Ranges': 'bytes', 'Content-Range': f'bytes {start}-{end}/{size}',
+                })
+        return self.reply(416, b'', content_type, {'Content-Range': f'bytes */{size}'})
+
     def serve_inventory(self, method):
         from urllib.parse import urlparse, parse_qs
         parsed=urlparse(self.path)
@@ -1097,6 +1131,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')
                 if request_user['role'] != 'owner' and not request_user['manage']:
                     return self.reply(403, 'WEB依頼は主管理者・管理者だけが利用できます。', 'text/plain; charset=utf-8')
+        if path in ('/mark-guide', '/mark-guide/video.mp4', '/mark-guide/subtitles.vtt'):
+            return self.serve_mark_guide(path)
         if path in ('/customer-accounts','/customer-accounts.js','/customer-accounts.css'):
             with connect() as c:
                 u=self.session_user(c)
