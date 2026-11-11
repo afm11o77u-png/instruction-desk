@@ -131,6 +131,29 @@ def _is_compound_code(text):
     return False
 
 
+_DOM_COLOR_MAP = {
+    'C-50': 'ダークネイビー(C50)',
+    'C50': 'ダークネイビー(C50)',
+    'C-92': 'ダークグレー(C92)',
+    'C92': 'ダークグレー(C92)',
+    'C-24': 'ヌードピンク(C24)',
+    'C24': 'ヌードピンク(C24)',
+    'C-74': 'サンドベージュ(C74)',
+    'C74': 'サンドベージュ(C74)',
+    'ダークネイビー': 'ダークネイビー(C50)',
+    'ヌードピンク': 'ヌードピンク(C24)',
+    'ダークグレー': 'ダークグレー(C92)',
+    'サンドベージュ': 'サンドベージュ(C74)',
+}
+
+
+def _resolve_dom_color(color_text):
+    if not color_text:
+        return ''
+    norm = unicodedata.normalize('NFKC', color_text).strip()
+    return _DOM_COLOR_MAP.get(norm.upper(), _DOM_COLOR_MAP.get(norm, norm))
+
+
 def _is_slash_code(text):
     """'SDAW01UA / ANDAKW01-UAC' のように空白を含むスラッシュで区切られた品番併記"""
     norm = unicodedata.normalize('NFKC', text or '').strip()
@@ -391,7 +414,10 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         if hit.get('kind') == 'color' and stock.text(hit.get('original') or '') == tail:
             tail_color = stock.text(hit.get('value') or tail)
         if not color and (tail_color or _is_color_code(tail)) and _formal_code(head):
-            return _empty(apply=True, kind='color', baseCode=head, color=tail_color or tail, note=note)
+            target_color = tail_color or tail
+            if head.startswith('DOM'):
+                target_color = _resolve_dom_color(target_color)
+            return _empty(apply=True, kind='color', baseCode=head, color=target_color, note=note)
         if paren.is_embroidery_price_condition(tail):
             return _empty(
                 apply=False, kind='price_condition', needsConfirm=False, baseCode=raw,
@@ -412,7 +438,10 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 processingName=word, color=color, note=note,
             )
         if not color and _is_color_code(tail) and _formal_code(head):
-            return _empty(apply=True, kind='color', baseCode=head, color=tail, note=note)
+            target_color = tail
+            if head.startswith('DOM'):
+                target_color = _resolve_dom_color(target_color)
+            return _empty(apply=True, kind='color', baseCode=head, color=target_color, note=note)
         dim = _dimension(tail)
         if dim and _formal_code(head):
             if is_part_product_name(product_name):
@@ -432,7 +461,10 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             if color:
                 norm_base = unicodedata.normalize('NFKC', base)
                 norm_base = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_base)
-                return _empty(apply=True, kind='color', baseCode=norm_base, color=color, note=note)
+                target_color = color
+                if norm_base.startswith('DOM'):
+                    target_color = _resolve_dom_color(target_color)
+                return _empty(apply=True, kind='color', baseCode=norm_base, color=target_color, note=note)
             norm_raw = unicodedata.normalize('NFKC', raw)
             return _empty(
                 apply=True,
@@ -461,7 +493,10 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     if color and base != body:
         norm_base = unicodedata.normalize('NFKC', base)
         norm_base = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_base)
-        return _empty(apply=True, kind='color', baseCode=norm_base, color=color, note=note)
+        target_color = color
+        if norm_base.startswith('DOM'):
+            target_color = _resolve_dom_color(target_color)
+        return _empty(apply=True, kind='color', baseCode=norm_base, color=target_color, note=note)
     if note and base != raw:
         return _empty(apply=True, kind='note', baseCode=base, note=note, color=color)
     if '用' in raw and not note:

@@ -9957,6 +9957,20 @@ def auto_line_spec_sku_decisions(uploaded, sku_decisions):
     return decisions, auto
 
 
+def auto_dom_color_split_decisions(sku_groups, sku_decisions):
+    """DOM品番（DOM0020, DOM0022, DOM0023等）で複数色がある場合は自動で「色別に分けて登録」。"""
+    decisions = dict(sku_decisions) if isinstance(sku_decisions, dict) else {}
+    for g in (sku_groups or []):
+        code_t = stock.text(g.get('code') or '')
+        if not code_t.startswith('DOM'):
+            continue
+        if code_t in decisions:
+            continue
+        if g.get('colorSplitEstimateCount', 0) >= 2 or len(g.get('variants') or []) >= 2:
+            decisions[code_t] = {'decision': SKU_DECISION_COLOR_SPLIT, 'autoDomSplit': True}
+    return decisions
+
+
 def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
     """品番決定を行ステータスへ反映。
 
@@ -11284,6 +11298,7 @@ def build_preview(c, body):
     for g in sku_groups:
         if str(g.get('code')) in auto_line_codes:
             g['autoLineSpecMerge'] = True  # 仕様だけ違う → 自動決定済み
+    sku_decisions = auto_dom_color_split_decisions(sku_groups, sku_decisions)
     # 色別に分けて登録: 選択を再照合でも保持し、在庫自動まとめ対象外の予定を付与
     attach_color_split_plans(c, sku_groups, sku_decisions, classified=classified)
     # 内容別に分けて登録: 色別とは独立。件数見積りは常時、予定は選択時
@@ -12670,6 +12685,7 @@ def commit_preview(c, body, *, db_path=None):
     selections = body.get('selections') if isinstance(body.get('selections'), dict) else {}
     sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
     sku_decisions, _auto = auto_line_spec_sku_decisions(uploaded, sku_decisions)
+    sku_decisions = auto_dom_color_split_decisions(sku_groups, sku_decisions)
 
     review_rows = [r for r in classified if r['status'] == STATUS_REVIEW]
     excluded_rows = [r for r in classified if r['status'] == STATUS_EXCLUDED]
