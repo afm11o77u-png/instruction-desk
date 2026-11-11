@@ -27,7 +27,7 @@ COLOR_TERMS = (
     'ブラウン', 'ベージュ', 'シルバー', 'ゴールド', 'サックス', 'チャコール',
     'カーキ', 'キャメル', 'キャロット', 'ワイン', 'エンジ', 'アイボリー',
     'ターコイズ', 'バイオレット', 'ココア', 'モカ', 'ボルドー', 'ライラック', 'スカイブルー',
-    '水色',
+    '水色', 'オリーブ', 'マスカットグリーン', 'モスグリーン', 'ライトベージュ', 'レモンイエロー',
 )
 
 # 誤記・別名 → 代表色。明示エントリのみ（「ミスト」を機械的に全除去しない）。
@@ -41,6 +41,12 @@ COLOR_SYNONYMS = {
     'バーガンディー': 'バーガンディ',
     'ダークグレイ': 'ダークグレー',
     'ダークネイビ': 'ダークネイビー',
+    'マスカット': 'マスカットグリーン',
+    'ｵﾘｰﾌﾞ': 'オリーブ',
+    'ﾓｽｸﾞﾘｰﾝ': 'モスグリーン',
+    'モスグリン': 'モスグリーン',
+    'ﾗｲﾄﾍﾞｰｼﾞｭ': 'ライトベージュ',
+    'ﾚﾓﾝｲｴﾛｰ': 'レモンイエロー',
     # 白
     '白': 'ホワイト',
     'しろ': 'ホワイト',
@@ -456,6 +462,8 @@ def _processing_match(seg_key: str, seg_raw: str):
         return None, None
     for term in _PROCESSINGS:
         if term and term in seg_key and seg_key != term:
+            if term == 'カット' and 'マスカット' in seg_key:
+                continue
             # 複合は原文セグメントを加工仕様として残す
             return term, seg_raw.strip()
     return None, None
@@ -801,10 +809,15 @@ def _no_processing_keys():
 
 
 _DISCONTINUED_NOTES = ('現在不使用', '不使用', '使用しない', '廃番')
+_PURCHASE_NOTES = ('購入', '買取', '買い取り')
 
 
 def _discontinued_note_keys():
     return {_norm_token(unify_import_notation(w)) for w in _DISCONTINUED_NOTES}
+
+
+def _purchase_note_keys():
+    return {_norm_token(unify_import_notation(w)) for w in _PURCHASE_NOTES}
 
 
 def is_embroidery_price_condition(text: str) -> bool:
@@ -849,9 +862,9 @@ def classify_paren_segment(segment: str, *, pants: bool = False):
     if key in _no_processing_keys():
         return {'kind': 'hem_ignore', 'value': raw, 'matched': key, 'original': source,
                 'noProcessing': True}
-    # 廃番・不使用は注記。表示名からは外し、部品の「用」にはしない。
-    if key in _discontinued_note_keys():
-        return {'kind': 'discontinued', 'value': raw, 'matched': key, 'original': source}
+    # 廃番・不使用・購入等は注記。表示名からは外し、部品の「用」にはしない。
+    if key in _discontinued_note_keys() or key in _purchase_note_keys():
+        return {'kind': 'discontinued', 'value': raw, 'matched': key, 'original': source, 'note': raw}
     if is_embroidery_price_condition(raw):
         return {
             'kind': 'unknown', 'value': raw, 'matched': '', 'original': source,

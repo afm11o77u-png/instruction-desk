@@ -76,8 +76,12 @@ class ClassifyTest(unittest.TestCase):
         lower = suffix.classify_suffix('7-522下', supplier='仕入A', product_name='ズボン')
         self.assertEqual(lower['baseCode'], '7-522')
         self.assertEqual(lower['position'], '下')
-        conflict = suffix.classify_suffix('KK7122-16（LL）', size='XL', product_name='帽')
+        conflict = suffix.classify_suffix('AZ-5000（LL）', size='XL', product_name='帽')
         self.assertTrue(conflict['needsConfirm'])
+        kk_res = suffix.classify_suffix('KK7122-16（LL）', size='XL', product_name='女性用カーディガン')
+        self.assertFalse(kk_res['needsConfirm'])
+        self.assertEqual(kk_res['note'], 'LL')
+        self.assertEqual(kk_res['baseCode'], 'KK7122-16')
         change = suffix.classify_suffix('MH60B下無くなり次第F15BO78へ', product_name='帽')
         self.assertTrue(change['needsConfirm'])
         # 括弧内に移行・廃番メモがある場合は品番本体を採用して備考へ
@@ -455,7 +459,7 @@ class ImportTest(unittest.TestCase):
     def test_dimension_conflict_stays_uncommitted(self):
         folder, path, conn = newdb()
         try:
-            text = '顧客,仕入先,商品コード,商品名,サイズ\n顧客A,仕入A,KK7122-16（LL）,帽子,XL\n'
+            text = '顧客,仕入先,商品コード,商品名,サイズ\n顧客A,仕入A,AZ-5000（LL）,帽子,XL\n'
             body = {
                 'importMode': 'products', 'name': 'dim.csv',
                 'file': base64.b64encode(text.encode('utf-8-sig')).decode('ascii'),

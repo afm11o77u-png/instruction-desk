@@ -41,11 +41,14 @@ _NOTE_KIND = {
     '東洋リントフリー': 'brand',
     'ボンマックス': 'brand',
     'BONMAX': 'brand',
+    'トムス': 'brand',
+    'TOMS': 'brand',
 }
 _PART_WORDS = (
     'ボタン', '釦', 'ファスナー', 'ジッパー', 'チャック',
     'スナッパ', 'スナッパー', 'Ｄカン', 'Dカン', 'バックル',
     '生地', '芯地', '裏地', '名札', '肩パット', 'パッド', 'ゴム',
+    'ラインテープ', 'テープ', 'リボン', 'アイスパック', '保冷剤',
 )
 
 
@@ -257,6 +260,66 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     raw = stock.text(code)
     if not raw:
         return _empty()
+    # KM-8397 は KM-8379 の誤記修正
+    if raw.startswith(('KM-8397', 'KM8397')):
+        fixed = re.sub(r'^KM[-]?8397', 'KM-8379', raw)
+        sub = classify_suffix(fixed, product_name=product_name, supplier=supplier, size=size)
+        sub['apply'] = True
+        if not sub.get('baseCode'):
+            sub['baseCode'] = fixed
+        return sub
+    # SIC-9415 等の部品・資材コード、またはラインテープ等の部品
+    if raw.startswith(('SIC-', 'SIC ')) or ('ライン' in product_name and '巻' in product_name):
+        return _empty(
+            apply=False,
+            kind='parts',
+            baseCode=raw,
+            registerAsParts=True,
+            needsConfirm=False,
+        )
+    # スレンカラータオル OK51000 1000匁 などのタオル規格品
+    if 'ｽﾚﾝｶﾗｰﾀｵﾙ' in raw or 'スレンカラータオル' in raw:
+        norm = unicodedata.normalize('NFKC', raw).strip()
+        return _empty(
+            apply=True,
+            kind='plain',
+            baseCode=norm,
+            needsConfirm=False,
+        )
+    # 品番・色・商品略称（例: YT3923-1ネイビーSK, YT4922-1ネイビーJK, YT9900-3グレーCD, YT9901-3グレーNS）
+    m_abbr = re.match(r'^([A-Za-z0-9\-_]+?)\s*([ァ-ヴー]+)\s*([A-Za-z]{2,3})$', raw)
+    if m_abbr:
+        c_head, c_color, c_abbr = m_abbr.group(1), m_abbr.group(2), m_abbr.group(3).upper()
+        if _formal_code(c_head) or _is_compound_code(c_head):
+            color_hit = paren.classify_paren_segment(c_color) or {}
+            resolved_c = stock.text(color_hit.get('value') or '')
+            if not resolved_c and c_color in paren.COLOR_TERMS:
+                resolved_c = c_color
+            if resolved_c:
+                norm_head = unicodedata.normalize('NFKC', c_head).strip()
+                norm_head = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_head)
+                return _empty(
+                    apply=True,
+                    kind='color',
+                    baseCode=norm_head,
+                    color=resolved_c,
+                    note=c_abbr,
+                    needsConfirm=False,
+                )
+    # VES367新 など末尾「新」
+    m_shin = re.match(r'^([A-Za-z0-9\-_]+?)\s*(新)$', raw)
+    if m_shin:
+        c_head, c_shin = m_shin.group(1), m_shin.group(2)
+        if _formal_code(c_head) or _is_compound_code(c_head):
+            norm_head = unicodedata.normalize('NFKC', c_head).strip()
+            norm_head = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_head)
+            return _empty(
+                apply=True,
+                kind='note',
+                baseCode=norm_head,
+                note=c_shin,
+                needsConfirm=False,
+            )
     # APK489無地-C8 などの限定処理（無地を備考へ退避）
     m_apk = re.match(r'^(APK489)無地(-.+)$', raw)
     if m_apk:
@@ -311,6 +374,20 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         if not sub.get('needsConfirm'):
             sub['apply'] = True
             return sub
+    # 品番末尾の「刺繍」「加工」「プリント」等の直書き（MUP1990刺繍 等）を分離
+    proc_tail = re.match(r'^(.+?)\s*(刺繍|ししゅう|加工|プリント)$', raw)
+    if proc_tail:
+        clean_code = proc_tail.group(1).strip(' -_－')
+        proc_word = proc_tail.group(2)
+        if clean_code and _formal_code(clean_code):
+            sub = classify_suffix(clean_code, product_name=product_name, supplier=supplier, size=size)
+            if not sub.get('needsConfirm'):
+                sub['apply'] = True
+                sub['kind'] = 'processing'
+                sub['processingName'] = proc_word
+                if not sub.get('baseCode'):
+                    sub['baseCode'] = clean_code
+                return sub
     if raw in ('要確認', '別注') or (raw.startswith('別注(') and raw.endswith(')')):
         return _empty(kind='plain', baseCode=raw)
     name = stock.text(product_name)
@@ -334,6 +411,13 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             norm_head = unicodedata.normalize('NFKC', head)
             norm_head = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_head)
             return _empty(apply=True, kind='note', baseCode=norm_head, note=arrow_m.group(2).strip())
+    change_space_m = re.match(r'^(\S+)\s+(.+(?:無くなり次第|代替|(?:へ|に)?変更).*)$', raw)
+    if change_space_m:
+        head, tail = change_space_m.group(1), change_space_m.group(2).strip()
+        if _formal_code(head) or _is_compound_code(head):
+            norm_head = unicodedata.normalize('NFKC', head)
+            norm_head = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_head)
+            return _empty(apply=True, kind='note', baseCode=norm_head, note=tail)
     if _CHANGE_RE.search(raw):
         return _empty(
             kind='mixed', needsConfirm=True, baseCode=raw,
@@ -354,7 +438,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             inner_color = stock.text(hit.get('value') or inner)
         elif _is_color_code(inner):
             inner_color = inner
-        if inner_color and (_formal_code(body) or _is_compound_code(body)):
+        body_ok = _formal_code(body) or _is_compound_code(body) or (bool(re.search(r'\d', body)) and len(body) >= 3)
+        if inner_color and body_ok:
             norm_body = unicodedata.normalize('NFKC', body)
             norm_body = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_body)
             return _empty(apply=True, kind='color', baseCode=norm_body, color=inner_color, note=note)
@@ -372,6 +457,10 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 if is_part_product_name(product_name):
                     return _empty(apply=False, kind='parts', baseCode=raw, registerAsParts=True, size=dim, note=inner)
                 if _size_conflict(dim, size):
+                    if body.startswith('KK7122'):
+                        norm_body = unicodedata.normalize('NFKC', body)
+                        norm_body = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_body)
+                        return _empty(apply=True, kind='note', baseCode=norm_body, note=inner)
                     return _empty(
                         kind='dimension', needsConfirm=True, baseCode=raw,
                         reason=f'品番「{raw}」の寸法とサイズ欄「{stock.text(size)}」が違います。どちらをサイズにするか確認してください。',
@@ -389,6 +478,15 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         note = inner
     color = _color_of(body)
     base = _strip_color_tail(body, color) if color else body
+    if color and not base:
+        return _empty(
+            apply=True,
+            kind='color',
+            baseCode='不明',
+            color=color,
+            note=note,
+            needsConfirm=False,
+        )
     base_ok = _formal_code(base) or _is_compound_code(base) or _is_slash_code(base)
     if color and not base_ok:
         return _empty(
@@ -413,7 +511,20 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         hit = paren.classify_paren_segment(tail) or {}
         if hit.get('kind') == 'color' and stock.text(hit.get('original') or '') == tail:
             tail_color = stock.text(hit.get('value') or tail)
-        if not color and (tail_color or _is_color_code(tail)) and _formal_code(head):
+        else:
+            tail_code_m = re.match(r'^([Cc][\-_/／]?[0-9]+[A-Za-z]?)\s+(.+)$', tail)
+            if tail_code_m:
+                sub_hit = paren.classify_paren_segment(tail_code_m.group(2)) or {}
+                if sub_hit.get('kind') == 'color':
+                    tail_color = stock.text(sub_hit.get('value') or tail_code_m.group(2))
+            else:
+                tail_name_m = re.match(r'^(.+)\s+([Cc][\-_/／]?[0-9]+[A-Za-z]?)$', tail)
+                if tail_name_m:
+                    sub_hit = paren.classify_paren_segment(tail_name_m.group(1)) or {}
+                    if sub_hit.get('kind') == 'color':
+                        tail_color = stock.text(sub_hit.get('value') or tail_name_m.group(1))
+        head_ok = _formal_code(head) or head.startswith('HG2000N')
+        if not color and (tail_color or _is_color_code(tail)) and head_ok:
             target_color = tail_color or tail
             if head.startswith('DOM'):
                 target_color = _resolve_dom_color(target_color)
@@ -459,7 +570,7 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             return _empty(apply=True, kind='dimension', baseCode=head, size=dim, color=color, note=note)
         if _formal_code(head) and _formal_code(tail):
             if color:
-                norm_base = unicodedata.normalize('NFKC', base)
+                norm_base = unicodedata.normalize('NFKC', base).strip()
                 norm_base = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_base)
                 target_color = color
                 if norm_base.startswith('DOM'):
@@ -491,8 +602,11 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             position=base[-1], color=color, note=note,
         )
     if color and base != body:
-        norm_base = unicodedata.normalize('NFKC', base)
+        norm_base = unicodedata.normalize('NFKC', base).strip()
         norm_base = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_base)
+        m_code_color = re.match(r'^(\S+)\s+([Cc][\-_/／]?[0-9]+[A-Za-z]?)$', norm_base)
+        if m_code_color and _formal_code(m_code_color.group(1)):
+            norm_base = m_code_color.group(1)
         target_color = color
         if norm_base.startswith('DOM'):
             target_color = _resolve_dom_color(target_color)

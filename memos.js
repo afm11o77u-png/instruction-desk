@@ -3,7 +3,7 @@
 const memoDialog=document.createElement('dialog');memoDialog.id='memodesk';document.body.append(memoDialog);
 function resetMemos(){memoDialog.close();memoDialog.replaceChildren()}
 // [red]…[/red] で囲んだ部分は赤字（複数行にまたがる場合は行ごとに囲む）。
-function memoInline(s){return esc(s).replace(/\[red\]([\s\S]*?)\[\/red\]/g,'<span class="memo-red">$1</span>')}
+function memoInline(s){return esc(s).replace(/\[red\]([\s\S]*?)\[\/red\]/g,'<span class="memo-red">$1</span>').replace(/\[([^\]\n]+)\]\(memo:([a-z0-9-]+)\)/g,'<button type="button" class="quiet memo-link" data-memo-link="$2">$1 →</button>')}
 function memoHtml(md){
  const out=[];let list=null;let code=null;
  const close=()=>{if(list){out.push(`</${list}>`);list=null}};
@@ -29,6 +29,9 @@ function memoHtml(md){
  closeCode();close();return out.join('')
 }
 function bindMemoCopy(){
+ memoDialog.querySelectorAll('[data-memo-link]').forEach(b=>{
+  b.onclick=()=>showMemo(b.dataset.memoLink).catch(e=>toast(e.message));
+ });
  memoDialog.querySelectorAll('.memo-copy').forEach(b=>{
   b.onclick=async()=>{
    const code=b.parentElement.querySelector('code');

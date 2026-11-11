@@ -1231,3 +1231,4 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 
 table.products-list .prod-price{margin-left:4px;padding-left:8px;padding-right:8px}
 .badge.warn{background:#f6e3b8;color:#6b4a00}
+.qr-access-guide{margin-top:24px;padding:16px;border:1px solid #c8dace;border-radius:8px;background:#f4f8f5;line-height:1.7}.qr-access-guide summary{font-weight:bold;cursor:pointer;color:#195b3d}.qr-access-guide h3{margin:20px 0 8px}.qr-access-guide li{margin:8px 0}.qr-access-guide a{text-decoration:underline}.qr-access-guide code{overflow-wrap:anywhere}

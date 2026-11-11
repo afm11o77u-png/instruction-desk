@@ -231,6 +231,29 @@
         <canvas id="qrCamCanvas" hidden></canvas>
       </div>
       <div id="qrScanResult"></div>
+      <details class="qr-access-guide">
+        <summary>スマホ・画面付き端末からの開き方／おすすめ端末</summary>
+        <h3>スマホ・端末でも同じページを使えます</h3>
+        <ol>
+          <li>パソコンと同じ社内Wi-Fiにつなぎます。</li>
+          <li>ブラウザで、管理者から案内されたシステムのアドレスを開きます。</li>
+          <li>ログインして「在庫管理」→「QR読み取り」を開きます。</li>
+        </ol>
+        <p>アドレスの例：<code>http://192.168.1.10:8765</code>（実際のパソコンのIPアドレスに置き換えてください）。別端末からは <code>127.0.0.1</code> や <code>localhost</code> では接続できません。開けない場合は、社内ネットワークからの接続設定を管理者に確認してください。</p>
+        <h3>読み取り方法</h3>
+        <ul>
+          <li><strong>スマホのカメラ：</strong>「カメラで読む」を押して利用を許可します。スマホのカメラ利用には原則HTTPSが必要です。上のHTTPアドレス例は画面への接続用です。</li>
+          <li><strong>スキャナー内蔵端末：</strong>QR文字列の入力欄を選び、本体のボタンで読み取ります。読み取った文字列をブラウザの入力欄へ送る設定と、必要に応じてEnterを送る設定が必要です。</li>
+        </ul>
+        <h3>おすすめの導入候補（メーカー公式）</h3>
+        <ul>
+          <li><a href="https://www.zebra.com/us/en/products/mobile-computers/handheld/tc2x-series.html" target="_blank" rel="noopener noreferrer">Zebra TC22／TC27</a>：画面で商品や数量を確認する運用の候補。社内Wi-Fi中心ならTC22。</li>
+          <li><a href="https://www.denso-wave.com/ja/adcd/product/handy_terminal/bht-m80.html" target="_blank" rel="noopener noreferrer">デンソーウェーブ BHT-M80</a>：5インチ画面で情報を確認したい場合の候補。</li>
+          <li><a href="https://www.denso-wave.com/ja/adcd/product/handy_terminal/bht-m60.html" target="_blank" rel="noopener noreferrer">デンソーウェーブ BHT-M60</a>：物理キーで数量を入力したい場合の候補。</li>
+        </ul>
+        <p>このシステムでの実機動作は未確認です。購入前に貸出機などで、ブラウザ・QR入力・社内Wi-Fi接続を確認してください。</p>
+        <p><strong>現在は通信しながら利用します。</strong>通信なしでの読みため・後から一括反映する機能は未実装です。読み取っただけでは在庫数は変わりません。</p>
+      </details>
     </section>`
     const form=document.getElementById('qrScanForm')
     const input=document.getElementById('qrScanInput')

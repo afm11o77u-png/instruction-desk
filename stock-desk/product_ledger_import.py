@@ -600,9 +600,11 @@ def plan_provisional_official_name(group, raw_decision=None):
     # 既存公式名は維持。手動／メーカーが明示した色は上書きしない。
     raw_color = stock.text(raw.get('color') or '')
     aux_color = stock.text(aux.get('plannedRegisteredColor') or aux.get('adoptedColor') or '')
+    variant_colors = [stock.text(v.get('color')) for v in variants if stock.text(v.get('color'))]
+    unique_variant_color = variant_colors[0] if len(set(variant_colors)) == 1 else ''
     lock_name = rule_code == 'existing'
     lock_color = bool(raw_color)
-    seed_color = raw_color or aux_color
+    seed_color = raw_color or aux_color or unique_variant_color
     split_res = apply_representative_name_color_split(
         chosen,
         existing_color=seed_color,
@@ -3903,8 +3905,16 @@ def stamp_aux_adopted_package_on_rows(classified, sku_groups):
         prod['applyOfficialName'] = True
         prod['csvOriginalName'] = csv_name
         prod['primarySupplierName'] = main_supplier
-        prod['officialColor'] = stock.text(package.get('color') or '')
-        prod['proposedColor'] = stock.text(package.get('color') or '')
+        adopted_color = stock.text(package.get('color') or '')
+        if not adopted_color:
+            adopted_color = stock.text(
+                group.get('plannedRegisteredColor')
+                or (group.get('namePlan') or {}).get('color')
+                or prod.get('officialColor')
+                or ''
+            )
+        prod['officialColor'] = adopted_color
+        prod['proposedColor'] = adopted_color
         prod['officialMaterial'] = stock.text(package.get('material') or '')
         prod['proposedMaterial'] = stock.text(package.get('material') or '')
         prod['skuMerge'] = True
@@ -4116,6 +4126,38 @@ def names_equivalent_core(a, b):
     if not ta or not tb:
         return False
     return product_name_core_key(ta) == product_name_core_key(tb)
+
+
+def _is_don_111_code(code: str) -> bool:
+    clean = re.sub(r'[\s\.\-_]+', '', stock.text(code)).upper()
+    return clean in ('DON111', 'DONNO111')
+
+
+_DON_111_COLOR_RULES = {
+    'ブルー': {'code': 'DON NO.111-1', 'makerCode': 'DON NO.111-1', 'color': 'ブルー'},
+    '青': {'code': 'DON NO.111-1', 'makerCode': 'DON NO.111-1', 'color': 'ブルー'},
+    'ネイビー': {'code': 'DON NO.111-2', 'makerCode': 'DON NO.111-2', 'color': 'ネイビー'},
+    '紺': {'code': 'DON NO.111-2', 'makerCode': 'DON NO.111-2', 'color': 'ネイビー'},
+    'ブラック': {'code': 'DON NO.111-5', 'makerCode': 'DON NO.111-5', 'color': 'ブラック'},
+    '黒': {'code': 'DON NO.111-5', 'makerCode': 'DON NO.111-5', 'color': 'ブラック'},
+    'ライトグレー': {'code': 'DON NO.111-7', 'makerCode': 'DON NO.111-7', 'color': 'ライトグレー'},
+    'グレー': {'code': 'DON NO.111-7', 'makerCode': 'DON NO.111-7', 'color': 'ライトグレー'},
+    'レッド': {'code': 'DON NO.111-10', 'makerCode': 'DON NO.111-10', 'color': 'レッド'},
+    '赤': {'code': 'DON NO.111-10', 'makerCode': 'DON NO.111-10', 'color': 'レッド'},
+    'オレンジ': {'code': 'DON NO.111-33', 'makerCode': 'DON NO.111-33', 'color': 'オレンジ'},
+    '橙': {'code': 'DON NO.111-33', 'makerCode': 'DON NO.111-33', 'color': 'オレンジ'},
+    'グリーン': {'code': 'DON NO.117-4', 'makerCode': 'DON NO.117-4', 'color': 'グリーン'},
+    '緑': {'code': 'DON NO.117-4', 'makerCode': 'DON NO.117-4', 'color': 'グリーン'},
+}
+
+
+def _resolve_don_111_color_rule(color: str):
+    """DON NO.111 の色番表による品番・メーカー品番・色名解決。"""
+    c_t = stock.text(color)
+    if not c_t:
+        return None
+    key_match = paren_classify.color_match_key(c_t) or c_t
+    return _DON_111_COLOR_RULES.get(key_match) or _DON_111_COLOR_RULES.get(c_t)
 
 
 def suggest_color_split_internal_code(maker_code, color):
@@ -4378,23 +4420,65 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
 
     color_buckets = {}  # colorKey -> plan draft
     unassigned_rows = []
+    is_don_111 = _is_don_111_code(maker_code)
 
     def _ensure_bucket(color_display, product_name_hint=''):
-        key = paren_classify.color_match_key(color_display)
+        c_disp = stock.text(color_display)
+        if maker_code in ('KM-8379', 'KM-8399', 'KM-8397', 'T-8091'):
+            if c_disp in ('黒', 'ブラック'):
+                c_disp = 'ブラック'
+            elif c_disp in ('紺', 'ネイビー'):
+                c_disp = 'ネイビー'
+        key = paren_classify.color_match_key(c_disp)
         if not key:
             return None
         if key not in color_buckets:
-            suggested = suggest_color_split_internal_code(maker_code, color_display)
+            if is_don_111:
+                rule = _resolve_don_111_color_rule(c_disp)
+                if rule:
+                    suggested = rule['code']
+                    plan_maker_code = rule['makerCode']
+                    color_val = rule['color']
+                else:
+                    suggested = suggest_color_split_internal_code(maker_code, c_disp)
+                    plan_maker_code = maker_code
+                    color_val = stock.text(c_disp)
+                pname = 'つなぎ服'
+                notes_val = '購入'
+            elif maker_code in ('KM-8379', 'KM-8399', 'KM-8397', 'T-8091'):
+                plan_maker_code = 'KM-8379' if maker_code in ('KM-8379', 'KM-8397') else maker_code
+                color_val = c_disp
+                suggested = f'{plan_maker_code}-{color_val}'
+                if plan_maker_code == 'T-8091':
+                    default_pname = '胸当てエプロン'
+                elif plan_maker_code == 'KM-8379':
+                    default_pname = 'ジャケット'
+                else:
+                    default_pname = 'テーパードパンツ'
+                pname = stock.text(product_name_hint or default_pname)
+                for cw in ('ネイビー', 'ブラック', '紺', '黒'):
+                    pname = re.sub(r'[\s　]*' + re.escape(cw) + r'$', '', pname).strip()
+                notes_val = ''
+            else:
+                suggested = suggest_color_split_internal_code(maker_code, c_disp)
+                plan_maker_code = maker_code
+                color_val = stock.text(c_disp)
+                pname = stock.text(product_name_hint or '')
+                notes_val = ''
             user = user_plans.get(key) or user_plans.get(color_display) or {}
             if not isinstance(user, dict):
                 user = {}
             internal = stock.text(user.get('internalCode') or user.get('code') or '') or suggested
-            pname = stock.text(user.get('productName') or product_name_hint or '')
-            color_val = stock.text(user.get('color') or color_display)
+            if user.get('productName'):
+                pname = stock.text(user.get('productName'))
+            if user.get('color'):
+                color_val = stock.text(user.get('color'))
+            if user.get('notes'):
+                notes_val = stock.text(user.get('notes'))
             color_buckets[key] = {
                 'colorKey': key,
                 'color': color_val,
-                'makerCode': maker_code,
+                'makerCode': plan_maker_code,
                 'csvProductCode': maker_code,
                 'internalCode': internal,
                 'suggestedInternalCode': suggested,
@@ -4403,7 +4487,7 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
                 'category': stock.text(user.get('category') or '商品'),
                 'supplier': stock.text(user.get('supplier') or ''),
                 'material': stock.text(user.get('material') or ''),
-                'notes': stock.text(user.get('notes') or ''),
+                'notes': notes_val,
                 'processing': stock.text(user.get('processing') or ''),
                 'rowNos': [],
                 'sizes': [],
@@ -4490,6 +4574,22 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
     for row in source_rows:
         row_no = int(row.get('rowNo') or 0)
         info = _row_color_extraction(row)
+        if maker_code in ('KM-8379', 'KM-8399', 'KM-8397', 'T-8091'):
+            c_val = info.get('color') or ''
+            if c_val in ('黒', 'ブラック'):
+                info['color'] = 'ブラック'
+                info['needsConfirm'] = False
+            elif c_val in ('紺', 'ネイビー'):
+                info['color'] = 'ネイビー'
+                info['needsConfirm'] = False
+            if not info.get('color'):
+                orig_name = stock.text((row.get('csv') or {}).get('productName') or '')
+                if 'ブラック' in orig_name or '黒' in orig_name:
+                    info['color'] = 'ブラック'
+                    info['needsConfirm'] = False
+                elif 'ネイビー' in orig_name or '紺' in orig_name:
+                    info['color'] = 'ネイビー'
+                    info['needsConfirm'] = False
         row_info_by_no[row_no] = info
         preferred_name = _color_split_preferred_product_name(info)
         dest_key = stock.text(row_destinations.get(str(row_no)) or row_destinations.get(row_no) or '')
@@ -6560,6 +6660,14 @@ def classify_row(
     supplier_name = stock.text(item.get('仕入先'))
     code_raw = stock.text(item.get('商品コード'))
     product_name = stock.text(item.get('商品名'))
+    # 商品コードと商品名の逆転検知と自動入れ替え（例: アイスパック/IP5000, コート/6-521, コックコート/6-441）
+    if (
+        looks_like_garment_name_token(code_raw)
+        and not re.search(r'\d', code_raw)
+        and looks_like_maker_sku_token(product_name)
+        and re.search(r'\d', product_name)
+    ):
+        code_raw, product_name = product_name, code_raw
     size_raw = item.get('サイズ')
     size = size_raw if isinstance(size_raw, str) else ('' if size_raw is None else str(size_raw))
     size_label = stock.canonical_size_label(size)
@@ -6664,6 +6772,7 @@ def classify_row(
     # 既存商品照合は登録予定品番（VEH30B下）で行う
     item_for_product = dict(item) if isinstance(item, dict) else {'商品コード': code}
     item_for_product['商品コード'] = code
+    item_for_product['商品名'] = product_name
     product = _product_preview(
         c, item_for_product, supp, row_no,
         customer_name=customer_name,
@@ -6673,7 +6782,7 @@ def classify_row(
         selected_product_id=selected_product_id,
         force_create=force_create_product,
     )
-    if suffix.get('registerAsParts'):
+    if suffix.get('registerAsParts') or suffix_attr.is_part_product_name(product_name):
         product['category'] = stock.CATEGORY_PARTS
         product['proposedCategory'] = stock.CATEGORY_PARTS
     if code and code != source_code:
@@ -6870,12 +6979,27 @@ def classify_row(
         prov.setdefault('sourceCode', source_code)
         if suffix.get('note'):
             prov['codeNote'] = suffix['note']
+            if not stock.text(pc.get('supplement') or ''):
+                pc['supplement'] = suffix['note']
+                row['parenClassification'] = pc
+            prod = dict(row.get('product') or {})
+            if not prod.get('notes'):
+                prod['notes'] = suffix['note']
+                row['product'] = prod
         row['specProvenance'] = prov
     elif suffix.get('note'):
+        pc = dict(row.get('parenClassification') or {})
+        if not stock.text(pc.get('supplement') or ''):
+            pc['supplement'] = suffix['note']
+            row['parenClassification'] = pc
         prov = dict(row.get('specProvenance') or {})
         prov['codeNote'] = suffix['note']
         prov.setdefault('sourceCode', source_code)
         row['specProvenance'] = prov
+        prod = dict(row.get('product') or {})
+        if not prod.get('notes'):
+            prod['notes'] = suffix['note']
+            row['product'] = prod
     return _apply_review_acceptance(row, raw_override)
 
 
@@ -7056,6 +7180,14 @@ def _row_variant(row):
     csv = row.get('csv') or {}
     name = csv.get('productName') or ''
     _bk, color_key, base_display, color_display = legacy.product_name_base_and_color(name)
+    suffix_color = stock.text(
+        (row.get('suffixAttribute') or {}).get('color')
+        or (row.get('product') or {}).get('officialColor')
+        or ''
+    )
+    if not color_display and suffix_color:
+        color_display = suffix_color
+        color_key = paren_classify.color_match_key(suffix_color)
     proc_key = _name_processing_key(name)
     processing = ''
     try:
@@ -7805,7 +7937,16 @@ def _register_kind_override(row, overrides):
 def _auto_register_kind(row):
     pc = row.get('parenClassification') if isinstance(row.get('parenClassification'), dict) else {}
     ps = row.get('processingService') if isinstance(row.get('processingService'), dict) else {}
-    if row.get('physicalPartsView') or pc.get('physicalPartsView') or ps.get('isPhysicalParts'):
+    prod = row.get('product') or {}
+    suffix = row.get('suffixAttribute') or {}
+    if (
+        row.get('physicalPartsView')
+        or pc.get('physicalPartsView')
+        or ps.get('isPhysicalParts')
+        or suffix.get('registerAsParts')
+        or prod.get('category') == stock.CATEGORY_PARTS
+        or prod.get('proposedCategory') == stock.CATEGORY_PARTS
+    ):
         return '部品・資材'
     if (
         row.get('processingServiceView')
@@ -8984,6 +9125,9 @@ def _row_is_service_only(row):
 def _row_has_parts_side(row):
     """部品・加工段階で扱う行。"""
     prod = row.get('product') or {}
+    cat = stock.text(prod.get('category') or prod.get('proposedCategory') or '')
+    if cat == stock.CATEGORY_PARTS:
+        return True
     if row.get('k2GarmentAsProduct'):
         return True  # K2の衣服行で「商品」を選んだもの（商品段階には出ないのでここで登録）
     return (_row_is_service_only(row) or bool(_row_companion_service_name(row))
@@ -9020,7 +9164,12 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                     prod['officialName'] = comp
                 row['product'] = prod
         else:
-            ok = not _row_is_service_only(row)
+            prod = row.get('product') or {}
+            is_pure_service = (
+                stock.text(prod.get('category') or prod.get('proposedCategory') or '') == stock.CATEGORY_PROCESS_SERVICE
+                or (bool(_row_companion_service_name(row)) and not stock.text((row.get('csv') or {}).get('code')))
+            )
+            ok = not is_pure_service
         if ok:
             kept.append(row)
         else:
@@ -9958,15 +10107,27 @@ def auto_line_spec_sku_decisions(uploaded, sku_decisions):
 
 
 def auto_dom_color_split_decisions(sku_groups, sku_decisions):
-    """DOM品番（DOM0020, DOM0022, DOM0023等）で複数色がある場合は自動で「色別に分けて登録」。"""
+    """DOM品番（DOM0020, DOM0022, DOM0023等）、DON111、HG2000Nスーパー、KM-8379、KM-8399、T-8091で複数色がある場合は自動で「色別に分けて登録」。"""
     decisions = dict(sku_decisions) if isinstance(sku_decisions, dict) else {}
     for g in (sku_groups or []):
         code_t = stock.text(g.get('code') or '')
-        if not code_t.startswith('DOM'):
+        is_target = (
+            code_t.startswith('DOM')
+            or _is_don_111_code(code_t)
+            or code_t.startswith('HG2000N')
+            or code_t in ('KM-8379', 'KM-8399', 'KM-8397', 'T-8091')
+        )
+        if not is_target:
             continue
         if code_t in decisions:
             continue
-        if g.get('colorSplitEstimateCount', 0) >= 2 or len(g.get('variants') or []) >= 2:
+        if (
+            code_t.startswith('HG2000N')
+            or code_t in ('KM-8379', 'KM-8399', 'KM-8397', 'T-8091')
+            or g.get('colorSplitEstimateCount', 0) >= 2
+            or len(g.get('variants') or []) >= 2
+            or g.get('contentSplitEstimateCount', 0) >= 2
+        ):
             decisions[code_t] = {'decision': SKU_DECISION_COLOR_SPLIT, 'autoDomSplit': True}
     return decisions
 
@@ -10439,6 +10600,8 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                     and stock.text(m.get('registrationName') or '') == pname
                 )
             ]
+            maker_code_for_prod = stock.text(plan.get('makerCode') or code)
+            plan_notes_val = stock.text(plan.get('notes') or '')
             keep_id = plan.get('keepProductId')
             if keep_id and plan.get('collisionAction') in ('', 'reuse'):
                 row['product'] = dict(row.get('product') or {})
@@ -10446,9 +10609,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['action'] = 'reuse'
                 row['product']['code'] = internal
                 row['product']['codeOverride'] = internal
-                row['product']['makerCode'] = code
+                row['product']['makerCode'] = maker_code_for_prod
                 row['product']['officialName'] = pname
                 row['product']['officialColor'] = color
+                row['product']['notes'] = plan_notes_val
                 row['product']['applyOfficialName'] = True
                 row['product']['colorSplit'] = True
                 row['product']['skuMerge'] = False
@@ -10469,9 +10633,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['action'] = 'create'
                 row['product']['code'] = internal
                 row['product']['codeOverride'] = internal
-                row['product']['makerCode'] = code
+                row['product']['makerCode'] = maker_code_for_prod
                 row['product']['officialName'] = pname
                 row['product']['officialColor'] = color
+                row['product']['notes'] = plan_notes_val
                 row['product']['applyOfficialName'] = True
                 row['product']['colorSplit'] = True
                 row['product']['skuMerge'] = False
