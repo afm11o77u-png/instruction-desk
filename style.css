@@ -857,3 +857,5 @@ body.catalog-kintai main>header .headactions{display:none}
 #kintainav .kintai-nav-group .nav {display:block;width:100%;padding-block:8px}
 
 @media print { .exec-crimp-print {break-inside:avoid} }
+
+.shift-export-actions{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-left:24px}
