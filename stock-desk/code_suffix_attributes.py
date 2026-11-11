@@ -68,6 +68,7 @@ def _empty(**extra):
         'apply': False,
         'kind': 'plain',
         'baseCode': '',
+        'productName': '',
         'color': '',
         'processingName': '',
         'position': '',
@@ -105,7 +106,7 @@ def _is_midori(supplier):
 def _formal_code(text):
     norm = unicodedata.normalize('NFKC', text or '')
     norm = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm)
-    return bool(re.fullmatch(r'[#＃№0-9A-Za-z][0-9A-Za-z._\-－/／#＃№&+]*', norm))
+    return bool(re.fullmatch(r'[#＃№0-9A-Za-z\u0370-\u03ff][0-9A-Za-z._\-－/／#＃№&+\u0370-\u03ff]*', norm))
 
 
 def _is_color_code(text):
@@ -260,6 +261,49 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     raw = stock.text(code)
     if not raw:
         return _empty()
+    # α-100, α100, α-3000 などの α 品番の正規化と「品番 色 メモ」の自動分割
+    # （例: α100 黒 -> 品番 α-100, 色 ブラック / α‐3000 黒 恵み野 -> 品番 α-3000, 色 ブラック, メモ 恵み野）
+    norm_raw = unicodedata.normalize('NFKC', raw).strip()
+    norm_raw = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_raw)
+    if re.match(r'^[αΑ][\-_－]?\d+', norm_raw):
+        norm_fixed = re.sub(r'^[αΑ](\d+)', r'α-\1', norm_raw)
+        norm_fixed = re.sub(r'^[αΑ]-(\d+)', r'α-\1', norm_fixed)
+        parts = norm_fixed.split()
+        if len(parts) >= 2:
+            code_head = parts[0]
+            color_candidate = parts[1]
+            color_hit = paren.classify_paren_segment(color_candidate) or {}
+            resolved_c = color_hit.get('value') or (color_candidate if color_candidate in paren.COLOR_TERMS else '')
+            if resolved_c:
+                memo_tail = ' '.join(parts[2:]) if len(parts) > 2 else ''
+                return _empty(
+                    apply=True,
+                    kind='color',
+                    baseCode=code_head,
+                    color=resolved_c,
+                    note=memo_tail,
+                    needsConfirm=False,
+                )
+        if re.fullmatch(r'^[αΑ]\d+', norm_raw):
+            return _empty(
+                apply=True,
+                kind='plain',
+                baseCode=norm_fixed,
+                needsConfirm=False,
+            )
+    # 別注 ポーチの代替(900-5)
+    # 品番: 900-5 / 商品名: ウエストバッグ（ポーチ） / メモ: 代替
+    if 'ポーチの代替' in raw or ('別注' in raw and 'ポーチ' in raw and '代替' in raw):
+        m_pouch = re.search(r'[（(]([0-9A-Za-z\-]+)[）)]', raw)
+        pouch_code = m_pouch.group(1) if m_pouch else '900-5'
+        return _empty(
+            apply=True,
+            kind='note',
+            baseCode=pouch_code,
+            productName='ウエストバッグ（ポーチ）',
+            note='代替',
+            needsConfirm=False,
+        )
     # KM-8397 は KM-8379 の誤記修正
     if raw.startswith(('KM-8397', 'KM8397')):
         fixed = re.sub(r'^KM[-]?8397', 'KM-8379', raw)
@@ -388,7 +432,14 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 if not sub.get('baseCode'):
                     sub['baseCode'] = clean_code
                 return sub
-    if raw in ('要確認', '別注') or (raw.startswith('別注(') and raw.endswith(')')):
+    if raw == '要確認':
+        return _empty(
+            kind='unknown',
+            needsConfirm=True,
+            baseCode='',
+            reason='品番が「要確認」となっています。品番を確認してください。',
+        )
+    if raw == '別注' or (raw.startswith('別注(') and raw.endswith(')')):
         return _empty(kind='plain', baseCode=raw)
     name = stock.text(product_name)
     if _is_midori(supplier) and ('上' in raw or '下' in raw):

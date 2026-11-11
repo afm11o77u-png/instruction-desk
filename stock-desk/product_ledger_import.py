@@ -6645,6 +6645,18 @@ def code_name_columns_look_swapped(code, product_name):
     return looks_like_garment_name_token(code) and looks_like_maker_sku_token(product_name)
 
 
+def is_legacy_coop_bettyu(code: str) -> bool:
+    norm = unicodedata.normalize('NFKC', code or '').strip()
+    norm = re.sub(r'[‐-―−ｰ－]', '-', norm)
+    if 'ポーチ' in norm:
+        return False
+    if norm == '別注':
+        return True
+    if norm.startswith(('別注(', '別注（', '別注 ')):
+        return True
+    return False
+
+
 def classify_row(
     c, row_no, item, *,
     selected_product_id=None, selected_handle_id=None, selected_category=None,
@@ -6707,6 +6719,8 @@ def classify_row(
             position = suffix['position']
         if suffix.get('size'):
             size_label = stock.canonical_size_label(suffix['size'])
+        if suffix.get('productName'):
+            product_name = suffix['productName']
     group_key = match_group_key(
         customer=customer_name, code=code, product_name=product_name, supplier=supplier_name,
     )
@@ -6730,7 +6744,20 @@ def classify_row(
     if tape_reason:
         return _excluded_row(row_no, item, reason=f'{row_no}行目：{tape_reason}')
 
+    if is_legacy_coop_bettyu(code_raw):
+        return _excluded_row(row_no, item, reason=f'{row_no}行目：旧別注制服（現在未使用）のため登録対象外')
+
     if not customer_name:
+        is_service_candidate = bool(
+            proc_svc.is_processing_vendor(supplier_name)
+            or proc_svc.is_standalone_processing_service_name(product_name)
+        )
+        is_parts_candidate = bool(
+            suffix.get('registerAsParts')
+            or suffix_attr.is_part_product_name(product_name)
+        )
+        if not is_service_candidate and not is_parts_candidate and not stock_product_merge.is_normal_product_code(code):
+            return _excluded_row(row_no, item, reason=f'{row_no}行目：顧客名が空のため登録対象外')
         # 顧客なしは取扱を作れない
         cust = {
             'action': 'review', 'id': None, 'name': '', 'candidates': [],
@@ -6796,6 +6823,10 @@ def classify_row(
         product['codeDisplay'] = stock.product_code_display(code, product.get('category') or '')
         if suffix.get('color'):
             product['officialColor'] = suffix['color']
+            product['applyOfficialName'] = True
+        if suffix.get('productName'):
+            product['officialName'] = suffix['productName']
+            product['name'] = suffix['productName']
             product['applyOfficialName'] = True
     if pos_info.get('conflict') or pos_info.get('needsConfirm'):
         product['action'] = 'review'
