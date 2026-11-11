@@ -14,3 +14,7 @@ body:not(.authenticated)>aside,body:not(.authenticated)>main{display:none}#auths
 #accounts td:last-child button{display:block;max-width:100%;white-space:normal;margin:5px 0;text-align:left}
 
 #sidebarfooter{margin-top:auto;border-top:1px solid #6d9a80;padding-top:10px;display:flex;flex-direction:column;gap:6px;min-width:0}#sidebarfooter #accountbar{margin-top:0;border-top:0;padding:8px 10px 6px;min-width:0}
+
+#desksettings > summary {display:list-item;cursor:pointer;width:100%}
+.desksettings-items {display:grid;margin-left:12px;border-left:1px solid #6d9a80;padding-left:6px}
+.desksettings-items > .nav {width:100%;padding-block:8px}
