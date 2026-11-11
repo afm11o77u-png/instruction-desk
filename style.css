@@ -869,3 +869,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .exec-report-print .exec-inventory-table td {overflow-wrap:anywhere}
 
 .exec-report-print .exec-contracts-grid th {white-space:nowrap}
+
+/* Keep sidebar links and buttons on the same Japanese typeface. */
+body > aside {font-family:"Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}
+body > aside :is(button,a,summary) {font-family:inherit}
+body > aside .nav {font-weight:600}
