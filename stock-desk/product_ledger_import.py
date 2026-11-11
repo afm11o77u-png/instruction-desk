@@ -5987,7 +5987,9 @@ def _product_preview(
     import code_suffix_attributes
     is_part = code_suffix_attributes.is_part_product_name(name)
     blank_kind = legacy_code_assign.blank_code_kind(name) if blank_sku else ''
-    if blank_sku and blank_kind == 'processing':
+    if blank_sku and is_part:
+        proposed_category = stock.CATEGORY_PARTS
+    elif blank_sku and blank_kind == 'processing':
         proposed_category = stock.CATEGORY_PROCESS_SERVICE
     elif blank_sku and blank_kind == 'garment':
         proposed_category = stock.CATEGORY_UNIFORM
