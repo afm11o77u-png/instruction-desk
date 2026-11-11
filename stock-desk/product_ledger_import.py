@@ -5901,8 +5901,10 @@ def _finalize_matched_product(
         if _saved_name_alias(c, prod['id'], name):
             # 注記除去や色を色欄へ移したあとの原文。同じ商品の再取込であり、別の別注とは混ぜない。
             name = stock.text(prod['name'])
-        elif names_equivalent_core(prod['name'], name):
-            # 標記・空白/全角半角・明示シノニムのみ → 同一商品。原文は別名に残す。
+        elif names_equivalent_core(prod['name'], name) or (
+            paren_classify.split_name_and_color(name).get('plannedName') == stock.text(prod['name'])
+        ):
+            # 標記・空白/全角半角・明示シノニム・商品名からの色分離のみ → 同一商品。原文は別名に残す。
             if names_differ_only_by_used_marker(prod['name'], name):
                 info['usedMarkerNameDiff'] = True
             else:

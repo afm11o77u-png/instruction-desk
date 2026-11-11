@@ -467,10 +467,13 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                     )
                 return _empty(apply=True, kind='dimension', baseCode=body, size=dim, note=inner)
             norm_inner = unicodedata.normalize('NFKC', inner)
+            norm_inner = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_inner)
             if body and (_formal_code(body) or _is_compound_code(body)) and re.match(r'^[0-9A-Za-z\-_]+$', norm_inner) and re.search(r'\d', norm_inner):
                 norm_body = unicodedata.normalize('NFKC', body)
                 norm_body = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_body)
                 return _empty(apply=True, kind='note', baseCode=norm_body, note=inner)
+            if body and not _formal_code(body) and (_formal_code(norm_inner) or _is_compound_code(norm_inner)) and re.search(r'\d', norm_inner):
+                return _empty(apply=True, kind='note', baseCode=norm_inner, note=body)
             return _empty(
                 kind='unknown', needsConfirm=True, baseCode=raw,
                 reason=f'品番「{raw}」の追加文字「{inner}」の意味を確定できません。',

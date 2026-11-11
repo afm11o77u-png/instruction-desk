@@ -23,6 +23,9 @@ class KeyTest(unittest.TestCase):
         self.assertEqual(key('スナッパ加工'), key('スナッパー加工'))
         self.assertEqual(ps.unify_processing_service_name('スナッパ加工'), 'スナッパー加工')
         self.assertEqual(ps.unify_processing_service_name('スナッパ'), 'スナッパー加工')
+        self.assertEqual(ps.unify_processing_service_name('サイズ変更'), 'サイズ変更')
+        self.assertEqual(ps.unify_processing_service_name('サイズ変更加工'), 'サイズ変更')
+        self.assertEqual(ps.unify_processing_service_name('サイズ直し'), 'サイズ直し')
 
     def test_not_over_merged(self):
         for a, b in [('スーパー加工', 'スパ加工'), ('ノー加工', 'ノ加工'), ('ネーム刺繍', 'ネム刺繍'),
