@@ -285,6 +285,87 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(seven['note'], 'セブン')
         self.assertFalse(seven['needsConfirm'])
 
+    def test_recent_user_requested_cases(self):
+        # 1. APK489無地-C8 -> 無地をメモへ、品番はAPK489-C8
+        apk = suffix.classify_suffix('APK489無地-C8')
+        self.assertTrue(apk['apply'])
+        self.assertEqual(apk['baseCode'], 'APK489-C8')
+        self.assertEqual(apk['kind'], 'note')
+        self.assertEqual(apk['note'], '無地')
+
+        # 2. AS-8061 ｃ-10ブラック / AS-8062 ｃ-10ブラック -> c-10は品番、ブラックは色
+        as8061 = suffix.classify_suffix('AS-8061 ｃ-10ブラック')
+        self.assertTrue(as8061['apply'])
+        self.assertEqual(as8061['baseCode'], 'AS-8061 c-10')
+        self.assertEqual(as8061['kind'], 'color')
+        self.assertEqual(as8061['color'], 'ブラック')
+
+        as8062 = suffix.classify_suffix('AS-8062 ｃ-10ブラック')
+        self.assertTrue(as8062['apply'])
+        self.assertEqual(as8062['baseCode'], 'AS-8062 c-10')
+        self.assertEqual(as8062['kind'], 'color')
+        self.assertEqual(as8062['color'], 'ブラック')
+
+        # 3. AS110(310-8) -> 括弧内コードはメモへ
+        as110 = suffix.classify_suffix('AS110(310-8)')
+        self.assertTrue(as110['apply'])
+        self.assertEqual(as110['baseCode'], 'AS110')
+        self.assertEqual(as110['kind'], 'note')
+        self.assertEqual(as110['note'], '310-8')
+
+        # 4. AS110→なくなり次第6-605へ -> 矢印以降をメモへ
+        as_arrow = suffix.classify_suffix('AS110→なくなり次第6-605へ')
+        self.assertTrue(as_arrow['apply'])
+        self.assertEqual(as_arrow['baseCode'], 'AS110')
+        self.assertEqual(as_arrow['kind'], 'note')
+        self.assertEqual(as_arrow['note'], '→なくなり次第6-605へ')
+
+        # 5. AZ-1730-006 スカイブルー -> スカイブルーは色
+        az = suffix.classify_suffix('AZ-1730-006 スカイブルー')
+        self.assertTrue(az['apply'])
+        self.assertEqual(az['baseCode'], 'AZ-1730-006')
+        self.assertEqual(az['kind'], 'color')
+        self.assertEqual(az['color'], 'スカイブルー')
+
+        # 6. EP-6840 C10(ブラック) / EP-6840 C5(ネイビー) / EP-6849 c-1ホワイト
+        ep_c10 = suffix.classify_suffix('EP-6840 C10(ブラック)')
+        self.assertTrue(ep_c10['apply'])
+        self.assertEqual(ep_c10['baseCode'], 'EP-6840 C10')
+        self.assertEqual(ep_c10['kind'], 'color')
+        self.assertEqual(ep_c10['color'], 'ブラック')
+
+        ep_c5 = suffix.classify_suffix('EP-6840 C5(ネイビー)')
+        self.assertTrue(ep_c5['apply'])
+        self.assertEqual(ep_c5['baseCode'], 'EP-6840 C5')
+        self.assertEqual(ep_c5['kind'], 'color')
+        self.assertEqual(ep_c5['color'], 'ネイビー')
+
+        ep_c1 = suffix.classify_suffix('EP-6849 c-1ホワイト')
+        self.assertTrue(ep_c1['apply'])
+        self.assertEqual(ep_c1['baseCode'], 'EP-6849 c-1')
+        self.assertEqual(ep_c1['kind'], 'color')
+        self.assertEqual(ep_c1['color'], 'ホワイト')
+
+        # 7. FB4026L-15→FB4534Uへ変更 -> 矢印以降をメモへ
+        fb_arrow = suffix.classify_suffix('FB4026L-15→FB4534Uへ変更')
+        self.assertTrue(fb_arrow['apply'])
+        self.assertEqual(fb_arrow['baseCode'], 'FB4026L-15')
+        self.assertEqual(fb_arrow['kind'], 'note')
+        self.assertEqual(fb_arrow['note'], '→FB4534Uへ変更')
+
+        # 8. FH207C-01(東洋リントフリー製) / FK7177(ボンマックス)
+        lint = suffix.classify_suffix('FH207C-01(東洋リントフリー製)')
+        self.assertTrue(lint['apply'])
+        self.assertEqual(lint['baseCode'], 'FH207C-01')
+        self.assertEqual(lint['kind'], 'note')
+        self.assertEqual(lint['note'], '東洋リントフリー製')
+
+        bon = suffix.classify_suffix('FK7177(ボンマックス)')
+        self.assertTrue(bon['apply'])
+        self.assertEqual(bon['baseCode'], 'FK7177')
+        self.assertEqual(bon['kind'], 'note')
+        self.assertEqual(bon['note'], 'ボンマックス')
+
 
 class ImportTest(unittest.TestCase):
     def test_processing_color_parts_and_notes_register_without_shape_block(self):
