@@ -5752,6 +5752,27 @@
     return `<p class="excelhint" data-pl-timings>計測: CSV読込 ${t.csvParse||0}ms　商品照合 ${t.productJudgment||0}ms　初期在庫準備 ${t.openingStockPrep||0}ms　合計 ${t.total||0}ms</p>`
   }
 
+  function qrReplacementBannerHtml(r){
+    const targets=r&&r.qrReplacementTargets
+    if(!targets||!targets.length)return ''
+    return `<div class="notice qr-replacement-alert" style="margin-top:14px; background:#fffbe6; border:2px solid #faad14; padding:14px 16px; border-radius:8px; box-shadow:0 2px 8px rgba(250,173,20,0.15);">
+      <h4 style="margin:0 0 8px 0; color:#d46b08; font-size:15px; display:flex; align-items:center; gap:8px;">
+        <span style="font-size:18px;">⚠️</span> <span>QRコードの貼り替えが必要な商品（${targets.length}件）</span>
+      </h4>
+      <p style="margin:0 0 10px 0; color:#595959; font-size:13px; line-height:1.6;">
+        以下の商品は、旧データで複数色が混在していたため、今回規格・色ごとに分けて登録されました。<br>
+        <strong>旧システムのQRコード（または混在箱）のままでは色が混ざってしまうため、新システムで新QRコードを発行して現物の箱・袋に貼り替えてください。</strong>
+      </p>
+      <ul style="margin:0; padding-left:20px; font-size:13px; color:#262626; line-height:1.8;">
+        ${targets.map(t=>`
+          <li><strong>元品番 ${esc(t.originalCode)}</strong>（${esc(t.splitTypeLabel||'分割')}）:
+            ${(t.splitItems||[]).map(item=>`<span style="display:inline-block; margin:2px 4px; padding:2px 8px; background:#fff; border:1px solid #d9d9d9; border-radius:4px; font-weight:bold;">${esc(item.code)}${item.name?' ('+esc(item.name)+(item.color?' / '+esc(item.color):'')+')':''}</span>`).join('')}
+          </li>
+        `).join('')}
+      </ul>
+    </div>`
+  }
+
   function resultHtml(st){
     const r=st.result
     if(!r)return ''
@@ -5761,6 +5782,7 @@
       return `<div class="notice legacy-csv-result">
         <strong>${r.already?'同じ操作は登録済みです':'初期在庫の登録が完了しました'}</strong>
         <p>初期在庫: 新規 ${c.openingCreated||0}　数量更新 ${c.openingQtyUpdated||0}　変更なし ${c.openingUnchanged||0}　保留 ${c.openingHeld||0}　補完候補スキップ ${c.openingComplementSkipped||0}</p>
+        ${qrReplacementBannerHtml(r)}
       </div>`
     }
     const openingBit=r.registerOpeningStock
@@ -5774,6 +5796,7 @@
      　確定行 ${c.committedRows||0}　保留 ${c.deferred||r.deferredCount||0}　要確認残 ${r.reviewRemaining||0}　対象外 ${r.excludedCount||0}</p>
       ${s.csvRows!=null?`<p class="excelhint">確定時サマリ: CSV行 ${s.csvRows} / 新規商品 ${s.productsToCreate} / 再利用 ${s.productsToReuse} / 統合 ${s.productsToMerge}（行数≠新規商品数）</p>`:''}
       ${openingBit}
+      ${qrReplacementBannerHtml(r)}
       <p class="excelhint">初期在庫は画面を閉じて「旧CSV一括取り込み」→「初期在庫を登録」から行えます（マップは保存済み）。</p>
     </div>`
   }

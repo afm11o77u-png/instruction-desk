@@ -12383,6 +12383,39 @@ def _assert_fresh_preview(c, body, preview):
     return preview_fp
 
 
+def collect_qr_replacement_targets(sku_groups, sku_decisions=None):
+    """色別・内容別に分割された商品（新QRへの貼り替え推奨対象）を収集。"""
+    targets = []
+    decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
+    for g in (sku_groups or []):
+        code = stock.text(g.get('code') or '')
+        raw_dec = decisions.get(code)
+        dec = stock.text(raw_dec.get('decision')) if isinstance(raw_dec, dict) else stock.text(raw_dec)
+        is_color_split = dec == SKU_DECISION_COLOR_SPLIT or bool(g.get('colorSplit'))
+        is_content_split = dec == SKU_DECISION_CONTENT_SPLIT or bool(g.get('contentSplit'))
+        if not (is_color_split or is_content_split):
+            continue
+        plans = []
+        if is_color_split:
+            plans = (g.get('colorSplitPlans') or {}).get('plans') or []
+        elif is_content_split:
+            plans = (g.get('contentSplitPlans') or {}).get('plans') or []
+        split_items = []
+        for p in plans:
+            split_items.append({
+                'code': stock.text(p.get('internalCode') or p.get('code') or code),
+                'name': stock.text(p.get('productName') or ''),
+                'color': stock.text(p.get('color') or ''),
+            })
+        targets.append({
+            'originalCode': code,
+            'splitType': 'color' if is_color_split else 'content',
+            'splitTypeLabel': '色別に分割' if is_color_split else '内容別に分割',
+            'splitItems': split_items,
+        })
+    return targets
+
+
 def _reuse_commit_token(c, token):
     existing_token = c.execute(
         'SELECT id,result_json FROM product_ledger_import_runs WHERE commit_token=?', (token,)
@@ -12562,6 +12595,16 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
             result_counts['legacyQrInserted'] = link_counts['inserted']
             result_counts['legacyQrKept'] = link_counts['kept']
         after_stock = stock_snapshot(c)
+        last_product_run = c.execute(
+            "SELECT result_json FROM product_ledger_import_runs WHERE import_mode != 'opening' AND result_json IS NOT NULL ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        qr_targets = []
+        if last_product_run:
+            try:
+                prev_res = json.loads(last_product_run['result_json'] or '{}')
+                qr_targets = prev_res.get('qrReplacementTargets') or []
+            except Exception:
+                qr_targets = []
         result = {
             'runId': run_id,
             'already': False,
@@ -12583,6 +12626,7 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
             'reviewRemaining': 0,
             'excludedCount': 0,
             'deferredCount': 0,
+            'qrReplacementTargets': qr_targets,
             'fileName': aux_uploaded['fileName'],
             'fileSha256': aux_uploaded['fileSha256'],
             'actorName': actor,
@@ -13129,6 +13173,8 @@ def commit_preview(c, body, *, db_path=None):
 
         import code_suffix_attributes as suffix_attr
         suffix_registration = suffix_attr.register_pending_with_k2(c, classified)
+        sku_decisions = body.get('skuDecisions') if isinstance(body.get('skuDecisions'), dict) else {}
+        qr_replacement_targets = collect_qr_replacement_targets(sku_groups, sku_decisions)
         result = {
             'runId': run_id,
             'already': False,
@@ -13146,6 +13192,7 @@ def commit_preview(c, body, *, db_path=None):
             'reviewRemaining': len(review_rows),
             'excludedCount': len(excluded_rows),
             'deferredCount': len(hold_rows),
+            'qrReplacementTargets': qr_replacement_targets,
             'fileName': uploaded['fileName'],
             'fileSha256': uploaded['fileSha256'],
             'actorName': actor,
