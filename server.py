@@ -875,8 +875,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
     def serve_mark_guide(self, path):
         with connect() as c:
             user = self.session_user(c)
-        if not user or user['must_change'] or user['role'] != 'owner':
-            return self.reply(403, {'error': '説明動画は主管理者だけが見られます。'})
+        if not user or user['must_change'] or not kintai.can_use_kintai(user):
+            return self.reply(403, {'error': 'マーク管理の権限が必要です。'})
         files = {
             '/mark-guide': ('mark-guide.html', 'text/html; charset=utf-8'),
             '/mark-guide/video.mp4': ('assets/mark-guide.mp4', 'video/mp4'),
