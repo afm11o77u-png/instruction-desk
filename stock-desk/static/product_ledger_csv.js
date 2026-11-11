@@ -5531,6 +5531,41 @@
     }
   }
 
+  function nameWordingOnlyCodes(st){
+    const groups=(st.preview&&st.preview.skuGroups)||[]
+    const out=[]
+    for(const g of groups){
+      if(!g.needsDecision)continue
+      const reasons=g.reasons||[]
+      const hasWording=reasons.some(r=>r.code==='name_wording')
+      if(!hasWording)continue
+      const otherReasons=reasons.filter(r=>r.code!=='name_wording')
+      if(otherReasons.length>0)continue
+      if(g.makerCorrection&&g.makerCorrection.bulkEligible){
+        out.push(String(g.code))
+      }
+    }
+    return out
+  }
+
+  function autoTriggerNameWordingBulkLookup(st){
+    if(isOpeningMode(st))return
+    if(!st._autoNameWordingFetched)st._autoNameWordingFetched=new Set()
+    const targets=nameWordingOnlyCodes(st).filter(c=>!st._autoNameWordingFetched.has(c))
+    if(!targets.length)return
+    targets.forEach(c=>{
+      st._autoNameWordingFetched.add(c)
+      st.selectedCodes[c]=true
+    })
+    syncSkuSelectionUi(st)
+    startBulkMakerLookup(st,{
+      codes:targets,
+      skipConfirm:true
+    }).catch(e=>{
+      scrollLog('auto-bulk-maker-lookup-error',e)
+    })
+  }
+
   function isProcessingServicePreviewRow(st,rowNo){
     const row=((st.preview&&st.preview.rows)||[]).find(r=>Number(r.rowNo)===Number(rowNo))
     if(!row)return false
@@ -6638,6 +6673,7 @@
     st.makerLookup=null
     st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
+    st._autoNameWordingFetched=new Set()
     st.selectedCodes={}
     st.expandedCodes={}
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
@@ -7057,6 +7093,7 @@
       st.busy=false
       // 再照合は位置維持。初回のみ先頭（preserveScroll:false）。
       paintPreview(keepScroll?{}:{preserveScroll:false})
+      autoTriggerNameWordingBulkLookup(st)
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
     const reBtn=$('#plRePreview');if(reBtn)reBtn.onclick=runPreview
@@ -8123,6 +8160,8 @@
       scrollMakerLookupIntoView,
       startBulkMakerLookup,
       refetchBulkMakerResult,
+      nameWordingOnlyCodes,
+      autoTriggerNameWordingBulkLookup,
       adoptBulkMakerSelections,
       scheduleLedgerScrollRestore,
       captureLedgerScroll,

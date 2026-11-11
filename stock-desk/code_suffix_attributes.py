@@ -112,11 +112,11 @@ def _is_color_code(text):
     t = stock.text(text).strip()
     if not t:
         return False
-    # C/1, C-10, C-101, C/5, C10, C-1, C1
-    if re.fullmatch(r'[Cc][\-_/／]?[0-9]+[A-Za-z]?', t):
+    # C/1, C-10, C-101, C/5, C10, C-1, C1, C/#1, C#1
+    if re.fullmatch(r'[Cc][\-_/／#＃]*[0-9]+[A-Za-z]?', t):
         return True
-    # Col.1, COL-2, Color 3, COL/1
-    if re.fullmatch(r'(?:Col|COL|color|COLOR)[\.:_\-/／]?[0-9]+[A-Za-z]?', t):
+    # Col.1, COL-2, Color 3, COL/1, Col#1
+    if re.fullmatch(r'(?:Col|COL|color|COLOR)[\.:_\-/／#＃]*[0-9]+[A-Za-z]?', t):
         return True
 
     return False
@@ -512,13 +512,13 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         if hit.get('kind') == 'color' and stock.text(hit.get('original') or '') == tail:
             tail_color = stock.text(hit.get('value') or tail)
         else:
-            tail_code_m = re.match(r'^([Cc][\-_/／]?[0-9]+[A-Za-z]?)\s+(.+)$', tail)
+            tail_code_m = re.match(r'^([Cc][\-_/／#＃]*[0-9]+[A-Za-z]?)\s+(.+)$', tail)
             if tail_code_m:
                 sub_hit = paren.classify_paren_segment(tail_code_m.group(2)) or {}
                 if sub_hit.get('kind') == 'color':
                     tail_color = stock.text(sub_hit.get('value') or tail_code_m.group(2))
             else:
-                tail_name_m = re.match(r'^(.+)\s+([Cc][\-_/／]?[0-9]+[A-Za-z]?)$', tail)
+                tail_name_m = re.match(r'^(.+)\s+([Cc][\-_/／#＃]*[0-9]+[A-Za-z]?)$', tail)
                 if tail_name_m:
                     sub_hit = paren.classify_paren_segment(tail_name_m.group(1)) or {}
                     if sub_hit.get('kind') == 'color':
@@ -604,7 +604,7 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
     if color and base != body:
         norm_base = unicodedata.normalize('NFKC', base).strip()
         norm_base = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_base)
-        m_code_color = re.match(r'^(\S+)\s+([Cc][\-_/／]?[0-9]+[A-Za-z]?)$', norm_base)
+        m_code_color = re.match(r'^(\S+)\s+([Cc][\-_/／#＃]*[0-9]+[A-Za-z]?)$', norm_base)
         if m_code_color and _formal_code(m_code_color.group(1)):
             norm_base = m_code_color.group(1)
         target_color = color
@@ -617,7 +617,7 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         left, right = raw.split('用', 1)
         right_name = _part_right_name(right, name)
         if right_name:
-            if re.search(r'\d', left) and _formal_code(left):
+            if is_part_product_name(name) or is_part_product_name(product_name) or (re.search(r'\d', left) and _formal_code(left)):
                 return _empty(
                     apply=False, kind='parts', baseCode=raw, registerAsParts=True,
                     note=right_name,
