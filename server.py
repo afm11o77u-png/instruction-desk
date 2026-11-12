@@ -880,13 +880,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         files = {
             '/mark-guide': ('mark-guide.html', 'text/html; charset=utf-8'),
             '/mark-guide/video.mp4': ('assets/mark-guide.mp4', 'video/mp4'),
+            '/mark-guide/demo.mp4': ('assets/mark-guide-demo.mp4', 'video/mp4'),
             '/mark-guide/subtitles.vtt': ('assets/mark-guide.vtt', 'text/vtt; charset=utf-8'),
         }
         name, content_type = files[path]
         file = ROOT / name
         if not file.is_file():
             return self.reply(404, {'error': '説明動画のファイルが見つかりません。'})
-        if path != '/mark-guide/video.mp4':
+        if content_type != 'video/mp4':
             return self.reply(200, file.read_bytes(), content_type)
         size = file.stat().st_size
         range_header = self.headers.get('Range')
@@ -1131,7 +1132,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')
                 if request_user['role'] != 'owner' and not request_user['manage']:
                     return self.reply(403, 'WEB依頼は主管理者・管理者だけが利用できます。', 'text/plain; charset=utf-8')
-        if path in ('/mark-guide', '/mark-guide/video.mp4', '/mark-guide/subtitles.vtt'):
+        if path in ('/mark-guide', '/mark-guide/video.mp4', '/mark-guide/demo.mp4', '/mark-guide/subtitles.vtt'):
             return self.serve_mark_guide(path)
         if path in ('/customer-accounts','/customer-accounts.js','/customer-accounts.css'):
             with connect() as c:

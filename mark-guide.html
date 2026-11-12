@@ -26,6 +26,13 @@
 <main>
   <a href="/?kintai=attendance">← マーク管理に戻る</a>
   <h1>マーク管理の説明動画</h1>
+  <h2>操作実演</h2>
+  <p>シフト表で全員を休みにしてから個別に直す手順と、圧着カウンターを保存したときの画面の変化を、サンプルデータと字幕で確認できます。</p>
+  <video id="demo-video" controls playsinline preload="metadata" aria-label="シフト表と圧着カウンターの操作実演">
+    <source src="/mark-guide/demo.mp4" type="video/mp4">
+    このブラウザーでは動画を再生できません。
+  </video>
+  <h2>業務の流れと手順</h2>
   <video id="guide-video" controls playsinline preload="metadata" aria-label="マーク管理の操作説明">
     <source src="/mark-guide/video.mp4" type="video/mp4">
     <track kind="captions" src="/mark-guide/subtitles.vtt" srclang="ja" label="日本語" default>
@@ -51,6 +58,9 @@
 </main>
 <script>
   const video = document.querySelector('#guide-video');
+  const demo = document.querySelector('#demo-video');
+  video.addEventListener('play', () => demo.pause());
+  demo.addEventListener('play', () => video.pause());
   const toggle = document.querySelector('#caption-toggle');
   const status = document.querySelector('#player-status');
   const chapters = document.querySelectorAll('#guide-chapters button');
