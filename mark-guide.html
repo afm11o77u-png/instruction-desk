@@ -27,11 +27,23 @@
   <a href="/?kintai=attendance">← マーク管理に戻る</a>
   <h1>マーク管理の説明動画</h1>
   <h2>操作実演</h2>
-  <p>シフト表で全員を休みにしてから個別に直す手順と、圧着カウンターを保存したときの画面の変化を、サンプルデータと字幕で確認できます。</p>
-  <video id="demo-video" controls playsinline preload="metadata" aria-label="シフト表と圧着カウンターの操作実演">
-    <source src="/mark-guide/demo.mp4" type="video/mp4">
-    このブラウザーでは動画を再生できません。
-  </video>
+  <p><a href="#shift-lesson">シフト表・予定CSV</a> ／ <a href="#crimp-lesson">圧着カウンター</a></p>
+  <section aria-labelledby="shift-lesson">
+    <h3 id="shift-lesson">シフト表・予定CSV</h3>
+    <p>対象月の確認、休みの一括入力、個別修正、保存、予定CSVの出力を実演します。</p>
+    <video controls playsinline preload="metadata" aria-labelledby="shift-lesson">
+      <source src="/mark-guide/shift.mp4" type="video/mp4">
+      このブラウザーでは動画を再生できません。
+    </video>
+  </section>
+  <section aria-labelledby="crimp-lesson">
+    <h3 id="crimp-lesson">圧着カウンター</h3>
+    <p>毎日の累計値の記録、圧着数と月合計の確認、管理者による入力修正を実演します。</p>
+    <video controls playsinline preload="metadata" aria-labelledby="crimp-lesson">
+      <source src="/mark-guide/crimp.mp4" type="video/mp4">
+      このブラウザーでは動画を再生できません。
+    </video>
+  </section>
   <h2>業務の流れと手順</h2>
   <video id="guide-video" controls playsinline preload="metadata" aria-label="マーク管理の操作説明">
     <source src="/mark-guide/video.mp4" type="video/mp4">
@@ -58,9 +70,10 @@
 </main>
 <script>
   const video = document.querySelector('#guide-video');
-  const demo = document.querySelector('#demo-video');
-  video.addEventListener('play', () => demo.pause());
-  demo.addEventListener('play', () => video.pause());
+  const players = document.querySelectorAll('video');
+  players.forEach(player => player.addEventListener('play', () => {
+    players.forEach(other => { if (other !== player) other.pause(); });
+  }));
   const toggle = document.querySelector('#caption-toggle');
   const status = document.querySelector('#player-status');
   const chapters = document.querySelectorAll('#guide-chapters button');
