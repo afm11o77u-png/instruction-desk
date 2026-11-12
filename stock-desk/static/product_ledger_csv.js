@@ -5440,7 +5440,7 @@
       else{
         stopBulkMakerPoll(st)
         if(st.bulkMakerLookup)st.bulkMakerLookup._completionToasted=true
-        st.toast('メーカー情報の一括取得が完了しました。必要なら「結果を見る」でパネルへ移動できます。')
+        await adoptBulkMakerSelections(st,{autoSingleOnly:true})
       }
     }catch(e){
       st.bulkMakerLookup=Object.assign({},st.bulkMakerLookup,{
@@ -5497,10 +5497,9 @@
       }
       if(job.finished){
         stopBulkMakerPoll(st)
-        // 完了は toast／進捗のみ。自動スクロールしない。
         if(st.bulkMakerLookup&&!st.bulkMakerLookup._completionToasted){
           st.bulkMakerLookup._completionToasted=true
-          st.toast('メーカー情報の一括取得が完了しました。必要なら「結果を見る」でパネルへ移動できます。')
+          await adoptBulkMakerSelections(st,{autoSingleOnly:true})
         }
       }
     }catch(e){
@@ -5531,39 +5530,71 @@
     }
   }
 
-  function nameWordingOnlyCodes(st){
+  function isNameIssueOnlyGroup(g){
+    if(!g||!g.needsDecision)return false
+    if(!g.makerCorrection||!g.makerCorrection.bulkEligible)return false
+    if(g.makerCorrectionAdopted)return false
+    // 明確な色競合・仕入先競合・既存重複があるものは「商品名のみ」ではない
+    if(g.colorDiffPossible)return false
+    if(g.supplierDiff)return false
+    if(g.existingDuplicates)return false
+    const reasons=g.reviewReasons||[]
+    if(!reasons.length)return false
+    const nameRelatedCodes=new Set([
+      'name_wording',
+      'kind',
+      'processing',
+      'fabric',
+      'gender',
+      'aux_stock_positive_tie',
+      'aux_stock_multi_nonzero',
+      'aux_stock_all_zero',
+      'aux_stock_multi_negative',
+      'aux_stock_review'
+    ])
+    for(const r of reasons){
+      const code=r.code||''
+      if(code==='color'||code==='supplier'||code==='existing_dup')return false
+      if(String(r.label||'').includes('色の違い')||String(r.label||'').includes('仕入先'))return false
+      if(!nameRelatedCodes.has(code))return false
+    }
+    return true
+  }
+
+  function nameIssueOnlyCodes(st){
     const groups=(st.preview&&st.preview.skuGroups)||[]
     const out=[]
     for(const g of groups){
-      if(!g.needsDecision)continue
-      const reasons=g.reasons||[]
-      const hasWording=reasons.some(r=>r.code==='name_wording')
-      if(!hasWording)continue
-      const otherReasons=reasons.filter(r=>r.code!=='name_wording')
-      if(otherReasons.length>0)continue
-      if(g.makerCorrection&&g.makerCorrection.bulkEligible){
+      if(isNameIssueOnlyGroup(g)){
         out.push(String(g.code))
       }
     }
     return out
   }
 
-  function autoTriggerNameWordingBulkLookup(st){
+  function nameWordingOnlyCodes(st){
+    return nameIssueOnlyCodes(st)
+  }
+
+  function initNameIssueSelections(st){
     if(isOpeningMode(st))return
-    if(!st._autoNameWordingFetched)st._autoNameWordingFetched=new Set()
-    const targets=nameWordingOnlyCodes(st).filter(c=>!st._autoNameWordingFetched.has(c))
+    if(!st.selectedCodes)st.selectedCodes={}
+    const targets=nameIssueOnlyCodes(st)
     if(!targets.length)return
+    let changed=false
     targets.forEach(c=>{
-      st._autoNameWordingFetched.add(c)
-      st.selectedCodes[c]=true
+      if(st.selectedCodes[c]==null){
+        st.selectedCodes[c]=true
+        changed=true
+      }
     })
-    syncSkuSelectionUi(st)
-    startBulkMakerLookup(st,{
-      codes:targets,
-      skipConfirm:true
-    }).catch(e=>{
-      scrollLog('auto-bulk-maker-lookup-error',e)
-    })
+    if(changed){
+      syncSkuSelectionUi(st)
+    }
+  }
+
+  function autoTriggerNameWordingBulkLookup(st){
+    initNameIssueSelections(st)
   }
 
   function isProcessingServicePreviewRow(st,rowNo){
@@ -5677,19 +5708,30 @@
     }
   }
 
-  async function adoptBulkMakerSelections(st){
+  async function adoptBulkMakerSelections(st,opts){
+    opts=opts||{}
+    const autoSingleOnly=!!opts.autoSingleOnly
     const panel=st.bulkMakerLookup
     if(!panel||panel.running)return
     const adoptSel=panel.adoptSelected||{}
     const picks=[]
     ;(panel.results||[]).forEach((r,ri)=>{
       if(r.adopted)return
+      if(autoSingleOnly){
+        if(r.status==='ok'&&r.adoptableSingle&&(r.candidates||[]).length===1){
+          picks.push({result:r,cand:r.candidates[0],ri,ci:0,key:bulkMakerAdoptSelectionKey(r,0)})
+        }
+        return
+      }
       ;(r.candidates||[]).forEach((c,ci)=>{
         const key=bulkMakerAdoptSelectionKey(r,ci)
         if(adoptSel[key])picks.push({result:r,cand:c,ri,ci,key})
       })
     })
-    if(!picks.length){st.toast('採用する補正を選択してください。');return}
+    if(!picks.length){
+      if(!autoSingleOnly)st.toast('採用する補正を選択してください。')
+      return
+    }
     // 色分割中の品番は確認
     const colorSplitCodes=[]
     picks.forEach(p=>{
@@ -5700,11 +5742,19 @@
       })
     })
     if(colorSplitCodes.length){
-      const ok=confirm(
-        `選択した補正の採用で、色別登録中の ${colorSplitCodes.length} 品番を「同じ商品としてまとめる」に切り替えます。\n`+
-        `品番: ${colorSplitCodes.slice(0,12).join('、')}${colorSplitCodes.length>12?` …他${colorSplitCodes.length-12}`:''}\n\nよろしいですか？`
-      )
-      if(!ok)return
+      if(autoSingleOnly){
+        for(let i=picks.length-1;i>=0;i--){
+          const hasSplit=(picks[i].result.skuCodes||[]).some(c=>colorSplitCodes.includes(c))
+          if(hasSplit)picks.splice(i,1)
+        }
+        if(!picks.length)return
+      }else{
+        const ok=confirm(
+          `選択した補正の採用で、色別登録中の ${colorSplitCodes.length} 品番を「同じ商品としてまとめる」に切り替えます。\n`+
+          `品番: ${colorSplitCodes.slice(0,12).join('、')}${colorSplitCodes.length>12?` …他${colorSplitCodes.length-12}`:''}\n\nよろしいですか？`
+        )
+        if(!ok)return
+      }
     }
     st.busy=true
     paintDialog()
@@ -5737,7 +5787,16 @@
       st.previewError=''
       snapshotAppliedSkuDecisions(st)
       // 初期在庫の選択・照合情報は preview 再取得でも openingSelections を消さない
-      st.toast(`メーカー補正を ${adopted} 件採用しました（プレビュー反映のみ。台帳未登録）`)
+      if(autoSingleOnly){
+        const multiCount=(panel.results||[]).filter(r=>!r.adopted&&(r.status==='multiple'||r.status==='colorway_choice')).length
+        st.toast(
+          `メーカー情報の一致候補 ${adopted} 件を自動採用しました。`+
+          (multiCount?` 複数候補のある ${multiCount} 件はパネルで選択してください。`:''),
+          8000
+        )
+      }else{
+        st.toast(`メーカー補正を ${adopted} 件採用しました（プレビュー反映のみ。台帳未登録）`)
+      }
     }catch(e){
       st.toast(apiErrorMessage(e,'一括採用に失敗しました。'),6000)
     }finally{
@@ -7091,9 +7150,10 @@
       }
       if(reqId!==st.previewReqSeq)return
       st.busy=false
+      // 商品名のみが迷いの原因の品番を初期選択し、「選択した商品のメーカー情報を取得」を即実行できるようにする
+      initNameIssueSelections(st)
       // 再照合は位置維持。初回のみ先頭（preserveScroll:false）。
       paintPreview(keepScroll?{}:{preserveScroll:false})
-      autoTriggerNameWordingBulkLookup(st)
     }
     const prevBtn=$('#plPreview');if(prevBtn)prevBtn.onclick=runPreview
     const reBtn=$('#plRePreview');if(reBtn)reBtn.onclick=runPreview
@@ -8161,6 +8221,9 @@
       startBulkMakerLookup,
       refetchBulkMakerResult,
       nameWordingOnlyCodes,
+      nameIssueOnlyCodes,
+      isNameIssueOnlyGroup,
+      initNameIssueSelections,
       autoTriggerNameWordingBulkLookup,
       adoptBulkMakerSelections,
       scheduleLedgerScrollRestore,
