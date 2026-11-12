@@ -344,6 +344,16 @@ def analyze_sku_review_diffs(variants, *, existing_count=0, name_mismatch=False)
 
     color_diff = _explicit_color_diff(color_keys)
     processing_diff = _set_diff(proc_sets)
+    if processing_diff:
+        # 加工・刺繍を除去した本体名が同一（例: エプロン と エプロン(LEOC刺繍)）であれば、
+        # 衣服本体を別商品に分割せず、取扱側の刺繍・加工仕様として自動でまとめる。
+        planned_cores = {
+            legacy.product_name_base_key(paren_classify.classify_product_name(n).get('plannedName') or n)
+            for n in hint_names if n
+        }
+        if len(planned_cores) <= 1:
+            processing_diff = False
+
     # 商品種はシノニム正規化済み。差があれば個別確認。
     kind_diff = False
     if len(hint_names) >= 2:
@@ -8584,6 +8594,10 @@ def apply_processing_service_split(c, classified, sku_groups):
         group['processingDiffPossible'] = False
 
         if group.get('needsDecision') and group.get('garmentBodyKnown'):
+            garment_cores = {
+                legacy.product_name_base_key(paren_classify.classify_product_name(n).get('plannedName') or n)
+                for n in garment_names if n
+            }
             soft_reasons = []
             for r in list(group.get('reviewReasons') or []):
                 code_r = stock.text(r.get('code') or '')
@@ -8591,8 +8605,8 @@ def apply_processing_service_split(c, classified, sku_groups):
                     # 加工行由来の疑い。本体側に実差が残るかは garment_variants で見る
                     continue
                 if code_r == 'compare':
-                    # 加工行を除くと本体1候補なのに残る汎用「内容確認」は分離後に落とす
-                    if len(garment_variants) <= 1:
+                    # 加工行を除くと本体1候補、または本体ベース名が同一なら落とす
+                    if len(garment_variants) <= 1 or len(garment_cores) <= 1:
                         continue
                 if code_r == 'supplier':
                     if len(group.get('supplierCandidates') or []) <= 1:
@@ -8605,7 +8619,7 @@ def apply_processing_service_split(c, classified, sku_groups):
                 soft_reasons.append(r)
             group['reviewReasons'] = soft_reasons
             group['nameWordingDiff'] = len({product_name_core_key(n) for n in garment_names if n}) > 1
-            if len(garment_variants) <= 1 and len(existing) <= 1 and not soft_reasons:
+            if (len(garment_variants) <= 1 or len(garment_cores) <= 1) and len(existing) <= 1 and not soft_reasons:
                 group['needsDecision'] = False
                 group['plannedSingleProduct'] = True
                 group['status'] = 'auto'

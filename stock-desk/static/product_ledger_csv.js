@@ -3265,12 +3265,10 @@
       })
     }
     if(procs.length===1){
-      return makePlanField('processing',procs[0],PLAN_STATUS.AUTO)
+      return makePlanField('processing',procs[0],PLAN_STATUS.AUTO,{hint:'取扱ごとに仕様設定'})
     }
     if(procs.length>1){
-      return makePlanField('processing',procs.join('／'),PLAN_STATUS.NEED_CHOICE,{
-        editHint:'詳細'
-      })
+      return makePlanField('processing',procs.join('／'),PLAN_STATUS.AUTO,{hint:'取扱ごとに仕様設定'})
     }
     return makePlanField('processing','',PLAN_STATUS.NA)
   }
