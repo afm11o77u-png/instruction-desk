@@ -2949,7 +2949,7 @@
     name:'商品名',
     color:'色',
     supplier:'仕入先',
-    customer:'顧客',
+    customer:'取扱顧客',
     processing:'必要な加工・仕様',
     procName:'加工名',
     procVendor:'加工業者',
@@ -3196,6 +3196,67 @@
     })
   }
 
+  function itemCustomers(st,item){
+    if(!item)return []
+    const list=[]
+    function add(name){
+      const t=String(name||'').trim()
+      if(t&&!list.includes(t))list.push(t)
+    }
+    if(item.group){
+      const g=item.group
+      ;(g.variants||[]).forEach(v=>(v.customers||[]).forEach(add))
+      if(Array.isArray(g.customers))g.customers.forEach(add)
+    }
+    const rows=item.rows||[]
+    if(!rows.length&&item.kind==='sku'&&item.group){
+      const code=String(item.code||item.group.code||'')
+      const matchRows=((st.preview&&st.preview.rows)||[]).filter(r=>String((r.csv||{}).code||'')===code)
+      matchRows.forEach(r=>add((r.csv||{}).customer))
+    }else{
+      rows.forEach(r=>add((r.csv||{}).customer))
+    }
+    return list
+  }
+
+  function customerPlanField(st,item){
+    const customers=itemCustomers(st,item)
+    const issues=item.issues||[]
+    const hasCustIssue=issues.some(i=>!i.resolved&&(i.fieldKey==='customer'||i.type==='customer_pick'||/顧客/.test(i.label||'')))
+    if(!customers.length){
+      return makePlanField('customer','―',PLAN_STATUS.NA,{
+        hint:'該当なし（共通資材など）'
+      })
+    }
+    const status=hasCustIssue?PLAN_STATUS.NEED_CHOICE:PLAN_STATUS.AUTO
+    if(customers.length===1){
+      return makePlanField('customer',customers[0],status,{
+        hint:hasCustIssue?'表記の候補から選んでください':'',
+        editHint:hasCustIssue?'操作列または詳細の顧客':''
+      })
+    }
+    const summaryText=`${customers[0]} 他${customers.length-1}社（計${customers.length}社）`
+    const statusBit=status?`<span class="sku-plan-status">【${esc(status)}】</span>`:''
+    const toggleBtn=`<span class="sku-plan-cust-toggle" title="取扱顧客の一覧を表示／非表示"><span class="toggle-closed">一覧 ▼</span><span class="toggle-open">閉じる ▲</span></span>`
+    const listHtml=`<ul class="sku-plan-cust-list">${customers.map(c=>`<li>${esc(c)}</li>`).join('')}</ul>`
+    const customHtml=`<details class="sku-plan-cust-details">
+      <summary class="sku-plan-cust-summary">
+        <span class="sku-plan-value">${esc(summaryText)}</span>
+        ${statusBit}
+        ${toggleBtn}
+      </summary>
+      ${listHtml}
+    </details>`
+    return {
+      key:'customer',
+      label:PLAN_FIELD_LABELS.customer||'取扱顧客',
+      value:summaryText,
+      status:status,
+      unsettled:planStatusUnsettled(status),
+      customHtml:customHtml
+    }
+  }
+
   function skuProcessingPlanField(st,g,d){
     const procs=variantProcessings(g)
     if(g.processingDiffPossible||hasReasonCode(g,'processing')){
@@ -3258,11 +3319,12 @@
       }))
     }
     fields.push(skuSupplierPlanField(st,g,d))
+    fields.push(customerPlanField(st,item))
     fields.push(skuProcessingPlanField(st,g,d))
     return fields
   }
 
-  function contentSplitPlanFields(st,g,d){
+  function contentSplitPlanFields(st,g,d,item){
     const fields=[]
     const pending=skuDecisionPendingRematch(st,g.code)
     const split=g.contentSplitPlans||{}
@@ -3293,6 +3355,7 @@
           editHint:'詳細の内容別フォーム'
         }))
       }
+      fields.push(customerPlanField(st,item))
     }
     return fields
   }
@@ -3302,16 +3365,17 @@
     if(!g)return []
     const d=skuDecision(st,g.code)
     if((d.decision||'')==='color_split'){
-      return colorSplitPlanFields(st,g,d)
+      return colorSplitPlanFields(st,g,d,item)
     }
     if((d.decision||'')==='content_split'){
-      return contentSplitPlanFields(st,g,d)
+      return contentSplitPlanFields(st,g,d,item)
     }
     return [
       makePlanField('sku',g.codeDisplay||g.code||item.targetLabel||'',PLAN_STATUS.AUTO),
       skuNamePlanField(st,g,d),
       skuColorPlanField(st,g,d),
       skuSupplierPlanField(st,g,d),
+      customerPlanField(st,item),
       skuProcessingPlanField(st,g,d)
     ]
   }
@@ -3350,6 +3414,7 @@
     return [
       makePlanField('procName',name,nameStatus,{editHint:'詳細の加工名'}),
       makePlanField('procVendor',vendor,vendorStatus,{editHint:'詳細'}),
+      customerPlanField(st,item),
       makePlanField('procSpec',specText,specStatus,{
         hint:specBits.length>3?'他は詳細へ':'',
         editHint:'詳細の補足／個別仕様'
@@ -3420,7 +3485,6 @@
       ))
     }else{
       const sup=sample.supplier||{}
-      const cust=sample.customer||{}
       const sel=(st.selections||{})[String(sample.rowNo)]||{}
       const supplierNeeds=sup.action==='review'&&(sup.candidates||[]).length&&!sel.supplierId
       fields.push(makePlanField(
@@ -3429,15 +3493,8 @@
         supplierNeeds?PLAN_STATUS.NEED_CHOICE:(csvSupplier?PLAN_STATUS.AUTO:PLAN_STATUS.UNSET),
         {hint:supplierNeeds?'表記の候補から選んでください':(csvSupplier?'CSV行の仕入先':'仕入先情報が不足')}
       ))
-      if(cust.action==='review'&&(cust.candidates||[]).length&&!sel.customerId){
-        fields.push(makePlanField(
-          'customer',
-          csv.customer||'',
-          PLAN_STATUS.NEED_CHOICE,
-          {hint:'表記の候補から選んでください',editHint:'操作列の顧客の候補'}
-        ))
-      }
     }
+    fields.push(customerPlanField(st,item))
     fields.push(makePlanField('processing','',PLAN_STATUS.NA))
     return fields
   }
@@ -3468,11 +3525,13 @@
     const hintBit=field.hint?`<span class="sku-plan-hint">（${esc(field.hint)}）</span>`:''
     const editBit=(field.unsettled&&field.editHint)
       ?`<span class="sku-plan-edit-hint">${esc(field.editHint)}</span>`:''
+    const mainContent=field.customHtml
+      ?field.customHtml
+      :`<span class="sku-plan-value">${esc(valueText)}</span>${statusBit}${hintBit}${editBit}`
     return `<div class="${cls.join(' ')}" data-plan-field="${esc(field.key)}">
       <span class="sku-plan-label">${esc(field.label)}</span>
       <span class="sku-plan-main">
-        <span class="sku-plan-value">${esc(valueText)}</span>
-        ${statusBit}${hintBit}${editBit}
+        ${mainContent}
       </span>
     </div>`
   }
