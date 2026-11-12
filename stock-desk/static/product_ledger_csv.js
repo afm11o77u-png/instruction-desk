@@ -27,7 +27,7 @@
   // unified=確認リスト（旧・個別確認＋行要確認の統合）。sourceRows=元行一覧（詳細確認用・既定折りたたみ）
   // rowExcluded=登録しない項目（今回の取り込みだけの行除外）
   // confirmed=確認済み一覧（ユーザーが方針を選び必須入力が揃ったもの。自動決定は含めない）
-  const SECTION_DEFAULTS={unified:true,individual:true,bulk:false,auto:false,hold:false,rowExcluded:false,confirmed:true,sourceRows:false}
+  const SECTION_DEFAULTS={unified:true,individual:true,makerPending:true,bulk:false,auto:false,hold:false,rowExcluded:false,confirmed:true,sourceRows:false}
   const CONFIRMED_STATUS={pending:'反映待ち',confirmed:'確認済み'}
   const CONFIRMED_LIST_COL_COUNT=7
   // 手動「今回登録しない／この行を登録しない」。自動除外理由と区別する（恒久ルールにはしない）
@@ -953,6 +953,7 @@
     const bulkUnapproved=[]
     const confirmed=[]
     const hold=[]
+    const makerPending=[]
     groups.forEach(g=>{
       if(!g||!g.needsDecision)return
       const dec=effectiveDecision(st,g)
@@ -963,6 +964,10 @@
         if(userActionChoiceComplete(st,g)&&!skuSupplierPendingRematch(st,g.code)){confirmed.push(g);return}
         // 必須未完・再照合後の穴 → 確認リスト側に残し、選んだ対応＋残課題を出す
         individual.push(g)
+        return
+      }
+      if(!isOpeningMode(st)&&isNameIssueOnlyGroup(g)){
+        makerPending.push(g)
         return
       }
       if(tier==='bulk'){bulkUnapproved.push(g);return}
@@ -980,7 +985,7 @@
       :autoPlans.length
     const excludedRows=(st&&st.preview&&st.preview.outcomeSummary&&st.preview.outcomeSummary.excludedRows)||0
     return {
-      individual,bulkUnapproved,approved,confirmed,hold,separate,autoPlans,autoCount,excludedRows
+      individual,makerPending,bulkUnapproved,approved,confirmed,hold,separate,autoPlans,autoCount,excludedRows
     }
   }
 
@@ -1284,6 +1289,7 @@
       unresolved:unified.unresolved,
       issueCount:unified.issueCount,
       individualSku:p.individual.length,
+      makerPending:(p.makerPending||[]).length,
       unapproved:p.bulkUnapproved.length,
       // approved は互換（確認済みのうちまとめる／色別）。UI件数は confirmed を正とする
       approved:p.approved.length,
@@ -1308,8 +1314,9 @@
   }
   function productsRegisterBlocked(st){
     const c=judgmentStatusCounts(st)
-    // 確認リスト未解決=0 かつ 一括承認候補の未承認=0、かつ未反映の方針変更なしで登録可
-    return (c.unresolved>0)||(c.unapproved>0)||(pendingRematchCount(st)>0)||(rowAcceptancePending(st)>0)||(codeShapeUnresolved(st)>0)
+    const p=partitionJudgmentGroups(st)
+    // 確認リスト未解決=0 かつ 一括承認候補の未承認=0 かつ メーカー取得待ち=0、かつ未反映の方針変更なしで登録可
+    return (c.unresolved>0)||(c.unapproved>0)||((p.makerPending||[]).length>0)||(pendingRematchCount(st)>0)||(rowAcceptancePending(st)>0)||(codeShapeUnresolved(st)>0)
   }
 
   function pageSlice(st,key,items){
@@ -1340,7 +1347,7 @@
     return `<div class="sku-judgment-status-bar" data-sku-status-counts>
       <p class="notice sku-preregister-banner"><strong>登録確定前の確認画面です。</strong>「確認済み」「自動決定済み」「手動確定済み」は登録予定の状態であり、台帳への保存済み（登録完了）ではありません。未反映・未解決 ≠ 確認済み。最終の「確認して一括登録（保留・登録しない項目を除く）」まで商品・在庫は変わりません。</p>
       <p class="excelhint"><strong>登録前の件数:</strong>
-        未解決 ${c.unresolved}（確認リストの対象）　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　確認済み ${c.confirmed}（反映待ち ${c.confirmedPending}／確認済み ${c.confirmedDone}）　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}${pending?`　未反映 ${pending}`:''}
+        未解決 ${c.unresolved}（確認リストの対象）${c.makerPending?`　メーカー取得待ち ${c.makerPending}`:''}　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　確認済み ${c.confirmed}（反映待ち ${c.confirmedPending}／確認済み ${c.confirmedDone}）　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}${pending?`　未反映 ${pending}`:''}
       </p>
       <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。ユーザー確認済みは下の「確認済み一覧」で追跡します（自動決定・保留・登録しないとは混ぜません）。保留 ${c.hold} 件・登録しない ${c.rowExcluded||0} 行は登録対象外です。${pending?' 未反映の方針変更がある間は再照合してください。':''}</p>
       ${pendingRematchBannerHtml(st)}
@@ -1998,6 +2005,7 @@
       if(reason==='pending'&&skuDecision(st,g.code).decision)return false
       if(reason==='merge'&&skuDecision(st,g.code).decision!=='merge')return false
       if(reason==='hold'&&skuDecision(st,g.code).decision!=='hold')return false
+      if(reason==='makerPending'&&!isNameIssueOnlyGroup(g))return false
       if(reason==='name_wording'&&!g.nameWordingDiff)return false
       if(reason==='supplier'&&!g.supplierDiff)return false
       if(reason==='color'&&!g.colorDiffPossible)return false
@@ -2559,6 +2567,7 @@
     if(reason==='pending'&&effectiveDecision(st,g))return false
     if(reason==='merge'&&effectiveDecision(st,g)!=='merge')return false
     if(reason==='hold'&&effectiveDecision(st,g)!=='hold')return false
+    if(reason==='makerPending'&&!isNameIssueOnlyGroup(g))return false
     if(reason==='name_wording'&&!g.nameWordingDiff)return false
     if(reason==='supplier'&&!g.supplierDiff)return false
     if(reason==='color'&&!g.colorDiffPossible)return false
@@ -4039,13 +4048,16 @@
     const filterList=(arr)=>arr.filter(g=>matchesSkuFilters(st,g))
     const bulkAll=filterList(part.bulkUnapproved)
     const holdAll=filterList(part.hold)
+    const makerPendingAll=filterList(part.makerPending||[])
     const unifiedSlice=pageSlice(st,'unified',unifiedAll)
     const bulkSlice=pageSlice(st,'bulk',bulkAll)
     const holdSlice=pageSlice(st,'hold',holdAll)
+    const makerPendingSlice=pageSlice(st,'makerPending',makerPendingAll)
     const rowExSlice=pageSlice(st,'rowExcluded',excludedRowList)
     const bulkPages=bulkSlice.pages
     const unifiedOpen=!!(st.sectionOpen&&(st.sectionOpen.unified!=null?st.sectionOpen.unified:st.sectionOpen.individual))
     const bulkOpen=!!(st.sectionOpen&&st.sectionOpen.bulk)
+    const makerPendingOpen=!!(st.sectionOpen&&st.sectionOpen.makerPending)
     const autoOpen=!!(st.sectionOpen&&st.sectionOpen.auto)
     const holdOpen=!!(st.sectionOpen&&st.sectionOpen.hold)
     const rowExOpen=!!(st.sectionOpen&&st.sectionOpen.rowExcluded)
@@ -4071,6 +4083,12 @@
 
     const autoBody=autoOpen?autoDecidedBodyHtml(st,part):''
 
+    const makerPendingBody=makerPendingOpen?`<div class="sku-section-body">
+      <p class="excelhint">商品名の言い回し違いや初期在庫同数などで迷いがある品番です。「この${part.makerPending.length}件のメーカー情報を一括取得」ボタンを押すと、公式サイトから正式名称を取得し、1件確定したものは自動でまとまります。</p>
+      ${sectionPagerHtml('makerPending',makerPendingSlice,makerPendingAll.length)}
+      ${skuCompareTableHtml(st,makerPendingSlice.pageItems,{section:'makerPending'})}
+    </div>`:''
+
     const holdBody=holdOpen?`<div class="sku-section-body">
       <p class="excelhint">保留は登録対象外です。件数は隠さず残します。対象外 ${part.excludedRows||0} 行も outcome に計上されています。確認済み一覧には混ぜません。</p>
       ${sectionPagerHtml('hold',holdSlice,holdAll.length)}
@@ -4086,6 +4104,7 @@
         <select id="plSkuReason" ${st.busy?'disabled':''}>
           <option value="">理由すべて</option>
           <option value="bulk" ${st.skuReasonFilter==='bulk'?'selected':''}>一括承認候補</option>
+          <option value="makerPending" ${st.skuReasonFilter==='makerPending'?'selected':''}>メーカー情報取得待ち</option>
           <option value="individual" ${st.skuReasonFilter==='individual'?'selected':''}>品番の個別確認</option>
           <option value="pending" ${st.skuReasonFilter==='pending'?'selected':''}>未決定のみ</option>
           <option value="merge" ${st.skuReasonFilter==='merge'?'selected':''}>確認済み（まとめる）</option>
@@ -4103,6 +4122,17 @@
         <span class="excelhint" id="plSkuSelCount">選択中 ${selected.length} 品番（開いている区分の表示ページ／個別チェック）</span>
       </div>
       ${bulkMakerPanelHtml(st)}
+
+      ${part.makerPending&&part.makerPending.length?`<section class="sku-judgment-section sku-section-maker-pending" data-sku-section-block="makerPending">
+        <header class="sku-section-header bar">
+          <h4>メーカー情報取得待ち <span class="sku-section-count">${part.makerPending.length}件</span>
+            <span class="sub">商品名の迷い・有効メーカー品番あり</span></h4>
+          ${sectionToggleBtn(st,'makerPending')}
+          <button type="button" id="plSkuBulkMakerPendingBtn" class="primary" ${st.busy||!part.makerPending.length||(st.bulkMakerLookup&&st.bulkMakerLookup.running)?'disabled':''}>この${part.makerPending.length}件のメーカー情報を一括取得</button>
+        </header>
+        <p class="excelhint">商品名の言い回し違いや初期在庫同数などで迷いがある品番です。ボタンを押すと公式サイトから一括取得し、一致候補1件なら自動でまとまります（複数候補のみ選択）。</p>
+        ${makerPendingOpen?makerPendingBody:`<p class="excelhint sku-section-collapsed-hint">閉じています。商品名未確定 ${part.makerPending.length} 件が待機中です。</p>`}
+      </section>`:''}
 
       <section class="sku-judgment-section sku-section-individual sku-section-unified" data-sku-section-block="unified">
         <header class="sku-section-header bar">
@@ -7224,6 +7254,9 @@
       if(st.sectionOpen&&st.sectionOpen.bulk){
         pageSlice(st,'bulk',part.bulkUnapproved.filter(g=>matchesSkuFilters(st,g))).pageItems.forEach(g=>pick.push(g))
       }
+      if(st.sectionOpen&&st.sectionOpen.makerPending){
+        pageSlice(st,'makerPending',(part.makerPending||[]).filter(g=>matchesSkuFilters(st,g))).pageItems.forEach(g=>pick.push(g))
+      }
       pick.forEach(g=>{st.selectedCodes[g.code]=true})
       st.toast(pick.length
         ?`開いている区分の表示ページ ${pick.length} 品番を選択しました`
@@ -7235,6 +7268,16 @@
     if(clearSel)clearSel.onclick=()=>{st.selectedCodes={};syncSkuSelectionUi(st)}
     const bulkMakerFetch=$('#plBulkMakerFetch')
     if(bulkMakerFetch)bulkMakerFetch.onclick=()=>startBulkMakerLookup(st)
+    const bulkMakerPendingBtn=$('#plSkuBulkMakerPendingBtn')
+    if(bulkMakerPendingBtn)bulkMakerPendingBtn.onclick=()=>{
+      const part=partitionJudgmentGroups(st)
+      const codes=(part.makerPending||[]).map(g=>String(g.code))
+      if(!codes.length){st.toast('メーカー情報取得待ちの品番がありません。');return}
+      startBulkMakerLookup(st,{
+        codes,
+        skipConfirm:false
+      })
+    }
     bindBulkMakerPanelHandlers()
     const bulkApprove=$('#plSkuBulkApproveSection')
     if(bulkApprove)bulkApprove.onclick=()=>{

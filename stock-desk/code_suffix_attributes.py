@@ -46,7 +46,7 @@ _NOTE_KIND = {
 }
 _PART_WORDS = (
     'ボタン', '釦', 'ファスナー', 'ジッパー', 'チャック',
-    'スナッパ', 'スナッパー', 'Ｄカン', 'Dカン', 'バックル',
+    'スナッパ', 'スナッパー', 'Ｄカン', 'Dカン', 'バックル', '美錠', '尾錠',
     '生地', '芯地', '裏地', '名札', '肩パット', 'パッド', 'ゴム',
     'ラインテープ', 'テープ', 'リボン', 'アイスパック', '保冷剤',
 )
@@ -55,6 +55,8 @@ _PART_WORDS = (
 def is_part_product_name(name):
     t = stock.text(name)
     if not t:
+        return False
+    if 'ボタンダウン' in t or 'ﾎﾞﾀﾝﾀﾞｳﾝ' in t:
         return False
     return any(w in t for w in _PART_WORDS)
 _DIM_RE = re.compile(r'^(\d+(?:\.\d+)?)(mm|㎜|cm|㎝)$', re.I)
@@ -637,6 +639,16 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 baseCode=norm_raw,
                 needsConfirm=False,
             )
+        if is_part_product_name(product_name):
+            norm_raw = unicodedata.normalize('NFKC', raw)
+            return _empty(
+                apply=False,
+                kind='parts',
+                baseCode=norm_raw,
+                registerAsParts=True,
+                needsConfirm=False,
+                note=note,
+            )
         return _empty(
             kind='unknown', needsConfirm=True, baseCode=raw,
             reason=f'品番「{raw}」の追加文字「{tail}」の意味を確定できません。',
@@ -686,6 +698,16 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             apply=bool(norm != raw),
             kind='branch' if re.search(r'[-_－][0-9A-Za-z]+$', norm) else 'plain',
             baseCode=norm,
+        )
+    if is_part_product_name(product_name) or is_part_product_name(name):
+        norm_raw = unicodedata.normalize('NFKC', raw)
+        return _empty(
+            apply=False,
+            kind='parts',
+            baseCode=norm_raw,
+            registerAsParts=True,
+            needsConfirm=False,
+            note=note,
         )
     return _empty(
         kind='unknown', needsConfirm=True, baseCode=raw,
