@@ -964,8 +964,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if not file.is_file(): return self.reply(404, {'error':'見つかりません。'})
         kind={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}.get(file.suffix[1:],'application/octet-stream')
         return self.reply(200, file.read_bytes(), kind)
-    def serve_personal_note(self, save=False):
+    def serve_personal_note(self, save=False, shared=False):
         from auth import log
+        from urllib.parse import parse_qs, urlsplit
 
         try:
             with connect() as c:
@@ -974,6 +975,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 user = self.session_user(c)
                 if not user or user['must_change']:
                     return self.reply(401, {'error': 'ログインし直してください。'})
+                can_edit = not shared or user['role'] == 'owner'
+                if shared and (not kintai.can_use_kintai(user) or (save and not can_edit)):
+                    return self.reply(403, {'error': '連絡メモを操作する権限がありません。'})
+                query = parse_qs(urlsplit(self.path).query)
+                note_id = int(query.get('note', ['0'])[0])
+                category_id = int(query.get('category', ['1'])[0]) if shared else 1
                 if save:
                     length = int(self.headers.get('Content-Length') or 0)
                     if not 0 < length <= 256000:
@@ -981,21 +988,33 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     data = json.loads(self.rfile.read(length))
                     if not isinstance(data, dict):
                         raise ValueError('送信内容を確認してください。')
-                    result = personal_notes.save(c, user, data)
-                    log(c, user, '個人メモを更新', f'user:{user["id"]}')
+                    if shared:
+                        if note_id and data.get('new_category') is not None:
+                            raise ValueError('新しいカテゴリには新規メモを登録してください。')
+                        category_id = personal_notes.contact_category(c, category_id, data.get('new_category'))
+                    result = personal_notes.save(c, user, data, shared, category_id, note_id)
+                    if shared:
+                        log(c, user, '連絡メモを更新', 'マーク管理')
+                    else:
+                        log(c, user, '個人メモを更新', f'user:{user["id"]}')
                 else:
-                    result = personal_notes.get(c, user)
-            return self.reply(200, result)
+                    if shared:
+                        personal_notes.contact_category(c, category_id)
+                    result = personal_notes.get(c, user, shared, category_id, note_id)
+                if shared:
+                    result.update(can_edit=can_edit, category_id=category_id, categories=personal_notes.categories(c))
+            return self.reply(200, result, headers={'Cache-Control': 'no-store'})
         except (json.JSONDecodeError, UnicodeError):
             return self.reply(400, {'error': '送信内容を確認してください。'})
         except ValueError as error:
             return self.reply(400, {'error': str(error)})
         except sqlite3.Error:
-            return self.reply(503, {'error': '個人メモを処理できませんでした。'})
+            return self.reply(503, {'error': 'メモを処理できませんでした。'})
 
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
+        if path == '/api/contact-note': return self.serve_personal_note(shared=True)
         if path == '/api/personal-note': return self.serve_personal_note()
         if path=='/api/customer-accounts':
             with connect() as c:
@@ -1158,7 +1177,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/work-batches.js':'work-batches.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in ('/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with connect() as c:
                 request_user = self.session_user(c)
@@ -1202,6 +1221,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(403,{'error':'接続元を確認してください。'})
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if route == '/api/contact-note': return self.serve_personal_note(save=True, shared=True)
         if route == '/api/personal-note': return self.serve_personal_note(save=True)
         if route == '/api/customer-accounts':
             with connect() as c:

@@ -892,6 +892,10 @@ def handle(h,c,path,d,can_access):
     if u['role']=='sales' and path not in ('/api/picking/carry-day','/api/picking/carry-check','/api/picking/carry-print','/api/picking/carry-month','/api/picking/save','/api/picking/cancel','/api/picking/mail','/api/picking/sent','/api/picking/arrange','/api/picking/reopen','/api/picking') and not re.fullmatch(r'/api/picking/\d+/(history|xlsx)',path):
         return 403,{'error':'管理担当持込の出力は営業と主管理者が使用します。'}
     if d is None:
+        if path=='/api/picking/work-batches':
+            return 200,[record(r,u) for r in c.execute(
+                "SELECT * FROM picking_lists WHERE json_extract(payload,'$.workBatch')=1 "
+                "AND json_extract(payload,'$.status')!='取消' ORDER BY id DESC")]
         if path=='/api/picking':
             return 200,[row for row in (record(r,u) for r in c.execute('SELECT * FROM picking_lists ORDER BY id DESC') if visible(u,r)) if row.get('status')!='取消']
         one=re.fullmatch(r'/api/picking/(\d+)',path)
@@ -977,7 +981,10 @@ def handle(h,c,path,d,can_access):
     if path=='/api/picking/reopen': return reopen_list(c,u,d)
     if path=='/api/picking/flags': return tune_flags(c,u,d,can_access)
     if path in ('/api/picking/listed/search','/api/picking/listed'): return 404,{'error':'ピッキングリスト済の手修正はできません。リストの保存・削除、またはテスト用リセットで変わります。'}
-    if path not in ('/api/picking/save','/api/picking/cancel'): return 404,{'error':'見つかりません。'}
+    if path not in ('/api/picking/save','/api/picking/cancel','/api/picking/work-batches'): return 404,{'error':'見つかりません。'}
+    creating_batch=path=='/api/picking/work-batches'
+    if creating_batch:
+        d={k:d.get(k) for k in ('title','date','sources')}
     old=None; before={}
     if d.get('id'):
         old=c.execute('SELECT * FROM picking_lists WHERE id=?',(d['id'],)).fetchone()
@@ -1002,6 +1009,8 @@ def handle(h,c,path,d,can_access):
         day=text(d.get('date','')); date.fromisoformat(day)
         raw=d.get('sources',[]); manual=d.get('manual',[])
         if not isinstance(raw,list) or not isinstance(manual,list) or len(raw)>100 or len(manual)>500: raise ValueError('明細が多すぎます。リストを分けてください。')
+        if creating_batch and not 1<=len(raw)<=40:
+            raise ValueError('まとめに入れる指示書を1～40件選んでください。')
         sources=[]; seen=set(); previous={s['id']:s for s in before.get('sources',[])}
         for s in raw:
             if not isinstance(s,dict) or type(s.get('id')) is not int: raise ValueError('指示書を確認してください。')
@@ -1011,6 +1020,8 @@ def handle(h,c,path,d,can_access):
             if used and (not old or used['list_id']!=old['id']): return 409,{'error':'選択した指示書は別のリストに取り込まれています。'}
             source=previous.get(s['id']) or imported(c,u,s,can_access)
             sources.append(source)
+        if before.get('workBatch') and seen!=set(previous):
+            raise ValueError('作業のまとめに入っている指示書は変更できません。')
         manualrows=[]; keys=set()
         for r in manual:
             if not isinstance(r,dict): raise ValueError('明細を確認してください。')
@@ -1032,6 +1043,8 @@ def handle(h,c,path,d,can_access):
             if arrange_kind(draft)=='local': return 409,{'error':'石狩倉庫の明細がなくなります。開いている古い依頼メールを破棄することを確認してから保存してください。新しいメールは作りません。すでに送信している場合は、変更を保存せず、依頼メールを開くボタンで作業中にしてください。'}
             return 409,{'error':'メール作成後の修正です。古いメールを破棄して作り直すことを確認してから保存してください。'}
         value={'title':title,'date':day,'status':status,'sources':sources,'manual':manualrows,'rows':rows,'createdBy':before.get('createdBy',u['name']),'updatedBy':u['name'],'updatedAt':now}
+        if creating_batch or before.get('workBatch'):
+            value['workBatch']=True
         action='保存内容を変更' if old else '依頼を保存'
         if mail_open and arrange_kind(draft)=='local':
             action='保存内容を変更（石狩倉庫の明細がなくなり、メールは不要）'

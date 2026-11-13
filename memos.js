@@ -64,6 +64,10 @@ function openOldDataMemo(){
  return openMemos({only:'03-kyudata-toridashi',title:'旧データの取り出し方'});
 }
 
+function openStockMemo(){
+ return openMemos({only:'06-product-code-color-rules',title:'在庫メモ'});
+}
+
 function openProcedureMemo(){
  return openMemos({only:'04-mark-workflow',title:'手順メモ'});
 }

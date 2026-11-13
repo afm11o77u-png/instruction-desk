@@ -25,3 +25,7 @@ body:not(.authenticated)>aside,body:not(.authenticated)>main{display:none}#auths
 #personalnote-dialog textarea{resize:vertical;line-height:1.65}
 #personalnote-error{color:#a23928}
 @media print{#personalnote-dialog{display:none!important}}
+
+#accountbar .account-note-actions{display:flex;flex-wrap:wrap;gap:4px}
+#personalnote-dialog .note-picker{display:flex;flex-wrap:wrap;align-items:end;gap:8px}
+#personalnote-dialog .note-picker label{flex:1;min-width:min(100%,14rem)}

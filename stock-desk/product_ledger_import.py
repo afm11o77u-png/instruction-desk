@@ -4613,6 +4613,18 @@ def build_color_split_plans(c, group, decision_raw=None, *, classified=None):
             if bucket:
                 _inherit_color_row(bucket, row, info, preferred_name)
                 continue
+        import ledger_custom_rules as lcr
+        if lcr.is_custom_color_split_code(maker_code):
+            var = lcr.match_custom_color_variant(maker_code, row, info)
+            if var:
+                bucket = _ensure_bucket(var['color'], var['productName'])
+                if bucket:
+                    bucket['internalCode'] = var['code']
+                    bucket['suggestedInternalCode'] = var['code']
+                    bucket['productName'] = var['productName']
+                    bucket['color'] = var['color']
+                    _inherit_color_row(bucket, row, info, var['productName'])
+                    continue
         if info['color'] and not info['needsConfirm']:
             bucket = _ensure_bucket(info['color'], preferred_name or info.get('originalName'))
             if bucket:
@@ -7657,6 +7669,9 @@ def mark_multi_color_groups(sku_groups, classified):
         code = stock.text(group.get('code') or '')
         if not stock_product_merge.is_normal_product_code(code):
             continue
+        import ledger_custom_rules as lcr
+        if lcr.is_custom_merge_code(code) or lcr.is_custom_color_split_code(code):
+            continue
         colors = []
         for row in rows_by_code.get(code) or []:
             if (row.get('processingService') or {}).get('isProcessingService'):
@@ -9381,7 +9396,8 @@ def _row_companion_service_name(row):
         return ''
     if _row_line_spec(row):
         return ''  # ライン色は仕様。色別の加工サービスは作らない
-    return proc_svc.garment_paren_processing_name(csv.get('productName') or '')
+    pname = stock.text(csv.get('productName') or '')
+    return proc_svc.garment_paren_processing_name(pname)
 
 
 def _ensure_companion_processing_service(c, name, ids_by_key):
@@ -10162,8 +10178,25 @@ def auto_line_spec_sku_decisions(uploaded, sku_decisions):
 def auto_dom_color_split_decisions(sku_groups, sku_decisions):
     """DOM品番（DOM0020, DOM0022, DOM0023等）、DON111、HG2000Nスーパー、KM-8379、KM-8399、T-8091で複数色がある場合は自動で「色別に分けて登録」。"""
     decisions = dict(sku_decisions) if isinstance(sku_decisions, dict) else {}
+    import ledger_custom_rules as lcr
     for g in (sku_groups or []):
         code_t = stock.text(g.get('code') or '')
+        if lcr.is_custom_color_split_code(code_t):
+            if code_t not in decisions:
+                decisions[code_t] = {'decision': SKU_DECISION_COLOR_SPLIT, 'autoCustomSplit': True}
+            continue
+        if lcr.is_custom_merge_code(code_t):
+            if code_t not in decisions:
+                mspec = lcr.get_custom_merge_spec(code_t)
+                decisions[code_t] = {
+                    'decision': SKU_DECISION_MERGE,
+                    'autoCustomMerge': True,
+                    'officialName': mspec['officialName'],
+                    'color': mspec['color'],
+                    'primarySupplier': mspec['primarySupplier'],
+                    'subSupplier': mspec.get('subSupplier'),
+                }
+            continue
         is_target = (
             code_t.startswith('DOM')
             or _is_don_111_code(code_t)
@@ -10191,6 +10224,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
     未決定でもサイズ行を要確認へ流し込まない。品番比較パネルで止め、
     行ステータスは新規／既存使用／サイズ追加のまま残す。
     """
+    import ledger_custom_rules as lcr
     decisions = sku_decisions if isinstance(sku_decisions, dict) else {}
     group_by_code = {g['code']: g for g in sku_groups}
     hold_count = 0
@@ -10217,6 +10251,10 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
         # メーカー情報で補正の採用 → 名・色競合理由だけ落とす（プレビュー）
         if isinstance(raw, dict) and raw.get('makerAdopted'):
             _soften_after_maker_adopt(group, raw)
+        if lcr.is_custom_color_split_code(code) or lcr.is_custom_merge_code(code):
+            group['needsDecision'] = False
+            group['status'] = 'auto'
+            group['reviewTier'] = REVIEW_TIER_AUTO
 
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code'))
@@ -10235,6 +10273,7 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
         # （色省略の背景まとめが色別の未割当行を潰さない）
         if (
             not group['needsDecision']
+            and not lcr.is_custom_merge_code(code)
             and decision not in (SKU_DECISION_COLOR_SPLIT, SKU_DECISION_CONTENT_SPLIT)
         ):
             continue
@@ -10468,6 +10507,12 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 row['product']['nameAdoptionRule'] = name_plan.get('adoptionRule') or ''
                 row['status'] = STATUS_CREATE
                 row['statusLabel'] = STATUS_LABELS[STATUS_CREATE]
+                row['canCommit'] = True
+            if lcr.is_custom_merge_code(code):
+                row['reasons'] = [
+                    x for x in (row.get('reasons') or [])
+                    if '括弧外の色' not in x and '比較' not in x
+                ]
                 row['canCommit'] = True
             continue
 
