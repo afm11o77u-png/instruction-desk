@@ -473,12 +473,27 @@ def recount_bulk_result_counts(results: list) -> dict:
 
 def _result_row_from_search(*, target: dict, search_result: dict, status_override: str = '') -> dict:
     status = status_override or stock.text(search_result.get('status') or 'error') or 'error'
-    label = (
-        _STATUS_LABELS.get(status)
-        or search_result.get('statusLabel')
-        or status
-    )
     cands = list(search_result.get('candidates') or [])
+    if len(cands) > 1:
+        if status in ('ok', 'multiple'):
+            status = 'multiple'
+            label = f'候補{len(cands)}件'
+        elif search_result.get('statusLabel') == '一致候補1件':
+            label = f'候補{len(cands)}件'
+        else:
+            label = (
+                search_result.get('statusLabel')
+                or _STATUS_LABELS.get(status)
+                or status
+            )
+    elif len(cands) == 1 and status == 'ok':
+        label = '一致候補1件'
+    else:
+        label = (
+            _STATUS_LABELS.get(status)
+            or search_result.get('statusLabel')
+            or status
+        )
     manufacturer = (
         search_result.get('manufacturer')
         or target.get('manufacturer')

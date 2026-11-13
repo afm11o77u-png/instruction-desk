@@ -4264,9 +4264,11 @@ def search_maker_product(
     candidates = _with_saved(live_candidates)
     # 保存済みを先頭に足したあとでも同一品番の色補完を再適用
     candidates = complement_color_from_same_product_pages(candidates)
-    status, status_label, status_note = _lookup_status_for_candidates(
-        [c for c in candidates if not c.get('fromSaved')] or candidates
-    )
+    status, status_label, status_note = _lookup_status_for_candidates(candidates)
+    if len(candidates) > 1 and status == 'multiple':
+        status_label = f'候補{len(candidates)}件'
+    elif len(candidates) == 1 and status == 'ok':
+        status_label = '一致候補1件'
 
     return {
         'status': status,

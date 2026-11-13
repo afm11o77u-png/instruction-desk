@@ -4921,7 +4921,10 @@
     }
   }
 
-  function bulkMakerStatusLabel(status){
+  function bulkMakerStatusLabel(status,candCount){
+    if(candCount&&candCount>1&&(status==='ok'||status==='multiple')){
+      return `候補${candCount}件`
+    }
     const map={
       ok:'一致候補1件',multiple:'候補複数',colorway_choice:'配色の選択が必要',
       fetch_failed:'検索結果取得不可',
@@ -5420,10 +5423,18 @@
       const refetchBtn=(!panel.running)
         ?`<button type="button" class="quiet" data-pl-bulk-maker-refetch="${ri}" ${st.busy?'disabled':''}>再取得</button>`
         :''
+      let dispLabel=r.statusLabel
+      if(cands.length>1&&(status==='ok'||status==='multiple'||dispLabel==='一致候補1件')){
+        dispLabel=`候補${cands.length}件`
+      }else if(cands.length===1&&(status==='ok'||status==='multiple')){
+        dispLabel='一致候補1件'
+      }else if(!dispLabel){
+        dispLabel=bulkMakerStatusLabel(status,cands.length)
+      }
       return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}" data-bulk-result-idx="${ri}" data-bulk-search-key="${esc(r.searchKey||'')}" style="border-bottom:2px solid #b8d4be!important;background:#fff!important;">
         <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;">${esc(codes)}</td>
         <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;">${esc(r.makerSku||'—')}${r.position?`（${esc(r.position)}）`:''}</td>
-        <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;"><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${refetchBtn}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
+        <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;"><strong>${esc(dispLabel)}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${refetchBtn}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
       </tr>`
     }).join('')
     const resultTable=results.length
