@@ -10255,6 +10255,12 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
             group['needsDecision'] = False
             group['status'] = 'auto'
             group['reviewTier'] = REVIEW_TIER_AUTO
+            group['customRule'] = True
+            group['customRuleType'] = 'color_split' if lcr.is_custom_color_split_code(code) else 'merge'
+            if lcr.is_custom_merge_code(code):
+                mspec = lcr.get_custom_merge_spec(code)
+                group['customRuleNote'] = mspec.get('notes') or '同一商品へ統合'
+                group['customRuleSubSupplier'] = mspec.get('subSupplier') or ''
 
     for row in classified:
         code = stock.text((row.get('csv') or {}).get('code'))
@@ -12004,6 +12010,7 @@ def build_preview(c, body):
         'rowCount': len(classified),
         'rows': classified,
         'skuGroups': sku_groups,
+        'customRuleGroups': [g for g in sku_groups if g.get('customRule')],
         'codeShapeGroups': _code_shape_groups(c, classified),
         'processingCandidates': suffix_attr.annotate_candidate_vendors(c, suffix_attr.collect_processing_candidates(classified)),
         'autoLineSpecCodes': auto_line_codes,

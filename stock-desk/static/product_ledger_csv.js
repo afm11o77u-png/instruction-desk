@@ -27,7 +27,7 @@
   // unified=確認リスト（旧・個別確認＋行要確認の統合）。sourceRows=元行一覧（詳細確認用・既定折りたたみ）
   // rowExcluded=登録しない項目（今回の取り込みだけの行除外）
   // confirmed=確認済み一覧（ユーザーが方針を選び必須入力が揃ったもの。自動決定は含めない）
-  const SECTION_DEFAULTS={unified:true,individual:true,makerPending:true,bulk:false,auto:false,hold:false,rowExcluded:false,confirmed:true,sourceRows:false}
+  const SECTION_DEFAULTS={unified:true,individual:true,makerPending:true,bulk:false,customRule:true,auto:false,hold:false,rowExcluded:false,confirmed:true,sourceRows:false}
   const CONFIRMED_STATUS={pending:'反映待ち',confirmed:'確認済み'}
   const CONFIRMED_LIST_COL_COUNT=7
   // 手動「今回登録しない／この行を登録しない」。自動除外理由と区別する（恒久ルールにはしない）
@@ -75,7 +75,7 @@
         skuQ:'',skuReasonFilter:'',skuPage:1,
         selectedCodes:{},expandedCodes:{},
         sectionOpen:Object.assign({},SECTION_DEFAULTS),
-        sectionPages:{unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1,confirmed:1,rowExcluded:1},
+        sectionPages:{unified:1,individual:1,bulk:1,approved:1,customRule:1,auto:1,hold:1,separate:1,confirmed:1,rowExcluded:1},
         expandedUnified:{},expandedConfirmed:{},reselectCodes:{},
         confirmedQ:'',
         selections:{},skuDecisions:{},codeShapeDecisions:{},appliedSkuDecisions:{},rowClassifications:{},rowExclusions:{},commitToken:'',busy:false,open:false,
@@ -103,7 +103,7 @@
     if(ui.sectionOpen.unified==null&&ui.sectionOpen.individual!=null){
       ui.sectionOpen.unified=!!ui.sectionOpen.individual
     }
-    if(!ui.sectionPages)ui.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,separate:1,confirmed:1,rowExcluded:1}
+    if(!ui.sectionPages)ui.sectionPages={unified:1,individual:1,bulk:1,approved:1,customRule:1,auto:1,hold:1,separate:1,confirmed:1,rowExcluded:1}
     if(ui.sectionPages.confirmed==null)ui.sectionPages.confirmed=1
     if(!ui.expandedUnified)ui.expandedUnified={}
     if(!ui.expandedConfirmed)ui.expandedConfirmed={}
@@ -135,7 +135,7 @@
     st.makerLookup=null;st.bulkMakerLookup=null
     stopBulkMakerPoll(st)
     st.sectionOpen=Object.assign({},SECTION_DEFAULTS)
-    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,auto:1,hold:1,rowExcluded:1,separate:1,confirmed:1}
+    st.sectionPages={unified:1,individual:1,bulk:1,approved:1,customRule:1,auto:1,hold:1,rowExcluded:1,separate:1,confirmed:1}
     st.expandedUnified={}
     st.expandedConfirmed={}
     st.reselectCodes={}
@@ -949,13 +949,15 @@
    */
   function partitionJudgmentGroups(st){
     const groups=((st&&st.preview&&st.preview.skuGroups)||[])
+    const customRuleGroups=((st&&st.preview&&st.preview.customRuleGroups)||groups.filter(g=>g&&g.customRule))
     const individual=[]
     const bulkUnapproved=[]
     const confirmed=[]
     const hold=[]
     const makerPending=[]
     groups.forEach(g=>{
-      if(!g||!g.needsDecision)return
+      if(!g||g.customRule)return
+      if(!g.needsDecision)return
       const dec=effectiveDecision(st,g)
       const tier=g.reviewTier||'individual'
       if(dec==='hold'){hold.push(g);return}
@@ -985,7 +987,7 @@
       :autoPlans.length
     const excludedRows=(st&&st.preview&&st.preview.outcomeSummary&&st.preview.outcomeSummary.excludedRows)||0
     return {
-      individual,makerPending,bulkUnapproved,approved,confirmed,hold,separate,autoPlans,autoCount,excludedRows
+      individual,makerPending,bulkUnapproved,approved,confirmed,hold,separate,autoPlans,autoCount,excludedRows,customRuleGroups
     }
   }
 
@@ -1296,6 +1298,7 @@
       confirmed:(p.confirmed||[]).length,
       confirmedPending,
       confirmedDone,
+      customRuleCount:(p.customRuleGroups||[]).length,
       autoDecided:p.autoCount,
       hold:p.hold.length,
       separate:p.separate.length,
@@ -1347,7 +1350,7 @@
     return `<div class="sku-judgment-status-bar" data-sku-status-counts>
       <p class="notice sku-preregister-banner"><strong>登録確定前の確認画面です。</strong>「確認済み」「自動決定済み」「手動確定済み」は登録予定の状態であり、台帳への保存済み（登録完了）ではありません。未反映・未解決 ≠ 確認済み。最終の「確認して一括登録（保留・登録しない項目を除く）」まで商品・在庫は変わりません。</p>
       <p class="excelhint"><strong>登録前の件数:</strong>
-        未解決 ${c.unresolved}（確認リストの対象）${c.makerPending?`　メーカー取得待ち ${c.makerPending}`:''}　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　確認済み ${c.confirmed}（反映待ち ${c.confirmedPending}／確認済み ${c.confirmedDone}）　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}${pending?`　未反映 ${pending}`:''}
+        未解決 ${c.unresolved}（確認リストの対象）${c.makerPending?`　メーカー取得待ち ${c.makerPending}`:''}　確認事項 ${c.issueCount}　未承認 ${c.unapproved}　確認済み ${c.confirmed}（反映待ち ${c.confirmedPending}／確認済み ${c.confirmedDone}）${c.customRuleCount?`　在庫メモルール適用 ${c.customRuleCount}`:''}　自動決定済み（未登録） ${c.autoDecided}　保留 ${c.hold}${c.rowExcluded?`　登録しない ${c.rowExcluded}`:''}${c.excluded?`　対象外 ${c.excluded}`:''}${pending?`　未反映 ${pending}`:''}
       </p>
       <p class="excelhint">この確認リストの未解決が0で、必要な承認も完了すれば登録可能です。ユーザー確認済みは下の「確認済み一覧」で追跡します（自動決定・保留・登録しないとは混ぜません）。保留 ${c.hold} 件・登録しない ${c.rowExcluded||0} 行は登録対象外です。${pending?' 未反映の方針変更がある間は再照合してください。':''}</p>
       ${pendingRematchBannerHtml(st)}
@@ -4101,12 +4104,113 @@
       ${blocks}</div>`
   }
 
+  function customRuleSectionHtml(st, part){
+    const groups = (part && part.customRuleGroups) || []
+    if (!groups.length) return ''
+    const open = !!(st.sectionOpen && (st.sectionOpen.customRule !== false))
+    const count = groups.length
+
+    let body = ''
+    if (open) {
+      const rows = groups.map(g => {
+        const code = esc(g.code || '')
+        const isColorSplit = g.customRuleType === 'color_split'
+        const badge = isColorSplit
+          ? '<span class="badge" style="background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9">色別に分けて登録</span>'
+          : '<span class="badge" style="background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7">まとめる</span>'
+
+        let targetCodesHtml = ''
+        let nameHtml = ''
+        let colorHtml = ''
+        let supplierHtml = ''
+        const rowCount = g.rowCount || ((g.variants || []).reduce((sum, v) => sum + (v.count || 0), 0)) || '—'
+
+        if (isColorSplit) {
+          const plans = ((g.colorSplitPlans || {}).plans) || []
+          nameHtml = esc((plans[0] && plans[0].productName) || g.plannedOfficialName || '')
+
+          targetCodesHtml = plans.map(p => {
+            const cnt = (p.rowNos || []).length
+            return `<div><strong>${esc(p.internalCode || '')}</strong> <small class="sub">(${cnt}行)</small></div>`
+          }).join('') || `<strong>${code}</strong>`
+
+          colorHtml = plans.map(p => {
+            return `<div>${esc(p.color || '')}</div>`
+          }).join('') || '—'
+
+          const mainSup = esc(g.plannedSupplier || (g.primarySupplierResolved && g.primarySupplierResolved.primarySupplier) || ((g.variants || [])[0] || {}).supplier || '')
+          supplierHtml = `<div>${mainSup || '未設定'}</div>`
+          if (g.code === '7751') {
+            supplierHtml += '<div class="sub" style="color:#2e7d32">※LEOC刺繍行は加工「LEOC刺繍」（㈲エルムスコーポレーション）へ自動分離</div>'
+          } else if (g.code === '72-1226') {
+            supplierHtml += '<div class="sub" style="color:#1565c0">※ブルー×ネイビーは別品番 72-1224 へ切替</div>'
+          }
+        } else {
+          targetCodesHtml = `<strong>${code}</strong>`
+          nameHtml = esc(g.plannedOfficialName || '')
+          colorHtml = esc(g.plannedColor || g.plannedRegisteredColor || '')
+          const ps = g.primarySupplierResolved || {}
+          const mainSup = esc(ps.primarySupplier || ((g.variants || [])[0] || {}).supplier || '')
+          const subSup = esc(g.customRuleSubSupplier || '')
+          if (subSup) {
+            supplierHtml = `<div>メイン: <strong>${mainSup}</strong></div><div class="sub">サブ: ${subSup} <span style="color:#d84315">(逆転補正)</span></div>`
+          } else {
+            supplierHtml = `<div>${mainSup || '未設定'}</div>`
+          }
+          if (g.code === '832-11') {
+            supplierHtml += '<div class="sub" style="color:#2e7d32">※括弧外色競合を自動解消</div>'
+          }
+        }
+
+        return `<tr>
+          <td><strong>${code}</strong></td>
+          <td>${badge}</td>
+          <td>${targetCodesHtml}</td>
+          <td>${nameHtml}</td>
+          <td>${colorHtml}</td>
+          <td>${supplierHtml}</td>
+          <td style="text-align:right">${rowCount}行</td>
+        </tr>`
+      }).join('')
+
+      body = `<div class="sku-section-body">
+        <p class="excelhint">「在庫メモ（品番-色番になるように登録.md）」の確定仕様に基づき、自動で色分割（品番-色番付与）および統合（仕入先補正含む）を適用した品番一覧です。確認リスト（未解決）で止まらず、このまま「確認して一括登録」で登録されます。</p>
+        <div class="legacy-csv-table-wrap" style="max-height:480px;overflow:auto">
+          <table class="legacy-csv-table product-ledger-table">
+            <thead>
+              <tr>
+                <th style="width:110px">元品番 (CSV)</th>
+                <th style="width:130px">登録方針</th>
+                <th style="width:180px">登録先品番</th>
+                <th>登録商品名</th>
+                <th style="width:140px">色</th>
+                <th style="width:220px">仕入先設定・特記事項</th>
+                <th style="width:60px;text-align:right">元行数</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+        </div>
+      </div>`
+    }
+
+    return `<section class="sku-judgment-section sku-section-custom-rule" data-sku-section-block="customRule">
+      <header class="sku-section-header bar">
+        <h4>在庫メモルール適用（品番-色番・統合） <span class="sku-section-count">${count}件</span> <span class="badge" style="background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7">自動確定</span></h4>
+        ${sectionToggleBtn(st, 'customRule')}
+      </header>
+      ${open ? body : `<p class="excelhint sku-section-collapsed-hint">閉じています。開くと在庫メモで自動確定した ${count} 件の登録先品番・品名・色・仕入先を確認できます。</p>`}
+    </section>`
+  }
+
   function skuGroupsHtml(st){
     const part=partitionJudgmentGroups(st)
     const counts=judgmentStatusCounts(st)
     const unifiedAll=buildUnifiedReviewItems(st).filter(it=>matchesUnifiedFilters(st,it))
     const excludedRowList=listExcludedRows(st)
-    const hasAny=counts.unresolved||counts.unapproved||counts.confirmed||counts.autoDecided||counts.hold||counts.excluded||counts.rowExcluded
+    const hasAny=counts.unresolved||counts.unapproved||counts.confirmed||counts.customRuleCount||counts.autoDecided||counts.hold||counts.excluded||counts.rowExcluded
     if(!hasAny&&!(st.preview&&(st.preview.skuGroups||[]).length)&&!((st.preview&&st.preview.rows)||[]).length)return ''
     const selected=selectedCodeList(st)
     const filterList=(arr)=>arr.filter(g=>matchesSkuFilters(st,g))
@@ -4217,6 +4321,8 @@
         <p class="excelhint">${esc(bulkScopeHint)}</p>
         ${bulkOpen?bulkBody:''}
       </section>
+
+      ${customRuleSectionHtml(st, part)}
 
       <section class="sku-judgment-section sku-section-auto" data-sku-section-block="auto">
         <header class="sku-section-header bar">
