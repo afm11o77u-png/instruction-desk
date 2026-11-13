@@ -17,7 +17,7 @@ import product_ledger_position as position_sku
 import stock
 
 # 処理上限（サイト負荷抑制）
-BULK_LOOKUP_MAX_TARGETS = 40
+BULK_LOOKUP_MAX_TARGETS = 100
 BULK_LOOKUP_DELAY_SEC = 0.8
 BULK_LOOKUP_JOB_TTL_SEC = 60 * 60
 

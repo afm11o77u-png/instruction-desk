@@ -5463,7 +5463,7 @@
       </div>
       <p class="excelhint" id="plBulkMakerCounts">${esc(countLine)}</p>
       ${preflightNote}${criteriaNote}${exclNote}${dupNote}
-      <p class="excelhint">取得だけでは登録予定は変わりません。候補を確認してから「選択した補正を採用」してください（最終登録は既存の登録確定操作）。再実行時は未取得の選択のみ検索し、取得済み結果・採用・手入力は保持します。上限 ${panel.maxTargets||40} ユニーク検索／間隔 ${panel.delaySec||0.8} 秒。無料の公開ページのみ。</p>
+      <p class="excelhint">取得だけでは登録予定は変わりません。候補を確認してから「選択した補正を採用」してください（最終登録は既存の登録確定操作）。再実行時は未取得の選択のみ検索し、取得済み結果・採用・手入力は保持します。上限 ${panel.maxTargets||100} ユニーク検索／間隔 ${panel.delaySec||0.8} 秒。無料の公開ページのみ。</p>
       ${resultTable}
       <div class="bar">
         <button type="button" class="primary" id="plBulkMakerAdopt" ${adoptDisabled?'disabled':''}>選択した補正を採用</button>
@@ -5529,7 +5529,7 @@
       excludedCount:job.excludedCount||0,
       uniqueSearchCount:job.uniqueSearchCount||0,
       duplicateCollapsed:job.duplicateCollapsed||0,
-      maxTargets:job.maxTargets||40,
+      maxTargets:job.maxTargets||100,
       delaySec:job.delaySec||0.8,
       error:job.error||'',
       adoptSelected,
@@ -5634,7 +5634,7 @@
       adoptSelected:Object.assign({},(prevPanel&&prevPanel.adoptSelected)||{}),
       adoptedCount:(prevPanel&&prevPanel.adoptedCount)||0,
       excludedCount:plan.excludedCount||0,
-      maxTargets:40,delaySec:0.8,
+      maxTargets:100,delaySec:0.8,
       urlInputs:(prevPanel&&prevPanel.urlInputs)||{},
       urlFetchErrors:(prevPanel&&prevPanel.urlFetchErrors)||{},
       preflight:{newFetch:newCount,skipped:skipCount,label:preflightLabel},
