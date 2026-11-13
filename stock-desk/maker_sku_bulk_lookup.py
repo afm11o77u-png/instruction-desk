@@ -362,7 +362,7 @@ def classify_incremental_bulk_selection(
         max_targets=10_000,
     )
     force = {
-        stock.text(k) for k in (force_search_keys or []) if stock.text(k)
+        stock.text(k).strip().lower() for k in (force_search_keys or []) if stock.text(k).strip()
     }
     prior = [r for r in (prior_results or []) if isinstance(r, dict)]
     by_code: dict[str, dict] = {}
@@ -392,7 +392,11 @@ def classify_incremental_bulk_selection(
             if not c:
                 continue
             cached = by_code.get(c)
-            forced = bool(search_key and search_key in force)
+            forced = bool(
+                (search_key and search_key.lower() in force)
+                or (c and c.lower() in force)
+                or (cached and stock.text(cached.get('searchKey')).lower() in force)
+            )
             if cached and not forced:
                 prev_criteria = criteria_from_result_row(cached)
                 if search_criteria_equal(current_criteria, prev_criteria):

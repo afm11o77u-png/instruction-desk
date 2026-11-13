@@ -552,8 +552,22 @@ dialog.legacy-csv-detail-dialog .legacy-csv-detail-body{max-height:min(75vh,780p
 .pl-bulk-maker-results th:nth-child(1),.pl-bulk-maker-results td:nth-child(1){width:22%}
 .pl-bulk-maker-results th:nth-child(2),.pl-bulk-maker-results td:nth-child(2){width:16%}
 .pl-bulk-maker-cands{margin:6px 0 0;padding-left:0;list-style:none}
-.pl-bulk-maker-cands li{margin:6px 0;padding:6px 0;border-top:1px solid rgba(0,0,0,.06)}
-.pl-bulk-maker-cand-pick{display:flex;gap:8px;align-items:flex-start}
+.pl-bulk-maker-cands li{margin:8px 0;padding:10px 12px;border:1px solid #c9dcc4;border-radius:6px;background:#fbfdfb}
+.pl-bulk-maker-cand-pick{display:flex!important;gap:10px!important;align-items:flex-start!important;cursor:pointer!important}
+.pl-bulk-maker-cand-pick input[type="checkbox"]{
+  width:18px!important;min-width:18px!important;max-width:18px!important;
+  height:18px!important;min-height:18px!important;max-height:18px!important;
+  margin:2px 0 0!important;padding:0!important;
+  border:2px solid #5d9a72!important;border-radius:4px!important;
+  flex:0 0 18px!important;accent-color:#186438!important;cursor:pointer!important;
+}
+.pl-bulk-maker-cand-pick span{flex:1 1 auto;min-width:0;cursor:pointer}
+button[data-pl-bulk-maker-refetch]{
+  display:inline-block!important;padding:2px 8px!important;font-size:12px!important;
+  font-weight:600!important;margin-left:8px!important;border:1px solid #c9dcc4!important;
+  border-radius:4px!important;background:#fff!important;color:#1e4a36!important;cursor:pointer!important;
+}
+button[data-pl-bulk-maker-refetch]:hover{background:#eef8ef!important;border-color:#5d9a72!important}
 
 /* 重複商品の整理 */
 .merge-entry{align-items:center;gap:12px;flex-wrap:wrap}

@@ -5666,9 +5666,11 @@
     const codes=(row.skuCodes||[]).map(String).filter(Boolean)
     if(!codes.length){st.toast('再取得する品番がありません。');return}
     const key=row.searchKey||''
+    const forceKeys=[key,...codes].filter(Boolean)
+    st.toast(`「${codes.join('、')}」の再取得を開始します…`)
     await startBulkMakerLookup(st,{
       codes,
-      forceSearchKeys:key?[key]:[],
+      forceSearchKeys:forceKeys,
       skipConfirm:true
     })
   }
