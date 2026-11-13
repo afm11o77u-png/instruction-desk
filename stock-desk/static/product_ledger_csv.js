@@ -3669,8 +3669,15 @@
         <td class="sku-action" data-label="操作">
           <div class="sku-action-label">要確認</div>
           <div class="bar sku-mini-btns">
-            ${item.rows&&item.rows[0]&&(item.rows[0].makerCorrection||{}).eligible&&(item.rows[0].makerCorrection||{}).makerSku
-              ?`<button type="button" class="quiet" data-pl-maker-correct="${item.rows[0].rowNo}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`:''}
+            ${(()=>{
+              const firstRow=item.rows&&item.rows[0]
+              const mk=firstRow&&firstRow.makerCorrection
+              if(!mk||!mk.eligible||!mk.makerSku)return ''
+              if(linkedGroup&&linkedGroup.code){
+                return `<button type="button" class="quiet" data-pl-sku-maker-correct="${esc(linkedGroup.code)}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`
+              }
+              return `<button type="button" class="quiet" data-pl-maker-correct="${firstRow.rowNo}" ${st.busy?'disabled':''}>メーカー情報で補正</button>`
+            })()}
             ${showSkuPicker?`<button type="button" class="quiet" data-pl-sku-expand="${esc(linkedGroup.code)}">${skuExpanded?'品番詳細を閉じる':'通常仕入先を選ぶ'}</button>`:''}
             <button type="button" class="quiet" data-pl-unified-expand="${esc(item.id)}">${expanded?'詳細を閉じる':'詳細を開く'}</button>
           </div>
@@ -5165,7 +5172,7 @@
             plannedRegisteredSku:result.plannedRegisteredSku||row.plannedRegisteredSku,
             fromUrl:true,
             matchedPages:result.matchedPages||[],
-            adoptableSingle:result.status==='ok'&&cands.length===1&&!!(cands[0]&&cands[0].name)
+            adoptableSingle:(result.status==='ok'&&cands.length===1&&!!(cands[0]&&cands[0].name))||(cands.length===1&&!!(cands[0]&&(cands[0].cleanedName||cands[0].name)))
           })
           const results=(panel.results||[]).slice()
           results[ri]=next
@@ -5190,7 +5197,8 @@
           else if(next.status==='page_unavailable')counts.pageUnavailable=(counts.pageUnavailable||0)+1
           else if(next.status==='error')counts.error=(counts.error||0)+1
           else counts.needsConfirm=(counts.needsConfirm||0)+1
-          if(next.adoptableSingle){
+          const singleCand=cands.length===1&&!!(cands[0]&&(cands[0].cleanedName||cands[0].name))
+          if(next.adoptableSingle||singleCand){
             const pickKey=bulkMakerAdoptSelectionKey(next,0)
             panel.adoptSelected=Object.assign({},panel.adoptSelected||{})
             panel.adoptSelected[pickKey]=true
@@ -5370,7 +5378,9 @@
     }
     // 一致候補1件は確認しやすいよう初期選択（複数は手動）。取得済み行は触らない。
     results.forEach(r=>{
-      if(r.adoptableSingle&&!r.adopted){
+      const cands=r.candidates||[]
+      const singleCand=cands.length===1&&!!(cands[0]&&(cands[0].cleanedName||cands[0].name))
+      if((r.adoptableSingle||singleCand)&&!r.adopted){
         const key=bulkMakerAdoptSelectionKey(r,0)
         if(adoptSelected[key]==null)adoptSelected[key]=true
       }
@@ -5735,6 +5745,8 @@
       confirmed:true,
       acceptProposal:true,
       makerAdopted:true,
+      reviewAccepted:true,
+      userActed:true,
       makerSourceUrl:cand.sourceUrl||'',
       makerManufacturer:cand.manufacturer||manufacturer||'',
       sourceSku:srcSku,
@@ -5744,24 +5756,29 @@
       cleanedName:cleaned,
       makerColorUnavailable:!(cand.color||'').trim()
     }
-    if(scope==='sku'){
+    const resolvedSkuCode=skuCode||(rowNo!=null?(((findPreviewRowByNo(rowNo)||{}).csv||{}).code||''):'')
+    if(scope==='sku'||(resolvedSkuCode&&((st.preview&&st.preview.skuGroups)||[]).some(g=>String(g.code)===String(resolvedSkuCode)))){
+      const code=resolvedSkuCode||skuCode
+      const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(code))
+      const targetRowNos=(rowNos&&rowNos.length)?rowNos:(group&&group.rowNos)||(rowNo!=null?[rowNo]:[])
       // 加工サービス行へメーカー商品名を表示名として流し込まない（加工名を唯一の表示元に保つ）
-      ;(rowNos||[]).forEach(rn=>{
+      ;(targetRowNos||[]).forEach(rn=>{
         if(isProcessingServicePreviewRow(st,rn))return
         setRowClassification(st,rn,classPatch)
       })
-      const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(skuCode))
-      const d=skuDecision(st,skuCode)
+      const d=skuDecision(st,code)
       if((d.decision||'')==='color_split'){
         // 呼び出し側で確認済み想定。ここでも安全側に merge へ
       }
-      setSkuDecision(st,skuCode,{
+      setSkuDecision(st,code,{
         decision:'merge',
         officialName:cleaned,
         color:adoptColor,
         plannedRegisteredSku:plannedSku,
         position,
         makerAdopted:true,
+        reviewAccepted:true,
+        userActed:true,
         makerSourceUrl:cand.sourceUrl||'',
         makerManufacturer:cand.manufacturer||manufacturer||'',
         sourceSku:srcSku,
@@ -5771,14 +5788,16 @@
         cleanedName:cleaned,
         makerColorUnavailable:!(cand.color||'').trim()
       })
-      if(group)applyMergeDefaults(st,skuCode,group)
-      setSkuDecision(st,skuCode,{
+      if(group)applyMergeDefaults(st,code,group)
+      setSkuDecision(st,code,{
         decision:'merge',
         officialName:cleaned,
         color:adoptColor,
         plannedRegisteredSku:plannedSku,
         position,
         makerAdopted:true,
+        reviewAccepted:true,
+        userActed:true,
         makerSourceUrl:cand.sourceUrl||'',
         makerManufacturer:cand.manufacturer||manufacturer||'',
         sourceSku:srcSku,
@@ -5804,13 +5823,15 @@
     const picks=[]
     ;(panel.results||[]).forEach((r,ri)=>{
       if(r.adopted)return
+      const cands=r.candidates||[]
+      const singleCand=cands.length===1&&!!(cands[0]&&(cands[0].cleanedName||cands[0].name))
       if(autoSingleOnly){
-        if(r.status==='ok'&&r.adoptableSingle&&(r.candidates||[]).length===1){
-          picks.push({result:r,cand:r.candidates[0],ri,ci:0,key:bulkMakerAdoptSelectionKey(r,0)})
+        if((r.status==='ok'||singleCand||r.adoptableSingle)&&singleCand){
+          picks.push({result:r,cand:cands[0],ri,ci:0,key:bulkMakerAdoptSelectionKey(r,0)})
         }
         return
       }
-      ;(r.candidates||[]).forEach((c,ci)=>{
+      cands.forEach((c,ci)=>{
         const key=bulkMakerAdoptSelectionKey(r,ci)
         if(adoptSel[key])picks.push({result:r,cand:c,ri,ci,key})
       })
@@ -5873,16 +5894,18 @@
       st.preview=nextPreview
       st.previewError=''
       snapshotAppliedSkuDecisions(st)
+      if(!st.sectionOpen)st.sectionOpen={}
+      st.sectionOpen.confirmed=true
       // 初期在庫の選択・照合情報は preview 再取得でも openingSelections を消さない
       if(autoSingleOnly){
         const multiCount=(panel.results||[]).filter(r=>!r.adopted&&(r.status==='multiple'||r.status==='colorway_choice')).length
         st.toast(
-          `メーカー情報の一致候補 ${adopted} 件を自動採用しました。`+
+          `メーカー情報の一致候補 ${adopted} 件を採用し、確認済み一覧へ移しました。`+
           (multiCount?` 複数候補のある ${multiCount} 件はパネルで選択してください。`:''),
           8000
         )
       }else{
-        st.toast(`メーカー補正を ${adopted} 件採用しました（プレビュー反映のみ。台帳未登録）`)
+        st.toast(`メーカー補正を ${adopted} 件採用し、確認済み一覧へ移しました（台帳登録はまだ確定していません）`)
       }
     }catch(e){
       st.toast(apiErrorMessage(e,'一括採用に失敗しました。'),6000)
@@ -7737,9 +7760,12 @@
         const currentColor=edit.color!=null?edit.color:(pc.color||(row.product&&row.product.officialColor)||'')
         const currentSupplement=edit.supplement!=null?edit.supplement:(pc.supplement||'')
         const currentSku=(row.csv&&(row.csv.registeredCode||row.csv.plannedRegisteredSku||row.csv.code))||mk.makerSku||''
+        const linkedCode=(row.csv&&row.csv.code)||''
+        const linkedGroup=linkedCode?((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(linkedCode)):null
         st.busy=true
         st.makerLookup={
-          scope:'row',rowNo,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
+          scope:linkedGroup?'sku':'row',rowNo,skuCode:linkedCode,makerSku:mk.makerSku,manufacturer:mk.manufacturer||'',
+          rowNos:linkedGroup?(linkedGroup.rowNos||[rowNo]):[rowNo],
           supplier:(row.csv&&row.csv.supplier)||'',sourceName,currentSku,
           currentName,currentColor,currentSupplement,
           statusLabel:'検索中…',result:null,error:'',urlInput:'',urlFetchError:''
@@ -7916,9 +7942,11 @@
             makerSku:panel.makerSku
           })
           st.makerLookup=null
+          if(!st.sectionOpen)st.sectionOpen={}
+          st.sectionOpen.confirmed=true
           st.toast(skuScope
-            ?'メーカー情報を品番グループの登録予定へ採用しました（まだ台帳には登録していません）'
-            :'メーカー情報を予定へ採用しました（まだ台帳には登録していません）')
+            ?'メーカー情報を採用し、確認済み一覧へ移しました（台帳登録はまだ確定していません）'
+            :'メーカー情報を採用し、確認済み一覧へ移しました（台帳登録はまだ確定していません）')
           // 再照合して差分を画面へ反映（成功時のみ反映済み）
           const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
           st.preview=nextPreview

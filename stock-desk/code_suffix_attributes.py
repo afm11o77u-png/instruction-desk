@@ -434,12 +434,11 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
                 if not sub.get('baseCode'):
                     sub['baseCode'] = clean_code
                 return sub
-    if raw == '要確認':
+    if raw in ('要確認', '不明'):
         return _empty(
-            kind='unknown',
-            needsConfirm=True,
-            baseCode='',
-            reason='品番が「要確認」となっています。品番を確認してください。',
+            kind='plain',
+            needsConfirm=False,
+            baseCode='要確認',
         )
     if raw == '別注' or (raw.startswith('別注(') and raw.endswith(')')):
         return _empty(kind='plain', baseCode=raw)

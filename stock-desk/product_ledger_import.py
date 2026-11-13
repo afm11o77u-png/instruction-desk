@@ -3733,7 +3733,11 @@ def _soften_after_maker_adopt(group, raw):
         return
     if stock.text(raw.get('decision')) != SKU_DECISION_MERGE:
         return
-    drop_codes = {'color', 'name_wording', 'kind'}
+    drop_codes = {
+        'color', 'name_wording', 'kind', 'name', 'name_candidates',
+        'aux_stock_all_zero', 'aux_stock_positive_tie', 'aux_stock_multi_negative',
+        'aux_stock_multi_nonzero', 'aux_stock_review',
+    }
     group['colorDiffPossible'] = False
     group['nameWordingDiff'] = False
     group['kindDiffPossible'] = False
@@ -12469,8 +12473,8 @@ def _ensure_product(c, product_info, supplier_id, csv_name, *, customer_id=None,
     }
     if maker_code:
         save_body['makerCode'] = maker_code
-    if legacy_code_assign.is_custom_order_code(code):
-        # 別注(顧客名) は同じ品番でも商品名ごとに別商品（1品番=1商品の対象外）
+    if legacy_code_assign.is_custom_order_code(code) or code in ('要確認', '不明'):
+        # 別注(顧客名) や 要確認/不明 は同じ品番でも商品名ごとに別商品（1品番=1商品の対象外）
         save_body['_allowHistoricalDuplicateCode'] = True
     saved = stock.save_product(c, save_body)
     # 原文名は照合用別名（初期在庫CSVなどの後続解決用）。

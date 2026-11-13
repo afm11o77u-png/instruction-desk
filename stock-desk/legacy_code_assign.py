@@ -100,6 +100,16 @@ def assign_item_code(item, *, strip_used=False):
     if strip_used and is_custom_order_code(code):
         _strip_used_mark_for_custom(item)
     # 別注は CSV 上「別注」のまま照合し、登録時に「別注(顧客名)」にする（_ensure_product）
+    if code == '不明':
+        item['元品番'] = '不明'
+        item['商品コード'] = NEEDS_CODE
+        if strip_used and _strip_used_mark_for_custom(item):
+            name = item.get('商品名')
+        canon = canonical_needs_code_name(item.get('商品名'))
+        if canon != stock.text(item.get('商品名')):
+            item.setdefault('元商品名', stock.text(item.get('商品名')))
+            item['商品名'] = canon
+        return 'needs_code'
     if code or stock.text(item.get('元品番')):
         return ''
     name = item.get('商品名')
