@@ -29,6 +29,7 @@ WRITE_PATHS = {
     '/api/qr-link/dismiss-restore',
     '/api/product-ledger-csv/commit',
     '/api/product-ledger-csv/maker-lookup/adopt',
+    '/api/product-ledger-csv/maker-lookup/adopt-bulk',
     '/api/products/merge',
     '/api/products/registry-wipe',
     '/api/opening-stock/wipe',
@@ -598,6 +599,57 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
                 'code': 'maker_lookup_from_url_failed',
             }
         return 200, result
+    if path == '/api/product-ledger-csv/maker-lookup/adopt-bulk':
+        import maker_sku_lookup
+        items = payload.get('items') or []
+        results = []
+        try:
+            with stock.connect(db_path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                for item in items:
+                    res = maker_sku_lookup.adopt_maker_correction(
+                        c,
+                        manufacturer=item.get('manufacturer') or '',
+                        maker_sku=item.get('makerSku') or item.get('maker_sku') or '',
+                        name=item.get('name') or '',
+                        color=item.get('color') or '',
+                        supplement=item.get('supplement') or '',
+                        position=item.get('position') or '',
+                        planned_registered_sku=(
+                            item.get('plannedRegisteredSku')
+                            or item.get('planned_registered_sku')
+                            or ''
+                        ),
+                        source_url=item.get('sourceUrl') or item.get('source_url') or '',
+                        source_sku=item.get('sourceSku') or item.get('source_sku') or '',
+                        usage_note=item.get('usageNote') or item.get('usage_note') or '',
+                        original_title=(
+                            item.get('originalTitle')
+                            or item.get('original_title')
+                            or ''
+                        ),
+                        maker_color_code=(
+                            item.get('makerColorCode')
+                            or item.get('maker_color_code')
+                            or ''
+                        ),
+                        base_sku_override=(
+                            item.get('baseSku')
+                            or item.get('base_sku')
+                            or ''
+                        ),
+                        current_color=(
+                            item.get('currentColor')
+                            or item.get('current_color')
+                            or ''
+                        ),
+                    )
+                    results.append(res)
+                c.commit()
+            return 200, {'results': results, 'count': len(results)}
+        except ValueError as e:
+            return 400, {'error': str(e) or '採用内容を確認してください。'}
+
     if path == '/api/product-ledger-csv/maker-lookup/adopt':
         import maker_sku_lookup
         try:

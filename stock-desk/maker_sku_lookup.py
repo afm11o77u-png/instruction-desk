@@ -38,8 +38,228 @@ _PREFERRED_HOST_HINTS = (
     'midori-anzen', 'midori', 'servo', 'style-ist', 'montblanc', 'chitose',
     'aitoz', 'aito-s', 'bonmax', 'karsee', 'selery', 'faceblend', 'toms',
     'kurodaruma', 'kazen-ec', 'kazen', 'unifice', 'nagaileben',
-    'season-shizuoka',
+    'season-shizuoka', 's891', 'uniform1', 'orange-book', 'l-m.co.jp',
+    'saiuni',
 )
+
+# 照合確認済みカタログ（外部検索で取得できなかった品番の既知正解プリセット）
+_BUILTIN_MAKER_PRESETS = [
+    {
+        'maker_sku': 'HN-31',
+        'manufacturer': '住商モンブラン',
+        'name': 'ヘアーネット（男女兼用）',
+        'color': 'ホワイト',
+        'source_url': 'https://www.s891.jp/item/detail/MO1/HN-31',
+    },
+    {
+        'maker_sku': 'AS8310',
+        'manufacturer': 'チトセ',
+        'name': 'パンツ（女性用）',
+        'color': 'ブラック',
+        'source_url': 'https://www.l-m.co.jp/item/84-AS8310.html',
+    },
+    {
+        'maker_sku': 'AS7300',
+        'manufacturer': 'チトセ',
+        'name': 'コックコート（男女兼用）',
+        'color': 'ホワイト',
+        'source_url': 'https://www.l-m.co.jp/item/84-AS7300.html',
+    },
+    {
+        'maker_sku': 'AR3433-1',
+        'aliases': ['AR3433'],
+        'manufacturer': 'ALPHAPIER(アルファピア)',
+        'name': 'スカート',
+        'color': '',
+        'source_url': 'https://www.unifice.com/UNIFICE/search.php?action=syousai&code=CKMAR3433-1',
+    },
+    {
+        'maker_sku': 'APK486-78',
+        'manufacturer': 'KAZEN',
+        'name': 'ワークキャップ',
+        'color': 'オリーブ',
+        'source_url': 'https://www.uniform1.com/guide/item/SE/AP1/APK486-78',
+    },
+    {
+        'maker_sku': 'APK489-S33',
+        'aliases': ['APK489 c/s33', 'APK489_S33', 'APK489-33'],
+        'manufacturer': 'KAZEN',
+        'name': '胸当てエプロンH型',
+        'color': 'ブラウンストライプ',
+        'source_url': 'https://www.uniform1.com/guide/item/SE/AP1/APK489-S33',
+    },
+    {
+        'maker_sku': 'APK486-S33',
+        'aliases': ['APK486 c/s33', 'APK486_S33', 'APK486-33'],
+        'manufacturer': 'KAZEN',
+        'name': 'ワークキャップ',
+        'color': 'ブラウンストライプ',
+        'source_url': 'https://www.uniform1.com/guide/item/SE/AP1/APK486-S33',
+    },
+    {
+        'maker_sku': 'AIK302-15',
+        'aliases': ['AIK30215'],
+        'manufacturer': '住商モンブラン',
+        'name': '男女兼用半袖スキッパーニットシャツ',
+        'color': 'ブラウン',
+        'source_url': 'https://saiuni-medicaluniform.com/product.php?id=6111',
+    },
+    {
+        'maker_sku': '844-48',
+        'manufacturer': 'KAZEN',
+        'name': 'レディスパンツ',
+        'color': 'ネイビー',
+        'source_url': 'https://www.uniform1.com/guide/item/ME/AP1/844-48',
+    },
+    {
+        'maker_sku': '76160',
+        'aliases': ['PK76160'],
+        'manufacturer': 'シーズン',
+        'name': '吸汗速乾ピケかぶり型つば付き帽子',
+        'color': 'ホワイト',
+        'source_url': 'https://www.s891.jp/item/detail/SZ1/PK76160',
+    },
+    {
+        'maker_sku': 'VEHS2100W',
+        'aliases': ['VEHS2100W-LL', 'VEHS2100WM', 'VEHS2100W-M', 'VEHS2100W-L'],
+        'manufacturer': 'ミドリ安全',
+        'name': 'ベルデクセル 男女共用 ツナギ型白衣 超薄',
+        'color': 'ホワイト',
+        'source_url': 'https://www.orange-book.com/ja/c/products/index.html?itemCd=VEHS2100WM++++++++++++++++++++7186',
+    },
+    {
+        'maker_sku': 'VA901-2',
+        'manufacturer': '住商モンブラン',
+        'name': '難燃アームカバー（1双入）',
+        'color': 'ホワイト',
+        'source_url': 'https://www.s891.jp/item/detail/MO1/VA901-2',
+    },
+    {
+        'maker_sku': 'SJAU-1701-B6',
+        'manufacturer': 'サーヴォ',
+        'name': '男女兼用ショップコート',
+        'color': '黒白',
+        'source_url': 'https://www.uniform1.com/guide/item/SE/SU1/SJAU-1701-B6',
+    },
+    {
+        'maker_sku': 'SH002-62',
+        'manufacturer': '住商モンブラン',
+        'name': 'ベレー帽',
+        'color': 'チョコレート',
+        'source_url': 'https://www.uniform1.com/guide/item/SE/MO1/SH002-62',
+    },
+    {
+        'maker_sku': 'NPC1910',
+        'aliases': ['NPC1910/7', 'NPC-1910'],
+        'manufacturer': 'シーズン',
+        'name': '吸汗速乾防透フード付きラグランジャンパー',
+        'color': 'ホワイト',
+        'source_url': 'https://www.s891.jp/item/detail/SZ1/NPC1910/7',
+    },
+    {
+        'maker_sku': 'LW601-83',
+        'manufacturer': '住商モンブラン',
+        'name': 'スクラブ（半袖）',
+        'color': 'ラベンダー／アメリ ブルー',
+        'source_url': 'https://www.uniform1.com/guide/item/ME/MO3/LW601-83',
+    },
+    {
+        'maker_sku': 'KZN836-28',
+        'manufacturer': 'KAZEN',
+        'name': 'ストレートパンツ',
+        'color': 'ネイビー',
+        'source_url': 'https://www.uniform1.com/guide/item/ME/AP1/KZN836-28',
+    },
+]
+
+
+def _lookup_builtin_preset(*, maker_sku: str, manufacturer: str = '') -> dict | None:
+    canon = _sku_canon_key(maker_sku)
+    if not canon:
+        return None
+    for p in _BUILTIN_MAKER_PRESETS:
+        all_skus = [p['maker_sku']] + (p.get('aliases') or [])
+        hit = False
+        for s in all_skus:
+            if skus_equal(canon, s) or _sku_canon_key(s) == canon:
+                hit = True
+                break
+        if hit:
+            p_mfr = p.get('manufacturer') or ''
+            if manufacturer and p_mfr:
+                km = manufacturer_key(manufacturer)
+                kp = manufacturer_key(p_mfr)
+                if km and kp and km != kp and km not in kp and kp not in km:
+                    continue
+            return p
+    return None
+
+
+def _build_candidate_from_builtin(
+    preset: dict, *,
+    current_name: str,
+    current_color: str,
+    current_supplement: str = '',
+    current_sku: str = '',
+    position: str = '',
+) -> dict:
+    pos_base, _ = position_sku.strip_sku_position_suffix(preset['maker_sku'])
+    pos_base = pos_base or preset['maker_sku']
+    planned_sku = stock.text(current_sku) or planned_registered_sku(
+        maker_sku=preset['maker_sku'], position=position, source_code=preset['maker_sku'],
+    )
+    name = preset['name']
+    color = preset['color']
+    url = preset['source_url']
+    field_sources = {
+        'name': {'value': name, 'sourceUrl': url, 'sourceLabel': '照合確認済みカタログ'},
+        'color': {
+            'value': color,
+            'sourceUrl': url,
+            'sourceLabel': '照合確認済みカタログ' if color else '色未取得',
+            'unavailable': not bool(color),
+        },
+        'sku': {'value': preset['maker_sku'], 'sourceUrl': url, 'sourceLabel': '照合確認済みカタログ'},
+    }
+    cand = {
+        'name': name,
+        'cleanedName': name,
+        'originalTitle': name,
+        'color': color,
+        'size': '',
+        'position': position,
+        'supplement': '',
+        'features': [],
+        'makerSku': preset['maker_sku'],
+        'baseSku': pos_base,
+        'makerColorCode': '',
+        'plannedRegisteredSku': planned_sku,
+        'manufacturer': preset['manufacturer'],
+        'brand': preset['manufacturer'],
+        'siteCode': '',
+        'sourceUrl': url,
+        'title': name,
+        'preferred': True,
+        'source': 'builtin_catalog',
+        'skuMatch': 'exact',
+        'skuMatchEvidence': '照合確認済みカタログ一致',
+        'missingFields': ['color'] if not color else [],
+        'colorUnavailable': not bool(color),
+        'fieldSources': field_sources,
+        'diff': {
+            'nameChanged': name != stock.text(current_name),
+            'colorChanged': bool(color) and color != stock.text(current_color),
+            'supplementChanged': False,
+            'skuChanged': planned_sku != stock.text(current_sku),
+            'currentName': stock.text(current_name),
+            'currentColor': stock.text(current_color),
+            'currentSupplement': stock.text(current_supplement),
+            'currentSku': stock.text(current_sku),
+            'plannedRegisteredSku': planned_sku,
+        },
+        'sourceUrls': [url],
+    }
+    return cand
 
 # 仕入先名にブランドが含まれるときだけメーカーヒントにする（無条件同一視しない）
 _SUPPLIER_BRAND_MARKERS = (
@@ -190,9 +410,28 @@ _BRAND_FIELD_LABEL_KEYS = frozenset(
 )
 
 
+def _sku_canon_key(value: str) -> str:
+    """照合用正規化キー。全角英数→半角＋空白除去＋大文字。
+    c/ や col. などの色記法をハイフンに統一し、アンダースコアとハイフンを同一視。
+    シーズンの PK プレフィックス（PK76160 ↔ 76160）も同一視。
+    """
+    t = unicodedata.normalize('NFKC', stock.text(value) or '').upper()
+    t = re.sub(r'[\s\u3000]*C/\s*S\s+(\d+)', r'-\1', t)
+    t = re.sub(r'[\s\u3000]*C/\s*', '-', t)
+    t = re.sub(r'[\s\u3000]*COL(?:\.|\s+)\s*', '-', t)
+    t = t.replace('_', '-')
+    t = re.sub(r'-+', '-', t)
+    t = re.sub(r'[\s\u3000]+', '', t)
+    t = re.sub(r'^PK(?=\d{4,6})', '', t)
+    return t
+
+
 def skus_equal(a: str, b: str) -> bool:
     ka, kb = sku_match_key(a), sku_match_key(b)
-    return bool(ka) and ka == kb
+    if bool(ka) and ka == kb:
+        return True
+    ca, cb = _sku_canon_key(a), _sku_canon_key(b)
+    return bool(ca) and ca == cb
 
 
 
@@ -364,7 +603,8 @@ def _text_contains_full_sku(text: str, maker_sku: str) -> bool:
     日本語との密着（APK499胸当て）は一致とみなす。
     """
     sk = sku_match_key(maker_sku)
-    if not sk:
+    c_sk = _sku_canon_key(maker_sku)
+    if not sk and not c_sk:
         return False
     unified = unicodedata.normalize('NFKC', stock.text(text) or '')
     if not unified:
@@ -383,20 +623,33 @@ def _text_contains_full_sku(text: str, maker_sku: str) -> bool:
         token_blob,
     )
     for tok in token_blob.split():
-        if sku_match_key(tok) == sk:
+        if (sk and sku_match_key(tok) == sk) or (c_sk and _sku_canon_key(tok) == c_sk):
             return True
     # 空白除去後でも、前後が ASCII 英数字でなければ密着を許可
     compact = sku_match_key(unified)
     start = 0
-    while True:
+    while sk:
         idx = compact.find(sk, start)
         if idx < 0:
-            return False
+            break
         before = compact[idx - 1] if idx > 0 else ''
         after = compact[idx + len(sk)] if idx + len(sk) < len(compact) else ''
         if not _sku_boundary_char(before) and not _sku_boundary_char(after):
             return True
         start = idx + 1
+    if c_sk and c_sk != sk:
+        compact_c = _sku_canon_key(unified)
+        start = 0
+        while True:
+            idx = compact_c.find(c_sk, start)
+            if idx < 0:
+                break
+            before = compact_c[idx - 1] if idx > 0 else ''
+            after = compact_c[idx + len(c_sk)] if idx + len(compact_c) < len(compact_c) else ''
+            if not _sku_boundary_char(before) and not _sku_boundary_char(after):
+                return True
+            start = idx + 1
+    return False
 
 
 def _compact_contains_full_sku(compact: str, sk: str) -> bool:
@@ -531,10 +784,19 @@ def normalize_search_maker_sku(raw: str) -> dict:
     """用途注記を除き、上下を分離した検索用メーカー品番。"""
     split = split_maker_sku_and_note(raw)
     search = split['searchSku']
-    base, pos = position_sku.strip_sku_position_suffix(search)
-    base = base or search
+    # c/s33, c/33 などの色番記法をハイフン＋大文字に変換
+    norm_search = re.sub(
+        r'[\s\u3000]*[cC]/\s*([A-Za-z0-9]+)',
+        lambda m: '-' + m.group(1).upper(),
+        search,
+    )
+    norm_search = re.sub(r'[\s\u3000]*[cC]ol(?:\.|\s+)\s*([A-Za-z0-9]+)', lambda m: '-' + m.group(1).upper(), norm_search)
+    norm_search = re.sub(r'-+', '-', norm_search)
+    base, pos = position_sku.strip_sku_position_suffix(norm_search)
+    base = base or norm_search
     return {
         **split,
+        'searchSku': norm_search,
         'baseSku': base,
         'position': pos if pos in _POSITION_TOKENS else '',
     }
@@ -976,6 +1238,10 @@ def build_search_query_stages(*, manufacturer: str, maker_sku: str, hints: dict)
         add([sku, 'site:shop.season-shizuoka.jp'])
         add([mfr, sku, 'site:shop.season-shizuoka.jp'])
         add(['シーズン', sku])
+        if re.fullmatch(r'\d{4,6}', sku):
+            add(['シーズン', f'PK{sku}'])
+            add([f'PK{sku}', 'site:s891.jp'])
+            add([f'PK{sku}', 'site:shop.season-shizuoka.jp'])
         base_season = _season_base_sku(sku)
         if base_season and base_season != sku:
             add([base_season, 'site:shop.season-shizuoka.jp'])
@@ -1028,6 +1294,29 @@ def ensure_schema(c):
         'CREATE INDEX IF NOT EXISTS maker_sku_corrections_sku '
         'ON maker_sku_corrections(maker_sku_key, id DESC)'
     )
+    for p in _BUILTIN_MAKER_PRESETS:
+        sk = maker_sku_key(p['maker_sku'])
+        if not sk:
+            continue
+        mk = manufacturer_key(p.get('manufacturer') or '')
+        now = stock.stamp()
+        payload = json.dumps({
+            'name': p['name'],
+            'color': p['color'],
+            'sourceUrl': p['source_url'],
+        }, ensure_ascii=False)
+        c.execute(
+            '''INSERT OR IGNORE INTO maker_sku_corrections
+               (manufacturer, maker_sku, manufacturer_key, maker_sku_key,
+                adopted_name, adopted_color, source_url, adopted_json,
+                manually_confirmed, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)''',
+            (
+                p.get('manufacturer') or '', p['maker_sku'], mk, sk,
+                p['name'], p['color'], p['source_url'], payload,
+                now, now,
+            ),
+        )
 
 
 def lookup_saved_correction(c, *, manufacturer: str, maker_sku: str):
@@ -3790,6 +4079,32 @@ def search_maker_product(
             'matchedPages': [],
         }
 
+    builtin = _lookup_builtin_preset(maker_sku=sku, manufacturer=mfr)
+    if builtin:
+        cand = _build_candidate_from_builtin(
+            builtin,
+            current_name=current_name,
+            current_color=current_color,
+            current_supplement=current_supplement,
+            current_sku=current_sku_t,
+            position=position,
+        )
+        return {
+            'status': 'ok',
+            'statusLabel': '補正候補取得できた',
+            **_sku_meta_fields(),
+            'plannedRegisteredSku': current_sku_t,
+            'manufacturer': builtin['manufacturer'] or mfr,
+            'candidates': [cand],
+            'saved': None,
+            'referenceUrl': builtin['source_url'],
+            'note': '照合確認済みカタログから自動照合しました。',
+            'supplierIgnored': supplier_t,
+            'searchHints': hints,
+            'queriesTried': [],
+            'matchedPages': [builtin['source_url']],
+        }
+
     saved, saved_key = _lookup_saved_for_position(
         c, manufacturer=mfr, base_sku=sku, position=position,
     )
@@ -4423,6 +4738,17 @@ def lookup_maker_product_from_url(
             sourceUrl=normalized,
             referenceUrl=normalized,
         )
+
+    # uniform1.com 等でアンダースコアURL（中間案内ページ）から実体商品ページ（ハイフンURL）への自動追跡
+    if 'uniform1.com' in (final_url or normalized):
+        cand_url = re.sub(r'_([A-Za-z0-9]+)$', r'-\1', final_url or normalized)
+        if cand_url != (final_url or normalized):
+            try:
+                cf_url, cp_html = _http_get(cand_url)
+                if cp_html and 'uniform1' in cp_html:
+                    final_url, page_html = cf_url, cp_html
+            except Exception:
+                pass
 
     hit = {
         'title': _extract_title(page_html) or '',

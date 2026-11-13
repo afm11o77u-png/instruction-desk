@@ -4496,6 +4496,10 @@
 
   /** 自動検出の登録区分（手動が無ければこれ）。加工／素材の入力だけでは切り替えない。 */
   function autoRegisterKindForRow(r){
+    const prod=r&&r.product||{}
+    const cat=prod.category||prod.proposedCategory||''
+    if(cat==='部品・資材')return '部品・資材'
+    if(cat==='加工サービス')return '加工サービス'
     const pc=r&&r.parenClassification||{}
     const ps=r&&r.processingService||{}
     if(pc.autoRegisterKind&&REGISTER_KINDS.includes(pc.autoRegisterKind))return pc.autoRegisterKind
@@ -5069,7 +5073,12 @@
       return `処理中 ${panel.done||0}／${panel.total||0}`
         +(panel.currentMakerSku||panel.currentSku?`　現在: ${panel.currentMakerSku||panel.currentSku}`:'')
     }
-    if(panel.finished)return `完了 ${panel.done||0}／${panel.total||0}`
+    if(panel.adopting){
+      return `完了 ${panel.done||0}／${panel.total||0}（一致候補 ${panel.adoptingCount||0} 件を自動反映・再計算中...）`
+    }
+    if(panel.finished){
+      return `完了 ${panel.done||0}／${panel.total||0}`+(panel._adoptingDone?'（自動反映完了）':'')
+    }
     return '準備中'
   }
 
@@ -5368,7 +5377,7 @@
           const checked=!!adoptSel[key]
           const plannedSku=c.plannedRegisteredSku||r.plannedRegisteredSku||''
           const supp=(c.supplement==='上'||c.supplement==='下')?'':(c.supplement||'')
-          const disabled=!!panel.running||!!r.adopted||st.busy
+          const disabled=!!panel.running||!!panel.adopting||!!r.adopted||st.busy
           const cleaned=c.cleanedName||c.name||''
           const originalTitle=c.originalTitle||c.title||''
           const urls=(Array.isArray(c.sourceUrls)&&c.sourceUrls.length?c.sourceUrls:(c.sourceUrl?[c.sourceUrl]:[]))
@@ -5420,7 +5429,7 @@
       const urlErr=(panel.urlFetchErrors&&panel.urlFetchErrors[r.searchKey||ri])
         ?`<p class="product-ledger-import-error" role="alert">${esc(panel.urlFetchErrors[r.searchKey||ri])}</p>`
         :''
-      const refetchBtn=(!panel.running)
+      const refetchBtn=(!panel.running&&!panel.adopting)
         ?`<button type="button" class="quiet" data-pl-bulk-maker-refetch="${ri}" ${st.busy?'disabled':''}>再取得</button>`
         :''
       let dispLabel=r.statusLabel
@@ -5937,7 +5946,7 @@
     opts=opts||{}
     const autoSingleOnly=!!opts.autoSingleOnly
     const panel=st.bulkMakerLookup
-    if(!panel||panel.running)return
+    if(!panel||panel.running||panel.adopting)return
     const adoptSel=panel.adoptSelected||{}
     const picks=[]
     ;(panel.results||[]).forEach((r,ri)=>{
@@ -5983,39 +5992,152 @@
         if(!ok)return
       }
     }
+    panel.adopting=true
+    panel.adoptingCount=picks.length
+    patchBulkMakerProgressTexts(st)
     st.busy=true
     paintDialog()
     let adopted=0
     try{
+      // 1) サーバーへ一括採用API（1リクエスト・1トランザクションで高速実行）
+      const bulkPayloadItems=[]
+      picks.forEach(p=>{
+        const cand=p.cand
+        const plannedSku=cand.plannedRegisteredSku||''
+        let position=cand.position||''
+        const cleaned=cand.cleanedName||cand.name||''
+        let supplement=cand.supplement||''
+        if(supplement==='上'||supplement==='下')supplement=''
+        const res=(panel&&panel.result)||{}
+        const srcSku=p.result.sourceSku||res.sourceSku||''
+        const note=p.result.usageNote||res.usageNote||''
+        const diff=(cand&&cand.diff)||{}
+        const currentColor=diff.currentColor||(panel&&panel.currentColor)||''
+        bulkPayloadItems.push({
+          manufacturer:cand.manufacturer||p.result.manufacturer||'',
+          makerSku:p.result.makerSku||'',
+          name:cleaned,
+          color:cand.color||'',
+          currentColor,
+          supplement,
+          position,
+          plannedRegisteredSku:plannedSku,
+          sourceUrl:cand.sourceUrl||'',
+          sourceSku:srcSku,
+          usageNote:note,
+          originalTitle:cand.originalTitle||cand.title||'',
+          makerColorCode:cand.makerColorCode||'',
+          baseSku:cand.baseSku||''
+        })
+      })
+      try{
+        await st.api('/api/product-ledger-csv/maker-lookup/adopt-bulk',{items:bulkPayloadItems})
+      }catch(err){
+        for(const item of bulkPayloadItems){
+          await st.api('/api/product-ledger-csv/maker-lookup/adopt',item)
+        }
+      }
+
+      // 2) メモリ上の st.rowEdits / st.skuDecisions を同期的に一括適用（通信なし）
       for(const p of picks){
         const codes=p.result.skuCodes||[]
+        const cand=p.cand
+        const plannedSku=cand.plannedRegisteredSku||''
+        let position=cand.position||''
+        const cleaned=cand.cleanedName||cand.name||''
+        let supplement=cand.supplement||''
+        if(supplement==='上'||supplement==='下')supplement=''
+        const res=(panel&&panel.result)||{}
+        const srcSku=p.result.sourceSku||res.sourceSku||''
+        const note=p.result.usageNote||res.usageNote||''
+        const diff=(cand&&cand.diff)||{}
+        const currentColor=diff.currentColor||(panel&&panel.currentColor)||''
+        const adoptColor=(cand.color||'').trim()?cand.color:(currentColor||'')
+        const classPatch={
+          plannedName:cleaned,
+          color:adoptColor,
+          supplement,
+          position,
+          plannedRegisteredSku:plannedSku,
+          registeredCode:plannedSku,
+          unclassified:[],
+          userEdited:true,
+          confirmed:true,
+          acceptProposal:true,
+          makerAdopted:true,
+          reviewAccepted:true,
+          userActed:true,
+          makerSourceUrl:cand.sourceUrl||'',
+          makerManufacturer:cand.manufacturer||p.result.manufacturer||'',
+          sourceSku:srcSku,
+          searchMakerSku:p.result.makerSku||'',
+          usageNote:note,
+          originalTitle:cand.originalTitle||cand.title||'',
+          cleanedName:cleaned,
+          makerColorUnavailable:!(cand.color||'').trim()
+        }
         for(const code of codes){
           const rowNos=(p.result.rowNosBySku&&p.result.rowNosBySku[code])||[]
-          await applyMakerCandidateToPreview(st,{
-            scope:'sku',
-            skuCode:code,
-            rowNos:rowNos.length?rowNos:(((st.preview.skuGroups||[]).find(g=>String(g.code)===String(code))||{}).rowNos||[]),
-            cand:p.cand,
-            manufacturer:p.result.manufacturer,
-            makerSku:p.result.makerSku
+          const group=((st.preview&&st.preview.skuGroups)||[]).find(g=>String(g.code)===String(code))
+          const targetRowNos=(rowNos&&rowNos.length)?rowNos:(group&&group.rowNos)||[]
+          ;(targetRowNos||[]).forEach(rn=>{
+            if(isProcessingServicePreviewRow(st,rn))return
+            setRowClassification(st,rn,classPatch)
+          })
+          setSkuDecision(st,code,{
+            decision:'merge',
+            officialName:cleaned,
+            color:adoptColor,
+            plannedRegisteredSku:plannedSku,
+            position,
+            makerAdopted:true,
+            reviewAccepted:true,
+            userActed:true,
+            makerSourceUrl:cand.sourceUrl||'',
+            makerManufacturer:cand.manufacturer||p.result.manufacturer||'',
+            sourceSku:srcSku,
+            searchMakerSku:p.result.makerSku||'',
+            usageNote:note,
+            originalTitle:cand.originalTitle||cand.title||'',
+            cleanedName:cleaned,
+            makerColorUnavailable:!(cand.color||'').trim()
+          })
+          if(group)applyMergeDefaults(st,code,group)
+          setSkuDecision(st,code,{
+            decision:'merge',
+            officialName:cleaned,
+            color:adoptColor,
+            plannedRegisteredSku:plannedSku,
+            position,
+            makerAdopted:true,
+            reviewAccepted:true,
+            userActed:true,
+            makerSourceUrl:cand.sourceUrl||'',
+            makerManufacturer:cand.manufacturer||p.result.manufacturer||'',
+            sourceSku:srcSku,
+            searchMakerSku:p.result.makerSku||'',
+            usageNote:note,
+            originalTitle:cand.originalTitle||cand.title||'',
+            cleanedName:cleaned,
+            makerColorUnavailable:!(cand.color||'').trim()
           })
         }
         p.result.adopted=true
         adoptSel[p.key]=false
         adopted+=1
-        // 採用成功した品番は一括取得の選択から外す（スクロールは chase しない）
-        ;(p.result.skuCodes||[]).forEach(code=>{
+        codes.forEach(code=>{
           if(st.selectedCodes)st.selectedCodes[String(code)]=false
         })
       }
       panel.adoptedCount=(panel.adoptedCount||0)+adopted
+      // 3) CSVプレビュー全体の再計算
       const nextPreview=await st.api('/api/product-ledger-csv/preview',previewPayload(st))
       st.preview=nextPreview
       st.previewError=''
       snapshotAppliedSkuDecisions(st)
       if(!st.sectionOpen)st.sectionOpen={}
       st.sectionOpen.confirmed=true
-      // 初期在庫の選択・照合情報は preview 再取得でも openingSelections を消さない
+      panel._adoptingDone=true
       if(autoSingleOnly){
         const multiCount=(panel.results||[]).filter(r=>!r.adopted&&(r.status==='multiple'||r.status==='colorway_choice')).length
         st.toast(
@@ -6029,9 +6151,10 @@
     }catch(e){
       st.toast(apiErrorMessage(e,'一括採用に失敗しました。'),6000)
     }finally{
+      panel.adopting=false
       st.busy=false
-      paintDialog()
-      syncSkuSelectionUi(st)
+      patchBulkMakerProgressTexts(st)
+      refreshBulkMakerPanelUi(st)
     }
   }
 

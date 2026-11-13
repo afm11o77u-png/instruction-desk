@@ -9231,6 +9231,14 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 if comp:
                     prod['officialName'] = comp
                 row['product'] = prod
+        elif phase == PHASE_GOODS:
+            prod = row.get('product') or {}
+            cat = stock.text(prod.get('category') or prod.get('proposedCategory') or '')
+            is_parts_or_service = (
+                cat in (stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE)
+                or (bool(_row_companion_service_name(row)) and not stock.text((row.get('csv') or {}).get('code')))
+            )
+            ok = not is_parts_or_service
         else:
             prod = row.get('product') or {}
             is_pure_service = (
