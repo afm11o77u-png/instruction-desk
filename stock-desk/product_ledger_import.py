@@ -6011,12 +6011,21 @@ def _product_preview(
     # 台帳取込の品番空欄は一律「部品・資材」（旧・品番なし制服例外は使わない）。
     # 登録後のカテゴリ変更は選択／編集で可能。
     import code_suffix_attributes
-    is_part = code_suffix_attributes.is_part_product_name(name)
+    is_part = bool(
+        code_suffix_attributes.is_part_product_name(name)
+        or code_suffix_attributes.is_part_product_name(code)
+    )
+    is_proc = bool(
+        proc_svc.is_standalone_processing_service_name(name)
+        or proc_svc.is_standalone_processing_service_name(code)
+        or legacy_code_assign.blank_code_kind(name) == 'processing'
+        or legacy_code_assign.blank_code_kind(code) == 'processing'
+    )
     blank_kind = legacy_code_assign.blank_code_kind(name) if blank_sku else ''
-    if blank_sku and is_part:
-        proposed_category = stock.CATEGORY_PARTS
-    elif blank_sku and blank_kind == 'processing':
+    if is_proc:
         proposed_category = stock.CATEGORY_PROCESS_SERVICE
+    elif blank_sku and is_part:
+        proposed_category = stock.CATEGORY_PARTS
     elif blank_sku and blank_kind == 'garment':
         proposed_category = stock.CATEGORY_UNIFORM
     elif blank_sku:
@@ -6036,8 +6045,8 @@ def _product_preview(
         'sizeAction': 'ok', 'nameDiff': False,
         'supplierConflict': False, 'supplierKept': False,
         'subSupplierAdd': False, 'subSupplierId': None,
-        'category': proposed_category if (blank_sku or custom_order or is_part) else '',
-        'proposedCategory': proposed_category if (blank_sku or custom_order or is_part) else '',
+        'category': proposed_category if (blank_sku or custom_order or is_part or is_proc) else '',
+        'proposedCategory': proposed_category if (blank_sku or custom_order or is_part or is_proc) else '',
         'categoryAction': 'set' if (blank_sku or custom_order or is_part) else 'keep',
         'categoryConflict': False,
         'blankSku': blank_sku,
@@ -6839,9 +6848,20 @@ def classify_row(
         selected_product_id=selected_product_id,
         force_create=force_create_product,
     )
-    if suffix.get('registerAsParts') or suffix_attr.is_part_product_name(product_name):
+    if suffix.get('registerAsParts') or suffix_attr.is_part_product_name(product_name) or suffix_attr.is_part_product_name(code_raw):
         product['category'] = stock.CATEGORY_PARTS
         product['proposedCategory'] = stock.CATEGORY_PARTS
+    elif (
+        proc_svc.is_standalone_processing_service_name(product_name)
+        or proc_svc.is_standalone_processing_service_name(code_raw)
+        or legacy_code_assign.blank_code_kind(product_name) == 'processing'
+        or legacy_code_assign.blank_code_kind(code_raw) == 'processing'
+    ):
+        product['category'] = stock.CATEGORY_PROCESS_SERVICE
+        product['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+        product['processingServiceProduct'] = True
+        product['blankSku'] = True
+        product['officialName'] = product_name or code_raw
     if code and code != source_code:
         product['code'] = code
         product['codeOverride'] = code
@@ -8018,6 +8038,12 @@ def _auto_register_kind(row):
         or ps.get('k2GarmentCandidate')
         or (ps.get('isProcessingService') and not ps.get('isPhysicalParts'))
         or (ps.get('isProcessingVendor') and not ps.get('isPhysicalParts') and not row.get('k2UniformProduct'))
+        or prod.get('category') == stock.CATEGORY_PROCESS_SERVICE
+        or prod.get('proposedCategory') == stock.CATEGORY_PROCESS_SERVICE
+        or proc_svc.is_standalone_processing_service_name((row.get('csv') or {}).get('productName') or '')
+        or proc_svc.is_standalone_processing_service_name((row.get('csv') or {}).get('code') or '')
+        or legacy_code_assign.blank_code_kind((row.get('csv') or {}).get('productName') or '') == 'processing'
+        or legacy_code_assign.blank_code_kind((row.get('csv') or {}).get('code') or '') == 'processing'
     ):
         return '加工サービス'
     return '商品'

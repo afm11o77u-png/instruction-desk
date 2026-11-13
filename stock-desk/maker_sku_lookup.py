@@ -31,6 +31,7 @@ _MANAGEMENT_SKUS = frozenset({
     stock.BLANK_SKU_DISPLAY,
     stock.BLANK_SKU_UNIFORM_DISPLAY,
     '品番なし',
+    '6991-099',
 })
 
 # 公式・販社っぽいホスト（優先）
@@ -39,7 +40,7 @@ _PREFERRED_HOST_HINTS = (
     'aitoz', 'aito-s', 'bonmax', 'karsee', 'selery', 'faceblend', 'toms',
     'kurodaruma', 'kazen-ec', 'kazen', 'unifice', 'nagaileben',
     'season-shizuoka', 's891', 'uniform1', 'orange-book', 'l-m.co.jp',
-    'saiuni',
+    'saiuni', 'yodobashi',
 )
 
 # 照合確認済みカタログ（外部検索で取得できなかった品番の既知正解プリセット）
@@ -169,6 +170,58 @@ _BUILTIN_MAKER_PRESETS = [
         'name': 'ストレートパンツ',
         'color': 'ネイビー',
         'source_url': 'https://www.uniform1.com/guide/item/ME/AP1/KZN836-28',
+    },
+    {
+        'maker_sku': 'EP7619',
+        'aliases': ['84-EP7619'],
+        'manufacturer': 'チトセ',
+        'name': '七分袖ボタンダウンシャツ（男女兼用）',
+        'color': 'ベージュ',
+        'source_url': 'https://www.l-m.co.jp/item/84-EP7619.html',
+    },
+    {
+        'maker_sku': 'AR1667',
+        'aliases': ['40-AR1667'],
+        'manufacturer': 'ALPHAPIER(アルファピア)',
+        'name': '半袖ブラウス',
+        'color': 'ホワイト',
+        'source_url': 'https://www.l-m.co.jp/item/40-AR1667.html',
+    },
+    {
+        'maker_sku': '163-20',
+        'manufacturer': 'KAZEN',
+        'name': 'レディススラックス',
+        'color': 'ホワイト',
+        'source_url': 'https://www.uniform1.com/guide/item/ME/AP1/163-20',
+    },
+    {
+        'maker_sku': 'APK600-C5',
+        'manufacturer': 'KAZEN',
+        'name': 'ノータックパンツ（男女兼用）',
+        'color': 'ブラック',
+        'source_url': 'https://www.uniform1.com/guide/item/ME/AP1/APK600-C5',
+    },
+    {
+        'maker_sku': '409-60',
+        'manufacturer': 'KAZEN',
+        'name': 'ストレッチコックコート',
+        'color': 'ホワイト',
+        'source_url': 'https://www.uniform1.com/guide/item/HK/AP1/409-60',
+    },
+    {
+        'maker_sku': '101-28',
+        'manufacturer': 'KAZEN',
+        'name': 'レディスジャケット半袖',
+        'color': 'ホワイト×ネイビー',
+        'source_url': 'https://www.uniform1.com/guide/item/ME/AP1/101-28',
+    },
+    {
+        'maker_sku': '3110-011',
+        'aliases': ['3110-011-85', '3110011', '3110'],
+        'manufacturer': '自重堂',
+        'name': 'パンツ',
+        'color': 'ネービー',
+        'source_url': 'https://www.yodobashi.com/product/100000001009419426/',
     },
 ]
 
@@ -676,6 +729,8 @@ def manufacturer_key(value: str) -> str:
 def is_management_sku(sku: str) -> bool:
     s = stock.text(sku) or ''
     if s in _MANAGEMENT_SKUS:
+        return True
+    if _sku_canon_key(s) in ('6991-099', '6991099'):
         return True
     if s.startswith('品番なし'):
         return True
@@ -1561,10 +1616,16 @@ def is_montblanc_manufacturer(manufacturer: str) -> bool:
 
 
 def _http_get(url: str, *, timeout: float = _FETCH_TIMEOUT_SEC) -> tuple[str, str]:
+    ua = _USER_AGENT
+    if 'yodobashi.com' in url:
+        ua = (
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) '
+            'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
+        )
     req = urllib.request.Request(
         url,
         headers={
-            'User-Agent': _USER_AGENT,
+            'User-Agent': ua,
             'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'ja,en;q=0.8',
         },
@@ -3616,6 +3677,22 @@ def _build_candidate_from_hit(
                 'reason': 'hint_reject',
             },
         }
+
+    # 一般Web検索で日本語が一切含まれない海外工業製品等は自動採用しない（URL直接指定時は許可）
+    source = hit.get('source') or ''
+    if source in ('ddg', 'general_search', 'web') and not _host_preferred(url):
+        raw_name = stock.text(parsed.get('cleanedName') or parsed.get('name') or heading or '')
+        if raw_name and not re.search(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]', raw_name):
+            return {
+                'candidate': None,
+                'rejection': 'hint_reject',
+                'detail': {
+                    'sourceUrl': url,
+                    'title': heading,
+                    'reason': 'hint_reject',
+                    'note': '日本語表記のない海外製品のため除外しました。',
+                },
+            }
 
     # ヒントの上下があれば登録予定品番へ反映（掲載に無い場合の補完はしない＝矛盾防止）
     position = stock.text(parsed.get('position') or '')

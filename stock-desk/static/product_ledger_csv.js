@@ -4852,7 +4852,7 @@
       :''
     const resStatus=res.status||''
     const colorMissing=cands.some(c=>!!(c.colorUnavailable||(!(c.color||'').trim()&&(c.missingFields||[]).includes('color'))))
-    const showUrlForm=!searching&&(makerLookupNeedsUrlAssist(resStatus)||!cands.length||colorMissing||!!panel.urlFetchError)
+    const showUrlForm=!searching
     const urlForm=showUrlForm
       ?makerUrlFetchFormHtml({
         scope:panel.scope||'',
@@ -5416,14 +5416,14 @@
         candHtml=`<p class="excelhint"><a href="${esc(r.referenceUrl)}" target="_blank" rel="noopener">参考ページ</a>（開いただけでは補正完了になりません）</p>`
       }
       const colorMissing=cands.some(c=>!!(c.colorUnavailable||(!(c.color||'').trim()&&(c.missingFields||[]).includes('color'))))
-      const urlAssist=(!cands.length||makerLookupNeedsUrlAssist(status)||colorMissing)&&!r.adopted&&!panel.running
+      const urlAssist=(!panel.running&&!panel.adopting)
         ?makerUrlFetchFormHtml({
           scope:'bulk',
           inputId:`plBulkMakerUrl-${ri}`,
           btnId:`plBulkMakerUrlFetch-${ri}`,
           resultKey:String(ri),
           value:(panel.urlInputs&&panel.urlInputs[r.searchKey||ri])||'',
-          disabled:!!st.busy||!!panel.running
+          disabled:!!st.busy||!!panel.running||!!panel.adopting
         })
         :''
       const urlErr=(panel.urlFetchErrors&&panel.urlFetchErrors[r.searchKey||ri])
