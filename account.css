@@ -20,3 +20,8 @@ body:not(.authenticated)>aside,body:not(.authenticated)>main{display:none}#auths
 .desksettings-items > .nav {width:100%;padding-block:8px}
 
 #kintainav #markguide-open {margin-bottom:12px;padding-block:8px}
+
+#personalnote-dialog{width:min(800px,94vw)}
+#personalnote-dialog textarea{resize:vertical;line-height:1.65}
+#personalnote-error{color:#a23928}
+@media print{#personalnote-dialog{display:none!important}}

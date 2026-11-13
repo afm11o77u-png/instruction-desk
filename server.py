@@ -19,6 +19,7 @@ import kintai_crimp
 import name_exe
 import web_requests
 import customer_accounts
+import personal_notes
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -61,6 +62,7 @@ def initialize():
         schema(c)
         web_requests.schema(c)
         customer_accounts.schema(c)
+        personal_notes.initialize(c)
         templates.initialize(c)
         placement.bind(DATA)
         placement.schema(c)
@@ -962,9 +964,39 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if not file.is_file(): return self.reply(404, {'error':'見つかりません。'})
         kind={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}.get(file.suffix[1:],'application/octet-stream')
         return self.reply(200, file.read_bytes(), kind)
+    def serve_personal_note(self, save=False):
+        from auth import log
+
+        try:
+            with connect() as c:
+                if save:
+                    c.execute('BEGIN IMMEDIATE')
+                user = self.session_user(c)
+                if not user or user['must_change']:
+                    return self.reply(401, {'error': 'ログインし直してください。'})
+                if save:
+                    length = int(self.headers.get('Content-Length') or 0)
+                    if not 0 < length <= 256000:
+                        raise ValueError('送信内容を確認してください。')
+                    data = json.loads(self.rfile.read(length))
+                    if not isinstance(data, dict):
+                        raise ValueError('送信内容を確認してください。')
+                    result = personal_notes.save(c, user, data)
+                    log(c, user, '個人メモを更新', f'user:{user["id"]}')
+                else:
+                    result = personal_notes.get(c, user)
+            return self.reply(200, result)
+        except (json.JSONDecodeError, UnicodeError):
+            return self.reply(400, {'error': '送信内容を確認してください。'})
+        except ValueError as error:
+            return self.reply(400, {'error': str(error)})
+        except sqlite3.Error:
+            return self.reply(503, {'error': '個人メモを処理できませんでした。'})
+
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
+        if path == '/api/personal-note': return self.serve_personal_note()
         if path=='/api/customer-accounts':
             with connect() as c:
                 u=self.session_user(c)
@@ -1170,6 +1202,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(403,{'error':'接続元を確認してください。'})
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if route == '/api/personal-note': return self.serve_personal_note(save=True)
         if route == '/api/customer-accounts':
             with connect() as c:
                 u=self.session_user(c)
