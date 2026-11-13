@@ -5382,8 +5382,8 @@
               `${f.sourceUrl?` <a href="${esc(f.sourceUrl)}" target="_blank" rel="noopener">URL</a>`:''}`
           }
           return `<li>
-            <label class="pl-bulk-maker-cand-pick">
-              <input type="checkbox" data-pl-bulk-maker-pick="${esc(key)}" data-result-idx="${ri}" data-cand-idx="${ci}" ${checked?'checked':''} ${disabled?'disabled':''}>
+            <label class="pl-bulk-maker-cand-pick" style="display:flex!important;gap:10px!important;align-items:flex-start!important;cursor:pointer!important;">
+              <input type="checkbox" data-pl-bulk-maker-pick="${esc(key)}" data-result-idx="${ri}" data-cand-idx="${ci}" ${checked?'checked':''} ${disabled?'disabled':''} style="width:18px!important;min-width:18px!important;max-width:18px!important;height:18px!important;min-height:18px!important;max-height:18px!important;flex:0 0 18px!important;margin:2px 0 0!important;padding:0!important;border:2px solid #5d9a72!important;accent-color:#186438!important;cursor:pointer!important;">
               <span>
                 <div class="excelhint">元掲載名: ${esc(originalTitle||'—')}</div>
                 <strong>整理後: ${esc(cleaned||'—')}</strong>${c.color?`　色 ${esc(c.color)}`:(colorUnavailable?'　<span class="sub">色未取得</span>':'')}${supp?`　補足 ${esc(supp)}`:''}
@@ -5420,10 +5420,10 @@
       const refetchBtn=(!panel.running)
         ?`<button type="button" class="quiet" data-pl-bulk-maker-refetch="${ri}" ${st.busy?'disabled':''}>再取得</button>`
         :''
-      return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}" data-bulk-result-idx="${ri}" data-bulk-search-key="${esc(r.searchKey||'')}">
-        <td>${esc(codes)}</td>
-        <td>${esc(r.makerSku||'—')}${r.position?`（${esc(r.position)}）`:''}</td>
-        <td><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${refetchBtn}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
+      return `<tr class="pl-bulk-maker-result" data-bulk-status="${esc(status)}" data-bulk-result-idx="${ri}" data-bulk-search-key="${esc(r.searchKey||'')}" style="border-bottom:2px solid #b8d4be!important;background:#fff!important;">
+        <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;">${esc(codes)}</td>
+        <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;">${esc(r.makerSku||'—')}${r.position?`（${esc(r.position)}）`:''}</td>
+        <td style="padding:10px 8px!important;border-bottom:2px solid #b8d4be!important;vertical-align:top!important;"><strong>${esc(r.statusLabel||bulkMakerStatusLabel(status))}</strong>${r.adopted?' <span class="badge">採用済</span>':''}${r.fromUrl?' <span class="sub">（URL指定）</span>':''}${refetchBtn}${r.note?`<div class="excelhint">${esc(r.note)}</div>`:''}${candHtml}${urlErr}${urlAssist}</td>
       </tr>`
     }).join('')
     const resultTable=results.length
