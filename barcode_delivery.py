@@ -19,10 +19,56 @@ def normalize_name(name: str) -> str:
         return ""
     # Remove whitespace, full-width whitespace, brackets, company symbols
     s = re.sub(r"[\s\u3000㈱㈲（）\(\)株式会社有限会社]", "", str(name))
+    # Full-width to half-width alphanumeric/kana normalization if needed
     return s.lower()
 
+def extract_branch_keywords(name: str) -> list:
+    """Extract branch or location keywords like '帯広', '発寒', '北10条' from customer name."""
+    if not name:
+        return []
+    keywords = []
+    # 1. Split by spaces, full-width spaces, underscores, dots
+    parts = [p.strip() for p in re.split(r"[\s\u3000・_]+", name) if p.strip()]
+    if len(parts) >= 2:
+        for p in parts[1:]:
+            cleaned = re.sub(r"[㈱㈲（）\(\)株式会社有限会社]", "", p)
+            if cleaned:
+                keywords.append(normalize_name(cleaned))
+                
+    # 2. Extract words ending in 店, 支店, 営業所, 工場, 病院, 館 etc.
+    m = re.findall(r"([^\s\u3000・_]{2,}(?:店|支店|営業所|工場|病院|館|センター|クリニック))", name)
+    for w in m:
+        nw = normalize_name(w)
+        if nw and nw not in keywords:
+            keywords.append(nw)
+            # also root without 店
+            root = re.sub(r"(店|支店|営業所|工場|病院|館|センター|クリニック)$", "", nw)
+            if len(root) >= 2 and root not in keywords:
+                keywords.append(root)
+    return keywords
+
+def parse_cycle_flag(flag_str: str) -> str:
+    """Parse 8-digit flag like 91001000 into Japanese weekdays."""
+    s = str(flag_str or "").strip()
+    if not s or len(s) < 8 or not s.startswith("9"):
+        return ""
+    # Indices: 1: 月, 2: 火, 3: 水, 4: 木, 5: 金, 6: 土, 7: 日
+    days_map = [
+        (1, "月"),
+        (2, "火"),
+        (3, "水"),
+        (4, "木"),
+        (5, "金"),
+        (6, "土"),
+        (7, "日"),
+    ]
+    matched = [name for idx, name in days_map if idx < len(s) and s[idx] == "1"]
+    if matched:
+        return "・".join(matched)
+    return ""
+
 def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
-    """Lookup shipment info from SQLite shipments table."""
+    """Lookup shipment info from SQLite shipments table with strict store/branch safety."""
     if not DB_PATH.exists() or not customer_name:
         return {}
     
@@ -45,36 +91,35 @@ def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
             if normalize_name(r_name) == norm_target:
                 conn.close()
                 return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
-            
-        # 3. Substring match
-        if len(norm_target) >= 3:
+        
+        # 3. Store/branch safety check
+        target_branches = extract_branch_keywords(customer_name)
+        
+        # If target has a specific branch (e.g. 帯広, 発寒店), we MUST only match candidates that have that branch!
+        # Do NOT fall back to random stores or headquarters!
+        if target_branches:
             for r_name, r_w, r_t, r_c, r_m in all_shipments:
                 r_norm = normalize_name(r_name)
-                if r_norm and (norm_target in r_norm or r_norm in norm_target):
+                # Check if all branch keywords match or main branch matches
+                if any(b in r_norm for b in target_branches):
+                    # Also check that company name part matches
+                    company_prefix = normalize_name(customer_name.split()[0] if customer_name.split() else customer_name)
+                    clean_co = re.sub(r"(店|支店|営業所|工場|病院|館|センター|クリニック).*$", "", company_prefix)
+                    if clean_co and clean_co in r_norm:
+                        conn.close()
+                        return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
+            # Target has specific branch but no match found with that branch -> STOP (do NOT match other stores!)
+            conn.close()
+            return {}
+
+        # 4. If target has NO specific branch, only match candidate that also has NO specific branch
+        for r_name, r_w, r_t, r_c, r_m in all_shipments:
+            r_branches = extract_branch_keywords(r_name)
+            if not r_branches:
+                r_norm = normalize_name(r_name)
+                if r_norm and (norm_target == r_norm or (len(norm_target) >= 4 and norm_target in r_norm) or (len(r_norm) >= 4 and r_norm in norm_target)):
                     conn.close()
                     return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
-
-        # 4. Token-based match (e.g. "光塩東館調理 玉置" -> check each chunk)
-        tokens = [p for p in re.split(r"[\s\u3000・_]+", customer_name) if len(p) >= 2]
-        for tok in tokens:
-            t_norm = normalize_name(tok)
-            if len(t_norm) >= 2:
-                for r_name, r_w, r_t, r_c, r_m in all_shipments:
-                    r_norm = normalize_name(r_name)
-                    if t_norm in r_norm or (len(r_norm) >= 3 and r_norm in t_norm):
-                        conn.close()
-                        return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
-
-        # 5. Prefix match on first non-department chunk
-        first_chunk = tokens[0] if tokens else customer_name
-        clean_tok = re.sub(r"[調理販売食堂工場店舗売店厨房本部支店男女]+$", "", normalize_name(first_chunk))
-        for pfx_len in (4, 3, 2):
-            if len(clean_tok) >= pfx_len:
-                pfx = clean_tok[:pfx_len]
-                for r_name, r_w, r_t, r_c, r_m in all_shipments:
-                    if pfx in normalize_name(r_name):
-                        conn.close()
-                        return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
                     
         conn.close()
     except Exception:
@@ -129,17 +174,32 @@ def lookup_barcode(code: str) -> dict:
         customer_name = str(data.get("customer") or "").strip()
         customer_code = str(data.get("customerCode") or "").strip()
         cycle_car = str(data.get("cycle") or "").strip()
+        cycle_flag = str(data.get("cycleFlag") or "").strip()
         
-        ship_info = get_shipment_info(customer_name, customer_code)
+        # 1. Parse weekday from Access M_顧客マスタ flag (e.g. 91001000 -> "月・木")
+        flag_weekday = parse_cycle_flag(cycle_flag)
         
-        weekday = ship_info.get("weekday") or ""
+        # 2. Check if Access explicitly marked no delivery (flag 90000000 and no cycle)
+        # 90000000 means all weekday bits are 0
+        is_explicit_no_delivery = (cycle_flag.startswith("90000000") or cycle_flag == "90000000") and not cycle_car
+        
+        ship_info = {}
+        if not is_explicit_no_delivery:
+            ship_info = get_shipment_info(customer_name, customer_code)
+        
+        weekday = ship_info.get("weekday") or flag_weekday or ""
         time_band = ship_info.get("timeBand") or ""
-        car = ship_info.get("car") or ""
+        car = ship_info.get("car") or cycle_car or ""
         method = ship_info.get("method") or ""
         
-        # If shipments table didn't have car/cycle, fallback to M_顧客マスタ
-        if not car and cycle_car:
-            car = cycle_car
+        # 3. Label accurately if no delivery is configured
+        if is_explicit_no_delivery and not weekday and not car:
+            weekday = "集配なし"
+            car = "送り便 / 対象外"
+            method = "送り便"
+        elif not weekday and not car:
+            weekday = "未設定"
+            car = "未設定"
             
         result = {
             "ok": True,
@@ -151,6 +211,7 @@ def lookup_barcode(code: str) -> dict:
             "car": car,
             "timeBand": time_band,
             "method": method,
+            "isNoDelivery": bool(is_explicit_no_delivery or weekday == "集配なし" or "送り便" in car or "対象外" in car),
             "itemName": str(data.get("itemName") or "").strip(),
             "size": str(data.get("size") or "").strip(),
             "department": str(data.get("department") or "").strip(),

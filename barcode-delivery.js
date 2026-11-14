@@ -55,30 +55,43 @@
     const car = d.car || '未設定';
     const timeBand = d.timeBand || '';
     const method = d.method || '';
+    const isNoDelivery = d.isNoDelivery || weekday === '集配なし' || car.includes('送り便') || car.includes('対象外');
+
+    const boxBorder = isNoDelivery ? '#b0bec5' : '#2e7d32';
+    const headerBg = isNoDelivery ? '#f5f5f5' : '#e8f5e9';
+    const headerBorder = isNoDelivery ? '#cfd8dc' : '#a5d6a7';
+    const dayColor = isNoDelivery ? '#546e7a' : '#1b5e20';
+    const carColor = isNoDelivery ? '#d84315' : '#0d47a1';
 
     card.innerHTML = `
-      <div style="background:#fff;border:2px solid #2e7d32;border-radius:12px;padding:24px;box-shadow:0 4px 12px rgba(0,0,0,0.08);margin-bottom:24px;">
+      <div style="background:#fff;border:2px solid ${boxBorder};border-radius:12px;padding:24px;box-shadow:0 4px 12px rgba(0,0,0,0.08);margin-bottom:24px;">
         
+        ${isNoDelivery ? `
+          <div style="background:#fff3e0;border:1px solid #ffe082;border-radius:8px;padding:8px 14px;margin-bottom:16px;display:flex;align-items:center;gap:8px;color:#e65100;font-weight:bold;font-size:14px;">
+            <span>⚠️</span> <span>この顧客は定期集配ルート外（送り便・宅配便など）です。</span>
+          </div>
+        ` : ''}
+
         <!-- 最重要情報: 集配曜日 & 集配号車 (超特大表示) -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;background:#e8f5e9;padding:20px;border-radius:10px;border:1.5px solid #a5d6a7;margin-bottom:20px;">
-          <div style="text-align:center;border-right:2px dashed #81c784;padding-right:12px;">
-            <div style="font-size:16px;font-weight:bold;color:#1b5e20;margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:6px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;background:${headerBg};padding:20px;border-radius:10px;border:1.5px solid ${headerBorder};margin-bottom:20px;">
+          <div style="text-align:center;border-right:2px dashed ${headerBorder};padding-right:12px;">
+            <div style="font-size:16px;font-weight:bold;color:${dayColor};margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:6px;">
               <span>📅</span> 集配曜日
             </div>
-            <div style="font-size:42px;font-weight:900;color:#1b5e20;letter-spacing:1px;line-height:1.1;">
+            <div style="font-size:42px;font-weight:900;color:${dayColor};letter-spacing:1px;line-height:1.1;">
               ${esc(weekday)}
             </div>
-            ${timeBand ? `<div style="font-size:15px;color:#2e7d32;font-weight:bold;margin-top:8px;">⏰ ${esc(timeBand)}</div>` : ''}
+            ${timeBand ? `<div style="font-size:15px;color:${dayColor};font-weight:bold;margin-top:8px;">⏰ ${esc(timeBand)}</div>` : ''}
           </div>
           
           <div style="text-align:center;padding-left:12px;">
-            <div style="font-size:16px;font-weight:bold;color:#0d47a1;margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:6px;">
-              <span>🚚</span> 集配号車 / サイクル
+            <div style="font-size:16px;font-weight:bold;color:${carColor};margin-bottom:6px;display:flex;align-items:center;justify-content:center;gap:6px;">
+              <span>${isNoDelivery ? '📦' : '🚚'}</span> 集配号車 / サイクル
             </div>
-            <div style="font-size:42px;font-weight:900;color:#0d47a1;letter-spacing:1px;line-height:1.1;">
+            <div style="font-size:${car.length > 6 ? '32px' : '42px'};font-weight:900;color:${carColor};letter-spacing:1px;line-height:1.1;">
               ${esc(car)}
             </div>
-            ${method ? `<div style="font-size:15px;color:#1565c0;font-weight:bold;margin-top:8px;">📦 ${esc(method)}</div>` : ''}
+            ${method ? `<div style="font-size:15px;color:${carColor};font-weight:bold;margin-top:8px;">📦 ${esc(method)}</div>` : ''}
           </div>
         </div>
 
@@ -154,14 +167,20 @@
     }
 
     const rows = historyList.map(h => {
+      const isNoDeliv = h.isNoDelivery || h.weekday === '集配なし' || (h.car && (h.car.includes('送り便') || h.car.includes('対象外')));
+      const dayBg = isNoDeliv ? '#f5f5f5' : '#f1f8e9';
+      const dayColor = isNoDeliv ? '#546e7a' : '#1b5e20';
+      const carBg = isNoDeliv ? '#fff3e0' : '#e3f2fd';
+      const carColor = isNoDeliv ? '#e65100' : '#0d47a1';
+
       return `
         <tr style="border-bottom:1px solid #eee;cursor:pointer;" onclick="window.reselectBarcodeHistory('${esc(h.masterCode)}')">
           <td style="padding:10px 12px;font-weight:bold;color:#555;font-family:monospace;">${esc(h.masterCode)}</td>
           <td style="padding:10px 12px;font-weight:bold;color:#222;">${esc(h.customer || '—')}</td>
-          <td style="padding:10px 12px;text-align:center;font-weight:900;color:#1b5e20;font-size:15px;background:#f1f8e9;">
+          <td style="padding:10px 12px;text-align:center;font-weight:900;color:${dayColor};font-size:15px;background:${dayBg};">
             ${esc(h.weekday || '—')}
           </td>
-          <td style="padding:10px 12px;text-align:center;font-weight:900;color:#0d47a1;font-size:15px;background:#e3f2fd;">
+          <td style="padding:10px 12px;text-align:center;font-weight:900;color:${carColor};font-size:14px;background:${carBg};">
             ${esc(h.car || '—')}
           </td>
           <td style="padding:10px 12px;color:#333;">${esc(h.itemName || '—')}</td>
