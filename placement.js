@@ -242,7 +242,7 @@ function normalizeKintaiSection(section){
   if(section==='register')return 'register';
   if(section==='summary')return 'summary';
   if(section==='daily')return 'daily';
-  if(['tot','leave','report'].includes(section))return section;
+  if(['tot','leave','report','processed-stats'].includes(section))return section;
   return 'attendance';
 }
 function kintaiSectionFromLocation(){
@@ -253,7 +253,7 @@ function kintaiSectionFromLocation(){
   if(path==='/kintai'||path==='/kintai/attendance')return 'attendance';
   try{
     const q=new URLSearchParams(location.search).get('kintai');
-    if(['register','summary','daily','attendance','tot','leave','report'].includes(q))return q;
+    if(['register','summary','daily','attendance','tot','leave','report','processed-stats'].includes(q))return q;
   }catch(_){}
   return '';
 }
@@ -316,6 +316,8 @@ function syncKintaiNav(section){
   $('#kintaitot').hidden=kintaiSection!=='tot';
   $('#kintaileave').hidden=kintaiSection!=='leave';
   $('#kintaiexecpanel').hidden=kintaiSection!=='report';
+  const pstats=$('#kintaiprocessedstats');
+  if(pstats)pstats.hidden=kintaiSection!=='processed-stats';
 }
 async function showKintaiSection(section, reportMonth){
   const next=normalizeKintaiSection(section);
@@ -330,7 +332,7 @@ async function showKintaiSection(section, reportMonth){
   if(typeof listChrome==='function')listChrome();
   const heading=$('#title');
   if(heading&&document.body.classList.contains('catalog-kintai')){
-    const labels={attendance:'出勤簿・休日数',register:'共有出勤簿の取込',summary:'月別集計',daily:'日別・出勤日数',shift:'シフト表',bihin:'備品棚卸',crimp:'圧着カウンター',tot:'Touch On Time実績・コピー',leave:'有休残数の取込',report:'幹部会議報告'};
+    const labels={attendance:'出勤簿・休日数',register:'共有出勤簿の取込',summary:'月別集計',daily:'日別・出勤日数',shift:'シフト表',bihin:'備品棚卸',crimp:'圧着カウンター',tot:'Touch On Time実績・コピー',leave:'有休残数の取込',report:'幹部会議報告','processed-stats':'処理済み指示書枚数'};
     if(labels[kintaiSection])heading.textContent=labels[kintaiSection];
   }
   writeKintaiLocation(kintaiSection);
@@ -348,6 +350,8 @@ async function showKintaiSection(section, reportMonth){
     if(typeof loadExecReport==='function')await loadExecReport(reportMonth).catch(e=>toast(e.message));
   }else if(kintaiSection==='leave'){
     if(typeof loadKintaiLeaveBalances==='function')await loadKintaiLeaveBalances().catch(e=>toast(e.message));
+  }else if(kintaiSection==='processed-stats'){
+    if(typeof loadProcessedStats==='function')loadProcessedStats();
   }else if(kintaiSection!=='tot'&&typeof loadKintai==='function'){
     loadKintai().catch(e=>toast(e.message));
   }
