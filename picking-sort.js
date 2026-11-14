@@ -1,5 +1,6 @@
 (() => {
   const $ = s => document.querySelector(s);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   function canUsePickingSort() {
     if (typeof currentUser === 'undefined' || !currentUser) return false;
@@ -13,22 +14,14 @@
     btn.hidden = !allowed;
   }
 
-  // 利用者情報が読み込まれたタイミングなどで定期/イベントで表示制御
-  window.addEventListener('DOMContentLoaded', () => {
-    updatePickingSortNav();
-  });
-
-  // currentUserの読み込み完了タイミングにも対応
-  const origUpdateChrome = window.listChrome;
-  if (typeof origUpdateChrome === 'function') {
-    window.listChrome = function() {
-      const res = origUpdateChrome.apply(this, arguments);
-      updatePickingSortNav();
-      return res;
-    };
+  // 複数のタイミングで確実に表示判定を実行
+  if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', updatePickingSortNav);
   } else {
-    setInterval(updatePickingSortNav, 1500);
+    updatePickingSortNav();
   }
+  window.addEventListener('load', updatePickingSortNav);
+  setInterval(updatePickingSortNav, 1000);
 
   const modal = $('#picking-sort-modal');
   const btnOpen = $('#nav-picking-sort');
