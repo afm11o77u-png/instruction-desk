@@ -463,6 +463,11 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
     ws_ishikari = wb.create_sheet(title="石狩倉庫ピッキングリスト")
     _apply_sheet_styling(ws_ishikari, ishikari_rows, "石狩倉庫ピッキングリスト", now, file_name)
 
+    # 開いた時に「石狩倉庫ピッキングリスト」が最初に画面に出るようアクティブ設定
+    wb.active = ws_ishikari
+    for s in wb.worksheets:
+        s.sheet_view.tabSelected = (s == ws_ishikari)
+
     wb.save(str(out_path))
     wb.close()
 
@@ -606,6 +611,13 @@ def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str 
         ws_ware = wb.create_sheet(title="倉庫")
         headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
         ws_ware.append(headers)
+
+    # 開いた時に「持ち込み」シートが最初に画面に出るようアクティブ設定
+    if "持ち込み" in wb.sheetnames:
+        target_ws = wb["持ち込み"]
+        wb.active = target_ws
+        for s in wb.worksheets:
+            s.sheet_view.tabSelected = (s == target_ws)
 
     wb.save(str(out_path))
     wb.close()
