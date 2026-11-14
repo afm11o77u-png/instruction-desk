@@ -943,7 +943,7 @@
     report.classList.toggle('is-a3', isA3);
 
     const widthMm = isA3 ? 277 : 190;
-    const heightMm = isA3 ? 390 : 265;
+    const heightMm = isA3 ? 365 : 250;
 
     const measure = report.cloneNode(true);
     measure.classList.toggle('is-a3', isA3);
@@ -979,7 +979,8 @@
       document.head.appendChild(styleEl);
     }
     const marginMm = paper === 'A3' ? '10mm' : '8mm';
-    styleEl.textContent = `@page exec-report-page{size:${paper} portrait;margin:${marginMm}}`;
+    // Chromium は無名 @page の size を印刷プレビューの用紙サイズ初期値に優先採用するため、先頭に無名 @page を指定。
+    styleEl.textContent = `@page{size:${paper} portrait;margin:${marginMm}} @page exec-report-page{size:${paper} portrait;margin:${marginMm}}`;
     let cleaned = false;
     const done = () => {
       if (cleaned) return;
@@ -990,7 +991,7 @@
       window.removeEventListener('afterprint', done);
     };
     window.addEventListener('afterprint', done);
-    setTimeout(() => window.print(), 50);
+    setTimeout(() => window.print(), 100);
   }
 
   window.loadExecReport = loadExecReport;
