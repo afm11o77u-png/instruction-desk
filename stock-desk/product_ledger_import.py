@@ -9383,14 +9383,16 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['skuDecisionNeeded'] = False
                 parts_only.add(row.get('rowNo'))
                 row['registerServiceWithoutCustomer'] = True
+                row['reasons'] = [
+                    r for r in (row.get('reasons') or [])
+                    if '仕入先' not in stock.text(r) and '顧客' not in stock.text(r) and '表記差' not in stock.text(r)
+                    and '色別登録' not in stock.text(r) and '社内管理品番' not in stock.text(r)
+                    and '追加文字' not in stock.text(r)
+                ]
                 if not row.get('processingServiceNeedsConfirm'):
                     row['status'] = STATUS_CREATE if (row.get('product') or {}).get('action') == 'create' else STATUS_REUSE
                     row['statusLabel'] = STATUS_LABELS[row['status']]
                     row['canCommit'] = True
-                    row['reasons'] = [
-                        r for r in (row.get('reasons') or [])
-                        if '仕入先' not in stock.text(r) and '顧客' not in stock.text(r) and '表記差' not in stock.text(r)
-                    ]
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
@@ -10844,16 +10846,23 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
                 )
                 continue
             if row_no in unassigned or row_no not in plan_by_row:
-                row['status'] = STATUS_REVIEW
-                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
-                row['canCommit'] = False
-                why = (unassigned.get(row_no) or {}).get('reason') or (
-                    '色別登録の行き先が未定です。色を選ぶか、行の行き先を指定してください。'
+                is_service = (
+                    _row_is_service_only(row)
+                    or bool(_row_companion_service_name(row))
+                    or row.get('phasePartsOnly')
+                    or stock.text((row.get('product') or {}).get('category')) == stock.CATEGORY_PROCESS_SERVICE
                 )
-                row['reasons'] = list(row.get('reasons') or []) + [
-                    f'品番「{code}」の色別登録: {why}'
-                ]
-                pending_decision += 1
+                if not is_service:
+                    row['status'] = STATUS_REVIEW
+                    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                    row['canCommit'] = False
+                    why = (unassigned.get(row_no) or {}).get('reason') or (
+                        '色別登録の行き先が未定です。色を選ぶか、行の行き先を指定してください。'
+                    )
+                    row['reasons'] = list(row.get('reasons') or []) + [
+                        f'品番「{code}」の色別登録: {why}'
+                    ]
+                    pending_decision += 1
                 continue
 
             plan = plan_by_row[row_no]
