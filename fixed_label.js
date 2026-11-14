@@ -82,11 +82,53 @@
     '.cell.depts .title-row .title-customer,.cell.depts .title-row .title-store{flex:0 1 auto;min-width:0;' +
     'max-width:100%;font-weight:700;line-height:1.2;letter-spacing:.04em;overflow-wrap:anywhere;' +
     'word-break:break-word}' +
-    '.cell.cell-img{padding:0;justify-content:center;align-items:center}' +
-    '.cell.cell-img .cellimg{width:148.5mm;height:105mm;object-fit:contain;display:block;margin:0 auto}';
+    /* パンツ股下・交換品（文字列直接描画） */
+    '.cell.pr-card{padding:8mm 12mm 6mm 10mm;display:flex;flex-direction:column;box-sizing:border-box;position:relative;overflow:hidden}' +
+    '.pr-card .pr-header{margin-left:auto;display:flex;flex-direction:column;gap:1.2mm;font-size:13pt;font-weight:700;line-height:1.2}' +
+    '.pr-card .pr-row{display:flex;align-items:center;justify-content:flex-end}' +
+    '.pr-card .pr-lbl{margin-right:4.5mm;letter-spacing:.05em}' +
+    '.pr-card .pr-opt{width:12mm;text-align:center;letter-spacing:.1em}' +
+    '.pr-card .pr-box{display:inline-block;font-size:13pt;font-weight:400;margin-right:2mm}' +
+    '.pr-card .pr-lbl-exchange{width:24mm;letter-spacing:.05em;text-align:left}' +
+    '.pr-card .pr-name-line{border-bottom:1.8px solid #000;width:66%;margin-top:1.5mm;height:0}' +
+    '.pr-card .pr-sama-wrap{display:flex;justify-content:flex-end;align-items:flex-end;margin-top:1.5mm;height:16mm;padding-right:5mm}' +
+    '.pr-card .pr-sama{font-size:34pt;font-weight:700;line-height:1}' +
+    '.pr-card .pr-middle{display:flex;align-items:baseline;margin-top:1mm;font-size:24pt;font-weight:700;letter-spacing:.02em}' +
+    '.pr-card .pr-pants{font-size:24pt;font-weight:900}' +
+    '.pr-card .pr-cross{font-size:22pt;margin-left:20mm;font-weight:700}' +
+    '.pr-card .pr-inseam{font-size:24pt;font-weight:900;margin-left:auto}' +
+    '.pr-card .pr-cm{font-size:22pt;font-weight:900;margin-left:14mm}' +
+    '.pr-card .pr-bottom{display:flex;align-items:baseline;margin-top:auto;margin-bottom:2mm;font-size:26pt;font-weight:900}' +
+    '.pr-card .pr-hope{font-size:26pt;font-weight:900;letter-spacing:.04em}' +
+    '.pr-card .pr-slash{font-size:24pt;margin-left:20mm;font-weight:700}' +
+    '.pr-card .pr-paren-l{font-size:24pt;margin-left:18mm;font-weight:700}' +
+    '.pr-card .pr-paren-r{font-size:24pt;margin-left:18mm;font-weight:700}';
 
   function escText(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /* パンツ股下・交換品：文字列と罫線を直接ベクター描画。A4横4分割用。 */
+  function pantsRepairCellHtml() {
+    return (
+      '<section class="cell pr-card">' +
+      '<div class="pr-header">' +
+      '<div class="pr-row"><span class="pr-lbl">その他</span><span class="pr-opt">あり</span><span class="pr-opt">なし</span></div>' +
+      '<div class="pr-row"><span class="pr-box">□</span><span class="pr-lbl-exchange">交換品</span></div>' +
+      '<div class="pr-row"><span class="pr-lbl">バーコード貼り</span><span class="pr-opt">済</span><span class="pr-opt">無</span></div>' +
+      '</div>' +
+      '<div class="pr-name-line"></div>' +
+      '<div class="pr-sama-wrap"><span class="pr-sama">様</span></div>' +
+      '<div class="pr-middle">' +
+      '<span class="pr-pants">パンツ</span><span class="pr-cross">×</span>' +
+      '<span class="pr-inseam">股下</span><span class="pr-cm">cm</span>' +
+      '</div>' +
+      '<div class="pr-bottom">' +
+      '<span class="pr-hope">希望日</span><span class="pr-slash">/</span>' +
+      '<span class="pr-paren-l">（</span><span class="pr-paren-r">）</span>' +
+      '</div>' +
+      '</section>'
+    );
   }
 
   /* ひまわり書式：stores を左列 leftCount 件・残りを右列。チェック欄は空の□（手書きでチェック）。 */
@@ -171,16 +213,8 @@
       id: 'pants-repair',
       name: 'パンツ股下・交換品',
       kind: 'cells',
-      imageUrl: '/fixed-label/pants-repair.png',
-      imageFile: 'fixed-label/pants-repair.png',
-      buildCellHtml: function buildPantsRepairCell(assetBase) {
-        const base = assetBase ? String(assetBase).replace(/\/?$/, '/') : '/';
-        const src = base + 'fixed-label/pants-repair.png';
-        return (
-          '<section class="cell cell-img">' +
-          `<img class="cellimg" src="${src}" alt="パンツ股下・交換品">` +
-          '</section>'
-        );
+      buildCellHtml: function buildPantsRepairCell() {
+        return pantsRepairCellHtml();
       },
     },
     himawari('himawari-1', 'ひまわり1', 5, ['タワー店', 'ファイターズ通り店', '豊平店', '月寒店', '清田店', '新琴似店', '篠路店', '真駒内店', 'タウン店']),
