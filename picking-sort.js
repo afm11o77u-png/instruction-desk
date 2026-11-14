@@ -41,6 +41,11 @@
       previewFiles.innerHTML = '';
       btnExec.disabled = true;
       btnExec.textContent = '仕分けを実行する';
+      btnExec.dataset.done = '0';
+      if (btnCancel) {
+        btnCancel.textContent = 'キャンセル';
+        btnCancel.hidden = false;
+      }
       modal.showModal();
 
       try {
@@ -75,6 +80,11 @@
 
   if (btnExec) {
     btnExec.addEventListener('click', async () => {
+      if (btnExec.dataset.done === '1') {
+        closeModal();
+        return;
+      }
+
       btnExec.disabled = true;
       btnExec.textContent = '仕分け・保存処理中...';
       resultBox.style.display = 'none';
@@ -97,7 +107,10 @@
           `;
           previewCount.textContent = '仕分け完了（処理中フォルダは空になりました）';
           previewFiles.innerHTML = '';
-          btnExec.textContent = '完了';
+          btnExec.disabled = false;
+          btnExec.dataset.done = '1';
+          btnExec.textContent = '完了（閉じる）';
+          if (btnCancel) btnCancel.hidden = true;
           if (typeof toast === 'function') toast('指示書の仕分けと保存が完了しました');
         } else {
           resultBox.style.display = 'block';
@@ -105,6 +118,7 @@
           resultBox.style.borderColor = '#facfd4';
           resultBox.innerHTML = `<div style="color:#c00;">${esc(res.message || 'エラーが発生しました')}</div>`;
           btnExec.disabled = false;
+          btnExec.dataset.done = '0';
           btnExec.textContent = '再試行';
         }
       } catch (err) {
@@ -113,6 +127,11 @@
         resultBox.style.borderColor = '#facfd4';
         resultBox.innerHTML = `<div style="color:#c00;">エラー: ${esc(err.message || err)}</div>`;
         btnExec.disabled = false;
+        btnExec.dataset.done = '0';
+        btnExec.textContent = '再試行';
+      }
+    });
+  }
         btnExec.textContent = '再試行';
       }
     });
