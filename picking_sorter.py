@@ -175,8 +175,8 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         stock_val = normalize_stock(get_val("stock"))
         
         cond_raw = str(get_val("condition") or "").strip()
-        if cond_raw in ("0", "0.0", "", "未指定", "新古", "新品・中古"):
-            condition_val = "新　　　　古"
+        if cond_raw in ("0", "0.0", "", "未指定", "新古", "新品・中古", "新　　　　古"):
+            condition_val = "新\n古"
         elif cond_raw in ("新", "新品"):
             condition_val = "新"
         elif cond_raw in ("古", "中古"):
@@ -209,8 +209,11 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
 
     font_header = Font(name="Yu Gothic", size=11, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
+    font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_cond = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_header = Alignment(horizontal="center", vertical="center", wrap_text=False)
     border_thin = Border(
         left=Side(style='thin', color='888888'),
         right=Side(style='thin', color='888888'),
@@ -223,7 +226,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     for col_idx in range(1, len(headers) + 1):
         cell = ws.cell(row=1, column=col_idx)
         cell.font = font_header
-        cell.alignment = align_center
+        cell.alignment = align_header
         cell.border = border_thin
         cell.fill = fill_header
 
@@ -242,17 +245,21 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
             "", "", "", ""
         ]
         ws.append(row_vals)
-        ws.row_dimensions[r_idx].height = 30
+        ws.row_dimensions[r_idx].height = 32
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=r_idx, column=col_idx)
-            cell.font = font_data
             cell.border = border_thin
-            if col_idx in (1, 6, 7, 8, 11, 12, 13, 14):
+            if col_idx == 7: # 新古: 左端インデントで縦並び、はみ出さない
+                cell.font = font_cond
+                cell.alignment = align_cond
+            elif col_idx in (1, 6, 8, 11, 12, 13, 14):
+                cell.font = font_data
                 cell.alignment = align_center
             else:
+                cell.font = font_data
                 cell.alignment = align_left
 
-    col_widths = {1:12, 2:24, 3:24, 4:14, 5:14, 6:10, 7:12, 8:8, 9:20, 10:16, 11:6, 12:6, 13:6, 14:6}
+    col_widths = {1:9.0, 2:32.0, 3:20.0, 4:11.0, 5:14.0, 6:7.0, 7:5.5, 8:6.0, 9:15.0, 10:8.0, 11:8.0, 12:6.5, 13:6.5, 14:6.5}
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -344,8 +351,11 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     
     font_header = Font(name="Yu Gothic", size=11, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
+    font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_cond = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_header = Alignment(horizontal="center", vertical="center", wrap_text=False)
     border_thin = Border(
         left=Side(style='thin', color='888888'),
         right=Side(style='thin', color='888888'),
@@ -361,7 +371,7 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
             cell.font = font_header
-            cell.alignment = align_center
+            cell.alignment = align_header
             cell.border = border_thin
             cell.fill = fill_header
     elif ws.max_row < 1:
@@ -383,17 +393,21 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
             "", "", "", ""
         ]
         ws.append(row_vals)
-        ws.row_dimensions[r_idx].height = 30
+        ws.row_dimensions[r_idx].height = 32
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=r_idx, column=col_idx)
-            cell.font = font_data
             cell.border = border_thin
-            if col_idx in (1, 6, 7, 8, 11, 12, 13, 14):
+            if col_idx == 7: # 新古: 左端インデントで縦並び、はみ出さない
+                cell.font = font_cond
+                cell.alignment = align_cond
+            elif col_idx in (1, 6, 8, 11, 12, 13, 14):
+                cell.font = font_data
                 cell.alignment = align_center
             else:
+                cell.font = font_data
                 cell.alignment = align_left
 
-    col_widths = {1:12, 2:24, 3:24, 4:14, 5:14, 6:10, 7:12, 8:8, 9:20, 10:16, 11:6, 12:6, 13:6, 14:6}
+    col_widths = {1:9.0, 2:32.0, 3:20.0, 4:11.0, 5:14.0, 6:7.0, 7:5.5, 8:6.0, 9:15.0, 10:8.0, 11:8.0, 12:6.5, 13:6.5, 14:6.5}
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
