@@ -1081,6 +1081,19 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(200, data)
             except Exception as e:
                 return self.reply(500, {'error': f'集計エラー: {e}'})
+        if path.startswith('/api/barcode-delivery'):
+            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
+            if not allowed:
+                return self.reply(403, {'error': '権限がありません。現場または管理者権限が必要です。'})
+            try:
+                import barcode_delivery
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                code = qs.get('code', [''])[0].strip()
+                result = barcode_delivery.lookup_barcode(code)
+                return self.reply(200, result)
+            except Exception as e:
+                return self.reply(500, {'error': f'バーコード照会エラー: {e}'})
         if path=='/api/picking-sort/preview':
             if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
                 return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
@@ -1197,7 +1210,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in ('/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with connect() as c:
                 request_user = self.session_user(c)
