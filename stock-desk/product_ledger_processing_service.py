@@ -155,6 +155,12 @@ _SERVICE_NAME_ALIASES = {
     'インナーネット付け': 'インナーネット付け',
     'インナーネット取付': 'インナーネット付け',
     'インナーネット取り付け': 'インナーネット付け',
+    # 十勝の加工+インナー外し → 加工名はインナー外し
+    '十勝の加工+インナー外し': 'インナー外し',
+    '十勝の加工＋インナー外し': 'インナー外し',
+    # 裾リブ→平加工 / 袖リブ→平加工
+    '裾リブ→平加工': '袖リブ→平加工',
+    '袖リブ→平加工': '袖リブ→平加工',
 }
 
 # 商品名から加工サービス名を拾うときの候補（長い語優先）
@@ -191,6 +197,8 @@ _COMPOSITION_SPLIT_RE = re.compile(r'[＋+・･＆&／/]+')
 _SLASH_NAME_RE = re.compile(r'[／/]+')
 _NO_PROCESSING_RE = re.compile(
     r'(?:刺繍|ししゅう|ネーム|プリント|加工|裾上げ|丈加工|ワッペン|マーク)(?:無[し|い]?|なし|ナシ|不要)'
+    r'|(?:無加工|ノー加工|未加工)'
+    r'|(?:たれ付|たれ付き|垂れ付|垂れ付き|タレ付|タレ付き)'
 )
 
 
@@ -764,6 +772,8 @@ def is_garment_body_name(name):
     """
     base = _strip_parens_keep_inner(stock.text(name))[0] or stock.text(name)
     compact = re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', base or ''))
+    # 帽子の仕様「たれ付」「たれ付き」等の末尾を除去して衣服判定
+    compact = re.sub(r'(?:たれ付|たれ付き|垂れ付|垂れ付き|タレ付|タレ付き)$', '', compact)
     if not compact or '加工' in compact or _SERVICE_SUFFIX_RE.search(compact):
         return False
     if re.search(_KIND_STRIP_RE.pattern + r'$', compact):
@@ -885,6 +895,8 @@ def extract_row_specific_specs(product_name: str, paren_processing: str = '') ->
     cust, _rest = _strip_customer_use_prefix(base)
     if cust:
         specs['customerUse'] = cust
+    if '十勝の加工' in nfkc:
+        specs['customerUse'] = '十勝の加工'
     # 股下・仕上がり寸法
     dim_hits = re.findall(
         r'((?:股下|仕上がり丈|仕上り丈|裾丈|丈)\s*\d{2,3}(?:\.\d+)?(?:cm|㎝|センチ)?)',

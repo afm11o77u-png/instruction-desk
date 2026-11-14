@@ -6854,8 +6854,13 @@ def classify_row(
     elif (
         proc_svc.is_standalone_processing_service_name(product_name)
         or proc_svc.is_standalone_processing_service_name(code_raw)
-        or legacy_code_assign.blank_code_kind(product_name) == 'processing'
-        or legacy_code_assign.blank_code_kind(code_raw) == 'processing'
+        or (
+            not stock_product_merge.is_normal_product_code(code_raw)
+            and (
+                legacy_code_assign.blank_code_kind(product_name) == 'processing'
+                or legacy_code_assign.blank_code_kind(code_raw) == 'processing'
+            )
+        )
     ):
         product['category'] = stock.CATEGORY_PROCESS_SERVICE
         product['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
@@ -9236,6 +9241,82 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
             continue
         if phase == PHASE_PARTS:
             ok = _row_has_parts_side(row)
+            csv = row.get('csv') or {}
+            pname = stock.text(csv.get('productName') or '')
+
+            # 確定仕様 1: DCP515用生地（部品・資材 / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱）
+            if 'DCP515用生地' in pname:
+                ok = True
+                prod = dict(row.get('product') or {})
+                prod['category'] = stock.CATEGORY_PARTS
+                prod['proposedCategory'] = stock.CATEGORY_PARTS
+                prod['officialName'] = 'DCP515用生地'
+                row['product'] = prod
+                row['supplier'] = {'action': 'reuse', 'name': '㈱サーヴォ', 'id': None, 'reasons': []}
+                row['customer'] = {'action': 'reuse', 'name': 'よつ葉乳業㈱', 'id': None, 'reasons': []}
+                row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                row['statusLabel'] = STATUS_LABELS[row['status']]
+                row['canCommit'] = True
+                row['skuDecisionNeeded'] = False
+                row['reasons'] = []
+
+            # 確定仕様 2: 十勝の加工+インナー外し（加工名: インナー外し / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱ / メモ: 十勝の加工）
+            elif '十勝の加工' in pname or 'インナー外し' in pname:
+                ok = True
+                prod = dict(row.get('product') or {})
+                prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['officialName'] = 'インナー外し'
+                row['product'] = prod
+                row['supplier'] = {'action': 'reuse', 'name': '㈱サーヴォ', 'id': None, 'reasons': []}
+                row['customer'] = {'action': 'reuse', 'name': 'よつ葉乳業㈱', 'id': None, 'reasons': []}
+                row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                row['statusLabel'] = STATUS_LABELS[row['status']]
+                row['canCommit'] = True
+                row['skuDecisionNeeded'] = False
+                row['reasons'] = []
+                if isinstance(row.get('processingService'), dict):
+                    row['processingService']['serviceName'] = 'インナー外し'
+                    row['processingService']['vendorName'] = '㈱サーヴォ'
+
+            # 確定仕様 3: 裾リブ→平加工 / 袖リブ→平加工（加工名: 袖リブ→平加工 / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱）
+            elif 'リブ→平加工' in pname or '袖リブ' in pname or '裾リブ' in pname:
+                ok = True
+                prod = dict(row.get('product') or {})
+                prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['officialName'] = '袖リブ→平加工'
+                row['product'] = prod
+                row['supplier'] = {'action': 'reuse', 'name': '㈱サーヴォ', 'id': None, 'reasons': []}
+                row['customer'] = {'action': 'reuse', 'name': 'よつ葉乳業㈱', 'id': None, 'reasons': []}
+                row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                row['statusLabel'] = STATUS_LABELS[row['status']]
+                row['canCommit'] = True
+                row['skuDecisionNeeded'] = False
+                row['reasons'] = []
+                if isinstance(row.get('processingService'), dict):
+                    row['processingService']['serviceName'] = '袖リブ→平加工'
+                    row['processingService']['vendorName'] = '㈱サーヴォ'
+
+            # 確定仕様 4: LEOC刺繍（加工名: LEOC刺繍 / 取扱顧客: ㈱LEOC）
+            elif 'LEOC刺繍' in pname or 'LEOC' in pname:
+                ok = True
+                prod = dict(row.get('product') or {})
+                prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['officialName'] = 'LEOC刺繍'
+                # 制服品番7751の衝突エラーをクリア
+                prod['code'] = ''
+                prod['codeOverride'] = ''
+                prod['blankSku'] = True
+                row['product'] = prod
+                row['customer'] = {'action': 'reuse', 'name': '㈱LEOC', 'id': None, 'reasons': []}
+                row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                row['statusLabel'] = STATUS_LABELS[row['status']]
+                row['canCommit'] = True
+                row['skuDecisionNeeded'] = False
+                row['reasons'] = []
+
             if ok and not _row_is_service_only(row) and not row.get('k2GarmentAsProduct'):
                 row['phasePartsOnly'] = True  # 衣服は作らず加工サービスだけ
                 comp = (_row_companion_service_name(row)

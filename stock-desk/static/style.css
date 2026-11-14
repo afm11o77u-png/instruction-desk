@@ -1296,3 +1296,114 @@ dialog.product-ledger-dialog .product-ledger-preview-actions{
 table.products-list .prod-price{margin-left:4px;padding-left:8px;padding-right:8px}
 .badge.warn{background:#f6e3b8;color:#6b4a00}
 .qr-access-guide{margin-top:24px;padding:16px;border:1px solid #c8dace;border-radius:8px;background:#f4f8f5;line-height:1.7}.qr-access-guide summary{font-weight:bold;cursor:pointer;color:#195b3d}.qr-access-guide h3{margin:20px 0 8px}.qr-access-guide li{margin:8px 0}.qr-access-guide a{text-decoration:underline}.qr-access-guide code{overflow-wrap:anywhere}
+
+/* 旧CSV一括取り込み プログレス・ローディングアニメーション */
+@keyframes pl-progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(50%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes pl-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pl-pulse-shadow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(46, 125, 50, 0.2); }
+  50% { box-shadow: 0 0 0 4px rgba(46, 125, 50, 0.15); }
+}
+
+.pl-progress-bar-container {
+  position: sticky;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  background: #e0e6e2;
+  overflow: hidden;
+  z-index: 100;
+  margin: -12px -16px 8px -16px;
+}
+
+.pl-progress-bar-active {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 50%;
+  background: linear-gradient(90deg, #2e7d32 0%, #66bb6a 50%, #2e7d32 100%);
+  animation: pl-progress-indeterminate 1.4s infinite cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 0 8px rgba(46, 125, 50, 0.5);
+}
+
+.pl-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid rgba(46, 125, 50, 0.25);
+  border-top-color: #2e7d32;
+  border-radius: 50%;
+  animation: pl-spin 0.75s linear infinite;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.pl-busy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1b5e20;
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  padding: 3px 10px;
+  border-radius: 12px;
+  margin-left: 10px;
+  animation: pl-pulse-shadow 2s infinite ease-in-out;
+}
+
+.pl-busy-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin: 10px 0;
+  background: #f1f8e9;
+  border: 1px solid #c5e1a5;
+  border-left: 5px solid #2e7d32;
+  border-radius: 4px;
+  color: #1b5e20;
+}
+
+.pl-busy-banner .pl-spinner {
+  width: 22px;
+  height: 22px;
+  border-width: 3px;
+}
+
+.pl-busy-banner-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+
+.pl-busy-timer-pill {
+  background: #2e7d32;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 10px;
+  letter-spacing: 0.03em;
+}
+
+.pl-busy-banner-desc {
+  font-size: 0.82rem;
+  color: #33691e;
+  font-weight: normal;
+  margin-top: 3px;
+}
+

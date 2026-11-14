@@ -22,10 +22,20 @@ GARMENT_WORDS = (
     'バスタオル', 'タオル',
 )
 # 加工（裾上げ・ネット付け等）を表す語。含めば既存の加工サービス扱いのまま
+# ※単独の「付」はポケット付・ボタン付・たれ付等の衣服仕様に誤爆するため含めない
 PROCESSING_WORDS = (
-    '加工', '刺繍', '取付', '取り付', '付け', '付', '直し', '裾上げ', '丈上げ', '丈詰', '外し',
+    '加工', '刺繍', '取付', '取り付', '付け', '直し', '裾上げ', '丈上げ', '丈詰', '外し',
     '潰し', 'ダウン', 'アップ', '補修', '修理', '交換', '作製', '貼', 'カン止', '型代', '反射',
     'プリント',
+)
+# 加工を行わない否定表記・既製品の仕様（加工サービスにしない）
+NO_PROCESSING_WORDS = (
+    '刺繍無', '刺繍なし', '刺繍無し', '刺繍ナシ', '刺繍不要',
+    'ネーム無', 'ネームなし', 'ネーム無し', 'ネームナシ', 'ネーム不要',
+    'プリント無', 'プリントなし', 'プリント無し',
+    'ワッペン無', 'ワッペンなし', 'ワッペン無し',
+    '無加工', '加工なし', '加工無し', '加工無', 'ノー加工',
+    'たれ付', 'たれ付き', '垂れ付', '垂れ付き', 'タレ付', 'タレ付き',
 )
 # 部品・資材（白リブ・釦・フライス等）や商品以外（システム代・サンプル等）
 NON_GARMENT_WORDS = (
@@ -58,9 +68,12 @@ def blank_code_kind(name):
     n = _nfkc(name)
     if not n:
         return 'other'
-    for w in PROCESSING_WORDS:
-        if _nfkc(w) in n:
-            return 'processing'
+    # 加工否定（刺繍無・無加工等）や帽子仕様（たれ付）は加工サービスにしない
+    has_no_processing = any(_nfkc(w) in n for w in NO_PROCESSING_WORDS)
+    if not has_no_processing:
+        for w in PROCESSING_WORDS:
+            if _nfkc(w) in n:
+                return 'processing'
     for w in NON_GARMENT_WORDS:
         if _nfkc(w) in n:
             return 'parts'

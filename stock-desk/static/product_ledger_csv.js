@@ -6443,6 +6443,62 @@
     </div>`
   }
 
+  function startBusyTimer(st){
+    stopBusyTimer(st)
+    st._busyStartTime=Date.now()
+    st._busyElapsedSec=0
+    st._busyInterval=setInterval(()=>{
+      if(!st.busy||!st.open){
+        stopBusyTimer(st)
+        return
+      }
+      st._busyElapsedSec=Math.max(0,Math.floor((Date.now()-st._busyStartTime)/1000))
+      const dlg=document.getElementById('dialog')
+      if(!dlg)return
+      const counts=dlg.querySelectorAll('.pl-busy-timer-count')
+      counts.forEach(el=>{
+        el.textContent=el.parentElement&&el.parentElement.classList.contains('pl-busy-timer-pill')
+          ? String(st._busyElapsedSec)
+          : `${st._busyElapsedSec}秒`
+      })
+    },1000)
+  }
+
+  function stopBusyTimer(st){
+    if(st&&st._busyInterval){
+      clearInterval(st._busyInterval)
+      st._busyInterval=null
+    }
+    if(st)st._busyElapsedSec=0
+  }
+
+  function busyBarHtml(st){
+    return st.busy?`<div class="pl-progress-bar-container"><div class="pl-progress-bar-active"></div></div>`:''
+  }
+
+  function busyPillHtml(st){
+    if(!st.busy)return ''
+    const label=st.progressLabel||'処理中…'
+    const sec=st._busyElapsedSec||0
+    return `<span class="pl-busy-pill"><span class="pl-spinner"></span><span class="pl-busy-pill-label">${esc(label)}</span> <span class="pl-busy-timer-count">${sec}秒</span></span>`
+  }
+
+  function busyBannerHtml(st){
+    if(!st.progressLabel&&!st.busy)return ''
+    const sec=st._busyElapsedSec||0
+    const label=st.progressLabel||'処理中…'
+    return `<div class="pl-busy-banner" role="status">
+      <span class="pl-spinner"></span>
+      <div class="pl-busy-banner-text">
+        <div class="pl-busy-banner-title">
+          <strong>${esc(label)}</strong>
+          <span class="pl-busy-timer-pill"><span class="pl-busy-timer-count">${sec}</span>秒経過</span>
+        </div>
+        <div class="pl-busy-banner-desc">現在バックグラウンドで解析・計算処理が進行しています。画面を閉じずにお待ちください。</div>
+      </div>
+    </div>`
+  }
+
   function filePickHtml(st){
     if(isOpeningMode(st)){
       return `<div class="product-ledger-files">
@@ -6466,7 +6522,7 @@
           <button type="button" id="plPreview" class="primary" ${!st.legacyStockB64||st.busy?'disabled':''}>読み込み・照合</button>
           <button type="button" id="plBackMode" class="quiet" ${st.busy?'disabled':''}>段階選択に戻る</button>
         </div>
-        ${st.progressLabel?`<p class="excelhint" role="status">${esc(st.progressLabel)}</p>`:''}
+        ${busyBannerHtml(st)}
         ${st.previewError?`<p class="notice product-ledger-import-error" role="alert">${esc(st.previewError)}</p>`:''}
       </div>`
     }
@@ -6497,7 +6553,7 @@
         <button type="button" id="plPreview" class="primary" ${!st.fileB64||st.busy?'disabled':''}>読み込み・照合</button>
         <button type="button" id="plBackMode" class="quiet" ${st.busy?'disabled':''}>段階選択に戻る</button>
       </div>
-      ${st.progressLabel?`<p class="excelhint" role="status">${esc(st.progressLabel)}</p>`:''}
+      ${busyBannerHtml(st)}
       ${st.previewError?`<p class="notice product-ledger-import-error" role="alert">${esc(st.previewError)}</p>`:''}
     </div>`
   }
@@ -6986,6 +7042,11 @@
   function paintDialog(opts){
     opts=opts||{}
     const st=ensureState()
+    if(st.busy){
+      if(!st._busyInterval) startBusyTimer(st)
+    }else{
+      if(st._busyInterval) stopBusyTimer(st)
+    }
     dropBlockedAcceptance(st)
     const dlg=document.getElementById('dialog')
     if(!dlg||!st.open)return
@@ -6999,7 +7060,7 @@
     const canWrite=typeof st.stockCanWrite==='function'?st.stockCanWrite():true
     dlg.classList.add('product-ledger-dialog','legacy-csv-detail-dialog')
     if(!st.importMode){
-      dlg.innerHTML=`<div class="dialoghead"><h2>旧CSV一括取り込み</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
+      dlg.innerHTML=`${busyBarHtml(st)}<div class="dialoghead"><h2>旧CSV一括取り込み${busyPillHtml(st)}</h2><button type="button" id="plClose" class="quiet" ${st.busy?'disabled':''}>閉じる</button></div>
         <div class="dialogbody legacy-csv-detail-body">${modeChooserHtml(st)}${resultHtml(st)}</div>`
       if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
       bindDialog()
@@ -7019,6 +7080,7 @@
           <div class="bar product-ledger-preview-actions">
             <button type="button" id="plRePreview" ${st.busy?'disabled':''}>選択を反映して再照合</button>
             <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite?'disabled':''}>確認して初期在庫を登録</button>
+            ${busyPillHtml(st)}
           </div>`
       :`<p class="excelhint">${esc(st.preview.note||'')}</p>
           ${timingsHtml(st)}
@@ -7042,10 +7104,11 @@
           <div class="bar product-ledger-preview-actions">
             <button type="button" id="plRePreview" class="${pendingRematchCount(st)||rowAcceptancePending(st)?'primary':''}" ${st.busy?'disabled':''}>選択を反映して再照合</button>
             <button type="button" id="plCommit" class="primary" ${st.busy||!canWrite||registerBlocked?'disabled':''} title="${pendingRematchCount(st)?'再照合してください':''}">確認して一括登録（保留・登録しない項目を除く）</button>
+            ${busyPillHtml(st)}
           </div>
           ${st.makerLookup&&st.makerLookup.scope==='row'?makerLookupPanelHtml(st,{forRowNo:st.makerLookup.rowNo}):''}
           ${sourceRowsPanelHtml(st)}`):''
-    dlg.innerHTML=`<div class="dialoghead"><h2>${esc(title)}</h2><button type="button" id="plClose" class="quiet">閉じる</button></div>
+    dlg.innerHTML=`${busyBarHtml(st)}<div class="dialoghead"><h2>${esc(title)}${busyPillHtml(st)}</h2><button type="button" id="plClose" class="quiet" ${st.busy?'disabled':''}>閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
         <p class="merge-lead">${lead}</p>
         ${filePickHtml(st)}
@@ -7184,6 +7247,7 @@
   function bindDialog(){
     const st=ensureState()
     const close=()=>{
+      stopBusyTimer(st)
       st.open=false
       const dlg=document.getElementById('dialog')
       if(dlg){dlg.close();dlg.classList.remove('product-ledger-dialog','legacy-csv-detail-dialog');dlg.innerHTML=''}
