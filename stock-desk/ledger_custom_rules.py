@@ -229,12 +229,27 @@ CUSTOM_MERGE_SPECS = {
         'color': 'ボトルグリーン',
         'primarySupplier': '住商モンブラン㈱',
     },
+    'SIC9415_M': {
+        'officialName': 'テープ M(7mm) C/26',
+        'color': 'ディープブルー',
+        'primarySupplier': 'オリゾン㈲',
+    },
 }
+
+# ---------------------------------------------------------------------------
+# 3. 内容別に分けて登録（自動分割：2品番）
+# ---------------------------------------------------------------------------
+CUSTOM_CONTENT_SPLIT_SPECS = {'9910', 'ZZZ2'}
 
 
 def is_custom_color_split_code(code: str) -> bool:
     t = stock.text(code or '')
     return t in CUSTOM_COLOR_SPLIT_SPECS
+
+
+def is_custom_content_split_code(code: str) -> bool:
+    t = stock.text(code or '')
+    return t in CUSTOM_CONTENT_SPLIT_SPECS
 
 
 def is_custom_merge_code(code: str) -> bool:

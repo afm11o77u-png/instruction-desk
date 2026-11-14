@@ -9243,9 +9243,15 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
             ok = _row_has_parts_side(row)
             csv = row.get('csv') or {}
             pname = stock.text(csv.get('productName') or '')
+            code = stock.text(csv.get('code') or '')
+            ps = row.get('processingService') or {}
+            ps_name = stock.text(ps.get('serviceName') or '')
+            companion = stock.text(row.get('companionProcessingService') or '')
+            paren = stock.text((row.get('parenClassification') or {}).get('processing') or '')
+            raw_text = f"{code} {pname} {ps_name} {companion} {paren}"
 
             # 確定仕様 1: DCP515用生地（部品・資材 / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱）
-            if 'DCP515用生地' in pname:
+            if 'DCP515用生地' in raw_text:
                 ok = True
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PARTS
@@ -9261,12 +9267,14 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['reasons'] = []
 
             # 確定仕様 2: 十勝の加工+インナー外し（加工名: インナー外し / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱ / メモ: 十勝の加工）
-            elif '十勝の加工' in pname or 'インナー外し' in pname:
+            elif '十勝の加工' in raw_text or 'インナー外し' in raw_text:
                 ok = True
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['officialName'] = 'インナー外し'
+                prod['code'] = ''
+                prod['blankSku'] = True
                 row['product'] = prod
                 row['supplier'] = {'action': 'reuse', 'name': '㈱サーヴォ', 'id': None, 'reasons': []}
                 row['customer'] = {'action': 'reuse', 'name': 'よつ葉乳業㈱', 'id': None, 'reasons': []}
@@ -9275,17 +9283,21 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
-                if isinstance(row.get('processingService'), dict):
-                    row['processingService']['serviceName'] = 'インナー外し'
-                    row['processingService']['vendorName'] = '㈱サーヴォ'
+                row['companionProcessingService'] = 'インナー外し'
+                row['processingService'] = {'serviceName': 'インナー外し', 'vendorName': '㈱サーヴォ'}
+                if isinstance(row.get('parenClassification'), dict):
+                    row['parenClassification']['processing'] = 'インナー外し'
+                row['customerUse'] = '十勝の加工'
 
             # 確定仕様 3: 裾リブ→平加工 / 袖リブ→平加工（加工名: 袖リブ→平加工 / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱）
-            elif 'リブ→平加工' in pname or '袖リブ' in pname or '裾リブ' in pname:
+            elif 'リブ→平加工' in raw_text or '袖リブ' in raw_text or '裾リブ' in raw_text:
                 ok = True
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
                 prod['officialName'] = '袖リブ→平加工'
+                prod['code'] = ''
+                prod['blankSku'] = True
                 row['product'] = prod
                 row['supplier'] = {'action': 'reuse', 'name': '㈱サーヴォ', 'id': None, 'reasons': []}
                 row['customer'] = {'action': 'reuse', 'name': 'よつ葉乳業㈱', 'id': None, 'reasons': []}
@@ -9294,12 +9306,13 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
-                if isinstance(row.get('processingService'), dict):
-                    row['processingService']['serviceName'] = '袖リブ→平加工'
-                    row['processingService']['vendorName'] = '㈱サーヴォ'
+                row['companionProcessingService'] = '袖リブ→平加工'
+                row['processingService'] = {'serviceName': '袖リブ→平加工', 'vendorName': '㈱サーヴォ'}
+                if isinstance(row.get('parenClassification'), dict):
+                    row['parenClassification']['processing'] = '袖リブ→平加工'
 
             # 確定仕様 4: LEOC刺繍（加工名: LEOC刺繍 / 取扱顧客: ㈱LEOC）
-            elif 'LEOC刺繍' in pname or 'LEOC' in pname:
+            elif 'LEOC刺繍' in raw_text or 'LEOC' in raw_text:
                 ok = True
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
@@ -9311,6 +9324,29 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 prod['blankSku'] = True
                 row['product'] = prod
                 row['customer'] = {'action': 'reuse', 'name': '㈱LEOC', 'id': None, 'reasons': []}
+                row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
+                row['statusLabel'] = STATUS_LABELS[row['status']]
+                row['canCommit'] = True
+                row['skuDecisionNeeded'] = False
+                row['reasons'] = []
+
+            # 確定仕様 5: プリント（加工名: プリント / 仕入先: (有)マークショップ / 取扱顧客: ㈱合同観光商事 ひまわり / 場所はメモ）
+            elif code == 'プリント' or ('プリント' in raw_text and not any(nw in raw_text for nw in ('プリント無', 'プリントなし'))):
+                ok = True
+                prod = dict(row.get('product') or {})
+                prod['category'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['proposedCategory'] = stock.CATEGORY_PROCESS_SERVICE
+                prod['officialName'] = 'プリント'
+                prod['code'] = ''
+                prod['codeOverride'] = ''
+                prod['blankSku'] = True
+                row['product'] = prod
+                row['supplier'] = {'action': 'reuse', 'name': '(有)マークショップ', 'id': None, 'reasons': []}
+                row['customer'] = {'action': 'reuse', 'name': '㈱合同観光商事 ひまわり', 'id': None, 'reasons': []}
+                row['companionProcessingService'] = 'プリント'
+                row['processingService'] = {'serviceName': 'プリント', 'vendorName': '(有)マークショップ'}
+                if pname and pname != 'プリント':
+                    row['customerUse'] = pname
                 row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
                 row['statusLabel'] = STATUS_LABELS[row['status']]
                 row['canCommit'] = True
@@ -10300,6 +10336,10 @@ def auto_dom_color_split_decisions(sku_groups, sku_decisions):
             if code_t not in decisions:
                 decisions[code_t] = {'decision': SKU_DECISION_COLOR_SPLIT, 'autoCustomSplit': True}
             continue
+        if lcr.is_custom_content_split_code(code_t):
+            if code_t not in decisions:
+                decisions[code_t] = {'decision': SKU_DECISION_CONTENT_SPLIT, 'autoCustomContentSplit': True}
+            continue
         if lcr.is_custom_merge_code(code_t):
             if code_t not in decisions:
                 mspec = lcr.get_custom_merge_spec(code_t)
@@ -10366,13 +10406,18 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
         # メーカー情報で補正の採用 → 名・色競合理由だけ落とす（プレビュー）
         if isinstance(raw, dict) and raw.get('makerAdopted'):
             _soften_after_maker_adopt(group, raw)
-        if lcr.is_custom_color_split_code(code) or lcr.is_custom_merge_code(code):
+        if lcr.is_custom_color_split_code(code) or lcr.is_custom_merge_code(code) or lcr.is_custom_content_split_code(code):
             group['needsDecision'] = False
             group['status'] = 'auto'
             group['reviewTier'] = REVIEW_TIER_AUTO
             group['customRule'] = True
-            group['customRuleType'] = 'color_split' if lcr.is_custom_color_split_code(code) else 'merge'
-            if lcr.is_custom_merge_code(code):
+            if lcr.is_custom_color_split_code(code):
+                group['customRuleType'] = 'color_split'
+            elif lcr.is_custom_content_split_code(code):
+                group['customRuleType'] = 'content_split'
+                group['customRuleNote'] = '内容別に分けて登録'
+            else:
+                group['customRuleType'] = 'merge'
                 mspec = lcr.get_custom_merge_spec(code)
                 group['customRuleNote'] = mspec.get('notes') or '同一商品へ統合'
                 group['customRuleSubSupplier'] = mspec.get('subSupplier') or ''
@@ -10790,20 +10835,27 @@ def _apply_sku_decisions(c, classified, sku_groups, sku_decisions):
 
             plan = plan_by_row[row_no]
             if plan.get('needsCollisionChoice'):
-                row['status'] = STATUS_REVIEW
-                row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
-                row['canCommit'] = False
-                existing_ids = ', '.join(
-                    str(p['id']) for p in (plan.get('existingProducts') or [])[:5]
+                is_service = (
+                    _row_is_service_only(row)
+                    or bool(_row_companion_service_name(row))
+                    or row.get('phasePartsOnly')
+                    or stock.text((row.get('product') or {}).get('category')) == stock.CATEGORY_PROCESS_SERVICE
                 )
-                row['reasons'] = list(row.get('reasons') or []) + [
-                    f'品番「{code}」の色「{plan.get("color")}」の社内管理品番'
-                    f'「{plan.get("internalCode")}」が既存商品（ID {existing_ids or "—"}）'
-                    f'または他の予定と衝突しています。既存を使うか、社内品番を編集してください'
-                    f'（無条件の上書きはしません）。'
-                ]
-                pending_decision += 1
-                continue
+                if not is_service:
+                    row['status'] = STATUS_REVIEW
+                    row['statusLabel'] = STATUS_LABELS[STATUS_REVIEW]
+                    row['canCommit'] = False
+                    existing_ids = ', '.join(
+                        str(p['id']) for p in (plan.get('existingProducts') or [])[:5]
+                    )
+                    row['reasons'] = list(row.get('reasons') or []) + [
+                        f'品番「{code}」の色「{plan.get("color")}」の社内管理品番'
+                        f'「{plan.get("internalCode")}」が既存商品（ID {existing_ids or "—"}）'
+                        f'または他の予定と衝突しています。既存を使うか、社内品番を編集してください'
+                        f'（無条件の上書きはしません）。'
+                    ]
+                    pending_decision += 1
+                    continue
 
             internal = stock.text(plan.get('internalCode') or '')
             color = stock.text(plan.get('color') or '')

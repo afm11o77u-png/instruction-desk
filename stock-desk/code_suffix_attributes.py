@@ -59,6 +59,9 @@ def is_part_product_name(name):
         return False
     if 'ボタンダウン' in t or 'ﾎﾞﾀﾝﾀﾞｳﾝ' in t:
         return False
+    # ゴムパンツ、脇ゴム、総ゴム、ウエストゴム等の衣服仕様は部品ではない
+    if re.search(r'(?:ゴムパンツ|脇ゴム|総ゴム|ウエストゴム|ｳｴｽﾄｺﾞﾑ|ｺﾞﾑﾊﾟﾝﾂ|脇ｺﾞﾑ|総ｺﾞﾑ)', t):
+        return False
     return any(w in t for w in _PART_WORDS)
 _DIM_RE = re.compile(r'^(\d+(?:\.\d+)?)(mm|㎜|cm|㎝)$', re.I)
 _SIZE_WORD = {'大', '小', 'LL', 'L', 'M', 'S', 'XL', '2L', '3L'}
