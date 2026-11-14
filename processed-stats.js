@@ -64,44 +64,56 @@
 
   function renderWeekdayMedians() {
     const container = $('#pstatsmedians');
-    if (!container || !statsData || !statsData.months) return;
+    if (!container || !statsData) return;
 
-    const byWeekday = { '月': [], '火': [], '水': [], '木': [], '金': [], '土': [], '日': [] };
-    statsData.months.forEach(m => {
-      (m.days || []).forEach(d => {
-        if (d.weekday && d.count != null && byWeekday[d.weekday]) {
-          byWeekday[d.weekday].push(d.count);
+    let medians = statsData.weekdayMedians;
+    if (!medians && statsData.months) {
+      const byWeekday = { '月': [], '火': [], '水': [], '木': [], '金': [], '土': [], '日': [] };
+      statsData.months.forEach(m => {
+        (m.days || []).forEach(d => {
+          if (d.weekday && d.count != null && byWeekday[d.weekday]) {
+            byWeekday[d.weekday].push(d.count);
+          }
+        });
+      });
+      medians = {};
+      ['月', '火', '水', '木', '金', '土', '日'].forEach(w => {
+        const arr = (byWeekday[w] || []).slice().sort((a, b) => a - b);
+        if (arr.length > 0) {
+          const mid = Math.floor(arr.length / 2);
+          medians[w] = arr.length % 2 !== 0 ? arr[mid] : Math.round((arr[mid - 1] + arr[mid]) / 2);
         }
       });
-    });
+    }
 
-    const weekdays = ['月', '火', '水', '木', '金', '土', '日'].filter(w => byWeekday[w].length > 0);
+    if (!medians) {
+      container.innerHTML = '';
+      return;
+    }
+
+    const weekdays = ['月', '火', '水', '木', '金', '土', '日'].filter(w => medians[w] != null);
     if (!weekdays.length) {
       container.innerHTML = '';
       return;
     }
 
-    const medians = {};
-    weekdays.forEach(w => {
-      const arr = byWeekday[w].slice().sort((a, b) => a - b);
-      const mid = Math.floor(arr.length / 2);
-      medians[w] = arr.length % 2 !== 0 ? arr[mid] : Math.round((arr[mid - 1] + arr[mid]) / 2);
-    });
-
     const ths = weekdays.map(w => {
       const color = w === '日' ? '#c62828' : (w === '土' ? '#1565c0' : '#444');
-      return `<th style="border:1px solid #d0d7de;padding:2px 7px;font-size:11px;font-weight:600;color:${color};background:#f6f8fa;text-align:center;">${w}</th>`;
+      return `<th style="border:1px solid #d0d7de;padding:2px 7px;font-size:11px;font-weight:600;color:${color};background:#f6f8fa;text-align:center;white-space:nowrap;width:1%;min-width:18px;">${w}</th>`;
     }).join('');
 
     const tds = weekdays.map(w => {
-      return `<td style="border:1px solid #d0d7de;padding:3px 7px;font-size:12px;font-weight:bold;color:#222;background:#fff;text-align:center;">${medians[w]}</td>`;
+      return `<td style="border:1px solid #d0d7de;padding:3px 7px;font-size:12px;font-weight:bold;color:#222;background:#fff;text-align:center;white-space:nowrap;width:1%;min-width:18px;">${medians[w]}</td>`;
     }).join('');
 
     container.innerHTML = `
-      <table style="border-collapse:collapse;box-shadow:0 1px 3px rgba(0,0,0,0.06);border-radius:4px;overflow:hidden;">
-        <thead><tr>${ths}</tr></thead>
-        <tbody><tr>${tds}</tr></tbody>
-      </table>
+      <div style="display:inline-block;text-align:right;">
+        <div style="font-size:10px;color:#666;margin-bottom:2px;font-weight:normal;">全期間 曜日別中央値</div>
+        <table style="display:inline-table;border-collapse:collapse;box-shadow:0 1px 3px rgba(0,0,0,0.06);border-radius:4px;overflow:hidden;width:auto;margin-left:auto;">
+          <thead><tr>${ths}</tr></thead>
+          <tbody><tr>${tds}</tr></tbody>
+        </table>
+      </div>
     `;
   }
 

@@ -666,13 +666,13 @@
     if (!weekdays.length) return '';
     const ths = weekdays.map(w => {
       const color = w === '日' ? '#c62828' : (w === '土' ? '#1565c0' : '#424242');
-      return `<th style="border:0.3pt solid #888;padding:1px 4px;color:${color};font-weight:bold;background:#f3f3f3;white-space:nowrap;width:auto;">${w}</th>`;
+      return `<th style="border:0.3pt solid #888;padding:1px 3px!important;color:${color};font-weight:bold;background:#f3f3f3;white-space:nowrap;width:1%!important;min-width:14px;max-width:22px;text-align:center;">${w}</th>`;
     }).join('');
     const tds = weekdays.map(w => {
-      return `<td style="border:0.3pt solid #888;padding:1px 4px;font-weight:bold;text-align:center;white-space:nowrap;width:auto;">${medians[w]}</td>`;
+      return `<td style="border:0.3pt solid #888;padding:1px 3px!important;font-weight:bold;text-align:center;white-space:nowrap;width:1%!important;min-width:14px;max-width:22px;background:#fff;">${medians[w]}</td>`;
     }).join('');
     return `
-      <table class="exec-medians-table" style="width:auto!important;margin:0 0 0 auto;border-collapse:collapse;font-size:6.8pt;line-height:1.15;display:table;">
+      <table class="exec-medians-table" style="width:auto!important;max-width:max-content!important;margin:0 0 0 auto!important;border-collapse:collapse;font-size:6.8pt;line-height:1.15;display:inline-table!important;">
         <thead><tr>${ths}</tr></thead>
         <tbody><tr>${tds}</tr></tbody>
       </table>
@@ -933,9 +933,9 @@
 
     if (isA3) {
       return `<div class="exec-report-print is-a3-landscape">
-        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2mm;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm;">
-          <h2 style="margin:0;border:none;padding:0;">幹部会議報告書　${y}年${m}月度</h2>
-          <div style="flex:none;margin-left:auto;">${mediansHtml}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2mm;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm;gap:12px;">
+          <h2 style="margin:0;border:none;padding:0;white-space:nowrap;flex:none;">幹部会議報告書　${y}年${m}月度</h2>
+          <div style="flex:none;margin-left:auto;text-align:right;">${mediansHtml}</div>
         </div>
         <div class="exec-columns-grid">
           <div class="exec-col-left">
@@ -973,9 +973,9 @@
     }
 
     return `<div class="exec-report-print">
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2mm;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm;">
-        <h2 style="margin:0;border:none;padding:0;">幹部会議報告書　${y}年${m}月度</h2>
-        <div style="flex:none;margin-left:auto;">${mediansHtml}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2mm;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm;gap:12px;">
+        <h2 style="margin:0;border:none;padding:0;white-space:nowrap;flex:none;">幹部会議報告書　${y}年${m}月度</h2>
+        <div style="flex:none;margin-left:auto;text-align:right;">${mediansHtml}</div>
       </div>
       <h3>1. 月別集計（${esc(summary.fiscalLabel || '')}　全員の合計）</h3>
       <table>

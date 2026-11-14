@@ -120,14 +120,41 @@ def get_stats(force_refresh: bool = False) -> dict:
             cache_data = None
 
     base = get_processed_dir()
-    if not base.exists():
+    base_exists = False
+    try:
+        base_exists = base.exists()
+    except Exception:
+        base_exists = False
+
+    if not base_exists:
+        if cache_data and isinstance(cache_data.get("months"), list):
+            if "weekdayMedians" not in cache_data:
+                try:
+                    import statistics
+                    by_w = {"月": [], "火": [], "水": [], "木": [], "金": [], "土": [], "日": []}
+                    for md in cache_data["months"]:
+                        for day in md.get("days", []):
+                            w = day.get("weekday")
+                            cnt = day.get("count")
+                            if w in by_w and cnt is not None:
+                                by_w[w].append(cnt)
+                    wm = {}
+                    for w in WEEKDAYS_JA:
+                        vals = by_w.get(w, [])
+                        if vals:
+                            wm[w] = round(statistics.median(vals))
+                    cache_data["weekdayMedians"] = wm
+                except Exception:
+                    cache_data["weekdayMedians"] = {}
+            return cache_data
         return {
             "exists": False,
             "dir": str(base),
             "years": [],
             "total_all": 0,
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "months": []
+            "months": [],
+            "weekdayMedians": {}
         }
 
     # 月フォルダの列挙
@@ -187,13 +214,32 @@ def get_stats(force_refresh: bool = False) -> dict:
     months_result.sort(key=lambda x: (x["year"], x["month"]), reverse=True)
     sorted_years = sorted(list(years_set), reverse=True)
 
+    # 全期間の曜日別中央値
+    weekday_medians = {}
+    try:
+        import statistics
+        by_weekday = {"月": [], "火": [], "水": [], "木": [], "金": [], "土": [], "日": []}
+        for md in months_result:
+            for day in md.get("days", []):
+                w = day.get("weekday")
+                cnt = day.get("count")
+                if w in by_weekday and cnt is not None:
+                    by_weekday[w].append(cnt)
+        for w in WEEKDAYS_JA:
+            vals = by_weekday.get(w, [])
+            if vals:
+                weekday_medians[w] = round(statistics.median(vals))
+    except Exception:
+        weekday_medians = {}
+
     result = {
         "exists": True,
         "dir": str(base),
         "years": sorted_years,
         "total_all": total_all,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "months": months_result
+        "months": months_result,
+        "weekdayMedians": weekday_medians
     }
 
     # キャッシュ保存

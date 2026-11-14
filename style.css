@@ -857,8 +857,8 @@ body.catalog-kintai main>header .headactions{display:none}
 .exec-report-print.is-a3-landscape .exec-inventory-table {font-size:6.8pt}
 .exec-report-print.is-a3-landscape .exec-contracts-grid {gap:2.5mm}
 .exec-report-print.is-a3-landscape .exec-orders-table {font-size:7.5pt}
-.exec-report-print .exec-medians-table {width:auto!important;margin:0 0 0 auto!important;border-collapse:collapse;font-size:6.8pt;line-height:1.15}
-.exec-report-print .exec-medians-table th,.exec-report-print .exec-medians-table td {padding:.4mm 1.5mm!important;white-space:nowrap!important;text-align:center;border:.3pt solid #888;width:auto!important}
+.exec-report-print .exec-medians-table {width:auto!important;max-width:max-content!important;display:inline-table!important;margin:0 0 0 auto!important;border-collapse:collapse!important;font-size:6.8pt!important;line-height:1.15!important}
+.exec-report-print .exec-medians-table th,.exec-report-print .exec-medians-table td {padding:.3mm 1mm!important;white-space:nowrap!important;text-align:center!important;border:.3pt solid #888!important;width:1%!important;min-width:14px!important;max-width:22px!important}
 .exec-report-print .exec-medians-table th {background:#f3f3f3!important;font-weight:700}
 .exec-report-print .exec-medians-table td {font-weight:700;font-size:7pt}
 @media print {
