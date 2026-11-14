@@ -33,7 +33,11 @@
   const resultBox = $('#picking-sort-result');
 
   if (btnOpen) {
-    btnOpen.addEventListener('click', async () => {
+    btnOpen.addEventListener('click', async (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       if (!modal) return;
       resultBox.style.display = 'none';
       resultBox.innerHTML = '';
