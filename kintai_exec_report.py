@@ -161,6 +161,7 @@ def bundle(c, year, month, fiscal_start_year, summary_fn) -> dict:
     # 処理済み指示書枚数（報告対象月以前の月のみ。未来月は隠す）
     processed_orders = None
     try:
+        import statistics
         import processed_stats
         p_stats = processed_stats.get_stats()
         cutoff_key = f"{y:04d}-{m:02d}"
@@ -169,10 +170,26 @@ def bundle(c, year, month, fiscal_start_year, summary_fn) -> dict:
             if mon.get("key", "") <= cutoff_key
         ]
         target_month = next((mon for mon in past_months if mon.get("key") == cutoff_key), None)
+
+        # 全期間の曜日別中央値（記録がある日を対象）
+        by_weekday = {w: [] for w in ('月', '火', '水', '木', '金', '土', '日')}
+        for mon in p_stats.get("months", []):
+            for d in mon.get("days", []):
+                w = d.get("weekday")
+                c_val = d.get("count")
+                if w in by_weekday and c_val is not None:
+                    by_weekday[w].append(c_val)
+        medians = {}
+        for w in ('月', '火', '水', '木', '金', '土', '日'):
+            vals = by_weekday[w]
+            if vals:
+                medians[w] = round(statistics.median(vals))
+
         processed_orders = {
             'target': target_month,
             'recentMonths': past_months[:6],
             'totalThroughTarget': sum(mon.get("total", 0) for mon in past_months),
+            'weekdayMedians': medians,
         }
     except Exception:
         processed_orders = None

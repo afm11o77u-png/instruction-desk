@@ -660,6 +660,25 @@
     `;
   }
 
+  function buildWeekdayMediansHtml(medians) {
+    if (!medians) return '';
+    const weekdays = ['月', '火', '水', '木', '金', '土', '日'].filter(w => medians[w] != null);
+    if (!weekdays.length) return '';
+    const ths = weekdays.map(w => {
+      const color = w === '日' ? '#c62828' : (w === '土' ? '#1565c0' : '#424242');
+      return `<th style="border:0.4pt solid #888;padding:1px 5px;color:${color};font-weight:600;background:#f5f5f5;">${w}</th>`;
+    }).join('');
+    const tds = weekdays.map(w => {
+      return `<td style="border:0.4pt solid #888;padding:1px 5px;font-weight:bold;text-align:center;">${medians[w]}</td>`;
+    }).join('');
+    return `
+      <table class="exec-medians-table" style="border-collapse:collapse;font-size:7pt;line-height:1.2;margin:0;display:inline-table;">
+        <thead><tr>${ths}</tr></thead>
+        <tbody><tr>${tds}</tr></tbody>
+      </table>
+    `;
+  }
+
   function paintExecReport(data) {
     execReportData = data || null;
     execContractsDirty = false;
@@ -694,15 +713,19 @@
       if (po && po.target) {
         const t = po.target;
         const avg = t.days && t.days.length ? (t.total / t.days.length).toFixed(1) : 0;
+        const mediansHtml = buildWeekdayMediansHtml(po.weekdayMedians);
         ordersEl.innerHTML = `
           <div style="background:#fff;border:1px solid #dcdcdc;border-radius:6px;padding:14px;margin-top:12px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:2px solid #4caf50;padding-bottom:6px;">
               <h3 style="margin:0;font-size:15px;color:#2e7d32;display:flex;align-items:center;gap:6px;">
                 <span>📋</span> 5. 指示書処理枚数（${t.label || (data.year + '年' + data.month + '月度')}）
               </h3>
-              <div style="font-size:13px;font-weight:bold;color:#333;">
-                月間合計: <span style="font-size:16px;color:#2e7d32;">${t.total.toLocaleString('ja-JP')}</span> 枚
-                <span style="font-size:11px;color:#666;font-weight:normal;margin-left:8px;">（稼働 ${t.days ? t.days.length : 0}日 / 1日平均 ${avg}枚）</span>
+              <div style="display:flex;align-items:center;gap:12px;">
+                ${mediansHtml}
+                <div style="font-size:13px;font-weight:bold;color:#333;">
+                  月間合計: <span style="font-size:16px;color:#2e7d32;">${t.total.toLocaleString('ja-JP')}</span> 枚
+                  <span style="font-size:11px;color:#666;font-weight:normal;margin-left:8px;">（稼働 ${t.days ? t.days.length : 0}日 / 1日平均 ${avg}枚）</span>
+                </div>
               </div>
             </div>
             ${buildOrderStatsSvg(t, 740, 170)}
@@ -795,7 +818,7 @@
     toast(`幹部会議報告（${ym}）をExcel出力しました。`);
   }
 
-  function buildExecPrintHtml(data) {
+  function buildExecPrintHtml(data, isA3 = true) {
     const y = data.year;
     const m = data.month;
     const summary = data.summary || {};
@@ -891,8 +914,69 @@
       </section>`;
     }
 
+    let ordersPrintSection = '';
+    const po = data.processedOrders;
+    if (po && po.target) {
+      const t = po.target;
+      ordersPrintSection = `
+        <section class="exec-orders-print" style="margin-top:10px;page-break-inside:avoid;">
+          <h3>5. 指示書処理枚数（${y}年${m}月度　合計: ${t.total.toLocaleString('ja-JP')}枚）</h3>
+          <div style="margin-bottom:6px;">
+            ${buildOrderStatsSvg(t, isA3 ? 740 : 700, isA3 ? 135 : 130)}
+          </div>
+          ${buildOrderStatsTableHtml(t)}
+        </section>
+      `;
+    }
+
+    const mediansHtml = buildWeekdayMediansHtml(data.processedOrders?.weekdayMedians);
+
+    if (isA3) {
+      return `<div class="exec-report-print is-a3-landscape">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2mm;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm;">
+          <h2 style="margin:0;border:none;padding:0;">幹部会議報告書　${y}年${m}月度</h2>
+          ${mediansHtml}
+        </div>
+        <div class="exec-columns-grid">
+          <div class="exec-col-left">
+            <h3>1. 月別集計（${esc(summary.fiscalLabel || '')}　全員の合計）</h3>
+            <table>
+              <thead><tr><th>月</th><th>普通勤務時間</th><th>残業時間</th><th>勤務時間計</th><th>通常勤務給与</th><th>残業給与</th><th>給与計</th></tr></thead>
+              <tbody>${sumRows}${sumTotal}</tbody>
+            </table>
+            <h3>2. ユニフォーム契約報告（${y}年${m}月度）</h3>
+            <div class="exec-contracts-grid">
+              ${contractTable('【新規分】', newC)}
+              ${contractTable('【入替分】', renC)}
+            </div>
+            <h3>3. 備品棚卸（${y}年${m}月度）</h3>
+            <table class="exec-inventory-table">
+              <colgroup><col style="width:9%"><col style="width:20%"><col style="width:4%"><col style="width:7%">${'<col style="width:7.5%">'.repeat(8)}</colgroup>
+              <thead>
+                <tr>
+                  <th rowspan="2">科目</th><th rowspan="2">品名</th><th rowspan="2">単位</th><th rowspan="2">単価</th>
+                  <th colspan="2">月初在庫</th><th colspan="2">当月購入</th><th colspan="2">月末在庫</th><th colspan="2">当月使用</th>
+                </tr>
+                <tr>
+                  <th>数量</th><th>金額</th><th>数量</th><th>金額</th><th>数量</th><th>金額</th><th>数量</th><th>金額</th>
+                </tr>
+              </thead>
+              <tbody>${bRows}${bTotal}</tbody>
+            </table>
+          </div>
+          <div class="exec-col-right">
+            ${crimpTable}
+            ${ordersPrintSection}
+          </div>
+        </div>
+      </div>`;
+    }
+
     return `<div class="exec-report-print">
-      <h2>幹部会議報告書　${y}年${m}月度</h2>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2mm;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm;">
+        <h2 style="margin:0;border:none;padding:0;">幹部会議報告書　${y}年${m}月度</h2>
+        ${mediansHtml}
+      </div>
       <h3>1. 月別集計（${esc(summary.fiscalLabel || '')}　全員の合計）</h3>
       <table>
         <thead><tr><th>月</th><th>普通勤務時間</th><th>残業時間</th><th>勤務時間計</th><th>通常勤務給与</th><th>残業給与</th><th>給与計</th></tr></thead>
@@ -918,35 +1002,16 @@
         <tbody>${bRows}${bTotal}</tbody>
       </table>
       ${crimpTable}
-      ${(() => {
-        const po = data.processedOrders;
-        if (!po || !po.target) return '';
-        const t = po.target;
-        return `
-          <section class="exec-orders-print" style="margin-top:14px;page-break-inside:avoid;">
-            <h3>5. 指示書処理枚数（${y}年${m}月度　合計: ${t.total.toLocaleString('ja-JP')}枚）</h3>
-            <div style="margin-bottom:8px;">
-              ${buildOrderStatsSvg(t, 980, 150)}
-            </div>
-            ${buildOrderStatsTableHtml(t)}
-          </section>
-        `;
-      })()}
+      ${ordersPrintSection}
     </div>`;
   }
 
-  async function fitExecReportToPage(report) {
+  async function fitExecReportToPage(report, isA3 = true) {
     await document.fonts.ready;
-    const requested = $('#kintaiexecpaper')?.value || 'A3';
-    const paper = requested === 'A4' ? 'A4' : 'A3';
-    const isA3 = paper === 'A3';
-    report.classList.toggle('is-a3', isA3);
-
-    const widthMm = isA3 ? 277 : 190;
-    const heightMm = isA3 ? 365 : 250;
+    const widthMm = isA3 ? 400 : 190;
+    const heightMm = isA3 ? 260 : 250;
 
     const measure = report.cloneNode(true);
-    measure.classList.toggle('is-a3', isA3);
     measure.style.cssText = `position:fixed;left:-10000px;top:0;visibility:hidden;width:${widthMm}mm;zoom:1`;
     document.body.append(measure);
     try {
@@ -958,7 +1023,11 @@
         : 1;
       report.style.width = `${widthMm}mm`;
       report.style.zoom = String(scale);
-      return paper;
+      return {
+        paper: isA3 ? 'A3' : 'A4',
+        orientation: isA3 ? 'landscape' : 'portrait',
+        label: isA3 ? 'A3横（左右2分割）' : 'A4縦',
+      };
     } finally {
       measure.remove();
     }
@@ -968,9 +1037,11 @@
     const data = await saveExecContracts(true);
     const sheet = $('#bihincountsheet');
     if (!sheet) return;
-    sheet.innerHTML = buildExecPrintHtml(data);
-    const paper = await fitExecReportToPage(sheet.querySelector('.exec-report-print'));
-    $('#kintaiexecstatus').textContent = `${paper}縦・1枚で印刷します。`;
+    const requested = $('#kintaiexecpaper')?.value || 'A3';
+    const isA3 = requested === 'A3';
+    sheet.innerHTML = buildExecPrintHtml(data, isA3);
+    const pageInfo = await fitExecReportToPage(sheet.querySelector('.exec-report-print'), isA3);
+    $('#kintaiexecstatus').textContent = `${pageInfo.label}・1枚で印刷します。`;
     document.body.classList.add('printing-bihin-count', 'printing-exec-report');
     let styleEl = document.getElementById('bihin-count-print-page-css');
     if (!styleEl) {
@@ -978,9 +1049,9 @@
       styleEl.id = 'bihin-count-print-page-css';
       document.head.appendChild(styleEl);
     }
-    const marginMm = paper === 'A3' ? '10mm' : '8mm';
+    const marginMm = isA3 ? '10mm' : '8mm';
     // Chromium は無名 @page の size を印刷プレビューの用紙サイズ初期値に優先採用するため、先頭に無名 @page を指定。
-    styleEl.textContent = `@page{size:${paper} portrait;margin:${marginMm}} @page exec-report-page{size:${paper} portrait;margin:${marginMm}}`;
+    styleEl.textContent = `@page{size:${pageInfo.paper} ${pageInfo.orientation};margin:${marginMm}} @page exec-report-page{size:${pageInfo.paper} ${pageInfo.orientation};margin:${marginMm}}`;
     let cleaned = false;
     const done = () => {
       if (cleaned) return;
