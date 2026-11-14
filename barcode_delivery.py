@@ -8,6 +8,7 @@ from pathlib import Path
 
 MDB_PATH = Path(r"C:\Users\zfm11\Desktop\db3.mdb")
 DB_PATH = Path("data/instructions.sqlite3")
+PS1_PATH = Path(__file__).parent / "barcode_delivery.ps1"
 
 # In-memory cache for fast lookup
 _CACHE = {}
@@ -97,73 +98,24 @@ def lookup_barcode(code: str) -> dict:
             "message": f"Accessデータベースファイルが見つかりません。({MDB_PATH})"
         }
     
-    # Clean code to avoid SQL injection
     clean_code = re.sub(r"[^0-9a-zA-Z_\-\/]", "", code)
     if not clean_code:
         return {"ok": False, "found": False, "message": "バーコード番号の形式が正しくありません。"}
-        
-    ps_script = f"""
-$connStr = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source={MDB_PATH};Persist Security Info=False;"
-$conn = New-Object System.Data.OleDb.OleDbConnection($connStr)
-try {{
-    $conn.Open()
-    $cmd = $conn.CreateCommand()
-    $cmd.CommandText = @"
-SELECT TOP 1
-    s.MasterCode,
-    c.顧客名,
-    c.顧客コード,
-    c.集配サイクル,
-    c.集配曜日フラグ,
-    p.商品名,
-    p.ラベル表示用_商品名,
-    s.サイズ,
-    k.部署名,
-    k.個人名
-FROM ((([M_識別コードマスタ] s
-LEFT JOIN [M_顧客マスタ] c ON s.顧客コード = c.顧客コード)
-LEFT JOIN [M_商品マスタ] p ON s.商品コード = p.商品コード)
-LEFT JOIN [M_契約マスタ] k ON s.KID = k.KID)
-WHERE s.MasterCode = '{clean_code}'
-"@
-    $dt = New-Object System.Data.DataTable
-    $adapter = New-Object System.Data.OleDb.OleDbDataAdapter($cmd)
-    [void]$adapter.Fill($dt)
-    if ($dt.Rows.Count -gt 0) {{
-        $r = $dt.Rows[0]
-        $res = @{{
-            found = $true
-            masterCode = "" + $r["MasterCode"]
-            customer = "" + $r["顧客名"]
-            customerCode = "" + $r["顧客コード"]
-            cycle = "" + $r["集配サイクル"]
-            cycleFlag = "" + $r["集配曜日フラグ"]
-            itemName = if ($r["ラベル表示用_商品名"]) {{ "" + $r["ラベル表示用_商品名"] }} elseif ($r["商品名"]) {{ "" + $r["商品名"] }} else {{ "" }}
-            size = "" + $r["サイズ"]
-            department = "" + $r["部署名"]
-            person = "" + $r["個人名"]
-        }}
-        $res | ConvertTo-Json -Compress
-    }} else {{
-        @{{ found = $false }} | ConvertTo-Json -Compress
-    }}
-}} catch {{
-    @{{ found = $false; error = "" + $_.Exception.Message }} | ConvertTo-Json -Compress
-}} finally {{
-    $conn.Close()
-}}
-"""
 
     try:
-        p = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", str(PS1_PATH.resolve()),
+            "-Code", clean_code,
+            "-MdbPath", str(MDB_PATH.resolve())
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
         out = (p.stdout or "").strip()
         if not out:
-            return {"ok": False, "found": False, "message": "検索処理から応答がありませんでした。"}
+            err = (p.stderr or "").strip()
+            return {"ok": False, "found": False, "message": f"検索処理でエラーが発生しました。({err or '応答なし'})"}
             
         data = json.loads(out)
         if not data.get("found"):
