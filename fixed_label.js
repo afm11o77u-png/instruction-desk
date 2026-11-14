@@ -81,7 +81,9 @@
     'align-items:baseline;gap:1em;width:100%;max-width:100%;min-width:0}' +
     '.cell.depts .title-row .title-customer,.cell.depts .title-row .title-store{flex:0 1 auto;min-width:0;' +
     'max-width:100%;font-weight:700;line-height:1.2;letter-spacing:.04em;overflow-wrap:anywhere;' +
-    'word-break:break-word}';
+    'word-break:break-word}' +
+    '.cell.cell-img{padding:0;justify-content:center;align-items:center}' +
+    '.cell.cell-img .cellimg{width:148.5mm;height:105mm;object-fit:contain;display:block;margin:0 auto}';
 
   function escText(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -165,6 +167,22 @@
       imageFile: 'fixed-label/2242-ishiya.jpg',
       sourcePageRotate: 180,
     },
+    {
+      id: 'pants-repair',
+      name: 'パンツ股下・交換品',
+      kind: 'cells',
+      imageUrl: '/fixed-label/pants-repair.png',
+      imageFile: 'fixed-label/pants-repair.png',
+      buildCellHtml: function buildPantsRepairCell(assetBase) {
+        const base = assetBase ? String(assetBase).replace(/\/?$/, '/') : '/';
+        const src = base + 'fixed-label/pants-repair.png';
+        return (
+          '<section class="cell cell-img">' +
+          `<img class="cellimg" src="${src}" alt="パンツ股下・交換品">` +
+          '</section>'
+        );
+      },
+    },
     himawari('himawari-1', 'ひまわり1', 5, ['タワー店', 'ファイターズ通り店', '豊平店', '月寒店', '清田店', '新琴似店', '篠路店', '真駒内店', 'タウン店']),
     himawari('himawari-2', 'ひまわり2', 4, ['五所川原店', '八戸店', '能代店', '大曲店', '岩沼店', '北上店', '多賀城店']),
     himawari('himawari-3', 'ひまわり3', 5, ['弟子屈店', '知床店', '美幌店', '北見店', '紋別店', '中標津店', '根室店', '釧路店', '帯広店', '音更店']),
@@ -227,7 +245,7 @@
         `</div>`
       );
     }
-    const cell = format.buildCellHtml();
+    const cell = format.buildCellHtml(assetBase);
     return `<div class="page">${cell}${cell}${cell}${cell}</div>`;
   }
 
