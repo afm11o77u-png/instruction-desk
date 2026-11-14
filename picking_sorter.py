@@ -261,8 +261,15 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    ws.oddHeader.left.text = f'&"-,Bold"&14{now.strftime("%Y/%m/%d %H:%M")}'
-    ws.oddHeader.center.text = f'&"-,Bold"&14{title} ({file_name})'
+    ws.page_margins.left = 0.0
+    ws.page_margins.right = 0.0
+    ws.page_margins.top = 0.984
+    ws.page_margins.bottom = 0.0
+    ws.page_margins.header = 0.315
+    ws.page_margins.footer = 0.315
+    ws.oddHeader.left.text = '&"-,Bold"&12 &D　&T'
+    ws.oddHeader.center.text = '&"-,Bold"&12 &A'
+    ws.oddHeader.right.text = None
     ws.print_title_rows = '1:1'
 
 def _save_ishikari_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
@@ -395,8 +402,15 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
-    ws.oddHeader.left.text = f'&"-,Bold"&14{now.strftime("%Y/%m/%d %H:%M")}'
-    ws.oddHeader.center.text = f'&"-,Bold"&14{title} ({file_name})'
+    ws.page_margins.left = 0.0
+    ws.page_margins.right = 0.0
+    ws.page_margins.top = 0.984
+    ws.page_margins.bottom = 0.0
+    ws.page_margins.header = 0.315
+    ws.page_margins.footer = 0.315
+    ws.oddHeader.left.text = '&"-,Bold"&12 &D　&T'
+    ws.oddHeader.center.text = '&"-,Bold"&12 &A'
+    ws.oddHeader.right.text = None
     ws.print_title_rows = '1:1'
 
 def _save_report_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
