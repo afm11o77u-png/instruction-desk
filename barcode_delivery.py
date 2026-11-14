@@ -224,3 +224,189 @@ def lookup_barcode(code: str) -> dict:
         
     except Exception as e:
         return {"ok": False, "found": False, "message": f"照会エラー: {e}"}
+
+SYNC_PS1_PATH = Path(__file__).parent / "sync_customers.ps1"
+
+def init_customer_cache_table():
+    """Ensure access_customers table exists in SQLite database."""
+    if not DB_PATH.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS access_customers (
+                code TEXT PRIMARY KEY,
+                name TEXT,
+                cycle TEXT,
+                flag TEXT,
+                weekday TEXT,
+                is_no_delivery INTEGER,
+                updated_at TEXT
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ac_name ON access_customers(name)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ac_cycle ON access_customers(cycle)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_ac_is_no_deliv ON access_customers(is_no_delivery)")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def sync_customers_from_mdb() -> dict:
+    """Read all customers from db3.mdb and cache into SQLite access_customers."""
+    if not MDB_PATH.exists():
+        return {"ok": False, "message": f"Accessデータベースが見つかりません: {MDB_PATH}"}
+    if not SYNC_PS1_PATH.exists():
+        return {"ok": False, "message": f"同期スクリプトが見つかりません: {SYNC_PS1_PATH}"}
+
+    init_customer_cache_table()
+
+    try:
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", str(SYNC_PS1_PATH.resolve()),
+            "-MdbPath", str(MDB_PATH.resolve())
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        out = (p.stdout or "").strip()
+        if not out:
+            return {"ok": False, "message": f"Access同期処理で応答がありませんでした。({p.stderr or ''})"}
+
+        data = json.loads(out)
+        if not isinstance(data, list):
+            return {"ok": False, "message": "同期データ形式が不正です。"}
+
+        from datetime import datetime
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
+        cur = conn.cursor()
+        
+        # Batch upsert
+        rows = []
+        for r in data:
+            code = str(r.get("code") or "").strip()
+            if not code:
+                continue
+            name = str(r.get("name") or "").strip()
+            cycle = str(r.get("cycle") or "").strip()
+            flag = str(r.get("flag") or "").strip()
+            
+            wday = parse_cycle_flag(flag)
+            
+            # Determine delivery type
+            # 90000000 with empty cycle is definitely no delivery
+            is_no_deliv = 1 if ((flag == "90000000" or flag == "0" or not flag) and (not cycle or cycle == "0" or cycle == "なし")) else 0
+            
+            rows.append((code, name, cycle, flag, wday, is_no_deliv, now_str))
+
+        cur.execute("DELETE FROM access_customers")
+        cur.executemany("""
+            INSERT OR REPLACE INTO access_customers (code, name, cycle, flag, weekday, is_no_delivery, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        
+        conn.commit()
+        conn.close()
+        
+        return {"ok": True, "count": len(rows), "updatedAt": now_str}
+    except Exception as e:
+        return {"ok": False, "message": f"同期失敗: {e}"}
+
+def get_delivery_customers_list(q: str = "", delivery_type: str = "all", car: str = "", weekday: str = "", limit: int = 200, offset: int = 0) -> dict:
+    """Fetch cached customers list with filters."""
+    init_customer_cache_table()
+    
+    if not DB_PATH.exists():
+        return {"ok": True, "total": 0, "filtered": 0, "customers": [], "cars": [], "weekdays": []}
+        
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
+        cur = conn.cursor()
+        
+        # Check count of cached customers
+        cur.execute("SELECT COUNT(*) FROM access_customers")
+        total_in_db = cur.fetchone()[0]
+        
+        # If empty, attempt auto-sync once if MDB is reachable
+        if total_in_db == 0 and MDB_PATH.exists():
+            sync_res = sync_customers_from_mdb()
+            if sync_res.get("ok"):
+                cur.execute("SELECT COUNT(*) FROM access_customers")
+                total_in_db = cur.fetchone()[0]
+
+        # Get unique cars and weekdays for filter dropdowns
+        cur.execute("SELECT DISTINCT cycle FROM access_customers WHERE cycle != '' AND cycle != '0' ORDER BY cycle")
+        cars = [r[0] for r in cur.fetchall() if r[0]]
+        
+        cur.execute("SELECT DISTINCT weekday FROM access_customers WHERE weekday != '' ORDER BY weekday")
+        weekdays = [r[0] for r in cur.fetchall() if r[0]]
+
+        # Build filter query
+        where_clauses = []
+        params = []
+        
+        # Delivery type filter: 'regular' (定期集配), 'delivery_only' (送り便/集配なし), 'all' (すべて)
+        if delivery_type == "regular":
+            where_clauses.append("is_no_delivery = 0")
+        elif delivery_type == "delivery_only":
+            where_clauses.append("is_no_delivery = 1")
+            
+        if car:
+            where_clauses.append("cycle = ?")
+            params.append(car)
+            
+        if weekday:
+            where_clauses.append("weekday = ?")
+            params.append(weekday)
+            
+        if q:
+            # Multi-word search
+            words = [w.strip() for w in q.split() if w.strip()]
+            for w in words:
+                where_clauses.append("(name LIKE ? OR code LIKE ?)")
+                params.extend([f"%{w}%", f"%{w}%"])
+                
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+        
+        # Filtered count
+        cur.execute(f"SELECT COUNT(*) FROM access_customers {where_sql}", params)
+        filtered_count = cur.fetchone()[0]
+        
+        # Fetch records
+        query = f"""
+            SELECT code, name, cycle, flag, weekday, is_no_delivery, updated_at
+            FROM access_customers
+            {where_sql}
+            ORDER BY is_no_delivery ASC, code ASC
+            LIMIT ? OFFSET ?
+        """
+        cur.execute(query, params + [max(1, min(limit, 20000)), max(0, offset)])
+        
+        records = []
+        for r_code, r_name, r_cycle, r_flag, r_wday, r_is_no_deliv, r_upd in cur.fetchall():
+            display_car = r_cycle if (r_cycle and r_cycle != "0") else ("送り便 / 対象外" if r_is_no_deliv else "未設定")
+            display_wday = r_wday if r_wday else ("集配なし" if r_is_no_deliv else "未設定")
+            records.append({
+                "code": r_code,
+                "name": r_name,
+                "cycle": display_car,
+                "weekday": display_wday,
+                "flag": r_flag,
+                "isNoDelivery": bool(r_is_no_deliv)
+            })
+            
+        conn.close()
+        return {
+            "ok": True,
+            "total": total_in_db,
+            "filtered": filtered_count,
+            "cars": cars,
+            "weekdays": weekdays,
+            "customers": records
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"一覧取得エラー: {e}", "customers": []}

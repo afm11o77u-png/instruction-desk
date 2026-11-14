@@ -78,6 +78,11 @@ def initialize():
         kintai.bind(DATA)
         kintai.schema(c)
         name_exe.schema(c)
+        try:
+            import restore_approvals
+            restore_approvals.restore_name_approvals_safe(c)
+        except Exception:
+            pass
         if not c.execute("SELECT 1 FROM settings WHERE key='seeded'").fetchone():
             customers = ['宮の沢明日佳病院', 'だるま食品銭函工場', '弁釜札幌', 'サザエ食品 店舗']
             for i in range(6):
@@ -1081,6 +1086,40 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(200, data)
             except Exception as e:
                 return self.reply(500, {'error': f'集計エラー: {e}'})
+        if path.startswith('/api/barcode-delivery/customers'):
+            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
+            if not allowed:
+                return self.reply(403, {'error': '権限がありません。現場または管理者権限が必要です。'})
+            try:
+                import barcode_delivery
+                from urllib.parse import parse_qs, urlparse
+                qs = parse_qs(urlparse(self.path).query)
+                q = qs.get('q', [''])[0].strip()
+                dtype = qs.get('type', ['all'])[0].strip()
+                car = qs.get('car', [''])[0].strip()
+                weekday = qs.get('weekday', [''])[0].strip()
+                try:
+                    limit = int(qs.get('limit', ['500'])[0])
+                except ValueError:
+                    limit = 500
+                try:
+                    offset = int(qs.get('offset', ['0'])[0])
+                except ValueError:
+                    offset = 0
+                result = barcode_delivery.get_delivery_customers_list(q=q, delivery_type=dtype, car=car, weekday=weekday, limit=limit, offset=offset)
+                return self.reply(200, result)
+            except Exception as e:
+                return self.reply(500, {'error': f'顧客一覧取得エラー: {e}'})
+        if path == '/api/barcode-delivery/sync':
+            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
+            if not allowed:
+                return self.reply(403, {'error': '権限がありません。'})
+            try:
+                import barcode_delivery
+                result = barcode_delivery.sync_customers_from_mdb()
+                return self.reply(200, result)
+            except Exception as e:
+                return self.reply(500, {'error': f'同期エラー: {e}'})
         if path.startswith('/api/barcode-delivery'):
             allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
             if not allowed:

@@ -3,6 +3,191 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   let historyList = [];
+  let allCustomers = [];
+  let filteredCustomers = [];
+  let displayLimit = 100;
+  let isCustomersLoaded = false;
+
+  function switchTab(target) {
+    const scanTab = $('#bdelivtab-scan');
+    const listTab = $('#bdelivtab-list');
+    const scanView = $('#bdelivscanview');
+    const listView = $('#bdelivcustomersview');
+
+    if (target === 'list') {
+      if (scanTab) { scanTab.className = 'quiet'; }
+      if (listTab) { listTab.className = 'primary'; }
+      if (scanView) scanView.hidden = true;
+      if (listView) listView.hidden = false;
+      if (!isCustomersLoaded) {
+        loadCustomers();
+      }
+    } else {
+      if (scanTab) { scanTab.className = 'primary'; }
+      if (listTab) { listTab.className = 'quiet'; }
+      if (scanView) scanView.hidden = false;
+      if (listView) listView.hidden = true;
+      const input = $('#bdelivcode');
+      if (input) setTimeout(() => input.focus(), 50);
+    }
+  }
+
+  async function loadCustomers(forceSync = false) {
+    const countEl = $('#bdelivcustcount');
+    const tbody = $('#bdelivcustbody');
+    const syncStatus = $('#bdelivcustsyncstatus');
+
+    if (countEl) countEl.textContent = forceSync ? 'Accessから同期中...' : '顧客一覧を読み込み中...';
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:30px;color:#666;">読み込み中...</td></tr>`;
+    }
+
+    try {
+      if (forceSync) {
+        if (syncStatus) syncStatus.textContent = 'Accessからデータを取得中...';
+        const sRes = await api('/api/barcode-delivery/sync');
+        if (!sRes.ok) {
+          throw new Error(sRes.message || '同期に失敗しました');
+        }
+        if (syncStatus) syncStatus.textContent = `同期完了: ${sRes.count || 0}件 (${sRes.updatedAt || ''})`;
+      }
+
+      // Fetch all cached customers (up to 20000)
+      const res = await api('/api/barcode-delivery/customers?limit=20000');
+      if (!res.ok) {
+        throw new Error(res.message || 'データ取得エラー');
+      }
+
+      allCustomers = res.customers || [];
+      isCustomersLoaded = true;
+
+      // Populate filter dropdowns if provided
+      setupDropdowns(res.cars || [], res.weekdays || []);
+
+      applyCustomerFilter();
+    } catch (err) {
+      if (countEl) countEl.textContent = '読み込み失敗';
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:30px;color:#c62828;">読み込みに失敗しました: ${esc(err.message || err)}</td></tr>`;
+      }
+    }
+  }
+
+  function setupDropdowns(cars, weekdays) {
+    const carSel = $('#bdelivcustcar');
+    const wdaySel = $('#bdelivcustwday');
+
+    if (carSel && carSel.options.length <= 1) {
+      const current = carSel.value;
+      carSel.innerHTML = '<option value="">すべての号車</option>';
+      cars.forEach(c => {
+        if (!c) return;
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = c;
+        if (c === current) opt.selected = true;
+        carSel.appendChild(opt);
+      });
+    }
+
+    if (wdaySel && wdaySel.options.length <= 1) {
+      const current = wdaySel.value;
+      wdaySel.innerHTML = '<option value="">すべての曜日</option>';
+      weekdays.forEach(w => {
+        if (!w) return;
+        const opt = document.createElement('option');
+        opt.value = w;
+        opt.textContent = w;
+        if (w === current) opt.selected = true;
+        wdaySel.appendChild(opt);
+      });
+    }
+  }
+
+  function applyCustomerFilter() {
+    const q = ($('#bdelivcustsearch')?.value || '').trim().toLowerCase();
+    const type = $('#bdelivcusttype')?.value || 'all';
+    const car = $('#bdelivcustcar')?.value || '';
+    const wday = $('#bdelivcustwday')?.value || '';
+
+    const tokens = q ? q.split(/\s+/).filter(Boolean) : [];
+
+    filteredCustomers = allCustomers.filter(c => {
+      // 1. Delivery type
+      if (type === 'regular' && c.isNoDelivery) return false;
+      if (type === 'delivery_only' && !c.isNoDelivery) return false;
+
+      // 2. Car / cycle
+      if (car && c.cycle !== car) return false;
+
+      // 3. Weekday
+      if (wday && c.weekday !== wday) return false;
+
+      // 4. Search query tokens
+      if (tokens.length) {
+        const text = (c.name + ' ' + c.code).toLowerCase();
+        for (const tok of tokens) {
+          if (!text.includes(tok)) return false;
+        }
+      }
+
+      return true;
+    });
+
+    displayLimit = 100;
+    renderCustomerTable();
+  }
+
+  function renderCustomerTable() {
+    const countEl = $('#bdelivcustcount');
+    const tbody = $('#bdelivcustbody');
+    const moreWrap = $('#bdelivcustmorewrap');
+
+    if (countEl) {
+      const total = allCustomers.length;
+      const count = filteredCustomers.length;
+      countEl.innerHTML = `全 <strong>${total.toLocaleString()}</strong> 件中 <strong>${count.toLocaleString()}</strong> 件を表示`;
+    }
+
+    if (!tbody) return;
+
+    if (!filteredCustomers.length) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:36px;color:#888;">条件に該当する顧客は見つかりませんでした。</td></tr>`;
+      if (moreWrap) moreWrap.hidden = true;
+      return;
+    }
+
+    const slice = filteredCustomers.slice(0, displayLimit);
+    const rowsHtml = slice.map(c => {
+      const isNoDeliv = c.isNoDelivery;
+      const typeBadge = isNoDeliv
+        ? `<span style="background:#fff3e0;color:#e65100;padding:3px 8px;border-radius:4px;font-weight:bold;font-size:12px;border:1px solid #ffe082;">📦 送り便</span>`
+        : `<span style="background:#e8f5e9;color:#1b5e20;padding:3px 8px;border-radius:4px;font-weight:bold;font-size:12px;border:1px solid #c8e6c9;">🚚 自社便集配</span>`;
+
+      const dayColor = isNoDeliv ? '#78909c' : '#1b5e20';
+      const carColor = isNoDeliv ? '#d84315' : '#0d47a1';
+
+      return `
+        <tr style="border-bottom:1px solid #eee;transition:background 0.15s;" onmouseover="this.style.background='#f8fafd'" onmouseout="this.style.background='transparent'">
+          <td style="padding:10px 14px;font-family:monospace;font-weight:bold;color:#555;">${esc(c.code)}</td>
+          <td style="padding:10px 14px;font-weight:bold;color:#222;">${esc(c.name)}</td>
+          <td style="padding:10px 14px;text-align:center;">${typeBadge}</td>
+          <td style="padding:10px 14px;text-align:center;font-weight:bold;color:${dayColor};font-size:14px;">
+            ${esc(c.weekday || '—')}
+          </td>
+          <td style="padding:10px 14px;text-align:center;font-weight:900;color:${carColor};font-size:14px;">
+            ${esc(c.cycle || '—')}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    tbody.innerHTML = rowsHtml;
+
+    if (moreWrap) {
+      moreWrap.hidden = filteredCustomers.length <= displayLimit;
+    }
+  }
 
   async function handleBarcodeSubmit(code) {
     code = (code || '').trim();
@@ -246,6 +431,76 @@
         if (input) {
           input.value = '';
           input.focus();
+        }
+      });
+    }
+
+    // Tab buttons
+    const tabScan = $('#bdelivtab-scan');
+    const tabList = $('#bdelivtab-list');
+    const linkToList = $('#bdelivlink-tolist');
+
+    if (tabScan && !tabScan.dataset.bound) {
+      tabScan.dataset.bound = '1';
+      tabScan.addEventListener('click', () => switchTab('scan'));
+    }
+    if (tabList && !tabList.dataset.bound) {
+      tabList.dataset.bound = '1';
+      tabList.addEventListener('click', () => switchTab('list'));
+    }
+    if (linkToList && !linkToList.dataset.bound) {
+      linkToList.dataset.bound = '1';
+      linkToList.addEventListener('click', e => {
+        e.preventDefault();
+        switchTab('list');
+      });
+    }
+
+    // Customer filters
+    const searchInput = $('#bdelivcustsearch');
+    let searchDebounceTimer = null;
+    if (searchInput && !searchInput.dataset.bound) {
+      searchInput.dataset.bound = '1';
+      searchInput.addEventListener('input', () => {
+        clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => applyCustomerFilter(), 120);
+      });
+    }
+
+    const typeSel = $('#bdelivcusttype');
+    const carSel = $('#bdelivcustcar');
+    const wdaySel = $('#bdelivcustwday');
+
+    [typeSel, carSel, wdaySel].forEach(sel => {
+      if (sel && !sel.dataset.bound) {
+        sel.dataset.bound = '1';
+        sel.addEventListener('change', () => applyCustomerFilter());
+      }
+    });
+
+    // More button
+    const moreBtn = $('#bdelivcustmore');
+    if (moreBtn && !moreBtn.dataset.bound) {
+      moreBtn.dataset.bound = '1';
+      moreBtn.addEventListener('click', () => {
+        displayLimit += 100;
+        renderCustomerTable();
+      });
+    }
+
+    // Sync button
+    const syncBtn = $('#bdelivsyncbtn');
+    if (syncBtn && !syncBtn.dataset.bound) {
+      syncBtn.dataset.bound = '1';
+      syncBtn.addEventListener('click', async () => {
+        syncBtn.disabled = true;
+        const origText = syncBtn.textContent;
+        syncBtn.textContent = '🔄 同期中...';
+        try {
+          await loadCustomers(true);
+        } finally {
+          syncBtn.disabled = false;
+          syncBtn.textContent = origText;
         }
       });
     }
