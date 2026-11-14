@@ -824,7 +824,14 @@ body.catalog-kintai main>header .headactions{display:none}
 .kintai-exec-table { width: 100%; }
 .kintai-exec-table td { padding: 3px 4px; }
 .kintai-exec-table input { width: 100%; box-sizing: border-box; padding: 4px 6px; border: 1px solid #bdd3c2; border-radius: 4px; font: inherit; }
-.exec-report-print {width:190mm;margin:0 auto;color:#111;font:8pt/1.35 "BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif}
+.exec-report-print {width:190mm;margin:0 auto;color:#111;font:8pt/1.35 "BIZ UDPGothic","Yu Gothic UI","Yu Gothic",Meiryo,sans-serif;box-sizing:border-box}
+.exec-report-print.is-a3 {width:277mm;font-size:10pt;line-height:1.4}
+.exec-report-print.is-a3 h2 {font-size:15pt;margin:0 0 3mm;padding-bottom:1.5mm}
+.exec-report-print.is-a3 h3 {font-size:11.5pt;margin:3mm 0 1.5mm;padding:1.1mm 2mm}
+.exec-report-print.is-a3 table {font-size:9pt;line-height:1.35;margin:0 0 2mm}
+.exec-report-print.is-a3 th,.exec-report-print.is-a3 td {padding:1.1mm 1.5mm}
+.exec-report-print.is-a3 .exec-inventory-table {font-size:8pt}
+.exec-report-print.is-a3 .exec-contracts-grid {gap:4mm}
 .exec-report-print h2 {margin:0 0 2mm;font-size:12pt;border-bottom:1.5pt solid #1f4f37;padding-bottom:1mm}
 .exec-report-print h3 {margin:2.5mm 0 1mm;font-size:9pt;background:#e2efda;padding:.7mm 1.5mm;border-left:3pt solid #1f4f37;print-color-adjust:exact}
 .exec-report-print table {width:100%;border-collapse:collapse;margin:0 0 1mm;font-size:7.5pt;line-height:1.35}

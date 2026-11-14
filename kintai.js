@@ -535,7 +535,8 @@
     const maxVal = Math.max(...days.map(d => d.count || 0), 1);
     const yMax = Math.ceil(maxVal * 1.15);
 
-    const padL = 42, padR = 24, padT = 24, padB = 28;
+    const isWide = width >= 900;
+    const padL = isWide ? 48 : 42, padR = isWide ? 28 : 24, padT = isWide ? 26 : 24, padB = isWide ? 30 : 28;
     const plotW = width - padL - padR;
     const plotH = height - padT - padB;
 
@@ -549,7 +550,7 @@
       const yPos = getY(v);
       gridLines += `
         <line x1="${padL}" y1="${yPos.toFixed(1)}" x2="${width - padR}" y2="${yPos.toFixed(1)}" stroke="#e0e0e0" stroke-width="1" stroke-dasharray="${step === 0 ? 'none' : '3,3'}" />
-        <text x="${padL - 6}" y="${(yPos + 3.5).toFixed(1)}" font-size="9" fill="#757575" text-anchor="end">${v}</text>
+        <text x="${padL - 6}" y="${(yPos + 3.5).toFixed(1)}" font-size="${isWide ? '10' : '9'}" fill="#757575" text-anchor="end">${v}</text>
       `;
     }
 
@@ -576,15 +577,17 @@
       const pct = ((d.count / total) * 100).toFixed(1);
       const isPeak = d.count === maxVal && maxVal > 0;
       const dotColor = isPeak ? '#d32f2f' : '#2e7d32';
-      const dotR = isPeak ? '4' : '3';
+      const dotR = isWide ? (isPeak ? '4.5' : '3.5') : (isPeak ? '4' : '3');
+      const valFontSize = isWide ? '10' : '8.5';
+      const dayFontSize = isWide ? '10' : '8.5';
 
       dotsAndLabels += `
         <g class="stat-dot">
           <circle cx="${cx}" cy="${cy}" r="${dotR}" fill="${dotColor}" stroke="#fff" stroke-width="1.5">
             <title>${d.label} (${d.weekday}): ${d.count}枚 (${pct}%)</title>
           </circle>
-          <text x="${cx}" y="${(cy - 6).toFixed(1)}" font-size="8.5" font-weight="${isPeak ? 'bold' : 'normal'}" fill="${dotColor}" text-anchor="middle">${d.count}</text>
-          <text x="${cx}" y="${height - 10}" font-size="8.5" fill="${d.weekday === '日' ? '#c62828' : (d.weekday === '土' ? '#1565c0' : '#424242')}" text-anchor="middle">${d.label.split('/')[1] || d.label}</text>
+          <text x="${cx}" y="${(cy - (isWide ? 7 : 6)).toFixed(1)}" font-size="${valFontSize}" font-weight="${isPeak ? 'bold' : 'normal'}" fill="${dotColor}" text-anchor="middle">${d.count}</text>
+          <text x="${cx}" y="${height - (isWide ? 10 : 9)}" font-size="${dayFontSize}" fill="${d.weekday === '日' ? '#c62828' : (d.weekday === '土' ? '#1565c0' : '#424242')}" text-anchor="middle">${d.label.split('/')[1] || d.label}</text>
         </g>
       `;
     });
@@ -602,8 +605,8 @@
         <polygon points="${areaPoints}" fill="url(#orderGrad)" />
         <polyline points="${linePoints}" fill="none" stroke="#2e7d32" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
         ${dotsAndLabels}
-        <text x="${padL}" y="14" font-size="9.5" font-weight="bold" fill="#2e7d32">■ 指示書枚数推移（折れ線・枚数ラベル）</text>
-        <text x="${width - padR}" y="14" font-size="9" fill="#757575" text-anchor="end">※下段は日付(日) / ピーク赤</text>
+        <text x="${padL}" y="${isWide ? 16 : 14}" font-size="${isWide ? '11' : '9.5'}" font-weight="bold" fill="#2e7d32">■ 指示書枚数推移（折れ線・枚数ラベル）</text>
+        <text x="${width - padR}" y="${isWide ? 16 : 14}" font-size="${isWide ? '10' : '9'}" fill="#757575" text-anchor="end">※下段は日付(日) / ピーク赤</text>
       </svg>
     `;
   }
@@ -623,7 +626,7 @@
       return `<td class="exec-center">${esc(d.label || '')}</td>
         <td class="exec-center" style="${wColor}">${esc(d.weekday || '')}</td>
         <td class="exec-num">${Number(d.count || 0).toLocaleString('ja-JP')}枚</td>
-        <td class="exec-center" style="font-size:0.9em;color:#555;">${pct}</td>`;
+        <td class="exec-center" style="color:#555;">${pct}</td>`;
     };
 
     let rowsHtml = '';
@@ -636,7 +639,7 @@
     const avg = days.length > 0 ? (total / days.length).toFixed(1) : '0';
 
     return `
-      <table class="exec-orders-table" style="width:100%;margin-top:8px;border-collapse:collapse;font-size:11px;">
+      <table class="exec-orders-table" style="width:100%;margin-top:6px;border-collapse:collapse;">
         <thead>
           <tr style="background:#f1f8e9;">
             <th style="width:13%">日付</th><th style="width:7%">曜日</th><th style="width:18%">指示書枚数</th><th style="width:12%">割合</th>
@@ -923,7 +926,7 @@
           <section class="exec-orders-print" style="margin-top:14px;page-break-inside:avoid;">
             <h3>5. 指示書処理枚数（${y}年${m}月度　合計: ${t.total.toLocaleString('ja-JP')}枚）</h3>
             <div style="margin-bottom:8px;">
-              ${buildOrderStatsSvg(t, 700, 140)}
+              ${buildOrderStatsSvg(t, 980, 150)}
             </div>
             ${buildOrderStatsTableHtml(t)}
           </section>
@@ -934,19 +937,26 @@
 
   async function fitExecReportToPage(report) {
     await document.fonts.ready;
+    const requested = $('#kintaiexecpaper')?.value || 'A3';
+    const paper = requested === 'A4' ? 'A4' : 'A3';
+    const isA3 = paper === 'A3';
+    report.classList.toggle('is-a3', isA3);
+
+    const widthMm = isA3 ? 277 : 190;
+    const heightMm = isA3 ? 390 : 265;
+
     const measure = report.cloneNode(true);
-    measure.style.cssText = 'position:fixed;left:-10000px;top:0;visibility:hidden;width:190mm;zoom:1';
+    measure.classList.toggle('is-a3', isA3);
+    measure.style.cssText = `position:fixed;left:-10000px;top:0;visibility:hidden;width:${widthMm}mm;zoom:1`;
     document.body.append(measure);
     try {
-      const pixelsPerMm = measure.getBoundingClientRect().width / 190;
-      const a4Scale = Math.min(1, 265 * pixelsPerMm / measure.getBoundingClientRect().height);
-      const requested = $('#kintaiexecpaper').value;
-      const paper = requested === 'auto' ? (a4Scale < 0.8 ? 'A3' : 'A4') : requested;
-      const width = paper === 'A3' ? 277 : 190;
-      const height = paper === 'A3' ? 380 : 265;
-      measure.style.width = `${width}mm`;
-      const scale = Math.min(1, height * pixelsPerMm / measure.getBoundingClientRect().height);
-      report.style.width = `${width}mm`;
+      const pixelsPerMm = measure.getBoundingClientRect().width / widthMm;
+      const contentHeight = measure.getBoundingClientRect().height;
+      const targetHeightPx = heightMm * pixelsPerMm;
+      const scale = contentHeight > targetHeightPx
+        ? Math.min(1, targetHeightPx / contentHeight)
+        : 1;
+      report.style.width = `${widthMm}mm`;
       report.style.zoom = String(scale);
       return paper;
     } finally {
@@ -968,7 +978,8 @@
       styleEl.id = 'bihin-count-print-page-css';
       document.head.appendChild(styleEl);
     }
-    styleEl.textContent = `@page exec-report-page{size:${paper} portrait;margin:10mm}`;
+    const marginMm = paper === 'A3' ? '10mm' : '8mm';
+    styleEl.textContent = `@page exec-report-page{size:${paper} portrait;margin:${marginMm}}`;
     let cleaned = false;
     const done = () => {
       if (cleaned) return;

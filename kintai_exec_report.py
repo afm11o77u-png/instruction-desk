@@ -549,7 +549,7 @@ def workbook(report: dict) -> bytes:
         rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(cells)}</row>')
         merges.extend([f'A{rn}:C{rn}', f'D{rn}:F{rn}', f'G{rn}:{_col(NCOLS - 1)}{rn}'])
 
-    paper_size = '8' if rn > 55 else '9'  # 記載が多い月はA3、それ以外はA4。
+    paper_size = '8'  # 幹部会議報告書は基本的にA3で大判印刷。
     widths = [12, 24, 10, 10, 10, 14, 10, 14, 10, 14, 10, 14]
     cols = ''.join(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>' for i, w in enumerate(widths, 1))
     sheet_xml = (
