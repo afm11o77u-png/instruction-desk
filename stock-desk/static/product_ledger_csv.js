@@ -6247,6 +6247,27 @@
     </div>`
   }
 
+  function commitErrorBannerHtml(st){
+    if(!st.commitError)return ''
+    return `<div class="notice error-banner" style="background:#fee2e2;border:2px solid #ef4444;color:#991b1b;padding:14px 18px;border-radius:8px;margin:12px 0;" role="alert">
+      <div style="font-weight:bold;font-size:1.15em;display:flex;align-items:center;gap:8px;">
+        <span>⚠️</span><span>【取り込みできませんでした】</span>
+      </div>
+      <p style="margin:8px 0 0 0;font-size:1.05em;font-weight:bold;line-height:1.5;">理由: ${esc(st.commitError)}</p>
+      <p class="excelhint" style="margin:6px 0 0 0;color:#7f1d1d;">未解決の項目を解消するか、選択を反映して再照合してからもう一度お試しください。</p>
+    </div>`
+  }
+
+  function commitSuccessBannerHtml(st){
+    if(!st.result)return ''
+    return `<div class="notice success-banner" style="background:#dcfce7;border:2px solid #22c55e;color:#166534;padding:14px 18px;border-radius:8px;margin:12px 0;" role="status">
+      <div style="font-weight:bold;font-size:1.15em;display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span>✅</span><span>【取り込み結果：登録が完了しました】</span>
+      </div>
+      ${resultHtml(st)}
+    </div>`
+  }
+
   /** 要確認を「理由×品番」にまとめる（1グループ1操作）。 */
   function openingReviewGroups(st){
     const os=st.preview&&st.preview.openingStock
@@ -7110,11 +7131,12 @@
           ${sourceRowsPanelHtml(st)}`):''
     dlg.innerHTML=`${busyBarHtml(st)}<div class="dialoghead"><h2>${esc(title)}${busyPillHtml(st)}</h2><button type="button" id="plClose" class="quiet" ${st.busy?'disabled':''}>閉じる</button></div>
       <div class="dialogbody legacy-csv-detail-body">
+        ${commitErrorBannerHtml(st)}
+        ${commitSuccessBannerHtml(st)}
         <p class="merge-lead">${lead}</p>
         ${filePickHtml(st)}
         ${historyBlock(st)}
         ${previewBody}
-        ${resultHtml(st)}
       </div>`
     if(typeof dlg.showModal==='function'&&!dlg.open)dlg.showModal()
     bindDialog()
@@ -8487,7 +8509,7 @@
         if(!confirm(summary))return
         try{assertSelectedUploads(st)}catch(e){st.toast(apiErrorMessage(e,OVERSIZE_MSG));return}
       }
-      st.busy=true;st.progressLabel='登録処理中…';paintDialog()
+      st.busy=true;st.progressLabel='登録処理中…';st.commitError='';paintDialog()
       try{
         if(!st.commitToken)st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         const commitBody=previewPayload(st)
@@ -8496,21 +8518,32 @@
         commitBody.token=st.commitToken
         st.result=await st.api('/api/product-ledger-csv/commit',commitBody)
         clearDraft(st)
+        st.commitError=''
         st.commitToken=`pl-${Date.now()}-${Math.random().toString(36).slice(2,10)}`
         if(typeof st.boot==='function')await st.boot()
         st.toast(isOpeningMode(st)?'初期在庫の登録が完了しました':'商品登録が完了しました（在庫は書いていません）')
       }catch(e){
+        let msg = apiErrorMessage(e, '登録に失敗しました。登録は完了していません。')
         if(e&&e.payload&&(e.payload.code==='stale_preview'||e.payload.code==='stale_files')){
-          st.toast(e.payload.code==='stale_files'
+          msg = (e.payload.code==='stale_files'
             ?'選んだJSONが差し替わっています。もう一度照合してください。'
             :'データが変わったため、もう一度照合してください。')
           st.preview=null
         }else if(e&&e.payload&&e.payload.code==='backup_failed'){
-          st.toast(apiErrorMessage(e,'登録前のバックアップに失敗したため、登録を中止しました'))
-        }else st.toast(apiErrorMessage(e,'登録に失敗しました。登録は完了していません。'))
+          msg = apiErrorMessage(e,'登録前のバックアップに失敗したため、登録を中止しました')
+        }
+        st.commitError = msg
+        st.toast(msg)
+      }finally{
+        st.progressLabel=''
+        st.busy=false
+        stopBusyTimer(st)
+        paintDialog({preserveScroll:false})
+        const dlg=document.getElementById('dialog')
+        if(dlg&&dlg.querySelector('.legacy-csv-detail-body')){
+          dlg.querySelector('.legacy-csv-detail-body').scrollTop=0
+        }
       }
-      st.progressLabel=''
-      st.busy=false;paintDialog()
     }
   }
 
@@ -8523,6 +8556,7 @@
     st.actorName=opts.actorName||''
     st.open=true
     st.result=null
+    st.commitError=''
     st.previewError=''
     st.progressLabel=''
     // 毎回段階選択から（閉じたあとも標準フローを保つ）

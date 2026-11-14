@@ -13220,17 +13220,31 @@ def commit_preview(c, body, *, db_path=None):
             'サイズ差だけの行は要確認ではありません。品番ごとの比較で決定してください。'
         )
     # 加工名不足などの真の要確認だけブロック（本体不明でサービス化済みの行は除く）
-    blocking_review = [
-        r for r in review_rows
-        if not (r.get('product') or {}).get('processingServiceProduct')
-        and not (
-            r.get('garmentBodyReviewOnly')
-            and (r.get('processingService') or {}).get('identifiable')
-        )
-    ]
+    phase = resolve_product_phase(body) if mode == IMPORT_MODE_PRODUCTS else ''
+    blocking_review = []
+    for r in review_rows:
+        if r.get('canCommit'):
+            continue
+        prod = r.get('product') or {}
+        if prod.get('processingServiceProduct'):
+            continue
+        if r.get('garmentBodyReviewOnly') and (r.get('processingService') or {}).get('identifiable'):
+            continue
+        if phase == PHASE_PARTS:
+            if r.get('phasePartsOnly') or r.get('registerServiceWithoutCustomer'):
+                continue
+            cat = stock.text(prod.get('category') or prod.get('proposedCategory') or '')
+            if cat in (stock.CATEGORY_PARTS, stock.CATEGORY_PROCESS_SERVICE):
+                continue
+        blocking_review.append(r)
     if blocking_review and not body.get('allowCommitWithReview'):
+        sample_reasons = []
+        for r in blocking_review[:3]:
+            rs = [stock.text(x) for x in (r.get('reasons') or []) if stock.text(x)]
+            sample_reasons.append(f"行{r.get('rowNo')}: {', '.join(rs) or '未確認'}")
+        detail_msg = f"（例: {' / '.join(sample_reasons)}）" if sample_reasons else ""
         raise ValueError(
-            f'要確認が {len(blocking_review)} 件残っています。'
+            f'要確認が {len(blocking_review)} 件残っています。{detail_msg}'
             f'未解決の行を黙って除外せず、候補を選ぶか解決してから確定してください。'
         )
     register_opening = bool(preview.get('registerOpeningStock')) and mode != IMPORT_MODE_PRODUCTS
