@@ -17,7 +17,7 @@ def normalize_name(name: str) -> str:
     if not name:
         return ""
     # Remove whitespace, full-width whitespace, brackets, company symbols
-    s = re.sub(r"[\s\u3000㈱㈲（）\(\)株式会社有限会社]", "", name)
+    s = re.sub(r"[\s\u3000㈱㈲（）\(\)株式会社有限会社]", "", str(name))
     return s.lower()
 
 def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
@@ -39,29 +39,51 @@ def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
         # 2. Normalized match across all shipments
         norm_target = normalize_name(customer_name)
         cur.execute("SELECT customer, weekday, time_band, car, method FROM shipments")
-        for r_name, r_w, r_t, r_c, r_m in cur.fetchall():
+        all_shipments = cur.fetchall()
+        for r_name, r_w, r_t, r_c, r_m in all_shipments:
             if normalize_name(r_name) == norm_target:
                 conn.close()
                 return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
             
         # 3. Substring match
         if len(norm_target) >= 3:
-            cur.execute("SELECT customer, weekday, time_band, car, method FROM shipments")
-            for r_name, r_w, r_t, r_c, r_m in cur.fetchall():
+            for r_name, r_w, r_t, r_c, r_m in all_shipments:
                 r_norm = normalize_name(r_name)
                 if r_norm and (norm_target in r_norm or r_norm in norm_target):
                     conn.close()
                     return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
+
+        # 4. Token-based match (e.g. "光塩東館調理 玉置" -> check each chunk)
+        tokens = [p for p in re.split(r"[\s\u3000・_]+", customer_name) if len(p) >= 2]
+        for tok in tokens:
+            t_norm = normalize_name(tok)
+            if len(t_norm) >= 2:
+                for r_name, r_w, r_t, r_c, r_m in all_shipments:
+                    r_norm = normalize_name(r_name)
+                    if t_norm in r_norm or (len(r_norm) >= 3 and r_norm in t_norm):
+                        conn.close()
+                        return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
+
+        # 5. Prefix match on first non-department chunk
+        first_chunk = tokens[0] if tokens else customer_name
+        clean_tok = re.sub(r"[調理販売食堂工場店舗売店厨房本部支店男女]+$", "", normalize_name(first_chunk))
+        for pfx_len in (4, 3, 2):
+            if len(clean_tok) >= pfx_len:
+                pfx = clean_tok[:pfx_len]
+                for r_name, r_w, r_t, r_c, r_m in all_shipments:
+                    if pfx in normalize_name(r_name):
+                        conn.close()
+                        return {"weekday": r_w or "", "timeBand": r_t or "", "car": r_c or "", "method": r_m or ""}
                     
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
         
     return {}
 
 def lookup_barcode(code: str) -> dict:
     """Lookup MasterCode in db3.mdb and combine with shipments info."""
-    code = str(code).strip()
+    code = str(code or "").strip()
     if not code:
         return {"ok": False, "found": False, "message": "バーコード番号が空です。"}
     
@@ -75,8 +97,7 @@ def lookup_barcode(code: str) -> dict:
             "message": f"Accessデータベースファイルが見つかりません。({MDB_PATH})"
         }
     
-    # PowerShell script to query db3.mdb
-    # Note: Using parameters or escaped string to avoid SQL injection
+    # Clean code to avoid SQL injection
     clean_code = re.sub(r"[^0-9a-zA-Z_\-\/]", "", code)
     if not clean_code:
         return {"ok": False, "found": False, "message": "バーコード番号の形式が正しくありません。"}
@@ -112,22 +133,22 @@ WHERE s.MasterCode = '{clean_code}'
         $r = $dt.Rows[0]
         $res = @{{
             found = $true
-            masterCode = [string]$r["MasterCode"]
-            customer = [string]$r["顧客名"]
-            customerCode = [string]$r["顧客コード"]
-            cycle = [string]$r["集配サイクル"]
-            cycleFlag = [string]$r["集配曜日フラグ"]
-            itemName = if ($r["ラベル表示用_商品名"]) {{ [string]$r["ラベル表示用_商品名"] }} else {{ [string]$r["商品名"] }}
-            size = [string]$r["サイズ"]
-            department = [string]$r["部署名"]
-            person = [string]$r["個人名"]
+            masterCode = "" + $r["MasterCode"]
+            customer = "" + $r["顧客名"]
+            customerCode = "" + $r["顧客コード"]
+            cycle = "" + $r["集配サイクル"]
+            cycleFlag = "" + $r["集配曜日フラグ"]
+            itemName = if ($r["ラベル表示用_商品名"]) {{ "" + $r["ラベル表示用_商品名"] }} elseif ($r["商品名"]) {{ "" + $r["商品名"] }} else {{ "" }}
+            size = "" + $r["サイズ"]
+            department = "" + $r["部署名"]
+            person = "" + $r["個人名"]
         }}
         $res | ConvertTo-Json -Compress
     }} else {{
         @{{ found = $false }} | ConvertTo-Json -Compress
     }}
 }} catch {{
-    @{{ found = $false; error = $_.Exception.Message }} | ConvertTo-Json -Compress
+    @{{ found = $false; error = "" + $_.Exception.Message }} | ConvertTo-Json -Compress
 }} finally {{
     $conn.Close()
 }}
@@ -140,7 +161,7 @@ WHERE s.MasterCode = '{clean_code}'
             text=True,
             timeout=10
         )
-        out = p.stdout.strip()
+        out = (p.stdout or "").strip()
         if not out:
             return {"ok": False, "found": False, "message": "検索処理から応答がありませんでした。"}
             
@@ -153,8 +174,10 @@ WHERE s.MasterCode = '{clean_code}'
             return {"ok": True, "found": False, "masterCode": code, "message": msg}
             
         # Found in db3.mdb! Combine with shipments table
-        customer_name = data.get("customer", "").strip()
-        customer_code = data.get("customerCode", "").strip()
+        customer_name = str(data.get("customer") or "").strip()
+        customer_code = str(data.get("customerCode") or "").strip()
+        cycle_car = str(data.get("cycle") or "").strip()
+        
         ship_info = get_shipment_info(customer_name, customer_code)
         
         weekday = ship_info.get("weekday") or ""
@@ -163,23 +186,23 @@ WHERE s.MasterCode = '{clean_code}'
         method = ship_info.get("method") or ""
         
         # If shipments table didn't have car/cycle, fallback to M_顧客マスタ
-        if not car and data.get("cycle"):
-            car = data.get("cycle").strip()
+        if not car and cycle_car:
+            car = cycle_car
             
         result = {
             "ok": True,
             "found": True,
-            "masterCode": data.get("masterCode") or code,
+            "masterCode": str(data.get("masterCode") or code).strip(),
             "customer": customer_name,
             "customerCode": customer_code,
             "weekday": weekday,
             "car": car,
             "timeBand": time_band,
             "method": method,
-            "itemName": data.get("itemName") or "",
-            "size": data.get("size") or "",
-            "department": data.get("department") or "",
-            "person": data.get("person") or ""
+            "itemName": str(data.get("itemName") or "").strip(),
+            "size": str(data.get("size") or "").strip(),
+            "department": str(data.get("department") or "").strip(),
+            "person": str(data.get("person") or "").strip()
         }
         
         # Save to cache
