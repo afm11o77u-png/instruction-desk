@@ -237,12 +237,13 @@ let kintaiSection='attendance';
 function kintaiShiftOnly(){return currentUser?.role==='floor3'&&!(currentUser.manage||currentUser.overview||currentUser.mark_kintai)}
 function normalizeKintaiSection(section){
   if(section==='crimp')return 'crimp';
+  if(section==='processed-stats')return 'processed-stats';
   if(section==='shift'||kintaiShiftOnly())return 'shift';
   if(section==='bihin')return 'bihin';
   if(section==='register')return 'register';
   if(section==='summary')return 'summary';
   if(section==='daily')return 'daily';
-  if(['tot','leave','report','processed-stats'].includes(section))return section;
+  if(['tot','leave','report'].includes(section))return section;
   return 'attendance';
 }
 function kintaiSectionFromLocation(){
@@ -297,7 +298,7 @@ async function openKintaiFromLocation(){
 }
 function syncKintaiNav(section){
   kintaiSection=normalizeKintaiSection(section);
-  document.querySelectorAll('#kintainav [data-kintai-section]').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp'].includes(b.dataset.kintaiSection)});
+  document.querySelectorAll('#kintainav [data-kintai-section]').forEach(b=>{b.classList.toggle('active',b.dataset.kintaiSection===kintaiSection);b.hidden=kintaiShiftOnly()&&!['shift','crimp','processed-stats'].includes(b.dataset.kintaiSection)});
   document.querySelectorAll('#kintainav .kintai-nav-group').forEach(group=>{group.hidden=!group.querySelector('.nav:not([hidden])')});
   const att=$('#kintaiattendance');
   const daily=$('#kintaidaily');

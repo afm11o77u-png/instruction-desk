@@ -127,7 +127,7 @@
 <button type="button" id="kintaiexecaddslot">＋ 契約枠を追加</button>
 <button type="button" id="kintaiexecsave">契約枠を保存</button>
 <button type="button" class="primary" id="kintaiexecxlsx">幹部会議用Excel出力</button>
-<label>印刷用紙<select id="kintaiexecpaper"><option value="A3" selected>A3（標準・見やすい大判）</option><option value="A4">A4</option><option value="auto">自動</option></select></label>
+<label>印刷用紙<select id="kintaiexecpaper"><option value="A3" selected>A3横・左右2分割（標準）</option><option value="A4">A4縦</option></select></label>
 <button type="button" id="kintaiexecpdf">印刷 / PDF保存</button>
 <span id="kintaiexecstatus" class="kintaimeta" aria-live="polite"></span>
 </div>
@@ -151,8 +151,13 @@
 <div id="kintaiexecorders" style="margin-top:16px;"></div>
 </section>
 <div id="kintaiprocessedstats" hidden style="max-width:1100px;">
-<h3 class="kintai-section" style="margin-top:0;">処理済み指示書枚数</h3>
-<p class="kintaimeta">共有フォルダ（【指示書フォルダ】\処理済み）内の指示書ファイル数を集計し、月別および日別の処理枚数を表示します（2024年以降）。</p>
+<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
+  <div>
+    <h3 class="kintai-section" style="margin-top:0;">処理済み指示書枚数</h3>
+    <p class="kintaimeta" style="margin-bottom:0;">共有フォルダ（【指示書フォルダ】\処理済み）内の指示書ファイル数を集計し、月別および日別の処理枚数を表示します（2024年以降）。</p>
+  </div>
+  <div id="pstatsmedians" style="flex:none;margin-top:2px;"></div>
+</div>
 <div class="kintaifilters" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:12px 0;">
   <label>表示対象年<select id="pstatsyear" aria-label="表示対象年"></select></label>
   <button type="button" id="pstatsrefresh" class="quiet">↻ 最新情報に更新</button>
