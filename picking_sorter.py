@@ -267,9 +267,9 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.page_margins.bottom = 0.0
     ws.page_margins.header = 0.315
     ws.page_margins.footer = 0.315
-    ws.oddHeader.left.text = '&"-,Bold"&12 &D　&T'
-    ws.oddHeader.center.text = '&"-,Bold"&12 &A'
-    ws.oddHeader.right.text = None
+    ws.oddHeader.left.text = '&"-,太字"&11 &D　&T'
+    ws.oddHeader.center.text = f'&"-,太字"&14 {title}'
+    ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
 def _save_ishikari_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
@@ -408,9 +408,9 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     ws.page_margins.bottom = 0.0
     ws.page_margins.header = 0.315
     ws.page_margins.footer = 0.315
-    ws.oddHeader.left.text = '&"-,Bold"&12 &D　&T'
-    ws.oddHeader.center.text = '&"-,Bold"&12 &A'
-    ws.oddHeader.right.text = None
+    ws.oddHeader.left.text = '&"-,太字"&11 &D　&T'
+    ws.oddHeader.center.text = f'&"-,太字"&14 {title}'
+    ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
 def _save_report_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
