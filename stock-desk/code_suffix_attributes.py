@@ -712,6 +712,16 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             needsConfirm=False,
             note=note,
         )
+    norm_raw = unicodedata.normalize('NFKC', raw).strip()
+    if norm_raw in ('プリント', '刺繍', 'ネーム', '丈直し', '裾上げ') or norm_raw.endswith('加工') or norm_raw.endswith('刺繍'):
+        return _empty(
+            apply=False,
+            kind='processing',
+            baseCode='',
+            processingName=norm_raw,
+            needsConfirm=False,
+            note=note,
+        )
     return _empty(
         kind='unknown', needsConfirm=True, baseCode=raw,
         reason=f'品番「{raw}」の追加文字を属性に分けられません。',

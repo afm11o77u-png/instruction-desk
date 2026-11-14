@@ -7752,7 +7752,15 @@ def build_sku_groups(c, classified):
             continue
         if row.get('registerKindChoice') in ('部品・資材', '加工サービス'):
             continue
+        prod = row.get('product') or {}
+        cat = stock.text(prod.get('category') or prod.get('proposedCategory') or '')
+        if cat == stock.CATEGORY_PROCESS_SERVICE:
+            continue
+        if _row_is_service_only(row) or bool(_row_companion_service_name(row)) or row.get('phasePartsOnly'):
+            continue
         code = stock.text((row.get('csv') or {}).get('code'))
+        if code in ('プリント', '刺繍', 'ネーム', '丈直し', '裾上げ'):
+            continue
         if stock_product_merge.is_normal_product_code(code):
             by_code[code].append(row)
 
@@ -9265,6 +9273,9 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
+                if isinstance(row.get('suffixAttribute'), dict):
+                    row['suffixAttribute']['needsConfirm'] = False
+                    row['suffixAttribute']['reason'] = ''
 
             # 確定仕様 2: 十勝の加工+インナー外し（加工名: インナー外し / 仕入先: ㈱サーヴォ / 取扱顧客: よつ葉乳業㈱ / メモ: 十勝の加工）
             elif '十勝の加工' in raw_text or 'インナー外し' in raw_text:
@@ -9283,6 +9294,9 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
+                if isinstance(row.get('suffixAttribute'), dict):
+                    row['suffixAttribute']['needsConfirm'] = False
+                    row['suffixAttribute']['reason'] = ''
                 row['companionProcessingService'] = 'インナー外し'
                 row['processingService'] = {'serviceName': 'インナー外し', 'vendorName': '㈱サーヴォ'}
                 if isinstance(row.get('parenClassification'), dict):
@@ -9306,6 +9320,9 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
+                if isinstance(row.get('suffixAttribute'), dict):
+                    row['suffixAttribute']['needsConfirm'] = False
+                    row['suffixAttribute']['reason'] = ''
                 row['companionProcessingService'] = '袖リブ→平加工'
                 row['processingService'] = {'serviceName': '袖リブ→平加工', 'vendorName': '㈱サーヴォ'}
                 if isinstance(row.get('parenClassification'), dict):
@@ -9329,6 +9346,9 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
+                if isinstance(row.get('suffixAttribute'), dict):
+                    row['suffixAttribute']['needsConfirm'] = False
+                    row['suffixAttribute']['reason'] = ''
 
             # 確定仕様 5: プリント（加工名: プリント / 仕入先: (有)マークショップ / 取扱顧客: ㈱合同観光商事 ひまわり / 場所はメモ）
             elif code == 'プリント' or ('プリント' in raw_text and not any(nw in raw_text for nw in ('プリント無', 'プリントなし'))):
@@ -9352,6 +9372,9 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 row['canCommit'] = True
                 row['skuDecisionNeeded'] = False
                 row['reasons'] = []
+                if isinstance(row.get('suffixAttribute'), dict):
+                    row['suffixAttribute']['needsConfirm'] = False
+                    row['suffixAttribute']['reason'] = ''
 
             if ok and not _row_is_service_only(row) and not row.get('k2GarmentAsProduct'):
                 row['phasePartsOnly'] = True  # 衣服は作らず加工サービスだけ
@@ -12084,11 +12107,19 @@ def build_preview(c, body):
         if not attr.get('needsConfirm'):
             continue
         ps = row.get('processingService') or {}
+        prod = row.get('product') or {}
+        is_service_row = (
+            prod.get('category') == stock.CATEGORY_PROCESS_SERVICE
+            or row.get('companionProcessingService')
+            or row.get('phasePartsOnly')
+            or _row_is_service_only(row)
+        )
         if (
-            ps.get('isProcessingService')
-            and ps.get('identifiable')
-            and not ps.get('needsConfirm')
-        ) or row.get('k2UniformProduct') or ps.get('k2UniformProduct'):
+            (ps.get('isProcessingService') and ps.get('identifiable') and not ps.get('needsConfirm'))
+            or row.get('k2UniformProduct')
+            or ps.get('k2UniformProduct')
+            or is_service_row
+        ):
             # 加工として特定済み、またはK2製作の制服。品番欄の語を未知注記として止めない。
             reason = stock.text(attr.get('reason') or '')
             if reason:
