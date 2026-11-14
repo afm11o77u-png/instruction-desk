@@ -526,6 +526,137 @@
     });
   }
 
+  function buildOrderStatsSvg(targetMonth, width = 740, height = 180) {
+    if (!targetMonth || !targetMonth.days || !targetMonth.days.length) {
+      return '<div style="color:#888;font-size:12px;padding:12px;text-align:center;">指示書処理枚数の日別データがありません</div>';
+    }
+    const days = targetMonth.days;
+    const total = targetMonth.total || 1;
+    const maxVal = Math.max(...days.map(d => d.count || 0), 1);
+    const yMax = Math.ceil(maxVal * 1.15);
+
+    const padL = 42, padR = 24, padT = 24, padB = 28;
+    const plotW = width - padL - padR;
+    const plotH = height - padT - padB;
+
+    const n = days.length;
+    const getX = (i) => padL + (n === 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+    const getY = (val) => padT + plotH - ((val || 0) / yMax) * plotH;
+
+    let gridLines = '';
+    for (let step = 0; step <= 4; step++) {
+      const v = Math.round((yMax / 4) * step);
+      const yPos = getY(v);
+      gridLines += `
+        <line x1="${padL}" y1="${yPos.toFixed(1)}" x2="${width - padR}" y2="${yPos.toFixed(1)}" stroke="#e0e0e0" stroke-width="1" stroke-dasharray="${step === 0 ? 'none' : '3,3'}" />
+        <text x="${padL - 6}" y="${(yPos + 3.5).toFixed(1)}" font-size="9" fill="#757575" text-anchor="end">${v}</text>
+      `;
+    }
+
+    let weekendBands = '';
+    days.forEach((d, i) => {
+      if (d.weekday === '土' || d.weekday === '日') {
+        const xCenter = getX(i);
+        const colW = n === 1 ? plotW : (plotW / (n - 1));
+        const xStart = Math.max(padL, xCenter - colW / 2);
+        const bandW = Math.min(width - padR - xStart, colW);
+        const fill = d.weekday === '日' ? 'rgba(239, 83, 80, 0.08)' : 'rgba(33, 150, 243, 0.08)';
+        weekendBands += `<rect x="${xStart.toFixed(1)}" y="${padT}" width="${bandW.toFixed(1)}" height="${plotH}" fill="${fill}" />`;
+      }
+    });
+
+    const pts = days.map((d, i) => `${getX(i).toFixed(1)},${getY(d.count).toFixed(1)}`);
+    const linePoints = pts.join(' ');
+    const areaPoints = `${getX(0).toFixed(1)},${getY(0).toFixed(1)} ` + linePoints + ` ${getX(n - 1).toFixed(1)},${getY(0).toFixed(1)}`;
+
+    let dotsAndLabels = '';
+    days.forEach((d, i) => {
+      const cx = getX(i).toFixed(1);
+      const cy = getY(d.count).toFixed(1);
+      const pct = ((d.count / total) * 100).toFixed(1);
+      const isPeak = d.count === maxVal && maxVal > 0;
+      const dotColor = isPeak ? '#d32f2f' : '#2e7d32';
+      const dotR = isPeak ? '4' : '3';
+
+      dotsAndLabels += `
+        <g class="stat-dot">
+          <circle cx="${cx}" cy="${cy}" r="${dotR}" fill="${dotColor}" stroke="#fff" stroke-width="1.5">
+            <title>${d.label} (${d.weekday}): ${d.count}枚 (${pct}%)</title>
+          </circle>
+          <text x="${cx}" y="${(cy - 6).toFixed(1)}" font-size="8.5" font-weight="${isPeak ? 'bold' : 'normal'}" fill="${dotColor}" text-anchor="middle">${d.count}</text>
+          <text x="${cx}" y="${height - 10}" font-size="8.5" fill="${d.weekday === '日' ? '#c62828' : (d.weekday === '土' ? '#1565c0' : '#424242')}" text-anchor="middle">${d.label.split('/')[1] || d.label}</text>
+        </g>
+      `;
+    });
+
+    return `
+      <svg viewBox="0 0 ${width} ${height}" style="width:100%;max-width:${width}px;height:auto;display:block;margin:0 auto;background:#fafafa;border:1px solid #e0e0e0;border-radius:4px;font-family:sans-serif;">
+        <defs>
+          <linearGradient id="orderGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#4caf50" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#4caf50" stop-opacity="0.03"/>
+          </linearGradient>
+        </defs>
+        ${weekendBands}
+        ${gridLines}
+        <polygon points="${areaPoints}" fill="url(#orderGrad)" />
+        <polyline points="${linePoints}" fill="none" stroke="#2e7d32" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+        ${dotsAndLabels}
+        <text x="${padL}" y="14" font-size="9.5" font-weight="bold" fill="#2e7d32">■ 指示書枚数推移（折れ線・枚数ラベル）</text>
+        <text x="${width - padR}" y="14" font-size="9" fill="#757575" text-anchor="end">※下段は日付(日) / ピーク赤</text>
+      </svg>
+    `;
+  }
+
+  function buildOrderStatsTableHtml(targetMonth) {
+    if (!targetMonth || !targetMonth.days || !targetMonth.days.length) {
+      return '<div class="exec-center" style="padding:10px;color:#888;">指示書処理枚数データがありません</div>';
+    }
+    const days = targetMonth.days;
+    const total = targetMonth.total || 0;
+    const half = Math.ceil(days.length / 2);
+
+    const rowCells = (d) => {
+      if (!d) return '<td></td><td class="exec-center"></td><td class="exec-num"></td><td class="exec-center"></td>';
+      const pct = total > 0 ? ((d.count / total) * 100).toFixed(1) + '%' : '0.0%';
+      const wColor = d.weekday === '日' ? 'color:#c62828;' : (d.weekday === '土' ? 'color:#1565c0;' : '');
+      return `<td class="exec-center">${esc(d.label || '')}</td>
+        <td class="exec-center" style="${wColor}">${esc(d.weekday || '')}</td>
+        <td class="exec-num">${Number(d.count || 0).toLocaleString('ja-JP')}枚</td>
+        <td class="exec-center" style="font-size:0.9em;color:#555;">${pct}</td>`;
+    };
+
+    let rowsHtml = '';
+    for (let i = 0; i < half; i++) {
+      const d1 = days[i];
+      const d2 = days[i + half];
+      rowsHtml += `<tr>${rowCells(d1)}${rowCells(d2)}</tr>`;
+    }
+
+    const avg = days.length > 0 ? (total / days.length).toFixed(1) : '0';
+
+    return `
+      <table class="exec-orders-table" style="width:100%;margin-top:8px;border-collapse:collapse;font-size:11px;">
+        <thead>
+          <tr style="background:#f1f8e9;">
+            <th style="width:13%">日付</th><th style="width:7%">曜日</th><th style="width:18%">指示書枚数</th><th style="width:12%">割合</th>
+            <th style="width:13%">日付</th><th style="width:7%">曜日</th><th style="width:18%">指示書枚数</th><th style="width:12%">割合</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+          <tr class="exec-total" style="background:#f5f5f5;font-weight:bold;">
+            <td colspan="2" class="exec-center">月間合計</td>
+            <td class="exec-num" style="color:#2e7d32;">${total.toLocaleString('ja-JP')}枚</td>
+            <td class="exec-center">100%</td>
+            <td colspan="2" class="exec-center">稼働日数 / 1日平均</td>
+            <td colspan="2" class="exec-center" style="color:#555;">${days.length}日 （平均 ${avg}枚/日）</td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+  }
+
   function paintExecReport(data) {
     execReportData = data || null;
     execContractsDirty = false;
@@ -553,6 +684,33 @@
       st.textContent = (data && data.updatedAt)
         ? `契約枠 最終保存: ${data.updatedAt}${data.updatedBy ? '（' + data.updatedBy + '）' : ''}`
         : '契約枠: 未保存（空枠のままでも出力できます）';
+    }
+    const ordersEl = $('#kintaiexecorders');
+    if (ordersEl) {
+      const po = data && data.processedOrders;
+      if (po && po.target) {
+        const t = po.target;
+        const avg = t.days && t.days.length ? (t.total / t.days.length).toFixed(1) : 0;
+        ordersEl.innerHTML = `
+          <div style="background:#fff;border:1px solid #dcdcdc;border-radius:6px;padding:14px;margin-top:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;border-bottom:2px solid #4caf50;padding-bottom:6px;">
+              <h3 style="margin:0;font-size:15px;color:#2e7d32;display:flex;align-items:center;gap:6px;">
+                <span>📋</span> 5. 指示書処理枚数（${t.label || (data.year + '年' + data.month + '月度')}）
+              </h3>
+              <div style="font-size:13px;font-weight:bold;color:#333;">
+                月間合計: <span style="font-size:16px;color:#2e7d32;">${t.total.toLocaleString('ja-JP')}</span> 枚
+                <span style="font-size:11px;color:#666;font-weight:normal;margin-left:8px;">（稼働 ${t.days ? t.days.length : 0}日 / 1日平均 ${avg}枚）</span>
+              </div>
+            </div>
+            ${buildOrderStatsSvg(t, 740, 170)}
+            <div style="margin-top:10px;">
+              ${buildOrderStatsTableHtml(t)}
+            </div>
+          </div>
+        `;
+      } else {
+        ordersEl.innerHTML = '';
+      }
     }
   }
 
@@ -757,6 +915,20 @@
         <tbody>${bRows}${bTotal}</tbody>
       </table>
       ${crimpTable}
+      ${(() => {
+        const po = data.processedOrders;
+        if (!po || !po.target) return '';
+        const t = po.target;
+        return `
+          <section class="exec-orders-print" style="margin-top:14px;page-break-inside:avoid;">
+            <h3>5. 指示書処理枚数（${y}年${m}月度　合計: ${t.total.toLocaleString('ja-JP')}枚）</h3>
+            <div style="margin-bottom:8px;">
+              ${buildOrderStatsSvg(t, 700, 140)}
+            </div>
+            ${buildOrderStatsTableHtml(t)}
+          </section>
+        `;
+      })()}
     </div>`;
   }
 

@@ -157,11 +157,32 @@ def bundle(c, year, month, fiscal_start_year, summary_fn) -> dict:
     ym = f'{y:04d}-{m:02d}'
     crimp = kintai_crimp.list_month(c, ym)
     bihin_sheet = kintai_bihin.get_sheet(c, y, m)
+
+    # 処理済み指示書枚数（報告対象月以前の月のみ。未来月は隠す）
+    processed_orders = None
+    try:
+        import processed_stats
+        p_stats = processed_stats.get_stats()
+        cutoff_key = f"{y:04d}-{m:02d}"
+        past_months = [
+            mon for mon in p_stats.get("months", [])
+            if mon.get("key", "") <= cutoff_key
+        ]
+        target_month = next((mon for mon in past_months if mon.get("key") == cutoff_key), None)
+        processed_orders = {
+            'target': target_month,
+            'recentMonths': past_months[:6],
+            'totalThroughTarget': sum(mon.get("total", 0) for mon in past_months),
+        }
+    except Exception:
+        processed_orders = None
+
     return {
         **contracts,
         'fiscalStartYear': fy,
         'summary': summary,
         'bihin': bihin_sheet,
+        'processedOrders': processed_orders,
         'crimp': {
             'rows': [{'day': row['day'], 'reading': row['reading'], 'diff': row['diff']} for row in crimp['rows']],
             'start': f'{ym}-01',
@@ -480,6 +501,53 @@ def workbook(report: dict) -> bytes:
         cells.extend(_range_cells(rn, 4, NCOLS - 1, total, S_TOTAL_LABEL))
         rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(cells)}</row>')
         merges.extend([f'A{rn}:D{rn}', f'E{rn}:{_col(NCOLS - 1)}{rn}'])
+
+    p_orders = report.get('processedOrders')
+    if p_orders and p_orders.get('target'):
+        target = p_orders['target']
+        t_days = target.get('days') or []
+        rn += 2
+        section = _cell(0, rn, f'5. 指示書処理枚数（{y}年{m}月度　合計: {target.get("total", 0):,}枚）', S_SECTION)
+        rows_xml.append(f'<row r="{rn}" ht="22" customHeight="1">{section}</row>')
+        merges.append(f'A{rn}:{_col(NCOLS - 1)}{rn}')
+        rn += 1
+
+        headers = []
+        for start_col in (0, 6):
+            headers.extend(_range_cells(rn, start_col, start_col + 1, '日付', S_HEAD))
+            merges.append(f'{_col(start_col)}{rn}:{_col(start_col + 1)}{rn}')
+            headers.append(_cell(start_col + 2, rn, '曜日', S_HEAD))
+            headers.extend(_range_cells(rn, start_col + 3, start_col + 4, '指示書枚数', S_HEAD))
+            merges.append(f'{_col(start_col + 3)}{rn}:{_col(start_col + 4)}{rn}')
+            headers.append(_cell(start_col + 5, rn, '割合', S_HEAD))
+        rows_xml.append(f'<row r="{rn}" ht="18" customHeight="1">{"".join(headers)}</row>')
+        rn += 1
+
+        total_m = target.get('total', 0) or 1
+        half = (len(t_days) + 1) // 2
+        for index in range(half):
+            cells = []
+            for start_col, day_idx in ((0, index), (6, index + half)):
+                if day_idx < len(t_days):
+                    d = t_days[day_idx]
+                    pct_str = f"{(d.get('count', 0) / total_m * 100):.1f}%"
+                    cells.extend(_range_cells(rn, start_col, start_col + 1, d.get('label', ''), S_CENTER))
+                    merges.append(f'{_col(start_col)}{rn}:{_col(start_col + 1)}{rn}')
+                    cells.append(_cell(start_col + 2, rn, d.get('weekday', ''), S_CENTER))
+                    cells.extend(_range_cells(rn, start_col + 3, start_col + 4, d.get('count', 0), S_TOTAL_INT))
+                    merges.append(f'{_col(start_col + 3)}{rn}:{_col(start_col + 4)}{rn}')
+                    cells.append(_cell(start_col + 5, rn, pct_str, S_CENTER))
+                else:
+                    cells.extend(_range_cells(rn, start_col, start_col + 5, '', S_CENTER))
+                    merges.append(f'{_col(start_col)}{rn}:{_col(start_col + 5)}{rn}')
+            rows_xml.append(f'<row r="{rn}" ht="16" customHeight="1">{"".join(cells)}</row>')
+            rn += 1
+
+        cells = _range_cells(rn, 0, 2, '指示書枚数 合計', S_TOTAL_LABEL)
+        cells.extend(_range_cells(rn, 3, 5, target.get('total', 0), S_TOTAL_INT))
+        cells.extend(_range_cells(rn, 6, NCOLS - 1, f'月間稼働: {len(t_days)} 日', S_TOTAL_LABEL))
+        rows_xml.append(f'<row r="{rn}" ht="19" customHeight="1">{"".join(cells)}</row>')
+        merges.extend([f'A{rn}:C{rn}', f'D{rn}:F{rn}', f'G{rn}:{_col(NCOLS - 1)}{rn}'])
 
     paper_size = '8' if rn > 55 else '9'  # 記載が多い月はA3、それ以外はA4。
     widths = [12, 24, 10, 10, 10, 14, 10, 14, 10, 14, 10, 14]
