@@ -85,11 +85,13 @@
           resultBox.style.display = 'block';
           resultBox.style.background = '#eef7ee';
           resultBox.style.borderColor = '#bce1bc';
+          const iCounts = res.ishikari_counts || {};
+          const rCounts = res.report_counts || {};
           resultBox.innerHTML = `
             <div style="font-weight:bold;color:#2e7d32;margin-bottom:6px;">✓ ${esc(res.message)}</div>
             <ul style="margin:4px 0;padding-left:20px;font-size:0.88rem;color:#333;">
-              ${res.ishikari_file ? `<li><strong>石狩倉庫:</strong> ${esc(res.ishikari_file)} (${res.ishikari_count}件)</li>` : '<li><strong>石狩倉庫:</strong> 対象データなし</li>'}
-              ${res.carry_file ? `<li><strong>持ち込み:</strong> ${esc(res.carry_file)} の「持ち込み」シートに追記 (${res.carry_count}件)</li>` : '<li><strong>持ち込み:</strong> 対象データなし</li>'}
+              ${res.ishikari_file ? `<li><strong>石狩倉庫ブック:</strong> ${esc(res.ishikari_file)} (石狩:${iCounts.ishikari||0}件, 工場:${iCounts.factory||0}件, 持ち込み:${iCounts.carry||0}件)</li>` : '<li><strong>石狩倉庫ブック:</strong> 対象データなし</li>'}
+              ${res.report_file ? `<li><strong>報告用リスト:</strong> ${esc(res.report_file)} に追記 (持ち込み:${rCounts.carry||0}件, 工場:${rCounts.factory||0}件)</li>` : '<li><strong>報告用リスト:</strong> 対象データなし</li>'}
               <li><strong>処理済み移動:</strong> ${res.moved_count}件のファイルを移動完了</li>
             </ul>
           `;

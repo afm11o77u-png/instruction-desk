@@ -2,13 +2,20 @@ r"""
 指示書フォルダ自動仕分け・保存・移動モジュール (picking_sorter.py)
 
 1. 入力元: \\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】\【処理中・・・】
-2. 出力①: 石狩倉庫 (在庫場所 '0')
+2. 出力①: 石狩倉庫ブック (ピッキングリスト)
    - 保存先: \\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】\ピッキングリスト\{YYYYMMDD}\
    - ファイル名: {YYYYMMDD}{連番:02d}.xlsx (例: 2026111401.xlsx)
-3. 出力②: 持ち込み (在庫場所 'b')
+   - シート構成:
+     * 「石狩倉庫ピッキングリスト」: 在庫場所 '0'
+     * 「工場内 aリスト」: 在庫場所 'a'
+     * 「持ち込み bリスト」: 在庫場所 'b'
+     * 「Sheet2」: 集約全データ
+3. 出力②: 報告用リスト
    - 保存先: \\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】\報告用リスト\
    - ファイル名: 報告用{YYMMDD}.xlsx (例: 報告用261114.xlsx)
-   - シート構成: 「持ち込み」「工場」「倉庫」の3シート。「持ち込み」シートに追記。
+   - シート構成: 「持ち込み」「工場」「倉庫」
+     * 「持ち込み」シート: 在庫場所 'b' のデータを追記
+     * 「工場」シート: 在庫場所 'a' のデータを追記
 4. 移動: \\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】\処理済み\{YYYY}.{M}月\{YYYYMMDD}\
 """
 
@@ -21,7 +28,6 @@ import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-# 既定の基準フォルダパス（環境変数 INSTRUCTION_FOLDER_BASE で上書き可能）
 DEFAULT_BASE_DIR = r"\\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】"
 
 def get_base_dir() -> Path:
@@ -41,6 +47,27 @@ def get_report_base_dir() -> Path:
 
 def get_processed_base_dir() -> Path:
     return get_base_dir() / "処理済み"
+
+def normalize_stock(val) -> str:
+    """在庫場所の値を正規化 ('0'=石狩倉庫, 'a'=工場内, 'b'=持ち込み)"""
+    if val is None:
+        return "0"
+    s = str(val).strip().lower()
+    if s in ("0", "0.0", "", "none"):
+        return "0"
+    if s in ("a", "ａ"):
+        return "a"
+    if s in ("b", "ｂ"):
+        return "b"
+    return s
+
+def clean_cell_text(val, default="") -> str:
+    if val is None:
+        return default
+    s = str(val).strip()
+    if s == "0" or s == "0.0":
+        return default
+    return s
 
 def get_pending_files() -> list[Path]:
     """【処理中・・・】内の対象Excelファイル一覧を取得（一時ファイル ~$* は除外）"""
@@ -75,10 +102,8 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
     """指示書Excelの『ピッキングリスト』シートから行データを抽出"""
     rows = []
     try:
-        # data_only=True で数式の結果を取得
         wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
-    except Exception as e:
-        # 読めないファイルはスキップ
+    except Exception:
         return []
 
     target_sheet = None
@@ -91,12 +116,11 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         wb.close()
         return []
 
-    # ヘッダーを探す
     header_col_map = {}
     header_row_idx = None
 
     for r_idx, row in enumerate(target_sheet.iter_rows(values_only=True), start=1):
-        if r_idx > 10: # ヘッダーは10行目までにあるはず
+        if r_idx > 10:
             break
         row_strs = [str(c or "").strip() for c in row]
         if any("アイテム名" in c or "品名" in c or "商品名" in c for c in row_strs) and any("数量" in c or "枚数" in c for c in row_strs):
@@ -118,7 +142,6 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
             break
 
     if header_row_idx is None:
-        # デフォルト列順（VBA基準: 依頼者(1), 顧客名(2), アイテム名(3), メーカー(4), 品番(5), サイズ(6), 新古(7), 数量(8), 備考(9), 備考_1(10), 在庫場所(11) ※0-indexed）
         header_col_map = {
             "requester": 0, "customer": 1, "name": 2, "maker": 3,
             "sku": 4, "size": 5, "condition": 6, "quantity": 7,
@@ -126,7 +149,6 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         }
         header_row_idx = 1
 
-    # データ行を読み込み
     for row in target_sheet.iter_rows(min_row=header_row_idx + 1, values_only=True):
         if not row:
             continue
@@ -140,7 +162,6 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         name_val = str(get_val("name") or "").strip()
         qty_val = get_val("quantity")
 
-        # アイテム名が "0" または空、数量が 0 または空なら除外
         if not name_val or name_val == "0":
             continue
         
@@ -151,66 +172,39 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         if qty_num <= 0:
             continue
 
-        stock_val = str(get_val("stock") or "").strip()
-        condition_val = str(get_val("condition") or "").strip()
-        if condition_val in ("0", "新古", "新品・中古"):
+        stock_val = normalize_stock(get_val("stock"))
+        
+        cond_raw = str(get_val("condition") or "").strip()
+        if cond_raw in ("0", "0.0", "", "未指定", "新古", "新品・中古"):
             condition_val = "新　　　　古"
-        elif condition_val in ("", "未指定"):
-            condition_val = "新　　　　古"
+        elif cond_raw in ("新", "新品"):
+            condition_val = "新"
+        elif cond_raw in ("古", "中古"):
+            condition_val = "古"
+        else:
+            condition_val = cond_raw
 
         rows.append({
             "source_file": file_path.name,
-            "requester": str(get_val("requester") or "").strip(),
-            "customer": str(get_val("customer") or "").strip(),
+            "requester": clean_cell_text(get_val("requester")),
+            "customer": clean_cell_text(get_val("customer")),
             "name": name_val,
-            "maker": str(get_val("maker") or "").strip(),
-            "sku": str(get_val("sku") or "").strip(),
-            "size": str(get_val("size") or "").strip(),
+            "maker": clean_cell_text(get_val("maker")),
+            "sku": clean_cell_text(get_val("sku")),
+            "size": clean_cell_text(get_val("size")),
             "condition": condition_val,
             "quantity": qty_num,
-            "note": str(get_val("note") or "").strip(),
-            "note2": str(get_val("note2") or "").strip(),
+            "note": clean_cell_text(get_val("note")),
+            "note2": clean_cell_text(get_val("note2")),
             "stock": stock_val,
         })
 
     wb.close()
     return rows
 
-def _save_ishikari_list(now: datetime, rows: list[dict]) -> tuple[Path | None, int]:
-    """石狩倉庫 (在庫場所 '0') 用のピッキングリストを連番保存"""
-    ishikari_rows = [r for r in rows if r["stock"] == "0"]
-    if not ishikari_rows:
-        return None, 0
-
-    # 顧客名昇順、アイテム名昇順でソート
-    ishikari_rows.sort(key=lambda x: (x["customer"], x["name"]))
-
-    date_str = now.strftime("%Y%m%d")
-    target_dir = get_ishikari_base_dir() / date_str
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    # 既存の連番を検索
-    max_seq = 0
-    pattern = re.compile(rf"^{date_str}(\d{{2}})\.xlsx$", re.IGNORECASE)
-    for f in target_dir.iterdir():
-        if f.is_file():
-            m = pattern.match(f.name)
-            if m:
-                seq = int(m.group(1))
-                if seq > max_seq:
-                    max_seq = seq
-
-    next_seq = max_seq + 1
-    file_name = f"{date_str}{next_seq:02d}.xlsx"
-    out_path = target_dir / file_name
-
-    # ブック作成
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "石狩倉庫ピッキングリスト"
-
-    # ヘッダー
-    headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考2", "実行者", "確認", "入力", "確認"]
+def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
+    """ピッキング／作業シート用の共通フォーマット適用"""
+    headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
     ws.append(headers)
 
     font_header = Font(name="Yu Gothic", size=11, bold=True)
@@ -225,6 +219,7 @@ def _save_ishikari_list(now: datetime, rows: list[dict]) -> tuple[Path | None, i
     )
     fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
+    ws.row_dimensions[1].height = 25
     for col_idx in range(1, len(headers) + 1):
         cell = ws.cell(row=1, column=col_idx)
         cell.font = font_header
@@ -232,9 +227,7 @@ def _save_ishikari_list(now: datetime, rows: list[dict]) -> tuple[Path | None, i
         cell.border = border_thin
         cell.fill = fill_header
 
-    ws.row_dimensions[1].height = 25
-
-    for r_idx, r in enumerate(ishikari_rows, start=2):
+    for r_idx, r in enumerate(rows_data, start=2):
         row_vals = [
             r["requester"],
             r["customer"],
@@ -246,7 +239,7 @@ def _save_ishikari_list(now: datetime, rows: list[dict]) -> tuple[Path | None, i
             r["quantity"],
             r["note"],
             r["note2"],
-            "", "", "", "" # チェック欄
+            "", "", "", ""
         ]
         ws.append(row_vals)
         ws.row_dimensions[r_idx].height = 30
@@ -259,58 +252,90 @@ def _save_ishikari_list(now: datetime, rows: list[dict]) -> tuple[Path | None, i
             else:
                 cell.alignment = align_left
 
-    # 列幅の調整
-    col_widths = {
-        1: 12, # 依頼者
-        2: 24, # 顧客名
-        3: 24, # アイテム名
-        4: 14, # メーカー
-        5: 14, # 品番
-        6: 10, # サイズ
-        7: 12, # 新古
-        8: 8,  # 数量
-        9: 20, # 備考
-        10: 16,# 備考2
-        11: 6, # 実行者
-        12: 6, # 確認
-        13: 6, # 入力
-        14: 6  # 確認
-    }
+    col_widths = {1:12, 2:24, 3:24, 4:14, 5:14, 6:10, 7:12, 8:8, 9:20, 10:16, 11:6, 12:6, 13:6, 14:6}
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    # 印刷設定（A4横、1ページ幅に収める）
     ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.oddHeader.left.text = f'&"-,Bold"&14{now.strftime("%Y/%m/%d %H:%M")}'
-    ws.oddHeader.center.text = f'&"-,Bold"&14石狩倉庫ピッキングリスト ({file_name})'
+    ws.oddHeader.center.text = f'&"-,Bold"&14{title} ({file_name})'
     ws.print_title_rows = '1:1'
+
+def _save_ishikari_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
+    r"""石狩倉庫用連番ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx) を作成"""
+    if not rows:
+        return None, {"ishikari": 0, "factory": 0, "carry": 0}
+
+    ishikari_rows = [r for r in rows if r["stock"] == "0"]
+    factory_rows  = [r for r in rows if r["stock"] == "a"]
+    carry_rows    = [r for r in rows if r["stock"] == "b"]
+
+    ishikari_rows.sort(key=lambda x: (x["customer"], x["name"]))
+    factory_rows.sort(key=lambda x: (x["customer"], x["name"]))
+    carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
+
+    date_str = now.strftime("%Y%m%d")
+    target_dir = get_ishikari_base_dir() / date_str
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    max_seq = 0
+    pattern = re.compile(rf"^{date_str}(\d{{2}})\.xlsx$", re.IGNORECASE)
+    for f in target_dir.iterdir():
+        if f.is_file():
+            m = pattern.match(f.name)
+            if m:
+                seq = int(m.group(1))
+                if seq > max_seq:
+                    max_seq = seq
+
+    next_seq = max_seq + 1
+    file_name = f"{date_str}{next_seq:02d}.xlsx"
+    out_path = target_dir / file_name
+
+    wb = openpyxl.Workbook()
+
+    # 1. Sheet2 (全件集約シート)
+    ws_all = wb.active
+    ws_all.title = "Sheet2"
+    all_headers = ["Source.Name", "依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "在庫場所"]
+    ws_all.append(all_headers)
+    for r in sorted(rows, key=lambda x: (x["customer"], x["name"])):
+        ws_all.append([
+            r["source_file"], r["requester"], r["customer"], r["name"],
+            r["maker"], r["sku"], r["size"], r["condition"], r["quantity"],
+            r["note"], r["note2"], r["stock"]
+        ])
+
+    # 2. 持ち込み bリスト
+    ws_carry = wb.create_sheet(title="持ち込み bリスト")
+    _apply_sheet_styling(ws_carry, carry_rows, "持ち込み bリスト", now, file_name)
+
+    # 3. 工場内 aリスト
+    ws_factory = wb.create_sheet(title="工場内 aリスト")
+    _apply_sheet_styling(ws_factory, factory_rows, "工場内 aリスト", now, file_name)
+
+    # 4. 石狩倉庫ピッキングリスト
+    ws_ishikari = wb.create_sheet(title="石狩倉庫ピッキングリスト")
+    _apply_sheet_styling(ws_ishikari, ishikari_rows, "石狩倉庫ピッキングリスト", now, file_name)
 
     wb.save(str(out_path))
     wb.close()
-    return out_path, len(ishikari_rows)
 
-def _save_carry_list(now: datetime, rows: list[dict]) -> tuple[Path | None, int]:
-    """持ち込み (在庫場所 'b') 用の報告用リスト（持ち込み/工場/倉庫の3シート）に追記保存"""
-    carry_rows = [r for r in rows if r["stock"].lower() == "b"]
-    if not carry_rows:
-        return None, 0
+    return out_path, {
+        "ishikari": len(ishikari_rows),
+        "factory": len(factory_rows),
+        "carry": len(carry_rows)
+    }
 
-    carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
-
-    report_dir = get_report_base_dir()
-    report_dir.mkdir(parents=True, exist_ok=True)
-
-    # ファイル名: 報告用YYMMDD.xlsx (例: 報告用261114.xlsx)
-    date_str = now.strftime("%y%m%d")
-    file_name = f"報告用{date_str}.xlsx"
-    out_path = report_dir / file_name
-
-    headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考2", "実行者", "確認", "入力", "確認"]
-
+def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
+    """報告用リストの指定シートにデータを追記"""
+    headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
+    
+    font_header = Font(name="Yu Gothic", size=11, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -320,27 +345,11 @@ def _save_carry_list(now: datetime, rows: list[dict]) -> tuple[Path | None, int]
         top=Side(style='thin', color='888888'),
         bottom=Side(style='thin', color='888888')
     )
-
-    if out_path.exists():
-        wb = openpyxl.load_workbook(str(out_path))
-    else:
-        wb = openpyxl.Workbook()
-        # 3シート作成: 持ち込み、工場、倉庫
-        default_sheet = wb.active
-        default_sheet.title = "持ち込み"
-        wb.create_sheet(title="工場")
-        wb.create_sheet(title="倉庫")
-
-    if "持ち込み" not in wb.sheetnames:
-        ws = wb.create_sheet(title="持ち込み", index=0)
-    else:
-        ws = wb["持ち込み"]
+    fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
     # ヘッダーが未設定なら設定
     if ws.max_row == 1 and ws.cell(row=1, column=1).value is None:
         ws.append(headers)
-        font_header = Font(name="Yu Gothic", size=11, bold=True)
-        fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
         ws.row_dimensions[1].height = 25
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=1, column=col_idx)
@@ -348,9 +357,11 @@ def _save_carry_list(now: datetime, rows: list[dict]) -> tuple[Path | None, int]
             cell.alignment = align_center
             cell.border = border_thin
             cell.fill = fill_header
+    elif ws.max_row < 1:
+        ws.append(headers)
 
     start_row = ws.max_row + 1
-    for r_idx, r in enumerate(carry_rows, start=start_row):
+    for r_idx, r in enumerate(rows_data, start=start_row):
         row_vals = [
             r["requester"],
             r["customer"],
@@ -362,7 +373,7 @@ def _save_carry_list(now: datetime, rows: list[dict]) -> tuple[Path | None, int]
             r["quantity"],
             r["note"],
             r["note2"],
-            "", "", "", "" # チェック欄
+            "", "", "", ""
         ]
         ws.append(row_vals)
         ws.row_dimensions[r_idx].height = 30
@@ -375,24 +386,75 @@ def _save_carry_list(now: datetime, rows: list[dict]) -> tuple[Path | None, int]
             else:
                 cell.alignment = align_left
 
-    # 列幅の設定
     col_widths = {1:12, 2:24, 3:24, 4:14, 5:14, 6:10, 7:12, 8:8, 9:20, 10:16, 11:6, 12:6, 13:6, 14:6}
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
-    # 印刷設定
     ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
     ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.oddHeader.left.text = f'&"-,Bold"&14{now.strftime("%Y/%m/%d %H:%M")}'
-    ws.oddHeader.center.text = f'&"-,Bold"&14持ち込みリスト ({file_name})'
+    ws.oddHeader.center.text = f'&"-,Bold"&14{title} ({file_name})'
     ws.print_title_rows = '1:1'
+
+def _save_report_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
+    r"""報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」および「工場」シートに追記保存"""
+    carry_rows   = [r for r in rows if r["stock"] == "b"]
+    factory_rows = [r for r in rows if r["stock"] == "a"]
+
+    if not carry_rows and not factory_rows:
+        return None, {"carry": 0, "factory": 0}
+
+    carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
+    factory_rows.sort(key=lambda x: (x["customer"], x["name"]))
+
+    report_dir = get_report_base_dir()
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    date_str = now.strftime("%y%m%d")
+    file_name = f"報告用{date_str}.xlsx"
+    out_path = report_dir / file_name
+
+    if out_path.exists():
+        wb = openpyxl.load_workbook(str(out_path))
+    else:
+        wb = openpyxl.Workbook()
+        ws_carry = wb.active
+        ws_carry.title = "持ち込み"
+        wb.create_sheet(title="工場")
+        wb.create_sheet(title="倉庫")
+
+    # 持ち込みシート
+    if "持ち込み" not in wb.sheetnames:
+        ws_carry = wb.create_sheet(title="持ち込み", index=0)
+    else:
+        ws_carry = wb["持ち込み"]
+    if carry_rows:
+        _append_rows_to_report_sheet(ws_carry, carry_rows, "持ち込みリスト", now, file_name)
+
+    # 工場シート
+    if "工場" not in wb.sheetnames:
+        ws_factory = wb.create_sheet(title="工場", index=1)
+    else:
+        ws_factory = wb["工場"]
+    if factory_rows:
+        _append_rows_to_report_sheet(ws_factory, factory_rows, "工場リスト", now, file_name)
+
+    # 倉庫シートがなければ枠だけ作成
+    if "倉庫" not in wb.sheetnames:
+        ws_ware = wb.create_sheet(title="倉庫")
+        headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
+        ws_ware.append(headers)
 
     wb.save(str(out_path))
     wb.close()
-    return out_path, len(carry_rows)
+
+    return out_path, {
+        "carry": len(carry_rows),
+        "factory": len(factory_rows)
+    }
 
 def _move_processed_files(now: datetime, files: list[Path]) -> tuple[Path, int]:
     r"""処理済みフォルダ (処理済み\{YYYY}.{M}月\{YYYYMMDD}\) へファイルを移動"""
@@ -407,7 +469,6 @@ def _move_processed_files(now: datetime, files: list[Path]) -> tuple[Path, int]:
             continue
         dest_file = dest_dir / f.name
         if dest_file.exists():
-            # 同名衝突時はタイムスタンプを付与
             ts = now.strftime("%H%M%S")
             dest_file = dest_dir / f"{f.stem}_{ts}{f.suffix}"
         shutil.move(str(f), str(dest_file))
@@ -424,9 +485,9 @@ def execute_sort() -> dict:
             "success": False,
             "message": "【処理中・・・】に対象ファイルがありません。",
             "ishikari_file": None,
-            "ishikari_count": 0,
-            "carry_file": None,
-            "carry_count": 0,
+            "ishikari_counts": {"ishikari": 0, "factory": 0, "carry": 0},
+            "report_file": None,
+            "report_counts": {"carry": 0, "factory": 0},
             "moved_count": 0,
         }
 
@@ -438,11 +499,11 @@ def execute_sort() -> dict:
         all_rows.extend(rows)
         processed_files.append(f)
 
-    # 1. 石狩倉庫
-    ishikari_path, ishikari_count = _save_ishikari_list(now, all_rows)
+    # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
+    ishikari_path, ishikari_counts = _save_ishikari_workbook(now, all_rows)
 
-    # 2. 持ち込み (報告用リスト)
-    carry_path, carry_count = _save_carry_list(now, all_rows)
+    # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」「工場」シートへ追記
+    report_path, report_counts = _save_report_workbook(now, all_rows)
 
     # 3. 処理済みフォルダへの移動
     dest_dir, moved_count = _move_processed_files(now, processed_files)
@@ -452,10 +513,10 @@ def execute_sort() -> dict:
         "message": "指示書の仕分けと保存が完了しました。",
         "ishikari_file": ishikari_path.name if ishikari_path else None,
         "ishikari_path": str(ishikari_path) if ishikari_path else None,
-        "ishikari_count": ishikari_count,
-        "carry_file": carry_path.name if carry_path else None,
-        "carry_path": str(carry_path) if carry_path else None,
-        "carry_count": carry_count,
+        "ishikari_counts": ishikari_counts,
+        "report_file": report_path.name if report_path else None,
+        "report_path": str(report_path) if report_path else None,
+        "report_counts": report_counts,
         "moved_count": moved_count,
         "processed_dir": str(dest_dir)
     }
