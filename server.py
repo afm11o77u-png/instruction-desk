@@ -8,6 +8,7 @@ import templates
 import label_sets
 import fixed_label_formats
 import picking
+import picking_sorter
 import placement
 import split_backup
 import shipping
@@ -1069,6 +1070,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path.startswith('/api/'):
             with connect() as c: result=self.auth_get(path,c)
             if result is not None: return self.reply(*result)
+        if path=='/api/picking-sort/preview':
+            if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
+                return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
+            try:
+                data = picking_sorter.preview_sort()
+                return self.reply(200, data)
+            except Exception as e:
+                return self.reply(500, {'error': f'プレビュー取得エラー: {e}'})
         if path=='/api/picking' or path.startswith('/api/picking/'):
             try:
                 with connect() as c: result=picking.handle(self,c,path,None,can_access)
@@ -1383,6 +1392,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 c.execute('BEGIN IMMEDIATE')
                 result=self.auth_post(route,d,c)
             if result is not None: return self.reply(*result)
+            if route=='/api/picking-sort/execute':
+                if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
+                    return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
+                try:
+                    data = picking_sorter.execute_sort()
+                    return self.reply(200, data)
+                except Exception as e:
+                    return self.reply(500, {'error': f'仕分け実行エラー: {e}'})
             if route.startswith('/api/picking/') or route.startswith('/api/carry-input/'):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
