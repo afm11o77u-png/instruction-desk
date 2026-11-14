@@ -454,7 +454,7 @@
   <p id="workbatches-message" role="status"></p>
   <div id="workbatches-content"></div>
 </dialog>
-<dialog id="picking-sort-modal" style="width:min(500px,94vw);border-radius:8px;padding:20px;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,0.2);">
+<dialog id="picking-sort-modal" style="width:min(520px,94vw);border-radius:8px;padding:20px;border:1px solid #ccc;box-shadow:0 4px 16px rgba(0,0,0,0.2);">
   <div class="dialoghead" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
     <h3 style="margin:0;font-size:1.15rem;">指示書ピッキング自動仕分け</h3>
     <button type="button" class="quiet" id="picking-sort-close" style="font-size:1.2rem;cursor:pointer;">×</button>
@@ -463,7 +463,26 @@
     <p style="margin-top:0;"><strong>【処理中・・・】</strong> フォルダ内の指示書を読み込み、石狩倉庫・持ち込みに仕分け保存して、処理済みフォルダへ移動します。</p>
     <div id="picking-sort-preview" style="background:#f4f6f8;padding:12px;border-radius:6px;margin:16px 0;">
       <p id="picking-sort-count" style="margin:0;font-weight:bold;">対象ファイルを確認中...</p>
-      <ul id="picking-sort-files" style="margin:8px 0 0;padding-left:20px;max-height:120px;overflow-y:auto;font-size:0.85rem;color:#555;"></ul>
+      <ul id="picking-sort-files" style="margin:8px 0 0;padding-left:20px;max-height:100px;overflow-y:auto;font-size:0.85rem;color:#555;"></ul>
+    </div>
+    <div id="picking-sort-filenames" style="background:#fff;border:1px solid #e0e0e0;border-radius:6px;padding:12px;margin:16px 0;">
+      <div style="font-weight:bold;margin-bottom:8px;font-size:0.9rem;color:#333;">保存ファイル名の確認・変更</div>
+      <label style="display:block;margin-bottom:8px;font-size:0.85rem;color:#555;">
+        <span>石狩倉庫ブック保存名:</span>
+        <input type="text" id="picking-sort-ishikari-name" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:4px;font-family:monospace;" placeholder="YYYYMMDDNN.xlsx">
+      </label>
+      <label style="display:block;font-size:0.85rem;color:#555;">
+        <span>報告用リスト保存名（持ち込み・工場）:</span>
+        <input type="text" id="picking-sort-report-name" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:4px;font-family:monospace;" placeholder="報告用YYMMDD.xlsx">
+      </label>
+      <small style="color:#888;display:block;margin-top:4px;">※通常はそのままで問題ありません。変更したい場合のみ編集してください。</small>
+    </div>
+    <div style="margin-top:12px;padding:10px 12px;background:#f9f9f9;border-radius:6px;border:1px solid #e5e5e5;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:0.9rem;cursor:pointer;margin:0;">
+        <input type="checkbox" id="picking-sort-print-labels" checked style="cursor:pointer;width:18px;height:18px;">
+        <span><strong>仕分け完了時に宛名書き印刷を開く</strong>（A4・4分割）</span>
+      </label>
+      <small id="picking-sort-label-count" style="display:block;margin-left:26px;color:#666;font-size:0.82rem;margin-top:2px;">宛名情報: 確認中...</small>
     </div>
     <div id="picking-sort-result" role="status" style="display:none;margin-top:12px;padding:12px;border-radius:6px;background:#eef7ee;border:1px solid #bce1bc;"></div>
   </div>

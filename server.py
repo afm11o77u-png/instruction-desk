@@ -1396,7 +1396,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
                     return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
                 try:
-                    data = picking_sorter.execute_sort()
+                    custom_ishikari = (d.get('custom_ishikari_file') or '').strip() or None
+                    custom_report = (d.get('custom_report_file') or '').strip() or None
+                    data = picking_sorter.execute_sort(custom_ishikari_file=custom_ishikari, custom_report_file=custom_report)
                     return self.reply(200, data)
                 except Exception as e:
                     return self.reply(500, {'error': f'仕分け実行エラー: {e}'})

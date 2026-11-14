@@ -27,6 +27,7 @@ from pathlib import Path
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+import excel_import
 
 DEFAULT_BASE_DIR = r"\\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】"
 
@@ -80,22 +81,154 @@ def get_pending_files() -> list[Path]:
             files.append(f)
     return sorted(files, key=lambda x: x.name)
 
+def get_next_ishikari_filename(now: datetime | None = None) -> str:
+    """次の石狩倉庫用連番ファイル名を計算して返す"""
+    if now is None:
+        now = datetime.now()
+    date_str = now.strftime("%Y%m%d")
+    target_dir = get_ishikari_base_dir() / date_str
+    if not target_dir.exists():
+        return f"{date_str}01.xlsx"
+
+    max_seq = 0
+    pattern = re.compile(rf"^{date_str}(\d{{2}})\.xlsx$", re.IGNORECASE)
+    for f in target_dir.iterdir():
+        if f.is_file():
+            m = pattern.match(f.name)
+            if m:
+                seq = int(m.group(1))
+                if seq > max_seq:
+                    max_seq = seq
+    return f"{date_str}{max_seq + 1:02d}.xlsx"
+
+def get_default_report_filename(now: datetime | None = None) -> str:
+    """既定の報告用リストファイル名を返す"""
+    if now is None:
+        now = datetime.now()
+    return f"報告用{now.strftime('%y%m%d')}.xlsx"
+
+def _extract_address_from_workbook(file_path: Path) -> dict | None:
+    """指示書Excelから宛名データ（顧客名、管理番号、部署名、従業員名、受付内容）を柔軟に抽出"""
+    # 1. excel_import エンジンによる標準解析
+    try:
+        blob = file_path.read_bytes()
+        payload, _ = excel_import.parse_instruction(blob)
+        customer = str(payload.get("customer") or "").strip()
+        management = str(payload.get("management") or "").strip()
+        department = str(payload.get("department") or "").strip()
+        employee = str(payload.get("employee") or "").strip()
+        request_val = str(payload.get("request") or "").strip()
+
+        if customer or employee:
+            return {
+                "source_file": file_path.name,
+                "customer": customer,
+                "management": management,
+                "department": department,
+                "employee": employee,
+                "request": request_val
+            }
+    except Exception:
+        pass
+
+    # 2. フォールバック: openpyxl で全シートから項目名を柔軟探索
+    try:
+        wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
+        addr = {
+            "source_file": file_path.name,
+            "customer": "",
+            "management": "",
+            "department": "",
+            "employee": "",
+            "request": ""
+        }
+        # 指示書シートまたは先頭シートを対象
+        target_sheets = [s for s in wb.sheetnames if "指示" in s]
+        if not target_sheets:
+            target_sheets = [wb.sheetnames[0]]
+
+        for sname in target_sheets:
+            ws = wb[sname]
+            for row in ws.iter_rows(values_only=True, max_row=40):
+                row_vals = [str(c or "").strip() for c in row]
+                for idx, val in enumerate(row_vals):
+                    v = val.replace(" ", "").replace("　", "")
+                    # 右隣のセルを取得するヘルパー
+                    next_val = ""
+                    for next_idx in range(idx + 1, min(idx + 4, len(row_vals))):
+                        if row_vals[next_idx]:
+                            next_val = row_vals[next_idx]
+                            break
+                    if not next_val:
+                        continue
+
+                    if not addr["customer"] and ("顧客名" in v or "お客様名" in v or v == "顧客"):
+                        addr["customer"] = next_val
+                    elif not addr["management"] and ("管理番号" in v or "管理No" in v):
+                        addr["management"] = next_val
+                    elif not addr["department"] and ("部署" in v or "店舗" in v or "ネーム部署" in v):
+                        addr["department"] = next_val
+                    elif not addr["employee"] and ("従業員名" in v or "氏名" in v or "社員名" in v or "お名前" in v):
+                        addr["employee"] = next_val
+                    elif not addr["request"] and ("受付内容" in v or "依頼内容" in v or "区分" in v):
+                        addr["request"] = next_val
+
+        wb.close()
+        if addr["customer"] or addr["employee"]:
+            return addr
+    except Exception:
+        pass
+
+    # 3. 最後のフォールバック: ピッキングリストの抽出行データから補完
+    try:
+        rows = _extract_rows_from_workbook(file_path)
+        if rows:
+            first = rows[0]
+            return {
+                "source_file": file_path.name,
+                "customer": first.get("customer", ""),
+                "management": "",
+                "department": "",
+                "employee": "",
+                "request": ""
+            }
+    except Exception:
+        pass
+
+    return None
+
 def preview_sort() -> dict:
-    """プレビュー情報（対象件数とファイル名）を返す"""
+    """プレビュー情報（対象件数、ファイル名、保存予定ファイル名、抽出宛名一覧）を返す"""
     p_dir = get_processing_dir()
+    now = datetime.now()
+    next_ishikari = get_next_ishikari_filename(now)
+    def_report = get_default_report_filename(now)
+
     if not p_dir.exists():
         return {
             "exists": False,
             "dir": str(p_dir),
             "count": 0,
-            "files": []
+            "files": [],
+            "next_ishikari_file": next_ishikari,
+            "default_report_file": def_report,
+            "addresses": []
         }
     files = get_pending_files()
+    addresses = []
+    for f in files:
+        addr = _extract_address_from_workbook(f)
+        if addr:
+            addresses.append(addr)
+
     return {
         "exists": True,
         "dir": str(p_dir),
         "count": len(files),
-        "files": [f.name for f in files]
+        "files": [f.name for f in files],
+        "next_ishikari_file": next_ishikari,
+        "default_report_file": def_report,
+        "addresses": addresses
     }
 
 def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
@@ -279,7 +412,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def _save_ishikari_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
+def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
     r"""石狩倉庫用連番ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx) を作成"""
     if not rows:
         return None, {"ishikari": 0, "factory": 0, "carry": 0}
@@ -296,18 +429,12 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict]) -> tuple[Path | Non
     target_dir = get_ishikari_base_dir() / date_str
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    max_seq = 0
-    pattern = re.compile(rf"^{date_str}(\d{{2}})\.xlsx$", re.IGNORECASE)
-    for f in target_dir.iterdir():
-        if f.is_file():
-            m = pattern.match(f.name)
-            if m:
-                seq = int(m.group(1))
-                if seq > max_seq:
-                    max_seq = seq
-
-    next_seq = max_seq + 1
-    file_name = f"{date_str}{next_seq:02d}.xlsx"
+    if custom_filename and custom_filename.strip():
+        file_name = custom_filename.strip()
+        if not file_name.lower().endswith(".xlsx"):
+            file_name += ".xlsx"
+    else:
+        file_name = get_next_ishikari_filename(now)
     out_path = target_dir / file_name
 
     wb = openpyxl.Workbook()
@@ -427,7 +554,7 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def _save_report_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None, dict]:
+def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
     r"""報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」および「工場」シートに追記保存"""
     carry_rows   = [r for r in rows if r["stock"] == "b"]
     factory_rows = [r for r in rows if r["stock"] == "a"]
@@ -441,8 +568,12 @@ def _save_report_workbook(now: datetime, rows: list[dict]) -> tuple[Path | None,
     report_dir = get_report_base_dir()
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    date_str = now.strftime("%y%m%d")
-    file_name = f"報告用{date_str}.xlsx"
+    if custom_filename and custom_filename.strip():
+        file_name = custom_filename.strip()
+        if not file_name.lower().endswith(".xlsx"):
+            file_name += ".xlsx"
+    else:
+        file_name = get_default_report_filename(now)
     out_path = report_dir / file_name
 
     if out_path.exists():
@@ -504,7 +635,7 @@ def _move_processed_files(now: datetime, files: list[Path]) -> tuple[Path, int]:
 
     return dest_dir, moved_count
 
-def execute_sort() -> dict:
+def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None) -> dict:
     """仕分け実行メインロジック"""
     now = datetime.now()
     pending_files = get_pending_files()
@@ -521,17 +652,21 @@ def execute_sort() -> dict:
 
     all_rows = []
     processed_files = []
+    addresses = []
 
     for f in pending_files:
         rows = _extract_rows_from_workbook(f)
         all_rows.extend(rows)
+        addr = _extract_address_from_workbook(f)
+        if addr:
+            addresses.append(addr)
         processed_files.append(f)
 
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
-    ishikari_path, ishikari_counts = _save_ishikari_workbook(now, all_rows)
+    ishikari_path, ishikari_counts = _save_ishikari_workbook(now, all_rows, custom_filename=custom_ishikari_file)
 
     # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」「工場」シートへ追記
-    report_path, report_counts = _save_report_workbook(now, all_rows)
+    report_path, report_counts = _save_report_workbook(now, all_rows, custom_filename=custom_report_file)
 
     # 3. 処理済みフォルダへの移動
     dest_dir, moved_count = _move_processed_files(now, processed_files)
@@ -546,5 +681,6 @@ def execute_sort() -> dict:
         "report_path": str(report_path) if report_path else None,
         "report_counts": report_counts,
         "moved_count": moved_count,
-        "processed_dir": str(dest_dir)
+        "processed_dir": str(dest_dir),
+        "addresses": addresses
     }
