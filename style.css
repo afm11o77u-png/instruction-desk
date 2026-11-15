@@ -1013,3 +1013,8 @@ body > aside .nav {font-weight:600}
 #formatpreview dt { font-weight: 700; }
 #formatpreview dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 #formatpreview .formatactions { margin-top: 12px; }
+
+#formatgrid { min-height: 100px; }
+#formatcontext { position: fixed; z-index: 2; display: grid; gap: 3px; min-width: 150px; padding: 5px; border: 1px solid #cbded3; border-radius: 7px; background: #fff; box-shadow: 0 4px 16px #16382826; }
+#formatcontext[hidden], #formatcontext button[hidden] { display: none; }
+#formatcontext button { text-align: left; padding: 6px 10px; }

@@ -10,6 +10,97 @@
  let dragId = '';
  const get = id => library.entries.find(entry => entry.id === id);
  const message = text => { $('#formatmessage').textContent = text; };
+ let historyToken = '', returningToPage = false;
+
+ function pushFormatLocation(depth) {
+  history.pushState({personalFormats:{token:historyToken,depth,folder,previewId}},'');
+ }
+
+ function rememberFormatLocation() {
+  const mark = history.state?.personalFormats;
+  if(mark?.token === historyToken)pushFormatLocation(mark.depth + 1);
+ }
+
+ window.addEventListener('popstate', event => {
+  if(returningToPage){returningToPage = false;return}
+  if(!dialog.open || !historyToken)return;
+  const mark = event.state?.personalFormats;
+  if(mark?.token !== historyToken){
+   historyToken = '';
+   dialog.close();
+   return;
+  }
+  folder = get(mark.folder)?.kind === 'folder' ? mark.folder : '';
+  const entry = get(mark.previewId);
+  selectedId = previewId = entry?.kind === 'format' && entry.parent === folder ? entry.id : '';
+  paint();
+ });
+ const context = $('#formatcontext');
+ const copyAction = $('#formatcopy');
+ const pasteAction = $('#formatpaste');
+ let copied = null, contextTarget = null, contextFocus = null;
+
+ function closeContext(restoreFocus = false) {
+  if(context.hidden)return;
+  context.hidden = true;
+  if(restoreFocus && contextFocus?.isConnected)contextFocus.focus();
+  contextFocus = null;
+ }
+
+ dialog.addEventListener('contextmenu', event => {
+  if(changing || !grid.contains(event.target))return;
+  const tile = event.target.closest('.formaticon');
+  const entry = tile && get(tile.dataset.id);
+  event.preventDefault();
+  closeContext();
+  contextTarget = entry || null;
+  contextFocus = tile || document.activeElement;
+  copyAction.hidden = entry?.kind !== 'format';
+  pasteAction.disabled = copied?.user !== currentUser;
+  pasteAction.textContent = entry?.kind === 'folder' ? 'このフォルダに貼り付け' : '貼り付け';
+  const bounds = dialog.getBoundingClientRect();
+  const anchor = tile?.getBoundingClientRect() || bounds;
+  context.hidden = false;
+  context.style.left = Math.max(bounds.left,Math.min(event.clientX || anchor.left,bounds.right-context.offsetWidth))+'px';
+  context.style.top = Math.max(bounds.top,Math.min(event.clientY || anchor.bottom,bounds.bottom-context.offsetHeight))+'px';
+  if(!copyAction.hidden)copyAction.focus();
+  else if(!pasteAction.disabled)pasteAction.focus();
+ });
+ dialog.addEventListener('pointerdown', event => {
+  if(!context.contains(event.target))closeContext();
+ });
+ dialog.addEventListener('cancel', event => {
+  if(!context.hidden){event.preventDefault();closeContext(true)}
+ });
+ dialog.addEventListener('close', () => {
+  closeContext();
+  const mark = history.state?.personalFormats;
+  if(historyToken && mark?.token === historyToken){
+   returningToPage = true;
+   history.go(-mark.depth);
+  }
+  historyToken = '';
+ });
+
+ copyAction.onclick = () => {
+  if(contextTarget?.kind !== 'format' || !canManagePosting())return;
+  copied = {user:currentUser, name:contextTarget.name, data:structuredClone(contextTarget.data)};
+  closeContext(true);
+  message('書式をコピーしました。貼り付け先で右クリックしてください。');
+ };
+ pasteAction.onclick = () => {
+  if(changing || !canManagePosting() || copied?.user !== currentUser)return;
+  const parent = contextTarget?.kind === 'folder' ? contextTarget.id : folder;
+  const existing = new Set(library.entries.filter(item=>item.parent===parent).map(item=>item.name));
+  let name = copied.name;
+  for(let number = 1; existing.has(name); number++){
+   const suffix = number===1 ? ' のコピー' : ' のコピー ('+number+')';
+   name = Array.from(copied.name).slice(0,80-suffix.length).join('')+suffix;
+  }
+  closeContext(true);
+  update([...library.entries,{id:crypto.randomUUID(),name,parent,kind:'format',data:copied.data}],'書式を貼り付けました。');
+ };
+
  const labels = {
   customer:'顧客名', department:'部署', request:'受付内容', contract:'契約区分',
   barcodeColor:'バーコード色', nameColor:'ネームの色', nameRequired:'ネームの有無',
@@ -44,13 +135,16 @@
   };
  }
 
- function openFolder(id) {
+ function openFolder(id, remember = true) {
+  const moved = id !== folder || !!previewId;
   folder = id;
   selectedId = previewId = '';
+  if(remember && moved)rememberFormatLocation();
   paint();
  }
 
  function paint() {
+  closeContext();
   const crumbs = [{id:'',name:'自分の書式'}, ...folderPath(folder)];
   const path = $('#formatpath');
   path.innerHTML = crumbs.map(entry => `<button type="button" data-folder="${entry.id}">${esc(entry.name)}</button>`).join('');
@@ -87,8 +181,9 @@
 
  function paintActions() {
   const back = $('#formatback');
-  back.disabled = changing || (!previewId && !folder);
-  back.title = previewId ? '書式の一覧に戻る' : '一つ上のフォルダに戻る';
+  const mark = history.state?.personalFormats;
+  back.disabled = changing || mark?.token !== historyToken || mark.depth <= 1;
+  back.title = '一つ前の表示に戻る';
   const entry = get(selectedId);
   for(const id of ['formatopen','formatrename','formatdelete'])$('#'+id).disabled = !entry || changing;
   $('#formatfolder').disabled = changing;
@@ -120,7 +215,10 @@
   const entry = get(selectedId);
   if(!entry)return;
   if(entry.kind === 'folder'){openFolder(entry.id);return}
-  previewId = entry.id;
+  if(previewId !== entry.id){
+   previewId = entry.id;
+   rememberFormatLocation();
+  }
   paintActions();
   paintPreview();
   preview.scrollIntoView({block:'nearest'});
@@ -139,7 +237,7 @@
   dirty = true;
  }
 
- async function update(entries) {
+ async function update(entries, successMessage = '') {
   if(changing)return;
   const user = currentUser;
   changing = true;
@@ -148,7 +246,7 @@
    const saved = await api('/api/personal-formats',{userId:user.id,version:library.version,entries});
    if(currentUser !== user)return;
    library = saved;
-   message('');
+   message(successMessage);
    paint();
   } catch(error) {
    message(error.message);
@@ -166,9 +264,12 @@
  }
 
  $('#personalformatsopen').onclick = async () => {
-  if(!canManagePosting() || changing || dialog.open)return;
+  if(!canManagePosting() || changing || dialog.open || returningToPage)return;
   const user = currentUser;
+  folder = selectedId = previewId = '';
+  historyToken = crypto.randomUUID();
   dialog.showModal();
+  pushFormatLocation(1);
   grid.replaceChildren();
   preview.hidden = true;
   message('読み込み中…');
@@ -178,11 +279,11 @@
    const loaded = await api('/api/personal-formats');
    if(currentUser !== user || !dialog.open)return;
    library = loaded;
-   openFolder('');
+   openFolder('',false);
    message('');
   } catch(error) {
    library = {version:0,entries:[]};
-   openFolder('');
+   openFolder('',false);
    message(error.message);
   } finally {
    changing = false;
@@ -190,14 +291,7 @@
   }
  };
  $('#formatback').onclick = () => {
-  if(previewId){
-   previewId = '';
-   paintActions();
-   paintPreview();
-   grid.querySelector('[aria-pressed="true"]')?.focus();
-   return;
-  }
-  if(folder)openFolder(get(folder)?.parent || '');
+  if(!$('#formatback').disabled)history.back();
  };
  $('#personalformatsclose').onclick = () => dialog.close();
  $('#formatopen').onclick = openSelected;
