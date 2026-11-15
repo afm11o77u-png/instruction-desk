@@ -74,6 +74,8 @@
  const context = $('#formatcontext');
  const copyAction = $('#formatcopy');
  const pasteAction = $('#formatpaste');
+ const renameAction = $('#formatcontextrename');
+ let renameTimer;
  let copied = null, contextTarget = null, contextFocus = null, contextFolder = '';
 
  function closeContext(restoreFocus = false) {
@@ -86,6 +88,7 @@
  page.addEventListener('contextmenu', event => {
   const side = panes.left.grid.contains(event.target) ? 'left' : panes.right.grid.contains(event.target) ? 'right' : '';
   if(changing || !side)return;
+  clearTimeout(renameTimer);
   contextFolder = folderOf(side);
   const tile = event.target.closest('.formaticon');
   const entry = tile && get(tile.dataset.id);
@@ -94,6 +97,7 @@
   contextTarget = entry || null;
   contextFocus = tile || document.activeElement;
   copyAction.hidden = entry?.kind !== 'format';
+  renameAction.hidden = !entry;
   pasteAction.disabled = copied?.user !== currentUser;
   pasteAction.textContent = entry?.kind === 'folder' ? 'このフォルダに貼り付け' : '貼り付け';
   const bounds = page.getBoundingClientRect();
@@ -102,6 +106,7 @@
   context.style.left = Math.max(bounds.left,Math.min(event.clientX || anchor.left,bounds.right-context.offsetWidth))+'px';
   context.style.top = Math.max(bounds.top,Math.min(event.clientY || anchor.bottom,bounds.bottom-context.offsetHeight))+'px';
   if(!copyAction.hidden)copyAction.focus();
+  else if(!renameAction.hidden)renameAction.focus();
   else if(!pasteAction.disabled)pasteAction.focus();
  });
  page.addEventListener('pointerdown', event => {
@@ -110,6 +115,13 @@
  page.addEventListener('keydown', event => {
   if(event.key==='Escape' && !context.hidden){event.preventDefault();closeContext(true)}
  });
+
+ renameAction.onclick = () => {
+  const tile = contextFocus;
+  const entry = contextTarget;
+  closeContext();
+  if(entry)startRename(entry,tile);
+ };
 
  copyAction.onclick = () => {
   if(contextTarget?.kind !== 'format' || !canManagePosting())return;
@@ -221,7 +233,8 @@
    const slot = slots?.get(tile.dataset.id);
    tile.style.gridColumn = slot == null ? '' : String(slot%cols+1);
    tile.style.gridRow = slot == null ? '' : String(Math.floor(slot/cols)+1);
-   fitIconName(tile.querySelector('.formaticon-name'));
+   const label = tile.querySelector('.formaticon-name');
+   if(label)fitIconName(label);
   }
  }
 
@@ -280,7 +293,11 @@
    : '<p>この場所にはまだ書式がありません。指示書の作成・編集画面から保存できます。</p>';
   grid.querySelectorAll('button').forEach(button => {
    const id = button.dataset.id;
-   button.onclick = () => {
+   button.onclick = event => {
+    clearTimeout(renameTimer);
+    const renameByClick = !changing && event.detail===1 && selectedId===id && selectedSide===side &&
+     !!event.target.closest('.formaticon-name');
+    if(renameByClick)renameTimer = setTimeout(() => startRename(get(id),button),550);
     if(selectedId !== id)previewId = '';
     selectedId = id;
     selectedSide = side;
@@ -288,8 +305,9 @@
     paintActions();
     paintPreview();
    };
-   button.ondblclick = openSelected;
+   button.ondblclick = () => {clearTimeout(renameTimer);openSelected()};
    button.ondragstart = event => {
+    clearTimeout(renameTimer);
     dragId = id;
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain',id);
@@ -301,6 +319,7 @@
  }
 
  function paint() {
+  clearTimeout(renameTimer);
   closeContext();
   if(folder && !get(folder))folder = '';
   if(rightFolder && !get(rightFolder))rightFolder = '';
@@ -459,11 +478,55 @@
   const name = prompt('フォルダ名')?.trim();
   if(name)update([...library.entries,{id:crypto.randomUUID(),kind:'folder',name,parent:folderOf(selectedSide)}]);
  };
+ function startRename(entry,tile) {
+  clearTimeout(renameTimer);
+  if(changing || !entry || !tile?.isConnected || page.hidden || !canManagePosting())return;
+  selectedId = entry.id;
+  selectedSide = panes.right.grid.contains(tile) ? 'right' : 'left';
+  if(previewId !== entry.id)previewId = '';
+  for(const pane of Object.values(panes))pane.grid.querySelectorAll('.formaticon').forEach(item=>{
+   item.setAttribute('aria-pressed',String(item===tile));
+  });
+  const wrapper = document.createElement('div');
+  wrapper.className = 'formaticon is-renaming';
+  wrapper.dataset.id = entry.id;
+  wrapper.style.cssText = tile.style.cssText;
+  const input = document.createElement('input');
+  input.className = 'format-rename-input';
+  input.type = 'text';
+  input.maxLength = 80;
+  input.value = entry.name;
+  input.setAttribute('aria-label',entry.kind==='folder'?'フォルダ名':'書式名');
+  wrapper.append(tile.querySelector('.formaticon-symbol').cloneNode(true),input,tile.querySelector('small').cloneNode(true));
+  tile.replaceWith(wrapper);
+  let finished = false;
+  const finish = save => {
+   if(finished || !wrapper.isConnected)return;
+   finished = true;
+   const name = input.value.trim();
+   paint();
+   const replacement = panes[selectedSide].grid.querySelector('.formaticon[aria-pressed="true"]');
+   replacement?.focus();
+   if(save && name && name!==entry.name)update(library.entries.map(item=>item.id===entry.id?{...item,name}:item));
+  };
+  input.onkeydown = event => {
+   if(event.isComposing)return;
+   if(event.key==='Enter'||event.key==='Escape'){
+    event.preventDefault();
+    event.stopPropagation();
+    finish(event.key==='Enter');
+   }
+  };
+  input.onblur = () => finish(true);
+  input.focus();
+  input.select();
+  paintActions();
+  paintPreview();
+ }
+
  $('#formatrename').onclick = () => {
-  const entry = get(selectedId);
-  if(!entry)return;
-  const name = prompt('新しい名前',entry.name)?.trim();
-  if(name && name!==entry.name)update(library.entries.map(item => item.id===entry.id ? {...item,name} : item));
+  const tile = panes[selectedSide].grid.querySelector('.formaticon[aria-pressed="true"]');
+  startRename(get(selectedId),tile);
  };
  $('#formatdelete').onclick = () => {
   const entry = get(selectedId);

@@ -1010,6 +1010,7 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
   padding: 14px clamp(12px, 3vw, 36px);
   border-bottom: 1px solid #cbded3;
 }
+#personalformats .formats-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 #personalformats .formats-heading h1 { margin: 0; }
 #personalformats .formats-body { padding: 14px clamp(12px, 3vw, 36px) 24px; }
 #personalformats .format-pane-path, #personalformats .formatactions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
@@ -1067,7 +1068,10 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 .formatpane { min-width: 0; }
 .formatpane[hidden] { display: none; }
 .formatpanes.is-split .formatpane { border: 1px solid #cbded3; border-radius: 8px; padding: 8px; }
-.formatactions #formatsplit[aria-pressed="true"] { background: #e6f2ea; border-color: #246449; }
+#formatsplit[aria-pressed="true"] { background: #e6f2ea; border-color: #246449; }
 @media (max-width: 640px) {
   .formatpanes.is-split { grid-template-columns: minmax(0, 1fr); }
 }
+
+.formatgrid .formaticon.is-renaming { background: #e6f2ea; border: 1px solid #246449; border-radius: 7px; }
+.formatgrid .format-rename-input { width: 100%; min-width: 0; align-self: center; padding: 3px; font-size: 13px; }
