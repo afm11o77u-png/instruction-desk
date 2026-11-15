@@ -6,6 +6,7 @@ let user,lists=[],candidates=[],current=null,dirty=false,busy=false,step=1,title
 const SHEET_LIMIT=100,CAND_PAGE=20;
 const pageQuery=new URLSearchParams(location.search);
 const carryKind=pageQuery.get('carry');
+const legacyScan=pageQuery.get('legacy-scan')==='1';
 const boardMode=pageQuery.get('board')==='1';
 const popupMode=pageQuery.get('popup')==='1';
 let viewingSources=false,viewingSheets=false,viewingTargets=false,sheetsClosingQuiet=false;
@@ -59,7 +60,7 @@ let pendingScans=0;
 
 function syncBarcodeControls(){
  if(!scanForm)return;
- scanForm.hidden=!editable()||!!carryKind||!!current?.workBatch;
+ scanForm.hidden=!legacyScan||!editable();
  scanExport.disabled=busy||pendingScans>0||!current?.manual.some(row=>row.barcode);
 }
 
@@ -90,9 +91,7 @@ if(scanForm)scanForm.onsubmit=e=>{
    maker:'',sku:'',size:result.size||'',condition:'未指定',quantity:1,stock,note2:''});
   activeGroup=stock;
   dirty=true;
-  paintGather();
   preview();
-  paintLanes();
   scanStatus.textContent=barcode+' を追加しました。';
  }).catch(error=>{
   if(current===draft)scanStatus.textContent=error.message;
@@ -116,10 +115,11 @@ if(scanExport)scanExport.onclick=()=>run(async()=>{
  link.download=current.date+'_ピッキングリスト.xlsx';
  link.click();
  setTimeout(()=>URL.revokeObjectURL(url),10000);
+ dirty=false;
  scanStatus.textContent='Excelを出力しました。';
 });
 
-function syncAddRow(){const btn=$('#addrow');if(!btn||!current)return;btn.hidden=!editable();btn.disabled=!editable();syncBarcodeControls()}
+function syncAddRow(){const btn=$('#addrow');if(!btn||!current)return;btn.hidden=legacyScan||!editable();btn.disabled=legacyScan||!editable();syncBarcodeControls()}
 function takeItems(){const have=new Set((current?.sources||[]).map(s=>s.id));return targetScope.filter(s=>s&&!excluded.has(s.id)&&!have.has(s.id))}
 function syncPickButtons(){const items=current?takeItems():[];const room=SHEET_LIMIT-(current?.sources.length||0);const over=items.length>room;const btn=$('#gatherall');if(btn){btn.textContent='指示書を取り込む';btn.disabled=!current||!editable()||!items.length}const review=$('#reviewtargets');if(review){review.hidden=!editable();review.disabled=!editable()}const limit=$('#targetlimit');if(limit){limit.hidden=!over;if(over)limit.textContent=`対象は${items.length}件です。1つのリストに入れられる指示書は${SHEET_LIMIT}件までです。先頭の一部は取り込みません。残り${items.length-room}件を今回の依頼から除外するか、リストを分けてください。`}const trim=$('#excludeoverflow');if(trim){trim.hidden=!(current&&editable()&&over);if(over)trim.textContent=`上限を超えた${items.length-room}件を今回の依頼から除外`}if($('#candprev')){$('#candprev').disabled=candidatePage<=1;$('#candnext').disabled=candidatePage>=Math.max(1,candidatePages)}}
 function paintExcluded(){const box=$('#excludedbox');if(!box)return;if(!excluded.size){box.innerHTML='<p class="hint">今回の依頼から外した指示書はありません。</p>';return}box.innerHTML=`<p>除外 ${excluded.size}件。作業状況は変えていません。この依頼だけの除外で、恒久的な対象外にはなりません。</p>`+[...excluded.values()].map(s=>`<span class="exchip">${esc(s.number)} ${esc(s.customer||'')}<button type="button" data-include="${s.id}">除外をやめる</button></span>`).join('');box.querySelectorAll('[data-include]').forEach(b=>b.onclick=()=>includeSheet(+b.dataset.include))}
@@ -265,4 +265,17 @@ $('#sdedit').onclick=()=>{if(savedDetail)openSavedEdit(savedDetail.id)};
 $('#sdcancel').onclick=()=>{if(!savedDetail||listFinished(savedDetail)||savedDetail.status==='取消')return;if(!confirmDelete(savedDetail))return;savedRun(async()=>{await api('/api/picking/cancel',{id:savedDetail.id,version:savedDetail.version,acknowledgeMailDiscard:!!(savedDetail.mailedAt||savedDetail.mailNeedsRecreate)});savedDetail=null;showSavedListFace();await loadSavedList();await refreshBoard();savedMsg('削除しました。一覧から外しました。入力中の新規作成は変えていません。')})};
 $('#sdflag').onchange=()=>{if(!savedDetail)return;const status=$('#sdflag').value;if(status===savedDetail.status)return;if(!confirm(`確認用に、このリストを「${status}」に変えます。続けますか？`)){$('#sdflag').value=savedDetail.status;return}savedRun(async()=>{try{savedDetail=await api('/api/picking/flags',{id:savedDetail.id,version:savedDetail.version,status});await loadSavedList();paintSavedDetail();savedMsg(`確認用に${savedDetail.status}にしました。`)}catch(e){$('#sdflag').value=savedDetail.status;throw e}})};
 function denyPickingAccess(needLogin){const embedded=pageQuery.get('embed')==='1'||popupMode;if(embedded&&window.parent&&window.parent!==window){if(needLogin){try{parent.postMessage({type:'picking-auth'},location.origin)}catch{}}message(needLogin?'ログインし直してください。':'この画面を使う権限がありません。');return}location.replace('/')}
-run(async()=>{const me=await api('/api/me');user=me.user;const role=user?.role;const allowed=carryKind==='in'?role==='owner'||role==='floor':carryKind==='out'?role==='owner'||role==='sales':role==='owner'||role==='floor';if(!user||user.must_change){denyPickingAccess(true);return}if(!allowed){denyPickingAccess(false);return}if(role==='owner')document.querySelectorAll('aside .nav[data-view="all"],aside .nav[data-view="draft"]').forEach(n=>n.hidden=false);$('#who').textContent=user.name;try{$('#mailto').value=localStorage.getItem('warehouse-mailto:'+user.id)||''}catch{};if(carryKind==='in'){$('#library').hidden=true;$('#editor').hidden=true;$('#carrydesk').hidden=true;$('#carryin').hidden=false;document.querySelector('header strong').textContent='管理担当持込(入力)';$('#carryindate').value=today();await loadCarryList();await loadCarryIn();return}if(carryKind==='out'){$('#library').hidden=true;$('#editor').hidden=true;$('#carryin').hidden=true;$('#carrydesk').hidden=false;$('#carrydate').value=today();$('#carrymonth').value=today().slice(0,7);document.querySelector('header strong').textContent='管理担当持込(出力)';await loadCarryMonth();await loadCarryOut();return}await loadBoard();if(popupMode){const id=Number(pageQuery.get('list'));if(!id){parent.postMessage({type:'picking-back'},location.origin);return}await open(await api('/api/picking/'+id));message('保存したピッキングリストです。うしろの新規作成の入力とは別です。送信前なら、ここで修正して保存できます。');return}if(boardMode){await openFromBoard();return}await openBlank()});
+run(async()=>{const me=await api('/api/me');user=me.user;const role=user?.role;const allowed=carryKind==='in'?role==='owner'||role==='floor':carryKind==='out'?role==='owner'||role==='sales':role==='owner'||role==='floor';if(!user||user.must_change){denyPickingAccess(true);return}if(!allowed){denyPickingAccess(false);return}if(role==='owner')document.querySelectorAll('aside .nav[data-view="all"],aside .nav[data-view="draft"]').forEach(n=>n.hidden=false);$('#who').textContent=user.name;try{$('#mailto').value=localStorage.getItem('warehouse-mailto:'+user.id)||''}catch{};if(carryKind==='in'){$('#library').hidden=true;$('#editor').hidden=true;$('#carrydesk').hidden=true;$('#carryin').hidden=false;document.querySelector('header strong').textContent='管理担当持込(入力)';$('#carryindate').value=today();await loadCarryList();await loadCarryIn();return}if(carryKind==='out'){$('#library').hidden=true;$('#editor').hidden=true;$('#carryin').hidden=true;$('#carrydesk').hidden=false;$('#carrydate').value=today();$('#carrymonth').value=today().slice(0,7);document.querySelector('header strong').textContent='管理担当持込(出力)';await loadCarryMonth();await loadCarryOut();return}if(legacyScan){
+ current=blankList();
+ current.title='バーコード取込 ピッキングリスト';
+ $('#title').value=current.title;
+ $('#date').value=current.date;
+ titleTouched=true;
+ $('#opensheets').hidden=true;
+ const desk=$('#legacy-scan-desk');
+ desk.append($('#metaedit'),$('#listview'));
+ desk.hidden=false;
+ preview();
+ scanStock.focus();
+ return;
+}await loadBoard();if(popupMode){const id=Number(pageQuery.get('list'));if(!id){parent.postMessage({type:'picking-back'},location.origin);return}await open(await api('/api/picking/'+id));message('保存したピッキングリストです。うしろの新規作成の入力とは別です。送信前なら、ここで修正して保存できます。');return}if(boardMode){await openFromBoard();return}await openBlank()});
