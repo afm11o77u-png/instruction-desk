@@ -9379,7 +9379,7 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 if isinstance(row.get('parenClassification'), dict):
                     row['parenClassification']['processing'] = '袖リブ→平加工'
 
-            # 確定仕様 4: LEOC刺繍（加工名: LEOC刺繍 / 取扱顧客: ㈱LEOC）
+            # 確定仕様 4: LEOC刺繍（加工名: LEOC刺繍 / 仕入先: ㈲エルムスコーポレーション / 顧客は作成しない）
             elif 'LEOC刺繍' in raw_text or 'LEOC' in raw_text:
                 ok = True
                 prod = dict(row.get('product') or {})
@@ -9391,7 +9391,13 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 prod['codeOverride'] = ''
                 prod['blankSku'] = True
                 row['product'] = prod
-                row['customer'] = {'action': 'reuse', 'name': '㈱LEOC', 'id': None, 'reasons': []}
+                elms_id = _find_supplier_id_by_name(c, '㈲エルムスコーポレーション') or 5
+                row['supplier'] = {'action': 'reuse', 'name': '㈲エルムスコーポレーション', 'id': elms_id, 'reasons': []}
+                row['customer'] = None
+                row['phasePartsOnly'] = True
+                row['registerServiceWithoutCustomer'] = True
+                row['companionProcessingService'] = 'LEOC刺繍'
+                row['processingService'] = {'serviceName': 'LEOC刺繍', 'vendorName': '㈲エルムスコーポレーション'}
                 row['status'] = STATUS_CREATE if prod.get('action') == 'create' else STATUS_REUSE
                 row['statusLabel'] = STATUS_LABELS[row['status']]
                 row['canCommit'] = True
