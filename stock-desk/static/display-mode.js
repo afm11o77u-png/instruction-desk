@@ -10,9 +10,9 @@
   ];
   const DEFAULT = 'standard';
   const SCREEN_DEFAULTS = {
-    orders: 'grid',
-    floor: 'grid',
-    drafts: 'grid',
+    orders: 'standard',
+    floor: 'standard',
+    drafts: 'standard',
     shipinfo: 'standard',
     'stock-customers': 'compact',
     'stock-suppliers': 'compact',

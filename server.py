@@ -833,9 +833,15 @@ def due_confirm(handler,d):
         c.execute('INSERT INTO history(order_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(row['id'],now,'納期を確認',current['id'],_actor(current),json.dumps(changes,ensure_ascii=False)))
         return 200, record(c.execute('SELECT * FROM orders WHERE id=?',(row['id'],)).fetchone())
 
+def posted_only_admin(user):
+    flags = dict(user)
+    return flags['role'] != 'owner' and bool(flags.get('manage') or flags.get('overview'))
+
+
 def can_access(user,payload):
     if user['role'] in ('floor2','floor3','warehouse'): return False
-    if user['role']=='owner' or user['overview']: return True
+    if user['role']=='owner': return True
+    if posted_only_admin(user): return payload.get('status') != '下書き'
     if user['role']=='floor': return payload.get('status')!='下書き'
     return user['id'] in (payload.get('authorId'),payload.get('assigneeId'))
 
@@ -1692,6 +1698,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         return self.reply(401, {'error': 'ログインし直してください。'})
                     if current['role'] in ('floor', 'floor2', 'floor3', 'warehouse'):
                         return self.reply(403, {'error': 'この権限では指示書を投函できません。'})
+                    if posted_only_admin(current):
+                        return self.reply(403, {'error':'管理者は投函待ちの指示書を操作できません。'})
                     if not isinstance(d, dict):
                         raise ValueError('投函する指示書を選んでください。')
                     code, result = post_ready_orders(c, current, d.get('orders'), datetime.now().isoformat(timespec='seconds'))
@@ -1705,6 +1713,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 if not current or current['must_change']: return self.reply(401,{'error':'ログインし直してください。'})
                 if current['role'] in ('floor2','floor3','warehouse'): return self.reply(403,{'error':'この権限では指示書を変更できません。'})
                 if current['role']=='floor': return self.reply(403,{'error':'現場の指示書は閲覧専用です。変更は営業担当者に依頼してください。'})
+                if posted_only_admin(current) and payload['status'] == '下書き':
+                    return self.reply(403, {'error':'管理者は投函済みの指示書を利用できます。'})
                 if d.get('id'):
                     old=c.execute('SELECT * FROM orders WHERE id=?',(d['id'],)).fetchone()
                     if not old: return self.reply(404,{'error':'指示書が見つかりません。'})

@@ -45,7 +45,8 @@ class DensityRemapMapTest(unittest.TestCase):
     def test_mode_set_and_default(self):
         self.assertEqual(display_modes.MODES, ('cozy', 'standard', 'compact', 'grid'))
         self.assertEqual(display_modes.DEFAULT, 'standard')
-        self.assertEqual(display_modes.default_for('orders'), 'grid')
+        for screen in ('orders', 'floor', 'drafts'):
+            self.assertEqual(display_modes.default_for(screen), 'standard')
         self.assertEqual(display_modes.default_for('shipinfo'), 'standard')
         self.assertEqual(display_modes.default_for('stock-list'), 'standard')
         self.assertEqual(display_modes.default_for('stock-opening'), 'compact')

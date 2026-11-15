@@ -3,13 +3,13 @@ import re
 
 MODES = ('cozy', 'standard', 'compact', 'grid')
 DEFAULT = 'standard'
-# Unset → per-screen default. Instruction lists stay grid.
+# Unset → per-screen default.
 # 登録・設定 (customers/suppliers/products/locations/opening) default to compact;
 # other stock screens stay standard (density remap from PR #47 unchanged).
 SCREEN_DEFAULTS = {
-    'orders': 'grid',
-    'floor': 'grid',
-    'drafts': 'grid',
+    'orders': 'standard',
+    'floor': 'standard',
+    'drafts': 'standard',
     'shipinfo': 'standard',
     'stock-customers': 'compact',
     'stock-suppliers': 'compact',
