@@ -977,3 +977,19 @@ body > aside .nav {font-weight:600}
   .posting-stages button { padding: .5rem; }
   .posting-stages strong { margin-inline-start: 0; }
 }
+
+#desknav .legacy-nav {
+  margin: 4px 0 0 12px;
+  padding-left: 8px;
+  border-left: 1px solid #719888;
+}
+#desknav .legacy-nav:not(:has(> .nav:not([hidden]))) { display: none; }
+#desknav .legacy-nav summary {
+  padding: 8px 10px;
+  color: #dbebe2;
+  font-weight: 700;
+  cursor: pointer;
+  border-radius: 6px;
+}
+#desknav .legacy-nav summary:hover,
+#desknav .legacy-nav summary:focus-visible { background: #275844; }
