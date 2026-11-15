@@ -6242,7 +6242,6 @@
      　確定行 ${c.committedRows||0}　保留 ${c.deferred||r.deferredCount||0}　要確認残 ${r.reviewRemaining||0}　対象外 ${r.excludedCount||0}</p>
       ${s.csvRows!=null?`<p class="excelhint">確定時サマリ: CSV行 ${s.csvRows} / 新規商品 ${s.productsToCreate} / 再利用 ${s.productsToReuse} / 統合 ${s.productsToMerge}（行数≠新規商品数）</p>`:''}
       ${openingBit}
-      ${qrReplacementBannerHtml(r)}
       <p class="excelhint">初期在庫は画面を閉じて「旧CSV一括取り込み」→「初期在庫を登録」から行えます（マップは保存済み）。</p>
     </div>`
   }
@@ -6424,6 +6423,7 @@
       :''
     return `<section class="product-ledger-opening-preview">
       <h3>初期在庫の登録予定</h3>
+      ${qrReplacementBannerHtml(st.preview)}
       ${legacyCustomerHtml(st)}
       <p class="notice">${esc(os.note||sum.note||'確認後に初期在庫を登録します。数量・新品中古・拠点・単価を確認してください。')}</p>
       ${exclHint}

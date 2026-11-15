@@ -6870,6 +6870,13 @@ def classify_row(
         if pm:
             mapped_product_id = pm['product_id']
 
+    if mapped_product_id:
+        prod_check = _load_product(c, mapped_product_id)
+        if prod_check and stock.text(prod_check['category'] if 'category' in prod_check.keys() else '') == stock.CATEGORY_PROCESS_SERVICE:
+            if stock_product_merge.is_normal_product_code(code) and not proc_svc.is_standalone_processing_service_name(product_name):
+                mapped_product_id = None
+                mapped_handle_id = None
+
     # 既存商品照合は登録予定品番（VEH30B下）で行う
     item_for_product = dict(item) if isinstance(item, dict) else {'商品コード': code}
     item_for_product['商品コード'] = code
@@ -11226,8 +11233,9 @@ def _hide_codeless_sizes(classified):
         prod['sizeAction'] = 'none'
         prod['sizeHidden'] = True
         h = row.get('handle')
-        if kind == 'parts' and isinstance(h, dict) and h.get('action') == 'create':
-            # 部品は台帳取込で取扱を作らない（在庫・注文で使うときに取扱を付ける）
+        cust_name = stock.text((row.get('csv') or {}).get('customer') or '')
+        if kind == 'parts' and isinstance(h, dict) and not cust_name:
+            # 顧客名が空の部品だけ取扱を作らない（顧客名がある部品は取扱を登録する）
             h['action'] = 'excluded'
             h['partsNoHandle'] = True
         prod['reasons'] = [x for x in (prod.get('reasons') or []) if 'サイズが空' not in str(x)]
@@ -11463,6 +11471,28 @@ def apply_office_codes(c, plan):
     return applied
 
 
+def _collect_all_qr_replacement_targets(c):
+    """商品登録ランから色分割等で新QRが必要な対象を集約する。"""
+    try:
+        rows = c.execute(
+            "SELECT result_json FROM product_ledger_import_runs WHERE import_mode != 'opening' AND result_json IS NOT NULL ORDER BY id ASC"
+        ).fetchall()
+    except Exception:
+        return []
+    by_code = {}
+    for r in rows:
+        try:
+            data = json.loads(r['result_json'] or '{}')
+            targets = data.get('qrReplacementTargets') or []
+            for t in targets:
+                code = t.get('originalCode')
+                if code:
+                    by_code[code] = t
+        except Exception:
+            pass
+    return list(by_code.values())
+
+
 def build_opening_stock_preview(c, body):
     """段階2: 初期在庫CSV、または旧在庫JSON。商品台帳CSVは不要。永続マップで登録先を解決。"""
     ensure_schema(c)
@@ -11565,6 +11595,7 @@ def build_opening_stock_preview(c, body):
             'openingStockPrep': prep_ms,
             'total': total_ms,
         },
+        'qrReplacementTargets': _collect_all_qr_replacement_targets(c),
         'note': (
             (
                 '旧在庫JSONで登録予定を作ります。商品台帳CSVの再選択は不要です。'
@@ -13152,16 +13183,7 @@ def commit_opening_stock_preview(c, body, *, db_path=None):
             result_counts['legacyQrInserted'] = link_counts['inserted']
             result_counts['legacyQrKept'] = link_counts['kept']
         after_stock = stock_snapshot(c)
-        last_product_run = c.execute(
-            "SELECT result_json FROM product_ledger_import_runs WHERE import_mode != 'opening' AND result_json IS NOT NULL ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        qr_targets = []
-        if last_product_run:
-            try:
-                prev_res = json.loads(last_product_run['result_json'] or '{}')
-                qr_targets = prev_res.get('qrReplacementTargets') or []
-            except Exception:
-                qr_targets = []
+        qr_targets = _collect_all_qr_replacement_targets(c)
         result = {
             'runId': run_id,
             'already': False,
