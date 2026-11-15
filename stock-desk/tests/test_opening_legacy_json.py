@@ -562,6 +562,23 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(plan['qty'], 7)
         self.assertEqual(result['counts'].get('openingCreated', 0), 1)
 
+    def test_customer_matching_row_is_confirmed_over_common_row(self):
+        """顧客ありの取扱行と顧客なし共通行が重複して候補にある場合、旧在庫の顧客と一致する取扱行で確定する。"""
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        # 共通商品（顧客空欄）と、顧客Aの取扱商品を両方登録
+        register_product(conn, path, [',仕入先X,P002,ジャケット,M', '顧客A,仕入先X,P002,ジャケット,M'])
+        preview, result = commit_json(conn, path, [
+            row(id='stock-cust-confirm', customer_id='cust-old-1', maker_id='maker-old-1',
+                item_num='P002', name='ジャケット', item_size='M',
+                maker_name='仕入先X', stock_count=4, calc_stock_count=4),
+        ], token='open-json-cust-confirm')
+        plan = preview['openingStock']['plans'][0]
+        self.assertIn(plan['status'], ('create', 'reuse'))
+        self.assertEqual(plan['target']['customer'], '顧客A')
+        self.assertEqual(result['counts'].get('openingCreated', 0), 1)
+
     def test_empty_price_defaults_to_zero_with_warning(self):
         """旧在庫の仕入単価が空欄(None)の場合、0円として登録可能(create)となり、zeroCostフラグと設定推奨注記が付く。"""
         folder, path, conn = newdb()

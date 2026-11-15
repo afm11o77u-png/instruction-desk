@@ -1382,6 +1382,13 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
 
 
 def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_map_id):
+    if customer:
+        cust_rows = [
+            r for r in rows
+            if stock.text(r['csv_customer'] or '') and _person_names_match(customer, r['csv_customer'])
+        ]
+        if cust_rows:
+            rows = cust_rows
     matches = []
     seen = set()
     service_hit = False
