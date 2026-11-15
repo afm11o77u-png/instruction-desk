@@ -6705,7 +6705,9 @@ def code_name_columns_look_swapped(code, product_name):
     return looks_like_garment_name_token(code) and looks_like_maker_sku_token(product_name)
 
 
-def is_legacy_coop_bettyu(code: str) -> bool:
+def is_legacy_coop_bettyu(customer_name: str, code: str) -> bool:
+    if 'コープ' not in (customer_name or ''):
+        return False
     norm = unicodedata.normalize('NFKC', code or '').strip()
     norm = re.sub(r'[‐-―−ｰ－]', '-', norm)
     if 'ポーチ' in norm:
@@ -6767,6 +6769,11 @@ def classify_row(
     source_code = stock.text(pos_info.get('sourceCode') or code_raw)
     base_code = stock.text(pos_info.get('baseCode') or code)
     position = stock.text(pos_info.get('position') or '')
+    # 1. 別注品は「別注(顧客名)」を品番にする
+    if legacy_code_assign.is_custom_order_code(code_raw) and customer_name:
+        code = legacy_code_assign.custom_order_code_for(customer_name)
+        source_code = code
+        base_code = code
     import code_suffix_attributes as suffix_attr
     suffix = suffix_attr.classify_suffix(
         code_raw, product_name=product_name, supplier=supplier_name, size=size_label,
@@ -6804,7 +6811,7 @@ def classify_row(
     if tape_reason:
         return _excluded_row(row_no, item, reason=f'{row_no}行目：{tape_reason}')
 
-    if is_legacy_coop_bettyu(code_raw):
+    if is_legacy_coop_bettyu(customer_name, code_raw):
         return _excluded_row(row_no, item, reason=f'{row_no}行目：旧別注制服（現在未使用）のため登録対象外')
 
     if not customer_name:
@@ -6874,6 +6881,15 @@ def classify_row(
     if suffix.get('registerAsParts') or suffix_attr.is_part_product_name(product_name) or suffix_attr.is_part_product_name(code_raw):
         product['category'] = stock.CATEGORY_PARTS
         product['proposedCategory'] = stock.CATEGORY_PARTS
+        # 2. 品番が空欄の部品だけ商品名を品番にする（品番がある部品は触らない）
+        if not code_raw and product_name:
+            code = product_name
+            source_code = product_name
+            base_code = product_name
+            product['code'] = product_name
+            product['codeOverride'] = product_name
+            product['codeDisplay'] = product_name
+            product['blankSku'] = False
     elif (
         proc_svc.is_standalone_processing_service_name(product_name)
         or proc_svc.is_standalone_processing_service_name(code_raw)

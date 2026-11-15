@@ -607,6 +607,20 @@ def build_plans(c, body):
             plan['reasons'] = [tape_reason]
             prepared.append({'blocked': plan})
             continue
+        # 3. 廃番・不使用で在庫0の行は登録対象外（除外一覧で確認可能）
+        pname_norm = stock.text(legacy_row.get('itemName') or '')
+        pcode_norm = stock.text(legacy_row.get('itemNum') or '')
+        is_discontinued = any(w in pname_norm or w in pcode_norm for w in ('(不使用)', '(廃番)', '(廃盤)', '（不使用）', '（廃番）', '（廃盤）'))
+        if qty == 0 and is_discontinued:
+            disc_reason = f'{index}行目：旧台帳で不使用/廃番（在庫数0）のため登録対象外です。'
+            plan = _blocked_plan(index, row, [disc_reason], legacy_info=legacy_row, qty=0)
+            plan['status'] = legacy.STATUS_EXCLUDED
+            plan['statusLabel'] = bulk.OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED]
+            plan['qrAction'] = 'skip'
+            plan['qrOutOfScope'] = True
+            plan['reasons'] = [disc_reason]
+            prepared.append({'blocked': plan})
+            continue
         reasons = [qty_note]
         if not legacy_row['stockId'] or not legacy_row['customerId'] or not legacy_row['makerId']:
             reasons.append('旧在庫行ID・旧顧客ID・旧メーカーIDは文字として必要です。数値にはしません。')

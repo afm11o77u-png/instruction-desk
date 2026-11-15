@@ -1311,8 +1311,19 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
 
     pli.ensure_schema(c)
     code_t = stock.text(code)
+    import legacy_code_assign
     if not code_t:
-        named = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
+        # 部品で品番が空欄だったものは商品名を品番としたマップ行も探す
+        named = []
+        if product_name:
+            named = c.execute(
+                '''SELECT * FROM product_ledger_row_maps
+                   WHERE csv_product_code=? AND product_id IS NOT NULL
+                   ORDER BY id DESC''',
+                (product_name,),
+            ).fetchall()
+        if not named:
+            named = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
         if not named:
             res = {
                 'status': 'missing',
@@ -1327,8 +1338,10 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
         return res
     variants = position_sku.sku_code_variants(code_t)
     base, _pos = position_sku.strip_sku_position_suffix(code_t)
-    # 原文・密着・スペース付き・基礎（基礎は後で上下で絞る）
-    code_candidates = list(dict.fromkeys([code_t, *variants, base]))
+    # 別注品は 別注(顧客名) も候補に加える
+    bettyu_cand = legacy_code_assign.custom_order_code_for(customer) if legacy_code_assign.is_custom_order_code(code_t) else ''
+    # 原文・密着・スペース付き・基礎・別注(顧客名)
+    code_candidates = list(dict.fromkeys([code_t, *variants, base, bettyu_cand]))
     rows = []
     seen_ids = set()
     for cand in code_candidates:
@@ -1749,6 +1762,24 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
             'productRegistrationExcluded': False, 'productRegistrationExcludedLabel': '',
         }
     if map_status != 'ok':
+        pname_norm = stock.text(payload.get('productName') or '')
+        pcode_norm = stock.text(payload.get('code') or '')
+        is_discontinued = any(w in pname_norm or w in pcode_norm for w in ('(不使用)', '(廃番)', '(廃盤)', '（不使用）', '（廃番）', '（廃盤）'))
+        if qty == 0 and is_discontinued:
+            return {
+                'rowNo': row_no, 'status': legacy.STATUS_EXCLUDED,
+                'statusLabel': OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED],
+                'qty': qty, 'unitCost': cost, 'condition': condition,
+                'conditionLabel': stock.condition_label(condition) if condition else '',
+                'reasons': [f'{row_no}行目：旧台帳で不使用/廃番（在庫数0）のため登録対象外です。'],
+                'csv': payload,
+                'target': None,
+                'place': place, 'stock': None, 'matchedLedger': False, 'complement': False,
+                'heldWithProduct': False, 'selected': False, 'mapResolve': resolved,
+                'fromPersistedMap': True, 'serviceExcluded': False,
+                'productRegistrationExcluded': True,
+                'productRegistrationExcludedLabel': '不使用/廃番（在庫0）',
+            }
         status = legacy.STATUS_REVIEW if map_status in ('ambiguous', 'deleted') else COMPLEMENT_STATUS
         if map_status == 'missing':
             status = COMPLEMENT_STATUS
