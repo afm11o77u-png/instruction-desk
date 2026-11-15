@@ -322,7 +322,7 @@ function openMigrationRestore(){
 }
 
 const testResetWarning='この操作はテストをやり直すためのものです。送信したメールや、倉庫にある添付Excelは取り消せません。実際の倉庫へ依頼したリストには使用しないでください。';
-function openTestReset(){
+function openTestReset(batchId = 0, onReset){
  if(currentUser?.role!=='owner')return;
  let plan=null,revert=false;
  repairDialog.innerHTML=`<div class="dialoghead"><div><h2>テスト用：ピッキング依頼をリセット</h2><p>主管理者専用 ／ 通常の削除とは別です。</p></div><button type="button" id="repair-close">閉じる</button></div><div class="repairbody"><div class="repairtools"><button type="button" id="repair-home">管理・修正に戻る</button></div><p id="repair-message" role="status"></p><p class="testwarn">${esc(testResetWarning)}</p><form id="test-search" class="repairfilters"><label>ピッキングリスト番号<input id="test-q" maxlength="40" placeholder="PK-000001" required></label><button type="submit">検索</button></form><div id="test-results"></div><div id="test-detail"></div></div>`;
@@ -371,10 +371,17 @@ function openTestReset(){
   const result=await api('/api/picking/test-reset',{id:plan.id,version:plan.version,reason,confirmNumber:typed,acknowledgeTest:true,revertStatus:revert,orders:plan.sheets.filter(s=>s.version!=null).map(s=>({id:s.orderId,version:s.version})),carry:[...new Map(plan.carry.map(x=>[x.day,x])).values()].map(x=>({day:x.day,version:x.version}))});
   repairMessage(result.already?result.message:'テスト用リセットを実施しました。リストは一覧から外し、記録は残しています。新しいリストを作成して再テストしてください。');
   if(typeof refresh==='function')await refresh();
+  if(onReset)await onReset();
   plan=await api('/api/picking/test-reset/preview',{id:plan.id,revertStatus:false});
   revert=false;
   paintPlan();
  };
  repairDialog.querySelector('#test-search').onsubmit=e=>{e.preventDefault();repairRun(async()=>{plan=null;paintPlan();const box=repairDialog.querySelector('#test-results');box.textContent='検索しています。';const found=await api('/api/picking/test-reset/search',{q:repairDialog.querySelector('#test-q').value.trim()});paintList(found.items||[]);if(!(found.items||[]).length){repairMessage('該当するリストはありません。');box.textContent='該当するリストはありません。'}})};
+ if(!repairDialog.open)repairDialog.showModal();
+ if(batchId){
+  repairDialog.querySelector('#repair-home').hidden=true;
+  repairDialog.querySelector('#test-search').hidden=true;
+  repairRun(async()=>{repairMessage('読み込み中…');await loadPlan(batchId);repairMessage('')});
+ }
 }
 

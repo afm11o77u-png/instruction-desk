@@ -75,6 +75,7 @@ def initialize():
         display_modes.initialize(c)
         picking.initialize(c)
         picking.backfill_picking_flags(c)
+        picking.backfill_batch_carry(c)
         kintai.bind(DATA)
         kintai.schema(c)
         name_exe.schema(c)

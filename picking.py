@@ -140,11 +140,44 @@ def sync_carry(c, list_id, manual, previous, active):
         if carry_keys(manual): mutate_carry(c, carry_keys(manual), list_id, True)
     elif carry_keys(previous): mutate_carry(c, carry_keys(previous), list_id, False)
 
+def sync_batch_carry(c, list_id, batch):
+    by_day={}
+    if batch.get('status')!='取消':
+        for source in batch.get('sources') or []:
+            order=c.execute('SELECT payload FROM orders WHERE id=?',(source['id'],)).fetchone()
+            if not order: continue
+            day=source.get('markShipDate') or json.loads(order['payload']).get('markShipDate')
+            try:
+                day=date.fromisoformat(day or '').isoformat()
+            except (ValueError, TypeError):
+                day=batch['date']
+            for row in source['rows']:
+                if row.get('stock')=='carry':
+                    by_day.setdefault(day,[]).append(dict(row,listId=list_id,fromWorkBatch=True))
+    for record in list(c.execute('SELECT day,payload FROM carry_inputs')):
+        day=record['day']
+        payload=json.loads(record['payload'])
+        old=payload.get('rows',[])
+        own=[row for row in old if row.get('fromWorkBatch') and row.get('listId')==list_id]
+        wanted=by_day.pop(day,[])
+        if own==wanted: continue
+        payload['rows']=[row for row in old if row not in own]+wanted
+        c.execute('UPDATE carry_inputs SET version=version+1,payload=? WHERE day=?',(json.dumps(payload,ensure_ascii=False),day))
+    for day,rows in by_day.items():
+        payload={'rows':rows,'updatedAt':batch.get('updatedAt',''),'updatedBy':batch.get('updatedBy','')}
+        c.execute('INSERT INTO carry_inputs(day,version,payload) VALUES(?,1,?)',(day,json.dumps(payload,ensure_ascii=False)))
+
+def backfill_batch_carry(c):
+    for row in list(c.execute('SELECT id,payload FROM picking_lists')):
+        batch=json.loads(row['payload'])
+        if batch.get('workBatch'): sync_batch_carry(c,row['id'],batch)
+
 def carry_manual(c, day, linked=False):
     row=c.execute('SELECT payload FROM carry_inputs WHERE day=?',(day,)).fetchone()
     if not row: return []
     manual=[]
     for item in json.loads(row['payload']).get('rows',[]):
+        if item.get('fromWorkBatch'): continue
         if item.get('listId') and not linked: continue
         manual.append({k:item.get(k,'') for k in FIELDS}|{'key':item['key'],'origin':item.get('origin') or '交換依頼(他)','requester':item.get('requester') or 'マーク','stock':'carry','sourceNumber':'直接依頼'})
     return manual
@@ -221,7 +254,7 @@ def imported(c,u,source,can_access):
         v.update(key=f"order:{row['id']}:{i}",sourceNumber=instruction_number(row['id'], d),requester=name,customer=d.get('customer',''),stock=stock(x.get('stock')),stockOriginal=x.get('stock',''))
         rows.append(v)
     if not rows: raise ValueError('商品明細のない指示書は取り込めません。')
-    return {'id':row['id'],'version':row['version'],'number':instruction_number(row['id'], d),'customer':d.get('customer',''),'rows':rows}
+    return {'id':row['id'],'version':row['version'],'number':instruction_number(row['id'], d),'customer':d.get('customer',''),'markShipDate':d.get('markShipDate'),'rows':rows}
 
 def validate_rows(rows,final):
     for n,r in enumerate(rows,1):
@@ -583,7 +616,10 @@ def board_view(c,u,d,can_access):
     sheets=eligible_sheets(c,u,can_access)
     visible_lists=[]
     for r in c.execute('SELECT * FROM picking_lists ORDER BY id DESC'):
-        if visible(u,r): visible_lists.append((r, json.loads(r['payload'])))
+        if visible(u,r):
+            payload=json.loads(r['payload'])
+            if d.get('scope')=='standalone' and payload.get('workBatch'): continue
+            visible_lists.append((r, payload))
     counts={'sheets':len(sheets),'drafts':0,'waiting':0,'sent':0,'cancelled':0}
     for _,payload in visible_lists: counts[list_bucket(payload)]+=1
     if not bucket:
@@ -608,6 +644,8 @@ def board_view(c,u,d,can_access):
 
 def history_view(c,u,d):
     kind=d.get('kind') or ''
+    scope=d.get('scope') or 'all'
+    if scope not in ('standalone','all'): raise ValueError('依頼の範囲を確認してください。')
     if kind=='cancelled': raise ValueError('削除したリストは一覧に出しません。')
     if kind not in ('','waiting','sent'): raise ValueError('状態を確認してください。')
     q=text(d.get('q') or '',80).lower()
@@ -623,6 +661,7 @@ def history_view(c,u,d):
     for r in c.execute('SELECT * FROM picking_lists'):
         if not visible(u,r): continue
         payload=json.loads(r['payload'])
+        if scope=='standalone' and payload.get('workBatch'): continue
         bucket=list_bucket(payload)
         if bucket not in ('waiting','sent'): continue
         counts[bucket]+=1
@@ -632,6 +671,7 @@ def history_view(c,u,d):
         item=list_brief(r,u,payload)
         if q and q not in item['_search']: continue
         item.pop('_search',None)
+        item['workBatch']=bool(payload.get('workBatch'))
         rows.append(item)
     rows.sort(key=lambda x: (x['date'] or '0000-00-00', x['id']))
     rows.reverse()
@@ -865,7 +905,8 @@ def test_reset_apply(c,u,d):
         changes['リスト']={'before':number,'after':number}
         c.execute('UPDATE orders SET version=version+1,payload=? WHERE id=?',(json.dumps(payload,ensure_ascii=False),sheet['orderId']))
         c.execute('INSERT INTO history(order_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(sheet['orderId'],now,'テスト用リセットを実施した',u['id'],actor,json.dumps(changes,ensure_ascii=False)))
-    if plan['carry']: mutate_carry(c, [item['key'] for item in plan['carry'] if item.get('key')], row['id'], False)
+    if plan['carry']: mutate_carry(c, [item['key'] for item in plan['carry'] if CARRY_KEY.fullmatch(item.get('key') or '')], row['id'], False)
+    if before.get('workBatch'): sync_batch_carry(c,row['id'],{**before,'status':'取消'})
     report={'released':released,'reverted':reverted,'skipped':skipped,'revertRequested':revert}
     value={**before,'status':'取消','deletedAt':now,'deletedBy':u['name'],'updatedAt':now,'testResetAt':now,'testResetBy':u['name'],'testResetReason':reason,'testResetRevert':revert,'testResetReport':report}
     encoded=json.dumps(value,ensure_ascii=False)
@@ -873,6 +914,55 @@ def test_reset_apply(c,u,d):
     c.execute('INSERT INTO picking_history(list_id,at,actor,action,before_json,after_json) VALUES(?,?,?,?,?,?)',(row['id'],now,u['name'],'テスト用リセットを実施した',row['payload'],encoded))
     log(c,u,'ピッキングリスト：テスト用リセットを実施した',f'{number} {reason}')
     return 200, {'already':False,'number':number,'version':row['version']+1,'message':'テスト用リセットを実施しました。リストは一覧から外し、記録は残しています。','released':released,'reverted':reverted,'skipped':skipped,'warning':TEST_RESET_WARNING}
+
+def test_reset_batch(c, u, d):
+    versions = _expect_map(d.get('lists'), 'リスト')
+    if not versions:
+        raise ValueError('対象のピッキングリストを選択してください。')
+    revert = d.get('revertStatus') is True
+
+    def load_plan(list_id):
+        row = c.execute('SELECT * FROM picking_lists WHERE id=?', (list_id,)).fetchone()
+        if not row or not json.loads(row['payload']).get('workBatch'):
+            raise ValueError('作業のまとめが見つかりません。一覧を更新してください。')
+        plan = test_reset_plan(c, row, revert)
+        if plan['already'] or plan['version'] != versions[list_id]:
+            raise ValueError('対象リストが更新されています。一覧を更新してください。')
+        return plan
+
+    def snapshot(plan):
+        return {
+            'id': plan['id'], 'version': plan['version'], 'confirmNumber': plan['number'],
+            'orders': [{'id': s['orderId'], 'version': s['version']} for s in plan['sheets'] if s['version'] is not None],
+            'carry': [{'day': day, 'version': version} for day, version in sorted(
+                {x['day']: x['version'] for x in plan['carry']}.items())],
+        }
+
+    plans = [load_plan(list_id) for list_id in versions]
+    if d.get('preview') is True:
+        return 200, {'lists': [snapshot(plan) for plan in plans],
+                     'sheets': len({s['orderId'] for plan in plans for s in plan['sheets']}),
+                     'reverting': len({s['orderId'] for plan in plans for s in plan['sheets'] if s['revertStatus']})}
+    if d.get('acknowledgeTest') is not True:
+        raise ValueError('対象がすべてテストデータであることを確認してください。')
+    if d['lists'] != [snapshot(plan) for plan in plans]:
+        raise ValueError('確認後に指示書や持込情報が変わりました。対象を確認し直してください。')
+    results = []
+    c.execute('SAVEPOINT picking_batch_reset')
+    try:
+        for list_id in versions:
+            # 前のリストの解除で同日の持込データの版が進むことがある。
+            status, result = test_reset_apply(c, u, {**d, **snapshot(load_plan(list_id))})
+            if status != 200:
+                raise ValueError(result['error'])
+            results.append(result)
+    except Exception:
+        c.execute('ROLLBACK TO picking_batch_reset')
+        raise
+    finally:
+        c.execute('RELEASE picking_batch_reset')
+    return 200, {'count': len(results)}
+
 
 def handle(h,c,path,d,can_access):
     u=h.session_user(c)
@@ -882,6 +972,7 @@ def handle(h,c,path,d,can_access):
         if d is None: return 404,{'error':'見つかりません。'}
         if path=='/api/picking/test-reset/search': return test_reset_search(c,u,d)
         if path=='/api/picking/test-reset/preview': return test_reset_preview(c,u,d)
+        if path=='/api/picking/test-reset/batch': return test_reset_batch(c,u,d)
         if path=='/api/picking/test-reset': return test_reset_apply(c,u,d)
         return 404,{'error':'見つかりません。'}
     if path.startswith('/api/carry-input'):
@@ -963,7 +1054,8 @@ def handle(h,c,path,d,can_access):
             if n: counts[day]=counts.get(day,0)+n
         for r in c.execute('SELECT day,payload FROM carry_inputs WHERE day LIKE ?',(month+'-%',)):
             rows=json.loads(r['payload']).get('rows') or []
-            if rows: counts[r['day']]=counts.get(r['day'],0)+len(rows)
+            manual_count=sum(1 for row in rows if not row.get('fromWorkBatch'))
+            if manual_count: counts[r['day']]=counts.get(r['day'],0)+manual_count
         printed={r['day']:r for r in c.execute('SELECT day,at,by_name FROM carry_prints WHERE day LIKE ?',(month+'-%',))}
         days=[{'day':day,'count':counts[day],'printedAt':printed[day]['at'] if day in printed else '','printedBy':printed[day]['by_name'] if day in printed else ''} for day in sorted(counts)]
         return 200,{'month':month,'days':days,'missing':sum(1 for day in days if not day['printedAt'])}
@@ -1059,6 +1151,7 @@ def handle(h,c,path,d,can_access):
     if value['status']!='取消':
         c.executemany('INSERT INTO picking_sources(order_id,list_id) VALUES(?,?)',[(s['id'],lid) for s in value['sources']])
     sync_carry(c, lid, value.get('manual') or [], (before or {}).get('manual') or [], value['status']!='取消')
+    if value.get('workBatch'): sync_batch_carry(c,lid,value)
     c.execute('INSERT INTO picking_history(list_id,at,actor,action,before_json,after_json) VALUES(?,?,?,?,?,?)',(lid,now,u['name'],action,json.dumps(before,ensure_ascii=False),payload))
     log(c,u,'ピッキングリスト：'+action,f'PK-{lid:06}')
     prev_ids=[s['id'] for s in (before.get('sources') or []) if isinstance(s,dict) and type(s.get('id')) is int]
