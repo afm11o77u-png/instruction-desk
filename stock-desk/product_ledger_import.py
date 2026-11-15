@@ -1022,6 +1022,16 @@ def _apply_user_row_exclusions(classified, sku_groups, processing_split_meta, ex
 
 def lookup_product_registration_exclusion(c, *, customer, code, product_name, size, supplier):
     """商品登録時に「この行を登録しない」とした記録（product_id なしのマップ）。"""
+    cache = getattr(c, '_prod_excl_cache', None)
+    if cache is None:
+        cache = {}
+        try:
+            setattr(c, '_prod_excl_cache', cache)
+        except Exception:
+            pass
+    k = (customer, code, product_name, size, supplier)
+    if k in cache:
+        return cache[k]
     ensure_schema(c)
     key = row_map_key(
         customer=customer, code=code, product_name=product_name, size=size, supplier=supplier,
@@ -1032,14 +1042,16 @@ def lookup_product_registration_exclusion(c, *, customer, code, product_name, si
         (key,),
     ).fetchone()
     if not row:
+        cache[k] = None
         return None
     try:
         spec = json.loads(row['spec_json'] or '') or {}
     except (TypeError, ValueError, json.JSONDecodeError):
         spec = {}
     if not isinstance(spec, dict) or not spec.get('excludedFromRegistration'):
+        cache[k] = None
         return None
-    return {
+    res = {
         'mapId': row['id'],
         'rowMapKey': key,
         'sourceRowNo': row['source_row_no'],
@@ -1047,6 +1059,8 @@ def lookup_product_registration_exclusion(c, *, customer, code, product_name, si
         'productId': row['product_id'],
         'runId': row['run_id'],
     }
+    cache[k] = res
+    return res
 
 
 def upsert_exclusion_row_map(c, *, run_id, file_sha256, file_name, row):

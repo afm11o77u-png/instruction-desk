@@ -671,6 +671,16 @@ def location_resolve(c, site_name, shelf_name, default_site_name):
     """Return (site_id|None, shelf_id|None, effective_site, shelf, flags)."""
     site = stock.text(site_name)
     shelf = stock.text(shelf_name)
+    cache = getattr(c, '_loc_resolve_cache', None)
+    if cache is None:
+        cache = {}
+        try:
+            setattr(c, '_loc_resolve_cache', cache)
+        except Exception:
+            pass
+    k = (site, shelf, stock.text(default_site_name))
+    if k in cache:
+        return cache[k]
     empty_site = not site
     if empty_site:
         site = stock.text(default_site_name) or stock.UNCONFIRMED_SITE_NAME
@@ -683,7 +693,7 @@ def location_resolve(c, site_name, shelf_name, default_site_name):
             'SELECT id,name,active FROM locations WHERE name=? AND parent_id=?',
             (shelf, site_row['id']),
         ).fetchone()
-    return {
+    res = {
         'siteName': site,
         'shelfName': shelf,
         'siteEmpty': empty_site,
@@ -695,6 +705,8 @@ def location_resolve(c, site_name, shelf_name, default_site_name):
         'shelfExists': shelf_row is not None if shelf else True,
         'locationId': (shelf_row['id'] if shelf_row else (site_row['id'] if site_row and not shelf else None)),
     }
+    cache[k] = res
+    return res
 
 
 def db_fingerprint(c):
@@ -750,6 +762,19 @@ def previous_imports_for_file(c, sha):
 
 def _person_preview(c, table, label, name, row_no):
     name = stock.text(name)
+    cache = getattr(c, '_person_preview_cache', None)
+    if cache is None:
+        cache = {}
+        try:
+            setattr(c, '_person_preview_cache', cache)
+        except Exception:
+            pass
+    k = (table, label, name)
+    if k in cache:
+        res = dict(cache[k])
+        if res.get('reasons'):
+            res['reasons'] = [re.sub(r'^\d+行目：', f'{row_no}行目：', r) for r in res['reasons']]
+        return res
     info = {
         'label': label, 'name': name, 'action': 'missing', 'id': None,
         'candidates': [], 'reasons': [],
@@ -757,6 +782,7 @@ def _person_preview(c, table, label, name, row_no):
     if not name:
         info['action'] = 'review'
         info['reasons'].append(f'{row_no}行目：{label}名が空です。架空名は作りません。')
+        cache[k] = info
         return info
     matches, how = find_person_matches(c, table, name)
     if how == 'exact' and len(matches) == 1:
@@ -768,6 +794,7 @@ def _person_preview(c, table, label, name, row_no):
         else:
             info['action'] = 'reuse'
             info['id'] = row['id']
+        cache[k] = info
         return info
     if how == 'form_variant':
         active_matches = [m for m in matches if m['active']]

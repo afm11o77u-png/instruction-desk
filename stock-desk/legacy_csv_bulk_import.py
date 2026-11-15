@@ -10,6 +10,7 @@ product_ledger_row_maps から登録先を解決する（メイン名選定の�
 from __future__ import annotations
 
 import hashlib
+import functools
 import json
 import re
 import unicodedata
@@ -208,6 +209,7 @@ def _processing_cmp_key(proc):
     return key
 
 
+@functools.lru_cache(maxsize=20000)
 def _names_equivalent_core(a, b):
     """原文名の同一判定。
 
@@ -1295,6 +1297,16 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
 
 def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size, supplier, prefer_map_id=None):
     """商品登録で永続化したマップから登録先候補を返す（推測で別商品へ寄せない）。"""
+    cache = getattr(c, '_lookup_dest_cache', None)
+    if cache is None:
+        cache = {}
+        try:
+            setattr(c, '_lookup_dest_cache', cache)
+        except Exception:
+            pass
+    k = (customer, code, product_name, size, supplier, prefer_map_id)
+    if k in cache:
+        return cache[k]
     import product_ledger_import as pli
 
     pli.ensure_schema(c)
@@ -1302,13 +1314,17 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
     if not code_t:
         named = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
         if not named:
-            return {
+            res = {
                 'status': 'missing',
                 'reason': '商品コードが空のため、商品登録マップから登録先を特定できません。',
                 'matches': [],
             }
-        return _resolve_from_map_rows(c, named, product_name=product_name, customer=customer,
-                                      code_t='', prefer_map_id=prefer_map_id)
+            cache[k] = res
+            return res
+        res = _resolve_from_map_rows(c, named, product_name=product_name, customer=customer,
+                                     code_t='', prefer_map_id=prefer_map_id)
+        cache[k] = res
+        return res
     variants = position_sku.sku_code_variants(code_t)
     base, _pos = position_sku.strip_sku_position_suffix(code_t)
     # 原文・密着・スペース付き・基礎（基礎は後で上下で絞る）
@@ -1351,8 +1367,10 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
     if not rows:
         # 部品などで品番を記録していないマップ: 仕入先＋商品名＋サイズで照合
         rows = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
-    return _resolve_from_map_rows(c, rows, product_name=product_name, customer=customer,
-                                  code_t=code_t, prefer_map_id=prefer_map_id)
+    res = _resolve_from_map_rows(c, rows, product_name=product_name, customer=customer,
+                                 code_t=code_t, prefer_map_id=prefer_map_id)
+    cache[k] = res
+    return res
 
 
 def _exact_name_key(name):
@@ -1364,12 +1382,19 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
     key = _exact_name_key(product_name)
     if not key:
         return []
+    cached_rows = getattr(c, '_codeless_rows_cache', None)
+    if cached_rows is None:
+        cached_rows = c.execute(
+            '''SELECT * FROM product_ledger_row_maps
+               WHERE (COALESCE(csv_product_code,'')='' OR csv_product_code='要確認')
+                 AND product_id IS NOT NULL ORDER BY id DESC'''
+        ).fetchall()
+        try:
+            setattr(c, '_codeless_rows_cache', cached_rows)
+        except Exception:
+            pass
     out = []
-    for row in c.execute(
-        '''SELECT * FROM product_ledger_row_maps
-           WHERE (COALESCE(csv_product_code,'')='' OR csv_product_code='要確認')
-             AND product_id IS NOT NULL ORDER BY id DESC'''
-    ).fetchall():
+    for row in cached_rows:
         if _exact_name_key(row['csv_product_name']) != key and not _names_equivalent_core(row['csv_product_name'], product_name):
             continue
         if supplier and stock.text(row['csv_supplier'] or '') and not _person_names_match(supplier, row['csv_supplier']):
