@@ -185,11 +185,11 @@ def _payload(kind, payload):
         raise ValueError('書式の内容を確認してください。')
     if kind == 'tiers':
         lines = payload.get('lines')
-        if not isinstance(lines, list) or len(lines) != 3:
-            raise ValueError('上段・中段・下段の3つを入力してください。')
+        if not isinstance(lines, list) or not 1 <= len(lines) <= 4:
+            raise ValueError('段数は1〜4段から選んでください。')
         cleaned = [_line(item, TIER_LIMIT, '各段') for item in lines]
         if any(_is_blank(item) for item in cleaned):
-            raise ValueError('上段・中段・下段をすべて入力してください。')
+            raise ValueError('選んだ段数の入力欄をすべて入力してください。')
         return {'lines': cleaned}
     departments = payload.get('departments')
     customer = _line(payload.get('customer'), CUSTOMER_LIMIT, '顧客名')

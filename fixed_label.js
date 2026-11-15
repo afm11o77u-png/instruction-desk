@@ -1,4 +1,4 @@
-/* 定型書式の印刷HTML。組み込み書式と、登録した書式（3段・部署チェック）のプレビューを作る。
+/* 定型書式の印刷HTML。組み込み書式と、登録した書式（固定文字・部署チェック）のプレビューを作る。
  * このファイルは指示書を更新しない。書式の保存は fixed_label_formats.py が行う。 */
 (function (root, factory) {
   const api = factory();
@@ -68,7 +68,7 @@
     '.hm .memo .label{font-size:8.5pt;font-weight:700;padding-top:2mm;white-space:nowrap}' +
     '.hm .memo .memobox{flex:1 1 auto;height:12mm;border:1px solid #000}' +
     '.hm .maker{text-align:right;font-size:6pt;line-height:1;margin-top:.8mm;flex:0 0 auto}' +
-    /* 登録した3段書式。各段の空白（納品日　月　日）は潰さない */
+    /* 登録した固定文字書式。各段の空白（納品日　月　日）は潰さない */
     '.cell.tiers{justify-content:center;align-items:center;gap:4mm;padding:10mm 8mm}' +
     '.cell.tiers .tierline{text-align:center;font-weight:700;line-height:1.35;letter-spacing:.06em;' +
     'white-space:pre-wrap;overflow-wrap:anywhere;width:100%}' +
@@ -352,14 +352,14 @@
     const body = payload && typeof payload === 'object' ? payload : null;
     if (kind === 'tiers') {
       const raw = body && body.lines;
-      if (!Array.isArray(raw) || raw.length !== 3) {
-        return { ok: false, error: '上段・中段・下段の3つを入力してください。' };
+      if (!Array.isArray(raw) || raw.length < 1 || raw.length > 4) {
+        return { ok: false, error: '段数は1〜4段から選んでください。' };
       }
       const lines = [];
       for (const item of raw) {
         const text = cleanFixedLabelText(item);
         if (text == null) return { ok: false, error: '各段を文字で入力してください。' };
-        if (isBlankFixedLabelText(text)) return { ok: false, error: '上段・中段・下段をすべて入力してください。' };
+        if (isBlankFixedLabelText(text)) return { ok: false, error: '選んだ段数の入力欄をすべて入力してください。' };
         if (Array.from(text).length > FIXED_LABEL_TIER_LIMIT) {
           return { ok: false, error: `各段は${FIXED_LABEL_TIER_LIMIT}文字以内で入力してください。` };
         }

@@ -523,6 +523,10 @@ function syncFixedDeleteButton(){
 function syncFixedRegKind(){
  const kind=document.querySelector('input[name="fixedregkind"]:checked')?.value||'tiers';
  const tiers=$('#fixedregtiers');
+ if(tiers){
+  const count=Number($('#fixedregtiercount').value);
+  tiers.querySelectorAll('input').forEach((input,index)=>{input.closest('label').hidden=index>=count});
+ }
  const depts=$('#fixedregdepts');
  if(tiers)tiers.hidden=kind!=='tiers';
  if(depts)depts.hidden=kind!=='departments';
@@ -591,11 +595,8 @@ function readFixedLabelDraft(){
   if(noBox&&!noBox.checked)payload.printNo=false;
   return {name,kind,payload,storeName:$('#fixedregstore')?.value||''};
  }
- return {name,kind,payload:{lines:[
-  $('#fixedregline1')?.value||'',
-  $('#fixedregline2')?.value||'',
-  $('#fixedregline3')?.value||'',
- ]}};
+ const lines=[...$('#fixedregtiers').querySelectorAll('input')].slice(0,Number($('#fixedregtiercount').value)).map(input=>input.value);
+ return {name,kind,payload:{lines}};
 }
 async function loadFixedLabelFormats(selectId){
  if(!canViewFixedLabelFormats())return;
@@ -630,9 +631,8 @@ function loadFixedLabelIntoEditor(){
   const radio=document.querySelector(`input[name="fixedregkind"][value="${kind}"]`);
   if(radio)radio.checked=true;
   const lines=rec.payload&&Array.isArray(rec.payload.lines)?rec.payload.lines:[];
-  if($('#fixedregline1'))$('#fixedregline1').value=kind==='tiers'?(lines[0]||''):'';
-  if($('#fixedregline2'))$('#fixedregline2').value=kind==='tiers'?(lines[1]||''):'';
-  if($('#fixedregline3'))$('#fixedregline3').value=kind==='tiers'?(lines[2]||''):'';
+  $('#fixedregtiercount').value=String(kind==='tiers'?lines.length:3);
+  $('#fixedregtiers').querySelectorAll('input').forEach((input,index)=>{input.value=lines[index]||''});
   if($('#fixedregcustomer'))$('#fixedregcustomer').value=kind==='departments'?(rec.payload&&rec.payload.customer||''):'';
   if($('#fixedregstoreslot'))$('#fixedregstoreslot').checked=kind==='departments'&&!!(rec.payload&&rec.payload.storeSlot);
   if($('#fixedregprintno'))$('#fixedregprintno').checked=kind!=='departments'||!(rec.payload&&rec.payload.printNo===false);
@@ -687,6 +687,7 @@ function previewFixedLabelDraft(){
  }
 }
 document.querySelectorAll('input[name="fixedregkind"]').forEach(el=>el.addEventListener('change',syncFixedRegKind));
+$('#fixedregtiercount')?.addEventListener('change',syncFixedRegKind);
 $('#fixedregstoreslot')?.addEventListener('change',syncFixedRegStore);
 $('#fixedregdeptadd')?.addEventListener('click',()=>{ $('#fixedregerror').textContent=''; addFixedDeptRow(''); });
 $('#fixedregload')?.addEventListener('click',loadFixedLabelIntoEditor);
