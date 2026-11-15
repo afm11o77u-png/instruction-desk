@@ -147,7 +147,7 @@ def judgment_aux_upload(body):
             '商品名': stock.text(row.get('name')),
             '商品コード': stock.text(row.get('item_num')),
             'サイズ': stock.canonical_size_label(row.get('item_size')),
-            '仕入単価': str(price) if type(price) is int and not isinstance(price, bool) else '0',
+            '仕入単価': str(price) if type(price) is int and not isinstance(price, bool) and price >= 0 else '0',
             '在庫': _agreed_qty_text(row),
             '拠点': stock.text(row.get('factory_name')),
             '棚': stock.text(row.get('shelf_name')),
@@ -170,19 +170,22 @@ def judgment_aux_upload(body):
 
 
 def _qty_decision(row):
-    stock_count = row.get('stock_count')
-    calc = row.get('calc_stock_count')
-    if type(stock_count) is bool or type(calc) is bool:
+    sc_raw = row.get('stock_count')
+    sh_raw = row.get('shipment_count')
+    calc_raw = row.get('calc_stock_count')
+    if sc_raw in (None, '') and sh_raw in (None, ''):
+        return 0, '旧在庫の数量が空欄のため0を在庫数量にします。'
+    sc = 0 if sc_raw is None else sc_raw
+    sh = 0 if sh_raw is None else sh_raw
+    if type(sc) is not int or type(sh) is not int or type(sc) is bool or type(sh) is bool:
         return None, '数量の型が不正なため登録しません。'
-    if stock_count in (None, '') or calc in (None, ''):
-        return None, QTY_EMPTY
-    if type(stock_count) is not int or type(calc) is not int:
-        return None, '数量が整数でないため登録しません。'
-    if stock_count != calc:
+    if calc_raw is not None and type(calc_raw) is int and calc_raw != sc:
         return None, QTY_MISMATCH
-    if stock_count < 0:
-        return stock_count, f'{QTY_SOURCE_SAME}（{stock_count}）を在庫数量にします。※数量がマイナスのため要確認（在庫数警告）'
-    return stock_count, f'{QTY_SOURCE_SAME}（{stock_count}）を在庫数量にします。'
+    qty = sc - sh
+    note = f'旧在庫（購入{sc} - 出荷{sh} = {qty}）を在庫数量にします。'
+    if qty < 0:
+        note += '※数量がマイナスのため要確認（在庫数警告）'
+    return qty, note
 
 
 def _condition_text(row):
@@ -677,7 +680,7 @@ def build_plans(c, body):
             'サイズ': legacy_row['itemSize'],
             '新古': _condition_text(row),
             '在庫': str(qty),
-            '仕入単価': str(row.get('price')) if type(row.get('price')) is int and not isinstance(row.get('price'), bool) else '0',
+            '仕入単価': str(row.get('price')) if type(row.get('price')) is int and not isinstance(row.get('price'), bool) and row.get('price') >= 0 else '0',
             '拠点': legacy_row['factoryName'],
             '棚': legacy_row['shelfName'],
         }

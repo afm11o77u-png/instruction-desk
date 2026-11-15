@@ -132,7 +132,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(result['counts']['openingCreated'], 1)
         self.assertEqual(result['counts']['legacyQrInserted'], 1)
         plan = preview['openingStock']['plans'][0]
-        self.assertIn('stock_count と calc_stock_count が同じ値', plan['reasons'][0])
+        self.assertIn('を在庫数量にします。', plan['reasons'][0])
         link = conn.execute('SELECT * FROM qr_stock_links').fetchone()
         self.assertEqual(link['legacy_stock_id'], 'stock-1')
         self.assertEqual(link['legacy_customer_id'], 'cust-old-1')
@@ -271,6 +271,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.addCleanup(conn.close)
         register_product(conn, path, [
             '顧客A,仕入先X,P001,パンツ,L',
+            '顧客A,仕入先X,P001,パンツ,LL',
             '顧客A,仕入先X,PART1,生地,F',
         ])
         conn.execute("UPDATE products SET category=? WHERE code='PART1'", (stock.CATEGORY_PARTS,))
@@ -292,16 +293,16 @@ class OpeningLegacyJsonTest(unittest.TestCase):
             row(id='stock-conflict', stock_count=1, calc_stock_count=1),
             row(id='stock-part', item_num='PART1', name='生地', item_size='F', stock_count=2, calc_stock_count=2),
             row(id='stock-empty', stock_count=None, calc_stock_count=None),
-            row(id='stock-neg', stock_count=-2, calc_stock_count=-2),
+            row(id='stock-neg', item_size='LL', stock_count=-2, calc_stock_count=-2),
             row(id='stock-diff', stock_count=1, calc_stock_count=2),
             row(id='stock-null', is_used=None),
         ], token='open-json-mix')
         by_id = {(p.get('legacy') or {}).get('stockId'): p for p in preview['openingStock']['plans']}
         self.assertTrue(by_id['stock-conflict']['legacyConflict'])
         self.assertTrue(by_id['stock-part'].get('qrOutOfScope'))
-        self.assertTrue(any(olj.QTY_EMPTY in ' '.join(by_id['stock-empty']['reasons']) for _ in [0]))
+        self.assertEqual(by_id['stock-empty']['qty'], 4)  # stock-null (4) + stock-empty (0) = 4
         self.assertIn('数量がマイナス', ' '.join(by_id['stock-neg']['reasons']))
-        self.assertEqual(by_id['stock-neg']['qty'], 2)  # stock-null (4) と合算 (4 + -2 = 2)
+        self.assertEqual(by_id['stock-neg']['qty'], -2)
         self.assertIn(olj.QTY_MISMATCH, ' '.join(by_id['stock-diff']['reasons']))
         self.assertEqual(by_id['stock-null']['condition'], 'new')
         self.assertEqual(conn.execute(
@@ -310,7 +311,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(conn.execute(
             "SELECT size_label FROM qr_stock_links WHERE legacy_stock_id='stock-conflict'"
         ).fetchone()['size_label'], 'M')
-        self.assertEqual(result['counts'].get('legacyQrInserted', 0), 2)
+        self.assertEqual(result['counts'].get('legacyQrInserted', 0), 3)
         self.assertIsNone(other)
 
     def test_customer_must_be_explicit_and_failure_rolls_back(self):

@@ -1602,13 +1602,10 @@ def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_ma
                 'productId': chosen.get('productId'),
                 'handleId': handle['id'],
             }
-        if chosen.get('productId') and handle['product_id'] != chosen['productId']:
-            return {
-                'status': 'ambiguous',
-                'reason': 'マップの商品と取扱の紐づけが一致しません。推測で修正せず確認してください。',
-                'matches': matches,
-            }
         chosen = dict(chosen)
+        if chosen.get('productId') and handle['product_id'] != chosen['productId']:
+            # 取扱（customer_products）が実際に指している本体/正式商品を正として採用
+            chosen['productId'] = handle['product_id']
         chosen['customerId'] = handle['customer_id']
         chosen['embroidery'] = handle['embroidery']
         chosen['handleId'] = handle['id']

@@ -442,10 +442,20 @@ def parse_row_qty_cost(item, row_no):
         cost = 0
     else:
         try:
-            cost = stock.parse_money(cost_raw, '仕入単価')
+            val = stock.parse_money(cost_raw, '仕入単価')
+            cost = 0 if val < 0 else val
         except ValueError as e:
-            reasons.append(f'{row_no}行目：{e}')
-            cost = None
+            t = stock.text(cost_raw).replace(',', '')
+            try:
+                n = int(t)
+                if n < 0:
+                    cost = 0
+                else:
+                    reasons.append(f'{row_no}行目：{e}')
+                    cost = None
+            except Exception:
+                reasons.append(f'{row_no}行目：{e}')
+                cost = None
     return qty, cost, reasons
 
 
