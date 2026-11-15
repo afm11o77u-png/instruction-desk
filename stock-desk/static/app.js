@@ -1442,11 +1442,6 @@ function productForm(r){
   r=r||{sizes:[],links:[],active:true,category:'',subSupplierIds:[]}
   const subIds=new Set((r.subSupplierIds||[]).map(Number))
   const suppliers=['<option value="">未設定</option>'].concat(state.data.suppliers.filter(s=>s.active||s.id===r.supplierId||subIds.has(s.id)).map(s=>`<option value="${s.id}" ${s.id===r.supplierId?'selected':''}>${esc(s.name)}</option>`)).join('')
-  const subChecks=state.data.suppliers.filter(s=>s.active||subIds.has(s.id)).map(s=>{
-    const disabled=r.supplierId!=null&&Number(s.id)===Number(r.supplierId)
-    const checked=!disabled&&subIds.has(Number(s.id))
-    return `<label class="check"><input type="checkbox" data-sub-supplier="${s.id}" ${checked?'checked':''} ${disabled?'disabled':''}>${esc(s.name)}</label>`
-  }).join('')||'<span class="sub">仕入先台帳が空です</span>'
   const scheme=detectSizeScheme(r.sizes)
   const cat=r.category||''
   const catOpts=[['','（なし）'],['制服','制服'],['部品・資材','部品・資材'],['加工サービス','加工サービス']].map(([v,l])=>`<option value="${esc(v)}" ${cat===v?'selected':''}>${esc(l)}</option>`).join('')
@@ -1457,7 +1452,7 @@ function productForm(r){
   return `<div class="grid">${field('code','社内管理品番（空欄可）',r.code,false)}${field('makerCode','メーカー品番（空＝社内と同じ）',r.makerCode||'',false)}${field('name','商品名（代表名）',r.name,true)}${field('color','色',r.color)}${field('material','生地・素材',r.material||'')}<label>カテゴリ<select id="category">${catOpts}</select></label><label>通常の仕入先<select id="supplierId">${suppliers}</select></label></div>
     ${aliasBlock}
     ${r.id?`<label class="add-aliases">別名を追加（、区切り）<input id="addNameAliases" placeholder="例: スナッパ加工"></label>`:''}
-    <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierChecks">${subChecks}</div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
+    <fieldset class="sub-suppliers"><legend>サブ仕入先（通常以外・複数可）</legend><div id="subSupplierSelected" class="sub-supplier-tags"></div><div class="sub-supplier-picker-row"><input type="search" id="subSupplierSearch" placeholder="仕入先を検索..." style="max-width:200px;"><select id="subSupplierSelect" style="max-width:280px;"></select><button type="button" id="addSubSupplierBtn">追加</button></div><p class="excelhint">通常仕入先は1社まで。他の仕入先はサブとして残します。既存の通常仕入先の動きは変わりません。</p></fieldset>
     <p class="excelhint">通常品番は1品番=1商品です。同じ通常品番の新規登録はできません（別注・不明・空欄は例外）。品番を空にすると品番なし商品です（台帳CSV取込では部品・資材／加工サービス）。画面表示はカテゴリに応じて「品番なし」または「品番なし（要確認）」になります（その文言を品番として保存しません）。加工サービスは衣服在庫数量ではなく加工回数・単価の管理向けです。色分割登録では社内管理品番とメーカー品番を分け、発注書にはメーカー品番＋色を出します。</p>
     <div class="size-scheme" role="group" aria-label="サイズ表記の切替">
       <span class="size-scheme-label">サイズ表記</span>
@@ -1481,7 +1476,7 @@ function resolveProductLinkCustomer(customers, customerId){
   return (customers||[]).find(c=>Number(c.id)===id)||null
 }
 function bindProductEditor(row){
-  const editor={sizes:[...row.sizes],links:row.links.map(l=>({...l})),scheme:detectSizeScheme(row.sizes)}
+  const editor={sizes:[...row.sizes],links:row.links.map(l=>({...l})),scheme:detectSizeScheme(row.sizes),subSupplierIds:new Set((row.subSupplierIds||[]).map(Number))}
   const draw=()=>{
     $('#sizeScheme').querySelectorAll('button').forEach(b=>{
       b.classList.toggle('on',b.dataset.scheme===editor.scheme)
@@ -1586,18 +1581,77 @@ function bindProductEditor(row){
     touchEditDirty()
     draw()
   }
-  const syncSubDisabled=()=>{
-    const primary=$('#supplierId')?Number($('#supplierId').value):null
-    document.querySelectorAll('#subSupplierChecks [data-sub-supplier]').forEach(el=>{
-      const sid=Number(el.dataset.subSupplier)
-      const isPrimary=primary&&sid===primary
-      el.disabled=!!isPrimary
-      if(isPrimary)el.checked=false
-    })
+  const renderSubSuppliers=()=>{
+    const container=$('#subSupplierSelected')
+    if(!container)return
+    const primaryId=$('#supplierId')?Number($('#supplierId').value):null
+    if(primaryId)editor.subSupplierIds.delete(primaryId)
+    const ids=[...editor.subSupplierIds]
+    if(!ids.length){
+      container.innerHTML='<span class="sub-supplier-empty-hint">未選択（通常仕入先のみ）</span>'
+    }else{
+      container.innerHTML=ids.map(id=>{
+        const sup=state.data.suppliers.find(s=>Number(s.id)===id)
+        const name=sup?sup.name:`ID:${id}`
+        return `<span class="sub-supplier-tag">${esc(name)}<button type="button" class="del-sub" data-del-sub="${id}" title="削除">×</button></span>`
+      }).join('')
+      container.querySelectorAll('[data-del-sub]').forEach(btn=>{
+        btn.onclick=()=>{
+          editor.subSupplierIds.delete(Number(btn.dataset.delSub))
+          touchEditDirty()
+          renderSubSuppliers()
+          updateSubSupplierOptions()
+        }
+      })
+    }
   }
+  const updateSubSupplierOptions=()=>{
+    const sel=$('#subSupplierSelect')
+    const searchInput=$('#subSupplierSearch')
+    if(!sel)return
+    const q=(searchInput?searchInput.value:'').trim().toLowerCase()
+    const primaryId=$('#supplierId')?Number($('#supplierId').value):null
+    const candidates=state.data.suppliers.filter(s=>{
+      if(!s.active && !editor.subSupplierIds.has(Number(s.id)))return false
+      if(primaryId && Number(s.id)===primaryId)return false
+      if(editor.subSupplierIds.has(Number(s.id)))return false
+      if(!q)return true
+      const name=(s.name||'').toLowerCase()
+      const kana=(s.kana||'').toLowerCase()
+      return name.includes(q) || kana.includes(q)
+    })
+    sel.innerHTML=['<option value="">仕入先を選択して追加...</option>'].concat(
+      candidates.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`)
+    ).join('')
+  }
+  const addSubBtn=$('#addSubSupplierBtn')
+  const subSel=$('#subSupplierSelect')
+  const subSearch=$('#subSupplierSearch')
+  const doAddSub=()=>{
+    if(!subSel)return
+    const val=Number(subSel.value)
+    if(val){
+      editor.subSupplierIds.add(val)
+      touchEditDirty()
+      renderSubSuppliers()
+      updateSubSupplierOptions()
+    }
+  }
+  if(addSubBtn)addSubBtn.onclick=doAddSub
+  if(subSel)subSel.onchange=doAddSub
+  if(subSearch)subSearch.oninput=()=>{updateSubSupplierOptions()}
   const supplierEl=$('#supplierId')
-  if(supplierEl)supplierEl.onchange=()=>{touchEditDirty();syncSubDisabled()}
-  syncSubDisabled()
+  if(supplierEl)supplierEl.onchange=()=>{
+    const primary=Number(supplierEl.value)
+    if(primary && editor.subSupplierIds.has(primary)){
+      editor.subSupplierIds.delete(primary)
+    }
+    touchEditDirty()
+    renderSubSuppliers()
+    updateSubSupplierOptions()
+  }
+  renderSubSuppliers()
+  updateSubSupplierOptions()
   draw()
   $('#dialog')._editor=editor
 }
@@ -1621,7 +1675,7 @@ function readForm(row){
   }
   const editor=$('#dialog')._editor
   const supplier=$('#supplierId').value
-  const subSupplierIds=[...document.querySelectorAll('#subSupplierChecks [data-sub-supplier]:checked')].map(el=>Number(el.dataset.subSupplier))
+  const subSupplierIds=editor&&editor.subSupplierIds?[...editor.subSupplierIds]:[]
   const links=(editor.links||[]).map(l=>{
     const cid=Number(l.customerId)
     if(!Number.isFinite(cid)||cid<=0||!resolveProductLinkCustomer(state.data.customers,cid)){

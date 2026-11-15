@@ -611,6 +611,12 @@ fieldset.sub-suppliers legend,fieldset.merge-subs legend,fieldset.merge-sizes le
   padding:0 6px;font-size:13px
 }
 #subSupplierChecks,.merge-subs,.merge-sizes{display:flex;flex-wrap:wrap;gap:8px 14px}
+.sub-supplier-tags{display:flex;flex-wrap:wrap;gap:6px;min-height:30px;align-items:center;padding:4px 0}
+.sub-supplier-tag{display:inline-flex;align-items:center;gap:6px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;padding:3px 8px;border-radius:14px;font-size:12px;font-weight:700}
+.sub-supplier-tag button.del-sub{border:none;background:none;cursor:pointer;color:#86efac;font-size:14px;line-height:1;padding:0 2px;font-weight:700}
+.sub-supplier-tag button.del-sub:hover{color:#ef4444}
+.sub-supplier-empty-hint{color:#94a3b8;font-size:12px;font-style:italic}
+.sub-supplier-picker-row{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
 
 /* 幅は dialog 本体へ（form に付けない＝dialog 既定880pxとの食い違いを防ぐ） */
 dialog.merge-dialog{
