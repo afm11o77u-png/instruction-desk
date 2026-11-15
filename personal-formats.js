@@ -86,6 +86,9 @@
  }
 
  function paintActions() {
+  const back = $('#formatback');
+  back.disabled = changing || (!previewId && !folder);
+  back.title = previewId ? '書式の一覧に戻る' : '一つ上のフォルダに戻る';
   const entry = get(selectedId);
   for(const id of ['formatopen','formatrename','formatdelete'])$('#'+id).disabled = !entry || changing;
   $('#formatfolder').disabled = changing;
@@ -118,6 +121,7 @@
   if(!entry)return;
   if(entry.kind === 'folder'){openFolder(entry.id);return}
   previewId = entry.id;
+  paintActions();
   paintPreview();
   preview.scrollIntoView({block:'nearest'});
  }
@@ -184,6 +188,16 @@
    changing = false;
    paintActions();
   }
+ };
+ $('#formatback').onclick = () => {
+  if(previewId){
+   previewId = '';
+   paintActions();
+   paintPreview();
+   grid.querySelector('[aria-pressed="true"]')?.focus();
+   return;
+  }
+  if(folder)openFolder(get(folder)?.parent || '');
  };
  $('#personalformatsclose').onclick = () => dialog.close();
  $('#formatopen').onclick = openSelected;

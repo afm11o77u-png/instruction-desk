@@ -1000,6 +1000,7 @@ body > aside .nav {font-weight:600}
 #personalformats { width: min(880px, 96vw); }
 #personalformats .dialogbody { max-height: 72vh; overflow: auto; }
 #formatpath, #personalformats .formatactions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+#personalformats .formatactions #formatpath { margin: 0; }
 #personalformats .formatactions label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; }
 #formatmessage:empty { display: none; }
 #formatgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
