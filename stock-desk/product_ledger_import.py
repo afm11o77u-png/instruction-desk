@@ -5298,18 +5298,32 @@ def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
         if bucket and stock.text(user.get('internalCode') or '') and bucket.get('kind') != 'process_service':
             bucket['internalCode'] = stock.text(user.get('internalCode'))
 
-    # 提案品番が内容間で重複し色で区別できるときは色を付ける（利用者入力は変えない）
+    # 提案品番が内容間で重複するときは色・仕様・連番で一意化（利用者入力は変えない）
     _dup = {}
     for plan in buckets.values():
         if plan.get('kind') != 'process_service' and plan.get('internalCode'):
             _dup.setdefault(plan['internalCode'], []).append(plan)
     for same in _dup.values():
-        colors = [stock.text(p.get('color') or '') for p in same]
-        if len(same) < 2 or not all(colors) or len(set(colors)) != len(same):
+        if len(same) < 2:
             continue
-        for plan, color in zip(same, colors):
+        # 第1段階: 色があるものは色を付加（同じ内部品番に複数色ある場合）
+        for plan in same:
             if plan['internalCode'] == plan.get('suggestedInternalCode'):
-                plan['internalCode'] = plan['suggestedInternalCode'] = f"{plan['internalCode']}-{color}"
+                color = stock.text(plan.get('color') or '')
+                if color and not plan['internalCode'].endswith(f'-{color}'):
+                    plan['internalCode'] = plan['suggestedInternalCode'] = f"{plan['internalCode']}-{color}"
+
+    # 第2段階: それでも重複しているものは連番（-2, -3...）で一意化
+    _dup2 = {}
+    for plan in buckets.values():
+        if plan.get('kind') != 'process_service' and plan.get('internalCode'):
+            _dup2.setdefault(plan['internalCode'], []).append(plan)
+    for base_code, same in _dup2.items():
+        if len(same) < 2:
+            continue
+        for idx, plan in enumerate(same[1:], start=2):
+            if plan['internalCode'] == plan.get('suggestedInternalCode'):
+                plan['internalCode'] = plan['suggestedInternalCode'] = f"{base_code}-{idx}"
 
     # 衝突検査（商品のみ。加工サービスは品番なし）
     seen_internal = {}
@@ -5362,12 +5376,38 @@ def build_content_split_plans(c, group, decision_raw=None, *, classified=None):
         plan['existingProducts'] = existing
         collision = bool(existing)
         if internal and internal in seen_internal:
-            collision = True
-            plan['collidesWithPlan'] = seen_internal[internal]
+            user_internal = stock.text(user_plans.get(plan.get('contentKey') or '', {}).get('internalCode') or '')
+            # 利用者の手動入力でなければ、プラン間衝突を連番で自動回避
+            if not user_internal or internal == plan.get('suggestedInternalCode'):
+                base_code = internal
+                seq = 2
+                while f'{base_code}-{seq}' in seen_internal or (c and stock_product_merge.find_live_products_by_code(c, f'{base_code}-{seq}')):
+                    seq += 1
+                internal = f'{base_code}-{seq}'
+                plan['internalCode'] = internal
+                plan['suggestedInternalCode'] = internal
+                plan['collidesWithPlan'] = ''
+            else:
+                collision = True
+                plan['collidesWithPlan'] = seen_internal[internal]
         else:
             plan['collidesWithPlan'] = ''
         if internal:
             seen_internal[internal] = plan.get('productName') or key
+        # internal更新後の既存DBチェック
+        if internal and not existing and stock_product_merge.is_normal_product_code(internal):
+            existing = [
+                {
+                    'id': r['id'],
+                    'code': r['code'],
+                    'name': r['name'],
+                    'color': r['color'] or '',
+                    'supplierName': r['supplier_name'] or '',
+                }
+                for r in stock_product_merge.find_live_products_by_code(c, internal)
+            ]
+            plan['existingProducts'] = existing
+        collision = bool(existing) or bool(plan.get('collidesWithPlan'))
         plan['collision'] = collision
         keep_id = plan.get('keepProductId')
         action = stock.text(plan.get('collisionAction') or '')

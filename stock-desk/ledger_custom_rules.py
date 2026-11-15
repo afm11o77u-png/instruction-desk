@@ -245,6 +245,8 @@ CUSTOM_CONTENT_SPLIT_SPECS = {
     '6991-099',
     '別注(よつ葉乳業㈱)',
     '別注(㈱LEOC)',
+    '別注(㈱ＬＥＯＣ)',
+    '別注((株)LEOC)',
     '別注(Umiosu 札幌工場)',
     '別注(みよしの)',
     '別注(釧路丸水㈱)',
@@ -254,22 +256,61 @@ CUSTOM_CONTENT_SPLIT_SPECS = {
 
 def is_custom_color_split_code(code: str) -> bool:
     t = stock.text(code or '')
-    return t in CUSTOM_COLOR_SPLIT_SPECS
+    if not t:
+        return False
+    if t in CUSTOM_COLOR_SPLIT_SPECS:
+        return True
+    import unicodedata
+    norm_t = unicodedata.normalize('NFKC', t)
+    for s in CUSTOM_COLOR_SPLIT_SPECS:
+        if unicodedata.normalize('NFKC', s) == norm_t:
+            return True
+    return False
 
 
 def is_custom_content_split_code(code: str) -> bool:
     t = stock.text(code or '')
-    return t in CUSTOM_CONTENT_SPLIT_SPECS
+    if not t:
+        return False
+    # 別注(顧客名) はすべて内容別に分けて登録の対象
+    if t.startswith(('別注(', '別注（', '別注 ')):
+        return True
+    if t in CUSTOM_CONTENT_SPLIT_SPECS:
+        return True
+    import unicodedata
+    norm_t = unicodedata.normalize('NFKC', t)
+    for s in CUSTOM_CONTENT_SPLIT_SPECS:
+        if unicodedata.normalize('NFKC', s) == norm_t:
+            return True
+    return False
 
 
 def is_custom_merge_code(code: str) -> bool:
     t = stock.text(code or '')
-    return t in CUSTOM_MERGE_SPECS
+    if not t:
+        return False
+    if t in CUSTOM_MERGE_SPECS:
+        return True
+    import unicodedata
+    norm_t = unicodedata.normalize('NFKC', t)
+    for s in CUSTOM_MERGE_SPECS:
+        if unicodedata.normalize('NFKC', s) == norm_t:
+            return True
+    return False
 
 
 def get_custom_merge_spec(code: str) -> dict | None:
     t = stock.text(code or '')
-    return CUSTOM_MERGE_SPECS.get(t)
+    if not t:
+        return None
+    if t in CUSTOM_MERGE_SPECS:
+        return CUSTOM_MERGE_SPECS[t]
+    import unicodedata
+    norm_t = unicodedata.normalize('NFKC', t)
+    for k, v in CUSTOM_MERGE_SPECS.items():
+        if unicodedata.normalize('NFKC', k) == norm_t:
+            return v
+    return None
 
 
 def match_custom_color_variant(maker_code: str, row: dict, info: dict) -> dict | None:

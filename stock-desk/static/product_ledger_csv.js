@@ -5334,8 +5334,8 @@
           st.toast(panel.urlFetchErrors[key],6000)
         }finally{
           st.busy=false
-          // URL取得後は候補リスト構造が変わるのでパネル差し替え（外枠・内部スクロール保持）
-          refreshBulkMakerPanelUi(st)
+          stopBusyTimer(st)
+          paintDialog()
         }
       }
     })
@@ -6153,8 +6153,8 @@
     }finally{
       panel.adopting=false
       st.busy=false
-      patchBulkMakerProgressTexts(st)
-      refreshBulkMakerPanelUi(st)
+      stopBusyTimer(st)
+      paintDialog()
     }
   }
 
