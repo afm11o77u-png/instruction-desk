@@ -1075,3 +1075,9 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 
 .formatgrid .formaticon.is-renaming { background: #e6f2ea; border: 1px solid #246449; border-radius: 7px; }
 .formatgrid .format-rename-input { width: 100%; min-width: 0; align-self: center; padding: 3px; font-size: 13px; }
+
+#formatbatch { width: min(720px, 95vw); }
+#formatbatch .dialogbody { display: grid; gap: 10px; }
+#formatbatch .formatactions { display: flex; flex-wrap: wrap; gap: 8px; }
+#formatbatchresult { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
+#formatbatchresult:empty, #formatbatchselection:empty { display: none; }

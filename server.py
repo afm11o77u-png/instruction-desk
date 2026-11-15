@@ -67,6 +67,7 @@ def initialize():
         personal_notes.initialize(c)
         personal_formats.initialize(c)
         templates.initialize(c)
+        personal_formats.migrate_legacy(c)
         placement.bind(DATA)
         placement.schema(c)
         shipping.schema(c)

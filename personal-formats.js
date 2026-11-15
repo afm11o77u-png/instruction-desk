@@ -16,7 +16,7 @@
  let dragId = '';
  const get = id => library.entries.find(entry => entry.id === id);
  const message = text => { $('#formatmessage').textContent = text; };
- let historyToken = '', returningToPage = false;
+ let historyToken = '', returningToPage = false, resumeEditor = false;
  const layoutControl = $('#formatlayout');
  const sizeControl = $('#formaticonsize');
  const sizes = {small:[100,94],medium:[140,124],large:[180,156]};
@@ -38,9 +38,11 @@
    history.go(-mark.depth);
   }
   historyToken = '';
+  if(resumeEditor&&canManagePosting()&&!editor.open)editor.showModal();
+  resumeEditor = false;
  }
 
- window.resetPersonalFormatsPage = () => closePage();
+ window.resetPersonalFormatsPage = () => {resumeEditor=false;closePage()};
 
 
  function pushFormatLocation(depth) {
@@ -148,6 +150,10 @@
   method:'納品方法', methodNote:'納品方法の補足', packing:'荷姿', car:'号車',
   advance:'先出し', advanceCondition:'先出し条件', enclosures:'同梱物'
  };
+
+ const extraLabels = {code:'顧客コード',management:'管理番号',employeeNumber:'社員番号',
+  employee:'従業員名',phonetic:'ふりがな',sex:'性別',repair:'修理内容',notes:'備考'};
+ const recurring = {...labels,code:'顧客コード',repair:'修理内容',notes:'備考'};
 
  function folderPath(id) {
   const path = [];
@@ -335,6 +341,7 @@
 
  function paintActions() {
   splitButton.disabled = layoutControl.disabled = sizeControl.disabled = changing;
+  $('#formatimport').disabled = $('#formatbatchopen').disabled = changing;
   layoutControl.value = library.layout || 'auto';
   sizeControl.value = library.iconSize || 'medium';
   const back = $('#formatback');
@@ -355,7 +362,7 @@
   preview.hidden = !entry;
   if(!entry){preview.replaceChildren();return}
   const d = entry.data;
-  const details = Object.entries(labels).filter(([key]) => d[key])
+  const details = Object.entries({...labels,...extraLabels}).filter(([key]) => d[key])
    .map(([key,label]) => `<div><dt>${label}</dt><dd>${esc(d[key])}</dd></div>`).join('');
   const columns = [['name','商品名'],['maker','メーカー'],['sku','品番'],['size','サイズ'],
    ['condition','新古'],['quantity','数量'],['stock','在庫場所'],['note','備考']];
@@ -383,6 +390,8 @@
 
  function useFormat(entry, update) {
   if(!canManagePosting())return;
+  if(resumeEditor && dirty && !confirm('現在の入力内容を破棄して、この書式を開きますか？'))return;
+  resumeEditor = false;
   closePage();
   openEditor(null,entry.data);
   if(typeof syncMethodNote === 'function')syncMethodNote();
@@ -420,9 +429,11 @@
   update(library.entries.map(item => item.id===id ? {...item,parent:target,slot:undefined} : item));
  }
 
- const openPage = async () => {
+ const openPage = async (fromEditor = false) => {
   if(!canManagePosting() || changing || !page.hidden || returningToPage)return;
   const user = currentUser;
+  resumeEditor = fromEditor;
+  if(fromEditor)editor.close();
   folder = rightFolder = selectedId = previewId = '';
   split = false;
   selectedSide = 'left';
@@ -450,7 +461,8 @@
    paintActions();
   }
  };
- $('#personalformatsopen').onclick = openPage;
+ $('#personalformatsopen').onclick = () => openPage();
+ $('#personalformatspick').onclick = () => openPage(true);
  window.openPersonalFormatsFromLocation = () => {
   const url = new URL(location.href);
   if(!url.searchParams.has('formats'))return;
@@ -537,12 +549,146 @@
   update(library.entries.filter(item => item.id!==entry.id));
  };
 
+ const singleFile = $('#formatimportfile');
+ async function readExcel(file) {
+  if(file.size>6000000)throw Error('ファイルが大きすぎます。');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for(let i=0;i<bytes.length;i+=0x8000)binary += String.fromCharCode(...bytes.subarray(i,i+0x8000));
+  return api('/api/templates/import',{filename:file.name,data:btoa(binary)});
+ }
+
+ $('#formatimport').onclick = () => singleFile.click();
+ singleFile.onchange = async () => {
+  const file = singleFile.files[0];
+  singleFile.value = '';
+  if(!file || changing)return;
+  const user = currentUser;
+  changing = true;
+  paintActions();
+  try {
+   const result = await readExcel(file);
+   if(user!==currentUser || page.hidden)return;
+   if(resumeEditor && dirty && !confirm('現在の入力内容を破棄して、Excelの内容で新規作成しますか？'))return;
+   resumeEditor = false;
+   closePage();
+   openEditor(null,result.payload);
+   dirty = true;
+   toast('Excelの内容を入力しました。'+(result.warnings||[]).join(' '));
+  } catch(error) {
+   message(error.message);
+  } finally {
+   changing = false;
+   paintActions();
+  }
+ };
+
+ const batch = $('#formatbatch');
+ const batchRun = $('#formatbatchrun');
+ const batchResult = $('#formatbatchresult');
+ const batchFolder = $('#formatbatchdestination');
+ const batchCollision = $('#formatbatchcollision');
+ let batchFiles = [];
+ let importing = false;
+ const cleanName = value => Array.from(value.trim()).slice(0,80).join('');
+
+ function selectBatchFiles(input) {
+  batchFiles = [...input.files].filter(file => /\.xlsx$/i.test(file.name) && !file.name.startsWith('~$'));
+  input.value = '';
+  $('#formatbatchselection').textContent = batchFiles.length ? batchFiles.length+'件を選択' : 'Excelファイル（.xlsx）がありません。';
+  batchRun.disabled = !batchFiles.length;
+  batchResult.textContent = '';
+ }
+
+ function createBatchFolder(entries,parent,name) {
+  const match = entries.find(entry=>entry.kind==='folder'&&entry.parent===parent&&entry.name===name);
+  if(match)return match.id;
+  const id = crypto.randomUUID();
+  entries.push({id,kind:'folder',parent,name});
+  return id;
+ }
+
+ $('#formatbatchopen').onclick = () => {
+  if(changing)return;
+  batchFiles = [];
+  batchRun.disabled = true;
+  $('#formatbatchselection').textContent = '';
+  batchResult.textContent = '';
+  batchFolder.innerHTML = '<option value="">自分の書式（最上位）</option>'+library.entries.filter(entry=>entry.kind==='folder').map(entry=>
+   `<option value="${entry.id}">${esc(folderPath(entry.id).map(part=>part.name).join(' / '))}</option>`).join('');
+  batchFolder.value = folderOf(selectedSide);
+  batchCollision.value = 'skip';
+  batch.showModal();
+ };
+ $('#formatbatchclose').onclick = () => {if(!importing)batch.close()};
+ batch.addEventListener('cancel',event=>{if(importing)event.preventDefault()});
+ for(const [button,id] of [['formatbatchpick','formatbatchfiles'],['formatbatchpickdir','formatbatchdir']]){
+  const input = $('#'+id);
+  $('#'+button).onclick = () => {if(!importing)input.click()};
+  input.onchange = () => selectBatchFiles(input);
+ }
+ batchRun.onclick = async () => {
+  if(changing || !batchFiles.length)return;
+  const user = currentUser;
+  const base = batchFolder.value;
+  const overwrite = batchCollision.value==='overwrite';
+  if(overwrite && !confirm('保存先に同じ名前の書式がある場合は上書きします。続けますか？'))return;
+  const results = [], entries = library.entries.map(entry=>({...entry}));
+  let count = 0;
+  changing = importing = true;
+  batch.querySelectorAll('button,select').forEach(control=>control.disabled=true);
+  try {
+   for(const file of batchFiles){
+    if(user!==currentUser || page.hidden)return;
+    batchResult.textContent = '読み込み中… '+file.name;
+    try {
+     const name = cleanName(file.name.replace(/\.xlsx$/i,''));
+     if(!name)throw Error('保存名を付けられません。');
+     const path = (file.webkitRelativePath||'').split('/').slice(0,-1).map(cleanName).filter(Boolean);
+     let parent = base;
+     for(const folderName of path){
+      parent = entries.find(entry=>entry.kind==='folder'&&entry.parent===parent&&entry.name===folderName)?.id;
+      if(!parent)break;
+     }
+     const previous = parent!=null && entries.find(entry=>entry.kind==='format'&&entry.parent===parent&&entry.name===name);
+     if(previous && !overwrite){results.push(file.name+'：同名のため登録を飛ばしました。');continue}
+     const result = await readExcel(file);
+     if(user!==currentUser || page.hidden)return;
+     parent = path.reduce((id,folderName)=>createBatchFolder(entries,id,folderName),base);
+     const entry = {id:previous?.id || crypto.randomUUID(),slot:previous?.slot,kind:'format',parent,name,data:result.payload};
+     if(previous)entries[entries.indexOf(previous)] = entry;
+     else entries.push(entry);
+     count++;
+     results.push(file.name+'：'+(previous?'上書き':'登録')+(result.warnings?.length?'（'+result.warnings.join(' ')+'）':''));
+    } catch(error) {
+     results.push(file.name+'：'+error.message);
+    }
+   }
+   if(!count){batchResult.textContent=results.join('\n');return}
+   const saved = await api('/api/personal-formats',{userId:user.id,version:library.version,entries});
+   if(user!==currentUser || page.hidden)return;
+   library = saved;
+   batchFiles = [];
+   paint();
+   batchResult.textContent = count+'件を自分の書式に保存しました。\n'+results.join('\n');
+  } catch(error) {
+   batchResult.textContent = error.message;
+  } finally {
+   changing = importing = false;
+   batch.querySelectorAll('button,select').forEach(control=>control.disabled=false);
+   batchRun.disabled = !batchFiles.length;
+   paintActions();
+  }
+ };
+
  saveButton.onclick = async () => {
   if(saveButton.disabled || !canManagePosting())return;
   const user = currentUser;
   const editingId = editor.dataset.formatId;
   const draft = gather('下書き');
-  const data = Object.fromEntries(Object.keys(labels).map(key => [key,draft[key]||'']));
+  const savedData = get(editingId)?.data || {};
+  const editLabels = editingId ? {...recurring,...extraLabels} : recurring;
+  const data = {...savedData,...Object.fromEntries(Object.keys(editLabels).map(key => [key,draft[key]||'']))};
   data.items = draft.items.filter(item => ['name','maker','sku','size','stock','note','note2'].some(key => item[key]));
   if(!data.customer.trim() && !data.items.some(item => item.name)){
    $('#formerror').textContent = '顧客名か商品名を入力してから書式に保存してください。';
