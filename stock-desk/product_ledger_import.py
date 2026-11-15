@@ -9487,8 +9487,14 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
             hidden.add(row.get('rowNo'))
     if not hidden and not parts_only:
         return kept, sku_groups, 0
-    # 部品・加工段階: 衣服側の行は品番グループ（一括承認・個別確認など）に出さない
-    drop = hidden | parts_only
+    # 部品・加工段階: 衣服側の行および加工サービス単独行は制服の品番グループ（一括承認・個別確認など）に出さない
+    service_only_rows = set()
+    if phase == PHASE_PARTS:
+        service_only_rows = {
+            row.get('rowNo') for row in kept
+            if _row_is_service_only(row) and not row.get('k2GarmentAsProduct')
+        }
+    drop = hidden | parts_only | service_only_rows
     groups = []
     for g in sku_groups or []:
         nos = [n for n in (g.get('rowNos') or []) if n not in drop]
