@@ -223,8 +223,11 @@ def _names_equivalent_core(a, b):
     # 本体キー一致＋色キー一致（片方色なしはここでは同一視しない＝色省略は上位処理）
     ba, ca, _, _ = legacy.product_name_base_and_color(ta)
     bb, cb, _, _ = legacy.product_name_base_and_color(tb)
-    if ba and ba == bb and ca == cb and _name_processing_key(ta) == _name_processing_key(tb):
-        return True
+    if ba and ba == bb and ca == cb:
+        pa = _name_processing_key(ta)
+        pb = _name_processing_key(tb)
+        if pa == pb or not pa or not pb:
+            return True
     # 半角カナ等: classify と同じ unify（SKU 全体 NFKC はしない）でも照合
     import product_ledger_paren as paren_classify
     ua = paren_classify.unify_import_notation(ta)
@@ -1366,7 +1369,7 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
         '''SELECT * FROM product_ledger_row_maps
            WHERE COALESCE(csv_product_code,'')='' AND product_id IS NOT NULL ORDER BY id DESC'''
     ).fetchall():
-        if _exact_name_key(row['csv_product_name']) != key:
+        if _exact_name_key(row['csv_product_name']) != key and not _names_equivalent_core(row['csv_product_name'], product_name):
             continue
         if supplier and stock.text(row['csv_supplier'] or '') and not _person_names_match(supplier, row['csv_supplier']):
             continue

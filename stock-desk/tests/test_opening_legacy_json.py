@@ -301,7 +301,8 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertTrue(by_id['stock-conflict']['legacyConflict'])
         self.assertTrue(by_id['stock-part'].get('qrOutOfScope'))
         self.assertTrue(any(olj.QTY_EMPTY in ' '.join(by_id['stock-empty']['reasons']) for _ in [0]))
-        self.assertIn(olj.QTY_NEGATIVE, ' '.join(by_id['stock-neg']['reasons']))
+        self.assertIn('数量がマイナス', ' '.join(by_id['stock-neg']['reasons']))
+        self.assertEqual(by_id['stock-neg']['qty'], -2)
         self.assertIn(olj.QTY_MISMATCH, ' '.join(by_id['stock-diff']['reasons']))
         self.assertEqual(by_id['stock-null']['status'], 'needs_review')
         self.assertEqual(conn.execute(
@@ -310,7 +311,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertEqual(conn.execute(
             "SELECT size_label FROM qr_stock_links WHERE legacy_stock_id='stock-conflict'"
         ).fetchone()['size_label'], 'M')
-        self.assertEqual(result['counts'].get('legacyQrInserted', 0), 0)
+        self.assertEqual(result['counts'].get('legacyQrInserted', 0), 1)
         self.assertIsNone(other)
 
     def test_customer_must_be_explicit_and_failure_rolls_back(self):
@@ -549,6 +550,22 @@ class OpeningLegacyJsonTest(unittest.TestCase):
 def customer_doc(rows):
     return {'result': True, 'data': rows}
 
+
+    def test_processing_suffix_matches_core_product(self):
+        """白衣(DHC刺繍あり) のように括弧で刺繍・加工表記がある場合でも、本体品名 白衣 とマッチして登録される。"""
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['㈱ＤＨＣ夕張長沼工場,㈱ホワイトマックス,NPC71082,白衣,2L'])
+        preview, result = commit_json(conn, path, [
+            row(id='stock-dhc', customer_id='cust-old-1', maker_id='maker-old-1',
+                item_num='NPC71082', name='白衣(DHC刺繍あり)', item_size='2L',
+                maker_name='㈱ホワイトマックス', stock_count=7, calc_stock_count=7),
+        ], token='open-json-dhc', customer_catalog={'rows': [{'id': 'cust-old-1', 'name': '㈱ＤＨＣ夕張長沼工場'}]})
+        plan = preview['openingStock']['plans'][0]
+        self.assertEqual(plan['status'], 'reuse')
+        self.assertEqual(plan['qty'], 7)
+        self.assertEqual(result['counts'].get('openingCreated', 0), 1)
 
 class CustomerJsonMatchTest(unittest.TestCase):
     def test_unique_name_is_automatic_and_reused(self):

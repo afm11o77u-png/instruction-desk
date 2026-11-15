@@ -181,7 +181,7 @@ def _qty_decision(row):
     if stock_count != calc:
         return None, QTY_MISMATCH
     if stock_count < 0:
-        return None, QTY_NEGATIVE
+        return stock_count, f'{QTY_SOURCE_SAME}（{stock_count}）を在庫数量にします。※数量がマイナスのため要確認（在庫数警告）'
     return stock_count, f'{QTY_SOURCE_SAME}（{stock_count}）を在庫数量にします。'
 
 

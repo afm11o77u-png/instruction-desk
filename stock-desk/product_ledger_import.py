@@ -5562,6 +5562,15 @@ def ensure_schema(c):
         'CREATE INDEX IF NOT EXISTS product_ledger_row_maps_code '
         'ON product_ledger_row_maps(csv_product_code, id DESC)'
     )
+    run_cols = {
+        r['name']
+        for r in c.execute('PRAGMA table_info(product_ledger_import_runs)').fetchall()
+    }
+    if 'import_mode' not in run_cols:
+        try:
+            c.execute("ALTER TABLE product_ledger_import_runs ADD COLUMN import_mode TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
     maker_sku_lookup.ensure_schema(c)
     _mark_schema_ready(c)
 
