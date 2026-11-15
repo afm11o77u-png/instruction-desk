@@ -6413,7 +6413,7 @@
         <td>${esc(p.conditionLabel||'')}</td>
         <td class="num">${p.qty!=null?esc(String(p.qty)):'—'}</td>
         <td>${esc(place.siteName||'')}${place.shelfName?` / ${esc(place.shelfName)}`:''}${place.usedDefaultSite?' <span class="excelhint">(空→未確認)</span>':''}</td>
-        <td class="num">${p.unitCost!=null?esc(String(p.unitCost)):'—'}</td>
+        <td class="num">${p.unitCost!=null?esc(String(p.unitCost)):'—'}${p.unitCost===0?' <span class="badge warn">単価0円</span>':''}</td>
         <td>${stock.exists!=null?`現在 ${esc(String(stock.currentQty))}`:'—'}</td>
         <td>${esc((p.reasons||[]).join(' '))}${p.productRegistrationExcluded?` <span class="badge">${esc(p.productRegistrationExcludedLabel||'商品登録時に除外した項目')}</span>`:''}${qtyCheck}</td>
       </tr>`

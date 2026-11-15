@@ -147,7 +147,7 @@ def judgment_aux_upload(body):
             '商品名': stock.text(row.get('name')),
             '商品コード': stock.text(row.get('item_num')),
             'サイズ': stock.canonical_size_label(row.get('item_size')),
-            '仕入単価': str(price) if type(price) is int and not isinstance(price, bool) else '',
+            '仕入単価': str(price) if type(price) is int and not isinstance(price, bool) else '0',
             '在庫': _agreed_qty_text(row),
             '拠点': stock.text(row.get('factory_name')),
             '棚': stock.text(row.get('shelf_name')),
@@ -677,7 +677,7 @@ def build_plans(c, body):
             'サイズ': legacy_row['itemSize'],
             '新古': _condition_text(row),
             '在庫': str(qty),
-            '仕入単価': str(row.get('price')) if type(row.get('price')) is int else '',
+            '仕入単価': str(row.get('price')) if type(row.get('price')) is int and not isinstance(row.get('price'), bool) else '0',
             '拠点': legacy_row['factoryName'],
             '棚': legacy_row['shelfName'],
         }
@@ -688,6 +688,10 @@ def build_plans(c, body):
         plan['qrAction'] = 'skip'
         plan_reasons = list(plan.get('reasons') or [])
         plan_reasons.insert(0, reasons[0])
+        if plan.get('unitCost') == 0:
+            plan['zeroCost'] = True
+            if not any('単価' in r for r in plan_reasons):
+                plan_reasons.append('※仕入単価が0円のため要確認（単価設定推奨）')
         plan['reasons'] = plan_reasons
         target = plan.get('target') or {}
         if target.get('customerAction') == 'create' or not confirmed.get('customerId'):

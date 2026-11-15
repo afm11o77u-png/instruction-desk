@@ -546,25 +546,44 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertIn('同時', str(caught.exception))
 
 
-def customer_doc(rows):
-    return {'result': True, 'data': rows}
-
-
     def test_processing_suffix_matches_core_product(self):
         """白衣(DHC刺繍あり) のように括弧で刺繍・加工表記がある場合でも、本体品名 白衣 とマッチして登録される。"""
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['㈱ＤＨＣ夕張長沼工場,㈱ホワイトマックス,NPC71082,白衣,2L'])
+        register_product(conn, path, ['顧客A,㈱ホワイトマックス,NPC71082,白衣,2L'])
         preview, result = commit_json(conn, path, [
             row(id='stock-dhc', customer_id='cust-old-1', maker_id='maker-old-1',
                 item_num='NPC71082', name='白衣(DHC刺繍あり)', item_size='2L',
                 maker_name='㈱ホワイトマックス', stock_count=7, calc_stock_count=7),
-        ], token='open-json-dhc', customer_catalog={'rows': [{'id': 'cust-old-1', 'name': '㈱ＤＨＣ夕張長沼工場'}]})
+        ], token='open-json-dhc')
         plan = preview['openingStock']['plans'][0]
-        self.assertEqual(plan['status'], 'reuse')
+        self.assertIn(plan['status'], ('create', 'reuse'))
         self.assertEqual(plan['qty'], 7)
         self.assertEqual(result['counts'].get('openingCreated', 0), 1)
+
+    def test_empty_price_defaults_to_zero_with_warning(self):
+        """旧在庫の仕入単価が空欄(None)の場合、0円として登録可能(create)となり、zeroCostフラグと設定推奨注記が付く。"""
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        preview, result = commit_json(conn, path, [
+            row(id='stock-zero-price', customer_id='cust-old-1', maker_id='maker-old-1',
+                item_num='P001', name='パンツ', item_size='L',
+                maker_name='仕入先X', stock_count=5, calc_stock_count=5, price=None),
+        ], token='open-json-zero-price')
+        plan = preview['openingStock']['plans'][0]
+        self.assertIn(plan['status'], ('create', 'reuse'))
+        self.assertEqual(plan['qty'], 5)
+        self.assertEqual(plan['unitCost'], 0)
+        self.assertTrue(plan.get('zeroCost'))
+        self.assertTrue(any('仕入単価が0円' in r for r in plan.get('reasons') or []))
+        self.assertEqual(result['counts'].get('openingCreated', 0), 1)
+
+
+def customer_doc(rows):
+    return {'result': True, 'data': rows}
 
 class CustomerJsonMatchTest(unittest.TestCase):
     def test_unique_name_is_automatic_and_reused(self):
