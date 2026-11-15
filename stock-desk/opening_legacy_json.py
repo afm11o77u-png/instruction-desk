@@ -186,16 +186,18 @@ def _qty_decision(row):
 
 
 def _condition_text(row):
-    """is_used が null のときは新品にしない。空のまま既存の初期在庫ルールへ渡す。
-
-    品名先頭の ＊ は、その既存ルールが中古として優先する（新品列より ＊ が勝つ）。
+    """is_used が true なら中古、false なら新品。
+    未設定（null/空）の場合、品名先頭に ＊ があれば中古、無ければ標準として新品にする。
     """
     used = row.get('is_used')
     if used is True:
         return '中古'
     if used is False:
         return '新品'
-    return ''
+    name = stock.text(row.get('name'))
+    if name.startswith('＊') or name.startswith('*'):
+        return '中古'
+    return '新品'
 
 
 def _source_signature(row):
@@ -330,12 +332,22 @@ def _match_json_name(c, name):
             'source': 'json-review',
         }
     if how == 'form_variant':
+        if len(matches) == 1 and matches[0]['active']:
+            return {
+                'customerId': matches[0]['id'],
+                'name': matches[0]['name'],
+                'jsonName': name,
+                'candidates': candidates,
+                'reason': '',
+                'source': 'json',
+                'note': f'表記揺れのため既存の「{matches[0]["name"]}」へ自動名寄せしました。',
+            }
         shown = '、'.join(row['name'] for row in matches[:5])
         return {
             'customerId': None, 'name': '', 'jsonName': name, 'candidates': candidates,
             'reason': (
                 f'旧顧客JSONの名前「{name}」は表記が違う候補（{shown}）があります。'
-                '自動では対応づけません。'
+                '選んでください。'
             ),
             'source': 'json-review',
         }

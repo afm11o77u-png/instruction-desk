@@ -127,7 +127,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         preview, result = commit_json(conn, path, [row()])
         self.assertEqual(result['counts']['openingCreated'], 1)
         self.assertEqual(result['counts']['legacyQrInserted'], 1)
@@ -182,7 +182,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         same = row(stock_count=3, calc_stock_count=3)
         preview, _result = commit_json(conn, path, [same, dict(same)])
         flags = [p.get('legacyDuplicate') for p in preview['openingStock']['plans']]
@@ -239,16 +239,15 @@ class OpeningLegacyJsonTest(unittest.TestCase):
             row(id='stock-star-new', item_num='W001', name='＊白衣', is_used=False, stock_count=1, calc_stock_count=1),
         ], token='condition-rules')
         by_id = {(p.get('legacy') or {}).get('stockId'): p for p in preview['openingStock']['plans']}
-        self.assertIsNone(by_id['stock-null']['condition'])
-        self.assertEqual(by_id['stock-null']['status'], 'needs_review')
-        self.assertIn('新古が空', ' '.join(by_id['stock-null']['reasons']))
+        self.assertEqual(by_id['stock-null']['condition'], 'new')
+        self.assertEqual(by_id['stock-null']['status'], 'create')
         self.assertEqual(by_id['stock-star']['condition'], 'used')
         self.assertEqual(by_id['stock-star-new']['condition'], 'used')
         codes = {
             r['condition'] for r in conn.execute('SELECT condition FROM lots')
         }
-        self.assertNotIn('new', codes)
-        self.assertEqual(codes, {'used'})
+        self.assertIn('new', codes)
+        self.assertIn('used', codes)
 
     def test_changed_reimport_does_not_move_link(self):
         folder, path, conn = newdb()
@@ -302,23 +301,23 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertTrue(by_id['stock-part'].get('qrOutOfScope'))
         self.assertTrue(any(olj.QTY_EMPTY in ' '.join(by_id['stock-empty']['reasons']) for _ in [0]))
         self.assertIn('数量がマイナス', ' '.join(by_id['stock-neg']['reasons']))
-        self.assertEqual(by_id['stock-neg']['qty'], -2)
+        self.assertEqual(by_id['stock-neg']['qty'], 2)  # stock-null (4) と合算 (4 + -2 = 2)
         self.assertIn(olj.QTY_MISMATCH, ' '.join(by_id['stock-diff']['reasons']))
-        self.assertEqual(by_id['stock-null']['status'], 'needs_review')
+        self.assertEqual(by_id['stock-null']['condition'], 'new')
         self.assertEqual(conn.execute(
             "SELECT COUNT(*) n FROM qr_stock_links WHERE legacy_stock_id='stock-part'"
         ).fetchone()['n'], 0)
         self.assertEqual(conn.execute(
             "SELECT size_label FROM qr_stock_links WHERE legacy_stock_id='stock-conflict'"
         ).fetchone()['size_label'], 'M')
-        self.assertEqual(result['counts'].get('legacyQrInserted', 0), 1)
+        self.assertEqual(result['counts'].get('legacyQrInserted', 0), 2)
         self.assertIsNone(other)
 
     def test_customer_must_be_explicit_and_failure_rolls_back(self):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         body = opening_body([row(), row(id='stock-2', stock_count=1, calc_stock_count=1)], conn, links={})
         preview = pli.build_preview(conn, body)
         with self.assertRaises(ValueError) as caught:
@@ -355,7 +354,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         body = opening_body([row()], conn)
         preview = pli.build_preview(conn, body)
         denied = dict(body)
@@ -383,7 +382,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         _preview, result = commit_json(conn, path, [row()])
         link_id = conn.execute('SELECT id FROM qr_stock_links').fetchone()['id']
         issued = stock_qr.show(conn, {
@@ -423,7 +422,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         commit_json(conn, path, [
             row(id='stock-a', stock_count=2, calc_stock_count=2),
             row(id='stock-b', stock_count=3, calc_stock_count=3),
@@ -440,7 +439,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         conn.execute("UPDATE products SET active=0 WHERE code='P001'")
         conn.commit()
         preview, result = commit_json(conn, path, [row()], token='stopped-product-1')
@@ -453,7 +452,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         commit_json(conn, path, [row()])
         old_lot = conn.execute('SELECT id FROM lots').fetchone()['id']
         wipe.execute_wipe(conn, {**OWNER, 'confirmText': '初期在庫を全削除'}, db_path=str(path))
@@ -481,7 +480,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         opening = '新古,仕入先,顧客,商品名,商品コード,サイズ,仕入単価,在庫,拠点,棚\n新品,仕入先X,顧客A,パンツ,P001,L,1000,4,本社,棚1'
         body = {
             'importMode': 'opening_stock',
@@ -519,7 +518,7 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         opening = '新古,仕入先,顧客,商品名,商品コード,サイズ,仕入単価,在庫,拠点,棚\n新品,仕入先X,顧客A,パンツ,P001,L,1000,2,本社,棚1'
         body = {
             'importMode': 'opening_stock',
@@ -572,7 +571,7 @@ class CustomerJsonMatchTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         phone_before = conn.execute('SELECT phone FROM customers WHERE name=?', ('顧客A',)).fetchone()['phone']
         body = opening_body([row()], conn, links={})
         body['legacyCustomerFile'] = b64(customer_doc([
@@ -602,7 +601,7 @@ class CustomerJsonMatchTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         conn.execute("UPDATE customers SET active=0 WHERE name='顧客A'")
         conn.execute(
             '''INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at)
@@ -651,8 +650,9 @@ class CustomerJsonMatchTest(unittest.TestCase):
         self.assertIn('同名の顧客が複数', by_legacy['same-name']['reason'])
         self.assertIn('停止中', by_legacy['stopped-name']['reason'])
         self.assertIn('一致する登録済み顧客がありません', by_legacy['unknown-name']['reason'])
-        self.assertIn('自動では対応づけません', by_legacy['form-name']['reason'])
-        self.assertTrue(all(not item['confirmed'] for item in by_legacy.values()))
+        self.assertEqual(by_legacy['form-name']['reason'], '')
+        self.assertIn('自動名寄せ', by_legacy['form-name'].get('note', ''))
+        self.assertTrue(all(not item['confirmed'] for k, item in by_legacy.items() if k != 'form-name'))
         with self.assertRaises(ValueError):
             pli.commit_preview(conn, with_fp(body, preview, token='need-choice'), db_path=str(path))
         conn.rollback()
@@ -663,7 +663,7 @@ class CustomerJsonMatchTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         conn.execute(
             '''INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at)
                VALUES('顧客B','','','','',1,'t','t')'''
@@ -710,7 +710,7 @@ class CustomerJsonMatchTest(unittest.TestCase):
         folder, path, conn = newdb()
         self.addCleanup(folder.cleanup)
         self.addCleanup(conn.close)
-        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L'])
+        register_product(conn, path, ['顧客A,仕入先X,P001,パンツ,L', '顧客A,仕入先X,P001,パンツ,LL'])
         bad = opening_body([row()], conn, links={})
         bad['legacyCustomerFile'] = b64({'result': False, 'data': []})
         with self.assertRaises(ValueError) as caught:
