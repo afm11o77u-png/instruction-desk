@@ -889,6 +889,7 @@ function registryExportQuery(kind){
   if(kind==='products'){
     const supplierId=resolveProductSupplierFilter()
     if(supplierId)q.set('supplierId',String(supplierId))
+    q.set('category',resolveProductCategoryFilter())
     q.set('sort',resolveProductSort())
   }
   return q
@@ -1142,10 +1143,23 @@ function productListTitle(r){
   if(r.code&&code)return `${code} / ${name}`
   return code?`${code} ${name}`:name
 }
+function normalizeProductSearch(value){
+  return String(value??'').normalize('NFKC').toLowerCase()
+}
+function productMatchesSearch(row, terms){
+  if(!terms.length)return true
+  const fields=[
+    row.displayNo,row.code,row.codeDisplay,row.makerCode,row.name,row.color,row.category,row.supplierName,
+    ...(row.subSuppliers||[]).map(supplier=>supplier.name),
+    ...(row.links||[]).flatMap(link=>[link.customerName,link.embroidery]),
+  ].map(normalizeProductSearch)
+  return terms.every(term=>fields.some(field=>field.includes(term)))
+}
 function products(){
   const supplierId=resolveProductSupplierFilter()
   const categoryFilter=resolveProductCategoryFilter()
   const sortKey=resolveProductSort()
+  const terms=normalizeProductSearch(state.q).trim().split(/\s+/).filter(Boolean)
   const rows=sortProductRows(state.data.products.filter(r=>{
     if(r.mergedIntoId){
       if(!state.stopped)return false
@@ -1154,9 +1168,7 @@ function products(){
     }
     if(supplierId&&!productMatchesSupplierFilter(r,supplierId))return false
     if(!productMatchesCategoryFilter(r,categoryFilter))return false
-    const subNames=(r.subSuppliers||[]).map(s=>s.name||'').join('')
-    const text=`${r.displayNo||''}${r.code}${r.codeDisplay||''}${r.makerCode||''}${r.name}${r.color}${r.category||''}${r.supplierName||''}${subNames}${r.links.map(l=>l.customerName+l.embroidery).join('')}`
-    return text.includes(state.q)
+    return productMatchesSearch(r,terms)
   }),sortKey)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
     <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
@@ -1302,7 +1314,20 @@ function bindList(rows,title,form,save,exportKind){
   const grid=$('#stocklistgrid')
   if(grid)grid.hidden=mode!=='grid'
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId(state.tab))
-  $('#q').oninput=e=>{const pos=e.target.selectionStart;state.q=e.target.value;paint();const q=$('#q');q.focus();q.setSelectionRange(pos,pos)}
+  const search=$('#q')
+  let composing=false
+  const applySearch=()=>{
+    if(state.q===search.value)return
+    const pos=search.selectionStart
+    state.q=search.value
+    paint()
+    const next=$('#q')
+    next.focus()
+    next.setSelectionRange(pos,pos)
+  }
+  search.oncompositionstart=()=>{composing=true}
+  search.oncompositionend=()=>{composing=false;applySearch()}
+  search.oninput=event=>{if(!composing&&!event.isComposing)applySearch()}
   $('#stopped').onchange=e=>{state.stopped=e.target.checked;paint()}
   $('#add').onclick=()=>edit(null,title,form,save)
   document.querySelectorAll('#main .stockopen,[data-id]').forEach(b=>{

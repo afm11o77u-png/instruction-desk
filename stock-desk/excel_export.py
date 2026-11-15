@@ -1,4 +1,5 @@
 """登録・設定台帳の確認用 Excel 出力（記入用ひな形とは別形式・非破壊）。"""
+import unicodedata
 from datetime import datetime
 from functools import cmp_to_key
 from urllib.parse import quote
@@ -276,9 +277,27 @@ def _suppliers(c, args):
     return rows
 
 
+def _product_search_text(value):
+    return unicodedata.normalize('NFKC', str(value if value is not None else '')).lower()
+
+
+def _product_matches_search(item, terms):
+    if not terms:
+        return True
+    fields = [item.get(key) for key in (
+        'displayNo', 'code', 'codeDisplay', 'makerCode', 'name', 'color', 'category', 'supplierName',
+    )]
+    fields.extend(supplier.get('name') for supplier in item.get('subSuppliers', ()))
+    for link in item.get('links', ()):
+        fields.extend((link.get('customerName'), link.get('embroidery')))
+    searchable = [_product_search_text(value) for value in fields]
+    return all(any(term in field for field in searchable) for term in terms)
+
+
 def _products(c, args):
     scope = _scope(args)
-    q = _q(args)
+    terms = _product_search_text(_q(args)).split()
+    category = args.get('category') or ''
     include_stopped = True if scope == SCOPE_ALL else _include_stopped(args)
     supplier_raw = args.get('supplierId')
     supplier_id = None
@@ -293,13 +312,10 @@ def _products(c, args):
                 continue
             if not include_stopped and not item['active']:
                 continue
-            sub_names = ''.join(s.get('name') or '' for s in (item.get('subSuppliers') or []))
-            hay = (
-                f"{item['code']}{item.get('codeDisplay') or ''}{item['name']}"
-                f"{item['color']}{item.get('category') or ''}{item['supplierName']}{sub_names}"
-            )
-            hay += ''.join(f"{l['customerName']}{l['embroidery']}" for l in item['links'])
-            if not _match_text(hay, q):
+            item_category = item.get('category') or ''
+            if category and item_category != ('' if category == '__empty__' else category):
+                continue
+            if not _product_matches_search(item, terms):
                 continue
         products.append(item)
     products = sort_product_rows(products, _product_sort(args))
