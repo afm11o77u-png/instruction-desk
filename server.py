@@ -946,7 +946,23 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             '/mark-guide/crimp.mp4': ('assets/mark-guide-crimp.mp4', 'video/mp4'),
             '/mark-guide/subtitles.vtt': ('assets/mark-guide.vtt', 'text/vtt; charset=utf-8'),
         }
-        name, content_type = files[path]
+        return self.serve_guide_file(*files[path])
+
+    def serve_desk_guide(self, path):
+        with connect() as c:
+            user = self.session_user(c)
+        if not user:
+            return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': '/'})
+        if user['must_change']:
+            return self.reply(403, {'error': '最初に仮パスワードを変更してください。'})
+        if path == '/desk-guide':
+            return self.serve_guide_file('desk-guide.html', 'text/html; charset=utf-8')
+        match = re.fullmatch(r'/desk-guide/(instructions|floor|inventory)\.webm', path)
+        if not match:
+            return self.reply(404, {'error': '指南ビデオが見つかりません。'})
+        return self.serve_guide_file(f'assets/desk-guide-{match[1]}.webm', 'video/webm')
+
+    def serve_guide_file(self, name, content_type):
         file = ROOT / name
         if not file.is_file():
             return self.reply(404, {'error': '説明動画のファイルが見つかりません。'})
@@ -1310,6 +1326,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')
                 if request_user['role'] != 'owner' and not request_user['manage']:
                     return self.reply(403, 'WEB依頼は主管理者・管理者だけが利用できます。', 'text/plain; charset=utf-8')
+        if path == '/desk-guide' or path.startswith('/desk-guide/'):
+            return self.serve_desk_guide(path)
         if path in ('/mark-guide', '/mark-guide/video.mp4', '/mark-guide/demo.mp4',
                     '/mark-guide/shift.mp4', '/mark-guide/crimp.mp4', '/mark-guide/subtitles.vtt'):
             return self.serve_mark_guide(path)

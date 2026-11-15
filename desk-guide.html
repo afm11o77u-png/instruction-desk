@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.png">
+<title>指南ビデオ | 指示書デスク</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f8f4; color: #173d2e; font: 16px/1.6 "Yu Gothic UI", Meiryo, sans-serif; }
+  main { max-width: 1040px; margin: auto; padding: 24px clamp(16px, 4vw, 36px) 40px; }
+  a { color: #1a6747; }
+  h1 { margin: 12px 0 0; font-size: clamp(26px, 5vw, 36px); }
+  main > p { margin: 4px 0 22px; }
+  .guides { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 16px; }
+  section { padding: 14px; background: #fff; border: 1px solid #d0e0d4; border-radius: 10px; }
+  h2 { margin: 0 0 10px; font-size: 1.1rem; }
+  video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #173d2e; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <a href="/?view=all">← 指示書デスクに戻る</a>
+  <h1>指南ビデオ</h1>
+  <p>各動画はタイトルのみの仮版です。</p>
+  <div class="guides">
+    <section aria-labelledby="instructions-title">
+      <h2 id="instructions-title">指示書の指南ビデオ</h2>
+      <video src="/desk-guide/instructions.webm" controls playsinline preload="metadata" aria-labelledby="instructions-title"></video>
+    </section>
+    <section aria-labelledby="floor-title">
+      <h2 id="floor-title">現場の作業の指南ビデオ</h2>
+      <video src="/desk-guide/floor.webm" controls playsinline preload="metadata" aria-labelledby="floor-title"></video>
+    </section>
+    <section aria-labelledby="inventory-title">
+      <h2 id="inventory-title">在庫管理の指南ビデオ</h2>
+      <video src="/desk-guide/inventory.webm" controls playsinline preload="metadata" aria-labelledby="inventory-title"></video>
+    </section>
+  </div>
+</main>
+</body>
+</html>
