@@ -9391,8 +9391,7 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 prod['codeOverride'] = ''
                 prod['blankSku'] = True
                 row['product'] = prod
-                elms_id = _find_supplier_id_by_name(c, '㈲エルムスコーポレーション') or 5
-                row['supplier'] = {'action': 'reuse', 'name': '㈲エルムスコーポレーション', 'id': elms_id, 'reasons': []}
+                row['supplier'] = {'action': 'reuse', 'name': '㈲エルムスコーポレーション', 'id': None, 'reasons': []}
                 row['customer'] = None
                 row['phasePartsOnly'] = True
                 row['registerServiceWithoutCustomer'] = True
