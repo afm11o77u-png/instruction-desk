@@ -2,7 +2,13 @@
  const page = $('#personalformats');
  const editor = $('#editor');
  const saveButton = $('#personalformatsave');
- const grid = $('#formatgrid');
+ const panes = {
+  left:{grid:$('#formatgrid'),path:$('#formatpath')},
+  right:{grid:$('#formatrightgrid'),path:$('#formatrightpath')},
+ };
+ const splitButton = $('#formatsplit');
+ let split = false, rightFolder = '', selectedSide = 'left';
+ const folderOf = side => side==='right' ? rightFolder : folder;
  const preview = $('#formatpreview');
  const destination = $('#formatdestination');
  let library = {version: 0, entries: []};
@@ -40,7 +46,7 @@
  function pushFormatLocation(depth) {
   const url = new URL(location.href);
   url.searchParams.set('formats','1');
-  history.pushState({personalFormats:{token:historyToken,depth,folder,previewId}},'',url);
+  history.pushState({personalFormats:{token:historyToken,depth,folder,previewId,rightFolder,selectedSide,split}},'',url);
  }
 
  function rememberFormatLocation() {
@@ -58,14 +64,17 @@
    return;
   }
   folder = get(mark.folder)?.kind === 'folder' ? mark.folder : '';
+  rightFolder = get(mark.rightFolder)?.kind === 'folder' ? mark.rightFolder : '';
+  split = !!mark.split;
+  selectedSide = split && mark.selectedSide==='right' ? 'right' : 'left';
   const entry = get(mark.previewId);
-  selectedId = previewId = entry?.kind === 'format' && entry.parent === folder ? entry.id : '';
+  selectedId = previewId = entry?.kind === 'format' && entry.parent === folderOf(selectedSide) ? entry.id : '';
   paint();
  });
  const context = $('#formatcontext');
  const copyAction = $('#formatcopy');
  const pasteAction = $('#formatpaste');
- let copied = null, contextTarget = null, contextFocus = null;
+ let copied = null, contextTarget = null, contextFocus = null, contextFolder = '';
 
  function closeContext(restoreFocus = false) {
   if(context.hidden)return;
@@ -75,7 +84,9 @@
  }
 
  page.addEventListener('contextmenu', event => {
-  if(changing || !grid.contains(event.target))return;
+  const side = panes.left.grid.contains(event.target) ? 'left' : panes.right.grid.contains(event.target) ? 'right' : '';
+  if(changing || !side)return;
+  contextFolder = folderOf(side);
   const tile = event.target.closest('.formaticon');
   const entry = tile && get(tile.dataset.id);
   event.preventDefault();
@@ -108,7 +119,7 @@
  };
  pasteAction.onclick = () => {
   if(changing || !canManagePosting() || copied?.user !== currentUser)return;
-  const parent = contextTarget?.kind === 'folder' ? contextTarget.id : folder;
+  const parent = contextTarget?.kind === 'folder' ? contextTarget.id : contextFolder;
   const existing = new Set(library.entries.filter(item=>item.parent===parent).map(item=>item.name));
   let name = copied.name;
   for(let number = 1; existing.has(name); number++){
@@ -156,16 +167,18 @@
   };
  }
 
- function openFolder(id, remember = true) {
-  const moved = id !== folder || !!previewId;
-  folder = id;
+ function openFolder(id, remember = true, side = 'left') {
+  const moved = id !== folderOf(side) || !!previewId;
+  if(side==='right')rightFolder = id;
+  else folder = id;
+  selectedSide = side;
   selectedId = previewId = '';
   if(remember && moved)rememberFormatLocation();
   paint();
  }
 
- function currentRows() {
-  return library.entries.filter(entry => entry.parent === folder).sort((a,b) =>
+ function currentRows(parent) {
+  return library.entries.filter(entry => entry.parent === parent).sort((a,b) =>
    a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name,'ja'));
  }
 
@@ -187,62 +200,91 @@
   return slots;
  }
 
- function layoutIcons() {
+ function fitIconName(label) {
+  label.style.fontSize = '';
+  if(label.clientHeight === 0 || label.scrollHeight <= label.clientHeight)return;
+  const preferred = parseFloat(getComputedStyle(label).fontSize);
+  for(let fontSize = Math.floor(preferred)-1; fontSize >= 7; fontSize--){
+   label.style.fontSize = fontSize+'px';
+   if(label.scrollHeight <= label.clientHeight)return;
+  }
+ }
+
+ function layoutIcons(side) {
+  const {grid} = panes[side];
   const [width,height] = sizes[library.iconSize] || sizes.medium;
   grid.style.setProperty('--format-width',width+'px');
   grid.style.setProperty('--format-height',height+'px');
   const cols = Math.max(1,Math.floor((grid.clientWidth+gap)/(width+gap)));
-  const slots = library.layout==='aligned' ? occupiedSlots(currentRows()) : null;
+  const slots = library.layout==='aligned' ? occupiedSlots(currentRows(folderOf(side))) : null;
   for(const tile of grid.querySelectorAll('.formaticon')){
    const slot = slots?.get(tile.dataset.id);
    tile.style.gridColumn = slot == null ? '' : String(slot%cols+1);
    tile.style.gridRow = slot == null ? '' : String(Math.floor(slot/cols)+1);
+   fitIconName(tile.querySelector('.formaticon-name'));
   }
  }
 
- new ResizeObserver(()=>{if(!page.hidden)layoutIcons()}).observe(grid);
- grid.addEventListener('dragover', event => {
-  if(!changing && dragId && library.layout==='aligned')event.preventDefault();
- });
- grid.addEventListener('drop', event => {
-  const entry = get(dragId);
-  if(!entry || changing || library.layout!=='aligned' || entry.parent!==folder)return;
-  event.preventDefault();
-  const [width,height] = sizes[library.iconSize] || sizes.medium;
-  const bounds = grid.getBoundingClientRect();
-  const cols = Math.max(1,Math.floor((grid.clientWidth+gap)/(width+gap)));
-  const column = Math.min(cols-1,Math.max(0,Math.floor((event.clientX-bounds.left)/(width+gap))));
-  const row = Math.max(0,Math.floor((event.clientY-bounds.top)/(height+gap)));
-  const target = Math.min(599,row*cols+column);
-  const slots = occupiedSlots(currentRows());
-  const previous = slots.get(entry.id);
-  if(previous===target)return;
-  for(const [id,slot] of slots)if(slot===target)slots.set(id,previous);
-  slots.set(entry.id,target);
-  update(library.entries.map(item => slots.has(item.id) ? {...item,slot:slots.get(item.id)} : item));
- });
+ function bindPane(side) {
+  const {grid} = panes[side];
+  new ResizeObserver(()=>{if(!page.hidden && (side==='left'||split))layoutIcons(side)}).observe(grid);
+  grid.addEventListener('dragover', event => {
+   const entry = get(dragId);
+   if(!changing && entry && (validDestination(entry,folderOf(side)) || (entry.parent===folderOf(side) && library.layout==='aligned'))){
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+   }
+  });
+  grid.addEventListener('drop', event => {
+   const entry = get(dragId);
+   if(!entry || changing)return;
+   const parent = folderOf(side);
+   if(entry.parent!==parent){
+    if(validDestination(entry,parent)){event.preventDefault();move(entry.id,parent)}
+    return;
+   }
+   if(library.layout!=='aligned')return;
+   event.preventDefault();
+   const [width,height] = sizes[library.iconSize] || sizes.medium;
+   const bounds = grid.getBoundingClientRect();
+   const cols = Math.max(1,Math.floor((grid.clientWidth+gap)/(width+gap)));
+   const column = Math.min(cols-1,Math.max(0,Math.floor((event.clientX-bounds.left)/(width+gap))));
+   const row = Math.max(0,Math.floor((event.clientY-bounds.top)/(height+gap)));
+   const target = Math.min(599,row*cols+column);
+   const slots = occupiedSlots(currentRows(folderOf(side)));
+   const previous = slots.get(entry.id);
+   if(previous===target)return;
+   for(const [id,slot] of slots)if(slot===target)slots.set(id,previous);
+   slots.set(entry.id,target);
+   update(library.entries.map(item => slots.has(item.id) ? {...item,slot:slots.get(item.id)} : item));
+  });
+ }
+ bindPane('left');
+ bindPane('right');
+ document.fonts?.ready.then(()=>{if(!page.hidden){layoutIcons('left');if(split)layoutIcons('right')}});
  layoutControl.onchange = () => update(library.entries,'',{layout:layoutControl.value});
  sizeControl.onchange = () => update(library.entries,'',{iconSize:sizeControl.value});
 
- function paint() {
-  closeContext();
-  const crumbs = [{id:'',name:'自分の書式'}, ...folderPath(folder)];
-  const path = $('#formatpath');
+ function paintPane(side) {
+  const {grid,path} = panes[side];
+  const parent = folderOf(side);
+  const crumbs = [{id:'',name:'自分の書式'}, ...folderPath(parent)];
   path.innerHTML = crumbs.map(entry => `<button type="button" data-folder="${entry.id}">${esc(entry.name)}</button>`).join('');
   path.querySelectorAll('button').forEach(button => {
    const id = button.dataset.folder;
-   button.onclick = () => openFolder(id);
+   button.onclick = () => openFolder(id,true,side);
    bindDrop(button,id);
   });
-  const rows = currentRows();
-  grid.innerHTML = rows.length ? rows.map(entry => `<button type="button" class="formaticon" title="${esc(entry.name)}" data-id="${entry.id}" draggable="true" aria-pressed="${entry.id===selectedId}"><span aria-hidden="true">${entry.kind==='folder'?'📁':'📄'}</span>${esc(entry.name)}<small>${entry.kind==='folder'?'フォルダ':'指示書の書式'}</small></button>`).join('')
+  const rows = currentRows(parent);
+  grid.innerHTML = rows.length ? rows.map(entry => `<button type="button" class="formaticon" title="${esc(entry.name)}" data-id="${entry.id}" draggable="true" aria-pressed="${entry.id===selectedId&&side===selectedSide}"><span class="formaticon-symbol" aria-hidden="true">${entry.kind==='folder'?'📁':'📄'}</span><span class="formaticon-name">${esc(entry.name)}</span><small>${entry.kind==='folder'?'フォルダ':'指示書の書式'}</small></button>`).join('')
    : '<p>この場所にはまだ書式がありません。指示書の作成・編集画面から保存できます。</p>';
   grid.querySelectorAll('button').forEach(button => {
    const id = button.dataset.id;
    button.onclick = () => {
     if(selectedId !== id)previewId = '';
     selectedId = id;
-    grid.querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed',String(item===button)));
+    selectedSide = side;
+    for(const pane of Object.values(panes))pane.grid.querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed',String(item===button)));
     paintActions();
     paintPreview();
    };
@@ -255,13 +297,25 @@
    button.ondragend = () => { dragId = ''; };
    if(get(id).kind==='folder')bindDrop(button,id);
   });
-  layoutIcons();
+  layoutIcons(side);
+ }
+
+ function paint() {
+  closeContext();
+  if(folder && !get(folder))folder = '';
+  if(rightFolder && !get(rightFolder))rightFolder = '';
+  $('#formatrightpane').hidden = !split;
+  $('#formatpanes').classList.toggle('is-split',split);
+  splitButton.setAttribute('aria-pressed',String(split));
+  splitButton.textContent = split ? '分割を閉じる' : '分割表示';
+  paintPane('left');
+  if(split)paintPane('right');
   paintActions();
   paintPreview();
  }
 
  function paintActions() {
-  layoutControl.disabled = sizeControl.disabled = changing;
+  splitButton.disabled = layoutControl.disabled = sizeControl.disabled = changing;
   layoutControl.value = library.layout || 'auto';
   sizeControl.value = library.iconSize || 'medium';
   const back = $('#formatback');
@@ -298,7 +352,7 @@
  function openSelected() {
   const entry = get(selectedId);
   if(!entry)return;
-  if(entry.kind === 'folder'){openFolder(entry.id);return}
+  if(entry.kind === 'folder'){openFolder(entry.id,true,selectedSide);return}
   if(previewId !== entry.id){
    previewId = entry.id;
    rememberFormatLocation();
@@ -350,11 +404,14 @@
  const openPage = async () => {
   if(!canManagePosting() || changing || !page.hidden || returningToPage)return;
   const user = currentUser;
-  folder = selectedId = previewId = '';
+  folder = rightFolder = selectedId = previewId = '';
+  split = false;
+  selectedSide = 'left';
   historyToken = crypto.randomUUID();
   showPage();
   pushFormatLocation(1);
-  grid.replaceChildren();
+  for(const pane of Object.values(panes))pane.grid.replaceChildren();
+  $('#formatrightpane').hidden = true;
   preview.hidden = true;
   message('読み込み中…');
   changing = true;
@@ -386,11 +443,21 @@
   if(!$('#formatback').disabled)history.back();
  };
  $('#personalformatsclose').onclick = () => closePage();
+ splitButton.onclick = () => {
+  split = !split;
+  if(split)rightFolder = get(folder)?.parent || '';
+  else if(selectedSide==='right'){
+   selectedSide = 'left';
+   selectedId = previewId = '';
+  }
+  rememberFormatLocation();
+  paint();
+ };
  $('#formatopen').onclick = openSelected;
  $('#formatmove').onclick = () => move(selectedId,destination.value);
  $('#formatfolder').onclick = () => {
   const name = prompt('フォルダ名')?.trim();
-  if(name)update([...library.entries,{id:crypto.randomUUID(),kind:'folder',name,parent:folder}]);
+  if(name)update([...library.entries,{id:crypto.randomUUID(),kind:'folder',name,parent:folderOf(selectedSide)}]);
  };
  $('#formatrename').onclick = () => {
   const entry = get(selectedId);

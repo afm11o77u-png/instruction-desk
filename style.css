@@ -1012,11 +1012,10 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 }
 #personalformats .formats-heading h1 { margin: 0; }
 #personalformats .formats-body { padding: 14px clamp(12px, 3vw, 36px) 24px; }
-#formatpath, #personalformats .formatactions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-#personalformats .formatactions #formatpath { margin: 0; }
+#personalformats .format-pane-path, #personalformats .formatactions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 #personalformats .formatactions label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; }
 #formatmessage:empty { display: none; }
-#formatgrid {
+.formatgrid {
   --format-width: 140px;
   --format-height: 124px;
   display: grid;
@@ -1028,11 +1027,32 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
   background: #f6faf7;
   border-radius: 8px;
 }
-#formatgrid > p { grid-column: 1 / -1; }
-#formatgrid .formaticon { display: grid; justify-items: center; align-content: start; gap: 4px; min-width: 0; overflow: hidden; padding: 10px 8px; overflow-wrap: anywhere; }
-#formatgrid .formaticon > span { font-size: calc(var(--format-width) / 4.5); }
-#formatgrid .formaticon small { line-height: 1.2; }
-#formatgrid .formaticon[aria-pressed="true"] { background: #e6f2ea; border-color: #246449; }
+.formatgrid > p { grid-column: 1 / -1; }
+.formatgrid .formaticon {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  justify-items: stretch;
+  gap: 3px;
+  min-width: 0;
+  min-height: 0;
+  padding: 6px;
+  text-align: center;
+}
+.formatgrid .formaticon-symbol {
+  font-size: clamp(20px, calc(var(--format-width) / 5.3), 34px);
+  line-height: 1.15;
+}
+.formatgrid .formaticon-name {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: clamp(12px, calc(var(--format-width) / 9.3), 17px);
+  line-height: 1.16;
+}
+.formatgrid .formaticon small {
+  font-size: clamp(10px, calc(var(--format-width) / 12), 13px);
+  line-height: 1.1;
+}
+.formatgrid .formaticon[aria-pressed="true"] { background: #e6f2ea; border-color: #246449; }
 #formatpreview { margin-top: 18px; border-top: 1px solid #cbded3; padding-top: 12px; }
 #formatpreview dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 #formatpreview dt { font-weight: 700; }
@@ -1042,3 +1062,12 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 #formatcontext { position: fixed; z-index: 2; display: grid; gap: 3px; min-width: 150px; padding: 5px; border: 1px solid #cbded3; border-radius: 7px; background: #fff; box-shadow: 0 4px 16px #16382826; }
 #formatcontext[hidden], #formatcontext button[hidden] { display: none; }
 #formatcontext button { text-align: left; padding: 6px 10px; }
+
+.formatpanes.is-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.formatpane { min-width: 0; }
+.formatpane[hidden] { display: none; }
+.formatpanes.is-split .formatpane { border: 1px solid #cbded3; border-radius: 8px; padding: 8px; }
+.formatactions #formatsplit[aria-pressed="true"] { background: #e6f2ea; border-color: #246449; }
+@media (max-width: 640px) {
+  .formatpanes.is-split { grid-template-columns: minmax(0, 1fr); }
+}
