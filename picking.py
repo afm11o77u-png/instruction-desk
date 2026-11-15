@@ -1005,6 +1005,19 @@ def handle(h,c,path,d,can_access):
         v=record(r,u)
         if v['status']!='確定': return 400,{'error':'依頼を保存してから出力してください。'}
         return 200,workbook(v),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    if path == '/api/picking/scan-xlsx':
+        if not isinstance(d, dict):
+            raise ValueError('出力する明細を確認してください。')
+        raw = d.get('rows')
+        if not isinstance(raw, list) or len(raw) > 10500 or any(not isinstance(row, dict) for row in raw):
+            raise ValueError('出力する明細を確認してください。')
+        day = date.fromisoformat(text(d.get('date', ''), 10)).isoformat()
+        title = text(d.get('title', ''), 100).strip()
+        if not title:
+            raise ValueError('保存名を入力してください。')
+        rows = [{key: row.get(key, '') for key in FIELDS} for row in raw]
+        validate_rows(rows, True)
+        return 200, workbook({'number': 'バーコード取込', 'date': day, 'title': title, 'rows': rows}), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     if path=='/api/picking/carry-check':
         day=text(d.get('date',''),10)
         try: date.fromisoformat(day)

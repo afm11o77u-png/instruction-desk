@@ -23,7 +23,7 @@ function mailStepAllowed(){return !!(current&&current.id&&current.status==='確�
 function syncControls(){if(boardData){$('#homeprev').disabled=boardData.page<=1;$('#homenext').disabled=boardData.page>=boardData.pages}const rows=current?allrows().length:0;if($('#stepnext'))$('#stepnext').disabled=false;if($('#stepblock'))$('#stepblock').hidden=true;syncAddRow();if(current&&step!==1&&$('#lane1sum'))$('#lane1sum').textContent=`指示書${current.sources.length}件・直接入力${current.manual.length}明細`;if(current&&step!==2&&$('#lane2sum'))$('#lane2sum').textContent=rows?groupBits():'内容確認へ進むと開きます';if(carryKind==='out'&&$('#carryprint'))$('#carryprint').disabled=!carryOutRows.length;syncPickButtons()}
 function groupBits(){const rows=allrows();return ['warehouse','factory','carry'].map(k=>`${groups[k]}${rows.filter(r=>r.stock===k).length}明細`).join('／')}
 function scrollWork(id){const el=document.getElementById(id);if(el)el.scrollIntoView({block:'start',behavior:'smooth'})}
-async function run(fn){if(busy)return;busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);try{message('');await fn()}catch(e){message(e.message)}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);syncControls()}}
+async function run(fn){if(busy)return;if(pendingScans){scanStatus.textContent='読み取りが終わってから操作してください。';return;}busy=true;document.querySelectorAll('button').forEach(b=>b.disabled=true);try{message('');await fn()}catch(e){message(e.message)}finally{busy=false;document.querySelectorAll('button').forEach(b=>b.disabled=false);syncControls()}}
 function editable(){return current&&current.status!=='取消'&&!listFinished(current)&&current.canEdit!==false}
 function allrows(){return [...current.sources.flatMap(s=>s.rows),...current.manual.map(r=>({...r,sourceNumber:r.sourceNumber||'直接依頼'}))]}
 function ageWrite(){return '<span class="agewrite">新<br>中</span>'}
@@ -35,7 +35,7 @@ function cellInput(row,key){if(key==='condition')return `<select data-row="${esc
 function previewTable(rows){const edit=editable();const entry=['requester','customer','name','maker','sku','size','quantity','note2'];return '<table><thead><tr>'+columns.map(([,label])=>`<th>${label}</th>`).join('')+(edit?'<th></th>':'')+'</tr></thead><tbody>'+rows.map(r=>{const typed=edit&&String(r.key||'').startsWith('manual:');const removable=edit&&(typed||String(r.key||'').startsWith('carry:'));return '<tr'+(typed?' class="exchange"':'')+'>'+columns.map(([k])=>`<td>${k==='condition'?conditionCell(r):typed&&entry.includes(k)?cellInput(r,k):esc(r[k])}</td>`).join('')+(edit?`<td>${removable?`<button type="button" class="drop" data-remove-manual="${esc(r.key)}">削除</button>`:''}</td>`:'')+'</tr>'}).join('')+'</tbody></table>'}
 function bindManualEdits(root){root.querySelectorAll('[data-field]').forEach(el=>{const apply=()=>{const r=current.manual.find(r=>r.key===el.dataset.row);if(!r)return;r[el.dataset.field]=el.value;dirty=true;paintTabs();syncControls()};el.oninput=apply;el.onchange=apply});root.querySelectorAll('[data-remove-manual]').forEach(b=>b.onclick=()=>{if(!confirm('この行を削除しますか？'))return;current.manual=current.manual.filter(r=>r.key!==b.dataset.removeManual);dirty=true;paintGather();preview()})}
 function paintTabs(){const rows=allrows();const defs=[['warehouse','石狩倉庫'],['factory','発寒支店'],['carry','管理担当持込']];if(rows.some(r=>!r.stock))defs.push(['','在庫場所未設定']);if(!defs.some(([k])=>k===activeGroup))activeGroup='warehouse';$('#grouptabs').innerHTML=defs.map(([k,label])=>`<button type="button" data-group="${esc(k)}" class="${k===activeGroup?'current':''}">${label} ${rows.filter(r=>r.stock===k).length}明細</button>`).join('');$('#grouptabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{flushPreview();activeGroup=b.dataset.group;preview()})}
-function preview(){const rows=previewRows();paintTabs();const problems=lineIssues().filter(s=>!s.startsWith('明細を1行以上'));$('#issues').innerHTML=problems.length?`<b>確認が必要な明細</b><ul>${problems.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:'';$('#preview').innerHTML=rows.length?previewTable(rows):'<p>この区分の明細はありません。ほかの区分の入力は残っています。交換依頼は「交換依頼を追加」から、この一覧へ入力します。</p>';bindManualEdits($('#preview'));syncAddRow()}
+function preview(){const rows=previewRows();paintTabs();const problems=lineIssues().filter(s=>!s.startsWith('明細を1行以上'));$('#issues').innerHTML=problems.length?`<b>確認が必要な明細</b><ul>${problems.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:'';$('#preview').innerHTML=(rows.length||editable())?previewTable(rows):'<p>この区分の明細はありません。ほかの区分の入力は残っています。交換依頼は「交換依頼を追加」から、この一覧へ入力します。</p>';bindManualEdits($('#preview'));syncAddRow()}
 function paintGather(){const edit=editable();if($('#fromsheets'))$('#fromsheets').hidden=true;if($('#loadcandidates'))$('#loadcandidates').hidden=!edit;paintSources();syncControls()}
 function paintSources(){if(!current)return;const edit=editable();const imported=current.sources.reduce((n,s)=>n+(s.rows||[]).length,0);const lead=$('#sourceslead');if(lead)lead.textContent=(current.sources.length||current.manual.length)?`指示書${current.sources.length}件・${imported}明細、交換依頼${current.manual.length}明細です。下は倉庫へ渡す一覧です。`:'まだ明細がありません。指示書を取り込むか、交換依頼の行を追加してください。';const sheetBtn=$('#opensheets');if(sheetBtn)sheetBtn.textContent=`指示書の内訳 ${current.sources.length}件`;const chip=$('#sourcechips');if(chip){chip.innerHTML=current.sources.length?current.sources.map(s=>`<div class="candidate"><span><b>${esc(s.number)}　${esc(s.customer||'')}</b><small>${(s.rows||[]).length}明細</small></span>${edit&&!current.workBatch?`<button type="button" data-remove-source="${s.id}">取り込みを外す</button>`:''}</div>`).join(''):'<p>取り込み済みの指示書はありません。</p>';chip.querySelectorAll('[data-remove-source]').forEach(b=>b.onclick=()=>{current.sources=current.sources.filter(s=>s.id!==+b.dataset.removeSource);dirty=true;paintSources();preview();paintLanes();run(async()=>{await loadCandidatePage(true);if(!$('#message').textContent)message('この依頼から外しました。指示書の作業状況は変えていません。作成画面のほかの入力は残しています。')})})}const defs=[['warehouse','石狩倉庫'],['factory','発寒支店'],['carry','管理担当持込']];const rowsAll=allrows();if(rowsAll.some(r=>!r.stock))defs.push(['','在庫場所未設定']);if(!defs.some(([k])=>k===activeGroup))activeGroup='warehouse';const tabs=$('#sourcegroups');if(tabs){tabs.innerHTML=defs.map(([k,label])=>`<button type="button" data-group="${esc(k)}" class="${k===activeGroup?'current':''}">${label} ${rowsAll.filter(r=>r.stock===k).length}明細</button>`).join('');tabs.querySelectorAll('button').forEach(b=>b.onclick=()=>{flushSourcePreview();flushPreview();activeGroup=b.dataset.group;paintSources();preview()})}const shown=previewRows();const view=$('#sourcepreview');if(view){view.innerHTML=shown.length?previewTable(shown):'<p>この区分の明細はありません。交換があるときは「交換依頼を追加」で行を足して入力します。</p>';bindManualEdits(view)}const add=$('#sourceadd');if(add){add.hidden=!edit;add.disabled=activeGroup==='carry'||activeGroup===''}}
 function showImported(){if(!current)return;flushInputs();paintSources();const dlg=$('#sourcedialog');if(dlg&&!dlg.open)dlg.showModal()}
@@ -49,7 +49,77 @@ function hideTargets(){viewingTargets=false;const dlg=$('#targetdialog');if(dlg&
 function hideSheets(){const dlg=$('#sheetsdialog');const was=viewingSheets||!!(dlg&&dlg.open);viewingSheets=false;if(dlg&&dlg.open)dlg.close();if(!was)return;paintLanes();paintGather();preview();pinCounts()}
 function showSources(){if(!current)return;flushInputs();viewingSources=true;$('#editor').hidden=true;$('#sourcescreen').hidden=false;paintSources();const el=document.getElementById('sourcescreen');if(el)el.scrollIntoView({block:'start',behavior:'smooth'})}
 function hideSources(){viewingSources=false;viewingSheets=false;if($('#sourcescreen'))$('#sourcescreen').hidden=true;closeSheetsQuiet();if($('#editor'))$('#editor').hidden=false;paintLanes();paintGather();preview();pinCounts()}
-function syncAddRow(){const btn=$('#addrow');if(!btn||!current)return;btn.hidden=!editable();btn.disabled=!editable()}
+const scanForm=$('#pickbarcodeform');
+const scanStock=$('#pickbarcodestock');
+const scanInput=$('#pickbarcode');
+const scanExport=$('#pickbarcodexlsx');
+const scanStatus=$('#pickbarcodestatus');
+let scanQueue=Promise.resolve();
+let pendingScans=0;
+
+function syncBarcodeControls(){
+ if(!scanForm)return;
+ scanForm.hidden=!editable()||!!carryKind||!!current?.workBatch;
+ scanExport.disabled=busy||pendingScans>0||!current?.manual.some(row=>row.barcode);
+}
+
+if(scanForm)scanForm.onsubmit=e=>{
+ e.preventDefault();
+ if(!editable()||busy||scanForm.hidden)return;
+ const code=scanInput.value.trim();
+ const stock=scanStock.value;
+ if(!code||!stock)return;
+ const draft=current;
+ scanInput.value='';
+ scanInput.focus();
+ pendingScans++;
+ scanStatus.textContent='照会中…';
+ syncBarcodeControls();
+ scanQueue=scanQueue.then(async()=>{
+  if(current!==draft||!editable())return;
+  if(draft.manual.some(row=>row.barcode===code))throw Error(code+' は追加済みです。');
+  if(draft.manual.length>=500)throw Error('明細は500行までです。リストを分けてください。');
+  const result=await api('/api/barcode-delivery?code='+encodeURIComponent(code));
+  if(current!==draft||!editable())return;
+  if(!result.ok||!result.found)throw Error(result.message||'バーコードが見つかりません。');
+  const barcode=result.masterCode||code;
+  if(draft.manual.some(row=>row.barcode===barcode))throw Error(barcode+' は追加済みです。');
+  flushInputs();
+  draft.manual.push({key:'manual:'+crypto.randomUUID(),barcode,
+   requester:user.name,customer:result.customer||'',name:result.itemName||'',
+   maker:'',sku:'',size:result.size||'',condition:'未指定',quantity:1,stock,note2:''});
+  activeGroup=stock;
+  dirty=true;
+  paintGather();
+  preview();
+  paintLanes();
+  scanStatus.textContent=barcode+' を追加しました。';
+ }).catch(error=>{
+  if(current===draft)scanStatus.textContent=error.message;
+ }).finally(()=>{
+  pendingScans--;
+  syncBarcodeControls();
+ });
+};
+
+if(scanExport)scanExport.onclick=()=>run(async()=>{
+ flushInputs();
+ const response=await fetch('/api/picking/scan-xlsx',{
+  method:'POST',
+  headers:{'Content-Type':'application/json','X-Desk-Request':'1'},
+  body:JSON.stringify({title:current.title,date:current.date,rows:allrows()})
+ });
+ if(!response.ok)throw Error((await response.json()).error||'Excelを出力できませんでした。');
+ const url=URL.createObjectURL(await response.blob());
+ const link=document.createElement('a');
+ link.href=url;
+ link.download=current.date+'_ピッキングリスト.xlsx';
+ link.click();
+ setTimeout(()=>URL.revokeObjectURL(url),10000);
+ scanStatus.textContent='Excelを出力しました。';
+});
+
+function syncAddRow(){const btn=$('#addrow');if(!btn||!current)return;btn.hidden=!editable();btn.disabled=!editable();syncBarcodeControls()}
 function takeItems(){const have=new Set((current?.sources||[]).map(s=>s.id));return targetScope.filter(s=>s&&!excluded.has(s.id)&&!have.has(s.id))}
 function syncPickButtons(){const items=current?takeItems():[];const room=SHEET_LIMIT-(current?.sources.length||0);const over=items.length>room;const btn=$('#gatherall');if(btn){btn.textContent='指示書を取り込む';btn.disabled=!current||!editable()||!items.length}const review=$('#reviewtargets');if(review){review.hidden=!editable();review.disabled=!editable()}const limit=$('#targetlimit');if(limit){limit.hidden=!over;if(over)limit.textContent=`対象は${items.length}件です。1つのリストに入れられる指示書は${SHEET_LIMIT}件までです。先頭の一部は取り込みません。残り${items.length-room}件を今回の依頼から除外するか、リストを分けてください。`}const trim=$('#excludeoverflow');if(trim){trim.hidden=!(current&&editable()&&over);if(over)trim.textContent=`上限を超えた${items.length-room}件を今回の依頼から除外`}if($('#candprev')){$('#candprev').disabled=candidatePage<=1;$('#candnext').disabled=candidatePage>=Math.max(1,candidatePages)}}
 function paintExcluded(){const box=$('#excludedbox');if(!box)return;if(!excluded.size){box.innerHTML='<p class="hint">今回の依頼から外した指示書はありません。</p>';return}box.innerHTML=`<p>除外 ${excluded.size}件。作業状況は変えていません。この依頼だけの除外で、恒久的な対象外にはなりません。</p>`+[...excluded.values()].map(s=>`<span class="exchip">${esc(s.number)} ${esc(s.customer||'')}<button type="button" data-include="${s.id}">除外をやめる</button></span>`).join('');box.querySelectorAll('[data-include]').forEach(b=>b.onclick=()=>includeSheet(+b.dataset.include))}
