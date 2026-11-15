@@ -21,6 +21,7 @@ import name_exe
 import web_requests
 import customer_accounts
 import personal_notes
+import personal_formats
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -64,6 +65,7 @@ def initialize():
         web_requests.schema(c)
         customer_accounts.schema(c)
         personal_notes.initialize(c)
+        personal_formats.initialize(c)
         templates.initialize(c)
         placement.bind(DATA)
         placement.schema(c)
@@ -1086,10 +1088,37 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         except sqlite3.Error:
             return self.reply(503, {'error': 'メモを処理できませんでした。'})
 
+    def serve_personal_formats(self, save=False):
+        try:
+            with connect() as c:
+                if save:
+                    c.execute('BEGIN IMMEDIATE')
+                user = self.session_user(c)
+                if not user or user['must_change']:
+                    return self.reply(401, {'error': 'ログインし直してください。'})
+                if user['role'] not in ('owner', 'sales'):
+                    return self.reply(403, {'error': 'この権限では書式を使えません。'})
+                if save:
+                    size = int(self.headers.get('Content-Length', '0'))
+                    if not 0 < size <= 4_000_000:
+                        raise ValueError('保存内容が多すぎます。')
+                    data = json.loads(self.rfile.read(size))
+                    if not isinstance(data, dict) or data.get('userId') != user['id']:
+                        return self.reply(409, {'error': '利用者が変わりました。書式を開き直してください。'})
+                    code, result = personal_formats.save(c, user['id'], data)
+                else:
+                    code, result = 200, personal_formats.load(c, user['id'])
+            return self.reply(code, result)
+        except (ValueError, TypeError) as error:
+            return self.reply(400, {'error': str(error)})
+        except sqlite3.Error:
+            return self.reply(503, {'error': '書式を処理できませんでした。'})
+
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
         if path == '/api/contact-note': return self.serve_personal_note(shared=True)
+        if path == '/api/personal-formats': return self.serve_personal_formats()
         if path == '/api/personal-note': return self.serve_personal_note()
         if path=='/api/customer-accounts':
             with connect() as c:
@@ -1318,7 +1347,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in ('/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with connect() as c:
                 request_user = self.session_user(c)
@@ -1365,6 +1394,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
         if route == '/api/contact-note': return self.serve_personal_note(save=True, shared=True)
+        if route == '/api/personal-formats': return self.serve_personal_formats(save=True)
         if route == '/api/personal-note': return self.serve_personal_note(save=True)
         if route == '/api/customer-accounts':
             with connect() as c:

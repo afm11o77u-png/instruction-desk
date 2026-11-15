@@ -996,3 +996,19 @@ body > aside .nav {font-weight:600}
 }
 #desknav .legacy-nav summary:hover,
 #desknav .legacy-nav summary:focus-visible { background: #275844; }
+
+#personalformats { width: min(880px, 96vw); }
+#personalformats .dialogbody { max-height: 72vh; overflow: auto; }
+#formatpath, #personalformats .formatactions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+#personalformats .formatactions label { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; }
+#formatmessage:empty { display: none; }
+#formatgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+#formatgrid > p { grid-column: 1 / -1; }
+#formatgrid .formaticon { display: grid; justify-items: center; align-content: start; gap: 4px; min-height: 108px; padding: 10px 8px; overflow-wrap: anywhere; }
+#formatgrid .formaticon > span { font-size: 28px; }
+#formatgrid .formaticon[aria-pressed="true"] { background: #e6f2ea; border-color: #246449; }
+#formatpreview { margin-top: 18px; border-top: 1px solid #cbded3; padding-top: 12px; }
+#formatpreview dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+#formatpreview dt { font-weight: 700; }
+#formatpreview dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+#formatpreview .formatactions { margin-top: 12px; }
