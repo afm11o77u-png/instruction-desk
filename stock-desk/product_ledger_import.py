@@ -6058,7 +6058,7 @@ def _product_preview(
         proposed_category = stock.CATEGORY_UNIFORM
     elif blank_sku:
         proposed_category = stock.CATEGORY_PARTS
-    elif is_part:
+    elif is_part and not (stock_product_merge.is_normal_product_code(code) and code_suffix_attributes._GARMENT_WORDS_RE.search(name)):
         proposed_category = stock.CATEGORY_PARTS
     else:
         proposed_category = stock.CATEGORY_UNIFORM  # 品番のある通常商品・要確認・別注は制服

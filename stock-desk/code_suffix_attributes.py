@@ -52,6 +52,19 @@ _PART_WORDS = (
     '反射材', '反射テープ', '再帰反射',
 )
 
+_GARMENT_WORDS_RE = re.compile(
+    r'(?:パンツ|ズボン|スラックス|上衣|白衣|白下|白上|作業着|作業服|作業ズボン|'
+    r'シャツ|ブラウス|ブルゾン|ジャンパー|ジャンバー|コート|ジャケット|'
+    r'帽子|キャップ|エプロン|ベスト|スカート|つなぎ|ツナギ|カバーオール|'
+    r'スクラブ|ポロシャツ|ポロ|コックコート|調理服|調理衣|割烹着|下着|インナー|タイツ)'
+)
+
+_PART_SUFFIX_RE = re.compile(
+    r'(?:ボタン|釦|ファスナー|ジッパー|チャック|スナッパー|スナッパ|'
+    r'Ｄカン|Dカン|バックル|美錠|尾錠|生地|芯地|裏地|肩パット|パッド|'
+    r'ラインテープ|テープ|保冷剤|アイスパック)$'
+)
+
 
 def is_part_product_name(name):
     t = stock.text(name)
@@ -61,6 +74,14 @@ def is_part_product_name(name):
         return False
     # ゴムパンツ、脇ゴム、総ゴム、ウエストゴム等の衣服仕様は部品ではない
     if re.search(r'(?:ゴムパンツ|脇ゴム|総ゴム|ウエストゴム|ｳｴｽﾄｺﾞﾑ|ｺﾞﾑﾊﾟﾝﾂ|脇ｺﾞﾑ|総ｺﾞﾑ)', t):
+        return False
+    # 括弧を除いた本体部分を取得
+    base = re.split(r'[(（【\[]', t, maxsplit=1)[0].strip()
+    # 末尾が「〇〇バックル」「〇〇ボタン」「〇〇生地」等の部品名で終わる、または「〇〇用〜」なら部品
+    if _PART_SUFFIX_RE.search(base) or re.search(r'(?:用|向け|専用)\s*(?:ボタン|釦|生地|Dカン|バックル|テープ)', base):
+        return True
+    # 本体部分が衣服名（パンツ、ブラウス、コート、ジャンパー、帽子等）なら衣服（部品ではない）
+    if _GARMENT_WORDS_RE.search(base):
         return False
     return any(w in t for w in _PART_WORDS)
 _DIM_RE = re.compile(r'^(\d+(?:\.\d+)?)(mm|㎜|cm|㎝)$', re.I)
