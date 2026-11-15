@@ -10,6 +10,7 @@ AI・外部サービスは使わない。明示辞書＋規則のみ。
 """
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 
@@ -170,6 +171,7 @@ def _nfkc(value: str) -> str:
     return unicodedata.normalize('NFKC', value or '')
 
 
+@functools.lru_cache(maxsize=50000)
 def _norm_token(value: str) -> str:
     """照合用。空白除去・NFKC。％/% は両方残すため NFKC 後もそのまま。連続長音符は1つに縮約。"""
     t = _nfkc(value)
@@ -541,6 +543,7 @@ def halfwidth_katakana_to_fullwidth(text: str) -> str:
 _halfwidth_katakana_to_fullwidth = halfwidth_katakana_to_fullwidth
 
 
+@functools.lru_cache(maxsize=50000)
 def unify_import_notation(value: str) -> str:
     """取込用の表記統一。分類・位置検出・登録表示の前に必ず適用する。
 
@@ -1680,8 +1683,8 @@ def extract_line_specs(text: str):
     return rest, specs
 
 
-def split_name_and_color(product_name: str):
-    """「○○ライン」は仕様として先に外し、残りを従来どおり商品名・色へ振り分ける。"""
+@functools.lru_cache(maxsize=30000)
+def _split_name_and_color_cached(product_name: str):
     original = (product_name or '').strip()
     rest, specs = extract_line_specs(original)
     if not specs or not rest:
@@ -1694,6 +1697,12 @@ def split_name_and_color(product_name: str):
     out['lineProcessService'] = LINE_PROCESS_SERVICE_NAME
     out['originalName'] = original
     return out
+
+
+def split_name_and_color(product_name: str):
+    """「○○ライン」は仕様として先に外し、残りを従来どおり商品名・色へ振り分ける。"""
+    res = _split_name_and_color_cached(product_name)
+    return dict(res)
 
 
 def _split_name_and_color_core(product_name: str):

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 
@@ -693,6 +694,7 @@ def _resolve_service_core(core: str) -> str:
     return ''
 
 
+@functools.lru_cache(maxsize=30000)
 def is_standalone_processing_service_name(product_name: str) -> bool:
     """商品名全体が加工サービス名だけで、衣服種を含まないとき True。
 
@@ -781,6 +783,7 @@ def is_garment_body_name(name):
     return _looks_like_garment_name(compact)
 
 
+@functools.lru_cache(maxsize=30000)
 def unify_processing_service_name(raw_name: str) -> str:
     """加工サービス表示名へ統一。衣服種・顧客用接頭・括弧仕様は落とす。読めなければ空。
 

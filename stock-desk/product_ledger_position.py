@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 
@@ -170,20 +171,14 @@ def extract_positions_for_search(text: str) -> list[str]:
     return [pos] if pos else []
 
 
-def resolve_garment_position(
-    *,
-    code: str = '',
-    product_name: str = '',
-    maker_position: str = '',
-    override_position: str = '',
-    override_registered_code: str = '',
+@functools.lru_cache(maxsize=50000)
+def _resolve_garment_position_core(
+    code: str,
+    product_name: str,
+    maker_position: str,
+    override_position: str,
+    override_registered_code: str,
 ) -> dict:
-    """行の上下区分と登録予定品番を決定する。
-
-    戻り値:
-      sourceCode, baseCode, position, registeredCode,
-      conflict, needsConfirm, sources
-    """
     source = stock.text(code)
     override_reg = stock.text(override_registered_code)
     if override_reg:
@@ -247,6 +242,30 @@ def resolve_garment_position(
         'needsConfirm': needs_confirm,
         'sources': sources,
     }
+
+
+def resolve_garment_position(
+    *,
+    code: str = '',
+    product_name: str = '',
+    maker_position: str = '',
+    override_position: str = '',
+    override_registered_code: str = '',
+) -> dict:
+    """行の上下区分と登録予定品番を決定する。
+
+    戻り値:
+      sourceCode, baseCode, position, registeredCode,
+      conflict, needsConfirm, sources
+    """
+    res = _resolve_garment_position_core(
+        stock.text(code),
+        stock.text(product_name),
+        stock.text(maker_position),
+        stock.text(override_position),
+        stock.text(override_registered_code),
+    )
+    return dict(res)
 
 
 def codes_match_for_aux(map_code: str, aux_code: str) -> bool:

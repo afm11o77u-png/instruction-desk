@@ -6041,8 +6041,13 @@ def _product_preview(
     is_proc = bool(
         proc_svc.is_standalone_processing_service_name(name)
         or proc_svc.is_standalone_processing_service_name(code)
-        or legacy_code_assign.blank_code_kind(name) == 'processing'
-        or legacy_code_assign.blank_code_kind(code) == 'processing'
+        or (
+            (blank_sku or not stock_product_merge.is_normal_product_code(code))
+            and (
+                legacy_code_assign.blank_code_kind(name) == 'processing'
+                or legacy_code_assign.blank_code_kind(code) == 'processing'
+            )
+        )
     )
     blank_kind = legacy_code_assign.blank_code_kind(name) if blank_sku else ''
     if is_proc:
@@ -8094,8 +8099,13 @@ def _auto_register_kind(row):
         or prod.get('proposedCategory') == stock.CATEGORY_PROCESS_SERVICE
         or proc_svc.is_standalone_processing_service_name((row.get('csv') or {}).get('productName') or '')
         or proc_svc.is_standalone_processing_service_name((row.get('csv') or {}).get('code') or '')
-        or legacy_code_assign.blank_code_kind((row.get('csv') or {}).get('productName') or '') == 'processing'
-        or legacy_code_assign.blank_code_kind((row.get('csv') or {}).get('code') or '') == 'processing'
+        or (
+            not stock_product_merge.is_normal_product_code((row.get('csv') or {}).get('code') or '')
+            and (
+                legacy_code_assign.blank_code_kind((row.get('csv') or {}).get('productName') or '') == 'processing'
+                or legacy_code_assign.blank_code_kind((row.get('csv') or {}).get('code') or '') == 'processing'
+            )
+        )
     ):
         return '加工サービス'
     return '商品'
@@ -8610,13 +8620,15 @@ def apply_processing_service_split(c, classified, sku_groups):
     service_plans = {}
     by_code = {g['code']: g for g in (sku_groups or [])}
 
+    rows_by_code = defaultdict(list)
+    for r in (classified or []):
+        c_code = stock.text((r.get('csv') or {}).get('code') or '')
+        rows_by_code[c_code].append(r)
+
     # グループ単位: 加工業者を仕入先候補・差分から外し、本体名を推定
     for group in sku_groups or []:
         code = stock.text(group.get('code') or '')
-        rows = [
-            r for r in (classified or [])
-            if stock.text((r.get('csv') or {}).get('code') or '') == code
-        ]
+        rows = rows_by_code.get(code, [])
         proc_rows = [r for r in rows if (r.get('processingService') or {}).get('isProcessingVendor')]
         garment_rows = [
             r for r in rows
@@ -11728,6 +11740,7 @@ def build_preview(c, body):
         if 'category' in val:
             group_category[gk] = val.get('category')
 
+    has_group_overrides = bool(group_product or group_handle or group_force or group_category)
     classified = []
     for row_no, item in uploaded['rows']:
         sel = dict(selections.get(str(row_no)) or selections.get(row_no) or {})
@@ -11736,21 +11749,22 @@ def build_preview(c, body):
             or row_classifications.get(row_no)
             or sel.get('parenClassification')
         )
-        temp = classify_row(c, row_no, item, paren_override=paren_ov)
-        gk = temp['matchGroupKey']
-        if gk in group_product and sel.get('productId') is None:
-            sel['productId'] = group_product[gk]
-        if gk in group_handle and sel.get('handleId') is None:
-            sel['handleId'] = group_handle[gk]
-        # 通常品番の forceCreate は抜け穴にしない（別物整理の change_code 等で対応）
         code_t = stock.text(item.get('商品コード'))
         force = bool(sel.get('forceCreate'))
+        if has_group_overrides:
+            temp = classify_row(c, row_no, item, paren_override=paren_ov)
+            gk = temp['matchGroupKey']
+            if gk in group_product and sel.get('productId') is None:
+                sel['productId'] = group_product[gk]
+            if gk in group_handle and sel.get('handleId') is None:
+                sel['handleId'] = group_handle[gk]
+            if gk in group_force and not stock_product_merge.is_normal_product_code(code_t):
+                force = True
+            if gk in group_category and 'category' not in sel:
+                sel['category'] = group_category[gk]
+        # 通常品番の forceCreate は抜け穴にしない（別物整理の change_code 等で対応）
         if force and stock_product_merge.is_normal_product_code(code_t):
             force = False
-        if gk in group_force and not stock_product_merge.is_normal_product_code(code_t):
-            force = True
-        if gk in group_category and 'category' not in sel:
-            sel['category'] = group_category[gk]
         # sku merge で keepProductId が付いている場合
         sku = sku_decisions.get(code_t) or sku_decisions.get(str(code_t)) or {}
         if isinstance(sku, dict) and stock.text(sku.get('decision')) == SKU_DECISION_MERGE:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -300,6 +301,7 @@ def synonym_canonical_token(token):
     return t
 
 
+@functools.lru_cache(maxsize=30000)
 def product_name_base_and_color(name):
     """照合用に商品名本体キーと明示色キーへ分ける。
 
@@ -335,6 +337,7 @@ def product_name_base_and_color(name):
     return identity_match_key(base_display), color_key, stock.text(base_display), color_display
 
 
+@functools.lru_cache(maxsize=30000)
 def _name_processing_match_key(name):
     """括弧から取り出した加工の照合キー。パンツ一般『丈加工』は空。"""
     raw = stock.text(name)
@@ -355,6 +358,7 @@ def _name_processing_match_key(name):
         return ''
 
 
+@functools.lru_cache(maxsize=30000)
 def product_name_core_key(name):
     """通常品番の商品名照合キー。
 
@@ -1563,6 +1567,14 @@ def build_preview(c, body):
 def _ensure_person(c, table, save_fn, name, *, create):
     name = stock.text(name)
     row = c.execute(f'SELECT id,active FROM {table} WHERE name=?', (name,)).fetchone()
+    if not row:
+        # ㈱やスペース全半角等の軽微な表記揺れは既存側へ自動名寄せ
+        matches, how = find_person_matches(c, table, name)
+        active_matches = [m for m in matches if m['active']]
+        if len(active_matches) == 1:
+            row = active_matches[0]
+        elif not active_matches and len(matches) == 1:
+            row = matches[0]
     if row:
         if not row['active']:
             raise ValueError(f'停止中の{("顧客" if table == "customers" else "仕入先")}「{name}」は再開しません。')
