@@ -1566,6 +1566,8 @@ def build_preview(c, body):
 
 def _ensure_person(c, table, save_fn, name, *, create):
     name = stock.text(name)
+    if not name:
+        return None, False
     row = c.execute(f'SELECT id,active FROM {table} WHERE name=?', (name,)).fetchone()
     if not row:
         # ㈱やスペース全半角等の軽微な表記揺れは既存側へ自動名寄せ

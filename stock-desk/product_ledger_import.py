@@ -9401,8 +9401,12 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                     row['suffixAttribute']['needsConfirm'] = False
                     row['suffixAttribute']['reason'] = ''
 
-            # 確定仕様 5: プリント（加工名: プリント / 仕入先: (有)マークショップ / 取扱顧客: ㈱合同観光商事 ひまわり / 場所はメモ）
-            elif code == 'プリント' or ('プリント' in raw_text and not any(nw in raw_text for nw in ('プリント無', 'プリントなし'))):
+            # 確定仕様 5: プリント（加工名: プリント / 仕入先: (有)マークショップ / 取扱顧客: ㈱合田観光商事　ひまわり / 場所はメモ）
+            elif code == 'プリント' or (
+                'プリント' in raw_text
+                and ('合田' in raw_text or 'マークショップ' in raw_text)
+                and not any(nw in raw_text for nw in ('プリント無', 'プリントなし'))
+            ):
                 ok = True
                 prod = dict(row.get('product') or {})
                 prod['category'] = stock.CATEGORY_PROCESS_SERVICE
@@ -9413,7 +9417,7 @@ def _apply_product_phase(classified, sku_groups, processing_split_meta, phase):
                 prod['blankSku'] = True
                 row['product'] = prod
                 row['supplier'] = {'action': 'reuse', 'name': '(有)マークショップ', 'id': None, 'reasons': []}
-                row['customer'] = {'action': 'reuse', 'name': '㈱合同観光商事 ひまわり', 'id': None, 'reasons': []}
+                row['customer'] = {'action': 'reuse', 'name': '㈱合田観光商事　ひまわり', 'id': 109, 'reasons': []}
                 row['companionProcessingService'] = 'プリント'
                 row['processingService'] = {'serviceName': 'プリント', 'vendorName': '(有)マークショップ'}
                 if pname and pname != 'プリント':
@@ -12348,8 +12352,11 @@ def _commit_person(c, table, save_fn, block, csv_name):
         if not row or not row['active']:
             raise ValueError(f'停止中または不明な{label}は登録に使いません。')
         return row['id'], False
+    csv_t = stock.text(csv_name)
+    if not csv_t:
+        return None, False
     return _ensure_person(
-        c, table, save_fn, csv_name, create=block.get('action') == 'create',
+        c, table, save_fn, csv_t, create=block.get('action') == 'create',
     )
 
 
@@ -13468,12 +13475,16 @@ def commit_preview(c, body, *, db_path=None):
                     # 顧客名は空のまま。架空の顧客も取扱も作らない。
                     cust_id, created = None, False
                 else:
-                    cust_id, created = _commit_person(
-                        c, 'customers', stock.save_customer, row.get('customer'),
-                        row['csv']['customer'],
-                    )
-                    if created:
-                        result_counts['customersCreated'] += 1
+                    cust_name = stock.text((row.get('customer') or {}).get('name') or (row.get('csv') or {}).get('customer') or '')
+                    if not cust_name:
+                        cust_id, created = None, False
+                    else:
+                        cust_id, created = _commit_person(
+                            c, 'customers', stock.save_customer, row.get('customer'),
+                            cust_name,
+                        )
+                        if created:
+                            result_counts['customersCreated'] += 1
 
                 sup_id = None
                 csv_supplier = stock.text(row['csv'].get('supplier') or '')
