@@ -19,7 +19,11 @@ def initialize(c):
 
 def load(c, user_id):
     row = c.execute('SELECT version,entries FROM personal_formats WHERE user_id=?', (user_id,)).fetchone()
-    return {'version': row[0], 'entries': json.loads(row[1])} if row else {'version': 0, 'entries': []}
+    value = json.loads(row[1]) if row else []
+    if isinstance(value, list):
+        value = {'entries': value}
+    return {'version': row[0] if row else 0, 'entries': value['entries'],
+            'layout': value.get('layout', 'auto'), 'iconSize': value.get('iconSize', 'medium')}
 
 
 def clean_text(value, limit=300):
@@ -66,6 +70,11 @@ def save(c, user_id, data):
         if not ID.fullmatch(key) or key in cleaned or kind not in ('folder', 'format') or not name:
             raise ValueError('フォルダまたは書式の名前を確認してください。')
         item = {'id': key, 'name': name, 'kind': kind, 'parent': parent}
+        slot = entry.get('slot')
+        if slot is not None:
+            if type(slot) is not int or not 0 <= slot < 600:
+                raise ValueError('アイコンの配置を確認してください。')
+            item['slot'] = slot
         if kind == 'format':
             item['data'] = form_data(entry.get('data'))
         cleaned[key] = item
@@ -78,9 +87,13 @@ def save(c, user_id, data):
                 raise ValueError('移動先のフォルダを確認してください。')
             visited.add(parent)
             parent = target['parent']
-    entries = list(cleaned.values())
+    layout = data.get('layout', previous['layout'])
+    icon_size = data.get('iconSize', previous['iconSize'])
+    if layout not in ('auto', 'aligned') or icon_size not in ('small', 'medium', 'large'):
+        raise ValueError('アイコンの表示設定を確認してください。')
+    value = {'entries': list(cleaned.values()), 'layout': layout, 'iconSize': icon_size}
     version = previous['version'] + 1
     c.execute('INSERT INTO personal_formats VALUES(?,?,?) ON CONFLICT(user_id) '
               'DO UPDATE SET version=excluded.version, entries=excluded.entries',
-              (user_id, version, json.dumps(entries, ensure_ascii=False)))
-    return 200, {'version': version, 'entries': entries}
+              (user_id, version, json.dumps(value, ensure_ascii=False)))
+    return 200, {'version': version, **value}

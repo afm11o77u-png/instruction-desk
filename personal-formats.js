@@ -1,5 +1,5 @@
 (() => {
- const dialog = $('#personalformats');
+ const page = $('#personalformats');
  const editor = $('#editor');
  const saveButton = $('#personalformatsave');
  const grid = $('#formatgrid');
@@ -11,9 +11,36 @@
  const get = id => library.entries.find(entry => entry.id === id);
  const message = text => { $('#formatmessage').textContent = text; };
  let historyToken = '', returningToPage = false;
+ const layoutControl = $('#formatlayout');
+ const sizeControl = $('#formaticonsize');
+ const sizes = {small:[100,94],medium:[140,124],large:[180,156]};
+ const gap = 8;
+
+ function showPage() {
+  page.hidden = false;
+  document.body.classList.add('personal-formats-page');
+ }
+
+ function closePage(restoreHistory = true) {
+  if(page.hidden)return;
+  page.hidden = true;
+  document.body.classList.remove('personal-formats-page');
+  closeContext();
+  const mark = history.state?.personalFormats;
+  if(restoreHistory && historyToken && mark?.token === historyToken){
+   returningToPage = true;
+   history.go(-mark.depth);
+  }
+  historyToken = '';
+ }
+
+ window.resetPersonalFormatsPage = () => closePage();
+
 
  function pushFormatLocation(depth) {
-  history.pushState({personalFormats:{token:historyToken,depth,folder,previewId}},'');
+  const url = new URL(location.href);
+  url.searchParams.set('formats','1');
+  history.pushState({personalFormats:{token:historyToken,depth,folder,previewId}},'',url);
  }
 
  function rememberFormatLocation() {
@@ -23,11 +50,11 @@
 
  window.addEventListener('popstate', event => {
   if(returningToPage){returningToPage = false;return}
-  if(!dialog.open || !historyToken)return;
+  if(page.hidden || !historyToken)return;
   const mark = event.state?.personalFormats;
   if(mark?.token !== historyToken){
    historyToken = '';
-   dialog.close();
+   closePage(false);
    return;
   }
   folder = get(mark.folder)?.kind === 'folder' ? mark.folder : '';
@@ -47,7 +74,7 @@
   contextFocus = null;
  }
 
- dialog.addEventListener('contextmenu', event => {
+ page.addEventListener('contextmenu', event => {
   if(changing || !grid.contains(event.target))return;
   const tile = event.target.closest('.formaticon');
   const entry = tile && get(tile.dataset.id);
@@ -58,7 +85,7 @@
   copyAction.hidden = entry?.kind !== 'format';
   pasteAction.disabled = copied?.user !== currentUser;
   pasteAction.textContent = entry?.kind === 'folder' ? 'このフォルダに貼り付け' : '貼り付け';
-  const bounds = dialog.getBoundingClientRect();
+  const bounds = page.getBoundingClientRect();
   const anchor = tile?.getBoundingClientRect() || bounds;
   context.hidden = false;
   context.style.left = Math.max(bounds.left,Math.min(event.clientX || anchor.left,bounds.right-context.offsetWidth))+'px';
@@ -66,20 +93,11 @@
   if(!copyAction.hidden)copyAction.focus();
   else if(!pasteAction.disabled)pasteAction.focus();
  });
- dialog.addEventListener('pointerdown', event => {
+ page.addEventListener('pointerdown', event => {
   if(!context.contains(event.target))closeContext();
  });
- dialog.addEventListener('cancel', event => {
-  if(!context.hidden){event.preventDefault();closeContext(true)}
- });
- dialog.addEventListener('close', () => {
-  closeContext();
-  const mark = history.state?.personalFormats;
-  if(historyToken && mark?.token === historyToken){
-   returningToPage = true;
-   history.go(-mark.depth);
-  }
-  historyToken = '';
+ page.addEventListener('keydown', event => {
+  if(event.key==='Escape' && !context.hidden){event.preventDefault();closeContext(true)}
  });
 
  copyAction.onclick = () => {
@@ -128,7 +146,10 @@
    }
   };
   button.ondrop = event => {
+   const entry = get(dragId);
+   if(!entry || !validDestination(entry,target))return;
    event.preventDefault();
+   event.stopPropagation();
    const id = dragId;
    dragId = '';
    move(id,target);
@@ -143,6 +164,66 @@
   paint();
  }
 
+ function currentRows() {
+  return library.entries.filter(entry => entry.parent === folder).sort((a,b) =>
+   a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name,'ja'));
+ }
+
+ function occupiedSlots(rows) {
+  const slots = new Map(), used = new Set();
+  for(const entry of rows){
+   if(Number.isInteger(entry.slot) && !used.has(entry.slot)){
+    slots.set(entry.id,entry.slot);
+    used.add(entry.slot);
+   }
+  }
+  let next = 0;
+  for(const entry of rows){
+   if(slots.has(entry.id))continue;
+   while(used.has(next))next++;
+   slots.set(entry.id,next);
+   used.add(next);
+  }
+  return slots;
+ }
+
+ function layoutIcons() {
+  const [width,height] = sizes[library.iconSize] || sizes.medium;
+  grid.style.setProperty('--format-width',width+'px');
+  grid.style.setProperty('--format-height',height+'px');
+  const cols = Math.max(1,Math.floor((grid.clientWidth+gap)/(width+gap)));
+  const slots = library.layout==='aligned' ? occupiedSlots(currentRows()) : null;
+  for(const tile of grid.querySelectorAll('.formaticon')){
+   const slot = slots?.get(tile.dataset.id);
+   tile.style.gridColumn = slot == null ? '' : String(slot%cols+1);
+   tile.style.gridRow = slot == null ? '' : String(Math.floor(slot/cols)+1);
+  }
+ }
+
+ new ResizeObserver(()=>{if(!page.hidden)layoutIcons()}).observe(grid);
+ grid.addEventListener('dragover', event => {
+  if(!changing && dragId && library.layout==='aligned')event.preventDefault();
+ });
+ grid.addEventListener('drop', event => {
+  const entry = get(dragId);
+  if(!entry || changing || library.layout!=='aligned' || entry.parent!==folder)return;
+  event.preventDefault();
+  const [width,height] = sizes[library.iconSize] || sizes.medium;
+  const bounds = grid.getBoundingClientRect();
+  const cols = Math.max(1,Math.floor((grid.clientWidth+gap)/(width+gap)));
+  const column = Math.min(cols-1,Math.max(0,Math.floor((event.clientX-bounds.left)/(width+gap))));
+  const row = Math.max(0,Math.floor((event.clientY-bounds.top)/(height+gap)));
+  const target = Math.min(599,row*cols+column);
+  const slots = occupiedSlots(currentRows());
+  const previous = slots.get(entry.id);
+  if(previous===target)return;
+  for(const [id,slot] of slots)if(slot===target)slots.set(id,previous);
+  slots.set(entry.id,target);
+  update(library.entries.map(item => slots.has(item.id) ? {...item,slot:slots.get(item.id)} : item));
+ });
+ layoutControl.onchange = () => update(library.entries,'',{layout:layoutControl.value});
+ sizeControl.onchange = () => update(library.entries,'',{iconSize:sizeControl.value});
+
  function paint() {
   closeContext();
   const crumbs = [{id:'',name:'自分の書式'}, ...folderPath(folder)];
@@ -153,9 +234,8 @@
    button.onclick = () => openFolder(id);
    bindDrop(button,id);
   });
-  const rows = library.entries.filter(entry => entry.parent === folder).sort((a,b) =>
-   a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name,'ja'));
-  grid.innerHTML = rows.length ? rows.map(entry => `<button type="button" class="formaticon" data-id="${entry.id}" draggable="true" aria-pressed="${entry.id===selectedId}"><span aria-hidden="true">${entry.kind==='folder'?'📁':'📄'}</span>${esc(entry.name)}<small>${entry.kind==='folder'?'フォルダ':'指示書の書式'}</small></button>`).join('')
+  const rows = currentRows();
+  grid.innerHTML = rows.length ? rows.map(entry => `<button type="button" class="formaticon" title="${esc(entry.name)}" data-id="${entry.id}" draggable="true" aria-pressed="${entry.id===selectedId}"><span aria-hidden="true">${entry.kind==='folder'?'📁':'📄'}</span>${esc(entry.name)}<small>${entry.kind==='folder'?'フォルダ':'指示書の書式'}</small></button>`).join('')
    : '<p>この場所にはまだ書式がありません。指示書の作成・編集画面から保存できます。</p>';
   grid.querySelectorAll('button').forEach(button => {
    const id = button.dataset.id;
@@ -175,11 +255,15 @@
    button.ondragend = () => { dragId = ''; };
    if(get(id).kind==='folder')bindDrop(button,id);
   });
+  layoutIcons();
   paintActions();
   paintPreview();
  }
 
  function paintActions() {
+  layoutControl.disabled = sizeControl.disabled = changing;
+  layoutControl.value = library.layout || 'auto';
+  sizeControl.value = library.iconSize || 'medium';
   const back = $('#formatback');
   const mark = history.state?.personalFormats;
   back.disabled = changing || mark?.token !== historyToken || mark.depth <= 1;
@@ -226,7 +310,7 @@
 
  function useFormat(entry, update) {
   if(!canManagePosting())return;
-  dialog.close();
+  closePage();
   openEditor(null,entry.data);
   if(typeof syncMethodNote === 'function')syncMethodNote();
   if(update){
@@ -237,13 +321,13 @@
   dirty = true;
  }
 
- async function update(entries, successMessage = '') {
+ async function update(entries, successMessage = '', preferences = {}) {
   if(changing)return;
   const user = currentUser;
   changing = true;
   paintActions();
   try {
-   const saved = await api('/api/personal-formats',{userId:user.id,version:library.version,entries});
+   const saved = await api('/api/personal-formats',{userId:user.id,version:library.version,entries,...preferences});
    if(currentUser !== user)return;
    library = saved;
    message(successMessage);
@@ -260,15 +344,15 @@
   const entry = get(id);
   if(!entry || !validDestination(entry,target))return;
   if(selectedId === id)selectedId = previewId = '';
-  update(library.entries.map(item => item.id===id ? {...item,parent:target} : item));
+  update(library.entries.map(item => item.id===id ? {...item,parent:target,slot:undefined} : item));
  }
 
- $('#personalformatsopen').onclick = async () => {
-  if(!canManagePosting() || changing || dialog.open || returningToPage)return;
+ const openPage = async () => {
+  if(!canManagePosting() || changing || !page.hidden || returningToPage)return;
   const user = currentUser;
   folder = selectedId = previewId = '';
   historyToken = crypto.randomUUID();
-  dialog.showModal();
+  showPage();
   pushFormatLocation(1);
   grid.replaceChildren();
   preview.hidden = true;
@@ -277,7 +361,7 @@
   paintActions();
   try {
    const loaded = await api('/api/personal-formats');
-   if(currentUser !== user || !dialog.open)return;
+   if(currentUser !== user || page.hidden)return;
    library = loaded;
    openFolder('',false);
    message('');
@@ -290,10 +374,18 @@
    paintActions();
   }
  };
+ $('#personalformatsopen').onclick = openPage;
+ window.openPersonalFormatsFromLocation = () => {
+  const url = new URL(location.href);
+  if(!url.searchParams.has('formats'))return;
+  url.searchParams.delete('formats');
+  history.replaceState(history.state,'',url);
+  return openPage();
+ };
  $('#formatback').onclick = () => {
   if(!$('#formatback').disabled)history.back();
  };
- $('#personalformatsclose').onclick = () => dialog.close();
+ $('#personalformatsclose').onclick = () => closePage();
  $('#formatopen').onclick = openSelected;
  $('#formatmove').onclick = () => move(selectedId,destination.value);
  $('#formatfolder').onclick = () => {
@@ -335,7 +427,7 @@
    if(currentUser !== user || !editor.open)return;
    const previous = state.entries.find(item=>item.id===editingId);
    if(editingId && !previous)throw Error('書式を開き直してください。');
-   const entry = {id:editingId||crypto.randomUUID(),parent:previous?.parent||'',kind:'format',name,data};
+   const entry = {id:editingId||crypto.randomUUID(),parent:previous?.parent||'',slot:previous?.slot,kind:'format',name,data};
    const entries = editingId ? state.entries.map(item=>item.id===editingId?entry:item) : [...state.entries,entry];
    const saved = await api('/api/personal-formats',{userId:user.id,version:state.version,entries});
    if(currentUser !== user)return;
