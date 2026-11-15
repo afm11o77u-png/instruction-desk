@@ -1367,7 +1367,8 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
     out = []
     for row in c.execute(
         '''SELECT * FROM product_ledger_row_maps
-           WHERE COALESCE(csv_product_code,'')='' AND product_id IS NOT NULL ORDER BY id DESC'''
+           WHERE (COALESCE(csv_product_code,'')='' OR csv_product_code='要確認')
+             AND product_id IS NOT NULL ORDER BY id DESC'''
     ).fetchall():
         if _exact_name_key(row['csv_product_name']) != key and not _names_equivalent_core(row['csv_product_name'], product_name):
             continue
@@ -1701,8 +1702,8 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
         size=payload['size'],
         supplier=payload['supplier'],
     )
-    # 商品登録時の除外を数量除外へ自動適用しない。表示し、登録先なしは確認対象のまま。
-    if product_excl:
+    # 商品登録時の除外を数量除外へ自動適用しない。登録先が確定している（productIdあり）場合は除外理由としない。
+    if product_excl and not dest.get('productId'):
         label = product_excl.get('label') or pli.PRODUCT_REGISTRATION_EXCLUDED_LABEL
         if label not in reasons:
             reasons = [label, *reasons]
@@ -1852,8 +1853,8 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
             status = legacy.STATUS_CREATE if master_new else legacy.STATUS_REUSE
 
     sel = selection if isinstance(selection, dict) else {}
-    # 登録先があっても除外表示は残す（数量除外へは自動適用しない／登録済み扱いしない）
-    if product_excl:
+    # 登録先がない場合のみ除外表示を残す
+    if product_excl and not dest.get('productId'):
         label = product_excl.get('label') or pli.PRODUCT_REGISTRATION_EXCLUDED_LABEL
         if label not in reasons:
             reasons = [label, *reasons]

@@ -599,6 +599,25 @@ class OpeningLegacyJsonTest(unittest.TestCase):
         self.assertTrue(any('仕入単価が0円' in r for r in plan.get('reasons') or []))
         self.assertEqual(result['counts'].get('openingCreated', 0), 1)
 
+    def test_codeless_uniform_matches_registered_product(self):
+        """商品登録時にコードが未定(要確認)で登録された制服商品が、旧在庫のコード空欄行からでも仕入先+品名+サイズでマッチして登録される。"""
+        folder, path, conn = newdb()
+        self.addCleanup(folder.cleanup)
+        self.addCleanup(conn.close)
+        register_product(conn, path, ['顧客A,Ｋ２スタッフ工房,要確認,衣装係ストレートパンツ,7号'])
+        # マップの品番を '要確認' に設定
+        conn.execute("UPDATE product_ledger_row_maps SET csv_product_code='要確認' WHERE csv_product_name='衣装係ストレートパンツ'")
+        conn.commit()
+        preview, result = commit_json(conn, path, [
+            row(id='stock-ishou-7', customer_id='cust-old-1', maker_id='maker-old-1',
+                item_num='', name='衣装係ストレートパンツ', item_size='7号',
+                maker_name='Ｋ２スタッフ工房', stock_count=2, calc_stock_count=2),
+        ], token='open-json-ishou')
+        plan = preview['openingStock']['plans'][0]
+        self.assertIn(plan['status'], ('create', 'reuse'))
+        self.assertEqual(plan['qty'], 2)
+        self.assertEqual(result['counts'].get('openingCreated', 0), 1)
+
 
 def customer_doc(rows):
     return {'result': True, 'data': rows}
