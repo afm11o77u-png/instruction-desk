@@ -173,6 +173,56 @@ def find_order_by_number(c, raw):
         if str(json.loads(row['payload']).get('number') or '')==raw: return row
     return None
 
+def set_posting_fields(payload, previous, user, now):
+    ready = payload.pop('postingReady', False) is True
+    for key in ('postedAt', 'postedBy'):
+        payload.pop(key, None)
+        if key in previous:
+            payload[key] = previous[key]
+    if payload['status'] == '下書き':
+        if ready:
+            check_posting(payload)
+            payload['postingReady'] = True
+    elif previous.get('status', '下書き') == '下書き':
+        payload['postedAt'] = now
+        payload['postedBy'] = user['name']
+
+
+def post_ready_orders(c, user, entries, now):
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('投函する指示書を選んでください。')
+    pending = []
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or type(entry.get('id')) is not int or type(entry.get('version')) is not int:
+            raise ValueError('一覧を更新してから指示書を選び直してください。')
+        oid = entry['id']
+        if oid in seen:
+            raise ValueError('同じ指示書が重複しています。')
+        seen.add(oid)
+        row = c.execute('SELECT * FROM orders WHERE id=?', (oid,)).fetchone()
+        if row is None or not can_access(user, previous := json.loads(row['payload'])):
+            return 404, {'error': '投函する指示書が見つかりません。一覧を更新してください。'}
+        if row['version'] != entry['version'] or previous.get('status') != '下書き' or previous.get('postingReady') is not True:
+            return 409, {'error': '指示書の状態が変わりました。一覧を更新して選び直してください。'}
+        payload = dict(previous, status='未着手')
+        check_posting(payload)
+        set_posting_fields(payload, previous, user, now)
+        pending.append((oid, payload))
+    result = []
+    for oid, payload in pending:
+        fix_received_and_number(c, payload, {'status': '下書き'}, oid)
+        c.execute('UPDATE orders SET version=version+1,payload=? WHERE id=?',
+                  (json.dumps(payload, ensure_ascii=False), oid))
+        changes = {'status': {'before': '下書き', 'after': '未着手'},
+                   'postingReady': {'before': True, 'after': None}}
+        c.execute('INSERT INTO history(order_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',
+                  (oid, now, '投函待ち → 投函', user['id'], f"{user['name']} ({user['login']})",
+                   json.dumps(changes, ensure_ascii=False)))
+        result.append(record(c.execute('SELECT * FROM orders WHERE id=?', (oid,)).fetchone()))
+    return 200, {'orders': result}
+
+
 def record(row):
     payload=json.loads(row['payload'])
     return dict(payload, id=row['id'], version=row['version'], number=order_number(row, payload))
@@ -324,6 +374,8 @@ def status_flag(handler,d):
         payload=json.loads(row['payload'])
         before=payload.get('status')
         if before==status: return 200, record(row)
+        if '下書き' in (before, status):
+            return 400, {'error': '下書きの投函は指示書一覧または編集画面から行ってください。'}
         payload['status']=status
         c.execute('UPDATE orders SET version=version+1,payload=? WHERE id=?',(json.dumps(payload,ensure_ascii=False),row['id']))
         changes={'status':{'before':before,'after':status}}
@@ -1583,6 +1635,18 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     ):
                         return self.reply(500, {'error': '備品棚卸を保存できませんでした。入力内容はそのまま残しています。しばらくして再度お試しください。'})
                     return self.reply(500, {'error': '勤怠の処理に失敗しました。入力内容はそのまま残しています。しばらくして再度お試しください。'})
+            if self.path == '/api/orders/post-ready':
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    current = self.session_user(c)
+                    if not current or current['must_change']:
+                        return self.reply(401, {'error': 'ログインし直してください。'})
+                    if current['role'] in ('floor', 'floor2', 'floor3', 'warehouse'):
+                        return self.reply(403, {'error': 'この権限では指示書を投函できません。'})
+                    if not isinstance(d, dict):
+                        raise ValueError('投函する指示書を選んでください。')
+                    code, result = post_ready_orders(c, current, d.get('orders'), datetime.now().isoformat(timespec='seconds'))
+                return self.reply(code, result)
             if self.path!='/api/orders': return self.reply(404,{'error':'見つかりません。'})
             payload=validate(d); now=datetime.now().isoformat(timespec='seconds')
             payload.pop('authorId',None); payload.pop('authorName',None)
@@ -1611,6 +1675,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     reconcile_shortages(payload)
                     refresh_due_for_mark(payload, previous)
                     apply_charge(c,payload,previous,current,False)
+                    set_posting_fields(payload, previous, current, now)
                     fix_received_and_number(c,payload,previous,d['id'])
                     before=previous['status']
                     if current['role']!='floor' and payload['status']!='下書き': check_posting(payload)
@@ -1627,9 +1692,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     ensure_line_ids(payload.get('items') if isinstance(payload.get('items'), list) else [])
                     payload['authorId']=current['id']; payload['authorName']=current['name']
                     apply_charge(c,payload,previous,current,True)
+                    set_posting_fields(payload, previous, current, now)
                     fix_received_and_number(c,payload,previous,None)
                     if payload['status']!='下書き': check_posting(payload)
                     cur=c.execute('INSERT INTO orders(version,payload) VALUES(1,?)',(json.dumps(payload,ensure_ascii=False),)); oid=cur.lastrowid; action='下書きを作成' if payload['status']=='下書き' else '新規作成・投函'
+                if payload.get('postingReady') and not previous.get('postingReady'):
+                    action = '投函待ちに保存'
+                elif previous.get('postingReady') and payload['status'] == '下書き' and not payload.get('postingReady'):
+                    action = '編集中に戻す'
                 changes={k:{'before':previous.get(k),'after':payload.get(k)} for k in sorted(set(previous)|set(payload)) if k not in ('authorId','authorName','assigneeId','assigneeName') and previous.get(k)!=payload.get(k)}
                 if 'shortages' in changes: changes['shortages']={'before':shortage_text(previous.get('shortages')),'after':shortage_text(payload.get('shortages'))}
                 c.execute('INSERT INTO history(order_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(oid,now,action,current['id'],f"{current['name']} ({current['login']})",json.dumps(changes,ensure_ascii=False)))
