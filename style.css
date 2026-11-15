@@ -959,13 +959,14 @@ body > aside .nav {font-weight:600}
   justify-content: space-between;
   gap: .75rem;
   padding: .65rem .9rem;
-  margin-top: .5rem;
+  margin: .5rem 12px;
   border: 1px solid #cbded3;
   border-radius: .45rem;
   background: #f5faf7;
 }
 .posting-batch label, .posting-choice {
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   gap: .35rem;
   white-space: nowrap;
