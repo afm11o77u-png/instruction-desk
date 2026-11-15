@@ -1698,7 +1698,7 @@ function searchPickerMarkup({label,inputId,listId,clearId,hintId,placeholder,val
       <p class="search-picker-hint" id="${hintId}"></p>
     </label>`
 }
-function bindOpeningSearchPicker({input,list,clearBtn,hint,getItems,emptyText,isConfirmed,confirmedLabel,onPick,onClear,onQueryChange}){
+function bindOpeningSearchPicker({input,list,clearBtn,hint,getItems,emptyText,isConfirmed,confirmedLabel,onPick,onClear,onQueryChange,unconfirmedText='候補から選んで確定してください（入力だけでは保存できません）'}){
   let active=-1
   let open=false
   const setHint=(text,confirmed)=>{
@@ -1755,7 +1755,7 @@ function bindOpeningSearchPicker({input,list,clearBtn,hint,getItems,emptyText,is
     const confirmed=isConfirmed()
     if(clearBtn)clearBtn.hidden=!confirmed&&!String(input.value||'').trim()
     if(confirmed)setHint('選択済み: '+confirmedLabel(),true)
-    else if(String(input.value||'').trim())setHint('候補から選んで確定してください（入力だけでは保存できません）',false)
+    else if(String(input.value||'').trim())setHint(unconfirmedText,false)
     else setHint('',false)
   }
   const move=(delta)=>{
@@ -2436,12 +2436,40 @@ async function loadStockMoreGroups(){
 let stockListBarCache={el:null,data:null,writable:null}
 // 起動直後、bootstrap より先に在庫が届いたときの仮データ（絞り込み欄は bootstrap 到着後に埋まる）
 const STOCK_LIST_EMPTY_DATA={products:[],customers:[],locations:[]}
+function bindStockListPicker(id, field, records, filter, label, apply){
+  const input=$('#'+id)
+  const selected=()=>records.find(item=>String(item.id)===String(state.filters[field]))
+  bindOpeningSearchPicker({
+    input,list:$('#'+id+'List'),clearBtn:$('#'+id+'Clear'),hint:$('#'+id+'Hint'),
+    getItems:()=>filter(input.value===label(selected())?'':input.value).slice(0,40)
+      .map(item=>({id:item.id,label:label(item)})),
+    emptyText:'一致する候補はありません。',
+    isConfirmed:()=>!!selected()&&input.value===label(selected()),
+    confirmedLabel:()=>label(selected()),
+    unconfirmedText:'候補を選ぶと一覧に反映します。',
+    onPick:item=>{state.filters[field]=String(item.id);input.value=item.label;apply()},
+    onClear:()=>{state.filters[field]='';apply()},
+    onQueryChange:value=>{
+      if(!value.trim()&&state.filters[field]){
+        state.filters[field]=''
+        apply()
+      }
+      return false
+    },
+  })
+}
 function stockList(){
   const f=state.filters
   const data=state.data||STOCK_LIST_EMPTY_DATA
   const sizes=[...new Set(data.products.flatMap(p=>p.sizes))]
   const specs=new Map()
   data.products.forEach(p=>p.links.forEach(l=>specs.set(l.embroidery||'none',specLabel(l.embroidery))))
+  const customerLabel=c=>c?.name||''
+  const selectedCustomer=data.customers.find(c=>String(c.id)===String(f.customerId))
+  const selectedProduct=data.products.find(p=>String(p.id)===String(f.productId))
+  const picker=(id,label,placeholder,value)=>searchPickerMarkup({
+    label,inputId:id,listId:id+'List',clearId:id+'Clear',hintId:id+'Hint',placeholder,value,required:false,
+  })
   const opt=(value,label,current)=>`<option value="${esc(value)}" ${String(current)===String(value)?'selected':''}>${esc(label)}</option>`
   const totalNew=state.stock?state.stock.totalQtyNew:0
   const totalUsed=state.stock?state.stock.totalQtyUsed:0
@@ -2456,12 +2484,12 @@ function stockList(){
   if(barReuse){
     $('#stockListRest').innerHTML=restHtml
     const setv=(id,v)=>{const el=$('#'+id);if(el&&el.value!==String(v??''))el.value=String(v??'')}
-    setv('fCustomer',f.customerId);setv('fProduct',f.productId);setv('fSize',f.size);setv('fSpec',f.spec);setv('fLocation',f.locationId);setv('fCondition',f.condition||'');setv('fStockFilter',f.stockFilter);setv('groups',f.group||'lot')
+    setv('fSize',f.size);setv('fSpec',f.spec);setv('fLocation',f.locationId);setv('fCondition',f.condition||'');setv('fStockFilter',f.stockFilter);setv('groups',f.group||'lot')
   }else{
     $('#main').innerHTML=`<section class="panel stock-list-panel"><div id="stockListBar">
     <div class="bar stock-list-filters">
-      <label>顧客<select id="fCustomer"><option value="">すべて</option>${customersBySortKey(data.customers).map(c=>opt(c.id,c.name,f.customerId)).join('')}</select></label>
-      <label>商品<select id="fProduct"><option value="">すべて</option>${data.products.map(p=>opt(p.id,`${p.code} ${p.name} ${p.color}（No. ${p.displayNo||p.id}）`,f.productId)).join('')}</select></label>
+      ${picker('fCustomer','顧客','顧客名・フリガナ',customerLabel(selectedCustomer))}
+      ${picker('fProduct','商品','商品名・品番',historyProductLabel(selectedProduct))}
       <label>サイズ<select id="fSize"><option value="">すべて</option>${sizes.map(s=>opt(s,s,f.size)).join('')}</select></label>
       <label>加工<select id="fSpec"><option value="">すべて</option>${[...specs].map(([k,v])=>opt(k,v,f.spec)).join('')}</select></label>
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
@@ -2472,8 +2500,20 @@ function stockList(){
     <select id="groups" class="stock-group-select" aria-label="表示の切替">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<option value="${id}"${(f.group||'lot')===id?' selected':''}>${label}</option>`).join('')}</select></div><div id="stockListRest">${restHtml}</div></section>`
     stockListBarCache={el:$('#stockListBar'),data,writable}
   }
-  const apply=async()=>{f.customerId=$('#fCustomer').value;f.productId=$('#fProduct').value;f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value;f.condition=$('#fCondition').value;f.stockFilter=$('#fStockFilter').value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
-  ;['fCustomer','fProduct','fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
+  const apply=async()=>{
+    f.size=$('#fSize').value;f.spec=$('#fSpec').value;f.locationId=$('#fLocation').value
+    f.condition=$('#fCondition').value;f.stockFilter=$('#fStockFilter').value
+    state.stockLotLimit=STOCK_LOT_PAGE_SIZE
+    try{await loadStock();paint()}catch(error){toast(error.message)}
+  }
+  if(!barReuse){
+    const customers=customersBySortKey(data.customers)
+    bindStockListPicker('fCustomer','customerId',customers,
+      q=>filterHistoryCustomers(q, customers),customerLabel,apply)
+    bindStockListPicker('fProduct','productId',data.products,
+      q=>filterHistoryProducts(q, data.products),historyProductLabel,apply)
+  }
+  ;['fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
   $('#groups').onchange=async e=>{f.group=e.target.value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}
   const openNew=$('#listInboundNew')
   if(openNew)openNew.onclick=()=>openNormalInboundRegister()
@@ -2781,21 +2821,19 @@ function clearHistoryFilters(){
   state.historyResult=null
   paint()
 }
-function filterHistoryCustomers(query){
+function filterHistoryCustomers(query, records=state.data.customers||[]){
   const needle=String(query||'').trim().toLowerCase()
-  const list=(state.data.customers||[]).slice()
-  if(!needle)return list
-  return list.filter(c=>{
+  if(!needle)return records
+  return records.filter(c=>{
     const name=String(c.name||'').toLowerCase()
     const kana=String(c.kana||'').toLowerCase()
     return name.includes(needle)||kana.includes(needle)
   })
 }
-function filterHistoryProducts(query){
+function filterHistoryProducts(query, records=state.data.products||[]){
   const needle=String(query||'').trim().toLowerCase()
-  const list=(state.data.products||[]).slice()
-  if(!needle)return list
-  return list.filter(p=>{
+  if(!needle)return records
+  return records.filter(p=>{
     const hay=`${p.code||''} ${p.name||''} ${p.color||''} ${p.supplierName||''}`.toLowerCase()
     return hay.includes(needle)
   })
