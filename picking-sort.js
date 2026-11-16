@@ -23,6 +23,7 @@
   setInterval(updatePickingSortNav, 1000);
 
   let lastAddresses = [];
+  let previewEpoch = 0;
 
   function closeModal() {
     const modal = document.getElementById('picking-sort-modal');
@@ -41,6 +42,9 @@
     const previewCount = document.getElementById('picking-sort-count');
     const previewFiles = document.getElementById('picking-sort-files');
     const btnExec = document.getElementById('picking-sort-exec');
+    const btnLabelOnly = document.getElementById('picking-sort-label-only');
+    const epoch = ++previewEpoch;
+    if (btnLabelOnly) btnLabelOnly.disabled = true;
     const btnCancel = document.getElementById('picking-sort-cancel');
     const inputIshikari = document.getElementById('picking-sort-ishikari-name');
     const inputReport = document.getElementById('picking-sort-report-name');
@@ -60,6 +64,7 @@
 
     try {
       const res = await api('/api/picking-sort/preview');
+      if (epoch !== previewEpoch || !modal.open) return;
       if (inputIshikari && res.next_ishikari_file) inputIshikari.value = res.next_ishikari_file;
       if (inputReport && res.default_report_file) inputReport.value = res.default_report_file;
 
@@ -79,6 +84,7 @@
         if (previewCount) previewCount.textContent = `仕分け対象の指示書: ${res.count} 件`;
         if (previewFiles) previewFiles.innerHTML = res.files.map(f => `<li>${esc(f)}</li>`).join('');
         lastAddresses = res.addresses || [];
+        if (btnLabelOnly) btnLabelOnly.disabled = !lastAddresses.length;
         if (labelCountText) {
           labelCountText.textContent = lastAddresses.length > 0
             ? `宛名情報: ${lastAddresses.length}件の指示書から宛名データを検出`
@@ -87,6 +93,7 @@
         if (btnExec) btnExec.disabled = false;
       }
     } catch (err) {
+      if (epoch !== previewEpoch || !modal.open) return;
       if (previewCount) {
         previewCount.textContent = `ファイル一覧の確認に失敗しました: ${err.message || err}`;
         previewCount.style.color = '#c00';
@@ -112,7 +119,7 @@
       return;
     }
 
-    if (t.id === 'picking-sort-open-print' || t.closest('#picking-sort-open-print')) {
+    if (t.closest('#picking-sort-label-only, #picking-sort-open-print')) {
       e.preventDefault();
       e.stopPropagation();
       if (lastAddresses && lastAddresses.length > 0 && typeof queuePrint === 'function') {
@@ -131,6 +138,8 @@
       }
 
       t.disabled = true;
+      const btnLabelOnly = document.getElementById('picking-sort-label-only');
+      if (btnLabelOnly) btnLabelOnly.disabled = true;
       t.textContent = '仕分け・保存処理中...';
       const resultBox = document.getElementById('picking-sort-result');
       const previewCount = document.getElementById('picking-sort-count');
@@ -197,6 +206,7 @@
           t.disabled = false;
           t.dataset.done = '0';
           t.textContent = '再試行';
+          if (btnLabelOnly) btnLabelOnly.disabled = !lastAddresses.length;
         }
       } catch (err) {
         if (resultBox) {
@@ -208,6 +218,7 @@
         t.disabled = false;
         t.dataset.done = '0';
         t.textContent = '再試行';
+        if (btnLabelOnly) btnLabelOnly.disabled = !lastAddresses.length;
       }
     }
   });

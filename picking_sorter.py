@@ -109,6 +109,7 @@ def get_default_report_filename(now: datetime | None = None) -> str:
 
 def _extract_address_from_workbook(file_path: Path) -> dict | None:
     """指示書Excelから宛名データ（顧客名、管理番号、部署名、従業員名、受付内容）を柔軟に抽出"""
+    standard = None
     # 1. excel_import エンジンによる標準解析
     try:
         blob = file_path.read_bytes()
@@ -120,7 +121,7 @@ def _extract_address_from_workbook(file_path: Path) -> dict | None:
         request_val = str(payload.get("request") or "").strip()
 
         if customer or employee:
-            return {
+            standard = {
                 "source_file": file_path.name,
                 "customer": customer,
                 "management": management,
@@ -128,6 +129,8 @@ def _extract_address_from_workbook(file_path: Path) -> dict | None:
                 "employee": employee,
                 "request": request_val
             }
+            if employee:
+                return standard
     except Exception:
         pass
 
@@ -168,16 +171,22 @@ def _extract_address_from_workbook(file_path: Path) -> dict | None:
                         addr["management"] = next_val
                     elif not addr["department"] and ("部署" in v or "店舗" in v or "ネーム部署" in v):
                         addr["department"] = next_val
-                    elif not addr["employee"] and ("従業員名" in v or "氏名" in v or "社員名" in v or "お名前" in v):
+                    elif not addr["employee"] and (v in ("氏名", "従業員") or v.startswith(("従業員名", "氏名", "社員名", "お名前"))):
                         addr["employee"] = next_val
                     elif not addr["request"] and ("受付内容" in v or "依頼内容" in v or "区分" in v):
                         addr["request"] = next_val
 
         wb.close()
+        if standard is not None:
+            standard["employee"] = addr["employee"]
+            return standard
         if addr["customer"] or addr["employee"]:
             return addr
     except Exception:
         pass
+
+    if standard is not None:
+        return standard
 
     # 3. 最後のフォールバック: ピッキングリストの抽出行データから補完
     try:
