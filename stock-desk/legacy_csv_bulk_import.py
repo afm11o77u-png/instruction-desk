@@ -1257,7 +1257,12 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
     map_base = stock.text(meta.get('baseCode') or map_code)
 
     code_ok = False
-    if map_code == aux_code or map_reg == aux_reg:
+    import legacy_code_assign
+    aux_clean_code = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', aux_code).strip()
+    map_clean_code = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', map_code).strip()
+    if legacy_code_assign.is_custom_order_code(aux_code) and legacy_code_assign.is_custom_order_code(map_code):
+        code_ok = True
+    elif map_code == aux_code or map_reg == aux_reg or (aux_clean_code and aux_clean_code == map_clean_code):
         code_ok = True
     elif aux_code in position_sku.sku_code_variants(map_code) or map_code in position_sku.sku_code_variants(aux_code):
         code_ok = True
@@ -1278,14 +1283,22 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
     if map_pos in position_sku.POSITION_TOKENS and aux_pos in position_sku.POSITION_TOKENS:
         if map_pos != aux_pos:
             return False
-    if supplier and stock.text(map_row['csv_supplier'] or ''):
+    # 別注品は顧客と品名で一意に特定されるため仕入先差を許容
+    is_bettyu = legacy_code_assign.is_custom_order_code(aux_code) or legacy_code_assign.is_custom_order_code(map_code)
+    if supplier and stock.text(map_row['csv_supplier'] or '') and not is_bettyu:
         if not _person_names_match(supplier, map_row['csv_supplier']):
             return False
     if customer and stock.text(map_row['csv_customer'] or ''):
         if not _person_names_match(customer, map_row['csv_customer']):
             return False
     if not _names_equivalent_core(map_name, product_name):
-        return False
+        # 色省略または括弧内加工差の許容（基礎商品名が一致し、片方が色なしの場合）
+        ba, ca, _, _ = legacy.product_name_base_and_color(map_name)
+        bb, cb, _, _ = legacy.product_name_base_and_color(product_name)
+        if ba and ba == bb and (not ca or not cb):
+            pass
+        else:
+            return False
     map_size = stock.text(map_row['csv_size'] or '')
     aux_size = size if isinstance(size, str) else ('' if size is None else str(size))
     aux_size = aux_size.strip()
@@ -1339,9 +1352,25 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
     variants = position_sku.sku_code_variants(code_t)
     base, _pos = position_sku.strip_sku_position_suffix(code_t)
     # 別注品は 別注(顧客名) も候補に加える
-    bettyu_cand = legacy_code_assign.custom_order_code_for(customer) if legacy_code_assign.is_custom_order_code(code_t) else ''
-    # 原文・密着・スペース付き・基礎・別注(顧客名)
-    code_candidates = list(dict.fromkeys([code_t, *variants, base, bettyu_cand]))
+    bettyu_candidates = []
+    if legacy_code_assign.is_custom_order_code(code_t):
+        if customer:
+            bettyu_candidates.append(legacy_code_assign.custom_order_code_for(customer))
+            import unicodedata
+            bettyu_candidates.append(legacy_code_assign.custom_order_code_for(unicodedata.normalize('NFKC', customer)))
+            # マップテーブルに存在する別注(顧客名)を検索して追加
+            norm_cust = unicodedata.normalize('NFKC', customer)
+            for r in c.execute(
+                '''SELECT DISTINCT csv_product_code FROM product_ledger_row_maps
+                   WHERE csv_product_code LIKE '別注(%' AND product_id IS NOT NULL'''
+            ).fetchall():
+                b_code = r[0]
+                if b_code and (customer in b_code or norm_cust in unicodedata.normalize('NFKC', b_code)):
+                    bettyu_candidates.append(b_code)
+    clean_code = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', code_t).strip()
+    clean_base = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', base).strip()
+    # 原文・密着・スペース付き・基礎・加工除去コード・別注(顧客名)
+    code_candidates = list(dict.fromkeys([code_t, *variants, base, clean_code, clean_base, *bettyu_candidates]))
     rows = []
     seen_ids = set()
     for cand in code_candidates:
@@ -1374,12 +1403,21 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             ) in variants:
                 seen_ids.add(row['id'])
                 rows.append(row)
-    rows = [r for r in rows if _map_matches_aux_identity(
+    raw_candidate_rows = list(rows)
+    matched_rows = [r for r in raw_candidate_rows if _map_matches_aux_identity(
         r, customer=customer, code=code_t, product_name=product_name, size=size, supplier=supplier,
     )]
+    if not matched_rows and size:
+        # 新サイズ追加の場合、サイズ不問（同一品番・顧客・品名）で同じ商品にフォールバック
+        matched_rows = [r for r in raw_candidate_rows if _map_matches_aux_identity(
+            r, customer=customer, code=code_t, product_name=product_name, size='', supplier=supplier,
+        )]
+    rows = matched_rows
     if not rows:
         # 部品などで品番を記録していないマップ: 仕入先＋商品名＋サイズで照合
         rows = _codeless_map_rows(c, customer=customer, product_name=product_name, size=size, supplier=supplier)
+        if not rows and size:
+            rows = _codeless_map_rows(c, customer=customer, product_name=product_name, size='', supplier=supplier)
     res = _resolve_from_map_rows(c, rows, product_name=product_name, customer=customer,
                                  code_t=code_t, prefer_map_id=prefer_map_id)
     cache[k] = res
