@@ -1081,3 +1081,14 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 #formatbatch .formatactions { display: flex; flex-wrap: wrap; gap: 8px; }
 #formatbatchresult { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; }
 #formatbatchresult:empty, #formatbatchselection:empty { display: none; }
+
+#addressprevieweditor { width: min(1240px, 96vw); }
+#addressprevieweditor .dialogbody { max-height: 70vh; overflow: auto; }
+#addressprevieweditor .tablewrap { overflow-x: auto; }
+#addressprevieweditor table { width: 100%; min-width: 920px; }
+#addressprevieweditor td, #addressprevieweditor th { padding: 6px 8px; vertical-align: middle; }
+#addressprevieweditor tbody th { max-width: 200px; overflow-wrap: anywhere; font-weight: 400; }
+#addressprevieweditor input[type="text"] { width: 100%; min-width: 95px; }
+#addresspreviewerror { color: #a22; }
+#addresspreviewerror:empty { display: none; }
+@media print { #addressprevieweditor { display: none !important; } }

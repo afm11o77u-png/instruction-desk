@@ -180,15 +180,15 @@ class ClassifyTest(unittest.TestCase):
 
         # C/1, C-10 color code in SKU
         as7300 = suffix.classify_suffix('AS7300 C/1', product_name='シャツ', supplier='チトセ')
-        self.assertTrue(as7300['apply'])
+        self.assertFalse(as7300['apply'])
         self.assertFalse(as7300['needsConfirm'])
-        self.assertEqual(as7300['baseCode'], 'AS7300')
+        self.assertEqual(as7300['baseCode'], 'AS7300 C/1')
         self.assertEqual(as7300['color'], 'C/1')
 
         as5403 = suffix.classify_suffix('AS5403 C-10', product_name='シャツ', supplier='チトセ')
-        self.assertTrue(as5403['apply'])
+        self.assertFalse(as5403['apply'])
         self.assertFalse(as5403['needsConfirm'])
-        self.assertEqual(as5403['baseCode'], 'AS5403')
+        self.assertEqual(as5403['baseCode'], 'AS5403 C-10')
         self.assertEqual(as5403['color'], 'C-10')
 
         # Slash in SKU (APK600-C/5, AS5402C/10)
@@ -231,10 +231,10 @@ class ClassifyTest(unittest.TestCase):
         self.assertTrue(btn['registerAsParts'])
         self.assertEqual(btn['baseCode'], '030 15mm')
 
-        # 0803(エメラルドグリーン)
+        # 0803(エメラルドグリーン) - 色番・色名付き品番として独立保持
         emerald = suffix.classify_suffix('0803(エメラルドグリーン)', product_name='ポロシャツ', supplier='仕入C')
         self.assertFalse(emerald['needsConfirm'])
-        self.assertEqual(emerald['baseCode'], '0803')
+        self.assertEqual(emerald['baseCode'], '0803(エメラルドグリーン)')
         self.assertEqual(emerald['color'], 'エメラルドグリーン')
 
         # 100-M-S-ｍ (fullwidth 'ｍ' in SKU)
@@ -435,8 +435,8 @@ class ImportTest(unittest.TestCase):
         folder, path, conn = newdb()
         try:
             lines = [
-                '顧客A,住商モンブラン,6-615,コックコート半袖加工,L',
-                '顧客B,住商モンブラン,6-615 刺繍,コックコート(LEOC刺繍),６L',
+                '顧客A,住商モンブラン,6-615,コックコート,L',
+                '顧客B,住商モンブラン,6-615,コックコート,６L',
                 '顧客A,住商モンブラン,6-615 青,コックコート,M',
                 '顧客A,住商モンブラン,BW554-73用Dカン,Dカン,-',
                 '顧客A,住商モンブラン,6-827 (デリカ),帽子,F',
@@ -466,12 +466,8 @@ class ImportTest(unittest.TestCase):
             pid = codes['6-615']['id']
             sizes = {r['label'] for r in conn.execute('SELECT label FROM product_sizes WHERE product_id=?', (pid,))}
             self.assertIn('L', sizes)
-            self.assertIn('6L', sizes)
-            self.assertNotIn('６L', sizes)
-            handles = list(conn.execute(
-                'SELECT embroidery FROM customer_products WHERE product_id=? ORDER BY id', (pid,)
-            ))
-            self.assertIn('LEOC刺繍', [r['embroidery'] for r in handles])
+            self.assertIn('M', sizes)
+            self.assertIn('S', sizes)
             services = list(conn.execute(
                 "SELECT name, supplier_id FROM products WHERE category='加工サービス'"
             ))

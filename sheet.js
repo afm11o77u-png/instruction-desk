@@ -95,7 +95,7 @@ function applyPreviewZoom(){
 function openPrintPreview(){reopenEditor=!!$('#editor')?.open;if(reopenEditor)$('#editor').close();wrapPreviewPages();document.body.classList.add('previewing');$('#previewbar').hidden=false;$('#previewprint').hidden=draftPreview||previewChoice;$('#previewchoiceprint').hidden=draftPreview||!previewChoice;showPreviewKind(previewShow);const tip=$('#previewbar small');if(tip){const labelsOnly=!!$('#printarea').querySelector('.labelpage')&&!$('#printarea').querySelector('.papersheet');tip.textContent=labelsOnly?'白い部分が用紙です。Chrome／Edgeでは「その他の設定」→「ヘッダーとフッター」をオフにしてください。画面の拡大率は印刷に影響しません。':'白い部分が用紙です。画面の拡大率は印刷倍率に影響しません。'}previewFit=true;applyPreviewZoom();$('#printarea').scrollTop=0;$('#printarea').scrollLeft=0}
 new ResizeObserver(()=>applyPreviewZoom()).observe($('#previewbar'));
 window.addEventListener('resize',applyPreviewZoom);
-function closePrintPreview(){draftPreview=false;document.body.classList.remove('draftpreview');document.body.classList.remove('previewing');$('#previewbar').hidden=true;previewChoice=false;previewOrder=null;previewShow='sheet';$('#previewprint').hidden=false;$('#previewchoiceprint').hidden=true;$('#previewchoiceprint').textContent='印刷';$('#previewseesheet').hidden=true;$('#previewseelabel').hidden=true;const reopen=reopenEditor;reopenEditor=false;if(reopen)$('#editor').showModal()}
+function closePrintPreview(){resetImportedAddressPreview();draftPreview=false;document.body.classList.remove('draftpreview');document.body.classList.remove('previewing');$('#previewbar').hidden=true;previewChoice=false;previewOrder=null;previewShow='sheet';$('#previewprint').hidden=false;$('#previewchoiceprint').hidden=true;$('#previewchoiceprint').textContent='印刷';$('#previewseesheet').hidden=true;$('#previewseelabel').hidden=true;const reopen=reopenEditor;reopenEditor=false;if(reopen)$('#editor').showModal()}
 let draftPreview=false;
 let previewChoice=false,previewOrder=null,previewShow='sheet';
 function showPreviewKind(kind){
@@ -112,7 +112,59 @@ function showPreviewKind(kind){
  });
 }
 function openFloorSheetPreview(order){if(!order)return;previewChoice=true;previewOrder=order;previewShow='sheet';queuePrint([order],false,true,true)}
-function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirmationOnly=false,labelPattern='4'){
+const importedAddressFields=[['customer','顧客名'],['management','管理番号'],['department','部署名'],['employee','氏名'],['request','受付内容']];
+let importedAddressRows=null;
+
+function resetImportedAddressPreview(){
+ importedAddressRows=null;
+ const dialog=$('#addressprevieweditor');
+ if(dialog?.open)dialog.close();
+ const button=$('#previeweditaddresses');
+ if(button)button.hidden=true;
+}
+
+function openImportedAddressPreview(addresses){
+ queuePrint(addresses,true,true,true,false,'4',true);
+}
+
+$('#previeweditaddresses').onclick=()=>{
+ if(!importedAddressRows || !document.body.classList.contains('previewing'))return;
+ $('#addresspreviewrows').innerHTML=importedAddressRows.map((row,i)=>{
+  const number=i+1;
+  return `<tr><td><input type="checkbox" name="include" aria-label="${number}行目を印刷" ${row.include?'checked':''}></td>
+    <th scope="row">${esc(row.source_file||number+'件目')}</th>
+    ${importedAddressFields.map(([key,label])=>`<td><input type="text" name="${key}" aria-label="${number}行目の${label}" value="${esc(row[key])}"></td>`).join('')}</tr>`;
+ }).join('');
+ $('#addresspreviewerror').textContent='';
+ $('#addressprevieweditor').showModal();
+};
+
+$('#addresspreviewcancel').onclick=()=>$('#addressprevieweditor').close();
+$('#addresspreviewform').onsubmit=event=>{
+ event.preventDefault();
+ if(!importedAddressRows)return;
+ const updated=[...$('#addresspreviewrows').rows].map((tr,i)=>({
+  ...importedAddressRows[i],
+  include:tr.querySelector('[name="include"]').checked,
+  ...Object.fromEntries(importedAddressFields.map(([key])=>[key,tr.querySelector('[name="'+key+'"]').value.trim()])),
+ }));
+ const included=updated.filter(row=>row.include);
+ if(!included.length){
+  $('#addresspreviewerror').textContent='印刷する宛名を1件以上選んでください。';
+  return;
+ }
+ const pages=addressTags(included,'4');
+ importedAddressRows=updated;
+ const area=$('#printarea');
+ area.replaceChildren(...pages);
+ wrapPreviewPages();
+ $('#addressprevieweditor').close();
+ applyPreviewZoom();
+ area.scrollTop=area.scrollLeft=0;
+ $('#previeweditaddresses').focus();
+};
+
+function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirmationOnly=false,labelPattern='4',editableAddresses=false){
  if(!list.length)return;
  if(guardPrinting())return;
  // labelOrders() keeps null slots for blank print positions; skip those here.
@@ -122,7 +174,13 @@ function queuePrint(list,labelsOnly,previewOnly=false,includeLabels=true,confirm
  printing=true;pendingPrintIds=labelsOnly||draftPreview?[]:list.filter(Boolean).map(o=>o.id);
  try{
   $('#printarea').replaceChildren(...(labelsOnly?addressTags(list,labelPattern):[...list.map(printedSheet),...(includeLabels?addressTags(list,'4'):[])]));
-  if(previewOnly){openPrintPreview();return}
+  if(previewOnly){
+   if(editableAddresses&&labelsOnly){
+    importedAddressRows=list.map(row=>({...row,include:true}));
+    $('#previeweditaddresses').hidden=false;
+   }
+   openPrintPreview();return;
+  }
   // Close the modal before printing so its backdrop cannot cover the paper.
   reopenEditor=!!$('#editor')?.open;
   if(reopenEditor)$('#editor').close();

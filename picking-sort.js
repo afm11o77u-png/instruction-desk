@@ -122,9 +122,9 @@
     if (t.closest('#picking-sort-label-only, #picking-sort-open-print')) {
       e.preventDefault();
       e.stopPropagation();
-      if (lastAddresses && lastAddresses.length > 0 && typeof queuePrint === 'function') {
+      if (lastAddresses && lastAddresses.length > 0 && typeof openImportedAddressPreview === 'function') {
         closeModal();
-        queuePrint(lastAddresses, true, true);
+        openImportedAddressPreview(lastAddresses);
       } else {
         if (typeof toast === 'function') toast('印刷対象の宛名データがありません。');
       }
@@ -192,9 +192,9 @@
           if (btnCancel) btnCancel.hidden = true;
           if (typeof toast === 'function') toast('指示書の仕分けと保存が完了しました');
 
-          if (autoPrintLabels && lastAddresses.length > 0 && typeof queuePrint === 'function') {
+          if (autoPrintLabels && lastAddresses.length > 0 && typeof openImportedAddressPreview === 'function') {
             closeModal();
-            queuePrint(lastAddresses, true, true);
+            openImportedAddressPreview(lastAddresses);
           }
         } else {
           if (resultBox) {

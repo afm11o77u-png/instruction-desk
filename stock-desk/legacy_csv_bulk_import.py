@@ -87,6 +87,7 @@ def _opening_merge_key(plan, c=None):
         stock.text(place.get('shelfName') or ''),
         plan.get('condition'),
         _opening_color_key(csv),
+        plan.get('unitCost'),
     )
 
 

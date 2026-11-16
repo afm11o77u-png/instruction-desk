@@ -522,6 +522,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
         if inner_color and body_ok:
             norm_body = unicodedata.normalize('NFKC', body)
             norm_body = re.sub(r'[\u2010-\u2015\u2212\uff70\uff0d]', '-', norm_body)
+            if norm_body == '0803' or norm_body.isdigit():
+                return _empty(apply=False, kind='color', baseCode=raw, color=inner_color, note=note)
             return _empty(apply=True, kind='color', baseCode=norm_body, color=inner_color, note=note)
 
         # 品番の（LEOC刺繍）や（+ペン差し加工）などの加工指定
@@ -611,6 +613,8 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             target_color = tail_color or tail
             if head.startswith('DOM'):
                 target_color = _resolve_dom_color(target_color)
+            if _is_color_code(tail) or _is_color_code(tail.split()[0] if tail else ''):
+                return _empty(apply=False, kind='color', baseCode=raw, color=target_color, note=note)
             return _empty(apply=True, kind='color', baseCode=head, color=target_color, note=note)
         if paren.is_embroidery_price_condition(tail):
             return _empty(
@@ -635,7 +639,7 @@ def classify_suffix(code, *, product_name='', supplier='', size=''):
             target_color = tail
             if head.startswith('DOM'):
                 target_color = _resolve_dom_color(target_color)
-            return _empty(apply=True, kind='color', baseCode=head, color=target_color, note=note)
+            return _empty(apply=False, kind='color', baseCode=raw, color=target_color, note=note)
         dim = _dimension(tail)
         if dim and _formal_code(head):
             if is_part_product_name(product_name):
