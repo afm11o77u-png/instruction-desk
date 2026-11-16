@@ -796,17 +796,22 @@ def commit_opening_stock_plans(
                 counts['reviewedSkipped'] += 1
                 continue
             stock_info = plan.get('stock') or {}
-            stock.adjust_opening_qty_diff(c, {
-                '_canWrite': True,
-                '_actor': body.get('_actor'),
-                'lotIds': stock_info.get('lotIds') or [],
-                'targetQty': plan['qty'],
-                'fingerprint': stock_info.get('fingerprint') or '',
-                'reason': f'{BULK_OPENING_NOTE}（数量差異・初期在庫CSV {row_no}行目）',
-                'businessOn': basis,
-                'actorName': actor,
-            })
-            counts['qtyUpdated'] += 1
+            target_qty = plan['qty']
+            current_qty = stock_info.get('currentQty')
+            if current_qty is not None and current_qty == target_qty:
+                counts['unchanged'] += 1
+            else:
+                stock.adjust_opening_qty_diff(c, {
+                    '_canWrite': True,
+                    '_actor': body.get('_actor'),
+                    'lotIds': stock_info.get('lotIds') or [],
+                    'targetQty': target_qty,
+                    'fingerprint': stock_info.get('fingerprint') or '',
+                    'reason': f'{BULK_OPENING_NOTE}（数量差異・初期在庫CSV {row_no}行目）',
+                    'businessOn': basis,
+                    'actorName': actor,
+                })
+                counts['qtyUpdated'] += 1
             _up(
                 c, run_id=run_id, aux_uploaded=aux_uploaded, plan=plan,
                 lot_ids=stock_info.get('lotIds') or [],
@@ -848,16 +853,17 @@ def commit_opening_stock_plans(
             # 同じ取込で先に作ったロットへ加算する（エラーにしない）
             lead_row, lead_qty = created_in_run[run_key]
             new_qty = stock_info['currentQty'] + qty
-            stock.adjust_opening_qty_diff(c, {
-                '_canWrite': True,
-                '_actor': body.get('_actor'),
-                'lotIds': stock_info.get('lotIds') or [],
-                'targetQty': new_qty,
-                'fingerprint': stock_info.get('fingerprint') or '',
-                'reason': f'{BULK_OPENING_NOTE}（初期在庫CSV {row_no}行目を{lead_row}行目と同じ在庫に合算）',
-                'businessOn': basis,
-                'actorName': actor,
-            })
+            if new_qty != stock_info['currentQty']:
+                stock.adjust_opening_qty_diff(c, {
+                    '_canWrite': True,
+                    '_actor': body.get('_actor'),
+                    'lotIds': stock_info.get('lotIds') or [],
+                    'targetQty': new_qty,
+                    'fingerprint': stock_info.get('fingerprint') or '',
+                    'reason': f'{BULK_OPENING_NOTE}（初期在庫CSV {row_no}行目を{lead_row}行目と同じ在庫に合算）',
+                    'businessOn': basis,
+                    'actorName': actor,
+                })
             created_in_run[run_key] = (lead_row, new_qty)
             counts['merged'] = counts.get('merged', 0) + 1
             _up(
