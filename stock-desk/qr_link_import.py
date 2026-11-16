@@ -1168,16 +1168,8 @@ _REFLECTIVE_TAPE_NAME = re.compile(r'反射テープ(?:\d+(?:\.\d+)?mm)?\Z')
 
 
 def is_reflective_tape_row(code, name):
-    """品番 3M9910 かつ品名が反射テープ（幅の mm 表記だけ可）か。
-
-    反射ベスト、反射加工、裾上げテープ、別品番のテープ、品番だけの一致は含めない。
-    """
-    code_key = unicodedata.normalize('NFKC', stock.text(code)).strip().casefold()
-    if code_key != _REFLECTIVE_TAPE_CODE:
-        return False
-    text = _leading_mark_stripped(name)
-    compact = re.sub(r'[\s\u3000]+', '', text)
-    return _REFLECTIVE_TAPE_NAME.fullmatch(compact) is not None
+    """反射テープは部品・資材として登録対象となったため常に False を返す。"""
+    return False
 
 
 def reflective_tape_reason(code, name):

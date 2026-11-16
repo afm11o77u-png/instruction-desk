@@ -1596,15 +1596,7 @@ def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_ma
     service_hit = False
     for row in rows:
         full = _map_row_spec_full(row)
-        # 加工サービス商品自体には衣服在庫を付けない（リンク行の本体 product_id を使う）
-        if full.get('rowKind') == 'processing_service':
-            service_hit = True
-            continue
         pid = row['product_id']
-        # 誤って加工サービス商品 ID が本体欄に入っていればスキップ
-        if full.get('processingProductId') and int(pid) == int(full['processingProductId']):
-            if full.get('rowKind') == 'processing_service':
-                continue
         cpid = row['customer_product_id']
         cid = row['customer_id']
         color, processing, material = full['color'], full['processing'], full['material']
