@@ -1303,10 +1303,15 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
     if map_pos in position_sku.POSITION_TOKENS and aux_pos in position_sku.POSITION_TOKENS:
         if map_pos != aux_pos:
             return False
-    # 別注品やメーカー品番固有品は仕入先差を許容
+    # 別注品やメーカー品番固有品、品番・品名完全一致品は仕入先差（サブ仕入先）を許容
     is_bettyu = legacy_code_assign.is_custom_order_code(aux_code) or legacy_code_assign.is_custom_order_code(map_code)
     has_maker_paren = '（' in aux_code or '(' in aux_code or '（' in map_code or '(' in map_code
-    allow_supp_diff = is_bettyu or (has_maker_paren and (map_norm_code == aux_norm_code or map_strip_paren == aux_strip_paren))
+    norm_a_tmp = re.sub(r'[*＊\s　]+', '', map_name)
+    norm_b_tmp = re.sub(r'[*＊\s　]+', '', product_name)
+    is_code_name_match = (map_norm_code == aux_norm_code) and (
+        norm_a_tmp == norm_b_tmp or (norm_a_tmp and norm_a_tmp in norm_b_tmp) or (norm_b_tmp and norm_b_tmp in norm_a_tmp)
+    )
+    allow_supp_diff = is_bettyu or (has_maker_paren and (map_norm_code == aux_norm_code or map_strip_paren == aux_strip_paren)) or is_code_name_match
     if supplier and stock.text(map_row['csv_supplier'] or '') and not allow_supp_diff:
         if not _person_names_match(supplier, map_row['csv_supplier']):
             return False
@@ -1334,8 +1339,8 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
             else:
                 # 代表的な品名表現揺れグループ（同一品番内の別名）
                 synonym_groups = [
-                    {'パンツ', 'ズボン', 'スラックス', '下衣', '白下', '女白下', '男白下', '女性用白下', '男性用白下', '黒ズボン', '黒ｽﾞﾎﾞﾝ', 'テーパードパンツ', 'マタニティパンツ'},
-                    {'白衣', '男白衣', '女白衣', '男性半袖白衣', '女性半袖白衣', '長袖白衣', '半袖白衣', '上衣', 'コート', 'シャツ', 'ジャケット', 'カーディガン'},
+                    {'パンツ', 'ズボン', 'スラックス', '下衣', '白下', '青下', '女白下', '男白下', '女性用白下', '男性用白下', '黒ズボン', '黒ｽﾞﾎﾞﾝ', 'テーパードパンツ', 'マタニティパンツ'},
+                    {'白衣', '青衣', '男白衣', '女白衣', '男性半袖白衣', '女性半袖白衣', '長袖白衣', '半袖白衣', '上衣', 'コート', 'シャツ', 'ジャケット', 'カーディガン'},
                     {'帽子', 'ワークキャップ', 'キャップ', '和帽子', '丸帽', '天メッシュ丸帽', '天メッシュ和帽子'},
                     {'エプロン', '胸当エプロン', '腰下エプロン', '胸当てエプロン', '衿付き胸当てエプロン', '特注エプロン'},
                 ]
@@ -1984,21 +1989,37 @@ def _plan_opening_row_from_map(c, *, row_no, item, default_site, selection):
     if map_status != 'ok':
         pname_norm = stock.text(payload.get('productName') or '')
         pcode_norm = stock.text(payload.get('code') or '')
-        is_discontinued = any(w in pname_norm or w in pcode_norm for w in ('(不使用)', '(廃番)', '(廃盤)', '（不使用）', '（廃番）', '（廃盤）'))
-        if qty == 0 and is_discontinued:
+        is_empty_row = not pcode_norm and not pname_norm and not stock.text(payload.get('size') or '')
+        if is_empty_row:
             return {
                 'rowNo': row_no, 'status': legacy.STATUS_EXCLUDED,
                 'statusLabel': OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED],
                 'qty': qty, 'unitCost': cost, 'condition': condition,
                 'conditionLabel': stock.condition_label(condition) if condition else '',
-                'reasons': [f'{row_no}行目：旧台帳で不使用/廃番（在庫数0）のため登録対象外です。'],
+                'reasons': [f'{row_no}行目：品番・商品名・サイズが未入力のため登録対象外です。'],
                 'csv': payload,
                 'target': None,
                 'place': place, 'stock': None, 'matchedLedger': False, 'complement': False,
                 'heldWithProduct': False, 'selected': False, 'mapResolve': resolved,
                 'fromPersistedMap': True, 'serviceExcluded': False,
                 'productRegistrationExcluded': True,
-                'productRegistrationExcludedLabel': '不使用/廃番（在庫0）',
+                'productRegistrationExcludedLabel': '未入力行',
+            }
+        is_discontinued = any(w in pname_norm or w in pcode_norm for w in ('(不使用)', '(廃番)', '(廃盤)', '（不使用）', '（廃番）', '（廃盤）'))
+        if qty == 0 and (is_discontinued or map_status == 'missing'):
+            return {
+                'rowNo': row_no, 'status': legacy.STATUS_EXCLUDED,
+                'statusLabel': OPENING_STATUS_LABELS[legacy.STATUS_EXCLUDED],
+                'qty': qty, 'unitCost': cost, 'condition': condition,
+                'conditionLabel': stock.condition_label(condition) if condition else '',
+                'reasons': [f'{row_no}行目：旧データで台帳未登録（在庫数0）のため登録対象外です。'],
+                'csv': payload,
+                'target': None,
+                'place': place, 'stock': None, 'matchedLedger': False, 'complement': False,
+                'heldWithProduct': False, 'selected': False, 'mapResolve': resolved,
+                'fromPersistedMap': True, 'serviceExcluded': False,
+                'productRegistrationExcluded': True,
+                'productRegistrationExcludedLabel': '台帳未登録（在庫0）',
             }
         status = legacy.STATUS_REVIEW if map_status in ('ambiguous', 'deleted') else COMPLEMENT_STATUS
         if map_status == 'missing':
