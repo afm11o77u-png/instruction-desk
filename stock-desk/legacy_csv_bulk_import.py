@@ -1258,11 +1258,31 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
 
     code_ok = False
     import legacy_code_assign
+    import unicodedata
     aux_clean_code = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', aux_code).strip()
     map_clean_code = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', map_code).strip()
+    aux_norm_code = re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', aux_code)).strip()
+    map_norm_code = re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', map_code)).strip()
+    aux_strip_color = re.sub(r'[\s　]+(?:[Cc]-?\d+.*|[A-Za-z0-9]+色|赤|黒|白|青|紺|ホワイト|ブラック|ストライプ|ネイビー).*$', '', aux_norm_code).strip()
+    map_strip_color = re.sub(r'[\s　]+(?:[Cc]-?\d+.*|[A-Za-z0-9]+色|赤|黒|白|青|紺|ホワイト|ブラック|ストライプ|ネイビー).*$', '', map_norm_code).strip()
+    aux_strip_paren = re.sub(r'[（\(][^）\)]*[）\)]', '', aux_norm_code).strip()
+    map_strip_paren = re.sub(r'[（\(][^）\)]*[）\)]', '', map_norm_code).strip()
+    aux_strip_hyphen = re.sub(r'-\d+$', '', aux_norm_code).strip()
+    map_strip_hyphen = re.sub(r'-\d+$', '', map_norm_code).strip()
+
     if legacy_code_assign.is_custom_order_code(aux_code) and legacy_code_assign.is_custom_order_code(map_code):
         code_ok = True
-    elif map_code == aux_code or map_reg == aux_reg or (aux_clean_code and aux_clean_code == map_clean_code):
+    elif (
+        map_code == aux_code or map_reg == aux_reg or
+        (aux_clean_code and aux_clean_code == map_clean_code) or
+        (aux_norm_code and aux_norm_code == map_norm_code) or
+        (aux_strip_color and (aux_strip_color == map_norm_code or aux_strip_color == map_strip_color)) or
+        (map_strip_color and map_strip_color == aux_norm_code) or
+        (aux_strip_paren and (aux_strip_paren == map_norm_code or aux_strip_paren == map_strip_paren)) or
+        (map_strip_paren and map_strip_paren == aux_norm_code) or
+        (aux_strip_hyphen and (aux_strip_hyphen == map_norm_code or aux_strip_hyphen == map_strip_hyphen)) or
+        (map_strip_hyphen and map_strip_hyphen == aux_norm_code)
+    ):
         code_ok = True
     elif aux_code in position_sku.sku_code_variants(map_code) or map_code in position_sku.sku_code_variants(aux_code):
         code_ok = True
@@ -1283,9 +1303,11 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
     if map_pos in position_sku.POSITION_TOKENS and aux_pos in position_sku.POSITION_TOKENS:
         if map_pos != aux_pos:
             return False
-    # 別注品は顧客と品名で一意に特定されるため仕入先差を許容
+    # 別注品やメーカー品番固有品は仕入先差を許容
     is_bettyu = legacy_code_assign.is_custom_order_code(aux_code) or legacy_code_assign.is_custom_order_code(map_code)
-    if supplier and stock.text(map_row['csv_supplier'] or '') and not is_bettyu:
+    has_maker_paren = '（' in aux_code or '(' in aux_code or '（' in map_code or '(' in map_code
+    allow_supp_diff = is_bettyu or (has_maker_paren and (map_norm_code == aux_norm_code or map_strip_paren == aux_strip_paren))
+    if supplier and stock.text(map_row['csv_supplier'] or '') and not allow_supp_diff:
         if not _person_names_match(supplier, map_row['csv_supplier']):
             return False
     if customer and stock.text(map_row['csv_customer'] or ''):
@@ -1295,9 +1317,33 @@ def _map_matches_aux_identity(map_row, *, customer, code, product_name, size, su
         # 色省略または括弧内加工差の許容（基礎商品名が一致し、片方が色なしの場合）
         ba, ca, _, _ = legacy.product_name_base_and_color(map_name)
         bb, cb, _, _ = legacy.product_name_base_and_color(product_name)
+        matched_name = False
         if ba and ba == bb and (not ca or not cb):
-            pass
+            matched_name = True
         else:
+            # 同一品番（code_ok）かつ仕入先矛盾なしの場合の衣類カテゴリ・コア部分一致判定
+            norm_a = re.sub(r'[*＊\s　]+', '', map_name)
+            norm_b = re.sub(r'[*＊\s　]+', '', product_name)
+            # 準清浄帽子 と 清浄帽子 は別カテゴリのため混同を防ぐ
+            is_jun_a = '準' in norm_a
+            is_jun_b = '準' in norm_b
+            if is_jun_a != is_jun_b:
+                return False
+            if norm_a and norm_b and (norm_a in norm_b or norm_b in norm_a):
+                matched_name = True
+            else:
+                # 代表的な品名表現揺れグループ（同一品番内の別名）
+                synonym_groups = [
+                    {'パンツ', 'ズボン', 'スラックス', '下衣', '白下', '女白下', '男白下', '女性用白下', '男性用白下', '黒ズボン', '黒ｽﾞﾎﾞﾝ', 'テーパードパンツ', 'マタニティパンツ'},
+                    {'白衣', '男白衣', '女白衣', '男性半袖白衣', '女性半袖白衣', '長袖白衣', '半袖白衣', '上衣', 'コート', 'シャツ', 'ジャケット', 'カーディガン'},
+                    {'帽子', 'ワークキャップ', 'キャップ', '和帽子', '丸帽', '天メッシュ丸帽', '天メッシュ和帽子'},
+                    {'エプロン', '胸当エプロン', '腰下エプロン', '胸当てエプロン', '衿付き胸当てエプロン', '特注エプロン'},
+                ]
+                for grp in synonym_groups:
+                    if any(w in norm_a for w in grp) and any(w in norm_b for w in grp):
+                        matched_name = True
+                        break
+        if not matched_name:
             return False
     map_size = stock.text(map_row['csv_size'] or '')
     aux_size = size if isinstance(size, str) else ('' if size is None else str(size))
@@ -1320,6 +1366,7 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
     k = (customer, code, product_name, size, supplier, prefer_map_id)
     if k in cache:
         return cache[k]
+    import unicodedata
     import product_ledger_import as pli
 
     pli.ensure_schema(c)
@@ -1346,7 +1393,7 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
             cache[k] = res
             return res
         res = _resolve_from_map_rows(c, named, product_name=product_name, customer=customer,
-                                     code_t='', prefer_map_id=prefer_map_id)
+                                     code_t='', prefer_map_id=prefer_map_id, supplier=supplier)
         cache[k] = res
         return res
     variants = position_sku.sku_code_variants(code_t)
@@ -1369,8 +1416,20 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
                     bettyu_candidates.append(b_code)
     clean_code = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', code_t).strip()
     clean_base = re.sub(r'[\s　]*(?:刺繍|加工).*$', '', base).strip()
-    # 原文・密着・スペース付き・基礎・加工除去コード・別注(顧客名)
-    code_candidates = list(dict.fromkeys([code_t, *variants, base, clean_code, clean_base, *bettyu_candidates]))
+    norm_nfkc = unicodedata.normalize('NFKC', code_t).strip()
+    norm_space = re.sub(r'\s+', ' ', norm_nfkc).strip()
+    space_only = re.sub(r'\s+', ' ', code_t.replace('　', ' ')).strip()
+    clean_color = re.sub(r'[\s　]+(?:[Cc]-?\d+.*|[A-Za-z0-9]+色|赤|黒|白|青|紺|ホワイト|ブラック|ストライプ|ネイビー).*$', '', norm_space).strip()
+    clean_color_raw = re.sub(r'[\s　]+(?:[Cc]-?\d+.*|[A-Za-z0-9]+色|赤|黒|白|青|紺|ホワイト|ブラック|ストライプ|ネイビー).*$', '', space_only).strip()
+    clean_paren = re.sub(r'[（\(][^）\)]*[）\)]', '', norm_space).strip()
+    clean_pos_strip = re.sub(r'[上下]$', '', norm_space).strip()
+    clean_hyphen = re.sub(r'-\d+$', '', norm_space).strip()
+    pos_expanded = [code_t + ' 下', code_t + '下', code_t + ' 上', code_t + '上']
+    # 原文・密着・スペース付き・基礎・加工除去コード・色/括弧除去コード・別注(顧客名)
+    code_candidates = list(dict.fromkeys([
+        code_t, *variants, base, clean_code, clean_base, norm_nfkc, norm_space, space_only,
+        clean_color, clean_color_raw, clean_paren, clean_pos_strip, *pos_expanded, *bettyu_candidates
+    ]))
     rows = []
     seen_ids = set()
     for cand in code_candidates:
@@ -1386,6 +1445,17 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
                 continue
             seen_ids.add(row['id'])
             rows.append(row)
+    # ハイフン数字サフィックス削り（例: HCS-2488-14 -> HCS-2488）は候補が見つからない場合のフォールバック
+    if not rows and clean_hyphen and clean_hyphen != norm_space:
+        for row in c.execute(
+            '''SELECT * FROM product_ledger_row_maps
+               WHERE csv_product_code=? AND product_id IS NOT NULL
+               ORDER BY id DESC''',
+            (clean_hyphen,),
+        ).fetchall():
+            if row['id'] not in seen_ids:
+                seen_ids.add(row['id'])
+                rows.append(row)
     # registeredCode が JSON 内だけ、の旧マップも拾う（件数制限付き）
     if base and base != code_t:
         for row in c.execute(
@@ -1407,11 +1477,44 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
     matched_rows = [r for r in raw_candidate_rows if _map_matches_aux_identity(
         r, customer=customer, code=code_t, product_name=product_name, size=size, supplier=supplier,
     )]
+    if not matched_rows and customer:
+        # 顧客違い（新顧客取扱）の場合、顧客不問（同一品番・仕入先・品名・サイズ）で同じ商品本体にフォールバック
+        matched_rows = [r for r in raw_candidate_rows if _map_matches_aux_identity(
+            r, customer='', code=code_t, product_name=product_name, size=size, supplier=supplier,
+        )]
     if not matched_rows and size:
         # 新サイズ追加の場合、サイズ不問（同一品番・顧客・品名）で同じ商品にフォールバック
         matched_rows = [r for r in raw_candidate_rows if _map_matches_aux_identity(
             r, customer=customer, code=code_t, product_name=product_name, size='', supplier=supplier,
         )]
+    if not matched_rows and customer and size:
+        # 顧客・サイズ双方不問フォールバック
+        matched_rows = [r for r in raw_candidate_rows if _map_matches_aux_identity(
+            r, customer='', code=code_t, product_name=product_name, size='', supplier=supplier,
+        )]
+    # 品番・品名の逆転対応（例: code='和帽子', product_name='SV3'）
+    if not matched_rows and product_name and code_t:
+        rev_cand = [product_name, unicodedata.normalize('NFKC', product_name).strip()]
+        rev_rows = []
+        for rc in rev_cand:
+            for row in c.execute(
+                '''SELECT * FROM product_ledger_row_maps
+                   WHERE csv_product_code=? AND product_id IS NOT NULL
+                   ORDER BY id DESC''',
+                (rc,),
+            ).fetchall():
+                if row['id'] not in seen_ids:
+                    seen_ids.add(row['id'])
+                    rev_rows.append(row)
+        matched_rev = [r for r in rev_rows if _map_matches_aux_identity(
+            r, customer=customer, code=product_name, product_name=code_t, size=size, supplier=supplier,
+        )]
+        if not matched_rev and size:
+            matched_rev = [r for r in rev_rows if _map_matches_aux_identity(
+                r, customer=customer, code=product_name, product_name=code_t, size='', supplier=supplier,
+            )]
+        if matched_rev:
+            matched_rows = matched_rev
     rows = matched_rows
     if not rows:
         # 部品などで品番を記録していないマップ: 仕入先＋商品名＋サイズで照合
@@ -1419,7 +1522,7 @@ def lookup_ledger_destinations_for_aux(c, *, customer, code, product_name, size,
         if not rows and size:
             rows = _codeless_map_rows(c, customer=customer, product_name=product_name, size='', supplier=supplier)
     res = _resolve_from_map_rows(c, rows, product_name=product_name, customer=customer,
-                                 code_t=code_t, prefer_map_id=prefer_map_id)
+                                 code_t=code_t, prefer_map_id=prefer_map_id, supplier=supplier)
     cache[k] = res
     return res
 
@@ -1437,7 +1540,7 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
     if cached_rows is None:
         cached_rows = c.execute(
             '''SELECT * FROM product_ledger_row_maps
-               WHERE (COALESCE(csv_product_code,'')='' OR csv_product_code='要確認')
+               WHERE (COALESCE(csv_product_code,'')='' OR csv_product_code='要確認' OR csv_product_code LIKE '別注(%')
                  AND product_id IS NOT NULL ORDER BY id DESC'''
         ).fetchall()
         try:
@@ -1446,7 +1549,18 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
             pass
     out = []
     for row in cached_rows:
-        if _exact_name_key(row['csv_product_name']) != key and not _names_equivalent_core(row['csv_product_name'], product_name):
+        matched = False
+        if _exact_name_key(row['csv_product_name']) == key or _names_equivalent_core(row['csv_product_name'], product_name):
+            matched = True
+        else:
+            # 「男パンツ」と「男性パンツ」「男性用パンツ」等の差異吸収
+            na = re.sub(r'[*＊\s　]+', '', row['csv_product_name'] or '')
+            nb = re.sub(r'[*＊\s　]+', '', product_name or '')
+            ca = re.sub(r'男性用|女性用|男性|女性|男|女', '', na)
+            cb = re.sub(r'男性用|女性用|男性|女性|男|女', '', nb)
+            if ca and ca == cb:
+                matched = True
+        if not matched:
             continue
         if supplier and stock.text(row['csv_supplier'] or '') and not _person_names_match(supplier, row['csv_supplier']):
             continue
@@ -1458,7 +1572,7 @@ def _codeless_map_rows(c, *, customer, product_name, size, supplier):
     return out
 
 
-def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_map_id):
+def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_map_id, supplier=None):
     if customer:
         cust_rows = [
             r for r in rows
@@ -1613,6 +1727,74 @@ def _resolve_from_map_rows(c, rows, *, product_name, customer, code_t, prefer_ma
                 if len(narrow_s_keys) == 1:
                     matches = narrowed_s
                     dest_keys = narrow_s_keys
+        # 仕入先で絞る（旧在庫の仕入先と一致する候補があれば優先）
+        if len(dest_keys) > 1 and supplier:
+            narrowed_sup = [
+                m for m in matches
+                if stock.text(m.get('csvSupplier') or m.get('supplier') or '') and _person_names_match(supplier, stock.text(m.get('csvSupplier') or m.get('supplier') or ''))
+            ]
+            if narrowed_sup:
+                narrow_sup_keys = {_dest_key(m) for m in narrowed_sup}
+                if len(narrow_sup_keys) == 1:
+                    matches = narrowed_sup
+                    dest_keys = narrow_sup_keys
+                elif len(narrow_sup_keys) < len(dest_keys):
+                    matches = narrowed_sup
+                    dest_keys = narrow_sup_keys
+
+        # 色指定なしで絞る（旧品名に色表記がなく、候補の中に無色があれば無色優先）
+        if len(dest_keys) > 1:
+            try:
+                import product_ledger_paren as paren_classify
+                extracted = paren_classify.extract_explicit_color_from_name(product_name)
+                aux_color = stock.text(extracted.get('color') or '')
+            except Exception:
+                aux_color = ''
+            if not aux_color:
+                # 旧品名が無色なら、候補の中で色が空のものを優先
+                narrowed_colorless = [m for m in matches if not stock.text(m.get('color') or '')]
+                if narrowed_colorless:
+                    narrow_c_keys = {_dest_key(m) for m in narrowed_colorless}
+                    if len(narrow_c_keys) == 1:
+                        matches = narrowed_colorless
+                        dest_keys = narrow_c_keys
+                    elif len(narrow_c_keys) < len(dest_keys):
+                        matches = narrowed_colorless
+                        dest_keys = narrow_c_keys
+
+        # 品名完全一致で絞る（同一品番で別名が複数ある場合、完全一致する候補を優先）
+        if len(dest_keys) > 1:
+            norm_aux_pname = re.sub(r'[*＊\s　]+', '', product_name)
+            if norm_aux_pname:
+                narrowed_exact_name = [
+                    m for m in matches
+                    if re.sub(r'[*＊\s　]+', '', m.get('csvProductName') or '') == norm_aux_pname
+                ]
+                if narrowed_exact_name:
+                    narrow_n_keys = {_dest_key(m) for m in narrowed_exact_name}
+                    if len(narrow_n_keys) == 1:
+                        matches = narrowed_exact_name
+                        dest_keys = narrow_n_keys
+                    elif len(narrow_n_keys) < len(dest_keys):
+                        matches = narrowed_exact_name
+                        dest_keys = narrow_n_keys
+
+        # 単一商品（同じproductId）への複数取扱・仕様ゆれの場合は、代表候補を選定して曖昧にしない
+        if len(dest_keys) > 1:
+            pids = {m['productId'] for m in matches if m.get('productId')}
+            if len(pids) == 1:
+                # 1. isMainCandidate が True のもの
+                # 2. 品名完全一致（または正規化一致）
+                # 3. 先頭
+                best = next((m for m in matches if m.get('isMainCandidate')), None)
+                if not best:
+                    norm_pname = re.sub(r'[*＊\s　]+', '', product_name)
+                    best = next((m for m in matches if re.sub(r'[*＊\s　]+', '', m.get('csvProductName') or '') == norm_pname), None)
+                if not best:
+                    best = matches[0]
+                matches = [best]
+                dest_keys = {_dest_key(best)}
+
         if len(dest_keys) > 1:
             return {
                 'status': 'ambiguous',
