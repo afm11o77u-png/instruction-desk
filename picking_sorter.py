@@ -15,7 +15,7 @@ r"""
    - ファイル名: 報告用{YYMMDD}.xlsx (例: 報告用261114.xlsx)
    - シート構成: 「持ち込み」「工場」「倉庫」
      * 「持ち込み」シート: 在庫場所 'b' のデータを追記
-     * 「工場」シート: 在庫場所 'a' のデータを追記
+     * 「工場」シート: 報告用の追記対象外
 4. 移動: \\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】\処理済み\{YYYY}.{M}月\{YYYYMMDD}\
 """
 
@@ -569,15 +569,13 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     ws.print_title_rows = '1:1'
 
 def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
-    r"""報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」および「工場」シートに追記保存"""
-    carry_rows   = [r for r in rows if r["stock"] == "b"]
-    factory_rows = [r for r in rows if r["stock"] == "a"]
+    r"""報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」シートに追記保存"""
+    carry_rows = [r for r in rows if r["stock"] == "b"]
 
-    if not carry_rows and not factory_rows:
+    if not carry_rows:
         return None, {"carry": 0, "factory": 0}
 
     carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
-    factory_rows.sort(key=lambda x: (x["customer"], x["name"]))
 
     report_dir = get_report_base_dir()
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -604,16 +602,7 @@ def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str 
         ws_carry = wb.create_sheet(title="持ち込み", index=0)
     else:
         ws_carry = wb["持ち込み"]
-    if carry_rows:
-        _append_rows_to_report_sheet(ws_carry, carry_rows, "持ち込みリスト", now, file_name)
-
-    # 工場シート
-    if "工場" not in wb.sheetnames:
-        ws_factory = wb.create_sheet(title="工場", index=1)
-    else:
-        ws_factory = wb["工場"]
-    if factory_rows:
-        _append_rows_to_report_sheet(ws_factory, factory_rows, "工場リスト", now, file_name)
+    _append_rows_to_report_sheet(ws_carry, carry_rows, "持ち込みリスト", now, file_name)
 
     # 倉庫シートがなければ枠だけ作成
     if "倉庫" not in wb.sheetnames:
@@ -633,7 +622,7 @@ def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str 
 
     return out_path, {
         "carry": len(carry_rows),
-        "factory": len(factory_rows)
+        "factory": 0
     }
 
 def _move_processed_files(now: datetime, files: list[Path]) -> tuple[Path, int]:
@@ -686,7 +675,7 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
     ishikari_path, ishikari_counts = _save_ishikari_workbook(now, all_rows, custom_filename=custom_ishikari_file)
 
-    # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」「工場」シートへ追記
+    # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」シートへ追記
     report_path, report_counts = _save_report_workbook(now, all_rows, custom_filename=custom_report_file)
 
     # 3. 処理済みフォルダへの移動

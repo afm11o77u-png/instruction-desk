@@ -171,7 +171,7 @@
               <div style="font-weight:bold;color:#2e7d32;margin-bottom:6px;">✓ ${esc(res.message)}</div>
               <ul style="margin:4px 0;padding-left:20px;font-size:0.88rem;color:#333;">
                 ${res.ishikari_file ? `<li><strong>石狩倉庫ブック:</strong> ${esc(res.ishikari_file)} (石狩:${iCounts.ishikari||0}件, 工場:${iCounts.factory||0}件, 持ち込み:${iCounts.carry||0}件)</li>` : '<li><strong>石狩倉庫ブック:</strong> 対象データなし</li>'}
-                ${res.report_file ? `<li><strong>報告用リスト:</strong> ${esc(res.report_file)} に追記 (持ち込み:${rCounts.carry||0}件, 工場:${rCounts.factory||0}件)</li>` : '<li><strong>報告用リスト:</strong> 対象データなし</li>'}
+                ${res.report_file ? `<li><strong>報告用リスト:</strong> ${esc(res.report_file)} に追記 (持ち込み:${rCounts.carry||0}件)</li>` : '<li><strong>報告用リスト:</strong> 対象データなし</li>'}
                 <li><strong>処理済み移動:</strong> ${res.moved_count}件のファイルを移動完了</li>
                 ${lastAddresses.length > 0 ? `<li><strong>宛名書き:</strong> ${lastAddresses.length}件の宛名データを抽出完了</li>` : ''}
               </ul>
