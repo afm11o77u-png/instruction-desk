@@ -1,5 +1,6 @@
 /** QRコード貼り替えが必要な商品（56件）の共通モーダル・一覧表示・CSV出力 */
 (function(){
+  const BASE = location.pathname.startsWith('/inventory') ? '/inventory' : ''
   let modalEl = null
   let cachedData = null
   let isBusy = false
@@ -22,7 +23,7 @@
 
   async function loadData(){
     if (cachedData) return cachedData
-    const res = await fetch('/api/qr-replacement/targets', {
+    const res = await fetch(`${BASE}/api/qr-replacement/targets`, {
       headers: { 'X-Stock-Request': '1' }
     })
     if (!res.ok) throw new Error('貼り替え対象データを取得できませんでした。')
@@ -94,7 +95,7 @@
             元品番: <strong>${totalCount}件</strong> / 分割後の商品: <strong>${(data && data.splitCodes ? data.splitCodes.length : '—')}品番</strong>
           </div>
           <div style="display:flex; gap:8px;">
-            <a href="/api/qr-replacement/export.csv" download="qr-replacement-targets.csv" class="button primary" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-size:13px; padding:6px 14px;">
+            <a href="${BASE}/api/qr-replacement/export.csv" download="qr-replacement-targets.csv" class="button primary" style="text-decoration:none; display:inline-flex; align-items:center; gap:4px; font-size:13px; padding:6px 14px;">
               <span>📥</span> <span>作業用CSV（Excel）を出力</span>
             </a>
             <button type="button" id="qrModalPrint" style="font-size:13px; padding:6px 14px;">🖨️ 一覧を印刷</button>
