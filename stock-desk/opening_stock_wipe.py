@@ -95,16 +95,16 @@ def _opening_lots(c):
 
 def _reasons_for_lot(c, lot, tables):
     reasons = []
-    if int(lot['qty_remaining']) != int(lot['qty_received']):
-        reasons.append('初期在庫の数量が、登録した数量から変わっています。')
     kinds = [
         row['kind'] for row in c.execute(
             'SELECT kind FROM moves WHERE lot_id=? ORDER BY id', (lot['id'],)
         )
     ] if 'moves' in tables else []
-    extra = [kind for kind in kinds if kind != 'opening']
+    extra = [kind for kind in kinds if kind not in ('opening', 'legacy_csv_adjust')]
     if extra:
         reasons.append('初期在庫のあとに別の入出庫履歴があります（' + '、'.join(sorted(set(extra))) + '）。')
+    if int(lot['qty_remaining']) != int(lot['qty_received']) and not any(k == 'legacy_csv_adjust' for k in kinds):
+        reasons.append('初期在庫の数量が、登録した数量から変わっています。')
     if not kinds:
         reasons.append('初期在庫の登録履歴が見つかりません。')
     lot_id = int(lot['id'])
