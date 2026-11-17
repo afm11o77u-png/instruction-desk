@@ -1171,7 +1171,7 @@ function products(){
     return productMatchesSearch(r,terms)
   }),sortKey)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
-    <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
+    <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><button type="button" class="quiet" id="qrReplSetupBtn" style="color:#d46b08; border-color:#faad14; background:#fffbe6; font-weight:bold; cursor:pointer; margin-left:8px;">⚠️ QR貼り替え対象（56件）</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
     <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
     <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>から行います。既存のQRを今の商品へ対応づけるのは、その隣の<strong>旧QR対応</strong>です（在庫数量は変えません）。</p>
     ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
@@ -1224,6 +1224,8 @@ function products(){
     $('#priceReviewOpen').onclick=()=>CurrentPrice.openReview()
     $('#priceRulesOpen').onclick=()=>CurrentPrice.openRules()
   }
+  const qrSetupBtn=$('#qrReplSetupBtn')
+  if(qrSetupBtn && window.QrReplacementModal)qrSetupBtn.onclick=()=>window.QrReplacementModal.open()
   const mergeBtn=$('#productMergeOpen')
   if(mergeBtn)mergeBtn.onclick=()=>{
     if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
@@ -2520,6 +2522,7 @@ function stockList(){
       <label>保管場所<select id="fLocation"><option value="">すべて</option>${data.locations.map(l=>opt(l.id,l.label,f.locationId)).join('')}</select></label>
       <label>状態${conditionSelectHtml('fCondition',f.condition||'',{allowAll:true})}</label>
       <label>在庫<select id="fStockFilter"><option value="" ${!f.stockFilter?'selected':''}>すべて</option><option value="shortage" ${f.stockFilter==='shortage'?'selected':''}>在庫不足（マイナス）のみ</option></select></label>
+      <button type="button" class="quiet" id="qrReplStockListBtn" style="color:#d46b08; border-color:#faad14; background:#fffbe6; font-weight:bold; cursor:pointer;" title="色・規格分割により新QR貼り替えが必要な商品一覧">⚠️ QR貼り替え対象</button>
       ${writable?`<button type="button" class="primary" id="listInboundNew">一覧にない商品を入庫</button>`:''}
     </div>
     <select id="groups" class="stock-group-select" aria-label="表示の切替">${[['lot','在庫明細'],['customer','顧客別'],['product','商品別'],['location','場所別']].map(([id,label])=>`<option value="${id}"${(f.group||'lot')===id?' selected':''}>${label}</option>`).join('')}</select></div><div id="stockListRest">${restHtml}</div></section>`
@@ -2537,6 +2540,8 @@ function stockList(){
       q=>filterHistoryCustomers(q, customers),customerLabel,apply)
     bindStockListPicker('fProduct','productId',data.products,
       q=>filterHistoryProducts(q, data.products),historyProductLabel,apply)
+    const qrReplStockBtn = $('#qrReplStockListBtn')
+    if(qrReplStockBtn && window.QrReplacementModal) qrReplStockBtn.onclick = () => window.QrReplacementModal.open()
   }
   ;['fSize','fSpec','fLocation','fCondition','fStockFilter'].forEach(id=>$('#'+id).onchange=apply)
   $('#groups').onchange=async e=>{f.group=e.target.value;state.stockLotLimit=STOCK_LOT_PAGE_SIZE;await loadStock();paint()}

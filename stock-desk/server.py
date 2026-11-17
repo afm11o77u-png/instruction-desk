@@ -118,6 +118,20 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         body['stockHold'] = stock_close.hold_state(c)
         body['canHoldStock'] = stock_close.can_hold(actor)
         return 200, body
+    if path == '/api/qr-replacement/targets':
+        import qr_replacement_targets
+        with stock.connect(db_path) as c:
+            return 200, qr_replacement_targets.get_targets_detail(c)
+    if path == '/api/qr-replacement/export.csv':
+        import qr_replacement_targets
+        with stock.connect(db_path) as c:
+            csv_bytes = qr_replacement_targets.export_csv_bytes(c)
+            return (
+                200,
+                csv_bytes,
+                'text/csv; charset=utf-8',
+                {'Content-Disposition': 'attachment; filename="qr-replacement-targets.csv"'},
+            )
     if path.startswith('/api/prices/'):
         import stock_prices
         q = {k: v[0] for k, v in query.items()}

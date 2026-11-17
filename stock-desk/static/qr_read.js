@@ -215,6 +215,15 @@
     if(!main)return
     main.innerHTML=`<section class="panel qr-read-page">
       <h2>QR読み取り</h2>
+      <div id="qrReplBanner" style="display:none; margin:10px 0 16px 0; background:#fffbe6; border:2px solid #faad14; padding:12px 16px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div>
+          <strong style="color:#d46b08; font-size:15px; display:flex; align-items:center; gap:6px;">
+            <span>⚠️</span> <span>QRコードの貼り替えが必要な商品が <span id="qrReplCount">56</span> 件あります</span>
+          </strong>
+          <span style="font-size:12px; color:#595959;">旧データで複数色が混在していた商品を規格・色ごとに分けました。現物の新QR貼り替え対象を確認できます。</span>
+        </div>
+        <button type="button" id="qrReplOpenBtn" class="primary" style="font-size:13px; padding:6px 14px; white-space:nowrap; cursor:pointer;">貼り替え一覧・印刷を開く</button>
+      </div>
       <p>WindowsのQRリーダーは、読み取った文字列を下の欄へ入力します。Enterで検索します。手入力も同じ欄です。AndroidとiOSのブラウザは、下のカメラで読めます。別アプリには分けていません。</p>
       <p class="excelhint">${esc(noteForCamera())} 読み取った文字列は外部のQRサービスへ送りません。URLを開いたり、在庫数量を自動では変えません。</p>
       <form id="qrScanForm" class="qr-read-form">
@@ -263,6 +272,19 @@
     const stopBtn=document.getElementById('qrCamStop')
     if(start)start.onclick=()=>startCamera()
     if(stopBtn)stopBtn.onclick=()=>{stop();const note=document.getElementById('qrCamNote');if(note)note.textContent='カメラを止めました。'}
+    // QR貼り替えバナーの初期化
+    const replBanner=document.getElementById('qrReplBanner')
+    const replBtn=document.getElementById('qrReplOpenBtn')
+    if(replBanner&&window.QrReplacementModal){
+      window.QrReplacementModal.loadData().then(data=>{
+        if(data&&data.totalCount>0){
+          const countEl=document.getElementById('qrReplCount')
+          if(countEl)countEl.textContent=String(data.totalCount)
+          replBanner.style.display='flex'
+          if(replBtn)replBtn.onclick=()=>window.QrReplacementModal.open()
+        }
+      }).catch(()=>{})
+    }
     paintResult()
   }
 
