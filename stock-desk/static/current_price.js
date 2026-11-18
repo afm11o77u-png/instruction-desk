@@ -22,7 +22,8 @@ const CurrentPrice=(()=>{
     if(!s)return ''
     const rs=Object.entries(s.reviewByReason||{}).map(([k,v])=>`<li>${esc(k)}: ${v}</li>`).join('')
     const ig=Object.entries(s.ignoredByReason||{}).map(([k,v])=>`${esc(k)} ${v}`).join('、')
-    return `<ul class="cp-summary"><li>単価を設定: ${s.set}（棚卸 ${s.fromStocktake} / 旧データ ${s.fromDb}）</li><li>要確認: ${s.review}</li>${rs?`<ul>${rs}</ul>`:''}<li>未設定: ${s.unset}</li><li>棚卸 ${s.stocktakeRows}行 → 照合 ${s.matched} / 対象外 ${s.ignored}${ig?`（${ig}）`:''}</li></ul>`
+    const sp=s.specials!=null?`<li>顧客別の特値を自動設定: ${s.specials}</li>`:''
+    return `<ul class="cp-summary"><li>単価を設定: ${s.set}（棚卸 ${s.fromStocktake} / 旧データ ${s.fromDb}）</li>${sp}<li>要確認: ${s.review}</li>${rs?`<ul>${rs}</ul>`:''}<li>未設定: ${s.unset}</li><li>棚卸 ${s.stocktakeRows}行 → 照合 ${s.matched} / 対象外 ${s.ignored}${ig?`（${ig}）`:''}</li></ul>`
   }
   function openInit(){
     const d=show('現単価の初期設定',`<p class="excelhint">毎回同じルールで現単価を上書きします。在庫数は変わりません。</p>
@@ -65,11 +66,11 @@ const CurrentPrice=(()=>{
   const RULES=`<ol class="cp-rules">
 <li><strong>照合</strong>：棚卸Excelの1枚目の各行を「顧客＋商品コード＋サイズ」で登録済みの初期在庫と照らし合わせます。全角・半角の違いと空白は無視し、Excelで数字になった品番（105.0）は「105」として扱います。仕入先は一致した在庫データの仕入先を使います。</li>
 <li><strong>品番の読み替え</strong>：一致しないときは順に試します。①下の読替表 ②末尾の括弧書きを外す（6991-099(2601へ変更)→6991-099） ③Excelが日付に変えた品番を戻す（44927→2023-01） ④先頭の0を補う（51→00051）。</li>
-<li><strong>棚卸にある品</strong>：棚卸の単価のうち一番高いものを現単価にします（0円は除く）。旧データの最高単価と違うとき、顧客によって棚卸単価が2倍以上違うときは「要確認」にします。</li>
-<li><strong>棚卸にない品</strong>：旧データ（0円を除く）の一番高い単価にします。ただし一番高い単価が一番多い単価の3倍以上なら、一番多い単価にして「要確認」にします。「一番多い」は在庫数が多い順、同じなら購入数が多い順です。</li>
+<li><strong>最新単価の採用（基準単価）</strong>：旧データの行IDに含まれる登録日時から、各顧客で一番最後に作成された最新ロットの単価を採用します（棚卸Excelに手書き追加された新単価がある場合はそちらを優先し「要確認」にします）。</li>
+<li><strong>顧客別の特値（自動登録）</strong>：同じ「仕入先×商品×サイズ」を複数の顧客で使っていて、顧客によって最新単価が異なる場合（大口特値など）、基準単価と異なる顧客の最新単価を自動で「特値」に登録します。</li>
+<li><strong>異常値の除外・要確認</strong>：同一商品の通常単価（最頻値）の3倍以上や極端な少額（100円未満）は誤入力・複数枚合算とみなして除外し、通常単価を採用した上で「要確認」にします。</li>
 <li><strong>0円しかない品</strong>：「未設定」にします。</li>
-<li>単価のまとまりは「仕入先×商品×サイズ」です。実行するたびに同じルールで上書きします（手で直した単価も戻ります）。在庫数は変わりません。</li>
-<li>一致しなかった行は対象外として一覧に出し、取り込みません。特値（顧客ごとの単価）は自動では作りません。</li>
+<li>単価のまとまりは「仕入先×商品×サイズ」です。実行するたびに同じルールで上書きします。在庫数は変わりません。</li>
 </ol>`
   async function openRules(){
     const d=show('取り込みルール',RULES+'<h3>品番の読替表</h3><div id="cpMaps">読み込み中…</div>')

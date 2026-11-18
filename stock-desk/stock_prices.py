@@ -199,10 +199,37 @@ def _lot_supplier_map(c):
     return out
 
 
+def _lot_legacy_ts_map(c):
+    """ロットID・行番号→旧在庫行ID（先頭の日時数字）マップ。"""
+    has_qr = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='qr_stock_links'").fetchone()
+    if not has_qr:
+        return {}, {}
+    qr_by_row = {}
+    for r in c.execute('SELECT source_row_no,legacy_stock_id FROM qr_stock_links WHERE source_row_no IS NOT NULL'):
+        m = re.match(r'^(\d{8,17})', str(r['legacy_stock_id'] or ''))
+        if m:
+            qr_by_row[int(r['source_row_no'])] = m.group(1)
+    by_lot = {}
+    for r in c.execute('SELECT source_row_no,lot_ids_json FROM legacy_csv_row_maps WHERE source_row_no IS NOT NULL ORDER BY id'):
+        ts = qr_by_row.get(int(r['source_row_no']), '')
+        if not ts:
+            continue
+        try:
+            ids = json.loads(r['lot_ids_json'] or '[]')
+        except ValueError:
+            continue
+        for lid in ids:
+            lid_i = int(lid)
+            if lid_i not in by_lot or ts > by_lot[lid_i]:
+                by_lot[lid_i] = ts
+    return by_lot, qr_by_row
+
+
 def db_lots(c):
     by_lot = _lot_supplier_map(c)
+    ts_by_lot, ts_by_row = _lot_legacy_ts_map(c)
     rows = c.execute(
-        '''SELECT l.id,l.size_label,l.unit_cost,l.qty_remaining,l.qty_received,
+        '''SELECT l.id,l.size_label,l.unit_cost,l.qty_remaining,l.qty_received,l.payout_order,
                   cp.customer_id,cp.product_id,p.supplier_id,p.code,p.maker_code,p.name,
                   cu.name AS customer_name
            FROM lots l JOIN customer_products cp ON cp.id=l.customer_product_id
@@ -211,12 +238,15 @@ def db_lots(c):
     ).fetchall()
     out = []
     for r in rows:
+        lid = r['id']
+        ts = ts_by_lot.get(lid) or ts_by_row.get(int(r['payout_order'] or 0)) or ''
         out.append({
-            'lotId': r['id'], 'supplierId': by_lot.get(r['id']) or r['supplier_id'] or 0,
+            'lotId': lid, 'supplierId': by_lot.get(lid) or r['supplier_id'] or 0,
             'productId': r['product_id'], 'size': r['size_label'], 'price': r['unit_cost'] or 0,
             'stockQty': r['qty_remaining'] or 0, 'buyQty': r['qty_received'] or 0,
             'customerId': r['customer_id'], 'customerName': r['customer_name'],
             'code': r['code'] or '', 'makerCode': r['maker_code'] or '', 'name': r['name'] or '',
+            'legacyTs': ts,
         })
     return out
 
@@ -284,12 +314,26 @@ def _match_stocktake(c, srows, lots):
     idx = collections.defaultdict(set)          # (cust, code, size) -> {(sid,pid)}
     names = {}                                  # pid -> norm name
     cust_codes = collections.defaultdict(set)   # cust -> {code}
+    lot_sid_by_pid = {}
     for l in lots:
         cu = norm(l['customerName'])
         names[l['productId']] = norm(l['name'])
+        lot_sid_by_pid[l['productId']] = l['supplierId']
         for code in {norm(l['code']), norm(l['makerCode'])} - {''}:
             idx[(cu, code, norm(l['size']))].add((l['supplierId'], l['productId']))
             cust_codes[cu].add(code)
+    csv_name_idx = collections.defaultdict(set)
+    for r in c.execute('SELECT csv_customer,csv_product_code,csv_product_name,csv_size,product_id FROM legacy_csv_row_maps WHERE product_id IS NOT NULL'):
+        pid = int(r['product_id'])
+        if pid not in lot_sid_by_pid:
+            continue
+        cu, co, sz, nm = norm(r['csv_customer']), norm(r['csv_product_code']), norm(r['csv_size']), norm(r['csv_product_name'])
+        if cu and co:
+            pair = (lot_sid_by_pid[pid], pid)
+            idx[(cu, co, sz)].add(pair)
+            cust_codes[cu].add(co)
+            if nm:
+                csv_name_idx[(cu, co, sz, nm)].add(pair)
     maps = {}
     for m in c.execute('SELECT customer_name,stock_code,real_code FROM price_code_map'):
         maps[(norm(m['customer_name']), norm(m['stock_code']))] = norm(m['real_code'])
@@ -323,7 +367,7 @@ def _match_stocktake(c, srows, lots):
             if not keys:
                 continue
             if len(keys) > 1:
-                byname = {k for k in keys if names.get(k[1]) == norm(r['name'])}
+                byname = {k for k in keys if names.get(k[1]) == norm(r['name'])} or csv_name_idx.get((cu, code, size, norm(r['name'])), set())
                 if len(byname) == 1:
                     keys = byname
                 else:
@@ -352,11 +396,14 @@ def _mode_price(lots):
     return max(w, key=lambda p: (w[p][0], w[p][1], w[p][2], p))
 
 
-def compute(c, srows):
+def _compute_all(c, srows):
     lots = db_lots(c)
     groups = collections.defaultdict(list)
+    prod_lots = collections.defaultdict(list)
     for l in lots:
         groups[(l['supplierId'], l['productId'], l['size'])].append(l)
+        if l['price'] >= 100:
+            prod_lots[(l['supplierId'], l['productId'])].append(l)
     # サイズ表記ゆれ対策: 照合キーはnorm(size)、グループは実際のsize_label
     size_label = {(k[0], k[1], norm(k[2])): k[2] for k in groups}
     matched, ignored = _match_stocktake(c, srows or [], lots)
@@ -367,6 +414,7 @@ def compute(c, srows):
     # 顧客間2倍ルール: 同じ品番でも顧客ごとに商品が分かれていることがあるので、
     # 仕入先×品番(正規化)×サイズでまとめて比較する
     pcode = {r[0]: norm(r[1]) for r in c.execute('SELECT id,code FROM products')}
+    cname_to_id = {norm(r['name']): r['id'] for r in c.execute('SELECT id,name FROM customers')}
     fam = collections.defaultdict(lambda: collections.defaultdict(int))
     for m in matched:
         if (m['price'] or 0) > 0:
@@ -374,15 +422,74 @@ def compute(c, srows):
             ck = norm(m['customer'])
             fam[fk][ck] = max(fam[fk][ck], m['price'])
     results = {}
+    specials = []
     for key in set(groups) | set(st):
         g = groups.get(key, [])
         db_pos = [l for l in g if l['price'] > 0]
         db_max = max((l['price'] for l in db_pos), default=None)
         st_pos = [m for m in st.get(key, []) if (m['price'] or 0) > 0]
+        st_max = max((m['price'] for m in st_pos), default=None)
+        has_ts = any(l.get('legacyTs') for l in db_pos)
         reasons, price, rule = [], None, ''
-        if st_pos:
+        if has_ts and db_pos:
+            rule = 'b' if st_pos else 'c'
+            p_all = prod_lots.get((key[0], key[1]))
+            ref_mode = _mode_price(p_all) if p_all else _mode_price(db_pos)
+            valid = [
+                l for l in db_pos
+                if l['price'] < MAX_MODE_RATIO * ref_mode and not (ref_mode >= 300 and l['price'] < 100)
+            ]
+            if len(valid) < len(db_pos):
+                reasons.append(REASON_MAX_VS_MODE)
+            if not valid:
+                price = ref_mode
+            else:
+                by_cust = collections.defaultdict(list)
+                for l in valid:
+                    by_cust[l['customerId']].append(l)
+                cust_latest = {}
+                for cid, clist in by_cust.items():
+                    clist.sort(key=lambda x: (x.get('legacyTs') or '', x['price'], x['lotId']), reverse=True)
+                    cust_latest[cid] = dict(clist[0])
+                db_price_set = {l['price'] for l in db_pos}
+                for m in st_pos:
+                    mp = m['price']
+                    if mp not in db_price_set and mp < MAX_MODE_RATIO * ref_mode and not (ref_mode >= 300 and mp < 100):
+                        cid = cname_to_id.get(norm(m['customer']))
+                        if cid:
+                            cust_latest[cid] = {'customerId': cid, 'price': mp, 'legacyTs': '99999999999999999'}
+                        if REASON_STOCKTAKE_VS_DB not in reasons:
+                            reasons.append(REASON_STOCKTAKE_VS_DB)
+                years = [
+                    int(cl['legacyTs'][:4]) for cl in cust_latest.values()
+                    if str(cl.get('legacyTs') or '')[:4].isdigit() and int(str(cl['legacyTs'])[:4]) < 9000
+                ]
+                max_yr = max(years) if years else 0
+                recent = [
+                    cl for cl in cust_latest.values()
+                    if not max_yr or not str(cl.get('legacyTs') or '')[:4].isdigit()
+                    or int(str(cl['legacyTs'])[:4]) >= max_yr - 1
+                ] or list(cust_latest.values())
+                p_counts = collections.Counter(cl['price'] for cl in recent)
+                p_ts = {
+                    pr: max((str(cl.get('legacyTs') or '') for cl in recent if cl['price'] == pr), default='')
+                    for pr in p_counts
+                }
+                price = max(p_counts, key=lambda pr: (p_counts[pr], pr, p_ts[pr]))
+                for cid, cl in sorted(cust_latest.items()):
+                    if cl['price'] != price:
+                        specials.append({
+                            'customerId': cid, 'supplierId': key[0],
+                            'productId': key[1], 'size': key[2], 'price': cl['price'],
+                        })
+            if st_pos:
+                per_cust = fam[(key[0], pcode.get(key[1], key[1]), norm(key[2]))]
+                if len(per_cust) > 1 and max(per_cust.values()) >= CUSTOMER_SPREAD_RATIO * min(per_cust.values()):
+                    if REASON_CUSTOMER_SPREAD not in reasons:
+                        reasons.append(REASON_CUSTOMER_SPREAD)
+        elif st_pos:
             rule = 'b'
-            price = max(m['price'] for m in st_pos)
+            price = st_max
             if db_max is not None and db_max != price:
                 reasons.append(REASON_STOCKTAKE_VS_DB)
             per_cust = fam[(key[0], pcode.get(key[1], key[1]), norm(key[2]))]
@@ -400,12 +507,17 @@ def compute(c, srows):
         status = STATUS_UNSET if price is None else STATUS_REVIEW if reasons else STATUS_OK
         results[key] = {'supplierId': key[0], 'productId': key[1], 'size': key[2], 'price': price,
                         'status': status, 'reason': '／'.join(reasons), 'rule': rule,
-                        'dbMax': db_max, 'stocktakeMax': max((m['price'] for m in st_pos), default=None)}
+                        'dbMax': db_max, 'stocktakeMax': st_max}
+    return results, matched, ignored, specials
+
+
+def compute(c, srows):
+    results, matched, ignored, _specials = _compute_all(c, srows)
     return results, matched, ignored
 
 
 def run_initial(c, body, *, srows=None):
-    """初期設定。基準単価を毎回同じルールで上書き（在庫数量は触らない）。"""
+    """初期設定。基準単価と顧客別特値を毎回同じルールで上書き（在庫数量は触らない）。"""
     file_name = ''
     if srows is None:
         raw = body.get('file') if isinstance(body, dict) else None
@@ -418,7 +530,7 @@ def run_initial(c, body, *, srows=None):
             file_name = stock.text(body.get('name'))
         else:
             srows = []
-    results, matched, ignored = compute(c, srows)
+    results, matched, ignored, specials = _compute_all(c, srows)
     t = stock.now()
     for r in results.values():
         c.execute(
@@ -429,6 +541,15 @@ def run_initial(c, body, *, srows=None):
                  source='initial',updated_at=excluded.updated_at''',
             (r['supplierId'], r['productId'], r['size'], r['price'], r['status'], r['reason'], t),
         )
+    c.execute("DELETE FROM price_special WHERE note='初期設定'")
+    for sp in specials:
+        c.execute(
+            '''INSERT INTO price_special(customer_id,supplier_id,product_id,size_label,price,note,created_at,updated_at)
+               VALUES(?,?,?,?,?,'初期設定',?,?)
+               ON CONFLICT(customer_id,supplier_id,product_id,COALESCE(size_label,'')) DO UPDATE SET
+                 price=excluded.price,note='初期設定',updated_at=excluded.updated_at''',
+            (sp['customerId'], sp['supplierId'], sp['productId'], sp['size'], sp['price'], t, t),
+        )
     by_reason = collections.Counter()
     for r in results.values():
         for reason in filter(None, r['reason'].split('／')):
@@ -438,6 +559,7 @@ def run_initial(c, body, *, srows=None):
         'set': sum(r['price'] is not None for r in results.values()),
         'fromStocktake': sum(r['rule'] == 'b' for r in results.values()),
         'fromDb': sum(r['rule'] == 'c' for r in results.values()),
+        'specials': len(specials),
         'review': sum(r['status'] == STATUS_REVIEW for r in results.values()),
         'reviewByReason': dict(by_reason),
         'unset': sum(r['status'] == STATUS_UNSET for r in results.values()),

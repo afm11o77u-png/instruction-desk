@@ -35,17 +35,23 @@ class Base(unittest.TestCase):
                 (code, name, self._id('suppliers', supplier), self.t, self.t)).lastrowid
         return self.ids[key]
 
-    def lot(self, customer, code, size, price, stock_qty=1, buy_qty=None, supplier='S1', name='品'):
+    def lot(self, customer, code, size, price, stock_qty=1, buy_qty=None, supplier='S1', name='品', legacy_id=None):
         pid = self.product(code, supplier, name)
         cid = self._id('customers', customer)
         row = self.c.execute('SELECT id FROM customer_products WHERE customer_id=? AND product_id=?', (cid, pid)).fetchone()
         cp = row[0] if row else self.c.execute(
             'INSERT INTO customer_products(customer_id,product_id,created_at,updated_at) VALUES(?,?,?,?)',
             (cid, pid, self.t, self.t)).lastrowid
+        row_no = self.c.execute('SELECT COALESCE(MAX(payout_order),0)+1 FROM lots').fetchone()[0] if legacy_id else 0
         self.c.execute(
             '''INSERT INTO lots(customer_product_id,size_label,location_id,unit_cost,qty_received,qty_remaining,
-               basis_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)''',
-            (cp, size, self.loc, price, buy_qty if buy_qty is not None else stock_qty, stock_qty, '2026-01-01', self.t, self.t))
+               payout_order,basis_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+            (cp, size, self.loc, price, buy_qty if buy_qty is not None else stock_qty, stock_qty, row_no, '2026-01-01', self.t, self.t))
+        if legacy_id:
+            self.c.execute(
+                '''INSERT INTO qr_stock_links(legacy_stock_id,source_row_no,created_at,updated_at)
+                   VALUES(?,?,?,?)''',
+                (legacy_id, row_no, self.t, self.t))
         return pid
 
     def st(self, customer, code, size, price, name='品'):
@@ -114,6 +120,19 @@ class RulesTest(Base):
         stock_prices.run_initial(self.c, {}, srows=[self.st('B', 'X1', 'M', 750)])
         self.assertEqual(self.base(p1, 'M', 'S1'), (1000, 'ok', ''))
         self.assertEqual(self.base(p2, 'M', 'S2')[0], 750)
+
+    def test_latest_timestamp_and_auto_customer_specials(self):
+        # 同一顧客で2025年より2026年の単価が安い場合でも最新作成日時を採用し、顧客別特値も自動登録する
+        pid = self.lot('丸藤', 'DC5182', 'L', 2450, legacy_id='20260515100000001abc')
+        self.lot('LEOC', 'DC5182', 'L', 2100, legacy_id='20240101100000001abc')
+        self.lot('LEOC', 'DC5182', 'L', 1813, legacy_id='20260110100000001abc')
+        res = stock_prices.run_initial(self.c, {}, srows=[])
+        self.assertEqual(self.base(pid, 'L'), (2450, 'ok', ''))
+        self.assertEqual(res['summary']['specials'], 1)
+        cid_leoc = self._id('customers', 'LEOC')
+        cid_maru = self._id('customers', '丸藤')
+        self.assertEqual(stock_prices.lookup(self.c, customer_id=cid_leoc, product_id=pid, size_label='L')['price'], 1813)
+        self.assertEqual(stock_prices.lookup(self.c, customer_id=cid_maru, product_id=pid, size_label='L')['price'], 2450)
 
 
 class MatchTest(Base):
