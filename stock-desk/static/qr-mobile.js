@@ -9,6 +9,7 @@ async function logoutMobile(){
    method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:'{}',
   });
   if(!response.ok&&response.status!==401)throw Error('ログアウトできませんでした。もう一度お試しください。');
+  if(window.QrLocal)await QrLocal.clearProfile();
   location.replace('/');
  }catch(err){
   error.textContent=err.message;error.hidden=false;button.disabled=false;
@@ -24,17 +25,13 @@ async function api(path,data){
 }
 (async()=>{
  try{
-  const response=await fetch('/api/me');
-  const value=await response.json();
-  if(!value.user||value.user.must_change){
-   document.getElementById('main').innerHTML='<h1>在庫QR読み取り</h1><p>ログインしてから、このページを開いてください。</p><a class="login" href="/">ログイン画面へ</a>';
-   return;
-  }
-  document.getElementById('who').textContent=value.user.name;
+  const user=await QrLocal.init(null,true);
+  document.getElementById('who').textContent=user.name;
   const logout=document.getElementById('mobile-logout');
   logout.hidden=false;logout.onclick=logoutMobile;
   QrRead.mobilePage();
  }catch(error){
   document.getElementById('main').textContent=error.message;
+  const login=document.createElement('a');login.href='/';login.className='login';login.textContent='事務所のWi-Fiでログイン画面へ';document.getElementById('main').append(login);
  }
 })();

@@ -139,9 +139,70 @@ class QrWorkTests(unittest.TestCase):
         j = self.call('edit', body)['job']
         self.assertEqual(len(j['lines']), 1)
         self.assertEqual(self.qty(), 10)
+
         j = self.scan(j, self.qr2)
         self.assertEqual(len(j['lines']), 2)
         self.assertEqual(j['lines'][1]['qty'], 1)
+        self.assertEqual(self.qty(), 10)
+
+    def submission(self, **changes):
+        return {'id': str(uuid.uuid4()), 'startedAt': '2026-11-19T01:00:00Z',
+                'completedAt': '2026-11-19T01:15:00Z',
+                'lines': [{'qr': self.qr, 'qty': 3, 'scanCount': 4}], **changes}
+
+    def test_device_submission_receipt_dedup_and_office_confirmation(self):
+        body = self.submission()
+        self.assertEqual(self.call('state', {'inbox': True}, manager=True)['jobs'], [])
+        j = self.call('submit', body)['job']
+        self.assertEqual(j['status'], 'completed')
+        self.assertEqual(j['actor_id'], str(self.worker['id']))
+        self.assertEqual(j['lines'][0]['qty'], 3)
+        self.assertEqual(self.qty(), 10)
+        self.assertEqual(self.call('state', {'inbox': True}, manager=True)['jobs'][0]['id'], j['id'])
+        self.assertTrue(self.call('submit', body)['duplicate'])
+        self.call('confirm', {'id': j['id'], 'version': j['version']}, expected=403)
+        j['lines'][0]['qty'] = 2
+        self.call('edit', self.edit_body(j), expected=403)
+        j = self.call('edit', self.edit_body(j), manager=True)['job']
+        # An acknowledgment lost before office edits still deduplicates the original upload.
+        self.assertTrue(self.call('submit', body)['duplicate'])
+        self.call('confirm', {'id': j['id'], 'version': j['version']}, manager=True)
+        self.assertEqual(self.qty(), 8)
+        self.assertTrue(self.call('submit', body)['duplicate'])
+        self.assertEqual(self.qty(), 8)
+
+    def test_inbox_hides_own_in_progress_and_catalog_has_no_stock_quantities(self):
+        self.scan()
+        self.assertEqual(self.call('state', {'inbox': True})['jobs'], [])
+        catalog = self.call('catalog')
+        self.assertIn(self.qr, [e['qr'] for e in catalog['entries']])
+        import json
+        self.assertNotIn('qtyRemaining', json.dumps(catalog))
+        self.assertEqual(self.qty(), 10)
+
+    def test_bad_or_changed_submission_is_not_received(self):
+        body = self.submission()
+        body['lines'].append({'qr': 'unknown-qr', 'qty': 1, 'scanCount': 1})
+        self.call('submit', body, expected=400)
+        self.assertEqual(self.call('state', {'inbox': True}, manager=True)['jobs'], [])
+        body = self.submission()
+        self.call('submit', body)
+        body['lines'][0]['qty'] = 9
+        self.call('submit', body, expected=400)
+        self.call('submit', body, actor={'id': 13, 'name': '他の担当'}, expected=400)
+        self.assertEqual(self.qty(), 10)
+
+    def test_inherited_server_draft_is_not_received_until_submission(self):
+        old = self.scan()
+        body = self.submission(id=old['id'], sourceVersion=old['version'])
+        wrong = dict(body, sourceVersion=old['version'] + 1)
+        self.call('submit', wrong, expected=400)
+        self.assertEqual(self.call('state', {'inbox': True}, manager=True)['jobs'], [])
+        j = self.call('submit', body)['job']
+        self.assertEqual(j['id'], old['id'])
+        self.assertEqual(j['status'], 'completed')
+        self.assertTrue(self.call('submit', body)['duplicate'])
+        self.assertEqual(len(self.call('state', {'inbox': True}, manager=True)['jobs']), 1)
         self.assertEqual(self.qty(), 10)
 
     def test_old_qr_json_and_id_increment_same_line_and_mismatch_is_rejected(self):

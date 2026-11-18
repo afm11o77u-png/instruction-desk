@@ -89,7 +89,7 @@
     busy=true
     paintResult()
     try{
-      result=await api('/api/stock-qr/read',{qr:raw})
+      result=window.QrLocal?await QrLocal.lookup(raw):await api('/api/stock-qr/read',{qr:raw})
       if(window.QrWork){
         await QrWork.record(raw)
       }

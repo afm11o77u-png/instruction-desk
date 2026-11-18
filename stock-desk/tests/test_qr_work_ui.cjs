@@ -39,6 +39,7 @@ const clone=x=>JSON.parse(JSON.stringify(x));
     }
    }
    if(url.pathname==='/pc')return route.fulfill({contentType:'text/html',body:`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/inventory/qr_work.css"></head><body><main id="main"></main><script>function stockCanWrite(){return true}async function api(p,d){const r=await fetch('/inventory'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(d)});return r.json()}</script><script src="/inventory/qr_work.js"></script><script src="/inventory/qr_read.js"></script><script>QrRead.page()</script></body></html>`});
+   if(url.pathname==='/inventory/qr_local.js')return route.fulfill({contentType:'text/javascript',body:"window.QrLocal={init:async()=>({id:'12',name:'検証担当'}),request:(a,b)=>api('/api/qr-work/'+a,b),lookup:qr=>api('/api/stock-qr/read',{qr})}"});
    const name=url.pathname.replace('/inventory/','');
    if(['qr-mobile.html','qr-mobile.js','qr-mobile.css','qr_work.js','qr_work.css','qr_read.js'].includes(name))return route.fulfill({contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html',body:fs.readFileSync(path.join(staticRoot,name))});
    return route.fulfill({status:404,body:''});
@@ -73,7 +74,10 @@ const clone=x=>JSON.parse(JSON.stringify(x));
   await page.locator('[data-plus]').click();
   assert.equal(await page.locator('[data-total]').innerText(),'合計 3 点');
   await page.locator('[data-field="qty"]').fill('4');
-  await page.locator('[data-save]').click();await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.textContent.includes('保存しました'));
+  assert.equal(await page.locator('[data-save]').count(),0);
+  await page.evaluate(()=>document.querySelector('[data-jobs]').dispatchEvent(new Event('change')));
+  for(let i=0;job.lines[0].qty!==4&&i<100;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(job.lines[0].qty,4);
   await page.reload();await page.locator('[data-field="qty"]').waitFor();
   assert.equal(await page.locator('[data-field="qty"]').inputValue(),'4');
   loseScan=true;await page.evaluate(()=>QrRead.lookup('test-qr'));

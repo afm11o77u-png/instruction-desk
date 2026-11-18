@@ -16,6 +16,8 @@ def schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS qr_work_scans (
         token TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES qr_work_jobs(id))''')
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS qr_work_one_active ON qr_work_jobs(actor_id) WHERE status='collecting'")
+    c.execute('''CREATE TABLE IF NOT EXISTS qr_work_receipts (
+        id TEXT PRIMARY KEY REFERENCES qr_work_jobs(id), actor_id TEXT NOT NULL, digest TEXT NOT NULL)''')
 
 
 def actor(body):
@@ -34,12 +36,119 @@ def public(row):
 def state(c, body):
     schema(c)
     who, _ = actor(body)
+    inbox_only = body.get('inbox') is True
     jobs = [public(r) for r in c.execute('''SELECT * FROM qr_work_jobs
-        WHERE status!='collecting' OR actor_id=? ORDER BY status='collecting' DESC, started_at DESC LIMIT 200''', (who,))]
+        WHERE status!='collecting' OR (actor_id=? AND ?=0)
+        ORDER BY status='collecting' DESC, started_at DESC LIMIT 200''', (who, int(inbox_only)))]
     locations = [{'id': r['id'], 'name': stock.location_label(c, r)}
                  for r in c.execute('SELECT * FROM locations WHERE active=1 ORDER BY id')]
     return {'jobs': jobs, 'locations': locations, 'actorId': who,
             'canConfirm': bool(body.get('_canWrite'))}
+
+
+def catalog(c, body):
+    """Only QR identity and garment attributes, never live stock quantities."""
+    actor(body)
+    stock_qr.ensure_schema(c)
+    import qr_link_import
+    qr_link_import.ensure_schema(c)
+    handles = {}
+    for cp in c.execute('''SELECT cp.*,cu.name customer_name,p.code,p.name product_name,p.color
+        FROM customer_products cp JOIN customers cu ON cu.id=cp.customer_id
+        JOIN products p ON p.id=cp.product_id
+        WHERE cp.active=1 AND cu.active=1 AND p.active=1 AND p.merged_into_id IS NULL'''):
+        sizes = [r[0] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order', (cp['product_id'],))]
+        handles[cp['id']] = {'customerProductId': cp['id'], 'customerName': cp['customer_name'],
+            'code': cp['code'], 'productName': cp['product_name'], 'color': cp['color'],
+            'spec': stock.embroidery_label(cp['embroidery']), 'sizes': sizes,
+            'size': '', 'condition': '', 'locationId': None, 'unitCost': '', 'lots': []}
+    entries = []
+    for row in c.execute('SELECT * FROM stock_qr_codes'):
+        target = handles.get(row['customer_product_id'])
+        if target:
+            entries.append({'qr': row['public_id'], 'kind': 'new', 'target': {
+                **target, 'size': row['size_label'], 'condition': row['condition']}})
+    for row in c.execute('SELECT * FROM qr_stock_links'):
+        target = handles.get(row['customer_product_id'])
+        if target:
+            entries.append({'qr': str(row['legacy_stock_id']), 'kind': 'legacy',
+                'customer': row['legacy_customer_id'] or '', 'maker': row['legacy_maker_id'] or '',
+                'target': {**target, 'size': row['size_label'] or '', 'condition': row['condition'] or '',
+                           'locationId': row['location_id']}})
+    return {'entries': entries, 'preparedAt': stock.stamp()}
+
+
+def submit(c, body):
+    """Receive an immutable completed device job, resolve all targets on server."""
+    schema(c)
+    who, name = actor(body)
+    job_id = str(uuid.UUID(str(body.get('id') or '')))
+    rows = body.get('lines')
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 1000:
+        raise ValueError('送信する制服の明細を確認してください（1～1000種類）。')
+    normalized = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('送信する明細が不正です。')
+        raw = stock_qr.parse_scan(row.get('qr'))
+        qty = stock.parse_qty(row.get('qty'), allow_zero=True)
+        count = stock.parse_qty(row.get('scanCount'))
+        if raw in seen:
+            raise ValueError('同じQRの明細は1行にまとめてください。')
+        seen.add(raw)
+        normalized.append({'qr': raw, 'qty': qty, 'scanCount': count})
+    if not any(r['qty'] for r in normalized):
+        raise ValueError('数量が1以上の明細を残してください。')
+    # Store a receipt hash separately: a retry remains identical even after office edits.
+    digest = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+    receipt = c.execute('SELECT * FROM qr_work_receipts WHERE id=?', (job_id,)).fetchone()
+    if receipt:
+        if receipt['actor_id'] != who or receipt['digest'] != digest:
+            raise ValueError('同じ作業番号で異なる内容が送信されました。元の作業を確認してください。')
+        return {'job': _job(c, {'id': job_id}), 'duplicate': True}
+    legacy = c.execute('SELECT * FROM qr_work_jobs WHERE id=?', (job_id,)).fetchone()
+    if legacy and not (legacy['actor_id'] == who and legacy['status'] == 'collecting'
+                       and type(body.get('sourceVersion')) is int and legacy['version'] == body['sourceVersion']):
+        raise ValueError('元の作業が更新されたか、作業番号が重複しています。管理者に確認してください。端末の記録は残っています。')
+    lines = []
+    for row in normalized:
+        found = stock_qr.read_scan(c, {'qr': row['qr']})
+        link = found.get('link') or found
+        if not found.get('found') or found.get('mismatch') or link.get('stale') or not link.get('customerProductId'):
+            raise ValueError('対応が変わったQRが含まれています。商品登録を確認して再送信してください。端末の記録は残っています。')
+        cp = stock.resolve_customer_product(c, link['customerProductId'])
+        lots = found.get('lots') or []
+        def single(field):
+            values = {x.get(field) for x in lots}
+            return next(iter(values)) if len(values) == 1 else None
+        lines.append({'key': hashlib.sha256(row['qr'].encode()).hexdigest(),
+            'qr': row['qr'], 'customerProductId': cp['id'], 'customerName': cp['customer_name'],
+            'code': cp['code'], 'productName': cp['product_name'], 'color': cp['color'],
+            'spec': stock.embroidery_label(cp['embroidery']),
+            'size': link.get('sizeLabel') or found.get('size') or single('size') or '',
+            'condition': link.get('condition') or found.get('condition') or single('condition') or '',
+            'locationId': link.get('locationId') or single('locationId'), 'unitCost': '',
+            'sizes': [r[0] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=?', (cp['product_id'],))],
+            'qty': row['qty'], 'scanCount': row['scanCount'], 'lots': []})
+    # Device dates are display metadata only; validate them, never use for stock posting dates.
+    def device_time(key):
+        from datetime import datetime
+        raw = body.get(key)
+        if not isinstance(raw, str) or len(raw) > 40:
+            raise ValueError('作業の開始・完了日時を確認してください。')
+        datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        return raw
+    started, completed = device_time('startedAt'), device_time('completedAt')
+    if legacy:
+        c.execute("UPDATE qr_work_jobs SET status='completed',version=version+1,direction='outbound',completed_at=?,lines=? WHERE id=?",
+                  (completed, json.dumps(lines, ensure_ascii=False), job_id))
+    else:
+        c.execute('''INSERT INTO qr_work_jobs(id,actor_id,actor_name,status,version,direction,
+            started_at,completed_at,lines) VALUES(?,?,?,'completed',1,'outbound',?,?,?)''',
+            (job_id, who, name, started, completed, json.dumps(lines, ensure_ascii=False)))
+    c.execute('INSERT INTO qr_work_receipts(id,actor_id,digest) VALUES(?,?,?)', (job_id, who, digest))
+    return {'job': _job(c, {'id': job_id}), 'duplicate': False}
 
 
 def _job(c, body):
@@ -129,6 +238,9 @@ def scan(c, body):
 def edit(c, body, *, complete=False):
     schema(c)
     job = _job(c, body)
+    if job['status'] == 'completed' and not body.get('_canWrite') and c.execute(
+            'SELECT 1 FROM qr_work_receipts WHERE id=?', (job['id'],)).fetchone():
+        raise PermissionError('送信済みの作業は、PCの在庫更新権限を持つ担当者が修正してください。')
     _editable(job, body)
     if complete and (job['status'] != 'collecting' or job['actor_id'] != actor(body)[0]):
         raise ValueError('本人の読み取り中の作業だけ完了できます。')
@@ -212,6 +324,10 @@ def dispatch(db_path, action, body):
             c.execute('BEGIN IMMEDIATE')
             if action == 'state':
                 result = state(c, body)
+            elif action == 'catalog':
+                result = catalog(c, body)
+            elif action == 'submit':
+                result = submit(c, body)
             elif action == 'scan':
                 result = scan(c, body)
             elif action in ('edit', 'complete'):
