@@ -1,0 +1,21 @@
+
+*{box-sizing:border-box}
+body{margin:0;background:#f3f7f4;color:#173d2e;font:17px/1.6 "Yu Gothic UI",Meiryo,sans-serif}
+header{display:flex;justify-content:space-between;gap:12px;padding:12px 16px;background:white;border-bottom:1px solid #d1dfd4}
+a{color:#17633e}
+main{max-width:620px;margin:auto;padding:16px}
+h1{font-size:26px;margin:0 0 18px}
+button,.login{display:block;width:100%;min-height:52px;margin:12px 0;padding:12px;font:inherit;border:1px solid #aac5b3;border-radius:10px;background:white;color:inherit;text-align:center}
+.primary{background:#17633e;color:white;font-weight:bold}
+button:disabled{opacity:.5}
+label,input{display:block;width:100%}
+input{font:inherit;padding:12px;border:1px solid #aac5b3;border-radius:8px}
+video{display:block;width:100%;max-height:42vh;background:#16372b;border-radius:12px}
+details{margin:18px 0}
+summary{padding:12px 0;cursor:pointer}
+.tablewrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:15px}
+td,th{padding:8px 5px;border-bottom:1px solid #cbded3;text-align:left}
+td label{white-space:nowrap}
+input[type=radio]{width:auto;display:inline}
+.qr-read-result,.notice{padding:14px;background:white;border:1px solid #cbded3;border-radius:10px;overflow-wrap:anywhere}

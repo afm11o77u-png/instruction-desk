@@ -10,6 +10,7 @@
   let selectedLot=''
   let busy=false
   let error=''
+  let mobile=false
 
   function esc(s){
     return String(s==null?'':s)
@@ -51,6 +52,7 @@
     error=''
     result=null
     selectedLot=''
+    if(busy)return
     if(!raw){error='QRの文字列を入力してください。';paintResult();return}
     if(raw.length>MAX_LEN){error='QRの文字列が長すぎます。';paintResult();return}
     if(suspicious(raw)){error='URLや実行用の文字列は在庫QRとして扱いません。';paintResult();return}
@@ -181,7 +183,7 @@
           }
         }
       }
-      if(text)await lookup(text)
+      if(text){if(mobile)stop();await lookup(text)}
     }catch(_){}
     decoding=false
   }
@@ -210,7 +212,51 @@
     timer=requestAnimationFrame(tick)
   }
 
+  function mobilePage(){
+    mobile=true
+    stop()
+    result=null
+    error=''
+    lastText=''
+    lastAt=0
+    document.getElementById('main').innerHTML=`<section class="qr-read-page">
+      <h1>在庫QR読み取り</h1>
+      <button type="button" id="qrCamStart" class="primary">カメラで読む</button>
+      <div class="qr-read-camera">
+        <p id="qrCamNote" role="status"></p>
+        <video id="qrCamVideo" playsinline muted autoplay></video>
+        <canvas id="qrCamCanvas" hidden></canvas>
+        <button type="button" id="qrCamStop">カメラを止める</button>
+      </div>
+      <details><summary>QRリーダー・手入力で探す</summary>
+        <form id="qrScanForm"><label>QR文字列<input id="qrScanInput" maxlength="${MAX_LEN}" autocomplete="off"></label>
+        <button type="submit">この文字列で探す</button></form>
+      </details>
+      <div id="qrScanResult" aria-live="polite"></div>
+      <button type="button" id="qrNext">次のQRを読む</button>
+    </section>`
+    document.getElementById('qrCamStart').onclick=startCamera
+    document.getElementById('qrCamStop').onclick=stop
+    document.getElementById('qrScanForm').onsubmit=event=>{
+      event.preventDefault()
+      lookup(document.getElementById('qrScanInput').value)
+    }
+    document.getElementById('qrNext').onclick=()=>{
+      if(busy)return
+      result=null
+      error=''
+      lastText=''
+      lastAt=0
+      paintResult()
+      document.getElementById('qrScanInput').value=''
+      startCamera()
+    }
+    const note=document.getElementById('qrCamNote')
+    note.textContent=noteForCamera()
+  }
+
   function page(){
+    mobile=false
     const main=document.getElementById('main')
     if(!main)return
     main.innerHTML=`<section class="panel qr-read-page">
@@ -242,7 +288,7 @@
       <div id="qrScanResult"></div>
       <details class="qr-access-guide">
         <summary>スマホ・画面付き端末からの開き方／おすすめ端末</summary>
-        <h3>スマホ・端末でも同じページを使えます</h3>
+        <h3>スマホ・端末から使えます</h3><p><a href="qr-mobile.html">スマホ専用のQR読み取りを開く</a></p>
         <ol>
           <li>パソコンと同じ社内Wi-Fiにつなぎます。</li>
           <li>ブラウザで、管理者から案内されたシステムのアドレスを開きます。</li>
@@ -290,5 +336,5 @@
 
   window.addEventListener('pagehide',stop)
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')stop()})
-  window.QrRead={page,stop,lookup}
+  window.QrRead={page,mobilePage,stop,lookup}
 })()
