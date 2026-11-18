@@ -1,5 +1,11 @@
 
 *{box-sizing:border-box}
+.certificate-help{max-width:620px;margin:0 auto 24px;padding:0 16px}
+.certificate-help details{padding:0 16px;background:white;border:1px solid #cbded3;border-radius:10px}
+.certificate-help summary{font-weight:bold}
+.certificate-help h2{font-size:19px;margin-top:24px}
+.certificate-help ol{padding-left:24px}
+.certificate-help li{margin:12px 0}
 body{margin:0;background:#f3f7f4;color:#173d2e;font:17px/1.6 "Yu Gothic UI",Meiryo,sans-serif}
 header{display:flex;justify-content:space-between;gap:12px;padding:12px 16px;background:white;border-bottom:1px solid #d1dfd4}
 a{color:#17633e}

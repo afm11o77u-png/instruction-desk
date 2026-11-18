@@ -4,12 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/favicon.png">
-<link rel="stylesheet" href="qr-mobile.css?v=20261118_01">
+<link rel="stylesheet" href="qr-mobile.css?v=20261118_02">
 <title>在庫QR読み取り</title>
 </head>
 <body>
 <header><span id="who"></span><a href="/">指示書デスク</a></header>
 <main id="main"><p>読み込み中…</p></main>
+<section class="certificate-help" aria-labelledby="certificate-title">
+<details>
+<summary id="certificate-title">初回設定：証明書のインストール</summary>
+<p>社内Wi-Fiでカメラ読み取りを使うための設定です。この指示書デスクの管理者から案内された接続先であることを確認してから進めてください。</p>
+<a class="login" href="/mobile-root-certificate.cer" download="instruction-desk-root.cer">証明書をダウンロード</a>
+<h2>iPhone・iPad</h2>
+<ol><li>Safariでこのページを開き、上のボタンで証明書をダウンロードします。</li><li>「設定」の「ダウンロード済みのプロファイル」を開き、インストールします。見つからない場合は「一般」→「VPNとデバイス管理」を確認してください。</li><li>「設定」→「一般」→「情報」→「証明書信頼設定」で、インストールした証明書の信頼を有効にします。</li><li>ブラウザに戻ってこのページを開き直します。</li></ol>
+<h2>Android</h2>
+<ol><li>上のボタンで証明書をダウンロードします。</li><li>端末の「設定」で「証明書」を検索し、「証明書をインストール」→「CA証明書」からダウンロードしたファイルを選びます。機種によって項目名が異なります。</li><li>端末の案内に従ってインストールし、ブラウザでこのページを開き直します。</li></ol>
+<p>ページから自動でインストールすることはできません。設定後も接続の警告が出る場合は、管理者に接続先アドレスとサーバー証明書の確認を依頼してください。</p>
+</details>
+</section>
 <script src="vendor/jsqr/jsQR.js"></script>
 <script src="qr_read.js?v=20261118_mobile1"></script>
 <script src="qr-mobile.js?v=20261118_01"></script>

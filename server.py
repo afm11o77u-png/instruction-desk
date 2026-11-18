@@ -1124,6 +1124,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
+        if path == '/mobile-root-certificate.cer':
+            # Only the public CA certificate is downloadable, never TLS keys.
+            certificate = ROOT / 'tls' / 'trial-root.cer'
+            if not certificate.is_file():
+                return self.reply(404, {'error': '証明書がありません。管理者に確認してください。'})
+            return self.reply(200, certificate.read_bytes(), 'application/x-x509-ca-cert', {
+                'Content-Disposition': 'attachment; filename="instruction-desk-root.cer"',
+            })
         if path == '/api/contact-note': return self.serve_personal_note(shared=True)
         if path == '/api/personal-formats': return self.serve_personal_formats()
         if path == '/api/personal-note': return self.serve_personal_note()
