@@ -321,13 +321,13 @@ class UiWiringTest(unittest.TestCase):
 
     def test_price_buttons_on_products_tab(self):
         app = (ROOT / 'static' / 'app.js').read_text(encoding='utf-8')
-        products = app[app.index('id="productMergeOpen"'):]
-        products = products[:products.index('function ', products.index('const mergeBtn'))]
+        tools = app[app.index('function openOwnerSetupTools()'):app.index('function syncLegacyCsvBulkEntry')]
+        self.assertIn('stockIsOwner()', tools)
         opening = app[app.index('id="openOpeningRegister"'):]
         opening = opening[:opening.index("const search=$('#openingListQ')")]
         for i in ('priceInitOpen', 'priceReviewOpen', 'priceRulesOpen'):
-            self.assertIn(f'id="{i}"', products)
-            self.assertIn(f"$('#{i}')", products)
+            self.assertIn(f'id="{i}"', tools)
+            self.assertIn(f"#{i}", tools)
             self.assertNotIn(i, opening)
             self.assertEqual(app.count(f'id="{i}"'), 1)
 

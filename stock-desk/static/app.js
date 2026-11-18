@@ -499,12 +499,90 @@ function syncStockListDisplaySlot(section){
   slot.hidden=true
   slot.innerHTML=''
 }
-/** 登録・設定の右上・「表示」の直前に「旧CSV一括取り込み」を置く */
+/** 主管理者のみ：取り込み・整理・初期設定をまとめたダイアログを開く */
+function openOwnerSetupTools(){
+  if(!stockIsOwner())return
+  let dlg=document.getElementById('ownerToolsDialog')
+  if(!dlg){
+    dlg=document.createElement('dialog')
+    dlg.id='ownerToolsDialog'
+    dlg.className='cp-dialog'
+    document.body.appendChild(dlg)
+  }
+  dlg.innerHTML=`<form method="dialog">
+    <div class="dialoghead"><h2>取込・整理・初期設定（主管理者）</h2><button type="button" class="quiet" id="ownerToolsClose">閉じる</button></div>
+    <div class="dialogbody">
+      <h3>旧データ取り込み・QR対応</h3>
+      <p class="excelhint">旧システムの台帳＋初期在庫の一括取込、および既存QRの紐づけを行います。</p>
+      <div class="bar merge-entry"><button type="button" id="legacyCsvBulkOpen">旧CSV一括取り込み</button><button type="button" id="qrLinkOpen" class="quiet">旧QR対応</button></div>
+      <h3>商品整理・QR貼り替え</h3>
+      <p class="excelhint">同じ通常品番の複数商品IDを比較・統合したり、色分割によるQR貼り替え対象を確認します。</p>
+      <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><button type="button" class="quiet" id="qrReplSetupBtn" style="color:#d46b08; border-color:#faad14; background:#fffbe6; font-weight:bold; cursor:pointer; margin-left:8px;">⚠️ QR貼り替え対象（56件）</button></div>
+      <h3>現単価の設定・確認</h3>
+      <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
+      <div class="verify-zone" aria-label="検証用">
+        <h3 class="verify-zone-title">検証用</h3>
+        <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
+        <div class="bar merge-entry"><button type="button" class="danger product-wipe-scope" data-scope="parts">部品を削除</button><button type="button" class="danger product-wipe-scope" data-scope="process">加工を削除</button><button type="button" class="danger product-wipe-scope" data-scope="uniform">制服を削除</button></div>
+        <div class="bar merge-entry"><button type="button" class="danger" id="openingWipeOpen">初期在庫を削除</button><button type="button" id="displayNoRenumber" class="quiet">No.振り直し</button></div>
+      </div>
+    </div>
+  </form>`
+  dlg.querySelector('#ownerToolsClose').onclick=()=>dlg.close()
+  const btn=dlg.querySelector('#legacyCsvBulkOpen')
+  if(btn)btn.onclick=()=>{
+    if(typeof ProductLedgerCsv==='undefined'||!ProductLedgerCsv.open){toast('旧CSV一括取り込み画面を読み込めませんでした。');return}
+    dlg.close()
+    ProductLedgerCsv.open({api,toast,boot,stockCanWrite,actorName:(state.data&&state.data.actorName)||''})
+  }
+  const qrBtn=dlg.querySelector('#qrLinkOpen')
+  if(qrBtn)qrBtn.onclick=()=>{
+    if(typeof QrLink==='undefined'||!QrLink.open){toast('旧QR対応の画面を読み込めませんでした。');return}
+    dlg.close()
+    QrLink.open({api,toast,stockCanWrite,actorName:(state.data&&state.data.actorName)||''})
+  }
+  if(typeof CurrentPrice!=='undefined'){
+    dlg.querySelector('#priceInitOpen').onclick=()=>{dlg.close();CurrentPrice.openInit()}
+    dlg.querySelector('#priceReviewOpen').onclick=()=>{dlg.close();CurrentPrice.openReview()}
+    dlg.querySelector('#priceRulesOpen').onclick=()=>{dlg.close();CurrentPrice.openRules()}
+  }
+  const qrSetupBtn=dlg.querySelector('#qrReplSetupBtn')
+  if(qrSetupBtn&&window.QrReplacementModal)qrSetupBtn.onclick=()=>{dlg.close();window.QrReplacementModal.open()}
+  const mergeBtn=dlg.querySelector('#productMergeOpen')
+  if(mergeBtn)mergeBtn.onclick=()=>{
+    if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
+    dlg.close()
+    ProductMerge.open({api,toast,boot,stockCanWrite,actorName:(state.data&&state.data.actorName)||''})
+  }
+  const renumberBtn=dlg.querySelector('#displayNoRenumber')
+  if(renumberBtn)renumberBtn.onclick=async()=>{
+    if(!stockIsOwner())return
+    if(!confirm('全商品のNo.を品番順に振り直します（K/B/Sとも1から）。今のNo.は変わります。実行しますか？'))return
+    const all=state.data.products||[]
+    const live=all.filter(r=>!r.mergedIntoId&&r.active),rest=all.filter(r=>r.mergedIntoId||!r.active)
+    const order=[...sortProductRows(live,'codeAsc'),...sortProductRows(rest,'codeAsc')].map(r=>r.id)
+    try{await api('/api/products/display-no/renumber',{order});toast('振り直しました');dlg.close();await boot()}
+    catch(e){toast(e.message||'失敗しました')}
+  }
+  const openingWipe=dlg.querySelector('#openingWipeOpen')
+  if(openingWipe)openingWipe.onclick=()=>{
+    if(typeof OpeningStockWipe==='undefined'||!OpeningStockWipe.open){toast('初期在庫の削除画面を読み込めませんでした。');return}
+    dlg.close()
+    OpeningStockWipe.open({api,toast,boot,isOwner:stockIsOwner,actorName:(state.data&&state.data.actorName)||''})
+  }
+  dlg.querySelectorAll('.product-wipe-scope').forEach(b=>{b.onclick=()=>{
+    if(typeof ProductRegistryWipe==='undefined'||!ProductRegistryWipe.open){toast('削除画面を読み込めませんでした。');return}
+    dlg.close()
+    ProductRegistryWipe.open({api,toast,boot,isOwner:stockIsOwner,actorName:(state.data&&state.data.actorName)||'',scope:b.dataset.scope})
+  }})
+  dlg.showModal()
+}
+/** 登録・設定の右上・「表示」の直前に主管理者専用の「取込・整理・初期設定」リンクを置く */
 function syncLegacyCsvBulkEntry(section){
   const slot=$('#stocklistdisplay')
   if(!slot)return
   let wrap=slot.querySelector('#legacyCsvBulkEntry')
-  if(section!=='setup'){
+  if(section!=='setup'||!stockIsOwner()){
     if(wrap)wrap.remove()
     return
   }
@@ -512,38 +590,13 @@ function syncLegacyCsvBulkEntry(section){
     wrap=document.createElement('div')
     wrap.id='legacyCsvBulkEntry'
     wrap.className='legacy-csv-bulk-entry'
-    wrap.innerHTML='<button type="button" id="legacyCsvBulkOpen" class="quiet">旧CSV一括取り込み</button><button type="button" id="qrLinkOpen" class="quiet">旧QR対応</button>'
+    wrap.innerHTML='<a href="#" id="ownerSetupToolsOpen" class="quiet" style="font-size:13px; text-decoration:underline; padding:4px 8px;">取込・整理・初期設定</a>'
     const displayBar=slot.querySelector(':scope > .display-mode-bar')
     if(displayBar)slot.insertBefore(wrap,displayBar)
     else slot.appendChild(wrap)
   }
-  const btn=wrap.querySelector('#legacyCsvBulkOpen')
-  if(btn)btn.onclick=()=>{
-    if(typeof ProductLedgerCsv==='undefined'||!ProductLedgerCsv.open){
-      toast('旧CSV一括取り込み画面を読み込めませんでした。')
-      return
-    }
-    ProductLedgerCsv.open({
-      api,
-      toast,
-      boot,
-      stockCanWrite,
-      actorName:(state.data&&state.data.actorName)||'',
-    })
-  }
-  const qrBtn=wrap.querySelector('#qrLinkOpen')
-  if(qrBtn)qrBtn.onclick=()=>{
-    if(typeof QrLink==='undefined'||!QrLink.open){
-      toast('旧QR対応の画面を読み込めませんでした。')
-      return
-    }
-    QrLink.open({
-      api,
-      toast,
-      stockCanWrite,
-      actorName:(state.data&&state.data.actorName)||'',
-    })
-  }
+  const link=wrap.querySelector('#ownerSetupToolsOpen')
+  if(link)link.onclick=e=>{e.preventDefault();openOwnerSetupTools()}
 }
 function mountStockDisplay(stage,tab,repaint){
   if(!stage||typeof DisplayMode==='undefined')return 'standard'
@@ -1170,17 +1223,7 @@ function products(){
     if(!productMatchesCategoryFilter(r,categoryFilter))return false
     return productMatchesSearch(r,terms)
   }),sortKey)
-  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。既存の重複は「重複商品の整理」で確認してから統合します。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
-    <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><button type="button" class="quiet" id="qrReplSetupBtn" style="color:#d46b08; border-color:#faad14; background:#fffbe6; font-weight:bold; cursor:pointer; margin-left:8px;">⚠️ QR貼り替え対象（56件）</button><span class="excelhint">同じ通常品番の複数商品IDを比較し、必要なものだけ統合します。全件自動統合はしません。</span></div>
-    <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
-    <p class="excelhint merge-entry">旧システムの台帳＋初期在庫の一括取込は、画面右上の<strong>旧CSV一括取り込み</strong>から行います。既存のQRを今の商品へ対応づけるのは、その隣の<strong>旧QR対応</strong>です（在庫数量は変えません）。</p>
-    ${stockIsOwner()?`<div class="verify-zone" aria-label="検証用">
-      <h3 class="verify-zone-title">検証用</h3>
-      <p class="excelhint">通常の登録操作とは別に、主管理者だけが使う確認用の操作です。画面の検索や仕入先フィルタは無視し、停止中・統合済みを含む選んだ区分の商品登録が対象です。在庫・履歴・発注・顧客／仕入先マスタは消しません。</p>
-      <div class="bar merge-entry"><button type="button" class="danger product-wipe-scope" data-scope="parts">部品を削除</button><button type="button" class="danger product-wipe-scope" data-scope="process">加工を削除</button><button type="button" class="danger product-wipe-scope" data-scope="uniform">制服を削除</button><span class="excelhint">取扱も一緒に消えます。在庫などの参照があると中止します。制服はカテゴリ空欄も含みます。</span></div>
-      <div class="bar merge-entry"><button type="button" class="danger" id="openingWipeOpen">初期在庫を削除</button><span class="excelhint">初期在庫だけが対象です。検索や絞り込みは無視します。後から入出庫・貸出・発注で使われた初期在庫があると、一件も消さず中止します。通常の入出庫、発注、旧QR、新QR、商品マスタ、勤怠は残します。</span></div>
-      <div class="bar merge-entry"><button type="button" id="displayNoRenumber">No.振り直し</button></div>
-    </div>`:''}
+  $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>No.</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
     ${rows.map(r=>{
       const makerBit=r.makerCode&&r.makerCode!==r.code?` <span class="sub">メーカー ${esc(r.makerCode)}</span>`:''
@@ -1219,56 +1262,6 @@ function products(){
     saveProductSort(state.productSort)
     paint()
   }
-  if(typeof CurrentPrice!=='undefined'&&$('#priceInitOpen')){
-    $('#priceInitOpen').onclick=()=>CurrentPrice.openInit()
-    $('#priceReviewOpen').onclick=()=>CurrentPrice.openReview()
-    $('#priceRulesOpen').onclick=()=>CurrentPrice.openRules()
-  }
-  const qrSetupBtn=$('#qrReplSetupBtn')
-  if(qrSetupBtn && window.QrReplacementModal)qrSetupBtn.onclick=()=>window.QrReplacementModal.open()
-  const mergeBtn=$('#productMergeOpen')
-  if(mergeBtn)mergeBtn.onclick=()=>{
-    if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
-    ProductMerge.open({
-      api,
-      toast,
-      boot,
-      stockCanWrite,
-      actorName:(state.data&&state.data.actorName)||'',
-    })
-  }
-  const renumberBtn=document.getElementById('displayNoRenumber')
-  if(renumberBtn)renumberBtn.onclick=async()=>{
-    if(!stockIsOwner())return
-    if(!confirm('全商品のNo.を品番順に振り直します（K/B/Sとも1から）。今のNo.は変わります。実行しますか？'))return
-    const all=state.data.products||[]
-    const live=all.filter(r=>!r.mergedIntoId&&r.active),rest=all.filter(r=>r.mergedIntoId||!r.active)
-    const order=[...sortProductRows(live,'codeAsc'),...sortProductRows(rest,'codeAsc')].map(r=>r.id)
-    try{await api('/api/products/display-no/renumber',{order});toast('振り直しました');await boot()}
-    catch(e){toast(e.message||'失敗しました')}
-  }
-  const openingWipe=document.getElementById('openingWipeOpen')
-  if(openingWipe)openingWipe.onclick=()=>{
-    if(typeof OpeningStockWipe==='undefined'||!OpeningStockWipe.open){toast('初期在庫の削除画面を読み込めませんでした。');return}
-    OpeningStockWipe.open({
-      api,
-      toast,
-      boot,
-      isOwner:stockIsOwner,
-      actorName:(state.data&&state.data.actorName)||'',
-    })
-  }
-  document.querySelectorAll('.product-wipe-scope').forEach(btn=>{btn.onclick=()=>{
-    if(typeof ProductRegistryWipe==='undefined'||!ProductRegistryWipe.open){toast('削除画面を読み込めませんでした。');return}
-    ProductRegistryWipe.open({
-      api,
-      toast,
-      boot,
-      isOwner:stockIsOwner,
-      actorName:(state.data&&state.data.actorName)||'',
-      scope:btn.dataset.scope,
-    })
-  }})
 }
 const SHELF_PREVIEW_LIMIT=3
 function siteLocationRows(){
