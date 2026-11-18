@@ -45,14 +45,16 @@
   if(!phone){try{await verify();remote=await api('/api/qr-work/state',{inbox:true});connected=true}catch{}}
   const remoteIds=new Set(remote.jobs.map(j=>j.id));
   const jobs=[...local.jobs.filter(j=>phone||!remoteIds.has(j.id)),...(!phone?remote.jobs:[])];
-  return {...remote,jobs,actorId:profile.id,localMode:true,preparedAt:catalog?.preparedAt||null,connected};
+  return {...remote,jobs,actorId:profile.id,localMode:true,preparedAt:await get('prepared:'+profile.id)||catalog?.preparedAt||null,connected};
  }
  async function prepare(){
   const progress=text=>window.dispatchEvent(new CustomEvent('qr-prepare-progress',{detail:text}));
   progress('事務所のサーバーへの接続を確認しています…');
   await verify();
   progress('QRと商品情報を読み込んでいます…');
-  const catalog=await api('/api/qr-work/catalog',{});
+  const cached=await get('catalog:'+profile.id);
+  const response=await api('/api/qr-work/catalog',{revision:cached?.revision});
+  const catalog=response.notModified&&cached?{...cached,preparedAt:response.preparedAt}:response;
   if(phone){
    progress('通信なしで使えるように画面を保存しています…');
    if(!('serviceWorker' in navigator))throw Error('このブラウザでは通信なしで画面を開く準備ができません。対応するブラウザで開いてください。');
@@ -63,19 +65,24 @@
    await new Promise((resolve,reject)=>{const channel=new MessageChannel();const timer=setTimeout(()=>reject(Error('画面の保存に時間がかかっています。Wi-Fiを確認して再度準備してください。')),30000);channel.port1.onmessage=e=>{clearTimeout(timer);e.data?.ok?resolve():reject(Error('画面の保存ができませんでした。もう一度準備してください。'))};worker.postMessage({type:'prepare'},[channel.port2])});
   }
   progress(`商品情報 ${catalog.entries.length}件を端末に保存しています…`);
-  await write('catalog:'+profile.id,catalog);
+  if(!response.notModified)await write('catalog:'+profile.id,catalog);
   // Preserve pre-offline jobs without submitting them. The same UUID and source
   // version prevent two devices importing the same old work as separate receipts.
   progress('以前の途中作業を確認しています…');
-  const old=await api('/api/qr-work/state',{});
+  const old=await api('/api/qr-work/state',{legacyOnly:true});
   const source=old.jobs.find(j=>j.status==='collecting'&&String(j.actor_id)===profile.id);
   let inherited=false;
-  if(source){
+  const local=await get('jobs:'+profile.id)||fresh();
+  if(source&&!local.jobs.some(j=>j.id===source.id||j.status==='collecting')){
    const keys=new Map();
-   for(const e of catalog.entries){
-    const raw=e.kind==='new'?e.qr:'legacy:'+e.qr;
-    const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw)));
-    keys.set([...bytes].map(n=>n.toString(16).padStart(2,'0')).join(''),e);
+   for(let offset=0;offset<catalog.entries.length;offset+=128){
+    await Promise.all(catalog.entries.slice(offset,offset+128).map(async e=>{
+     const raw=e.kind==='new'?e.qr:'legacy:'+e.qr;
+     const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(raw)));
+     keys.set([...bytes].map(n=>n.toString(16).padStart(2,'0')).join(''),e);
+    }));
+    progress(`以前の途中作業を照合しています… ${Math.min(offset+128,catalog.entries.length)} / ${catalog.entries.length}件`);
+    if(source.lines.every(l=>keys.has(l.key)))break;
    }
    const lines=source.lines.map(l=>{const e=keys.get(l.key);return e?{...l,key:(e.kind==='new'?'new:':'legacy:')+e.qr,qr:e.qr}:null});
    if(lines.every(Boolean))inherited=await change(s=>{
@@ -84,6 +91,7 @@
    });
   }
   if(navigator.storage?.persist)await navigator.storage.persist().catch(()=>false);
+  await write('prepared:'+profile.id,catalog.preparedAt);
   return {message:`倉庫用の準備ができました（${catalog.entries.length}件）。この端末・同じブラウザで開いてください。${inherited?'以前の途中作業もこの端末に引き継ぎました（未送信）。':''}`};
  }
  async function dispatch(action,body={}){

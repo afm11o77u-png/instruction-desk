@@ -37,11 +37,13 @@ def state(c, body):
     schema(c)
     who, _ = actor(body)
     inbox_only = body.get('inbox') is True
+    legacy_only = body.get('legacyOnly') is True
     jobs = [public(r) for r in c.execute('''SELECT * FROM qr_work_jobs
         WHERE status!='collecting' OR (actor_id=? AND ?=0)
-        ORDER BY status='collecting' DESC, started_at DESC LIMIT 200''', (who, int(inbox_only)))]
+        ORDER BY status='collecting' DESC, started_at DESC LIMIT 200''', (who, int(inbox_only)))] if not legacy_only else [
+        public(r) for r in c.execute("SELECT * FROM qr_work_jobs WHERE status='collecting' AND actor_id=?", (who,))]
     locations = [{'id': r['id'], 'name': stock.location_label(c, r)}
-                 for r in c.execute('SELECT * FROM locations WHERE active=1 ORDER BY id')]
+                 for r in c.execute('SELECT * FROM locations WHERE active=1 ORDER BY id')] if not legacy_only else []
     return {'jobs': jobs, 'locations': locations, 'actorId': who,
             'canConfirm': bool(body.get('_canWrite'))}
 
@@ -53,11 +55,14 @@ def catalog(c, body):
     import qr_link_import
     qr_link_import.ensure_schema(c)
     handles = {}
+    sizes_by_product = {}
+    for row in c.execute('SELECT product_id,label FROM product_sizes ORDER BY product_id,sort_order'):
+        sizes_by_product.setdefault(row['product_id'], []).append(row['label'])
     for cp in c.execute('''SELECT cp.*,cu.name customer_name,p.code,p.name product_name,p.color
         FROM customer_products cp JOIN customers cu ON cu.id=cp.customer_id
         JOIN products p ON p.id=cp.product_id
         WHERE cp.active=1 AND cu.active=1 AND p.active=1 AND p.merged_into_id IS NULL'''):
-        sizes = [r[0] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order', (cp['product_id'],))]
+        sizes = sizes_by_product.get(cp['product_id'], [])
         handles[cp['id']] = {'customerProductId': cp['id'], 'customerName': cp['customer_name'],
             'code': cp['code'], 'productName': cp['product_name'], 'color': cp['color'],
             'spec': stock.embroidery_label(cp['embroidery']), 'sizes': sizes,
@@ -75,7 +80,10 @@ def catalog(c, body):
                 'customer': row['legacy_customer_id'] or '', 'maker': row['legacy_maker_id'] or '',
                 'target': {**target, 'size': row['size_label'] or '', 'condition': row['condition'] or '',
                            'locationId': row['location_id']}})
-    return {'entries': entries, 'preparedAt': stock.stamp()}
+    revision = hashlib.sha256(json.dumps(entries, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    if body.get('revision') == revision:
+        return {'notModified': True, 'revision': revision, 'preparedAt': stock.stamp()}
+    return {'entries': entries, 'revision': revision, 'preparedAt': stock.stamp()}
 
 
 def submit(c, body):

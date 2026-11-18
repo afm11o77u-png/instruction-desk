@@ -178,6 +178,14 @@ class QrWorkTests(unittest.TestCase):
         self.assertIn(self.qr, [e['qr'] for e in catalog['entries']])
         import json
         self.assertNotIn('qtyRemaining', json.dumps(catalog))
+        checked = self.call('catalog', {'revision': catalog['revision']})
+        self.assertTrue(checked['notModified'])
+        self.assertNotIn('entries', checked)
+        with closing(stock.connect(self.db)) as c, c:
+            c.execute("UPDATE products SET name='変更した白衣' WHERE id=(SELECT product_id FROM customer_products WHERE id=?)", (self.cp,))
+        updated = self.call('catalog', {'revision': catalog['revision']})
+        self.assertNotEqual(updated['revision'], catalog['revision'])
+        self.assertTrue(updated['entries'])
         self.assertEqual(self.qty(), 10)
 
     def test_bad_or_changed_submission_is_not_received(self):

@@ -925,6 +925,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         super().end_headers()
     def reply(self,status,data,ctype='application/json; charset=utf-8',headers=None):
         b = data if isinstance(data,bytes) else json.dumps(data,ensure_ascii=False).encode()
+        if (status == 200 and self.path.split('?')[0] == '/inventory/api/qr-work/catalog'
+                and 'gzip' in self.headers.get('Accept-Encoding', '') and len(b) > 1024):
+            import gzip
+            b = gzip.compress(b, compresslevel=3)
+            headers = {**(headers or {}), 'Content-Encoding': 'gzip', 'Vary': 'Accept-Encoding'}
         self.send_response(status); self.send_header('Content-Type',ctype); self.send_header('Content-Length',str(len(b))); self.send_header('Cache-Control','no-store'); self.send_header('X-Content-Type-Options','nosniff')
         for key, value in (headers or {}).items(): self.send_header(key, value)
         self.end_headers(); self.wfile.write(b)
