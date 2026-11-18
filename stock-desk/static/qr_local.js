@@ -149,6 +149,15 @@
   if(action==='state')return state();
   if(action==='prepare')return prepare();
   const local=await get('jobs:'+profile.id)||fresh();const existing=local.jobs.find(j=>j.id===body.id);
+  if(action==='resume'){
+   return change(s=>{
+    const j=s.jobs.find(j=>j.id===body.id);
+    if(!j||j.status!=='completed'||j.submitAttempted)throw Error('再開できるのは送信を始めていない、端末内の完了作業だけです。');
+    if(j.version!==body.version)throw Error('別の画面で更新されました。一覧を更新してください。');
+    if(s.jobs.some(x=>x.status==='collecting'&&x.id!==j.id))throw Error('別の読み取り中の作業があります。先にその作業を完了してください。');
+    j.last_completed_at=j.completed_at;j.completed_at=null;j.status='collecting';j.version++;return {job:j};
+   });
+  }
   if(action==='scan'){
    const {identity,found}=await entry(body.qr);
    if(!found)throw missingQr();
@@ -176,6 +185,7 @@
    if(!existing||!['completed','sent'].includes(existing.status))throw Error('先に作業を完了してください。');
    if(existing.lines.some(l=>l.unresolved))throw Error('未照合の行が残っています。商品情報を更新して照合してから送信してください。');
    await verify();
+   await change(s=>{const j=s.jobs.find(x=>x.id===existing.id);if(!j||!['completed','sent'].includes(j.status)||j.version!==existing.version)throw Error('作業が更新されました。一覧を更新してから送信してください。');j.submitAttempted=true;return true});
    const response=await api('/api/qr-work/submit',{id:existing.id,sourceVersion:existing.sourceVersion,startedAt:existing.started_at,completedAt:existing.completed_at,lines:existing.lines.map(l=>({qr:l.qr,qty:l.qty,scanCount:l.scanCount}))});
    return change(s=>{const j=s.jobs.find(j=>j.id===existing.id);j.status='sent';j.sent_at=new Date().toISOString();j.version++;return {job:j,receipt:response.job.id}});
   }

@@ -69,6 +69,7 @@
    <div class="qr-work-actions">
    ${job.status==='collecting'&&job.actor_id===data.actorId?`<button type="button" class="primary" data-complete ${completing?'disabled':''}>${completing?'保存を待って完了しています…':'作業を完了（端末に保存）'}</button>`:''}
    ${job._local&&job.status==='completed'?'<button type="button" class="primary" data-submit>事務所へ送信</button>':''}
+   ${job._local&&job.status==='completed'&&!job.submitAttempted?'<button type="button" data-resume>この作業を再開</button>':''}
    ${!job._local&&!mobile&&job.status==='completed'&&data.canConfirm?'<button type="button" class="primary" data-confirm>確認して在庫に反映</button>':''}</div>
    ${job._local&&job.status==='completed'?'<p>この作業は端末内に保存済み・未送信です。事務所のWi-Fiにつないで「事務所へ送信」を押してください。</p>':job.status==='completed'?'<p>受信した作業です。確認・編集後に「在庫に反映」を押すと、編集内容も保存して反映します。</p>':''}`:'<p>まだ作業を開始していません。QRを読み取ると自動で開始します。</p>'}`;
   box.querySelector('[data-prepare]').onclick=()=>action(async()=>{
@@ -81,7 +82,8 @@
    try{const result=await request('prepare');stage='準備した情報を確認しています…';paint();data=await request('state');render();message(result.message)}
    finally{clearInterval(timer);window.removeEventListener('qr-prepare-progress',progress);box.setAttribute('aria-busy','false');box.querySelector('#qrWorkMessage')?.classList.remove('is-loading');const currentButton=box.querySelector('[data-prepare]');if(currentButton)currentButton.textContent='倉庫用の準備（事務所Wi-Fi）';}
   });
-  const submit=box.querySelector('[data-submit]');if(submit)submit.onclick=()=>action(async()=>{message('事務所に送信しています。受信を確認するまで閉じないでください。');put((await request('submit',{id:job.id})).job);render();message('送信済みです。PCの受信一覧で確認できます。');});
+  const resume=box.querySelector('[data-resume]');if(resume)resume.onclick=()=>action(async()=>{QrRead.stop();await QrRead.waitForRead();put((await request('resume',{id:job.id,version:job.version})).job);render();message('作業を再開しました。追加の読み取り・枚数編集・行の削除ができます。最後にもう一度作業を完了してください。');});
+  const submit=box.querySelector('[data-submit]');if(submit)submit.onclick=()=>action(async()=>{message('事務所に送信しています。受信を確認するまで閉じないでください。');try{put((await request('submit',{id:job.id})).job);render();message('送信済みです。PCの受信一覧で確認できます。');}catch(e){data=await request('state');render();throw e}});
   box.querySelector('[data-refresh]').onclick=()=>action(refresh);
   box.querySelector('[data-active]').onclick=()=>action(async()=>{await save();selected=active()?.id||null;render()});
   box.querySelector('[data-jobs]').onchange=e=>{const value=e.target.value;action(async()=>{await save();selected=value||null;render()})};
