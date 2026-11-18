@@ -1,4 +1,19 @@
 function stockCanWrite(){return false}
+async function logoutMobile(){
+ const button=document.getElementById('mobile-logout');
+ const error=document.getElementById('logout-error');
+ button.disabled=true;error.hidden=true;
+ try{
+  QrRead.stop();
+  const response=await fetch('/api/logout',{
+   method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:'{}',
+  });
+  if(!response.ok&&response.status!==401)throw Error('ログアウトできませんでした。もう一度お試しください。');
+  location.replace('/');
+ }catch(err){
+  error.textContent=err.message;error.hidden=false;button.disabled=false;
+ }
+}
 async function api(path,data){
  const response=await fetch('/inventory'+path,data?{
   method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data),
@@ -16,6 +31,8 @@ async function api(path,data){
    return;
   }
   document.getElementById('who').textContent=value.user.name;
+  const logout=document.getElementById('mobile-logout');
+  logout.hidden=false;logout.onclick=logoutMobile;
   QrRead.mobilePage();
  }catch(error){
   document.getElementById('main').textContent=error.message;
