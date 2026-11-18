@@ -1,0 +1,10 @@
+.qr-work{margin:24px 0;padding:18px;border:2px solid #aac5b3;border-radius:12px;background:#fff;color:#173d2e}
+.qr-work h2{font-size:23px}.qr-work label{display:block;margin:12px 0}
+.qr-work select,.qr-work input{font:inherit;max-width:100%;padding:10px;border:1px solid #aac5b3;border-radius:8px;min-height:44px;width:100%;background:white;color:inherit}
+.qr-work button{font:inherit;min-height:44px;padding:10px 16px;border:1px solid #aac5b3;border-radius:8px;cursor:pointer}
+.qr-work .primary{background:#17633e;color:white}.qr-work button:disabled{opacity:.5;cursor:default}
+.qr-work-lines{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}
+.qr-work article{padding:16px;border:1px solid #cbded3;border-radius:10px;background:#f3f7f4}
+.qr-work .qr-qty{display:flex;gap:8px;align-items:center}.qr-work .qr-qty input{min-width:65px;text-align:center}.qr-work .qr-qty button{width:auto;margin:0;flex:0 0 48px}
+.qr-work-actions{display:flex;gap:10px;flex-wrap:wrap}.qr-work-actions button{width:auto}
+.qr-work [hidden]{display:none!important}#qrWorkMessage{white-space:pre-wrap;overflow-wrap:anywhere;font-weight:bold}#qrWorkMessage.error{color:#a12626}

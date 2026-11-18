@@ -3,8 +3,6 @@
   const MAX_LEN=400
   let stream=null
   let timer=0
-  let lastText=''
-  let lastAt=0
   let decoding=false
   let result=null
   let selectedLot=''
@@ -56,14 +54,13 @@
     if(!raw){error='QRの文字列を入力してください。';paintResult();return}
     if(raw.length>MAX_LEN){error='QRの文字列が長すぎます。';paintResult();return}
     if(suspicious(raw)){error='URLや実行用の文字列は在庫QRとして扱いません。';paintResult();return}
-    const now=Date.now()
-    if(raw===lastText&&now-lastAt<2500)return
-    lastText=raw
-    lastAt=now
     busy=true
     paintResult()
     try{
       result=await api('/api/stock-qr/read',{qr:raw})
+      if(window.QrWork){
+        await QrWork.record(raw)
+      }
     }catch(e){
       error=(e&&e.message)||'QRを確認できませんでした。'
       result=null
@@ -73,7 +70,7 @@
     if(mobile){
       const note=document.getElementById('qrCamNote')
       if(note)note.textContent=error?'照合できませんでした。下のメッセージを確認してください。':'読み取りました。下に照合結果を表示しています。'
-      document.getElementById('qrScanResult')?.scrollIntoView({behavior:'smooth',block:'nearest'})
+      document.getElementById(!error&&window.QrWork?'qrWork':'qrScanResult')?.scrollIntoView({behavior:'smooth',block:'nearest'})
     }
   }
 
@@ -127,7 +124,7 @@
         <td>${esc(lot.qtyRemaining)}</td>
       </tr>`
     }).join('')
-    const write=canWrite()
+    const write=canWrite()&&!window.QrWork
     const picked=!!chosenLot()
     const inbound=write&&(picked||(!lots.length&&(link.customerProductId||result.customerProductId)))
     const outbound=write&&picked
@@ -139,7 +136,7 @@
       ${write?`<div class="bar">
         <button type="button" id="qrGoIn" ${inbound?'':'disabled'}>${lots.length?'選んだロットで入庫画面を開く':'在庫はありません。入庫画面を開く'}</button>
         <button type="button" id="qrGoOut" ${outbound?'':'disabled'}>選んだロットで出庫画面を開く</button>
-      </div>`:'<p class="excelhint">閲覧専用のため、在庫の確認だけできます。入庫・出庫はできません。</p>'}
+      </div>`:window.QrWork?'<p>数量は下の作業一覧で確認・編集してください。完了後、PCで在庫への反映を確定します。</p>':'<p class="excelhint">閲覧専用のため、在庫の確認だけできます。入庫・出庫はできません。</p>'}
     </section>`
     box.querySelectorAll('input[name="qrLot"]').forEach(input=>{
       input.onchange=()=>{selectedLot=input.value;paintResult()}
@@ -191,11 +188,9 @@
         }
       }
       if(text){
-        if(mobile){
-          stop()
-          const note=document.getElementById('qrCamNote')
-          if(note)note.textContent='QRを読み取りました。在庫を照合しています。'
-        }
+        stop()
+        const note=document.getElementById('qrCamNote')
+        if(note)note.textContent='QRを読み取りました。在庫を照合しています。'
         await lookup(text)
       }
     }catch(_){}
@@ -231,8 +226,6 @@
     stop()
     result=null
     error=''
-    lastText=''
-    lastAt=0
     document.getElementById('main').innerHTML=`<section class="qr-read-page">
       <h1>在庫QR読み取り</h1>
       <button type="button" id="qrCamStart" class="primary">カメラで読む</button>
@@ -259,18 +252,18 @@
       if(busy)return
       result=null
       error=''
-      lastText=''
-      lastAt=0
       paintResult()
       document.getElementById('qrScanInput').value=''
       startCamera()
     }
     const note=document.getElementById('qrCamNote')
     note.textContent=noteForCamera()
+    if(window.QrWork)QrWork.mount(true)
   }
 
   function page(){
     mobile=false
+    stop()
     const main=document.getElementById('main')
     if(!main)return
     main.innerHTML=`<section class="panel qr-read-page">
@@ -346,6 +339,7 @@
       }).catch(()=>{})
     }
     paintResult()
+    if(window.QrWork)QrWork.mount(false)
   }
 
   window.addEventListener('pagehide',stop)

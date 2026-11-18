@@ -19,7 +19,7 @@ async function api(path,data){
   method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(data),
  }:{});
  const value=await response.json();
- if(!response.ok)throw Error(value.error||'在庫を確認できませんでした。');
+ if(!response.ok){const error=Error(value.error||'在庫を確認できませんでした。');error.status=response.status;throw error;}
  return value;
 }
 (async()=>{

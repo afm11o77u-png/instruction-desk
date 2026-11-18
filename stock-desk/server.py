@@ -366,6 +366,9 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
     payload['_canWrite'] = bool(can_write)
     if actor:
         payload['_actor'] = actor
+    if path.startswith('/api/qr-work/'):
+        import qr_work
+        return qr_work.dispatch(db_path, path.rsplit('/', 1)[-1], payload)
     if path == '/api/import':
         import excel_book
         try:
