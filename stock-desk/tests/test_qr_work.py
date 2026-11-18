@@ -284,6 +284,39 @@ class QrWorkTests(unittest.TestCase):
             self.assertEqual(c.execute("SELECT qr_raw FROM qr_stock_links WHERE legacy_stock_id='box-old'").fetchone()[0], raw)
         self.assertEqual(self.qty(), 10)
 
+    def test_legacy_qr_is_selected_by_exact_imported_lot_even_when_price_changes(self):
+        import json
+        import qr_link_import
+        with closing(stock.connect(self.db)) as c, c:
+            qr_link_import.ensure_schema(c)
+            cp = stock.resolve_customer_product(c, self.cp)
+            first = c.execute('SELECT id FROM lots ORDER BY id LIMIT 1').fetchone()[0]
+            second = stock.register_inbound(c, {'token':'second-price-test','customerProductId':self.cp,
+                'size':'M','condition':'new','locationId':self.loc,'qty':4,'unitCost':200,'receivedOn':'2026-02-01'})['lotId']
+            for number, lot, old_id in [(1,first,'box-price-a'),(2,second,'box-price-b')]:
+                c.execute('''INSERT INTO qr_stock_links(legacy_stock_id,customer_id,product_id,
+                    customer_product_id,size_label,condition,location_id,qr_raw,file_sha256,source_row_no,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''', (old_id,cp['customer_id'],cp['product_id'],self.cp,'M','new',self.loc,json.dumps({'id':old_id}),'same-file',number,'t','t'))
+                c.execute('''INSERT INTO legacy_csv_row_maps(product_map_key,stock_map_key,file_sha256,
+                    source_row_no,customer_product_id,product_id,lot_ids_json,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?)''', ('product',str(number),'same-file',number,self.cp,cp['product_id'],json.dumps([lot]),'t','t'))
+            # Current cost is deliberately no longer a discriminator.
+            c.execute('UPDATE lots SET unit_cost=999 WHERE id IN (?,?)', (first,second))
+        for lot, old_id in [(first,'box-price-a'),(second,'box-price-b')]:
+            status, shown = server.api_post(self.db,'desk','/api/stock-qr',{
+                'preferLegacy':True,'lotId':lot,'customerProductId':self.cp,'size':'M','condition':'new'},
+                can_write=False,actor=self.worker)
+            self.assertEqual(status,200,shown)
+            self.assertEqual(shown['legacyStockId'],old_id)
+            self.assertNotIn('legacyChoices',shown)
+        with closing(stock.connect(self.db)) as c, c:
+            c.execute("UPDATE legacy_csv_row_maps SET file_sha256='other-file' WHERE source_row_no=1")
+        status, result = server.api_post(self.db,'desk','/api/stock-qr',{
+            'preferLegacy':True,'lotId':first,'customerProductId':self.cp,'size':'M','condition':'new'},actor=self.manager)
+        self.assertEqual(status,400)
+        self.assertFalse(result['issued'])
+        self.assertEqual(self.qty(),14)
+
 
 if __name__ == '__main__':
     unittest.main()

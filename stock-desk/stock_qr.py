@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 import sqlite3
 import uuid
@@ -202,8 +203,35 @@ def show_legacy(c, body):
     cp, size, condition = _classification(c, body)
     rows = c.execute('''SELECT * FROM qr_stock_links WHERE customer_product_id=?
         AND size_label=? AND condition=? ORDER BY id''', (cp['id'], size, condition)).fetchall()
+    lot_id = body.get('lotId')
+    if lot_id is not None:
+        if type(lot_id) is not int:
+            raise ValueError('QRを表示する在庫明細を選び直してください。')
+        lot = c.execute('SELECT * FROM lots WHERE id=?', (lot_id,)).fetchone()
+        if not lot or (lot['customer_product_id'], lot['size_label'], lot['condition']) != (cp['id'], size, condition):
+            raise ValueError('選択した在庫明細と商品・サイズ・状態が一致しません。')
+        exact = []
+        for row in rows:
+            if not row['file_sha256'] or row['source_row_no'] is None:
+                continue
+            maps = c.execute('''SELECT lot_ids_json FROM legacy_csv_row_maps
+                WHERE file_sha256=? AND source_row_no=? AND customer_product_id=? AND product_id=?''',
+                (row['file_sha256'], row['source_row_no'], cp['id'], cp['product_id']))
+            for mapping in maps:
+                try:
+                    ids = json.loads(mapping['lot_ids_json'])
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(ids, list) and lot_id in ids:
+                    exact.append(row)
+                    break
+        rows = exact
+        if not rows:
+            raise ValueError('選択した在庫行と旧QRの取り込み対応が確認できません。別の行のQRは表示しません。対応登録を確認してください。')
+        if len(rows) != 1:
+            raise ValueError('選択した在庫行に旧QRが複数紐づいています。取り込み対応を確認してください。')
     location = body.get('locationId')
-    if location is not None:
+    if location is not None and lot_id is None:
         rows = [r for r in rows if r['location_id'] in (None, location)]
     requested = body.get('legacyStockId')
     if requested:

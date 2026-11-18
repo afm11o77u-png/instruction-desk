@@ -358,6 +358,7 @@ function installStockOpMenuDismiss(){
 }
 function stockQrAmbiguousReason(row){
   if(!row||row.customerProductId==null)return 'この行では顧客と商品の取扱が一つに定まらないため、QRを発行しません。'
+  if(!Number.isInteger(row.lotId)&&!Number.isInteger(row.id))return '在庫明細の1行を選んで旧QRを表示してください。まとめた行では旧QRを特定できません。'
   if(row.size==null||String(row.size)==='')return 'サイズが空のため、QRを発行しません。'
   if(row.conditionMixed)return '新品と中古が同じ行に混ざっているため、QRを発行しません。在庫明細で状態ごとの行から表示してください。'
   if(row.condition!=='new'&&row.condition!=='used'&&row.condition!=='')return '新品か中古かがこの行では定まらないため、QRを発行しません。在庫明細で状態ごとの行から表示してください。'
@@ -401,10 +402,11 @@ const stockQrFlight=new Map()
 async function openStockQr(row,legacyStockId=null){
   const reason=stockQrAmbiguousReason(row)
   if(reason){showStockQrMessage(reason);return}
-  const key=[row.customerProductId,row.size,row.condition,row.locationId,legacyStockId].join('\u0001')
+  const lotId=row.lotId??row.id
+  const key=[lotId,row.customerProductId,row.size,row.condition,row.locationId,legacyStockId].join('\u0001')
   if(!stockQrFlight.has(key)){
     const job=api('/api/stock-qr',{
-      preferLegacy:true,legacyStockId,locationId:row.locationId,
+      preferLegacy:true,legacyStockId,lotId,locationId:row.locationId,
       customerProductId:row.customerProductId,
       size:row.size,
       condition:row.condition
