@@ -16,7 +16,7 @@ async function logoutMobile(){
 }
 async function api(path,data){
  const response=await fetch('/inventory'+path,data?{
-  method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(data),
+  method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(data),
  }:{});
  const value=await response.json();
  if(!response.ok)throw Error(value.error||'在庫を確認できませんでした。');

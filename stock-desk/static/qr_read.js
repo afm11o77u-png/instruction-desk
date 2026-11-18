@@ -48,11 +48,11 @@
   }
 
   async function lookup(text){
+    if(busy)return
     const raw=String(text||'').replace(/\r/g,'').replace(/\n/g,'').trim()
     error=''
     result=null
     selectedLot=''
-    if(busy)return
     if(!raw){error='QRの文字列を入力してください。';paintResult();return}
     if(raw.length>MAX_LEN){error='QRの文字列が長すぎます。';paintResult();return}
     if(suspicious(raw)){error='URLや実行用の文字列は在庫QRとして扱いません。';paintResult();return}
@@ -70,6 +70,11 @@
     }
     busy=false
     paintResult()
+    if(mobile){
+      const note=document.getElementById('qrCamNote')
+      if(note)note.textContent=error?'照合できませんでした。下のメッセージを確認してください。':'読み取りました。下に照合結果を表示しています。'
+      document.getElementById('qrScanResult')?.scrollIntoView({behavior:'smooth',block:'nearest'})
+    }
   }
 
   function lotKey(lot){return String(lot.lotId)}
@@ -163,9 +168,11 @@
     try{
       let text=''
       if(window.BarcodeDetector){
+        try{
         const detector=tick.detector||(tick.detector=new BarcodeDetector({formats:['qr_code']}))
         const codes=await detector.detect(video)
         if(codes&&codes[0])text=codes[0].rawValue||''
+        }catch(_){ /* Use jsQR when the browser detector is unsupported. */ }
       }
       if(!text&&typeof jsQR==='function'){
         const canvas=document.getElementById('qrCamCanvas')
@@ -183,7 +190,14 @@
           }
         }
       }
-      if(text){if(mobile)stop();await lookup(text)}
+      if(text){
+        if(mobile){
+          stop()
+          const note=document.getElementById('qrCamNote')
+          if(note)note.textContent='QRを読み取りました。在庫を照合しています。'
+        }
+        await lookup(text)
+      }
     }catch(_){}
     decoding=false
   }
