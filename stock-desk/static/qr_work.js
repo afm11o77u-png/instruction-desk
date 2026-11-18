@@ -1,8 +1,11 @@
 /* Shared phone/PC collection workflow. Recording never changes stock. */
 (function(){
- let data=null,selected=null,mobile=false,busy=false,dirty=false,pending=null,epoch=0;
+ let data=null,selected=null,mobile=false,busy=false,dirty=false,pending=null,epoch=0,completing=false;
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const id=()=>crypto.randomUUID();
+ const idleWaiters=[];
+ function release(){busy=false;lock(false);idleWaiters.splice(0).forEach(resolve=>resolve())}
+ function waitIdle(){return busy?new Promise(resolve=>idleWaiters.push(resolve)):Promise.resolve()}
  const root=()=>document.getElementById('qrWork');
  const current=()=>data?.jobs.find(j=>j.id===selected)||null;
  const active=()=>data?.jobs.find(j=>j.status==='collecting'&&j.actor_id===data.actorId)||null;
@@ -21,8 +24,8 @@
     return {key:line.key,qty:val('qty'),size:val('size'),condition:val('condition'),locationId:Number(val('locationId'))||null,unitCost:val('unitCost')};})};
  }
  async function save(){if(!dirty)return;put((await request('edit',edits())).job);render();}
- async function action(fn){if(busy)return;busy=true;lock(true);try{await fn()}catch(e){message(e.message,true)}finally{busy=false;lock(false)}}
- function lock(value){if(root())root().querySelectorAll('button,input,select').forEach(el=>{if(value){el.dataset.preDisabled=el.disabled?'1':'0';el.disabled=true}else if(el.dataset.preDisabled!==undefined){el.disabled=el.dataset.preDisabled==='1';delete el.dataset.preDisabled}})}
+ async function action(fn){if(busy)return;busy=true;lock(true);try{await fn()}catch(e){message(e.message,true)}finally{release()}}
+ function lock(value){if(root())root().querySelectorAll('button,input,select').forEach(el=>{if(el.hasAttribute('data-complete')){el.disabled=completing;return}if(value){el.dataset.preDisabled=el.disabled?'1':'0';el.disabled=true}else if(el.dataset.preDisabled!==undefined){el.disabled=el.dataset.preDisabled==='1';delete el.dataset.preDisabled}})}
  async function refresh(){
   if(dirty&&!confirm('未保存の編集を破棄して一覧を更新しますか？'))return;
   data=await request('state');dirty=false;pending=null;
@@ -61,7 +64,7 @@
    </article>`).join('')}</div>
    <p><strong data-total>合計 ${job.lines.reduce((n,l)=>n+l.qty,0)} 点</strong> ／ ${job.lines.length} 種類</p>
    <div class="qr-work-actions">${editable?'<button type="button" data-save>編集した内容を保存</button>':''}
-   ${job.status==='collecting'&&job.actor_id===data.actorId?'<button type="button" class="primary" data-complete>読み取り作業を完了</button>':''}
+   ${job.status==='collecting'&&job.actor_id===data.actorId?`<button type="button" class="primary" data-complete ${completing?'disabled':''}>${completing?'保存を待って完了しています…':'読み取り作業を完了'}</button>`:''}
    ${!mobile&&job.status==='completed'&&data.canConfirm?'<button type="button" class="primary" data-confirm>確認して在庫に反映</button>':''}</div>
    ${job.status==='completed'?'<p>PCの「QR読み取り」でこの作業を選び、内容を確認して在庫に反映してください。</p>':''}`:'<p>まだ作業を開始していません。QRを読み取ると自動で開始します。</p>'}`;
   box.querySelector('[data-refresh]').onclick=()=>action(refresh);
@@ -72,9 +75,16 @@
   box.querySelectorAll('[data-field], [data-direction]').forEach(input=>input.oninput=()=>{dirty=true;total();if(input.matches('[data-direction]'))box.querySelectorAll('.qr-work-cost').forEach(el=>el.hidden=input.value!=='inbound')});
   box.querySelectorAll('[data-plus],[data-minus]').forEach(button=>button.onclick=()=>{const input=button.closest('[data-line]').querySelector('[data-field="qty"]');input.value=Math.max(0,Math.min(99999,Number(input.value)+(button.hasAttribute('data-plus')?1:-1)));dirty=true;total();});
   const saveBtn=box.querySelector('[data-save]');if(saveBtn)saveBtn.onclick=()=>action(async()=>{await save();message('保存しました。在庫数量は変えていません。')});
-  const complete=box.querySelector('[data-complete]');if(complete)complete.onclick=()=>action(async()=>{
-   QrRead.stop();await save();put((await request('complete',edits())).job);render();message('作業を完了しました。PC側で在庫への反映を確認できます。');
-  });
+  const complete=box.querySelector('[data-complete]');if(complete)complete.onclick=async()=>{
+   if(completing)return;
+   completing=true;complete.disabled=true;QrRead.stop();message('読み取りの保存を待ってから作業を完了します。');
+   try{
+    const saved=await QrRead.waitForRead();
+    await waitIdle();
+    if(saved===false||pending)throw Error('最後の読み取りを保存できませんでした。読み取り結果を確認し、再読み取りしてから完了してください。');
+    await action(async()=>{await save();put((await request('complete',edits())).job);render();message('作業を完了しました。PC側で在庫への反映を確認できます。');});
+   }catch(e){message(e.message,true)}finally{completing=false;const button=box.querySelector('[data-complete]');if(button){button.disabled=false;button.textContent='読み取り作業を完了';}}
+  };
   const confirmBtn=box.querySelector('[data-confirm]');if(confirmBtn)confirmBtn.onclick=()=>action(async()=>{
    await save();const j=current();if(!confirm(`${j.direction==='inbound'?'入庫':'出庫'}として合計${j.lines.reduce((n,l)=>n+l.qty,0)}点を在庫に反映しますか？`))return;
    put((await request('confirm',{id:j.id,version:j.version})).job);render();message('在庫に反映しました。同じ作業を重複して反映することはありません。');
@@ -100,7 +110,7 @@
    let response;
    try{response=await request('scan',pending)}catch(e){if(e.status&&e.status<500)pending=null;throw e}
    pending=null;put(response.job);render();message('読み取りを保存しました。同じQRは数量を1加算します。');
-  }finally{busy=false;lock(false)}
+  }finally{release()}
  }
  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
  window.QrWork={mount,record};

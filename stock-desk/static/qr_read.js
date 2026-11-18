@@ -7,6 +7,7 @@
   let result=null
   let selectedLot=''
   let busy=false
+  let reading=null
   let error=''
   let mobile=false
   let cameraStarting=false
@@ -69,7 +70,14 @@
     return low.startsWith('http://')||low.startsWith('https://')||low.startsWith('javascript:')||low.startsWith('data:')
   }
 
-  async function lookup(text){
+  function lookup(text){
+    if(reading)return reading
+    const task=lookupCore(text).finally(()=>{if(reading===task)reading=null})
+    reading=task
+    return task
+  }
+
+  async function lookupCore(text){
     if(busy)return
     const raw=String(text||'').replace(/\r/g,'').replace(/\n/g,'').trim()
     error=''
@@ -96,6 +104,7 @@
       if(note)note.textContent=error?'照合できませんでした。下のメッセージを確認してください。':'読み取りました。下に照合結果を表示しています。'
       if(error)stop()
     }
+    return !error
   }
 
   function lotKey(lot){return String(lot.lotId)}
@@ -371,5 +380,5 @@
 
   window.addEventListener('pagehide',stop)
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')stop()})
-  window.QrRead={page,mobilePage,stop,lookup}
+  window.QrRead={page,mobilePage,stop,lookup,waitForRead:()=>reading||Promise.resolve(true)}
 })()

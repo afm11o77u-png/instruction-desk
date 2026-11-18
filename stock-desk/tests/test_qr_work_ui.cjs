@@ -8,7 +8,7 @@ const clone=x=>JSON.parse(JSON.stringify(x));
  try{
   const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
   const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  let job=null,pc=false,stock=10,confirmed=0,loseScan=false;const tokens=new Set();
+  let job=null,pc=false,stock=10,confirmed=0,loseScan=false,delayScan=false,releaseScan=null;const tokens=new Set();
   const json=(route,value,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(value)});
   await page.route('https://qr.test/**',async route=>{
    const req=route.request(),url=new URL(req.url()),body=req.method()==='POST'?req.postDataJSON():{};
@@ -25,6 +25,7 @@ const clone=x=>JSON.parse(JSON.stringify(x));
       job.lines[0].qty++;job.lines[0].scanCount++;job.version++;
      }
      if(loseScan){loseScan=false;return route.abort('failed')}
+     if(delayScan){delayScan=false;await new Promise(resolve=>releaseScan=resolve)}
      return json(route,{job:clone(job)});
     }
     if(action==='edit'||action==='complete'){
@@ -80,12 +81,18 @@ const clone=x=>JSON.parse(JSON.stringify(x));
   await page.evaluate(()=>QrRead.lookup('test-qr'));
   assert.equal(await page.locator('[data-field="qty"]').inputValue(),'5');
   assert.equal(job.lines[0].qty,5,'lost response retry must not increment twice');
-  await page.locator('[data-complete]').click();await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.textContent.includes('作業を完了'));
+  delayScan=true;await page.evaluate(()=>{window.testRead=QrRead.lookup('test-qr')});
+  for(let i=0;!releaseScan&&i<100;i++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert(releaseScan,'scan response should be held for race test');
+  await page.locator('[data-complete]').click();
+  assert.equal(job.status,'collecting','completion must wait for the scan response');
+  releaseScan();
+  await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.textContent.includes('作業を完了'));
   assert.equal(await page.locator('[data-confirm]').count(),0);assert.equal(stock,10);
   pc=true;await page.goto('https://qr.test/pc');await page.locator('[data-jobs]').waitFor();await page.locator('[data-jobs]').selectOption('job-one');
   await page.locator('[data-confirm]').waitFor();page.on('dialog',d=>d.accept());
   await page.locator('[data-confirm]').click();try{await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.textContent.includes('在庫に反映しました'),null,{timeout:5000})}catch(e){console.error({message:await page.locator('#qrWorkMessage').innerText(),errors,job,stock});throw e}
-  assert.equal(stock,5);assert.equal(confirmed,1);assert.equal(await page.locator('[data-confirm]').count(),0);
+  assert.equal(stock,4);assert.equal(job.lines[0].qty,6);assert.equal(confirmed,1);assert.equal(await page.locator('[data-confirm]').count(),0);
   assert.deepEqual(errors,[]);
   console.log('PASS: phone scan count/edit/save/reload/lost-response retry/complete; PC confirmation; no phone confirmation or JS errors');
  }finally{await browser.close()}
