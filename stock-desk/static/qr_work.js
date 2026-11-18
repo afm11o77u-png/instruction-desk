@@ -15,7 +15,9 @@
   return {id:job.id,version:job.version,direction:root().querySelector('[data-direction]')?.value||job.direction,
    lines:job.lines.map(line=>{const row=[...root().querySelectorAll('[data-line]')].find(r=>r.dataset.line===line.key);
     if(!row)return {...line};
-    const val=name=>row.querySelector(`[data-field="${name}"]`).value;
+    if(row.dataset.deleted==='1')return {key:line.key,deleted:true};
+    const val=name=>row.querySelector(`[data-field="${name}"]`)?.value;
+    if(mobile)return {key:line.key,qty:val('qty'),size:line.size,condition:line.condition,locationId:line.locationId,unitCost:line.unitCost};
     return {key:line.key,qty:val('qty'),size:val('size'),condition:val('condition'),locationId:Number(val('locationId'))||null,unitCost:val('unitCost')};})};
  }
  async function save(){if(!dirty)return;put((await request('edit',edits())).job);render();}
@@ -40,26 +42,28 @@
    <div class="qr-work-actions"><button type="button" data-refresh>一覧を更新</button><button type="button" data-active>読み取り中の作業へ</button></div>
    <label>保存された作業<select data-jobs><option value="">新しい作業（最初のQRで開始）</option>${visible.map(j=>`<option value="${esc(j.id)}" ${j.id===selected?'selected':''}>${esc(j.started_at)} ／ ${esc(j.actor_name)} ／ ${status(j)} ／ ${j.lines.reduce((n,l)=>n+l.qty,0)}点</option>`).join('')}</select></label>
    ${job?`<h3>${status(job)}</h3><p>担当：${esc(job.actor_name)}<br>開始：${esc(job.started_at)}${job.completed_at?'<br>完了：'+esc(job.completed_at):''}${job.confirmed_at?'<br>在庫反映：'+esc(job.confirmed_at)+' ／ '+esc(job.confirmed_by):''}</p>
-   <label>在庫に反映する操作<select data-direction ${editable?'':'disabled'}><option value="outbound" ${job.direction==='outbound'?'selected':''}>出庫（在庫を減らす）</option><option value="inbound" ${job.direction==='inbound'?'selected':''}>入庫（在庫を増やす）</option></select></label>
-   <p>数量は＋・－ボタンまたは直接入力で変更できます。0は反映対象外です。サイズ・新品中古・場所が未選択の場合は確認して選んでください。出庫は選んだ場所の在庫から古い入荷順に引き当てます。</p>
+   ${!mobile?`<label>在庫に反映する操作<select data-direction ${editable?'':'disabled'}><option value="outbound" ${job.direction==='outbound'?'selected':''}>出庫（在庫を減らす）</option><option value="inbound" ${job.direction==='inbound'?'selected':''}>入庫（在庫を増やす）</option></select></label>
+   <p>数量は＋・－ボタンまたは直接入力で変更できます。0は反映対象外です。サイズ・新品中古・場所が未選択の場合は確認して選んでください。出庫は選んだ場所の在庫から古い入荷順に引き当てます。</p>`:'<p>枚数を確認してください。間違えて読んだ行は削除できます。</p>'}
    <div class="qr-work-lines">${job.lines.map(l=>`<article data-line="${esc(l.key)}"><strong>${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)}</strong>
     <p>${esc(l.color)} ／ ${esc(l.spec)}</p>
     <p>QR読み取り ${l.scanCount} 回</p>
-    <label>反映する数量<div class="qr-qty"><button type="button" data-minus ${editable?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable?'':'disabled'}><button type="button" data-plus ${editable?'':'disabled'} aria-label="数量を1増やす">＋</button></div></label>
-    <label>サイズ<select data-field="size" ${editable?'':'disabled'}>${options(l.sizes.map(s=>({id:s,name:s||'サイズなし'})),l.size,'選択してください')}</select></label>
+    <label>${mobile?'枚数':'反映する数量'}<div class="qr-qty"><button type="button" data-minus ${editable?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable?'':'disabled'}><button type="button" data-plus ${editable?'':'disabled'} aria-label="数量を1増やす">＋</button></div></label>
+    ${mobile?`<p>サイズ：${esc(l.size||'未設定')} ／ ${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</p>`:`<label>サイズ<select data-field="size" ${editable?'':'disabled'}>${options(l.sizes.map(s=>({id:s,name:s||'サイズなし'})),l.size,'選択してください')}</select></label>
     <label>新品・中古<select data-field="condition" ${editable?'':'disabled'}>${options([{id:'new',name:'新品'},{id:'used',name:'中古'}],l.condition,'選択してください')}</select></label>
     <label>保管場所<select data-field="locationId" ${editable?'':'disabled'}>${options(data.locations,l.locationId,'選択してください')}</select></label>
-    <label class="qr-work-cost" ${job.direction==='inbound'?'':'hidden'}>仕入単価（入庫時に必須・円）<input data-field="unitCost" type="number" min="0" step="1" value="${esc(l.unitCost)}" ${editable?'':'disabled'}></label>
+    <label class="qr-work-cost" ${job.direction==='inbound'?'':'hidden'}>仕入単価（入庫時に必須・円）<input data-field="unitCost" type="number" min="0" step="1" value="${esc(l.unitCost)}" ${editable?'':'disabled'}></label>`}
+    ${editable?'<button type="button" data-delete>この行を削除</button>':''}
    </article>`).join('')}</div>
    <p><strong data-total>合計 ${job.lines.reduce((n,l)=>n+l.qty,0)} 点</strong> ／ ${job.lines.length} 種類</p>
-   <div class="qr-work-actions">${editable?'<button type="button" data-save>数量・内容を保存</button>':''}
+   <div class="qr-work-actions">${editable?'<button type="button" data-save>編集した内容を保存</button>':''}
    ${job.status==='collecting'&&job.actor_id===data.actorId?'<button type="button" class="primary" data-complete>読み取り作業を完了</button>':''}
    ${!mobile&&job.status==='completed'&&data.canConfirm?'<button type="button" class="primary" data-confirm>確認して在庫に反映</button>':''}</div>
    ${job.status==='completed'?'<p>PCの「QR読み取り」でこの作業を選び、内容を確認して在庫に反映してください。</p>':''}`:'<p>まだ作業を開始していません。QRを読み取ると自動で開始します。</p>'}`;
   box.querySelector('[data-refresh]').onclick=()=>action(refresh);
   box.querySelector('[data-active]').onclick=()=>action(async()=>{await save();selected=active()?.id||null;render()});
   box.querySelector('[data-jobs]').onchange=e=>{const value=e.target.value;action(async()=>{await save();selected=value||null;render()})};
-  const total=()=>{const label=box.querySelector('[data-total]');if(label)label.textContent='合計 '+[...box.querySelectorAll('[data-field="qty"]')].reduce((n,input)=>n+(Number(input.value)||0),0)+' 点'};
+  box.querySelectorAll('[data-delete]').forEach(button=>button.onclick=()=>{const row=button.closest('[data-line]');if(!confirm('この行を読み取り一覧から削除しますか？'))return;row.dataset.deleted='1';row.hidden=true;dirty=true;total();});
+  const total=()=>{const label=box.querySelector('[data-total]');if(label)label.textContent='合計 '+[...box.querySelectorAll('[data-line]:not([data-deleted="1"]) [data-field="qty"]')].reduce((n,input)=>n+(Number(input.value)||0),0)+' 点'};
   box.querySelectorAll('[data-field], [data-direction]').forEach(input=>input.oninput=()=>{dirty=true;total();if(input.matches('[data-direction]'))box.querySelectorAll('.qr-work-cost').forEach(el=>el.hidden=input.value!=='inbound')});
   box.querySelectorAll('[data-plus],[data-minus]').forEach(button=>button.onclick=()=>{const input=button.closest('[data-line]').querySelector('[data-field="qty"]');input.value=Math.max(0,Math.min(99999,Number(input.value)+(button.hasAttribute('data-plus')?1:-1)));dirty=true;total();});
   const saveBtn=box.querySelector('[data-save]');if(saveBtn)saveBtn.onclick=()=>action(async()=>{await save();message('保存しました。在庫数量は変えていません。')});

@@ -131,6 +131,19 @@ class QrWorkTests(unittest.TestCase):
         self.assertEqual(self.call('state')['jobs'], [])
         self.assertEqual(self.qty(), 10)
 
+    def test_delete_wrong_row_and_rescan_without_changing_inventory(self):
+        j = self.scan()
+        j = self.scan(j, self.qr2)
+        body = self.edit_body(j)
+        body['lines'][1] = {'key': j['lines'][1]['key'], 'deleted': True}
+        j = self.call('edit', body)['job']
+        self.assertEqual(len(j['lines']), 1)
+        self.assertEqual(self.qty(), 10)
+        j = self.scan(j, self.qr2)
+        self.assertEqual(len(j['lines']), 2)
+        self.assertEqual(j['lines'][1]['qty'], 1)
+        self.assertEqual(self.qty(), 10)
+
     def test_old_qr_json_and_id_increment_same_line_and_mismatch_is_rejected(self):
         import qr_link_import
         import json

@@ -136,10 +136,15 @@ def edit(c, body, *, complete=False):
     if not isinstance(updates, list) or len(updates) != len(job['lines']):
         raise ValueError('作業の明細を確認してください。')
     by_key = {x.get('key'): x for x in updates if isinstance(x, dict)}
+    if len(by_key) != len(job['lines']) or set(by_key) != {x['key'] for x in job['lines']}:
+        raise ValueError('明細が変わりました。一覧を更新してください。')
+    kept = []
     for line in job['lines']:
         u = by_key.get(line['key'])
         if u is None:
             raise ValueError('明細が変わりました。一覧を更新してください。')
+        if u.get('deleted') is True:
+            continue
         line['qty'] = stock.parse_qty(u.get('qty'), allow_zero=True)
         line['size'] = str(u.get('size') or '')
         line['condition'] = stock_qr._condition_key(u.get('condition'))
@@ -147,6 +152,8 @@ def edit(c, body, *, complete=False):
         line['locationId'] = stock.resolve_active_location(c, loc)['id'] if loc else None
         cost = u.get('unitCost')
         line['unitCost'] = '' if cost in ('', None) else stock.parse_money(cost)
+        kept.append(line)
+    job['lines'] = kept
     direction = body.get('direction', job['direction'])
     if direction not in ('inbound', 'outbound'):
         raise ValueError('出庫か入庫を選んでください。')

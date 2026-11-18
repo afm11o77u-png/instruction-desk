@@ -106,6 +106,7 @@
     if(busy){box.innerHTML='<p>照合しています。在庫数量は変えていません。</p>';return}
     if(error){box.innerHTML=`<p class="notice" role="alert">${esc(error)}</p>`;return}
     if(!result){box.innerHTML='';return}
+    if(mobile&&window.QrWork){box.innerHTML='';return}
     const kind=result.qrKind==='new'?'新QR':'旧QR'
     if(!result.found){
       box.innerHTML=`<p class="notice">一致する在庫QRはありません（${esc(kind)}として照合しました）。0件を1件には決めません。</p>`
