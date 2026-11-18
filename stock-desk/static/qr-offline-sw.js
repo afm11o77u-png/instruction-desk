@@ -1,5 +1,5 @@
-const CACHE='instruction-qr-shell-20261119-offline1';
-const ASSETS=['qr-mobile.html','qr-mobile.css?v=20261119_offline1','qr_work.css?v=20261119_offline1','qr_local.js?v=20261119_offline1','qr_work.js?v=20261119_offline1','qr_read.js?v=20261119_offline1','qr-mobile.js?v=20261119_offline1','vendor/jsqr/jsQR.js'].map(p=>'/inventory/'+p);
+const CACHE='instruction-qr-shell-20261119-offline3';
+const ASSETS=['qr-mobile.html','qr-mobile.css?v=20261119_offline1','qr_work.css?v=20261119_offline3','qr_local.js?v=20261119_offline3','qr_work.js?v=20261119_offline3','qr_read.js?v=20261119_offline1','qr-mobile.js?v=20261119_offline1','vendor/jsqr/jsQR.js'].map(p=>'/inventory/'+p);
 async function prepare(){
  const responses=await Promise.all(ASSETS.map(async url=>{const r=await fetch(url,{cache:'reload'});if(!r.ok||r.redirected)throw Error('Cannot cache authenticated QR shell');return [url,r]}));
  const cache=await caches.open(CACHE);await Promise.all(responses.map(([url,r])=>cache.put(url,r)));

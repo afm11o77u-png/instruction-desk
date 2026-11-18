@@ -21,3 +21,7 @@
 .qr-work-mobile [data-delete]{width:40px;flex:none;padding:2px;margin:0;font-size:12px}
 .qr-work-mobile .qr-work-help{margin:4px 0;font-size:14px}
 .qr-work-mobile .qr-work-help summary{padding:4px 0}
+#qrWorkMessage.is-loading{padding:12px;background:#e8f2ec;border-radius:8px}
+#qrWorkMessage.is-loading::before{content:'';display:inline-block;width:18px;height:18px;margin-right:8px;vertical-align:middle;border:3px solid #aac5b3;border-top-color:#17633e;border-radius:50%;animation:qr-preparing 1s linear infinite}
+@keyframes qr-preparing{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#qrWorkMessage.is-loading::before{animation:none}}

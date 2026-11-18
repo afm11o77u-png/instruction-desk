@@ -48,9 +48,13 @@
   return {...remote,jobs,actorId:profile.id,localMode:true,preparedAt:catalog?.preparedAt||null,connected};
  }
  async function prepare(){
+  const progress=text=>window.dispatchEvent(new CustomEvent('qr-prepare-progress',{detail:text}));
+  progress('事務所のサーバーへの接続を確認しています…');
   await verify();
+  progress('QRと商品情報を読み込んでいます…');
   const catalog=await api('/api/qr-work/catalog',{});
   if(phone){
+   progress('通信なしで使えるように画面を保存しています…');
    if(!('serviceWorker' in navigator))throw Error('このブラウザでは通信なしで画面を開く準備ができません。対応するブラウザで開いてください。');
    const registration=await navigator.serviceWorker.register('/inventory/qr-offline-sw.js',{scope:'/inventory/'});
    await navigator.serviceWorker.ready;
@@ -58,9 +62,11 @@
    if(!worker)throw Error('画面の保存を確認できません。もう一度準備してください。');
    await new Promise((resolve,reject)=>{const channel=new MessageChannel();const timer=setTimeout(()=>reject(Error('画面の保存に時間がかかっています。Wi-Fiを確認して再度準備してください。')),30000);channel.port1.onmessage=e=>{clearTimeout(timer);e.data?.ok?resolve():reject(Error('画面の保存ができませんでした。もう一度準備してください。'))};worker.postMessage({type:'prepare'},[channel.port2])});
   }
+  progress(`商品情報 ${catalog.entries.length}件を端末に保存しています…`);
   await write('catalog:'+profile.id,catalog);
   // Preserve pre-offline jobs without submitting them. The same UUID and source
   // version prevent two devices importing the same old work as separate receipts.
+  progress('以前の途中作業を確認しています…');
   const old=await api('/api/qr-work/state',{});
   const source=old.jobs.find(j=>j.status==='collecting'&&String(j.actor_id)===profile.id);
   let inherited=false;

@@ -45,6 +45,7 @@
    <p>${mobile?'カメラONで連続読み取りできます。同じQRは一度画面から外して、再び映すと1枚追加します。':'カメラは1回ごとに停止します。続ける場合は「カメラで読む」を押してください。'}</p>
    ${mobile?'</details>':''}
    <p id="qrWorkMessage" role="status"></p>
+   <p class="notice" role="note"><strong>新しいQRを追加したときは、倉庫へ行く前に、事務所のWi-Fiで「倉庫用の準備」を押して商品情報を更新してください。</strong> 在庫数量が増減しただけなら更新は不要です。</p>
    <details class="qr-work-help"><summary>倉庫へ行く前の準備</summary><p>${data.preparedAt?'商品情報の準備日時：'+esc(data.preparedAt):'未準備：事務所のWi-Fiで下のボタンを押してください。'}</p><button type="button" data-prepare>倉庫用の準備（事務所Wi-Fi）</button><p>同じ接続先・同じブラウザで開いてください。初回は準備後に一度ページを開き直し、通信を切って動作を確認してください。</p></details>
    ${mobile?'<details class="qr-work-help"><summary>保存した作業・一覧更新</summary>':''}
    <div class="qr-work-actions"><button type="button" data-refresh>一覧を更新</button><button type="button" data-active>読み取り中の作業へ</button></div>
@@ -69,7 +70,16 @@
    ${job._local&&job.status==='completed'?'<button type="button" class="primary" data-submit>事務所へ送信</button>':''}
    ${!job._local&&!mobile&&job.status==='completed'&&data.canConfirm?'<button type="button" class="primary" data-confirm>確認して在庫に反映</button>':''}</div>
    ${job._local&&job.status==='completed'?'<p>この作業は端末内に保存済み・未送信です。事務所のWi-Fiにつないで「事務所へ送信」を押してください。</p>':job.status==='completed'?'<p>受信した作業です。確認・編集後に「在庫に反映」を押すと、編集内容も保存して反映します。</p>':''}`:'<p>まだ作業を開始していません。QRを読み取ると自動で開始します。</p>'}`;
-  box.querySelector('[data-prepare]').onclick=()=>action(async()=>{const result=await request('prepare');data=await request('state');render();message(result.message)});
+  box.querySelector('[data-prepare]').onclick=()=>action(async()=>{
+   const button=box.querySelector('[data-prepare]'),started=Date.now();
+   let stage='倉庫用の準備を開始しています…';
+   const paint=()=>{message(stage+'\n経過 '+Math.floor((Date.now()-started)/1000)+'秒。画面を閉じずにお待ちください。');box.querySelector('#qrWorkMessage')?.classList.add('is-loading');};
+   const progress=e=>{stage=e.detail;paint()};
+   button.textContent='準備中…';box.setAttribute('aria-busy','true');
+   window.addEventListener('qr-prepare-progress',progress);paint();const timer=setInterval(paint,1000);
+   try{const result=await request('prepare');stage='準備した情報を確認しています…';paint();data=await request('state');render();message(result.message)}
+   finally{clearInterval(timer);window.removeEventListener('qr-prepare-progress',progress);box.setAttribute('aria-busy','false');box.querySelector('#qrWorkMessage')?.classList.remove('is-loading');const currentButton=box.querySelector('[data-prepare]');if(currentButton)currentButton.textContent='倉庫用の準備（事務所Wi-Fi）';}
+  });
   const submit=box.querySelector('[data-submit]');if(submit)submit.onclick=()=>action(async()=>{message('事務所に送信しています。受信を確認するまで閉じないでください。');put((await request('submit',{id:job.id})).job);render();message('送信済みです。PCの受信一覧で確認できます。');});
   box.querySelector('[data-refresh]').onclick=()=>action(refresh);
   box.querySelector('[data-active]').onclick=()=>action(async()=>{await save();selected=active()?.id||null;render()});

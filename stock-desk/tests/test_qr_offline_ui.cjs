@@ -3,7 +3,7 @@ const http=require('http'),fs=require('fs'),path=require('path'),assert=require(
 const {chromium}=require(process.env.QR_TEST_PLAYWRIGHT||'playwright');
 const folder=path.join(__dirname,'../static');
 (async()=>{
- let received=[],stock=20,uploads=0,loseReceipt=false,denied=false;
+ let received=[],stock=20,uploads=0,loseReceipt=false,denied=false,catalogRelease=null;
  const legacyId=require('crypto').randomUUID();
  const target={customerProductId:1,customerName:'検証顧客',code:'OFF-1',productName:'白衣',size:'M',condition:'new',sizes:['M'],unitCost:'',color:'白',spec:'標準',lots:[],locationId:1};
  const server=http.createServer(async(req,res)=>{
@@ -12,7 +12,7 @@ const folder=path.join(__dirname,'../static');
   if(url.pathname.startsWith('/inventory/api/qr-work/')){
    if(req.headers['x-stock-request']!=='1')return json({error:'header'},400);
    let raw='';for await(const chunk of req)raw+=chunk;const b=JSON.parse(raw||'{}'),action=url.pathname.split('/').pop();
-   if(action==='catalog')return json({entries:[{qr:'offline-qr',kind:'legacy',customer:'',maker:'',target}],preparedAt:'2026-11-19'});
+   if(action==='catalog'){await new Promise(resolve=>catalogRelease=resolve);return json({entries:[{qr:'offline-qr',kind:'legacy',customer:'',maker:'',target}],preparedAt:'2026-11-19'});}
    if(action==='state')return json({jobs:b.inbox?received:[...received,{id:legacyId,actor_id:'12',actor_name:'検証担当',version:1,status:'collecting',direction:'outbound',started_at:'2026-11-19T00:00:00Z',lines:[{...target,qty:0,scanCount:1,key:require('crypto').createHash('sha256').update('legacy:offline-qr').digest('hex')}]}],locations:[{id:1,name:'検証倉庫'}],actorId:'1',canConfirm:true});
    if(action==='submit'){
     uploads++;if(b.id===legacyId)assert.equal(b.sourceVersion,1);
@@ -42,7 +42,13 @@ const folder=path.join(__dirname,'../static');
   await office.addCookies([{name:'office',value:'1',url:base}]);
   await page.goto(base+'/inventory/qr-mobile.html');await page.locator('[data-prepare]').waitFor({state:'attached'});
   await page.locator('summary').filter({hasText:'倉庫へ行く前の準備'}).click();await page.locator('[data-prepare]').click();
+  await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.classList.contains('is-loading'));
+  assert.equal(await page.locator('[data-prepare]').innerText(),'準備中…');
+  assert.equal(await page.locator('[data-prepare]').isDisabled(),true);
+  await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.textContent.includes('QRと商品情報'));
+  assert(catalogRelease);catalogRelease();
   await page.waitForFunction(()=>document.querySelector('#qrWorkMessage')?.textContent.includes('準備ができました'));
+  assert.equal(await page.locator('#qrWorkMessage').getAttribute('class'),null);
   await page.reload();await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
   await context.setOffline(true);await page.reload();await page.locator('#qrCamToggle').waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-jobs]'));
