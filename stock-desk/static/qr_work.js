@@ -1,6 +1,6 @@
 /* Shared phone/PC collection workflow. Recording never changes stock. */
 (function(){
- let data=null,selected=null,mobile=false,busy=false,dirty=false,pending=null,epoch=0,completing=false;
+ let data=null,selected=null,mobile=false,busy=false,dirty=false,pending=null,epoch=0,completing=false,pickingLists=null,pickingCompare=null;
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  const id=()=>crypto.randomUUID();
  const idleWaiters=[];
@@ -38,6 +38,53 @@
   const job=current(),collector=mobile||job?._local,editable=job&&(job._local?job.status==='collecting':(job.status==='collecting'?job.actor_id===data.actorId:!mobile&&job.status==='completed'&&data.canConfirm));
   const visible=data.jobs.filter(j=>!mobile||j.actor_id===data.actorId);
   box.classList.toggle('qr-work-mobile',mobile);
+  const locName=id=>{const hit=(data.locations||[]).find(x=>String(x.id)===String(id));return hit?hit.name:''};
+  const condName=c=>c==='new'?'新品':c==='used'?'中古':'未選択';
+  const pcRowHtml=l=>{
+   const place=locName(l.locationId);
+   const missing=[];
+   if(!l.unresolved){
+    if(!l.size)missing.push('サイズ未選択');
+    if(!l.condition)missing.push('状態未選択');
+    if(!place)missing.push('場所未選択');
+   }
+   return `<article class="qr-work-pc-row" data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}">
+    <div class="qr-work-pc-summary">
+     <div class="qr-work-pc-title">
+      <strong>${l.unresolved?'商品未照合・集計対象外':esc(l.customerName)+' ／ '+esc(l.code)+' '+esc(l.productName)}</strong>
+      <span class="qr-work-pc-meta" data-meta>${esc(l.size||'サイズ未設定')} ／ ${esc(condName(l.condition))} ／ ${esc(place||'場所未設定')}</span>
+      ${missing.length?`<span class="qr-work-pc-warn" data-warn>${esc(missing.join('・'))}</span>`:'<span class="qr-work-pc-warn" data-warn hidden></span>'}
+     </div>
+     <div class="qr-work-pc-ctrl">
+      <div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" aria-label="反映する数量" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1増やす">＋</button></div>
+      <button type="button" class="qr-detail-btn" data-toggle-detail aria-expanded="false">詳細</button>
+      ${editable?'<button type="button" data-delete>削除</button>':''}
+     </div>
+    </div>
+    <div class="qr-work-detail" hidden>
+     <p>${esc(l.color)} ／ ${esc(l.spec)} ／ QR読み取り ${l.scanCount} 回</p>
+     ${collector?`<p>サイズ：${esc(l.size||'未設定')} ／ ${esc(condName(l.condition))}</p>`:`<label>サイズ<select data-field="size" ${editable&&!l.unresolved?'':'disabled'}>${options(l.sizes.map(s=>({id:s,name:s||'サイズなし'})),l.size,'選択してください')}</select></label>
+     <label>新品・中古<select data-field="condition" ${editable&&!l.unresolved?'':'disabled'}>${options([{id:'new',name:'新品'},{id:'used',name:'中古'}],l.condition,'選択してください')}</select></label>
+     <label>保管場所<select data-field="locationId" ${editable&&!l.unresolved?'':'disabled'}>${options(data.locations,l.locationId,'選択してください')}</select></label>
+     <label class="qr-work-cost" ${job.direction==='inbound'?'':'hidden'}>仕入単価（入庫時に必須・円）<input data-field="unitCost" type="number" min="0" step="1" value="${esc(l.unitCost)}" ${editable&&!l.unresolved?'':'disabled'}></label>`}
+    </div>
+   </article>`;
+  };
+  const cmpHtml=()=>{
+   if(mobile||collector||!job)return '';
+   const opts=(pickingLists||[]).map(p=>`<option value="${esc(p.id)}" ${pickingCompare&&Number(pickingCompare.pickingListId)===Number(p.id)?'selected':''}>${esc(p.title)}（${esc(p.date)}・${esc(p.status)}・${p.rowCount}行）</option>`).join('');
+   const cRes=pickingCompare&&pickingCompare.jobId===job.id?pickingCompare.data:null;
+   const cRows=cRes?(cRes.items||[]).map(it=>`<tr class="qr-work-cmp-${esc(it.status)}"><td>${esc(it.customer)}</td><td>${esc(it.sku)} ${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.conditionLabel)}</td><td>${esc(it.stockOriginal||'—')}</td><td style="text-align:right">${it.expectedQty}</td><td style="text-align:right">${it.scannedQty}</td><td>${esc(it.statusLabel)}</td></tr>`).join(''):'';
+   return `<section class="qr-work-compare">
+    <h4 style="margin:0 0 8px 0">指示書デスクのピッキングリストと照合</h4>
+    <div class="qr-work-compare-bar">
+     <select id="qrPickingListSelect"><option value="">ピッキングリストを選択してください</option>${opts}</select>
+     <button type="button" id="qrPickingCompareBtn">照合する</button>
+    </div>
+    ${cRes?`<p style="margin:10px 0 6px 0"><strong>${esc(cRes.title)}</strong>：揃っている <strong>${cRes.summary.ok}</strong>件 ／ 不足 <strong style="color:#cf1322">${cRes.summary.short}</strong>件 ／ 多い <strong style="color:#d46b08">${cRes.summary.over}</strong>件 ／ リスト外 <strong>${cRes.summary.extra}</strong>件</p>
+    <div class="tablewrap"><table class="data" style="width:100%;font-size:13px"><thead><tr><th>顧客</th><th>品番・商品名</th><th>サイズ</th><th>状態</th><th>区分</th><th style="text-align:right">予定数</th><th style="text-align:right">読取数</th><th>判定</th></tr></thead><tbody>${cRows||'<tr><td colspan="8">対象行がありません</td></tr>'}</tbody></table></div>`:''}
+   </section>`;
+  };
   box.innerHTML=`<h2>${mobile?'読み取った制服':'倉庫の読み取り作業'}</h2>
    ${mobile?'<details class="qr-work-help"><summary>操作方法</summary>':''}
    <p>読み取り・枚数編集 → 端末内で作業完了 → 事務所Wi-Fiで送信 → PC担当者が在庫に反映</p>
@@ -54,16 +101,8 @@
    ${job?`<h3>${status(job)}</h3>${mobile?'<details class="qr-work-help"><summary>作業日時・担当</summary>':''}<p>担当：${esc(job.actor_name)}<br>開始：${esc(job.started_at)}${job.completed_at?'<br>完了：'+esc(job.completed_at):''}${job.confirmed_at?'<br>在庫反映：'+esc(job.confirmed_at)+' ／ '+esc(job.confirmed_by):''}</p>${mobile?'</details>':''}
    ${!collector?`<label>在庫に反映する操作<select data-direction ${editable?'':'disabled'}><option value="outbound" ${job.direction==='outbound'?'selected':''}>出庫（在庫を減らす）</option><option value="inbound" ${job.direction==='inbound'?'selected':''}>入庫（在庫を増やす）</option></select></label>
    <p>数量は＋・－ボタンまたは直接入力で変更できます。0は反映対象外です。サイズ・新品中古・場所が未選択の場合は確認して選んでください。出庫は選んだ場所の在庫から古い入荷順に引き当てます。</p>`:'<p>枚数を確認してください。間違えて読んだ行は削除できます。</p>'}
-   <div class="qr-work-lines">${job.lines.map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${l.unresolved?'商品未照合・集計対象外':esc(l.code)+' '+esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:`<article data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><strong>${l.unresolved?'商品未照合・集計対象外':esc(l.customerName)+' ／ '+esc(l.code)+' '+esc(l.productName)}</strong>
-    <p>${esc(l.color)} ／ ${esc(l.spec)}</p>
-    <p>QR読み取り ${l.scanCount} 回</p>
-    <label>${collector?'枚数':'反映する数量'}<div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1増やす">＋</button></div></label>
-    ${collector?`<p>サイズ：${esc(l.size||'未設定')} ／ ${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</p>`:`<label>サイズ<select data-field="size" ${editable&&!l.unresolved?'':'disabled'}>${options(l.sizes.map(s=>({id:s,name:s||'サイズなし'})),l.size,'選択してください')}</select></label>
-    <label>新品・中古<select data-field="condition" ${editable&&!l.unresolved?'':'disabled'}>${options([{id:'new',name:'新品'},{id:'used',name:'中古'}],l.condition,'選択してください')}</select></label>
-    <label>保管場所<select data-field="locationId" ${editable&&!l.unresolved?'':'disabled'}>${options(data.locations,l.locationId,'選択してください')}</select></label>
-    <label class="qr-work-cost" ${job.direction==='inbound'?'':'hidden'}>仕入単価（入庫時に必須・円）<input data-field="unitCost" type="number" min="0" step="1" value="${esc(l.unitCost)}" ${editable&&!l.unresolved?'':'disabled'}></label>`}
-    ${editable?'<button type="button" data-delete>この行を削除</button>':''}
-   </article>`).join('')}</div>
+   <div class="qr-work-lines">${job.lines.map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${l.unresolved?'商品未照合・集計対象外':esc(l.code)+' '+esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:pcRowHtml(l)).join('')}</div>
+   ${cmpHtml()}
    ${job.lines.some(l=>l.unresolved)?'<p role="alert">未照合の行は集計対象外です。準備を更新して照合するか、その行を削除してください。</p>':''}
    <p><strong data-total>合計 ${job.lines.reduce((n,l)=>n+(l.unresolved?0:l.qty),0)} 点</strong> ／ ${job.lines.filter(l=>!l.unresolved).length} 種類</p>
    <div class="qr-work-actions">
@@ -88,8 +127,38 @@
   box.querySelector('[data-active]').onclick=()=>action(async()=>{await save();selected=active()?.id||null;render()});
   box.querySelector('[data-jobs]').onchange=e=>{const value=e.target.value;action(async()=>{await save();selected=value||null;render()})};
   box.querySelectorAll('[data-delete]').forEach(button=>button.onclick=()=>{const row=button.closest('[data-line]');if(!confirm('この行を読み取り一覧から削除しますか？'))return;row.dataset.deleted='1';row.hidden=true;dirty=true;total();});
+  const syncRowMeta=row=>{
+   if(!row||row.dataset.unresolved==='1')return;
+   const val=name=>row.querySelector(`[data-field="${name}"]`)?.value||'';
+   const sz=val('size'),cond=val('condition'),locId=val('locationId'),place=locName(locId);
+   const meta=row.querySelector('[data-meta]');
+   if(meta)meta.textContent=`${sz||'サイズ未設定'} ／ ${condName(cond)} ／ ${place||'場所未設定'}`;
+   const warn=row.querySelector('[data-warn]');
+   if(warn){
+    const miss=[];if(!sz)miss.push('サイズ未選択');if(!cond)miss.push('状態未選択');if(!place)miss.push('場所未選択');
+    warn.textContent=miss.join('・');warn.hidden=!miss.length;
+   }
+  };
+  box.querySelectorAll('[data-toggle-detail]').forEach(button=>button.onclick=()=>{
+   const row=button.closest('[data-line]');const det=row&&row.querySelector('.qr-work-detail');if(!det)return;
+   const open=det.hidden;det.hidden=!open;button.setAttribute('aria-expanded',open?'true':'false');button.textContent=open?'閉じる':'詳細';
+  });
+  const cmpBtn=box.querySelector('#qrPickingCompareBtn');
+  if(cmpBtn)cmpBtn.onclick=()=>action(async()=>{
+   const sel=box.querySelector('#qrPickingListSelect');const plId=Number(sel?.value||0);
+   if(!plId){message('照合するピッキングリストを選んでください。',true);return}
+   const cur=current();if(!cur)return;
+   const editedLines=cur.lines.map(l=>{
+    const row=[...box.querySelectorAll('[data-line]')].find(r=>r.dataset.line===l.key);
+    if(!row||row.dataset.deleted==='1')return {...l,deleted:row?.dataset.deleted==='1'};
+    const val=n=>row.querySelector(`[data-field="${n}"]`)?.value;
+    return {...l,qty:val('qty')??l.qty,size:val('size')??l.size,condition:val('condition')??l.condition};
+   });
+   const res=await api('/api/qr-work/picking-compare',{id:cur.id,pickingListId:plId,lines:editedLines});
+   pickingCompare={jobId:cur.id,pickingListId:plId,data:res};render();
+  });
   const total=()=>{const label=box.querySelector('[data-total]');if(label)label.textContent='合計 '+[...box.querySelectorAll('[data-line]:not([data-deleted="1"]):not([data-unresolved="1"]) [data-field="qty"]')].reduce((n,input)=>n+(Number(input.value)||0),0)+' 点'};
-  box.querySelectorAll('[data-field], [data-direction]').forEach(input=>input.oninput=()=>{dirty=true;total();if(input.matches('[data-direction]'))box.querySelectorAll('.qr-work-cost').forEach(el=>el.hidden=input.value!=='inbound')});
+  box.querySelectorAll('[data-field], [data-direction]').forEach(input=>input.oninput=()=>{dirty=true;total();syncRowMeta(input.closest('[data-line]'));if(input.matches('[data-direction]'))box.querySelectorAll('.qr-work-cost').forEach(el=>el.hidden=input.value!=='inbound')});
   box.querySelectorAll('[data-plus],[data-minus]').forEach(button=>button.onclick=()=>{const input=button.closest('[data-line]').querySelector('[data-field="qty"]');input.value=Math.max(0,Math.min(99999,Number(input.value)+(button.hasAttribute('data-plus')?1:-1)));dirty=true;total();});
   const complete=box.querySelector('[data-complete]');if(complete)complete.onclick=async()=>{
    if(completing)return;
@@ -110,7 +179,7 @@
   mobile=phone;data=null;selected=null;dirty=false;pending=null;const run=++epoch;
   const parent=document.querySelector('.qr-read-page');if(!parent)return;
   const box=document.createElement('section');box.id='qrWork';box.className='qr-work';box.innerHTML='<h2>倉庫の読み取り作業</h2><p id="qrWorkMessage">保存した作業を読み込み中…</p>';if(mobile)parent.insertBefore(box,parent.querySelector('details'));else parent.append(box);
-  try{if(window.QrLocal)await QrLocal.init(null,phone);const loaded=await request('state');if(epoch!==run||!root())return;data=loaded;selected=active()?.id||null;render();if(window.QrText)await QrText.mount(phone)}catch(e){message(e.message+' 一度ページを開き直してください。',true)}
+  try{if(window.QrLocal)await QrLocal.init(null,phone);const loaded=await request('state');if(epoch!==run||!root())return;data=loaded;selected=active()?.id||null;if(!phone){try{pickingLists=(await api('/api/qr-work/picking-lists',{})).lists||[]}catch(_){pickingLists=[]}}render();if(window.QrText)await QrText.mount(phone)}catch(e){message(e.message+' 一度ページを開き直してください。',true)}
  }
  async function record(raw){
   if(!root()||!data)throw Error('作業一覧を読み込めませんでした。ページを開き直してください。');

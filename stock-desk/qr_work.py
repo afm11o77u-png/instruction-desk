@@ -371,6 +371,169 @@ def confirm(c, body):
     return {'job': _job(c, body)}
 
 
+def _instructions_db(db_path):
+    from pathlib import Path
+    import sqlite3
+    p = Path(db_path).with_name('instructions.sqlite3')
+    if not p.is_file():
+        return None
+    conn = sqlite3.connect(f'file:{p}?mode=ro', uri=True, timeout=5)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _norm_key(value):
+    import re
+    import unicodedata
+    return re.sub(r'[\s\u3000]+', '', unicodedata.normalize('NFKC', str(value or ''))).casefold()
+
+
+def _cond_norm(value):
+    t = str(value or '').strip()
+    if t in ('new', '新品'):
+        return 'new'
+    if t in ('used', '中古'):
+        return 'used'
+    return ''
+
+
+def picking_lists(db_path):
+    conn = _instructions_db(db_path)
+    if not conn:
+        return {'lists': [], 'available': False}
+    try:
+        has = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='picking_lists'").fetchone()
+        if not has:
+            return {'lists': [], 'available': False}
+        out = []
+        for r in conn.execute('SELECT id, payload FROM picking_lists ORDER BY id DESC LIMIT 30'):
+            try:
+                pl = json.loads(r['payload'] or '{}')
+            except (TypeError, ValueError):
+                continue
+            rows = pl.get('rows') or []
+            out.append({
+                'id': int(r['id']),
+                'title': pl.get('title') or f"ピッキングリスト #{r['id']}",
+                'date': pl.get('date') or '',
+                'status': pl.get('status') or '',
+                'rowCount': len(rows),
+            })
+        return {'lists': out, 'available': True}
+    finally:
+        conn.close()
+
+
+def picking_compare(db_path, c, body):
+    pl_id = int(body.get('pickingListId') or 0)
+    if not pl_id:
+        raise ValueError('ピッキングリストを選んでください。')
+    conn = _instructions_db(db_path)
+    if not conn:
+        raise ValueError('指示書デスクのデータ（instructions.sqlite3）が見つかりません。')
+    try:
+        row = conn.execute('SELECT id, payload FROM picking_lists WHERE id=?', (pl_id,)).fetchone()
+        if not row:
+            raise ValueError('選択したピッキングリストが見つかりません。')
+        pl = json.loads(row['payload'] or '{}')
+    finally:
+        conn.close()
+
+    # 1. Aggregate expected rows from picking list
+    expected = {}
+    for r in (pl.get('rows') or []):
+        qty = int(r.get('quantity') or 0)
+        if qty <= 0:
+            continue
+        cust = str(r.get('customer') or '')
+        sku = str(r.get('sku') or '')
+        name = str(r.get('name') or '')
+        size = str(r.get('size') or '')
+        cond = _cond_norm(r.get('condition'))
+        key = (_norm_key(cust), _norm_key(sku) or _norm_key(name), _norm_key(size), cond)
+        if key not in expected:
+            expected[key] = {
+                'customer': cust, 'sku': sku, 'name': name, 'size': size,
+                'condition': cond, 'conditionLabel': r.get('condition') or '未指定',
+                'stockOriginal': str(r.get('stockOriginal') or ''),
+                'expectedQty': 0, 'scannedQty': 0,
+            }
+        expected[key]['expectedQty'] += qty
+
+    # 2. Gather scanned lines (either from body['lines'] or DB job)
+    raw_lines = body.get('lines')
+    if not isinstance(raw_lines, list):
+        raw_lines = _job(c, body).get('lines') or []
+
+    extras = {}
+    for l in raw_lines:
+        if l.get('deleted') or l.get('unresolved'):
+            continue
+        qty = int(l.get('qty') or 0)
+        if qty <= 0:
+            continue
+        cust = str(l.get('customerName') or '')
+        sku = str(l.get('code') or '')
+        name = str(l.get('productName') or '')
+        size = str(l.get('size') or '')
+        cond = _cond_norm(l.get('condition'))
+        nk_cust, nk_sku, nk_name, nk_size = _norm_key(cust), _norm_key(sku), _norm_key(name), _norm_key(size)
+
+        # Try exact (cust, sku, size, cond), then cond='', then fallback without cust if unique sku+size
+        hit_key = None
+        for k_try in (
+            (nk_cust, nk_sku or nk_name, nk_size, cond),
+            (nk_cust, nk_sku or nk_name, nk_size, ''),
+        ):
+            if k_try in expected:
+                hit_key = k_try
+                break
+        if hit_key is None and nk_sku:
+            cands = [k for k in expected if k[1] == nk_sku and k[2] == nk_size and k[3] in (cond, '')]
+            if len(cands) == 1:
+                hit_key = cands[0]
+        if hit_key is not None:
+            expected[hit_key]['scannedQty'] += qty
+        else:
+            ek = (nk_cust, nk_sku or nk_name, nk_size, cond)
+            if ek not in extras:
+                extras[ek] = {
+                    'customer': cust, 'sku': sku, 'name': name, 'size': size,
+                    'condition': cond,
+                    'conditionLabel': '新品' if cond == 'new' else '中古' if cond == 'used' else '未設定',
+                    'stockOriginal': '', 'expectedQty': 0, 'scannedQty': 0,
+                }
+            extras[ek]['scannedQty'] += qty
+
+    items = []
+    summary = {'ok': 0, 'short': 0, 'over': 0, 'extra': 0}
+    for entry in list(expected.values()) + list(extras.values()):
+        diff = entry['scannedQty'] - entry['expectedQty']
+        if entry['expectedQty'] == 0:
+            st = 'extra'
+            st_label = 'リスト外'
+        elif diff == 0:
+            st = 'ok'
+            st_label = '揃っている'
+        elif diff < 0:
+            st = 'short'
+            st_label = f'不足 ({diff})'
+        else:
+            st = 'over'
+            st_label = f'多い (+{diff})'
+        summary[st] += 1
+        items.append({**entry, 'diff': diff, 'status': st, 'statusLabel': st_label})
+
+    order_rank = {'short': 0, 'over': 1, 'extra': 2, 'ok': 3}
+    items.sort(key=lambda x: (order_rank.get(x['status'], 9), x['customer'], x['sku'], x['size']))
+    return {
+        'pickingListId': pl_id,
+        'title': pl.get('title') or f'ピッキングリスト #{pl_id}',
+        'summary': summary,
+        'items': items,
+    }
+
+
 def dispatch(db_path, action, body):
     try:
         with closing(stock.connect(db_path)) as c, c:
@@ -391,6 +554,10 @@ def dispatch(db_path, action, body):
                 result = edit(c, body, complete=action == 'complete')
             elif action == 'confirm':
                 result = confirm(c, body)
+            elif action == 'picking-lists':
+                result = picking_lists(db_path)
+            elif action == 'picking-compare':
+                result = picking_compare(db_path, c, body)
             else:
                 raise ValueError('操作が見つかりません。')
         return 200, result
