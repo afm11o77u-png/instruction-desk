@@ -667,6 +667,10 @@ function saveSetupTab(tab){
 }
 function applySectionState(section,setupTab){
   state.section=normalizeSection(section)
+  state.stockLotLimit=200
+  state.stockGroupLimit=0
+  state.productLimit=200
+  state.openingLimit=200
   if(state.section==='list'){
     state.tab='list'
     state.mode='stock'
