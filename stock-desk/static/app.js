@@ -1,5 +1,5 @@
 const $=(s,r=document)=>r.querySelector(s)
-const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',productCategoryFilter:'',productSort:'',data:null,stock:null,openings:null,stockLotLimit:200,filters:{group:'lot',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
+const state={section:'list',setupTab:'customers',mode:'stock',tab:'list',q:'',openingListQ:'',moveQ:'',moveMode:'in',moveTargets:null,moveDraft:{},moveDirty:false,period:{from:'',to:'',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',group:'detail'},periodResult:null,history:{from:'',to:'',customerId:'',productId:'',kind:'',condition:'',locationId:'',page:1,pageSize:50},historyResult:null,poQ:'',poStatus:'',poList:null,stopped:false,productSupplierId:'',productCategoryFilter:'',productSort:'',productLimit:200,openingLimit:200,data:null,stock:null,openings:null,stockLotLimit:200,filters:{group:'lot',customerId:'',productId:'',size:'',spec:'',locationId:'',condition:'',stockFilter:''},token:'',opening:{condition:'new'},stockRegisterKind:'opening',openingDirty:false,openingHandleForm:null,editDirty:false,legacyCsv:null}
 const CONDITION_OPTS=[['new','新品'],['used','中古']]
 function conditionLabel(code){return code==='used'?'中古':code==='new'?'新品':(code?'未設定':'新品')}
 function conditionQtyText(r){
@@ -1208,6 +1208,17 @@ function productMatchesSearch(row, terms){
   ].map(normalizeProductSearch)
   return terms.every(term=>fields.some(field=>field.includes(term)))
 }
+function listPagerHtml(shown,total,step=200){
+  if(!total||shown>=total)return total?`<p class="excelhint">${num(total)}件を表示中</p>`:''
+  const next=Math.min(step,total-shown)
+  return `<div class="bar list-pager"><span class="excelhint">${num(total)}件中 先頭 ${num(shown)}件を表示中</span><button type="button" class="quiet" data-pager-more>さらに${num(next)}件表示</button><button type="button" class="quiet" data-pager-all>すべて表示</button></div>`
+}
+function bindListPager(root,getLimit,setLimit,step=200){
+  const more=root&&root.querySelector('[data-pager-more]')
+  const all=root&&root.querySelector('[data-pager-all]')
+  if(more)more.onclick=()=>{setLimit(getLimit()+step);paint()}
+  if(all)all.onclick=()=>{setLimit(Number.MAX_SAFE_INTEGER);paint()}
+}
 function products(){
   const supplierId=resolveProductSupplierFilter()
   const categoryFilter=resolveProductCategoryFilter()
@@ -1223,42 +1234,51 @@ function products(){
     if(!productMatchesCategoryFilter(r,categoryFilter))return false
     return productMatchesSearch(r,terms)
   }),sortKey)
+  const limit=state.productLimit||200
+  const visibleRows=rows.slice(0,limit)
   $('#main').innerHTML=`<section class="panel">${listNote('商品一覧の注意','通常品番は1品番=1商品です（別注・不明・品番なしは例外）。商品名や仕入先が違っても同じ通常品番で新規は作れません。顧客ごとの加工は取扱で区別します。仕入先・カテゴリ（制服／部品・資材／加工サービス）で絞り込めます。加工サービスは衣服在庫数量の対象外です。統合済みは「停止も表示」で統合先を追跡できます。')}${bar('品番・商品名・顧客',productSupplierControl(supplierId)+productCategoryControl(categoryFilter)+productSortControl(),'新しく登録','products')}
+    ${listPagerHtml(visibleRows.length,rows.length)}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table class="products-list"><thead><tr><th>No.</th><th>カテゴリ</th><th>商品</th><th>取扱</th><th>サイズ</th><th>開く</th></tr></thead><tbody>
-    ${rows.map(r=>{
+    ${visibleRows.map(r=>{
       const makerBit=r.makerCode&&r.makerCode!==r.code?` <span class="sub">メーカー ${esc(r.makerCode)}</span>`:''
       const subs=(r.subSuppliers||[]).map(s=>s.name).filter(Boolean)
       const subLine=subs.length?` / サブ: ${esc(subs.join('、'))}`:''
       const merged=r.mergedIntoId?`<span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''
       return `<tr class="${r.mergedIntoId?'is-merged':''}"><td class="prod-id" title="内部ID ${r.id}">${esc(r.displayNo||String(r.id))}</td><td class="prod-cat">${esc(r.category||'—')}</td><td class="prod-name"><span class="dm-primary">${esc(productListTitle(r))}</span>${makerBit} ${r.active?'':'<span class="badge stop">停止</span>'}${merged}${codeNeedsBadge(r)}<span class="sub dm-secondary">通常の仕入先: ${esc(r.supplierName)||'未設定'}${subLine}</span></td><td class="prod-handles">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}${l.isStandard?'（標準）':''}${l.active?'':' 停止'}`).join('<br>')||'未設定'}</td><td class="prod-sizes">${r.sizes.map(esc).join('、')}</td><td class="prod-act">${r.mergedIntoId?'—':`${stockOpenBtn(r.id)}<button type="button" class="quiet prod-price" data-price-id="${r.id}">単価</button>`}</td></tr>`
     }).join('')||'<tr><td colspan="6">該当する商品はありません。</td></tr>'}
-  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
+    ${listPagerHtml(visibleRows.length,rows.length)}</section>`
   const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=rows.length?rows.map(r=>{
+  const mode=typeof DisplayMode!=='undefined'?DisplayMode.get(stockScreenId('products')):'standard'
+  if(grid&&mode==='grid')grid.innerHTML=visibleRows.length?visibleRows.map(r=>{
     const maker=r.makerCode&&r.makerCode!==r.code?`　メーカー ${esc(r.makerCode)}`:''
     return `<article class="dm-card"><div class="dm-primary">${esc(productListTitle(r))}${r.active?'':' <span class="badge stop">停止</span>'}${r.mergedIntoId?` <span class="badge merge">統合済 → ${r.mergedIntoId}</span>`:''}${codeNeedsBadge(r)}</div><div class="dm-secondary">商品ID ${r.id}　仕入先 ${esc(r.supplierName)||'未設定'}${(r.subSuppliers||[]).length?`　サブ ${(r.subSuppliers||[]).map(s=>esc(s.name)).join('、')}`:''}${r.category?`　${esc(r.category)}`:''}${maker}</div><div class="dm-secondary">${r.links.map(l=>`${esc(l.customerName)} / ${esc(specLabel(l.embroidery))}${procNames(l)}`).join(' · ')||'取扱未設定'}</div><div class="dm-meta"><span>${r.sizes.map(esc).join('、')||'サイズ未設定'}</span></div><div class="dm-actions">${r.mergedIntoId?'':stockOpenBtn(r.id)}</div></article>`
   }).join(''):'<div class="dm-empty">該当する商品はありません。</div>'
   bindList(rows.filter(r=>!r.mergedIntoId),'商品',productForm,body=>api('/api/products',body),'products')
+  document.querySelectorAll('#main .list-pager').forEach(p=>bindListPager(p,()=>state.productLimit||200,v=>{state.productLimit=v}))
   document.querySelectorAll('#main [data-price-id]').forEach(b=>{
     b.onclick=()=>{
-      const p=rows.find(r=>r.id===Number(b.dataset.priceId))
+      const p=visibleRows.find(r=>r.id===Number(b.dataset.priceId))
       if(p&&typeof CurrentPrice!=='undefined')CurrentPrice.openProductView(p)
     }
   })
   const supplierSelect=$('#productSupplier')
   if(supplierSelect)supplierSelect.onchange=()=>{
     state.productSupplierId=supplierSelect.value
+    state.productLimit=200
     saveProductSupplierFilter(state.productSupplierId)
     paint()
   }
   const categorySelect=$('#productCategory')
   if(categorySelect)categorySelect.onchange=()=>{
+    state.productLimit=200
     saveProductCategoryFilter(categorySelect.value)
     paint()
   }
   const sortSelect=$('#productSort')
   if(sortSelect)sortSelect.onchange=()=>{
     state.productSort=sortSelect.value
+    state.productLimit=200
     saveProductSort(state.productSort)
     paint()
   }
@@ -1860,6 +1880,8 @@ function opening(){
   const all=(state.openings&&state.openings.entries)||[]
   const q=state.openingListQ||''
   const entries=typeof filterOpeningListEntries==='function'?filterOpeningListEntries(all,q):all
+  const limit=state.openingLimit||200
+  const visibleEntries=entries.slice(0,limit)
   const emptyMsg=all.length&&!entries.length?'該当する初期在庫はありません':'登録された初期在庫はまだありません。'
   const countLabel=q.trim()?`${entries.length} / ${all.length}件`:`${all.length}件`
   $('#main').innerHTML=`<section class="panel">
@@ -1871,8 +1893,9 @@ function opening(){
     </div>
     ${excelExportNotice()}
     ${listNote('初期在庫一覧','ここは登録した初期在庫の一覧です。現在数量の集計は「在庫一覧」で確認します。数量は登録時（訂正後は訂正後）の数量です。')}
+    ${listPagerHtml(visibleEntries.length,entries.length)}
     <div class="list-stage" id="stockliststage"><div class="tablewrap"><table><thead><tr><th>顧客</th><th>商品</th><th>加工</th><th>サイズ</th><th>状態</th><th>数量</th><th>仕入単価</th><th>保管場所</th></tr></thead><tbody>
-      ${entries.map(e=>`<tr>
+      ${visibleEntries.map(e=>`<tr>
         <td class="dm-primary">${esc(e.customerName)}</td>
         <td>${esc(e.code)} ${esc(e.productName)} ${esc(e.color)}<span class="sub dm-secondary">商品ID ${e.productId}</span></td>
         <td>${esc(e.embroideryLabel)}</td>
@@ -1883,16 +1906,20 @@ function opening(){
         <td>${esc(e.locationLabel)}</td>
       </tr>`).join('')||`<tr><td colspan="8">${emptyMsg}</td></tr>`}
     </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div>
+    ${listPagerHtml(visibleEntries.length,entries.length)}
   </section>`
-  const grid=$('#stocklistgrid')
-  if(grid)grid.innerHTML=entries.length?entries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${esc(e.conditionLabel||conditionLabel(e.condition))}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):`<div class="dm-empty">${emptyMsg}</div>`
   const stage=$('#stockliststage')
   const mode=mountStockDisplay(stage,'opening',()=>paint())
-  if(grid)grid.hidden=mode!=='grid'
+  const grid=$('#stocklistgrid')
+  if(grid){
+    grid.hidden=mode!=='grid'
+    if(mode==='grid')grid.innerHTML=visibleEntries.length?visibleEntries.map(e=>`<article class="dm-card"><div class="dm-primary">${esc(e.customerName)}</div><div class="dm-secondary">${esc(e.code)} ${esc(e.productName)} ${esc(e.color)} · 商品ID ${e.productId}</div><div class="dm-meta"><span>${esc(e.embroideryLabel)}</span><span>${esc(e.size)}</span><span>${esc(e.conditionLabel||conditionLabel(e.condition))}</span><span>${num(e.qty)}</span><span class="money">${yen(e.unitCost)}</span></div><div class="dm-secondary">${esc(e.locationLabel)}</div></article>`).join(''):`<div class="dm-empty">${emptyMsg}</div>`
+  }
   if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,stockScreenId('opening'))
+  document.querySelectorAll('#main .list-pager').forEach(p=>bindListPager(p,()=>state.openingLimit||200,v=>{state.openingLimit=v}))
   $('#openOpeningRegister').onclick=()=>openOpeningRegister()
   const search=$('#openingListQ')
-  if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
+  if(search)search.oninput=e=>{const pos=e.target.selectionStart;state.openingListQ=e.target.value;state.openingLimit=200;paint();const qEl=$('#openingListQ');if(qEl){qEl.focus();qEl.setSelectionRange(pos,pos)}}
   bindExcel('opening')
 }
 function isInboundRegister(){return state.stockRegisterKind==='inbound'}
