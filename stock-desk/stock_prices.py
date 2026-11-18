@@ -399,11 +399,8 @@ def _mode_price(lots):
 def _compute_all(c, srows):
     lots = db_lots(c)
     groups = collections.defaultdict(list)
-    prod_lots = collections.defaultdict(list)
     for l in lots:
         groups[(l['supplierId'], l['productId'], l['size'])].append(l)
-        if l['price'] >= 100:
-            prod_lots[(l['supplierId'], l['productId'])].append(l)
     # サイズ表記ゆれ対策: 照合キーはnorm(size)、グループは実際のsize_label
     size_label = {(k[0], k[1], norm(k[2])): k[2] for k in groups}
     matched, ignored = _match_stocktake(c, srows or [], lots)
@@ -433,8 +430,8 @@ def _compute_all(c, srows):
         reasons, price, rule = [], None, ''
         if has_ts and db_pos:
             rule = 'b' if st_pos else 'c'
-            p_all = prod_lots.get((key[0], key[1]))
-            ref_mode = _mode_price(p_all) if p_all else _mode_price(db_pos)
+            size_normal = [l for l in db_pos if l['price'] >= 100]
+            ref_mode = _mode_price(size_normal) if size_normal else _mode_price(db_pos)
             valid = [
                 l for l in db_pos
                 if l['price'] < MAX_MODE_RATIO * ref_mode and not (ref_mode >= 300 and l['price'] < 100)
