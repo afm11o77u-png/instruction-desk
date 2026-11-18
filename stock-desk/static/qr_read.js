@@ -90,6 +90,7 @@
     paintResult()
     try{
       result=window.QrLocal?await QrLocal.lookup(raw):await api('/api/stock-qr/read',{qr:raw})
+      if(!result?.found)throw Error('このQRは商品情報と照合できません。枚数には加算していません。「倉庫用の準備」を更新し、QRの対応登録を確認してください。')
       if(window.QrWork){
         await QrWork.record(raw)
       }
@@ -101,7 +102,7 @@
     paintResult()
     if(mobile){
       const note=document.getElementById('qrCamNote')
-      if(note)note.textContent=error?'照合できませんでした。下のメッセージを確認してください。':'読み取りました。下に照合結果を表示しています。'
+      if(note)note.textContent=error?'読取エラー：'+error:'読み取り内容を端末に保存しました。一覧に表示しています。'
       if(error)stop()
     }
     return !error

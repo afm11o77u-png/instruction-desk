@@ -379,7 +379,7 @@ function showStockQrDialog(data){
   dlg.classList.add('stock-qr-dialog')
   const img=data.pngBase64?`<img class="stock-qr-image" alt="在庫QR" src="data:image/png;base64,${data.pngBase64}">`:''
   const imageError=data.imageError?`<p class="notice">${esc(data.imageError)}</p>`:''
-  const again=data.created?'':'<p>以前に発行したQRです。</p>'
+  const again=data.legacy?'<p><strong>旧システムから引き継いだQRです。段ボールに貼ってある旧QRはそのまま使えます。新しいIDは発行していません。</strong></p>':data.created?'':'<p>以前に発行したQRです。</p>'
   dlg.innerHTML=`<div class="dialoghead"><h2>在庫QR</h2><button type="button" id="qrStockClose" class="quiet">閉じる</button></div>
     <div class="dialogbody">
       <p>顧客　${esc(data.customerName||'')}</p>
@@ -392,18 +392,19 @@ function showStockQrDialog(data){
       ${img}
       ${imageError}
       <p class="stock-qr-id">${esc(data.publicId||'')}</p>
-      <p class="sub">このQRの内容はIDだけです。場所や入荷、単価が違っても同じ区分は同じQRです。印刷用のラベルは後日です。在庫数量は変えていません。</p>
+      <p class="sub">${data.legacy?'旧システムから保存した元の文字列で表示しています。貼り替えは不要です。':'このQRの内容はIDだけです。'}在庫数量は変えていません。</p>
     </div>`
   if(!dlg.open)dlg.showModal()
   $('#qrStockClose').onclick=()=>{dlg.close();dlg.innerHTML='';dlg.classList.remove('stock-qr-dialog')}
 }
 const stockQrFlight=new Map()
-async function openStockQr(row){
+async function openStockQr(row,legacyStockId=null){
   const reason=stockQrAmbiguousReason(row)
   if(reason){showStockQrMessage(reason);return}
-  const key=[row.customerProductId,row.size,row.condition].join('\u0001')
+  const key=[row.customerProductId,row.size,row.condition,row.locationId,legacyStockId].join('\u0001')
   if(!stockQrFlight.has(key)){
     const job=api('/api/stock-qr',{
+      preferLegacy:true,legacyStockId,locationId:row.locationId,
       customerProductId:row.customerProductId,
       size:row.size,
       condition:row.condition
@@ -411,7 +412,12 @@ async function openStockQr(row){
     stockQrFlight.set(key,job)
   }
   try{
-    showStockQrDialog(await stockQrFlight.get(key))
+    const result=await stockQrFlight.get(key)
+    if(result.legacyChoices){
+      const dlg=$('#dialog');dlg.innerHTML=`<div class="dialoghead"><h2>旧QRを選択</h2><button type="button" data-legacy-close>閉じる</button></div><div class="dialogbody"><p>同じ商品の旧QRが複数あります。表示する段ボールの旧ID・場所・単価・入荷を確認してください。新しいQRは発行しません。</p>${result.legacyChoices.map((item,i)=>`<p><button type="button" data-legacy-choice="${i}">${esc(item.label)}</button></p>`).join('')}</div>`;
+      if(!dlg.open)dlg.showModal();dlg.querySelector('[data-legacy-close]').onclick=()=>dlg.close();
+      dlg.querySelectorAll('[data-legacy-choice]').forEach(button=>button.onclick=()=>openStockQr(row,result.legacyChoices[Number(button.dataset.legacyChoice)].id));
+    }else showStockQrDialog(result)
   }catch(e){
     showStockQrMessage(e.message||'QRを表示できませんでした。')
   }

@@ -46,25 +46,26 @@
    ${mobile?'</details>':''}
    <p id="qrWorkMessage" role="status"></p>
    <p class="notice" role="note"><strong>新しいQRを追加したときは、倉庫へ行く前に、事務所のWi-Fiで「倉庫用の準備」を押して商品情報を更新してください。</strong> 在庫数量が増減しただけなら更新は不要です。</p>
-   <details class="qr-work-help"><summary>倉庫へ行く前の準備</summary><p>${data.preparedAt?'商品情報の準備日時：'+esc(data.preparedAt):'未準備：事務所のWi-Fiで下のボタンを押してください。'}</p><button type="button" data-prepare>倉庫用の準備（事務所Wi-Fi）</button><p>同じ接続先・同じブラウザで開いてください。初回は準備後に一度ページを開き直し、通信を切って動作を確認してください。</p></details>
+   <details class="qr-work-help"><summary>倉庫へ行く前の準備</summary><p>${data.preparedAt?'商品情報の準備日時：'+esc(data.preparedAt):'未準備：事務所のWi-Fiで下のボタンを押してください。'}</p><p>端末の商品情報：${data.catalogOk?esc(data.catalogCount)+'件・保存確認済み':'未準備または保存情報が不完全'}</p><button type="button" data-prepare>倉庫用の準備（事務所Wi-Fi）</button><p>同じ接続先・同じブラウザで開いてください。初回は準備後に一度ページを開き直し、通信を切って動作を確認してください。</p></details>
    ${mobile?'<details class="qr-work-help"><summary>保存した作業・一覧更新</summary>':''}
    <div class="qr-work-actions"><button type="button" data-refresh>一覧を更新</button><button type="button" data-active>読み取り中の作業へ</button></div>
-   <label>${mobile?'この端末に保存した作業':'端末内の作業・事務所で受信した作業'}<select data-jobs><option value="">新しい作業（最初のQRで開始）</option>${visible.map(j=>`<option value="${esc(j.id)}" ${j.id===selected?'selected':''}>${esc(j.started_at)} ／ ${esc(j.actor_name)} ／ ${status(j)} ／ ${j.lines.reduce((n,l)=>n+l.qty,0)}点</option>`).join('')}</select></label>
+   <label>${mobile?'この端末に保存した作業':'端末内の作業・事務所で受信した作業'}<select data-jobs><option value="">新しい作業（最初のQRで開始）</option>${visible.map(j=>`<option value="${esc(j.id)}" ${j.id===selected?'selected':''}>${esc(j.started_at)} ／ ${esc(j.actor_name)} ／ ${status(j)} ／ ${j.lines.reduce((n,l)=>n+(l.unresolved?0:l.qty),0)}点</option>`).join('')}</select></label>
    ${mobile?'</details>':''}
    ${job?`<h3>${status(job)}</h3>${mobile?'<details class="qr-work-help"><summary>作業日時・担当</summary>':''}<p>担当：${esc(job.actor_name)}<br>開始：${esc(job.started_at)}${job.completed_at?'<br>完了：'+esc(job.completed_at):''}${job.confirmed_at?'<br>在庫反映：'+esc(job.confirmed_at)+' ／ '+esc(job.confirmed_by):''}</p>${mobile?'</details>':''}
    ${!collector?`<label>在庫に反映する操作<select data-direction ${editable?'':'disabled'}><option value="outbound" ${job.direction==='outbound'?'selected':''}>出庫（在庫を減らす）</option><option value="inbound" ${job.direction==='inbound'?'selected':''}>入庫（在庫を増やす）</option></select></label>
    <p>数量は＋・－ボタンまたは直接入力で変更できます。0は反映対象外です。サイズ・新品中古・場所が未選択の場合は確認して選んでください。出庫は選んだ場所の在庫から古い入荷順に引き当てます。</p>`:'<p>枚数を確認してください。間違えて読んだ行は削除できます。</p>'}
-   <div class="qr-work-lines">${job.lines.map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${esc(l.code)} ${esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable?'':'disabled'}><button type="button" data-plus ${editable?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:`<article data-line="${esc(l.key)}"><strong>${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)}</strong>
+   <div class="qr-work-lines">${job.lines.map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${l.unresolved?'商品未照合・集計対象外':esc(l.code)+' '+esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:`<article data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><strong>${l.unresolved?'商品未照合・集計対象外':esc(l.customerName)+' ／ '+esc(l.code)+' '+esc(l.productName)}</strong>
     <p>${esc(l.color)} ／ ${esc(l.spec)}</p>
     <p>QR読み取り ${l.scanCount} 回</p>
-    <label>${collector?'枚数':'反映する数量'}<div class="qr-qty"><button type="button" data-minus ${editable?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable?'':'disabled'}><button type="button" data-plus ${editable?'':'disabled'} aria-label="数量を1増やす">＋</button></div></label>
-    ${collector?`<p>サイズ：${esc(l.size||'未設定')} ／ ${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</p>`:`<label>サイズ<select data-field="size" ${editable?'':'disabled'}>${options(l.sizes.map(s=>({id:s,name:s||'サイズなし'})),l.size,'選択してください')}</select></label>
-    <label>新品・中古<select data-field="condition" ${editable?'':'disabled'}>${options([{id:'new',name:'新品'},{id:'used',name:'中古'}],l.condition,'選択してください')}</select></label>
-    <label>保管場所<select data-field="locationId" ${editable?'':'disabled'}>${options(data.locations,l.locationId,'選択してください')}</select></label>
-    <label class="qr-work-cost" ${job.direction==='inbound'?'':'hidden'}>仕入単価（入庫時に必須・円）<input data-field="unitCost" type="number" min="0" step="1" value="${esc(l.unitCost)}" ${editable?'':'disabled'}></label>`}
+    <label>${collector?'枚数':'反映する数量'}<div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1増やす">＋</button></div></label>
+    ${collector?`<p>サイズ：${esc(l.size||'未設定')} ／ ${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</p>`:`<label>サイズ<select data-field="size" ${editable&&!l.unresolved?'':'disabled'}>${options(l.sizes.map(s=>({id:s,name:s||'サイズなし'})),l.size,'選択してください')}</select></label>
+    <label>新品・中古<select data-field="condition" ${editable&&!l.unresolved?'':'disabled'}>${options([{id:'new',name:'新品'},{id:'used',name:'中古'}],l.condition,'選択してください')}</select></label>
+    <label>保管場所<select data-field="locationId" ${editable&&!l.unresolved?'':'disabled'}>${options(data.locations,l.locationId,'選択してください')}</select></label>
+    <label class="qr-work-cost" ${job.direction==='inbound'?'':'hidden'}>仕入単価（入庫時に必須・円）<input data-field="unitCost" type="number" min="0" step="1" value="${esc(l.unitCost)}" ${editable&&!l.unresolved?'':'disabled'}></label>`}
     ${editable?'<button type="button" data-delete>この行を削除</button>':''}
    </article>`).join('')}</div>
-   <p><strong data-total>合計 ${job.lines.reduce((n,l)=>n+l.qty,0)} 点</strong> ／ ${job.lines.length} 種類</p>
+   ${job.lines.some(l=>l.unresolved)?'<p role="alert">未照合の行は集計対象外です。準備を更新して照合するか、その行を削除してください。</p>':''}
+   <p><strong data-total>合計 ${job.lines.reduce((n,l)=>n+(l.unresolved?0:l.qty),0)} 点</strong> ／ ${job.lines.filter(l=>!l.unresolved).length} 種類</p>
    <div class="qr-work-actions">
    ${job.status==='collecting'&&job.actor_id===data.actorId?`<button type="button" class="primary" data-complete ${completing?'disabled':''}>${completing?'保存を待って完了しています…':'作業を完了（端末に保存）'}</button>`:''}
    ${job._local&&job.status==='completed'?'<button type="button" class="primary" data-submit>事務所へ送信</button>':''}
@@ -85,7 +86,7 @@
   box.querySelector('[data-active]').onclick=()=>action(async()=>{await save();selected=active()?.id||null;render()});
   box.querySelector('[data-jobs]').onchange=e=>{const value=e.target.value;action(async()=>{await save();selected=value||null;render()})};
   box.querySelectorAll('[data-delete]').forEach(button=>button.onclick=()=>{const row=button.closest('[data-line]');if(!confirm('この行を読み取り一覧から削除しますか？'))return;row.dataset.deleted='1';row.hidden=true;dirty=true;total();});
-  const total=()=>{const label=box.querySelector('[data-total]');if(label)label.textContent='合計 '+[...box.querySelectorAll('[data-line]:not([data-deleted="1"]) [data-field="qty"]')].reduce((n,input)=>n+(Number(input.value)||0),0)+' 点'};
+  const total=()=>{const label=box.querySelector('[data-total]');if(label)label.textContent='合計 '+[...box.querySelectorAll('[data-line]:not([data-deleted="1"]):not([data-unresolved="1"]) [data-field="qty"]')].reduce((n,input)=>n+(Number(input.value)||0),0)+' 点'};
   box.querySelectorAll('[data-field], [data-direction]').forEach(input=>input.oninput=()=>{dirty=true;total();if(input.matches('[data-direction]'))box.querySelectorAll('.qr-work-cost').forEach(el=>el.hidden=input.value!=='inbound')});
   box.querySelectorAll('[data-plus],[data-minus]').forEach(button=>button.onclick=()=>{const input=button.closest('[data-line]').querySelector('[data-field="qty"]');input.value=Math.max(0,Math.min(99999,Number(input.value)+(button.hasAttribute('data-plus')?1:-1)));dirty=true;total();});
   const complete=box.querySelector('[data-complete]');if(complete)complete.onclick=async()=>{
@@ -99,7 +100,7 @@
    }catch(e){message(e.message,true)}finally{completing=false;const button=box.querySelector('[data-complete]');if(button){button.disabled=false;button.textContent='作業を完了（端末に保存）';}}
   };
   const confirmBtn=box.querySelector('[data-confirm]');if(confirmBtn)confirmBtn.onclick=()=>action(async()=>{
-   await save();const j=current();if(!confirm(`${j.direction==='inbound'?'入庫':'出庫'}として合計${j.lines.reduce((n,l)=>n+l.qty,0)}点を在庫に反映しますか？`))return;
+   await save();const j=current();if(!confirm(`${j.direction==='inbound'?'入庫':'出庫'}として合計${j.lines.reduce((n,l)=>n+(l.unresolved?0:l.qty),0)}点を在庫に反映しますか？`))return;
    put((await request('confirm',{id:j.id,version:j.version,_remote:!j._local})).job);render();message('在庫に反映しました。同じ作業を重複して反映することはありません。');
   });
  }

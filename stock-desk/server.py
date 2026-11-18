@@ -1,5 +1,6 @@
 import json, os, sqlite3, re
 from pathlib import Path
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import stock
@@ -189,7 +190,7 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
     if path == '/api/stock-qr/lookup':
         import stock_qr
         try:
-            with stock.connect(db_path) as c:
+            with closing(stock.connect(db_path)) as c, c:
                 return 200, stock_qr.lookup(c, (query.get('qr') or [''])[0])
         except ValueError as e:
             return 400, {'error': str(e) or 'QRを確認してください。', 'qtyChanged': False}
@@ -484,7 +485,7 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
     if path == '/api/stock-qr/read':
         import stock_qr
         try:
-            with stock.connect(db_path) as c:
+            with closing(stock.connect(db_path)) as c, c:
                 return 200, stock_qr.read_scan(c, payload)
         except ValueError as e:
             return 400, {'error': str(e) or 'QRを確認してください。', 'qtyChanged': False}
@@ -494,9 +495,9 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
     if path == '/api/stock-qr':
         import stock_qr
         try:
-            with stock.connect(db_path) as c:
+            with closing(stock.connect(db_path)) as c, c:
                 c.execute('BEGIN IMMEDIATE')
-                result = stock_qr.show(c, payload)
+                result = stock_qr.show_legacy(c, payload) if payload.get('preferLegacy') else stock_qr.show(c, payload)
         except PermissionError as e:
             return 403, {'error': str(e), 'issued': False, 'qtyChanged': False}
         except ValueError as e:

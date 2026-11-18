@@ -195,6 +195,43 @@ def show(c, body):
     return _payload(c, cp, row, created=created)
 
 
+def show_legacy(c, body):
+    """Re-display the imported box QR verbatim. Never issue a replacement ID."""
+    import qr_link_import
+    qr_link_import.ensure_schema(c)
+    cp, size, condition = _classification(c, body)
+    rows = c.execute('''SELECT * FROM qr_stock_links WHERE customer_product_id=?
+        AND size_label=? AND condition=? ORDER BY id''', (cp['id'], size, condition)).fetchall()
+    location = body.get('locationId')
+    if location is not None:
+        rows = [r for r in rows if r['location_id'] in (None, location)]
+    requested = body.get('legacyStockId')
+    if requested:
+        rows = [r for r in rows if r['legacy_stock_id'] == str(requested)]
+    if not rows:
+        raise ValueError('この在庫に対応する旧QRが見つかりません。旧QRの対応登録を確認してください。新しいQRは発行していません。')
+    if len(rows) > 1:
+        return {'legacyChoices': [{'id': r['legacy_stock_id'], 'label':
+            f"旧ID {r['legacy_stock_id']} ／ {r['factory_name']} {r['shelf_name']} ／ 単価 {r['price_text']} ／ 入荷 {r['arrival_date']}"} for r in rows],
+            'issued': False, 'created': False, 'qtyChanged': False}
+    row = rows[0]
+    raw = row['qr_raw'] or ''
+    if not raw:
+        raise ValueError('旧QRの元の文字列が保存されていません。対応登録を確認してください。新しいQRは発行していません。')
+    resolved = qr_link_import.lookup_qr(c, raw)
+    if not resolved.get('found') or resolved.get('mismatch') or (resolved.get('link') or {}).get('customerProductId') != cp['id']:
+        raise ValueError('旧QRの元の文字列と対応先が一致しません。対応登録を確認してください。')
+    image, image_error = _image(raw)
+    result = {'found': True, 'legacy': True, 'created': False, 'issued': False, 'qtyChanged': False,
+        'publicId': raw, 'legacyStockId': row['legacy_stock_id'], 'pngBase64': image,
+        'customerName': cp['customer_name'], 'code': cp['code'], 'productName': cp['product_name'],
+        'color': cp['color'], 'embroideryLabel': stock.embroidery_label(cp['embroidery']),
+        'size': size, 'conditionLabel': stock.condition_label(condition) if condition else '未設定'}
+    if image_error:
+        result['imageError'] = image_error
+    return result
+
+
 def _lookup_new(c, public_id):
     ensure_schema(c)
     row = c.execute(

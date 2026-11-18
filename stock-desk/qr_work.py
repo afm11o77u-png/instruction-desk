@@ -82,8 +82,8 @@ def catalog(c, body):
                            'locationId': row['location_id']}})
     revision = hashlib.sha256(json.dumps(entries, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
     if body.get('revision') == revision:
-        return {'notModified': True, 'revision': revision, 'preparedAt': stock.stamp()}
-    return {'entries': entries, 'revision': revision, 'preparedAt': stock.stamp()}
+        return {'notModified': True, 'revision': revision, 'entryCount': len(entries), 'preparedAt': stock.stamp()}
+    return {'entries': entries, 'revision': revision, 'entryCount': len(entries), 'preparedAt': stock.stamp()}
 
 
 def submit(c, body):
@@ -157,6 +157,28 @@ def submit(c, body):
             (job_id, who, name, started, completed, json.dumps(lines, ensure_ascii=False)))
     c.execute('INSERT INTO qr_work_receipts(id,actor_id,digest) VALUES(?,?,?)', (job_id, who, digest))
     return {'job': _job(c, {'id': job_id}), 'duplicate': False}
+
+
+def resolve(c, body):
+    """Resolve an existing QR only: never issue a new identity or change stock."""
+    actor(body)
+    raw = stock_qr.parse_scan(body.get('qr'))
+    found = stock_qr.read_scan(c, {'qr': raw})
+    link = found.get('link') or found
+    if not found.get('found') or found.get('mismatch') or link.get('stale') or not link.get('customerProductId'):
+        raise ValueError('商品情報と照合できないQRです。QRの対応登録を確認してください。')
+    cp = stock.resolve_customer_product(c, link['customerProductId'])
+    kind = 'new' if stock_qr.is_new_qr(raw) else 'legacy'
+    entry = {'kind': kind, 'qr': found.get('publicId') if kind == 'new' else str(found['legacyStockId']),
+        'customer': link.get('legacyCustomerId') or '', 'maker': link.get('legacyMakerId') or '',
+        'target': {'customerProductId': cp['id'], 'customerName': cp['customer_name'],
+            'code': cp['code'], 'productName': cp['product_name'], 'color': cp['color'],
+            'spec': stock.embroidery_label(cp['embroidery']),
+            'size': link.get('sizeLabel') or found.get('size') or '',
+            'condition': link.get('condition') or found.get('condition') or '',
+            'sizes': [r[0] for r in c.execute('SELECT label FROM product_sizes WHERE product_id=? ORDER BY sort_order', (cp['product_id'],))],
+            'locationId': link.get('locationId'), 'unitCost': '', 'lots': []}}
+    return {'entry': entry, 'qtyChanged': False}
 
 
 def text_message(c, body, *, send=False):
@@ -359,6 +381,8 @@ def dispatch(db_path, action, body):
                 result = catalog(c, body)
             elif action == 'submit':
                 result = submit(c, body)
+            elif action == 'resolve':
+                result = resolve(c, body)
             elif action in ('text-list', 'text-send'):
                 result = text_message(c, body, send=action == 'text-send')
             elif action == 'scan':

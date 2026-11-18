@@ -35,17 +35,46 @@
   let identity={id:raw};if(raw.startsWith('{')){try{const o=JSON.parse(raw);if(o&&typeof o==='object'&&!Array.isArray(o))identity={id:String(o.id||o.legacyStockId||''),customer:o.customer_id,maker:o.maker_id}}catch{throw Error('QRの文字列を確認してください。')}}
   if(!identity.id)throw Error('QRの番号がありません。');return {raw,...identity,key:(raw.startsWith('nqr1.')?'new:':'legacy:')+identity.id};
  }
- async function entry(raw){const x=identify(raw),catalog=await get('catalog:'+profile.id);const found=catalog?.entries.find(e=>(e.kind==='new'?'new:':'legacy:')+e.qr===x.key);
+ function validCatalog(catalog){return !!catalog&&Array.isArray(catalog.entries)&&(catalog.entryCount===undefined||catalog.entryCount===catalog.entries.length)&&catalog.entries.every(e=>e&&['new','legacy'].includes(e.kind)&&typeof e.qr==='string'&&e.qr&&e.target&&Number.isInteger(e.target.customerProductId)&&e.target.customerProductId>0&&typeof e.target.productName==='string'&&e.target.productName.trim())}
+ function missingQr(){const e=Error('このQRは商品情報と照合できません。枚数には加算していません。事務所のWi-Fiで「倉庫用の準備」を更新してください。更新後も出る場合はQRの対応登録を確認してください。');e.status=400;return e}
+ async function resolveOnline(raw){
+  if(navigator.onLine===false)return null;
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2500);
+  try{
+   const response=await fetch('/inventory/api/qr-work/resolve',{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify({qr:raw}),signal:controller.signal});
+   if(!response.ok)return null;
+   const result=await response.json();const e=result.entry;
+   if(!validCatalog({entries:[e],entryCount:1}))return null;
+   await change(c=>{if(!validCatalog(c))throw missingQr();const index=c.entries.findIndex(x=>x.kind===e.kind&&x.qr===e.qr);if(index<0)c.entries.push(e);else c.entries[index]=e;c.entryCount=c.entries.length;c.revision=null;return true},'catalog:'+profile.id);
+   return e;
+  }catch{return null}finally{clearTimeout(timer)}
+ }
+ async function entry(raw){const x=identify(raw),catalog=await get('catalog:'+profile.id);
+  if(!validCatalog(catalog))throw Error('商品情報が未準備、または保存した情報が不完全です。事務所のWi-Fiで「倉庫用の準備」を更新してください。枚数には加算していません。');
+  let found=catalog.entries.find(e=>(e.kind==='new'?'new:':'legacy:')+e.qr===x.key);
+  if(!found)found=await resolveOnline(x.raw);
   if(found&&((x.customer!==undefined&&String(x.customer)!==found.customer)||(x.maker!==undefined&&String(x.maker)!==found.maker)))throw Error('QRの顧客・メーカーが準備済みの商品情報と一致しません。');return {identity:x,found};
  }
- async function lookup(raw){const {identity,found}=await entry(raw);return found?{found:true,qrKind:found.kind,...found.target,lots:[]}:{found:false,qrKind:identity.key.startsWith('new:')?'new':'legacy',lots:[]}}
+ async function lookup(raw){const {found}=await entry(raw);if(!found)throw missingQr();return {found:true,qrKind:found.kind,...found.target,lots:[]}}
  async function state(){
-  const local=await get('jobs:'+profile.id)||fresh(),catalog=await get('catalog:'+profile.id);
+  let local=await get('jobs:'+profile.id)||fresh();const catalog=await get('catalog:'+profile.id);
+  const catalogOk=validCatalog(catalog);
+  const targets=new Map(catalogOk?catalog.entries.map(e=>[(e.kind==='new'?'new:':'legacy:')+e.qr,e]):[]);
+  // Keep old unidentified records for review, but never include them in totals.
+  let needsRepair=false;
+  for(const job of local.jobs){if(job.status==='sent')continue;for(const line of job.lines){
+   let match;try{const identity=identify(line.qr);match=targets.get(identity.key);if(match&&((identity.customer!==undefined&&String(identity.customer)!==match.customer)||(identity.maker!==undefined&&String(identity.maker)!==match.maker)))match=null}catch{}
+   if(!!line.unresolved!==!match||(match&&(line.productName!==match.target.productName||line.code!==match.target.code)))needsRepair=true;
+  }}
+  if(needsRepair){await change(s=>{for(const job of s.jobs){if(job.status==='sent')continue;for(const line of job.lines){
+   let match;try{const identity=identify(line.qr);match=targets.get(identity.key);if(match&&((identity.customer!==undefined&&String(identity.customer)!==match.customer)||(identity.maker!==undefined&&String(identity.maker)!==match.maker)))match=null}catch{}
+   line.unresolved=!match;if(match){for(const key of ['customerProductId','customerName','code','productName','color','spec','size','condition','sizes'])line[key]=match.target[key];line.unresolved=false;}
+  }}return true});local=await get('jobs:'+profile.id)||fresh();}
   let remote={jobs:[],locations:[],canConfirm:false},connected=false;
   if(!phone){try{await verify();remote=await api('/api/qr-work/state',{inbox:true});connected=true}catch{}}
   const remoteIds=new Set(remote.jobs.map(j=>j.id));
   const jobs=[...local.jobs.filter(j=>phone||!remoteIds.has(j.id)),...(!phone?remote.jobs:[])];
-  return {...remote,jobs,actorId:profile.id,localMode:true,preparedAt:await get('prepared:'+profile.id)||catalog?.preparedAt||null,connected};
+  return {...remote,jobs,actorId:profile.id,localMode:true,catalogCount:catalogOk?catalog.entries.length:0,catalogOk,preparedAt:await get('prepared:'+profile.id)||catalog?.preparedAt||null,connected};
  }
  async function prepare(){
   const progress=text=>window.dispatchEvent(new CustomEvent('qr-prepare-progress',{detail:text}));
@@ -53,8 +82,9 @@
   await verify();
   progress('QRと商品情報を読み込んでいます…');
   const cached=await get('catalog:'+profile.id);
-  const response=await api('/api/qr-work/catalog',{revision:cached?.revision});
+  const response=await api('/api/qr-work/catalog',{revision:validCatalog(cached)&&Number.isInteger(cached.entryCount)?cached.revision:undefined});
   const catalog=response.notModified&&cached?{...cached,preparedAt:response.preparedAt}:response;
+  if(!validCatalog(catalog))throw Error('商品情報を正しく取得できませんでした。以前の保存情報は残しています。もう一度準備してください。');
   if(phone){
    progress('通信なしで使えるように画面を保存しています…');
    if(!('serviceWorker' in navigator))throw Error('このブラウザでは通信なしで画面を開く準備ができません。対応するブラウザで開いてください。');
@@ -66,6 +96,8 @@
   }
   progress(`商品情報 ${catalog.entries.length}件を端末に保存しています…`);
   if(!response.notModified)await write('catalog:'+profile.id,catalog);
+  const persisted=await get('catalog:'+profile.id);
+  if(!validCatalog(persisted)||persisted.entries.length!==catalog.entries.length||persisted.revision!==catalog.revision)throw Error('商品情報の保存確認に失敗しました。端末の空き容量を確認して準備し直してください。');
   // Preserve pre-offline jobs without submitting them. The same UUID and source
   // version prevent two devices importing the same old work as separate receipts.
   progress('以前の途中作業を確認しています…');
@@ -118,16 +150,16 @@
   if(action==='prepare')return prepare();
   const local=await get('jobs:'+profile.id)||fresh();const existing=local.jobs.find(j=>j.id===body.id);
   if(action==='scan'){
-   const catalog=await get('catalog:'+profile.id);if(!catalog)throw Error('事務所のWi-Fiで「倉庫用の準備」をしてから読み取ってください。');
    const {identity,found}=await entry(body.qr);
+   if(!found)throw missingQr();
    return change(s=>{
     let j=s.jobs.find(j=>j.status==='collecting');
     if(j&&body.id&&j.id!==body.id)throw Error('読み取り中の作業を選び直してください。');
     if(!j){j={id:crypto.randomUUID(),actor_id:profile.id,actor_name:profile.name,status:'collecting',version:0,direction:'outbound',started_at:new Date().toISOString(),completed_at:null,lines:[],_local:true};s.jobs.unshift(j)}
     if(body.id&&body.version!==j.version)throw Error('別の画面で更新されました。一覧を更新してください。');
     let line=j.lines.find(l=>l.key===identity.key);
-    if(line){if(line.qty>=99999)throw Error('枚数は99999までです。');line.qty++;line.scanCount++}
-    else{if(j.lines.length>=1000)throw Error('1回の作業は1000種類までです。');j.lines.push({...found?.target,key:identity.key,qr:identity.raw,code:found?.target.code||identity.id,productName:found?.target.productName||'商品未確認（事務所で対応登録を確認）',size:found?.target.size||'',condition:found?.target.condition||'',sizes:found?.target.sizes||[],unitCost:'',qty:1,scanCount:1})}
+    if(line){if(line.unresolved)throw missingQr();if(line.qty>=99999)throw Error('枚数は99999までです。');line.qty++;line.scanCount++}
+    else{if(j.lines.length>=1000)throw Error('1回の作業は1000種類までです。');j.lines.push({...found.target,key:identity.key,qr:identity.raw,unitCost:'',qty:1,scanCount:1})}
     j.version++;return {job:j};
    });
   }
@@ -136,12 +168,13 @@
     if(!Array.isArray(body.lines)||body.lines.length!==j.lines.length)throw Error('明細を確認してください。');
     const updates=new Map(body.lines.map(l=>[l.key,l]));if(updates.size!==j.lines.length)throw Error('明細が重複しています。');
     j.lines=j.lines.filter(l=>{const u=updates.get(l.key);if(!u)throw Error('明細が変わりました。一覧を更新してください。');if(u.deleted===true)return false;const n=Number(u.qty);if(!Number.isInteger(n)||n<0||n>99999)throw Error('枚数は0～99999の整数で入力してください。');l.qty=n;return true});
-    if(action==='complete'){if(!j.lines.some(l=>l.qty>0))throw Error('枚数が1以上の行を残してください。');j.status='completed';j.completed_at=new Date().toISOString()}
+    if(action==='complete'){if(j.lines.some(l=>l.unresolved))throw Error('未照合の行があります。準備を更新して照合するか、その行を削除してから完了してください。');if(!j.lines.some(l=>l.qty>0))throw Error('枚数が1以上の行を残してください。');j.status='completed';j.completed_at=new Date().toISOString()}
     j.version++;return {job:j};
    });
   }
   if(action==='submit'){
    if(!existing||!['completed','sent'].includes(existing.status))throw Error('先に作業を完了してください。');
+   if(existing.lines.some(l=>l.unresolved))throw Error('未照合の行が残っています。商品情報を更新して照合してから送信してください。');
    await verify();
    const response=await api('/api/qr-work/submit',{id:existing.id,sourceVersion:existing.sourceVersion,startedAt:existing.started_at,completedAt:existing.completed_at,lines:existing.lines.map(l=>({qr:l.qr,qty:l.qty,scanCount:l.scanCount}))});
    return change(s=>{const j=s.jobs.find(j=>j.id===existing.id);j.status='sent';j.sent_at=new Date().toISOString();j.version++;return {job:j,receipt:response.job.id}});

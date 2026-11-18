@@ -5,6 +5,8 @@ const folder=path.join(__dirname,'../static');
 (async()=>{
  let textMessages=[],received=[],stock=20,uploads=0,loseReceipt=false,denied=false,catalogRelease=null,catalogRequests=0,assetReads=0;
  const legacyId=require('crypto').randomUUID();
+ const newQr='nqr1.'+'a'.repeat(32),missingQr='nqr1.'+'b'.repeat(32),lateQr='nqr1.'+'c'.repeat(32);
+ const oldPayload=JSON.stringify({id:'offline-qr',customer_id:'',maker_id:''});
  const target={customerProductId:1,customerName:'検証顧客',code:'OFF-1',productName:'白衣',size:'M',condition:'new',sizes:['M'],unitCost:'',color:'白',spec:'標準',lots:[],locationId:1};
  const server=http.createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost');const json=(body,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(body))};
@@ -14,7 +16,8 @@ const folder=path.join(__dirname,'../static');
    let raw='';for await(const chunk of req)raw+=chunk;const b=JSON.parse(raw||'{}'),action=url.pathname.split('/').pop();
    if(action==='text-send'){let item=textMessages.find(x=>x.id===b.id);if(!item){item={id:b.id,body:b.text,actor_name:'検証担当',received_at:'2026-11-19T01:00:00'};textMessages.push(item)}return json({message:item})}
    if(action==='text-list')return json({messages:textMessages});
-   if(action==='catalog'){catalogRequests++;if(b.revision==='catalog-1')return json({notModified:true,revision:'catalog-1',preparedAt:'2026-11-19'});await new Promise(resolve=>catalogRelease=resolve);return json({revision:'catalog-1',entries:[{qr:'offline-qr',kind:'legacy',customer:'',maker:'',target}],preparedAt:'2026-11-19'});}
+   if(action==='resolve'){if(b.qr!==lateQr)return json({error:'未照合'},400);return json({entry:{qr:lateQr,kind:'new',target:{...target,productName:'追加確認した制服'}}})}
+   if(action==='catalog'){catalogRequests++;if(b.revision==='catalog-1')return json({notModified:true,revision:'catalog-1',entryCount:2,preparedAt:'2026-11-19'});if(catalogRequests===1)await new Promise(resolve=>catalogRelease=resolve);return json({revision:'catalog-1',entryCount:2,entries:[{qr:'offline-qr',kind:'legacy',customer:'',maker:'',target},{qr:newQr,kind:'new',target:{...target,productName:'新方式で登録済みの制服'}}],preparedAt:'2026-11-19'});}
    if(action==='state')return json({jobs:b.inbox?received:[...received,{id:legacyId,actor_id:'12',actor_name:'検証担当',version:1,status:'collecting',direction:'outbound',started_at:'2026-11-19T00:00:00Z',lines:[{...target,qty:0,scanCount:1,key:require('crypto').createHash('sha256').update('legacy:offline-qr').digest('hex')}]}],locations:[{id:1,name:'検証倉庫'}],actorId:'1',canConfirm:true});
    if(action==='submit'){
     uploads++;if(b.id===legacyId)assert.equal(b.sourceVersion,1);
@@ -59,7 +62,12 @@ const folder=path.join(__dirname,'../static');
   await page.reload();await page.waitForFunction(()=>!!navigator.serviceWorker.controller);
   await context.setOffline(true);await page.reload();await page.locator('#qrCamToggle').waitFor();
   await page.waitForFunction(()=>document.querySelector('[data-jobs]'));
-  await page.evaluate(()=>QrRead.lookup('offline-qr'));await page.evaluate(()=>QrRead.lookup('offline-qr'));
+  const beforeInvalid=await page.evaluate(()=>QrLocal.request('state'));
+  assert.equal(await page.evaluate(qr=>QrRead.lookup(qr),missingQr),false);
+  assert((await page.locator('#qrScanResult').innerText()).includes('加算していません'));
+  const afterInvalid=await page.evaluate(()=>QrLocal.request('state'));assert.deepEqual(afterInvalid.jobs,beforeInvalid.jobs);
+  assert.equal(await page.evaluate(async qr=>{try{await QrLocal.request('scan',{qr,token:crypto.randomUUID()});return false}catch{return true}},missingQr),true);
+  await page.evaluate(qr=>QrRead.lookup(qr),oldPayload);await page.evaluate(()=>QrRead.lookup('offline-qr'));
   assert.equal(await page.locator('[data-field="qty"]').inputValue(),'2');assert.equal(received.length,0);
   assert.equal(await page.locator('[data-save]').count(),0);
   await page.locator('[data-field="qty"]').fill('4');
@@ -108,6 +116,26 @@ const folder=path.join(__dirname,'../static');
   assert.equal(await pc.evaluate(()=>window.testCopied),longText);
   assert.equal(await pc.evaluate(()=>window.injected),undefined);
   assert.equal(stock,17,'text transfer must not change inventory');
+  await page.evaluate(qr=>QrRead.lookup(qr),lateQr);
+  assert((await page.locator('[data-line]').last().innerText()).includes('追加確認した制服'));
+  await context.setOffline(true);await page.reload();await page.locator('[data-field="qty"]').first().waitFor();
+  assert((await page.locator('[data-line]').last().innerText()).includes('追加確認した制服'),'server-verified item must remain named offline');
+  const totalBefore=await page.locator('[data-total]').innerText();
+  await page.evaluate(async qr=>{const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('instruction-desk-qr-device',1);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)});await new Promise((resolve,reject)=>{const t=db.transaction('records','readwrite'),s=t.objectStore('records'),r=s.get('jobs:12');r.onsuccess=()=>{const data=r.result;data.jobs.find(j=>j.status==='collecting').lines.push({qr,key:'new:'+qr,qty:7,scanCount:7,code:qr,productName:'商品未確認',sizes:[],size:'',condition:'',unitCost:''});s.put(data,'jobs:12')};t.oncomplete=resolve;t.onerror=()=>reject(t.error)});db.close()},missingQr);
+  await page.reload();await page.locator('[data-unresolved="1"]').waitFor();
+  assert.equal(await page.locator('[data-total]').innerText(),totalBefore,'previous unidentified rows must not count');
+  assert.equal(await page.locator('[data-unresolved="1"] input').isDisabled(),true);
+  assert((await page.locator('[data-unresolved="1"]').innerText()).includes('集計対象外'));
+  assert.equal(await page.evaluate(qr=>QrRead.lookup(qr),newQr),true);
+  assert((await page.locator('[data-line]').last().innerText()).includes('新方式で登録済みの制服'),'prepared nqr1 must resolve by exact ID while offline');
+  const rowsBefore=await page.locator('[data-line]').count(),qtyBefore=await page.locator('[data-field="qty"]').last().inputValue();
+  await page.evaluate(async()=>{const db=await new Promise(resolve=>{const r=indexedDB.open('instruction-desk-qr-device',1);r.onsuccess=()=>resolve(r.result)});await new Promise((resolve,reject)=>{const t=db.transaction('records','readwrite'),s=t.objectStore('records'),r=s.get('catalog:12');r.onsuccess=()=>{const c=r.result;window.savedCatalogForTest=c;s.put({...c,entryCount:c.entries.length+1},'catalog:12')};t.oncomplete=resolve;t.onerror=()=>reject(t.error)});db.close()});
+  assert.equal(await page.evaluate(qr=>QrRead.lookup(qr),newQr),false);
+  assert((await page.locator('#qrScanResult').innerText()).includes('不完全'));
+  assert.equal(await page.locator('[data-line]').count(),rowsBefore);
+  assert.equal(await page.locator('[data-field="qty"]').last().inputValue(),qtyBefore,'bad saved catalog must never increment');
+
+
   assert.deepEqual(errors,[]);
   console.log('PASS: offline shell reload, offline scans/edit/complete, local persistence, explicit send, lost receipt retry, office inbox and stock confirmation');
  }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}

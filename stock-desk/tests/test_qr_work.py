@@ -204,6 +204,7 @@ class QrWorkTests(unittest.TestCase):
         self.assertTrue(updated['entries'])
         self.assertEqual(self.qty(), 10)
 
+
     def test_bad_or_changed_submission_is_not_received(self):
         body = self.submission()
         body['lines'].append({'qr': 'unknown-qr', 'qty': 1, 'scanCount': 1})
@@ -247,6 +248,40 @@ class QrWorkTests(unittest.TestCase):
         self.assertEqual(j['lines'][0]['qty'], 2)
         self.call('scan', {'id': j['id'], 'version': j['version'], 'token': str(uuid.uuid4()),
                           'qr': json.dumps({'id': 'old-test', 'customer_id': 'wrong'})}, expected=400)
+        self.assertEqual(self.qty(), 10)
+
+    def test_normal_qr_display_preserves_original_legacy_payload_without_issuing(self):
+        import qr_link_import
+        import json
+        raw = json.dumps({'id': 'box-old', 'customer_id': 'old-c', 'maker_id': 'old-m'}, ensure_ascii=False)
+        with closing(stock.connect(self.db)) as c, c:
+            qr_link_import.ensure_schema(c)
+            cp = stock.resolve_customer_product(c, self.cp)
+            for legacy_id in ['box-old', 'box-old-2']:
+                payload = raw if legacy_id == 'box-old' else json.dumps({'id': legacy_id, 'customer_id': 'old-c', 'maker_id': 'old-m'})
+                c.execute('''INSERT INTO qr_stock_links(legacy_stock_id,legacy_customer_id,legacy_maker_id,
+                    customer_id,product_id,customer_product_id,size_label,condition,location_id,qr_raw,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''', (legacy_id,'old-c','old-m',cp['customer_id'],cp['product_id'],self.cp,'M','new',self.loc,payload,'t','t'))
+            before = c.execute('SELECT COUNT(*) FROM stock_qr_codes').fetchone()[0]
+        body = {'preferLegacy': True, 'customerProductId': self.cp, 'size': 'M', 'condition': 'new', 'locationId': self.loc}
+        status, choices = server.api_post(self.db, 'desk', '/api/stock-qr', body, can_write=False, actor=self.worker)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(choices['legacyChoices']), 2)
+        status, shown = server.api_post(self.db, 'desk', '/api/stock-qr', dict(body, legacyStockId='box-old'), can_write=False, actor=self.worker)
+        self.assertEqual(status, 200)
+        self.assertEqual(shown['publicId'], raw)
+        self.assertTrue(shown['legacy'])
+        self.assertFalse(shown['issued'])
+        status, missing = server.api_post(self.db, 'desk', '/api/stock-qr', dict(body, size='L'), can_write=True, actor=self.manager)
+        self.assertEqual(status, 400)
+        self.assertFalse(missing['issued'])
+        resolved = self.call('resolve', {'qr': raw})
+        self.assertEqual(resolved['entry']['qr'], 'box-old')
+        self.assertEqual(resolved['entry']['target']['productName'], '白衣')
+        self.call('resolve', {'qr': 'nqr1.' + 'f' * 32}, expected=400)
+        with closing(stock.connect(self.db)) as c:
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM stock_qr_codes').fetchone()[0], before)
+            self.assertEqual(c.execute("SELECT qr_raw FROM qr_stock_links WHERE legacy_stock_id='box-old'").fetchone()[0], raw)
         self.assertEqual(self.qty(), 10)
 
 
