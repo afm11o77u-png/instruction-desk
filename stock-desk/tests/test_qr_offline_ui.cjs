@@ -3,7 +3,7 @@ const http=require('http'),fs=require('fs'),path=require('path'),assert=require(
 const {chromium}=require(process.env.QR_TEST_PLAYWRIGHT||'playwright');
 const folder=path.join(__dirname,'../static');
 (async()=>{
- let received=[],stock=20,uploads=0,loseReceipt=false,denied=false,catalogRelease=null,catalogRequests=0,assetReads=0;
+ let textMessages=[],received=[],stock=20,uploads=0,loseReceipt=false,denied=false,catalogRelease=null,catalogRequests=0,assetReads=0;
  const legacyId=require('crypto').randomUUID();
  const target={customerProductId:1,customerName:'検証顧客',code:'OFF-1',productName:'白衣',size:'M',condition:'new',sizes:['M'],unitCost:'',color:'白',spec:'標準',lots:[],locationId:1};
  const server=http.createServer(async(req,res)=>{
@@ -12,6 +12,8 @@ const folder=path.join(__dirname,'../static');
   if(url.pathname.startsWith('/inventory/api/qr-work/')){
    if(req.headers['x-stock-request']!=='1')return json({error:'header'},400);
    let raw='';for await(const chunk of req)raw+=chunk;const b=JSON.parse(raw||'{}'),action=url.pathname.split('/').pop();
+   if(action==='text-send'){let item=textMessages.find(x=>x.id===b.id);if(!item){item={id:b.id,body:b.text,actor_name:'検証担当',received_at:'2026-11-19T01:00:00'};textMessages.push(item)}return json({message:item})}
+   if(action==='text-list')return json({messages:textMessages});
    if(action==='catalog'){catalogRequests++;if(b.revision==='catalog-1')return json({notModified:true,revision:'catalog-1',preparedAt:'2026-11-19'});await new Promise(resolve=>catalogRelease=resolve);return json({revision:'catalog-1',entries:[{qr:'offline-qr',kind:'legacy',customer:'',maker:'',target}],preparedAt:'2026-11-19'});}
    if(action==='state')return json({jobs:b.inbox?received:[...received,{id:legacyId,actor_id:'12',actor_name:'検証担当',version:1,status:'collecting',direction:'outbound',started_at:'2026-11-19T00:00:00Z',lines:[{...target,qty:0,scanCount:1,key:require('crypto').createHash('sha256').update('legacy:offline-qr').digest('hex')}]}],locations:[{id:1,name:'検証倉庫'}],actorId:'1',canConfirm:true});
    if(action==='submit'){
@@ -27,7 +29,7 @@ const folder=path.join(__dirname,'../static');
   }
   if(url.pathname==='/pc'){
    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});
-   return res.end(`<!doctype html><meta charset="utf-8"><main id="main"></main><script>async function api(p,d){let r=await fetch('/inventory'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(d)});let b=await r.json();if(!r.ok)throw Error(b.error);return b}</script><script src="/inventory/qr_local.js"></script><script src="/inventory/qr_work.js"></script><script src="/inventory/qr_read.js"></script><script>QrRead.page()</script>`);
+   return res.end(`<!doctype html><meta charset="utf-8"><main id="main"></main><script>async function api(p,d){let r=await fetch('/inventory'+p,{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify(d)});let b=await r.json();if(!r.ok)throw Error(b.error);return b}</script><script src="/inventory/qr_local.js"></script><script src="/inventory/qr_work.js"></script><script src="/inventory/qr_text.js"></script><script src="/inventory/qr_read.js"></script><script>QrRead.page()</script>`);
   }
   if(url.pathname!=='/inventory/qr-offline-sw.js')assetReads++;
   const file=path.resolve(folder,url.pathname.replace('/inventory/',''));
@@ -86,6 +88,26 @@ const folder=path.join(__dirname,'../static');
   await page.evaluate(()=>QrRead.lookup('offline-qr'));
   assert.equal(await page.locator('[data-line]').count(),1);
   assert.equal(await page.locator('[data-field="qty"]').inputValue(),'1','deleted garment can be scanned again offline');
+  const longText='スマホのChatGPTの説明\n  空白・改行\n<script>window.injected=true</script>\n'+'長い文章です。'.repeat(1000);
+  await page.locator('#qrText summary').first().click();await page.locator('[data-text-draft]').fill(longText);
+  await page.locator('[data-text-send]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-text-note]')?.textContent.includes('未送信の文章'));
+  assert.equal(textMessages.length,0);
+  await page.reload();await page.locator('#qrText summary').first().click();
+  await page.locator('[data-text-retry]').first().waitFor({state:'attached'});
+  await page.locator('[data-text-outbox] summary').first().click();
+  assert.equal(await page.locator('[data-text-outbox] textarea').first().inputValue(),longText);
+  await context.setOffline(false);await page.locator('[data-text-retry]').first().click();
+  await page.waitForFunction(()=>document.querySelector('[data-text-note]')?.textContent.includes('送信しました'));
+  assert.equal(textMessages.length,1);
+  await pc.locator('#qrText summary').first().click();await pc.locator('[data-text-refresh]').click();
+  await pc.waitForSelector('[data-text-copy]');
+  assert.equal(await pc.locator('[data-text-body]').first().inputValue(),longText);
+  await pc.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{window.testCopied=text}},configurable:true}));
+  await pc.locator('[data-text-copy]').first().click();
+  assert.equal(await pc.evaluate(()=>window.testCopied),longText);
+  assert.equal(await pc.evaluate(()=>window.injected),undefined);
+  assert.equal(stock,17,'text transfer must not change inventory');
   assert.deepEqual(errors,[]);
   console.log('PASS: offline shell reload, offline scans/edit/complete, local persistence, explicit send, lost receipt retry, office inbox and stock confirmation');
  }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}

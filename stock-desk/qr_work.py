@@ -159,6 +159,29 @@ def submit(c, body):
     return {'job': _job(c, {'id': job_id}), 'duplicate': False}
 
 
+def text_message(c, body, *, send=False):
+    who, name = actor(body)
+    c.execute('''CREATE TABLE IF NOT EXISTS qr_text_messages (
+        id TEXT PRIMARY KEY, actor_id TEXT NOT NULL, actor_name TEXT NOT NULL,
+        body TEXT NOT NULL, received_at TEXT NOT NULL)''')
+    if not send:
+        return {'messages': [dict(r) for r in c.execute(
+            'SELECT * FROM qr_text_messages WHERE actor_id=? ORDER BY received_at DESC,rowid DESC LIMIT 100', (who,))]}
+    message_id = str(uuid.UUID(str(body.get('id') or '')))
+    text = body.get('text')
+    if not isinstance(text, str) or not text.strip() or len(text) > 50000:
+        raise ValueError('送信する文章を1～50000文字で入力してください。')
+    old = c.execute('SELECT * FROM qr_text_messages WHERE id=?', (message_id,)).fetchone()
+    if old:
+        if old['actor_id'] != who or old['body'] != text:
+            raise ValueError('同じ送信番号で異なる文章が送られました。元の文章を確認してください。')
+        return {'message': dict(old), 'duplicate': True}
+    c.execute('INSERT INTO qr_text_messages(id,actor_id,actor_name,body,received_at) VALUES(?,?,?,?,?)',
+              (message_id, who, name, text, stock.stamp()))
+    return {'message': dict(c.execute('SELECT * FROM qr_text_messages WHERE id=?', (message_id,)).fetchone()),
+            'duplicate': False}
+
+
 def _job(c, body):
     row = c.execute('SELECT * FROM qr_work_jobs WHERE id=?', (str(body.get('id') or ''),)).fetchone()
     if not row:
@@ -336,6 +359,8 @@ def dispatch(db_path, action, body):
                 result = catalog(c, body)
             elif action == 'submit':
                 result = submit(c, body)
+            elif action in ('text-list', 'text-send'):
+                result = text_message(c, body, send=action == 'text-send')
             elif action == 'scan':
                 result = scan(c, body)
             elif action in ('edit', 'complete'):

@@ -131,6 +131,22 @@ class QrWorkTests(unittest.TestCase):
         self.assertEqual(self.call('state')['jobs'], [])
         self.assertEqual(self.qty(), 10)
 
+    def test_text_transfer_is_independent_idempotent_and_keeps_exact_text(self):
+        text = 'スマホの説明\n  空白も維持\n<script>alert("test")</script>\n' + '長い文章です。' * 1000
+        body = {'id': str(uuid.uuid4()), 'text': text}
+        result = self.call('text-send', body)
+        self.assertEqual(result['message']['body'], text)
+        self.assertTrue(self.call('text-send', body)['duplicate'])
+        messages = self.call('text-list')['messages']
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]['body'], text)
+        self.assertEqual(self.call('text-list', manager=True)['messages'], [])
+        self.call('text-send', dict(body, text='異なる本文'), expected=400)
+        self.call('text-send', {'id': str(uuid.uuid4()), 'text': 'x' * 50001}, expected=400)
+        self.call('text-send', {'id': str(uuid.uuid4()), 'text': '   '}, expected=400)
+        self.assertEqual(self.qty(), 10)
+        self.assertEqual(self.call('state')['jobs'], [])
+
     def test_delete_wrong_row_and_rescan_without_changing_inventory(self):
         j = self.scan()
         j = self.scan(j, self.qr2)

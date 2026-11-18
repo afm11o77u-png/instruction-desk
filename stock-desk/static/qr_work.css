@@ -25,3 +25,6 @@
 #qrWorkMessage.is-loading::before{content:'';display:inline-block;width:18px;height:18px;margin-right:8px;vertical-align:middle;border:3px solid #aac5b3;border-top-color:#17633e;border-radius:50%;animation:qr-preparing 1s linear infinite}
 @keyframes qr-preparing{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){#qrWorkMessage.is-loading::before{animation:none}}
+.qr-text textarea{display:block;width:100%;max-width:100%;padding:10px;font:16px/1.5 Meiryo,sans-serif;box-sizing:border-box;white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #aac5b3;border-radius:8px}
+.qr-text [data-text-note]{white-space:pre-wrap;overflow-wrap:anywhere}
+.qr-text article{margin:12px 0}

@@ -107,7 +107,7 @@
   mobile=phone;data=null;selected=null;dirty=false;pending=null;const run=++epoch;
   const parent=document.querySelector('.qr-read-page');if(!parent)return;
   const box=document.createElement('section');box.id='qrWork';box.className='qr-work';box.innerHTML='<h2>倉庫の読み取り作業</h2><p id="qrWorkMessage">保存した作業を読み込み中…</p>';if(mobile)parent.insertBefore(box,parent.querySelector('details'));else parent.append(box);
-  try{if(window.QrLocal)await QrLocal.init(null,phone);const loaded=await request('state');if(epoch!==run||!root())return;data=loaded;selected=active()?.id||null;render()}catch(e){message(e.message+' 一度ページを開き直してください。',true)}
+  try{if(window.QrLocal)await QrLocal.init(null,phone);const loaded=await request('state');if(epoch!==run||!root())return;data=loaded;selected=active()?.id||null;render();if(window.QrText)await QrText.mount(phone)}catch(e){message(e.message+' 一度ページを開き直してください。',true)}
  }
  async function record(raw){
   if(!root()||!data)throw Error('作業一覧を読み込めませんでした。ページを開き直してください。');

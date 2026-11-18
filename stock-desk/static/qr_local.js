@@ -9,9 +9,9 @@
  }))}
  async function get(key){const db=await database();return new Promise((resolve,reject)=>{const tx=db.transaction('records');const req=tx.objectStore('records').get(key);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}
  async function write(key,value){const db=await database();return new Promise((resolve,reject)=>{const tx=db.transaction('records','readwrite');tx.objectStore('records').put(value,key);tx.oncomplete=()=>resolve(value);tx.onerror=()=>reject(Error('端末への保存に失敗しました。容量を確認してください。'));tx.onabort=()=>reject(Error('端末への保存が中断されました。'))})}
- async function change(fn){const db=await database();const key='jobs:'+profile.id;return new Promise((resolve,reject)=>{
+ async function change(fn,key='jobs:'+profile.id,initial=fresh){const db=await database();return new Promise((resolve,reject)=>{
   const tx=db.transaction('records','readwrite'),store=tx.objectStore('records');let result,failure;
-  const req=store.get(key);req.onsuccess=()=>{try{const state=req.result||fresh();result=fn(state);store.put(state,key)}catch(e){failure=e;tx.abort()}};
+  const req=store.get(key);req.onsuccess=()=>{try{const state=req.result||initial();result=fn(state);store.put(state,key)}catch(e){failure=e;tx.abort()}};
   tx.oncomplete=()=>resolve(result);tx.onerror=tx.onabort=()=>reject(failure||Error('端末に保存できませんでした。作業を閉じずに空き容量を確認してください。'));
  })}
  async function session(){
@@ -95,6 +95,25 @@
   return {message:`倉庫用の準備ができました（${catalog.entries.length}件）。この端末・同じブラウザで開いてください。${inherited?'以前の途中作業もこの端末に引き継ぎました（未送信）。':''}`};
  }
  async function dispatch(action,body={}){
+  if(action==='text-state'){
+   const local=await get('texts:'+profile.id)||{draft:'',items:[]};
+   return local;
+  }
+  if(action==='text-draft'){
+   if(typeof body.text!=='string'||body.text.length>50000)throw Error('文章は50000文字までです。');
+   return change(s=>{s.draft=body.text;return {saved:true}},'texts:'+profile.id,()=>({draft:'',items:[]}));
+  }
+  if(action==='text-save'){
+   if(typeof body.text!=='string'||!body.text.trim()||body.text.length>50000)throw Error('送る文章を入力してください（50000文字まで）。');
+   return change(s=>{const item={id:crypto.randomUUID(),text:body.text,createdAt:new Date().toISOString(),sent:false};s.items.unshift(item);s.draft='';return {item}},'texts:'+profile.id,()=>({draft:'',items:[]}));
+  }
+  if(action==='text-send'){
+   const local=await get('texts:'+profile.id),item=local?.items.find(x=>x.id===body.id);
+   if(!item)throw Error('端末に保存した文章が見つかりません。');
+   await verify();await api('/api/qr-work/text-send',{id:item.id,text:item.text});
+   return change(s=>{const row=s.items.find(x=>x.id===item.id);row.sent=true;row.sentAt=new Date().toISOString();return {sent:true}},'texts:'+profile.id,()=>({draft:'',items:[]}));
+  }
+  if(action==='text-list'){await verify();return api('/api/qr-work/text-list',{})}
   if(action==='state')return state();
   if(action==='prepare')return prepare();
   const local=await get('jobs:'+profile.id)||fresh();const existing=local.jobs.find(j=>j.id===body.id);
