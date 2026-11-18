@@ -58,7 +58,7 @@
      <div class="qr-work-pc-ctrl">
       <div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" aria-label="反映する数量" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="数量を1増やす">＋</button></div>
       <button type="button" class="qr-detail-btn" data-toggle-detail aria-expanded="false">詳細</button>
-      ${editable?'<button type="button" data-delete>削除</button>':''}
+      ${editable&&collector?'<button type="button" data-delete>削除</button>':''}
      </div>
     </div>
     <div class="qr-work-detail" hidden>
@@ -70,16 +70,29 @@
     </div>
    </article>`;
   };
+  const cRes=job&&pickingCompare&&pickingCompare.jobId===job.id?pickingCompare.data:null;
+  const orderedPcLines=()=>{
+   if(!job)return [];
+   if(!cRes||!cRes.items)return job.lines;
+   const byKey=new Map(job.lines.map(l=>[l.key,l]));
+   const seen=new Set();const out=[];
+   cRes.items.forEach(it=>(it.lineKeys||[]).forEach(k=>{if(byKey.has(k)&&!seen.has(k)){seen.add(k);out.push(byKey.get(k))}}));
+   job.lines.forEach(l=>{if(!seen.has(l.key))out.push(l)});
+   return out;
+  };
   const cmpHtml=()=>{
    if(mobile||collector||!job)return '';
    const opts=(pickingLists||[]).map(p=>`<option value="${esc(p.id)}" ${pickingCompare&&Number(pickingCompare.pickingListId)===Number(p.id)?'selected':''}>${esc(p.title)}（${esc(p.date)}・${esc(p.status)}・${p.rowCount}行）</option>`).join('');
-   const cRes=pickingCompare&&pickingCompare.jobId===job.id?pickingCompare.data:null;
-   const cRows=cRes?(cRes.items||[]).map(it=>`<tr class="qr-work-cmp-${esc(it.status)}"><td>${esc(it.customer)}</td><td>${esc(it.sku)} ${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.conditionLabel)}</td><td>${esc(it.stockOriginal||'—')}</td><td style="text-align:right">${it.expectedQty}</td><td style="text-align:right">${it.scannedQty}</td><td>${esc(it.statusLabel)}</td></tr>`).join(''):'';
+   const cRows=cRes?(cRes.items||[]).map(it=>{
+    const prevNote=it.prevQty>0?`<div style="font-size:11px;color:#595959">(前回${it.prevQty}+今回${it.currentQty})</div>`:'';
+    return `<tr class="qr-work-cmp-${esc(it.status)}"><td>${esc(it.customer)}</td><td>${esc(it.sku)} ${esc(it.name)}</td><td>${esc(it.size)}</td><td>${esc(it.conditionLabel)}</td><td>${esc(it.stockOriginal||'—')}</td><td style="text-align:right">${it.expectedQty}</td><td style="text-align:right">${it.scannedQty}${prevNote}</td><td>${esc(it.statusLabel)}</td></tr>`;
+   }).join(''):'';
    return `<section class="qr-work-compare">
     <h4 style="margin:0 0 8px 0">指示書デスクのピッキングリストと照合</h4>
     <div class="qr-work-compare-bar">
      <select id="qrPickingListSelect"><option value="">ピッキングリストを選択してください</option>${opts}</select>
      <button type="button" id="qrPickingCompareBtn">照合する</button>
+     <button type="button" id="qrPickingCompleteBtn" title="照合が完了したリストを一覧から非表示にします">このリストを完了にする</button>
     </div>
     ${cRes?`<p style="margin:10px 0 6px 0"><strong>${esc(cRes.title)}</strong>：揃っている <strong>${cRes.summary.ok}</strong>件 ／ 不足 <strong style="color:#cf1322">${cRes.summary.short}</strong>件 ／ 多い <strong style="color:#d46b08">${cRes.summary.over}</strong>件 ／ リスト外 <strong>${cRes.summary.extra}</strong>件</p>
     <div class="tablewrap"><table class="data" style="width:100%;font-size:13px"><thead><tr><th>顧客</th><th>品番・商品名</th><th>サイズ</th><th>状態</th><th>区分</th><th style="text-align:right">予定数</th><th style="text-align:right">読取数</th><th>判定</th></tr></thead><tbody>${cRows||'<tr><td colspan="8">対象行がありません</td></tr>'}</tbody></table></div>`:''}
@@ -101,8 +114,10 @@
    ${job?`<h3>${status(job)}</h3>${mobile?'<details class="qr-work-help"><summary>作業日時・担当</summary>':''}<p>担当：${esc(job.actor_name)}<br>開始：${esc(job.started_at)}${job.completed_at?'<br>完了：'+esc(job.completed_at):''}${job.confirmed_at?'<br>在庫反映：'+esc(job.confirmed_at)+' ／ '+esc(job.confirmed_by):''}</p>${mobile?'</details>':''}
    ${!collector?`<label>在庫に反映する操作<select data-direction ${editable?'':'disabled'}><option value="outbound" ${job.direction==='outbound'?'selected':''}>出庫（在庫を減らす）</option><option value="inbound" ${job.direction==='inbound'?'selected':''}>入庫（在庫を増やす）</option></select></label>
    <p>数量は＋・－ボタンまたは直接入力で変更できます。0は反映対象外です。サイズ・新品中古・場所が未選択の場合は確認して選んでください。出庫は選んだ場所の在庫から古い入荷順に引き当てます。</p>`:'<p>枚数を確認してください。間違えて読んだ行は削除できます。</p>'}
-   <div class="qr-work-lines">${job.lines.map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${l.unresolved?'商品未照合・集計対象外':esc(l.code)+' '+esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:pcRowHtml(l)).join('')}</div>
-   ${cmpHtml()}
+   <div class="${!mobile&&!collector?'qr-work-split':''}">
+    <div class="qr-work-lines">${(mobile?job.lines:orderedPcLines()).map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}" data-unresolved="${l.unresolved?1:0}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${l.unresolved?'商品未照合・集計対象外':esc(l.code)+' '+esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable&&!l.unresolved?'':'disabled'}><button type="button" data-plus ${editable&&!l.unresolved?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:pcRowHtml(l)).join('')}</div>
+    ${cmpHtml()}
+   </div>
    ${job.lines.some(l=>l.unresolved)?'<p role="alert">未照合の行は集計対象外です。準備を更新して照合するか、その行を削除してください。</p>':''}
    <p><strong data-total>合計 ${job.lines.reduce((n,l)=>n+(l.unresolved?0:l.qty),0)} 点</strong> ／ ${job.lines.filter(l=>!l.unresolved).length} 種類</p>
    <div class="qr-work-actions">
@@ -156,6 +171,16 @@
    });
    const res=await api('/api/qr-work/picking-compare',{id:cur.id,pickingListId:plId,lines:editedLines});
    pickingCompare={jobId:cur.id,pickingListId:plId,data:res};render();
+  });
+  const cmpDoneBtn=box.querySelector('#qrPickingCompleteBtn');
+  if(cmpDoneBtn)cmpDoneBtn.onclick=()=>action(async()=>{
+   const sel=box.querySelector('#qrPickingListSelect');const plId=Number(sel?.value||0);
+   if(!plId){message('完了にするピッキングリストを選んでください。',true);return}
+   if(!confirm('このピッキングリストを照合完了にして一覧から非表示にしますか？'))return;
+   await api('/api/qr-work/picking-reconcile',{pickingListId:plId});
+   pickingLists=(pickingLists||[]).filter(p=>Number(p.id)!==plId);
+   if(pickingCompare&&Number(pickingCompare.pickingListId)===plId)pickingCompare=null;
+   render();message('ピッキングリストを完了にしました。');
   });
   const total=()=>{const label=box.querySelector('[data-total]');if(label)label.textContent='合計 '+[...box.querySelectorAll('[data-line]:not([data-deleted="1"]):not([data-unresolved="1"]) [data-field="qty"]')].reduce((n,input)=>n+(Number(input.value)||0),0)+' 点'};
   box.querySelectorAll('[data-field], [data-direction]').forEach(input=>input.oninput=()=>{dirty=true;total();syncRowMeta(input.closest('[data-line]'));if(input.matches('[data-direction]'))box.querySelectorAll('.qr-work-cost').forEach(el=>el.hidden=input.value!=='inbound')});

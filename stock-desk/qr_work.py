@@ -18,6 +18,10 @@ def schema(c):
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS qr_work_one_active ON qr_work_jobs(actor_id) WHERE status='collecting'")
     c.execute('''CREATE TABLE IF NOT EXISTS qr_work_receipts (
         id TEXT PRIMARY KEY REFERENCES qr_work_jobs(id), actor_id TEXT NOT NULL, digest TEXT NOT NULL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS qr_work_picking_reconciled (
+        picking_list_id INTEGER PRIMARY KEY, reconciled_at TEXT NOT NULL, reconciled_by TEXT NOT NULL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS qr_work_picking_links (
+        job_id TEXT PRIMARY KEY, picking_list_id INTEGER NOT NULL, linked_at TEXT NOT NULL)''')
 
 
 def actor(body):
@@ -397,7 +401,7 @@ def _cond_norm(value):
     return ''
 
 
-def picking_lists(db_path):
+def picking_lists(db_path, c=None):
     conn = _instructions_db(db_path)
     if not conn:
         return {'lists': [], 'available': False}
@@ -405,18 +409,28 @@ def picking_lists(db_path):
         has = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='picking_lists'").fetchone()
         if not has:
             return {'lists': [], 'available': False}
+        reconciled = set()
+        if c is not None:
+            schema(c)
+            reconciled = {int(r[0]) for r in c.execute('SELECT picking_list_id FROM qr_work_picking_reconciled')}
         out = []
-        for r in conn.execute('SELECT id, payload FROM picking_lists ORDER BY id DESC LIMIT 30'):
+        for r in conn.execute('SELECT id, payload FROM picking_lists ORDER BY id DESC LIMIT 50'):
+            pid = int(r['id'])
+            if pid in reconciled:
+                continue
             try:
                 pl = json.loads(r['payload'] or '{}')
             except (TypeError, ValueError):
                 continue
+            st = pl.get('status') or ''
+            if st == '取消':
+                continue
             rows = pl.get('rows') or []
             out.append({
-                'id': int(r['id']),
-                'title': pl.get('title') or f"ピッキングリスト #{r['id']}",
+                'id': pid,
+                'title': pl.get('title') or f"ピッキングリスト #{pid}",
                 'date': pl.get('date') or '',
-                'status': pl.get('status') or '',
+                'status': st,
                 'rowCount': len(rows),
             })
         return {'lists': out, 'available': True}
@@ -424,7 +438,23 @@ def picking_lists(db_path):
         conn.close()
 
 
+def picking_reconcile(c, body):
+    schema(c)
+    pl_id = int(body.get('pickingListId') or 0)
+    if not pl_id:
+        raise ValueError('完了にするピッキングリストを選んでください。')
+    _, actor_name = actor(body)
+    c.execute(
+        '''INSERT INTO qr_work_picking_reconciled(picking_list_id, reconciled_at, reconciled_by)
+           VALUES(?,?,?) ON CONFLICT(picking_list_id) DO UPDATE SET
+             reconciled_at=excluded.reconciled_at, reconciled_by=excluded.reconciled_by''',
+        (pl_id, stock.stamp(), actor_name),
+    )
+    return {'ok': True, 'pickingListId': pl_id}
+
+
 def picking_compare(db_path, c, body):
+    schema(c)
     pl_id = int(body.get('pickingListId') or 0)
     if not pl_id:
         raise ValueError('ピッキングリストを選んでください。')
@@ -438,6 +468,15 @@ def picking_compare(db_path, c, body):
         pl = json.loads(row['payload'] or '{}')
     finally:
         conn.close()
+
+    job_id = str(body.get('id') or '').strip()
+    if job_id:
+        c.execute(
+            '''INSERT INTO qr_work_picking_links(job_id, picking_list_id, linked_at)
+               VALUES(?,?,?) ON CONFLICT(job_id) DO UPDATE SET
+                 picking_list_id=excluded.picking_list_id, linked_at=excluded.linked_at''',
+            (job_id, pl_id, stock.stamp()),
+        )
 
     # 1. Aggregate expected rows from picking list
     expected = {}
@@ -456,11 +495,43 @@ def picking_compare(db_path, c, body):
                 'customer': cust, 'sku': sku, 'name': name, 'size': size,
                 'condition': cond, 'conditionLabel': r.get('condition') or '未指定',
                 'stockOriginal': str(r.get('stockOriginal') or ''),
-                'expectedQty': 0, 'scannedQty': 0,
+                'expectedQty': 0, 'prevQty': 0, 'currentQty': 0, 'scannedQty': 0,
+                'lineKeys': [],
             }
         expected[key]['expectedQty'] += qty
 
-    # 2. Gather scanned lines (either from body['lines'] or DB job)
+    def _match_key(cust, sku, name, size, cond):
+        nk_cust, nk_sku, nk_name, nk_size = _norm_key(cust), _norm_key(sku), _norm_key(name), _norm_key(size)
+        for k_try in (
+            (nk_cust, nk_sku or nk_name, nk_size, cond),
+            (nk_cust, nk_sku or nk_name, nk_size, ''),
+        ):
+            if k_try in expected:
+                return k_try
+        if nk_sku:
+            cands = [k for k in expected if k[1] == nk_sku and k[2] == nk_size and k[3] in (cond, '')]
+            if len(cands) == 1:
+                return cands[0]
+        return None
+
+    # 2. Sum previously confirmed jobs linked to this picking list (for split picking rounds)
+    for prev_row in c.execute(
+        '''SELECT j.lines FROM qr_work_jobs j
+           JOIN qr_work_picking_links l ON l.job_id = j.id
+           WHERE l.picking_list_id = ? AND j.status = 'confirmed' AND j.id <> ?''',
+        (pl_id, job_id),
+    ):
+        for l in json.loads(prev_row['lines'] or '[]'):
+            if l.get('deleted') or l.get('unresolved'):
+                continue
+            qty = int(l.get('qty') or 0)
+            if qty <= 0:
+                continue
+            hk = _match_key(l.get('customerName'), l.get('code'), l.get('productName'), l.get('size'), _cond_norm(l.get('condition')))
+            if hk is not None:
+                expected[hk]['prevQty'] += qty
+
+    # 3. Gather current job scanned lines
     raw_lines = body.get('lines')
     if not isinstance(raw_lines, list):
         raw_lines = _job(c, body).get('lines') or []
@@ -477,37 +548,29 @@ def picking_compare(db_path, c, body):
         name = str(l.get('productName') or '')
         size = str(l.get('size') or '')
         cond = _cond_norm(l.get('condition'))
-        nk_cust, nk_sku, nk_name, nk_size = _norm_key(cust), _norm_key(sku), _norm_key(name), _norm_key(size)
-
-        # Try exact (cust, sku, size, cond), then cond='', then fallback without cust if unique sku+size
-        hit_key = None
-        for k_try in (
-            (nk_cust, nk_sku or nk_name, nk_size, cond),
-            (nk_cust, nk_sku or nk_name, nk_size, ''),
-        ):
-            if k_try in expected:
-                hit_key = k_try
-                break
-        if hit_key is None and nk_sku:
-            cands = [k for k in expected if k[1] == nk_sku and k[2] == nk_size and k[3] in (cond, '')]
-            if len(cands) == 1:
-                hit_key = cands[0]
+        hit_key = _match_key(cust, sku, name, size, cond)
         if hit_key is not None:
-            expected[hit_key]['scannedQty'] += qty
+            expected[hit_key]['currentQty'] += qty
+            if l.get('key'):
+                expected[hit_key]['lineKeys'].append(l['key'])
         else:
-            ek = (nk_cust, nk_sku or nk_name, nk_size, cond)
+            ek = (_norm_key(cust), _norm_key(sku) or _norm_key(name), _norm_key(size), cond)
             if ek not in extras:
                 extras[ek] = {
                     'customer': cust, 'sku': sku, 'name': name, 'size': size,
                     'condition': cond,
                     'conditionLabel': '新品' if cond == 'new' else '中古' if cond == 'used' else '未設定',
-                    'stockOriginal': '', 'expectedQty': 0, 'scannedQty': 0,
+                    'stockOriginal': '', 'expectedQty': 0, 'prevQty': 0, 'currentQty': 0, 'scannedQty': 0,
+                    'lineKeys': [],
                 }
-            extras[ek]['scannedQty'] += qty
+            extras[ek]['currentQty'] += qty
+            if l.get('key'):
+                extras[ek]['lineKeys'].append(l['key'])
 
     items = []
     summary = {'ok': 0, 'short': 0, 'over': 0, 'extra': 0}
     for entry in list(expected.values()) + list(extras.values()):
+        entry['scannedQty'] = entry['prevQty'] + entry['currentQty']
         diff = entry['scannedQty'] - entry['expectedQty']
         if entry['expectedQty'] == 0:
             st = 'extra'
@@ -524,7 +587,7 @@ def picking_compare(db_path, c, body):
         summary[st] += 1
         items.append({**entry, 'diff': diff, 'status': st, 'statusLabel': st_label})
 
-    order_rank = {'short': 0, 'over': 1, 'extra': 2, 'ok': 3}
+    order_rank = {'ok': 0, 'over': 1, 'extra': 2, 'short': 3}
     items.sort(key=lambda x: (order_rank.get(x['status'], 9), x['customer'], x['sku'], x['size']))
     return {
         'pickingListId': pl_id,
@@ -555,9 +618,11 @@ def dispatch(db_path, action, body):
             elif action == 'confirm':
                 result = confirm(c, body)
             elif action == 'picking-lists':
-                result = picking_lists(db_path)
+                result = picking_lists(db_path, c)
             elif action == 'picking-compare':
                 result = picking_compare(db_path, c, body)
+            elif action == 'picking-reconcile':
+                result = picking_reconcile(c, body)
             else:
                 raise ValueError('操作が見つかりません。')
         return 200, result
