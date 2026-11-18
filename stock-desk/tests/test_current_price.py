@@ -123,16 +123,20 @@ class RulesTest(Base):
 
     def test_latest_timestamp_and_auto_customer_specials(self):
         # 同一顧客で2025年より2026年の単価が安い場合でも最新作成日時を採用し、顧客別特値も自動登録する
+        # ただし2024年以前かつ在庫0の古い履歴顧客は特値にしない
         pid = self.lot('丸藤', 'DC5182', 'L', 2450, legacy_id='20260515100000001abc')
         self.lot('LEOC', 'DC5182', 'L', 2100, legacy_id='20240101100000001abc')
         self.lot('LEOC', 'DC5182', 'L', 1813, legacy_id='20260110100000001abc')
+        self.lot('旧顧客', 'DC5182', 'L', 1900, stock_qty=0, legacy_id='20191209100000001abc')
         res = stock_prices.run_initial(self.c, {}, srows=[])
         self.assertEqual(self.base(pid, 'L'), (2450, 'ok', ''))
         self.assertEqual(res['summary']['specials'], 1)
         cid_leoc = self._id('customers', 'LEOC')
         cid_maru = self._id('customers', '丸藤')
+        cid_old = self._id('customers', '旧顧客')
         self.assertEqual(stock_prices.lookup(self.c, customer_id=cid_leoc, product_id=pid, size_label='L')['price'], 1813)
         self.assertEqual(stock_prices.lookup(self.c, customer_id=cid_maru, product_id=pid, size_label='L')['price'], 2450)
+        self.assertEqual(stock_prices.lookup(self.c, customer_id=cid_old, product_id=pid, size_label='L')['source'], 'base')
 
 
 class MatchTest(Base):

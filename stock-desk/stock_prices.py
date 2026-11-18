@@ -474,7 +474,11 @@ def _compute_all(c, srows):
                 }
                 price = max(p_counts, key=lambda pr: (p_counts[pr], pr, p_ts[pr]))
                 for cid, cl in sorted(cust_latest.items()):
-                    if cl['price'] != price:
+                    if cl['price'] == price:
+                        continue
+                    ts_yr = str(cl.get('legacyTs') or '')[:4]
+                    has_stock = sum(x['stockQty'] for x in by_cust.get(cid, ())) > 0
+                    if (ts_yr.isdigit() and int(ts_yr) >= 2025) or has_stock:
                         specials.append({
                             'customerId': cid, 'supplierId': key[0],
                             'productId': key[1], 'size': key[2], 'price': cl['price'],
