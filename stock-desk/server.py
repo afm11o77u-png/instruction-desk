@@ -44,6 +44,7 @@ WRITE_PATHS = {
     '/api/stocktakes/checksheet/import-preview', '/api/stocktakes/checksheet/import',
     '/api/company-profile',
     '/api/prices/initial', '/api/prices/base', '/api/prices/special', '/api/prices/code-map',
+    '/api/customer-products/process-backfill/commit',
 }
 
 def _git_short_hash(start):
@@ -151,6 +152,10 @@ def api_get(db_path, mode, path, query, *, can_write=True, actor=None):
         except (ValueError, TypeError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
         return 404, {'error': '見つかりません。'}
+    if path == '/api/customer-products/process-backfill/preview':
+        import stock_process_backfill
+        with stock.connect(db_path) as c:
+            return 200, stock_process_backfill.preview(c)
     if path == '/api/products/duplicates':
         import stock_product_merge
         with stock.connect(db_path) as c:
@@ -914,11 +919,13 @@ def api_post(db_path, mode, path, body, *, can_write=True, actor=None):
         except (ValueError, TypeError, KeyError) as e:
             return 400, {'error': str(e) or '入力を確認してください。'}
     import stock_prices
+    import stock_process_backfill
     routes = {
         '/api/prices/initial': stock_prices.run_initial,
         '/api/prices/base': stock_prices.save_base,
         '/api/prices/special': stock_prices.save_special,
         '/api/prices/code-map': stock_prices.save_code_map,
+        '/api/customer-products/process-backfill/commit': stock_process_backfill.commit,
         '/api/customers': stock.save_customer,
         '/api/customers/unify-preview': stock.preview_customer_duplicates,
         '/api/customers/unify-apply': stock.apply_customer_duplicates_merge,

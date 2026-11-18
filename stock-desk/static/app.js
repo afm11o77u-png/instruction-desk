@@ -499,6 +499,48 @@ function syncStockListDisplaySlot(section){
   slot.hidden=true
   slot.innerHTML=''
 }
+async function openProcessBackfillModal(){
+  if(!stockIsOwner())return
+  const dlg=$('#dialog')
+  if(!dlg)return
+  dlg.innerHTML=`<form method="dialog"><div class="dialoghead"><h2>取扱加工の一括整理（主管理者）</h2><button type="button" id="pbClose" class="quiet">閉じる</button></div><div class="dialogbody"><p>候補を検索しています…</p></div></form>`
+  dlg.querySelector('#pbClose').onclick=()=>{dlg.close();dlg.innerHTML=''}
+  dlg.showModal()
+  try{
+    const res=await api('/api/customer-products/process-backfill/preview')
+    const items=res.items||[]
+    const body=dlg.querySelector('.dialogbody')
+    if(!items.length){
+      body.innerHTML='<p>加工未整理で反映できる候補はありませんでした。</p>'
+      return
+    }
+    const rows=items.map(i=>`<tr>
+      <td><input type="checkbox" class="pb-chk" value="${i.cpId}" checked></td>
+      <td>${esc(i.customerName)}</td>
+      <td>${esc(i.code)} ${esc(i.productName)}</td>
+      <td><strong>${esc(i.proposedLabel)}</strong></td>
+      <td>${esc((i.processNames||[]).join('・')||'—')}</td>
+      <td><span class="sub">${esc(i.source)}</span></td>
+    </tr>`).join('')
+    body.innerHTML=`<p class="excelhint">旧データ名または既存の加工サービス紐づけから見つかった <strong>${items.length}件</strong> です。反映しない行はチェックを外してから「一括反映」を押してください。</p>
+      <div class="bar"><button type="button" class="primary" id="pbApply">選択した候補を一括反映</button></div>
+      <div class="tablewrap"><table><thead><tr><th></th><th>顧客</th><th>商品</th><th>設定する加工表示</th><th>加工サービス</th><th>判定元</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    dlg.querySelector('#pbApply').onclick=async()=>{
+      const cpIds=[...dlg.querySelectorAll('.pb-chk:checked')].map(el=>Number(el.value))
+      if(!cpIds.length){toast('反映する候補を選んでください。');return}
+      const btn=dlg.querySelector('#pbApply');btn.disabled=true
+      try{
+        const r=await api('/api/customer-products/process-backfill/commit',{cpIds})
+        dlg.close();dlg.innerHTML=''
+        toast(`${r.updated}件の取扱加工を反映しました。`)
+        await boot()
+      }catch(e){toast(e.message||'反映に失敗しました。');btn.disabled=false}
+    }
+  }catch(e){
+    const body=dlg.querySelector('.dialogbody')
+    if(body)body.innerHTML=`<p class="notice">${esc(e.message||'読み込みに失敗しました。')}</p>`
+  }
+}
 /** 主管理者のみ：取り込み・整理・初期設定をまとめたダイアログを開く */
 function openOwnerSetupTools(){
   if(!stockIsOwner())return
@@ -517,7 +559,7 @@ function openOwnerSetupTools(){
       <div class="bar merge-entry"><button type="button" id="legacyCsvBulkOpen">旧CSV一括取り込み</button><button type="button" id="qrLinkOpen" class="quiet">旧QR対応</button></div>
       <h3>商品整理・QR貼り替え</h3>
       <p class="excelhint">同じ通常品番の複数商品IDを比較・統合したり、色分割によるQR貼り替え対象を確認します。</p>
-      <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><button type="button" class="quiet" id="qrReplSetupBtn" style="color:#d46b08; border-color:#faad14; background:#fffbe6; font-weight:bold; cursor:pointer; margin-left:8px;">⚠️ QR貼り替え対象（56件）</button></div>
+      <div class="bar merge-entry"><button type="button" id="productMergeOpen">重複商品の整理</button><button type="button" id="processBackfillOpen" class="quiet">取扱加工の一括整理</button><button type="button" class="quiet" id="qrReplSetupBtn" style="color:#d46b08; border-color:#faad14; background:#fffbe6; font-weight:bold; cursor:pointer; margin-left:8px;">⚠️ QR貼り替え対象（56件）</button></div>
       <h3>現単価の設定・確認</h3>
       <div class="bar price-entry"><button type="button" id="priceInitOpen">現単価の初期設定</button><button type="button" class="quiet" id="priceReviewOpen">要確認一覧</button><button type="button" class="quiet" id="priceRulesOpen">取り込みルール</button></div>
       <div class="verify-zone" aria-label="検証用">
@@ -548,6 +590,8 @@ function openOwnerSetupTools(){
   }
   const qrSetupBtn=dlg.querySelector('#qrReplSetupBtn')
   if(qrSetupBtn&&window.QrReplacementModal)qrSetupBtn.onclick=()=>{dlg.close();window.QrReplacementModal.open()}
+  const pbBtn=dlg.querySelector('#processBackfillOpen')
+  if(pbBtn)pbBtn.onclick=()=>{dlg.close();openProcessBackfillModal()}
   const mergeBtn=dlg.querySelector('#productMergeOpen')
   if(mergeBtn)mergeBtn.onclick=()=>{
     if(typeof ProductMerge==='undefined'||!ProductMerge.open){toast('重複商品の整理画面を読み込めませんでした。');return}
