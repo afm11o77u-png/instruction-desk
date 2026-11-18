@@ -1,4 +1,4 @@
-const CACHE='instruction-qr-shell-20261119-resume1';
+const CACHE='instruction-qr-shell-20261119-home1';
 const ASSETS=['qr_text.js?v=20261119_text1','qr-mobile.html','qr-mobile.css?v=20261119_offline1','qr_work.css?v=20261119_text1','qr_local.js?v=20261119_resume1','qr_work.js?v=20261119_resume1','qr_read.js?v=20261119_match1','qr-mobile.js?v=20261119_offline1','vendor/jsqr/jsQR.js'].map(p=>'/inventory/'+p);
 async function prepare(){
  const cache=await caches.open(CACHE);
