@@ -21,6 +21,10 @@ button:disabled{opacity:.5}
 label,input{display:block;width:100%}
 input{font:inherit;padding:12px;border:1px solid #aac5b3;border-radius:8px}
 video{display:block;width:100%;max-height:42vh;background:#16372b;border-radius:12px}
+.mobile-camera{position:sticky;top:0;z-index:2;background:#f3f7f4;padding:4px 0}
+.mobile-camera video{height:150px;object-fit:cover}
+.mobile-camera button{margin:4px 0}
+.mobile-camera #qrCamNote{font-size:13px;margin:4px 0}
 details{margin:18px 0}
 summary{padding:12px 0;cursor:pointer}
 .tablewrap{overflow-x:auto}

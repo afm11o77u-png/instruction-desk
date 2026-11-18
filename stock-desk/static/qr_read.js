@@ -9,6 +9,27 @@
   let busy=false
   let error=''
   let mobile=false
+  let cameraStarting=false
+  let cameraEpoch=0
+  let heldCode=''
+  let emptySince=null
+
+  function cameraButton(){
+    const button=document.getElementById('qrCamToggle')
+    if(button){button.textContent=stream||cameraStarting?'カメラOFF':'カメラON';button.setAttribute('aria-pressed',String(!!stream||cameraStarting))}
+  }
+
+  function acceptFrame(text,now){
+    if(!text){
+      if(emptySince===null)emptySince=now
+      if(now-emptySince>=600)heldCode=''
+      return false
+    }
+    emptySince=null
+    if(text===heldCode)return false
+    heldCode=text
+    return true
+  }
 
   function esc(s){
     return String(s==null?'':s)
@@ -21,6 +42,8 @@
   }
 
   function stop(){
+    cameraEpoch++
+    cameraStarting=false
     if(timer){cancelAnimationFrame(timer);timer=0}
     if(stream){
       stream.getTracks().forEach(track=>{try{track.stop()}catch(_){}})
@@ -28,6 +51,7 @@
     }
     const video=document.getElementById('qrCamVideo')
     if(video)video.srcObject=null
+    cameraButton()
   }
 
   function noteForCamera(){
@@ -70,7 +94,7 @@
     if(mobile){
       const note=document.getElementById('qrCamNote')
       if(note)note.textContent=error?'照合できませんでした。下のメッセージを確認してください。':'読み取りました。下に照合結果を表示しています。'
-      document.getElementById(!error&&window.QrWork?'qrWork':'qrScanResult')?.scrollIntoView({behavior:'smooth',block:'nearest'})
+      if(error)stop()
     }
   }
 
@@ -158,6 +182,7 @@
 
   async function tick(){
     if(!stream)return
+    const run=cameraEpoch
     timer=requestAnimationFrame(tick)
     if(decoding)return
     const video=document.getElementById('qrCamVideo')
@@ -188,8 +213,8 @@
           }
         }
       }
-      if(text){
-        stop()
+      if(stream&&run===cameraEpoch&&((!mobile&&text)||(mobile&&acceptFrame(text,Date.now())))){
+        if(!mobile)stop()
         const note=document.getElementById('qrCamNote')
         if(note)note.textContent='QRを読み取りました。在庫を照合しています。'
         await lookup(text)
@@ -205,12 +230,22 @@
       return
     }
     stop()
+    const run=++cameraEpoch
+    cameraStarting=true
+    cameraButton()
+    heldCode='';emptySince=null
     try{
-      stream=await navigator.mediaDevices.getUserMedia({
+      const acquired=await navigator.mediaDevices.getUserMedia({
         audio:false,
         video:{facingMode:{ideal:'environment'}},
       })
+      if(run!==cameraEpoch){acquired.getTracks().forEach(track=>track.stop());return}
+      stream=acquired
+      cameraStarting=false
+      cameraButton()
     }catch(e){
+      if(run!==cameraEpoch)return
+      cameraStarting=false;cameraButton()
       if(note)note.textContent='カメラを開始できませんでした。権限を拒否したか、このブラウザが対応していません。QRリーダーか手入力を使ってください。'
       return
     }
@@ -229,33 +264,24 @@
     error=''
     document.getElementById('main').innerHTML=`<section class="qr-read-page">
       <h1>在庫QR読み取り</h1>
-      <button type="button" id="qrCamStart" class="primary">カメラで読む</button>
-      <div class="qr-read-camera">
+      <div class="qr-read-camera mobile-camera">
+        <button type="button" id="qrCamToggle" class="primary" aria-pressed="false">カメラON</button>
         <p id="qrCamNote" role="status"></p>
         <video id="qrCamVideo" playsinline muted autoplay></video>
         <canvas id="qrCamCanvas" hidden></canvas>
-        <button type="button" id="qrCamStop">カメラを止める</button>
       </div>
       <details><summary>QRリーダー・手入力で探す</summary>
         <form id="qrScanForm"><label>QR文字列<input id="qrScanInput" maxlength="${MAX_LEN}" autocomplete="off"></label>
         <button type="submit">この文字列で探す</button></form>
       </details>
       <div id="qrScanResult" aria-live="polite"></div>
-      <button type="button" id="qrNext">次のQRを読む</button>
     </section>`
-    document.getElementById('qrCamStart').onclick=startCamera
-    document.getElementById('qrCamStop').onclick=stop
+    document.getElementById('qrCamToggle').onclick=()=>{
+      if(stream||cameraStarting){stop();document.getElementById('qrCamNote').textContent='カメラはOFFです。'}else startCamera()
+    }
     document.getElementById('qrScanForm').onsubmit=event=>{
       event.preventDefault()
       lookup(document.getElementById('qrScanInput').value)
-    }
-    document.getElementById('qrNext').onclick=()=>{
-      if(busy)return
-      result=null
-      error=''
-      paintResult()
-      document.getElementById('qrScanInput').value=''
-      startCamera()
     }
     const note=document.getElementById('qrCamNote')
     note.textContent=noteForCamera()

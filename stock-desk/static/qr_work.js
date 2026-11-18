@@ -34,17 +34,22 @@
   const box=root();if(!box||!data)return;
   const job=current(),editable=job&&job.status!=='confirmed'&&(job.actor_id===data.actorId||(!mobile&&job.status==='completed'&&data.canConfirm));
   const visible=data.jobs.filter(j=>!mobile||j.actor_id===data.actorId);
-  box.innerHTML=`<h2>倉庫の読み取り作業</h2>
+  box.classList.toggle('qr-work-mobile',mobile);
+  box.innerHTML=`<h2>${mobile?'読み取った制服':'倉庫の読み取り作業'}</h2>
+   ${mobile?'<details class="qr-work-help"><summary>操作方法</summary>':''}
    <p>最初のQRで作業開始 → 同じQRで数量＋1 → 数量を確認して完了 → PCで在庫に反映</p>
    <p>読み取り・保存・完了だけでは在庫は変わりません。Wi-Fi接続中に利用してください。</p>
-   <p>カメラは1回の読み取りで停止します。続ける場合は「次のQRを読む」（PCでは「カメラで読む」）を押してください。同じQRを映し続けて数量が増えることを防ぎます。</p>
+   <p>${mobile?'カメラONで連続読み取りできます。同じQRは一度画面から外して、再び映すと1枚追加します。':'カメラは1回ごとに停止します。続ける場合は「カメラで読む」を押してください。'}</p>
+   ${mobile?'</details>':''}
    <p id="qrWorkMessage" role="status"></p>
+   ${mobile?'<details class="qr-work-help"><summary>保存した作業・一覧更新</summary>':''}
    <div class="qr-work-actions"><button type="button" data-refresh>一覧を更新</button><button type="button" data-active>読み取り中の作業へ</button></div>
    <label>保存された作業<select data-jobs><option value="">新しい作業（最初のQRで開始）</option>${visible.map(j=>`<option value="${esc(j.id)}" ${j.id===selected?'selected':''}>${esc(j.started_at)} ／ ${esc(j.actor_name)} ／ ${status(j)} ／ ${j.lines.reduce((n,l)=>n+l.qty,0)}点</option>`).join('')}</select></label>
-   ${job?`<h3>${status(job)}</h3><p>担当：${esc(job.actor_name)}<br>開始：${esc(job.started_at)}${job.completed_at?'<br>完了：'+esc(job.completed_at):''}${job.confirmed_at?'<br>在庫反映：'+esc(job.confirmed_at)+' ／ '+esc(job.confirmed_by):''}</p>
+   ${mobile?'</details>':''}
+   ${job?`<h3>${status(job)}</h3>${mobile?'<details class="qr-work-help"><summary>作業日時・担当</summary>':''}<p>担当：${esc(job.actor_name)}<br>開始：${esc(job.started_at)}${job.completed_at?'<br>完了：'+esc(job.completed_at):''}${job.confirmed_at?'<br>在庫反映：'+esc(job.confirmed_at)+' ／ '+esc(job.confirmed_by):''}</p>${mobile?'</details>':''}
    ${!mobile?`<label>在庫に反映する操作<select data-direction ${editable?'':'disabled'}><option value="outbound" ${job.direction==='outbound'?'selected':''}>出庫（在庫を減らす）</option><option value="inbound" ${job.direction==='inbound'?'selected':''}>入庫（在庫を増やす）</option></select></label>
    <p>数量は＋・－ボタンまたは直接入力で変更できます。0は反映対象外です。サイズ・新品中古・場所が未選択の場合は確認して選んでください。出庫は選んだ場所の在庫から古い入荷順に引き当てます。</p>`:'<p>枚数を確認してください。間違えて読んだ行は削除できます。</p>'}
-   <div class="qr-work-lines">${job.lines.map(l=>`<article data-line="${esc(l.key)}"><strong>${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)}</strong>
+   <div class="qr-work-lines">${job.lines.map(l=>mobile?`<article class="qr-work-row" data-line="${esc(l.key)}"><span class="qr-row-name" title="${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)} ／ ${esc(l.color)} ／ ${esc(l.spec)}">${esc(l.code)} ${esc(l.productName)} <small>${esc(l.size||'未設定')}・${esc(l.condition==='new'?'新品':l.condition==='used'?'中古':'状態未設定')}</small></span><div class="qr-qty"><button type="button" data-minus ${editable?'':'disabled'} aria-label="枚数を1減らす">－</button><input data-field="qty" aria-label="枚数" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable?'':'disabled'}><button type="button" data-plus ${editable?'':'disabled'} aria-label="枚数を1増やす">＋</button></div>${editable?'<button type="button" data-delete aria-label="この行を削除">削除</button>':''}</article>`:`<article data-line="${esc(l.key)}"><strong>${esc(l.customerName)} ／ ${esc(l.code)} ${esc(l.productName)}</strong>
     <p>${esc(l.color)} ／ ${esc(l.spec)}</p>
     <p>QR読み取り ${l.scanCount} 回</p>
     <label>${mobile?'枚数':'反映する数量'}<div class="qr-qty"><button type="button" data-minus ${editable?'':'disabled'} aria-label="数量を1減らす">－</button><input data-field="qty" type="number" min="0" max="99999" step="1" value="${l.qty}" ${editable?'':'disabled'}><button type="button" data-plus ${editable?'':'disabled'} aria-label="数量を1増やす">＋</button></div></label>
@@ -78,7 +83,7 @@
  async function mount(phone){
   mobile=phone;data=null;selected=null;dirty=false;pending=null;const run=++epoch;
   const parent=document.querySelector('.qr-read-page');if(!parent)return;
-  const box=document.createElement('section');box.id='qrWork';box.className='qr-work';box.innerHTML='<h2>倉庫の読み取り作業</h2><p id="qrWorkMessage">保存した作業を読み込み中…</p>';parent.append(box);
+  const box=document.createElement('section');box.id='qrWork';box.className='qr-work';box.innerHTML='<h2>倉庫の読み取り作業</h2><p id="qrWorkMessage">保存した作業を読み込み中…</p>';if(mobile)parent.insertBefore(box,parent.querySelector('details'));else parent.append(box);
   try{const loaded=await request('state');if(epoch!==run||!root())return;data=loaded;selected=active()?.id||null;render()}catch(e){message(e.message+' 一度ページを開き直してください。',true)}
  }
  async function record(raw){
