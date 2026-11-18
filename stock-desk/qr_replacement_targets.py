@@ -10,6 +10,73 @@ import product_ledger_import as pli
 import stock
 
 
+def _collect_merged_qr_lots(c: sqlite3.Connection) -> list[dict]:
+    """同じ在庫に合算され、旧QRが2つ以上紐づいているロット（または在庫ありで旧QR未紐づけ）を収集する。"""
+    has_qr = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='qr_stock_links'").fetchone()
+    has_map = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='legacy_csv_row_maps'").fetchone()
+    if not has_qr or not has_map:
+        return []
+    qr_by_key = {}
+    for r in c.execute(
+        'SELECT file_sha256, source_row_no, legacy_stock_id FROM qr_stock_links WHERE source_row_no IS NOT NULL'
+    ):
+        qr_by_key[(r['file_sha256'], r['source_row_no'])] = r['legacy_stock_id']
+    lot_qrs: dict[int, list[str]] = {}
+    for r in c.execute(
+        'SELECT file_sha256, source_row_no, lot_ids_json FROM legacy_csv_row_maps WHERE source_row_no IS NOT NULL'
+    ):
+        lid_str = qr_by_key.get((r['file_sha256'], r['source_row_no']))
+        if not lid_str:
+            continue
+        try:
+            ids = json.loads(r['lot_ids_json'] or '[]')
+        except (TypeError, ValueError):
+            continue
+        for lid in ids:
+            lot_qrs.setdefault(int(lid), []).append(lid_str)
+    out = []
+    for row in c.execute(
+        '''SELECT l.id AS lot_id, l.customer_product_id, l.size_label, l.condition,
+                  l.qty_remaining, l.location_id,
+                  cu.name AS customer_name, p.id AS product_id, p.code, p.name AS product_name, p.color,
+                  cp.embroidery, loc.name AS loc_name, parent.name AS site_name
+           FROM lots l
+           JOIN customer_products cp ON cp.id = l.customer_product_id
+           JOIN customers cu ON cu.id = cp.customer_id
+           JOIN products p ON p.id = cp.product_id
+           JOIN locations loc ON loc.id = l.location_id
+           LEFT JOIN locations parent ON parent.id = loc.parent_id
+           WHERE l.qty_remaining > 0
+           ORDER BY cu.name, p.code, l.size_label, l.id'''
+    ):
+        qrs = list(dict.fromkeys(lot_qrs.get(int(row['lot_id']), [])))
+        if len(qrs) == 1:
+            continue
+        s_name = row['site_name'] or row['loc_name'] or ''
+        sh_name = row['loc_name'] if row['site_name'] else ''
+        place = f"{s_name} / {sh_name}" if sh_name else s_name
+        reason = '同じ在庫に合算（旧QR複数）' if len(qrs) >= 2 else '旧QR未対応'
+        out.append({
+            'lotId': int(row['lot_id']),
+            'customerProductId': int(row['customer_product_id']),
+            'productId': int(row['product_id']),
+            'customerName': row['customer_name'] or '',
+            'code': row['code'] or '',
+            'name': row['product_name'] or '',
+            'color': row['color'] or '',
+            'embroideryLabel': stock.embroidery_label(row['embroidery']),
+            'size': row['size_label'] or '',
+            'condition': row['condition'] or '',
+            'conditionLabel': stock.condition_label(row['condition']) if row['condition'] else '未設定',
+            'qty': int(row['qty_remaining'] or 0),
+            'locationId': int(row['location_id']),
+            'place': place,
+            'reason': reason,
+            'legacyIds': qrs,
+        })
+    return out
+
+
 def get_targets_detail(c: sqlite3.Connection) -> dict:
     """貼り替え対象56件と、各分割商品の現在庫・保管場所情報を集約する。"""
     raw_targets = pli._collect_all_qr_replacement_targets(c)
@@ -89,11 +156,14 @@ def get_targets_detail(c: sqlite3.Connection) -> dict:
             'items': items,
         })
 
+    merged_lots = _collect_merged_qr_lots(c)
     return {
         'totalCount': len(detailed_targets),
         'targets': detailed_targets,
         'splitProductIds': sorted(list(all_split_product_ids)),
         'splitCodes': sorted(list(all_split_codes)),
+        'mergedLotCount': len(merged_lots),
+        'mergedLots': merged_lots,
     }
 
 
@@ -132,5 +202,17 @@ def export_csv_bytes(c: sqlite3.Connection) -> bytes:
                 locs_str,
                 '',  # チェック用空欄
             ])
+
+    for m in detail.get('mergedLots') or []:
+        writer.writerow([
+            m.get('customerName') or '',
+            m.get('reason') or '',
+            m.get('code') or '',
+            f"{m.get('name') or ''} ({m.get('size') or ''} / {m.get('conditionLabel') or ''})",
+            m.get('color') or '',
+            m.get('qty') or 0,
+            f"{m.get('place') or ''} ({m.get('size') or ''}: {m.get('qty') or 0}着)",
+            '',
+        ])
 
     return '\ufeff'.join(['', output.getvalue()]).encode('utf-8')

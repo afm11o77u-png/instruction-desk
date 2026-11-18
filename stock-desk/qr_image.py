@@ -1,20 +1,21 @@
 """在庫QRの画像。標準ライブラリだけでPNGを作る。
 
 外部のQRサービスへは送らない。Pillow や qrcode が無くても在庫アプリは起動する。
-中に入れる文字列はIDだけ。版は3、誤り訂正はM。このIDの長さ（37文字）に足りる。
+版3（新QRの37文字ID用）と版8（旧QRのJSON文字列用、最大152バイト）に対応。
 """
 from __future__ import annotations
 
 import struct
 import zlib
 
-# 版3・誤り訂正M。データ44符号、誤り訂正26符号、ブロック1つ。
-_VERSION = 3
-_SIZE = 17 + _VERSION * 4  # 29
-_DATA_CODEWORDS = 44
-_ECC_CODEWORDS = 26
 _QUIET = 4
 _SCALE = 8
+
+# (version, size, total_data_codewords, groups: ((count, data_cw, ecc_cw), ...), align_centers)
+_SPECS = (
+    (3, 29, 44, ((1, 44, 26),), (22,)),
+    (8, 49, 154, ((2, 38, 22), (2, 39, 22)), (6, 24, 42)),
+)
 
 _EXP = [0] * 512
 _LOG = [0] * 256
@@ -67,9 +68,24 @@ def _bch_type_info(data):
     return ((data << 10) | d) ^ 0b101010000010010
 
 
-def _byte_codewords(payload: bytes):
-    if len(payload) > 38:
-        raise ValueError('QRに入る文字数を超えています。')
+def _bch_version_info(version):
+    g12 = 0b1111100100101
+    d = version << 12
+    while d.bit_length() - g12.bit_length() >= 0:
+        d ^= g12 << (d.bit_length() - g12.bit_length())
+    return (version << 12) | d
+
+
+def _select_spec(payload_len):
+    for spec in _SPECS:
+        # 4bit mode + 8bit length (for v1..9) = 12bit header -> max bytes = total_data - 2
+        if payload_len <= spec[2] - 2:
+            return spec
+    raise ValueError('QRに入る文字数を超えています。')
+
+
+def _byte_codewords(payload: bytes, spec):
+    _ver, _size, total_data, groups, _align = spec
     bits = []
 
     def put(value, length):
@@ -80,7 +96,7 @@ def _byte_codewords(payload: bytes):
     put(len(payload), 8)
     for byte in payload:
         put(byte, 8)
-    capacity = _DATA_CODEWORDS * 8
+    capacity = total_data * 8
     for _ in range(min(4, capacity - len(bits))):
         bits.append(0)
     while len(bits) % 8:
@@ -94,21 +110,41 @@ def _byte_codewords(payload: bytes):
         for bit in bits[i:i + 8]:
             value = (value << 1) | bit
         data.append(value)
-    if len(data) != _DATA_CODEWORDS:
+    if len(data) != total_data:
         raise ValueError('QRの符号数を合わせられませんでした。')
-    return data + _rs_ecc(data, _ECC_CODEWORDS)
+    data_blocks = []
+    ecc_blocks = []
+    pos = 0
+    for count, dcw, ecw in groups:
+        for _ in range(count):
+            blk = data[pos:pos + dcw]
+            pos += dcw
+            data_blocks.append(blk)
+            ecc_blocks.append(_rs_ecc(blk, ecw))
+    out = []
+    max_d = max(len(b) for b in data_blocks)
+    for i in range(max_d):
+        for b in data_blocks:
+            if i < len(b):
+                out.append(b[i])
+    max_e = max(len(e) for e in ecc_blocks)
+    for i in range(max_e):
+        for e in ecc_blocks:
+            if i < len(e):
+                out.append(e[i])
+    return out
 
 
-def _blank():
-    return [[None] * _SIZE for _ in range(_SIZE)]
+def _blank(size):
+    return [[None] * size for _ in range(size)]
 
 
-def _finder(modules, row, col):
+def _finder(modules, size, row, col):
     for r in range(-1, 8):
-        if not 0 <= row + r < _SIZE:
+        if not 0 <= row + r < size:
             continue
         for c in range(-1, 8):
-            if not 0 <= col + c < _SIZE:
+            if not 0 <= col + c < size:
                 continue
             on = (
                 (0 <= r <= 6 and c in (0, 6))
@@ -118,21 +154,31 @@ def _finder(modules, row, col):
             modules[row + r][col + c] = on
 
 
-def _patterns(modules):
-    _finder(modules, 0, 0)
-    _finder(modules, 0, _SIZE - 7)
-    _finder(modules, _SIZE - 7, 0)
-    for i in range(8, _SIZE - 8):
+def _patterns(modules, spec):
+    version, size, _total, _groups, align_centers = spec
+    _finder(modules, size, 0, 0)
+    _finder(modules, size, 0, size - 7)
+    _finder(modules, size, size - 7, 0)
+    for i in range(8, size - 8):
         if modules[i][6] is None:
             modules[i][6] = i % 2 == 0
         if modules[6][i] is None:
             modules[6][i] = i % 2 == 0
-    # 版3の位置合わせは (22, 22) だけ。検出パターンと重なる位置は置かない。
-    center = 22
-    if modules[center][center] is None:
-        for r in range(-2, 3):
-            for c in range(-2, 3):
-                modules[center + r][center + c] = r in (-2, 2) or c in (-2, 2) or (r == 0 and c == 0)
+    for ar in align_centers:
+        for ac in align_centers:
+            if (ar < 9 and ac < 9) or (ar < 9 and ac >= size - 8) or (ar >= size - 8 and ac < 9):
+                continue
+            for r in range(-2, 3):
+                for c in range(-2, 3):
+                    modules[ar + r][ac + c] = r in (-2, 2) or c in (-2, 2) or (r == 0 and c == 0)
+    if version >= 7:
+        vbits = _bch_version_info(version)
+        for i in range(18):
+            bit = ((vbits >> i) & 1) == 1
+            r = i // 3
+            c = size - 11 + (i % 3)
+            modules[r][c] = bit
+            modules[c][r] = bit
 
 
 def _mask_on(pattern, row, col):
@@ -155,7 +201,7 @@ def _mask_on(pattern, row, col):
     raise ValueError('マスクが不正です。')
 
 
-def _draw_format(modules, mask, test=False):
+def _draw_format(modules, size, mask, test=False):
     # 誤り訂正Mは 00。
     bits = _bch_type_info(mask & 7)
     for i in range(15):
@@ -165,23 +211,23 @@ def _draw_format(modules, mask, test=False):
         elif i < 8:
             modules[i + 1][8] = bit
         else:
-            modules[_SIZE - 15 + i][8] = bit
+            modules[size - 15 + i][8] = bit
         if i < 8:
-            modules[8][_SIZE - i - 1] = bit
+            modules[8][size - i - 1] = bit
         elif i < 9:
             modules[8][15 - i - 1 + 1] = bit
         else:
             modules[8][15 - i - 1] = bit
-    modules[_SIZE - 8][8] = not test
+    modules[size - 8][8] = not test
 
 
-def _map_data(modules, codewords, mask):
+def _map_data(modules, size, codewords, mask):
     inc = -1
-    row = _SIZE - 1
+    row = size - 1
     bit_index = 7
     byte_index = 0
     data_len = len(codewords)
-    for col in range(_SIZE - 1, 0, -2):
+    for col in range(size - 1, 0, -2):
         if col <= 6:
             col -= 1
         while True:
@@ -198,14 +244,14 @@ def _map_data(modules, codewords, mask):
                         byte_index += 1
                         bit_index = 7
             row += inc
-            if row < 0 or row >= _SIZE:
+            if row < 0 or row >= size:
                 row -= inc
                 inc = -inc
                 break
 
 
 def _penalty(modules):
-    n = _SIZE
+    n = len(modules)
     score = 0
     for row in modules:
         run = 1
@@ -242,15 +288,17 @@ def _penalty(modules):
 def modules_for(text: str):
     """True が黒。余白は含めない。"""
     payload = text.encode('utf-8')
-    codewords = _byte_codewords(payload)
+    spec = _select_spec(len(payload))
+    size = spec[1]
+    codewords = _byte_codewords(payload, spec)
     best = None
     best_score = None
     for mask in range(8):
-        modules = _blank()
-        _patterns(modules)
-        _draw_format(modules, mask, test=True)
-        _map_data(modules, codewords, mask)
-        _draw_format(modules, mask, test=False)
+        modules = _blank(size)
+        _patterns(modules, spec)
+        _draw_format(modules, size, mask, test=True)
+        _map_data(modules, size, codewords, mask)
+        _draw_format(modules, size, mask, test=False)
         score = _penalty(modules)
         if best_score is None or score < best_score:
             best = modules
@@ -260,7 +308,8 @@ def modules_for(text: str):
 
 def png_bytes(text: str) -> bytes:
     modules = modules_for(text)
-    n = _SIZE + _QUIET * 2
+    size = len(modules)
+    n = size + _QUIET * 2
     width = n * _SCALE
     height = width
     rows = []
@@ -269,7 +318,7 @@ def png_bytes(text: str) -> bytes:
         line = bytearray()
         for c in range(n):
             sc = c - _QUIET
-            dark = 0 <= src < _SIZE and 0 <= sc < _SIZE and bool(modules[src][sc])
+            dark = 0 <= src < size and 0 <= sc < size and bool(modules[src][sc])
             line.extend((b'\x00' if dark else b'\xff') * _SCALE)
         row = bytes(line)
         if len(row) != width:
