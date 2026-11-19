@@ -80,7 +80,7 @@ if(scanForm)scanForm.onsubmit=e=>{
   if(current!==draft||!editable())return;
   if(draft.manual.some(row=>row.barcode===code))throw Error(code+' は追加済みです。');
   if(draft.manual.length>=500)throw Error('明細は500行までです。リストを分けてください。');
-  const result=await api('/api/barcode-delivery?code='+encodeURIComponent(code));
+  const result=await api('/api/barcode-delivery?product=1&code='+encodeURIComponent(code));
   if(current!==draft||!editable())return;
   if(!result.ok||!result.found)throw Error(result.message||'バーコードが見つかりません。');
   const barcode=result.masterCode||code;
@@ -88,7 +88,7 @@ if(scanForm)scanForm.onsubmit=e=>{
   flushInputs();
   draft.manual.push({key:'manual:'+crypto.randomUUID(),barcode,
    requester:user.name,customer:result.customer||'',name:result.itemName||'',
-   maker:'',sku:'',size:result.size||'',condition:'未指定',quantity:1,stock,note2:''});
+   maker:result.maker||'',sku:result.sku||'',size:result.size||'',condition:'未指定',quantity:1,stock,note2:''});
   activeGroup=stock;
   dirty=true;
   preview();
