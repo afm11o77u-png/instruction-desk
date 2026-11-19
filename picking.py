@@ -978,7 +978,8 @@ def handle(h,c,path,d,can_access):
     if path.startswith('/api/carry-input'):
         if u['role'] not in ('owner','floor'): return 403,{'error':'管理担当持込の入力は現場と主管理者が使用します。'}
         return carry_input(c,u,path,d or {})
-    if u['role'] not in ('owner','floor','sales'): return 403,{'error':'この操作はできません。'}
+    scan_export = path == '/api/picking/scan-xlsx' and d is not None
+    if u['role'] not in ('owner','floor','sales') and not (scan_export and u['role']=='floor3'): return 403,{'error':'この操作はできません。'}
     if path in ('/api/picking/carry-day','/api/picking/carry-check','/api/picking/carry-print','/api/picking/carry-month') and u['role'] not in ('owner','sales'): return 403,{'error':'管理担当持込の出力は営業と主管理者が使用します。'}
     if u['role']=='sales' and path not in ('/api/picking/carry-day','/api/picking/carry-check','/api/picking/carry-print','/api/picking/carry-month','/api/picking/save','/api/picking/cancel','/api/picking/mail','/api/picking/sent','/api/picking/arrange','/api/picking/reopen','/api/picking') and not re.fullmatch(r'/api/picking/\d+/(history|xlsx)',path):
         return 403,{'error':'管理担当持込の出力は営業と主管理者が使用します。'}
