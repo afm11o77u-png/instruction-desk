@@ -1,5 +1,8 @@
 """WEB依頼の部署・採用品設定。在庫DBは読み取り専用。"""
 import json
+import base64
+import io
+from datetime import datetime
 from contextlib import closing
 import sqlite3
 
@@ -13,6 +16,7 @@ def schema(c):
       display_name TEXT NOT NULL DEFAULT '', sizes TEXT NOT NULL DEFAULT '[]',
       published INTEGER NOT NULL DEFAULT 0, UNIQUE(department_id,product_id));
     ''')
+    c.execute("CREATE TABLE IF NOT EXISTS web_request_customer_settings (customer_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0, draft TEXT NOT NULL, publication TEXT, status TEXT NOT NULL DEFAULT 'draft')")
 
 def catalog(path):
     if not path.exists(): return {'customers':[], 'products':[]}
@@ -31,36 +35,148 @@ def catalog(path):
             p['customers']=links.get(p['id'],[])
         return {'customers':customers,'products':products}
 
-def state(c,path):
+REQUEST_TYPES = ['新規', 'サイズ交換', '破損交換', '追加・補充', 'その他']
+
+def can_open(u):
+    return bool(u and not u['must_change'] and (u['role'] in ('owner','sales') or u['manage']))
+
+def default_config():
+    return dict(primary_user_id=None, backup_user_id=None, delivery_to='', receive_place='', customer_note='', request_types=REQUEST_TYPES[:], departments=[])
+
+def read_config(c,cid):
+    row=c.execute('SELECT * FROM web_request_customer_settings WHERE customer_id=?',(cid,)).fetchone()
+    if row:
+        return dict(customer_id=cid,version=row['version'],draft=json.loads(row['draft']),publication=json.loads(row['publication']) if row['publication'] else None,status=row['status'])
+    cfg=default_config()
+    # Preserve previous department/uniform settings as drafts requiring handling selection.
+    for dep in c.execute('SELECT * FROM web_request_departments WHERE customer_id=?',(cid,)):
+        uniforms=[dict(r) for r in c.execute('SELECT * FROM web_request_uniforms WHERE department_id=?',(dep['id'],))]
+        cfg['departments'].append(dict(id='legacy-'+str(dep['id']),name=dep['name'],contracts=[dict(id='legacy-contract-'+str(dep['id']),name='標準契約',kind='要設定',default_qty=1,active=True,uniforms=[dict(id='legacy-uniform-'+str(x['id']),customer_product_id=None,product_id=x['product_id'],display_name=x['display_name'],description='',default_qty=1,sort_order=0,photo='',active=bool(x['published'])) for x in uniforms])]))
+    return dict(customer_id=cid,version=0,draft=cfg,publication=None,status='draft')
+
+def permitted(profile,u):
+    if u is None or u['role']=='owner' or u['manage']: return True
+    cfg=profile['draft']; assigned=[cfg.get('primary_user_id'),cfg.get('backup_user_id')]
+    return not any(assigned) or u['id'] in assigned
+
+def state(c,path,user=None):
     data=catalog(path)
-    data['departments']=[dict(r) for r in c.execute('SELECT * FROM web_request_departments ORDER BY name,id')]
-    data['uniforms']=[]
-    for r in c.execute('SELECT * FROM web_request_uniforms ORDER BY id'):
-        row=dict(r);row['sizes']=json.loads(row['sizes']);data['uniforms'].append(row)
+    with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as s:
+        s.row_factory=sqlite3.Row
+        data['handles']=[dict(r) for r in s.execute('SELECT id,customer_id,product_id,embroidery FROM customer_products WHERE active=1')]
+    profiles=[read_config(c,x['id']) for x in data['customers']]
+    data['profiles']=[x for x in profiles if permitted(x,user)]
+    allowed={x['customer_id'] for x in data['profiles']}
+    data['customers']=[x for x in data['customers'] if x['id'] in allowed]
+    data['handles']=[x for x in data['handles'] if x['customer_id'] in allowed]
+    pids={x['product_id'] for x in data['handles']}
+    data['products']=[x for x in data['products'] if x['id'] in pids]
+    data['staff']=[dict(r) for r in c.execute("SELECT id,name FROM users WHERE active=1 AND (role IN ('owner','sales') OR manage=1) ORDER BY name")]
+    data['requestTypes']=REQUEST_TYPES
+    data['userId']=user['id'] if user else None
+    data['isAdmin']=user is None or user['role']=='owner' or bool(user['manage'])
     return data
 
-def save(c,path,d):
-    data=catalog(path)
-    if d.get('action')=='department':
-        cid=int(d['customer_id']);name=str(d.get('name','')).strip()
-        if cid not in {x['id'] for x in data['customers']} or not name or len(name)>80:
-            raise ValueError('顧客と部署名を確認してください。')
-        c.execute('INSERT OR IGNORE INTO web_request_departments(customer_id,name) VALUES(?,?)',(cid,name))
-    elif d.get('action')=='uniform':
-        did=int(d['department_id']);pid=int(d['product_id'])
-        if not c.execute('SELECT 1 FROM web_request_departments WHERE id=?',(did,)).fetchone():
-            raise ValueError('部署を選んでください。')
-        p=next((x for x in data['products'] if x['id']==pid),None)
-        if not p: raise ValueError('有効な制服を選んでください。')
-        sizes=d.get('sizes',[]);name=str(d.get('display_name','')).strip()
-        if not isinstance(sizes,list) or not sizes or any(x not in p['sizes'] for x in sizes) or len(name)>120:
-            raise ValueError('在庫に登録されているサイズを１つ以上選んでください。')
-        c.execute('''INSERT INTO web_request_uniforms(department_id,product_id,display_name,sizes,published)
-          VALUES(?,?,?,?,?) ON CONFLICT(department_id,product_id) DO UPDATE SET
-          display_name=excluded.display_name,sizes=excluded.sizes,published=excluded.published''',
-          (did,pid,name,json.dumps(list(dict.fromkeys(sizes)),ensure_ascii=False),int(bool(d.get('published')))))
-    elif d.get('action')=='remove':
-        c.execute('DELETE FROM web_request_uniforms WHERE id=?',(int(d['id']),))
-    else: raise ValueError('操作を確認してください。')
-    c.commit()
-    return state(c,path)
+def text(value,label,limit=100,required=False):
+    if not isinstance(value,str): raise ValueError(label+'を確認してください。')
+    value=value.strip()
+    if len(value)>limit or (required and not value): raise ValueError(label+'を確認してください。')
+    return value
+
+def number(value,label,low=1,high=99):
+    if type(value) is not int or not low<=value<=high: raise ValueError(label+'を確認してください。')
+    return value
+
+def normalize_photo(value):
+    if not value:return ''
+    if not isinstance(value,str) or len(value)>2400000:raise ValueError('写真の容量が大きすぎます。')
+    try:
+        from PIL import Image, ImageOps
+        head,encoded=value.split(',',1)
+        if head not in ('data:image/jpeg;base64','data:image/png;base64','data:image/webp;base64'):raise ValueError()
+        with Image.open(io.BytesIO(base64.b64decode(encoded,validate=True))) as img:
+            if img.width*img.height>16000000 or getattr(img,'n_frames',1)!=1:raise ValueError()
+            img=ImageOps.exif_transpose(img);img.thumbnail((1000,1000))
+            canvas=Image.new('RGB',img.size,'white')
+            if 'A' in img.getbands():canvas.paste(img,mask=img.getchannel('A'))
+            else:canvas.paste(img.convert('RGB'))
+            out=io.BytesIO();canvas.save(out,format='JPEG',quality=82)
+        return 'data:image/jpeg;base64,'+base64.b64encode(out.getvalue()).decode('ascii')
+    except Exception as e:raise ValueError('写真はJPEG・PNG・WebPの静止画像を選んでください。') from e
+
+def validate_config(cfg,data,cid):
+    if not isinstance(cfg,dict):raise ValueError('設定を確認してください。')
+    out=default_config()
+    staff_ids={x['id'] for x in data['staff']}
+    for k in ('primary_user_id','backup_user_id'):
+        v=cfg.get(k)
+        if v is not None and (type(v) is not int or v not in staff_ids):raise ValueError('担当者を確認してください。')
+        out[k]=v
+    if out['primary_user_id'] and out['primary_user_id']==out['backup_user_id']:raise ValueError('主担当と副担当は別の人を選んでください。')
+    for k in ('delivery_to','receive_place','customer_note'):out[k]=text(cfg.get(k,''),'納品先・案内文',1000)
+    types=cfg.get('request_types')
+    if not isinstance(types,list) or not types or any(x not in REQUEST_TYPES for x in types):raise ValueError('受付する依頼を選んでください。')
+    out['request_types']=list(dict.fromkeys(types))
+    handles={x['id']:x for x in data['handles'] if x['customer_id']==cid}
+    products={x['id']:x for x in data['products']}
+    ids=set()
+    def ident(x):
+        v=text(x.get('id',''),'識別情報',80,True)
+        if v in ids:raise ValueError('識別情報が重複しています。')
+        ids.add(v);return v
+    deps=cfg.get('departments',[])
+    if not isinstance(deps,list) or len(deps)>100:raise ValueError('部署数を確認してください。')
+    for d in deps:
+        if not isinstance(d,dict):raise ValueError('部署の内容を確認してください。')
+        dep=dict(id=ident(d),name=text(d.get('name',''),'部署名',80,True),contracts=[])
+        contracts=d.get('contracts',[])
+        if not isinstance(contracts,list) or len(contracts)>100:raise ValueError('契約数を確認してください。')
+        for k in contracts:
+            if not isinstance(k,dict):raise ValueError('契約の内容を確認してください。')
+            contract=dict(id=ident(k),name=text(k.get('name',''),'契約名',100,True),kind=text(k.get('kind',''),'契約形態',100,True),default_qty=number(k.get('default_qty'),'標準枚数'),active=bool(k.get('active')),uniforms=[])
+            uniforms=k.get('uniforms',[])
+            if not isinstance(uniforms,list) or len(uniforms)>200:raise ValueError('制服数を確認してください。')
+            seen=set()
+            for u in uniforms:
+                if not isinstance(u,dict):raise ValueError('制服の内容を確認してください。')
+                hid=u.get('customer_product_id')
+                if hid is not None:number(hid,'在庫の制服',1,2147483647)
+                h=handles.get(hid);p=products.get(h['product_id']) if h else None
+                # Legacy unresolved links can remain drafts, but cannot be published.
+                legacy=hid is None and str(u.get('id','')).startswith('legacy-')
+                if not legacy and (not h or not p):raise ValueError('この顧客の在庫に登録された制服を選んでください。')
+                if hid in seen and hid is not None:raise ValueError('同じ契約に同じ制服が重複しています。')
+                seen.add(hid)
+                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=number(u.get('default_qty'),'契約枚数'),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active'))))
+            dep['contracts'].append(contract)
+        out['departments'].append(dep)
+    return out
+
+def save(c,path,d,user=None):
+    cid=number(d.get('customer_id'),'顧客',1,2147483647)
+    data=state(c,path,user)
+    if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この顧客の設定を変更する権限がありません。')
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        current=read_config(c,cid)
+        if not permitted(current,user):raise PermissionError('担当者の設定を確認してください。')
+        if type(d.get('version')) is not int or d['version']!=current['version']:raise ValueError('別の画面で更新されています。一覧を更新してからやり直してください。')
+        action=d.get('action')
+        if action not in ('save','publish','pause'):raise ValueError('操作を確認してください。')
+        cfg=validate_config(d.get('config'),data,cid)
+        if not data['isAdmin']:
+            if not cfg['primary_user_id'] and not cfg['backup_user_id']:cfg['primary_user_id']=user['id']
+            if user['id'] not in (cfg['primary_user_id'],cfg['backup_user_id']):raise ValueError('自分を主担当か副担当に設定してください。')
+        publication=current['publication'];status=current['status']
+        if action=='publish':
+            active=[u for dep in cfg['departments'] for k in dep['contracts'] if k['active'] for u in k['uniforms'] if u['active']]
+            pmap={x['id']:x for x in data['products']}
+            if not active:raise ValueError('表示する契約と制服を１つ以上登録してください。')
+            if any(not u['customer_product_id'] or not pmap.get(u['product_id'],{}).get('sizes') for u in active):raise ValueError('未紐づけの制服やサイズ未登録の制服を確認してください。')
+            publication=dict(config=cfg,published_at=datetime.now().isoformat(timespec='seconds'),version=current['version']+1);status='published'
+        elif action=='pause':status='paused'
+        c.execute("INSERT INTO web_request_customer_settings(customer_id,version,draft,publication,status) VALUES(?,?,?,?,?) ON CONFLICT(customer_id) DO UPDATE SET version=excluded.version,draft=excluded.draft,publication=excluded.publication,status=excluded.status",(cid,current['version']+1,json.dumps(cfg,ensure_ascii=False),json.dumps(publication,ensure_ascii=False) if publication else None,status))
+        c.commit()
+    except Exception:
+        c.rollback();raise
+    return state(c,path,user)

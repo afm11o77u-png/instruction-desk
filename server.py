@@ -1151,9 +1151,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
-                if not u or (u['role'] != 'owner' and not u['manage']):
-                    return self.reply(403, {'error':'主管理者・管理者だけが利用できます。'})
-                try: return self.reply(200, web_requests.state(c, STOCK_DB))
+                if not web_requests.can_open(u):
+                    return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
+                try: return self.reply(200, web_requests.state(c, STOCK_DB, u))
                 except sqlite3.Error: return self.reply(503, {'error':'在庫の顧客・商品を読み取れません。先に在庫管理を確認してください。'})
         if path.startswith('/api/') and migration.is_busy() and path != '/api/me':
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
@@ -1373,8 +1373,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 request_user = self.session_user(c)
                 if not request_user:
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')
-                if request_user['role'] != 'owner' and not request_user['manage']:
-                    return self.reply(403, 'WEB依頼は主管理者・管理者だけが利用できます。', 'text/plain; charset=utf-8')
+                if not web_requests.can_open(request_user):
+                    return self.reply(403, 'WEB依頼は主管理者・管理者・担当者だけが利用できます。', 'text/plain; charset=utf-8')
         if path == '/desk-guide' or path.startswith('/desk-guide/'):
             return self.serve_desk_guide(path)
         if path in ('/mark-guide', '/mark-guide/video.mp4', '/mark-guide/demo.mp4',
@@ -1438,16 +1438,20 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if route == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
-                if not u or (u['role'] != 'owner' and not u['manage']):
-                    return self.reply(403, {'error':'主管理者・管理者だけが利用できます。'})
+                if not web_requests.can_open(u):
+                    return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
                 try:
                     n = int(self.headers.get('Content-Length') or 0)
-                    if n < 1 or n > 100000: raise ValueError('送信内容を確認してください。')
+                    if n < 1 or n > 12000000: raise ValueError('送信内容を確認してください。')
                     d = json.loads(self.rfile.read(n))
                     if not isinstance(d, dict): raise ValueError('送信内容を確認してください。')
-                    return self.reply(200, web_requests.save(c, STOCK_DB, d))
-                except (ValueError, TypeError, KeyError):
-                    return self.reply(400, {'error':'部署・制服・サイズの入力を確認してください。'})
+                    return self.reply(200, web_requests.save(c, STOCK_DB, d, u))
+                except PermissionError as e:
+                    return self.reply(403, {'error':str(e)})
+                except ValueError as e:
+                    return self.reply(400, {'error':str(e)})
+                except (TypeError, KeyError):
+                    return self.reply(400, {'error':'入力内容を確認してください。'})
                 except sqlite3.Error:
                     return self.reply(503, {'error':'設定を保存できませんでした。在庫の登録を確認してください。'})
         if route=='/api/name-labels/exe':
