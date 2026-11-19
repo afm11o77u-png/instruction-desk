@@ -241,7 +241,7 @@ def preview_sort() -> dict:
     }
 
 def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
-    """指示書Excelの『ピッキングリスト』シートから行データを抽出"""
+    """ピッキングリストから行を抽出し、対応する指示書の備考を優先する。"""
     rows = []
     try:
         wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
@@ -283,6 +283,22 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
                     else: header_col_map["note2"] = c_idx
             break
 
+    instruction_rows = ()
+    if (
+        header_row_idx == 1
+        and target_sheet.title == "ピッキングリスト"
+        and "指示書" in wb.sheetnames
+        and tuple(header_col_map.get(key) for key in ("name", "sku", "size", "quantity", "note", "note2"))
+        == (2, 4, 5, 7, 8, 9)
+    ):
+        details = wb["指示書"].iter_rows(
+            min_row=10, max_row=22, max_col=8, values_only=True
+        )
+        if tuple(clean_cell_text(value) for value in next(details, ())) == (
+            "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考"
+        ):
+            instruction_rows = tuple(details)
+
     if header_row_idx is None:
         header_col_map = {
             "requester": 0, "customer": 1, "name": 2, "maker": 3,
@@ -291,7 +307,9 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         }
         header_row_idx = 1
 
-    for row in target_sheet.iter_rows(min_row=header_row_idx + 1, values_only=True):
+    for detail_index, row in enumerate(
+        target_sheet.iter_rows(min_row=header_row_idx + 1, values_only=True)
+    ):
         if not row:
             continue
         
@@ -326,6 +344,16 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         else:
             condition_val = cond_raw
 
+        note, note2 = get_val("note"), get_val("note2")
+        if detail_index < len(instruction_rows):
+            # ピッキングリスト2行目と指示書11行目が対応する。除外行があっても行位置は詰めない。
+            detail = instruction_rows[detail_index]
+            if all(
+                clean_cell_text(detail[col]) == clean_cell_text(get_val(key))
+                for col, key in ((0, "name"), (2, "sku"), (3, "size"), (5, "quantity"))
+            ):
+                note, note2 = detail[6:8]
+
         rows.append({
             "source_file": file_path.name,
             "requester": clean_cell_text(get_val("requester")),
@@ -336,8 +364,8 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
             "size": clean_cell_text(get_val("size")),
             "condition": condition_val,
             "quantity": qty_num,
-            "note": clean_cell_text(get_val("note")),
-            "note2": clean_cell_text(get_val("note2")),
+            "note": clean_cell_text(note),
+            "note2": clean_cell_text(note2),
             "stock": stock_val,
         })
 
