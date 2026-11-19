@@ -1247,7 +1247,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 from urllib.parse import parse_qs, urlparse
                 qs = parse_qs(urlparse(self.path).query)
                 code = qs.get('code', [''])[0].strip()
-                result = barcode_delivery.lookup_barcode(code)
+                result = barcode_delivery.lookup_barcode(code, include_product=qs.get('product', [''])[0] == '1')
                 return self.reply(200, result)
             except Exception as e:
                 return self.reply(500, {'error': f'バーコード照会エラー: {e}'})
