@@ -134,6 +134,7 @@ WHERE s.MasterCode = '$cleanCode'
         }
         if ($IncludeProduct) {
             $details = Get-ProductDetails $conn ($r["LookupProductCode"])
+            $res.itemName = "" + $r["商品名"]
             $res.maker = $details.maker
             $res.sku = $details.sku
         }
