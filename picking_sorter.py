@@ -20,21 +20,26 @@ r"""
 """
 
 import os
+import posixpath
 import re
 import shutil
 from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import Lock
+from xml.dom import minidom
 from xml.etree import ElementTree
 from zipfile import ZipFile
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
 import excel_import
 
 DEFAULT_BASE_DIR = r"\\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】"
 _REPORT_SAVE_LOCK = Lock()
+_REPORT_KEYS = ("requester", "customer", "name", "maker", "sku", "size", "condition", "quantity", "note", "note2")
+_SHEET_XML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_DOCUMENT_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 def get_base_dir() -> Path:
     env_path = os.environ.get("INSTRUCTION_FOLDER_BASE")
@@ -641,19 +646,7 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
 
     start_row = last_data_row + 1
     for r_idx, r in enumerate(rows_data, start=start_row):
-        row_vals = [
-            r["requester"],
-            r["customer"],
-            r["name"],
-            r["maker"],
-            r["sku"],
-            r["size"],
-            r["condition"],
-            r["quantity"],
-            r["note"],
-            r["note2"],
-            "", "", "", ""
-        ]
+        row_vals = [r[key] for key in _REPORT_KEYS] + [""] * 4
         ws.row_dimensions[r_idx].height = 32
         for col_idx, value in enumerate(row_vals, start=1):
             cell = ws.cell(row=r_idx, column=col_idx)
@@ -702,14 +695,99 @@ def _report_has_external_data(path: Path) -> bool:
     return False
 
 
-def _report_output_path(path: Path) -> Path:
-    destination = path
-    version = 1
-    while destination.exists() and _report_has_external_data(destination):
-        suffix = "【自動仕分け】" if version == 1 else f"【自動仕分け{version}】"
-        destination = path.with_name(f"{path.stem}{suffix}{path.suffix}")
-        version += 1
-    return destination
+def _append_to_external_report(source: Path, destination: Path, rows: list[dict]):
+    """Patch only the report sheet in the original Excel package."""
+    with ZipFile(source) as original:
+        book = ElementTree.fromstring(original.read("xl/workbook.xml"))
+        sheet = book.find(f".//{{{_SHEET_XML}}}sheet[@name='持ち込み']")
+        if sheet is None:
+            raise ValueError("外部データ接続付きの報告書に「持ち込み」シートがありません。")
+        rel_id = sheet.get(f"{{{_DOCUMENT_REL}}}id")
+        rels = ElementTree.fromstring(original.read("xl/_rels/workbook.xml.rels"))
+        target = next(rel.attrib["Target"] for rel in rels if rel.get("Id") == rel_id)
+        part = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
+
+        doc = minidom.parseString(original.read(part))
+        root = doc.documentElement
+        data = root.getElementsByTagNameNS(_SHEET_XML, "sheetData")[0]
+        existing_rows = {int(row.getAttribute("r")): row for row in data.getElementsByTagNameNS(_SHEET_XML, "row")}
+        last_data_row = max(
+            (index for index, row in existing_rows.items() if any(
+                row.getElementsByTagNameNS(_SHEET_XML, tag) for tag in ("v", "is", "f")
+            )),
+            default=0,
+        )
+        if not last_data_row:
+            raise ValueError("外部データ接続付きの報告書の「持ち込み」シートに見出しがありません。")
+        first_row, end_row = last_data_row + 1, last_data_row + len(rows)
+        if end_row > 1_048_576:
+            raise ValueError("報告用リストがExcelの行数上限を超えます。")
+        for tag in ("mergeCell", "autoFilter"):
+            for item in root.getElementsByTagNameNS(_SHEET_XML, tag):
+                left, top, _, bottom = range_boundaries(item.getAttribute("ref"))
+                if left <= 14 and top <= end_row and bottom >= first_row:
+                    raise ValueError("報告書の追記先が結合セルまたはフィルター範囲と重なっています。")
+        if root.getElementsByTagNameNS(_SHEET_XML, "tablePart"):
+            raise ValueError("外部データ接続付きの報告書では「持ち込み」シートに直接設定されたテーブルに追記できません。")
+
+        def element(tag):
+            return doc.createElementNS(_SHEET_XML, f"{root.prefix}:{tag}" if root.prefix else tag)
+
+        styles = {
+            re.sub(r"\d+$", "", cell.getAttribute("r")): cell.getAttribute("s")
+            for cell in existing_rows[last_data_row].getElementsByTagNameNS(_SHEET_XML, "c")
+        } if last_data_row > 1 else {}
+        following_rows = iter(sorted(i for i in existing_rows if i >= first_row))
+        following = next(following_rows, None)
+        for index, values in enumerate(rows, start=first_row):
+            row = existing_rows.get(index)
+            if row is None:
+                row = element("row")
+                row.setAttribute("r", str(index))
+                data.insertBefore(row, existing_rows[following] if following is not None else None)
+            else:
+                following = next(following_rows, None)
+
+            existing_cells = {
+                cell.getAttribute("r"): cell for cell in row.getElementsByTagNameNS(_SHEET_XML, "c")
+            }
+            for col in range(1, 15):
+                letter = get_column_letter(col)
+                ref = f"{letter}{index}"
+                cell = existing_cells.pop(ref, None)
+                if cell is None:
+                    cell = element("c")
+                    cell.setAttribute("r", ref)
+                    if styles.get(letter):
+                        cell.setAttribute("s", styles[letter])
+                else:
+                    row.removeChild(cell)
+                    if cell.hasAttribute("t"):
+                        cell.removeAttribute("t")
+                value = values[_REPORT_KEYS[col - 1]] if col <= len(_REPORT_KEYS) else ""
+                if value != "":
+                    if col == 8:
+                        child = element("v")
+                        child.appendChild(doc.createTextNode(str(value)))
+                    else:
+                        cell.setAttribute("t", "inlineStr")
+                        child = element("is")
+                        text = element("t")
+                        text.setAttribute("xml:space", "preserve")
+                        text.appendChild(doc.createTextNode(str(value)))
+                        child.appendChild(text)
+                    cell.appendChild(child)
+                row.insertBefore(cell, next(iter(existing_cells.values()), None))
+
+        dimensions = root.getElementsByTagNameNS(_SHEET_XML, "dimension")
+        if dimensions:
+            _, top, right, bottom = range_boundaries(dimensions[0].getAttribute("ref"))
+            dimensions[0].setAttribute("ref", f"A{min(top, first_row)}:{get_column_letter(max(14, right))}{max(bottom, end_row)}")
+        patched = doc.toxml(encoding="utf-8")
+        ElementTree.fromstring(patched)
+        with ZipFile(destination, "w") as output:
+            for entry in original.infolist():
+                output.writestr(entry, patched if entry.filename == part else original.read(entry))
 
 
 def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
@@ -735,7 +813,23 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
             file_name += ".xlsx"
     else:
         file_name = get_default_report_filename(now)
-    out_path = _report_output_path(report_dir / file_name)
+    out_path = report_dir / file_name
+
+    if out_path.exists() and _report_has_external_data(out_path):
+        temp_path = None
+        before = out_path.stat()
+        try:
+            with NamedTemporaryFile(dir=report_dir, suffix=".xlsx", delete=False) as temp:
+                temp_path = Path(temp.name)
+            _append_to_external_report(out_path, temp_path, carry_rows)
+            after = out_path.stat()
+            if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise OSError("報告用リストが編集中に更新されました。再度仕分けを実行してください。")
+            os.replace(temp_path, out_path)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+        return out_path, {"carry": len(carry_rows), "factory": 0}
 
     if out_path.exists():
         wb = openpyxl.load_workbook(str(out_path))
