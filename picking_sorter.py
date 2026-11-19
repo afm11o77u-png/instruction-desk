@@ -108,6 +108,35 @@ def get_default_report_filename(now: datetime | None = None) -> str:
     return f"報告用{now.strftime('%y%m%d')}.xlsx"
 
 def _extract_address_from_workbook(file_path: Path) -> dict | None:
+    address = _extract_address_fields(file_path)
+    if not address or not address["customer"]:
+        return address
+
+    # 旧指示書の顧客名欄は B2 が顧客名、C2 が店名。宛名にだけ店名を加える。
+    try:
+        wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
+        try:
+            if "指示書" in wb.sheetnames:
+                ws = wb["指示書"]
+                label, customer, store = next(ws.iter_rows(min_row=2, max_row=2, max_col=3), (None,) * 3)
+                if (
+                    label is not None
+                    and clean_cell_text(label.value) == "顧客名"
+                    and clean_cell_text(customer.value) == address["customer"]
+                    and isinstance(store.value, str)
+                    and store.data_type != "e"
+                ):
+                    store_name = clean_cell_text(store.value)
+                    if store_name and not store_name.isdecimal() and store_name != address["customer"]:
+                        address["customer"] = f'{address["customer"]} {store_name}'
+        finally:
+            wb.close()
+    except Exception:
+        # 店名を読み取れない場合も、既に取得した宛名は使用する。
+        pass
+    return address
+
+def _extract_address_fields(file_path: Path) -> dict | None:
     """指示書Excelから宛名データ（顧客名、管理番号、部署名、従業員名、受付内容）を柔軟に抽出"""
     standard = None
     # 1. excel_import エンジンによる標準解析
