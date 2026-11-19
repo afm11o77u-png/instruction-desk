@@ -352,10 +352,10 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     font_header = Font(name="Yu Gothic", size=11, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
     font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
-    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    align_cond = Alignment(horizontal="left", vertical="center", wrap_text=True)
-    align_header = Alignment(horizontal="center", vertical="center", wrap_text=False)
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=False, shrink_to_fit=True)
+    align_left = Alignment(horizontal="left", vertical="center", wrap_text=False, shrink_to_fit=True)
+    align_cond = Alignment(horizontal="left", vertical="center", wrap_text=False, shrink_to_fit=True)
+    align_header = Alignment(horizontal="center", vertical="center", wrap_text=False, shrink_to_fit=True)
     border_thin = Border(
         left=Side(style='thin', color='888888'),
         right=Side(style='thin', color='888888'),
@@ -386,12 +386,14 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
             r["note2"],
             "", "", "", ""
         ]
+        # 表示用シートは1行に統一。集約シートの元データはそのまま保持する。
+        row_vals = [re.sub(r"[\r\n]+", " ", v) if isinstance(v, str) else v for v in row_vals]
         ws.append(row_vals)
         ws.row_dimensions[r_idx].height = 32
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=r_idx, column=col_idx)
             cell.border = border_thin
-            if col_idx == 7: # 新古: 左端インデントで縦並び、はみ出さない
+            if col_idx == 7: # 新古: 左寄せ・1行表示
                 cell.font = font_cond
                 cell.alignment = align_cond
             elif col_idx in (1, 6, 8, 11, 12, 13, 14):
@@ -401,7 +403,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
                 cell.font = font_data
                 cell.alignment = align_left
 
-    col_widths = {1:9.0, 2:32.0, 3:20.0, 4:11.0, 5:14.0, 6:7.0, 7:5.5, 8:6.0, 9:15.0, 10:8.0, 11:8.0, 12:6.5, 13:6.5, 14:6.5}
+    col_widths = {1:8.0, 2:28.0, 3:18.0, 4:10.0, 5:14.0, 6:7.0, 7:5.5, 8:6.0, 9:19.0, 10:12.0, 11:8.0, 12:6.5, 13:6.5, 14:6.5}
     for col_idx, width in col_widths.items():
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
