@@ -127,14 +127,15 @@ def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
         
     return {}
 
-def lookup_barcode(code: str) -> dict:
+def lookup_barcode(code: str, include_product: bool = False) -> dict:
     """Lookup MasterCode in db3.mdb and combine with shipments info."""
     code = str(code or "").strip()
     if not code:
         return {"ok": False, "found": False, "message": "バーコード番号が空です。"}
     
-    if code in _CACHE:
-        return _CACHE[code]
+    cache_key = (code, include_product)
+    if cache_key in _CACHE:
+        return _CACHE[cache_key]
     
     if not MDB_PATH.exists():
         return {
@@ -156,6 +157,8 @@ def lookup_barcode(code: str) -> dict:
             "-Code", clean_code,
             "-MdbPath", str(MDB_PATH.resolve())
         ]
+        if include_product:
+            cmd.append("-IncludeProduct")
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
         out = (p.stdout or "").strip()
         if not out:
@@ -218,8 +221,11 @@ def lookup_barcode(code: str) -> dict:
             "person": str(data.get("person") or "").strip()
         }
         
-        # Save to cache
-        _CACHE[code] = result
+        if include_product:
+            result["maker"] = str(data.get("maker") or "").strip()
+            result["sku"] = str(data.get("sku") or "").strip()
+        # Keep regular delivery lookups separate from product-enriched lookups.
+        _CACHE[cache_key] = result
         return result
         
     except Exception as e:
