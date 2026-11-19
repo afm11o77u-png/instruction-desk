@@ -24,12 +24,17 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from threading import Lock
+from xml.etree import ElementTree
+from zipfile import ZipFile
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 import excel_import
 
 DEFAULT_BASE_DIR = r"\\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】"
+_REPORT_SAVE_LOCK = Lock()
 
 def get_base_dir() -> Path:
     env_path = os.environ.get("INSTRUCTION_FOLDER_BASE")
@@ -619,19 +624,22 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
     # ヘッダーが未設定なら設定
-    if ws.max_row == 1 and ws.cell(row=1, column=1).value is None:
-        ws.append(headers)
+    last_data_row = next(
+        (row for row in range(ws.max_row, 0, -1)
+         if any(cell.value not in (None, "") for cell in ws[row])),
+        0,
+    )
+    if not last_data_row:
         ws.row_dimensions[1].height = 25
-        for col_idx in range(1, len(headers) + 1):
-            cell = ws.cell(row=1, column=col_idx)
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
             cell.font = font_header
             cell.alignment = align_header
             cell.border = border_thin
             cell.fill = fill_header
-    elif ws.max_row < 1:
-        ws.append(headers)
+        last_data_row = 1
 
-    start_row = ws.max_row + 1
+    start_row = last_data_row + 1
     for r_idx, r in enumerate(rows_data, start=start_row):
         row_vals = [
             r["requester"],
@@ -646,10 +654,10 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
             r["note2"],
             "", "", "", ""
         ]
-        ws.append(row_vals)
         ws.row_dimensions[r_idx].height = 32
-        for col_idx in range(1, len(headers) + 1):
+        for col_idx, value in enumerate(row_vals, start=1):
             cell = ws.cell(row=r_idx, column=col_idx)
+            cell.value = value
             cell.border = border_thin
             if col_idx == 7: # 新古: 左端インデントで縦並び、はみ出さない
                 cell.font = font_cond
@@ -681,7 +689,35 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
+def _report_has_external_data(path: Path) -> bool:
+    """Identify Excel connections that a workbook round trip cannot retain."""
+    with ZipFile(path) as archive:
+        for part in archive.namelist():
+            name = part.lower()
+            if name == "xl/connections.xml" or name.startswith("xl/querytables/"):
+                return True
+            if name.startswith("xl/tables/") and name.endswith(".xml"):
+                if ElementTree.fromstring(archive.read(part)).get("tableType") == "queryTable":
+                    return True
+    return False
+
+
+def _report_output_path(path: Path) -> Path:
+    destination = path
+    version = 1
+    while destination.exists() and _report_has_external_data(destination):
+        suffix = "【自動仕分け】" if version == 1 else f"【自動仕分け{version}】"
+        destination = path.with_name(f"{path.stem}{suffix}{path.suffix}")
+        version += 1
+    return destination
+
+
 def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
+    with _REPORT_SAVE_LOCK:
+        return _save_report_workbook_locked(now, rows, custom_filename)
+
+
+def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filename: str | None) -> tuple[Path | None, dict]:
     r"""報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」シートに追記保存"""
     carry_rows = [r for r in rows if r["stock"] == "b"]
 
@@ -699,7 +735,7 @@ def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str 
             file_name += ".xlsx"
     else:
         file_name = get_default_report_filename(now)
-    out_path = report_dir / file_name
+    out_path = _report_output_path(report_dir / file_name)
 
     if out_path.exists():
         wb = openpyxl.load_workbook(str(out_path))
@@ -715,7 +751,7 @@ def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str 
         ws_carry = wb.create_sheet(title="持ち込み", index=0)
     else:
         ws_carry = wb["持ち込み"]
-    _append_rows_to_report_sheet(ws_carry, carry_rows, "持ち込みリスト", now, file_name)
+    _append_rows_to_report_sheet(ws_carry, carry_rows, "持ち込みリスト", now, out_path.name)
 
     # 倉庫シートがなければ枠だけ作成
     if "倉庫" not in wb.sheetnames:
@@ -730,8 +766,16 @@ def _save_report_workbook(now: datetime, rows: list[dict], custom_filename: str 
         for s in wb.worksheets:
             s.sheet_view.tabSelected = (s == target_ws)
 
-    wb.save(str(out_path))
-    wb.close()
+    temp_path = None
+    try:
+        with NamedTemporaryFile(dir=report_dir, suffix=".xlsx", delete=False) as temp:
+            temp_path = Path(temp.name)
+        wb.save(temp_path)
+        os.replace(temp_path, out_path)
+    finally:
+        wb.close()
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
     return out_path, {
         "carry": len(carry_rows),
