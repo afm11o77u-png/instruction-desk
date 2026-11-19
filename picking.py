@@ -1017,7 +1017,8 @@ def handle(h,c,path,d,can_access):
             raise ValueError('保存名を入力してください。')
         rows = [{key: row.get(key, '') for key in FIELDS} for row in raw]
         validate_rows(rows, True)
-        return 200, workbook({'number': 'バーコード取込', 'date': day, 'title': title, 'rows': rows}), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        from picking_sorter import scan_ishikari_workbook
+        return 200, scan_ishikari_workbook(day, rows), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     if path=='/api/picking/carry-check':
         day=text(d.get('date',''),10)
         try: date.fromisoformat(day)
