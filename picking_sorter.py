@@ -372,9 +372,11 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
     wb.close()
     return rows
 
-def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
+def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str, *, include_warehouse_note: bool):
     """ピッキング／作業シート用の共通フォーマット適用"""
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
+    if include_warehouse_note:
+        headers.insert(10, "倉庫から")
     ws.append(headers)
 
     font_header = Font(name="Yu Gothic", size=11, bold=True)
@@ -412,8 +414,8 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
             r["quantity"],
             r["note"],
             r["note2"],
-            "", "", "", ""
         ]
+        row_vals.extend([""] * (len(headers) - len(row_vals)))
         # 表示用シートは1行に統一。集約シートの元データはそのまま保持する。
         row_vals = [re.sub(r"[\r\n]+", " ", v) if isinstance(v, str) else v for v in row_vals]
         ws.append(row_vals)
@@ -424,15 +426,19 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
             if col_idx == 7: # 新古: 左寄せ・1行表示
                 cell.font = font_cond
                 cell.alignment = align_cond
-            elif col_idx in (1, 6, 8, 11, 12, 13, 14):
+            elif col_idx in (1, 6, 8) or col_idx > (11 if include_warehouse_note else 10):
                 cell.font = font_data
                 cell.alignment = align_center
             else:
                 cell.font = font_data
                 cell.alignment = align_left
 
-    col_widths = {1:8.0, 2:28.0, 3:18.0, 4:10.0, 5:14.0, 6:7.0, 7:5.5, 8:6.0, 9:19.0, 10:12.0, 11:8.0, 12:6.5, 13:6.5, 14:6.5}
-    for col_idx, width in col_widths.items():
+    col_widths = [8.0, 28.0, 18.0, 10.0, 14.0, 7.0, 5.5, 6.0, 19.0, 12.0, 8.0, 6.5, 6.5, 6.5]
+    if include_warehouse_note:
+        col_widths[1:3] = [25.0, 15.0]
+        col_widths[8] = 16.0
+        col_widths.insert(10, 9.0)
+    for col_idx, width in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
@@ -451,7 +457,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
+def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, include_warehouse_note: bool = True):
     """Create the warehouse workbook without touching the filesystem."""
     ishikari_rows = [r for r in rows if r["stock"] == "0"]
     factory_rows  = [r for r in rows if r["stock"] == "a"]
@@ -477,15 +483,15 @@ def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
 
     # 2. 持ち込み bリスト
     ws_carry = wb.create_sheet(title="持ち込み bリスト")
-    _apply_sheet_styling(ws_carry, carry_rows, "持ち込み bリスト", now, file_name)
+    _apply_sheet_styling(ws_carry, carry_rows, "持ち込み bリスト", now, file_name, include_warehouse_note=include_warehouse_note)
 
     # 3. 工場内 aリスト
     ws_factory = wb.create_sheet(title="工場内 aリスト")
-    _apply_sheet_styling(ws_factory, factory_rows, "工場内 aリスト", now, file_name)
+    _apply_sheet_styling(ws_factory, factory_rows, "工場内 aリスト", now, file_name, include_warehouse_note=include_warehouse_note)
 
     # 4. 石狩倉庫ピッキングリスト
     ws_ishikari = wb.create_sheet(title="石狩倉庫ピッキングリスト")
-    _apply_sheet_styling(ws_ishikari, ishikari_rows, "石狩倉庫ピッキングリスト", now, file_name)
+    _apply_sheet_styling(ws_ishikari, ishikari_rows, "石狩倉庫ピッキングリスト", now, file_name, include_warehouse_note=include_warehouse_note)
 
     # 開いた時に「石狩倉庫ピッキングリスト」が最初に画面に出るようアクティブ設定
     wb.active = ws_ishikari
@@ -521,7 +527,9 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
             "stock": stock_codes[row["stock"]],
         })
 
-    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx")
+    wb, _ = build_ishikari_workbook(
+        now, normalized, f"{day}_ピッキングリスト.xlsx", include_warehouse_note=False
+    )
     try:
         # The previous barcode exporter stored all user text literally.
         # Preserve that behavior instead of letting openpyxl interpret formulas or errors.
