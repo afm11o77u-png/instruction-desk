@@ -722,7 +722,11 @@
         <span>報告用リスト保存名（持ち込み）:</span>
         <input type="text" id="picking-sort-report-name" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #ccc;border-radius:4px;margin-top:4px;font-family:monospace;" placeholder="報告用YYMMDD.xlsx">
       </label>
-      <small style="color:#888;display:block;margin-top:4px;">※通常はそのままで問題ありません。変更したい場合のみ編集してください。</small>
+      <label style="display:block;margin-top:8px;font-size:0.85rem;color:#555;">
+        <span>処理済みフォルダの日付</span>
+        <input type="date" id="picking-sort-processed-date" style="display:block;padding:6px 8px;margin-top:4px;">
+      </label>
+      <small style="color:#555;display:block;margin-top:4px;">この日付は元の指示書の移動先に使います。</small>
     </div>
     <div style="margin-top:12px;padding:10px 12px;background:#f9f9f9;border-radius:6px;border:1px solid #e5e5e5;">
       <label style="display:flex;align-items:center;gap:8px;font-size:0.9rem;cursor:pointer;margin:0;">
@@ -739,4 +743,4 @@
     <button type="button" class="primary" id="picking-sort-exec">仕分けを実行する</button>
   </div>
 </dialog>
-<script src="/account.js?v=20261118_mobile1"></script><script src="/work-batches.js"></script><script src="/picking-sort.js?v=20261117_02"></script><script src="/processed-stats.js?v=20261114_16"></script><script src="/barcode-delivery.js?v=20261114_20"></script></body></html>
+<script src="/account.js?v=20261118_mobile1"></script><script src="/work-batches.js"></script><script src="/picking-sort.js?v=20261119_processed_date"></script><script src="/processed-stats.js?v=20261114_16"></script><script src="/barcode-delivery.js?v=20261114_20"></script></body></html>

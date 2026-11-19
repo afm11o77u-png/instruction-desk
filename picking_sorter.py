@@ -23,7 +23,7 @@ import os
 import posixpath
 import re
 import shutil
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import Lock
@@ -270,6 +270,7 @@ def preview_sort() -> dict:
             "files": [],
             "next_ishikari_file": next_ishikari,
             "default_report_file": def_report,
+            "default_processed_date": now.date().isoformat(),
             "addresses": []
         }
     files = get_pending_files()
@@ -286,6 +287,7 @@ def preview_sort() -> dict:
         "files": [f.name for f in files],
         "next_ishikari_file": next_ishikari,
         "default_report_file": def_report,
+        "default_processed_date": now.date().isoformat(),
         "addresses": addresses
     }
 
@@ -882,10 +884,11 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
         "factory": 0
     }
 
-def _move_processed_files(now: datetime, files: list[Path]) -> tuple[Path, int]:
+def _move_processed_files(now: datetime, files: list[Path], processed_date: date | None = None) -> tuple[Path, int]:
     r"""処理済みフォルダ (処理済み\{YYYY}.{M}月\{YYYYMMDD}\) へファイルを移動"""
-    month_folder_name = f"{now.year}.{now.month}月"
-    day_folder_name = now.strftime("%Y%m%d")
+    day = processed_date or now.date()
+    month_folder_name = f"{day.year}.{day.month}月"
+    day_folder_name = day.isoformat().replace("-", "")
     dest_dir = get_processed_base_dir() / month_folder_name / day_folder_name
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -897,14 +900,26 @@ def _move_processed_files(now: datetime, files: list[Path]) -> tuple[Path, int]:
         if dest_file.exists():
             ts = now.strftime("%H%M%S")
             dest_file = dest_dir / f"{f.stem}_{ts}{f.suffix}"
+            sequence = 2
+            while dest_file.exists():
+                dest_file = dest_dir / f"{f.stem}_{ts}_{sequence}{f.suffix}"
+                sequence += 1
         shutil.move(str(f), str(dest_file))
         moved_count += 1
 
     return dest_dir, moved_count
 
-def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None) -> dict:
+def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None) -> dict:
     """仕分け実行メインロジック"""
     now = datetime.now()
+    move_date = now.date()
+    if processed_date not in (None, ""):
+        try:
+            move_date = date.fromisoformat(processed_date)
+            if move_date.isoformat() != processed_date:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValueError("処理済みフォルダの日付を確認してください。") from None
     pending_files = get_pending_files()
     if not pending_files:
         return {
@@ -936,7 +951,7 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
     report_path, report_counts = _save_report_workbook(now, all_rows, custom_filename=custom_report_file)
 
     # 3. 処理済みフォルダへの移動
-    dest_dir, moved_count = _move_processed_files(now, processed_files)
+    dest_dir, moved_count = _move_processed_files(now, processed_files, move_date)
 
     return {
         "success": True,
@@ -949,5 +964,6 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
         "report_counts": report_counts,
         "moved_count": moved_count,
         "processed_dir": str(dest_dir),
+        "processed_date": move_date.isoformat(),
         "addresses": addresses
     }

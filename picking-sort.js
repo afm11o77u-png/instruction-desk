@@ -48,6 +48,7 @@
     const btnCancel = document.getElementById('picking-sort-cancel');
     const inputIshikari = document.getElementById('picking-sort-ishikari-name');
     const inputReport = document.getElementById('picking-sort-report-name');
+    const inputProcessedDate = document.getElementById('picking-sort-processed-date');
     const labelCountText = document.getElementById('picking-sort-label-count');
 
     lastAddresses = [];
@@ -57,6 +58,7 @@
     if (labelCountText) { labelCountText.textContent = '宛名情報: 確認中...'; }
     if (inputIshikari) { inputIshikari.value = ''; }
     if (inputReport) { inputReport.value = ''; }
+    if (inputProcessedDate) inputProcessedDate.value = '';
     if (btnExec) { btnExec.disabled = true; btnExec.textContent = '仕分けを実行する'; btnExec.dataset.done = '0'; }
     if (btnCancel) { btnCancel.textContent = 'キャンセル'; btnCancel.hidden = false; }
 
@@ -67,6 +69,7 @@
       if (epoch !== previewEpoch || !modal.open) return;
       if (inputIshikari && res.next_ishikari_file) inputIshikari.value = res.next_ishikari_file;
       if (inputReport && res.default_report_file) inputReport.value = res.default_report_file;
+      if (inputProcessedDate && res.default_processed_date) inputProcessedDate.value = res.default_processed_date;
 
       if (!res.exists) {
         if (previewCount) {
@@ -155,7 +158,8 @@
 
         const res = await api('/api/picking-sort/execute', {
           custom_ishikari_file,
-          custom_report_file
+          custom_report_file,
+          processed_date: document.getElementById('picking-sort-processed-date')?.value || ''
         });
         if (res.success) {
           lastAddresses = res.addresses || [];
@@ -172,7 +176,7 @@
               <ul style="margin:4px 0;padding-left:20px;font-size:0.88rem;color:#333;">
                 ${res.ishikari_file ? `<li><strong>石狩倉庫ブック:</strong> ${esc(res.ishikari_file)} (石狩:${iCounts.ishikari||0}件, 工場:${iCounts.factory||0}件, 持ち込み:${iCounts.carry||0}件)</li>` : '<li><strong>石狩倉庫ブック:</strong> 対象データなし</li>'}
                 ${res.report_file ? `<li><strong>報告用リスト:</strong> ${esc(res.report_file)} に追記 (持ち込み:${rCounts.carry||0}件)</li>` : '<li><strong>報告用リスト:</strong> 対象データなし</li>'}
-                <li><strong>処理済み移動:</strong> ${res.moved_count}件のファイルを移動完了</li>
+                <li><strong>処理済み移動:</strong> ${esc(res.processed_date || '')} のフォルダに ${res.moved_count}件を移動</li>
                 ${lastAddresses.length > 0 ? `<li><strong>宛名書き:</strong> ${lastAddresses.length}件の宛名データを抽出完了</li>` : ''}
               </ul>
               ${lastAddresses.length > 0 ? `

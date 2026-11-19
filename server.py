@@ -1582,8 +1582,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 try:
                     custom_ishikari = (d.get('custom_ishikari_file') or '').strip() or None
                     custom_report = (d.get('custom_report_file') or '').strip() or None
-                    data = picking_sorter.execute_sort(custom_ishikari_file=custom_ishikari, custom_report_file=custom_report)
+                    data = picking_sorter.execute_sort(
+                        custom_ishikari_file=custom_ishikari,
+                        custom_report_file=custom_report,
+                        processed_date=d.get('processed_date'),
+                    )
                     return self.reply(200, data)
+                except ValueError as e:
+                    return self.reply(400, {'error': str(e)})
                 except Exception as e:
                     return self.reply(500, {'error': f'仕分け実行エラー: {e}'})
             if route.startswith('/api/picking/') or route.startswith('/api/carry-input/'):
