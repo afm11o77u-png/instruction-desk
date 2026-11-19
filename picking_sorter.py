@@ -117,28 +117,38 @@ def get_default_report_filename(now: datetime | None = None) -> str:
         now = datetime.now()
     return f"報告用{now.strftime('%y%m%d')}.xlsx"
 
+def _instruction_customer_names(wb) -> tuple[str, str]:
+    """Return the B2 customer and its display name for the standard header."""
+    if "指示書" not in wb.sheetnames:
+        return "", ""
+    label, customer, adjacent = next(
+        wb["指示書"].iter_rows(min_row=2, max_row=2, max_col=3),
+        (None,) * 3,
+    )
+    if label is None or clean_cell_text(label.value) != "顧客名":
+        return "", ""
+    name = clean_cell_text(customer.value)
+    if not name or not isinstance(adjacent.value, str) or adjacent.data_type == "e":
+        return name, name
+    extra = clean_cell_text(adjacent.value)
+    if not extra or extra.isdecimal() or extra == name:
+        return name, name
+    company_prefixes = ("株式会社", "有限会社", "合同会社", "合資会社", "合名会社", "㈱", "㈲", "(株)", "（株）")
+    separator = "" if name in company_prefixes or extra in company_prefixes else " "
+    return name, f"{name}{separator}{extra}"
+
+
 def _extract_address_from_workbook(file_path: Path) -> dict | None:
     address = _extract_address_fields(file_path)
     if not address or not address["customer"]:
         return address
 
-    # 旧指示書の顧客名欄は B2 が顧客名、C2 が店名。宛名にだけ店名を加える。
     try:
         wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
         try:
-            if "指示書" in wb.sheetnames:
-                ws = wb["指示書"]
-                label, customer, store = next(ws.iter_rows(min_row=2, max_row=2, max_col=3), (None,) * 3)
-                if (
-                    label is not None
-                    and clean_cell_text(label.value) == "顧客名"
-                    and clean_cell_text(customer.value) == address["customer"]
-                    and isinstance(store.value, str)
-                    and store.data_type != "e"
-                ):
-                    store_name = clean_cell_text(store.value)
-                    if store_name and not store_name.isdecimal() and store_name != address["customer"]:
-                        address["customer"] = f'{address["customer"]} {store_name}'
+            name, display_name = _instruction_customer_names(wb)
+            if name == address["customer"]:
+                address["customer"] = display_name
         finally:
             wb.close()
     except Exception:
@@ -346,6 +356,7 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
         }
         header_row_idx = 1
 
+    instruction_customer, display_customer = _instruction_customer_names(wb)
     for detail_index, row in enumerate(
         target_sheet.iter_rows(min_row=header_row_idx + 1, values_only=True)
     ):
@@ -393,10 +404,13 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
             ):
                 note, note2 = detail[6:8]
 
+        customer = clean_cell_text(get_val("customer"))
+        if customer and customer == instruction_customer:
+            customer = display_customer
         rows.append({
             "source_file": file_path.name,
             "requester": clean_cell_text(get_val("requester")),
-            "customer": clean_cell_text(get_val("customer")),
+            "customer": customer,
             "name": name_val,
             "maker": clean_cell_text(get_val("maker")),
             "sku": clean_cell_text(get_val("sku")),
