@@ -421,11 +421,8 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
-    r"""石狩倉庫用連番ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx) を作成"""
-    if not rows:
-        return None, {"ishikari": 0, "factory": 0, "carry": 0}
-
+def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
+    """Create the warehouse workbook without touching the filesystem."""
     ishikari_rows = [r for r in rows if r["stock"] == "0"]
     factory_rows  = [r for r in rows if r["stock"] == "a"]
     carry_rows    = [r for r in rows if r["stock"] == "b"]
@@ -433,18 +430,6 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
     ishikari_rows.sort(key=lambda x: (x["customer"], x["name"]))
     factory_rows.sort(key=lambda x: (x["customer"], x["name"]))
     carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
-
-    date_str = now.strftime("%Y%m%d")
-    target_dir = get_ishikari_base_dir() / date_str
-    target_dir.mkdir(parents=True, exist_ok=True)
-
-    if custom_filename and custom_filename.strip():
-        file_name = custom_filename.strip()
-        if not file_name.lower().endswith(".xlsx"):
-            file_name += ".xlsx"
-    else:
-        file_name = get_next_ishikari_filename(now)
-    out_path = target_dir / file_name
 
     wb = openpyxl.Workbook()
 
@@ -477,14 +462,75 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
     for s in wb.worksheets:
         s.sheet_view.tabSelected = (s == ws_ishikari)
 
-    wb.save(str(out_path))
-    wb.close()
-
-    return out_path, {
+    return wb, {
         "ishikari": len(ishikari_rows),
         "factory": len(factory_rows),
         "carry": len(carry_rows)
     }
+
+def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
+    """Export legacy barcode rows using the automatic sorter workbook format."""
+    from io import BytesIO
+
+    now = datetime.fromisoformat(day)
+    stock_codes = {"warehouse": "0", "factory": "a", "carry": "b"}
+    normalized = []
+    for row in rows:
+        condition = str(row.get("condition") or "").strip()
+        if row["stock"] == "warehouse" or condition in ("", "未指定", "新古", "新品・中古"):
+            condition = "新\n古"
+        elif condition in ("新", "新品"):
+            condition = "新"
+        elif condition in ("古", "中古"):
+            condition = "古"
+        normalized.append({
+            **row,
+            "source_file": "",
+            "condition": condition,
+            "note": row.get("note", ""),
+            "stock": stock_codes[row["stock"]],
+        })
+
+    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx")
+    try:
+        # The previous barcode exporter stored all user text literally.
+        # Preserve that behavior instead of letting openpyxl interpret formulas or errors.
+        for ws in wb.worksheets:
+            for cells in ws.iter_rows():
+                for cell in cells:
+                    if isinstance(cell.value, str):
+                        cell.data_type = "s"
+        with BytesIO() as out:
+            wb.save(out)
+            return out.getvalue()
+    finally:
+        wb.close()
+
+
+def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
+    r"""石狩倉庫用連番ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx) を作成"""
+    if not rows:
+        return None, {"ishikari": 0, "factory": 0, "carry": 0}
+
+    date_str = now.strftime("%Y%m%d")
+    target_dir = get_ishikari_base_dir() / date_str
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if custom_filename and custom_filename.strip():
+        file_name = custom_filename.strip()
+        if not file_name.lower().endswith(".xlsx"):
+            file_name += ".xlsx"
+    else:
+        file_name = get_next_ishikari_filename(now)
+    out_path = target_dir / file_name
+
+    wb, counts = build_ishikari_workbook(now, rows, file_name)
+    try:
+        wb.save(str(out_path))
+    finally:
+        wb.close()
+    return out_path, counts
+
 
 def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
     """報告用リストの指定シートにデータを追記"""
