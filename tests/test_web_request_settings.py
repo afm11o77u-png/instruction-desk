@@ -12,11 +12,11 @@ class SettingsTest(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.path=Path(self.tmp.name)/'stock.db'
         with closing(sqlite3.connect(self.path)) as s:
-            s.executescript("""CREATE TABLE customers(id INTEGER,name TEXT,active INTEGER);
+            s.executescript("""CREATE TABLE customers(id INTEGER,name TEXT,active INTEGER,kana TEXT DEFAULT '');
 CREATE TABLE products(id INTEGER,code TEXT,name TEXT,color TEXT,active INTEGER,merged_into_id INTEGER,category TEXT);
 CREATE TABLE product_sizes(id INTEGER,product_id INTEGER,label TEXT,sort_order INTEGER);
 CREATE TABLE customer_products(id INTEGER,customer_id INTEGER,product_id INTEGER,embroidery TEXT,active INTEGER);
-INSERT INTO customers VALUES(1,'顧客A',1),(2,'顧客B',1);
+INSERT INTO customers(id,name,active) VALUES(1,'顧客A',1),(2,'顧客B',1);
 INSERT INTO products VALUES(1,'A01','白衣','白',1,NULL,'制服'),(2,'B01','帽子','青',1,NULL,'制服');
 INSERT INTO product_sizes VALUES(1,1,'S',1),(2,1,'M',2),(3,2,'F',1);
 INSERT INTO customer_products VALUES(10,1,1,'刺繍A',1),(11,1,1,'加工なし',1),(20,2,2,'',1);""")

@@ -28,7 +28,7 @@ def catalog(path):
     if not path.exists(): return {'customers':[], 'products':[]}
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as s:
         s.row_factory=sqlite3.Row
-        customers=[dict(r) for r in s.execute('SELECT id,name FROM customers WHERE active=1 ORDER BY name')]
+        customers=[dict(r) for r in s.execute('SELECT id,name,kana FROM customers WHERE active=1 ORDER BY name')]
         products=[dict(r) for r in s.execute("SELECT id,code,name,color FROM products WHERE active=1 AND merged_into_id IS NULL AND category IN ('','制服') ORDER BY name,id")]
         sizes={}
         for r in s.execute('SELECT product_id,label FROM product_sizes ORDER BY sort_order,id'):
