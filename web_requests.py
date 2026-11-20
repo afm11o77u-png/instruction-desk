@@ -1,4 +1,5 @@
 """WEB依頼の部署・採用品設定。在庫DBは読み取り専用。"""
+import unicodedata
 import json
 import base64
 import io
@@ -126,9 +127,13 @@ def validate_config(cfg,data,cid):
         ids.add(v);return v
     deps=cfg.get('departments',[])
     if not isinstance(deps,list) or len(deps)>100:raise ValueError('部署数を確認してください。')
+    department_names=set()
     for d in deps:
         if not isinstance(d,dict):raise ValueError('部署の内容を確認してください。')
         dep=dict(id=ident(d),name=text(d.get('name',''),'部署名',80,True),contracts=[])
+        name_key=' '.join(unicodedata.normalize('NFKC',dep['name']).lower().split())
+        if name_key in department_names:raise ValueError('同じ名前の部署が重複しています。部署名を確認してください。')
+        department_names.add(name_key)
         contracts=d.get('contracts',[])
         if not isinstance(contracts,list) or len(contracts)>100:raise ValueError('契約数を確認してください。')
         for k in contracts:

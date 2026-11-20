@@ -50,6 +50,16 @@ INSERT INTO customer_products VALUES(10,1,1,'刺繍A',1),(11,1,1,'加工なし',
         self.assertNotIn(1,[x['id'] for x in w.state(self.c,self.path,self.other)['customers']])
         with self.assertRaises(PermissionError):self.save(user=self.other)
         with self.assertRaises(ValueError):self.save(version=0)
+    def test_duplicate_departments_rejected_before_save(self):
+        self.cfg['departments'][0]['name']='部門A'
+        duplicate=copy.deepcopy(self.cfg['departments'][0]);duplicate.update(id='dep2',name=' 部門Ａ　',contracts=[])
+        self.cfg['departments'].append(duplicate)
+        with self.assertRaisesRegex(ValueError,'部署が重複'):self.save()
+        self.assertEqual(w.read_config(self.c,1)['version'],0)
+        self.cfg['departments'][1]['name']='検品部'
+        self.save()
+        self.assertEqual(len(w.read_config(self.c,1)['draft']['departments']),2)
+
     def test_missing_size_and_photo(self):
         with closing(sqlite3.connect(self.path)) as s:s.execute('DELETE FROM product_sizes WHERE product_id=1');s.commit()
         self.save()
