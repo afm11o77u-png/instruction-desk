@@ -1,4 +1,5 @@
 """WEB依頼の部署・採用品設定。在庫DBは読み取り専用。"""
+import web_request_organizations as organizations
 import unicodedata
 import json
 import base64
@@ -18,6 +19,8 @@ def schema(c):
       published INTEGER NOT NULL DEFAULT 0, UNIQUE(department_id,product_id));
     ''')
     c.execute("CREATE TABLE IF NOT EXISTS web_request_customer_settings (customer_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0, draft TEXT NOT NULL, publication TEXT, status TEXT NOT NULL DEFAULT 'draft')")
+
+    organizations.schema(c)
 
 def catalog(path):
     if not path.exists(): return {'customers':[], 'products':[]}
@@ -60,13 +63,21 @@ def permitted(profile,u):
     cfg=profile['draft']; assigned=[cfg.get('primary_user_id'),cfg.get('backup_user_id')]
     return not any(assigned) or u['id'] in assigned
 
-def state(c,path,user=None):
+def state(c,path,user=None,preview_account_id=None):
     data=catalog(path)
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as s:
         s.row_factory=sqlite3.Row
         data['handles']=[dict(r) for r in s.execute('SELECT id,customer_id,product_id,embroidery FROM customer_products WHERE active=1')]
     profiles=[read_config(c,x['id']) for x in data['customers']]
-    data['profiles']=[x for x in profiles if permitted(x,user)]
+    org=organizations.read(c)
+    assigned=organizations.staff_ids(org,user['id']) if user else set()
+    data['profiles']=[x for x in profiles if permitted(x,user) or x['customer_id'] in assigned]
+    if preview_account_id is not None:
+        if not organizations.admin(user):raise PermissionError('顧客の利用範囲の確認は管理者が行ってください。')
+        scope,can_request=organizations.account_scope(c,org,preview_account_id)
+        data['profiles']=[x for x in data['profiles'] if x['customer_id'] in scope]
+        data['previewAccountId']=preview_account_id
+        data['previewCanRequest']=can_request
     allowed={x['customer_id'] for x in data['profiles']}
     data['customers']=[x for x in data['customers'] if x['id'] in allowed]
     data['handles']=[x for x in data['handles'] if x['customer_id'] in allowed]
@@ -75,7 +86,9 @@ def state(c,path,user=None):
     data['staff']=[dict(r) for r in c.execute("SELECT id,name FROM users WHERE active=1 AND (role IN ('owner','sales') OR manage=1) ORDER BY name")]
     data['requestTypes']=REQUEST_TYPES
     data['userId']=user['id'] if user else None
-    data['isAdmin']=user is None or user['role']=='owner' or bool(user['manage'])
+    data['isAdmin']=organizations.admin(user)
+    data['organizations']=organizations.view(c,allowed,user) if preview_account_id is None else organizations.view(c,allowed,dict(role='sales',manage=0,id=-1))
+    data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
 
 def text(value,label,limit=100,required=False):
@@ -158,20 +171,24 @@ def validate_config(cfg,data,cid):
     return out
 
 def save(c,path,d,user=None):
+    if d.get('action')=='organization':
+        data=state(c,path,user)
+        organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data['staff']},user)
+        return state(c,path,user)
     cid=number(d.get('customer_id'),'顧客',1,2147483647)
     data=state(c,path,user)
     if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この顧客の設定を変更する権限がありません。')
     c.execute('BEGIN IMMEDIATE')
     try:
         current=read_config(c,cid)
-        if not permitted(current,user):raise PermissionError('担当者の設定を確認してください。')
+        if not permitted(current,user) and (not user or cid not in organizations.staff_ids(organizations.read(c),user['id'])):raise PermissionError('担当者の設定を確認してください。')
         if type(d.get('version')) is not int or d['version']!=current['version']:raise ValueError('別の画面で更新されています。一覧を更新してからやり直してください。')
         action=d.get('action')
         if action not in ('save','publish','pause'):raise ValueError('操作を確認してください。')
         cfg=validate_config(d.get('config'),data,cid)
         if not data['isAdmin']:
             if not cfg['primary_user_id'] and not cfg['backup_user_id']:cfg['primary_user_id']=user['id']
-            if user['id'] not in (cfg['primary_user_id'],cfg['backup_user_id']):raise ValueError('自分を主担当か副担当に設定してください。')
+            if user['id'] not in (cfg['primary_user_id'],cfg['backup_user_id']) and cid not in organizations.staff_ids(organizations.read(c),user['id']):raise ValueError('自分を主担当か副担当に設定してください。')
         publication=current['publication'];status=current['status']
         if action=='publish':
             active=[u for dep in cfg['departments'] for k in dep['contracts'] if k['active'] for u in k['uniforms'] if u['active']]

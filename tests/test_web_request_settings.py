@@ -23,7 +23,7 @@ INSERT INTO customer_products VALUES(10,1,1,'刺繍A',1),(11,1,1,'加工なし',
             s.commit()
         self.c=sqlite3.connect(':memory:');self.c.row_factory=sqlite3.Row
         self.c.executescript("CREATE TABLE users(id INTEGER,name TEXT,active INTEGER,role TEXT,manage INTEGER); INSERT INTO users VALUES(1,'管理者',1,'owner',0),(2,'担当A',1,'sales',0),(3,'担当B',1,'sales',0);")
-        w.schema(self.c);self.c.commit()
+        w.schema(self.c);self.c.execute('CREATE TABLE customer_accounts(id INTEGER,customer_id INTEGER,active INTEGER,name TEXT,email TEXT)');self.c.commit()
         self.owner=dict(id=1,role='owner',manage=0,must_change=0)
         self.sales=dict(id=2,role='sales',manage=0,must_change=0)
         self.other=dict(id=3,role='sales',manage=0,must_change=0)

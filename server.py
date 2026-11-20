@@ -1153,7 +1153,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 u = self.session_user(c)
                 if not web_requests.can_open(u):
                     return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
-                try: return self.reply(200, web_requests.state(c, STOCK_DB, u))
+                try:
+                    from urllib.parse import urlparse as _org_urlparse, parse_qs as _org_parse_qs
+                    account_id=_org_parse_qs(_org_urlparse(self.path).query).get('account_id',[None])[0]
+                    return self.reply(200, web_requests.state(c, STOCK_DB, u, int(account_id) if account_id is not None else None))
+                except PermissionError as e: return self.reply(403, {'error':str(e)})
+                except ValueError as e: return self.reply(400, {'error':str(e)})
                 except sqlite3.Error: return self.reply(503, {'error':'在庫の顧客・商品を読み取れません。先に在庫管理を確認してください。'})
         if path.startswith('/api/') and migration.is_busy() and path != '/api/me':
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
@@ -1367,8 +1372,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
-        if path in ('/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
+        files={'/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        if path in ('/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with connect() as c:
                 request_user = self.session_user(c)
                 if not request_user:
