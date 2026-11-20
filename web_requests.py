@@ -65,7 +65,7 @@ def permitted(profile,u):
     cfg=profile['draft']; assigned=[cfg.get('primary_user_id'),cfg.get('backup_user_id')]
     return not any(assigned) or u['id'] in assigned
 
-def state(c,path,user=None,preview_account_id=None):
+def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
     data=catalog(path)
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as s:
         s.row_factory=sqlite3.Row
@@ -74,11 +74,16 @@ def state(c,path,user=None,preview_account_id=None):
     org=organizations.read(c)
     assigned=organizations.staff_ids(org,user['id']) if user else set()
     data['profiles']=[x for x in profiles if permitted(x,user) or x['customer_id'] in assigned]
-    if preview_account_id is not None:
-        if not organizations.admin(user):raise PermissionError('顧客の利用範囲の確認は管理者が行ってください。')
-        scope,can_request=organizations.account_scope(c,org,preview_account_id)
+    preview=preview_account_id is not None or preview_page_id is not None
+    if preview:
+        if not organizations.admin(user):raise PermissionError('顧客向け表示の確認は管理者が行ってください。')
+        if preview_account_id is not None and preview_page_id is not None:raise ValueError('確認する利用者かページを1つ選んでください。')
+        if preview_page_id is not None:
+            page=organizations.request_page(org,preview_page_id);scope=organizations.customer_ids(org,page['node_ids']);can_request=page['can_request'];visible=organizations.descendant_ids(org,page['node_ids'])
+            data['previewPageId']=page['id'];data['previewPageName']=page['name']
+        else:
+            scope,can_request=organizations.account_scope(c,org,preview_account_id);visible=organizations.account_node_ids(c,org,preview_account_id);data['previewAccountId']=preview_account_id
         data['profiles']=[x for x in data['profiles'] if x['customer_id'] in scope]
-        data['previewAccountId']=preview_account_id
         data['previewCanRequest']=can_request
     allowed={x['customer_id'] for x in data['profiles']}
     data['customers']=[x for x in data['customers'] if x['id'] in allowed]
@@ -89,9 +94,8 @@ def state(c,path,user=None,preview_account_id=None):
     data['requestTypes']=REQUEST_TYPES
     data['userId']=user['id'] if user else None
     data['isAdmin']=organizations.admin(user)
-    data['organizations']=organizations.view(c,allowed,user) if preview_account_id is None else organizations.view(c,allowed,dict(role='sales',manage=0,id=-1))
-    if preview_account_id is not None:
-        visible=organizations.account_node_ids(c,org,preview_account_id)
+    data['organizations']=organizations.view(c,allowed,user) if not preview else organizations.view(c,allowed,dict(role='sales',manage=0,id=-1))
+    if preview:
         keep=set(visible)
         for _ in range(len(org['nodes'])+1):
             keep|={n['parent_id'] for n in org['nodes'] if n['id'] in keep and n['parent_id']}

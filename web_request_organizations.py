@@ -20,7 +20,8 @@ def admin(user):
 
 def read(c):
     row=c.execute('SELECT version,payload FROM web_request_org_settings WHERE id=1').fetchone()
-    return dict(version=row['version'],**json.loads(row['payload']))
+    payload=json.loads(row['payload']);payload.setdefault('request_pages',[])
+    return dict(version=row['version'],**payload)
 
 
 def descendant_ids(org,node_ids):
@@ -37,12 +38,22 @@ def customer_ids(org,node_ids):
     return {n['customer_id'] for n in org['nodes'] if n['id'] in selected and n['customer_id'] is not None}
 
 
+def request_page(org,page_id):
+    page=next((p for p in org.get('request_pages',[]) if p['id']==page_id),None)
+    if not page:raise ValueError('顧客向けページを選んでください。')
+    return page
+
+
+def scope_nodes(org,scope):
+    return request_page(org,scope['page_id'])['node_ids'] if scope.get('page_id') else scope['node_ids']
+
+
 def account_node_ids(c,org,account_id):
     scope=next((s for s in org['customer_scopes'] if s['account_id']==account_id),None)
     if scope is None:
         account=c.execute('SELECT customer_id FROM customer_accounts WHERE id=?',(account_id,)).fetchone()
         return {n['id'] for n in org['nodes'] if n['customer_id']==account['customer_id']}
-    return descendant_ids(org,scope['node_ids'])
+    return descendant_ids(org,scope_nodes(org,scope))
 
 
 def staff_ids(org,uid):
@@ -60,6 +71,8 @@ def account_scope(c,org,account_id):
     if not account or not account['active']:raise ValueError('有効な顧客IDを選んでください。')
     scope=next((s for s in org['customer_scopes'] if s['account_id']==account_id),None)
     if scope is None:return {account['customer_id']},True
+    if scope.get('page_id'):
+        page=request_page(org,scope['page_id']);return customer_ids(org,page['node_ids']),page['can_request']
     return customer_ids(org,scope['node_ids']),scope['can_request']
 
 
@@ -74,7 +87,7 @@ def view(c,allowed,user):
         parents={n['parent_id'] for n in org['nodes'] if n['id'] in keep and n['parent_id']}
         if parents<=keep:break
         keep|=parents
-    return dict(version=org['version'],nodes=[n for n in org['nodes'] if n['id'] in keep],customer_scopes=[],staff_scopes=[s for s in org['staff_scopes'] if s['user_id']==user['id']],accounts=[])
+    return dict(version=org['version'],nodes=[n for n in org['nodes'] if n['id'] in keep],customer_scopes=[],staff_scopes=[s for s in org['staff_scopes'] if s['user_id']==user['id']],accounts=[],request_pages=[])
 
 
 def validate(payload,customers,staff,accounts):
@@ -112,12 +125,27 @@ def validate(payload,customers,staff,accounts):
         supplied=n['customer_id']
         if supplied is not None and supplied!=root['customer_id']:raise ValueError('地区・拠点は親の顧客と同じ在庫を使います。')
         n['customer_id']=root['customer_id']
+    raw_pages=payload.get('request_pages',[])
+    if not isinstance(raw_pages,list) or len(raw_pages)>5000:raise ValueError('顧客向けページの数を確認してください。')
+    pages=[];page_ids=set();page_names=set()
+    for page in raw_pages:
+        if not isinstance(page,dict):raise ValueError('顧客向けページを確認してください。')
+        pid=page.get('id');name=page.get('name');cid=page.get('customer_id');nids=page.get('node_ids');permission=page.get('can_request')
+        if not isinstance(pid,str) or not pid or len(pid)>80 or pid in page_ids or not isinstance(name,str) or not name.strip() or len(name)>100:raise ValueError('ページ名と識別情報を確認してください。')
+        if type(cid) is not int or cid not in customers or not isinstance(nids,list) or any(not isinstance(n,str) or n not in byid or byid[n]['customer_id']!=cid for n in nids) or type(permission) is not bool:raise ValueError('ページの顧客と表示範囲を確認してください。')
+        key=(cid,' '.join(unicodedata.normalize('NFKC',name).lower().split()))
+        if key in page_names:raise ValueError('同じ顧客でページ名が重複しています。')
+        page_names.add(key);page_ids.add(pid);pages.append(dict(id=pid,name=name.strip(),customer_id=cid,node_ids=list(dict.fromkeys(nids)),can_request=permission))
     cs=payload.get('customer_scopes',[]);ss=payload.get('staff_scopes',[])
     if not isinstance(cs,list) or not isinstance(ss,list) or len(cs)>5000 or len(ss)>10000:raise ValueError('担当範囲の数を確認してください。')
     customer_scopes=[];seen=set()
     for s in cs:
         if not isinstance(s,dict):raise ValueError('顧客側の担当範囲を確認してください。')
-        aid=s.get('account_id');nids=s.get('node_ids');permission=s.get('can_request')
+        aid=s.get('account_id')
+        if s.get('page_id'):
+            if type(aid) is not int or aid not in accounts or aid in seen or not isinstance(s['page_id'],str) or s['page_id'] not in page_ids:raise ValueError('顧客IDと紐づけるページを確認してください。')
+            seen.add(aid);customer_scopes.append(dict(account_id=aid,page_id=s['page_id']));continue
+        nids=s.get('node_ids');permission=s.get('can_request')
         if type(aid) is not int or aid not in accounts or aid in seen or not isinstance(nids,list) or any(not isinstance(x,str) or x not in ids for x in nids) or type(permission) is not bool:raise ValueError('顧客IDと閲覧・依頼範囲を確認してください。')
         seen.add(aid);customer_scopes.append(dict(account_id=aid,node_ids=list(dict.fromkeys(nids)),can_request=permission))
     staff_scopes=[];seen=set()
@@ -126,7 +154,7 @@ def validate(payload,customers,staff,accounts):
         uid=s.get('user_id');nid=s.get('node_id')
         if type(uid) is not int or uid not in staff or not isinstance(nid,str) or nid not in ids or (uid,nid) in seen:raise ValueError('社内担当者と担当範囲を確認してください。')
         seen.add((uid,nid));staff_scopes.append(dict(user_id=uid,node_id=nid))
-    return dict(nodes=result,customer_scopes=customer_scopes,staff_scopes=staff_scopes)
+    return dict(nodes=result,customer_scopes=customer_scopes,staff_scopes=staff_scopes,request_pages=pages)
 
 
 def save(c,payload,version,customers,staff,user):

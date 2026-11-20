@@ -37,6 +37,31 @@ class OrganizationTest(fixtures.SettingsTest):
         profile=inherit.profile(self.c,w.read_config(self.c,1),org.read(self.c),org.read(self.c)['nodes'][4])
         with self.assertRaises(PermissionError):w.save(self.c,self.path,dict(action='save',customer_id=1,node_id='sendai',version=0,config=profile['draft'],inheritance_mode='custom'),self.other)
 
+    def test_customer_page_can_be_created_before_any_account_link(self):
+        payload=copy.deepcopy(self.organization);payload['customer_scopes']=[]
+        payload['request_pages']=[dict(id='page1',name='札幌店用',customer_id=1,node_ids=['sapporo'],can_request=False)]
+        self.save_org(payload)
+        preview=w.state(self.c,self.path,self.owner,preview_page_id='page1')
+        self.assertEqual(preview['previewPageName'],'札幌店用');self.assertFalse(preview['previewCanRequest'])
+        self.assertEqual(preview['allowedNodeIds'],['sapporo'])
+        self.assertEqual(org.read(self.c)['customer_scopes'],[])
+        payload['customer_scopes']=[dict(account_id=10,page_id='page1'),dict(account_id=11,page_id='page1')]
+        self.save_org(payload)
+        for aid in [10,11]:
+            self.assertEqual(org.account_scope(self.c,org.read(self.c),aid),({1},False))
+            self.assertEqual(org.account_node_ids(self.c,org.read(self.c),aid),{'sapporo'})
+        payload['request_pages'][0]['node_ids']=['north'];self.save_org(payload)
+        self.assertEqual(org.account_node_ids(self.c,org.read(self.c),10),{'north','sapporo'})
+    def test_page_validation_and_preview_authority(self):
+        payload=copy.deepcopy(self.organization);payload['request_pages']=[dict(id='page1',name='店舗用',customer_id=2,node_ids=['sapporo'],can_request=True)]
+        with self.assertRaises(ValueError):self.save_org(payload)
+        payload['request_pages'][0]['customer_id']=1;payload['customer_scopes']=[dict(account_id=10,page_id='missing')]
+        with self.assertRaises(ValueError):self.save_org(payload)
+        payload['customer_scopes']=[];self.save_org(payload)
+        with self.assertRaises(PermissionError):w.state(self.c,self.path,self.sales,preview_page_id='page1')
+        with self.assertRaises(ValueError):w.state(self.c,self.path,self.owner,10,'page1')
+        with self.assertRaises(ValueError):w.state(self.c,self.path,self.owner,preview_page_id='missing')
+
     def test_shared_inventory_and_optional_regions(self):
         p=copy.deepcopy(self.organization);p['nodes'][3]['parent_id']='company';self.save_org(p)
         self.assertEqual(org.customer_ids(org.read(self.c),['company']),{1})

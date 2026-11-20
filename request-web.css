@@ -26,3 +26,5 @@ body:has(#settings:not([hidden])) .hero{display:none}.art img{height:145px;max-w
 .org-root-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;max-width:650px;align-items:center}#organization .org-root-picker input{margin:0}.org-root-options{position:absolute;top:calc(100% + 4px);left:0;right:0;max-height:310px;overflow-y:auto;z-index:20;background:white;border:1px solid #aecbb8;border-radius:8px;box-shadow:0 5px 16px #14372320}.org-root-options [role=option]{padding:10px 12px;cursor:pointer;overflow-wrap:anywhere}.org-root-options [role=option]:hover,.org-root-options .highlighted{background:#e7f1e9}.org-root-options [aria-selected=true]{font-weight:bold}#org-root-list{margin:0;white-space:nowrap}
 
 .org-classification-help{background:#f0f6f2;border-left:3px solid #287050;padding:10px 14px;border-radius:6px;font-size:13px}.org-classification-help p{margin:6px 0}
+
+.org-page-editor{grid-column:1/-1}.org-page-editor>label{max-width:700px}#org-page-nodes{max-height:300px}

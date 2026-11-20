@@ -1156,7 +1156,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 try:
                     from urllib.parse import urlparse as _org_urlparse, parse_qs as _org_parse_qs
                     account_id=_org_parse_qs(_org_urlparse(self.path).query).get('account_id',[None])[0]
-                    return self.reply(200, web_requests.state(c, STOCK_DB, u, int(account_id) if account_id is not None else None))
+                    page_id=_org_parse_qs(_org_urlparse(self.path).query).get('page_id',[None])[0]
+                    return self.reply(200, web_requests.state(c, STOCK_DB, u, int(account_id) if account_id is not None else None, page_id))
                 except PermissionError as e: return self.reply(403, {'error':str(e)})
                 except ValueError as e: return self.reply(400, {'error':str(e)})
                 except sqlite3.Error: return self.reply(503, {'error':'在庫の顧客・商品を読み取れません。先に在庫管理を確認してください。'})
