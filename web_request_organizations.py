@@ -23,17 +23,36 @@ def read(c):
     return dict(version=row['version'],**json.loads(row['payload']))
 
 
-def customer_ids(org,node_ids):
+def descendant_ids(org,node_ids):
     selected=set(node_ids)
     for _ in range(len(org['nodes'])+1):
         children={n['id'] for n in org['nodes'] if n['parent_id'] in selected}
         if children<=selected:break
         selected|=children
-    return {n['customer_id'] for n in org['nodes'] if n['id'] in selected and n['kind']=='site'}
+    return selected
+
+
+def customer_ids(org,node_ids):
+    selected=descendant_ids(org,node_ids)
+    return {n['customer_id'] for n in org['nodes'] if n['id'] in selected and n['customer_id'] is not None}
+
+
+def account_node_ids(c,org,account_id):
+    scope=next((s for s in org['customer_scopes'] if s['account_id']==account_id),None)
+    if scope is None:
+        account=c.execute('SELECT customer_id FROM customer_accounts WHERE id=?',(account_id,)).fetchone()
+        return {n['id'] for n in org['nodes'] if n['customer_id']==account['customer_id']}
+    return descendant_ids(org,scope['node_ids'])
 
 
 def staff_ids(org,uid):
     return customer_ids(org,[s['node_id'] for s in org['staff_scopes'] if s['user_id']==uid])
+
+
+def staff_can_manage(org,uid,cid,node_id=None):
+    roots=[s['node_id'] for s in org['staff_scopes'] if s['user_id']==uid]
+    if node_id:return node_id in descendant_ids(org,roots)
+    return any(n['id'] in roots and n['kind']=='company' and n['customer_id']==cid for n in org['nodes'])
 
 
 def account_scope(c,org,account_id):
@@ -72,12 +91,13 @@ def validate(payload,customers,staff,accounts):
         key=(parent,' '.join(unicodedata.normalize('NFKC',name).lower().split()))
         if key in names:raise ValueError('同じ所属先に同名の組織が重複しています。')
         names.add(key);ids.add(nid)
-        if kind=='site':
-            if type(cid) is not int or cid not in customers:raise ValueError('拠点に在庫管理の顧客を紐づけてください。')
-            if cid in used_customers:raise ValueError('同じ在庫顧客を複数の拠点に紐づけることはできません。')
+        if kind=='company':
+            if type(cid) is not int or cid not in customers:raise ValueError('最初に在庫管理の顧客を選択してください。')
+            if cid in used_customers:raise ValueError('同じ顧客の組織が重複しています。')
+            used_customers.add(cid);site_type=''
+        elif kind=='site':
             if site_type not in ('事業所','店舗','その他'):raise ValueError('拠点の種類を確認してください。')
-            used_customers.add(cid)
-        else:cid=None;site_type=''
+        else:site_type=''
         result.append(dict(id=nid,parent_id=parent,kind=kind,name=name.strip(),customer_id=cid,site_type=site_type))
     byid={n['id']:n for n in result}
     for n in result:
@@ -85,6 +105,13 @@ def validate(payload,customers,staff,accounts):
         if n['kind']=='company':
             if n['parent_id'] is not None:raise ValueError('企業に所属先は指定できません。')
         elif not p or p['kind'] not in (('company',) if n['kind']=='region' else ('company','region')):raise ValueError('地区は企業の下、拠点は企業または地区の下に登録してください。')
+    for n in result:
+        if n['kind']=='company':continue
+        parent=byid[n['parent_id']]
+        root=parent if parent['kind']=='company' else byid[parent['parent_id']]
+        supplied=n['customer_id']
+        if supplied is not None and supplied!=root['customer_id']:raise ValueError('地区・拠点は親の顧客と同じ在庫を使います。')
+        n['customer_id']=root['customer_id']
     cs=payload.get('customer_scopes',[]);ss=payload.get('staff_scopes',[])
     if not isinstance(cs,list) or not isinstance(ss,list) or len(cs)>5000 or len(ss)>10000:raise ValueError('担当範囲の数を確認してください。')
     customer_scopes=[];seen=set()

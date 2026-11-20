@@ -1,54 +1,81 @@
 import copy
 import unittest
-from test_web_request_settings import SettingsTest
+import test_web_request_settings as fixtures
 import web_requests as w
 import web_request_organizations as org
+import web_request_inheritance as inherit
 
-class OrganizationTest(SettingsTest):
+class OrganizationTest(fixtures.SettingsTest):
     def setUp(self):
         super().setUp()
-        self.c.execute("INSERT INTO customer_accounts VALUES(10,1,1,'地区担当','area@example.test'),(11,2,1,'店舗担当','site@example.test')");self.c.commit()
+        self.c.execute("INSERT INTO customer_accounts VALUES(10,1,1,'地区担当','area@example.test'),(11,1,1,'店舗担当','site@example.test')");self.c.commit()
         self.organization=dict(nodes=[
-            dict(id='company',parent_id=None,kind='company',name='ABCD社'),
-            dict(id='north',parent_id='company',kind='region',name='北海道地区'),
-            dict(id='east',parent_id='company',kind='region',name='東北地区'),
+            dict(id='company',parent_id=None,kind='company',name='ABCD社',customer_id=1),
+            dict(id='north',parent_id='company',kind='region',name='北海道地区',customer_id=1),
+            dict(id='east',parent_id='company',kind='region',name='東北地区',customer_id=1),
             dict(id='sapporo',parent_id='north',kind='site',name='札幌店',customer_id=1,site_type='店舗'),
-            dict(id='sendai',parent_id='east',kind='site',name='仙台事業所',customer_id=2,site_type='事業所')
+            dict(id='sendai',parent_id='east',kind='site',name='仙台事業所',customer_id=1,site_type='事業所')
         ],customer_scopes=[dict(account_id=10,node_ids=['north'],can_request=False),dict(account_id=11,node_ids=['sapporo','sendai'],can_request=True)],staff_scopes=[dict(user_id=3,node_id='north')])
     def save_org(self,payload=None,user=None,version=None):
         return w.save(self.c,self.path,dict(action='organization',organization=payload or self.organization,version=org.read(self.c)['version'] if version is None else version),user or self.owner)
-    def test_region_and_multiple_site_customer_scopes(self):
-        self.save_org()
-        data=w.state(self.c,self.path,self.owner,10)
-        self.assertEqual([c['id'] for c in data['customers']],[1]);self.assertFalse(data['previewCanRequest'])
+    def scope(self,node,config=None,mode='custom',action='publish'):
+        base=w.read_config(self.c,1);p=inherit.profile(self.c,base,org.read(self.c),next(n for n in org.read(self.c)['nodes'] if n['id']==node))
+        return w.save(self.c,self.path,dict(action=action,customer_id=1,node_id=node,version=p['version'],config=config or p['draft'],parent_config=w.validate_config(p['parent_config'],w.state(self.c,self.path,self.owner),1),inheritance_mode=mode),self.owner)
+    def test_region_scopes_do_not_expose_other_sites_of_same_customer(self):
+        self.save_org();data=w.state(self.c,self.path,self.owner,10)
+        self.assertEqual([x['id'] for x in data['customers']],[1]);self.assertFalse(data['previewCanRequest'])
         self.assertEqual({n['id'] for n in data['organizations']['nodes']},{'company','north','sapporo'})
-        self.assertEqual(len(data['handles']),2);self.assertEqual(data['organizations']['accounts'],[])
-        self.assertEqual({c['id'] for c in w.state(self.c,self.path,self.owner,11)['customers']},{1,2})
-    def test_staff_scope_and_server_authority(self):
+        self.assertEqual({p['node_id'] for p in data['scopeProfiles']},{'north','sapporo'})
+        self.assertNotIn('sendai',data['allowedNodeIds'])
+        self.assertIn('sendai',w.state(self.c,self.path,self.owner,11)['allowedNodeIds'])
+    def test_regional_staff_cannot_edit_another_region_or_customer_common(self):
         self.save();self.save_org()
-        self.assertIn(1,[c['id'] for c in w.state(self.c,self.path,self.other)['customers']])
-        self.assertIn(1,w.state(self.c,self.path,self.other)['assignedCustomerIds'])
-        self.save(user=self.other)
-        with self.assertRaises(PermissionError):self.save_org(user=self.sales)
-        with self.assertRaises(PermissionError):w.state(self.c,self.path,self.sales,10)
-    def test_company_direct_site_no_region_and_empty_scope(self):
-        p=copy.deepcopy(self.organization);p['nodes'][3]['parent_id']='company';p['customer_scopes'][0]['node_ids']=['company']
-        self.save_org(p);self.assertEqual(org.account_scope(self.c,org.read(self.c),10)[0],{1,2})
-        p['customer_scopes'][0]['node_ids']=[];self.save_org(p);self.assertEqual(w.state(self.c,self.path,self.owner,10)['customers'],[])
-    def test_invalid_parent_duplicate_link_and_version_rollback(self):
-        for change in ('parent','link','name','scope'):
+        state=w.state(self.c,self.path,self.other)
+        self.assertNotIn('sendai',state['allowedNodeIds'])
+        self.assertNotIn(1,state['manageCommonCustomerIds'])
+        with self.assertRaises(PermissionError):self.save(user=self.other)
+        profile=inherit.profile(self.c,w.read_config(self.c,1),org.read(self.c),org.read(self.c)['nodes'][4])
+        with self.assertRaises(PermissionError):w.save(self.c,self.path,dict(action='save',customer_id=1,node_id='sendai',version=0,config=profile['draft'],inheritance_mode='custom'),self.other)
+
+    def test_shared_inventory_and_optional_regions(self):
+        p=copy.deepcopy(self.organization);p['nodes'][3]['parent_id']='company';self.save_org(p)
+        self.assertEqual(org.customer_ids(org.read(self.c),['company']),{1})
+        self.assertEqual(len([n for n in org.read(self.c)['nodes'] if n['kind']=='site']),2)
+    def test_invalid_cross_customer_and_duplicate_root(self):
+        for change in ['parent','customer','duplicate','name','scope']:
             p=copy.deepcopy(self.organization)
             if change=='parent':p['nodes'][0]['parent_id']='north'
-            if change=='link':p['nodes'][4]['customer_id']=1
+            if change=='customer':p['nodes'][4]['customer_id']=2
+            if change=='duplicate':p['nodes'].append(dict(id='another',parent_id=None,kind='company',name='別名',customer_id=1))
             if change=='name':p['nodes'][2]['name']='北海道地区'
             if change=='scope':p['customer_scopes'][0]['node_ids']=['missing']
             with self.assertRaises(ValueError):self.save_org(p)
             self.assertEqual(org.read(self.c)['version'],0)
-        self.save_org()
-        with self.assertRaises(ValueError):self.save_org(version=0)
-    def test_unconfigured_legacy_scope_and_new_descendant(self):
-        self.assertEqual(org.account_scope(self.c,org.read(self.c),10),({1},True))
-        self.save_org();p=copy.deepcopy(self.organization);p['nodes'][4]['parent_id']='north';self.save_org(p)
-        self.assertEqual(org.account_scope(self.c,org.read(self.c),10)[0],{1,2})
+        with self.assertRaises(PermissionError):self.save_org(user=self.sales)
+    def test_inheritance_changes_only_overridden_uniform(self):
+        self.cfg['departments'][0]['contracts'][0]['uniforms'].append(dict(id='u2',customer_product_id=11,display_name='パンツ',description='',default_qty=3,sort_order=2,photo='',active=True))
+        self.save(action='publish');self.save_org()
+        region=copy.deepcopy(self.cfg);region['departments'][0]['contracts'][0]['uniforms'][0]['default_qty']=4
+        self.scope('north',region)
+        site=inherit.profile(self.c,w.read_config(self.c,1),org.read(self.c),org.read(self.c)['nodes'][3])['draft']
+        site['departments'][0]['contracts'][0]['uniforms'][1]['default_qty']=2;self.scope('sapporo',site)
+        self.cfg['departments'][0]['contracts'][0]['uniforms'][0]['description']='共通で変更';self.save(action='publish')
+        config,status=inherit.resolve(self.c,w.read_config(self.c,1),org.read(self.c),'sapporo',True)
+        uniforms=config['departments'][0]['contracts'][0]['uniforms']
+        self.assertEqual([u['default_qty'] for u in uniforms],[4,2]);self.assertEqual([u['_source'] for u in uniforms],['北海道地区','札幌店'])
+        self.assertEqual(uniforms[0]['description'],'共通で変更');self.assertEqual(status,'published')
+        self.scope('sapporo',mode='inherit')
+        config,_=inherit.resolve(self.c,w.read_config(self.c,1),org.read(self.c),'sapporo',True)
+        self.assertEqual([u['default_qty'] for u in config['departments'][0]['contracts'][0]['uniforms']],[4,3])
+    def test_draft_overrides_do_not_change_published_scope(self):
+        self.save(action='publish');self.save_org();config=copy.deepcopy(self.cfg);config['departments'][0]['contracts'][0]['uniforms'][0]['default_qty']=2
+        self.scope('north',config,action='save')
+        published,_=inherit.resolve(self.c,w.read_config(self.c,1),org.read(self.c),'sapporo',True)
+        draft,_=inherit.resolve(self.c,w.read_config(self.c,1),org.read(self.c),'sapporo')
+        self.assertEqual(published['departments'][0]['contracts'][0]['uniforms'][0]['default_qty'],3)
+        self.assertEqual(draft['departments'][0]['contracts'][0]['uniforms'][0]['default_qty'],2)
+    def test_deleted_parent_uniform_is_not_resurrected_as_partial_data(self):
+        patch=inherit.difference(dict(uniforms=[dict(id='a',default_qty=3)]),dict(uniforms=[dict(id='a',default_qty=2)]))
+        self.assertEqual(inherit.apply(dict(uniforms=[]),patch,'地区')['uniforms'],[])
 
 if __name__=='__main__':unittest.main()

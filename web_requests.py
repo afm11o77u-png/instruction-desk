@@ -1,4 +1,5 @@
 """WEB依頼の部署・採用品設定。在庫DBは読み取り専用。"""
+import web_request_inheritance as inheritance
 import web_request_organizations as organizations
 import unicodedata
 import json
@@ -21,6 +22,7 @@ def schema(c):
     c.execute("CREATE TABLE IF NOT EXISTS web_request_customer_settings (customer_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0, draft TEXT NOT NULL, publication TEXT, status TEXT NOT NULL DEFAULT 'draft')")
 
     organizations.schema(c)
+    inheritance.schema(c)
 
 def catalog(path):
     if not path.exists(): return {'customers':[], 'products':[]}
@@ -88,6 +90,23 @@ def state(c,path,user=None,preview_account_id=None):
     data['userId']=user['id'] if user else None
     data['isAdmin']=organizations.admin(user)
     data['organizations']=organizations.view(c,allowed,user) if preview_account_id is None else organizations.view(c,allowed,dict(role='sales',manage=0,id=-1))
+    if preview_account_id is not None:
+        visible=organizations.account_node_ids(c,org,preview_account_id)
+        keep=set(visible)
+        for _ in range(len(org['nodes'])+1):
+            keep|={n['parent_id'] for n in org['nodes'] if n['id'] in keep and n['parent_id']}
+        data['organizations']['nodes']=[n for n in data['organizations']['nodes'] if n['id'] in keep]
+        data['allowedNodeIds']=sorted(visible)
+    elif user and not organizations.admin(user):
+        visible={n['id'] for n in org['nodes'] if n['customer_id'] in allowed and (permitted(read_config(c,n['customer_id']),user) or organizations.staff_can_manage(org,user['id'],n['customer_id'],n['id']))}
+        keep=set(visible)
+        for _ in range(len(org['nodes'])+1):keep|={n['parent_id'] for n in org['nodes'] if n['id'] in keep and n['parent_id']}
+        data['organizations']['nodes']=[n for n in data['organizations']['nodes'] if n['id'] in keep]
+        data['allowedNodeIds']=sorted(visible)
+    else:data['allowedNodeIds']=[n['id'] for n in data['organizations']['nodes']]
+    data['manageCommonCustomerIds']=[p['customer_id'] for p in data['profiles'] if permitted(p,user) or (user and organizations.staff_can_manage(org,user['id'],p['customer_id']))]
+
+    data['scopeProfiles']=[inheritance.profile(c,p,org,n) for p in data['profiles'] for n in data['organizations']['nodes'] if n['customer_id']==p['customer_id'] and n['kind']!='company' and n['id'] in data['allowedNodeIds']]
     data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
 
@@ -175,13 +194,14 @@ def save(c,path,d,user=None):
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data['staff']},user)
         return state(c,path,user)
+    if d.get('node_id'):return save_scope(c,path,d,user)
     cid=number(d.get('customer_id'),'顧客',1,2147483647)
     data=state(c,path,user)
     if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この顧客の設定を変更する権限がありません。')
     c.execute('BEGIN IMMEDIATE')
     try:
         current=read_config(c,cid)
-        if not permitted(current,user) and (not user or cid not in organizations.staff_ids(organizations.read(c),user['id'])):raise PermissionError('担当者の設定を確認してください。')
+        if not permitted(current,user) and (not user or not organizations.staff_can_manage(organizations.read(c),user['id'],cid)):raise PermissionError('担当者の設定を確認してください。')
         if type(d.get('version')) is not int or d['version']!=current['version']:raise ValueError('別の画面で更新されています。一覧を更新してからやり直してください。')
         action=d.get('action')
         if action not in ('save','publish','pause'):raise ValueError('操作を確認してください。')
@@ -201,4 +221,39 @@ def save(c,path,d,user=None):
         c.commit()
     except Exception:
         c.rollback();raise
+    return state(c,path,user)
+
+
+def save_scope(c,path,d,user):
+    cid=number(d.get('customer_id'),'顧客',1,2147483647)
+    data=state(c,path,user);node_id=text(d.get('node_id'),'地区・拠点',80,True)
+    if cid not in {x['id'] for x in data['customers']} or node_id not in data['allowedNodeIds']:raise PermissionError('この地区・拠点の設定を変更できません。')
+    org=organizations.read(c);inheritance.chain(org,cid,node_id)
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        base=read_config(c,cid);old=inheritance.record(c,node_id)
+        if type(d.get('version')) is not int or d['version']!=old['version']:raise ValueError('設定が更新されています。再読込してください。')
+        parent,_=inheritance.resolve(c,base,org,node_id,skip_last=True)
+        clean_parent=validate_config(parent,data,cid)
+        if d.get('parent_config')!=clean_parent:raise ValueError('共通設定または地区設定が更新されています。再読込して確認してください。')
+        mode=d.get('inheritance_mode')
+        if mode not in ('inherit','custom'):raise ValueError('共通設定を使うか独自設定かを選んでください。')
+        config=validate_config(d.get('config'),data,cid)
+        payload=dict(mode=mode,patch=inheritance.difference(clean_parent,config) if mode=='custom' else {})
+        action=d.get('action');publication=old['publication'];status=old['status']
+        if action not in ('save','publish','pause'):raise ValueError('操作を確認してください。')
+        if action=='publish':
+            if base['status']!='published':raise ValueError('先に顧客共通の設定を依頼画面へ反映してください。')
+            parent_public,parent_status=inheritance.resolve(c,base,org,node_id,True,True)
+            effective=inheritance.apply(parent_public,payload['patch'],'独自設定') if mode=='custom' else parent_public
+            checked=validate_config(effective,data,cid)
+            active=[u for dep in checked['departments'] for k in dep['contracts'] if k['active'] for u in k['uniforms'] if u['active']]
+            if parent_status!='published' or not active:raise ValueError('親の設定が公開中で、選択できる制服があることを確認してください。')
+            products={p['id']:p for p in data['products']}
+            if any(not u['customer_product_id'] or not products.get(u['product_id'],{}).get('sizes') for u in active):raise ValueError('制服の紐づけとサイズを確認してください。')
+            publication=dict(payload,version=old['version']+1);status='published'
+        elif action=='pause':status='paused'
+        c.execute('INSERT INTO web_request_scope_settings(node_id,customer_id,version,draft,publication,status) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,draft=excluded.draft,publication=excluded.publication,status=excluded.status',(node_id,cid,old['version']+1,json.dumps(payload,ensure_ascii=False),json.dumps(publication,ensure_ascii=False) if publication else None,status))
+        c.commit()
+    except Exception:c.rollback();raise
     return state(c,path,user)
