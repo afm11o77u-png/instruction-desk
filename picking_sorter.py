@@ -564,18 +564,25 @@ def preview_ishikari_format() -> bytes:
         {
             "source_file": "見本.xlsx", "requester": "見本", "customer": "サンプル顧客",
             "name": name, "maker": "サンプル", "sku": "SAMPLE-01", "size": "M",
-            "condition": condition, "quantity": 1, "note": f"元の指示書：{instruction_value}",
+            "condition": condition, "quantity": 1, "note": "印刷範囲内の備考",
             "note2": "印刷範囲外の備考", "stock": stock,
         }
         for stock in ("0", "a", "b")
-        for name, condition, instruction_value in (
-            ("白衣（新古）", "新\n古", "新古・空欄・未指定"),
-            ("白衣（新）", "新", "新・新品"),
-            ("白衣（古）", "古", "古・中古"),
+        for name, condition in (
+            ("白衣（新古）", "新\n古"),
+            ("白衣（新）", "新"),
+            ("白衣（古）", "古"),
         )
     ]
     wb, _ = build_ishikari_workbook(datetime.now(), rows, "ピッキングリスト書式見本.xlsx")
     try:
+        for ws in wb.worksheets[1:]:
+            ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=ws.max_column)
+            ws["A5"] = "※ 元の指示書が「新・新品」なら新のみ、「古・中古」なら古のみ。「新古・空欄・未指定」は新と古を縦2段で表示します。"
+            ws["A5"].font = Font(name="Yu Gothic", size=10)
+            ws["A5"].alignment = Alignment(vertical="center", wrap_text=True)
+            for row_number in range(2, 6):
+                ws.row_dimensions[row_number].height = ws.sheet_format.defaultRowHeight
         with BytesIO() as out:
             wb.save(out)
             return out.getvalue()
