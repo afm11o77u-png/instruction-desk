@@ -243,7 +243,7 @@ function normalizeKintaiSection(section){
   if(section==='register')return 'register';
   if(section==='summary')return 'summary';
   if(section==='daily')return 'daily';
-  if(['tot','leave','report'].includes(section))return section;
+  if(['tot','leave','report','label-billing'].includes(section))return section;
   return 'attendance';
 }
 function kintaiSectionFromLocation(){
@@ -254,7 +254,7 @@ function kintaiSectionFromLocation(){
   if(path==='/kintai'||path==='/kintai/attendance')return 'attendance';
   try{
     const q=new URLSearchParams(location.search).get('kintai');
-    if(['register','summary','daily','attendance','tot','leave','report','processed-stats'].includes(q))return q;
+    if(['register','summary','daily','attendance','tot','leave','report','processed-stats','label-billing'].includes(q))return q;
   }catch(_){}
   return '';
 }
@@ -269,7 +269,7 @@ function writeKintaiLocation(section){
     else if(section==='daily')path='/kintai/daily';
     else if(cur==='/kintai/register'||cur==='/kintai/summary'||cur==='/kintai/daily')path='/';
     url.pathname=path;
-    if(['tot','leave','report'].includes(section)) {
+    if(['tot','leave','report','label-billing'].includes(section)) {
       url.pathname='/';
       url.searchParams.set('kintai',section);
     }else url.searchParams.delete('kintai');
@@ -312,6 +312,7 @@ function syncKintaiNav(section){
   if(summary)summary.hidden=kintaiSection!=='summary';
   if(shift)shift.hidden=kintaiSection!=='shift';
   if(bihin)bihin.hidden=kintaiSection!=='bihin';
+  $('#kintailabelbilling').hidden=kintaiSection!=='label-billing';
   const crimp=$('#kintaicrimp');
   if(crimp)crimp.hidden=kintaiSection!=='crimp';
   $('#kintaitot').hidden=kintaiSection!=='tot';
@@ -343,6 +344,11 @@ async function showKintaiSection(section, reportMonth){
     if(typeof loadKintaiCrimp==='function')loadKintaiCrimp().catch(e=>toast(e.message));
   }else if(kintaiSection==='bihin'){
     if(typeof loadKintaiBihin==='function')loadKintaiBihin().catch(e=>toast(e.message));
+  }else if(kintaiSection==='label-billing'){
+    const month=$('#kintailabelbillingmonth');
+    const today=new Date();
+    if(!month.value)month.value=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
+    if(heading)heading.textContent='各支店ラベル集計';
   }else if(kintaiSection==='summary'){
     if(typeof loadKintaiSummary==='function')loadKintaiSummary().catch(e=>toast(e.message));
   }else if(kintaiSection==='daily'){

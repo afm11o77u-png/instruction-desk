@@ -23,8 +23,8 @@ class KintaiPageSplitTest(unittest.TestCase):
             'シフト準備': ['shift'],
             '日々の記録': ['crimp'],
             '15日締め': ['tot', 'register', 'daily', 'leave', 'attendance'],
-            '月末締め': ['bihin'],
-            '10日 幹部会議': ['report', 'summary'],
+            '月末締め': ['bihin', 'label-billing'],
+            '10日 幹部会議': ['report', 'summary', 'processed-stats'],
         }
         import re
         groups = re.findall(r'<div class="kintai-nav-group"><div class="navcaption">([^<]+)</div>(.*?)</div>', nav, re.S)
@@ -66,7 +66,7 @@ class KintaiPageSplitTest(unittest.TestCase):
         self.assertIn("if(section==='register')return 'register';", place)
         self.assertIn("if(section==='summary')return 'summary';", place)
         self.assertIn("if(section==='daily')return 'daily';", place)
-        self.assertIn("['shift','crimp'].includes(b.dataset.kintaiSection)", place)
+        self.assertIn("['shift','crimp','processed-stats'].includes(b.dataset.kintaiSection)", place)
         self.assertIn("else if(cur==='/kintai/register'||cur==='/kintai/summary'||cur==='/kintai/daily')path='/';", place)
         self.assertIn("path==='/kintai/register'", place)
         self.assertIn("path==='/kintai/summary'", place)

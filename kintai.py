@@ -4631,6 +4631,12 @@ def handle_get(h, c, path: str):
     if path == '/api/kintai/bihin':
         q = _query_map(h)
         return 200, kintai_bihin.get_sheet(c, q.get('year'), q.get('month'))
+    if path == '/api/kintai/label-billing/xlsx':
+        import kintai_label_billing
+        ym = _parse_ym(_query_map(h).get('ym'))
+        if not ym:
+            raise ValueError('対象年月を選んでください。')
+        return kintai_label_billing.export(*ym)
     if path == '/api/kintai/bihin/xlsx':
         # 保存済みデータのみ・読み取り専用。権限は上の require_kintai（備品棚卸 GET と同じ）
         q = _query_map(h)
