@@ -285,7 +285,7 @@ $('#labelbarcodeform').onsubmit=event=>{
  event.preventDefault();
  const input=$('#labelbarcode');
  const status=$('#labelbarcodestatus');
- const code=input.value.trim();
+ const code=String(input.value||'').normalize('NFKC').replace(/[\u2010-\u2015\u2212\u30fc\uff0d\uff70]/g,'-').trim();
  if(!code)return;
  const revision=labelBarcodeRevision;
  input.value='';

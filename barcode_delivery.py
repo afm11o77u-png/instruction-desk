@@ -156,9 +156,15 @@ def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
         
     return {}
 
+def normalize_barcode_code(code: str) -> str:
+    """Convert full-width digits/letters/symbols in barcode input to half-width."""
+    s = unicodedata.normalize("NFKC", str(code or "")).strip()
+    s = re.sub(r"[\u2010-\u2015\u2212\u30fc\uff0d\uff70]", "-", s)
+    return s
+
 def lookup_barcode(code: str, include_product: bool = False, *, include_management: bool = False) -> dict:
     """Lookup MasterCode in db3.mdb and combine with shipments info."""
-    code = str(code or "").strip()
+    code = normalize_barcode_code(code)
     if not code:
         return {"ok": False, "found": False, "message": "バーコード番号が空です。"}
     

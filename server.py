@@ -494,7 +494,9 @@ def ship_order(handler,d):
     step=str(d.get('step') or 'ship').strip()
     if step not in SCAN_STEPS: return 400, {'error':'読み取る作業を選んでください。'}
     label,at_key,by_key,id_key=SCAN_STEPS[step]
-    raw=str(d.get('number','')).strip().upper().replace(' ','')
+    import unicodedata
+    raw=unicodedata.normalize('NFKC', str(d.get('number',''))).strip().upper().replace(' ','')
+    raw=re.sub(r'[\u2010-\u2015\u2212\u30fc\uff0d\uff70]', '-', raw)
     raw=raw.strip('*')
     if not (re.fullmatch(r'SI-\d{1,6}', raw) or re.fullmatch(r'SI-\d{8}-\d{3,4}', raw)): return 400, {'error':'指示番号のバーコードを読み取ってください。'}
     method=str(d.get('method') or '').strip()

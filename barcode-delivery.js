@@ -189,8 +189,12 @@
     }
   }
 
+  function normalizeBarcode(v) {
+    return String(v || '').normalize('NFKC').replace(/[\u2010-\u2015\u2212\u30fc\uff0d\uff70]/g, '-').trim();
+  }
+
   async function handleBarcodeSubmit(code) {
-    code = (code || '').trim();
+    code = normalizeBarcode(code);
     if (!code) return;
 
     const input = $('#bdelivcode');

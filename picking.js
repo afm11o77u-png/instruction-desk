@@ -67,7 +67,7 @@ function syncBarcodeControls(){
 if(scanForm)scanForm.onsubmit=e=>{
  e.preventDefault();
  if(!editable()||busy||scanForm.hidden)return;
- const code=scanInput.value.trim();
+ const code=String(scanInput.value||'').normalize('NFKC').replace(/[\u2010-\u2015\u2212\u30fc\uff0d\uff70]/g,'-').trim();
  const stock=scanStock.value;
  if(!code||!stock)return;
  const draft=current;
