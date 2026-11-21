@@ -33,15 +33,33 @@
     const status = $('#kintailabelbillingstatus');
     const total = $('#kintailabelbillingtotal');
     const submit = form.querySelector('button[type=submit]');
+    const save = $('#kintailabelbillingsave');
     const drafts = new Map();
     const unsaved = new Set();
     const number = new Intl.NumberFormat('ja-JP');
     let grid = null;
     let request = 0;
     let downloading = false;
+    let saving = false;
 
     const amount = raw => raw === '' ? null : /^\d{1,9}$/.test(raw) ? Number(raw) : NaN;
     const valueOf = (entry, price) => (amount(entry?.quantity || '') ?? 0) * price + (amount(entry?.shipping || '') ?? 0);
+
+    function syncButtons() {
+      submit.disabled = !grid || downloading;
+      save.disabled = !grid || saving || !unsaved.has(grid.ym);
+    }
+
+    function entriesFor(target) {
+      const entries = [...target.entries.values()].map(entry => ({
+        ...entry, quantity: amount(entry.quantity), shipping: amount(entry.shipping),
+      }));
+      const invalid = entries.find(entry => Number.isNaN(entry.quantity) || Number.isNaN(entry.shipping));
+      if (invalid) {
+        throw Error(`${invalid.branch}支店の${invalid.day}日：枚数と送料は0以上、9桁以内の整数を入力してください。`);
+      }
+      return entries;
+    }
 
     function refreshAmounts() {
       let sum = 0;
@@ -75,24 +93,27 @@
       const ym = month.value;
       const current = ++request;
       grid = null;
-      submit.disabled = true;
+      syncButtons();
       body.replaceChildren();
       total.textContent = '';
       status.textContent = ym ? '読み込み中…' : '対象年月を選んでください。';
       if (!ym) return;
       try {
-        if (!drafts.has(ym)) {
+        if (!unsaved.has(ym)) {
           const data = await api('/api/kintai/label-billing?ym=' + encodeURIComponent(ym));
           if (current !== request) return;
-          drafts.set(ym, {ym, data, entries: new Map(), revision: 0});
+          const entries = new Map(data.entries.map(entry => [`${entry.branch}:${entry.day}:${entry.kind}`, {
+            ...entry, quantity: String(entry.quantity ?? ''), shipping: String(entry.shipping ?? ''),
+          }]));
+          drafts.set(ym, {ym, data, entries, revision: 0, savedRevision: data.revision});
         }
         grid = drafts.get(ym);
         const selected = branches.value;
         branches.replaceChildren(...grid.data.branches.map(branch => new Option(branch.name + '支店', branch.name)));
         if (grid.data.branches.some(branch => branch.name === selected)) branches.value = selected;
         render();
-        submit.disabled = downloading;
-        status.textContent = '';
+        syncButtons();
+        status.textContent = unsaved.has(ym) ? '未保存の変更があります。' : grid.savedRevision ? '保存済み' : '';
       } catch (err) {
         if (current === request) status.textContent = err.message;
       }
@@ -115,25 +136,43 @@
       grid.revision++;
       unsaved.add(grid.ym);
       refreshAmounts();
+      syncButtons();
+      status.textContent = '未保存の変更があります。';
+    });
+
+    save.addEventListener('click', async () => {
+      if (!grid || saving) return;
+      const target = grid;
+      const revision = target.revision;
+      saving = true;
+      syncButtons();
+      try {
+        const entries = entriesFor(target);
+        status.textContent = '保存しています…';
+        const result = await api('/api/kintai/label-billing', {
+          ym: target.ym, revision: target.savedRevision, entries,
+        });
+        if (drafts.get(target.ym) !== target) return;
+        target.savedRevision = result.revision;
+        if (target.revision === revision) unsaved.delete(target.ym);
+        if (grid === target) status.textContent = unsaved.has(target.ym) ? '未保存の変更があります。' : 'Webに保存しました。';
+      } catch (err) {
+        if (grid === target) status.textContent = err.message;
+      } finally {
+        saving = false;
+        syncButtons();
+      }
     });
 
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (!grid || downloading) return;
       const target = grid;
-      const revision = target.revision;
-      const entries = [...target.entries.values()].map(entry => ({
-        ...entry, quantity: amount(entry.quantity), shipping: amount(entry.shipping),
-      }));
-      const invalid = entries.find(entry => Number.isNaN(entry.quantity) || Number.isNaN(entry.shipping));
-      if (invalid) {
-        status.textContent = `${invalid.branch}支店の${invalid.day}日：枚数と送料は0以上、9桁以内の整数を入力してください。`;
-        return;
-      }
       downloading = true;
-      submit.disabled = true;
-      status.textContent = 'Excelを作成しています…';
+      syncButtons();
       try {
+        const entries = entriesFor(target);
+        status.textContent = 'Excelを作成しています…';
         const reply = await fetch('/api/kintai/label-billing/xlsx', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', 'X-Desk-Request': '1'},
@@ -148,13 +187,14 @@
         link.download = `各支店ラベル集計_${target.ym.replace('-', '.')}.xlsx`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
-        if (target.revision === revision) unsaved.delete(target.ym);
-        if (grid === target) status.textContent = '入力済みExcelをダウンロードしました。';
+        if (grid === target) status.textContent = unsaved.has(target.ym)
+          ? 'Excelをダウンロードしました。Webに未保存の変更があります。'
+          : '入力済みExcelをダウンロードしました。';
       } catch (err) {
         if (grid === target) status.textContent = err.message;
       } finally {
         downloading = false;
-        submit.disabled = !grid;
+        syncButtons();
       }
     });
     window.addEventListener('beforeunload', event => {
@@ -172,7 +212,7 @@
       branches.replaceChildren();
       body.replaceChildren();
       status.textContent = total.textContent = '';
-      submit.disabled = true;
+      syncButtons();
     };
   }
 

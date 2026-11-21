@@ -307,6 +307,9 @@ DATA_DIR = Path('.')
 
 
 def schema(c):
+    c.execute('''CREATE TABLE IF NOT EXISTS kintai_label_billing (
+        ym TEXT PRIMARY KEY, revision INTEGER NOT NULL, entries TEXT NOT NULL
+    )''')
     cols = {r['name'] for r in c.execute('PRAGMA table_info(users)')}
     if 'mark_kintai' not in cols:
         c.execute('ALTER TABLE users ADD COLUMN mark_kintai INTEGER NOT NULL DEFAULT 0')
@@ -4637,7 +4640,7 @@ def handle_get(h, c, path: str):
         if not ym:
             raise ValueError('対象年月を選んでください。')
         if path == '/api/kintai/label-billing':
-            return 200, kintai_label_billing.month_form(*ym)
+            return 200, kintai_label_billing.month_form(c, *ym)
         return kintai_label_billing.export(*ym)
     if path == '/api/kintai/bihin/xlsx':
         # 保存済みデータのみ・読み取り専用。権限は上の require_kintai（備品棚卸 GET と同じ）
@@ -4674,11 +4677,13 @@ def handle_post(h, c, path: str, d: dict):
         denied = None
     if denied:
         return denied
-    if path == '/api/kintai/label-billing/xlsx':
+    if path in ('/api/kintai/label-billing', '/api/kintai/label-billing/xlsx'):
         import kintai_label_billing
         ym = _parse_ym(d.get('ym'))
         if not ym:
             raise ValueError('対象年月を選んでください。')
+        if path == '/api/kintai/label-billing':
+            return kintai_label_billing.save_month(c, *ym, d.get('revision'), d.get('entries'))
         return kintai_label_billing.export(*ym, entries=d.get('entries'))
     if path == '/api/kintai/leave-balance':
         return 200, kintai_leave_balance.handle(c, d or {}, read_xlsx_grid)

@@ -1,4 +1,5 @@
 """Generate the monthly Excel billing form for branch labels."""
+import json
 from calendar import monthrange
 from datetime import date
 from io import BytesIO
@@ -25,10 +26,17 @@ def _sizes(branch):
     return (('小', 30), ('大' if branch == '千歳' else '小貼付け', 60))
 
 
-def month_form(year, month):
+def month_form(c, year, month):
+    day_count = _day_count(year, month)
+    saved = c.execute(
+        'SELECT revision, entries FROM kintai_label_billing WHERE ym = ?',
+        (f'{year:04d}-{month:02d}',),
+    ).fetchone()
     return {
-        'days': [WEEKDAYS[date(year, month, day).weekday()] for day in range(1, _day_count(year, month) + 1)],
+        'days': [WEEKDAYS[date(year, month, day).weekday()] for day in range(1, day_count + 1)],
         'branches': [{'name': branch, 'sizes': _sizes(branch)} for branch in BRANCHES],
+        'revision': saved[0] if saved else 0,
+        'entries': json.loads(saved[1]) if saved else [],
     }
 
 
@@ -53,6 +61,24 @@ def _validated_entries(entries, day_count):
             raise ValueError('枚数と送料は0以上、9桁以内の整数を入力してください。')
         result[key] = (details, quantity, shipping)
     return result
+
+
+def save_month(c, year, month, revision, entries):
+    if type(revision) is not int or revision < 0:
+        raise ValueError('保存版を確認してください。')
+    rows = _validated_entries(entries, _day_count(year, month))
+    payload = [
+        dict(branch=branch, day=day, kind=kind, details=details, quantity=quantity, shipping=shipping)
+        for (branch, day, kind), (details, quantity, shipping) in rows.items()
+    ]
+    ym = f'{year:04d}-{month:02d}'
+    stored = c.execute('SELECT revision FROM kintai_label_billing WHERE ym = ?', (ym,)).fetchone()
+    if revision != (stored[0] if stored else 0):
+        return 409, {'error': 'この月は別の画面で更新されました。編集内容はExcelに出力できます。再読み込みすると最新の保存内容が表示されます。'}
+    c.execute('''INSERT INTO kintai_label_billing (ym, revision, entries) VALUES (?, ?, ?)
+                 ON CONFLICT(ym) DO UPDATE SET revision=excluded.revision, entries=excluded.entries''',
+              (ym, revision + 1, json.dumps(payload, ensure_ascii=False)))
+    return 200, {'revision': revision + 1}
 
 
 def export(year: int, month: int, entries=()):
