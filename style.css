@@ -1095,7 +1095,7 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 
 #kintailabelbillingtable { width: max-content; min-width: 0; }
 #kintailabelbillingtable th,
-#kintailabelbillingtable td { padding-inline: 7px; white-space: nowrap; }
+#kintailabelbillingtable td { padding-inline: 15px; white-space: nowrap; }
 #kintailabelbillingtable input {
   width: 100%; min-width: 5.5rem; box-sizing: border-box;
   background: #fff2a6; border: 1px solid #d1be70;
