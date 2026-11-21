@@ -109,6 +109,13 @@ if(scanExport)scanExport.onclick=()=>run(async()=>{
   body:JSON.stringify({title:current.title,date:current.date,rows:allrows()})
  });
  if(!response.ok)throw Error((await response.json()).error||'Excelを出力できませんでした。');
+ const savedHeader=response.headers.get('X-Saved-Path');
+ if(savedHeader){
+  const savedPath=decodeURIComponent(savedHeader);
+  dirty=false;
+  scanStatus.textContent='共有フォルダに保存しました：'+savedPath;
+  return;
+ }
  const url=URL.createObjectURL(await response.blob());
  const link=document.createElement('a');
  link.href=url;
@@ -116,7 +123,7 @@ if(scanExport)scanExport.onclick=()=>run(async()=>{
  link.click();
  setTimeout(()=>URL.revokeObjectURL(url),10000);
  dirty=false;
- scanStatus.textContent='Excelを出力しました。';
+ scanStatus.textContent='共有フォルダへ接続できなかったため、パソコンにダウンロードしました。';
 });
 
 function syncAddRow(){const btn=$('#addrow');if(!btn||!current)return;btn.hidden=legacyScan||!editable();btn.disabled=legacyScan||!editable();syncBarcodeControls()}

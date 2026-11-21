@@ -1018,8 +1018,27 @@ def handle(h,c,path,d,can_access):
             raise ValueError('保存名を入力してください。')
         rows = [{key: row.get(key, '') for key in FIELDS} for row in raw]
         validate_rows(rows, True)
-        from picking_sorter import scan_ishikari_workbook
-        return 200, scan_ishikari_workbook(day, rows), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        from pathlib import Path
+        from urllib.parse import quote
+        from picking_sorter import DEFAULT_BASE_DIR, scan_ishikari_workbook
+        xlsx_bytes = scan_ishikari_workbook(day, rows)
+        headers = {}
+        try:
+            save_dir = Path(DEFAULT_BASE_DIR)
+            if save_dir.is_dir():
+                base_name = f'{day}_ピッキングリスト'
+                dest = save_dir / f'{base_name}.xlsx'
+                n = 2
+                while dest.exists():
+                    dest = save_dir / f'{base_name}_{n}.xlsx'
+                    n += 1
+                dest.write_bytes(xlsx_bytes)
+                headers['X-Saved-Path'] = quote(str(dest))
+            else:
+                headers['X-Saved-Error'] = quote('共有フォルダに接続できませんでした。')
+        except Exception as exc:
+            headers['X-Saved-Error'] = quote(str(exc))
+        return 200, xlsx_bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers
     if path=='/api/picking/carry-check':
         day=text(d.get('date',''),10)
         try: date.fromisoformat(day)
