@@ -434,6 +434,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.append(headers)
 
     ws.sheet_format.defaultRowHeight = 31.5
+    ws.sheet_format.customHeight = True
     font_header = Font(name="Yu Gothic", size=11, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
     font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
