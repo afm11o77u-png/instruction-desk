@@ -428,7 +428,7 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
     wb.close()
     return rows
 
-def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str, *, stack_condition: bool):
+def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
     """ピッキング／作業シート用の共通フォーマット適用"""
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "倉庫から", "実行者", "確認", "入力", "確認"]
     ws.append(headers)
@@ -476,7 +476,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
         row_vals.extend([""] * (len(headers) - len(row_vals)))
         # 表示用シートは1行に統一。集約シートの元データはそのまま保持する。
         row_vals = [re.sub(r"[\r\n]+", " ", v) if isinstance(v, str) else v for v in row_vals]
-        stacked = stack_condition and isinstance(row_vals[6], str) and re.fullmatch(r"新\s*古", row_vals[6])
+        stacked = isinstance(row_vals[6], str) and re.fullmatch(r"新\s*古", row_vals[6])
         if stacked:
             row_vals[6] = "新\n古"
         ws.append(row_vals)
@@ -515,7 +515,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, stack_condition: bool = True):
+def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
     """Create the warehouse workbook without touching the filesystem."""
     ishikari_rows = [r for r in rows if r["stock"] == "0"]
     factory_rows  = [r for r in rows if r["stock"] == "a"]
@@ -541,15 +541,15 @@ def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, 
 
     # 2. 持ち込み bリスト
     ws_carry = wb.create_sheet(title="持ち込み bリスト")
-    _apply_sheet_styling(ws_carry, carry_rows, ws_carry.title, now, file_name, stack_condition=stack_condition)
+    _apply_sheet_styling(ws_carry, carry_rows, ws_carry.title, now, file_name)
 
     # 3. 工場内 aリスト
     ws_factory = wb.create_sheet(title="工場内 aリスト")
-    _apply_sheet_styling(ws_factory, factory_rows, ws_factory.title, now, file_name, stack_condition=stack_condition)
+    _apply_sheet_styling(ws_factory, factory_rows, ws_factory.title, now, file_name)
 
     # 4. 石狩倉庫ピッキングリスト
     ws_ishikari = wb.create_sheet(title="石狩倉庫ピッキングリスト")
-    _apply_sheet_styling(ws_ishikari, ishikari_rows, ws_ishikari.title, now, file_name, stack_condition=stack_condition)
+    _apply_sheet_styling(ws_ishikari, ishikari_rows, ws_ishikari.title, now, file_name)
 
     # 開いた時に「石狩倉庫ピッキングリスト」が最初に画面に出るようアクティブ設定
     wb.active = ws_ishikari
@@ -614,7 +614,7 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
             "stock": stock_codes[row["stock"]],
         })
 
-    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx", stack_condition=False)
+    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx")
     try:
         # The previous barcode exporter stored all user text literally.
         # Preserve that behavior instead of letting openpyxl interpret formulas or errors.
