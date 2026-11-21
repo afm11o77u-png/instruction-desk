@@ -230,7 +230,17 @@ function resetLabelCustomerBatch(){
  appliedLabelCustomer='';
  $('#labelcustomerbulk').value='';
 }
-function resetLabelCards(){resetLabelCustomerBatch();const box=$('#labelcards');box.replaceChildren();for(let i=0;i<4;i++)box.append(labelCard());renumberLabelCards()}
+let labelBarcodeRevision=0;
+function resetLabelCards(){
+ resetLabelCustomerBatch();
+ labelBarcodeRevision++;
+ $('#labelbarcode').value='';
+ $('#labelbarcodestatus').textContent='';
+ const box=$('#labelcards');
+ box.replaceChildren();
+ for(let i=0;i<4;i++)box.append(labelCard());
+ renumberLabelCards();
+}
 function labelOrders(){const list=[...$('#labelcards').querySelectorAll('.labelcard')].map(card=>{const order={};card.querySelectorAll('[data-key]').forEach(el=>order[el.dataset.key]=el.value.trim());const address=['customer','management','department','employee'].some(key=>order[key]);return address?order:null});while(list.length>4&&list.slice(0,4).every(order=>!order))list.splice(0,4);while(list.length>4&&list.slice(-4).every(order=>!order))list.splice(-4,4);return list.some(Boolean)?list:[]}
 resetLabelCards();
 $('#labeladd').onclick=()=>{
@@ -266,6 +276,51 @@ function ensureLabelCardCount(need){
  while(box.children.length<target)box.append(labelCard());
  renumberLabelCards();
 }
+function firstEmptyAddressCard(box){
+ return [...box.children].find(card=>[...card.querySelectorAll('input')].every(input=>!input.value.trim())&&
+  card.querySelector('[data-key="request"]').value===labelRequestDefault);
+}
+let labelBarcodeQueue=Promise.resolve();
+$('#labelbarcodeform').onsubmit=event=>{
+ event.preventDefault();
+ const input=$('#labelbarcode');
+ const status=$('#labelbarcodestatus');
+ const code=input.value.trim();
+ if(!code)return;
+ const revision=labelBarcodeRevision;
+ input.value='';
+ input.focus();
+ labelBarcodeQueue=labelBarcodeQueue.then(async()=>{
+  if(revision!==labelBarcodeRevision)return;
+  const box=$('#labelcards');
+  const limit=typeof LABEL_PASTE_MAX_ROWS!=='undefined'?LABEL_PASTE_MAX_ROWS:40;
+  if(!firstEmptyAddressCard(box)&&box.children.length>=limit){
+   status.textContent='一度に印刷できるのは40件までです。';
+   return;
+  }
+  status.textContent='宛名を照会しています…';
+  try{
+   const address=await api('/api/address-labels/barcode?code='+encodeURIComponent(code));
+   if(revision!==labelBarcodeRevision)return;
+   const keys=currentLabelPattern()==='3'?['customer','employee']:['customer','department','employee'];
+   if(!keys.some(key=>String(address[key]||'').trim())){
+    status.textContent='このバーコードの宛名情報が見つかりません。';
+    return;
+   }
+   let card=firstEmptyAddressCard(box);
+   if(!card&&box.children.length<limit){
+    const first=box.children.length;
+    ensureLabelCardCount(first+1);
+    card=box.children[first];
+   }
+   if(!card){status.textContent='一度に印刷できるのは40件までです。';return}
+   for(const key of keys)card.querySelector(`[data-key="${key}"]`).value=address[key]||'';
+   status.textContent=`${card.querySelector('.labelposition').textContent}に宛名を入力しました。`;
+  }catch(err){
+   if(revision===labelBarcodeRevision)status.textContent=err.message;
+  }
+ });
+};
 function applyLabelPasteUpdates(updates){
  const box=$('#labelcards');
  for(const item of updates){

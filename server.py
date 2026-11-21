@@ -1279,6 +1279,20 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path in ('/api/templates','/api/templates/admin'):
             with connect() as c: result=templates.handle(self,c,path)
             return self.reply(*result)
+        if path == '/api/address-labels/barcode':
+            if self.user['role'] not in ('owner', 'floor', 'floor2', 'floor3'):
+                return self.reply(403, {'error': 'バーコードで宛名を作成する権限がありません。'})
+            from urllib.parse import parse_qs, urlparse
+            import barcode_delivery
+            code = parse_qs(urlparse(self.path).query).get('code', [''])[0].strip()
+            result = barcode_delivery.lookup_barcode(code)
+            if not result.get('found'):
+                return self.reply(404, {'error': result.get('message') or 'バーコードが見つかりません。'})
+            return self.reply(200, {
+                'customer': result.get('customer', ''),
+                'department': result.get('department', ''),
+                'employee': result.get('person', ''),
+            })
         if path=='/api/label-sets':
             with connect() as c: result=label_sets.handle(self,c,path)
             return self.reply(*result)
