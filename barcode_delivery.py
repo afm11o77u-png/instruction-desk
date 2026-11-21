@@ -15,20 +15,31 @@ PS1_PATH = Path(__file__).parent / "barcode_delivery.ps1"
 _CACHE = {}
 
 _ADDRESS_STORE_DEPARTMENTS = frozenset(('青果', '水産', '惣菜', '畜産', 'レジ', 'グロサリー', '管理', '夜間', '夜間担当'))
+_LEADING_ADDRESS_NUMBER = re.compile(r'([0-9０-９]+(?:[-－‐‑−][0-9０-９]+)*)(?=\s|$)')
 
 
 def split_address_department(customer: str, department: str) -> tuple[str, str]:
     """Move a recognized department suffix out of a store name for address labels."""
+    daiichi = unicodedata.normalize('NFKC', customer).startswith(('ダイイチ', '株式会社ダイイチ', '株式会社 ダイイチ', '(株)ダイイチ'))
     match = re.fullmatch(r'(.+店)\s*([^店]+)', customer)
-    if not match:
+    if not match and daiichi:
+        match = re.fullmatch(r'(.+)\s+(\S+)', customer) or re.fullmatch(r'(.+?)(夜間担当)', customer)
+    if match is None:
         return customer, department
     store, suffix = match.groups()
     suffix = unicodedata.normalize('NFKC', suffix).strip()
     registered = unicodedata.normalize('NFKC', department).strip()
-    daiichi = unicodedata.normalize('NFKC', store).startswith(('ダイイチ', '株式会社ダイイチ', '株式会社 ダイイチ'))
     if suffix not in _ADDRESS_STORE_DEPARTMENTS or (not daiichi and suffix != registered):
         return customer, department
-    return store, suffix
+    return store.rstrip(), suffix
+
+
+def _address_number(text):
+    match = _LEADING_ADDRESS_NUMBER.match(text)
+    if match is None:
+        return "", text
+    number = re.sub(r'[－‐‑−]', '-', unicodedata.normalize("NFKC", match[1]))
+    return number, text[match.end():].lstrip()
 
 
 def normalize_name(name: str) -> str:
@@ -243,9 +254,11 @@ def lookup_barcode(code: str, include_product: bool = False, *, include_manageme
             result["maker"] = str(data.get("maker") or "").strip()
             result["sku"] = str(data.get("sku") or "").strip()
         if include_management:
-            person_code = unicodedata.normalize("NFKC", str(data.get("personCode") or "")).strip()
-            number = re.match(r"[0-9]+(?:-[0-9]+)*(?=\s|$)", person_code)
-            result["management"] = number.group() if number else ""
+            person_code, _ = _address_number(str(data.get("personCode") or "").strip())
+            name_number, name = _address_number(result["person"])
+            result["management"] = person_code or (name_number if name else "")
+            if name and name_number and name_number == result["management"]:
+                result["person"] = name
         # Keep regular delivery lookups separate from product-enriched lookups.
         _CACHE[cache_key] = result
         return result

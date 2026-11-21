@@ -302,6 +302,9 @@ $('#labelbarcodeform').onsubmit=event=>{
   try{
    const address=await api('/api/address-labels/barcode?code='+encodeURIComponent(code));
    if(revision!==labelBarcodeRevision)return;
+   if(currentLabelPattern()==='3'&&(address.management||(address.original_customer&&address.customer!==address.original_customer))){
+    setLabelPattern('4');
+   }
    const threeLines=currentLabelPattern()==='3';
    const keys=threeLines?['customer','employee']:['customer','management','department','employee'];
    if(threeLines)address.customer=address.original_customer||address.customer;
