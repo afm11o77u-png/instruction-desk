@@ -108,7 +108,8 @@ SELECT TOP 1
     p.ラベル表示用_商品名,
     s.サイズ,
     k.部署名,
-    k.個人名
+    k.個人名,
+    k.個人コード
 FROM ((([M_識別コードマスタ] s
 LEFT JOIN [M_顧客マスタ] c ON s.顧客コード = c.顧客コード)
 LEFT JOIN [M_商品マスタ] p ON s.商品コード = p.商品コード)
@@ -131,6 +132,7 @@ WHERE s.MasterCode = '$cleanCode'
             size = "" + $r["サイズ"]
             department = "" + $r["部署名"]
             person = "" + $r["個人名"]
+            personCode = "" + $r["個人コード"]
         }
         if ($IncludeProduct) {
             $details = Get-ProductDetails $conn ($r["LookupProductCode"])

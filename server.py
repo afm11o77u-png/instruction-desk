@@ -1285,7 +1285,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             import barcode_delivery
             code = parse_qs(urlparse(self.path).query).get('code', [''])[0].strip()
-            result = barcode_delivery.lookup_barcode(code)
+            result = barcode_delivery.lookup_barcode(code, include_management=True)
             if not result.get('found'):
                 return self.reply(404, {'error': result.get('message') or 'バーコードが見つかりません。'})
             original_customer = result.get('customer', '')
@@ -1294,6 +1294,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 'customer': customer,
                 'original_customer': original_customer,
                 'department': department,
+                'management': result.get('management', ''),
                 'employee': result.get('person', ''),
             })
         if path=='/api/label-sets':

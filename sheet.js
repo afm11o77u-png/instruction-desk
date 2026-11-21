@@ -303,7 +303,7 @@ $('#labelbarcodeform').onsubmit=event=>{
    const address=await api('/api/address-labels/barcode?code='+encodeURIComponent(code));
    if(revision!==labelBarcodeRevision)return;
    const threeLines=currentLabelPattern()==='3';
-   const keys=threeLines?['customer','employee']:['customer','department','employee'];
+   const keys=threeLines?['customer','employee']:['customer','management','department','employee'];
    if(threeLines)address.customer=address.original_customer||address.customer;
    if(!keys.some(key=>String(address[key]||'').trim())){
     status.textContent='このバーコードの宛名情報が見つかりません。';

@@ -145,13 +145,13 @@ def get_shipment_info(customer_name: str, customer_code: str = "") -> dict:
         
     return {}
 
-def lookup_barcode(code: str, include_product: bool = False) -> dict:
+def lookup_barcode(code: str, include_product: bool = False, *, include_management: bool = False) -> dict:
     """Lookup MasterCode in db3.mdb and combine with shipments info."""
     code = str(code or "").strip()
     if not code:
         return {"ok": False, "found": False, "message": "バーコード番号が空です。"}
     
-    cache_key = (code, include_product)
+    cache_key = (code, include_product, include_management)
     if cache_key in _CACHE:
         return _CACHE[cache_key]
     
@@ -242,6 +242,9 @@ def lookup_barcode(code: str, include_product: bool = False) -> dict:
         if include_product:
             result["maker"] = str(data.get("maker") or "").strip()
             result["sku"] = str(data.get("sku") or "").strip()
+        if include_management:
+            person_code = str(data.get("personCode") or "").strip()
+            result["management"] = person_code if re.fullmatch(r"[0-9０-９]+", person_code) else ""
         # Keep regular delivery lookups separate from product-enriched lookups.
         _CACHE[cache_key] = result
         return result
