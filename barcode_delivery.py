@@ -243,8 +243,9 @@ def lookup_barcode(code: str, include_product: bool = False, *, include_manageme
             result["maker"] = str(data.get("maker") or "").strip()
             result["sku"] = str(data.get("sku") or "").strip()
         if include_management:
-            person_code = str(data.get("personCode") or "").strip()
-            result["management"] = person_code if re.fullmatch(r"[0-9０-９]+", person_code) else ""
+            person_code = unicodedata.normalize("NFKC", str(data.get("personCode") or "")).strip()
+            number = re.match(r"[0-9]+(?:-[0-9]+)*(?=\s|$)", person_code)
+            result["management"] = number.group() if number else ""
         # Keep regular delivery lookups separate from product-enriched lookups.
         _CACHE[cache_key] = result
         return result
