@@ -1257,10 +1257,16 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(200, result)
             except Exception as e:
                 return self.reply(500, {'error': f'バーコード照会エラー: {e}'})
-        if path=='/api/picking-sort/preview':
+        if path in ('/api/picking-sort/preview', '/api/picking-sort/format-xlsx'):
             if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
                 return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
             try:
+                if path == '/api/picking-sort/format-xlsx':
+                    return self.reply(
+                        200, picking_sorter.preview_ishikari_format(),
+                        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        {'Content-Disposition': 'attachment; filename="picking-list-format.xlsx"'},
+                    )
                 data = picking_sorter.preview_sort()
                 return self.reply(200, data)
             except Exception as e:

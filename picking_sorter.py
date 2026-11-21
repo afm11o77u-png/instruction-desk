@@ -24,6 +24,7 @@ import posixpath
 import re
 import shutil
 from datetime import date, datetime
+from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import Lock
@@ -427,7 +428,7 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
     wb.close()
     return rows
 
-def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
+def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str, *, stack_condition: bool):
     """ピッキング／作業シート用の共通フォーマット適用"""
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "倉庫から", "実行者", "確認", "入力", "確認"]
     ws.append(headers)
@@ -438,6 +439,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=False, shrink_to_fit=True)
     align_left = Alignment(horizontal="left", vertical="center", wrap_text=False, shrink_to_fit=True)
     align_cond = Alignment(horizontal="left", vertical="center", wrap_text=False, shrink_to_fit=True)
+    align_stacked = Alignment(horizontal="left", vertical="center", wrap_text=True)
     align_header = Alignment(horizontal="center", vertical="center", wrap_text=False, shrink_to_fit=True)
     border_thin = Border(
         left=Side(style='thin', color='888888'),
@@ -471,6 +473,9 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
         row_vals.extend([""] * (len(headers) - len(row_vals)))
         # 表示用シートは1行に統一。集約シートの元データはそのまま保持する。
         row_vals = [re.sub(r"[\r\n]+", " ", v) if isinstance(v, str) else v for v in row_vals]
+        stacked = stack_condition and isinstance(row_vals[6], str) and re.fullmatch(r"新\s*古", row_vals[6])
+        if stacked:
+            row_vals[6] = "新\n古"
         ws.append(row_vals)
         ws.row_dimensions[r_idx].height = 32
         for col_idx in range(1, len(headers) + 1):
@@ -478,7 +483,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
             cell.border = border_thin
             if col_idx == 7: # 新古: 左寄せ・1行表示
                 cell.font = font_cond
-                cell.alignment = align_cond
+                cell.alignment = align_stacked if stacked else align_cond
             elif col_idx in (1, 6, 8) or col_idx > 11:
                 cell.font = font_data
                 cell.alignment = align_center
@@ -506,7 +511,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
+def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, stack_condition: bool = True):
     """Create the warehouse workbook without touching the filesystem."""
     ishikari_rows = [r for r in rows if r["stock"] == "0"]
     factory_rows  = [r for r in rows if r["stock"] == "a"]
@@ -532,15 +537,15 @@ def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
 
     # 2. 持ち込み bリスト
     ws_carry = wb.create_sheet(title="持ち込み bリスト")
-    _apply_sheet_styling(ws_carry, carry_rows, "持ち込み bリスト", now, file_name)
+    _apply_sheet_styling(ws_carry, carry_rows, ws_carry.title, now, file_name, stack_condition=stack_condition)
 
     # 3. 工場内 aリスト
     ws_factory = wb.create_sheet(title="工場内 aリスト")
-    _apply_sheet_styling(ws_factory, factory_rows, "工場内 aリスト", now, file_name)
+    _apply_sheet_styling(ws_factory, factory_rows, ws_factory.title, now, file_name, stack_condition=stack_condition)
 
     # 4. 石狩倉庫ピッキングリスト
     ws_ishikari = wb.create_sheet(title="石狩倉庫ピッキングリスト")
-    _apply_sheet_styling(ws_ishikari, ishikari_rows, "石狩倉庫ピッキングリスト", now, file_name)
+    _apply_sheet_styling(ws_ishikari, ishikari_rows, ws_ishikari.title, now, file_name, stack_condition=stack_condition)
 
     # 開いた時に「石狩倉庫ピッキングリスト」が最初に画面に出るようアクティブ設定
     wb.active = ws_ishikari
@@ -553,10 +558,28 @@ def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
         "carry": len(carry_rows)
     }
 
+def preview_ishikari_format() -> bytes:
+    rows = [
+        {
+            "source_file": "見本.xlsx", "requester": "見本", "customer": "サンプル顧客",
+            "name": name, "maker": "サンプル", "sku": "SAMPLE-01", "size": "M",
+            "condition": condition, "quantity": 1, "note": "印刷範囲内の備考",
+            "note2": "印刷範囲外の備考", "stock": stock,
+        }
+        for stock in ("0", "a", "b")
+        for name, condition in (("白衣（新古）", "新\n古"), ("白衣（新）", "新"), ("白衣（古）", "古"))
+    ]
+    wb, _ = build_ishikari_workbook(datetime.now(), rows, "ピッキングリスト書式見本.xlsx")
+    try:
+        with BytesIO() as out:
+            wb.save(out)
+            return out.getvalue()
+    finally:
+        wb.close()
+
+
 def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
     """Export legacy barcode rows using the automatic sorter workbook format."""
-    from io import BytesIO
-
     now = datetime.fromisoformat(day)
     stock_codes = {"warehouse": "0", "factory": "a", "carry": "b"}
     normalized = []
@@ -576,7 +599,7 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
             "stock": stock_codes[row["stock"]],
         })
 
-    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx")
+    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx", stack_condition=False)
     try:
         # The previous barcode exporter stored all user text literally.
         # Preserve that behavior instead of letting openpyxl interpret formulas or errors.
