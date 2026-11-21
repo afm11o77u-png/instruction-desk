@@ -4,6 +4,7 @@ import re
 import json
 import sqlite3
 import subprocess
+import unicodedata
 from pathlib import Path
 
 MDB_PATH = Path(r"C:\Users\zfm11\Desktop\db3.mdb")
@@ -12,6 +13,23 @@ PS1_PATH = Path(__file__).parent / "barcode_delivery.ps1"
 
 # In-memory cache for fast lookup
 _CACHE = {}
+
+_ADDRESS_STORE_DEPARTMENTS = frozenset(('青果', '水産', '惣菜', '畜産', 'レジ', 'グロサリー', '管理', '夜間', '夜間担当'))
+
+
+def split_address_department(customer: str, department: str) -> tuple[str, str]:
+    """Move a recognized department suffix out of a store name for address labels."""
+    match = re.fullmatch(r'(.+店)\s*([^店]+)', customer)
+    if not match:
+        return customer, department
+    store, suffix = match.groups()
+    suffix = unicodedata.normalize('NFKC', suffix).strip()
+    registered = unicodedata.normalize('NFKC', department).strip()
+    daiichi = unicodedata.normalize('NFKC', store).startswith(('ダイイチ', '株式会社ダイイチ', '株式会社 ダイイチ'))
+    if suffix not in _ADDRESS_STORE_DEPARTMENTS or (not daiichi and suffix != registered):
+        return customer, department
+    return store, suffix
+
 
 def normalize_name(name: str) -> str:
     """Normalize customer name for fuzzy matching."""

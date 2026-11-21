@@ -1288,9 +1288,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             result = barcode_delivery.lookup_barcode(code)
             if not result.get('found'):
                 return self.reply(404, {'error': result.get('message') or 'バーコードが見つかりません。'})
+            original_customer = result.get('customer', '')
+            customer, department = barcode_delivery.split_address_department(original_customer, result.get('department', ''))
             return self.reply(200, {
-                'customer': result.get('customer', ''),
-                'department': result.get('department', ''),
+                'customer': customer,
+                'original_customer': original_customer,
+                'department': department,
                 'employee': result.get('person', ''),
             })
         if path=='/api/label-sets':
