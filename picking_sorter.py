@@ -436,6 +436,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.sheet_format.defaultRowHeight = 31.5
     ws.sheet_format.customHeight = True
     font_header = Font(name="Yu Gothic", size=11, bold=True)
+    font_executor_header = Font(name="Yu Gothic", size=9, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
     font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
     align_center = Alignment(horizontal="center", vertical="center", wrap_text=False, shrink_to_fit=True)
@@ -452,9 +453,9 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
     ws.row_dimensions[1].height = 25
-    for col_idx in range(1, len(headers) + 1):
+    for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col_idx)
-        cell.font = font_header
+        cell.font = font_executor_header if header == "実行者" else font_header
         cell.alignment = align_header
         cell.border = border_thin
         cell.fill = fill_header
@@ -493,7 +494,8 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
                 cell.font = font_data
                 cell.alignment = align_left
 
-    col_widths = [8.0, 25.0, 15.0, 10.0, 14.0, 7.0, 5.5, 6.0, 16.0, 12.0, 9.0, 8.0, 6.5, 6.5, 6.5]
+    # Excel displays an XLSX width of 6.5 as 5.88 with this workbook's default font.
+    col_widths = [8.0, 25.0, 15.0, 10.0, 14.0, 7.0, 5.5, 6.0, 16.0, 12.0, 9.0, 6.5, 6.5, 6.5, 6.5]
     for col_idx, width in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
