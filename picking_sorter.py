@@ -563,11 +563,15 @@ def preview_ishikari_format() -> bytes:
         {
             "source_file": "見本.xlsx", "requester": "見本", "customer": "サンプル顧客",
             "name": name, "maker": "サンプル", "sku": "SAMPLE-01", "size": "M",
-            "condition": condition, "quantity": 1, "note": "印刷範囲内の備考",
+            "condition": condition, "quantity": 1, "note": f"元の指示書：{instruction_value}",
             "note2": "印刷範囲外の備考", "stock": stock,
         }
         for stock in ("0", "a", "b")
-        for name, condition in (("白衣（新古）", "新\n古"), ("白衣（新）", "新"), ("白衣（古）", "古"))
+        for name, condition, instruction_value in (
+            ("白衣（新古）", "新\n古", "新古・空欄・未指定"),
+            ("白衣（新）", "新", "新・新品"),
+            ("白衣（古）", "古", "古・中古"),
+        )
     ]
     wb, _ = build_ishikari_workbook(datetime.now(), rows, "ピッキングリスト書式見本.xlsx")
     try:
