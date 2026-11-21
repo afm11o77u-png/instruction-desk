@@ -1095,13 +1095,13 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 
 #kintailabelbillingtable { width: max-content; min-width: 0; }
 #kintailabelbillingtable th,
-#kintailabelbillingtable td { padding-inline: 5px; white-space: nowrap; }
+#kintailabelbillingtable td { padding-inline: 7px; white-space: nowrap; }
 #kintailabelbillingtable input {
   width: 100%; min-width: 5.5rem; box-sizing: border-box;
   background: #fff2a6; border: 1px solid #d1be70;
   border-radius: 4px; padding: 4px 6px;
 }
-#kintailabelbillingtable input[data-field="details"] { width: 14rem; }
+#kintailabelbillingtable input[data-field="details"] { width: 21rem; }
 #kintailabelbillingtable input[inputmode="numeric"] {
   width: 4rem;
   min-width: 0;
