@@ -82,12 +82,12 @@
         const key = `${branch.name}:${day}:${kind}`;
         const entry = grid.entries.get(key);
         const input = (field, label, attrs) =>
-          `<input type="text" data-field="${field}" aria-label="${day}日 ${esc(size)} ${label}" value="${esc(entry?.[field] || '')}" ${attrs}>`;
+          `<input type="text" data-field="${field}" aria-label="${day}日 ${label}" value="${esc(entry?.[field] || '')}" ${attrs}>`;
         return `<tr data-key="${key}" data-day="${day}" data-kind="${kind}" data-price="${price}">
-          <td>${kind === 0 ? day : ''}</td><td>${kind === 0 ? weekday : ''}</td>
-          <td>${input('details', '内訳', 'maxlength="200"')}</td><td>${esc(size)}</td>
-          <td>${input('quantity', '枚数', 'inputmode="numeric" maxlength="9"')}</td><td>${price}</td>
-          <td>${input('shipping', '送料', 'inputmode="numeric" maxlength="9"')}</td><td></td></tr>`;
+          ${kind === 0 ? `<td>${day}</td><td>${weekday}</td><td rowspan="2" style="vertical-align:middle">${input('details', '内訳', 'maxlength="403"')}</td>` : '<td></td><td></td>'}
+          <td>${esc(size)}</td>
+          <td>${input('quantity', esc(size) + ' 枚数', 'inputmode="numeric" maxlength="9"')}</td><td>${price}</td>
+          <td>${input('shipping', esc(size) + ' 送料', 'inputmode="numeric" maxlength="9"')}</td><td></td></tr>`;
       }).join('')).join('');
       refreshAmounts();
     }
@@ -108,6 +108,19 @@
           const entries = new Map(data.entries.map(entry => [`${entry.branch}:${entry.day}:${entry.kind}`, {
             ...entry, quantity: String(entry.quantity ?? ''), shipping: String(entry.shipping ?? ''),
           }]));
+          // Older drafts saved separate descriptions for the two sizes.
+          for (const entry of entries.values()) {
+            if (entry.kind !== 1 || !entry.details) continue;
+            const key = `${entry.branch}:${entry.day}:0`;
+            const daily = entries.get(key) || {
+              branch: entry.branch, day: entry.day, kind: 0, details: '', quantity: '', shipping: '',
+            };
+            if (daily.details !== entry.details) {
+              daily.details = [daily.details, entry.details].filter(Boolean).join(' / ');
+            }
+            entries.set(key, daily);
+            entry.details = '';
+          }
           drafts.set(ym, {ym, data, entries, revision: 0, savedRevision: data.revision});
         }
         grid = drafts.get(ym);
