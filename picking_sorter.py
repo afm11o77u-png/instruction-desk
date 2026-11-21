@@ -433,6 +433,7 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "倉庫から", "実行者", "確認", "入力", "確認"]
     ws.append(headers)
 
+    ws.sheet_format.defaultRowHeight = 31.5
     font_header = Font(name="Yu Gothic", size=11, bold=True)
     font_data = Font(name="Yu Gothic", size=11, bold=True)
     font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
