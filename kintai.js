@@ -42,7 +42,10 @@
     let downloading = false;
     let saving = false;
 
-    const amount = raw => raw === '' ? null : /^\d{1,9}$/.test(raw) ? Number(raw) : NaN;
+    const amount = raw => {
+      const digits = raw.trim().replace(/[０-９]/g, digit => digit.normalize('NFKC'));
+      return digits === '' ? null : /^\d{1,9}$/.test(digits) ? Number(digits) : NaN;
+    };
     const valueOf = (entry, price) => (amount(entry?.quantity || '') ?? 0) * price + (amount(entry?.shipping || '') ?? 0);
 
     function syncButtons() {
