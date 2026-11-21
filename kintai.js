@@ -32,7 +32,7 @@
     const body = $('#kintailabelbillingtable tbody');
     const status = $('#kintailabelbillingstatus');
     const total = $('#kintailabelbillingtotal');
-    const submit = form.querySelector('button[type=submit]');
+    const downloads = form.querySelectorAll('button[type=submit]');
     const save = $('#kintailabelbillingsave');
     const drafts = new Map();
     const unsaved = new Set();
@@ -49,12 +49,12 @@
     const valueOf = (entry, price) => (amount(entry?.quantity || '') ?? 0) * price + (amount(entry?.shipping || '') ?? 0);
 
     function syncButtons() {
-      submit.disabled = !grid || downloading;
+      downloads.forEach(button => { button.disabled = !grid || downloading; });
       save.disabled = !grid || saving || !unsaved.has(grid.ym);
     }
 
-    function entriesFor(target) {
-      const entries = [...target.entries.values()].map(entry => ({
+    function entriesFor(target, branch = null) {
+      const entries = [...target.entries.values()].filter(entry => !branch || entry.branch === branch).map(entry => ({
         ...entry, quantity: amount(entry.quantity), shipping: amount(entry.shipping),
       }));
       const invalid = entries.find(entry => Number.isNaN(entry.quantity) || Number.isNaN(entry.shipping));
@@ -183,16 +183,17 @@
     form.addEventListener('submit', async event => {
       event.preventDefault();
       if (!grid || downloading) return;
+      const scope = event.submitter?.value === 'ishikari' ? 'ishikari' : 'all';
       const target = grid;
       downloading = true;
       syncButtons();
       try {
-        const entries = entriesFor(target);
+        const entries = entriesFor(target, scope === 'ishikari' ? '石狩' : null);
         status.textContent = 'Excelを作成しています…';
         const reply = await fetch('/api/kintai/label-billing/xlsx', {
           method: 'POST',
           headers: {'Content-Type': 'application/json', 'X-Desk-Request': '1'},
-          body: JSON.stringify({ym: target.ym, entries}),
+          body: JSON.stringify({ym: target.ym, entries, scope}),
         });
         if (!reply.ok) throw Error((await reply.json()).error || 'Excelを作成できませんでした。');
         const workbook = await reply.blob();
@@ -200,7 +201,8 @@
         const url = URL.createObjectURL(workbook);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `各支店ラベル集計_${target.ym.replace('-', '.')}.xlsx`;
+        const title = scope === 'ishikari' ? '石狩支店ラベル集計' : '各支店ラベル集計';
+        link.download = `${title}_${target.ym.replace('-', '.')}.xlsx`;
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 10000);
         if (grid === target) status.textContent = unsaved.has(target.ym)

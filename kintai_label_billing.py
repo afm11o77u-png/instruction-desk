@@ -82,17 +82,24 @@ def save_month(c, year, month, revision, entries):
     return 200, {'revision': revision + 1}
 
 
-def export(year: int, month: int, entries=()):
+def export(year: int, month: int, entries=(), *, scope='all'):
+    if scope not in ('all', 'ishikari'):
+        raise ValueError('Excelの出力範囲を確認してください。')
     day_count = _day_count(year, month)
     rows = _validated_entries(entries, day_count) if entries != () else {}
     workbook = load_workbook(TEMPLATE)
     try:
+        title = '各支店ラベル集計'
+        if scope == 'ishikari':
+            for branch in BRANCHES[1:]:
+                workbook.remove(workbook[f'{branch}支店'])
+            title = '石狩支店ラベル集計'
         for branch in BRANCHES:
-            sheet = workbook[f'{branch}支店']
-            _fill_branch(sheet, branch, year, month, day_count, rows)
+            if f'{branch}支店' in workbook:
+                _fill_branch(workbook[f'{branch}支店'], branch, year, month, day_count, rows)
         with BytesIO() as out:
             workbook.save(out)
-            filename = quote(f'各支店ラベル集計_{year}.{month:02d}.xlsx')
+            filename = quote(f'{title}_{year}.{month:02d}.xlsx')
             return 200, out.getvalue(), XLSX, {
                 'Content-Disposition': f"attachment; filename*=UTF-8''{filename}",
             }

@@ -4684,7 +4684,7 @@ def handle_post(h, c, path: str, d: dict):
             raise ValueError('対象年月を選んでください。')
         if path == '/api/kintai/label-billing':
             return kintai_label_billing.save_month(c, *ym, d.get('revision'), d.get('entries'))
-        return kintai_label_billing.export(*ym, entries=d.get('entries'))
+        return kintai_label_billing.export(*ym, entries=d.get('entries'), scope=d.get('scope', 'all'))
     if path == '/api/kintai/leave-balance':
         return 200, kintai_leave_balance.handle(c, d or {}, read_xlsx_grid)
     if path == '/api/kintai/import':
