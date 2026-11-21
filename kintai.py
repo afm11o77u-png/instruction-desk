@@ -4631,11 +4631,13 @@ def handle_get(h, c, path: str):
     if path == '/api/kintai/bihin':
         q = _query_map(h)
         return 200, kintai_bihin.get_sheet(c, q.get('year'), q.get('month'))
-    if path == '/api/kintai/label-billing/xlsx':
+    if path in ('/api/kintai/label-billing', '/api/kintai/label-billing/xlsx'):
         import kintai_label_billing
         ym = _parse_ym(_query_map(h).get('ym'))
         if not ym:
             raise ValueError('対象年月を選んでください。')
+        if path == '/api/kintai/label-billing':
+            return 200, kintai_label_billing.month_form(*ym)
         return kintai_label_billing.export(*ym)
     if path == '/api/kintai/bihin/xlsx':
         # 保存済みデータのみ・読み取り専用。権限は上の require_kintai（備品棚卸 GET と同じ）
@@ -4672,6 +4674,12 @@ def handle_post(h, c, path: str, d: dict):
         denied = None
     if denied:
         return denied
+    if path == '/api/kintai/label-billing/xlsx':
+        import kintai_label_billing
+        ym = _parse_ym(d.get('ym'))
+        if not ym:
+            raise ValueError('対象年月を選んでください。')
+        return kintai_label_billing.export(*ym, entries=d.get('entries'))
     if path == '/api/kintai/leave-balance':
         return 200, kintai_leave_balance.handle(c, d or {}, read_xlsx_grid)
     if path == '/api/kintai/import':

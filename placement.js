@@ -349,6 +349,7 @@ async function showKintaiSection(section, reportMonth){
     const today=new Date();
     if(!month.value)month.value=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}`;
     if(heading)heading.textContent='各支店ラベル集計';
+    window.loadLabelBilling?.();
   }else if(kintaiSection==='summary'){
     if(typeof loadKintaiSummary==='function')loadKintaiSummary().catch(e=>toast(e.message));
   }else if(kintaiSection==='daily'){

@@ -24,6 +24,158 @@
 
   function $(sel, root) { return (root || document).querySelector(sel); }
 
+  function bindLabelBilling() {
+    const form = $('#kintailabelbillingform');
+    if (!form) return;
+    const month = $('#kintailabelbillingmonth');
+    const branches = $('#kintailabelbillingbranch');
+    const body = $('#kintailabelbillingtable tbody');
+    const status = $('#kintailabelbillingstatus');
+    const total = $('#kintailabelbillingtotal');
+    const submit = form.querySelector('button[type=submit]');
+    const drafts = new Map();
+    const unsaved = new Set();
+    const number = new Intl.NumberFormat('ja-JP');
+    let grid = null;
+    let request = 0;
+    let downloading = false;
+
+    const amount = raw => raw === '' ? null : /^\d{1,9}$/.test(raw) ? Number(raw) : NaN;
+    const valueOf = (entry, price) => (amount(entry?.quantity || '') ?? 0) * price + (amount(entry?.shipping || '') ?? 0);
+
+    function refreshAmounts() {
+      let sum = 0;
+      for (const row of body.rows) {
+        const value = valueOf(grid.entries.get(row.dataset.key), Number(row.dataset.price));
+        row.lastElementChild.textContent = Number.isNaN(value) ? '—' : number.format(value);
+        sum += value;
+      }
+      total.textContent = Number.isNaN(sum) ? '入力を確認' : `${number.format(sum)} 円`;
+    }
+
+    function render() {
+      const branch = grid?.data.branches.find(item => item.name === branches.value);
+      if (!branch) return;
+      body.innerHTML = grid.data.days.map((weekday, index) => branch.sizes.map(([size, price], kind) => {
+        const day = index + 1;
+        const key = `${branch.name}:${day}:${kind}`;
+        const entry = grid.entries.get(key);
+        const input = (field, label, attrs) =>
+          `<input type="text" data-field="${field}" aria-label="${day}日 ${esc(size)} ${label}" value="${esc(entry?.[field] || '')}" ${attrs}>`;
+        return `<tr data-key="${key}" data-day="${day}" data-kind="${kind}" data-price="${price}">
+          <td>${kind === 0 ? day : ''}</td><td>${kind === 0 ? weekday : ''}</td>
+          <td>${input('details', '内訳', 'maxlength="200"')}</td><td>${esc(size)}</td>
+          <td>${input('quantity', '枚数', 'inputmode="numeric" maxlength="9"')}</td><td>${price}</td>
+          <td>${input('shipping', '送料', 'inputmode="numeric" maxlength="9"')}</td><td></td></tr>`;
+      }).join('')).join('');
+      refreshAmounts();
+    }
+
+    async function load() {
+      const ym = month.value;
+      const current = ++request;
+      grid = null;
+      submit.disabled = true;
+      body.replaceChildren();
+      total.textContent = '';
+      status.textContent = ym ? '読み込み中…' : '対象年月を選んでください。';
+      if (!ym) return;
+      try {
+        if (!drafts.has(ym)) {
+          const data = await api('/api/kintai/label-billing?ym=' + encodeURIComponent(ym));
+          if (current !== request) return;
+          drafts.set(ym, {ym, data, entries: new Map(), revision: 0});
+        }
+        grid = drafts.get(ym);
+        const selected = branches.value;
+        branches.replaceChildren(...grid.data.branches.map(branch => new Option(branch.name + '支店', branch.name)));
+        if (grid.data.branches.some(branch => branch.name === selected)) branches.value = selected;
+        render();
+        submit.disabled = downloading;
+        status.textContent = '';
+      } catch (err) {
+        if (current === request) status.textContent = err.message;
+      }
+    }
+
+    month.addEventListener('change', load);
+    branches.addEventListener('change', render);
+    body.addEventListener('input', event => {
+      const input = event.target;
+      const field = input.dataset.field;
+      if (!grid || !field) return;
+      const row = input.closest('tr');
+      const entry = grid.entries.get(row.dataset.key) || {
+        branch: branches.value, day: Number(row.dataset.day), kind: Number(row.dataset.kind),
+        details: '', quantity: '', shipping: '',
+      };
+      entry[field] = input.value;
+      if (entry.details || entry.quantity || entry.shipping) grid.entries.set(row.dataset.key, entry);
+      else grid.entries.delete(row.dataset.key);
+      grid.revision++;
+      unsaved.add(grid.ym);
+      refreshAmounts();
+    });
+
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!grid || downloading) return;
+      const target = grid;
+      const revision = target.revision;
+      const entries = [...target.entries.values()].map(entry => ({
+        ...entry, quantity: amount(entry.quantity), shipping: amount(entry.shipping),
+      }));
+      const invalid = entries.find(entry => Number.isNaN(entry.quantity) || Number.isNaN(entry.shipping));
+      if (invalid) {
+        status.textContent = `${invalid.branch}支店の${invalid.day}日：枚数と送料は0以上、9桁以内の整数を入力してください。`;
+        return;
+      }
+      downloading = true;
+      submit.disabled = true;
+      status.textContent = 'Excelを作成しています…';
+      try {
+        const reply = await fetch('/api/kintai/label-billing/xlsx', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-Desk-Request': '1'},
+          body: JSON.stringify({ym: target.ym, entries}),
+        });
+        if (!reply.ok) throw Error((await reply.json()).error || 'Excelを作成できませんでした。');
+        const workbook = await reply.blob();
+        if (drafts.get(target.ym) !== target) return;
+        const url = URL.createObjectURL(workbook);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `各支店ラベル集計_${target.ym.replace('-', '.')}.xlsx`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        if (target.revision === revision) unsaved.delete(target.ym);
+        if (grid === target) status.textContent = '入力済みExcelをダウンロードしました。';
+      } catch (err) {
+        if (grid === target) status.textContent = err.message;
+      } finally {
+        downloading = false;
+        submit.disabled = !grid;
+      }
+    });
+    window.addEventListener('beforeunload', event => {
+      if (!unsaved.size) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
+    window.loadLabelBilling = load;
+    window.resetLabelBilling = () => {
+      ++request;
+      drafts.clear();
+      unsaved.clear();
+      grid = null;
+      month.value = '';
+      branches.replaceChildren();
+      body.replaceChildren();
+      status.textContent = total.textContent = '';
+      submit.disabled = true;
+    };
+  }
+
   function fiscalStartYear() {
     if (chosenYear) return chosenYear;
     const el = $('#kintaiyear');
@@ -1388,6 +1540,7 @@
   }
 
   function bindKintaiControls() {
+    bindLabelBilling();
     const reportExport = $('#kintaireportexport');
     if (reportExport) reportExport.onclick = async () => {
       reportExport.disabled = true;

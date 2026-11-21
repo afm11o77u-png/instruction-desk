@@ -15,16 +15,55 @@ BRANCHES = ('石狩', '千歳', '東', '函館', '帯広', '西')
 WEEKDAYS = '月火水木金土日'
 
 
-def export(year: int, month: int):
-    day_count = monthrange(year, month)[1]
+def _day_count(year, month):
     if not 1900 <= year <= 9999:
         raise ValueError('対象年月を確認してください。')
+    return monthrange(year, month)[1]
+
+
+def _sizes(branch):
+    return (('小', 30), ('大' if branch == '千歳' else '小貼付け', 60))
+
+
+def month_form(year, month):
+    return {
+        'days': [WEEKDAYS[date(year, month, day).weekday()] for day in range(1, _day_count(year, month) + 1)],
+        'branches': [{'name': branch, 'sizes': _sizes(branch)} for branch in BRANCHES],
+    }
+
+
+def _validated_entries(entries, day_count):
+    if not isinstance(entries, list) or len(entries) > len(BRANCHES) * day_count * 2:
+        raise ValueError('ラベル集計の明細を確認してください。')
+    result = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError('ラベル集計の明細を確認してください。')
+        branch, day, kind = (entry.get(key) for key in ('branch', 'day', 'kind'))
+        key = (branch, day, kind)
+        if (not isinstance(branch, str) or branch not in BRANCHES
+                or type(day) is not int or not 1 <= day <= day_count
+                or type(kind) is not int or kind not in (0, 1) or key in result):
+            raise ValueError('明細の支店・日・サイズを確認してください。')
+        details = entry.get('details', '')
+        if not isinstance(details, str) or len(details) > 200 or any(ord(c) < 32 for c in details):
+            raise ValueError('内訳は200文字以内で入力してください。')
+        quantity, shipping = (entry.get(field) for field in ('quantity', 'shipping'))
+        if any(n is not None and (type(n) is not int or not 0 <= n <= 999_999_999) for n in (quantity, shipping)):
+            raise ValueError('枚数と送料は0以上、9桁以内の整数を入力してください。')
+        result[key] = (details, quantity, shipping)
+    return result
+
+
+def export(year: int, month: int, entries=()):
+    day_count = _day_count(year, month)
+    rows = _validated_entries(entries, day_count) if entries != () else {}
     workbook = Workbook()
     workbook.remove(workbook.active)
     try:
         for branch in BRANCHES:
             sheet = workbook.create_sheet(f'{branch}支店')
-            _fill_branch(sheet, branch, year, month, day_count)
+            _fill_branch(sheet, branch, year, month, day_count, rows)
         with BytesIO() as out:
             workbook.save(out)
             filename = quote(f'各支店ラベル集計_{year}.{month:02d}.xlsx')
@@ -35,8 +74,8 @@ def export(year: int, month: int):
         workbook.close()
 
 
-def _fill_branch(sheet, branch: str, year: int, month: int, day_count: int):
-    second_size = '大' if branch == '千歳' else '小貼付け'
+def _fill_branch(sheet, branch: str, year: int, month: int, day_count: int, entries):
+    sizes = _sizes(branch)
     for cell, value in {
         'B2': branch, 'C2': '支店', 'D2': 'ラベル発行',
         'F2': f'{year}年', 'G2': month, 'H2': '月分',
@@ -53,13 +92,20 @@ def _fill_branch(sheet, branch: str, year: int, month: int, day_count: int):
         upper = first + (day - 1) * 2
         sheet.cell(upper, 2, day)
         sheet.cell(upper, 3, WEEKDAYS[date(year, month, day).weekday()])
-        for row, size, price in ((upper, '小', 30), (upper + 1, second_size, 60)):
+        for kind, (size, price) in enumerate(sizes):
+            row = upper + kind
+            details, quantity, shipping = entries.get((branch, day, kind), ('', None, None))
+            if details:
+                cell = sheet.cell(row, 4, details)
+                cell.data_type = 's'
             sheet.cell(row, 5, size)
+            sheet.cell(row, 6, quantity)
             sheet.cell(row, 7, price)
+            sheet.cell(row, 8, shipping)
             sheet.cell(row, 9, f'=F{row}*G{row}+H{row}')
 
     sheet.cell(total, 2, '合計')
-    for row, size in ((total, '小'), (total + 1, second_size)):
+    for row, (size, _) in enumerate(sizes, start=total):
         sheet.cell(row, 5, size)
         sheet.cell(row, 6, f'=SUMIF(E{first}:E{last},E{row},F{first}:F{last})')
     sheet.cell(total, 8, f'=SUM(H{first}:H{last})')

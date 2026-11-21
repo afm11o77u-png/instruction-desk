@@ -1092,3 +1092,12 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
 #addresspreviewerror { color: #a22; }
 #addresspreviewerror:empty { display: none; }
 @media print { #addressprevieweditor { display: none !important; } }
+
+#kintailabelbillingtable { min-width: 660px; }
+#kintailabelbillingtable input {
+  width: 100%; min-width: 5.5rem; box-sizing: border-box;
+  background: #fff2a6; border: 1px solid #d1be70;
+  border-radius: 4px; padding: 4px 6px;
+}
+#kintailabelbillingtable input[data-field="details"] { min-width: 14rem; }
+#kintailabelbillingtable input[inputmode="numeric"] { text-align: right; }
