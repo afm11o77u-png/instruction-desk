@@ -1,6 +1,7 @@
 import ssl
 import base64, importlib.util, json, shutil, sqlite3, os, re, sys, tempfile, threading, webbrowser
 from pathlib import Path
+from contextlib import closing
 from datetime import datetime, date, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from auth import AuthMixin, schema, can_open_stock, stock_can_write
@@ -22,6 +23,7 @@ import web_requests
 import customer_accounts
 import personal_notes
 import personal_formats
+import rental_management
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -29,6 +31,7 @@ DATA = Path(os.environ.get('INSTRUCTION_DATA', str(ROOT / 'data')))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'instructions.sqlite3'
 STOCK_DB = DATA / 'stock.sqlite3'
+RENTAL_DB = DATA / 'rental.sqlite3'
 def _stock_root():
     # Prefer nested stock-desk inside this repo; keep legacy paths as transition fallbacks.
     nested = ROOT / 'stock-desk'
@@ -56,6 +59,7 @@ def connect():
     return c
 
 def initialize():
+    rental_management.initialize(RENTAL_DB)
     with connect() as c:
         c.execute('PRAGMA journal_mode=WAL')
         c.execute('CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER NOT NULL, payload TEXT NOT NULL)')
@@ -1002,6 +1006,34 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 })
         return self.reply(416, b'', content_type, {'Content-Range': f'bytes */{size}'})
 
+    def serve_rental(self, path, save=False):
+        with closing(connect()) as c:
+            user=self.session_user(c)
+            if not user:return self.reply(401, {'error':'ログインしてからレンタル管理を開いてください。'})
+            if not rental_management.can_open(user):return self.reply(403, {'error':'レンタル管理を利用する権限がありません。'})
+            if path in ('/rental','/rental/app.js','/rental/style.css') and not save:
+                files={'/rental':('index.html','text/html; charset=utf-8'),'/rental/app.js':('app.js','application/javascript; charset=utf-8'),'/rental/style.css':('style.css','text/css; charset=utf-8')}
+                name,ctype=files[path]
+                return self.reply(200,(ROOT/'rental_management'/name).read_bytes(),ctype)
+            if migration.is_busy():return self.reply(503, {'error':'データ移行中です。完了してからレンタル管理を開いてください。'})
+            try:
+                data=rental_management.catalog(c,STOCK_DB,user)
+                if save:
+                    if not rental_management.can_write(user):return self.reply(403, {'error':'登録・貸与を行う権限がありません。'})
+                    length=int(self.headers.get('Content-Length') or 0)
+                    if not 0<length<=200000:raise ValueError('送信する内容を確認してください。')
+                    result=rental_management.save(RENTAL_DB,data,user,json.loads(self.rfile.read(length)))
+                    return self.reply(200,result)
+                from urllib.parse import parse_qs as _rental_qs,urlparse as _rental_url
+                params={k:v[0] for k,v in _rental_qs(_rental_url(self.path).query).items()}
+                if path=='/api/rental/catalog':
+                    data['user']={'name':user['name'],'role':user['role']}
+                    return self.reply(200,data)
+                return self.reply(200,rental_management.get(RENTAL_DB,data,params))
+            except PermissionError as e:return self.reply(403,{'error':str(e)})
+            except (ValueError,TypeError,KeyError) as e:return self.reply(400,{'error':str(e) if isinstance(e,ValueError) else '入力内容を確認してください。'})
+            except sqlite3.Error:return self.reply(503,{'error':'レンタル台帳を読み書きできません。再読込して確認してください。'})
+
     def serve_inventory(self, method):
         from urllib.parse import urlparse, parse_qs
         parsed=urlparse(self.path)
@@ -1139,6 +1171,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200, certificate.read_bytes(), 'application/x-x509-ca-cert', {
                 'Content-Disposition': 'attachment; filename="instruction-desk-root.cer"',
             })
+        if path in ('/rental','/rental/app.js','/rental/style.css','/api/rental/catalog','/api/rental/records'):return self.serve_rental(path)
         if path == '/api/contact-note': return self.serve_personal_note(shared=True)
         if path == '/api/personal-formats': return self.serve_personal_formats()
         if path == '/api/personal-note': return self.serve_personal_note()
@@ -1445,6 +1478,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(403,{'error':'接続元を確認してください。'})
         if migration.is_busy() and not route.startswith('/api/migration/'):
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
+        if route == '/api/rental/save':return self.serve_rental(route,save=True)
         if route == '/api/contact-note': return self.serve_personal_note(save=True, shared=True)
         if route == '/api/personal-formats': return self.serve_personal_formats(save=True)
         if route == '/api/personal-note': return self.serve_personal_note(save=True)
