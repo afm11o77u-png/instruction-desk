@@ -21,6 +21,17 @@ class OrganizationTest(fixtures.SettingsTest):
     def scope(self,node,config=None,mode='custom',action='publish'):
         base=w.read_config(self.c,1);p=inherit.profile(self.c,base,org.read(self.c),next(n for n in org.read(self.c)['nodes'] if n['id']==node))
         return w.save(self.c,self.path,dict(action=action,customer_id=1,node_id=node,version=p['version'],config=config or p['draft'],parent_config=w.validate_config(p['parent_config'],w.state(self.c,self.path,self.owner),1),inheritance_mode=mode),self.owner)
+    def test_explicit_empty_staff_scope_survives_save(self):
+        payload=copy.deepcopy(self.organization)
+        payload['staff_scopes']=[]
+        payload['staff_scope_settings']=[dict(user_id=3,customer_id=1)]
+        self.save_org(payload)
+        saved=org.read(self.c)
+        self.assertEqual(saved['staff_scopes'],[])
+        self.assertEqual(saved['staff_scope_settings'],payload['staff_scope_settings'])
+        payload['staff_scope_settings']=[dict(user_id=9999,customer_id=1)]
+        with self.assertRaises(ValueError):self.save_org(payload)
+
     def test_region_scopes_do_not_expose_other_sites_of_same_customer(self):
         self.save_org();data=w.state(self.c,self.path,self.owner,10)
         self.assertEqual([x['id'] for x in data['customers']],[1]);self.assertFalse(data['previewCanRequest'])

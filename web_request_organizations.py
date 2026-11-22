@@ -154,7 +154,15 @@ def validate(payload,customers,staff,accounts):
         uid=s.get('user_id');nid=s.get('node_id')
         if type(uid) is not int or uid not in staff or not isinstance(nid,str) or nid not in ids or (uid,nid) in seen:raise ValueError('社内担当者と担当範囲を確認してください。')
         seen.add((uid,nid));staff_scopes.append(dict(user_id=uid,node_id=nid))
-    return dict(nodes=result,customer_scopes=customer_scopes,staff_scopes=staff_scopes,request_pages=pages)
+    settings=payload.get('staff_scope_settings',[])
+    if not isinstance(settings,list) or len(settings)>10000:raise ValueError('社内担当者の設定数を確認してください。')
+    staff_scope_settings=[];seen=set()
+    for setting in settings:
+        if not isinstance(setting,dict):raise ValueError('社内担当者の設定を確認してください。')
+        uid=setting.get('user_id');cid=setting.get('customer_id')
+        if type(uid) is not int or uid not in staff or type(cid) is not int or cid not in customers or (uid,cid) in seen:raise ValueError('社内担当者と顧客を確認してください。')
+        seen.add((uid,cid));staff_scope_settings.append(dict(user_id=uid,customer_id=cid))
+    return dict(nodes=result,customer_scopes=customer_scopes,staff_scopes=staff_scopes,request_pages=pages,staff_scope_settings=staff_scope_settings)
 
 
 def save(c,payload,version,customers,staff,user):
