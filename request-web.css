@@ -66,3 +66,5 @@ body[data-request-page=organization] main{max-width:none;width:100%;padding-left
 .desk-common-page header nav a{padding:12px;color:#214e3c;text-decoration:none}.desk-common-page .brand span{font-weight:700}.desk-common-page #common-settings-toolbar{max-width:none;margin:0 0 24px}.desk-common-page #desk-customer-context{display:flex;justify-content:space-between;align-items:center;gap:20px;border-top:3px solid #28764a;margin-bottom:12px}.desk-common-page #desk-customer-context[hidden]{display:none}.desk-common-page #desk-customer-context p{margin:10px 0 0}.desk-common-page .desk-next-step{margin-top:24px}.desk-common-page #common-settings-return{display:inline-block;margin-top:8px}@media(max-width:800px){.desk-common-page #desk-customer-context{align-items:stretch;flex-direction:column}.desk-common-page header{flex-wrap:wrap}}
 
 .desk-common-page #common-settings-toolbar,.desk-common-page #common-settings-toolbar:has(>a[hidden]){display:block}
+
+.workspace-home-link{padding:10px 12px;text-decoration:none;font-size:13px;align-self:center}header nav{flex-wrap:wrap}
