@@ -49,7 +49,7 @@ body[data-request-page=organization] main{max-width:none;width:100%;padding-left
 
 #web-user-editor{max-width:640px;max-height:90dvh;overflow:auto}#web-user-editor p{font-size:12px;color:#5c7565}#web-user-editor label{display:block;margin:14px 0}#web-user-editor input,#web-user-editor select{display:block;width:100%;margin-top:6px}#web-user-error{color:#a12e24!important;white-space:pre-wrap}.web-user-actions{display:flex;flex-wrap:wrap;gap:8px}.web-user-actions button{font-size:12px}
 
-.web-common-settings a{display:inline-block;text-decoration:none;color:#fff;background:#236644;padding:12px 18px;border-radius:8px}.web-common-settings p{font-size:13px;color:#526f5c}#common-settings-toolbar:has(>a[hidden]):not(:has(>a:not([hidden]))){display:none}
+.web-common-settings a{display:inline-block;text-decoration:none;color:#fff;background:#236644;padding:12px 18px;border-radius:8px}.web-common-settings p{font-size:13px;color:#526f5c}body:not(.desk-common-page) #common-settings-toolbar:has(>a[hidden]):not(:has(>a:not([hidden]))){display:none}
 
 .org-save-bar{position:fixed;bottom:0;left:0;right:0;z-index:90;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px clamp(16px,2.2vw,44px) max(14px,env(safe-area-inset-bottom));background:#f6fbf7;border-top:1px solid #a9c9b3;box-shadow:0 -4px 18px #1b4d3020}.org-save-bar>div{min-width:0}.org-save-bar strong{font-size:15px}.org-save-bar p{font-size:12px;color:#587361;margin:4px 0 0}.org-save-bar button{flex:none;min-width:180px;padding:12px 20px}body[data-request-page=organization] main{padding-bottom:140px}body[data-request-page=organization] #notice{bottom:145px;z-index:100}@media(min-width:1001px){body[data-request-page=organization] #org-editor{max-height:calc(100dvh - 150px)}}@media(max-width:580px){.org-save-bar{gap:10px;padding:12px 16px max(12px,env(safe-area-inset-bottom));flex-wrap:wrap}.org-save-bar>div{flex:1 1 100%}.org-save-bar button{width:100%}.org-save-bar strong{font-size:13px}.org-save-bar p{font-size:11px}body[data-request-page=organization] main{padding-bottom:190px}body[data-request-page=organization] #notice{bottom:190px}}
 
@@ -61,3 +61,8 @@ body[data-request-page=organization] main{max-width:none;width:100%;padding-left
 
 /* Adjustable organization diagram height. */
 #org-tree{height:800px;max-height:none;box-sizing:border-box}.org-diagram-size{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:16px 0}.org-diagram-size input{width: min(280px,45vw);padding:0}.org-diagram-size output{min-width:60px;font-variant-numeric:tabular-nums}
+
+/* Instruction desk shared customer registration. */
+.desk-common-page header nav a{padding:12px;color:#214e3c;text-decoration:none}.desk-common-page .brand span{font-weight:700}.desk-common-page #common-settings-toolbar{max-width:none;margin:0 0 24px}.desk-common-page #desk-customer-context{display:flex;justify-content:space-between;align-items:center;gap:20px;border-top:3px solid #28764a;margin-bottom:12px}.desk-common-page #desk-customer-context[hidden]{display:none}.desk-common-page #desk-customer-context p{margin:10px 0 0}.desk-common-page .desk-next-step{margin-top:24px}.desk-common-page #common-settings-return{display:inline-block;margin-top:8px}@media(max-width:800px){.desk-common-page #desk-customer-context{align-items:stretch;flex-direction:column}.desk-common-page header{flex-wrap:wrap}}
+
+.desk-common-page #common-settings-toolbar,.desk-common-page #common-settings-toolbar:has(>a[hidden]){display:block}
