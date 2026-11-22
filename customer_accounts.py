@@ -50,4 +50,4 @@ def save(c, path, d, actor):
             c.execute('UPDATE customer_accounts SET email=?,name=?,customer_id=?,notification_email=?,active=?,version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',
                 (address,name,customer,notification,active,uid))
     log(c,actor,{'create':'顧客ID作成','update':'顧客ID更新','reset':'顧客パスワード再設定'}[action],str(uid))
-    return {'ok':True}
+    return {'ok':True,'id':uid}
