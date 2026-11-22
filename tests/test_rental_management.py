@@ -16,7 +16,10 @@ class RentalTest(unittest.TestCase):
     def save(self,body,user=None,data=None):return r.save(self.path,data or self.data,user or self.owner,body)['id']
     def get(self,entity,**kwargs):return r.get(self.path,self.data,dict(entity=entity,**kwargs))
     def contract(self,cid=1):return self.save(dict(entity='contract',customer_id=cid,name='通常契約',kind='個人レンタル',start_date='2026-01-01',end_date='',active=True,lines=[dict(customer_product_id=10 if cid==1 else 20,quantity=3)]))
-    def wearer(self,cid=1,contract=None,code='EMP01'):return self.save(dict(entity='wearer',customer_id=cid,employee_code=code,name='山田太郎',status='在籍',contract_id=contract))
+    def wearer(self,cid=1,contract=None,code='EMP01'):
+        if contract is None:
+            matches=self.get('contracts',customer_id=cid)['rows'];contract=matches[0]['id'] if matches else None
+        return self.save(dict(entity='wearer',customer_id=cid,employee_code=code,name='山田太郎',status='在籍',contract_id=contract))
     def unit(self,cid=1,barcode='UNIT001'):return self.save(dict(entity='unit',customer_id=cid,barcode=barcode,customer_product_id=10 if cid==1 else 20,size='M' if cid==1 else 'L',status='待機'))
     def test_full_lifecycle_history_and_snapshots(self):
         k=self.contract();w=self.wearer(contract=k);u=self.unit();body=dict(entity='loan',action='issue',unit_id=u,wearer_id=w,contract_id=k,issued_date='2026-11-01');loan=self.save(body)
@@ -59,6 +62,53 @@ class RentalTest(unittest.TestCase):
         with self.assertRaises(ValueError):self.save(dict(entity='loan',action='issue',unit_id=u,wearer_id=w,contract_id=k,issued_date='2025-12-31'))
         row=self.get('units',id=u)['rows'][0];self.save(dict(row,entity='unit',status='修理'))
         with self.assertRaises(ValueError):self.save(dict(entity='loan',action='issue',unit_id=u,wearer_id=w,contract_id=k,issued_date='2026-11-01'))
+    def test_mixed_services_ownership_and_multiple_contracts(self):
+        rental=self.contract()
+        cleaning=self.save(dict(entity='contract',customer_id=1,name='洗濯契約',kind='その他',service_type='クリーニングのみ',start_date='2026-01-01',active=True,lines=[dict(customer_product_id=10,quantity=2)]))
+        self.assertEqual(self.get('contracts',id=cleaning)['rows'][0]['default_ownership'],'顧客所有')
+        wearer=self.save(dict(entity='wearer',customer_id=1,name='混在利用',employee_code='MIX',status='在籍',contract_ids=[rental,cleaning]))
+        self.assertEqual(set(self.get('wearers',id=wearer)['rows'][0]['contract_ids']),{rental,cleaning})
+        unit=self.save(dict(entity='unit',customer_id=1,barcode='CUSTOMER',customer_product_id=10,size='M',status='待機',ownership='顧客所有'))
+        issue=dict(entity='loan',action='assign',unit_id=unit,wearer_id=wearer,contract_id=cleaning,issued_date='2026-11-01')
+        with self.assertRaises(ValueError):self.save(dict(issue,action='issue'))
+        link=self.save(issue)
+        self.assertEqual(self.get('summary')['loaned'],0);self.assertEqual(self.get('summary')['assigned'],1)
+        self.assertEqual(self.get('units',status='着用登録中')['total'],1)
+        with self.assertRaises(ValueError):self.save(issue)
+        old=self.get('units',id=unit)['rows'][0];self.save(dict(old,entity='unit',ownership='着用者所有'))
+        relation=self.get('loans',id=link)['rows'][0]
+        self.assertEqual(relation['issued_snapshot']['unit']['ownership'],'顧客所有')
+        with self.assertRaises(ValueError):self.save(dict(entity='loan',action='return',id=link,version=1,returned_date='2026-11-02'))
+        self.save(dict(entity='loan',action='unassign',id=link,version=1,returned_date='2026-11-02'))
+        self.assertEqual(self.get('summary')['assigned'],0)
+        self.assertEqual(self.get('loans',status='着用解除済み')['total'],1)
+        self.assertEqual(self.get('units',id=unit)['rows'][0]['ownership'],'着用者所有')
+        self.assertEqual(self.get('events',record_type='unit',record_id=unit)['rows'][0]['action'],'着用解除')
+        other=self.contract(cid=2)
+        row=self.get('wearers',id=wearer)['rows'][0]
+        with self.assertRaises(ValueError):self.save(dict(row,entity='wearer',contract_ids=[other]))
+        self.assertEqual(set(self.get('wearers',id=wearer)['rows'][0]['contract_ids']),{rental,cleaning})
+    def test_wearer_requires_matching_contract_and_known_ownership(self):
+        k=self.contract();w=self.wearer();u=self.unit()
+        row=self.get('wearers',id=w)['rows'][0];self.save(dict(row,entity='wearer',contract_ids=[]))
+        with self.assertRaises(ValueError):self.save(dict(entity='loan',action='issue',unit_id=u,wearer_id=w,contract_id=k,issued_date='2026-11-01'))
+        row=self.get('contracts',id=k)['rows'][0];self.save(dict(row,entity='contract',active=True,service_type='クリーニングのみ'))
+        row=self.get('wearers',id=w)['rows'][0];self.save(dict(row,entity='wearer',contract_ids=[k]))
+        with self.assertRaises(ValueError):self.save(dict(entity='loan',action='assign',unit_id=u,wearer_id=w,contract_id=k,issued_date='2026-11-01'))
+    def test_upgrade_preserves_legacy_records_and_is_repeatable(self):
+        legacy=Path(self.temp.name)/'old.sqlite3'
+        with sqlite3.connect(legacy) as c:
+            c.executescript(r.SCHEMA)
+            c.execute("INSERT INTO contracts(id,customer_id,name,kind,start_date,created_at,updated_at) VALUES(1,1,'既存契約','個人レンタル','2026-01-01','','')")
+            c.execute("INSERT INTO wearers(id,customer_id,employee_code,name,contract_id,created_at,updated_at) VALUES(1,1,'OLD','既存着用者',1,'','')")
+            c.execute("INSERT INTO units(id,customer_id,asset_code,barcode,customer_product_id,product_id,size,created_at,updated_at) VALUES(1,1,'RU-00000001','OLD',10,1,'M','','')")
+        c.close()
+        r.initialize(legacy);r.initialize(legacy)
+        row=r.get(legacy,self.data,dict(entity='wearers',id=1))['rows'][0];self.assertEqual(row['contract_ids'],[1])
+        self.assertEqual(r.get(legacy,self.data,dict(entity='units',id=1))['rows'][0]['ownership'],'未確認')
+        self.assertEqual(r.get(legacy,self.data,dict(entity='contracts',id=1))['rows'][0]['service_type'],'レンタル')
+        r.save(legacy,self.data,self.owner,dict(row,entity='wearer',contract_ids=[]));r.initialize(legacy)
+        self.assertEqual(r.get(legacy,self.data,dict(entity='wearers',id=1))['rows'][0]['contract_ids'],[])
     def test_pagination_and_literal_search(self):
         for i in range(53):self.wearer(code='E'+str(i))
         self.assertEqual(len(self.get('wearers')['rows']),50);self.assertEqual(len(self.get('wearers',page='2')['rows']),3)

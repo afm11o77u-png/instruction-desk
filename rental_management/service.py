@@ -7,6 +7,8 @@ import sqlite3
 import uuid
 
 KINDS=['個人レンタル','リース','販売','その他']
+SERVICES=['レンタル','クリーニングのみ']
+OWNERS=['自社所有','顧客所有','着用者所有','その他','未確認']
 SCHEMA="""
 CREATE TABLE IF NOT EXISTS rental_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
 INSERT OR IGNORE INTO rental_meta VALUES('schema_version','1');
@@ -37,7 +39,16 @@ def can_write(user):
 
 def initialize(path):
     with closing(sqlite3.connect(path,timeout=15)) as c:
-        c.execute('PRAGMA journal_mode=WAL');c.execute('PRAGMA foreign_keys=ON');c.executescript(SCHEMA);c.commit()
+        c.execute('PRAGMA journal_mode=WAL');c.execute('PRAGMA foreign_keys=ON');c.executescript(SCHEMA)
+        c.execute('BEGIN IMMEDIATE')
+        for table,columns in {'contracts':{'service_type':"TEXT NOT NULL DEFAULT 'レンタル'",'default_ownership':"TEXT NOT NULL DEFAULT '自社所有'"},'units':{'ownership':"TEXT NOT NULL DEFAULT '未確認'"},'loans':{'relation_type':"TEXT NOT NULL DEFAULT '貸与'"}}.items():
+            existing_columns={r[1] for r in c.execute('PRAGMA table_info('+table+')')}
+            for name,definition in columns.items():
+                if name not in existing_columns:c.execute('ALTER TABLE '+table+' ADD COLUMN '+name+' '+definition)
+        c.execute('CREATE TABLE IF NOT EXISTS wearer_contracts(wearer_id INTEGER NOT NULL REFERENCES wearers(id),contract_id INTEGER NOT NULL REFERENCES contracts(id),PRIMARY KEY(wearer_id,contract_id))')
+        if c.execute("SELECT value FROM rental_meta WHERE key='schema_version'").fetchone()[0]=='1':
+            c.execute('INSERT OR IGNORE INTO wearer_contracts SELECT id,contract_id FROM wearers WHERE contract_id IS NOT NULL')
+        c.execute("UPDATE rental_meta SET value='2' WHERE key='schema_version'");c.commit()
 
 
 @contextmanager
@@ -149,6 +160,8 @@ def save(path,data,user,d):
             notes=text(d.get('notes',''),'備考',2000)
             if entity=='contract':
                 name=text(d.get('name',''),'契約名',100,True);kind=d.get('kind');start=day(d.get('start_date',''),'契約開始日',True);end=day(d.get('end_date',''),'契約終了日')
+                service_type=d.get('service_type',row['service_type'] if row else 'レンタル');default_ownership=d.get('default_ownership',row['default_ownership'] if row else ('顧客所有' if service_type=='クリーニングのみ' else '自社所有'))
+                if service_type not in SERVICES or default_ownership not in OWNERS:raise ValueError('取引区分・所有区分の初期値を確認してください。')
                 if kind not in KINDS or (end and end<start):raise ValueError('契約形態・期間を確認してください。')
                 if type(d.get('active')) is not bool:raise ValueError('契約の有効状態を確認してください。')
                 ref=d.get('source_ref') or None
@@ -163,7 +176,7 @@ def save(path,data,user,d):
                     seen.add(h['id']);checked.append((h['id'],p['id'],integer(item.get('quantity'),'貸与枚数',1,999)))
                 # An existing WEB reference is immutable so it cannot be silently switched.
                 if row and ref!=row['source_ref']:raise ValueError('登録後のWEB契約の参照先は変更できません。')
-                ident=insert_or_update(c,table,dict(customer_id=cid,name=name,kind=kind,start_date=start,end_date=end,notes=notes,active=int(d['active']),source_ref=ref),row)
+                ident=insert_or_update(c,table,dict(customer_id=cid,name=name,kind=kind,start_date=start,end_date=end,notes=notes,active=int(d['active']),source_ref=ref,service_type=service_type,default_ownership=default_ownership),row)
                 c.execute('DELETE FROM contract_lines WHERE contract_id=?',(ident,));c.executemany('INSERT INTO contract_lines(contract_id,customer_product_id,product_id,quantity) VALUES(?,?,?,?)',[(ident,*x) for x in checked])
                 snapshot=dict(d,lines=[dict(customer_product_id=x[0],product_id=x[1],quantity=x[2]) for x in checked])
             elif entity=='wearer':
@@ -171,17 +184,24 @@ def save(path,data,user,d):
                 if site and not any(n['id']==site and n['customer_id']==cid for n in data['sites']):raise ValueError('この顧客の拠点を選択してください。')
                 status=d.get('status');joined=day(d.get('joined_date',''),'入社日');left=day(d.get('left_date',''),'退職日')
                 if status not in ('在籍','休止','退職') or (joined and left and left<joined):raise ValueError('在籍状態と日付を確認してください。')
-                contract_id=d.get('contract_id') or None
-                if contract_id:
+                contract_ids=d.get('contract_ids',([d['contract_id']] if d.get('contract_id') else []))
+                if not isinstance(contract_ids,list) or len(contract_ids)>200:raise ValueError('利用する契約を確認してください。')
+                contract_ids=list(dict.fromkeys(integer(k,'契約') for k in contract_ids))
+                for contract_id in contract_ids:
                     contract=existing(c,'contracts',contract_id,data)
                     if contract['customer_id']!=cid:raise ValueError('同じ顧客の契約を選択してください。')
-                ident=insert_or_update(c,table,dict(customer_id=cid,name=name,employee_code=code,kana=kana,site_id=site,department=department,contract_id=contract_id,status=status,joined_date=joined,left_date=left,size_notes=text(d.get('size_notes',''),'サイズ情報',500),notes=notes),row);snapshot=d
+                contract_id=contract_ids[0] if contract_ids else None
+                ident=insert_or_update(c,table,dict(customer_id=cid,name=name,employee_code=code,kana=kana,site_id=site,department=department,contract_id=contract_id,status=status,joined_date=joined,left_date=left,size_notes=text(d.get('size_notes',''),'サイズ情報',500),notes=notes),row)
+                c.execute('DELETE FROM wearer_contracts WHERE wearer_id=?',(ident,))
+                c.executemany('INSERT INTO wearer_contracts VALUES(?,?)',[(ident,k) for k in contract_ids]);snapshot=dict(d,contract_ids=contract_ids)
             else:
                 barcode=text(d.get('barcode',''),'個体バーコード',150,True);size=text(d.get('size',''),'サイズ',40,True);h,p=handle(data,cid,d.get('customer_product_id'),size);status=d.get('status')
+                ownership=d.get('ownership',row['ownership'] if row else '未確認')
+                if ownership not in OWNERS:raise ValueError('制服の所有区分を確認してください。')
                 if status not in ('待機','修理','廃棄'):raise ValueError('個体の状態を確認してください。')
                 if row and (row['customer_product_id']!=h['id'] or row['size']!=size or row['barcode']!=barcode):raise ValueError('個体の登録後は、商品・サイズ・バーコードを変更できません。')
                 if row and c.execute('SELECT 1 FROM loans WHERE unit_id=? AND returned_date IS NULL',(row['id'],)).fetchone() and status!='待機':raise ValueError('貸与中の個体は、先に返却を記録してください。')
-                ident=insert_or_update(c,table,dict(customer_id=cid,asset_code=row['asset_code'] if row else 'PENDING-'+uuid.uuid4().hex,barcode=barcode,customer_product_id=h['id'],product_id=p['id'],size=size,status=status,acquired_date=day(d.get('acquired_date',''),'登録・取得日'),notes=notes),row)
+                ident=insert_or_update(c,table,dict(customer_id=cid,asset_code=row['asset_code'] if row else 'PENDING-'+uuid.uuid4().hex,barcode=barcode,customer_product_id=h['id'],product_id=p['id'],size=size,status=status,acquired_date=day(d.get('acquired_date',''),'登録・取得日'),notes=notes,ownership=ownership),row)
                 if not row:c.execute('UPDATE units SET asset_code=? WHERE id=?',('RU-'+str(ident).zfill(8),ident))
                 snapshot=d
             emit(c,cid,entity,ident,'変更' if row else '登録',user,snapshot);c.commit();return dict(ok=True,id=ident)
@@ -192,26 +212,32 @@ def save(path,data,user,d):
 
 def loan_action(c,data,user,d,row,action):
     today=date.today().isoformat()
-    if action=='issue' and row is None:
+    if action in ('issue','assign') and row is None:
         unit=existing(c,'units',d.get('unit_id'),data);wearer=existing(c,'wearers',d.get('wearer_id'),data);contract=existing(c,'contracts',d.get('contract_id'),data)
         if len({unit['customer_id'],wearer['customer_id'],contract['customer_id']})!=1:raise ValueError('顧客の異なる制服・着用者・契約を組み合わせることはできません。')
-        issued=day(d.get('issued_date',today),'貸与日',True)
+        relation_type='着用登録' if action=='assign' else '貸与'
+        if (contract['service_type']=='クリーニングのみ')!=(action=='assign'):raise ValueError('クリーニングのみの契約は着用登録、レンタル契約は貸与を選択してください。')
+        if action=='assign' and unit['ownership']=='未確認':raise ValueError('着用登録の前に制服の所有区分を確認してください。')
+        links=[r[0] for r in c.execute('SELECT contract_id FROM wearer_contracts WHERE wearer_id=?',(wearer['id'],))]
+        if contract['id'] not in links:raise ValueError('着用者の利用契約に、この契約を登録してください。')
+        issued=day(d.get('issued_date',today),'開始日',True)
         if wearer['status']!='在籍' or unit['status']!='待機' or not contract['active'] or issued<contract['start_date'] or (contract['end_date'] and issued>contract['end_date']):raise ValueError('着用者・個体の状態と、契約の有効期間を確認してください。')
-        if c.execute('SELECT 1 FROM loans WHERE unit_id=? AND returned_date IS NULL',(unit['id'],)).fetchone():raise ValueError('この個体はすでに貸与中です。')
+        if c.execute('SELECT 1 FROM loans WHERE unit_id=? AND returned_date IS NULL',(unit['id'],)).fetchone():raise ValueError('この個体はすでに貸与・着用登録中です。')
         if not c.execute('SELECT 1 FROM contract_lines WHERE contract_id=? AND customer_product_id=?',(contract['id'],unit['customer_product_id'])).fetchone():raise ValueError('この制服は選択した契約の対象商品にありません。')
         snapshot=dict(unit=unit,wearer=wearer,contract=contract,lines=[dict(r) for r in c.execute('SELECT * FROM contract_lines WHERE contract_id=?',(contract['id'],))])
         now=datetime.now().isoformat(timespec='seconds')
-        ident=c.execute('INSERT INTO loans(customer_id,unit_id,wearer_id,contract_id,issued_date,issued_snapshot,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',(unit['customer_id'],unit['id'],wearer['id'],contract['id'],issued,json.dumps(snapshot,ensure_ascii=False),now,now)).lastrowid
+        ident=c.execute('INSERT INTO loans(customer_id,unit_id,wearer_id,contract_id,issued_date,issued_snapshot,created_at,updated_at,relation_type) VALUES(?,?,?,?,?,?,?,?,?)',(unit['customer_id'],unit['id'],wearer['id'],contract['id'],issued,json.dumps(snapshot,ensure_ascii=False),now,now,relation_type)).lastrowid
         c.execute('UPDATE units SET version=version+1,updated_at=? WHERE id=?',(now,unit['id']))
-        emit(c,unit['customer_id'],'unit',unit['id'],'貸与',user,dict(loan_id=ident,wearer_id=wearer['id'],contract_id=contract['id'],date=issued));return dict(ok=True,id=ident)
-    if action=='return' and row:
+        emit(c,unit['customer_id'],'unit',unit['id'],relation_type,user,dict(loan_id=ident,wearer_id=wearer['id'],contract_id=contract['id'],date=issued));return dict(ok=True,id=ident)
+    if action in ('return','unassign') and row:
+        if (row['relation_type']=='着用登録')!=(action=='unassign'):raise ValueError('着用登録は着用解除、貸与は返却を選択してください。')
         if row['returned_date']:raise ValueError('この貸与は返却済みです。')
         returned=day(d.get('returned_date',today),'返却日',True)
         if returned<row['issued_date']:raise ValueError('返却日は貸与日以降にしてください。')
         notes=text(d.get('return_notes',''),'返却メモ',1000);now=datetime.now().isoformat(timespec='seconds')
         c.execute('UPDATE loans SET returned_date=?,return_notes=?,version=version+1,updated_at=? WHERE id=?',(returned,notes,now,row['id']))
         c.execute('UPDATE units SET version=version+1,updated_at=? WHERE id=?',(now,row['unit_id']))
-        emit(c,row['customer_id'],'unit',row['unit_id'],'返却',user,dict(loan_id=row['id'],wearer_id=row['wearer_id'],date=returned,notes=notes));return dict(ok=True,id=row['id'])
+        emit(c,row['customer_id'],'unit',row['unit_id'],'着用解除' if action=='unassign' else '返却',user,dict(loan_id=row['id'],wearer_id=row['wearer_id'],date=returned,notes=notes));return dict(ok=True,id=row['id'])
     raise ValueError('貸与・返却の操作を確認してください。')
 
 
@@ -223,8 +249,9 @@ def get(path,data,params):
     with connection(path) as c:
         if entity=='summary':
             counts={t:c.execute('SELECT count(*) FROM '+t+' t WHERE '+where,args).fetchone()[0] for t in ['contracts','wearers','units']}
-            counts['loaned']=c.execute('SELECT count(*) FROM loans t WHERE '+where+' AND t.returned_date IS NULL',args).fetchone()[0]
-            counts['return_pending']=c.execute("SELECT count(*) FROM loans t JOIN wearers w ON w.id=t.wearer_id WHERE "+where+" AND t.returned_date IS NULL AND w.status='退職'",args).fetchone()[0]
+            counts['loaned']=c.execute("SELECT count(*) FROM loans t WHERE "+where+" AND t.returned_date IS NULL AND t.relation_type='貸与'",args).fetchone()[0]
+            counts['assigned']=c.execute("SELECT count(*) FROM loans t WHERE "+where+" AND t.returned_date IS NULL AND t.relation_type='着用登録'",args).fetchone()[0]
+            counts['return_pending']=c.execute("SELECT count(*) FROM loans t JOIN wearers w ON w.id=t.wearer_id WHERE "+where+" AND t.returned_date IS NULL AND t.relation_type='貸与' AND w.status='退職'",args).fetchone()[0]
             return counts
         table={'contracts':'contracts','wearers':'wearers','units':'units','loans':'loans','events':'events'}.get(entity)
         if not table:raise ValueError('表示する台帳を確認してください。')
@@ -235,11 +262,14 @@ def get(path,data,params):
             if columns:where+=' AND ('+' OR '.join('instr(lower(t.'+col+'),lower(?))>0' for col in columns)+')';args.extend([search]*len(columns))
         if status and entity=='wearers':where+=' AND t.status=?';args.append(status)
         if status and entity=='units':
-            if status=='貸与中':where+=' AND EXISTS(SELECT 1 FROM loans z WHERE z.unit_id=t.id AND z.returned_date IS NULL)'
+            if status in ('貸与中','着用登録中'):
+                where+=" AND EXISTS(SELECT 1 FROM loans z WHERE z.unit_id=t.id AND z.returned_date IS NULL AND z.relation_type=?)";args.append('貸与' if status=='貸与中' else '着用登録')
             else:
                 where+=' AND t.status=?';args.append(status)
                 if status=='待機':where+=' AND NOT EXISTS(SELECT 1 FROM loans z WHERE z.unit_id=t.id AND z.returned_date IS NULL)'
-        if status and entity=='loans':where+=' AND t.returned_date IS '+('NULL' if status=='貸与中' else 'NOT NULL')
+        if status and entity=='loans':
+            where+=' AND t.returned_date IS '+('NULL' if status in ('貸与中','着用登録中') else 'NOT NULL')
+            where+=' AND t.relation_type=?';args.append('着用登録' if status in ('着用登録中','着用解除済み') else '貸与')
         if params.get('wearer_id') and entity=='loans':where+=' AND t.wearer_id=?';args.append(int(params['wearer_id']))
         if params.get('unit_id') and entity=='loans':where+=' AND t.unit_id=?';args.append(int(params['unit_id']))
         if params.get('record_id') and entity=='events':
@@ -248,11 +278,13 @@ def get(path,data,params):
         total=c.execute('SELECT count(*) FROM '+table+' t WHERE '+where,args).fetchone()[0]
         page=max(1,int(params.get('page',1)));limit=50
         joins='';extra=''
-        if entity=='units':joins=' LEFT JOIN loans l ON l.unit_id=t.id AND l.returned_date IS NULL LEFT JOIN wearers w ON w.id=l.wearer_id';extra=',l.id AS loan_id,l.wearer_id,w.name AS wearer_name'
+        if entity=='units':joins=' LEFT JOIN loans l ON l.unit_id=t.id AND l.returned_date IS NULL LEFT JOIN wearers w ON w.id=l.wearer_id';extra=',l.id AS loan_id,l.wearer_id,l.relation_type,w.name AS wearer_name'
         if entity=='wearers':extra=',(SELECT count(*) FROM loans l WHERE l.wearer_id=t.id AND l.returned_date IS NULL) AS loan_count'
         if entity=='loans':joins=' JOIN units u ON u.id=t.unit_id JOIN wearers w ON w.id=t.wearer_id JOIN contracts k ON k.id=t.contract_id';extra=',u.asset_code,u.barcode,u.product_id,u.customer_product_id,u.size,w.name AS wearer_name,w.employee_code,k.name AS contract_name'
         rows=[dict(r) for r in c.execute('SELECT t.*'+extra+' FROM '+table+' t'+joins+' WHERE '+where+' ORDER BY t.id DESC LIMIT ? OFFSET ?',(*args,limit,(page-1)*limit))]
         for row in rows:
+            if entity=='wearers':
+                row['contracts']=[dict(r) for r in c.execute('SELECT k.id,k.name,k.service_type FROM contracts k JOIN wearer_contracts w ON w.contract_id=k.id WHERE w.wearer_id=? ORDER BY k.id',(row['id'],))];row['contract_ids']=[k['id'] for k in row['contracts']]
             if entity=='contracts':row['lines']=[dict(r) for r in c.execute('SELECT * FROM contract_lines WHERE contract_id=? ORDER BY id',(row['id'],))]
             if entity=='loans':row['issued_snapshot']=json.loads(row['issued_snapshot']) if ident else None
             if entity=='events':row['payload']=json.loads(row['payload']) if ident else None
