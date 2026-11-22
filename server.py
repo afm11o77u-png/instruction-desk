@@ -24,6 +24,7 @@ import customer_accounts
 import personal_notes
 import personal_formats
 import rental_management
+import common_contracts
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -144,6 +145,9 @@ def initialize():
         names.correct_takeda_duplicate_formats(c, DATA)
         names.ensure_asuka_bakery_name_formats(c, DATA)
         names.ensure_small_surname_36_exact_samples(c, DATA)
+
+    with closing(connect()) as shared_connection:
+        common_contracts.migrate(shared_connection, RENTAL_DB)
 
 def order_number(row, payload=None):
     payload=json.loads(row['payload']) if payload is None else payload
@@ -1018,6 +1022,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             if migration.is_busy():return self.reply(503, {'error':'データ移行中です。完了してからレンタル管理を開いてください。'})
             try:
                 data=rental_management.catalog(c,STOCK_DB,user)
+                common_contracts.synchronize(RENTAL_DB,data)
                 if save:
                     if not rental_management.can_write(user):return self.reply(403, {'error':'登録・貸与を行う権限がありません。'})
                     length=int(self.headers.get('Content-Length') or 0)
@@ -1432,9 +1437,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
-        if path in ('/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
-            with connect() as c:
+        files={'/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        if path in ('/customer-contracts', '/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
+            with closing(connect()) as c:
                 request_user = self.session_user(c)
                 if not request_user:
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')

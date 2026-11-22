@@ -174,7 +174,18 @@ def validate_config(cfg,data,cid):
         if not isinstance(contracts,list) or len(contracts)>100:raise ValueError('契約数を確認してください。')
         for k in contracts:
             if not isinstance(k,dict):raise ValueError('契約の内容を確認してください。')
-            contract=dict(id=ident(k),name=text(k.get('name',''),'契約名',100,True),kind=text(k.get('kind',''),'契約形態',100,True),default_qty=number(k.get('default_qty'),'標準枚数'),active=bool(k.get('active')),uniforms=[])
+            contract=dict(id=ident(k),name=text(k.get('name',''),'契約名',100,True),kind=text(k.get('kind',''),'契約形態',100,True),default_qty=number(k.get('default_qty'),'標準枚数',1,999),active=bool(k.get('active')),uniforms=[])
+            from datetime import date
+            service=k.get('service_type','レンタル');ownership=k.get('default_ownership','顧客所有' if service=='クリーニングのみ' else '自社所有')
+            if service not in ('レンタル','クリーニングのみ') or ownership not in ('自社所有','顧客所有','着用者所有','その他','未確認'):raise ValueError('取引区分・所有区分を確認してください。')
+            start=text(k.get('start_date',''),'契約開始日',10);end=text(k.get('end_date',''),'契約終了日',10)
+            for value in (start,end):
+                if value:
+                    try:
+                        if date.fromisoformat(value).isoformat()!=value:raise ValueError()
+                    except ValueError:raise ValueError('契約期間を正しい日付で入力してください。')
+            if start and end and end<start:raise ValueError('契約終了日は開始日以降にしてください。')
+            contract.update(service_type=service,default_ownership=ownership,start_date=start,end_date=end,notes=text(k.get('notes',''),'契約備考',2000))
             uniforms=k.get('uniforms',[])
             if not isinstance(uniforms,list) or len(uniforms)>200:raise ValueError('制服数を確認してください。')
             seen=set()
@@ -188,7 +199,7 @@ def validate_config(cfg,data,cid):
                 if not legacy and (not h or not p):raise ValueError('この顧客の在庫に登録された制服を選んでください。')
                 if hid in seen and hid is not None:raise ValueError('同じ契約に同じ制服が重複しています。')
                 seen.add(hid)
-                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=number(u.get('default_qty'),'契約枚数'),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active'))))
+                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=number(u.get('default_qty'),'契約枚数',1,999),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active'))))
             dep['contracts'].append(contract)
         out['departments'].append(dep)
     return out
@@ -239,7 +250,7 @@ def save_scope(c,path,d,user):
         if type(d.get('version')) is not int or d['version']!=old['version']:raise ValueError('設定が更新されています。再読込してください。')
         parent,_=inheritance.resolve(c,base,org,node_id,skip_last=True)
         clean_parent=validate_config(parent,data,cid)
-        if d.get('parent_config')!=clean_parent:raise ValueError('共通設定または地区設定が更新されています。再読込して確認してください。')
+        if validate_config(d.get('parent_config'),data,cid)!=clean_parent:raise ValueError('共通設定または地区設定が更新されています。再読込して確認してください。')
         mode=d.get('inheritance_mode')
         if mode not in ('inherit','custom'):raise ValueError('共通設定を使うか独自設定かを選んでください。')
         config=validate_config(d.get('config'),data,cid)

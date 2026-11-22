@@ -41,10 +41,12 @@ class RentalHTTPTest(unittest.TestCase):
             with urlopen(req,timeout=5) as response:return response.status,response.read()
         except HTTPError as e:return e.code,e.read()
     def test_page_assets_and_api_require_staff_login(self):
-        for path in ['/rental','/rental/app.js','/api/rental/catalog','/api/rental/records?entity=summary']:
+        for path in ['/customer-contracts','/rental','/rental/app.js','/api/rental/catalog','/api/rental/records?entity=summary']:
             self.assertEqual(self.request(path)[0],401)
             self.assertEqual(self.request(path,'floor')[0],403)
         self.assertEqual(self.request('/rental','owner')[0],200)
+        self.assertEqual(self.request('/customer-contracts','owner')[0],200)
+        self.assertEqual(self.request('/customer-contracts','warehouse')[0],403)
         code,body=self.request('/api/rental/catalog','warehouse');self.assertEqual(code,200);self.assertFalse(json.loads(body)['canWrite'])
     def test_post_rejects_readonly_and_missing_csrf_header(self):
         self.assertEqual(self.request('/api/rental/save','warehouse',{})[0],403)

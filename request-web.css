@@ -28,3 +28,5 @@ body:has(#settings:not([hidden])) .hero{display:none}.art img{height:145px;max-w
 .org-classification-help{background:#f0f6f2;border-left:3px solid #287050;padding:10px 14px;border-radius:6px;font-size:13px}.org-classification-help p{margin:6px 0}
 
 .org-page-editor{grid-column:1/-1}.org-page-editor>label{max-width:700px}#org-page-nodes{max-height:300px}
+
+#common-settings-toolbar{display:flex;justify-content:flex-end;gap:18px;margin:18px 0}#common-settings-toolbar[hidden],#common-settings-toolbar a[hidden]{display:none}#common-settings-toolbar a{color:#235a40;padding:8px 12px;border:1px solid #cbd9cf;border-radius:8px;text-decoration:none;background:white}

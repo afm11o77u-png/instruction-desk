@@ -80,6 +80,8 @@ def catalog(desk,stock,user):
             for k in dep['contracts']:
                 if k['active']:
                     presets.append(dict(ref=str(customer['id'])+':'+dep['id']+':'+k['id'],customer_id=customer['id'],name=k['name'],department=dep['name'],kind=k['kind'],lines=[dict(customer_product_id=u['customer_product_id'],quantity=u['default_qty']) for u in k['uniforms'] if u['active'] and u['customer_product_id']]))
+    from common_contracts import records
+    data['common_contracts']=records(desk,allowed);data['sharedContracts']=True
     data['presets']=presets;data['canWrite']=can_write(user);return data
 
 
@@ -145,6 +147,7 @@ def save(path,data,user,d):
     if not can_write(user):raise PermissionError('登録・貸与を行う権限がありません。')
     if not isinstance(d,dict):raise ValueError('入力を確認してください。')
     entity=d.get('entity');action=d.get('action','save')
+    if entity=='contract' and data.get('sharedContracts'):raise ValueError('契約・対象制服・枚数は、指示書デスクの「顧客・契約管理」で登録・変更してください。')
     if entity not in ('contract','wearer','unit','loan'):raise ValueError('操作を確認してください。')
     table={'contract':'contracts','wearer':'wearers','unit':'units','loan':'loans'}[entity]
     with connection(path) as c:
