@@ -83,3 +83,5 @@ body.desk-common-page[data-request-page=customer-data] main{max-width:none;paddi
 #contract-active-control[hidden]{display:none!important}
 
 #directory-editor[hidden],.org-structure-layout[hidden]{display:none!important}.org-company-editor .fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.org-company-editor textarea{width:100%;box-sizing:border-box}#org-customer-start>#directory-new{margin:0 0 18px}#directory-master-tools{margin-bottom:16px}@media(max-width:600px){.org-company-editor .fields{grid-template-columns:1fr}}
+
+.contract-inheritance{margin:16px 0 22px;padding:14px 16px;background:#f0f6f1;border-left:3px solid #72a384;border-radius:6px}.contract-inheritance[hidden],.contract-inheritance button[hidden],#inheritance-mode[hidden]{display:none!important}.contract-inheritance p{margin:0 0 10px}
