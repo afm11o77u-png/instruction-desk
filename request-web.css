@@ -94,3 +94,5 @@ body.desk-common-page[data-request-page=customer-data] main{max-width:none;paddi
 #org-customer-start .org-company-editor{max-width:none;margin:0;padding:0;border:0;box-shadow:none}#org-company-selector[hidden]{display:none!important}#org-customer-start>#directory-new[hidden]{display:none!important}
 
 body.desk-common-page #org-customer-start{display:none!important}#common-settings-toolbar .org-company-editor{max-width:none;margin-top:16px}#desk-customer-context #directory-new[hidden]{display:none!important}
+
+.org-structure-layout:has(#org-editor[hidden]){grid-template-columns:minmax(0,1fr)}#org-editor[hidden]{display:none!important}.org-diagram-panel #org-selection{padding:12px 0;margin:0 0 12px;border:0;background:transparent}.org-diagram-panel #org-selection>strong{display:block;margin-bottom:8px}.org-diagram-panel .org-diagram-size{margin-top:18px}
