@@ -1039,12 +1039,39 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except (ValueError,TypeError,KeyError) as e:return self.reply(400,{'error':str(e) if isinstance(e,ValueError) else '入力内容を確認してください。'})
             except sqlite3.Error:return self.reply(503,{'error':'レンタル台帳を読み書きできません。再読込して確認してください。'})
 
+    def serve_customer_directory(self, save=False):
+        import common_customers
+        from urllib.parse import urlparse,parse_qs
+        action=parse_qs(urlparse(self.path).query).get('action',['list'])[0]
+        with closing(connect()) as c:
+            user=self.session_user(c)
+            try:
+                common_customers.access(user)
+                ensure_stock();stockdesk()
+                if save:
+                    n=int(self.headers.get('Content-Length') or 0)
+                    if not 0<n<=12000000:raise ValueError('送信内容を確認してください。')
+                    body=json.loads(self.rfile.read(n))
+                    if not isinstance(body,dict):raise ValueError('送信内容を確認してください。')
+                    if action=='save':result=common_customers.save(STOCK_DB,user,body)
+                    elif action=='import':result=common_customers.import_excel(STOCK_DB,user,body)
+                    elif action in ('unify-preview','unify-apply'):result=common_customers.unify(c,STOCK_DB,user,action=='unify-apply',body.get('expected'))
+                    else:raise ValueError('操作を確認してください。')
+                    return self.reply(200,result)
+                if action in ('template','export'):
+                    if not common_customers.can_write(user):raise PermissionError('Excel出力は主管理者・管理者が行います。')
+                    return self.reply(200,common_customers.excel(STOCK_DB,action=='template'),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                return self.reply(200,common_customers.directory(c,STOCK_DB,user))
+            except PermissionError as e:return self.reply(403,{'error':str(e)})
+            except (ValueError,TypeError,KeyError) as e:return self.reply(400,{'error':str(e) or '登録内容を確認してください。'})
+            except sqlite3.Error:return self.reply(400,{'error':'同じ顧客名が登録されているか、登録内容が更新されています。再読込して確認してください。'})
+
     def serve_inventory(self, method):
         from urllib.parse import urlparse, parse_qs
         parsed=urlparse(self.path)
         path=parsed.path
         if not (STOCK_ROOT / 'server.py').is_file(): return self.reply(503, {'error':'在庫管理の置き場所が見つかりません。'})
-        with connect() as c:
+        with closing(connect()) as c:
             u=self.session_user(c)
         if not u:
             # 画面遷移で JSON を表示しない（ログイン画面へ戻す）
@@ -1064,6 +1091,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(403, {'error':'商品登録の全削除は主管理者だけが実行できます。', 'deleted': False})
             if method=='GET':
                 return self.reply(*stockdesk().api_get(STOCK_DB, 'desk', api_path, parse_qs(parsed.query), can_write=can_write, actor=actor))
+            if api_path in ('/api/customers','/api/customers/unify-preview','/api/customers/unify-apply'):
+                return self.reply(409,{'error':'顧客の登録・編集・統合は顧客・契約管理の顧客一覧から行ってください。'})
             if self.headers.get('X-Stock-Request')!='1': return self.reply(400, {'error':'画面からの操作だけを受け付けます。'})
             origin=self.headers.get('Origin') or ''
             if origin and origin not in ALLOWED_ORIGINS: return self.reply(403, {'error':'接続元を確認してください。'})
@@ -1076,7 +1105,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             try: body=json.loads(self.rfile.read(n).decode('utf-8') or '{}')
             except json.JSONDecodeError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
             try:
+                if api_path=='/api/import':
+                    import base64,excel_book
+                    sheets=excel_book.read_sheets(base64.b64decode(body.get('file',''),validate=True))
+                    customer_rows,_=excel_book._table(sheets.get('顧客'),'顧客',excel_book.SHEETS[0][1])
+                    if customer_rows:return self.reply(409,{'error':'顧客シートの取込は顧客・契約管理で行ってください。在庫の取込では顧客シートを空にしてください。'})
                 result=sd.api_post(STOCK_DB, 'desk', api_path, body, can_write=can_write, actor=actor)
+            except (ValueError,TypeError,KeyError):
+                return self.reply(400,{'error':'Excelの内容を確認してください。顧客の取込は顧客・契約管理から行います。'})
             except Exception as e:
                 # Keep JSON error body so /inventory/ proxy never looks like Failed to fetch.
                 print(f'inventory api_post crashed path={api_path}: {type(e).__name__}: {e}', flush=True)
@@ -1188,6 +1224,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 try: return self.reply(200, customer_accounts.state(c, STOCK_DB))
                 except sqlite3.Error: return self.reply(503, {'error':'顧客情報を読み取れません。在庫管理を確認してください。'})
         if path=='/inventory' or path.startswith('/inventory/'): return self.serve_inventory('GET')
+        if path == '/api/customer-directory':return self.serve_customer_directory()
         if path == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
@@ -1437,8 +1474,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
-        if path in ('/customer-contracts', '/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
+        files={'/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        if path in ('/customer-directory.js', '/customer-contracts', '/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with closing(connect()) as c:
                 request_user = self.session_user(c)
                 if not request_user:
@@ -1506,6 +1543,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(400, {'error':str(e)})
                 except sqlite3.Error:
                     return self.reply(503, {'error':'保存できませんでした。顧客情報を確認してください。'})
+        if route == '/api/customer-directory':return self.serve_customer_directory(save=True)
         if route == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)

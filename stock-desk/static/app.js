@@ -1096,6 +1096,7 @@ function bindExcel(kind){
   }
 }
 function customers(){
+  if(location.pathname.startsWith('/inventory'))return sharedCustomers()
   const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}${r.officeCode||''}`.includes(state.q))
   const blank='<span class="blank">—</span>'
   const unifyBar=stockIsOwner()?`<div class="bar merge-entry"><button type="button" id="customerUnifyOpen">顧客の表記揺れを統合</button><span class="excelhint">全角／半角や(株)／㈱などの重複顧客を検出し、半角・環境依存文字優先で1つに統合します（主管理者のみ）。</span></div>`:''
@@ -1106,6 +1107,12 @@ function customers(){
   if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}${r.officeCode?`<div class="dm-secondary">営業所 ${esc(r.officeCode)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div><div class="dm-actions">${stockOpenBtn(r.id)}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
   bindList(rows,'顧客',customerForm,body=>api('/api/customers',body),'customers')
   bindCustomerUnify()
+}
+function sharedCustomers(){
+ const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.officeCode||''}`.includes(state.q));
+ $('#main').innerHTML=`<section class="panel"><div class="bar"><label>検索<input id="sharedCustomerSearch" placeholder="顧客名・カナ・コード" value="${esc(state.q)}"></label><label><input id="sharedCustomerStopped" type="checkbox" ${state.stopped?'checked':''}> 停止も表示</label>${stockCanWrite()?'<a class="button" href="/customer-contracts?page=customers" target="_top">共通の顧客一覧・登録へ →</a>':''}</div><p class="excelhint">顧客の新規登録・基本情報の変更・Excel取込・表記揺れ統合は「顧客・契約管理」で行います。</p><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>顧客窓口</th><th>住所</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.name)}</b><small>${esc(r.kana)}</small></td><td>${esc(r.phone||'—')}</td><td>${esc(r.contact||'—')}</td><td>${esc(r.address||'—')}</td><td>${stockCanWrite()?`<a href="/customer-contracts?page=customers&edit_customer_id=${r.id}" target="_top">共通の顧客情報を開く</a>`:'閲覧のみ'}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}</tbody></table></div></section>`;
+ $('#sharedCustomerSearch').oninput=e=>{const pos=e.target.selectionStart;state.q=e.target.value;sharedCustomers();$('#sharedCustomerSearch').focus();$('#sharedCustomerSearch').setSelectionRange(pos,pos)};
+ $('#sharedCustomerStopped').onchange=e=>{state.stopped=e.target.checked;sharedCustomers()};
 }
 function bindCustomerUnify(){
   const btn=$('#customerUnifyOpen')
