@@ -1417,3 +1417,13 @@ table.products-list .prod-price{margin-left:4px;padding-left:8px;padding-right:8
 .stock-list-filters > .search-picker { flex-grow: 2; align-self: start; }
 .stock-list-filters .search-picker-control input { min-width: 0; }
 .stock-list-filters .search-picker-list { min-width: min(240px, 70vw); }
+
+/* Preserve the former customer-row height after removing its action button. */
+.shared-customer-directory.dm-standard table td{height:35px}
+.shared-customer-directory.dm-compact table td{height:31px}
+.shared-customer-directory.dm-cozy table td{height:67px}
+table.customer-reference-table th:nth-child(1),table.customer-reference-table td:nth-child(1){width:32%}
+table.customer-reference-table th:nth-child(2),table.customer-reference-table td:nth-child(2){width:12%;white-space:nowrap}
+table.customer-reference-table th:nth-child(3),table.customer-reference-table td:nth-child(3){width:16%}
+table.customer-reference-table th:nth-child(4),table.customer-reference-table td:nth-child(4){width:14%}
+table.customer-reference-table th:nth-child(5),table.customer-reference-table td:nth-child(5){width:26%}
