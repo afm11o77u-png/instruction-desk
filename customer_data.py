@@ -9,7 +9,7 @@ import web_request_organizations as organizations
 import web_request_inheritance as inheritance
 
 FIELD_GROUPS={
-'customers':('顧客基本情報',[('id','顧客ID'),('name','顧客名'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者'),('active','利用状態'),('created_at','登録日時'),('updated_at','更新日時'),('stocktake_target','棚卸対象（在庫用）')]),
+'customers':('顧客基本情報',[('id','顧客ID'),('name','顧客名'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者'),('active','利用状態'),('created_at','登録日時'),('updated_at','更新日時')]),
 'nodes':('組織',[('id','組織ID'),('parent_id','所属先の組織ID'),('kind','区分（会社・地区・拠点）'),('name','組織名'),('customer_id','顧客ID'),('site_type','拠点の呼び方')]),
 'staff_scopes':('社内担当範囲',[('user_id','社内担当者ID'),('node_id','担当する組織ID')]),
 'staff_scope_settings':('担当範囲の設定済み記録',[('user_id','社内担当者ID'),('customer_id','顧客ID')]),
@@ -36,7 +36,7 @@ def state(c,stock_path,user):
         roots={n['id'] for n in org['nodes'] if n['kind']=='company' and n['customer_id']==row['id']}
         row['company_staff_ids']=sorted({x['user_id'] for x in org['staff_scopes'] if x['node_id'] in roots})
         cfg=web_requests.read_config(c,row['id']);row['primary_user_id']=cfg['draft'].get('primary_user_id');row['backup_user_id']=cfg['draft'].get('backup_user_id');row['contract_version']=cfg['version']
-    groups['customers']['fields'][3:3]=[dict(key='primary_user_id',label='主担当'),dict(key='backup_user_id',label='副担当'),dict(key='company_staff_ids',label='顧客全体の担当範囲（参照）'),dict(key='contract_version',label='設定更新番号')]
+    groups['customers']['fields'][3:3]=[dict(key='primary_user_id',label='主担当'),dict(key='backup_user_id',label='副担当'),dict(key='company_staff_ids',label='顧客全体の担当範囲（参照）')]
     for key in ['nodes','staff_scopes','staff_scope_settings','customer_scopes']:groups[key]['rows']=org.get(key,[])
     groups['pages']['rows']=org.get('request_pages',[])
     for customer in groups['customers']['rows']:
