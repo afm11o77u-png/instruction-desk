@@ -3,6 +3,7 @@ All settings live in the instruction database. Inventory customer IDs stay uncha
 """
 import json
 import unicodedata
+import uuid
 
 
 def schema(c):
@@ -12,6 +13,32 @@ def schema(c):
       payload TEXT NOT NULL DEFAULT '{"nodes":[],"customer_scopes":[],"staff_scopes":[]}');
     INSERT OR IGNORE INTO web_request_org_settings(id) VALUES(1);
     """)
+    migrate_direct_sites(c)
+
+
+def migrate_direct_sites(c):
+    """Keep existing site IDs/settings; add one neutral parent category per company."""
+    row=c.execute('SELECT version,payload FROM web_request_org_settings WHERE id=1').fetchone()
+    payload=json.loads(row[1]);nodes=payload.get('nodes',[])
+    roots=[n for n in nodes if n.get('kind')=='company']
+    changed=False
+    for root in roots:
+        sites=[n for n in nodes if n.get('kind')=='site' and n.get('parent_id')==root['id']]
+        if not sites:continue
+        names={n['name'] for n in nodes if n.get('parent_id')==root['id']}
+        name='直属';number=1
+        while name in names:
+            number+=1;name='直属（移行'+str(number)+'）'
+        category_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'instruction-desk:category:'+root['id']))
+        if any(n['id']==category_id for n in nodes):category_id=str(uuid.uuid4())
+        nodes.append(dict(id=category_id,parent_id=root['id'],kind='region',name=name,customer_id=root['customer_id'],site_type=''))
+        for site in sites:site['parent_id']=category_id
+        changed=True
+    if changed:
+        with c:
+            c.execute('CREATE TABLE IF NOT EXISTS web_request_org_migrations(id INTEGER PRIMARY KEY,at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,previous_version INTEGER NOT NULL,previous_payload TEXT NOT NULL)')
+            c.execute('INSERT INTO web_request_org_migrations(previous_version,previous_payload) VALUES(?,?)',(row[0],row[1]))
+            c.execute('UPDATE web_request_org_settings SET payload=?,version=version+1 WHERE id=1',(json.dumps(payload,ensure_ascii=False),))
 
 
 def admin(user):
@@ -100,7 +127,7 @@ def validate(payload,customers,staff,accounts):
         nid=node.get('id');parent=node.get('parent_id');kind=node.get('kind');name=node.get('name');cid=node.get('customer_id');site_type=node.get('site_type','事業所')
         if not isinstance(nid,str) or not nid or len(nid)>80 or nid in ids:raise ValueError('組織の識別情報を確認してください。')
         if parent is not None and (not isinstance(parent,str) or len(parent)>80):raise ValueError('所属先を確認してください。')
-        if kind not in ('company','region','site') or not isinstance(name,str) or not name.strip() or len(name)>100:raise ValueError('企業・地区・拠点の名前を確認してください。')
+        if kind not in ('company','region','site') or not isinstance(name,str) or not name.strip() or len(name)>100:raise ValueError('企業・カテゴリ・拠点の名前を確認してください。')
         key=(parent,' '.join(unicodedata.normalize('NFKC',name).lower().split()))
         if key in names:raise ValueError('同じ所属先に同名の組織が重複しています。')
         names.add(key);ids.add(nid)
@@ -109,7 +136,7 @@ def validate(payload,customers,staff,accounts):
             if cid in used_customers:raise ValueError('同じ顧客の組織が重複しています。')
             used_customers.add(cid);site_type=''
         elif kind=='site':
-            if site_type not in ('事業所','店舗','その他'):raise ValueError('拠点の種類を確認してください。')
+            if site_type not in ('事業所','店舗','支店','その他'):raise ValueError('拠点の種類を確認してください。')
         else:site_type=''
         result.append(dict(id=nid,parent_id=parent,kind=kind,name=name.strip(),customer_id=cid,site_type=site_type))
         for field,limit in [('kana',80),('office_code',40),('address',200),('phone',40),('contact',80)]:
@@ -122,13 +149,13 @@ def validate(payload,customers,staff,accounts):
         p=byid.get(n['parent_id'])
         if n['kind']=='company':
             if n['parent_id'] is not None:raise ValueError('企業に所属先は指定できません。')
-        elif not p or p['kind'] not in (('company',) if n['kind']=='region' else ('company','region')):raise ValueError('地区は企業の下、拠点は企業または地区の下に登録してください。')
+        elif not p or p['kind'] not in (('company',) if n['kind']=='region' else ('region',)):raise ValueError('カテゴリは会社の下、店舗・拠点はカテゴリの中に登録してください。')
     for n in result:
         if n['kind']=='company':continue
         parent=byid[n['parent_id']]
         root=parent if parent['kind']=='company' else byid[parent['parent_id']]
         supplied=n['customer_id']
-        if supplied is not None and supplied!=root['customer_id']:raise ValueError('地区・拠点は親の顧客と同じ在庫を使います。')
+        if supplied is not None and supplied!=root['customer_id']:raise ValueError('カテゴリ・拠点は親の顧客と同じ在庫を使います。')
         n['customer_id']=root['customer_id']
     raw_pages=payload.get('request_pages',[])
     if not isinstance(raw_pages,list) or len(raw_pages)>5000:raise ValueError('顧客向けページの数を確認してください。')
@@ -171,7 +198,7 @@ def validate(payload,customers,staff,accounts):
 
 
 def save(c,payload,version,customers,staff,user):
-    if not admin(user):raise PermissionError('企業・地区・利用範囲の設定は主管理者・管理者が行ってください。')
+    if not admin(user):raise PermissionError('企業・カテゴリ・利用範囲の設定は主管理者・管理者が行ってください。')
     c.execute('BEGIN IMMEDIATE')
     try:
         old=read(c)

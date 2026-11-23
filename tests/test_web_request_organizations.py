@@ -86,8 +86,10 @@ class OrganizationTest(fixtures.SettingsTest):
         with self.assertRaises(ValueError):w.state(self.c,self.path,self.owner,10,'page1')
         with self.assertRaises(ValueError):w.state(self.c,self.path,self.owner,preview_page_id='missing')
 
-    def test_shared_inventory_and_optional_regions(self):
-        p=copy.deepcopy(self.organization);p['nodes'][3]['parent_id']='company';self.save_org(p)
+    def test_shared_inventory_and_required_category(self):
+        p=copy.deepcopy(self.organization);p['nodes'][3]['parent_id']='company'
+        with self.assertRaises(ValueError):self.save_org(p)
+        p['nodes'][3]['parent_id']='east';self.save_org(p)
         self.assertEqual(org.customer_ids(org.read(self.c),['company']),{1})
         self.assertEqual(len([n for n in org.read(self.c)['nodes'] if n['kind']=='site']),2)
     def test_invalid_cross_customer_and_duplicate_root(self):

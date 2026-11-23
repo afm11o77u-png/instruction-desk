@@ -89,7 +89,7 @@ class CommonContractsTest(unittest.TestCase):
         import web_request_inheritance as inheritance
         self.f.save()
         value = org.read(self.f.c)
-        value['nodes'] = [dict(id='company', kind='company', name='顧客', parent_id=None, customer_id=1), dict(id='site', kind='site', name='札幌店', parent_id='company', customer_id=1)]
+        value['nodes'] = [dict(id='company', kind='company', name='顧客', parent_id=None, customer_id=1), dict(id='category',kind='region',name='直属',parent_id='company',customer_id=1),dict(id='site', kind='site', name='札幌店', parent_id='category', customer_id=1)]
         # Use the production organization's normal save validation.
         org.save(self.f.c, value, value['version'], {1, 2}, {1, 2, 3}, self.user)
         parent = web.read_config(self.f.c, 1)['draft']; changed = copy.deepcopy(parent)

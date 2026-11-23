@@ -10,14 +10,14 @@ import web_request_inheritance as inheritance
 
 FIELD_GROUPS={
 'customers':('顧客基本情報',[('id','顧客ID'),('name','顧客名'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者'),('active','利用状態'),('created_at','登録日時'),('updated_at','更新日時')]),
-'nodes':('組織',[('id','組織ID'),('parent_id','所属先の組織ID'),('kind','区分（会社・地区・拠点）'),('name','組織名'),('customer_id','顧客ID'),('site_type','拠点の呼び方'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者')]),
+'nodes':('組織',[('id','組織ID'),('parent_id','所属先の組織ID'),('kind','区分（会社・カテゴリ・拠点）'),('name','組織名'),('customer_id','顧客ID'),('site_type','拠点の呼び方'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者')]),
 'staff_scopes':('社内担当範囲',[('user_id','社内担当者ID'),('node_id','担当する組織ID')]),
 'staff_scope_settings':('担当範囲の設定済み記録',[('user_id','社内担当者ID'),('customer_id','顧客ID')]),
 'base':('顧客共通設定',[('customer_id','顧客ID'),('primary_user_id','主担当ID'),('backup_user_id','副担当ID'),('delivery_to','標準納品先（保存済みの旧設定）'),('receive_place','標準受取場所（保存済みの旧設定）'),('customer_note','顧客への案内'),('request_types','受付する依頼の種類')]),
 'departments':('部署',[('id','部署ID'),('name','部署名'),('contracts','配下の契約（別表）')]),
 'contracts':('契約',[('id','契約ID'),('name','契約名'),('kind','契約形態'),('service_type','取引区分'),('default_ownership','所有区分の初期値'),('start_date','契約開始日'),('end_date','契約終了日'),('notes','契約備考'),('default_qty','制服追加時の初期枚数'),('active','有効・停止'),('uniforms','対象制服（別表）')]),
 'uniforms':('契約の対象制服',[('id','制服設定ID'),('customer_product_id','顧客の取扱商品ID'),('product_id','商品ID'),('display_name','顧客向け表示名'),('description','説明'),('default_qty','制服ごとの契約枚数'),('sort_order','表示順'),('photo','写真'),('active','対象・対象外')]),
-'scopes':('地区・店舗の共通／個別設定',[('node_id','組織ID'),('customer_id','顧客ID'),('version','更新番号'),('draft','下書き：mode（共通／個別）・patch（差分）'),('publication','反映済み：mode・patch・version'),('status','下書き／反映済み／停止')]),
+'scopes':('カテゴリ・店舗の共通／個別設定',[('node_id','組織ID'),('customer_id','顧客ID'),('version','更新番号'),('draft','下書き：mode（共通／個別）・patch（差分）'),('publication','反映済み：mode・patch・version'),('status','下書き／反映済み／停止')]),
 'pages':('WEB依頼用・顧客向けページ',[('id','ページID'),('name','ページ名'),('customer_id','顧客ID'),('node_ids','表示する組織IDの一覧'),('can_request','依頼可否')]),
 'customer_scopes':('WEB依頼用・利用者の表示範囲',[('account_id','顧客側アカウントID'),('page_id','利用ページID'),('node_ids','個別指定の組織ID一覧'),('can_request','依頼可否')]),
 }
