@@ -92,3 +92,5 @@ body.desk-common-page[data-request-page=customer-data] main{max-width:none;paddi
 #save-settings:disabled{cursor:not-allowed}
 
 #org-customer-start .org-company-editor{max-width:none;margin:0;padding:0;border:0;box-shadow:none}#org-company-selector[hidden]{display:none!important}#org-customer-start>#directory-new[hidden]{display:none!important}
+
+body.desk-common-page #org-customer-start{display:none!important}#common-settings-toolbar .org-company-editor{max-width:none;margin-top:16px}#desk-customer-context #directory-new[hidden]{display:none!important}
