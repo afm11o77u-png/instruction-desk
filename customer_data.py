@@ -10,7 +10,7 @@ import web_request_inheritance as inheritance
 
 FIELD_GROUPS={
 'customers':('顧客基本情報',[('id','顧客ID'),('name','顧客名'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者'),('active','利用状態'),('created_at','登録日時'),('updated_at','更新日時')]),
-'nodes':('組織',[('id','組織ID'),('parent_id','所属先の組織ID'),('kind','区分（会社・地区・拠点）'),('name','組織名'),('customer_id','顧客ID'),('site_type','拠点の呼び方')]),
+'nodes':('組織',[('id','組織ID'),('parent_id','所属先の組織ID'),('kind','区分（会社・地区・拠点）'),('name','組織名'),('customer_id','顧客ID'),('site_type','拠点の呼び方'),('kana','フリガナ'),('office_code','営業所コード'),('address','住所'),('phone','電話番号'),('contact','顧客側の窓口担当者')]),
 'staff_scopes':('社内担当範囲',[('user_id','社内担当者ID'),('node_id','担当する組織ID')]),
 'staff_scope_settings':('担当範囲の設定済み記録',[('user_id','社内担当者ID'),('customer_id','顧客ID')]),
 'base':('顧客共通設定',[('customer_id','顧客ID'),('primary_user_id','主担当ID'),('backup_user_id','副担当ID'),('delivery_to','標準納品先（保存済みの旧設定）'),('receive_place','標準受取場所（保存済みの旧設定）'),('customer_note','顧客への案内'),('request_types','受付する依頼の種類')]),

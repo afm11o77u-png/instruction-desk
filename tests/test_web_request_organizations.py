@@ -16,6 +16,19 @@ class OrganizationTest(fixtures.SettingsTest):
             dict(id='sapporo',parent_id='north',kind='site',name='札幌店',customer_id=1,site_type='店舗'),
             dict(id='sendai',parent_id='east',kind='site',name='仙台事業所',customer_id=1,site_type='事業所')
         ],customer_scopes=[dict(account_id=10,node_ids=['north'],can_request=False),dict(account_id=11,node_ids=['sapporo','sendai'],can_request=True)],staff_scopes=[dict(user_id=3,node_id='north')])
+    def test_region_and_site_contact_details_round_trip(self):
+        for node in self.organization['nodes']:
+            node.update(kana='フリガナ',office_code='101',address='所在地',phone='011-123',contact='窓口')
+        self.save_org()
+        saved=org.read(self.c)
+        for node in saved['nodes']:
+            self.assertEqual(node['address'],'所在地')
+            self.assertEqual(node['phone'],'011-123')
+            self.assertEqual(node['contact'],'窓口')
+        invalid=copy.deepcopy(self.organization);invalid['nodes'][1]['phone']='x'*41
+        with self.assertRaises(ValueError):self.save_org(invalid)
+        self.assertEqual(org.read(self.c),saved)
+
     def save_org(self,payload=None,user=None,version=None):
         return w.save(self.c,self.path,dict(action='organization',organization=payload or self.organization,version=org.read(self.c)['version'] if version is None else version),user or self.owner)
     def scope(self,node,config=None,mode='custom',action='publish'):

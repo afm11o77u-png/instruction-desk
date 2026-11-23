@@ -112,6 +112,11 @@ def validate(payload,customers,staff,accounts):
             if site_type not in ('事業所','店舗','その他'):raise ValueError('拠点の種類を確認してください。')
         else:site_type=''
         result.append(dict(id=nid,parent_id=parent,kind=kind,name=name.strip(),customer_id=cid,site_type=site_type))
+        for field,limit in [('kana',80),('office_code',40),('address',200),('phone',40),('contact',80)]:
+            if field not in node:continue
+            value=node[field]
+            if not isinstance(value,str) or len(value)>limit:raise ValueError('組織の所在地・連絡先を確認してください。')
+            result[-1][field]=value.strip()
     byid={n['id']:n for n in result}
     for n in result:
         p=byid.get(n['parent_id'])
