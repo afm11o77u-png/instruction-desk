@@ -1039,6 +1039,24 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except (ValueError,TypeError,KeyError) as e:return self.reply(400,{'error':str(e) if isinstance(e,ValueError) else '入力内容を確認してください。'})
             except sqlite3.Error:return self.reply(503,{'error':'レンタル台帳を読み書きできません。再読込して確認してください。'})
 
+    def serve_customer_data(self, save=False):
+        import customer_data
+        with closing(connect()) as c:
+            user=self.session_user(c)
+            try:
+                customer_data.require_admin(user)
+                ensure_stock();stockdesk()
+                if not save:return self.reply(200,customer_data.state(c,STOCK_DB,user))
+                n=int(self.headers.get('Content-Length') or 0)
+                if not 0<n<=8000000:raise ValueError('送信内容を確認してください。')
+                body=json.loads(self.rfile.read(n))
+                if not isinstance(body,dict):raise ValueError('送信内容を確認してください。')
+                result=customer_data.undo(c,STOCK_DB,user,body.get('history_id')) if body.get('action')=='undo' else customer_data.save(c,STOCK_DB,user,body)
+                return self.reply(200,result)
+            except PermissionError as e:return self.reply(403,{'error':str(e)})
+            except (ValueError,TypeError,KeyError) as e:return self.reply(400,{'error':str(e) or '変更内容を確認してください。'})
+            except sqlite3.Error:return self.reply(400,{'error':'保存できませんでした。顧客名の重複や別の画面からの更新を確認してください。'})
+
     def serve_customer_directory(self, save=False):
         import common_customers
         from urllib.parse import urlparse,parse_qs
@@ -1224,6 +1242,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 try: return self.reply(200, customer_accounts.state(c, STOCK_DB))
                 except sqlite3.Error: return self.reply(503, {'error':'顧客情報を読み取れません。在庫管理を確認してください。'})
         if path=='/inventory' or path.startswith('/inventory/'): return self.serve_inventory('GET')
+        if path == '/api/customer-data':return self.serve_customer_data()
         if path == '/api/customer-directory':return self.serve_customer_directory()
         if path == '/api/web-request/settings':
             with connect() as c:
@@ -1474,8 +1493,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/workspace-switcher.js':'workspace-switcher.js','/workspace-switcher.css':'workspace-switcher.css','/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
-        if path in ('/customer-directory.js', '/customer-contracts', '/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
+        files={'/customer-data.js':'customer-data.js','/workspace-switcher.js':'workspace-switcher.js','/workspace-switcher.css':'workspace-switcher.css','/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        if path in ('/customer-data.js', '/customer-directory.js', '/customer-contracts', '/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with closing(connect()) as c:
                 request_user = self.session_user(c)
                 if not request_user:
@@ -1543,6 +1562,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(400, {'error':str(e)})
                 except sqlite3.Error:
                     return self.reply(503, {'error':'保存できませんでした。顧客情報を確認してください。'})
+        if route == '/api/customer-data':return self.serve_customer_data(save=True)
         if route == '/api/customer-directory':return self.serve_customer_directory(save=True)
         if route == '/api/web-request/settings':
             with connect() as c:

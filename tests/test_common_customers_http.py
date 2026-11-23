@@ -36,3 +36,16 @@ DROP TABLE old_customers;""")
         import excel_book
         code,data=self.request('/api/customer-directory?action=template','owner')
         self.assertEqual(code,200);self.assertEqual(set(excel_book.read_sheets(data)),{'顧客'})
+    def test_customer_data_owner_only_and_csrf(self):
+        self.assertEqual(self.request('/api/customer-data')[0],403)
+        self.assertEqual(self.request('/api/customer-data','sales')[0],403)
+        code,raw=self.request('/api/customer-data','owner')
+        self.assertEqual(code,200,raw)
+        state=json.loads(raw);row=state['groups'][0]['rows'][0]
+        import customer_data
+        after={k:row[k] for k in customer_data.EDITABLE};after.update(primary_user_id=2,backup_user_id=3)
+        body=dict(orgVersion=state['orgVersion'],changes=[dict(id=row['id'],before=row,after=after)])
+        self.assertEqual(self.request('/api/customer-data','owner',body,desk_header=False)[0],403)
+        code,raw=self.request('/api/customer-data','owner',body,origin=self.url)
+        self.assertEqual(code,200,raw)
+        self.assertEqual(self.request('/customer-data.js','owner')[0],200)
