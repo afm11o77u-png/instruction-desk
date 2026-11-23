@@ -8,6 +8,7 @@ from picking_xlsx import workbook
 MAIL_DIR = Path(os.environ.get('INSTRUCTION_DATA', str(Path(__file__).resolve().parent / 'data'))) / 'mail-out'
 
 GROUPS = {'warehouse':'石狩倉庫', 'factory':'発寒支店', 'carry':'管理担当持込'}
+REFERENCE_FIELDS = ('customer_product_id','product_id','contract_customer_id','contract_id','contract_uniform_id','department_id','contract_scope_id','contract_version','contract_name','department_name','service_type','color','embroidery')
 FIELDS = ['requester','customer','name','maker','sku','size','condition','quantity','note','note2','stock']
 
 def instruction_number(row_id, payload):
@@ -250,6 +251,7 @@ def imported(c,u,source,can_access):
     for i,x in enumerate(d.get('items',[])):
         if not str(x.get('name','')).strip(): continue
         v={k:x.get(k,'') for k in FIELDS if k!='note'}
+        v.update({k:x[k] for k in REFERENCE_FIELDS if k in x})
         strip_list_row(v)
         v.update(key=f"order:{row['id']}:{i}",sourceNumber=instruction_number(row['id'], d),requester=name,customer=d.get('customer',''),stock=stock(x.get('stock')),stockOriginal=x.get('stock',''))
         rows.append(v)
