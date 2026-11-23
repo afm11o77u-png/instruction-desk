@@ -69,4 +69,18 @@ INSERT INTO customer_products VALUES(10,1,1,'刺繍A',1),(11,1,1,'加工なし',
         p=w.normalize_photo('data:image/png;base64,'+base64.b64encode(b.getvalue()).decode());self.assertTrue(p.startswith('data:image/jpeg;base64,'))
         with self.assertRaises(ValueError):w.normalize_photo('data:image/svg+xml;base64,PHN2Zz4=')
 
+    def test_multiple_services_per_department_and_stopped_contract(self):
+        cfg=copy.deepcopy(self.cfg)
+        cfg['departments'][0]['contracts']=[]
+        for i,service in enumerate(['レンタル','リース','CL']):
+            k=copy.deepcopy(self.cfg['departments'][0]['contracts'][0])
+            k['uniforms'][0]['id']='mixed-uniform-'+str(i)
+            k.update(id='mixed-'+str(i),name=service+'契約',service_type=service,kind='その他',default_ownership='着用者所有',active=service!='CL')
+            cfg['departments'][0]['contracts'].append(k)
+        self.save(cfg)
+        saved=w.read_config(self.c,1)['draft']['departments'][0]['contracts']
+        self.assertEqual([k['service_type'] for k in saved],['レンタル','リース','CL'])
+        self.assertEqual([k['default_ownership'] for k in saved],['自社所有','自社所有','顧客所有'])
+        self.assertFalse(saved[2]['active'])
+
 if __name__=='__main__':unittest.main()

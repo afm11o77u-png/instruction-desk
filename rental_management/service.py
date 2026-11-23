@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 
 KINDS=['個人レンタル','リース','販売','その他']
-SERVICES=['レンタル','クリーニングのみ']
+SERVICES=['レンタル','リース','CL','クリーニングのみ']
 OWNERS=['自社所有','顧客所有','着用者所有','その他','未確認']
 SCHEMA="""
 CREATE TABLE IF NOT EXISTS rental_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -219,7 +219,7 @@ def loan_action(c,data,user,d,row,action):
         unit=existing(c,'units',d.get('unit_id'),data);wearer=existing(c,'wearers',d.get('wearer_id'),data);contract=existing(c,'contracts',d.get('contract_id'),data)
         if len({unit['customer_id'],wearer['customer_id'],contract['customer_id']})!=1:raise ValueError('顧客の異なる制服・着用者・契約を組み合わせることはできません。')
         relation_type='着用登録' if action=='assign' else '貸与'
-        if (contract['service_type']=='クリーニングのみ')!=(action=='assign'):raise ValueError('クリーニングのみの契約は着用登録、レンタル契約は貸与を選択してください。')
+        if (contract['service_type'] in ('CL','クリーニングのみ'))!=(action=='assign'):raise ValueError('クリーニングのみの契約は着用登録、レンタル契約は貸与を選択してください。')
         if action=='assign' and unit['ownership']=='未確認':raise ValueError('着用登録の前に制服の所有区分を確認してください。')
         links=[r[0] for r in c.execute('SELECT contract_id FROM wearer_contracts WHERE wearer_id=?',(wearer['id'],))]
         if contract['id'] not in links:raise ValueError('着用者の利用契約に、この契約を登録してください。')

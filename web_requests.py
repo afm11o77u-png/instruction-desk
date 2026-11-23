@@ -177,7 +177,8 @@ def validate_config(cfg,data,cid):
             contract=dict(id=ident(k),name=text(k.get('name',''),'契約名',100,True),kind=text(k.get('kind',''),'契約形態',100,True),default_qty=number(k.get('default_qty'),'標準枚数',1,999),active=bool(k.get('active')),uniforms=[])
             from datetime import date
             service=k.get('service_type','レンタル');ownership=k.get('default_ownership','顧客所有' if service=='クリーニングのみ' else '自社所有')
-            if service not in ('レンタル','クリーニングのみ') or ownership not in ('自社所有','顧客所有','着用者所有','その他','未確認'):raise ValueError('取引区分・所有区分を確認してください。')
+            if service not in ('レンタル','リース','CL','クリーニングのみ') or ownership not in ('自社所有','顧客所有','着用者所有','その他','未確認'):raise ValueError('取引区分・所有区分を確認してください。')
+            if service in ('レンタル','リース','CL'):ownership='顧客所有' if service=='CL' else '自社所有'
             start=text(k.get('start_date',''),'契約開始日',10);end=text(k.get('end_date',''),'契約終了日',10)
             for value in (start,end):
                 if value:
