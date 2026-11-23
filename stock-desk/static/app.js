@@ -1109,10 +1109,14 @@ function customers(){
   bindCustomerUnify()
 }
 function sharedCustomers(){
- const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.officeCode||''}`.includes(state.q));
- $('#main').innerHTML=`<section class="panel"><div class="bar"><label>検索<input id="sharedCustomerSearch" placeholder="顧客名・カナ・コード" value="${esc(state.q)}"></label><label><input id="sharedCustomerStopped" type="checkbox" ${state.stopped?'checked':''}> 停止も表示</label>${stockCanWrite()?'<a class="button" href="/customer-contracts?page=customers" target="_top">共通の顧客一覧・登録へ →</a>':''}</div><p class="excelhint">顧客の新規登録・基本情報の変更・Excel取込・表記揺れ統合は「顧客・契約管理」で行います。</p><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>顧客窓口</th><th>住所</th><th></th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.name)}</b><small>${esc(r.kana)}</small></td><td>${esc(r.phone||'—')}</td><td>${esc(r.contact||'—')}</td><td>${esc(r.address||'—')}</td><td>${stockCanWrite()?`<a href="/customer-contracts?page=customers&edit_customer_id=${r.id}" target="_top">共通の顧客情報を開く</a>`:'閲覧のみ'}</td></tr>`).join('')||'<tr><td colspan="5">該当する顧客はありません。</td></tr>'}</tbody></table></div></section>`;
- $('#sharedCustomerSearch').oninput=e=>{const pos=e.target.selectionStart;state.q=e.target.value;sharedCustomers();$('#sharedCustomerSearch').focus();$('#sharedCustomerSearch').setSelectionRange(pos,pos)};
- $('#sharedCustomerStopped').onchange=e=>{state.stopped=e.target.checked;sharedCustomers()};
+  const rows=state.data.customers.filter(r=>(state.stopped||r.active)&&`${r.name}${r.kana}${r.phone}${r.contact}${r.address}${r.officeCode||''}`.includes(state.q))
+  const blank='<span class="blank">—</span>'
+  $('#main').innerHTML=`<section class="panel"><div class="bar"><label>検索<input id="q" value="${esc(state.q)}" placeholder="顧客名・カナ・電話番号・担当者・営業所コード"></label>${inactiveToggle()}${stockCanWrite()?'<a href="/customer-contracts?page=customers" target="_top">共通の顧客一覧・登録へ →</a>':''}</div><div class="list-stage" id="stockliststage"><div class="directory-scroll"><table class="directory"><thead><tr><th>顧客</th><th>電話番号</th><th>担当者</th><th>住所</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr class="${r.active?'':'is-stopped'}"><td class="who"><span class="sid">${r.id}</span><span class="nameline"><b class="dm-primary">${esc(r.name)}</b>${r.active?'':'<span class="badge stop">停止</span>'}${r.kana?`<span class="sub dm-secondary">${esc(r.kana)}</span>`:''}${r.officeCode?`<span class="sub dm-secondary">営業所 ${esc(r.officeCode)}</span>`:''}</span></td><td class="tel">${r.phone?esc(r.phone):blank}</td><td>${r.contact?`<span class="pill">${esc(r.contact)}</span>`:blank}</td><td class="addr">${r.address?esc(r.address):blank}</td></tr>`).join('')||'<tr><td colspan="4">該当する顧客はありません。</td></tr>'}
+  </tbody></table></div><div class="list-grid" id="stocklistgrid" hidden></div></div></section>`
+  const grid=$('#stocklistgrid')
+  if(grid)grid.innerHTML=rows.length?rows.map(r=>`<article class="dm-card ${r.active?'':'is-stopped'}"><div class="dm-primary">${esc(r.name)}${r.active?'':' <span class="badge stop">停止</span>'}</div>${r.kana?`<div class="dm-secondary">${esc(r.kana)}</div>`:''}${r.officeCode?`<div class="dm-secondary">営業所 ${esc(r.officeCode)}</div>`:''}<div class="dm-meta"><span>${r.phone?esc(r.phone):'—'}</span><span>${r.contact?esc(r.contact):'—'}</span></div><div class="dm-secondary">${r.address?esc(r.address):'—'}</div></article>`).join(''):'<div class="dm-empty">該当する顧客はありません。</div>'
+  bindList(rows,'顧客',customerForm,body=>api('/api/customers',body),'customers')
 }
 function bindCustomerUnify(){
   const btn=$('#customerUnifyOpen')
@@ -1407,7 +1411,7 @@ function bindList(rows,title,form,save,exportKind){
   search.oncompositionend=()=>{composing=false;applySearch()}
   search.oninput=event=>{if(!composing&&!event.isComposing)applySearch()}
   $('#stopped').onchange=e=>{state.stopped=e.target.checked;paint()}
-  $('#add').onclick=()=>edit(null,title,form,save)
+  if($('#add'))$('#add').onclick=()=>edit(null,title,form,save)
   document.querySelectorAll('#main .stockopen,[data-id]').forEach(b=>{
     if(!b.dataset.id)return
     b.onclick=()=>edit(rows.find(r=>r.id===Number(b.dataset.id)),title,form,save)

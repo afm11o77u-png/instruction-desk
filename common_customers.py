@@ -7,7 +7,7 @@ from pathlib import Path
 import web_requests
 import web_request_organizations as organizations
 
-COLUMNS=[('顧客ID','id',False),('顧客名','name',True),('フリガナ','kana',False),('住所','address',False),('電話番号','phone',False),('顧客窓口','contact',False),('顧客コード','officeCode',False),('利用状態','active',False)]
+COLUMNS=[('顧客ID','id',False),('顧客名','name',True),('フリガナ','kana',False),('住所','address',False),('電話番号','phone',False),('顧客窓口','contact',False),('営業所コード','officeCode',False),('利用状態','active',False)]
 
 def access(user):
     if not web_requests.can_open(user):raise PermissionError('顧客・契約管理を利用する権限がありません。')
