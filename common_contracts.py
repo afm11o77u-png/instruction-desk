@@ -18,6 +18,9 @@ def records(c, customer_ids):
         for node in org['nodes']:
             if node['customer_id'] == cid and node['kind'] != 'company' and inheritance.record(c, node['id'])['draft']['mode'] == 'custom':
                 configs.append((node['id'], node['name'], inheritance.resolve(c, base, org, node['id'])[0]))
+        import web_request_department_registry as registry
+        if c.execute("SELECT 1 FROM sqlite_master WHERE name='web_request_department_library'").fetchone() and c.execute('SELECT 1 FROM web_request_department_library WHERE customer_id=?',(cid,)).fetchone():
+            configs=[(None if n['kind']=='company' else n['id'],n['name'],registry.configuration(c,base,org,n)) for n in org['nodes'] if n['customer_id']==cid and organizations.personnel_enabled(org,n)]
         for node_id, scope_name, cfg in configs:
             for dep in cfg.get('departments', []):
                 for contract in dep.get('contracts', []):

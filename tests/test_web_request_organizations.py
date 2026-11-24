@@ -67,6 +67,29 @@ class OrganizationTest(fixtures.SettingsTest):
         self.save_org(payload)
         self.assertTrue(org.personnel_enabled(org.read(self.c),org.read(self.c)['nodes'][0]))
 
+    def test_department_library_is_not_auto_assigned_and_assignment_is_atomic(self):
+        import web_request_department_registry as registry
+        import common_contracts
+        self.save();self.save_org()
+        result=w.save(self.c,self.path,dict(action='department_library',customer_id=1,version=0,config=self.cfg),self.owner)
+        self.assertTrue(all(not a['department_ids'] for a in result['departmentAssignments']))
+        self.assertEqual(common_contracts.records(self.c,{1}),[])
+        payload=dict(action='assign_department',customer_id=1,department_id='dep1',operation='add',library_version=1,targets=[dict(node_id='sapporo',version=0)])
+        result=w.save(self.c,self.path,payload,self.owner)
+        self.assertEqual(next(a for a in result['departmentAssignments'] if a['node_id']=='sapporo')['department_ids'],['dep1'])
+        self.assertEqual(len(common_contracts.records(self.c,{1})),1)
+        self.assertEqual(common_contracts.records(self.c,{1})[0]['node_id'],'sapporo')
+        with self.assertRaises(ValueError):w.save(self.c,self.path,payload,self.owner)
+        invalid=copy.deepcopy(payload);invalid['targets']=[dict(node_id='sendai',version=0),dict(node_id='north',version=0)]
+        with self.assertRaises(PermissionError):w.save(self.c,self.path,invalid,self.owner)
+        self.assertEqual(registry.selection(self.c,w.read_config(self.c,1),org.read(self.c),self.organization['nodes'][-1])['department_ids'],[])
+        payload.update(operation='remove',targets=[dict(node_id='sapporo',version=1)])
+        w.save(self.c,self.path,payload,self.owner)
+        self.assertEqual(common_contracts.records(self.c,{1}),[])
+        self.assertEqual(len(registry.library(self.c,w.read_config(self.c,1))['draft']['departments']),1)
+        invalid['targets']=[dict(node_id='company',version=0)]
+        with self.assertRaises(PermissionError):w.save(self.c,self.path,invalid,self.owner)
+
     def test_region_and_site_contact_details_round_trip(self):
         for node in self.organization['nodes']:
             node.update(kana='フリガナ',office_code='101',address='所在地',phone='011-123',contact='窓口')

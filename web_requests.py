@@ -1,6 +1,7 @@
 """WEB依頼の部署・採用品設定。在庫DBは読み取り専用。"""
 import web_request_inheritance as inheritance
 import web_request_organizations as organizations
+import web_request_department_registry as department_registry
 import auth
 import unicodedata
 import json
@@ -22,6 +23,7 @@ def schema(c):
     ''')
     c.execute("CREATE TABLE IF NOT EXISTS web_request_customer_settings (customer_id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0, draft TEXT NOT NULL, publication TEXT, status TEXT NOT NULL DEFAULT 'draft')")
 
+    department_registry.schema(c)
     organizations.schema(c)
     inheritance.schema(c)
 
@@ -118,6 +120,8 @@ def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
 
     data['scopeProfiles']=[inheritance.profile(c,p,org,n) for p in data['profiles'] for n in data['organizations']['nodes'] if n['customer_id']==p['customer_id'] and n['kind']!='company' and n['id'] in data['allowedNodeIds']]
     data['personnelTargets']=[dict(node_id=n['id'],customer_id=n['customer_id'],kind=n['kind'],name=n['name']) for n in data['organizations']['nodes'] if organizations.personnel_enabled(data['organizations'],n)]
+    data['departmentLibraries']=[department_registry.library(c,p) for p in data['profiles']] if not preview else []
+    data['departmentAssignments']=[dict(department_registry.selection(c,next(p for p in data['profiles'] if p['customer_id']==n['customer_id']),org,n),customer_id=n['customer_id']) for n in data['organizations']['nodes'] if n['id'] in data['allowedNodeIds'] and organizations.personnel_enabled(org,n)] if not preview else []
     data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
 
@@ -217,6 +221,40 @@ def save(c,path,d,user=None):
     if d.get('action')=='organization':
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)
+        return state(c,path,user)
+    if d.get('action') in ('department_library','assign_department'):
+        cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
+        if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この会社の設定を変更できません。')
+        base=read_config(c,cid);org=organizations.read(c)
+        if d['action']=='department_library':
+            if not permitted(base,user) and cid not in data['manageCommonCustomerIds']:raise PermissionError('会社の部署を編集する権限がありません。')
+            cfg=validate_config(d.get('config'),data,cid)
+            c.execute('BEGIN IMMEDIATE')
+            try:
+                current=department_registry.library(c,base)
+                if type(d.get('version')) is not int or current['version']!=d['version']:raise ValueError('部署一覧が更新されています。再読込してください。')
+                c.execute('INSERT INTO web_request_department_library VALUES(?,?,?) ON CONFLICT(customer_id) DO UPDATE SET version=excluded.version,config=excluded.config',(cid,current['version']+1,json.dumps(cfg,ensure_ascii=False)))
+                c.commit()
+            except Exception:c.rollback();raise
+        else:
+            operation=d.get('operation');targets=d.get('targets');dep_id=d.get('department_id')
+            if operation not in ('add','remove') or not isinstance(targets,list) or not targets or len(targets)>2000:raise ValueError('対象と操作を確認してください。')
+            lib=department_registry.library(c,base)
+            if not any(x['id']==dep_id for x in lib['draft']['departments']):raise ValueError('登録済みの部署を選んでください。')
+            c.execute('BEGIN IMMEDIATE')
+            try:
+                if lib['version']!=d.get('library_version'):raise ValueError('部署一覧が更新されています。再読込してください。')
+                seen=set()
+                for target in targets:
+                    nid=target.get('node_id');node=next((n for n in org['nodes'] if n['id']==nid and n['customer_id']==cid),None)
+                    if nid in seen or not node or nid not in data['allowedNodeIds'] or not organizations.personnel_enabled(org,node):raise PermissionError('この登録先には割り当てできません。')
+                    seen.add(nid);current=department_registry.selection(c,base,org,node)
+                    if current['version']!=target.get('version'):raise ValueError('割り当てが更新されています。再読込してください。')
+                    ids=current['department_ids'];ids=[x for x in ids if x!=dep_id]
+                    if operation=='add':ids.append(dep_id)
+                    c.execute('INSERT INTO web_request_department_targets VALUES(?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,department_ids=excluded.department_ids',(nid,cid,current['version']+1,json.dumps(ids)))
+                c.commit()
+            except Exception:c.rollback();raise
         return state(c,path,user)
     if d.get('action')=='company_personnel':
         if not organizations.admin(user):raise PermissionError('管理者が設定してください。')
