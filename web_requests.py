@@ -229,7 +229,7 @@ def save(c,path,d,user=None):
         if cid not in {x['id'] for x in data['customers']} or cid not in data['manageCommonCustomerIds']:raise PermissionError('この会社の部署を取り込む権限がありません。')
         current=department_registry.library(c,read_config(c,cid))
         if d['action']=='department_import_preview':
-            return dict(department_excel.preview(d.get('file'),current['draft']['departments']),customer_id=cid,version=current['version'])
+            return dict(department_excel.preview(d.get('file'),current['draft']['departments'],d.get('source','customer')),customer_id=cid,version=current['version'])
         if type(d.get('version')) is not int or d['version']!=current['version']:raise ValueError('部署一覧が更新されています。Excelを選び直してください。')
         names=d.get('names')
         if not isinstance(names,list) or not names or len(names)>500:raise ValueError('取り込む部署を1件以上選んでください。')

@@ -28,3 +28,14 @@ class DepartmentExcelTest(unittest.TestCase):
         self.assertEqual(plan['candidates'][0]['name'],'精肉')
         for data in ('bad',book([['A','会社名']],['コード','名前'])):
             with self.assertRaises(ValueError):department_excel.preview(data,[])
+
+    def test_contract_master_uses_department_column_without_importing_people(self):
+        raw=book([['M1','ﾊﾟﾝ粉工場','氏名A',0],['M1','パン粉工場','氏名B',0],['M2','製造','氏名C',0],['M2','','氏名D',0],['M2','削除','氏名E',1]],['顧客コード','部署名','個人名','削除フラグ'])
+        plan=department_excel.preview(raw,[dict(name='製造')],'contract')
+        self.assertEqual([x['name'] for x in plan['candidates']],['パン粉工場','製造'])
+        self.assertEqual(plan['candidates'][0]['rows'],[2,3])
+        self.assertFalse(plan['candidates'][1]['selected'])
+        self.assertEqual(len(plan['unresolved']),1)
+        self.assertEqual(plan['deleted'],1)
+        with self.assertRaises(ValueError):department_excel.preview(raw,[],'customer')
+        with self.assertRaises(ValueError):department_excel.preview(raw,[],'invalid')

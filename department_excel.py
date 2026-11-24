@@ -14,7 +14,10 @@ def normalized(value):
     return ' '.join(unicodedata.normalize('NFKC',str(value or '')).split())
 
 
-def preview(raw,existing):
+def preview(raw,existing,source="customer"):
+    if source not in ("customer","contract"):raise ValueError("取り込みの書式を選んでください。")
+    required=("顧客コード","部署名") if source=="contract" else ("顧客コード","顧客名")
+    label="契約" if source=="contract" else "顧客"
     try:
         if not isinstance(raw,str) or len(raw)>11_000_000:raise ValueError()
         blob=base64.b64decode(raw,validate=True)
@@ -43,19 +46,19 @@ def preview(raw,existing):
                     if any(str(v).strip() for v in cells.values()):table.append((int(row.get('r','0')),cells))
                 if table:
                     header={normalized(v):col for col,v in table[0][1].items()}
-                    if '顧客コード' in header and '顧客名' in header:sheets.append((sheet.get('name'),table,header))
+                    if all(key in header for key in required):sheets.append((sheet.get('name'),table,header))
     except Exception as error:
-        raise ValueError('顧客マスタのExcel（.xlsx）を読み取れませんでした。ファイルの形式・容量を確認してください。') from error
-    if len(sheets)!=1:raise ValueError('「顧客コード」「顧客名」のあるシートを1つ含むExcelを選んでください。')
+        raise ValueError(label+'マスタのExcel（.xlsx）を読み取れませんでした。ファイルの形式・容量を確認してください。') from error
+    if len(sheets)!=1:raise ValueError('「'+'」「'.join(required)+'」のあるシートを1つ含むExcelを選んでください。')
     sheet,table,header=sheets[0];known={normalized(d['name']).casefold() for d in existing};groups={};unresolved=[];deleted=0;count=0
     for row,cells in table[1:]:
         count+=1
         if count>20000:raise ValueError('取り込みは2万行以内のExcelで行ってください。')
         if normalized(cells.get(header.get('削除フラグ',''),'')).casefold() in ('1','true','削除'):
             deleted+=1;continue
-        code=normalized(cells.get(header['顧客コード'],''));customer=normalized(cells.get(header['顧客名'],''))
+        code=normalized(cells.get(header['顧客コード'],''));customer=normalized(cells.get(header.get('顧客名',''),''))
         direct=header.get('部署名') or header.get('部署');name=normalized(cells.get(direct,'')) if direct else (customer.split(' ',1)[1] if ' ' in customer else '')
-        if not code or not customer or not name or len(name)>80:
+        if not code or (source=="customer" and not customer) or not name or len(name)>80:
             unresolved.append(dict(row=row,code=code,customer=customer,name='',selected=False));continue
         key=name.casefold()
         if key not in groups:groups[key]=dict(name=name,rows=[],examples=[],existing=key in known,selected=key not in known)
