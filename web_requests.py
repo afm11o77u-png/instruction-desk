@@ -186,7 +186,7 @@ def validate_config(cfg,data,cid):
         if not isinstance(contracts,list) or len(contracts)>100:raise ValueError('契約数を確認してください。')
         for k in contracts:
             if not isinstance(k,dict):raise ValueError('契約の内容を確認してください。')
-            contract=dict(id=ident(k),name=text(k.get('name',''),'契約名',100,True),kind=text(k.get('kind',''),'契約形態',100,True),default_qty=number(k.get('default_qty'),'標準枚数',1,999),active=bool(k.get('active')),uniforms=[])
+            contract=dict(id=ident(k),name=text(k.get('name',''),'契約名',100,True),kind=text(k.get('kind',''),'契約形態',100,True),default_qty=None if k.get('service_type') in ('CL','クリーニングのみ') else number(k.get('default_qty'),'標準枚数',1,999),active=bool(k.get('active')),uniforms=[])
             from datetime import date
             service=k.get('service_type','レンタル');ownership=k.get('default_ownership','顧客所有' if service=='クリーニングのみ' else '自社所有')
             if service not in ('レンタル','リース','CL','クリーニングのみ') or ownership not in ('自社所有','顧客所有','着用者所有','その他','未確認'):raise ValueError('取引区分・所有区分を確認してください。')
@@ -212,7 +212,7 @@ def validate_config(cfg,data,cid):
                 if not legacy and (not h or not p):raise ValueError('この顧客の在庫に登録された制服を選んでください。')
                 if hid in seen and hid is not None:raise ValueError('同じ契約に同じ制服が重複しています。')
                 seen.add(hid)
-                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=number(u.get('default_qty'),'契約枚数',1,999),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active'))))
+                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=None if service in ('CL','クリーニングのみ') else number(u.get('default_qty'),'契約枚数',1,999),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active'))))
             dep['contracts'].append(contract)
         out['departments'].append(dep)
     return out

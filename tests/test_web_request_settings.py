@@ -32,6 +32,20 @@ INSERT INTO customer_products VALUES(10,1,1,'刺繍A',1),(11,1,1,'加工なし',
     def tearDown(self):self.c.close();self.tmp.cleanup()
     def save(self,cfg=None,action='save',user=None,version=None):
         return w.save(self.c,self.path,dict(action=action,customer_id=1,version=w.read_config(self.c,1)['version'] if version is None else version,config=cfg or self.cfg),user or self.owner)
+    def test_cl_has_no_fixed_contract_or_uniform_quantity(self):
+        contract=self.cfg['departments'][0]['contracts'][0]
+        contract['service_type']='CL';contract.pop('default_qty')
+        contract['uniforms'][0].pop('default_qty')
+        self.save()
+        saved=w.read_config(self.c,1)['draft']['departments'][0]['contracts'][0]
+        self.assertIsNone(saved['default_qty'])
+        self.assertIsNone(saved['uniforms'][0]['default_qty'])
+        contract['service_type']='レンタル'
+        with self.assertRaises(ValueError):self.save()
+        contract['default_qty']=2;contract['uniforms'][0]['default_qty']=2
+        self.save()
+        self.assertEqual(w.read_config(self.c,1)['draft']['departments'][0]['contracts'][0]['uniforms'][0]['default_qty'],2)
+
     def test_snapshots_and_sizes(self):
         self.save(action='publish');before=w.read_config(self.c,1)['publication']
         self.cfg['departments'][0]['contracts'][0]['uniforms'][0]['default_qty']=5

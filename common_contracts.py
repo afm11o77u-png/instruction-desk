@@ -94,7 +94,7 @@ def synchronize(path, data):
                 if entry['node_id']: name = entry['scope_name'] + ' / ' + name
                 values = dict(customer_id=entry['customer_id'], name=name, kind=k['kind'], start_date=k.get('start_date') or '0001-01-01', end_date=k.get('end_date', ''), notes=k.get('notes', ''), active=int(bool(k['active'])), source_ref=ref, external_key='common:'+ref, service_type=k.get('service_type', 'レンタル'), default_ownership=k.get('default_ownership', '自社所有'))
                 valid_handles = {h['id']: h for h in data['handles'] if h['customer_id'] == entry['customer_id']}
-                lines = [(u['customer_product_id'], valid_handles[u['customer_product_id']]['product_id'], u['default_qty']) for u in k['uniforms'] if u['active'] and u.get('customer_product_id') in valid_handles]
+                lines = [(u['customer_product_id'], valid_handles[u['customer_product_id']]['product_id'], (u['default_qty'] or 1)) for u in k['uniforms'] if u['active'] and u.get('customer_product_id') in valid_handles]
                 if row:
                     ident = row['id']
                     old_lines = [tuple(x) for x in c.execute('SELECT customer_product_id,product_id,quantity FROM contract_lines WHERE contract_id=? ORDER BY customer_product_id', (ident,))]

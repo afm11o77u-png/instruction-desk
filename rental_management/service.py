@@ -81,7 +81,7 @@ def catalog(desk,stock,user):
         for dep in cfg['departments']:
             for k in dep['contracts']:
                 if k['active']:
-                    presets.append(dict(ref=str(customer['id'])+':'+dep['id']+':'+k['id'],customer_id=customer['id'],name=k['name'],department=dep['name'],kind=k['kind'],lines=[dict(customer_product_id=u['customer_product_id'],quantity=u['default_qty']) for u in k['uniforms'] if u['active'] and u['customer_product_id']]))
+                    presets.append(dict(ref=str(customer['id'])+':'+dep['id']+':'+k['id'],customer_id=customer['id'],name=k['name'],department=dep['name'],kind=k['kind'],lines=[dict(customer_product_id=u['customer_product_id'],quantity=None if k.get('service_type') in ('CL','クリーニングのみ') else u['default_qty']) for u in k['uniforms'] if u['active'] and u['customer_product_id']]))
     from common_contracts import records
     data['common_contracts']=records(desk,allowed);data['sharedContracts']=True
     data['presets']=presets;data['canWrite']=can_write(user);return data
@@ -291,6 +291,8 @@ def get(path,data,params):
             if entity=='wearers':
                 row['contracts']=[dict(r) for r in c.execute('SELECT k.id,k.name,k.service_type FROM contracts k JOIN wearer_contracts w ON w.contract_id=k.id WHERE w.wearer_id=? ORDER BY k.id',(row['id'],))];row['contract_ids']=[k['id'] for k in row['contracts']]
             if entity=='contracts':row['lines']=[dict(r) for r in c.execute('SELECT * FROM contract_lines WHERE contract_id=? ORDER BY id',(row['id'],))]
+            if entity=='contracts' and row['service_type'] in ('CL','クリーニングのみ'):
+                for line in row['lines']:line['quantity']=None
             if entity=='loans':row['issued_snapshot']=json.loads(row['issued_snapshot']) if ident else None
             if entity=='events':row['payload']=json.loads(row['payload']) if ident else None
         return dict(rows=rows,total=total,page=page,pageSize=limit)
