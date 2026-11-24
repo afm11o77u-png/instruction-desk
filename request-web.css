@@ -185,3 +185,19 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 
 #department-import-dialog{width:min(1000px,94vw);max-width:1000px}.department-import-scroll{max-height:55vh;overflow:auto}.department-import-scroll table{border-collapse:collapse;width:100%;font-size:13px}.department-import-scroll th,.department-import-scroll td{text-align:left;padding:8px;border-bottom:1px solid #d4e2d8;vertical-align:top}.department-import-scroll th{position:sticky;top:0;background:#edf5ef}.department-import-scroll input[data-import-name]{width:220px;max-width:100%;padding:7px}.department-import-scroll small{display:block;color:#607667;margin-top:5px}#department-import-error{color:#a43e31}
 #order .uniform-examples{display:none!important}
+/* Request screen: internal check panel above the hero, customer choices below it */
+.internal-scope{margin:0 0 20px;padding:14px 18px;border:2px dashed #9fb3a5;border-radius:12px;background:#f3f5f2}
+.internal-scope[hidden]{display:none}
+.internal-scope-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.internal-scope-head strong{color:#3f5a48}
+.internal-scope-head small{color:#6d7f72}
+.internal-scope-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));align-items:end;gap:14px 20px}
+.internal-scope-fields>label{display:flex;flex-direction:column;align-items:stretch;gap:6px;font-size:12px;min-width:0}
+.internal-scope-fields>label select{width:100%;min-width:0}
+.internal-scope .customer-picker,.context.customer-request .customer-picker{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-column:span 2;gap:6px 10px;min-width:0;align-items:end}
+.internal-scope .customer-picker>label{grid-column:1/-1;display:block;margin:0;font-size:12px}
+.internal-scope .customer-combo{min-width:0;position:relative}
+.context.customer-request .customer-request-head{grid-column:1/-1;display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.context.customer-request .customer-request-head p{margin:0}
+#customer-scope-name{font-weight:bold;font-size:15px;color:#24452f}
+@media(max-width:580px){.internal-scope-fields{grid-template-columns:minmax(0,1fr)}.internal-scope .customer-picker,.context.customer-request .customer-picker{grid-column:span 1}}
