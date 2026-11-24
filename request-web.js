@@ -39,7 +39,7 @@ $('#back').onclick=()=>$('#confirm').close();$('#send').onclick=()=>{if(data.pre
 var orderLayoutReady=false;
 function setupOrderLayout(){if(sharedPage||orderLayoutReady)return;orderLayoutReady=true;const ctx=document.querySelector('section.context'),hero=document.querySelector('.hero');if(!ctx||!hero)return;
  const internal=document.createElement('section');internal.id='internal-scope';internal.className='request-record internal-scope';internal.setAttribute('aria-label','社内確認用');internal.innerHTML='<div class="internal-scope-head"><strong>社内確認用：表示する顧客・店舗</strong><small>お客さまには表示されません</small></div><div class="internal-scope-fields"></div>';
- const fields=internal.querySelector('.internal-scope-fields');[$('#org-company-filter').closest('label'),$('#org-region-filter').closest('label'),ctx.querySelector('.customer-picker'),$('#scope-select-field')].forEach(x=>x&&fields.append(x));
+ const fields=internal.querySelector('.internal-scope-fields');[ctx.querySelector('.customer-picker'),$('#org-company-filter').closest('label'),$('#org-region-filter').closest('label'),$('#scope-select-field')].forEach(x=>x&&fields.append(x));
  hero.before(internal);const banner=$('#scope-preview-banner');if(banner)internal.before(banner);
  ctx.classList.add('customer-request');const head=document.createElement('div');head.className='customer-request-head';head.innerHTML='<span class="eyebrow">ご依頼内容の選択</span><strong id="customer-scope-name"></strong>';ctx.prepend(head)}
 function syncOrderLayout(){if(sharedPage||!orderLayoutReady)return;const internal=$('#internal-scope'),ctx=document.querySelector('section.context'),preview=!!(data.previewAccountId||data.previewPageId);
@@ -47,7 +47,7 @@ function syncOrderLayout(){if(sharedPage||!orderLayoutReady)return;const interna
  // In customer preview the internal panel is hidden; keep only the choices this customer actually has to make.
  const picker=document.querySelector('.customer-picker'),store=$('#scope-select-field'),fields=internal.querySelector('.internal-scope-fields'),head=ctx.querySelector('.customer-request-head');
  const needCustomer=preview&&(data.customers||[]).length>1,needStore=preview&&$('#scope-select').options.length>1;
- if(needCustomer)head.after(picker);else fields.insertBefore(picker,fields.children[2]||null);
+ if(needCustomer)head.after(picker);else fields.prepend(picker);
  if(needStore)(needCustomer?picker:head).after(store);else fields.append(store);
  const customer=(data.customers||[]).find(c=>c.id===cid())?.name||'',site=$('#scope-select').selectedOptions[0]?.textContent||'';
  $('#customer-scope-name').textContent=customer?'ご依頼先：'+customer+(site&&$('#scope-select').value?' ／ '+site:''):'ご依頼先が選ばれていません'}
@@ -167,7 +167,7 @@ $('#contract-diagram').onclick=e=>{const group=e.target.closest('[data-category-
 function cleanConfig(value){return JSON.parse(JSON.stringify(value,(key,v)=>key.startsWith('_')?undefined:v))}
 function inherited(){return !sharedPage&&mode==='settings'&&!!profile()?.node_id&&$('#inheritance-mode').value==='inherit'}
 function companyPersonnel(){const nodes=(data.organizations?.nodes||[]).filter(n=>n.customer_id===cid()),root=nodes.find(n=>n.kind==='company');return root?.personnel_registration??!nodes.some(n=>n.kind==='site')}
-function scopeOptions(){const old=$('#scope-select').value,nodes=(data.organizations?.nodes||[]).filter(n=>n.customer_id===cid()&&n.kind==='site'&&(!data.allowedNodeIds||data.allowedNodeIds.includes(n.id)));$('#scope-select-label').textContent=mode==='settings'?'登録先':'事業所・店舗';$('#scope-select').innerHTML=(companyPersonnel()&&(!data.manageCommonCustomerIds||data.manageCommonCustomerIds.includes(cid()))?'<option value="">会社自身</option>':'')+nodes.map(n=>`<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('');if([...$('#scope-select').options].some(o=>o.value===old))$('#scope-select').value=old;$('#scope-select-field').hidden=!['order','settings'].includes(mode);}
+function scopeOptions(){const old=$('#scope-select').value,nodes=(data.organizations?.nodes||[]).filter(n=>n.customer_id===cid()&&n.kind==='site'&&(!data.allowedNodeIds||data.allowedNodeIds.includes(n.id)));$('#scope-select-label').textContent=mode==='settings'?'登録先':'拠点';$('#scope-select').innerHTML=(companyPersonnel()&&(!data.manageCommonCustomerIds||data.manageCommonCustomerIds.includes(cid()))?'<option value="">会社自身</option>':'')+nodes.map(n=>`<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('');if([...$('#scope-select').options].some(o=>o.value===old))$('#scope-select').value=old;$('#scope-select-field').hidden=!['order','settings'].includes(mode);}
 
 // Customers with a department library are shown live (latest save, filtered by store assignments); others use the published snapshot.
 function config(){if(mode==='settings')return draft;const p=profile();if(p?.live)return p.live.status==='paused'?null:p.live.config;return p?.status==='published'?p?.publication?.config:null}
