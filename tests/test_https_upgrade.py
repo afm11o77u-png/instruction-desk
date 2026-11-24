@@ -11,6 +11,14 @@ from pathlib import Path
 import https_upgrade
 
 
+class NoPeekTest(unittest.TestCase):
+    def test_accept_path_does_not_use_msg_peek(self):
+        src = Path(__file__).resolve().parents[1].joinpath('https_upgrade.py').read_text(encoding='utf-8')
+        self.assertNotIn('MSG_PEEK', src.split('"""', 2)[-1])
+        self.assertIn('wrap_bio', src)
+        self.assertIn('class BioSSLSocket', src)
+
+
 class RequestTargetTest(unittest.TestCase):
     def test_path_query_and_host(self):
         raw = b'GET /?module=desk HTTP/1.1\r\nHost: 127.0.0.1:8765\r\n\r\n'
