@@ -5,6 +5,7 @@ import web_request_department_registry as department_registry
 import auth
 import unicodedata
 import json
+import copy
 import base64
 import io
 from datetime import datetime
@@ -122,8 +123,43 @@ def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
     data['personnelTargets']=[dict(node_id=n['id'],customer_id=n['customer_id'],kind=n['kind'],name=n['name']) for n in data['organizations']['nodes'] if organizations.personnel_enabled(data['organizations'],n)]
     data['departmentLibraries']=[department_registry.library(c,p) for p in data['profiles']] if not preview else []
     data['departmentAssignments']=[dict(department_registry.selection(c,next(p for p in data['profiles'] if p['customer_id']==n['customer_id']),org,n),customer_id=n['customer_id']) for n in data['organizations']['nodes'] if n['id'] in data['allowedNodeIds'] and organizations.personnel_enabled(org,n)] if not preview else []
+    products={p['id']:p for p in data['products']};handles={};bases={x['customer_id']:x for x in data['profiles']};nodes={n['id']:n for n in org['nodes']}
+    for h in data['handles']:handles.setdefault(h['customer_id'],{})[h['id']]=h['product_id']
+    libraries={cid for cid in bases if has_library(c,cid)}
+    for p in data['profiles']+data['scopeProfiles']:
+        if p['customer_id'] in libraries:p['live']=live_config(c,bases[p['customer_id']],org,nodes.get(p.get('node_id')),handles.get(p['customer_id'],{}),products)
     data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
+
+def has_library(c,cid):
+    return c.execute('SELECT 1 FROM web_request_department_library WHERE customer_id=?',(cid,)).fetchone() is not None
+
+def offerable(cfg,handles,products,today=None):
+    """Keep only what the order screen may offer: active, in-date contracts and linked uniforms with sizes."""
+    today=today or datetime.now().strftime('%Y-%m-%d');out=copy.deepcopy(cfg)
+    for dep in out.get('departments',[]):
+        contracts=[]
+        for k in dep.get('contracts',[]):
+            if not k.get('active') or (k.get('start_date') and k['start_date']>today) or (k.get('end_date') and k['end_date']<today):continue
+            k['uniforms']=[u for u in k.get('uniforms',[]) if u.get('active') and u.get('customer_product_id') in handles and products.get(handles[u['customer_product_id']],{}).get('sizes')]
+            contracts.append(k)
+        dep['contracts']=contracts
+    return out
+
+def live_config(c,base,org,node,handles,products):
+    """Latest saved department library, filtered by the node's explicit assignments; no publish step."""
+    cid=base['customer_id'];nodes=[n for n in org['nodes'] if n['customer_id']==cid]
+    lib=department_registry.library(c,base)['draft']
+    if node is None:node=next((n for n in nodes if n['kind']=='company'),None)
+    cfg,_=inheritance.resolve(c,base,org,node['id']) if node and node['kind']!='company' else (copy.deepcopy(base['draft']),None)
+    _,public_status=inheritance.resolve(c,base,org,node['id'],True) if node and node['kind']!='company' else (None,base['status'])
+    if not node:departments=lib['departments']
+    elif organizations.personnel_enabled(org,node):
+        chosen=set(department_registry.selection(c,base,org,node)['department_ids']);departments=[d for d in lib['departments'] if d['id'] in chosen]
+    else:departments=[]
+    cfg['departments']=inheritance.annotate(dict(departments=departments),'部署登録')['departments']
+    status='paused' if base['status']=='paused' or public_status=='paused' else 'published'
+    return dict(config=offerable(cfg,handles,products),status=status)
 
 def text(value,label,limit=100,required=False):
     if not isinstance(value,str): raise ValueError(label+'を確認してください。')
