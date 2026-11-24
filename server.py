@@ -26,6 +26,7 @@ import personal_formats
 import rental_management
 import common_contracts
 import workspace_config
+import https_upgrade
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -1949,12 +1950,12 @@ if __name__=='__main__':
     if EXE_DROP_ENABLED:
         name_exe.DropWatcher(DATA, EXE_DROP_DIR, log=lambda m: print(m, flush=True)).start()
         print(f'統合ネームラベルexeの置き場: {EXE_DROP_DIR}', flush=True)
-    server=ThreadingHTTPServer((BIND_HOST,PORT),Handler)
+    context = None
     if CONFIG.get('tls'):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(ROOT / 'tls/server.crt', ROOT / 'tls/server.key')
-        server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    server = https_upgrade.DeskServer((BIND_HOST, PORT), Handler, ssl_context=context)
     print(f'{SCHEME}://127.0.0.1:{PORT}',flush=True)
     if '--open' in sys.argv: threading.Timer(.5,lambda:webbrowser.open(f'{SCHEME}://127.0.0.1:{PORT}')).start()
     server.serve_forever()
