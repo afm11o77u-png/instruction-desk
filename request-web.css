@@ -106,3 +106,28 @@ body.desk-common-page #org-customer-start{display:none!important}#common-setting
 .org-diagram-panel #org-access-section{margin:16px 0;padding:12px;border:1px solid #c8dbcc;border-radius:8px}.org-diagram-panel #org-access-editors{display:block}.org-staff-label{display:block;font-size:11px;color:#486f57;margin-top:5px}#org-staff-nodes[hidden],#org-staff-all[hidden],#org-staff-none[hidden]{display:none!important}
 
 #org-editor #org-access-editors{display:block}#org-editor #org-access-editors>.request-record{padding:0;border:0;box-shadow:none;margin:12px 0 0}#org-editor #org-access-section{margin-top:20px;padding-top:16px}#org-editor #org-access-section p{font-size:12px}#org-editor #org-access-section label{font-size:12px}#org-editor #org-access-section button{font-size:12px;padding:8px 10px;white-space:normal}#org-editor #org-access-section .actions{gap:6px;flex-wrap:wrap}#org-editor #org-staff-nodes{max-height:210px;font-size:12px}#org-editor #org-staff-nodes label{overflow-wrap:anywhere}
+#contract-diagram{position:relative}
+.bulk-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:0 0 12px;padding:12px 14px;background:#f3f8f4;border:1px solid #cfe0d4;border-radius:10px}
+.bulk-bar[hidden]{display:none}
+.bulk-bar label{display:flex;align-items:center;gap:6px;font-size:13px;margin:0}
+.bulk-bar select{min-width:240px;max-width:100%}
+.bulk-bar #bulk-count{color:#a85d00;min-width:9em}
+.bulk-bar .small{flex:1 1 100%;margin:0;font-size:12px;color:#587361}
+.contract-node{position:relative}
+.contract-node .bulk-check{display:none;position:absolute;top:10px;right:10px;width:20px;height:20px;border:2px solid #9bb8a5;border-radius:5px;background:#fff;font-size:14px;line-height:16px;text-align:center;color:#fff}
+body.bulk-mode .contract-node .bulk-check,.contract-node.bulk-selected .bulk-check{display:block}
+.contract-node.bulk-selected{outline:3px solid #e08a1e;outline-offset:1px;background:#fff7ea}
+.contract-node.bulk-selected .bulk-check{background:#e08a1e;border-color:#e08a1e}
+.contract-node.bulk-selected .bulk-check:after{content:'✓'}
+.bulk-rect{position:absolute;border:1px dashed #e08a1e;background:#e08a1e22;pointer-events:none;z-index:5}
+#contract-diagram.bulk-dragging{user-select:none;cursor:crosshair}
+.contract-group-loose{background:#f7f7f2}
+#bulk-confirm{max-width:900px;width:calc(100% - 30px)}
+.bulk-table-wrap{max-height:50vh;overflow:auto;margin:10px 0}
+.bulk-table{width:100%;border-collapse:collapse;font-size:13px}
+.bulk-table th,.bulk-table td{border-bottom:1px solid #dbe6dd;padding:6px 8px;text-align:left;vertical-align:top}
+.bulk-table tr.bulk-over td{background:#fff3e3}
+.bulk-table tr.bulk-same td{color:#8a9a8f}
+.bulk-warn{color:#a04800;font-weight:700}
+.bulk-ack{display:flex;gap:8px;align-items:center;font-weight:700}
+@media(max-width:580px){.bulk-bar select{min-width:0;width:100%}.bulk-bar .bulk-source-field{flex:1 1 100%;flex-wrap:wrap}}

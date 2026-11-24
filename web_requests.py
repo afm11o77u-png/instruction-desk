@@ -215,6 +215,7 @@ def save(c,path,d,user=None):
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)
         return state(c,path,user)
+    if d.get('action')=='save_many':return save_many(c,path,d,user)
     if d.get('node_id'):return save_scope(c,path,d,user)
     cid=number(d.get('customer_id'),'顧客',1,2147483647)
     data=state(c,path,user)
@@ -275,6 +276,53 @@ def save_scope(c,path,d,user):
             publication=dict(payload,version=old['version']+1);status='published'
         elif action=='pause':status='paused'
         c.execute('INSERT INTO web_request_scope_settings(node_id,customer_id,version,draft,publication,status) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,draft=excluded.draft,publication=excluded.publication,status=excluded.status',(node_id,cid,old['version']+1,json.dumps(payload,ensure_ascii=False),json.dumps(publication,ensure_ascii=False) if publication else None,status))
+        c.commit()
+    except Exception:c.rollback();raise
+    return state(c,path,user)
+
+
+def save_many(c,path,d,user):
+    """Copy one node's effective departments/contracts/uniforms to many sites in one transaction.
+
+    Each target keeps its own non-department settings. The result is stored as a patch against the
+    target's own parent, so a target whose result equals its parent becomes 'inherit'.
+    """
+    cid=number(d.get('customer_id'),'顧客',1,2147483647)
+    data=state(c,path,user)
+    if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この顧客の設定を変更する権限がありません。')
+    targets=d.get('targets')
+    if not isinstance(targets,list) or not targets or len(targets)>500:raise ValueError('設定する拠点を選んでください。')
+    allowed=set(data['allowedNodeIds']);source_id=d.get('source_node_id') or None
+    if source_id is not None and source_id not in allowed:raise PermissionError('呼び出す設定を確認できません。')
+    org=organizations.read(c);byid={n['id']:n for n in org['nodes']}
+    if source_id is not None:inheritance.chain(org,cid,source_id)
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        base=read_config(c,cid)
+        source=inheritance.resolve(c,base,org,source_id)[0] if source_id else base['draft']
+        departments=validate_config(source,data,cid)['departments']
+        expected=validate_config(dict(default_config(),departments=d.get('expected_departments')),data,cid)['departments']
+        if expected!=departments:raise ValueError('呼び出した設定が別の画面で更新されています。再読込してからやり直してください。')
+        seen=set();conflicts=[];rows=[]
+        for t in targets:
+            if not isinstance(t,dict):raise ValueError('設定する拠点を確認してください。')
+            node_id=text(t.get('node_id'),'拠点',80,True);node=byid.get(node_id)
+            if node_id in seen:raise ValueError('同じ拠点が重複しています。')
+            seen.add(node_id)
+            if node_id not in allowed or not node or node['customer_id']!=cid:raise PermissionError('この拠点の設定を変更できません。')
+            if node['kind']!='site':raise ValueError('まとめて設定できるのは店舗・拠点だけです。')
+            inheritance.chain(org,cid,node_id)
+            old=inheritance.record(c,node_id)
+            if type(t.get('version')) is not int or t['version']!=old['version']:conflicts.append(node['name']);continue
+            current,_=inheritance.resolve(c,base,org,node_id)
+            parent,_=inheritance.resolve(c,base,org,node_id,skip_last=True)
+            clean_parent=validate_config(parent,data,cid)
+            config=validate_config(dict(current,departments=departments),data,cid)
+            patch=inheritance.difference(clean_parent,config)
+            rows.append((node_id,old,dict(mode='custom' if patch else 'inherit',patch=patch)))
+        if conflicts:raise ValueError('次の拠点は別の画面で更新されています。再読込してからやり直してください：'+'、'.join(conflicts))
+        for node_id,old,payload in rows:
+            c.execute('INSERT INTO web_request_scope_settings(node_id,customer_id,version,draft,publication,status) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,draft=excluded.draft',(node_id,cid,old['version']+1,json.dumps(payload,ensure_ascii=False),json.dumps(old['publication'],ensure_ascii=False) if old['publication'] else None,old['status']))
         c.commit()
     except Exception:c.rollback();raise
     return state(c,path,user)
