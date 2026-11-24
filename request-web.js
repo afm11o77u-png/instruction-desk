@@ -43,18 +43,21 @@ function renderRegisteredContracts(){
  $('#contract-editing-label').textContent=dep()?'編集対象：'+dep().name+(contract()?' ／ '+contract().name:' ／ 契約未登録'):'';
 }
 $('#registered-contracts').onclick=e=>{const b=e.target.closest('[data-edit-department]');if(!b||busy||!discardEditor())return;$('#department').value=b.dataset.editDepartment;renderContracts();if(b.dataset.editContract){$('#contract').value=b.dataset.editContract;changeContract()}$('#contract-editing-label').scrollIntoView({block:'start',behavior:'smooth'})};
+const bulkSelected=new Set();let bulkMode=false,bulkSource=null,bulkDrag=null;
 function renderContractDiagram(){
  if(!sharedPage||!$('#contract-diagram'))return;
  const customer=data.customers.find(c=>c.id===cid()),container=$('#contract-diagram');
- if(!customer){container.innerHTML='<p>上の「顧客を選ぶ」から設定する顧客を選択してください。</p>';$('#contract-target').textContent='';return}
+ if(!customer){container.innerHTML='<p>上の「顧客を選ぶ」から設定する顧客を選択してください。</p>';$('#contract-target').textContent='';bulkRefresh();return}
  const nodes=(data.organizations?.nodes||[]).filter(n=>n.customer_id===cid()),root=nodes.find(n=>n.kind==='company'),selected=$('#scope-select').value;
  const allowed=new Set([...$('#scope-select').options].map(o=>o.value));
- function card(node){const id=node?.kind==='company'?'':node?.id||'',p=id?data.scopeProfiles?.find(x=>x.customer_id===cid()&&x.node_id===id):baseProfile();const current=id===selected;const cfg=current?draft:p?.draft;const mode=current?(editingInheritanceMode??p?.draft_mode):p?.draft_mode;const contracts=(cfg?.departments||[]).flatMap(d=>d.contracts.filter(k=>k.active).map(k=>({name:d.name+' ／ '+k.name,count:k.uniforms.length})));const own=!id||mode==='custom';const source=!id?'会社共通':own?'個別設定':node?.kind==='region'?'会社共通を使用':'上位の共通設定を使用';return `<button type="button" class="contract-node ${node?.kind==='region'?'contract-category-heading':''} ${current?'selected':''}" data-contract-node="${esc(id)}" aria-pressed="${current}" ${allowed.has(id)?'':'disabled'}><small>${node?.kind==='region'?'カテゴリ':node?.kind==='site'?'拠点':'会社'}</small><strong>${esc(node?.name||customer.name)}</strong><span class="contract-source">${source}${current&&changed?'・未保存':''}</span><span>${contracts.length?contracts.map(k=>`${esc(k.name)}（制服${k.count}種類）`).join('<br>'):'契約未設定'}</span></button>`}
- const regions=nodes.filter(n=>n.kind==='region');
- container.innerHTML=`<div class="contract-root">${card(root)}</div><div class="contract-branches">${regions.map(r=>`<section class="contract-group">${card(r)}<div class="contract-sites">${nodes.filter(n=>n.kind==='site'&&n.parent_id===r.id).map(card).join('')||'<p>店舗・事業所は未登録です。</p>'}</div></section>`).join('')}${!nodes.some(n=>n.kind!=='company')?'<p>傘下のカテゴリ・店舗はまだ登録されていません。会社全体の契約を設定できます。</p>':''}</div>`;
+ function card(node){const id=node?.kind==='company'?'':node?.id||'',p=id?data.scopeProfiles?.find(x=>x.customer_id===cid()&&x.node_id===id):baseProfile();const current=id===selected;const cfg=current?draft:p?.draft;const mode=current?(editingInheritanceMode??p?.draft_mode):p?.draft_mode;const contracts=(cfg?.departments||[]).flatMap(d=>d.contracts.filter(k=>k.active).map(k=>({name:d.name+' ／ '+k.name,count:k.uniforms.length})));const own=!id||mode==='custom';const source=!id?'会社共通':own?'個別設定':node?.kind==='region'?'会社共通を使用':'上位の共通設定を使用';const site=node?.kind==='site';return `<button type="button" class="contract-node ${node?.kind==='region'?'contract-category-heading':''} ${current?'selected':''} ${site&&bulkSelected.has(id)?'bulk-selected':''}" data-contract-node="${esc(id)}" data-kind="${esc(node?.kind||'company')}" aria-pressed="${current}" ${allowed.has(id)?'':'disabled'}>${site?'<span class="bulk-check" aria-hidden="true"></span>':''}<small>${node?.kind==='region'?'カテゴリ':node?.kind==='site'?'拠点':'会社'}</small><strong>${esc(node?.name||customer.name)}</strong><span class="contract-source">${source}${current&&changed?'・未保存':''}</span><span>${contracts.length?contracts.map(k=>`${esc(k.name)}（制服${k.count}種類）`).join('<br>'):'契約未設定'}</span></button>`}
+ const regions=nodes.filter(n=>n.kind==='region'),loose=nodes.filter(n=>n.kind==='site'&&!regions.some(r=>r.id===n.parent_id));
+ for(const id of [...bulkSelected])if(!nodes.some(n=>n.id===id&&n.kind==='site'&&allowed.has(id)))bulkSelected.delete(id);
+ container.innerHTML=`<div class="contract-root">${card(root)}</div><div class="contract-branches">${regions.map(r=>`<section class="contract-group">${card(r)}<div class="contract-sites">${nodes.filter(n=>n.kind==='site'&&n.parent_id===r.id).map(card).join('')||'<p>店舗・事業所は未登録です。</p>'}</div></section>`).join('')}${loose.length?`<section class="contract-group contract-group-loose"><h3>カテゴリなし（会社の直下）</h3><div class="contract-sites">${loose.map(card).join('')}</div></section>`:''}${!nodes.some(n=>n.kind!=='company')?'<p>傘下のカテゴリ・店舗はまだ登録されていません。会社全体の契約を設定できます。</p>':''}</div>`;
  const selectedNode=nodes.find(n=>n.id===selected);$('#contract-target').textContent='設定する対象：'+(selectedNode?.name||customer.name)+' ／ '+(!selected?'会社全体の共通設定':inherited()?'共通設定を使用中。変更する場合は登録済み内容の下の「この店舗・拠点だけ変更」から設定できます。':'個別設定');
+ bulkRefresh();
 }
-$('#contract-diagram').onclick=e=>{const b=e.target.closest('[data-contract-node]');if(!b||b.disabled)return;const old=$('#scope-select').value;$('#scope-select').value=b.dataset.contractNode;$('#scope-select').onchange();if($('#scope-select').value!==b.dataset.contractNode)$('#scope-select').value=old;renderContractDiagram()};
+$('#contract-diagram').onclick=e=>{const b=e.target.closest('[data-contract-node]');if(!b||b.disabled)return;if(b.dataset.kind==='site'&&(bulkMode||e.ctrlKey||e.metaKey)){const id=b.dataset.contractNode;if(bulkSelected.has(id))bulkSelected.delete(id);else bulkSelected.add(id);if(!bulkMode)bulkSetMode(true);bulkRefresh();return}const old=$('#scope-select').value;$('#scope-select').value=b.dataset.contractNode;$('#scope-select').onchange();if($('#scope-select').value!==b.dataset.contractNode)$('#scope-select').value=old;renderContractDiagram()};
 function cleanConfig(value){return JSON.parse(JSON.stringify(value,(key,v)=>key.startsWith('_')?undefined:v))}
 function inherited(){return mode==='settings'&&!!profile()?.node_id&&$('#inheritance-mode').value==='inherit'}
 function scopeOptions(){const old=$('#scope-select').value,nodes=(data.organizations?.nodes||[]).filter(n=>n.customer_id===cid()&&n.kind!=='company'&&(mode==='settings'||n.kind==='site')&&(!data.allowedNodeIds||data.allowedNodeIds.includes(n.id)));$('#scope-select-label').textContent=mode==='settings'?'設定範囲':'事業所・店舗';$('#scope-select').innerHTML=((mode==='settings'&&(!data.manageCommonCustomerIds||data.manageCommonCustomerIds.includes(cid())))||!nodes.length?'<option value="">顧客共通</option>':'')+nodes.map(n=>`<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('');if([...$('#scope-select').options].some(o=>o.value===old))$('#scope-select').value=old;$('#scope-select-field').hidden=!['order','settings'].includes(mode);}
@@ -136,4 +139,86 @@ $('#customer-list-search').addEventListener('compositionend',renderCustomerList)
 $('#customer-list-grid').addEventListener('click',e=>{const b=e.target.closest('[data-list-customer]');if(!b)return;const id=Number(b.dataset.listCustomer);if(customerListTarget){customerListTarget.select(id);if(customerListTarget.selectedId()===id)$('#customer-list').close()}else{chooseCustomer(id);if(cid()===id)$('#customer-list').close()}});
 $('#staff-record-scope').onchange=renderRecords;
 window.WebRequestDesk={syncCommonCustomer:syncSharedLink,openCustomerList,getCustomers:()=>sortedCustomers(true),getData:()=>data,getMode:()=>mode,notify,tab,dirty:()=>changed,loadSettings,saveOrganization:async(org,version)=>{await api({action:'organization',organization:org,version});await loadSettings()},refreshCustomers:()=>{if(!leave())return false;const old=$('#customer').value;$('#customer').innerHTML=customerOptions(sortedCustomers())||'<option value="">該当する拠点がありません</option>';if([...$('#customer').options].some(x=>x.value===old))$('#customer').value=old;$('#customer').onchange();return true},selectCustomer:chooseCustomer};
+
+// Bulk store settings: select many sites on the diagram (drag / click in bulk mode) and copy one node's
+// saved departments, contracts and uniforms to them in one server transaction.
+function bulkNode(id){return (data.organizations?.nodes||[]).find(n=>n.id===id)}
+function bulkProfile(id){return id?data.scopeProfiles?.find(x=>x.customer_id===cid()&&x.node_id===id):baseProfile()}
+function bulkCards(){return [...document.querySelectorAll('#contract-diagram .contract-node[data-kind="site"]:not(:disabled)')]}
+function bulkSummary(cfg){const rows=(cfg?.departments||[]).flatMap(d=>d.contracts.filter(k=>k.active).map(k=>`${d.name} ／ ${k.name}（制服${k.uniforms.length}種類・計${k.uniforms.reduce((n,u)=>n+(Number(u.default_qty)||0),0)}枚）`));return rows.length?rows.join('、'):'契約未設定'}
+function bulkSetMode(on){bulkMode=on;const box=$('#bulk-mode');if(box)box.checked=on;document.body.classList.toggle('bulk-mode',on)}
+function bulkInit(){
+ if(!sharedPage||$('#bulk-bar')||!$('#contract-diagram'))return;
+ const bar=document.createElement('div');bar.id='bulk-bar';bar.className='bulk-bar';
+ bar.innerHTML='<label class="bulk-toggle"><input type="checkbox" id="bulk-mode"> まとめて設定</label><button type="button" id="bulk-all">全選択</button><button type="button" id="bulk-none">全解除</button><strong id="bulk-count" role="status" aria-live="polite"></strong><label class="bulk-source-field">呼び出す設定<select id="bulk-source"></select></label><button type="button" class="primary" id="bulk-apply">選択した拠点に設定</button><p class="small" id="bulk-source-summary"></p><p class="small">図の空いている所からドラッグで囲むと、拠点をまとめて選べます。「まとめて設定」がオンの間は、拠点カードを押すと選択／解除します（Ctrl＋クリックでも可）。カードを開いて編集するときはオフにしてください。</p>';
+ $('#contract-diagram').before(bar);
+ // Selecting stores is not an edit: keep these controls out of the settings change tracking.
+ bar.addEventListener('input',e=>e.stopPropagation());
+ $('#bulk-mode').onchange=e=>{bulkSetMode(e.target.checked);bulkRefresh()};
+ $('#bulk-all').onclick=()=>{bulkCards().forEach(b=>bulkSelected.add(b.dataset.contractNode));bulkSetMode(true);bulkRefresh()};
+ $('#bulk-none').onclick=()=>{bulkSelected.clear();bulkRefresh()};
+ $('#bulk-source').onchange=e=>{bulkSource=e.target.value;bulkRefresh()};
+ $('#bulk-apply').onclick=bulkConfirm;
+ const box=$('#contract-diagram');
+ box.addEventListener('pointerdown',e=>{
+  if(e.button!==0||e.pointerType==='touch'||busy||e.target.closest('.contract-node,button,input,select,a,label'))return;
+  const r=box.getBoundingClientRect();if(e.clientX-r.left>=box.clientWidth||e.clientY-r.top>=box.clientHeight)return;
+  bulkDrag={x:e.clientX-r.left+box.scrollLeft,y:e.clientY-r.top+box.scrollTop,cx:e.clientX,cy:e.clientY,moved:false,base:new Set(bulkSelected),hits:new Set(),invert:e.ctrlKey||e.metaKey};
+  box.setPointerCapture(e.pointerId);e.preventDefault()});
+ box.addEventListener('pointermove',e=>{
+  if(!bulkDrag)return;bulkDrag.cx=e.clientX;bulkDrag.cy=e.clientY;
+  const r=box.getBoundingClientRect();
+  if(e.clientY>r.bottom-28)box.scrollTop+=18;else if(e.clientY<r.top+28)box.scrollTop-=18;
+  if(e.clientX>r.right-28)box.scrollLeft+=18;else if(e.clientX<r.left+28)box.scrollLeft-=18;
+  bulkDragUpdate()});
+ const end=e=>{if(!bulkDrag)return;const drag=bulkDrag;bulkDrag=null;box.classList.remove('bulk-dragging');box.querySelector('.bulk-rect')?.remove();
+  if(drag.moved&&drag.hits.size){bulkSelected.clear();bulkDragResult(drag).forEach(id=>bulkSelected.add(id));bulkSetMode(true)}bulkRefresh()};
+ box.addEventListener('pointerup',end);box.addEventListener('pointercancel',end);
+}
+function bulkDragResult(drag){const out=new Set(drag.base);for(const id of drag.hits){if(drag.invert&&drag.base.has(id))out.delete(id);else out.add(id)}return out}
+function bulkDragUpdate(){
+ const box=$('#contract-diagram'),d=bulkDrag,r=box.getBoundingClientRect();
+ const x=d.cx-r.left+box.scrollLeft,y=d.cy-r.top+box.scrollTop;
+ if(!d.moved&&Math.abs(x-d.x)+Math.abs(y-d.y)<6)return;d.moved=true;box.classList.add('bulk-dragging');
+ let rect=box.querySelector('.bulk-rect');if(!rect){rect=document.createElement('div');rect.className='bulk-rect';box.append(rect)}
+ const left=Math.min(x,d.x),top=Math.min(y,d.y),right=Math.max(x,d.x),bottom=Math.max(y,d.y);
+ Object.assign(rect.style,{left:left+'px',top:top+'px',width:(right-left)+'px',height:(bottom-top)+'px'});
+ d.hits.clear();
+ for(const b of bulkCards()){const c=b.getBoundingClientRect(),cl=c.left-r.left+box.scrollLeft,ct=c.top-r.top+box.scrollTop;if(cl<right&&cl+c.width>left&&ct<bottom&&ct+c.height>top)d.hits.add(b.dataset.contractNode)}
+ const preview=bulkDragResult(d);bulkCards().forEach(b=>b.classList.toggle('bulk-selected',preview.has(b.dataset.contractNode)));bulkCount(preview.size)}
+function bulkCount(n){const el=$('#bulk-count');if(el)el.textContent=n?`選択中：${n}拠点`:'拠点を選択していません'}
+function bulkRefresh(){
+ if(!sharedPage)return;bulkInit();if(!$('#bulk-bar'))return;
+ const customer=data.customers.find(c=>c.id===cid());$('#bulk-bar').hidden=!customer||mode!=='settings';
+ const nodes=(data.organizations?.nodes||[]).filter(n=>n.customer_id===cid()&&n.kind!=='company'&&bulkProfile(n.id));
+ const options=[...(baseProfile()?[['','会社共通（'+(customer?.name||'')+'）']]:[]),...nodes.filter(n=>n.kind==='region').map(n=>[n.id,'カテゴリ：'+n.name]),...nodes.filter(n=>n.kind==='site').map(n=>[n.id,'拠点：'+n.name+(bulkProfile(n.id)?.draft_mode==='custom'?'（個別設定）':'（共通設定を使用）')])];
+ const select=$('#bulk-source');select.innerHTML=options.map(([v,l])=>`<option value="${esc(v)}">${esc(l)}</option>`).join('');
+ if(bulkSource===null||!options.some(([v])=>v===bulkSource))bulkSource=options.some(([v])=>v===$('#scope-select').value)?$('#scope-select').value:(options[0]?.[0]??'');
+ select.value=bulkSource;
+ $('#bulk-source-summary').textContent='呼び出す内容：'+bulkSummary(bulkProfile(bulkSource)?.draft);
+ bulkCards().forEach(b=>b.classList.toggle('bulk-selected',bulkSelected.has(b.dataset.contractNode)));
+ bulkCount(bulkSelected.size);$('#bulk-mode').checked=bulkMode;
+ for(const id of ['bulk-mode','bulk-all','bulk-none','bulk-source'])$('#'+id).disabled=busy;
+ $('#bulk-apply').disabled=busy||!bulkSelected.size||!options.length;
+}
+function bulkConfirm(){
+ if(busy)return;const targets=[...bulkSelected].filter(id=>bulkProfile(id));
+ if(!targets.length)return notify('設定する拠点を選んでください。');
+ if(changed||pendingEditors.size)return notify('編集中の変更があります。先に保存するか「未保存の変更を取り消す」を押してから、まとめて設定してください。');
+ const sid=bulkSource||'',src=bulkProfile(sid);if(!src)return notify('呼び出す設定を選んでください。');
+ const key=c=>JSON.stringify(cleanConfig(c?.departments||[]));
+ const rows=targets.map(id=>{const p=bulkProfile(id);return {id,p,name:bulkNode(id)?.name||id,same:key(p.draft)===key(src.draft),custom:p.draft_mode==='custom'}});
+ const changes=rows.filter(r=>!r.same),overwrite=changes.filter(r=>r.custom);
+ if(!changes.length)return notify('選択した拠点は、すでに呼び出した設定と同じ内容です。');
+ let dlg=$('#bulk-confirm');if(!dlg){dlg=document.createElement('dialog');dlg.id='bulk-confirm';document.body.append(dlg)}
+ const srcName=sid?bulkNode(sid)?.name:'会社共通';
+ dlg.innerHTML=`<h2>選択した拠点に設定</h2><p>呼び出す設定：<b>${esc(srcName)}</b><br><small>${esc(bulkSummary(src.draft))}</small></p><p class="small">部署・契約・制服の内容を、選んだ拠点にそのまま設定します。納品先など他の設定は各拠点のままです。結果が上位の共通設定と同じになる拠点は「共通設定を使用」に戻ります。</p>${overwrite.length?`<p class="bulk-warn">${overwrite.length}拠点は、その拠点だけの設定（個別設定）があり、上書きされます。</p>`:''}<div class="bulk-table-wrap"><table class="bulk-table"><thead><tr><th>拠点</th><th>今の状態</th><th>今の内容</th><th>変更</th></tr></thead><tbody>${rows.map(r=>`<tr class="${r.same?'bulk-same':r.custom?'bulk-over':''}"><td>${esc(r.name)}</td><td>${r.custom?'個別設定':'共通設定を使用'}</td><td>${esc(bulkSummary(r.p.draft))}</td><td>${r.same?'変更なし':r.custom?'<b>個別設定を上書き</b>':'設定する'}</td></tr>`).join('')}</tbody></table></div>${overwrite.length?'<label class="bulk-ack"><input type="checkbox" id="bulk-ack"> 上書きされる内容を確認しました</label>':''}<p id="bulk-error" role="alert"></p><div class="dialog-actions"><button type="button" id="bulk-cancel">キャンセル</button><button type="button" class="primary" id="bulk-ok">${changes.length}拠点に設定する</button></div>`;
+ const ok=$('#bulk-ok'),ack=$('#bulk-ack');ok.disabled=!!ack;if(ack)ack.onchange=()=>ok.disabled=!ack.checked;
+ $('#bulk-cancel').onclick=()=>dlg.close();
+ ok.onclick=async()=>{if(busy)return;busy=true;ok.disabled=true;$('#bulk-cancel').disabled=true;bulkRefresh();
+  try{data=await api({action:'save_many',customer_id:cid(),source_node_id:sid||null,expected_departments:cleanConfig(src.draft.departments||[]),targets:changes.map(r=>({node_id:r.id,version:r.p.version}))});
+   changed=false;editingInheritanceMode=null;draft=profile()?clone(profile().draft):null;bulkSelected.clear();dlg.close();renderSettings();window.dispatchEvent(new Event('web-request-data'));notify(changes.length+'拠点に設定しました。')}
+  catch(e){$('#bulk-error').textContent=e.message;notify(e.message);ok.disabled=!!ack&&!ack.checked}
+  finally{busy=false;$('#bulk-cancel').disabled=false;applyInheritanceMode();syncSaveButton();renderContractDiagram()}};
+ dlg.showModal()}
 })();
