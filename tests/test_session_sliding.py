@@ -63,7 +63,7 @@ class SlidingSessionTest(unittest.TestCase):
 class InventoryPageRedirectTest(unittest.TestCase):
     def test_page_redirects_not_json(self):
         src = (Path(__file__).resolve().parents[1] / 'server.py').read_text(encoding='utf-8')
-        self.assertIn("{'Location': workspace_config.entry_path()}", src)
+        self.assertIn("{'Location': '/'}", src)
 
 
 if __name__ == '__main__':
