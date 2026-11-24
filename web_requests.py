@@ -30,7 +30,8 @@ def catalog(path):
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as s:
         s.row_factory=sqlite3.Row
         customers=[dict(r) for r in s.execute('SELECT id,name,kana FROM customers WHERE active=1 ORDER BY name')]
-        products=[dict(r) for r in s.execute("SELECT id,code,name,color FROM products WHERE active=1 AND merged_into_id IS NULL AND category IN ('','制服') ORDER BY name,id")]
+        manufacturer="manufacturer" if "manufacturer" in {r[1] for r in s.execute("PRAGMA table_info(products)")} else "'' AS manufacturer"
+        products=[dict(r) for r in s.execute("SELECT id,code,name,color,"+manufacturer+" FROM products WHERE active=1 AND merged_into_id IS NULL AND category IN ('','制服') ORDER BY name,id")]
         sizes={}
         for r in s.execute('SELECT product_id,label FROM product_sizes ORDER BY sort_order,id'):
             sizes.setdefault(r['product_id'],[]).append(r['label'])
