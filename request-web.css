@@ -170,3 +170,5 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 .picked-chip button{padding:0 6px;min-height:0;font-size:12px;line-height:1.6}
 
 #registered-contracts .dept-card.paste-target{outline:3px solid #287cba;outline-offset:2px;background:#f1f8ff}#registered-contracts .dept-card.dept-drop-target{outline:3px dashed #237249;background:#ddf2e4}.paste-target-label{font-size:11px;color:#216494;font-weight:bold}#contract-context-menu{position:fixed;z-index:300;background:white;border:1px solid #b8cdbf;border-radius:8px;padding:5px;box-shadow:0 4px 18px #0003;min-width:200px}#contract-context-menu button{display:block;width:100%;text-align:left;border:0;font-size:13px;padding:8px 12px}#contract-context-menu[hidden]{display:none}
+
+#registered-contracts .dept-contract.contract-picked{outline:3px solid #287cba;outline-offset:1px;background:#e6f3ff}
