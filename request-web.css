@@ -102,3 +102,5 @@ body.desk-common-page #org-customer-start{display:none!important}#common-setting
 .org-region-group.drop-ready{outline:2px dashed #68a57b;outline-offset:-3px}.org-region-group.drop-over{outline:3px solid #276a48;outline-offset:-3px;background:#d9edde}
 
 #org-node-form>label[hidden]{display:none!important}
+
+.org-diagram-panel #org-access-section{margin:16px 0;padding:12px;border:1px solid #c8dbcc;border-radius:8px}.org-diagram-panel #org-access-editors{display:block}.org-staff-label{display:block;font-size:11px;color:#486f57;margin-top:5px}#org-staff-nodes[hidden],#org-staff-all[hidden],#org-staff-none[hidden]{display:none!important}

@@ -16,6 +16,29 @@ class OrganizationTest(fixtures.SettingsTest):
             dict(id='sapporo',parent_id='north',kind='site',name='札幌店',customer_id=1,site_type='店舗'),
             dict(id='sendai',parent_id='east',kind='site',name='仙台事業所',customer_id=1,site_type='事業所')
         ],customer_scopes=[dict(account_id=10,node_ids=['north'],can_request=False),dict(account_id=11,node_ids=['sapporo','sendai'],can_request=True)],staff_scopes=[dict(user_id=3,node_id='north')])
+    def test_registered_internal_users_and_scope_modes(self):
+        import auth
+        self.c.execute("ALTER TABLE users ADD COLUMN login TEXT DEFAULT ''")
+        self.c.execute("ALTER TABLE users ADD COLUMN password TEXT DEFAULT 'hash'")
+        self.c.execute("INSERT INTO users VALUES(4,'現場担当',1,'floor',0,'staff-id','hash')")
+        self.c.execute("INSERT INTO users VALUES(5,'停止中',0,'floor',0,'inactive','hash')")
+        self.c.execute("INSERT INTO users VALUES(6,'名前のみ',1,'floor',0,?,'hash')",(auth.new_name_only_login(),))
+        self.c.commit()
+        users=w.state(self.c,self.path,self.owner)['organizationStaff']
+        self.assertIn(dict(id=4,name='現場担当',login='staff-id'),users)
+        self.assertFalse(any(u['id'] in (5,6) for u in users))
+        self.assertTrue(all('password' not in u for u in users))
+        self.organization['staff_scopes']=[dict(user_id=4,node_id='company')]
+        self.save_org()
+        self.assertTrue(org.staff_can_manage(org.read(self.c),4,1,'sendai'))
+        self.organization['nodes'].append(dict(id='future',parent_id='north',kind='site',name='新拠点',customer_id=1))
+        self.save_org()
+        self.assertTrue(org.staff_can_manage(org.read(self.c),4,1,'future'))
+        self.organization['staff_scopes']=[dict(user_id=4,node_id='sapporo')]
+        self.save_org()
+        self.assertTrue(org.staff_can_manage(org.read(self.c),4,1,'sapporo'))
+        self.assertFalse(org.staff_can_manage(org.read(self.c),4,1,'sendai'))
+
     def test_region_and_site_contact_details_round_trip(self):
         for node in self.organization['nodes']:
             node.update(kana='フリガナ',office_code='101',address='所在地',phone='011-123',contact='窓口')

@@ -1,6 +1,7 @@
 """WEB依頼の部署・採用品設定。在庫DBは読み取り専用。"""
 import web_request_inheritance as inheritance
 import web_request_organizations as organizations
+import auth
 import unicodedata
 import json
 import base64
@@ -94,6 +95,10 @@ def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
     data['requestTypes']=REQUEST_TYPES
     data['userId']=user['id'] if user else None
     data['isAdmin']=organizations.admin(user)
+    user_columns={r[1] for r in c.execute('PRAGMA table_info(users)')}
+    login_column='login' if 'login' in user_columns else "'' AS login"
+    data['organizationStaff']=[dict(r) for r in c.execute('SELECT id,name,'+login_column+" FROM users WHERE active=1"+(" AND password<>''" if 'password' in user_columns else '')+' ORDER BY name')] if data['isAdmin'] and not preview else data['staff']
+    data['organizationStaff']=[u for u in data['organizationStaff'] if not auth.is_name_only(u.get('login'))]
     data['organizations']=organizations.view(c,allowed,user) if not preview else organizations.view(c,allowed,dict(role='sales',manage=0,id=-1))
     if preview:
         keep=set(visible)
@@ -208,7 +213,7 @@ def validate_config(cfg,data,cid):
 def save(c,path,d,user=None):
     if d.get('action')=='organization':
         data=state(c,path,user)
-        organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data['staff']},user)
+        organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)
         return state(c,path,user)
     if d.get('node_id'):return save_scope(c,path,d,user)
     cid=number(d.get('customer_id'),'顧客',1,2147483647)
