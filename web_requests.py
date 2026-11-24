@@ -237,10 +237,10 @@ def save(c,path,d,user=None):
                 c.commit()
             except Exception:c.rollback();raise
         else:
-            operation=d.get('operation');targets=d.get('targets');dep_id=d.get('department_id')
+            operation=d.get('operation');targets=d.get('targets');dep_ids=d.get('department_ids',[d.get('department_id')])
             if operation not in ('add','remove') or not isinstance(targets,list) or not targets or len(targets)>2000:raise ValueError('対象と操作を確認してください。')
             lib=department_registry.library(c,base)
-            if not any(x['id']==dep_id for x in lib['draft']['departments']):raise ValueError('登録済みの部署を選んでください。')
+            if not isinstance(dep_ids,list) or not dep_ids or any(not isinstance(x,str) for x in dep_ids) or len(set(dep_ids))!=len(dep_ids) or not set(dep_ids)<={x['id'] for x in lib['draft']['departments']}:raise ValueError('登録済みの部署を選んでください。')
             c.execute('BEGIN IMMEDIATE')
             try:
                 if lib['version']!=d.get('library_version'):raise ValueError('部署一覧が更新されています。再読込してください。')
@@ -250,8 +250,8 @@ def save(c,path,d,user=None):
                     if nid in seen or not node or nid not in data['allowedNodeIds'] or not organizations.personnel_enabled(org,node):raise PermissionError('この登録先には割り当てできません。')
                     seen.add(nid);current=department_registry.selection(c,base,org,node)
                     if current['version']!=target.get('version'):raise ValueError('割り当てが更新されています。再読込してください。')
-                    ids=current['department_ids'];ids=[x for x in ids if x!=dep_id]
-                    if operation=='add':ids.append(dep_id)
+                    ids=current['department_ids'];ids=[x for x in ids if x not in dep_ids]
+                    if operation=='add':ids.extend(dep_ids)
                     c.execute('INSERT INTO web_request_department_targets VALUES(?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,department_ids=excluded.department_ids',(nid,cid,current['version']+1,json.dumps(ids)))
                 c.commit()
             except Exception:c.rollback();raise

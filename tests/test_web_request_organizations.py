@@ -90,6 +90,18 @@ class OrganizationTest(fixtures.SettingsTest):
         invalid['targets']=[dict(node_id='company',version=0)]
         with self.assertRaises(PermissionError):w.save(self.c,self.path,invalid,self.owner)
 
+    def test_multiple_departments_assigned_and_removed_together(self):
+        self.save_org()
+        cfg=copy.deepcopy(self.cfg);cfg['departments'].append(dict(id='dep2',name='管理',contracts=[]))
+        w.save(self.c,self.path,dict(action='department_library',customer_id=1,version=0,config=cfg),self.owner)
+        payload=dict(action='assign_department',customer_id=1,department_ids=['dep1','dep2'],operation='add',library_version=1,targets=[dict(node_id='sapporo',version=0),dict(node_id='sendai',version=0)])
+        result=w.save(self.c,self.path,payload,self.owner)
+        self.assertTrue(all(set(a['department_ids'])=={'dep1','dep2'} for a in result['departmentAssignments']))
+        payload.update(operation='remove',targets=[dict(node_id='sapporo',version=1)])
+        result=w.save(self.c,self.path,payload,self.owner)
+        self.assertEqual(next(a['department_ids'] for a in result['departmentAssignments'] if a['node_id']=='sapporo'),[])
+        self.assertEqual(set(next(a['department_ids'] for a in result['departmentAssignments'] if a['node_id']=='sendai')),{'dep1','dep2'})
+
     def test_region_and_site_contact_details_round_trip(self):
         for node in self.organization['nodes']:
             node.update(kana='フリガナ',office_code='101',address='所在地',phone='011-123',contact='窓口')
