@@ -131,3 +131,31 @@ body.bulk-mode .contract-node .bulk-check,.contract-node.bulk-selected .bulk-che
 .bulk-warn{color:#a04800;font-weight:700}
 .bulk-ack{display:flex;gap:8px;align-items:center;font-weight:700}
 @media(max-width:580px){.bulk-bar select{min-width:0;width:100%}.bulk-bar .bulk-source-field{flex:1 1 100%;flex-wrap:wrap}}
+/* Department cards: compact, editable directly from the diagram */
+#registered-contracts .dept-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;align-items:start}
+.dept-card{border:1px solid #cadccf;border-radius:10px;padding:10px 12px;background:#fff;display:flex;flex-direction:column;gap:8px;min-width:0}
+.dept-card.selected{border-color:#2f7a4c;box-shadow:0 0 0 2px #cfe6d7}
+.dept-head{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0}
+.dept-head strong{overflow-wrap:anywhere}
+.dept-head.dept-rename{flex-wrap:wrap}
+.dept-head.dept-rename input{flex:1 1 100%;min-width:0}
+.dept-head.dept-rename button,.dept-add-contract{padding:4px 10px;min-height:0;font-size:13px}
+.dept-icon{padding:2px 8px;min-height:0;font-size:14px;line-height:1.4}
+.dept-contracts{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.dept-contract{display:block;width:100%;text-align:left;padding:6px 8px;min-height:0;border:1px solid #d8e4db;border-radius:6px;background:#f7faf8;font-weight:normal}
+.dept-contract b{display:block;font-size:14px;overflow-wrap:anywhere}
+.dept-contract small{display:block;color:#5d7765;font-size:12px;margin-top:2px}
+.dept-contract.selected{background:#eaf4ed;border-color:#2f7a4c}
+.dept-contract.inactive{opacity:.7}
+.dept-empty{color:#7a8a80;font-size:13px;padding:4px 2px}
+.dept-add-contract{align-self:flex-start}
+button.dept-card.dept-new{margin:0;width:100%;justify-content:center;align-items:center;min-height:88px;border-style:dashed;color:#2f7a4c;font-weight:bold;background:#f7faf8}
+#dept-panel-head{display:none}
+body.desk-common-page[data-request-page=settings] #dept-form{display:none}
+body.desk-common-page[data-request-page=settings] #settings:not(.dept-panel-open) #contract-form,
+body.desk-common-page[data-request-page=settings] #settings:not(.dept-panel-open) #contract-editing-label,
+body.desk-common-page[data-request-page=settings] #settings:not(.dept-panel-edit) .dept-uniform-section{display:none}
+body.desk-common-page[data-request-page=settings] #settings.dept-panel-open #dept-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding:10px 12px;border-radius:8px;background:#eaf4ed;scroll-margin-top:12px}
+#settings.dept-panel-new #update-contract,#settings.dept-panel-new #contract-active-control{display:none}
+#settings.dept-panel-edit #contract-form .actions>button:not(#update-contract){display:none}
+body.desk-common-page[data-request-page=settings] #contract-editing-label{display:none!important}
