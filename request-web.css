@@ -159,3 +159,12 @@ body.desk-common-page[data-request-page=settings] #settings.dept-panel-open #dep
 #settings.dept-panel-new #update-contract,#settings.dept-panel-new #contract-active-control{display:none}
 #settings.dept-panel-edit #contract-form .actions>button:not(#update-contract){display:none}
 body.desk-common-page[data-request-page=settings] #contract-editing-label{display:none!important}
+/* Stock-linked uniform picker inside the card editor */
+#contract-registration .dept-uniform-section{border:1px solid #cadccf;border-radius:10px;box-shadow:none;margin:12px 0;padding:14px}
+#contract-registration .dept-uniform-section h3{margin-top:0}
+#new-contract-products{margin:14px 0;padding:12px;border:1px solid #cadccf;border-radius:10px}
+#new-contract-products h4{margin:0 0 8px}
+#new-contract-product-options{max-height:320px;overflow:auto;display:grid;gap:4px;margin-top:8px}
+#contract-product-options{max-height:360px;overflow:auto}
+.picked-chip{display:inline-flex;align-items:center;gap:4px;margin:2px 6px 2px 0;padding:2px 4px 2px 8px;border-radius:999px;background:#eaf4ed}
+.picked-chip button{padding:0 6px;min-height:0;font-size:12px;line-height:1.6}
