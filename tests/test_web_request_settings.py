@@ -46,6 +46,20 @@ INSERT INTO customer_products VALUES(10,1,1,'刺繍A',1),(11,1,1,'加工なし',
         self.save()
         self.assertEqual(w.read_config(self.c,1)['draft']['departments'][0]['contracts'][0]['uniforms'][0]['default_qty'],2)
 
+    def test_department_import_adds_names_without_overwriting_contracts(self):
+        import web_request_department_registry as registry
+        self.save()
+        result=w.save(self.c,self.path,dict(action='department_import',customer_id=1,version=0,names=['製造','ＯＳ','OS']),self.owner)
+        self.assertEqual(result['departmentImportResult'],dict(added=1,skipped=2))
+        lib=registry.library(self.c,w.read_config(self.c,1))
+        self.assertEqual([d['name'] for d in lib['draft']['departments']],['製造','OS'])
+        self.assertEqual(lib['draft']['departments'][0]['contracts'],w.read_config(self.c,1)['draft']['departments'][0]['contracts'])
+        self.assertEqual(lib['draft']['departments'][1]['contracts'],[])
+        with self.assertRaises(ValueError):w.save(self.c,self.path,dict(action='department_import',customer_id=1,version=0,names=['精肉']),self.owner)
+        with self.assertRaises(ValueError):w.save(self.c,self.path,dict(action='department_import',customer_id=1,version=1,names=['精肉','']),self.owner)
+        self.assertEqual(registry.library(self.c,w.read_config(self.c,1)),lib)
+        with self.assertRaises(PermissionError):w.save(self.c,self.path,dict(action='department_import',customer_id=1,version=1,names=['精肉']),self.other)
+
     def test_snapshots_and_sizes(self):
         self.save(action='publish');before=w.read_config(self.c,1)['publication']
         self.cfg['departments'][0]['contracts'][0]['uniforms'][0]['default_qty']=5

@@ -222,6 +222,26 @@ def save(c,path,d,user=None):
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)
         return state(c,path,user)
+    if d.get('action') in ('department_import_preview','department_import'):
+        import department_excel
+        import uuid
+        cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
+        if cid not in {x['id'] for x in data['customers']} or cid not in data['manageCommonCustomerIds']:raise PermissionError('この会社の部署を取り込む権限がありません。')
+        current=department_registry.library(c,read_config(c,cid))
+        if d['action']=='department_import_preview':
+            return dict(department_excel.preview(d.get('file'),current['draft']['departments']),customer_id=cid,version=current['version'])
+        if type(d.get('version')) is not int or d['version']!=current['version']:raise ValueError('部署一覧が更新されています。Excelを選び直してください。')
+        names=d.get('names')
+        if not isinstance(names,list) or not names or len(names)>500:raise ValueError('取り込む部署を1件以上選んでください。')
+        cfg=current['draft'];known={department_excel.normalized(x['name']).casefold() for x in cfg['departments']};added=skipped=0
+        for value in names:
+            name=text(value,'部署名',80,True);name=department_excel.normalized(name);key=name.casefold()
+            if key in known:skipped+=1;continue
+            cfg['departments'].append(dict(id=str(uuid.uuid4()),name=name,contracts=[]));known.add(key);added+=1
+        if not added:return dict(data,departmentImportResult=dict(added=0,skipped=skipped))
+        result=save(c,path,dict(action='department_library',customer_id=cid,version=current['version'],config=cfg),user)
+        result['departmentImportResult']=dict(added=added,skipped=skipped)
+        return result
     if d.get('action') in ('department_library','assign_department'):
         cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
         if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この会社の設定を変更できません。')
