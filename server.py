@@ -25,6 +25,7 @@ import personal_notes
 import personal_formats
 import rental_management
 import common_contracts
+import workspace_config
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -1222,6 +1223,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
         path=self.path.split('?')[0]
+        if path == '/workspace-config.js':
+            return self.reply(200, workspace_config.browser_script().encode('ascii'), 'text/javascript; charset=utf-8')
         if path == '/mobile-root-certificate.cer':
             # Only the public CA certificate is downloadable, never TLS keys.
             certificate = ROOT / 'tls' / 'trial-root.cer'
