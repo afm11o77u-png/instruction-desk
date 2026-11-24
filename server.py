@@ -25,6 +25,7 @@ import personal_notes
 import personal_formats
 import rental_management
 import common_contracts
+import workspace_config
 from requirements import METHODS, check_posting
 
 ROOT = Path(__file__).resolve().parent
@@ -976,7 +977,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         with connect() as c:
             user = self.session_user(c)
         if not user:
-            return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': '/'})
+            return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': workspace_config.entry_path()})
         if user['must_change']:
             return self.reply(403, {'error': '最初に仮パスワードを変更してください。'})
         if path == '/desk-guide':
@@ -1094,7 +1095,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if not u:
             # 画面遷移で JSON を表示しない（ログイン画面へ戻す）
             if not path.startswith('/inventory/api'):
-                return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': '/'})
+                return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': workspace_config.entry_path()})
             return self.reply(401, {'error':'ログインしてください。'})
         if u['must_change']: return self.reply(403, {'error':'最初に仮パスワードを変更してください。'})
         if not can_open_stock(u): return self.reply(403, {'error':'在庫管理は主管理者と管理者、倉庫担当が使用します。'})
@@ -1219,8 +1220,23 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         except sqlite3.Error:
             return self.reply(503, {'error': '書式を処理できませんでした。'})
 
+    def redirect_hidden_top(self):
+        if not workspace_config.should_redirect_top(self.path):
+            return None
+        destination = workspace_config.entry_path()
+        with connect() as c:
+            user = self.session_user(c)
+        if user and not user['must_change']:
+            destination = workspace_config.entry_path_for(user)
+        if destination == '/' or workspace_config.is_top_menu_request(destination):
+            return None
+        return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': destination})
+
     def do_GET(self):
         if self.headers.get('Host') not in ALLOWED_HOSTS: return self.reply(403, {'error':'接続先アドレスを確認してください。'})
+        redirected = self.redirect_hidden_top()
+        if redirected is not None:
+            return redirected
         path=self.path.split('?')[0]
         if path == '/mobile-root-certificate.cer':
             # Only the public CA certificate is downloadable, never TLS keys.

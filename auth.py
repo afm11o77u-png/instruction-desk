@@ -2,6 +2,7 @@
 from pathlib import Path
 import hashlib, hmac, secrets, time, re, sqlite3, json
 from http.cookies import SimpleCookie
+import workspace_config
 
 SESSION_IDLE_SECONDS=12*3600  # 無操作で切れるまで（操作のたびに延長）
 SESSION_REFRESH_SECONDS=60  # 延長の書き込み間隔
@@ -160,7 +161,7 @@ class AuthMixin:
     def auth_get(self,path,c):
         if path=='/api/me':
             u=self.session_user(c)
-            return 200,{'setup':not c.execute('SELECT 1 FROM users LIMIT 1').fetchone(),'user':public(u) if u else None}
+            return 200,{'setup':not c.execute('SELECT 1 FROM users LIMIT 1').fetchone(),'user':public(u) if u else None,'show_top_menu':workspace_config.SHOW_TOP_MENU}
         u=self.session_user(c)
         if not u: return 401,{'error':'ログインしてください。'}
         if u['must_change']: return 403,{'error':'最初に仮パスワードを変更してください。'}
