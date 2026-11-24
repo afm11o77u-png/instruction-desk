@@ -98,3 +98,7 @@ body.desk-common-page #org-customer-start{display:none!important}#common-setting
 .org-structure-layout:has(#org-editor[hidden]){grid-template-columns:minmax(0,1fr)}#org-editor[hidden]{display:none!important}.org-diagram-panel #org-selection{padding:12px 0;margin:0 0 12px;border:0;background:transparent}.org-diagram-panel #org-selection>strong{display:block;margin-bottom:8px}.org-diagram-panel .org-diagram-size{margin-top:18px}
 
 .org-diagram-panel .org-diagram-size{display:flex;flex-direction:row;align-items:center;flex-wrap:nowrap;gap:12px}.org-diagram-panel .org-diagram-size>label{display:block;flex:0 0 auto;margin:0;white-space:nowrap}.org-diagram-panel .org-diagram-size>input[type=range]{flex:1 1 280px;width:auto;min-width:40px;max-width:420px;margin:0}.org-diagram-panel .org-diagram-size>output{flex:0 0 auto;min-width:48px;white-space:nowrap}.org-diagram-panel .org-diagram-size>button{flex:0 0 auto;margin:0;white-space:nowrap}@media(max-width:580px){.org-diagram-panel .org-diagram-size{gap:6px;font-size:12px}.org-diagram-panel .org-diagram-size>button{padding:8px;font-size:12px}}
+
+.org-region-group.drop-ready{outline:2px dashed #68a57b;outline-offset:-3px}.org-region-group.drop-over{outline:3px solid #276a48;outline-offset:-3px;background:#d9edde}
+
+#org-node-form>label[hidden]{display:none!important}
