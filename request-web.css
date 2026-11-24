@@ -173,4 +173,4 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 
 #registered-contracts .dept-contract.contract-picked{outline:3px solid #287cba;outline-offset:1px;background:#e6f3ff}
 
-#contract-diagram .contract-sites{grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))}#contract-diagram .contract-node{min-width:0}#contract-diagram .contract-node>span:last-child{display:block;width:100%;min-width:0}#contract-diagram .contract-name-line{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+#contract-diagram .contract-node{min-width:0}#contract-diagram .contract-node>span:last-child{display:block;width:100%;min-width:0}#contract-diagram .contract-name-line{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
