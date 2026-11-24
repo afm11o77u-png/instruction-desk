@@ -39,6 +39,19 @@ class OrganizationTest(fixtures.SettingsTest):
         self.assertTrue(org.staff_can_manage(org.read(self.c),4,1,'sapporo'))
         self.assertFalse(org.staff_can_manage(org.read(self.c),4,1,'sendai'))
 
+    def test_department_subset_assignment_and_direct_contract_roundtrip(self):
+        self.cfg['departments'].append(dict(id='direct',name='部署なし',no_department=True,contracts=[]))
+        self.save();self.save_org()
+        data=w.state(self.c,self.path,self.owner)
+        source=w.read_config(self.c,1)['draft']['departments']
+        target=next(p for p in data['scopeProfiles'] if p['node_id']=='sapporo')
+        w.save(self.c,self.path,dict(action='save_many',customer_id=1,source_node_id=None,expected_departments=source,department_ids=['direct'],targets=[dict(node_id='sapporo',version=target['version'])]),self.owner)
+        result=inherit.resolve(self.c,w.read_config(self.c,1),org.read(self.c),'sapporo')[0]
+        self.assertEqual([d['id'] for d in result['departments']],['direct'])
+        self.assertTrue(result['departments'][0]['no_department'])
+        with self.assertRaises(ValueError):
+            w.save(self.c,self.path,dict(action='save_many',customer_id=1,expected_departments=source,department_ids=['missing'],targets=[dict(node_id='sapporo',version=1)]),self.owner)
+
     def test_region_and_site_contact_details_round_trip(self):
         for node in self.organization['nodes']:
             node.update(kana='フリガナ',office_code='101',address='所在地',phone='011-123',contact='窓口')

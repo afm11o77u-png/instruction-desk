@@ -173,6 +173,7 @@ def validate_config(cfg,data,cid):
     for d in deps:
         if not isinstance(d,dict):raise ValueError('部署の内容を確認してください。')
         dep=dict(id=ident(d),name=text(d.get('name',''),'部署名',80,True),contracts=[])
+        if d.get('no_department') is True:dep['no_department']=True
         name_key=' '.join(unicodedata.normalize('NFKC',dep['name']).lower().split())
         if name_key in department_names:raise ValueError('同じ名前の部署が重複しています。部署名を確認してください。')
         department_names.add(name_key)
@@ -304,6 +305,10 @@ def save_many(c,path,d,user):
         departments=validate_config(source,data,cid)['departments']
         expected=validate_config(dict(default_config(),departments=d.get('expected_departments')),data,cid)['departments']
         if expected!=departments:raise ValueError('呼び出した設定が別の画面で更新されています。再読込してからやり直してください。')
+        selected=d.get('department_ids')
+        if selected is not None:
+            if not isinstance(selected,list) or any(not isinstance(x,str) for x in selected) or len(selected)!=len(set(selected)) or not set(selected)<={x['id'] for x in departments}:raise ValueError('割り当てる部署を選び直してください。')
+            departments=[x for x in departments if x['id'] in selected]
         seen=set();conflicts=[];rows=[]
         for t in targets:
             if not isinstance(t,dict):raise ValueError('設定する拠点を確認してください。')
