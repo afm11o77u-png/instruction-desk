@@ -218,6 +218,17 @@ def validate_config(cfg,data,cid):
     return out
 
 def save(c,path,d,user=None):
+    if d.get('action') in ('department_assignment_import_preview','department_assignment_import'):
+        import department_excel_assignment as importer
+        cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
+        if cid not in data['manageCommonCustomerIds']:raise PermissionError('この会社への取り込み権限がありません。')
+        base=read_config(c,cid)
+        if d['action']=='department_assignment_import_preview':
+            org=organizations.read(c)
+            nodes=[n for n in org['nodes'] if n['customer_id']==cid and n['id'] in data['allowedNodeIds'] and organizations.personnel_enabled(org,n)]
+            return importer.preview(dict(d,_assignments=data['departmentAssignments']),department_registry.library(c,base),org,nodes)
+        result=importer.apply(c,d,data,base,user,validate_config,text)
+        return dict(state(c,path,user),departmentImportResult=result)
     if d.get('action')=='organization':
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)

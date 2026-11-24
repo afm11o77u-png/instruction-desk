@@ -50,7 +50,7 @@ def preview(raw,existing,source="customer"):
     except Exception as error:
         raise ValueError(label+'マスタのExcel（.xlsx）を読み取れませんでした。ファイルの形式・容量を確認してください。') from error
     if len(sheets)!=1:raise ValueError('「'+'」「'.join(required)+'」のあるシートを1つ含むExcelを選んでください。')
-    sheet,table,header=sheets[0];known={normalized(d['name']).casefold() for d in existing};groups={};unresolved=[];deleted=0;count=0
+    sheet,table,header=sheets[0];known={normalized(d['name']).casefold() for d in existing};groups={};unresolved=[];deleted=0;count=0;records=[]
     for row,cells in table[1:]:
         count+=1
         if count>20000:raise ValueError('取り込みは2万行以内のExcelで行ってください。')
@@ -58,6 +58,7 @@ def preview(raw,existing,source="customer"):
             deleted+=1;continue
         code=normalized(cells.get(header['顧客コード'],''));customer=normalized(cells.get(header.get('顧客名',''),''))
         direct=header.get('部署名') or header.get('部署');name=normalized(cells.get(direct,'')) if direct else (customer.split(' ',1)[1] if ' ' in customer else '')
+        records.append(dict(row=row,code=code,customer=customer,name=name,site_name=customer.split(' ',1)[0]))
         if not code or (source=="customer" and not customer) or not name or len(name)>80:
             unresolved.append(dict(row=row,code=code,customer=customer,name='',selected=False));continue
         key=name.casefold()
@@ -65,4 +66,4 @@ def preview(raw,existing,source="customer"):
         item=groups[key];item['rows'].append(row)
         if len(item['examples'])<3:item['examples'].append(dict(code=code,customer=customer))
     if not count:raise ValueError('取り込むデータ行がありません。')
-    return dict(sheet=sheet,source_rows=count,deleted=deleted,candidates=list(groups.values()),unresolved=unresolved)
+    return dict(sheet=sheet,source_rows=count,deleted=deleted,candidates=list(groups.values()),unresolved=unresolved,records=records)
