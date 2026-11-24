@@ -73,6 +73,8 @@ def catalog(desk,stock,user):
     data['handles']=[x for x in handles if x['customer_id'] in allowed]
     pids={x['product_id'] for x in data['handles']};data['products']=[x for x in data['products'] if x['id'] in pids]
     data['sites']=[n for n in org.read(desk)['nodes'] if n['kind']=='site' and n['customer_id'] in allowed]
+    organization=org.read(desk)
+    data['personnelTargets']=[dict(node_id=n['id'],customer_id=n['customer_id'],kind=n['kind'],name=n['name']) for n in organization['nodes'] if n['customer_id'] in allowed and org.personnel_enabled(organization,n)]
     presets=[]
     for customer in data['customers']:
         cfg=web_requests.read_config(desk,customer['id'])['draft']

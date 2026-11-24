@@ -52,6 +52,21 @@ class OrganizationTest(fixtures.SettingsTest):
         with self.assertRaises(ValueError):
             w.save(self.c,self.path,dict(action='save_many',customer_id=1,expected_departments=source,department_ids=['missing'],targets=[dict(node_id='sapporo',version=1)]),self.owner)
 
+    def test_company_personnel_toggle_keeps_settings_and_filters_targets(self):
+        self.save();self.save_org()
+        before=w.read_config(self.c,1)
+        state=w.state(self.c,self.path,self.owner)
+        self.assertEqual({x['node_id'] for x in state['personnelTargets']},{'sapporo','sendai'})
+        for enabled in (True,False):
+            state=w.save(self.c,self.path,dict(action='company_personnel',customer_id=1,enabled=enabled,version=state['organizations']['version']),self.owner)
+            self.assertEqual('company' in {x['node_id'] for x in state['personnelTargets']},enabled)
+            self.assertFalse(any(x['kind']=='region' for x in state['personnelTargets']))
+            self.assertEqual(w.read_config(self.c,1),before)
+        with self.assertRaises(PermissionError):w.save(self.c,self.path,dict(action='company_personnel',customer_id=1,enabled=True,version=state['organizations']['version']),self.sales)
+        payload=copy.deepcopy(self.organization);payload['nodes']=[payload['nodes'][0]];payload['customer_scopes']=[];payload['staff_scopes']=[]
+        self.save_org(payload)
+        self.assertTrue(org.personnel_enabled(org.read(self.c),org.read(self.c)['nodes'][0]))
+
     def test_region_and_site_contact_details_round_trip(self):
         for node in self.organization['nodes']:
             node.update(kana='フリガナ',office_code='101',address='所在地',phone='011-123',contact='窓口')

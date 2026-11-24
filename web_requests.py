@@ -117,6 +117,7 @@ def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
     data['manageCommonCustomerIds']=[p['customer_id'] for p in data['profiles'] if permitted(p,user) or (user and organizations.staff_can_manage(org,user['id'],p['customer_id']))]
 
     data['scopeProfiles']=[inheritance.profile(c,p,org,n) for p in data['profiles'] for n in data['organizations']['nodes'] if n['customer_id']==p['customer_id'] and n['kind']!='company' and n['id'] in data['allowedNodeIds']]
+    data['personnelTargets']=[dict(node_id=n['id'],customer_id=n['customer_id'],kind=n['kind'],name=n['name']) for n in data['organizations']['nodes'] if organizations.personnel_enabled(data['organizations'],n)]
     data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
 
@@ -216,6 +217,15 @@ def save(c,path,d,user=None):
     if d.get('action')=='organization':
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)
+        return state(c,path,user)
+    if d.get('action')=='company_personnel':
+        if not organizations.admin(user):raise PermissionError('管理者が設定してください。')
+        cid=number(d.get('customer_id'),'顧客',1,2147483647)
+        if type(d.get('enabled')) is not bool:raise ValueError('会社の人員登録設定を確認してください。')
+        data=state(c,path,user);payload=data['organizations'];root=next((n for n in payload['nodes'] if n['kind']=='company' and n['customer_id']==cid),None)
+        if not root:raise ValueError('会社を組織構成で登録してください。')
+        root['personnel_registration']=d['enabled']
+        organizations.save(c,payload,d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data['organizationStaff']},user)
         return state(c,path,user)
     if d.get('action')=='save_many':return save_many(c,path,d,user)
     if d.get('node_id'):return save_scope(c,path,d,user)

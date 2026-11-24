@@ -117,6 +117,11 @@ def view(c,allowed,user):
     return dict(version=org['version'],nodes=[n for n in org['nodes'] if n['id'] in keep],customer_scopes=[],staff_scopes=[s for s in org['staff_scopes'] if s['user_id']==user['id']],accounts=[],request_pages=[])
 
 
+def personnel_enabled(org,node):
+    if node['kind']=='site':return True
+    if node['kind']!='company':return False
+    return node.get('personnel_registration',not any(n['kind']=='site' and n['customer_id']==node['customer_id'] for n in org['nodes']))
+
 def validate(payload,customers,staff,accounts):
     if not isinstance(payload,dict):raise ValueError('組織の入力を確認してください。')
     nodes=payload.get('nodes',[])
@@ -139,6 +144,9 @@ def validate(payload,customers,staff,accounts):
             if site_type not in ('事業所','店舗','支店','その他'):raise ValueError('拠点の種類を確認してください。')
         else:site_type=''
         result.append(dict(id=nid,parent_id=parent,kind=kind,name=name.strip(),customer_id=cid,site_type=site_type))
+        if kind=='company' and 'personnel_registration' in node:
+            if type(node['personnel_registration']) is not bool:raise ValueError('会社の人員登録設定を確認してください。')
+            result[-1]['personnel_registration']=node['personnel_registration']
         for field,limit in [('kana',80),('office_code',40),('address',200),('phone',40),('contact',80)]:
             if field not in node:continue
             value=node[field]
