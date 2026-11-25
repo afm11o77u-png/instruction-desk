@@ -325,6 +325,11 @@ function bindRubberBand(){
         if(selectedSites.size){const first=[...selectedSites][0];diagramSelection=first;lastSiteClick=first}
         tree();
         renderDeliveryBulk();
+      }else if(!ev.ctrlKey&&!ev.metaKey&&!ev.shiftKey&&selectedSites.size){
+        // 余白をクリック（ほぼ動かさない）したら、拠点の複数選択だけを解除する（未保存の変更はそのまま）。
+        selectedSites=new Set();lastSiteClick=null;
+        tree();
+        renderDeliveryBulk();
       }
       band=null;
     };
