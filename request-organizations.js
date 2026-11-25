@@ -65,13 +65,18 @@ function configurePanel(mode){const web=mode==='web-settings',picker=$('#org-cus
 // 拠点（店舗）の一括取り込み：顧客マスタのExcelから、選んだ会社の直下に拠点を追加する。
 // プレビューで選んだ拠点を編集中の一覧に追加し、「変更をまとめて保存」で確定する（それまで保存しない）。
 let siteImported=false;
-function siteImportKey(name){return nameKey(name).replace(/\s+/g,'')}
-function existingSiteKeys(root){const keys=new Set();org.nodes.filter(n=>n.parent_id===root.id||(n.kind==='site'&&n.customer_id===root.customer_id)).forEach(n=>{keys.add(siteImportKey(n.name));if(n.office_code)keys.add('code:'+siteImportKey(n.office_code))});return keys}
+// site_name_key.py と同じ照合：NFKC・空白/大小無視、先頭の会社名と末尾の「店」を外す。補助キーはブランド名（ラッキーマート）を外したもの。
+const SITE_BRANDS=['ラッキーマート'];
+function plainKey(s){return String(s??'').normalize('NFKC').replace(/\s+/g,'').toLowerCase()}
+function companyKey(name){let s=String(name??'').normalize('NFKC').trim();const corp=/^(?:株式会社|有限会社|\(株\)|\(有\))\s*|\s*(?:株式会社|有限会社|\(株\)|\(有\))$/g;s=s.replace(corp,'');while(s&&!/[\p{L}\p{Nd}]$/u.test(s))s=s.slice(0,-1);return plainKey(s.replace(corp,''))}
+function siteKeys(name,company){let k=plainKey(name);const ck=companyKey(company);if(ck&&k.startsWith(ck)&&k.length>ck.length)k=k.slice(ck.length);if(k.endsWith('店')&&k.length>1)k=k.slice(0,-1);if(!k)return [];const keys=[k];for(const b of SITE_BRANDS.map(plainKey))if(k.startsWith(b)&&k.length>b.length)keys.push(k.slice(b.length));return keys}
+function siteImportKey(name){return plainKey(name)}
+function existingSiteKeys(root){const keys=new Set();org.nodes.filter(n=>n.kind==='site'&&n.customer_id===root.customer_id).forEach(n=>{siteKeys(n.name,root.name).forEach(k=>keys.add(k));if(n.office_code)keys.add('code:'+plainKey(n.office_code))});org.nodes.filter(n=>n.parent_id===root.id&&n.kind!=='site').forEach(n=>keys.add('other:'+plainKey(n.name)));return keys}
 function ensureSiteImport(){
   const host=$('#organization');if(!host)return null;let box=$('#org-site-import');
   if(!box){
     box=document.createElement('section');box.id='org-site-import';box.className='request-record org-site-import';
-    box.innerHTML='<h3>拠点（店舗）の一括取り込み</h3><p class="small">顧客マスタのExcelから、選んでいる会社の直下に店舗・事業所をまとめて追加します。同じ名前の拠点がすでにある候補は追加しません。先にこちらで拠点を登録・保存してから、下の「集配曜日の一括取り込み」を行うと、集配曜日も登録できます。</p><div class="actions"><button type="button" id="org-site-import-open">Excelから拠点を一括取込</button></div>';
+    box.innerHTML='<h3>拠点（店舗）の一括取り込み</h3><p class="small">顧客マスタのExcelから、選んでいる会社の直下に店舗・事業所をまとめて追加します。同じ名前の拠点がすでにある候補は追加しません（末尾の「店」や会社名の有無は同じとみなします）。先にこちらで拠点を登録・保存してから、下の「集配曜日の一括取り込み」を行うと、集配曜日も登録できます。</p><div class="actions"><button type="button" id="org-site-import-open">Excelから拠点を一括取込</button></div>';
     const anchor=$('#collection-import'),bar=$('#org-save-bar');
     if(anchor&&anchor.parentNode===host)anchor.before(box);else if(bar&&bar.parentNode===host)bar.after(box);else host.prepend(box);
     $('#org-site-import-open').onclick=openSiteImport;
@@ -95,7 +100,7 @@ function openSiteImport(){
     try{
       const plan=await desk().previewOrganizationSites(root.customer_id,file.files[0]),keys=existingSiteKeys(root);
       message.textContent=plan.candidates.length?`対象 ${plan.matched}行から ${plan.candidates.length}件の候補が見つかりました。拠点名を確認し、不要な候補はチェックを外してください。`:'この会社の拠点候補が見つかりませんでした。Excelの顧客名を確認してください。';
-      output.innerHTML=plan.candidates.length?'<table><thead><tr><th>取込</th><th>拠点名</th><th>元の顧客名</th></tr></thead><tbody>'+plan.candidates.map(({name,count,examples},index)=>{const exists=keys.has(siteImportKey(name));return `<tr><td><input type="checkbox" ${exists?'disabled':'checked'} aria-label="${index+1}件目を取り込む"></td><td><input type="text" maxlength="100" value="${esc(name)}" aria-label="${index+1}件目の拠点名"></td><td>${examples.map(esc).join('<br>')}<br>${count}行${exists?'・登録済み（追加しません）':''}</td></tr>`}).join('')+'</tbody></table>':'';
+      output.innerHTML=plan.candidates.length?'<table><thead><tr><th>取込</th><th>拠点名</th><th>元の顧客名</th></tr></thead><tbody>'+plan.candidates.map(({name,count,examples,existing,similar,checked},index)=>{const exists=!!existing||siteKeys(name,root.name).some(k=>keys.has(k)),note=exists?'・登録済み（'+esc(existing||name)+'）・追加しません':(similar||[]).length?'・似た拠点あり（'+similar.map(esc).join('、')+'）':'';return `<tr><td><input type="checkbox" ${exists?'disabled':(checked===false?'':'checked')} aria-label="${index+1}件目を取り込む"></td><td><input type="text" maxlength="100" value="${esc(name)}" aria-label="${index+1}件目の拠点名"></td><td>${examples.map(esc).join('<br>')}<br>${count}行${note}</td></tr>`}).join('')+'</tbody></table>':'';
       apply.hidden=!plan.candidates.length;
     }catch(error){message.textContent=error.message}
     finally{preview.disabled=file.disabled=false}
@@ -107,9 +112,9 @@ function openSiteImport(){
       const box=row.querySelector('input[type=checkbox]');if(!box.checked||box.disabled)continue;
       const input=row.querySelector('input[type=text]'),name=input.value.trim();
       if(!name||name.length>100){message.textContent='選択した拠点の名前を100文字以内で入力してください。';input.focus();return}
-      const key=siteImportKey(name);
-      if(keys.has(key)||keys.has('code:'+key)){duplicates++;continue}
-      keys.add(key);
+      const sk=siteKeys(name,root.name);
+      if(!sk.length||sk.some(k=>keys.has(k))||keys.has('code:'+plainKey(name))||keys.has('other:'+plainKey(name))){duplicates++;continue}
+      sk.forEach(k=>keys.add(k));
       additions.push({id:crypto.randomUUID?.()||('org-'+Date.now()+'-'+Math.random().toString(36).slice(2)),kind:'site',parent_id:root.id,customer_id:root.customer_id,name,site_type:'その他'});
     }
     if(!additions.length){message.textContent=duplicates?'選択した候補はすべて同名の拠点があるため、追加するものがありません。':'取り込む拠点を選択してください。';return}

@@ -271,7 +271,9 @@ def save(c,path,d,user=None):
         cid=number(d.get('customer_id'),'顧客',1,2147483647)
         customer=next((x for x in state(c,path,user)['customers'] if x['id']==cid),None)
         if not customer:raise ValueError('登録先の会社を選択してください。')
-        return department_excel.preview_sites(d.get('file'),customer['name'])
+        o=organizations.read(c);root=next((n for n in o['nodes'] if n['kind']=='company' and n['customer_id']==cid),None)
+        sites=[n for n in o['nodes'] if n['kind']=='site' and n['customer_id']==cid] if root else []
+        return department_excel.preview_sites(d.get('file'),root['name'] if root else customer['name'],sites)
     if d.get('action') in ('load_site_details','save_site_details'):
         import web_request_site_details as site_details
         return site_details.handle(c,path,d,user)

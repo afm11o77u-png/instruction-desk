@@ -54,8 +54,26 @@ class DepartmentExcelTest(unittest.TestCase):
         self.assertEqual(plan['deleted'], 1)
         self.assertEqual(plan['matched'], 5)
         self.assertEqual([(x['name'], x['count']) for x in plan['candidates']], [
-            ('北雄ラッキー本部', 2),
-            ('北雄ラッキー 岩内店', 1),
-            ('北雄ラッキー星置女性', 1),
-            ('北雄ラッキー星置男性', 1),
+            ('本部', 2),
+            ('岩内店', 1),
+            ('星置女性', 1),
+            ('星置男性', 1),
         ])
+
+    def test_site_preview_uses_shared_site_key(self):
+        raw = book([
+            ['1', '北雄ﾗｯｷｰ篠路 管理', 0],
+            ['2', 'ﾗｯｷｰﾏｰﾄ西野 管理', 0],
+            ['3', 'ラッキーマート幌向', 0],
+            ['4', '北雄ラッキー星置女性 管理', 0],
+            ['5', '他社 管理', 0],
+        ])
+        sites = [dict(id='a', name='篠路店'), dict(id='b', name='西野店'), dict(id='c', name='ラッキーマート幌向店'), dict(id='d', name='星置駅前店')]
+        plan = department_excel.preview_sites(raw, '北雄ラッキー㉈', sites)
+        got = {x['name']: (x['existing'], x['similar'], x['checked']) for x in plan['candidates']}
+        self.assertEqual(got, {
+            '篠路': ('篠路店', [], False),
+            'ラッキーマート西野': ('西野店', [], False),
+            'ラッキーマート幌向': ('ラッキーマート幌向店', [], False),
+            '星置女性': ('', ['星置駅前店'], False),
+        })
