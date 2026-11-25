@@ -48,3 +48,13 @@ const data = {
 }
 assert.deepStrictEqual([...X.usedProductIds(data, 1)].sort(), [101, 103])
 console.log('ok')
+
+// 「＋ 制服を追加」の案内は最初から表示（フォーム内で重複させない）
+{
+  const src = require('fs').readFileSync(path.join(__dirname, '..', 'web-request-extras.js'), 'utf8')
+  const hint = '一覧にない制服は、こちらに入力して追加できます。'
+  assert.strictEqual(src.split(hint).length - 1, 1)
+  assert.ok(src.indexOf(hint) < src.indexOf('id="manual-entry-open"'))
+  assert.ok(src.indexOf(hint) < src.indexOf('id="manual-entry-form"'))
+  assert.ok(!src.includes('契約外'))
+}
