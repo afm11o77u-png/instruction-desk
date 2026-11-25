@@ -42,4 +42,12 @@ class CategoryMigrationTest(unittest.TestCase):
         self.assertEqual({n['id']:n['parent_id'] for n in saved['nodes']},{'root':None,'site':'root'})
         self.assertEqual(org.descendant_ids(saved,{'root'}),{'root','site'})
 
+    def test_direct_group_name_saved_on_company_without_category(self):
+        payload=dict(nodes=[dict(id='root',kind='company',name='会社',parent_id=None,customer_id=1,direct_group_name=' 直属 '),dict(id='area',kind='region',name='地方',parent_id='root',customer_id=1),dict(id='site',kind='site',name='本店',parent_id='root',customer_id=1,site_type='店舗')],staff_scopes=[],customer_scopes=[])
+        org.save(self.f.c,payload,0,{1,2},{1,2,3},self.f.owner);org.schema(self.f.c)
+        saved=org.read(self.f.c);by={n['id']:n for n in saved['nodes']}
+        self.assertEqual(by['root']['direct_group_name'],'直属');self.assertEqual(by['site']['parent_id'],'root');self.assertEqual(len(saved['nodes']),3)
+        payload['nodes'][0]['direct_group_name']='地方'
+        with self.assertRaises(ValueError):org.save(self.f.c,payload,saved['version'],{1,2},{1,2,3},self.f.owner)
+
 if __name__=='__main__':unittest.main()

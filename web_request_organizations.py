@@ -159,6 +159,11 @@ def validate(payload,customers,staff,accounts):
         if kind=='company' and 'personnel_registration' in node:
             if type(node['personnel_registration']) is not bool:raise ValueError('会社の人員登録設定を確認してください。')
             result[-1]['personnel_registration']=node['personnel_registration']
+        if kind=='company' and 'direct_group_name' in node:
+            # 会社の直下の店舗・事業所をまとめて表示するときのカテゴリ名（データは会社の直下のまま）。
+            value=node['direct_group_name']
+            if not isinstance(value,str) or len(value.strip())>100:raise ValueError('会社直下のカテゴリ名を確認してください。')
+            if value.strip():result[-1]['direct_group_name']=value.strip()
         for field,limit in NODE_TEXT_FIELDS:
             if field not in node:continue
             value=node[field]
@@ -185,6 +190,10 @@ def validate(payload,customers,staff,accounts):
         if n['kind']=='company':
             if n['parent_id'] is not None:raise ValueError('企業に所属先は指定できません。')
         elif not p or p['kind'] not in (('company',) if n['kind']=='region' else ('company','region')):raise ValueError('カテゴリは会社の下、店舗・拠点は会社またはカテゴリの下に登録してください。')
+    for n in result:
+        if n['kind']=='company' and n.get('direct_group_name'):
+            key=' '.join(unicodedata.normalize('NFKC',n['direct_group_name']).lower().split())
+            if (n['id'],key) in names:raise ValueError('会社直下のカテゴリ名が、同じ会社のカテゴリ名と重複しています。')
     for n in result:
         if n['kind']=='company':continue
         parent=byid[n['parent_id']]
