@@ -19,6 +19,7 @@ r"""
 4. 移動: \\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】\処理済み\{YYYY}.{M}月\{YYYYMMDD}\
 """
 
+import json
 import os
 import posixpath
 import re
@@ -38,6 +39,7 @@ import excel_import
 
 DEFAULT_BASE_DIR = r"\\Desktop-iu7d38q\e\札幌発寒支店共有\【指示書フォルダ】"
 _REPORT_SAVE_LOCK = Lock()
+_SORT_LOCK = Lock()
 _REPORT_KEYS = ("requester", "customer", "name", "maker", "sku", "size", "condition", "quantity", "note", "note2")
 _SHEET_XML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _DOCUMENT_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -262,6 +264,22 @@ def preview_sort() -> dict:
     now = datetime.now()
     next_ishikari = get_next_ishikari_filename(now)
     def_report = get_default_report_filename(now)
+
+    journal_path = get_base_dir() / ".instruction-desk-pending-sort.json"
+    if journal_path.exists():
+        try:
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            journal = None
+        if journal is not None:
+            result = journal["result"]
+            return {
+                "resume_move": True,
+                "next_ishikari_file": result["ishikari_file"],
+                "default_report_file": result["report_file"],
+                "default_processed_date": result["processed_date"],
+                "files": [entry["source"] for entry in journal["moves"]],
+            }
 
     if not p_dir.exists():
         return {
@@ -922,33 +940,92 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
         "factory": 0
     }
 
-def _move_processed_files(now: datetime, files: list[Path], processed_date: date | None = None) -> tuple[Path, int]:
-    r"""処理済みフォルダ (処理済み\{YYYY}.{M}月\{YYYYMMDD}\) へファイルを移動"""
-    day = processed_date or now.date()
+def _processed_destination(day: date) -> Path:
     month_folder_name = f"{day.year}.{day.month}月"
     day_folder_name = day.isoformat().replace("-", "")
-    dest_dir = get_processed_base_dir() / month_folder_name / day_folder_name
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    return get_processed_base_dir() / month_folder_name / day_folder_name
 
-    moved_count = 0
-    for f in files:
-        if not f.exists():
-            continue
-        dest_file = dest_dir / f.name
-        if dest_file.exists():
-            ts = now.strftime("%H%M%S")
-            dest_file = dest_dir / f"{f.stem}_{ts}{f.suffix}"
-            sequence = 2
-            while dest_file.exists():
-                dest_file = dest_dir / f"{f.stem}_{ts}_{sequence}{f.suffix}"
-                sequence += 1
-        shutil.move(str(f), str(dest_file))
-        moved_count += 1
 
-    return dest_dir, moved_count
+def _file_stamp(path: Path) -> list[int]:
+    info = path.stat()
+    return [info.st_size, info.st_mtime_ns]
+
+
+def _planned_moves(now, files, destination):
+    reserved = set()
+    moves = []
+    for source in files:
+        name = source.name
+        suffix_number = 0
+        while name.casefold() in reserved or (destination / name).exists():
+            suffix_number += 1
+            serial = f"_{suffix_number}" if suffix_number > 1 else ""
+            name = f"{source.stem}_{now:%H%M%S}{serial}{source.suffix}"
+        reserved.add(name.casefold())
+        moves.append({"source": source.name, "destination": name, "stamp": _file_stamp(source)})
+    return moves
+
+
+def _save_move_journal(path, journal):
+    temp_path = None
+    try:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as temp:
+            temp_path = Path(temp.name)
+            json.dump(journal, temp, ensure_ascii=False)
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _finish_saved_sort(path, journal, addresses=None):
+    result = journal["result"]
+    destination = _processed_destination(date.fromisoformat(result["processed_date"]))
+    archived = []
+    try:
+        destination.mkdir(parents=True, exist_ok=True)
+        for entry in journal["moves"]:
+            if any(Path(entry[key]).name != entry[key] or entry[key] in ("", ".", "..") for key in ("source", "destination")):
+                raise ValueError("移動記録のファイル名が不正です。")
+            source = get_processing_dir() / entry["source"]
+            target = destination / entry["destination"]
+            if source.exists():
+                if _file_stamp(source) != entry["stamp"] or target.exists():
+                    raise OSError(f"移動元または移動先が変更されています（{source.name}）。")
+                source.rename(target)
+            elif not target.is_file() or _file_stamp(target) != entry["stamp"]:
+                raise OSError(f"元の指示書が移動先に見つかりません（{source.name}）。")
+            archived.append((entry["source"], target))
+    except OSError as exc:
+        raise OSError(f"Excelは保存済みですが、指示書の移動を完了できませんでした。同じ画面から再実行すると移動を再開します。{exc}") from exc
+    resumed = addresses is None
+    if resumed:
+        addresses = []
+        for original_name, target in archived:
+            address = _extract_address_from_workbook(target)
+            if address:
+                addresses.append({**address, "source_file": original_name})
+    path.unlink()
+    result["moved_count"] = len(archived)
+    result["addresses"] = addresses
+    result["resumed_move"] = resumed
+    if resumed:
+        result["message"] = "前回保存した指示書の移動を完了しました。新しい指示書は取込画面を開き直して仕分けしてください。"
+    return result
 
 def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None) -> dict:
     """仕分け実行メインロジック"""
+    with _SORT_LOCK:
+        return _execute_sort(custom_ishikari_file, custom_report_file, processed_date)
+
+
+def _execute_sort(custom_ishikari_file, custom_report_file, processed_date):
+    journal_path = get_base_dir() / ".instruction-desk-pending-sort.json"
+    if journal_path.exists():
+        return _finish_saved_sort(journal_path, json.loads(journal_path.read_text(encoding="utf-8")))
+
     now = datetime.now()
     move_date = now.date()
     if processed_date not in (None, ""):
@@ -971,8 +1048,9 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
         }
 
     all_rows = []
-    processed_files = []
     addresses = []
+    dest_dir = _processed_destination(move_date)
+    moves = _planned_moves(now, pending_files, dest_dir)
 
     for f in pending_files:
         rows = _extract_rows_from_workbook(f)
@@ -980,7 +1058,8 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
         addr = _extract_address_from_workbook(f)
         if addr:
             addresses.append(addr)
-        processed_files.append(f)
+    if any(_file_stamp(f) != move["stamp"] for f, move in zip(pending_files, moves)):
+        raise OSError("読み込み中に指示書が更新されました。保存を終えてから再実行してください。")
 
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
     ishikari_path, ishikari_counts = _save_ishikari_workbook(now, all_rows, custom_filename=custom_ishikari_file)
@@ -988,10 +1067,7 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
     # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」シートへ追記
     report_path, report_counts = _save_report_workbook(now, all_rows, custom_filename=custom_report_file)
 
-    # 3. 処理済みフォルダへの移動
-    dest_dir, moved_count = _move_processed_files(now, processed_files, move_date)
-
-    return {
+    result = {
         "success": True,
         "message": "指示書の仕分けと保存が完了しました。",
         "ishikari_file": ishikari_path.name if ishikari_path else None,
@@ -1000,8 +1076,9 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
         "report_file": report_path.name if report_path else None,
         "report_path": str(report_path) if report_path else None,
         "report_counts": report_counts,
-        "moved_count": moved_count,
         "processed_dir": str(dest_dir),
         "processed_date": move_date.isoformat(),
-        "addresses": addresses
     }
+    journal = {"moves": moves, "result": result}
+    _save_move_journal(journal_path, journal)
+    return _finish_saved_sort(journal_path, journal, addresses)
