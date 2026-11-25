@@ -55,7 +55,120 @@ $('#org-diagram-height').oninput=e=>setDiagramHeight(e.target.value);$('#org-dia
 
 function scopeSelectors(){const a=$('#org-account').value,u=$('#org-staff').value;$('#org-account').innerHTML='<option value="">利用者を選択</option>'+(org.accounts||[]).map(x=>`<option value="${x.id}">${esc(x.name)} / ${esc(x.email)}${x.active?'':'（停止中）'}</option>`).join('');if([...$('#org-account').options].some(x=>x.value===a))$('#org-account').value=a;$('#org-staff').innerHTML='<option value="">社内担当者を選択</option>'+(data().organizationStaff||data().staff).map(x=>`<option value="${x.id}">${esc(x.name)}${x.login?' ／ '+esc(x.login):''}</option>`).join('');if([...$('#org-staff').options].some(x=>x.value===u))$('#org-staff').value=u;accountForm();staffForm();pageSelectors()}
 function configurePanel(mode){const web=mode==='web-settings',picker=$('#org-customer-start');if(web)$('#web-page-customer').append(picker);else $('#organization').insertBefore(picker,$('.org-structure-layout'));$('#org-customer-help').textContent=web?'顧客を選ぶと、その顧客のページ・利用者設定を表示します。組織構成の登録・変更は顧客・契約管理で行います。':'顧客を選ぶと、そのままカテゴリ・店舗・事業所を追加できます。変更は画面下部の「変更をまとめて保存」で確定します。';$('#web-page-editors').hidden=!admin();$('#web-page-permission').hidden=admin();$('#web-page-save').hidden=!admin();const url=new URL('/customer-contracts',location.origin);url.searchParams.set('page','organization');if($('#org-root-customer').value)url.searchParams.set('customer_id',$('#org-root-customer').value);$('#web-organization-link').href=url.pathname+url.search;}
-function render(){if(pending.size)return;rootOptions();configurePanel(desk().getMode());prepareSelectedRoot();tree();scopeSelectors();newNode();$('#org-access-editors').hidden=!admin();$('#org-access-section').hidden=!admin()||!selectedRoot();$('#org-editor').hidden=!selectedRoot();$('#org-node-form').hidden=!admin();$('#org-editor-title').hidden=!admin();$('#org-editor-title').nextElementSibling.hidden=!admin();$('#org-placement').hidden=!admin();$('#org-save').hidden=!admin();setStatus()}
+const siteImportButton = document.createElement('button');
+siteImportButton.type = 'button';
+siteImportButton.textContent = 'Excelから拠点を一括取込';
+siteImportButton.hidden = true;
+$('#org-node-form').before(siteImportButton);
+
+function siteImportKey(name) {
+    return nameKey(name).replace(/\s+/g, ' ');
+}
+
+function existingSiteNames(root) {
+    return new Set(org.nodes.filter(n => n.parent_id === root.id ||
+        (n.kind === 'site' && n.customer_id === root.customer_id)).map(n => siteImportKey(n.name)));
+}
+
+siteImportButton.onclick = () => {
+    const root = selectedRoot();
+    if (!admin() || !root || saving) return;
+    if (pending.size) return notice('入力途中の内容を一覧に適用してから取り込んでください。');
+    const dialog = document.createElement('dialog');
+    dialog.id = 'org-site-import-dialog';
+    dialog.setAttribute('aria-labelledby', 'org-import-title');
+    dialog.innerHTML = `<h2 id="org-import-title">Excelから拠点を一括取込</h2>
+        <p>登録先は <strong>${esc(root.name)}</strong> の直下です。</p>
+        <label>顧客マスタのExcel<input type="file" accept=".xlsx"></label>
+        <p class="small">「顧客名」から会社名が一致する候補を探し、末尾の既知の部署名を外します。</p>
+        <div class="department-import-scroll"></div><p role="alert"></p>
+        <div class="dialog-actions"><button type="button" data-cancel>閉じる</button>
+        <button type="button" data-preview class="primary">内容を確認</button>
+        <button type="button" data-apply class="primary" hidden>選択した拠点を一覧に追加</button></div>`;
+    document.body.append(dialog);
+    const file = dialog.querySelector('input[type=file]');
+    const preview = dialog.querySelector('[data-preview]');
+    const apply = dialog.querySelector('[data-apply]');
+    const output = dialog.querySelector('.department-import-scroll');
+    const message = dialog.querySelector('[role=alert]');
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.querySelector('[data-cancel]').onclick = () => dialog.close();
+    file.onchange = () => {
+        apply.hidden = true;
+        output.replaceChildren();
+        message.textContent = '';
+    };
+    preview.onclick = async () => {
+        preview.disabled = file.disabled = true;
+        apply.hidden = true;
+        output.replaceChildren();
+        message.textContent = 'Excelを読み込んでいます…';
+        try {
+            const plan = await desk().previewOrganizationSites(root.customer_id, file.files[0]);
+            const names = existingSiteNames(root);
+            message.textContent = plan.candidates.length ?
+                `対象 ${plan.matched}行から ${plan.candidates.length}件の候補が見つかりました。拠点名を確認し、不要な候補はチェックを外してください。` :
+                'この会社の拠点候補が見つかりませんでした。Excelの顧客名を確認してください。';
+            output.innerHTML = plan.candidates.length ? '<table><thead><tr><th>取込</th><th>拠点名</th><th>元の顧客名</th></tr></thead><tbody>' +
+                plan.candidates.map(({name, count, examples}, index) => {
+                    const exists = names.has(siteImportKey(name));
+                    return `<tr><td><input type="checkbox" ${exists ? '' : 'checked'} aria-label="${index + 1}件目を取り込む"></td>
+                        <td><input type="text" maxlength="100" value="${esc(name)}" aria-label="${index + 1}件目の拠点名"></td>
+                        <td>${examples.map(esc).join('<br>')}<br>${count}行${exists ? '・同名の組織あり' : ''}</td></tr>`;
+                }).join('') + '</tbody></table>' : '';
+            apply.hidden = !plan.candidates.length;
+        } catch (error) {
+            message.textContent = error.message;
+        } finally {
+            preview.disabled = file.disabled = false;
+        }
+    };
+    apply.onclick = () => {
+        if (!admin() || saving || pending.size || selectedRoot()?.id !== root.id) {
+            message.textContent = '会社の選択と編集中の内容を確認してから、再度取り込んでください。';
+            return;
+        }
+        const names = existingSiteNames(root);
+        const additions = [];
+        let duplicates = 0;
+        for (const row of output.querySelectorAll('tbody tr')) {
+            if (!row.querySelector('input[type=checkbox]').checked) continue;
+            const input = row.querySelector('input[type=text]');
+            const name = input.value.trim();
+            if (!name || name.length > 100) {
+                message.textContent = '選択した拠点の名前を100文字以内で入力してください。';
+                input.focus();
+                return;
+            }
+            const key = siteImportKey(name);
+            if (names.has(key)) {
+                duplicates++;
+                continue;
+            }
+            names.add(key);
+            additions.push({
+                id: crypto.randomUUID?.() || ('org-' + Date.now() + '-' + Math.random().toString(36).slice(2)),
+                kind: 'site', parent_id: root.id, customer_id: root.customer_id, name, site_type: 'その他'
+            });
+        }
+        if (!additions.length) {
+            message.textContent = duplicates ? '選択した候補はすべて同名の組織があるため、追加対象がありません。' : '取り込む拠点を選択してください。';
+            return;
+        }
+        if (org.nodes.length + additions.length > 3000) {
+            message.textContent = '組織の登録上限を超えています。取り込む拠点を減らしてください。';
+            return;
+        }
+        org.nodes.push(...additions);
+        mark();
+        render();
+        dialog.close();
+        notice(`${additions.length}件を編集中の一覧に追加しました。${duplicates ? '同名の' + duplicates + '件は省略しました。' : ''}「変更をまとめて保存」で確定してください。`);
+    };
+    dialog.showModal();
+};
+
+function render(){if(pending.size)return;rootOptions();configurePanel(desk().getMode());prepareSelectedRoot();siteImportButton.hidden=!admin()||!selectedRoot()||desk().getMode()!=='organization';tree();scopeSelectors();newNode();$('#org-access-editors').hidden=!admin();$('#org-access-section').hidden=!admin()||!selectedRoot();$('#org-editor').hidden=!selectedRoot();$('#org-node-form').hidden=!admin();$('#org-editor-title').hidden=!admin();$('#org-editor-title').nextElementSibling.hidden=!admin();$('#org-placement').hidden=!admin();$('#org-save').hidden=!admin();setStatus()}
 function canLeave(){if(saving||userSaving||$('#web-user-editor').open)return false;if(window.CustomerDirectory&&!window.CustomerDirectory.canLeaveCompany())return false;if((dirty||pending.size)&&!confirm('保存していない組織・利用範囲の変更を破棄しますか？'))return false;if(dirty||pending.size){org=clone(data().organizations||org);dirty=false;moveHistory=[];pending.clear();render()}return true}
 function received(){org=clone(data().organizations||{version:0,nodes:[],customer_scopes:[],staff_scopes:[],accounts:[]});org.request_pages??=[];dirty=false;moveHistory=[];syncMoveUndo();pending.clear();selectedCompany='';selectedRegion='';$('#org-company-filter').value='';$('#org-region-filter').value='';filters();desk().refreshCustomers();render();const preview=!!(data().previewAccountId||data().previewPageId);$('#scope-preview-banner').hidden=!preview;$('#scope-preview-label').textContent=preview?(data().previewPageName||data().previewAccountName)+'の表示範囲を確認中'+(data().previewCanRequest?'（依頼可能）':'（閲覧のみ）'):'';for(const name of ['organization','settings','staff','setup','web-settings'])document.querySelectorAll(`[data-tab="${name}"]`).forEach(e=>e.hidden=preview||(name==='setup'&&location.pathname!=='/customer-contracts'));$('#request-form button[type=submit]').disabled=data().previewCanRequest===false;if(preview)desk().tab('order');}
 $('#org-root-customer').onchange=()=>{if(window.CustomerDirectory&&!window.CustomerDirectory.canLeaveCompany())return false;if(pending.size&&!confirm('入力途中の組織・ページ・利用者設定を破棄して顧客を切り替えますか？'))return false;pending.clear();diagramSelection=null;render();desk().syncCommonCustomer();return true};

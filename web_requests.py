@@ -254,6 +254,15 @@ def validate_config(cfg,data,cid):
     return out
 
 def save(c,path,d,user=None):
+    if d.get('action') == 'organization_site_import_preview':
+        import department_excel
+        if not organizations.admin(user):
+            raise PermissionError('拠点の一括取り込み権限がありません。')
+        cid = number(d.get('customer_id'), '顧客', 1, 2147483647)
+        customer = next((x for x in state(c,path,user)['customers'] if x['id'] == cid), None)
+        if not customer:
+            raise ValueError('登録先の会社を選択してください。')
+        return department_excel.preview_sites(d.get('file'), customer['name'])
     if d.get('action') in ('department_assignment_import_preview','department_assignment_import'):
         import department_excel_assignment as importer
         cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
