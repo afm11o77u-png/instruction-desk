@@ -12,7 +12,7 @@ function ensure(){
   if(!box){
     box=document.createElement('section');box.id='collection-import';box.className='request-record collection-import';
     box.innerHTML='<h3>集配曜日の一括取り込み</h3><p class="small">顧客マスタ（Excel・CSV）の「集配曜日フラグ」から、拠点の配送方法と集配曜日をまとめて登録します。拠点は営業所コード＝顧客コード、なければ拠点名＝顧客名の店名で探します。先にプレビューを表示し、「この内容で取り込む」を押すまで保存しません。</p><div class="actions"><input id="collection-import-file" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"><button type="button" id="collection-import-preview">プレビュー</button></div><div id="collection-import-result"></div>';
-    const bar=$('#org-save-bar');if(bar&&bar.parentNode===host)bar.after(box);else host.appendChild(box);
+    const bar=$('#org-site-import')||$('#org-save-bar');if(bar&&bar.parentNode===host)bar.after(box);else host.appendChild(box);
     $('#collection-import-file').onchange=()=>{file=$('#collection-import-file').files[0]||null;preview=null;show()};
     $('#collection-import-preview').onclick=runPreview;
   }

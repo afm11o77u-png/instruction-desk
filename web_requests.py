@@ -265,6 +265,13 @@ def validate_config(cfg,data,cid):
     return out
 
 def save(c,path,d,user=None):
+    if d.get('action')=='organization_site_import_preview':
+        import department_excel
+        if not user or not organizations.admin(user):raise PermissionError('拠点の一括取り込みは主管理者・管理者が行ってください。')
+        cid=number(d.get('customer_id'),'顧客',1,2147483647)
+        customer=next((x for x in state(c,path,user)['customers'] if x['id']==cid),None)
+        if not customer:raise ValueError('登録先の会社を選択してください。')
+        return department_excel.preview_sites(d.get('file'),customer['name'])
     if d.get('action') in ('load_site_details','save_site_details'):
         import web_request_site_details as site_details
         return site_details.handle(c,path,d,user)
@@ -286,7 +293,7 @@ def save(c,path,d,user=None):
         return dict(state(c,path,user),collectionImport=result) if d['action']=='collection_days_import' else dict(collectionImport=result)
     if d.get('action')=='organization':
         data=state(c,path,user)
-        organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)
+        organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user,backup=d.get('backup') is True)
         return state(c,path,user)
     if d.get('action') in ('department_import_preview','department_import'):
         import department_excel

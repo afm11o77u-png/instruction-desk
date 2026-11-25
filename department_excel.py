@@ -2,6 +2,7 @@
 import base64
 import io
 import posixpath
+import re
 import unicodedata
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -67,3 +68,45 @@ def preview(raw,existing,source="customer"):
         if len(item['examples'])<3:item['examples'].append(dict(code=code,customer=customer))
     if not count:raise ValueError('取り込むデータ行がありません。')
     return dict(sheet=sheet,source_rows=count,deleted=deleted,candidates=list(groups.values()),unresolved=unresolved,records=records)
+
+# The customer master puts these department labels after the location name.
+SITE_DEPARTMENT_SUFFIXES = {
+    'OS', 'グロサリー', 'デイリー', 'ベーカリー', 'ベーカリー2', '惣菜',
+    '管理', '管理SP', '精肉', '貸出', '青果', '鮮魚', '衣料', '官製品',
+}
+
+
+def company_name_key(value):
+    name = normalized(value)
+    corporate = r'(?:株式会社|有限会社|\(株\)|\(有\))'
+    name = re.sub(r'^' + corporate + r'\s*|\s*' + corporate + r'$', '', name)
+    return name.replace(' ', '').casefold()
+
+
+def preview_sites(raw, company):
+    master = preview(raw, [])
+    company_key = company_name_key(company)
+    if not company_key:
+        raise ValueError('会社名を確認してください。')
+    candidates = {}
+    matched = 0
+    for record in master['records']:
+        customer = record['customer']
+        key = company_name_key(customer)
+        if not key.startswith(company_key) or key == company_key:
+            continue
+        matched += 1
+        name, _, suffix = customer.rpartition(' ')
+        if suffix not in SITE_DEPARTMENT_SUFFIXES:
+            name = customer
+        if company_name_key(name) == company_key:
+            continue
+        candidate = candidates.setdefault(name.replace(' ', '').casefold(),
+                                          dict(name=name, count=0, examples=[]))
+        candidate['count'] += 1
+        if customer not in candidate['examples'] and len(candidate['examples']) < 3:
+            candidate['examples'].append(customer)
+    if len(candidates) > 500:
+        raise ValueError('候補が500件を超えています。対象の会社の行に絞ってください。')
+    return dict(candidates=list(candidates.values()), matched=matched,
+                source_rows=master['source_rows'], deleted=master['deleted'])
