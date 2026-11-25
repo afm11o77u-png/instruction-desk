@@ -38,9 +38,10 @@ class BrandTitleSourceTest(unittest.TestCase):
         self.assertNotIn('word-break:break-word', title)
         logo = re.search(r'\.brand \.brandlogo\{([^}]+)\}', style).group(1)
         self.assertIn('flex:0 0 auto', logo)
-        self.assertIn('max-width:112px', logo)
-        self.assertIn('max-height:28px', logo)
-        self.assertNotIn('min-width:0', logo)
+        self.assertIn('width:100%', logo)
+        self.assertIn('height:auto', logo)
+        self.assertNotIn('max-width:112px', logo)
+        self.assertNotIn('max-height:28px', logo)
         pbrand = re.search(r'aside\.deskmenu \.brand\{([^}]+)\}', picking).group(1)
         self.assertIn('flex-direction:column', pbrand)
         ptitle = re.search(r'aside\.deskmenu \.brand>span\{([^}]+)\}', picking).group(1)
@@ -101,12 +102,19 @@ class BrandTitleBrowserTest(unittest.TestCase):
                           const box = el.getBoundingClientRect();
                           const switcher = document.querySelector('.workspace-back').getBoundingClientRect();
                           const nav = document.querySelector('#desknav').getBoundingClientRect();
+                          const row = document.querySelector('.brandrow').getBoundingClientRect();
+                          const cs = getComputedStyle(document.querySelector('.brandlogo'));
+                          const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+                          const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
                           const right = Math.max(box.right, logo.right, mascots.right);
                           return {
                             lines: el.getClientRects().length,
                             overflow: Math.max(0, right - aside.right),
                             clipped: el.scrollWidth > el.clientWidth + 0.5,
                             logoW: logo.width, logoH: logo.height,
+                            rowW: row.width,
+                            contentW: logo.width - padX,
+                            contentH: logo.height - padY,
                             stacked: logo.bottom <= box.top + 0.5 && box.bottom <= switcher.top + 0.5 && switcher.bottom <= nav.top + 0.5,
                           };
                         }''',
@@ -117,10 +125,10 @@ class BrandTitleBrowserTest(unittest.TestCase):
                     self.assertLess(info['overflow'], 1, title)
                     self.assertFalse(info['clipped'], title)
                     self.assertTrue(info['stacked'], title)
-                    # logo.jpg is wide (240x30); max-width:112px is the binding cap.
-                    self.assertGreaterEqual(info['logoW'], 111)
-                    self.assertLessEqual(info['logoW'], 113)
-                    self.assertGreaterEqual(info['logoH'], 18)
+                    self.assertGreaterEqual(info['logoW'], info['rowW'] - 1)
+                    self.assertLessEqual(info['logoW'], info['rowW'] + 1)
+                    self.assertGreater(info['logoH'], 18)
+                    self.assertAlmostEqual(info['contentW'] / info['contentH'], 240 / 30, delta=0.35)
                 widths = {round(w, 2) for w, _h in sizes}
                 self.assertEqual(len(widths), 1, 'logo width should not shrink with longer titles')
         finally:
