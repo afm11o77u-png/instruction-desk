@@ -9,7 +9,7 @@ Site settings walk up to category then company when the site itself has none.
 from datetime import date, timedelta
 
 LEAD_DAYS = 2
-WEEKDAYS = ('月', '火', '水', '木', '金', '土')
+WEEKDAYS = ('月', '火', '水', '木', '金', '土', '日')
 WEEKDAY_NAMES = '月火水木金土日'
 
 

@@ -269,3 +269,13 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 .manual-entry-row .me-note{flex:2 1 200px}
 .manual-entry-actions{margin-top:8px}
 @media(max-width:640px){.manual-entry-row label,.manual-entry-row .me-name,.manual-entry-row .me-processing,.manual-entry-row .me-note{flex:1 1 100%}.manual-entry-row .me-code,.manual-entry-row .me-color,.manual-entry-row .me-size,.manual-entry-row .me-qty{flex:1 1 calc(50% - 10px)}.manual-entry-open{width:100%}}
+
+/* 集配曜日の一括取り込み */
+.collection-import{margin:12px 0}
+.collection-import .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.collection-import-summary{margin:10px 0}
+.collection-import-scroll{max-height:360px;overflow:auto;border:1px solid #ddd;border-radius:6px}
+.collection-import-table{width:100%;border-collapse:collapse;font-size:13px}
+.collection-import-table th,.collection-import-table td{padding:6px 8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+.collection-import-table th{position:sticky;top:0;background:#f6f6f6}
+.collection-import details{margin:8px 0}

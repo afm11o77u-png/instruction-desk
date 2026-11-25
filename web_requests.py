@@ -279,6 +279,11 @@ def save(c,path,d,user=None):
             return importer.preview(dict(d,_assignments=data['departmentAssignments']),department_registry.library(c,base),org,nodes)
         result=importer.apply(c,d,data,base,user,validate_config,text)
         return dict(state(c,path,user),departmentImportResult=result)
+    if d.get('action') in ('collection_days_import_preview','collection_days_import'):
+        import web_request_collection_import as collection_import
+        if not user or not organizations.admin(user):raise PermissionError('集配曜日の取り込みは主管理者・管理者が行ってください。')
+        result=collection_import.handle(c,d,state(c,path,user),user)
+        return dict(state(c,path,user),collectionImport=result) if d['action']=='collection_days_import' else dict(collectionImport=result)
     if d.get('action')=='organization':
         data=state(c,path,user)
         organizations.save(c,d.get('organization'),d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data.get('organizationStaff',data['staff'])},user)

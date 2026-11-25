@@ -139,7 +139,7 @@ function ensureOrgToolbars(){
     box.id='org-delivery-bulk';
     box.className='org-delivery-bulk request-record';
     box.hidden=true;
-    box.innerHTML='<h3>選んだ拠点の配送設定</h3><p class="small" id="org-delivery-count"></p><label>配送方法<select id="org-delivery-method"><option value="">未設定</option><option value="自社集配">自社集配</option><option value="福山便">福山便</option><option value="佐川便">佐川便</option><option value="ヤマト便">ヤマト便</option></select></label><fieldset id="org-collection-days" hidden><legend>集配曜日（月〜土・複数可）</legend>'+['月','火','水','木','金','土'].map(d=>'<label class="check"><input type="checkbox" value="'+d+'">'+d+'</label>').join('')+'</fieldset><div class="actions"><button type="button" class="primary" id="org-delivery-apply">選んだ拠点に適用</button></div><p class="small">適用した内容は、下の「変更をまとめて保存」で確定します。</p>';
+    box.innerHTML='<h3>選んだ拠点の配送設定</h3><p class="small" id="org-delivery-count"></p><label>配送方法<select id="org-delivery-method"><option value="">未設定</option><option value="自社集配">自社集配</option><option value="福山便">福山便</option><option value="佐川便">佐川便</option><option value="ヤマト便">ヤマト便</option></select></label><fieldset id="org-collection-days" hidden><legend>集配曜日（月〜日・複数可）</legend>'+['月','火','水','木','金','土','日'].map(d=>'<label class="check"><input type="checkbox" value="'+d+'">'+d+'</label>').join('')+'</fieldset><div class="actions"><button type="button" class="primary" id="org-delivery-apply">選んだ拠点に適用</button></div><p class="small">適用した内容は、下の「変更をまとめて保存」で確定します。</p>';
     const editor=$('#org-editor');
     if(editor)editor.insertBefore(box, editor.firstChild);
     $('#org-delivery-method').onchange=()=>{$('#org-collection-days').hidden=$('#org-delivery-method').value!=='自社集配'};
@@ -244,4 +244,5 @@ $('#org-page-apply').onclick=()=>{if(!admin())return;if(pending.has('node')||pen
 $('#org-page-preview').onclick=async()=>{const id=$('#org-request-page').value;if(!id)return notice('作成したページを選択してください。');if(dirty||pending.size)return notice('先に「ページ・利用者の設定を保存」を押してください。');try{await desk().loadSettings(null,id)}catch(e){notice(e.message)}};
 $('#org-page-delete').onclick=()=>{const id=$('#org-request-page').value;if(!admin()||!id)return notice('削除するページを選んでください。');if(org.customer_scopes.some(s=>s.page_id===id))return notice('このページを利用する人が設定されています。先にその人の利用ページを変更してください。');if(!confirm('このページを編集中の一覧から削除しますか？制服・拠点は削除されません。'))return;org.request_pages=org.request_pages.filter(p=>p.id!==id);pending.delete('page');mark();scopeSelectors()};
 $('#org-account-page').onchange=()=>{$('#org-account-direct-fields').hidden=!!$('#org-account-page').value;mark('account')};
+if(!document.getElementById('collection-days-import-js')){const sc=document.createElement('script');sc.id='collection-days-import-js';sc.src='/collection-days-import.js?v=20261126_collection_import';document.head.appendChild(sc)}
 })();
