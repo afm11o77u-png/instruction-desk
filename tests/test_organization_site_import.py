@@ -1,0 +1,47 @@
+"""拠点の一括取り込み（RW-30）：権限、直下の拠点の保存と控え、画面の配置。"""
+import copy
+import unittest
+from pathlib import Path
+import test_web_request_settings as fixtures
+import web_requests as w
+import web_request_organizations as org
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class SiteImportTest(unittest.TestCase):
+    def setUp(self):
+        f = fixtures.SettingsTest(); f.setUp(); self.addCleanup(f.tearDown)
+        self.c, self.path, self.owner, self.sales = f.c, f.path, f.owner, f.sales
+        self.organization = dict(nodes=[
+            dict(id='company', parent_id=None, kind='company', name='ABCD社', customer_id=1),
+            dict(id='north', parent_id='company', kind='region', name='北海道地区', customer_id=1),
+            dict(id='sapporo', parent_id='north', kind='site', name='札幌店', customer_id=1, site_type='店舗'),
+        ], customer_scopes=[], staff_scopes=[])
+
+    def save_org(self):
+        return w.save(self.c, self.path, dict(action='organization', organization=self.organization, version=org.read(self.c)['version']), self.owner)
+
+    def test_preview_is_admin_only_and_save_keeps_backup(self):
+        with self.assertRaises(PermissionError):
+            w.save(self.c, self.path, dict(action='organization_site_import_preview', customer_id=1, file=''), self.sales)
+        self.save_org()
+        before = org.read(self.c)
+        p = copy.deepcopy(self.organization)
+        p['nodes'].append(dict(id='new', parent_id='company', kind='site', name='北雄ラッキー篠路', customer_id=1, site_type='その他'))
+        w.save(self.c, self.path, dict(action='organization', organization=p, version=before['version'], backup=True), self.owner)
+        saved = org.read(self.c)
+        self.assertEqual(next(n for n in saved['nodes'] if n['id'] == 'new')['parent_id'], 'company')
+        row = self.c.execute('SELECT previous_version FROM web_request_org_migrations ORDER BY id DESC').fetchone()
+        self.assertEqual(row[0], before['version'])
+
+    def test_ui_wiring(self):
+        js = (ROOT / 'request-organizations.js').read_text(encoding='utf-8')
+        self.assertIn("box.id='org-site-import'", js)
+        self.assertIn('keys.has(key)', js)  # 登録済みの名前・営業所コードは追加しない
+        self.assertIn('{backup:siteImported}', js)
+        self.assertIn("$('#org-site-import')||$('#org-save-bar')", (ROOT / 'collection-days-import.js').read_text(encoding='utf-8'))
+
+
+if __name__ == '__main__':
+    unittest.main()

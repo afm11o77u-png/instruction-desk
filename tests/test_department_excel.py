@@ -39,3 +39,23 @@ class DepartmentExcelTest(unittest.TestCase):
         self.assertEqual(plan['deleted'],1)
         with self.assertRaises(ValueError):department_excel.preview(raw,[],'customer')
         with self.assertRaises(ValueError):department_excel.preview(raw,[],'invalid')
+
+    def test_site_preview_groups_only_known_departments_for_selected_company(self):
+        raw = book([
+            ['1', '北雄ﾗｯｷｰ本部 青果', 0],
+            ['2', '北雄ラッキー本部 ＯＳ', 0],
+            ['3', '北雄ラッキー 岩内店', 0],
+            ['4', '北雄ラッキー星置女性 管理', 0],
+            ['5', '北雄ラッキー星置男性 管理', 0],
+            ['6', '他社本部 青果', 0],
+            ['7', '北雄ラッキー旧店舗', 1],
+        ])
+        plan = department_excel.preview_sites(raw, '北雄ラッキー㈱')
+        self.assertEqual(plan['deleted'], 1)
+        self.assertEqual(plan['matched'], 5)
+        self.assertEqual([(x['name'], x['count']) for x in plan['candidates']], [
+            ('北雄ラッキー本部', 2),
+            ('北雄ラッキー 岩内店', 1),
+            ('北雄ラッキー星置女性', 1),
+            ('北雄ラッキー星置男性', 1),
+        ])

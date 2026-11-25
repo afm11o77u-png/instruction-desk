@@ -279,3 +279,8 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 .collection-import-table th,.collection-import-table td{padding:6px 8px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
 .collection-import-table th{position:sticky;top:0;background:#f6f6f6}
 .collection-import details{margin:8px 0}
+
+/* 拠点（店舗）の一括取り込み */
+#org-site-import-dialog{width:min(780px,94vw);max-width:780px}
+.org-site-import{margin:12px 0}
+.org-site-import .actions{display:flex;gap:8px;flex-wrap:wrap}
