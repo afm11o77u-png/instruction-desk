@@ -182,12 +182,12 @@
   /* 依頼画面：「＋ 制服を追加」 */
   function ensureManualEntry() {
     if ($('#manual-entry')) return;
-    const items = $('#cart-items');
+    const items = $('#products');
     if (!items) return;
     const box = document.createElement('div');
     box.id = 'manual-entry';
     box.className = 'manual-entry';
-    box.innerHTML = '<p class="small manual-entry-hint" id="manual-entry-hint">一覧にない制服は、こちらに入力して追加できます。</p><button type="button" id="manual-entry-open" class="manual-entry-open" aria-describedby="manual-entry-hint">＋ 制服を追加</button><div id="manual-entry-form" class="manual-entry-form" hidden><label>商品名（必須）<input data-manual="name" maxlength="100"></label><div class="manual-entry-grid"><label>品番<input data-manual="code" maxlength="60"></label><label>色<input data-manual="color" maxlength="40"></label><label>サイズ<input data-manual="size" maxlength="40"></label><label>枚数（必須）<input data-manual="qty" type="number" min="1" max="99" value="1"></label></div><label>加工の希望<input data-manual="processing" maxlength="200" placeholder="ネーム・刺繍など"></label><label>備考<input data-manual="note" maxlength="300"></label><p id="manual-entry-error" role="alert"></p><div class="manual-entry-actions"><button type="button" class="primary" id="manual-entry-add">ご依頼内容に追加</button><button type="button" id="manual-entry-close">閉じる</button></div></div>';
+    box.innerHTML = '<p class="small manual-entry-hint" id="manual-entry-hint">一覧にない制服は、こちらに入力して追加できます。</p><button type="button" id="manual-entry-open" class="manual-entry-open" aria-describedby="manual-entry-hint">＋ 制服を追加</button><div id="manual-entry-form" class="manual-entry-form" hidden><div class="manual-entry-row"><label class="me-name">商品名（必須）<input data-manual="name" maxlength="100"></label><label class="me-code">品番<input data-manual="code" maxlength="60"></label><label class="me-color">色<input data-manual="color" maxlength="40"></label><label class="me-size">サイズ<input data-manual="size" maxlength="40"></label><label class="me-qty">枚数（必須）<input data-manual="qty" type="number" min="1" max="99" value="1"></label><label class="me-processing">加工の希望<input data-manual="processing" maxlength="200" placeholder="ネーム・刺繍など"></label><label class="me-note">備考<input data-manual="note" maxlength="300"></label></div><p id="manual-entry-error" role="alert"></p><div class="manual-entry-actions"><button type="button" class="primary" id="manual-entry-add">ご依頼内容に追加</button><button type="button" id="manual-entry-close">閉じる</button></div></div>';
     items.after(box);
     const form = box.querySelector('#manual-entry-form');
     box.querySelector('#manual-entry-open').onclick = () => { form.hidden = !form.hidden; if (!form.hidden) form.querySelector('[data-manual="name"]').focus(); };
