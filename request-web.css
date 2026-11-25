@@ -203,3 +203,22 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 @media(max-width:580px){.internal-scope-fields{grid-template-columns:minmax(0,1fr)}.internal-scope .customer-picker,.context.customer-request .customer-picker{grid-column:span 1}}
 #internal-scope .internal-company-filter{display:none!important}
 #order #request-form label:has(#delivery-to),#order #request-form label:has(#receive-place){display:none!important}
+
+/* 裾上げ（他）and 拠点の詳細, org multi-select */
+.hem-processing-fields{display:grid;gap:8px;margin:12px 0;padding:12px;border:1px solid #d5e4da;border-radius:8px;background:#f7fbf8}
+.hem-processing-fields .check{display:flex;align-items:center;gap:8px;font-weight:600}
+.site-details-layout{display:grid;grid-template-columns:minmax(220px,280px) 1fr;gap:16px;align-items:start}
+@media (max-width:860px){.site-details-layout{grid-template-columns:1fr}}
+.site-details-list ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.site-details-list button{width:100%;text-align:left;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.site-details-list button.active{outline:2px solid #1f7d49;background:#e8f6ec}
+.site-details-list .missing{display:inline-block;font-size:11px;padding:1px 6px;border-radius:999px;background:#fff3cd;color:#6b4e00}
+.site-details-delivery{margin:12px 0;padding:10px 12px;background:#edf5ef;border-radius:8px}
+#details-customer-code[readonly]{background:#f3f3f3}
+#organization .org-diagram-card.multi-selected{outline:2px solid #1f7d49;outline-offset:2px;background:#e5f6ea;box-shadow:0 0 0 4px #c2e5ce}
+#organization .org-delivery-tag{display:block;margin-top:4px;font-size:11px;color:#1f7d49;font-weight:600}
+#org-rubber-band{position:absolute;border:1px dashed #1f7d49;background:rgba(31,125,73,.12);pointer-events:none;z-index:5;display:none}
+#org-select-toolbar{margin:8px 0 4px}
+.org-delivery-bulk{margin:0 0 16px}
+.org-delivery-bulk fieldset{display:flex;flex-wrap:wrap;gap:8px 14px;border:1px solid #d5e4da;border-radius:8px;padding:8px 12px;margin:8px 0}
+#organization .org-tree-selecting{user-select:none}

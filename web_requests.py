@@ -32,7 +32,13 @@ def catalog(path):
     if not path.exists(): return {'customers':[], 'products':[]}
     with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)) as s:
         s.row_factory=sqlite3.Row
-        customers=[dict(r) for r in s.execute('SELECT id,name,kana FROM customers WHERE active=1 ORDER BY name')]
+        cols={r[1] for r in s.execute('PRAGMA table_info(customers)')}
+        def colsql(name):
+            return name if name in cols else "'' AS "+name
+        customers=[]
+        for r in s.execute('SELECT id,name,kana,'+colsql('customer_code')+','+colsql('postal_code')+','+colsql('address')+','+colsql('phone')+','+colsql('contact')+','+colsql('fax')+','+colsql('email')+','+colsql('memo')+','+colsql('updated_at')+' FROM customers WHERE active=1 ORDER BY name'):
+            customers.append(dict(id=r['id'],name=r['name'],kana=r['kana'] or '',address=r['address'] or '',phone=r['phone'] or '',contact=r['contact'] or '',customerCode=r['customer_code'] or '',postalCode=r['postal_code'] or '',fax=r['fax'] or '',email=r['email'] or '',memo=r['memo'] or '',updatedAt=r['updated_at'] or ''))
+
         manufacturer="manufacturer" if "manufacturer" in {r[1] for r in s.execute("PRAGMA table_info(products)")} else "'' AS manufacturer"
         products=[dict(r) for r in s.execute("SELECT id,code,name,color,"+manufacturer+" FROM products WHERE active=1 AND merged_into_id IS NULL AND category IN ('','制服') ORDER BY name,id")]
         sizes={}
@@ -248,12 +254,17 @@ def validate_config(cfg,data,cid):
                 if not legacy and (not h or not p):raise ValueError('この顧客の在庫に登録された制服を選んでください。')
                 if hid in seen and hid is not None:raise ValueError('同じ契約に同じ制服が重複しています。')
                 seen.add(hid)
-                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=None if service in ('CL','クリーニングのみ') else number(u.get('default_qty'),'契約枚数',1,999),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active'))))
+                hem=bool(u.get('hem_processing'));days=number(u.get('processing_days',0),'加工日数',0,365);days=days if hem else 0
+                if hem and days<1:raise ValueError('裾上げ（他）の加工日数を1日以上で入力してください。')
+                contract['uniforms'].append(dict(id=ident(u),customer_product_id=hid,product_id=h['product_id'] if h else u.get('product_id'),display_name=text(u.get('display_name',''),'表示名',120),description=text(u.get('description',''),'説明',1000),default_qty=None if service in ('CL','クリーニングのみ') else number(u.get('default_qty'),'契約枚数',1,999),sort_order=number(u.get('sort_order',0),'表示順',0,9999),photo=normalize_photo(u.get('photo','')),active=bool(u.get('active')),hem_processing=hem,processing_days=days))
             dep['contracts'].append(contract)
         out['departments'].append(dep)
     return out
 
 def save(c,path,d,user=None):
+    if d.get('action') in ('load_site_details','save_site_details'):
+        import web_request_site_details as site_details
+        return site_details.handle(c,path,d,user)
     if d.get('action') in ('department_assignment_import_preview','department_assignment_import'):
         import department_excel_assignment as importer
         cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)

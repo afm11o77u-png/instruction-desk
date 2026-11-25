@@ -16,20 +16,24 @@ function mark(form){moveHistory=[];syncMoveUndo();if(form)pending.add(form);else
 function rootInUse(n){return org.nodes.some(x=>x.parent_id===n.id)||(org.request_pages||[]).some(p=>p.node_ids.includes(n.id))||org.staff_scopes.some(s=>s.node_id===n.id)||org.customer_scopes.some(s=>(s.node_ids||[]).includes(n.id))}
 function prepareSelectedRoot(){const customer=data().customers.find(c=>c.id===Number($('#org-root-customer').value)),prepare=desk().getMode()==='organization'&&admin();org.nodes=org.nodes.filter(n=>!n._prepared||rootInUse(n)||(prepare&&n.customer_id===customer?.id));if(prepare&&customer&&!selectedRoot())org.nodes.push({id:crypto.randomUUID?.()||('customer-'+customer.id),parent_id:null,kind:'company',name:customer.name,customer_id:customer.id,site_type:'',_prepared:true});}
 function selectedRoot(){return org.nodes.find(n=>n.kind==='company'&&n.customer_id===Number($('#org-root-customer').value))}function rootOptions(){const old=$('#org-root-customer').value;$('#org-root-customer').innerHTML='<option value="">顧客を選択してください</option>'+desk().getCustomers().map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('');const wanted=old||new URLSearchParams(location.search).get('customer_id')||'';if([...$('#org-root-customer').options].some(o=>o.value===wanted))$('#org-root-customer').value=wanted;syncRootSearch();}
-let rootMatches=[],rootCursor=-1,diagramSelection=null,draggedSite=null,moveHistory=[];
+let rootMatches=[],rootCursor=-1,diagramSelection=null,draggedSite=null,draggedSites=[],moveHistory=[],selectedSites=new Set(),band=null,lastSiteClick=null;
 function closeRootSearch(){$('#org-root-options').hidden=true;$('#org-root-search').setAttribute('aria-expanded','false');$('#org-root-search').removeAttribute('aria-activedescendant');rootCursor=-1}
 function syncRootSearch(){const c=data().customers.find(x=>x.id===Number($('#org-root-customer').value));$('#org-root-search').value=c?.name||'';closeRootSearch()}
 function rootCandidates(all=false){const term=all?'':nameKey($('#org-root-search').value);rootMatches=desk().getCustomers().filter(c=>nameKey(c.name).includes(term));rootCursor=-1;$('#org-root-options').innerHTML=rootMatches.length?rootMatches.map((c,i)=>`<div role="option" id="org-root-option-${i}" data-org-customer-id="${c.id}" aria-selected="${String(c.id)===$('#org-root-customer').value}">${esc(c.name)}</div>`).join(''):'<div role="status" class="customer-no-match">一致する顧客がありません</div>';$('#org-root-options').hidden=false;$('#org-root-search').setAttribute('aria-expanded','true');$('#org-root-search').removeAttribute('aria-activedescendant')}
 function chooseRoot(id){const old=$('#org-root-customer').value;$('#org-root-customer').value=String(id);if($('#org-root-customer').onchange()===false)$('#org-root-customer').value=old;syncRootSearch()}
 
 function staffLabel(n){const ancestors=new Set([n.id]);let parent=n.parent_id;while(parent){ancestors.add(parent);parent=org.nodes.find(x=>x.id===parent)?.parent_id}const ids=new Set(org.staff_scopes.filter(s=>ancestors.has(s.node_id)).map(s=>s.user_id));return (data().organizationStaff||data().staff).filter(u=>ids.has(u.id)).map(u=>u.name).join('、')||'未設定'}
-function diagramNode(n){const children=org.nodes.filter(x=>x.parent_id===n.id),total=[...descendants(n.id)].filter(id=>org.nodes.some(x=>x.id===id&&x.kind==='site')).length;return `<button type="button" class="${n.kind==='region'?'org-category-heading':'org-diagram-card'} ${diagramSelection===n.id?'selected':''}" data-org-select="${esc(n.id)}" ${admin()&&n.kind==='site'?'draggable="true"':''} ${n.kind==='region'?'data-org-drop="'+esc(n.id)+'"':''} aria-pressed="${diagramSelection===n.id}"><span class="org-diagram-kind">${n.kind==='company'?'顧客・会社':n.kind==='region'?'カテゴリ（まとめる単位）':'拠点'}</span><strong>${esc(n.name)}</strong><small>${n.kind==='company'||n.kind==='region'?'配下の店舗・事業所 '+total+'件':(admin()?'ドラッグして所属先を変更できます':'選ぶと所属先と設定を確認')}</small><span class="org-staff-label">担当：${esc(staffLabel(n))}</span></button>`}
+function deliveryLabel(n){const method=n.delivery_method||'',days=(n.collection_days||[]).join('');if(!method)return '';return method==='自社集配'?(days?'自社集配・'+days:'自社集配'):method}
+function diagramNode(n){const total=[...descendants(n.id)].filter(id=>org.nodes.some(x=>x.id===id&&x.kind==='site')).length,multi=n.kind==='site'&&selectedSites.has(n.id);return `<button type="button" class="${n.kind==='region'?'org-category-heading':'org-diagram-card'} ${diagramSelection===n.id?'selected':''}${multi?' multi-selected':''}" data-org-select="${esc(n.id)}" data-org-kind="${esc(n.kind)}" ${admin()&&n.kind==='site'?'draggable="true"':''} ${n.kind==='region'?'data-org-drop="'+esc(n.id)+'"':''} aria-pressed="${diagramSelection===n.id||multi}"><span class="org-diagram-kind">${n.kind==='company'?'顧客・会社':n.kind==='region'?'カテゴリ（まとめる単位）':'拠点'}</span><strong>${esc(n.name)}</strong><small>${n.kind==='company'||n.kind==='region'?'配下の店舗・事業所 '+total+'件':(admin()?'ドラッグして所属先を変更できます':'選ぶと所属先と設定を確認')}</small>${n.kind==='site'&&deliveryLabel(n)?`<span class="org-delivery-tag">${esc(deliveryLabel(n))}</span>`:''}<span class="org-staff-label">担当：${esc(staffLabel(n))}</span></button>`}
 function renderDiagramSelection(){const n=org.nodes.find(x=>x.id===diagramSelection),panel=$('#org-selection');if(!n){panel.hidden=true;return}const children=org.nodes.filter(x=>x.parent_id===n.id),sites=[...descendants(n.id)].map(id=>org.nodes.find(x=>x.id===id)).filter(x=>x?.kind==='site');panel.hidden=false;panel.innerHTML=`<strong>${esc(n.name)}</strong>${admin()&&n.kind==='company'?`<label class="check"><input id="org-company-personnel" type="checkbox" ${(n.personnel_registration??!org.nodes.some(x=>x.customer_id===n.customer_id&&x.kind==='site'))?'checked':''}> この会社自体で人員を管理する</label>`:''}<div class="actions">${admin()&&n.kind!=='company'?`<button type="button" data-org-add="site">＋ ${n.kind==='region'?'このカテゴリに':'同じ所属先に'}店舗・事業所を追加</button>`:''}</div>`}
 $('#org-selection').addEventListener('change',e=>{if(e.target.id!=='org-company-personnel')return;const n=selectedRoot();if(!admin()||!n)return;n.personnel_registration=e.target.checked;mark();notice('会社の人員登録設定を変更しました。最後にまとめて保存してください。')});
 function diagramAddSlot(parent){if(!admin())return '';return `<li class="org-diagram-branch org-add-branch"><div class="org-add-card"><span class="org-diagram-kind">追加用の枠・未登録</span><strong>${parent.kind==='company'?'カテゴリを作成できます':'このカテゴリの拠点を増やせます'}</strong><p>登録済みの項目と並んで表示されます。</p>${parent.kind==='company'?`<button type="button" data-org-add="region" data-org-add-parent="${esc(parent.id)}">＋ カテゴリを追加</button>`:''}<button type="button" data-org-add="site" data-org-add-parent="${esc(parent.id)}">＋ 店舗・事業所を追加</button></div></li>`}
-function tree(){const root=selectedRoot();if(!root){$('#org-tree').innerHTML='<p class="org-diagram-empty">上で顧客を選ぶと、その会社の構成図を表示します。カテゴリ・店舗は図から追加できます。</p>';$('#org-selection').hidden=true;return}if(!descendants(root.id).has(diagramSelection))diagramSelection=root.id;const children=org.nodes.filter(n=>n.parent_id===root.id),sites=children.filter(n=>n.kind==='site'),regions=children.filter(n=>n.kind==='region');function siteGrid(parent,items){return `<ul class="org-wrapped-sites">${items.map(n=>`<li>${diagramNode(n)}</li>`).join('')+diagramAddSlot(parent)}</ul>`}$('#org-tree').innerHTML=`${admin()?`<div class="org-drop-tray"><span>ドラッグの移動先</span>${regions.map(n=>`<button type="button" class="org-drop-target" data-org-drop="${esc(n.id)}" data-org-jump="${esc(n.id)}" title="この枠に店舗・事業所をドラッグして移動">${esc(n.name)}</button>`).join('')}</div>`:''}<div class="org-diagram-canvas org-wrapped-diagram"><div class="org-diagram-root">${diagramNode(root)}</div><div class="org-parent-groups">${!regions.length?'<p>最初にカテゴリを作成し、その中に店舗・拠点を追加してください。</p>':''}${regions.map(region=>{const sites=org.nodes.filter(n=>n.parent_id===region.id&&n.kind==='site');return `<section class="org-site-group org-region-group" data-org-drop="${esc(region.id)}" aria-label="${esc(region.name)}の店舗・事業所"><div class="org-region-heading">${diagramNode(region)}<p>所属会社：${esc(root.name)} ／ このカテゴリの配下：${sites.length}件</p></div><div class="org-region-members"><p class="org-region-members-label">${esc(region.name)}に属する店舗・事業所</p>${siteGrid(region,sites)}</div></section>`}).join('')}</div></div><p class="org-diagram-caption">同じ枠内の店舗・事業所は、同じ会社・カテゴリに属します。件数が増えると下の行へ折り返して表示します。</p>`;renderDiagramSelection();syncMoveUndo()}
+function tree(){const root=selectedRoot();if(!root){$('#org-tree').innerHTML='<p class="org-diagram-empty">上で顧客を選ぶと、その会社の構成図を表示します。カテゴリ・店舗は図から追加できます。</p>';$('#org-selection').hidden=true;ensureOrgToolbars();return}if(!descendants(root.id).has(diagramSelection))diagramSelection=root.id;const children=org.nodes.filter(n=>n.parent_id===root.id),sites=children.filter(n=>n.kind==='site'),regions=children.filter(n=>n.kind==='region');function siteGrid(parent,items){return `<ul class="org-wrapped-sites">${items.map(n=>`<li>${diagramNode(n)}</li>`).join('')+diagramAddSlot(parent)}</ul>`}$('#org-tree').innerHTML=`${admin()?`<div class="org-drop-tray"><span>ドラッグの移動先</span>${regions.map(n=>`<button type="button" class="org-drop-target" data-org-drop="${esc(n.id)}" data-org-jump="${esc(n.id)}" title="この枠に店舗・事業所をドラッグして移動">${esc(n.name)}</button>`).join('')}</div>`:''}<div class="org-diagram-canvas org-wrapped-diagram"><div class="org-diagram-root">${diagramNode(root)}</div><div class="org-parent-groups">${!regions.length?'<p>最初にカテゴリを作成し、その中に店舗・拠点を追加してください。</p>':''}${regions.map(region=>{const sites=org.nodes.filter(n=>n.parent_id===region.id&&n.kind==='site');return `<section class="org-site-group org-region-group" data-org-drop="${esc(region.id)}" aria-label="${esc(region.name)}の店舗・事業所"><div class="org-region-heading">${diagramNode(region)}<p>所属会社：${esc(root.name)} ／ このカテゴリの配下：${sites.length}件</p></div><div class="org-region-members"><p class="org-region-members-label">${esc(region.name)}に属する店舗・事業所</p>${siteGrid(region,sites)}</div></section>`}).join('')}</div></div><p class="org-diagram-caption">同じ枠内の店舗・事業所は、同じ会社・カテゴリに属します。件数が増えると下の行へ折り返して表示します。</p>`;renderDiagramSelection();ensureOrgToolbars();syncMoveUndo();syncSelectToolbar();renderDeliveryBulk()}
 
-function selectDiagramNode(id){if(pending.has('node')&&!confirm('入力途中の組織を破棄して選択を切り替えますか？'))return;const node=org.nodes.find(n=>n.id===id);if(!node)return;pending.delete('node');diagramSelection=id;if(node.kind==='company')newNode();else editNode(id);tree()}
+function visibleSites(){return [...document.querySelectorAll('#org-tree [data-org-kind="site"]')].map(el=>el.dataset.orgSelect)}
+function currentCompanySites(){const root=selectedRoot();return root?org.nodes.filter(n=>n.customer_id===root.customer_id&&n.kind==='site'):[]}
+function selectAllSites(on){selectedSites=new Set(on?currentCompanySites().map(n=>n.id):[]);renderDeliveryBulk();tree();syncSelectToolbar()}
+function selectDiagramNode(id,opts={}){const node=org.nodes.find(n=>n.id===id);if(!node)return;if(!opts.keepPending&&pending.has('node')&&!confirm('入力途中の組織を破棄して選択を切り替えますか？'))return;if(!opts.keepPending)pending.delete('node');diagramSelection=id;if(!opts.silent){if(node.kind==='company')newNode();else if(!(opts.multiOnly&&node.kind==='site'))editNode(id)}tree();renderDeliveryBulk()}
 function addDiagramNode(kind,parentId=null){if(pending.has('node')&&!confirm('入力途中の組織を破棄して追加しますか？'))return;const selected=org.nodes.find(n=>n.id===(parentId||diagramSelection))||selectedRoot();if(!selected)return;if(kind==='site'&&selected.kind==='company')return notice('先にカテゴリを作成し、そのカテゴリを選んでください。');diagramSelection=selected.id;tree();newNode();$('#org-kind').value=kind;parentOptions();$('#org-parent').value=kind==='region'?selectedRoot().id:(selected.kind==='site'?selected.parent_id:selected.id);$('#org-editor').hidden=false;$('#org-editor-title').textContent=(kind==='region'?'カテゴリ':'店舗・事業所')+'を追加';$('#org-name').focus();$('#org-editor').scrollIntoView({block:'nearest',behavior:'smooth'});setStatus()}
 
 function parentOptions(){const kind=$('#org-kind').value,old=$('#org-parent').value,root=selectedRoot(),allowed=root?descendants(root.id):new Set();$('#org-parent').innerHTML='<option value="">所属先を選択</option>'+nodeOptions(org.nodes.filter(n=>allowed.has(n.id)&&n.id!==editing&&(kind==='region'?n.kind==='company':n.kind==='region')));if(old&&[...$('#org-parent').options].some(o=>o.value===old))$('#org-parent').value=old;else if(kind==='region'&&root)$('#org-parent').value=root.id;$('#org-parent').disabled=!admin();$('#org-source-customer-fields').hidden=true;updateNameLabel();updatePlacementPreview();}
@@ -57,25 +61,28 @@ function scopeSelectors(){const a=$('#org-account').value,u=$('#org-staff').valu
 function configurePanel(mode){const web=mode==='web-settings',picker=$('#org-customer-start');if(web)$('#web-page-customer').append(picker);else $('#organization').insertBefore(picker,$('.org-structure-layout'));$('#org-customer-help').textContent=web?'顧客を選ぶと、その顧客のページ・利用者設定を表示します。組織構成の登録・変更は顧客・契約管理で行います。':'顧客を選ぶと、そのままカテゴリ・店舗・事業所を追加できます。変更は画面下部の「変更をまとめて保存」で確定します。';$('#web-page-editors').hidden=!admin();$('#web-page-permission').hidden=admin();$('#web-page-save').hidden=!admin();const url=new URL('/customer-contracts',location.origin);url.searchParams.set('page','organization');if($('#org-root-customer').value)url.searchParams.set('customer_id',$('#org-root-customer').value);$('#web-organization-link').href=url.pathname+url.search;}
 function render(){if(pending.size)return;rootOptions();configurePanel(desk().getMode());prepareSelectedRoot();tree();scopeSelectors();newNode();$('#org-access-editors').hidden=!admin();$('#org-access-section').hidden=!admin()||!selectedRoot();$('#org-editor').hidden=!selectedRoot();$('#org-node-form').hidden=!admin();$('#org-editor-title').hidden=!admin();$('#org-editor-title').nextElementSibling.hidden=!admin();$('#org-placement').hidden=!admin();$('#org-save').hidden=!admin();setStatus()}
 function canLeave(){if(saving||userSaving||$('#web-user-editor').open)return false;if(window.CustomerDirectory&&!window.CustomerDirectory.canLeaveCompany())return false;if((dirty||pending.size)&&!confirm('保存していない組織・利用範囲の変更を破棄しますか？'))return false;if(dirty||pending.size){org=clone(data().organizations||org);dirty=false;moveHistory=[];pending.clear();render()}return true}
-function received(){org=clone(data().organizations||{version:0,nodes:[],customer_scopes:[],staff_scopes:[],accounts:[]});org.request_pages??=[];dirty=false;moveHistory=[];syncMoveUndo();pending.clear();selectedCompany='';selectedRegion='';$('#org-company-filter').value='';$('#org-region-filter').value='';filters();desk().refreshCustomers();render();const preview=!!(data().previewAccountId||data().previewPageId);$('#scope-preview-banner').hidden=!preview;$('#scope-preview-label').textContent=preview?(data().previewPageName||data().previewAccountName)+'の表示範囲を確認中'+(data().previewCanRequest?'（依頼可能）':'（閲覧のみ）'):'';for(const name of ['organization','settings','staff','setup','web-settings'])document.querySelectorAll(`[data-tab="${name}"]`).forEach(e=>e.hidden=preview||(name==='setup'&&location.pathname!=='/customer-contracts'));$('#request-form button[type=submit]').disabled=data().previewCanRequest===false;if(preview)desk().tab('order');}
+function received(){org=clone(data().organizations||{version:0,nodes:[],customer_scopes:[],staff_scopes:[],accounts:[]});org.request_pages??=[];dirty=false;moveHistory=[];syncMoveUndo();pending.clear();selectedCompany='';selectedRegion='';$('#org-company-filter').value='';$('#org-region-filter').value='';filters();desk().refreshCustomers();render();const preview=!!(data().previewAccountId||data().previewPageId);$('#scope-preview-banner').hidden=!preview;$('#scope-preview-label').textContent=preview?(data().previewPageName||data().previewAccountName)+'の表示範囲を確認中'+(data().previewCanRequest?'（依頼可能）':'（閲覧のみ）'):'';for(const name of ['organization','settings','details','staff','setup','web-settings'])document.querySelectorAll(`[data-tab="${name}"]`).forEach(e=>e.hidden=preview||(name==='setup'&&location.pathname!=='/customer-contracts'));$('#request-form button[type=submit]').disabled=data().previewCanRequest===false;if(preview)desk().tab('order');}
 $('#org-root-customer').onchange=()=>{if(window.CustomerDirectory&&!window.CustomerDirectory.canLeaveCompany())return false;if(pending.size&&!confirm('入力途中の組織・ページ・利用者設定を破棄して顧客を切り替えますか？'))return false;pending.clear();diagramSelection=null;render();desk().syncCommonCustomer();return true};
 $('#org-parent').onchange=()=>{mark('node');updatePlacementPreview()};$('#org-kind').onchange=()=>{parentOptions();mark('node')};$('#org-customer-search').oninput=inventoryOptions;$('#org-customer').onchange=()=>{const c=data().customers.find(x=>x.id===Number($('#org-customer').value));if(c)$('#org-name').value=c.name;mark('node')};
 $('#org-node-form').onsubmit=e=>{e.preventDefault();if(!admin())return;if(!selectedRoot())return notice('先に顧客を選択してカテゴリ・拠点の設定を開始してください。');if(pending.has('account')||pending.has('staff')||pending.has('page'))return notice('先に入力中の利用範囲・担当範囲を適用してください。');const kind=$('#org-kind').value,parent=$('#org-parent').value||null,name=$('#org-name').value.trim(),customer=Number($('#org-root-customer').value),old=org.nodes.find(n=>n.id===editing);if(kind!=='company'&&!parent)return notice('所属先を選択してください。');if(kind==='site'&&!customer)return notice('在庫顧客を選択してください。');if(org.nodes.some(n=>n.id!==editing&&n.parent_id===parent&&nameKey(n.name)===nameKey(name)))return notice('同じ所属先に同名の組織があります。');if(old&&old.kind!==kind&&org.nodes.some(n=>n.parent_id===old.id))return notice('下に組織があるため、種類は変更できません。');const n={id:editing||crypto.randomUUID?.()||('org-'+Date.now()+'-'+Math.random().toString(36).slice(2)),kind,parent_id:kind==='company'?null:parent,name,customer_id:customer,site_type:kind==='site'?(old?.site_type||'その他'):''};if(old)Object.assign(old,n);else org.nodes.push(n);diagramSelection=n.id;pending.delete('node');mark();tree();scopeSelectors();newNode(true);notice('編集中の一覧に適用しました。最後にまとめて保存してください。')};
 $('#org-node-new').onclick=()=>{if(!pending.has('node')||confirm('入力途中の組織を破棄しますか？'))newNode()};
 $('#org-node-delete').onclick=()=>{if(!admin()||!editing)return;if(org.nodes.some(n=>n.parent_id===editing))return notice('下にカテゴリ・拠点があります。先にそれらを移動または削除してください。');if((org.request_pages||[]).some(p=>p.node_ids.includes(editing))||org.customer_scopes.some(s=>(s.node_ids||[]).includes(editing))||org.staff_scopes.some(s=>s.node_id===editing))return notice('利用範囲・担当範囲で使用中です。先に範囲の指定を外してください。');if(!confirm('選択した組織を編集中の一覧から削除しますか？在庫の顧客は削除されません。'))return;org.nodes=org.nodes.filter(n=>n.id!==editing);mark();render()};
-$('#org-tree').onclick=e=>{const select=e.target.closest('[data-org-select]'),add=e.target.closest('[data-org-add]'),settings=e.target.closest('[data-org-settings]');const jump=e.target.closest('[data-org-jump]');if(jump)selectDiagramNode(jump.dataset.orgJump);if(select)selectDiagramNode(select.dataset.orgSelect);if(add)addDiagramNode(add.dataset.orgAdd,add.dataset.orgAddParent);if(settings){if(dirty||pending.size)return notice('先に組織・利用範囲をまとめて保存してください。');if(!canLeave())return;$('#org-company-filter').value='';regionFilter();$('#org-region-filter').value='';desk().tab('settings');desk().selectCustomer(Number(settings.dataset.orgSettings));if(settings.dataset.orgScope){$('#scope-select').value=settings.dataset.orgScope;$('#scope-select').onchange()}}};
+$('#org-tree').onclick=e=>{const select=e.target.closest('[data-org-select]'),add=e.target.closest('[data-org-add]'),settings=e.target.closest('[data-org-settings]');const jump=e.target.closest('[data-org-jump]');if(jump)selectDiagramNode(jump.dataset.orgJump);if(select){const node=org.nodes.find(n=>n.id===select.dataset.orgSelect);if(node?.kind==='site'&&(e.ctrlKey||e.metaKey||e.shiftKey)){e.preventDefault();toggleSiteSelection(node.id,e);return}if(node?.kind==='site'){selectedSites=new Set([node.id]);lastSiteClick=node.id}else selectedSites.clear();selectDiagramNode(select.dataset.orgSelect);}if(add)addDiagramNode(add.dataset.orgAdd,add.dataset.orgAddParent);if(settings){if(dirty||pending.size)return notice('先に組織・利用範囲をまとめて保存してください。');if(!canLeave())return;$('#org-company-filter').value='';regionFilter();$('#org-region-filter').value='';desk().tab('settings');desk().selectCustomer(Number(settings.dataset.orgSettings));if(settings.dataset.orgScope){$('#scope-select').value=settings.dataset.orgScope;$('#scope-select').onchange()}}};
 $('#org-selection').onclick=e=>$('#org-tree').onclick(e);
 
 function syncMoveUndo(){const button=$('#org-move-undo');if(button){button.disabled=!admin()||saving||!moveHistory.length;button.hidden=!admin();$('#org-move-state').textContent=moveHistory.length?'未保存のドラッグ移動：'+moveHistory.length+'件':'移動したら図に反映されます。最後に「まとめて保存」で確定します。'}}
 function validDrop(site,parent){return admin()&&!saving&&!pending.size&&site?.kind==='site'&&parent&&parent.kind==='region'&&site.customer_id===parent.customer_id&&site.parent_id!==parent.id&&!org.nodes.some(n=>n.id!==site.id&&n.parent_id===parent.id&&nameKey(n.name)===nameKey(site.name))}
 function clearDropHighlights(){document.querySelectorAll('#org-tree .drop-ready,#org-tree .drop-over,#org-tree .dragging').forEach(el=>el.classList.remove('drop-ready','drop-over','dragging'))}
-function refreshAfterMove(site){diagramSelection=site.id;tree();scopeSelectors();if(editing===site.id)editNode(site.id);else parentOptions();setStatus();syncMoveUndo()}
+function refreshAfterMove(site){if(site)diagramSelection=site.id;tree();scopeSelectors();if(site&&editing===site.id)editNode(site.id);else parentOptions();setStatus();syncMoveUndo();renderDeliveryBulk()}
 function moveSite(site,parent){if(!validDrop(site,parent))return false;moveHistory.push({id:site.id,from:site.parent_id,to:parent.id,dirtyBefore:dirty});if(moveHistory.length>50)moveHistory.shift();site.parent_id=parent.id;dirty=true;refreshAfterMove(site);notice(site.name+'を'+parent.name+'へ移動しました。ドラッグで戻すか「移動を元に戻す」で取り消せます。');return true}
-$('#org-tree').addEventListener('dragstart',e=>{const card=e.target.closest('[data-org-select]'),site=org.nodes.find(n=>n.id===card?.dataset.orgSelect);if(!admin()||saving||pending.size||site?.kind!=='site'){e.preventDefault();if(pending.size)notice('入力中の内容を追加・適用するかクリアしてから、ドラッグしてください。');return}draggedSite=site.id;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',site.id);card.classList.add('dragging');document.querySelectorAll('#org-tree [data-org-drop]').forEach(el=>{if(validDrop(site,org.nodes.find(n=>n.id===el.dataset.orgDrop)))el.classList.add('drop-ready')})});
-$('#org-tree').addEventListener('dragover',e=>{const card=e.target.closest('[data-org-drop]'),site=org.nodes.find(n=>n.id===draggedSite),parent=org.nodes.find(n=>n.id===card?.dataset.orgDrop);if(!validDrop(site,parent))return;e.preventDefault();e.dataTransfer.dropEffect='move';document.querySelectorAll('#org-tree .drop-over').forEach(el=>el.classList.remove('drop-over'));card.classList.add('drop-over')});
+function canBatchMove(sites,parent){if(!parent||parent.kind!=='region')return '移動先のカテゴリを確認してください。';const taken=new Set(org.nodes.filter(n=>n.parent_id===parent.id&&n.kind==='site'&&!sites.some(s=>s.id===n.id)).map(n=>nameKey(n.name)));for(const site of sites){if(site.kind!=='site'||site.customer_id!==parent.customer_id)return '同じ会社の拠点だけをまとめて移動できます。';if(site.parent_id===parent.id)continue;if(taken.has(nameKey(site.name)))return '同じ所属先に同名の拠点があるため、まとめて移動できません。';taken.add(nameKey(site.name))}return ''}
+function moveSites(sites,parent){const message=canBatchMove(sites,parent);if(message){notice(message);return false}const moving=sites.filter(s=>s.parent_id!==parent.id);if(!moving.length)return false;const batch=moving.map(s=>({id:s.id,from:s.parent_id,to:parent.id}));moveHistory.push({batch,dirtyBefore:dirty,id:moving[0].id,from:moving[0].parent_id,to:parent.id});if(moveHistory.length>50)moveHistory.shift();moving.forEach(s=>{s.parent_id=parent.id});dirty=true;refreshAfterMove(moving[0]);notice(moving.length===1?moving[0].name+'を'+parent.name+'へ移動しました。':'拠点'+moving.length+'件を'+parent.name+'へ移動しました。最後に「変更をまとめて保存」で確定します。');return true}
+function undoLastMove(){const last=moveHistory.pop();if(!last)return;const items=last.batch||[{id:last.id,from:last.from,to:last.to}];items.slice().reverse().forEach(item=>{const site=org.nodes.find(n=>n.id===item.id);if(site)site.parent_id=item.from});dirty=!!last.dirtyBefore||moveHistory.length>0;refreshAfterMove(org.nodes.find(n=>n.id===(items[0]||last).id));notice('移動を元に戻しました。')}
+$('#org-tree').addEventListener('dragstart',e=>{const card=e.target.closest('[data-org-select]'),site=org.nodes.find(n=>n.id===card?.dataset.orgSelect);if(!admin()||saving||pending.size||site?.kind!=='site'){e.preventDefault();if(pending.size)notice('入力中の内容を追加・適用するかクリアしてから、ドラッグしてください。');return}if(selectedSites.has(site.id)&&selectedSites.size){draggedSites=currentCompanySites().filter(n=>selectedSites.has(n.id))}else{draggedSites=[site];selectedSites=new Set([site.id])}draggedSite=site.id;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',site.id);card.classList.add('dragging');document.querySelectorAll('#org-tree [data-org-select][data-org-kind="site"]').forEach(el=>{if(draggedSites.some(n=>n.id===el.dataset.orgSelect))el.classList.add('dragging')});document.querySelectorAll('#org-tree [data-org-drop]').forEach(el=>{if(canBatchMove(draggedSites,org.nodes.find(n=>n.id===el.dataset.orgDrop))==='')el.classList.add('drop-ready')})});
+$('#org-tree').addEventListener('dragover',e=>{const card=e.target.closest('[data-org-drop]'),sites=draggedSites.length?draggedSites:[org.nodes.find(n=>n.id===draggedSite)].filter(Boolean),parent=org.nodes.find(n=>n.id===card?.dataset.orgDrop);if((sites.length>1?canBatchMove(sites,parent)!=='':!validDrop(sites[0],parent)))return;e.preventDefault();e.dataTransfer.dropEffect='move';document.querySelectorAll('#org-tree .drop-over').forEach(el=>el.classList.remove('drop-over'));card.classList.add('drop-over')});
 $('#org-tree').addEventListener('dragleave',e=>{const card=e.target.closest('[data-org-drop]');if(card&&!card.contains(e.relatedTarget))card.classList.remove('drop-over')});
-$('#org-tree').addEventListener('drop',e=>{const card=e.target.closest('[data-org-drop]'),site=org.nodes.find(n=>n.id===draggedSite),parent=org.nodes.find(n=>n.id===card?.dataset.orgDrop);e.preventDefault();clearDropHighlights();if(validDrop(site,parent))moveSite(site,parent);draggedSite=null});
-$('#org-tree').addEventListener('dragend',()=>{draggedSite=null;clearDropHighlights()});
+$('#org-tree').addEventListener('drop',e=>{const card=e.target.closest('[data-org-drop]'),sites=draggedSites.length?draggedSites:[org.nodes.find(n=>n.id===draggedSite)].filter(Boolean),parent=org.nodes.find(n=>n.id===card?.dataset.orgDrop);e.preventDefault();clearDropHighlights();if(sites.length>1)moveSites(sites,parent);else if(sites[0]&&validDrop(sites[0],parent))moveSite(sites[0],parent);draggedSite=null;draggedSites=[]});
+$('#org-tree').addEventListener('dragend',()=>{draggedSite=null;draggedSites=[];clearDropHighlights()});
 
 let userEditor=null,userSaving=false,userDirty=false;
 async function userApi(body){const response=await fetch('/api/customer-accounts',body?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(body)}:{cache:'no-store'}),result=await response.json();if(!response.ok)throw Error(result.error||'利用者情報を保存できませんでした。');return result}
@@ -96,7 +103,133 @@ $('#org-reload').onclick=()=>{if(canLeave())desk().loadSettings().catch(e=>notic
 $('#org-account-preview').onclick=async()=>{const aid=Number($('#org-account').value);if(!aid)return notice('利用者を選択してください。');if(dirty||pending.size)return notice('組織・利用範囲を保存してから確認してください。');try{await desk().loadSettings(aid)}catch(e){notice(e.message)}};
 $('#scope-preview-exit').onclick=()=>desk().loadSettings().catch(e=>notice(e.message));
 let selectedCompany='',selectedRegion='';$('#org-company-filter').onchange=()=>{const next=$('#org-company-filter').value;regionFilter();if(!desk().refreshCustomers()){$('#org-company-filter').value=selectedCompany;regionFilter();$('#org-region-filter').value=selectedRegion;return}selectedCompany=next;selectedRegion=$('#org-region-filter').value};$('#org-region-filter').onchange=()=>{if(!desk().refreshCustomers()){$('#org-region-filter').value=selectedRegion;return}selectedRegion=$('#org-region-filter').value};
-window.addEventListener('beforeunload',e=>{if(dirty||pending.size){e.preventDefault();e.returnValue=''}});window.addEventListener('web-request-data',received);window.WebRequestOrganization={companySaved:(id,body)=>{rootOptions();$('#org-root-customer').value=String(id);diagramSelection=null;render();const root=selectedRoot();if(root){root.name=body.name;for(const key of nodeFields)root[key]=body[key==='office_code'?'officeCode':key]||'';delete root._prepared;mark();tree()}desk().syncCommonCustomer()},hasChanges:()=>dirty||pending.size>0,render,configurePanel,canLeave,matchesCustomer,customerPath,customerLabel:()=>undefined};if(data().organizations)received();
+window.addEventListener('beforeunload',e=>{if(dirty||pending.size){e.preventDefault();e.returnValue=''}});window.addEventListener('web-request-data',received);function toggleSiteSelection(id,e){
+  const order=visibleSites();
+  if(e.shiftKey&&lastSiteClick&&order.includes(lastSiteClick)&&order.includes(id)){
+    const a=order.indexOf(lastSiteClick),b=order.indexOf(id),from=Math.min(a,b),to=Math.max(a,b);
+    if(!e.ctrlKey&&!e.metaKey)selectedSites=new Set();
+    for(let i=from;i<=to;i++)selectedSites.add(order[i]);
+  }else{
+    if(selectedSites.has(id))selectedSites.delete(id);else selectedSites.add(id);
+    lastSiteClick=id;
+  }
+  diagramSelection=id;
+  tree();
+  renderDeliveryBulk();
+}
+function ensureOrgToolbars(){
+  const treeEl=$('#org-tree');
+  if(!treeEl)return;
+  if(!$('#org-select-toolbar')){
+    const bar=document.createElement('div');
+    bar.id='org-select-toolbar';
+    bar.className='org-select-toolbar';
+    bar.innerHTML='<div class="org-move-toolbar"><span>拠点の複数選択</span><button type="button" id="org-select-all">すべてチェック</button><button type="button" id="org-select-none">すべてチェックを外す</button><button type="button" id="org-move-undo">移動を元に戻す</button><p id="org-move-state"></p><p class="small">Ctrl（または⌘）クリック、Shiftクリック、図の余白をドラッグして複数の拠点を選べます。選んだ拠点はまとめて移動・配送設定できます。</p></div>';
+    const panel=treeEl.closest('.org-diagram-panel')||treeEl.parentElement;
+    panel.insertBefore(bar, treeEl);
+    $('#org-select-all').onclick=()=>selectAllSites(true);
+    $('#org-select-none').onclick=()=>selectAllSites(false);
+    $('#org-move-undo').onclick=()=>undoLastMove();
+  }
+  if(!$('#org-delivery-bulk')){
+    const box=document.createElement('section');
+    box.id='org-delivery-bulk';
+    box.className='org-delivery-bulk request-record';
+    box.hidden=true;
+    box.innerHTML='<h3>選んだ拠点の配送設定</h3><p class="small" id="org-delivery-count"></p><label>配送方法<select id="org-delivery-method"><option value="">未設定</option><option value="自社集配">自社集配</option><option value="福山便">福山便</option><option value="佐川便">佐川便</option><option value="ヤマト便">ヤマト便</option></select></label><fieldset id="org-collection-days" hidden><legend>集配曜日（月〜土・複数可）</legend>'+['月','火','水','木','金','土'].map(d=>'<label class="check"><input type="checkbox" value="'+d+'">'+d+'</label>').join('')+'</fieldset><div class="actions"><button type="button" class="primary" id="org-delivery-apply">選んだ拠点に適用</button></div><p class="small">適用した内容は、下の「変更をまとめて保存」で確定します。</p>';
+    const editor=$('#org-editor');
+    if(editor)editor.insertBefore(box, editor.firstChild);
+    $('#org-delivery-method').onchange=()=>{$('#org-collection-days').hidden=$('#org-delivery-method').value!=='自社集配'};
+    $('#org-delivery-apply').onclick=applyDeliveryBulk;
+  }
+  bindRubberBand();
+}
+function syncSelectToolbar(){
+  const all=$('#org-select-all'),none=$('#org-select-none');
+  if(!all)return;
+  const sites=currentCompanySites();
+  all.disabled=!admin()||!sites.length;
+  none.disabled=!admin()||!selectedSites.size;
+  syncMoveUndo();
+}
+function selectedSiteNodes(){return currentCompanySites().filter(n=>selectedSites.has(n.id))}
+function renderDeliveryBulk(){
+  const box=$('#org-delivery-bulk');
+  if(!box)return;
+  const sites=selectedSiteNodes();
+  box.hidden=!admin()||!sites.length;
+  if($('#org-delivery-count'))$('#org-delivery-count').textContent=sites.length?('選択中の拠点：'+sites.length+'件。配送方法を選んで適用します。'):'';
+  if(!sites.length)return;
+  const methods=[...new Set(sites.map(n=>n.delivery_method||''))];
+  $('#org-delivery-method').value=methods.length===1?methods[0]:'';
+  $('#org-collection-days').hidden=$('#org-delivery-method').value!=='自社集配';
+  const daySet=new Set();
+  let mixed=false;
+  sites.forEach((n,i)=>{
+    const days=n.collection_days||[];
+    if(i===0)days.forEach(d=>daySet.add(d));
+    else if(days.join()!==[...daySet].join())mixed=true;
+  });
+  $('#org-collection-days').querySelectorAll('input').forEach(inp=>{inp.checked=!mixed&&daySet.has(inp.value)});
+}
+function applyDeliveryBulk(){
+  const sites=selectedSiteNodes();
+  if(!sites.length)return notice('先に拠点を選んでください。');
+  const method=$('#org-delivery-method').value;
+  if(method&&!['自社集配','福山便','佐川便','ヤマト便'].includes(method))return notice('配送方法を確認してください。');
+  const days=method==='自社集配'?[...$('#org-collection-days').querySelectorAll('input:checked')].map(x=>x.value):[];
+  sites.forEach(n=>{n.delivery_method=method;n.collection_days=days});
+  mark();
+  tree();
+  renderDeliveryBulk();
+  notice('選んだ拠点'+sites.length+'件に配送設定を適用しました。最後に「変更をまとめて保存」を押してください。');
+}
+function bindRubberBand(){
+  const canvas=$('#org-tree');
+  if(!canvas||canvas.dataset.rubberBound)return;
+  canvas.dataset.rubberBound='1';
+  canvas.addEventListener('mousedown',e=>{
+    if(e.button!==0||!admin())return;
+    if(e.target.closest('[data-org-select],[data-org-drop],[data-org-add],[data-org-settings],[data-org-jump],button,input,select,label,a'))return;
+    e.preventDefault();
+    const rect=canvas.getBoundingClientRect();
+    band={x:e.clientX,y:e.clientY,ox:e.clientX-rect.left+canvas.scrollLeft,oy:e.clientY-rect.top+canvas.scrollTop};
+    let box=document.getElementById('org-rubber-band');
+    if(!box){box=document.createElement('div');box.id='org-rubber-band';canvas.appendChild(box)}
+    const style=getComputedStyle(canvas);
+    if(style.position==='static')canvas.style.position='relative';
+    const move=ev=>{
+      if(!band)return;
+      const r=canvas.getBoundingClientRect();
+      const x=Math.min(band.x,ev.clientX)-r.left+canvas.scrollLeft,y=Math.min(band.y,ev.clientY)-r.top+canvas.scrollTop;
+      const w=Math.abs(ev.clientX-band.x),h=Math.abs(ev.clientY-band.y);
+      Object.assign(box.style,{display:'block',left:x+'px',top:y+'px',width:w+'px',height:h+'px'});
+    };
+    const up=ev=>{
+      document.removeEventListener('mousemove',move);
+      document.removeEventListener('mouseup',up);
+      if(!band)return;
+      const w=Math.abs(ev.clientX-band.x),h=Math.abs(ev.clientY-band.y);
+      box.style.display='none';
+      if(w>4||h>4){
+        const left=Math.min(band.x,ev.clientX),top=Math.min(band.y,ev.clientY),right=left+Math.max(w,1),bottom=top+Math.max(h,1);
+        if(!ev.ctrlKey&&!ev.metaKey&&!ev.shiftKey)selectedSites=new Set();
+        document.querySelectorAll('#org-tree [data-org-kind="site"]').forEach(el=>{
+          const r=el.getBoundingClientRect();
+          if(r.right>=left&&r.left<=right&&r.bottom>=top&&r.top<=bottom)selectedSites.add(el.dataset.orgSelect);
+        });
+        if(selectedSites.size){const first=[...selectedSites][0];diagramSelection=first;lastSiteClick=first}
+        tree();
+        renderDeliveryBulk();
+      }
+      band=null;
+    };
+    document.addEventListener('mousemove',move);
+    document.addEventListener('mouseup',up);
+  });
+}
+
+window.WebRequestOrganization={companySaved:(id,body)=>{rootOptions();$('#org-root-customer').value=String(id);diagramSelection=null;render();const root=selectedRoot();if(root){root.name=body.name;for(const key of nodeFields)root[key]=body[key==='office_code'?'officeCode':key]||'';delete root._prepared;mark();tree()}desk().syncCommonCustomer()},hasChanges:()=>dirty||pending.size>0,render,configurePanel,canLeave,matchesCustomer,customerPath,customerLabel:()=>undefined};if(data().organizations)received();
 $('#org-root-search').onfocus=()=>{rootCandidates(true);$('#org-root-search').select()};$('#org-root-search').oninput=e=>{if(!e.isComposing)rootCandidates()};$('#org-root-search').addEventListener('compositionend',()=>rootCandidates());$('#org-root-search').onblur=syncRootSearch;
 $('#org-root-search').onkeydown=e=>{if(e.isComposing)return;if(e.key==='Escape'){e.preventDefault();syncRootSearch();return}if(['ArrowDown','ArrowUp'].includes(e.key)){e.preventDefault();if($('#org-root-options').hidden)rootCandidates(true);if(!rootMatches.length)return;rootCursor=Math.max(0,Math.min(rootMatches.length-1,rootCursor+(e.key==='ArrowDown'?1:-1)));$('#org-root-options').querySelectorAll('[role=option]').forEach((x,i)=>x.classList.toggle('highlighted',i===rootCursor));const item=$('#org-root-option-'+rootCursor);$('#org-root-search').setAttribute('aria-activedescendant',item.id);item.scrollIntoView({block:'nearest'})}if(e.key==='Enter'&&!$('#org-root-options').hidden){e.preventDefault();if(rootCursor>=0)chooseRoot(rootMatches[rootCursor].id);else if(rootMatches.length===1)chooseRoot(rootMatches[0].id)}};
 $('#org-root-options').onpointerdown=e=>{const item=e.target.closest('[data-org-customer-id]');if(item){e.preventDefault();chooseRoot(Number(item.dataset.orgCustomerId))}};

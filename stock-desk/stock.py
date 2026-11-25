@@ -863,6 +863,7 @@ def migrate_schema(c):
     customer_cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
     if 'office_code' not in customer_cols:
         c.execute("ALTER TABLE customers ADD COLUMN office_code TEXT NOT NULL DEFAULT ''")
+    ensure_customer_profile_columns(c)
     move_cols = {r['name'] for r in c.execute('PRAGMA table_info(moves)')}
     if 'move_batch_id' not in move_cols:
         c.execute('ALTER TABLE moves ADD COLUMN move_batch_id INTEGER REFERENCES move_batches(id)')
@@ -1285,7 +1286,71 @@ def stamp():
     return now()
 
 
+
+CUSTOMER_CODE_RE = re.compile(r'^C[0-9]{4,10}$')
+CUSTOMER_PROFILE_COLUMNS = (
+    ('customer_code', ''),
+    ('postal_code', ''),
+    ('fax', ''),
+    ('email', ''),
+    ('memo', ''),
+)
+
+
+def ensure_customer_profile_columns(c):
+    """Add profile columns and fill empty 顧客コード only. Never overwrite a set code or office_code."""
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
+    if 'customers' not in {r['name'] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}:
+        return
+    for name, default in CUSTOMER_PROFILE_COLUMNS:
+        if name not in cols:
+            c.execute("ALTER TABLE customers ADD COLUMN %s TEXT NOT NULL DEFAULT %s" % (name, repr(default)))
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS customers_customer_code_unique "
+        "ON customers(customer_code) WHERE customer_code != ''"
+    )
+    assign_customer_codes(c)
+
+
+def assign_customer_codes(c):
+    """Assign C0001-style codes in internal id order to rows that still have none."""
+    cols = {r['name'] for r in c.execute('PRAGMA table_info(customers)')}
+    if 'customer_code' not in cols:
+        return
+    rows = list(c.execute('SELECT id, customer_code FROM customers ORDER BY id'))
+    used = {(r['customer_code'] or '').strip() for r in rows if (r['customer_code'] or '').strip()}
+    next_n = 1
+    for r in rows:
+        if (r['customer_code'] or '').strip():
+            continue
+        while 'C%04d' % next_n in used:
+            next_n += 1
+        code = 'C%04d' % next_n
+        used.add(code)
+        c.execute('UPDATE customers SET customer_code=? WHERE id=?', (code, r['id']))
+        next_n += 1
+
+
+def next_customer_code(c):
+    used = {(r['customer_code'] or '').strip() for r in c.execute(
+        "SELECT customer_code FROM customers WHERE IFNULL(customer_code,'') != ''")}
+    n = 1
+    while 'C%04d' % n in used:
+        n += 1
+    return 'C%04d' % n
+
+
+def normalize_customer_code(value):
+    if not isinstance(value, str):
+        raise ValueError('顧客コードを確認してください。')
+    value = value.strip()
+    if not CUSTOMER_CODE_RE.fullmatch(value):
+        raise ValueError('顧客コードは C0001 のような「C」と4桁以上の数字で入力してください。')
+    return value
+
+
 def save_customer(c, body):
+    ensure_customer_profile_columns(c)
     name = need(body.get('name'), '顧客名')
     kana = optional(body.get('kana'), 'フリガナ', 80)
     address = optional(body.get('address'), '住所', 200)
@@ -1293,11 +1358,17 @@ def save_customer(c, body):
     contact = optional(body.get('contact'), '担当者', 80)
     has_office = 'officeCode' in body
     office_code = optional(body.get('officeCode'), '営業所コード', 40) if has_office else ''
+    has_code = 'customerCode' in body
+    customer_code = normalize_customer_code(body.get('customerCode')) if has_code and body.get('customerCode') not in (None, '') else None
+    postal_code = optional(body.get('postalCode'), '郵便番号', 20) if 'postalCode' in body else None
+    fax = optional(body.get('fax'), 'FAX', 40) if 'fax' in body else None
+    email = optional(body.get('email'), 'メール', 120) if 'email' in body else None
+    memo = optional(body.get('memo'), 'メモ', 2000) if 'memo' in body else None
     active = flag(body.get('active', True))
     t = stamp()
     cid = body.get('id')
     if cid:
-        row = c.execute('SELECT id FROM customers WHERE id=?', (cid,)).fetchone()
+        row = c.execute('SELECT id, customer_code FROM customers WHERE id=?', (cid,)).fetchone()
         if not row:
             raise ValueError('顧客が見つかりません。')
         other = c.execute('SELECT id FROM customers WHERE name=? AND id<>?', (name, cid)).fetchone()
@@ -1307,14 +1378,36 @@ def save_customer(c, body):
                   (name, kana, address, phone, contact, active, t, cid))
         if has_office:
             c.execute('UPDATE customers SET office_code=? WHERE id=?', (office_code, cid))
+        if has_code:
+            code = customer_code or (row['customer_code'] or '').strip()
+            if not code:
+                code = next_customer_code(c)
+            else:
+                code = normalize_customer_code(code)
+            conflict = c.execute('SELECT id FROM customers WHERE customer_code=? AND id<>?', (code, cid)).fetchone()
+            if conflict:
+                raise ValueError('同じ顧客コードが既にあります。別の番号を指定してください。')
+            c.execute('UPDATE customers SET customer_code=? WHERE id=?', (code, cid))
+        extras = [('postal_code', postal_code), ('fax', fax), ('email', email), ('memo', memo)]
+        for column, value in extras:
+            if value is not None:
+                c.execute('UPDATE customers SET %s=? WHERE id=?' % column, (value, cid))
     else:
         if c.execute('SELECT id FROM customers WHERE name=?', (name,)).fetchone():
             raise ValueError('同じ名前の顧客が既にあります。新しい顧客を増やさず、一覧から修正してください。')
-        c.execute('INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
-                  (name, kana, address, phone, contact, active, t, t))
+        code = customer_code or next_customer_code(c)
+        conflict = c.execute('SELECT id FROM customers WHERE customer_code=?', (code,)).fetchone()
+        if conflict:
+            raise ValueError('同じ顧客コードが既にあります。別の番号を指定してください。')
+        c.execute('INSERT INTO customers(name,kana,address,phone,contact,active,created_at,updated_at,customer_code) VALUES(?,?,?,?,?,?,?,?,?)',
+                  (name, kana, address, phone, contact, active, t, t, code))
         cid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
         if office_code:
             c.execute('UPDATE customers SET office_code=? WHERE id=?', (office_code, cid))
+        extras = [('postal_code', postal_code), ('fax', fax), ('email', email), ('memo', memo)]
+        for column, value in extras:
+            if value is not None:
+                c.execute('UPDATE customers SET %s=? WHERE id=?' % column, (value, cid))
     return customer_row(c, cid)
 
 
@@ -2306,9 +2399,17 @@ def batch_result(c, batch_id, already):
 
 def customer_row(c, cid):
     r = c.execute('SELECT * FROM customers WHERE id=?', (cid,)).fetchone()
+    keys = r.keys()
+    def col(name):
+        return (r[name] if name in keys else '') or ''
     return {'id': r['id'], 'name': r['name'], 'kana': r['kana'], 'address': r['address'], 'phone': r['phone'],
             'contact': r['contact'], 'active': bool(r['active']), 'sortKey': customer_sort_key(r['name']),
-            'officeCode': (r['office_code'] if 'office_code' in r.keys() else '') or ''}
+            'officeCode': col('office_code'),
+            'customerCode': col('customer_code'),
+            'postalCode': col('postal_code'),
+            'fax': col('fax'),
+            'email': col('email'),
+            'memo': col('memo')}
 
 
 def supplier_row(c, sid):
