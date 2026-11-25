@@ -155,13 +155,12 @@ table.products-list th:nth-child(6),table.products-list td.prod-act{width:6.75re
 .bar .check input,.bar .inactive-toggle input{min-width:0;width:auto}
 dialog{border:0;border-radius:12px;width:min(880px,94vw);padding:0;max-height:min(92vh,920px);box-sizing:border-box;flex-direction:column;overflow:hidden}dialog::backdrop{background:#1e332866}
 dialog[open]{display:flex}
-/* form wrappers (登録・修正): % max-height fails when dialog only has max-height, so use the same vh cap */
-dialog>form{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;max-height:min(92vh,920px);width:100%;overflow:hidden;margin:0;box-sizing:border-box}
+/* form wrappers (登録・修正): % max-height fails when dialog only has max-height, so inherit each dialog's own vh cap */
+dialog>form{display:flex;flex-direction:column;flex:1 1 auto;min-height:0;max-height:inherit;width:100%;overflow:hidden;margin:0;box-sizing:border-box}
 .dialoghead,.dialogbody,.dialogactions{padding:16px 18px}.dialoghead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);flex:0 0 auto}
 .dialoghead h2{margin:0;font-size:1.2rem}.dialogactions{display:flex;gap:8px;justify-content:flex-end;border-top:1px solid var(--line);flex:0 0 auto}
 .dialogbody{overflow:auto;flex:1 1 auto;min-height:0}
 dialog.opening-dialog{width:min(1100px,96vw);max-height:min(94vh,980px)}
-dialog.opening-dialog>form{max-height:min(94vh,980px)}
 dialog.opening-dialog .dialogbody{padding-bottom:8px}
 #error{color:#9a3418;font-weight:700;min-height:1.2em;flex:0 0 auto;margin:0;padding:0 18px}footer{padding:0 28px 24px;color:#3d5146;display:flex;gap:12px;align-items:center}
 /* width:max-content + max-width keeps long Japanese errors readable and centered
