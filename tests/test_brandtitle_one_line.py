@@ -63,6 +63,12 @@ class BrandTitleSourceTest(unittest.TestCase):
         self.assertLess(top.index('id="brandtitle"'), aside.index('業務を切り替える'))
         menu = picking_html[picking_html.index('aside class="deskmenu"'):picking_html.index('</aside>')]
         self.assertLess(menu.index('src="/logo.jpg"'), menu.index('指示書デスク'))
+        js = (ROOT / 'workspace-switcher.js').read_text(encoding='utf-8')
+        self.assertIn('function placeSidebarSwitch()', js)
+        self.assertIn('title.before(link)', js)
+        self.assertIn('.brand:has(.workspace-back){gap:0}', style)
+        self.assertIn('margin:12px 0', style)
+        self.assertIn('aside.deskmenu .brand:has(.workspace-back){gap:0}', picking)
 
 
 @unittest.skipUnless(playwright_available(), 'playwright が必要です')
@@ -84,9 +90,10 @@ class BrandTitleBrowserTest(unittest.TestCase):
             '<div class="brandrow"><img class="brandlogo" src="/logo.jpg" alt="">'
             '<img class="mascots" src="/mascots.png" alt=""></div>'
             '<span id="brandtitle">指示書デスク</span></div>'
-            '<a class="workspace-back" href="/">業務を切り替える</a>'
+            '<a class="workspace-back" href="/" data-workspace-switch>業務を切り替える</a>'
             '<div id="desknav"><button type="button" class="nav">指示書一覧</button></div>'
             '</aside>'
+            '<script src="/workspace-switcher.js"></script>'
         )
         fixture = ROOT / 'tests/_brandtitle_fixture.html'
         fixture.write_text(html, encoding='utf-8')
@@ -132,7 +139,9 @@ class BrandTitleBrowserTest(unittest.TestCase):
                             sameRow: Math.abs(logo.top - mascots.top) < 2 && Math.abs(logo.bottom - mascots.bottom) < 2,
                             contentW: logo.width - padX,
                             contentH: logo.height - padY,
-                            stacked: row.bottom <= box.top + 0.5 && box.bottom <= switcher.top + 0.5 && switcher.bottom <= nav.top + 0.5,
+                            stacked: row.bottom <= switcher.top + 0.5 && switcher.bottom <= box.top + 0.5 && box.bottom <= nav.top + 0.5,
+                            gapAbove: switcher.top - row.bottom,
+                            gapBelow: box.top - switcher.bottom,
                           };
                         }''',
                         title,
@@ -142,6 +151,8 @@ class BrandTitleBrowserTest(unittest.TestCase):
                     self.assertLess(info['overflow'], 1, title)
                     self.assertFalse(info['clipped'], title)
                     self.assertTrue(info['stacked'], title)
+                    self.assertGreaterEqual(info['gapAbove'], 10, title)
+                    self.assertGreaterEqual(info['gapBelow'], 10, title)
                     self.assertTrue(info['sideBySide'], title)
                     self.assertTrue(info['sameRow'], title)
                     self.assertLess(info['logoLeft'], 1, title)

@@ -11,5 +11,7 @@ document.addEventListener('click',e=>{const target=e.target.closest('[data-works
 document.addEventListener('pointerdown',e=>{if(shown&&!panel.contains(e.target)&&!e.target.closest('[data-workspace-switch]'))close()});
 document.addEventListener('focusin',e=>{if(shown&&!panel.contains(e.target)&&e.target!==trigger)close()});
 document.addEventListener('keydown',e=>{if(shown&&e.key==='Escape'){e.preventDefault();close(true)}});
+function placeSidebarSwitch(){document.querySelectorAll('aside').forEach(aside=>{const brand=aside.querySelector('.brand'),row=brand&&brand.querySelector('.brandrow');if(!brand||!row)return;const link=aside.querySelector('.workspace-back, a[data-workspace-switch]');if(!link||!aside.contains(link))return;const title=brand.querySelector('#brandtitle')||brand.querySelector(':scope > span');if(title)title.before(link);else row.after(link)})}
+placeSidebarSwitch();
 window.addEventListener('resize',position);document.addEventListener('scroll',e=>{if(shown&&!panel.contains(e.target))position()},true);
 })();
