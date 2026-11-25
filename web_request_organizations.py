@@ -6,6 +6,22 @@ import unicodedata
 import uuid
 
 
+DELIVERY_METHODS = ('', '自社集配', '福山便', '佐川便', 'ヤマト便')
+COLLECTION_DAYS = ('月', '火', '水', '木', '金', '土')
+NODE_TEXT_FIELDS = (
+    ('kana', 80),
+    ('office_code', 40),
+    ('address', 200),
+    ('phone', 40),
+    ('contact', 80),
+    ('postal_code', 20),
+    ('fax', 40),
+    ('email', 120),
+    ('memo', 2000),
+    ('official_name', 100),
+)
+
+
 def schema(c):
     c.executescript("""
     CREATE TABLE IF NOT EXISTS web_request_org_settings (
@@ -147,11 +163,26 @@ def validate(payload,customers,staff,accounts):
         if kind=='company' and 'personnel_registration' in node:
             if type(node['personnel_registration']) is not bool:raise ValueError('会社の人員登録設定を確認してください。')
             result[-1]['personnel_registration']=node['personnel_registration']
-        for field,limit in [('kana',80),('office_code',40),('address',200),('phone',40),('contact',80)]:
+        for field,limit in NODE_TEXT_FIELDS:
             if field not in node:continue
             value=node[field]
             if not isinstance(value,str) or len(value)>limit:raise ValueError('組織の所在地・連絡先を確認してください。')
             result[-1][field]=value.strip()
+        if 'delivery_method' in node:
+            method=node['delivery_method']
+            if method not in DELIVERY_METHODS:raise ValueError('配送方法を確認してください。')
+            result[-1]['delivery_method']=method
+        else:
+            method=result[-1].get('delivery_method','')
+        if 'collection_days' in node:
+            days=node['collection_days']
+            if not isinstance(days,list) or len(days)>6 or len(set(days))!=len(days) or any(d not in COLLECTION_DAYS for d in days):
+                raise ValueError('集配曜日を確認してください。')
+            if method and method!='自社集配' and days:
+                raise ValueError('集配曜日は自社集配のときだけ設定できます。')
+            result[-1]['collection_days']=[d for d in COLLECTION_DAYS if d in days]
+        elif method and method!='自社集配':
+            result[-1]['collection_days']=[]
     byid={n['id']:n for n in result}
     for n in result:
         p=byid.get(n['parent_id'])
