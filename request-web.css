@@ -255,3 +255,4 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 #manual-entry-error{color:#a23928;font-size:13px;margin:4px 0}
 .manual-entry-actions{display:flex;gap:8px}
 .manual-badge{background:#fde9c8!important;color:#8a4b00!important}
+.manual-entry-hint{margin:0 0 6px;color:#526f5c}
