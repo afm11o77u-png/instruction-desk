@@ -2,6 +2,7 @@
 import web_request_inheritance as inheritance
 import web_request_organizations as organizations
 import web_request_department_registry as department_registry
+import web_request_product_display as product_display
 import auth
 import unicodedata
 import json
@@ -26,6 +27,7 @@ def schema(c):
 
     department_registry.schema(c)
     organizations.schema(c)
+    product_display.schema(c)
     inheritance.schema(c)
 
 def catalog(path):
@@ -134,6 +136,7 @@ def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
     libraries={cid for cid in bases if has_library(c,cid)}
     for p in data['profiles']+data['scopeProfiles']:
         if p['customer_id'] in libraries:p['live']=live_config(c,bases[p['customer_id']],org,nodes.get(p.get('node_id')),handles.get(p['customer_id'],{}),products)
+    data['productDisplay']=product_display.read_map(c,[p['id'] for p in data['products']])
     data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
 
