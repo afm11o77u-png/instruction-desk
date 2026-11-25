@@ -7,16 +7,24 @@ const isAdmin=()=>{const d=desk()?.getData?.();return !!(d&&d.isAdmin&&!d.previe
 async function post(body){const r=await fetch('/api/web-request/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(body)});let result={};try{result=await r.json()}catch(e){}if(!r.ok)throw Error(result.error||'取り込みに失敗しました。');return result}
 function readFile(f){return new Promise((ok,ng)=>{const fr=new FileReader();fr.onload=()=>ok(String(fr.result).split(',',2)[1]||'');fr.onerror=()=>ng(Error('ファイルを読み取れませんでした。'));fr.readAsDataURL(f)})}
 function ensure(){
-  const host=$('#organization');if(!host)return null;
+  const actions=window.orgImportActions?.();if(!actions)return null;
+  let btn=$('#collection-import-open');
+  if(!btn){btn=document.createElement('button');btn.type='button';btn.id='collection-import-open';btn.textContent='集配曜日の一括取り込み';btn.onclick=open;actions.append(btn)}
   let box=$('#collection-import');
   if(!box){
-    box=document.createElement('section');box.id='collection-import';box.className='request-record collection-import';
-    box.innerHTML='<h3>集配曜日の一括取り込み</h3><p class="small">顧客マスタ（Excel・CSV）の「集配曜日フラグ」から、拠点の配送方法と集配曜日をまとめて登録します。拠点は営業所コード＝顧客コード、なければ拠点名＝顧客名の店名で探します。先にプレビューを表示し、「この内容で取り込む」を押すまで保存しません。</p><div class="actions"><input id="collection-import-file" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"><button type="button" id="collection-import-preview">プレビュー</button></div><div id="collection-import-result"></div>';
-    const bar=$('#org-site-import')||$('#org-save-bar');if(bar&&bar.parentNode===host)bar.after(box);else host.appendChild(box);
+    box=document.createElement('dialog');box.id='collection-import';box.className='collection-import';box.setAttribute('aria-labelledby','collection-import-title');
+    box.innerHTML='<h2 id="collection-import-title">集配曜日の一括取り込み</h2><p class="small">顧客マスタ（Excel・CSV）の「集配曜日フラグ」から、拠点の配送方法と集配曜日をまとめて登録します。拠点は営業所コード＝顧客コード、なければ拠点名＝顧客名の店名で探します（末尾の「店」や会社名の有無は同じとみなします）。登録済みの拠点だけが対象で、新しい拠点は作りません。先に「拠点の一括取り込み」で拠点を追加して保存してから行ってください。プレビューを表示し、「この内容で取り込む」を押すまで保存しません。</p><div class="actions"><input id="collection-import-file" type="file" accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"><button type="button" id="collection-import-preview">プレビュー</button></div><div id="collection-import-result"></div><div class="dialog-actions"><button type="button" id="collection-import-close">閉じる</button></div>';
+    document.body.append(box);
     $('#collection-import-file').onchange=()=>{file=$('#collection-import-file').files[0]||null;preview=null;show()};
     $('#collection-import-preview').onclick=runPreview;
+    $('#collection-import-close').onclick=()=>box.close();
   }
-  return box;
+  return btn;
+}
+function open(){
+  if(!isAdmin())return;
+  if(window.WebRequestOrganization?.hasChanges?.())desk().notify('組織構成に未保存の変更があります。取り込む前に「変更をまとめて保存」で保存してください。');
+  const box=$('#collection-import');if(box&&!box.open)box.showModal();
 }
 function table(head,rows){return rows.length?'<div class="collection-import-scroll"><table class="collection-import-table"><thead><tr>'+head.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(v=>'<td>'+esc(v)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>':'<p class="small">ありません。</p>'}
 function show(){
@@ -45,10 +53,10 @@ async function runApply(){
   if(window.WebRequestOrganization?.hasChanges?.())return desk().notify('組織構成に未保存の変更があります。先に「変更をまとめて保存」で保存するか、変更を取り消してから取り込んでください。');
   if(!confirm(preview.counts.changes+'件の拠点の配送方法・集配曜日を変更します。よろしいですか？'))return;
   busy=true;show();
-  try{const r=await post({action:'collection_days_import',file:preview._raw,filename:preview._name,confirm:true,organization_version:preview.organization_version,expected_changes:preview.counts.changes});const saved=r.collectionImport?.saved||0;preview=null;file=null;const input=$('#collection-import-file');if(input)input.value='';await desk().loadSettings();desk().notify('集配曜日を'+saved+'件の拠点に取り込みました。')}
+  try{const r=await post({action:'collection_days_import',file:preview._raw,filename:preview._name,confirm:true,organization_version:preview.organization_version,expected_changes:preview.counts.changes});const saved=r.collectionImport?.saved||0;preview=null;file=null;const input=$('#collection-import-file');if(input)input.value='';await desk().loadSettings();$('#collection-import')?.close();desk().notify('集配曜日を'+saved+'件の拠点に取り込みました。')}
   catch(e){desk().notify(e.message)}finally{busy=false;show()}
 }
-function render(){const box=ensure();if(!box)return;box.hidden=!isAdmin()}
+function render(){const btn=ensure();if(!btn)return;btn.hidden=!isAdmin()}
 window.CollectionDaysImport={render};
 window.addEventListener('web-request-data',render);
 render();

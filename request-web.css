@@ -284,3 +284,11 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 #org-site-import-dialog{width:min(780px,94vw);max-width:780px}
 .org-site-import{margin:12px 0}
 .org-site-import .actions{display:flex;gap:8px;flex-wrap:wrap}
+
+/* 構成図の右上：取り込みボタンと「未保存の変更を取り消す」 */
+.org-diagram-panel .org-title-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;align-items:center;margin-left:auto}
+.org-diagram-panel .org-import-actions{display:flex;flex-wrap:wrap;gap:8px}
+.org-diagram-panel .section-title{flex-wrap:wrap;gap:8px}
+.org-diagram-panel .org-title-actions button{margin:0;white-space:nowrap;padding:7px 12px;font-size:13px}
+#collection-import{width:min(900px,94vw);max-width:900px}
+@media(max-width:580px){.org-diagram-panel .org-title-actions{justify-content:flex-start;margin-left:0}}
