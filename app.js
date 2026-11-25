@@ -126,9 +126,51 @@ function orderActionsHtml(o){
 
  return `<button class="quiet open" data-id="${o.id}">開く</button>${posting}${(view==='all'||view==='draft'||view==='done'||view==='shipped'||floorDue)?` <button type="button" class="quiet rowprint" data-id="${o.id}" aria-label="${esc(o.number)}を${o.status==='下書き'?'プレビュー':'印刷'}">${o.status==='下書き'?'プレビュー':'印刷'}</button>`:''}${floorDue?` <button type="button" class="quiet delayopen" data-id="${o.id}" aria-label="遅延を登録">遅延</button>`:''}${(view==='all'&&o.status!=='下書き')?` <button type="button" class="quiet dueopen" data-id="${o.id}" data-mode="confirm" aria-label="納期を確認">納期</button>`:''}`;
 }
+function ownerStatusSelect(o){return `<select class="flagstatus" data-flag="status" data-id="${o.id}" aria-label="作業状況　クリックで変更できます。印刷とピッキングとメールの記録は変わりません。">`+states.filter(s=>s!=='下書き').map(s=>`<option${s===o.status?' selected':''}>${esc(s)}</option>`).join('')+'</select>'}
+const deskCalMonth={};
+function deskLayoutScreen(){return view==='all'&&!shipReview?'orders':view==='floor'?'floor':''}
+function deskLayoutStorage(){try{return window.localStorage}catch(e){return null}}
+function paintDeskLayout(list){
+ const stage=$('#orderliststage');if(!stage||typeof DeskViews==='undefined')return;
+ const screen=deskLayoutScreen(),store=deskLayoutStorage();
+ const layout=screen?DeskViews.loadLayout(store,screen):'list';
+ const count=$('#count');
+ let sw=document.getElementById('desklayoutswitch');
+ if(!sw&&count){sw=document.createElement('div');sw.id='desklayoutswitch';sw.className='dv-switch';sw.setAttribute('role','group');sw.setAttribute('aria-label','見せ方');count.insertAdjacentElement('afterend',sw)}
+ if(sw){sw.hidden=!screen;sw.innerHTML=screen?DeskViews.switchHtml(layout):'';sw.querySelectorAll('[data-desk-layout]').forEach(b=>b.onclick=()=>{DeskViews.saveLayout(store,screen,b.dataset.deskLayout);render()})}
+ let board=document.getElementById('orderlistboard');
+ if(!board){board=document.createElement('div');board.id='orderlistboard';board.className='dv-board';stage.appendChild(board)}
+ stage.classList.toggle('dv-board-on',layout!=='list');
+ board.hidden=layout==='list';
+ if(layout==='list'){board.innerHTML='';return}
+ const sortSel=$('#sort'),dateKey=sortSel?.value||'markShipDate',dateLabel=sortSel?.selectedOptions?.[0]?.textContent||'マーク出荷日';
+ const owner=currentUser?.role==='owner';
+ if(layout==='kanban'){
+  board.innerHTML=DeskViews.kanbanHtml(list,{screen,statusFilter:$('#status')?.value||'',dateKey,dateLabel,today:today(),canDrag:owner,statusHtml:o=>owner&&o.status!=='下書き'?ownerStatusSelect(o):''});
+  bindKanbanDrag(board);
+ }else{
+  const month=deskCalMonth[screen]||today().slice(0,7);
+  board.innerHTML=DeskViews.calendarHtml(list,{month,dateKey,dateLabel,today:today()});
+  board.querySelectorAll('[data-cal-move]').forEach(b=>b.onclick=()=>{const d=Number(b.dataset.calMove);deskCalMonth[screen]=d?DeskViews.shiftMonth(month,d):today().slice(0,7);render()});
+  board.querySelectorAll('.dv-cal-more').forEach(b=>b.onclick=()=>{const day=b.closest('.dv-cal-day');if(!day)return;day.classList.toggle('expanded');b.textContent=day.classList.contains('expanded')?'閉じる':b.dataset.label});
+ }
+}
+function bindKanbanDrag(board){
+ let dragId=null;
+ board.querySelectorAll('.dv-card[draggable="true"]').forEach(card=>{
+  card.ondragstart=e=>{dragId=Number(card.dataset.id);if(e.dataTransfer){e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',String(dragId))}catch(_){}}card.classList.add('dragging')};
+  card.ondragend=()=>{card.classList.remove('dragging');board.querySelectorAll('.dv-col.over').forEach(c=>c.classList.remove('over'))};
+ });
+ board.querySelectorAll('.dv-col').forEach(col=>{
+  col.ondragover=e=>{if(dragId==null)return;e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect='move';col.classList.add('over')};
+  col.ondragleave=e=>{if(!col.contains(e.relatedTarget))col.classList.remove('over')};
+  col.ondrop=e=>{e.preventDefault();col.classList.remove('over');const id=dragId;dragId=null;const order=orders.find(o=>o.id===id);const target=col.dataset.status;if(!order||!target||order.status===target)return;const card=board.querySelector(`.dv-card[data-id="${id}"]`);const body=col.querySelector('.dv-col-body');if(card&&body){body.querySelector('.dv-empty')?.remove();body.prepend(card);card.classList.add('pending')}moveOrderStatusByDrag(order,target)};
+ });
+}
+async function moveOrderStatusByDrag(order,target){try{const r=await DeskViews.moveStatus(api,order,target,currentUser,states);if(!r.changed){render();return}await refresh();toast('作業状況を変更しました。')}catch(e){render();toast(e.message)}}
 function orderStatusBand(o,flagChecks){
  const ownerFlags=currentUser?.role==='owner';
- const badge=o.status==='下書き'?'<span class="badge s'+states.indexOf(o.status)+'">'+(o.postingReady===true?'投函待ち':'編集中')+'</span>':ownerFlags?`<select class="flagstatus" data-flag="status" data-id="${o.id}" aria-label="作業状況　クリックで変更できます。印刷とピッキングとメールの記録は変わりません。">`+states.filter(s=>s!=='下書き').map(s=>`<option${s===o.status?' selected':''}>${esc(s)}</option>`).join('')+'</select>':'<span class="badge s'+states.indexOf(o.status)+'">'+esc(o.status)+'</span>';
+ const badge=o.status==='下書き'?'<span class="badge s'+states.indexOf(o.status)+'">'+(o.postingReady===true?'投函待ち':'編集中')+'</span>':ownerFlags?ownerStatusSelect(o):'<span class="badge s'+states.indexOf(o.status)+'">'+esc(o.status)+'</span>';
  return `<div class="dm-status-band"><span class="dm-status-main">${badge}</span>${flagChecks(o)}</div>${o.postedAt&&['all','done'].includes(view)?`<small class="posting-meta">投函 ${esc(scanWhen(o.postedAt))} ${esc(o.postedBy)}</small>`:''}`;
 }
 function orderStatusBlock(o,flagChecks){
@@ -193,6 +235,7 @@ function render(){
  const gridEl=$('#orderlistgrid');
  if(gridEl){gridEl.innerHTML=grid;gridEl.hidden=mode!=='grid'}
  if(stage&&typeof DisplayMode!=='undefined')DisplayMode.apply(stage,screenId);
+ paintDeskLayout(list);
  const foot=$('#tablefoot');const footBody=foot&&(foot.querySelector('.list-note-body')||foot);const footSummary=foot&&foot.querySelector('summary');const footText=view==='floor'?floorOrderNote:(view==='done'||view==='shipped')&&!doneQuery()?'顧客名・従業員名・指示番号、または期間を指定すると表示します。':(view==='done'||view==='shipped')&&doneTotal>100?'100件まで表示しています。条件を狭めてください。':shipReview?'出荷方法、作業者、バーコード発行を確認して、選んだ指示書を完了にできます。':seesAll()?'本担当ごとにまとめています。代理が作成した場合は、指示書の下に作成者と出ます。':'自分の担当か、自分が作成した指示書を表示しています。期日の早い順です。';if(footBody)footBody.textContent=footText;if(footSummary)footSummary.textContent=view==='floor'?'並び順の説明':'一覧の説明';
  bindOrderListActions(document);
 }

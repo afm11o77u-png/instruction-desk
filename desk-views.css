@@ -1,0 +1,57 @@
+/* 指示書デスク：一覧／かんばん／カレンダー */
+.dv-switch{display:inline-flex;align-items:center;gap:0;margin-left:6px;align-self:center;margin-left:12px;flex:0 0 auto;white-space:nowrap}
+.dv-switch-btn,.dv-switch-caption{white-space:nowrap;writing-mode:horizontal-tb;flex:0 0 auto;width:auto}
+.dv-switch[hidden]{display:none}
+.dv-switch-caption{font-size:.8rem;color:#3d5344;margin-right:6px}
+.dv-switch-btn{padding:6px 12px;border:1px solid #9dceae;background:#fff;color:#1f3b28;font-size:.85rem;cursor:pointer;border-radius:0;margin:0}
+.dv-switch-btn+.dv-switch-btn{border-left:none}
+.dv-switch-btn:first-of-type{border-radius:6px 0 0 6px}
+.dv-switch-btn:last-of-type{border-radius:0 6px 6px 0}
+.dv-switch-btn.on{background:#146b28;border-color:#146b28;color:#fff;font-weight:600}
+.list-stage.dv-board-on .tablewrap,.list-stage.dv-board-on .list-grid{display:none!important}
+.dv-board[hidden]{display:none}
+.dv-note{font-size:.8rem;color:#3d5344;margin:4px 0 8px}
+.dv-kanban{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(240px,1fr);gap:12px;overflow-x:auto;align-items:start}
+.dv-col{background:#f3f8f3;border:1px solid #d5e6d4;border-radius:8px;padding:8px;min-height:160px;transition:background .1s}
+.dv-col.over{background:#e2f2e3;border-color:#146b28;border-style:dashed}
+.dv-col h3{display:flex;justify-content:space-between;align-items:center;margin:2px 4px 8px;font-size:.95rem}
+.dv-col h3 span{font-size:.8rem;font-weight:500;color:#3d5344}
+.dv-col-hint{font-size:.75rem;color:#6a7d6f;margin:-4px 4px 6px}
+.dv-col-body{display:flex;flex-direction:column;gap:8px;min-height:60px}
+.dv-empty{color:#8a9a8e;font-size:.8rem;text-align:center;margin:12px 0}
+.dv-card{background:#fff;border:1px solid #c5dcc4;border-left:4px solid #9dceae;border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:3px;font-size:.85rem}
+.dv-card[draggable="true"]{cursor:grab}
+.dv-card.dragging{opacity:.5}
+.dv-card.pending{opacity:.6;pointer-events:none}
+.dv-card.dv-overdue{border-left-color:#c0392b;background:#fff6f4}
+.dv-card.dv-today{border-left-color:#e08a00;background:#fffaf0}
+.dv-card-number{font-size:.78rem;color:#3d5344}
+.dv-card-customer{font-weight:700;font-size:.95rem;word-break:break-word}
+.dv-card-meta{display:flex;gap:8px;flex-wrap:wrap;color:#2f4636}
+.dv-card-request{padding:0 6px;border:1px solid #c5dcc4;border-radius:5px;background:#f7fbf7}
+.dv-card-due{font-size:.8rem}
+.dv-card-due b{color:#c0392b;margin-left:4px}
+.dv-card.dv-today .dv-card-due b{color:#b36b00}
+.dv-card-actions{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:4px}
+.dv-card-actions .flagstatus{font-size:.8rem;padding:3px 4px}
+.dv-cal-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 8px}
+.dv-cal-head strong{font-size:1.1rem;min-width:7em;text-align:center}
+.dv-cal-head .dv-note{margin:0}
+.dv-cal{border:1px solid #d5e6d4;border-radius:8px;overflow:hidden;background:#fff}
+.dv-cal-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr))}
+.dv-cal-row+.dv-cal-row{border-top:1px solid #e3eee2}
+.dv-cal-wd{text-align:center;font-size:.8rem;font-weight:600;padding:4px 0;background:#f3f8f3}
+.dv-cal-wd.sun{color:#c0392b}.dv-cal-wd.sat{color:#2c5fa8}
+.dv-cal-day{min-height:96px;padding:4px;border-left:1px solid #e3eee2;display:flex;flex-direction:column;gap:2px;min-width:0}
+.dv-cal-day:first-child{border-left:none}
+.dv-cal-day.out{background:#fafcfa;color:#a0aea3}
+.dv-cal-day.today{background:#fff8e1;box-shadow:inset 0 0 0 2px #e08a00}
+.dv-cal-num{font-size:.8rem;font-weight:600}
+.dv-cal-item{display:block;width:100%;text-align:left;font-size:.75rem;padding:2px 4px;margin:0;border:1px solid #c5dcc4;border-radius:4px;background:#f7fbf7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;color:#1f3b28}
+.dv-cal-item:hover{background:#e2f2e3}
+.dv-cal-item .number{color:#3d5344;margin-right:2px}
+.dv-cal-item.dv-overdue{border-color:#e3a39a;background:#fff0ed}
+.dv-cal-item.dv-today{border-color:#f0c070;background:#fff4dc}
+.dv-cal-day:not(.expanded) .dv-cal-extra{display:none}
+.dv-cal-more{font-size:.75rem;padding:1px 4px;margin:0;border:none;background:none;color:#146b28;text-align:left;cursor:pointer;text-decoration:underline}
+@media print{.dv-switch,.dv-board{display:none!important}}
