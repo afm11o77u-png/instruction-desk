@@ -4,6 +4,8 @@ All settings live in the instruction database. Inventory customer IDs stay uncha
 import json
 import unicodedata
 
+import site_name_key
+
 
 DELIVERY_METHODS = ('', '自社集配', '福山便', '佐川便', 'ヤマト便')
 COLLECTION_DAYS = ('月', '火', '水', '木', '金', '土', '日')
@@ -190,6 +192,15 @@ def validate(payload,customers,staff,accounts):
         supplied=n['customer_id']
         if supplied is not None and supplied!=root['customer_id']:raise ValueError('カテゴリ・拠点は親の顧客と同じ在庫を使います。')
         n['customer_id']=root['customer_id']
+    taken={}
+    for n in result:
+        if n['kind']!='site':continue
+        root=byid[n['parent_id']]
+        while root['kind']!='company':root=byid[root['parent_id']]
+        keys=site_name_key.site_keys(n['name'],root['name'])
+        key=(n['parent_id'],keys[0] if keys else n['name'])
+        if key in taken:raise ValueError('同じ所属先に同じ拠点（'+taken[key]+'・'+n['name']+'）が重複しています。末尾の「店」の有無だけの違いも同じ拠点とみなします。')
+        taken[key]=n['name']
     raw_pages=payload.get('request_pages',[])
     if not isinstance(raw_pages,list) or len(raw_pages)>5000:raise ValueError('顧客向けページの数を確認してください。')
     pages=[];page_ids=set();page_names=set()

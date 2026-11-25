@@ -15,6 +15,7 @@ import json
 
 import department_excel as excel
 import web_request_organizations as orgs
+import site_name_key
 
 DAYS = ('月', '火', '水', '木', '金', '土', '日')
 MAX_ROWS = 20000
@@ -152,21 +153,21 @@ def _key(value):
     return excel.normalized(value).casefold()
 
 
-def match_node(row, sites):
-    """(node, how) / (None, reason)。営業所コード＝顧客コード → 拠点名＝顧客名の店名部分。"""
+def match_node(row, sites, company_of=lambda n: ''):
+    """(node, how) / (None, reason)。営業所コード＝顧客コード → 拠点名＝顧客名の店名部分（site_name_key で照合）。"""
     code = _key(row['code'])
     hits = [n for n in sites if code and _key(n.get('office_code')) == code]
     if len(hits) == 1:
         return hits[0], 'コード一致'
     if len(hits) > 1:
         return None, '同じ営業所コードの拠点が複数あります'
-    site = _key(row['customer'].split(' ', 1)[0]) if row['customer'] else ''
-    hits = [n for n in sites if site and _key(n['name']) == site]
-    if len(hits) == 1:
-        return hits[0], '拠点名一致'
-    if len(hits) > 1:
-        return None, '同じ名前の拠点が複数あります'
-    return None, '一致する拠点がありません'
+    site = row['customer'].split(' ', 1)[0] if row['customer'] else ''
+    if not site:
+        return None, '一致する拠点がありません'
+    node, how, similar = site_name_key.find(site, '', sites, company_of)
+    if node:
+        return node, how
+    return None, how + ('（似た拠点：' + '、'.join(similar[:3]) + '）' if similar and how.startswith('一致する') else '')
 
 
 def describe(method, days):
@@ -179,6 +180,12 @@ def plan(rows, org):
     nodes = org.get('nodes', [])
     byid = {n['id']: n for n in nodes}
     sites = [n for n in nodes if n.get('kind') == 'site']
+
+    def company_of(n):
+        seen = set()
+        while n and n.get('parent_id') and n['id'] not in seen:
+            seen.add(n['id']);n = byid.get(n['parent_id'])
+        return n['name'] if n and n.get('kind') == 'company' else ''
 
     def path(n):
         names = []
@@ -196,7 +203,7 @@ def plan(rows, org):
         if result[0] == 'skip':
             skipped.append(dict(base, reason=result[1]))
             continue
-        node, how = match_node(row, sites)
+        node, how = match_node(row, sites, company_of)
         if result[0] == 'review':
             review.append(dict(base, reason=result[1], site=path(node) if node else ''))
             if node:

@@ -77,35 +77,51 @@ SITE_DEPARTMENT_SUFFIXES = {
 
 
 def company_name_key(value):
-    name = normalized(value)
-    corporate = r'(?:株式会社|有限会社|\(株\)|\(有\))'
-    name = re.sub(r'^' + corporate + r'\s*|\s*' + corporate + r'$', '', name)
-    return name.replace(' ', '').casefold()
+    import site_name_key
+    return site_name_key.company_key(value)
 
 
-def preview_sites(raw, company):
+def _strip_company(name, company):
+    import site_name_key
+    ck = site_name_key.company_key(company)
+    nm = normalized(name)
+    for i in range(1, len(nm)):
+        if site_name_key._plain(nm[:i]) == ck:
+            return nm[i:].strip() or nm
+    return nm
+
+
+def preview_sites(raw, company, sites=()):
+    """会社の拠点候補。sites はその会社に登録済みの拠点（name）。登録済みと同じ拠点は existing、似た拠点は similar に入れる。"""
+    import site_name_key
     master = preview(raw, [])
     company_key = company_name_key(company)
     if not company_key:
         raise ValueError('会社名を確認してください。')
+    sites = [dict(name=n['name'], id=n.get('id')) for n in sites]
     candidates = {}
     matched = 0
     for record in master['records']:
         customer = record['customer']
-        key = company_name_key(customer)
-        if not key.startswith(company_key) or key == company_key:
-            continue
-        matched += 1
         name, _, suffix = customer.rpartition(' ')
         if suffix not in SITE_DEPARTMENT_SUFFIXES:
             name = customer
-        if company_name_key(name) == company_key:
-            continue
-        candidate = candidates.setdefault(name.replace(' ', '').casefold(),
-                                          dict(name=name, count=0, examples=[]))
+        keys = site_name_key.site_keys(name, company)
+        own = site_name_key._plain(customer).startswith(company_key) and site_name_key._plain(name) != company_key
+        node, how, similar = site_name_key.find(name, company, sites, lambda n: company) if sites and keys else (None, '', [])
+        if not own and not node:
+            continue  # 他社の行（登録済みの拠点と同じ名前のときだけ表示する）
+        matched += 1
+        key = keys[0] if keys else site_name_key._plain(name)
+        if node:
+            key = 'node:' + str(node['id'] or node['name'])
+        candidate = candidates.setdefault(key, dict(name=_strip_company(name, company), count=0, examples=[],
+                                                     existing=node['name'] if node else '', similar=[] if node else similar[:3]))
         candidate['count'] += 1
         if customer not in candidate['examples'] and len(candidate['examples']) < 3:
             candidate['examples'].append(customer)
+    for c in candidates.values():
+        c['checked'] = not c['existing'] and not c['similar']
     if len(candidates) > 500:
         raise ValueError('候補が500件を超えています。対象の会社の行に絞ってください。')
     return dict(candidates=list(candidates.values()), matched=matched,

@@ -104,6 +104,25 @@ class ImportTest(unittest.TestCase):
             imp.handle(c, self.body('collection_days_import', confirm=True, organization_version=5, expected_changes=3), DATA, OWNER)
 
 
+class SiteKeyTest(unittest.TestCase):
+    def test_store_suffix_and_brand_match_but_no_guessing(self):
+        sites = [dict(id='a', parent_id='co', kind='site', name='篠路店'), dict(id='b', parent_id='co', kind='site', name='西野店'),
+                 dict(id='c', parent_id='co', kind='site', name='星置駅前店')]
+        co = lambda n: '北雄ラッキー㉈'
+        row = lambda name: dict(code='X', customer=name)
+        self.assertEqual(imp.match_node(row('北雄ﾗｯｷｰ篠路 管理'), sites, co)[0]['id'], 'a')
+        self.assertEqual(imp.match_node(row('ﾗｯｷｰﾏｰﾄ西野 管理'), sites, co)[0]['id'], 'b')
+        node, reason = imp.match_node(row('北雄ﾗｯｷｰ星置女性 管理'), sites, co)
+        self.assertIsNone(node)
+        self.assertIn('星置駅前店', reason)
+
+    def test_save_rejects_same_site_with_and_without_store_suffix(self):
+        nodes = NODES[:2] + [dict(id='x1', parent_id='rg', kind='site', name='篠路店', customer_id=262, site_type='店舗'),
+                             dict(id='x2', parent_id='rg', kind='site', name='北雄ラッキー篠路', customer_id=262, site_type='店舗')]
+        with self.assertRaises(ValueError):
+            organizations.validate(dict(nodes=nodes), {262}, set(), set())
+
+
 class SundayTest(unittest.TestCase):
     def test_sunday_accepted_everywhere(self):
         cfg = organizations.validate(dict(nodes=NODES[:2] + [dict(NODES[2], delivery_method='自社集配', collection_days=['日', '月'])]), {262}, set(), set())
