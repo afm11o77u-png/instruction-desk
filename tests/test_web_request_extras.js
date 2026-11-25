@@ -57,4 +57,6 @@ console.log('ok')
   assert.ok(src.indexOf(hint) < src.indexOf('id="manual-entry-open"'))
   assert.ok(src.indexOf(hint) < src.indexOf('id="manual-entry-form"'))
   assert.ok(!src.includes('契約外'))
+  // 左の契約の制服一覧（#products）の下に置く
+  assert.ok(src.includes("const items = $('#products');"))
 }
