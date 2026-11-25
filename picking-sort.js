@@ -59,6 +59,7 @@
     if (inputIshikari) { inputIshikari.value = ''; }
     if (inputReport) { inputReport.value = ''; }
     if (inputProcessedDate) inputProcessedDate.value = '';
+    for (const field of [inputIshikari, inputReport, inputProcessedDate]) if (field) field.disabled = false;
     if (btnExec) { btnExec.disabled = true; btnExec.textContent = '仕分けを実行する'; btnExec.dataset.done = '0'; }
     if (btnCancel) { btnCancel.textContent = 'キャンセル'; btnCancel.hidden = false; }
 
@@ -70,6 +71,18 @@
       if (inputIshikari && res.next_ishikari_file) inputIshikari.value = res.next_ishikari_file;
       if (inputReport && res.default_report_file) inputReport.value = res.default_report_file;
       if (inputProcessedDate && res.default_processed_date) inputProcessedDate.value = res.default_processed_date;
+
+      if (res.resume_move) {
+        if (previewCount) previewCount.textContent = '前回のExcelは保存済みです。元の指示書の移動を再開できます。';
+        if (previewFiles) previewFiles.innerHTML = res.files.map(f => `<li>${esc(f)}</li>`).join('');
+        if (labelCountText) labelCountText.textContent = '移動完了後に宛名情報を表示します';
+        for (const field of [inputIshikari, inputReport, inputProcessedDate]) if (field) field.disabled = true;
+        if (btnExec) {
+          btnExec.disabled = false;
+          btnExec.textContent = '指示書の移動を再開する';
+        }
+        return;
+      }
 
       if (!res.exists) {
         if (previewCount) {
@@ -175,7 +188,7 @@
               <div style="font-weight:bold;color:#2e7d32;margin-bottom:6px;">✓ ${esc(res.message)}</div>
               <ul style="margin:4px 0;padding-left:20px;font-size:0.88rem;color:#333;">
                 ${res.ishikari_file ? `<li><strong>石狩倉庫ブック:</strong> ${esc(res.ishikari_file)} (石狩:${iCounts.ishikari||0}件, 工場:${iCounts.factory||0}件, 持ち込み:${iCounts.carry||0}件)</li>` : '<li><strong>石狩倉庫ブック:</strong> 対象データなし</li>'}
-                ${res.report_file ? `<li><strong>報告用リスト:</strong> ${esc(res.report_file)} に追記 (持ち込み:${rCounts.carry||0}件)</li>` : '<li><strong>報告用リスト:</strong> 対象データなし</li>'}
+                ${res.report_file ? `<li><strong>報告用リスト:</strong> ${esc(res.report_file)} ${res.resumed_move ? 'は前回保存済み' : 'に追記'} (持ち込み:${rCounts.carry||0}件)</li>` : '<li><strong>報告用リスト:</strong> 対象データなし</li>'}
                 <li><strong>処理済み移動:</strong> ${esc(res.processed_date || '')} のフォルダに ${res.moved_count}件を移動</li>
                 ${lastAddresses.length > 0 ? `<li><strong>宛名書き:</strong> ${lastAddresses.length}件の宛名データを抽出完了</li>` : ''}
               </ul>
