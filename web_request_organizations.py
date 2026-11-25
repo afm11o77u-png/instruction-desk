@@ -7,7 +7,7 @@ import uuid
 
 
 DELIVERY_METHODS = ('', '自社集配', '福山便', '佐川便', 'ヤマト便')
-COLLECTION_DAYS = ('月', '火', '水', '木', '金', '土')
+COLLECTION_DAYS = ('月', '火', '水', '木', '金', '土', '日')
 NODE_TEXT_FIELDS = (
     ('kana', 80),
     ('office_code', 40),
@@ -196,7 +196,7 @@ def validate(payload,customers,staff,accounts):
             method=result[-1].get('delivery_method','')
         if 'collection_days' in node:
             days=node['collection_days']
-            if not isinstance(days,list) or len(days)>6 or len(set(days))!=len(days) or any(d not in COLLECTION_DAYS for d in days):
+            if not isinstance(days,list) or len(days)>len(COLLECTION_DAYS) or len(set(days))!=len(days) or any(d not in COLLECTION_DAYS for d in days):
                 raise ValueError('集配曜日を確認してください。')
             if method and method!='自社集配' and days:
                 raise ValueError('集配曜日は自社集配のときだけ設定できます。')
@@ -257,7 +257,7 @@ def validate(payload,customers,staff,accounts):
     return dict(nodes=result,customer_scopes=customer_scopes,staff_scopes=staff_scopes,request_pages=pages,staff_scope_settings=staff_scope_settings)
 
 
-def save(c,payload,version,customers,staff,user):
+def save(c,payload,version,customers,staff,user,backup=False):
     if not admin(user):raise PermissionError('企業・カテゴリ・利用範囲の設定は主管理者・管理者が行ってください。')
     c.execute('BEGIN IMMEDIATE')
     try:
@@ -265,5 +265,9 @@ def save(c,payload,version,customers,staff,user):
         if type(version) is not int or old['version']!=version:raise ValueError('別の画面で組織が更新されています。再読込してください。')
         accounts={r[0] for r in c.execute('SELECT id FROM customer_accounts')}
         config=validate(payload,customers,staff,accounts)
+        if backup:
+            row=c.execute('SELECT version,payload FROM web_request_org_settings WHERE id=1').fetchone()
+            c.execute('CREATE TABLE IF NOT EXISTS web_request_org_migrations(id INTEGER PRIMARY KEY,at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,previous_version INTEGER NOT NULL,previous_payload TEXT NOT NULL)')
+            c.execute('INSERT INTO web_request_org_migrations(previous_version,previous_payload) VALUES(?,?)',(row[0],row[1]))
         c.execute('UPDATE web_request_org_settings SET version=version+1,payload=? WHERE id=1',(json.dumps(config,ensure_ascii=False),));c.commit()
     except Exception:c.rollback();raise
