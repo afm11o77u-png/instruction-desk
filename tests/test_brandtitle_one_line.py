@@ -1,4 +1,4 @@
-"""左メニューはロゴを最上段に置き、その下の業務名を1行で表示する。"""
+"""左メニューはロゴとキャラクターを横一列・幅いっぱいに置き、その下の業務名を1行で表示する。"""
 import http.server
 import re
 import threading
@@ -36,14 +36,25 @@ class BrandTitleSourceTest(unittest.TestCase):
         title = re.search(r'#brandtitle\{([^}]+)\}', style).group(1)
         self.assertIn('white-space:nowrap', title)
         self.assertNotIn('word-break:break-word', title)
+        row = re.search(r'\.brandrow\{([^}]+)\}', style).group(1)
+        self.assertIn('display:grid', row)
+        self.assertIn('grid-template-columns', row)
         logo = re.search(r'\.brand \.brandlogo\{([^}]+)\}', style).group(1)
-        self.assertIn('flex:0 0 auto', logo)
-        self.assertIn('width:100%', logo)
+        mascot = re.search(r'\.brand \.mascots\{([^}]+)\}', style).group(1)
         self.assertIn('height:auto', logo)
+        self.assertIn('object-fit:contain', logo)
+        self.assertIn('aspect-ratio:250/36', logo)
         self.assertNotIn('max-width:112px', logo)
         self.assertNotIn('max-height:28px', logo)
+        self.assertIn('object-fit:contain', mascot)
+        self.assertIn('aspect-ratio:162/146', mascot)
+        self.assertNotIn('max-width:40px', mascot)
+        self.assertNotIn('max-height:36px', mascot)
         pbrand = re.search(r'aside\.deskmenu \.brand\{([^}]+)\}', picking).group(1)
         self.assertIn('flex-direction:column', pbrand)
+        prow = re.search(r'aside\.deskmenu \.brandrow\{([^}]+)\}', picking).group(1)
+        self.assertIn('display:grid', prow)
+        self.assertIn('grid-template-columns', prow)
         ptitle = re.search(r'aside\.deskmenu \.brand>span\{([^}]+)\}', picking).group(1)
         self.assertIn('white-space:nowrap', ptitle)
         aside = index[index.index('<aside>'):index.index('</aside>')]
@@ -56,7 +67,7 @@ class BrandTitleSourceTest(unittest.TestCase):
 
 @unittest.skipUnless(playwright_available(), 'playwright が必要です')
 class BrandTitleBrowserTest(unittest.TestCase):
-    def test_logo_stays_full_size_above_one_line_titles(self):
+    def test_logo_and_mascots_fill_row_above_one_line_titles(self):
         from playwright.sync_api import sync_playwright
 
         class Handler(http.server.SimpleHTTPRequestHandler):
@@ -112,24 +123,36 @@ class BrandTitleBrowserTest(unittest.TestCase):
                             overflow: Math.max(0, right - aside.right),
                             clipped: el.scrollWidth > el.clientWidth + 0.5,
                             logoW: logo.width, logoH: logo.height,
+                            mascotW: mascots.width, mascotH: mascots.height,
                             rowW: row.width,
+                            spanW: mascots.right - logo.left,
+                            logoLeft: logo.left - row.left,
+                            mascotRightGap: row.right - mascots.right,
+                            sideBySide: logo.right <= mascots.left + 0.5,
+                            sameRow: Math.abs(logo.top - mascots.top) < 2 && Math.abs(logo.bottom - mascots.bottom) < 2,
                             contentW: logo.width - padX,
                             contentH: logo.height - padY,
-                            stacked: logo.bottom <= box.top + 0.5 && box.bottom <= switcher.top + 0.5 && switcher.bottom <= nav.top + 0.5,
+                            stacked: row.bottom <= box.top + 0.5 && box.bottom <= switcher.top + 0.5 && switcher.bottom <= nav.top + 0.5,
                           };
                         }''',
                         title,
                     )
-                    sizes.append((info['logoW'], info['logoH']))
+                    sizes.append((info['logoW'], info['logoH'], info['mascotW'], info['mascotH']))
                     self.assertEqual(info['lines'], 1, title)
                     self.assertLess(info['overflow'], 1, title)
                     self.assertFalse(info['clipped'], title)
                     self.assertTrue(info['stacked'], title)
-                    self.assertGreaterEqual(info['logoW'], info['rowW'] - 1)
-                    self.assertLessEqual(info['logoW'], info['rowW'] + 1)
+                    self.assertTrue(info['sideBySide'], title)
+                    self.assertTrue(info['sameRow'], title)
+                    self.assertLess(info['logoLeft'], 1, title)
+                    self.assertLess(info['mascotRightGap'], 1, title)
+                    self.assertGreaterEqual(info['spanW'], info['rowW'] - 1)
+                    self.assertLessEqual(info['spanW'], info['rowW'] + 1)
+                    self.assertAlmostEqual(info['logoH'], info['mascotH'], delta=2)
                     self.assertGreater(info['logoH'], 18)
-                    self.assertAlmostEqual(info['contentW'] / info['contentH'], 240 / 30, delta=0.35)
-                widths = {round(w, 2) for w, _h in sizes}
+                    self.assertAlmostEqual(info['logoW'] / info['logoH'], 250 / 36, delta=0.35)
+                    self.assertAlmostEqual(info['mascotW'] / info['mascotH'], 162 / 146, delta=0.35)
+                widths = {round(w, 2) for w, _h, _mw, _mh in sizes}
                 self.assertEqual(len(widths), 1, 'logo width should not shrink with longer titles')
         finally:
             httpd.shutdown()
