@@ -67,7 +67,7 @@ class BrandTitleSourceTest(unittest.TestCase):
         self.assertIn('function placeSidebarSwitch()', js)
         self.assertIn('title.before(link)', js)
         self.assertIn('.brand:has(.workspace-back){gap:0}', style)
-        self.assertIn('margin:12px 0', style)
+        self.assertIn('margin:12px 0 24px', style)
         self.assertIn('aside.deskmenu .brand:has(.workspace-back){gap:0}', picking)
 
 
@@ -152,7 +152,7 @@ class BrandTitleBrowserTest(unittest.TestCase):
                     self.assertFalse(info['clipped'], title)
                     self.assertTrue(info['stacked'], title)
                     self.assertGreaterEqual(info['gapAbove'], 10, title)
-                    self.assertGreaterEqual(info['gapBelow'], 10, title)
+                    self.assertGreaterEqual(info['gapBelow'], 20, title)
                     self.assertTrue(info['sideBySide'], title)
                     self.assertTrue(info['sameRow'], title)
                     self.assertLess(info['logoLeft'], 1, title)
