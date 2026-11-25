@@ -2,7 +2,6 @@
 import base64
 import io
 import posixpath
-import re
 import unicodedata
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
@@ -76,37 +75,22 @@ SITE_DEPARTMENT_SUFFIXES = {
 }
 
 
-def company_name_key(value):
-    name = normalized(value)
-    corporate = r'(?:株式会社|有限会社|\(株\)|\(有\))'
-    name = re.sub(r'^' + corporate + r'\s*|\s*' + corporate + r'$', '', name)
-    return name.replace(' ', '').casefold()
-
-
-def preview_sites(raw, company):
+def preview_sites(raw):
     master = preview(raw, [])
-    company_key = company_name_key(company)
-    if not company_key:
-        raise ValueError('会社名を確認してください。')
     candidates = {}
     matched = 0
     for record in master['records']:
         customer = record['customer']
-        key = company_name_key(customer)
-        if not key.startswith(company_key) or key == company_key:
+        if not customer:
             continue
         matched += 1
         name, _, suffix = customer.rpartition(' ')
         if suffix not in SITE_DEPARTMENT_SUFFIXES:
             name = customer
-        if company_name_key(name) == company_key:
-            continue
-        candidate = candidates.setdefault(name.replace(' ', '').casefold(),
+        candidate = candidates.setdefault(name,
                                           dict(name=name, count=0, examples=[]))
         candidate['count'] += 1
         if customer not in candidate['examples'] and len(candidate['examples']) < 3:
             candidate['examples'].append(customer)
-    if len(candidates) > 500:
-        raise ValueError('候補が500件を超えています。対象の会社の行に絞ってください。')
     return dict(candidates=list(candidates.values()), matched=matched,
                 source_rows=master['source_rows'], deleted=master['deleted'])

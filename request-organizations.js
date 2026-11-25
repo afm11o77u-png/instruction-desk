@@ -55,11 +55,7 @@ $('#org-diagram-height').oninput=e=>setDiagramHeight(e.target.value);$('#org-dia
 
 function scopeSelectors(){const a=$('#org-account').value,u=$('#org-staff').value;$('#org-account').innerHTML='<option value="">利用者を選択</option>'+(org.accounts||[]).map(x=>`<option value="${x.id}">${esc(x.name)} / ${esc(x.email)}${x.active?'':'（停止中）'}</option>`).join('');if([...$('#org-account').options].some(x=>x.value===a))$('#org-account').value=a;$('#org-staff').innerHTML='<option value="">社内担当者を選択</option>'+(data().organizationStaff||data().staff).map(x=>`<option value="${x.id}">${esc(x.name)}${x.login?' ／ '+esc(x.login):''}</option>`).join('');if([...$('#org-staff').options].some(x=>x.value===u))$('#org-staff').value=u;accountForm();staffForm();pageSelectors()}
 function configurePanel(mode){const web=mode==='web-settings',picker=$('#org-customer-start');if(web)$('#web-page-customer').append(picker);else $('#organization').insertBefore(picker,$('.org-structure-layout'));$('#org-customer-help').textContent=web?'顧客を選ぶと、その顧客のページ・利用者設定を表示します。組織構成の登録・変更は顧客・契約管理で行います。':'顧客を選ぶと、そのままカテゴリ・店舗・事業所を追加できます。変更は画面下部の「変更をまとめて保存」で確定します。';$('#web-page-editors').hidden=!admin();$('#web-page-permission').hidden=admin();$('#web-page-save').hidden=!admin();const url=new URL('/customer-contracts',location.origin);url.searchParams.set('page','organization');if($('#org-root-customer').value)url.searchParams.set('customer_id',$('#org-root-customer').value);$('#web-organization-link').href=url.pathname+url.search;}
-const siteImportButton = document.createElement('button');
-siteImportButton.type = 'button';
-siteImportButton.textContent = 'Excelから拠点を一括取込';
-siteImportButton.hidden = true;
-$('#org-node-form').before(siteImportButton);
+const siteImportButton = $('#org-site-import');
 
 function siteImportKey(name) {
     return nameKey(name).replace(/\s+/g, ' ');
@@ -80,8 +76,8 @@ siteImportButton.onclick = () => {
     dialog.innerHTML = `<h2 id="org-import-title">Excelから拠点を一括取込</h2>
         <p>登録先は <strong>${esc(root.name)}</strong> の直下です。</p>
         <label>顧客マスタのExcel<input type="file" accept=".xlsx"></label>
-        <p class="small">「顧客名」から会社名が一致する候補を探し、末尾の既知の部署名を外します。</p>
-        <div class="department-import-scroll"></div><p role="alert"></p>
+        <p class="small">Excelの「顧客名」を候補に表示し、末尾の既知の部署名を外します。登録する拠点にチェックを入れてください。</p>
+        <p role="alert"></p><div class="actions" data-select-actions hidden><button type="button" data-select-all>未登録の候補をすべて選択</button><button type="button" data-clear-all>選択を解除</button></div><div class="department-import-scroll"></div>
         <div class="dialog-actions"><button type="button" data-cancel>閉じる</button>
         <button type="button" data-preview class="primary">内容を確認</button>
         <button type="button" data-apply class="primary" hidden>選択した拠点を一覧に追加</button></div>`;
@@ -91,32 +87,39 @@ siteImportButton.onclick = () => {
     const apply = dialog.querySelector('[data-apply]');
     const output = dialog.querySelector('.department-import-scroll');
     const message = dialog.querySelector('[role=alert]');
+    const selectActions = dialog.querySelector('[data-select-actions]');
+    dialog.querySelector('[data-select-all]').onclick = () => {
+        output.querySelectorAll('input[type=checkbox]:not([data-existing])').forEach(input => input.checked = true);
+    };
+    dialog.querySelector('[data-clear-all]').onclick = () => {
+        output.querySelectorAll('input[type=checkbox]').forEach(input => input.checked = false);
+    };
     dialog.addEventListener('close', () => dialog.remove());
     dialog.querySelector('[data-cancel]').onclick = () => dialog.close();
     file.onchange = () => {
-        apply.hidden = true;
+        apply.hidden = selectActions.hidden = true;
         output.replaceChildren();
         message.textContent = '';
     };
     preview.onclick = async () => {
         preview.disabled = file.disabled = true;
-        apply.hidden = true;
+        apply.hidden = selectActions.hidden = true;
         output.replaceChildren();
         message.textContent = 'Excelを読み込んでいます…';
         try {
             const plan = await desk().previewOrganizationSites(root.customer_id, file.files[0]);
             const names = existingSiteNames(root);
             message.textContent = plan.candidates.length ?
-                `対象 ${plan.matched}行から ${plan.candidates.length}件の候補が見つかりました。拠点名を確認し、不要な候補はチェックを外してください。` :
-                'この会社の拠点候補が見つかりませんでした。Excelの顧客名を確認してください。';
+                `対象 ${plan.matched}行から ${plan.candidates.length}件の候補が見つかりました。拠点名を確認し、登録する候補を選んでください。` :
+                '拠点候補が見つかりませんでした。Excelの顧客名を確認してください。';
             output.innerHTML = plan.candidates.length ? '<table><thead><tr><th>取込</th><th>拠点名</th><th>元の顧客名</th></tr></thead><tbody>' +
                 plan.candidates.map(({name, count, examples}, index) => {
                     const exists = names.has(siteImportKey(name));
-                    return `<tr><td><input type="checkbox" ${exists ? '' : 'checked'} aria-label="${index + 1}件目を取り込む"></td>
+                    return `<tr><td><input type="checkbox" ${exists ? 'data-existing' : ''} aria-label="${index + 1}件目を取り込む"></td>
                         <td><input type="text" maxlength="100" value="${esc(name)}" aria-label="${index + 1}件目の拠点名"></td>
                         <td>${examples.map(esc).join('<br>')}<br>${count}行${exists ? '・同名の組織あり' : ''}</td></tr>`;
                 }).join('') + '</tbody></table>' : '';
-            apply.hidden = !plan.candidates.length;
+            apply.hidden = selectActions.hidden = !plan.candidates.length;
         } catch (error) {
             message.textContent = error.message;
         } finally {

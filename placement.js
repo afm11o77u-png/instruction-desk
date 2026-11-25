@@ -222,7 +222,7 @@ let stockSection='list'
 function normalizeStockSection(section){
   // Legacy 入庫・出庫 section → 在庫一覧
   if(section==='move')return 'list'
-  return section==='setup'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='close'||section==='qrread'?section:'list'
+  return section==='ishikari-shelves'||section==='setup'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='close'||section==='qrread'?section:'list'
 }
 function syncStockNav(section){
   stockSection=normalizeStockSection(section)
@@ -230,7 +230,16 @@ function syncStockNav(section){
 }
 function tellStockFrame(section){
   const frame=$('#stockframe')
-  if(!frame||!frame.contentWindow)return
+  const shelves=$('#stock-shelf-frame')
+  if(!frame||!shelves)return
+  const showShelves=section==='ishikari-shelves'
+  shelves.hidden=!showShelves
+  frame.hidden=showShelves
+  if(showShelves){
+    if(!shelves.getAttribute('src'))shelves.src='/inventory/ishikari-2f.html'
+    return
+  }
+  if(!frame.contentWindow)return
   try{frame.contentWindow.postMessage({type:'stock-section',section:normalizeStockSection(section)},location.origin)}catch(_){}
 }
 let kintaiSection='attendance';
@@ -429,7 +438,7 @@ document.querySelectorAll('#kintainav [data-kintai-section]').forEach(b=>b.oncli
     await showCatalog('kintai');
   }else await showKintaiSection(b.dataset.kintaiSection);
 });
-window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='history'||e.data.section==='period'||e.data.section==='orders'||e.data.section==='stocktake'||e.data.section==='close'||e.data.section==='qrread'))syncStockNav(normalizeStockSection(e.data.section))});
+window.addEventListener('message',e=>{if(e.origin!==location.origin||!e.data)return;if(e.data.type==='desk-catalog'){if(e.data.mode==='desk'||e.data.mode==='info')showCatalog(e.data.mode);return}if(stockSection!=='ishikari-shelves'&&e.data.type==='stock-section-changed'&&(e.data.section==='list'||e.data.section==='setup'||e.data.section==='move'||e.data.section==='history'||e.data.section==='period'||e.data.section==='orders'||e.data.section==='stocktake'||e.data.section==='close'||e.data.section==='qrread'))syncStockNav(normalizeStockSection(e.data.section))});
 
 const placementAllButton=document.createElement('button');
 placementAllButton.type='button';

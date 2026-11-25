@@ -1658,7 +1658,6 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         except OSError: pass
             if route in ('/api/migration/inspect','/api/migration/restore'):
                 try:
-                    from contextlib import closing
                     with closing(connect()) as c:
                         with c:
                             u = self.session_user(c)
@@ -1718,10 +1717,15 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 try:
                     custom_ishikari = (d.get('custom_ishikari_file') or '').strip() or None
                     custom_report = (d.get('custom_report_file') or '').strip() or None
+                    with closing(stockdesk().stock.connect(STOCK_DB)) as stock_conn:
+                        customer_readings = dict(stock_conn.execute(
+                            "SELECT name, kana FROM customers WHERE kana <> ''"
+                        ).fetchall())
                     data = picking_sorter.execute_sort(
                         custom_ishikari_file=custom_ishikari,
                         custom_report_file=custom_report,
                         processed_date=d.get('processed_date'),
+                        customer_readings=customer_readings,
                     )
                     return self.reply(200, data)
                 except ValueError as e:

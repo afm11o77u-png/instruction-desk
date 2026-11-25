@@ -23,7 +23,8 @@ import os
 import posixpath
 import re
 import shutil
-from datetime import date, datetime
+import unicodedata
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -256,10 +257,15 @@ def _extract_address_fields(file_path: Path) -> dict | None:
 
     return None
 
+def _default_sort_date(now: datetime) -> datetime:
+    """Use the next calendar day for sorting defaults from 16:00 JST."""
+    return now + timedelta(days=1) if now.hour >= 16 else now
+
+
 def preview_sort() -> dict:
     """プレビュー情報（対象件数、ファイル名、保存予定ファイル名、抽出宛名一覧）を返す"""
     p_dir = get_processing_dir()
-    now = datetime.now()
+    now = _default_sort_date(datetime.now(timezone(timedelta(hours=9))))
     next_ishikari = get_next_ishikari_filename(now)
     def_report = get_default_report_filename(now)
 
@@ -423,15 +429,21 @@ def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
             "note": clean_cell_text(note),
             "note2": clean_cell_text(note2),
             "stock": stock_val,
+            "_source_fields": tuple(get_val(key) for key in (
+                "requester", "customer", "name", "maker", "sku", "size", "condition"
+            )) + (note, note2),
         })
 
     wb.close()
     return rows
 
-def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
+def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str, *, include_warehouse_column: bool = True):
     """ピッキング／作業シート用の共通フォーマット適用"""
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "倉庫から", "実行者", "確認", "入力", "確認"]
-    ws.append(headers)
+    if not include_warehouse_column:
+        headers.remove("倉庫から")
+    for col_idx, header in enumerate(headers, start=1):
+        ws.cell(row=1, column=col_idx, value=header)
 
     ws.sheet_format.defaultRowHeight = 31.5
     ws.sheet_format.customHeight = True
@@ -496,6 +508,8 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
 
     # Excel displays an XLSX width of 6.5 as 5.88 with this workbook's default font.
     col_widths = [8.0, 25.0, 15.0, 10.0, 14.0, 7.0, 5.5, 6.0, 16.0, 12.0, 9.0, 6.5, 6.5, 6.5, 6.5]
+    if not include_warehouse_column:
+        del col_widths[10]
     for col_idx, width in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
@@ -515,13 +529,53 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
 
-def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str):
+_ISHIKARI_IDENTITY_FIELDS = (
+    "requester", "customer", "name", "maker", "sku", "size", "condition", "note", "note2",
+)
+_KATAKANA_TO_HIRAGANA = str.maketrans({i: i - 0x60 for i in range(0x30A1, 0x30F7)})
+
+
+def _ishikari_customer_order(row, readings):
+    name = unicodedata.normalize("NFKC", row["customer"]).strip().casefold()
+    name = re.sub(r"^(?:株式会社|有限会社|\(株\)|\(有\))\s*", "", name)
+    if re.match(r"[a-z]", name):
+        return 0, name, row["customer"], row["name"]
+
+    reading = unicodedata.normalize("NFKC", readings.get(row["customer"]) or name)
+    reading = re.sub(r"^(?:カブシキガイシャ|ユウゲンガイシャ|\(カブ\)|\(ユウ\))\s*", "", reading.strip())
+    reading = reading.translate(_KATAKANA_TO_HIRAGANA)
+    if re.match(r"[ぁ-ゖ]", reading):
+        # Group voiced sounds and small kana with their corresponding base kana.
+        base = "".join(c for c in unicodedata.normalize("NFD", reading)
+                       if not unicodedata.combining(c))
+        base = base.translate(str.maketrans("ぁぃぅぇぉっゃゅょゎ", "あいうえおつやゆよわ"))
+        return 1, base, reading, row["customer"], row["name"]
+    return 2, name, row["customer"], row["name"]
+
+
+def _merge_ishikari_rows(rows, readings):
+    merged = {}
+    for row in rows:
+        output_fields = tuple(row[field] for field in _ISHIKARI_IDENTITY_FIELDS)
+        source_fields = row.get("_source_fields", output_fields)
+        identity = (output_fields, tuple((type(value), value) for value in source_fields))
+        if identity in merged:
+            merged[identity]["quantity"] += row["quantity"]
+        else:
+            merged[identity] = row.copy()
+    return sorted(merged.values(), key=lambda row: _ishikari_customer_order(row, readings))
+
+
+def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, customer_readings=None):
     """Create the warehouse workbook without touching the filesystem."""
     ishikari_rows = [r for r in rows if r["stock"] == "0"]
     factory_rows  = [r for r in rows if r["stock"] == "a"]
     carry_rows    = [r for r in rows if r["stock"] == "b"]
 
-    ishikari_rows.sort(key=lambda x: (x["customer"], x["name"]))
+    if customer_readings is None:
+        ishikari_rows.sort(key=lambda x: (x["customer"], x["name"]))
+    else:
+        ishikari_rows = _merge_ishikari_rows(ishikari_rows, customer_readings)
     factory_rows.sort(key=lambda x: (x["customer"], x["name"]))
     carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
 
@@ -597,8 +651,17 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
     """Export legacy barcode rows using the automatic sorter workbook format."""
     now = datetime.fromisoformat(day)
     stock_codes = {"warehouse": "0", "factory": "a", "carry": "b"}
-    normalized = []
+    fields = ("stock", "customer", "name", "maker", "sku", "size", "condition", "note2")
+    merged = {}
     for row in rows:
+        key = tuple(row[field] for field in fields)
+        if key in merged:
+            merged[key]["quantity"] += row["quantity"]
+        else:
+            merged[key] = row.copy()
+
+    normalized = []
+    for row in merged.values():
         condition = str(row.get("condition") or "").strip()
         if row["stock"] == "warehouse" or condition in ("", "未指定", "新古", "新品・中古"):
             condition = "新\n古"
@@ -630,14 +693,10 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
         wb.close()
 
 
-def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None) -> tuple[Path | None, dict]:
+def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None, *, customer_readings=None) -> tuple[Path | None, dict]:
     r"""石狩倉庫用連番ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx) を作成"""
     if not rows:
         return None, {"ishikari": 0, "factory": 0, "carry": 0}
-
-    date_str = now.strftime("%Y%m%d")
-    target_dir = get_ishikari_base_dir() / date_str
-    target_dir.mkdir(parents=True, exist_ok=True)
 
     if custom_filename and custom_filename.strip():
         file_name = custom_filename.strip()
@@ -645,9 +704,20 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
             file_name += ".xlsx"
     else:
         file_name = get_next_ishikari_filename(now)
+    # Use the date in an ordinary numbered filename even if the dialog was
+    # opened before the cutoff or the user changed the suggested date.
+    folder_day = now.date()
+    named_day = re.fullmatch(r"(\d{8})\d{2,}\.xlsx", file_name, re.IGNORECASE)
+    if named_day:
+        try:
+            folder_day = datetime.strptime(named_day[1], "%Y%m%d").date()
+        except ValueError:
+            pass
+    target_dir = get_ishikari_base_dir() / folder_day.strftime("%Y%m%d")
+    target_dir.mkdir(parents=True, exist_ok=True)
     out_path = target_dir / file_name
 
-    wb, counts = build_ishikari_workbook(now, rows, file_name)
+    wb, counts = build_ishikari_workbook(now, rows, file_name, customer_readings=customer_readings or {})
     try:
         wb.save(str(out_path))
     finally:
@@ -657,6 +727,8 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
 
 def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: datetime, file_name: str):
     """報告用リストの指定シートにデータを追記"""
+    ws.sheet_format.defaultRowHeight = 31.5
+    ws.sheet_format.customHeight = True
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
     
     font_header = Font(name="Yu Gothic", size=11, bold=True)
@@ -779,6 +851,16 @@ def _append_to_external_report(source: Path, destination: Path, rows: list[dict]
         def element(tag):
             return doc.createElementNS(_SHEET_XML, f"{root.prefix}:{tag}" if root.prefix else tag)
 
+        formats = root.getElementsByTagNameNS(_SHEET_XML, "sheetFormatPr")
+        if formats:
+            sheet_format = formats[0]
+        else:
+            sheet_format = element("sheetFormatPr")
+            columns = root.getElementsByTagNameNS(_SHEET_XML, "cols")
+            root.insertBefore(sheet_format, columns[0] if columns else data)
+        sheet_format.setAttribute("defaultRowHeight", "31.5")
+        sheet_format.setAttribute("customHeight", "1")
+
         styles = {
             re.sub(r"\d+$", "", cell.getAttribute("r")): cell.getAttribute("s")
             for cell in existing_rows[last_data_row].getElementsByTagNameNS(_SHEET_XML, "c")
@@ -883,7 +965,6 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
         wb = openpyxl.Workbook()
         ws_carry = wb.active
         ws_carry.title = "持ち込み"
-        wb.create_sheet(title="工場")
         wb.create_sheet(title="倉庫")
 
     # 持ち込みシート
@@ -892,6 +973,13 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
     else:
         ws_carry = wb["持ち込み"]
     _append_rows_to_report_sheet(ws_carry, carry_rows, "持ち込みリスト", now, out_path.name)
+
+    if "工場" not in wb.sheetnames:
+        wb.create_sheet(title="工場", index=wb.index(ws_carry) + 1)
+    ws_factory = wb["工場"]
+    if not any(value is not None for row in ws_factory.values for value in row):
+        _apply_sheet_styling(ws_factory, [], "工場", now, out_path.name,
+                             include_warehouse_column=False)
 
     # 倉庫シートがなければ枠だけ作成
     if "倉庫" not in wb.sheetnames:
@@ -947,9 +1035,9 @@ def _move_processed_files(now: datetime, files: list[Path], processed_date: date
 
     return dest_dir, moved_count
 
-def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None) -> dict:
+def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None, customer_readings=None) -> dict:
     """仕分け実行メインロジック"""
-    now = datetime.now()
+    now = _default_sort_date(datetime.now(timezone(timedelta(hours=9))))
     move_date = now.date()
     if processed_date not in (None, ""):
         try:
@@ -983,7 +1071,9 @@ def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: st
         processed_files.append(f)
 
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
-    ishikari_path, ishikari_counts = _save_ishikari_workbook(now, all_rows, custom_filename=custom_ishikari_file)
+    ishikari_path, ishikari_counts = _save_ishikari_workbook(
+        now, all_rows, custom_filename=custom_ishikari_file, customer_readings=customer_readings
+    )
 
     # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」シートへ追記
     report_path, report_counts = _save_report_workbook(now, all_rows, custom_filename=custom_report_file)

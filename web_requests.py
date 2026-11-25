@@ -262,7 +262,7 @@ def save(c,path,d,user=None):
         customer = next((x for x in state(c,path,user)['customers'] if x['id'] == cid), None)
         if not customer:
             raise ValueError('登録先の会社を選択してください。')
-        return department_excel.preview_sites(d.get('file'), customer['name'])
+        return department_excel.preview_sites(d.get('file'))
     if d.get('action') in ('department_assignment_import_preview','department_assignment_import'):
         import department_excel_assignment as importer
         cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
