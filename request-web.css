@@ -222,3 +222,5 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 .org-delivery-bulk{margin:0 0 16px}
 .org-delivery-bulk fieldset{display:flex;flex-wrap:wrap;gap:8px 14px;border:1px solid #d5e4da;border-radius:8px;padding:8px 12px;margin:8px 0}
 #organization .org-tree-selecting{user-select:none}
+
+#order .delivery-hint{margin:6px 0 12px;color:#335c40;background:#edf5ef;border-radius:8px;padding:8px 12px}
