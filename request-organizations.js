@@ -72,24 +72,27 @@ function companyKey(name){let s=String(name??'').normalize('NFKC').trim();const 
 function siteKeys(name,company){let k=plainKey(name);const ck=companyKey(company);if(ck&&k.startsWith(ck)&&k.length>ck.length)k=k.slice(ck.length);if(k.endsWith('店')&&k.length>1)k=k.slice(0,-1);if(!k)return [];const keys=[k];for(const b of SITE_BRANDS.map(plainKey))if(k.startsWith(b)&&k.length>b.length)keys.push(k.slice(b.length));return keys}
 function siteImportKey(name){return plainKey(name)}
 function existingSiteKeys(root){const keys=new Set();org.nodes.filter(n=>n.kind==='site'&&n.customer_id===root.customer_id).forEach(n=>{siteKeys(n.name,root.name).forEach(k=>keys.add(k));if(n.office_code)keys.add('code:'+plainKey(n.office_code))});org.nodes.filter(n=>n.parent_id===root.id&&n.kind!=='site').forEach(n=>keys.add('other:'+plainKey(n.name)));return keys}
-function ensureSiteImport(){
-  const host=$('#organization');if(!host)return null;let box=$('#org-site-import');
-  if(!box){
-    box=document.createElement('section');box.id='org-site-import';box.className='request-record org-site-import';
-    box.innerHTML='<h3>拠点（店舗）の一括取り込み</h3><p class="small">顧客マスタのExcelから、選んでいる会社の直下に店舗・事業所をまとめて追加します。同じ名前の拠点がすでにある候補は追加しません（末尾の「店」や会社名の有無は同じとみなします）。先にこちらで拠点を登録・保存してから、下の「集配曜日の一括取り込み」を行うと、集配曜日も登録できます。</p><div class="actions"><button type="button" id="org-site-import-open">Excelから拠点を一括取込</button></div>';
-    const anchor=$('#collection-import'),bar=$('#org-save-bar');
-    if(anchor&&anchor.parentNode===host)anchor.before(box);else if(bar&&bar.parentNode===host)bar.after(box);else host.prepend(box);
-    $('#org-site-import-open').onclick=openSiteImport;
-  }
-  return box;
+// 構成図の見出しの右上に、取り込みボタン（拠点・集配曜日）と「未保存の変更を取り消す」を並べる。
+function orgImportActions(){
+  let box=$('#org-import-actions');if(box)return box;
+  const reload=$('#org-reload');if(!reload||!reload.parentNode)return null;
+  const wrap=document.createElement('div');wrap.className='org-title-actions';reload.before(wrap);
+  box=document.createElement('div');box.id='org-import-actions';box.className='org-import-actions';
+  wrap.append(box,reload);return box;
 }
-function syncSiteImport(){const box=ensureSiteImport();if(box)box.hidden=!admin()||!selectedRoot()||desk().getMode()!=='organization'}
+window.orgImportActions=orgImportActions;
+function ensureSiteImport(){
+  const actions=orgImportActions();if(!actions)return null;let btn=$('#org-site-import-open');
+  if(!btn){btn=document.createElement('button');btn.type='button';btn.id='org-site-import-open';btn.textContent='拠点の一括取り込み';btn.onclick=openSiteImport;actions.prepend(btn)}
+  return btn;
+}
+function syncSiteImport(){const btn=ensureSiteImport();if(btn)btn.hidden=!admin()||!selectedRoot()||desk().getMode()!=='organization'}
 function openSiteImport(){
   const root=selectedRoot();
   if(!admin()||!root||saving)return;
   if(pending.size)return notice('入力途中の内容を一覧に適用してから取り込んでください。');
   const dialog=document.createElement('dialog');dialog.id='org-site-import-dialog';dialog.setAttribute('aria-labelledby','org-import-title');
-  dialog.innerHTML=`<h2 id="org-import-title">Excelから拠点を一括取込</h2><p>登録先は <strong>${esc(root.name)}</strong> の直下です。</p><label>顧客マスタのExcel<input type="file" accept=".xlsx"></label><p class="small">「顧客名」から会社名が一致する候補を探し、末尾の既知の部署名（管理・青果など）を外して拠点名にします。</p><div class="department-import-scroll"></div><p role="alert"></p><div class="dialog-actions"><button type="button" data-cancel>閉じる</button><button type="button" data-preview class="primary">内容を確認</button><button type="button" data-apply class="primary" hidden>選択した拠点を一覧に追加</button></div>`;
+  dialog.innerHTML=`<h2 id="org-import-title">拠点の一括取り込み</h2><p>登録先は <strong>${esc(root.name)}</strong> の直下です。</p><p class="small">顧客マスタのExcelから、選んでいる会社の直下に店舗・事業所をまとめて追加します。同じ名前の拠点がすでにある候補は追加しません（末尾の「店」や会社名の有無は同じとみなします）。追加した拠点は「変更をまとめて保存」で確定します。順番は「拠点の取り込み → 保存 → 集配曜日の一括取り込み」です。</p><label>顧客マスタのExcel<input type="file" accept=".xlsx"></label><p class="small">「顧客名」から会社名が一致する候補を探し、末尾の既知の部署名（管理・青果など）を外して拠点名にします。</p><div class="department-import-scroll"></div><p role="alert"></p><div class="dialog-actions"><button type="button" data-cancel>閉じる</button><button type="button" data-preview class="primary">内容を確認</button><button type="button" data-apply class="primary" hidden>選択した拠点を一覧に追加</button></div>`;
   document.body.append(dialog);
   const file=dialog.querySelector('input[type=file]'),preview=dialog.querySelector('[data-preview]'),apply=dialog.querySelector('[data-apply]'),output=dialog.querySelector('.department-import-scroll'),message=dialog.querySelector('[role=alert]');
   dialog.addEventListener('close',()=>dialog.remove());

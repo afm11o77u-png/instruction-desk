@@ -37,10 +37,12 @@ class SiteImportTest(unittest.TestCase):
 
     def test_ui_wiring(self):
         js = (ROOT / 'request-organizations.js').read_text(encoding='utf-8')
-        self.assertIn("box.id='org-site-import'", js)
+        self.assertIn("btn.textContent='拠点の一括取り込み'", js)
         self.assertIn('sk.some(k=>keys.has(k))', js)  # 登録済みの拠点（店の有無を無視）・営業所コードは追加しない
         self.assertIn('{backup:siteImported}', js)
-        self.assertIn("$('#org-site-import')||$('#org-save-bar')", (ROOT / 'collection-days-import.js').read_text(encoding='utf-8'))
+        cd = (ROOT / 'collection-days-import.js').read_text(encoding='utf-8')
+        self.assertIn("window.orgImportActions?.()", cd)
+        self.assertIn("box=document.createElement('dialog');box.id='collection-import'", cd)
 
 
 if __name__ == '__main__':
