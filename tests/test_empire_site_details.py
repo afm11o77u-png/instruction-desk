@@ -208,6 +208,14 @@ class SourceAndHtmlGuardTest(unittest.TestCase):
         self.assertIn('自社集配', orgjs)
         self.assertNotIn('legacy_customer_links', (ROOT / 'web_request_site_details.py').read_text(encoding='utf-8'))
 
+    def test_details_page_main_uses_full_width(self):
+        css=(ROOT/'request-web.css').read_text(encoding='utf-8')
+        self.assertRegex(css, r'body\.desk-common-page\[data-request-page=details\] main\{[^}]*max-width:\s*none')
+        self.assertIn('main{max-width:1250px', css)
+        # other customer-contracts tabs keep their own width rules
+        self.assertIn('body.desk-common-page[data-request-page=settings] main{max-width:none', css)
+        self.assertIn('body[data-request-page=organization] main{max-width:none', css)
+
 
 if __name__ == '__main__':
     unittest.main()
