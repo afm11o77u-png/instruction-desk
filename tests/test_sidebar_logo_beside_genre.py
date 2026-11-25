@@ -26,8 +26,8 @@ class SidebarLogoBesideGenreTest(unittest.TestCase):
         brand = top[top.index('class="brand"'):top.index('id="modes"')]
         self.assertIn('id="brandtitle"', brand)
         self.assertIn('id="brandimages"', brand)
-        self.assertLess(brand.index('id="brandtitle"'), brand.index('id="brandimages"'))
-        self.assertLess(brand.index('id="brandtitle"'), brand.index('src="/logo.jpg"'))
+        self.assertLess(brand.index('id="brandimages"'), brand.index('id="brandtitle"'))
+        self.assertLess(brand.index('src="/logo.jpg"'), brand.index('id="brandtitle"'))
         self.assertIn('src="/logo.jpg"', brand)
         self.assertIn('src="/mascots.png"', brand)
         self.assertEqual(aside.count('src="/logo.jpg"'), 1)
@@ -78,8 +78,8 @@ class SidebarLogoBesideGenreTest(unittest.TestCase):
     def test_layout_css_keeps_sidebar_width_and_row_brand(self):
         self.assertRegex(STYLE, r'aside\{[^}]*width:248px')
         brand = re.search(r'\.brand\{([^}]+)\}', STYLE).group(1)
-        self.assertIn('flex-direction:row', brand)
-        self.assertIn('align-items:center', brand)
+        self.assertIn('flex-direction:column', brand)
+        self.assertIn('align-items:stretch', brand)
         self.assertIn('.brand .brandlogo{', STYLE)
         self.assertIn('.brand .mascots{', STYLE)
         logo = re.search(r'\.brand \.brandlogo\{([^}]+)\}', STYLE).group(1)
@@ -98,11 +98,11 @@ class SidebarLogoBesideGenreTest(unittest.TestCase):
     def test_picking_sidebar_matches_title_then_images(self):
         menu = PICKING[PICKING.index('aside class="deskmenu"'):PICKING.index('</aside>')]
         brand = menu[menu.index('class="brand"'):menu.index('</div><a class="nav"')]
-        self.assertLess(brand.index('指示書デスク'), brand.index('src="/logo.jpg"'))
+        self.assertLess(brand.index('src="/logo.jpg"'), brand.index('指示書デスク'))
         self.assertIn('src="/mascots.png"', brand)
         pbrand = re.search(r'aside\.deskmenu \.brand\{([^}]+)\}', PICKING_CSS).group(1)
-        self.assertIn('flex-direction:row', pbrand)
-        self.assertIn('align-items:center', pbrand)
+        self.assertIn('flex-direction:column', pbrand)
+        self.assertIn('align-items:stretch', pbrand)
 
     def test_mark_manage_stays_in_account_footer(self):
         # #240 マージ後: 上部 modekintai は無く、accountbar にマーク管理
