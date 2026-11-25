@@ -393,7 +393,7 @@ def save_scope(c,path,d,user):
         action=d.get('action');publication=old['publication'];status=old['status']
         if action not in ('save','publish','pause'):raise ValueError('操作を確認してください。')
         if action=='publish':
-            if base['status']!='published':raise ValueError('先に顧客共通の設定を依頼画面へ反映してください。')
+            if base['status']!='published':raise ValueError('先に会社全体の共通設定を「公開・更新」してください。')
             parent_public,parent_status=inheritance.resolve(c,base,org,node_id,True,True)
             effective=inheritance.apply(parent_public,payload['patch'],'独自設定') if mode=='custom' else parent_public
             checked=validate_config(effective,data,cid)
