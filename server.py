@@ -20,6 +20,7 @@ import kintai
 import kintai_crimp
 import name_exe
 import web_requests
+import web_request_product_display
 import customer_accounts
 import personal_notes
 import personal_formats
@@ -1247,6 +1248,14 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if path=='/inventory' or path.startswith('/inventory/'): return self.serve_inventory('GET')
         if path == '/api/customer-data':return self.serve_customer_data()
         if path == '/api/customer-directory':return self.serve_customer_directory()
+        if re.fullmatch(r'/api/web-request/product-photo/\d+', path):
+            with connect() as c:
+                u = self.session_user(c)
+                if not web_requests.can_open(u):
+                    return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
+                found = web_request_product_display.photo(c, int(path.rsplit('/',1)[1]))
+            if not found: return self.reply(404, {'error':'写真がありません。'})
+            return self.reply(200, found[0], found[1], {'Content-Disposition':'inline', 'Content-Security-Policy':"default-src 'none'; img-src 'self' data:; sandbox"})
         if path == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
@@ -1496,7 +1505,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/contract-products.js':'contract-products.js','/customer-data.js':'customer-data.js','/workspace-switcher.js':'workspace-switcher.js','/workspace-switcher.css':'workspace-switcher.css','/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/desk-views.js':'desk-views.js','/desk-views.css':'desk-views.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/contract-products.js':'contract-products.js','/customer-data.js':'customer-data.js','/workspace-switcher.js':'workspace-switcher.js','/workspace-switcher.css':'workspace-switcher.css','/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/web-request-extras.js':'web-request-extras.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/desk-views.js':'desk-views.js','/desk-views.css':'desk-views.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in ('/customer-data.js', '/customer-directory.js', '/customer-contracts', '/request-organizations.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with closing(connect()) as c:
                 request_user = self.session_user(c)
@@ -1567,6 +1576,24 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(503, {'error':'保存できませんでした。顧客情報を確認してください。'})
         if route == '/api/customer-data':return self.serve_customer_data(save=True)
         if route == '/api/customer-directory':return self.serve_customer_directory(save=True)
+        if route == '/api/web-request/product-display':
+            with connect() as c:
+                u = self.session_user(c)
+                if not web_requests.can_open(u):
+                    return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
+                try:
+                    n = int(self.headers.get('Content-Length') or 0)
+                    if n < 1 or n > 5000000: raise ValueError('写真は3MB以下の画像を選んでください。')
+                    d = json.loads(self.rfile.read(n))
+                    if not isinstance(d, dict): raise ValueError('送信内容を確認してください。')
+                    product_ids = {p['id'] for p in web_requests.catalog(STOCK_DB)['products']}
+                    return self.reply(200, {'ok': True, 'productId': d.get('product_id'), 'display': web_request_product_display.save(c, u, d, product_ids)})
+                except PermissionError as e:
+                    return self.reply(403, {'error':str(e)})
+                except ValueError as e:
+                    return self.reply(400, {'error':str(e)})
+                except sqlite3.Error:
+                    return self.reply(503, {'error':'保存できませんでした。在庫の商品を確認してください。'})
         if route == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)

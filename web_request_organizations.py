@@ -30,6 +30,26 @@ def schema(c):
     INSERT OR IGNORE INTO web_request_org_settings(id) VALUES(1);
     """)
     migrate_direct_sites(c)
+    migrate_page_scopes(c)
+
+
+def migrate_page_scopes(c):
+    """顧客向けページの割り当てを、同じ範囲・依頼可否の直接指定へ移す。ページ自体は消さない（何度実行しても同じ結果）。"""
+    row=c.execute('SELECT version,payload FROM web_request_org_settings WHERE id=1').fetchone()
+    payload=json.loads(row[1]);pages={p.get('id'):p for p in payload.get('request_pages',[]) if isinstance(p,dict)}
+    changed=False;scopes=[]
+    for scope in payload.get('customer_scopes',[]):
+        page=pages.get(scope.get('page_id')) if isinstance(scope,dict) and scope.get('page_id') else None
+        if page is None:
+            scopes.append(scope);continue
+        scopes.append(dict(account_id=scope['account_id'],node_ids=list(dict.fromkeys(page.get('node_ids',[]))),can_request=bool(page.get('can_request',True)),migrated_from_page_id=page['id']))
+        changed=True
+    if changed:
+        payload['customer_scopes']=scopes
+        with c:
+            c.execute('CREATE TABLE IF NOT EXISTS web_request_org_migrations(id INTEGER PRIMARY KEY,at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,previous_version INTEGER NOT NULL,previous_payload TEXT NOT NULL)')
+            c.execute('INSERT INTO web_request_org_migrations(previous_version,previous_payload) VALUES(?,?)',(row[0],row[1]))
+            c.execute('UPDATE web_request_org_settings SET payload=?,version=version+1 WHERE id=1',(json.dumps(payload,ensure_ascii=False),))
 
 
 def migrate_direct_sites(c):
@@ -219,6 +239,7 @@ def validate(payload,customers,staff,accounts):
         nids=s.get('node_ids');permission=s.get('can_request')
         if type(aid) is not int or aid not in accounts or aid in seen or not isinstance(nids,list) or any(not isinstance(x,str) or x not in ids for x in nids) or type(permission) is not bool:raise ValueError('顧客IDと閲覧・依頼範囲を確認してください。')
         seen.add(aid);customer_scopes.append(dict(account_id=aid,node_ids=list(dict.fromkeys(nids)),can_request=permission))
+        if isinstance(s.get('migrated_from_page_id'),str) and len(s['migrated_from_page_id'])<=80:customer_scopes[-1]['migrated_from_page_id']=s['migrated_from_page_id']
     staff_scopes=[];seen=set()
     for s in ss:
         if not isinstance(s,dict):raise ValueError('社内の担当範囲を確認してください。')
