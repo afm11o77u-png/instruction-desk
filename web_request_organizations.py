@@ -3,7 +3,6 @@ All settings live in the instruction database. Inventory customer IDs stay uncha
 """
 import json
 import unicodedata
-import uuid
 
 
 def schema(c):
@@ -13,32 +12,6 @@ def schema(c):
       payload TEXT NOT NULL DEFAULT '{"nodes":[],"customer_scopes":[],"staff_scopes":[]}');
     INSERT OR IGNORE INTO web_request_org_settings(id) VALUES(1);
     """)
-    migrate_direct_sites(c)
-
-
-def migrate_direct_sites(c):
-    """Keep existing site IDs/settings; add one neutral parent category per company."""
-    row=c.execute('SELECT version,payload FROM web_request_org_settings WHERE id=1').fetchone()
-    payload=json.loads(row[1]);nodes=payload.get('nodes',[])
-    roots=[n for n in nodes if n.get('kind')=='company']
-    changed=False
-    for root in roots:
-        sites=[n for n in nodes if n.get('kind')=='site' and n.get('parent_id')==root['id']]
-        if not sites:continue
-        names={n['name'] for n in nodes if n.get('parent_id')==root['id']}
-        name='直属';number=1
-        while name in names:
-            number+=1;name='直属（移行'+str(number)+'）'
-        category_id=str(uuid.uuid5(uuid.NAMESPACE_URL,'instruction-desk:category:'+root['id']))
-        if any(n['id']==category_id for n in nodes):category_id=str(uuid.uuid4())
-        nodes.append(dict(id=category_id,parent_id=root['id'],kind='region',name=name,customer_id=root['customer_id'],site_type=''))
-        for site in sites:site['parent_id']=category_id
-        changed=True
-    if changed:
-        with c:
-            c.execute('CREATE TABLE IF NOT EXISTS web_request_org_migrations(id INTEGER PRIMARY KEY,at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,previous_version INTEGER NOT NULL,previous_payload TEXT NOT NULL)')
-            c.execute('INSERT INTO web_request_org_migrations(previous_version,previous_payload) VALUES(?,?)',(row[0],row[1]))
-            c.execute('UPDATE web_request_org_settings SET payload=?,version=version+1 WHERE id=1',(json.dumps(payload,ensure_ascii=False),))
 
 
 def admin(user):
@@ -157,7 +130,7 @@ def validate(payload,customers,staff,accounts):
         p=byid.get(n['parent_id'])
         if n['kind']=='company':
             if n['parent_id'] is not None:raise ValueError('企業に所属先は指定できません。')
-        elif not p or p['kind'] not in (('company',) if n['kind']=='region' else ('region',)):raise ValueError('カテゴリは会社の下、店舗・拠点はカテゴリの中に登録してください。')
+        elif not p or p['kind'] not in (('company',) if n['kind']=='region' else ('company','region')):raise ValueError('カテゴリは会社の下、店舗・拠点は会社またはカテゴリの下に登録してください。')
     for n in result:
         if n['kind']=='company':continue
         parent=byid[n['parent_id']]
