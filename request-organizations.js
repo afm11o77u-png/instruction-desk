@@ -58,7 +58,7 @@ function accountScopeNodes(selected){const cid=Number($('#org-root-customer').va
 function accountForm(){const aid=Number($('#org-account').value),scope=legacyPageScope(org.customer_scopes.find(s=>s.account_id===aid)),selected=scope?.node_ids||[];$('#org-account-page').innerHTML='<option value=""></option>';$('#org-account-page').value='';$('#org-account-page').closest('label').hidden=true;$('#org-account-direct-fields').hidden=false;$('#org-account-nodes').innerHTML=scopesHtml(selected,accountScopeNodes(selected));$('#org-can-request').checked=scope?.can_request??true;$('#org-account-hint').textContent=!aid?'利用者を選ぶと、その人が見られる範囲（会社全体・カテゴリ・拠点）を選べます。':scope?'チェックした会社・カテゴリ・拠点の契約と制服を表示します（下の階層も含みます）。チェックをすべて外すと、どの拠点も表示されません。':'範囲が未設定のため、ログインアカウントの登録先の会社全体を対象にしています。';pending.delete('account');if(!admin())$('#org-account-nodes').querySelectorAll('input').forEach(e=>e.disabled=true)}
 function staffNodes(){const root=selectedRoot();return root?org.nodes.filter(n=>n.customer_id===root.customer_id):[]}
 function staffForm(){const uid=Number($('#org-staff').value),root=selectedRoot(),nodes=staffNodes().filter(n=>n.kind==='site'),saved=org.staff_scopes.filter(s=>s.user_id===uid).map(s=>s.node_id),covered=new Set(saved.flatMap(id=>[...descendants(id)])),configured=(org.staff_scope_settings||[]).some(s=>s.user_id===uid&&s.customer_id===root?.customer_id);$('#org-staff-mode').value=saved.includes(root?.id)||(!configured&&!saved.some(id=>staffNodes().some(n=>n.id===id)))?'all':'individual';$('#org-staff-nodes').innerHTML=scopesHtml(nodes.filter(n=>covered.has(n.id)||!configured&&!saved.some(id=>staffNodes().some(n=>n.id===id))).map(n=>n.id),nodes);pending.delete('staff');const disabled=!admin()||!uid||!root;$('#org-staff-nodes').querySelectorAll('input').forEach(e=>e.disabled=disabled);for(const id of ['org-staff-all','org-staff-none','org-staff-apply','org-staff-mode','org-staff-remove-all','org-staff-remove-selected'])$('#'+id).disabled=disabled;staffMode()}
-function staffMode(){$('#org-staff-nodes').hidden=false;for(const id of ['org-staff-all','org-staff-none','org-staff-remove-selected'])$('#'+id).hidden=false}
+function staffMode(){$('#org-staff-nodes').hidden=false;for(const id of ['org-staff-all','org-staff-none','org-staff-remove-selected'])$('#'+id).hidden=false;if(typeof syncStaffDiagramButtons==='function')syncStaffDiagramButtons()}
 $('#org-staff-mode').onchange=()=>{if($('#org-staff-mode').value==='all')$('#org-staff-nodes').querySelectorAll('input').forEach(e=>e.checked=true);staffMode();mark('staff')};
 function setStaffChecks(checked){if(!admin()||!Number($('#org-staff').value)||!staffNodes().length)return;$('#org-staff-nodes').querySelectorAll('input').forEach(e=>e.checked=checked);$('#org-staff-mode').value='individual';mark('staff')}
 $('#org-staff-all').onclick=()=>setStaffChecks(true);$('#org-staff-none').onclick=()=>setStaffChecks(false);
@@ -204,7 +204,7 @@ function ensureOrgToolbars(){
     const bar=document.createElement('div');
     bar.id='org-select-toolbar';
     bar.className='org-select-toolbar';
-    bar.innerHTML='<div class="org-move-toolbar"><span>拠点の複数選択</span><button type="button" id="org-select-all">すべてチェック</button><button type="button" id="org-select-none">すべてチェックを外す</button><button type="button" id="org-move-undo">移動を元に戻す</button><p id="org-move-state"></p><p class="small">Ctrl（または⌘）クリック、Shiftクリック、図の余白をドラッグして複数の拠点を選べます。選んだ拠点はまとめて移動・配送設定できます。</p></div>';
+    bar.innerHTML='<div class="org-move-toolbar"><span>拠点の複数選択</span><strong id="org-select-count"></strong><button type="button" id="org-select-all">すべてチェック</button><button type="button" id="org-select-none">すべてチェックを外す</button><button type="button" id="org-move-undo">移動を元に戻す</button><p id="org-move-state"></p><p class="small">Ctrl（または⌘）クリック、Shiftクリック、図の余白をドラッグして複数の拠点を選べます。選んだ拠点はまとめて移動・配送設定できます。</p></div>';
     const panel=treeEl.closest('.org-diagram-panel')||treeEl.parentElement;
     panel.insertBefore(bar, treeEl);
     $('#org-select-all').onclick=()=>selectAllSites(true);
@@ -222,7 +222,29 @@ function ensureOrgToolbars(){
     $('#org-delivery-method').onchange=()=>{$('#org-collection-days').hidden=$('#org-delivery-method').value!=='自社集配'};
     $('#org-delivery-apply').onclick=applyDeliveryBulk;
   }
+  if(!$('#org-staff-from-diagram')&&$('#org-staff-none')){
+    const wrap=document.createElement('span');wrap.id='org-staff-from-diagram';wrap.className='org-staff-from-diagram';
+    wrap.innerHTML='<button type="button" id="org-staff-diagram-add">図で選んだ拠点をチェック</button><button type="button" id="org-staff-diagram-only">図で選んだ拠点だけにする</button>';
+    $('#org-staff-none').after(wrap);
+    $('#org-staff-diagram-add').onclick=()=>staffFromDiagram(false);
+    $('#org-staff-diagram-only').onclick=()=>staffFromDiagram(true);
+  }
+  syncStaffDiagramButtons();
   bindRubberBand();
+}
+// 図で選んだ拠点（範囲選択・Ctrl/Shiftクリック）を、社内担当者の担当範囲のチェックに反映する。確定は「担当範囲を一覧に適用」→「変更をまとめて保存」。
+function staffFromDiagram(only){
+  const ids=new Set(selectedSiteNodes().map(n=>n.id));
+  if(!admin()||!Number($('#org-staff').value))return notice('先に社内担当者を選んでください。');
+  if(!ids.size)return notice('先に図で拠点を選んでください（余白をドラッグ、またはCtrl/Shiftクリック）。');
+  $('#org-staff-mode').value='individual';
+  $('#org-staff-nodes').querySelectorAll('input').forEach(e=>{if(ids.has(e.value))e.checked=true;else if(only)e.checked=false});
+  mark('staff');
+  notice('図で選んだ拠点'+ids.size+'件を担当範囲にチェックしました。「担当範囲を一覧に適用」を押してから、最後に「変更をまとめて保存」で確定します。');
+}
+function syncStaffDiagramButtons(){
+  const n=selectedSiteNodes().length,disabled=!admin()||!Number($('#org-staff')?.value)||!n;
+  for(const [id,label] of [['org-staff-diagram-add','図で選んだ拠点をチェック'],['org-staff-diagram-only','図で選んだ拠点だけにする']]){const b=$('#'+id);if(!b)continue;b.disabled=disabled;b.textContent=label+(n?'（'+n+'件）':'')}
 }
 function syncSelectToolbar(){
   const all=$('#org-select-all'),none=$('#org-select-none');
@@ -230,10 +252,12 @@ function syncSelectToolbar(){
   const sites=currentCompanySites();
   all.disabled=!admin()||!sites.length;
   none.disabled=!admin()||!selectedSites.size;
+  const count=$('#org-select-count');if(count)count.textContent=selectedSiteNodes().length?'選択中 '+selectedSiteNodes().length+'件':'';
   syncMoveUndo();
 }
 function selectedSiteNodes(){return currentCompanySites().filter(n=>selectedSites.has(n.id))}
 function renderDeliveryBulk(){
+  syncStaffDiagramButtons();syncSelectToolbar();
   const box=$('#org-delivery-bulk');
   if(!box)return;
   const sites=selectedSiteNodes();
@@ -270,7 +294,7 @@ function bindRubberBand(){
   canvas.dataset.rubberBound='1';
   canvas.addEventListener('mousedown',e=>{
     if(e.button!==0||!admin())return;
-    if(e.target.closest('[data-org-select],[data-org-drop],[data-org-add],[data-org-settings],[data-org-jump],button,input,select,label,a'))return;
+    if(e.target.closest('[data-org-select],[data-org-add],[data-org-settings],[data-org-jump],.org-drop-tray,.org-add-card,button,input,select,label,a'))return;
     e.preventDefault();
     const rect=canvas.getBoundingClientRect();
     band={x:e.clientX,y:e.clientY,ox:e.clientX-rect.left+canvas.scrollLeft,oy:e.clientY-rect.top+canvas.scrollTop};
