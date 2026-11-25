@@ -292,3 +292,20 @@ body.desk-common-page[data-request-page=settings] #contract-editing-label{displa
 .org-diagram-panel .org-title-actions button{margin:0;white-space:nowrap;padding:7px 12px;font-size:13px}
 #collection-import{width:min(900px,94vw);max-width:900px}
 @media(max-width:580px){.org-diagram-panel .org-title-actions{justify-content:flex-start;margin-left:0}}
+
+/* 顧客・契約管理のヘッダー：顧客一覧を目立たせ、作成順を番号と矢印で示す */
+body.desk-common-page header nav{align-items:center;gap:10px;flex-wrap:wrap}
+body.desk-common-page header nav button[data-tab=customers].contracts-nav-directory{border:1.5px solid #236644;background:#fff;color:#1a5536;font-weight:700;padding:8px 16px;border-radius:9px}
+body.desk-common-page header nav button[data-tab=customers].contracts-nav-directory:hover{background:#e8f4ec}
+body.desk-common-page header nav button[data-tab=customers].contracts-nav-directory.active{background:#236644;color:#fff}
+.contracts-nav-flow{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;margin-left:4px;padding-left:12px;border-left:1px solid #c5d6ca}
+.contracts-nav-arrow{color:#5a7a66;font-weight:700;padding:0 2px;line-height:1}
+.contracts-nav-step{font-weight:700;color:#236644;margin-right:2px}
+body.desk-common-page header nav .contracts-nav-flow button.active{background:#e7f0e8;color:#17633f;font-weight:bold}
+body.desk-common-page header nav .contracts-nav-flow button.active .contracts-nav-step{color:#17633f}
+#contracts-service-links{display:inline-flex;gap:8px;flex-wrap:wrap;align-items:center;margin-left:8px}
+#contracts-service-links button{padding:7px 12px;font-size:12px;background:transparent}
+@media(max-width:800px){
+  .contracts-nav-flow{margin-left:0;padding-left:0;border-left:0;width:100%}
+  #contracts-service-links{margin-left:0}
+}
