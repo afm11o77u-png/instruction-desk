@@ -229,6 +229,9 @@ function ensureOrgToolbars(){
     $('#org-staff-diagram-add').onclick=()=>staffFromDiagram(false);
     $('#org-staff-diagram-only').onclick=()=>staffFromDiagram(true);
   }
+  // 「選んだ拠点の配送設定」は「社内担当者を設定」のすぐ下に置く。
+  const access=$('#org-access-section'),bulk=$('#org-delivery-bulk');
+  if(access&&bulk&&access.nextElementSibling!==bulk)access.after(bulk);
   syncStaffDiagramButtons();
   bindRubberBand();
 }
