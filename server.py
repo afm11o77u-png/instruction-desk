@@ -1104,6 +1104,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         can_write = stock_can_write(u)
         actor = {'id': u['id'], 'name': u['name'], 'role': u['role']}
         ensure_stock()
+        if path in ('/inventory/api/ishikari-2f','/inventory/ishikari-2f.xlsx'):
+            return self.serve_ishikari_shelves(method, path, u, can_write)
         if path.startswith('/inventory/api'):
             api_path=path[len('/inventory'):] or '/'
             # 商品登録の全削除（検証用）は主管理者のみ（manage 権限でも不可）
@@ -1148,6 +1150,39 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         if not file.is_file(): return self.reply(404, {'error':'見つかりません。'})
         kind={'html':'text/html; charset=utf-8','js':'text/javascript; charset=utf-8','css':'text/css; charset=utf-8'}.get(file.suffix[1:],'application/octet-stream')
         return self.reply(200, file.read_bytes(), kind)
+    def serve_ishikari_shelves(self, method, path, user, can_write):
+        """石狩倉庫2F 棚番号：読込・保存（在庫を変更できる人だけ）・Excel出力。"""
+        import ishikari_shelves
+        c = sqlite3.connect(DB, timeout=15, isolation_level=None)
+        try:
+            if path.endswith('.xlsx'):
+                if method != 'GET': return self.reply(405, {'error':'使えない操作です。'})
+                state = ishikari_shelves.read(c)
+                if state['version'] == 0:
+                    return self.reply(200, ishikari_shelves.TEMPLATE_XLSX.read_bytes(), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                return self.reply(200, ishikari_shelves.build_xlsx(state['data']), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                  {'Content-Disposition': "attachment; filename*=UTF-8''%E7%9F%B3%E7%8B%A9%E5%80%89%E5%BA%AB2F_%E6%A3%9A%E7%95%AA%E5%8F%B7.xlsx"})
+            if method == 'GET':
+                return self.reply(200, {**ishikari_shelves.read(c), 'can_edit': bool(can_write)})
+            if not can_write: return self.reply(403, {'error':'棚番号の編集は主管理者・管理者が行います。'})
+            if self.headers.get('X-Stock-Request')!='1': return self.reply(400, {'error':'画面からの操作だけを受け付けます。'})
+            origin=self.headers.get('Origin') or ''
+            if origin and origin not in ALLOWED_ORIGINS: return self.reply(403, {'error':'接続元を確認してください。'})
+            try: n=int(self.headers.get('Content-Length') or 0)
+            except ValueError: return self.reply(400, {'error':'送信内容を読めませんでした。'})
+            if n <= 0 or n > 5_000_000: return self.reply(400, {'error':'送信内容の大きさを確認してください。'})
+            try: body=json.loads(self.rfile.read(n).decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError): return self.reply(400, {'error':'送信内容を読めませんでした。'})
+            if not isinstance(body, dict): return self.reply(400, {'error':'送信内容を読めませんでした。'})
+            try:
+                result = ishikari_shelves.save(c, body.get('data'), body.get('version'), user['name'])
+            except ishikari_shelves.ConflictError as e:
+                return self.reply(409, {'error': str(e)})
+            except ValueError as e:
+                return self.reply(400, {'error': str(e)})
+            return self.reply(200, {**result, 'can_edit': True})
+        finally:
+            c.close()
     def serve_personal_note(self, save=False, shared=False):
         from auth import log
         from urllib.parse import parse_qs, urlsplit
