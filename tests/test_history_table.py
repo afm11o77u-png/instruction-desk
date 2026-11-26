@@ -11,8 +11,8 @@ class HistoryTableTest(unittest.TestCase):
         self.assertIn("function renderRecords(){renderHistory();$('#staff-list').innerHTML=records(true)}", js)
         self.assertIn("const HISTORY_STATUSES=['受付待ち','受付済み','差し戻し'];", js)
         self.assertIn("(single?'':'<option value=\"\">すべての店舗</option>')", js)  # 1店舗だけの利用者は切替なし
-        self.assertIn("r.status=b.dataset.accept?'受付済み':'差し戻し'", js)  # 受付する／差し戻すは従来どおり
-        self.assertIn("createdAt:new Date().toISOString()", js)
+        self.assertIn("status:b.dataset.accept?'受付済み':'差し戻し'", js)  # 受付する／差し戻す（RW-52でサーバー保存）
+        self.assertNotIn("createdAt:new Date().toISOString()", js)  # 依頼日はサーバーが記録（RW-52）
 
 
 if __name__ == '__main__':
