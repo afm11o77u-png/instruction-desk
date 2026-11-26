@@ -388,6 +388,7 @@ def save(c,path,d,user=None):
         root['personnel_registration']=d['enabled']
         organizations.save(c,payload,d.get('version'),{x['id'] for x in data['customers']},{x['id'] for x in data['organizationStaff']},user)
         return state(c,path,user)
+    if d.get('action')=='reception':return save_reception(c,path,d,user)
     if d.get('action')=='save_many':return save_many(c,path,d,user)
     if d.get('node_id'):return save_scope(c,path,d,user)
     cid=number(d.get('customer_id'),'顧客',1,2147483647)
@@ -449,6 +450,41 @@ def save_scope(c,path,d,user):
             publication=dict(payload,version=old['version']+1);status='published'
         elif action=='pause':status='paused'
         c.execute('INSERT INTO web_request_scope_settings(node_id,customer_id,version,draft,publication,status) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,draft=excluded.draft,publication=excluded.publication,status=excluded.status',(node_id,cid,old['version']+1,json.dumps(payload,ensure_ascii=False),json.dumps(publication,ensure_ascii=False) if publication else None,status))
+        c.commit()
+    except Exception:c.rollback();raise
+    return state(c,path,user)
+
+
+def save_reception(c,path,d,user):
+    """①組織構成の図から、会社全体・拠点（複数可）の受付中/受付停止を切り替える。
+
+    部署登録（部署ライブラリ）のある会社だけが対象。内容（部署・契約・制服）は変えず、状態だけを変える。
+    再開は停止前の状態に戻す（公開済みの内容があれば公開、なければ未反映＝停止ではない）。
+    """
+    cid=number(d.get('customer_id'),'顧客',1,2147483647)
+    data=state(c,path,user)
+    if cid not in {x['id'] for x in data['customers']}:raise PermissionError('この顧客の設定を変更する権限がありません。')
+    if not has_library(c,cid):raise ValueError('この会社は部署登録がないため、受付の切り替えはWEB依頼の設定で行ってください。')
+    paused=d.get('paused')
+    if type(paused) is not bool:raise ValueError('受付中か停止かを確認してください。')
+    ids=d.get('node_ids')
+    if not isinstance(ids,list) or not ids or len(ids)>500 or any(not isinstance(x,str) for x in ids) or len(set(ids))!=len(ids):raise ValueError('切り替える拠点を選んでください。')
+    org=organizations.read(c);byid={n['id']:n for n in org['nodes']};allowed=set(data['allowedNodeIds'])
+    for nid in ids:
+        n=byid.get(nid)
+        if not n or n['customer_id']!=cid or nid not in allowed:raise PermissionError('この拠点の受付を切り替えられません。')
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        base=read_config(c,cid)
+        for nid in ids:
+            if byid[nid]['kind']=='company':
+                if not permitted(base,user) and (not user or not organizations.staff_can_manage(org,user['id'],cid)):raise PermissionError('担当者の設定を確認してください。')
+                status='paused' if paused else ('published' if base['publication'] else 'draft')
+                c.execute("INSERT INTO web_request_customer_settings(customer_id,version,draft,publication,status) VALUES(?,?,?,?,?) ON CONFLICT(customer_id) DO UPDATE SET version=excluded.version,status=excluded.status",(cid,base['version']+1,json.dumps(base['draft'],ensure_ascii=False),json.dumps(base['publication'],ensure_ascii=False) if base['publication'] else None,status))
+            else:
+                old=inheritance.record(c,nid)
+                status='paused' if paused else ('published' if old['publication'] else 'draft')
+                c.execute('INSERT INTO web_request_scope_settings(node_id,customer_id,version,draft,publication,status) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,status=excluded.status',(nid,cid,old['version']+1,json.dumps(old['draft'],ensure_ascii=False),json.dumps(old['publication'],ensure_ascii=False) if old['publication'] else None,status))
         c.commit()
     except Exception:c.rollback();raise
     return state(c,path,user)

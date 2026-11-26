@@ -27,7 +27,7 @@ let directFocus=false;
 function directName(root){return String(root?.direct_group_name||'').trim()||'直下'}
 function directHeading(root,count){return `<button type="button" class="org-category-heading ${diagramSelection===root.id&&directFocus?'selected':''}" data-org-select="${esc(root.id)}" data-org-direct="${esc(root.id)}" data-org-kind="direct" data-org-drop="${esc(root.id)}" aria-pressed="${diagramSelection===root.id&&directFocus}"><span class="org-diagram-kind">カテゴリ（まとめる単位）</span><strong>${esc(directName(root))}</strong><small>配下の店舗・事業所 ${count}件</small><span class="org-staff-label">担当：${esc(staffLabel(root))}</span></button>`}
 function deliveryLabel(n){const method=n.delivery_method||'',days=(n.collection_days||[]).join('');if(!method)return '';return method==='自社集配'?(days?'自社集配・'+days:'自社集配'):method}
-function diagramNode(n){const total=[...descendants(n.id)].filter(id=>org.nodes.some(x=>x.id===id&&x.kind==='site')).length,multi=n.kind==='site'&&selectedSites.has(n.id);return `<button type="button" class="${n.kind==='region'?'org-category-heading':'org-diagram-card'} ${diagramSelection===n.id&&!(directFocus&&n.kind==='company')?'selected':''}${multi?' multi-selected':''}" data-org-select="${esc(n.id)}" data-org-kind="${esc(n.kind)}" ${admin()&&n.kind==='site'?'draggable="true"':''} ${n.kind!=='site'?'data-org-drop="'+esc(n.id)+'"':''} aria-pressed="${diagramSelection===n.id||multi}"><span class="org-diagram-kind">${n.kind==='company'?'顧客・会社':n.kind==='region'?'カテゴリ（まとめる単位）':'拠点'}</span><strong>${esc(n.name)}</strong><small>${n.kind==='company'||n.kind==='region'?'配下の店舗・事業所 '+total+'件':(admin()?'ドラッグで並べ替え・所属先の変更ができます':'選ぶと所属先と設定を確認')}</small>${n.kind==='site'&&deliveryLabel(n)?`<span class="org-delivery-tag">${esc(deliveryLabel(n))}</span>`:''}<span class="org-staff-label">担当：${esc(staffLabel(n))}</span></button>`}
+function diagramNode(n){const total=[...descendants(n.id)].filter(id=>org.nodes.some(x=>x.id===id&&x.kind==='site')).length,multi=n.kind==='site'&&selectedSites.has(n.id);return `<button type="button" class="${n.kind==='region'?'org-category-heading':'org-diagram-card'} ${diagramSelection===n.id&&!(directFocus&&n.kind==='company')?'selected':''}${multi?' multi-selected':''}${n.kind!=='company'&&receptionInfo(n)?.companyPaused?' reception-company-paused':''}" data-org-select="${esc(n.id)}" data-org-kind="${esc(n.kind)}" ${admin()&&n.kind==='site'?'draggable="true"':''} ${n.kind!=='site'?'data-org-drop="'+esc(n.id)+'"':''} aria-pressed="${diagramSelection===n.id||multi}"><span class="org-diagram-kind">${n.kind==='company'?'顧客・会社':n.kind==='region'?'カテゴリ（まとめる単位）':'拠点'}</span><strong>${esc(n.name)}</strong><small>${n.kind==='company'||n.kind==='region'?'配下の店舗・事業所 '+total+'件':(admin()?'ドラッグで並べ替え・所属先の変更ができます':'選ぶと所属先と設定を確認')}</small>${n.kind==='site'&&deliveryLabel(n)?`<span class="org-delivery-tag">${esc(deliveryLabel(n))}</span>`:''}<span class="org-staff-label">担当：${esc(staffLabel(n))}</span>${receptionBadge(n)}</button>`}
 function renderDiagramSelection(){const n=org.nodes.find(x=>x.id===diagramSelection),panel=$('#org-selection');if(!n){panel.hidden=true;return}const children=org.nodes.filter(x=>x.parent_id===n.id),sites=[...descendants(n.id)].map(id=>org.nodes.find(x=>x.id===id)).filter(x=>x?.kind==='site');panel.hidden=false;if(n.kind==='company'&&directFocus){panel.innerHTML=`<strong>${esc(directName(n))}</strong><p class="hint">カテゴリ（会社の直下）：${esc(n.name)}に直接属する店舗・事業所 ${children.filter(x=>x.kind==='site').length}件</p>${admin()?`<label>カテゴリ名<input id="org-direct-name" maxlength="100" value="${esc(directName(n))}"></label><div class="actions"><button type="button" id="org-direct-rename">名前を変更</button><button type="button" data-org-add="site">＋ このカテゴリに店舗・事業所を追加</button></div>`:''}`;return}panel.innerHTML=`<strong>${esc(n.name)}</strong>${admin()&&n.kind==='company'?`<label class="check"><input id="org-company-personnel" type="checkbox" ${(n.personnel_registration??!org.nodes.some(x=>x.customer_id===n.customer_id&&x.kind==='site'))?'checked':''}> この会社自体で人員を管理する</label>`:''}<div class="actions">${admin()?`<button type="button" data-org-add="site">＋ ${n.kind==='company'?'この会社に':n.kind==='region'?'このカテゴリに':'同じ所属先に'}店舗・事業所を追加</button>`:''}</div>`}
 // 会社直下の枠を「カテゴリ」として扱う：見出しの選択と名前の変更（データは会社の直下のまま、会社に direct_group_name として保存）。
 $('#org-tree').addEventListener('click',e=>{const jump=e.target.closest('[data-org-jump]'),select=e.target.closest('[data-org-select]');if(jump)directFocus=org.nodes.some(n=>n.id===jump.dataset.orgJump&&n.kind==='company');else if(select)directFocus=!!select.closest('[data-org-direct]')},true);
@@ -244,6 +244,13 @@ function ensureOrgToolbars(){
     $('#org-select-none').onclick=()=>selectAllSites(false);
     $('#org-move-undo').onclick=()=>undoLastMove();
   }
+  if(!$('#org-reception-bulk')&&$('#org-select-toolbar .org-move-toolbar')){
+    const r=document.createElement('div');r.id='org-reception-bulk';r.className='org-reception-bulk';r.hidden=true;
+    r.innerHTML='<span>WEB依頼の受付</span><button type="button" id="org-reception-open">まとめて受付</button><button type="button" id="org-reception-pause">まとめて停止</button><small id="org-reception-note"></small>';
+    $('#org-select-toolbar .org-move-toolbar').append(r);
+    $('#org-reception-open').onclick=()=>setReception(selectedSiteNodes().map(n=>n.id),false);
+    $('#org-reception-pause').onclick=()=>setReception(selectedSiteNodes().map(n=>n.id),true);
+  }
   if(!$('#org-delivery-bulk')){
     const box=document.createElement('section');
     box.id='org-delivery-bulk';
@@ -289,8 +296,63 @@ function syncSelectToolbar(){
   all.disabled=!admin()||!sites.length;
   none.disabled=!admin()||!selectedSites.size;
   const count=$('#org-select-count');if(count)count.textContent=selectedSiteNodes().length?'選択中 '+selectedSiteNodes().length+'件':'';
+  syncReceptionBulk();
   syncMoveUndo();
 }
+// WEB依頼の受付中/停止（部署登録のある会社だけ）。状態はWEB依頼の保存データ（live）から読み、切り替えはサーバーの reception で行う。
+let receptionBusy=false;
+function receptionInfo(n){
+  const d=data();if(!n||d.previewAccountId||d.previewPageId)return null;
+  const base=(d.profiles||[]).find(p=>p.customer_id===n.customer_id);if(!base?.live)return null;
+  const companyPaused=base.status==='paused';
+  if(n.kind==='company')return {company:true,paused:companyPaused,own:companyPaused,companyPaused};
+  const p=(d.scopeProfiles||[]).find(x=>x.node_id===n.id);if(!p?.live)return null;
+  return {company:false,paused:p.live.status==='paused',own:p.own_status==='paused',companyPaused};
+}
+function receptionBadge(n){
+  const r=receptionInfo(n);if(!r)return '';
+  let text='受付中',cls='open',title=admin()?'押すと受付を停止します':'';
+  if(r.company){if(r.paused){text='会社全体で停止中';cls='paused';title=admin()?'押すと会社全体の受付を再開します':''}else title=admin()?'押すと会社全体の受付を停止します':''}
+  else if(r.companyPaused){text='停止中';cls='paused inherited';title='会社全体で停止中です'}
+  else if(r.own){text='停止中';cls='paused';title=admin()?'押すと受付を再開します':''}
+  else if(r.paused){text='停止中（上位）';cls='paused inherited';title='上のカテゴリで停止中です'}
+  return `<span class="org-reception ${cls}" ${admin()?'role="button" tabindex="0"':''} data-org-reception="${esc(n.id)}" title="${esc(title)}">${text}</span>`;
+}
+function syncReceptionBulk(){
+  const box=$('#org-reception-bulk');if(!box)return;
+  const root=selectedRoot(),info=receptionInfo(root),n=selectedSiteNodes().length;
+  box.hidden=!admin()||!info;if(box.hidden)return;
+  $('#org-reception-open').disabled=$('#org-reception-pause').disabled=!n||receptionBusy||info.companyPaused;
+  $('#org-reception-open').textContent='まとめて受付'+(n?'（'+n+'件）':'');$('#org-reception-pause').textContent='まとめて停止'+(n?'（'+n+'件）':'');
+  $('#org-reception-note').textContent=info.companyPaused?'会社全体で停止中です。会社カードの「会社全体で停止中」を押すと再開します。':'図で拠点を選んで、まとめて受付・停止できます。各カードの「受付中」「停止中」を押すと1件ずつ切り替えます。';
+}
+async function setReception(ids,paused){
+  const root=selectedRoot();if(!admin()||!root||receptionBusy||!ids.length)return;
+  if(dirty||pending.size||saving)return notice('先に組織の変更を「変更をまとめて保存」で保存してから、受付を切り替えてください。');
+  const nodes=ids.map(id=>org.nodes.find(n=>n.id===id)).filter(Boolean);
+  const company=nodes.some(n=>n.kind==='company');
+  if(!company&&receptionInfo(root)?.companyPaused)return notice('会社全体で停止中です。先に会社カードの「会社全体で停止中」を押して受付を再開してください。');
+  const names=nodes.slice(0,5).map(n=>n.name).join('、')+(nodes.length>5?' ほか'+(nodes.length-5)+'件':'');
+  if(paused&&!confirm(company?'「'+root.name+'」の会社全体のWEB依頼の受付を停止しますか？\nすべての店舗・事業所で依頼できなくなります。':nodes.length+'件の受付を停止しますか？\n'+names))return;
+  receptionBusy=true;syncReceptionBulk();
+  try{
+    const r=await fetch('/api/web-request/settings',{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify({action:'reception',customer_id:root.customer_id,node_ids:nodes.map(n=>n.id),paused})});
+    const result=await r.json();if(!r.ok)throw Error(result.error||'受付の切り替えに失敗しました。');
+    await desk().loadSettings();
+    notice((company?'会社全体':nodes.length+'件')+(paused?'の受付を停止しました。':'の受付を再開しました。'));
+  }catch(e){notice(e.message)}finally{receptionBusy=false;syncReceptionBulk()}
+}
+function onReceptionBadge(e){
+  const b=e.target.closest('[data-org-reception]');if(!b)return;
+  if(e.type==='keydown'&&e.key!=='Enter'&&e.key!==' ')return;
+  e.preventDefault();e.stopPropagation();
+  if(!admin())return;
+  const n=org.nodes.find(x=>x.id===b.dataset.orgReception),r=receptionInfo(n);if(!r)return;
+  if(!r.company&&r.companyPaused)return notice('会社全体で停止中です。先に会社カードの「会社全体で停止中」を押して受付を再開してください。');
+  if(!r.company&&r.paused&&!r.own)return notice('上のカテゴリで停止中です。カテゴリの「停止中」を押して再開してください。');
+  setReception([n.id],!r.own);
+}
+$('#org-tree').addEventListener('click',onReceptionBadge,true);$('#org-tree').addEventListener('keydown',onReceptionBadge,true);
 function selectedSiteNodes(){return currentCompanySites().filter(n=>selectedSites.has(n.id))}
 function renderDeliveryBulk(){
   syncStaffDiagramButtons();syncSelectToolbar();
