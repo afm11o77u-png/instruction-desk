@@ -329,6 +329,13 @@ def shift_orders(c,u,sources,before_status,after_status,now,can_access):
 def tune_flags(c,u,d,can_access):
     return 400,{'error':'リストの削除は「削除」を使ってください。'}
 
+def route_rank(c):
+    try:
+        import ishikari_route
+        return ishikari_route.ranker(c)
+    except Exception:
+        return None
+
 def send_mail(c,u,d,can_access):
     if type(d.get('id')) is not int: raise ValueError('リストを選択してください。')
     row=c.execute('SELECT * FROM picking_lists WHERE id=?',(d['id'],)).fetchone()
@@ -352,7 +359,7 @@ def send_mail(c,u,d,can_access):
             if old.stat().st_mtime<cutoff: old.unlink()
         except OSError: pass
     path=MAIL_DIR/f"{value['number']}_{day}_v{row['version']}.xlsx"
-    path.write_bytes(workbook(value))
+    path.write_bytes(workbook(value,route_rank(c)))
     subject=f"【ピッキング依頼】{when:%Y年%m月%d日}／{value['number']}"
     body=f"石狩倉庫 ご担当者様　お疲れ様です。{when:%Y年%m月%d日}のピッキングリスト（{value['number']}）を添付いたします。添付ファイルの「石狩倉庫」シートをご確認のうえ、商品のピッキングをお願いいたします。商品・サイズ・数量などに不明点がございましたら、各明細の「依頼者・確認先」へご確認ください。欠品等によりご用意が難しい場合も、該当の依頼者へご連絡をお願いいたします。よろしくお願いいたします。"
     attachment=path.as_uri()
@@ -980,6 +987,14 @@ def handle(h,c,path,d,can_access):
     if path.startswith('/api/carry-input'):
         if u['role'] not in ('owner','floor'): return 403,{'error':'管理担当持込の入力は現場と主管理者が使用します。'}
         return carry_input(c,u,path,d or {})
+    if path in ('/api/picking/route','/api/picking/route-alias'):
+        # 石狩倉庫2Fのルート順と、顧客名→棚の覚えさせ（ピッキングを使う人なら誰でも）
+        if u['role'] not in ('owner','floor','sales','floor3'): return 403,{'error':'この操作はできません。'}
+        import ishikari_route
+        if d is None:
+            return (200,ishikari_route.info(c)) if path=='/api/picking/route' else (404,{'error':'見つかりません。'})
+        if path!='/api/picking/route-alias' or not isinstance(d,dict): return 404,{'error':'見つかりません。'}
+        return 200,ishikari_route.save_alias(c,d.get('customer'),d.get('block_id'),u['name'])
     scan_export = path == '/api/picking/scan-xlsx' and d is not None
     if u['role'] not in ('owner','floor','sales') and not (scan_export and u['role']=='floor3'): return 403,{'error':'この操作はできません。'}
     if path in ('/api/picking/carry-day','/api/picking/carry-check','/api/picking/carry-print','/api/picking/carry-month') and u['role'] not in ('owner','sales'): return 403,{'error':'管理担当持込の出力は営業と主管理者が使用します。'}
@@ -1007,7 +1022,7 @@ def handle(h,c,path,d,can_access):
             return 200,[dict(x) for x in c.execute('SELECT at,actor,action,before_json,after_json FROM picking_history WHERE list_id=? ORDER BY id DESC',(r['id'],))]
         v=record(r,u)
         if v['status']!='確定': return 400,{'error':'依頼を保存してから出力してください。'}
-        return 200,workbook(v),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        return 200,workbook(v,route_rank(c)),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     if path == '/api/picking/scan-xlsx':
         if not isinstance(d, dict):
             raise ValueError('出力する明細を確認してください。')
@@ -1023,7 +1038,7 @@ def handle(h,c,path,d,can_access):
         from pathlib import Path
         from urllib.parse import quote
         from picking_sorter import DEFAULT_BASE_DIR, scan_ishikari_workbook
-        xlsx_bytes = scan_ishikari_workbook(day, rows)
+        xlsx_bytes = scan_ishikari_workbook(day, rows, route_rank=route_rank(c))
         headers = {}
         try:
             save_dir = Path(DEFAULT_BASE_DIR)

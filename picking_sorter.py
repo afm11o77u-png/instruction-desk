@@ -584,7 +584,7 @@ def _merge_ishikari_rows(rows, readings):
     return sorted(merged.values(), key=lambda row: _ishikari_customer_order(row, readings))
 
 
-def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, customer_readings=None):
+def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, customer_readings=None, route_rank=None):
     """Create the warehouse workbook without touching the filesystem."""
     ishikari_rows = [r for r in rows if r["stock"] == "0"]
     factory_rows  = [r for r in rows if r["stock"] == "a"]
@@ -594,6 +594,10 @@ def build_ishikari_workbook(now: datetime, rows: list[dict], file_name: str, *, 
         ishikari_rows.sort(key=lambda x: (x["customer"], x["name"]))
     else:
         ishikari_rows = _merge_ishikari_rows(ishikari_rows, customer_readings)
+    if route_rank:
+        # 石狩倉庫2Fのルート順（配置図で入力）。ルート外の顧客は今の順のまま後ろへ。
+        from ishikari_route import route_sorted
+        ishikari_rows = route_sorted(ishikari_rows, route_rank)
     factory_rows.sort(key=lambda x: (x["customer"], x["name"]))
     carry_rows.sort(key=lambda x: (x["customer"], x["name"]))
 
@@ -665,7 +669,7 @@ def preview_ishikari_format() -> bytes:
         wb.close()
 
 
-def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
+def scan_ishikari_workbook(day: str, rows: list[dict], route_rank=None) -> bytes:
     """Export legacy barcode rows using the automatic sorter workbook format."""
     now = datetime.fromisoformat(day)
     stock_codes = {"warehouse": "0", "factory": "a", "carry": "b"}
@@ -695,7 +699,7 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
             "stock": stock_codes[row["stock"]],
         })
 
-    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx")
+    wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx", route_rank=route_rank)
     try:
         # The previous barcode exporter stored all user text literally.
         # Preserve that behavior instead of letting openpyxl interpret formulas or errors.
@@ -711,7 +715,7 @@ def scan_ishikari_workbook(day: str, rows: list[dict]) -> bytes:
         wb.close()
 
 
-def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None, *, customer_readings=None) -> tuple[Path | None, dict]:
+def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: str | None = None, *, customer_readings=None, route_rank=None) -> tuple[Path | None, dict]:
     r"""石狩倉庫用連番ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx) を作成"""
     if not rows:
         return None, {"ishikari": 0, "factory": 0, "carry": 0}
@@ -735,7 +739,7 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
     target_dir.mkdir(parents=True, exist_ok=True)
     out_path = target_dir / file_name
 
-    wb, counts = build_ishikari_workbook(now, rows, file_name, customer_readings=customer_readings or {})
+    wb, counts = build_ishikari_workbook(now, rows, file_name, customer_readings=customer_readings or {}, route_rank=route_rank)
     try:
         wb.save(str(out_path))
     finally:
@@ -1103,13 +1107,13 @@ def _finish_saved_sort(path, journal, addresses=None):
         result["message"] = "前回保存した指示書の移動を完了しました。新しい指示書は取込画面を開き直して仕分けしてください。"
     return result
 
-def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None, customer_readings=None) -> dict:
+def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None, customer_readings=None, route_rank=None) -> dict:
     """仕分け実行メインロジック"""
     with _SORT_LOCK:
-        return _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings)
+        return _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings, route_rank)
 
 
-def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings=None):
+def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings=None, route_rank=None):
     journal_path = get_base_dir() / ".instruction-desk-pending-sort.json"
     if journal_path.exists():
         return _finish_saved_sort(journal_path, json.loads(journal_path.read_text(encoding="utf-8")))
@@ -1151,7 +1155,7 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
 
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
     ishikari_path, ishikari_counts = _save_ishikari_workbook(
-        now, all_rows, custom_filename=custom_ishikari_file, customer_readings=customer_readings
+        now, all_rows, custom_filename=custom_ishikari_file, customer_readings=customer_readings, route_rank=route_rank
     )
 
     # 2. 報告用リスト (報告用リスト\報告用YYMMDD.xlsx) の「持ち込み」シートへ追記
