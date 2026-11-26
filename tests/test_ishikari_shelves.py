@@ -46,6 +46,13 @@ class IshikariShelvesTest(unittest.TestCase):
             m.save(self.c, data, 0)
         self.assertEqual(m.read(self.c)['version'], 0)
 
+    def test_diagram_fits_text_without_changing_saved_size(self):
+        from pathlib import Path
+        js = (Path(m.ROOT) / 'stock-desk' / 'static' / 'ishikari-2f.js').read_text(encoding='utf-8')
+        self.assertIn('function fitCell(d)', js)
+        self.assertIn('fitAll();', js)
+        self.assertNotIn('b.size=lo', js)  # 表示だけ小さくし、保存する大きさは変えない
+
 
 if __name__ == '__main__':
     unittest.main()
