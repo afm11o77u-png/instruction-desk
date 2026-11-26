@@ -66,7 +66,10 @@ def sync_protected():
         if merge_head.exists():
             git('merge', '--abort')
     if saved:
-        restored = git('stash', 'apply', '--index', saved, check=False)
+        # Merge file contents onto the updated tree. Replaying the old index
+        # patch can fail even when a three-way content merge succeeds.
+        # The retained stash preserves the original staging information.
+        restored = git('stash', 'apply', saved, check=False)
         if restored.returncode:
             raise RuntimeError('手元の変更と更新が重なりました。自動処理を停止しました。'
                                '\n元の変更はGitのstashに保管されています。復旧情報: ' + str(marker.resolve()))

@@ -5370,7 +5370,7 @@ def ensure_small_surname_36_exact_samples(c, data_dir=None):
 
 
 # --- 弁釜（Excel 行159–160）ネーム形式 ---
-BENKAMA_NAMES_POLICY = 'excel-gojuon2-r159-160-v1'
+BENKAMA_NAMES_POLICY = 'reference-upright-number-down5-20261022-v6'
 BENKAMA_NAMES_SETTINGS_KEY = 'benkama_name_formats'
 BENKAMA_NAMES_REPORT = 'benkama-name-formats-report.json'
 BENKAMA_CUSTOMER_KEY = 'excel:benkama'
@@ -5384,7 +5384,7 @@ BENKAMA_CUSTOMER_ALIASES = (
 )
 BENKAMA_FAMILY = 'MSPゴシック'
 BENKAMA_PLACEMENT = '白衣：左袖25cm'
-BENKAMA_WIDTH_MM, BENKAMA_HEIGHT_MM = THREE_LARGE_W, THREE_LARGE_H
+BENKAMA_WIDTH_MM, BENKAMA_HEIGHT_MM = 80, 50
 BENKAMA_BAND_HEIGHT_MM = 25.0
 BENKAMA_UPPER_PT = 20
 BENKAMA_HEADING = '上段：社員番号：〇〇〇〇〇〇〇'
@@ -5392,7 +5392,7 @@ BENKAMA_HEADING_SAMPLE = '社員番号：1234567'
 BENKAMA_NUMBER_LENGTH = 7
 BENKAMA_COLUMNS = 2
 BENKAMA_SAMPLE_FULL = THREE_SAMPLE_FULL
-BENKAMA_SAMPLE_PERIOD = '1 ﾃｷ ｼﾎｳ'  # Excel 例「① ﾃｷ ｼﾎｳ」に合わせたカタカナ＋期数字
+BENKAMA_SAMPLE_PERIOD = '① ﾃｷ ｼﾎｳ'  # Excel 例「① ﾃｷ ｼﾎｳ」に合わせたカタカナ＋期数字
 BENKAMA_PAPER_RGB = {
     '白': (255, 255, 255),
     '青': (135, 206, 250),  # #87CEFA
@@ -5406,11 +5406,11 @@ BENKAMA_STAFF_SWATCHES = ['#87CEFA', '#FFFFFF']
 BENKAMA_STAFF_PAPERS = ('青', '白')
 BENKAMA_STAFF_NOTE = (
     '社員番号7ケタ。書体はMSPゴシック。上段：20／下段：大汎用。'
-    '列2。上段帯25mm・中揃え／下段帯25mm・中揃え・上揃え。'
+    '列2。番号帯20mm・氏名帯30mm・中揃え。横向き正位置。社員番号を下へ5mm。'
     f'Excel 行159（ネーム仕分け_五十音順2）。色は{BENKAMA_STAFF_COLOR_CAPTION}。'
 )
 BENKAMA_PERIOD_COLOR_CAPTION = (
-    '札幌　1期生：赤　2期生：緑　3期生：青　4期生：白\n'
+    '札幌　1・5・9…期生：赤　2・6・10…期生：緑　3・7・11…期生：青　4・8・12…期生：白\n'
     '旭川　1期生：赤　2期生：緑　3期生：青　4期生：赤　5期生：青　'
     '6期生：白　7期生：赤　8期生：白　9期生：青　10期生：白\n'
     '函館　1～4期生：無し　5期生：緑　6期生：青　7期生：赤　8期生：白\n'
@@ -5418,14 +5418,14 @@ BENKAMA_PERIOD_COLOR_CAPTION = (
 )
 BENKAMA_PERIOD_NOTE = (
     'ラベル色は５期生以降ループ（札幌のみ、他は規則性なし？）\n'
-    '名前は全てカタカナ表記で頭に何期生かを記す数字\n'
+    '実習生の氏名は半角カタカナを使用し、頭に何期生かを記す数字\n'
     '例　① ﾃｷ ｼﾎｳ\n'
-    '書体はMSPゴシック。上段：20／下段：大汎用。列2。社員番号7ケタ。'
+    '書体はMSPゴシック。番号20pt／氏名32pt。横向き正位置・社員番号を下へ5mm。社員番号7ケタ。'
     'Excel 行160（ネーム仕分け_五十音順2）。'
 )
 BENKAMA_OPEN_ITEMS = [
     '大ネーム実寸は Excel に mm が無いため、既存どおり 80×50 を採用',
-    '上段帯・下段帯は各25mm（合計50mm）。横中揃え／上段縦中・下段縦上',
+    '番号帯20mm・氏名帯30mm。中揃え・横向き正位置・社員番号を下へ5mmで横80×縦50mm表示',
     'MSPゴシックは環境フォント次第（msgothic 等へフォールバック）',
     '期生色の見本はユニーク色（赤・緑・青・白）のみ。無しは見本なし',
     '顧客名は Excel「弁釜本社/札幌/八軒/旭川/函館/ローズD/」。既存の弁釜系別名は同一顧客へ寄せる',
@@ -5436,7 +5436,7 @@ def _benkama_period_color_rows():
     """拠点×期生の色表（無しは除外）。UI groups/colors/swatches 用。"""
     rows = []
     for site, pairs in (
-        ('札幌', [(1, '赤'), (2, '緑'), (3, '青'), (4, '白')]),
+        ('札幌', [('1・5・9…', '赤'), ('2・6・10…', '緑'), ('3・7・11…', '青'), ('4・8・12…', '白')]),
         ('旭川', [
             (1, '赤'), (2, '緑'), (3, '青'), (4, '赤'), (5, '青'),
             (6, '白'), (7, '赤'), (8, '白'), (9, '青'), (10, '白'),
@@ -5459,7 +5459,7 @@ def _benkama_bands(fmt_def):
         {
             'role': 'upper',
             'text': BENKAMA_HEADING_SAMPLE,
-            'heightMm': BENKAMA_BAND_HEIGHT_MM,
+            'heightMm': 20.0,
             'fontPt': float(BENKAMA_UPPER_PT),
             'alignH': 'center',
             'alignV': 'middle',
@@ -5468,10 +5468,10 @@ def _benkama_bands(fmt_def):
         {
             'role': 'name',
             'text': fmt_def['sampleText'],
-            'heightMm': BENKAMA_BAND_HEIGHT_MM,
+            'heightMm': 30.0,
             'fontPt': lower_pt,
             'alignH': 'center',
-            'alignV': 'top',
+            'alignV': 'middle',
             'indentMm': 0.0,
         },
     )
@@ -5483,7 +5483,7 @@ def _benkama_format_defs():
     period_colors = [r[1] for r in period_rows]
     period_swatches = [r[2] for r in period_rows]
     staff_pt = _benkama_lower_pt(BENKAMA_SAMPLE_FULL)
-    period_pt = _benkama_lower_pt(BENKAMA_SAMPLE_PERIOD)
+    period_pt = 32
     return (
         {
             'identity': 'benkama:large-staff',
@@ -5511,7 +5511,7 @@ def _benkama_format_defs():
             'papers': BENKAMA_STAFF_PAPERS,
             'caption': (
                 f'見本：上段「{BENKAMA_HEADING_SAMPLE}」・下段フルネーム「{BENKAMA_SAMPLE_FULL}」。'
-                f'上段{BENKAMA_UPPER_PT}pt／下段大汎用。書体は{BENKAMA_FAMILY}。'
+                f'番号{BENKAMA_UPPER_PT}pt。書体は{BENKAMA_FAMILY}。横向き正位置・社員番号を下へ5mm・指定サイズで描画。'
                 f'色は{BENKAMA_STAFF_COLOR_CAPTION}。'
             ),
         },
@@ -5519,7 +5519,7 @@ def _benkama_format_defs():
             'identity': 'benkama:large-period',
             'kind': 'benkama-period',
             'sourceRow': 160,
-            'formatName': '大ネーム（期生色表）',
+            'formatName': '大ネーム（実習生色表）',
             'placement': BENKAMA_PLACEMENT,
             'heading': BENKAMA_HEADING,
             'note': BENKAMA_PERIOD_NOTE,
@@ -5540,8 +5540,8 @@ def _benkama_format_defs():
             'fontPt': period_pt,
             'papers': ('赤', '緑', '青', '白'),
             'caption': (
-                f'見本：上段「{BENKAMA_HEADING_SAMPLE}」・下段カタカナ期生名「{BENKAMA_SAMPLE_PERIOD}」。'
-                f'上段{BENKAMA_UPPER_PT}pt／下段大汎用。書体は{BENKAMA_FAMILY}。'
+                f'見本：上段「{BENKAMA_HEADING_SAMPLE}」・下段半角カタカナ期生名「{BENKAMA_SAMPLE_PERIOD}」。'
+                f'番号{BENKAMA_UPPER_PT}pt。書体は{BENKAMA_FAMILY}。横向き正位置・社員番号を下へ5mm・指定サイズで描画。'
                 'ラベル色は５期生以降ループ（札幌のみ、他は規則性なし？）。'
             ),
         },
@@ -5558,7 +5558,10 @@ def _benkama_spec(fmt_def):
         'papers': list(fmt_def['papers']),
         'columns': BENKAMA_COLUMNS,
         'numberLength': BENKAMA_NUMBER_LENGTH,
-        'bandHeightsMm': [BENKAMA_BAND_HEIGHT_MM, BENKAMA_BAND_HEIGHT_MM],
+        'rotationDegrees': 0,
+        'numberOffsetMm': 5.0,
+        'sampleFit': 'exact',
+        'bandHeightsMm': [20.0, 30.0],
         'bandFontsPt': [BENKAMA_UPPER_PT, fmt_def['fontPt']],
         'genericFontsPt': dict(THREE_GENERIC_LARGE),
         'colorRoles': dict(zip(fmt_def.get('groups') or [], fmt_def.get('colors') or [])),
@@ -5770,6 +5773,37 @@ def _backup_benkama_format(c, root, backup_dir, fmt, samples):
                 shutil.copy2(src, dest)
 
 
+def _render_benkama_reference(dst, bands, paper_rgb):
+    """Excel reference: MS PGothic, exact points, centered number/name rows."""
+    from PIL import Image, ImageDraw, ImageFont
+    font_path = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts' / 'msgothic.ttc'
+    if not font_path.is_file():
+        return False, 'MS Pゴシックが見つかりません'
+    px = ASHUKA_SAMPLE_PX_PER_MM
+    image = Image.new('RGB', (round(80 * px), round(50 * px)), paper_rgb)
+    draw = ImageDraw.Draw(image)
+    top = 0
+    for band in bands:
+        size = round(float(band['fontPt']) * 25.4 / 72 * px)
+        text = band['text']
+        while True:
+            font = ImageFont.truetype(str(font_path), size, index=2)
+            box = draw.textbbox((0, 0), text, font=font)
+            if box[2]-box[0] <= 76*px or size <= 8:
+                break
+            size -= 1
+        h = band['heightMm'] * px
+        x = (image.width-(box[2]-box[0]))/2-box[0]
+        y = top+(h-(box[3]-box[1]))/2-box[1]
+        if band.get('role') == 'upper':
+            y += 5.0 * px
+        draw.text((round(x), round(y)), text, font=font, fill='black')
+        top += h
+    Path(dst).parent.mkdir(parents=True, exist_ok=True)
+    image.save(dst)
+    return True, 'MS PGothic exact pt; reference layout'
+
+
 def _write_benkama_samples(c, root, format_id, fmt_def):
     bands = _benkama_bands(fmt_def)
     c.execute('DELETE FROM name_samples WHERE format_id=?', (format_id,))
@@ -5777,17 +5811,11 @@ def _write_benkama_samples(c, root, format_id, fmt_def):
     paths = []
     for paper in fmt_def['papers']:
         key = _three_variant_key(fmt_def['papers'], paper)
-        stem = f'{fmt_def["kind"]}-{paper}'
+        stem = f'{fmt_def["kind"]}-upright-v6-{paper}'
         rel = f'images/names/{stem}-{format_id:06}.png'
         dst = root / rel
         rgb = BENKAMA_PAPER_RGB.get(paper, (255, 255, 255))
-        ok, note = _render_ashuka_banded_sample(
-            dst, bands,
-            width_mm=fmt_def['widthMm'],
-            height_mm=fmt_def['heightMm'],
-            family_hint=BENKAMA_FAMILY,
-            paper_rgb=rgb,
-        )
+        ok, note = _render_benkama_reference(dst, bands, rgb)
         notes.append(f'{paper}:{note}')
         if not ok:
             return False, '; '.join(notes), paths
@@ -7998,25 +8026,25 @@ ASUKA_BAKERY_PLACEMENT = (
 )
 ASUKA_BAKERY_FORMAT_NAME = '小ネーム（苗字のみ）'
 ASUKA_BAKERY_HEADING = '苗字のみ（36pt）'
-ASUKA_BAKERY_COLOR_CAPTION = '赤 or 青'
-ASUKA_BAKERY_COLORS = ['赤', '青']
-ASUKA_BAKERY_SWATCHES = ['#F08080', '#87CEFA']
-ASUKA_BAKERY_PAPERS = ('赤', '青')
+ASUKA_BAKERY_COLOR_CAPTION = '先方から指定（青・赤）'
+ASUKA_BAKERY_COLORS = ['青', '赤']
+ASUKA_BAKERY_SWATCHES = ['#87CEFA', '#F08080']
+ASUKA_BAKERY_PAPERS = ('先方から指定',)
 ASUKA_BAKERY_MAXIMUM_FONT = 36
 ASUKA_BAKERY_WIDTH_MM, ASUKA_BAKERY_HEIGHT_MM = THREE_SMALL_W, THREE_SMALL_H
 ASUKA_BAKERY_NOTE = (
-    f'書体は{ASUKA_BAKERY_FAMILY}。色は赤 or 青。'
+    f'書体は{ASUKA_BAKERY_FAMILY}。用紙色は先方から指定（青・赤）。2色表示は選択肢の見本です。'
     '小ネーム・1段・苗字のみ／36pt（exact）。'
     f'Excel 行{ASUKA_BAKERY_SOURCE_ROW}（ネーム仕分け_五十音順2）。'
 )
 ASUKA_BAKERY_CAPTION = (
     f'見本：苗字「{SIX_SAMPLE_SURNAME}」（36pt・exact・1段）。'
-    f'書体は{ASUKA_BAKERY_FAMILY}。色は赤 or 青。'
+    f'書体は{ASUKA_BAKERY_FAMILY}。用紙色は先方から指定（青・赤）。2色表示は選択肢の見本です。'
 )
 ASUKA_BAKERY_REPORT = 'asuka-bakery-name-formats-report.json'
 ASUKA_BAKERY_SETTINGS_KEY = 'asuka_bakery_name_formats'
 # v1: 赤・青見本を ensure。v2: 子形式を必ず1件に統合（重複赤青も退職・画像は残す）
-ASUKA_BAKERY_POLICY = 'excel-gojuon2-r14-one-format-red-blue-v2'
+ASUKA_BAKERY_POLICY = 'customer-specified-blue-red-v3'
 ASUKA_BAKERY_FORBIDDEN_SUBSTRINGS = (
     'あすかHOUSE', '明日佳', '明日香',
 )
@@ -8044,7 +8072,7 @@ def _asuka_bakery_format_def():
         'small': 1,
         'widthMm': ASUKA_BAKERY_WIDTH_MM,
         'heightMm': ASUKA_BAKERY_HEIGHT_MM,
-        'fixedColor': '',
+        'fixedColor': MIX_FIXED_COLOR,
         'colorCaption': ASUKA_BAKERY_COLOR_CAPTION,
         'groups': [],
         'colors': list(ASUKA_BAKERY_COLORS),
@@ -8061,6 +8089,7 @@ def _asuka_bakery_format_def():
 
 def _asuka_bakery_spec(fmt_def):
     return {
+        'mixColors': list(ASUKA_BAKERY_COLORS),
         'asukaBakeryKind': fmt_def['kind'],
         'asukaBakeryPolicy': ASUKA_BAKERY_POLICY,
         'surnameOnly': True,
@@ -8106,6 +8135,8 @@ def _asuka_bakery_is_current(fmt, samples, fmt_def):
     if str(fmt['reading'] or '') != '苗字のみ':
         return False
     if int(fmt['small'] or 0) != 1:
+        return False
+    if str(fmt['fixed_color'] or '') != MIX_FIXED_COLOR:
         return False
     if str(fmt['color_caption'] or '') != ASUKA_BAKERY_COLOR_CAPTION:
         return False
@@ -8264,7 +8295,7 @@ def ensure_asuka_bakery_name_formats(c, data_dir=None):
             ASUKA_BAKERY_FORMAT_NAME, ASUKA_BAKERY_PLACEMENT, ASUKA_BAKERY_FAMILY, '',
             ASUKA_BAKERY_HEADING, ASUKA_BAKERY_NOTE, 'Surname', '苗字のみ',
             1, ASUKA_BAKERY_WIDTH_MM, ASUKA_BAKERY_HEIGHT_MM, 0,
-            '', ASUKA_BAKERY_COLOR_CAPTION,
+            MIX_FIXED_COLOR, ASUKA_BAKERY_COLOR_CAPTION,
             groups, colors, swatches, 'null',
             '', float(ASUKA_BAKERY_MAXIMUM_FONT), 0, 0, ASUKA_BAKERY_SOURCE_ROW,
             spec, 0, '[]', 0,

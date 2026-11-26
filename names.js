@@ -1,3 +1,16 @@
+// Andersen uses one format with two customer-selected paper alternatives.
+function namePaperChoices(item){
+ const fixed=String(item.fixedColor||'').normalize('NFKC').replace(/\s/g,'');
+ return item.sourceName==='アンデルセン'&&/^先方から指定\(緑[・、/]赤\)$/.test(fixed)?['緑','赤']:[];
+}
+function nameChoicePictures(item){
+ const choices=namePaperChoices(item);
+ if(!choices.length)return nameScalePicture(item,item.hasImage?nameSampleUrl(item.sampleId):null);
+ return nameScalePicture({...item,fixedColor:'先方から指定',mixColors:choices},item.hasImage?nameSampleUrl(item.sampleId):null);
+}
+function nameChoiceSwatches(item){
+ return namePaperChoices(item).map(color=>`<span class="nameswatch"><i style="background:${solidPaperSwatch(color)}"></i>${color}</span>`).join('')+'<span>先方の指定に従い、どちらか1色を使用</span>';
+}
 const DEFAULT_MIX_COLORS=['赤','青','緑','白'];
 function nameMixColors(list){
  const rows=(list&&list.length?list:DEFAULT_MIX_COLORS).map(v=>String(v||'').trim()).filter(Boolean);
@@ -39,8 +52,8 @@ function nameMixStyle(item,paperColor){
  return `background:${nameMixGradient(item.mixColors)}`;
 }
 function nameScalePicture(item,url,paperColor){
- const mix=!!url&&nameIsMix(paperColor===undefined?item.fixedColor:paperColor);
- const mixStyle=mix?nameMixStyle(item,paperColor):'';
+ const mix=!!url&&(!!item.paperPreviewColor||nameIsMix(paperColor===undefined?item.fixedColor:paperColor));
+ const mixStyle=item.paperPreviewColor?`background:${solidPaperSwatch(item.paperPreviewColor)}`:mix?nameMixStyle(item,paperColor):'';
  const d=nameDimensions(item);
  const img=url?`<img src="${url}" alt="${esc(item.format||'ネーム見本')}" loading="lazy">`:`<span class="namemiss">${item.blank?'印字なし':'見本なし'}</span>`;
  if(!d)return `<span class="namescale-stage unknown"><span class="nameunknown-image${mix?' namepaper-mix':''}"${mixStyle?` style="${mixStyle}"`:''}>${img}</span></span>`;
@@ -56,11 +69,11 @@ function openNameZoom(item,sample){
   nameZoomDialog.addEventListener('click',e=>{if(e.target===nameZoomDialog)nameZoomDialog.close()});
  }
  $('#namezoomtitle').textContent=nameSizeHeading(item);
- $('#namezoomnote').textContent=[item.format,sample.condition,nameMixNote(sample.paperColor||item.fixedColor,item.mixColors),'拡大表示です。実物大ではありません。'].filter(Boolean).join(' ／ ');
+ $('#namezoomnote').textContent=[item.format,sample.condition,sample.paperPreviewColor?`用紙色：${sample.paperPreviewColor}`:'',nameMixNote(sample.paperColor||item.fixedColor,item.mixColors),'拡大表示です。実物大ではありません。'].filter(Boolean).join(' ／ ');
  $('#namezoomimage').src=nameSampleUrl(sample.id);$('#namezoomimage').alt=item.format+' '+(sample.condition||'');
- const mix=nameIsMix(sample.paperColor||item.fixedColor);
+ const mix=!!sample.paperPreviewColor||nameIsMix(sample.paperColor||item.fixedColor);
  $('#namezoompaper').classList.toggle('namepaper-mix',mix);
- $('#namezoompaper').style.background=mix?nameMixGradient(item.mixColors):'';
+ $('#namezoompaper').style.background=sample.paperPreviewColor?solidPaperSwatch(sample.paperPreviewColor):mix?nameMixGradient(item.mixColors):'';
  const dim=nameDimensions(item);$('#namezoompaper').style.setProperty('--name-ratio',dim?dim.w/dim.h:1.6);
  nameZoomDialog.showModal();
 }
@@ -110,7 +123,7 @@ function paintNameCustomers(data){
 function paintNameFormats(data){
  const box=$('#nameformats');
  const link=data.linkStatus==='対応'?`指示書デスクの顧客名と一致：${data.linkedName}`:'指示書デスクの顧客とは未対応です。名前だけでは結び付けていません。';
- const formats=(data.formats||[]).map(item=>`<button type="button" class="namecard" data-id="${item.id}"><span class="namesize-heading">${esc(nameSizeHeading(item))}</span>${nameScalePicture(item,item.hasImage?nameSampleUrl(item.sampleId):null)}<b>${esc(item.format)}</b><span class="namecolors">${nameSwatches(item.colors,item.fixedColor,item.mixColors)}</span><span>${esc(item.placement)||'貼付け位置の指定なし'}</span>${item.needsReview?'<em>要確認</em>':''}</button>`).join('');
+ const formats=(data.formats||[]).map(item=>({...item,sourceName:data.sourceName})).map(item=>`<button type="button" class="namecard" data-id="${item.id}"><span class="namesize-heading">${esc(nameSizeHeading(item))}</span>${nameChoicePictures(item)}<b>${esc(item.format)}</b><span class="namecolors">${namePaperChoices(item).length?nameChoiceSwatches(item):nameSwatches(item.colors,item.fixedColor,item.mixColors)}</span><span>${esc(item.placement)||'貼付け位置の指定なし'}</span>${item.needsReview?'<em>要確認</em>':''}</button>`).join('');
  const owner=currentUser?.role==='owner';
  const childCount=(data.formats||[]).length;
  box.innerHTML=`<div class="namehead"><h2>${esc(data.sourceName)}</h2><p>${esc(link)}</p><p>${esc(data.reading)?`読み：${esc(data.reading)}`:''}</p>${owner?`<div class="namehead-actions"><button type="button" id="nameaddformat">この顧客に形式を追加</button><button type="button" class="danger" id="namedeletecustomer">この顧客を削除</button></div>`:''}</div><p class="namescale-note">大小を同じ縮尺で表示しています（実物大ではありません）。形式を開くと、見本をクリックして拡大できます。</p><div class="namegrid">${formats||'<p>形式はありません。</p>'}</div>`;
@@ -167,16 +180,18 @@ function paintNameDeptRoleSection(item){
  };
 }
 function paintNameDetail(item){
- const colors=nameSwatches(item.colors,item.fixedColor,item.mixColors);
+ const choices=namePaperChoices(item);
+ const colors=choices.length?nameChoiceSwatches(item):nameSwatches(item.colors,item.fixedColor,item.mixColors);
+ const displaySamples=choices.length?(item.samples||[]).flatMap(sample=>choices.map(color=>({...sample,displayKey:sample.id+'-'+color,paperColor:color,paperPreviewColor:color,condition:'先方指定',caption:'先方の指定に従い、緑・赤のどちらか1色を使用。氏名は見本です。'}))):(item.samples||[]);
  const mixNoteFor=value=>nameMixNote(value,item.mixColors);
- const samples=(item.samples||[]).map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture(item,nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${mixNoteFor(sample.paperColor||item.fixedColor)?`<br>${esc(mixNoteFor(sample.paperColor||item.fixedColor))}`:''}</figcaption>${currentUser?.role==='owner'?`<button type="button" class="danger namesample-delete" data-delete-sample="${sample.id}">この画像を削除</button>`:''}</figure>`).join('');
+ const samples=displaySamples.map(sample=>`<figure class="namesample"><p class="namesize-heading">${esc(nameSizeHeading(item))}</p>${sample.hasImage?`<button type="button" class="namezoom-trigger" data-namezoom="${sample.displayKey||sample.id}" aria-label="${esc(item.format)}の見本を拡大">${nameScalePicture({...item,paperPreviewColor:sample.paperPreviewColor},nameSampleUrl(sample.id),sample.paperColor||item.fixedColor)}<span class="namezoom-hint">クリックして拡大</span></button>`:nameScalePicture(item,null)}<figcaption>${sample.condition?esc(sample.condition)+'　':''}${esc(sample.paperColor)?`この条件の用紙色：${esc(sample.paperColor)}`:''}<br>${esc(sample.caption)}${mixNoteFor(sample.paperColor||item.fixedColor)?`<br>${esc(mixNoteFor(sample.paperColor||item.fixedColor))}`:''}</figcaption>${currentUser?.role==='owner'?`<button type="button" class="danger namesample-delete" data-delete-sample="${sample.id}">この画像を削除</button>`:''}</figure>`).join('');
  const reasons=(item.reviewReasons||[]).filter(text=>!/書体|代替表示/.test(text)).map(text=>`<li>${esc(text)}</li>`).join('');
  const deptRole=paintNameDeptRoleSection(item);
  const departments=deptRole.hideInlineDepartments?'':(item.departments||[]).map(esc).join('、');
  const mixCount=nameMixColors(item.mixColors).length;
  $('#nametitle').textContent=item.format||'ネーム形式';
  $('#namenumber').textContent=item.number||'';
- $('#namebody').innerHTML=`<p class="namewarn">画像の背景は用紙の色です。「先方から指定」の${mixCount}色表示は色の選択肢を示し、実物が多色という意味ではありません。文字とコードはプリンターが印字する内容です。氏名と番号は架空です。</p>
+ $('#namebody').innerHTML=`<p class="namewarn">画像の背景は用紙の色です。${choices.length?'先方の指定に従い、緑・赤のどちらか1色を使用します。':`「先方から指定」の${mixCount}色表示は色の選択肢を示し、実物が多色という意味ではありません。`}文字とコードはプリンターが印字する内容です。氏名と番号は架空です。</p>
   <p class="namescale-note">大小を同じ縮尺で表示しています。実物大ではありません。寸法は画像の向きで表記しています。</p><div class="namesamples">${samples||'<p>見本画像はありません。</p>'}</div>
   ${deptRole.html}
   <dl class="namedef">
@@ -193,7 +208,7 @@ function paintNameDetail(item){
   </dl>
   ${reasons?`<h3>要確認</h3><ul>${reasons}</ul>`:''}`;
  paintNameReview(item);
- $('#namebody').querySelectorAll('[data-namezoom]').forEach(button=>button.onclick=()=>{const sample=item.samples.find(x=>String(x.id)===button.dataset.namezoom);if(sample)openNameZoom(item,sample)});
+ $('#namebody').querySelectorAll('[data-namezoom]').forEach(button=>button.onclick=()=>{const sample=displaySamples.find(x=>String(x.displayKey||x.id)===button.dataset.namezoom);if(sample)openNameZoom(item,sample)});
  const edit=$('#nameeditbtn');
  if(edit){edit.hidden=currentUser?.role!=='owner';edit.onclick=()=>openNameEditor(item)}
  $('#namebody').querySelectorAll('[data-delete-sample]').forEach(button=>button.onclick=()=>{const sample=item.samples.find(x=>String(x.id)===button.dataset.deleteSample);if(sample)confirmDeleteSample(item,sample)});

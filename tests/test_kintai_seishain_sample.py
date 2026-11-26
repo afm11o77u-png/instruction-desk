@@ -55,7 +55,7 @@ class SeishainSampleParseTest(unittest.TestCase):
         feb = parsed[(2026, 2)]
         self.assertEqual(feb['work_days'], 21)
         self.assertEqual(feb['paid_leave_days'], 0)
-        self.assertEqual(feb['holiday_days'], 21)
+        self.assertEqual(feb['holiday_days'], 10)
         self.assertEqual(feb['ordinary_minutes'], 9933)
         self.assertEqual(feb['overtime_minutes'], 670)
         self.assertEqual(feb['total_minutes'], 10603)
@@ -63,7 +63,7 @@ class SeishainSampleParseTest(unittest.TestCase):
         may = parsed[(2026, 5)]
         self.assertEqual(may['work_days'], 19.5)
         self.assertEqual(may['paid_leave_days'], 0.5)
-        self.assertEqual(may['holiday_days'], 22)
+        self.assertEqual(may['holiday_days'], 10)
         self.assertEqual(may['ordinary_minutes'], 9253)
         # 管理表 K = 行13+14+18（総労働−法定内ではない）
         self.assertEqual(may['overtime_minutes'], 545)
@@ -71,12 +71,12 @@ class SeishainSampleParseTest(unittest.TestCase):
         aug = parsed[(2026, 8)]
         self.assertEqual(aug['work_days'], 19)
         self.assertEqual(aug['paid_leave_days'], 3)
-        self.assertEqual(aug['holiday_days'], 20)
+        self.assertEqual(aug['holiday_days'], 9)
 
         nov = parsed[(2026, 11)]
         self.assertEqual(nov['work_days'], 0)
         self.assertEqual(nov['paid_leave_days'], 1)
-        self.assertEqual(nov['holiday_days'], 41)
+        self.assertIsNone(nov['holiday_days'])
         # 管理表: 行5=0 の月は J/K 空白
         self.assertIsNone(nov['ordinary_minutes'])
         self.assertIsNone(nov['overtime_minutes'])

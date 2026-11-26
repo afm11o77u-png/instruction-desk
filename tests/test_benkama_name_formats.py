@@ -13,8 +13,16 @@ if str(ROOT) not in sys.path:
 import names
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def _connect(path):
-    c = sqlite3.connect(path)
+    c = sqlite3.connect(path, factory=_ClosingConnection)
     c.row_factory = sqlite3.Row
     c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, payload TEXT NOT NULL DEFAULT "{}")')
@@ -81,17 +89,17 @@ class BenkamaNameFormatsTest(unittest.TestCase):
         self.assertIn('社員番号7ケタ', staff['note'])
 
         self.assertEqual(period['sourceRow'], 160)
-        self.assertEqual(period['formatName'], '大ネーム（期生色表）')
-        self.assertIn('札幌　1期生：赤', period['colorCaption'])
+        self.assertEqual(period['formatName'], '大ネーム（実習生色表）')
+        self.assertIn('札幌　1・5・9…期生：赤', period['colorCaption'])
         self.assertIn('旭川　1期生：赤', period['colorCaption'])
         self.assertIn('10期生：白', period['colorCaption'])
         self.assertIn('函館　1～4期生：無し', period['colorCaption'])
         self.assertIn('八軒　1期生：赤', period['colorCaption'])
         self.assertIn('（札幌のみ、他は規則性なし？）', period['note'])
-        self.assertIn('カタカナ', period['note'])
-        self.assertEqual(period['sampleText'], '1 ﾃｷ ｼﾎｳ')
+        self.assertIn('半角カタカナ', period['note'])
+        self.assertEqual(period['sampleText'], '① ﾃｷ ｼﾎｳ')
         self.assertEqual(period['papers'], ('赤', '緑', '青', '白'))
-        self.assertIn('札幌1期生', period['groups'])
+        self.assertIn('札幌1・5・9…期生', period['groups'])
         self.assertIn('旭川10期生', period['groups'])
         self.assertIn('函館5期生', period['groups'])
         self.assertIn('八軒1期生', period['groups'])
