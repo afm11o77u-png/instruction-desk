@@ -146,7 +146,7 @@ function paintDeskLayout(list){
  const sortSel=$('#sort'),dateKey=sortSel?.value||'markShipDate',dateLabel=sortSel?.selectedOptions?.[0]?.textContent||'マーク出荷日';
  const owner=currentUser?.role==='owner';
  if(layout==='kanban'){
-  board.innerHTML=DeskViews.kanbanHtml(list,{screen,statusFilter:$('#status')?.value||'',dateKey,dateLabel,today:today(),canDrag:owner,statusHtml:o=>owner&&o.status!=='下書き'?ownerStatusSelect(o):''});
+  board.innerHTML=DeskViews.kanbanHtml(list,{screen,statusFilter:$('#status')?.value||'',dateKey,dateLabel,today:today(),canDrag:owner,statusHtml:o=>owner&&o.status!=='下書き'?ownerStatusSelect(o):`<span class="dv-status-label" title="作業状況（主管理者だけが変更できます）">${esc(o.status)}</span>`});
   bindKanbanDrag(board);
  }else{
   const month=deskCalMonth[screen]||today().slice(0,7);

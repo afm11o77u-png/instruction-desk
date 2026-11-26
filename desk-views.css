@@ -34,6 +34,7 @@
 .dv-card.dv-today .dv-card-due b{color:#b36b00}
 .dv-card-actions{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-top:4px}
 .dv-card-actions .flagstatus{font-size:.8rem;padding:3px 4px}
+.dv-card-actions .dv-status-label{font-size:.8rem;color:#555;border:1px solid #ccc;border-radius:4px;padding:2px 6px;background:#f6f6f6}
 .dv-cal-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 8px}
 .dv-cal-head strong{font-size:1.1rem;min-width:7em;text-align:center}
 .dv-cal-head .dv-note{margin:0}

@@ -50,6 +50,8 @@ const owner = { role: 'owner' }
   assert.ok(/dv-overdue[^>]*data-id="1" draggable="true"/.test(html))
   assert.ok(html.includes('class="quiet open" data-id="2"'))
   assert.ok(!DV.kanbanHtml(list, { screen: 'orders', dateKey: 'markShipDate', today: '2026-11-26', canDrag: false }).includes('draggable'))
+  const ro = DV.kanbanHtml(list, { screen: 'orders', dateKey: 'markShipDate', today: '2026-11-26', canDrag: false, statusHtml: (o) => `<span class="dv-status-label">${o.status}</span>` })
+  assert.ok(ro.includes('主管理者だけ') && ro.includes('自動で切り替わります') && !ro.includes('<select'))
 
   // カレンダー：日曜始まり、今日の強調、件数あふれ
   const weeks = DV.monthGrid('2026-11')
