@@ -13,8 +13,16 @@ if str(ROOT) not in sys.path:
 import names
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, *args):
+        try:
+            return super().__exit__(*args)
+        finally:
+            self.close()
+
+
 def _connect(path):
-    c = sqlite3.connect(path)
+    c = sqlite3.connect(path, factory=_ClosingConnection)
     c.row_factory = sqlite3.Row
     c.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY, payload TEXT NOT NULL DEFAULT "{}")')
@@ -269,7 +277,7 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                 report = names.ensure_asuka_bakery_name_formats(c, data_dir)
                 self.assertGreaterEqual(report['changed'], 1)
                 self.assertTrue(report['exclusionsUntouched'])
-                self.assertEqual(report['colors'], ['赤', '青'])
+                self.assertEqual(report['colors'], ['青', '赤'])
                 self.assertEqual(report.get('activeFormatCount'), 1)
                 self.assertEqual(report['policy'], names.ASUKA_BAKERY_POLICY)
 
@@ -278,10 +286,12 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                     (names.ASUKA_BAKERY_IDENTITY,),
                 ).fetchone()
                 self.assertIsNotNone(keep)
-                self.assertEqual(keep['color_caption'], '赤 or 青')
+                self.assertEqual(keep['color_caption'], '先方から指定（青・赤）')
+                self.assertEqual(keep['fixed_color'], '先方から指定')
+                self.assertEqual(names.mix_colors_for(keep), ['青', '赤'])
                 self.assertEqual(keep['maximum_font'], 36)
                 self.assertEqual(keep['family'], 'MSPゴシック')
-                self.assertEqual(json.loads(keep['colors_json']), ['赤', '青'])
+                self.assertEqual(json.loads(keep['colors_json']), ['青', '赤'])
                 spec = json.loads(keep['spec_json'] or '{}')
                 self.assertEqual(spec.get('sampleFit'), 'exact')
                 self.assertEqual(spec.get('asukaBakeryPolicy'), names.ASUKA_BAKERY_POLICY)
@@ -292,7 +302,7 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                         (keep['id'],),
                     )
                 ]
-                self.assertEqual(papers, ['赤', '青'])
+                self.assertEqual(papers, ['先方から指定'])
                 self.assertEqual(
                     c.execute(
                         'SELECT COUNT(*) n FROM name_formats WHERE customer_id=? AND retired=0',
@@ -399,7 +409,7 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                 ))
                 self.assertEqual(len(active), 1)
                 self.assertEqual(active[0]['identity'], names.ASUKA_BAKERY_IDENTITY)
-                self.assertEqual(json.loads(active[0]['colors_json']), ['赤', '青'])
+                self.assertEqual(json.loads(active[0]['colors_json']), ['青', '赤'])
                 papers = [
                     s['paper_color']
                     for s in c.execute(
@@ -407,7 +417,7 @@ class AsukaBakeryRedBlueTest(unittest.TestCase):
                         (active[0]['id'],),
                     )
                 ]
-                self.assertEqual(papers, ['赤', '青'])
+                self.assertEqual(papers, ['先方から指定'])
 
                 self.assertEqual(
                     c.execute('SELECT retired FROM name_formats WHERE id=?', (second,)).fetchone()['retired'],

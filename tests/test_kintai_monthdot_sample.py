@@ -55,14 +55,14 @@ class ContractMonthdotSampleTest(unittest.TestCase):
         may = parsed[(2026, 5)]
         self.assertEqual(may['work_days'], 2.0)
         self.assertEqual(may['paid_leave_days'], 0.0)
-        self.assertEqual(may['holiday_days'], 40.0)
+        self.assertEqual(may['holiday_days'], 28.0)
         self.assertEqual(may['ordinary_minutes'], 900)
         self.assertEqual(may['overtime_minutes'], 0)
         self.assertEqual(may['total_minutes'], 900)
 
         aug = parsed[(2026, 8)]
         self.assertEqual(aug['work_days'], 22.0)
-        self.assertEqual(aug['holiday_days'], 20.0)
+        self.assertEqual(aug['holiday_days'], 9.0)
         self.assertEqual(aug['ordinary_minutes'], 8610)
         self.assertEqual(aug['overtime_minutes'], 264)
         self.assertEqual(aug['total_minutes'], 8874)
@@ -71,7 +71,7 @@ class ContractMonthdotSampleTest(unittest.TestCase):
         self.assertEqual(feb['work_days'], 0.0)
         self.assertIsNone(feb['ordinary_minutes'])
         self.assertIsNone(feb['overtime_minutes'])
-        self.assertEqual(feb['holiday_days'], 42.0)
+        self.assertIsNone(feb['holiday_days'])
 
     def test_start_col_is_e_not_h(self):
         self.assertEqual(self.layout['start_col'], 5)
@@ -110,7 +110,7 @@ class PartMonthdotSampleTest(unittest.TestCase):
 
         feb = parsed[(2026, 2)]
         self.assertEqual(feb['work_days'], 18.0)
-        self.assertEqual(feb['holiday_days'], 24.0)
+        self.assertEqual(feb['holiday_days'], 13.0)
         self.assertEqual(feb['paid_leave_days'], 0.0)
         self.assertEqual(feb['ordinary_minutes'], 6434)
         self.assertEqual(feb['overtime_minutes'], 0)
@@ -118,13 +118,13 @@ class PartMonthdotSampleTest(unittest.TestCase):
         june = parsed[(2026, 6)]
         self.assertEqual(june['work_days'], 13.0)
         self.assertEqual(june['paid_leave_days'], 4.0)
-        self.assertEqual(june['holiday_days'], 25.0)
+        self.assertEqual(june['holiday_days'], 14.0)
         self.assertEqual(june['ordinary_minutes'], 4674)
 
         nov = parsed[(2026, 11)]
         self.assertEqual(nov['work_days'], 0.0)
         self.assertEqual(nov['paid_leave_days'], 1.0)
-        self.assertEqual(nov['holiday_days'], 41.0)
+        self.assertIsNone(nov['holiday_days'])
         self.assertIsNone(nov['ordinary_minutes'])
         self.assertIsNone(nov['overtime_minutes'])
 
@@ -140,7 +140,7 @@ class PartMonthdotSampleTest(unittest.TestCase):
         parsed_ok = kintai.parse_person_workbook(
             self.blob, [(2026, 6)], self.layout, as_of=self.as_of
         )
-        self.assertNotEqual(
+        self.assertEqual(
             parsed_wrong[(2026, 6)]['holiday_days'],
             parsed_ok[(2026, 6)]['holiday_days'],
         )

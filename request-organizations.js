@@ -100,19 +100,22 @@ function openSiteImport(){
   if(!admin()||!root||saving)return;
   if(pending.size)return notice('入力途中の内容を一覧に適用してから取り込んでください。');
   const dialog=document.createElement('dialog');dialog.id='org-site-import-dialog';dialog.setAttribute('aria-labelledby','org-import-title');
-  dialog.innerHTML=`<h2 id="org-import-title">拠点の一括取り込み</h2><p>登録先は <strong>${esc(root.name)}</strong> の直下です。</p><p class="small">顧客マスタのExcelから、選んでいる会社の直下に店舗・事業所をまとめて追加します。同じ名前の拠点がすでにある候補は追加しません（末尾の「店」や会社名の有無は同じとみなします）。追加した拠点は「変更をまとめて保存」で確定します。順番は「拠点の取り込み → 保存 → 集配曜日の一括取り込み」です。</p><label>顧客マスタのExcel<input type="file" accept=".xlsx"></label><p class="small">「顧客名」から会社名が一致する候補を探し、末尾の既知の部署名（管理・青果など）を外して拠点名にします。</p><div class="department-import-scroll"></div><p role="alert"></p><div class="dialog-actions"><button type="button" data-cancel>閉じる</button><button type="button" data-preview class="primary">内容を確認</button><button type="button" data-apply class="primary" hidden>選択した拠点を一覧に追加</button></div>`;
+  dialog.innerHTML=`<h2 id="org-import-title">拠点の一括取り込み</h2><p>登録先は <strong>${esc(root.name)}</strong> の直下です。</p><p class="small">顧客マスタのExcelから、選んでいる会社の直下に店舗・事業所をまとめて追加します。同じ名前の拠点がすでにある候補は追加しません（末尾の「店」や会社名の有無は同じとみなします）。追加した拠点は「変更をまとめて保存」で確定します。順番は「拠点の取り込み → 保存 → 集配曜日の一括取り込み」です。</p><label>顧客マスタのExcel<input type="file" accept=".xlsx"></label><p class="small">「顧客名」から会社名が一致する候補を探し、末尾の既知の部署名（管理・青果など）を外して拠点名にします。</p><div class="department-import-scroll"></div><p role="alert"></p><div class="actions" data-select-actions hidden><button type="button" data-select-all>未登録の候補をすべて選択</button><button type="button" data-clear-all>選択を解除</button></div><div class="dialog-actions"><button type="button" data-cancel>閉じる</button><button type="button" data-preview class="primary">内容を確認</button><button type="button" data-apply class="primary" hidden>選択した拠点を一覧に追加</button></div>`;
   document.body.append(dialog);
-  const file=dialog.querySelector('input[type=file]'),preview=dialog.querySelector('[data-preview]'),apply=dialog.querySelector('[data-apply]'),output=dialog.querySelector('.department-import-scroll'),message=dialog.querySelector('[role=alert]');
+  const file=dialog.querySelector('input[type=file]'),preview=dialog.querySelector('[data-preview]'),apply=dialog.querySelector('[data-apply]'),output=dialog.querySelector('.department-import-scroll'),message=dialog.querySelector('[role=alert]'),selectActions=dialog.querySelector('[data-select-actions]');
+  // 会社PC版から：未登録の候補をまとめて選ぶ／外す（登録済みの候補は選べないまま）。
+  dialog.querySelector('[data-select-all]').onclick=()=>output.querySelectorAll('input[type=checkbox]:not(:disabled)').forEach(box=>box.checked=true);
+  dialog.querySelector('[data-clear-all]').onclick=()=>output.querySelectorAll('input[type=checkbox]').forEach(box=>box.checked=false);
   dialog.addEventListener('close',()=>dialog.remove());
   dialog.querySelector('[data-cancel]').onclick=()=>dialog.close();
-  file.onchange=()=>{apply.hidden=true;output.replaceChildren();message.textContent=''};
+  file.onchange=()=>{apply.hidden=selectActions.hidden=true;output.replaceChildren();message.textContent=''};
   preview.onclick=async()=>{
-    preview.disabled=file.disabled=true;apply.hidden=true;output.replaceChildren();message.textContent='Excelを読み込んでいます…';
+    preview.disabled=file.disabled=true;apply.hidden=selectActions.hidden=true;output.replaceChildren();message.textContent='Excelを読み込んでいます…';
     try{
       const plan=await desk().previewOrganizationSites(root.customer_id,file.files[0]),keys=existingSiteKeys(root);
       message.textContent=plan.candidates.length?`対象 ${plan.matched}行から ${plan.candidates.length}件の候補が見つかりました。拠点名を確認し、不要な候補はチェックを外してください。`:'この会社の拠点候補が見つかりませんでした。Excelの顧客名を確認してください。';
       output.innerHTML=plan.candidates.length?'<table><thead><tr><th>取込</th><th>拠点名</th><th>元の顧客名</th></tr></thead><tbody>'+plan.candidates.map(({name,count,examples,existing,similar,checked},index)=>{const exists=!!existing||siteKeys(name,root.name).some(k=>keys.has(k)),note=exists?'・登録済み（'+esc(existing||name)+'）・追加しません':(similar||[]).length?'・似た拠点あり（'+similar.map(esc).join('、')+'）':'';return `<tr><td><input type="checkbox" ${exists?'disabled':(checked===false?'':'checked')} aria-label="${index+1}件目を取り込む"></td><td><input type="text" maxlength="100" value="${esc(name)}" aria-label="${index+1}件目の拠点名"></td><td>${examples.map(esc).join('<br>')}<br>${count}行${note}</td></tr>`}).join('')+'</tbody></table>':'';
-      apply.hidden=!plan.candidates.length;
+      apply.hidden=selectActions.hidden=!plan.candidates.length;
     }catch(error){message.textContent=error.message}
     finally{preview.disabled=file.disabled=false}
   };
