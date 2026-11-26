@@ -139,11 +139,14 @@ const FIELDS=['name','shelf','branch','all_branch','rack','note'];
 function renderItems(){
   $('#items-head-op').hidden=!editing;$('#item-add').hidden=!editing;
   const focus=document.activeElement&&tbody.contains(document.activeElement)?[document.activeElement.closest('tr')?.dataset.id,document.activeElement.dataset.field]:null;
+  // 編集欄の幅は、その列でいちばん長い文字に合わせる（全角1文字=1em、半角は約0.6em）
+  const ems=v=>[...String(v??'')].reduce((n,ch)=>n+(/[\x20-\x7e\uff61-\uff9f]/.test(ch)?0.6:1),0);
+  const colEm=Object.fromEntries(FIELDS.map(f=>[f,Math.min(16,Math.max(3,...data.items.map(it=>ems(it[f])))+0.5)]));
   tbody.replaceChildren(...data.items.map(it=>{
     const tr=el('tr',{'data-id':it.id});
     for(const f of FIELDS){
       if(!editing){tr.append(el('td',{text:it[f]}));continue}
-      const i=el('input',{type:'text',maxlength:'200','data-field':f,'aria-label':f});i.value=it[f];
+      const i=el('input',{type:'text',maxlength:'200','data-field':f,'aria-label':f});i.value=it[f];i.style.width=colEm[f]+'em';i.title=it[f];
       i.onchange=()=>{const old=it[f];it[f]=i.value.trim();if(f==='name'){if(!it.name){alert('名称は空にできません。行ごと消すときは「削除」を押してください。');it.name=old;i.value=old;return}if($('#link-names').checked&&nameKey(old))for(const b of data.blocks)if(nameKey(b.text)===nameKey(old))b.text=it.name;renderMap();renderEditor()}markDirty();filter()};
       tr.append(el('td',{},i));
     }
