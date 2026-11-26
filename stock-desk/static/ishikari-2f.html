@@ -62,11 +62,11 @@ body.route-input .map .cell{cursor:crosshair}
 <section aria-label="棚番号配置図"><div class="map-scroll" tabindex="0" aria-label="配置図。横へスクロールできます"><div class="map-wrap"><div class="map" id="map"></div><svg id="route-layer" aria-hidden="true"></svg></div></div></section>
 <section id="block-editor" hidden aria-label="ブロックの編集"><h2>配置図のブロックの編集</h2><div class="actions"><button type="button" id="block-add">＋ ブロックを追加</button><button type="button" id="block-copy">選んだブロックを複製</button><button type="button" id="block-delete">選んだブロックを削除</button></div><div id="block-fields"></div></section>
 <section id="route-box" aria-label="ルート"><div class="actions"><label class="check"><input type="checkbox" id="route-show" checked> ルートを表示</label><span id="route-summary" class="hint"></span></div>
-<div id="route-editor" hidden><h2>ルート入力</h2><div class="actions"><button type="button" id="route-mode">ルート入力を始める</button><button type="button" id="route-clear">ルートを全部消す</button></div><p id="route-msg" class="hint" role="status"></p><ol id="route-list"></ol></div></section>
+<div id="route-editor" hidden><h2>ルート入力</h2><div class="actions"><button type="button" id="route-mode">ルート入力を始める</button><button type="button" id="route-clear">ルートを全部消す</button><button type="button" id="route-undo" disabled title="直前のルート操作を取り消します（Ctrl+Z）">1つ戻す</button></div><p id="route-msg" class="hint" role="status"></p><ol id="route-list"></ol></div></section>
 <section id="directory"><h2>棚番号一覧</h2><div class="controls"><label for="search">名称・棚番号で検索</label><input type="search" id="search"><span id="count" role="status"></span></div>
 <div class="table-scroll" tabindex="0"><table><thead><tr><th>名称</th><th>棚番号</th><th>名称別の枝番号</th><th>棚全体の枝番号</th><th>ラック</th><th>確認事項</th><th id="items-head-op" hidden>操作</th></tr></thead><tbody id="items"></tbody></table></div>
 <button type="button" id="item-add" hidden>＋ 行を追加</button></section>
 <div id="editbar" hidden><span id="edit-status" role="status"></span><label><input type="checkbox" id="link-names" checked> 名称の変更を図と一覧で連動する</label><button type="button" id="edit-cancel">取消（保存済みに戻す）</button><button type="button" id="edit-save" class="primary">保存</button></div>
-<script src="ishikari-2f.js?v=20261126_route"></script>
+<script src="ishikari-2f.js?v=20261126_route_undo"></script>
 </body>
 </html>

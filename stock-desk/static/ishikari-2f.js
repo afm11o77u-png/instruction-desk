@@ -137,7 +137,7 @@ $('#block-delete').onclick=removeBlock;
 // 重なったブロックは保存しない（Excelの結合セルにできないため）。
 function overlap(){const taken=new Map();for(const b of data.blocks)for(let r=b.r;r<b.r+b.rs;r++)for(let c=b.c;c<b.c+b.cs;c++){const k=r*1000+c,o=taken.get(k);if(o&&o!==b)return [o,b];taken.set(k,b)}return null}
 // ---- ルート（通る順。ピッキングリストの石狩倉庫の明細をこの順に並べる） ----
-let routeMode=false,routeNote='';
+let routeMode=false,routeNote='',routeUndo=[];
 const routeShow=$('#route-show');
 try{routeShow.checked=localStorage.getItem('ishikari-route-show')!=='0'}catch{}
 routeShow.onchange=()=>{try{localStorage.setItem('ishikari-route-show',routeShow.checked?'1':'0')}catch{}drawRoute()};
@@ -161,7 +161,7 @@ function drawRoute(){
     const t=svg('text',{x,y:y+0.5,'text-anchor':'middle','dominant-baseline':'central','font-size':i>=99?'9':'11','font-weight':'700',fill:'#fff'});t.textContent=String(i+1);g.append(t);kids.push(g)});
   layer.replaceChildren(...kids);
 }
-function setRoute(ids,note){data.route=ids;routeNote=note||'';markDirty();renderRoute()}
+function setRoute(ids,note){routeUndo.push(routeIds());if(routeUndo.length>200)routeUndo.shift();data.route=ids;routeNote=note||'';markDirty();renderRoute()}
 function renderRoute(){
   if(!data)return;
   const ids=routeIds();
@@ -170,7 +170,8 @@ function renderRoute(){
   document.body.classList.toggle('route-input',editing&&routeMode);
   const btn=$('#route-mode');btn.textContent=routeMode?'ルート入力を終える':'ルート入力を始める';btn.classList.toggle('primary',routeMode);
   $('#route-clear').disabled=!ids.length;
-  $('#route-msg').textContent=routeNote||(routeMode?'図のブロックを通る順にクリックしてください。クリックした順に①②③…と矢印でつながります。':'「ルート入力を始める」を押してから、図のブロックを通る順にクリックします。順番は下の一覧の↑↓で入れ替え、×で外せます。');
+  $('#route-undo').disabled=!routeUndo.length;
+  $('#route-msg').textContent=routeNote||(routeMode?'図のブロックを通る順にクリックしてください。クリックした順に①②③…と矢印でつながります。':'「ルート入力を始める」を押してから、図のブロックを通る順にクリックします。順番は下の一覧の↑↓で入れ替え、×で外せます。「1つ戻す」（Ctrl+Z）で直前の操作を取り消せます。');
   const list=$('#route-list');
   list.replaceChildren(...(editing?ids:[]).map((id,i)=>{
     const mv=(d)=>{const r=ids.slice();[r[i],r[i+d]]=[r[i+d],r[i]];setRoute(r)};
@@ -188,6 +189,9 @@ function routeClick(cell){
   const list=$('#route-list');list.scrollTop=list.scrollHeight;
 }
 $('#route-mode').onclick=()=>{routeMode=!routeMode;routeNote='';if(routeMode&&selected){selected=null;renderMap();renderEditor()}renderRoute()};
+function undoRoute(){if(!routeUndo.length)return;data.route=routeUndo.pop();routeNote='1つ前に戻しました。';markDirty();renderRoute()}
+$('#route-undo').onclick=undoRoute;
+document.addEventListener('keydown',e=>{if(!editing||!routeMode||!(e.ctrlKey||e.metaKey)||e.shiftKey||e.key.toLowerCase()!=='z'||e.target.closest('input,textarea,select,[contenteditable]'))return;e.preventDefault();undoRoute()});
 $('#route-clear').onclick=()=>{if(!confirm('ルートを全部消しますか？（保存するまで確定しません）'))return;setRoute([],'ルートを全部消しました。')};
 // ---- 棚番号一覧 ----
 const FIELDS=['name','shelf','branch','all_branch','rack','note'];
@@ -224,9 +228,9 @@ function filter(){
 search.addEventListener('input',filter);
 $('#item-add').onclick=()=>{const it={id:newId('s'),name:'新しい名称',shelf:'',branch:'',all_branch:'',rack:'',note:''};data.items.push(it);search.value='';markDirty();renderItems();tbody.querySelector(`tr[data-id="${CSS.escape(it.id)}"] input`)?.select()};
 // ---- 編集モード・保存・取消 ----
-function setEditing(on){editing=on;document.body.classList.toggle('editing',on);editBtn.textContent=on?'編集モードを終える':'編集モード';if(!on){selected=null;routeMode=false;routeNote=''}renderMap();renderItems();renderEditor();renderRoute();paintBar()}
+function setEditing(on){editing=on;document.body.classList.toggle('editing',on);editBtn.textContent=on?'編集モードを終える':'編集モード';if(!on){selected=null;routeMode=false;routeNote='';routeUndo=[]}renderMap();renderItems();renderEditor();renderRoute();paintBar()}
 editBtn.onclick=()=>{if(editing&&dirty&&!confirm('保存していない変更があります。変更を捨てて編集モードを終えますか？'))return;if(editing&&dirty){data=clone(saved);dirty=false}setEditing(!editing)};
-$('#edit-cancel').onclick=()=>{if(dirty&&!confirm('保存していない変更をすべて取り消して、保存済みの内容に戻しますか？'))return;data=clone(saved);dirty=false;selected=null;routeNote='';renderMap();renderItems();renderEditor();renderRoute();paintBar()};
+$('#edit-cancel').onclick=()=>{if(dirty&&!confirm('保存していない変更をすべて取り消して、保存済みの内容に戻しますか？'))return;data=clone(saved);dirty=false;selected=null;routeNote='';routeUndo=[];renderMap();renderItems();renderEditor();renderRoute();paintBar()};
 $('#edit-save').onclick=async()=>{
   if(busy||!dirty)return;
   const hit=overlap();if(hit){selected=hit[1].id;renderMap();renderEditor();const m=`配置図の「${hit[0].text}」と「${hit[1].text}」が重なっています。位置か大きさを直してから保存してください。`;status.textContent=m;alert(m);return}
@@ -235,7 +239,7 @@ $('#edit-save').onclick=async()=>{
     const res=await fetch('api/ishikari-2f',{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify({version,data})});
     const body=await res.json().catch(()=>({}));
     if(!res.ok)throw Error(body.error||'保存できませんでした。');
-    apply(body);dirty=false;busy=false;routeNote='';renderMap();renderItems();renderEditor();renderRoute();paintBar();status.textContent=`保存しました（版${version}）。`;
+    apply(body);dirty=false;busy=false;routeNote='';routeUndo=[];renderMap();renderItems();renderEditor();renderRoute();paintBar();status.textContent=`保存しました（版${version}）。`;
   }catch(err){busy=false;paintBar();status.textContent=err.message;alert(err.message)}
 };
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
