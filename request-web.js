@@ -97,7 +97,10 @@ function syncOrderLayout(){if(sharedPage||!orderLayoutReady)return;{const sel=$(
  if(needCustomer)head.after(picker);else fields.prepend(picker);
  if(needStore)(needCustomer?picker:head).after(store);else fields.append(store);
  const customer=(data.customers||[]).find(c=>c.id===cid())?.name||'',site=$('#scope-select').selectedOptions[0]?.textContent||'';
- $('#customer-scope-name').textContent=customer?'ご依頼先：'+customer+(site&&$('#scope-select').value?' ／ '+site:''):'ご依頼先が選ばれていません'}
+ $('#customer-scope-name').textContent=customer?'ご依頼先：'+customer+(site&&$('#scope-select').value?' ／ '+site:''):'ご依頼先が選ばれていません';syncScopeCollectionDays()}
+// ご依頼先の下に集配曜日（自社集配で曜日が登録されている店舗だけ）。納品希望日の集配日案内と同じ resolveDelivery を使う。
+function scopeCollectionDaysText(){if(!$('#scope-select')?.value)return '';const d=resolveDelivery(selectedOrgNode());return d.days.length?'集配曜日：'+d.days.join('・'):''}
+function syncScopeCollectionDays(){const name=$('#customer-scope-name');if(!name)return;let el=$('#customer-scope-days');const text=scopeCollectionDaysText();if(!el){el=document.createElement('div');el.id='customer-scope-days';el.className='customer-scope-days';name.after(el)}el.textContent=text;el.hidden=!text}
 setupOrderLayout();
 loadSettings().then(()=>{const q=new URLSearchParams(location.search),customer=Number(q.get('customer_id'));if(data.customers.some(c=>c.id===customer))chooseCustomer(customer);else if(!sharedPage){const preferred=defaultOrderCustomer();if(preferred)chooseCustomer(preferred)}tab(q.get('page')||(sharedPage?'customers':'order'),false);const node=q.get('node_id');if(node&&[...$('#scope-select').options].some(o=>o.value===node)){$('#scope-select').value=node;$('#scope-select').onchange()}const department=q.get('department_id');if(department&&[...$('#department').options].some(o=>o.value===department)){$('#department').value=department;renderContracts()}const key=q.get('contract_key');if(key&&[...$('#contract').options].some(o=>o.value===key)){$('#contract').value=key;changeContract()}syncSharedLink();document.documentElement.removeAttribute('data-customer-contracts')}).catch(e=>{notify(e.message);$('#products').textContent=e.message;document.documentElement.removeAttribute('data-customer-contracts')});
 
