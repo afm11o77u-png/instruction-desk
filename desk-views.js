@@ -93,7 +93,7 @@
   function kanbanHtml(list, opts) {
     const columns = kanbanColumns(opts.screen, opts.statusFilter);
     const groups = groupByStatus(list, columns);
-    const note = opts.canDrag ? 'カードを別の列へドラッグすると作業状況を変更します（カード内の作業状況でも変更できます）。' : '作業状況の変更は主管理者だけができます。';
+    const note = opts.canDrag ? 'カードを別の列へドラッグすると作業状況を変更します（カード内の作業状況でも変更できます）。' : '作業状況は作業の進み（ピッキングリストの作成・読み取り・発送など）に合わせて自動で切り替わります。カードの移動と作業状況の手直しは主管理者だけができます。';
     return `<p class="dv-note">${note}</p><div class="dv-kanban">` + columns.map((c) => {
       const rows = groups.get(c) || [];
       const hint = opts.screen === 'floor' && c === '発送済' ? '<p class="dv-col-hint">ここへ移すと現場の作業一覧から外れます。</p>' : '';
@@ -160,7 +160,7 @@
     const link = document.createElement('link');
     link.id = 'desk-views-css';
     link.rel = 'stylesheet';
-    link.href = '/desk-views.css?v=20261126_views';
+    link.href = '/desk-views.css?v=20261126_kanban_owner';
     document.head.appendChild(link);
   }
 
