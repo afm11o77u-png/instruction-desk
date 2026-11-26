@@ -53,6 +53,12 @@ class IshikariShelvesTest(unittest.TestCase):
         self.assertIn('fitAll();', js)
         self.assertNotIn('b.size=lo', js)  # 表示だけ小さくし、保存する大きさは変えない
 
+    def test_directory_table_is_sized_to_content(self):
+        from pathlib import Path
+        page = (Path(m.ROOT) / 'stock-desk' / 'static' / 'ishikari-2f.html').read_text(encoding='utf-8')
+        self.assertIn('table{border-collapse:collapse;width:auto}', page)
+        self.assertNotIn('width:100%;min-width:660px', page)
+
 
 if __name__ == '__main__':
     unittest.main()
