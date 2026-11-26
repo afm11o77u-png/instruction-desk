@@ -93,3 +93,82 @@ def apply_library(c, d, data, base, validate_config, text):
         c.commit()
     except Exception:c.rollback();raise
     return dict(added=added,skipped=skipped,assigned=0,targets=0)
+
+
+def _match_site(code, site, nodes, company):
+    """営業所コード → 同じ名前 → 拠点の一括取り込みと同じゆるい一致 → 名前の一部が一致（最長の1件）。"""
+    import site_name_key as snk
+    if code:
+        hit=[n for n in nodes if excel.normalized(n.get('office_code')).casefold()==code.casefold()]
+        if len(hit)==1:return hit[0],'コード一致',False
+        if len(hit)>1:return None,'同じコードの拠点が複数あります',False
+    if not site:return None,'顧客名から店を特定できません',False
+    hit=[n for n in nodes if excel.normalized(n['name']).casefold()==site.casefold()]
+    if len(hit)==1:return hit[0],'拠点名一致',False
+    sites=[n for n in nodes if n['kind']=='site']
+    node,how,_=snk.find(site,company,sites,lambda n:company)
+    if node:return node,how,False
+    if how.startswith('同じ名前'):return None,how,False
+    key=(snk.site_keys(site,company) or [''])[0]
+    if len(key)>=2:
+        part=[(len(k),n) for n in sites for k in (snk.site_keys(n['name'],company) or [''])[:1] if len(k)>=2 and (k in key or key in k)]
+        if part:
+            best=max(p[0] for p in part);top=[n for l,n in part if l==best]
+            if len(top)==1:return top[0],'名前の一部が一致（確認してください）',True
+            return None,'似た拠点が複数あります',False
+    return None,'一致する拠点がありません',False
+
+
+def preview_assign(d, library, org, nodes, assignments, company):
+    """登録済みの部署だけを、Excelの各店（顧客コード）に割り当てる案。部署は作らない。"""
+    plan=excel.preview(d.get('file'),[], 'customer')
+    deps={excel.normalized(x['name']).casefold():x for x in library['draft']['departments'] if not x.get('no_department')}
+    current={a['node_id']:set(a['department_ids']) for a in assignments}
+    rows={};skipped=0;blank=0
+    for r in plan['records']:
+        code,customer,name=r['code'],r['customer'],r['name']
+        if not name:blank+=1;continue
+        dep=deps.get(name.casefold())
+        if not dep:skipped+=1;continue
+        key=(code.casefold(),dep['id'])
+        if key in rows:rows[key]['count']+=1;continue
+        site=customer.split(' ',1)[0]
+        node,how,loose=_match_site(code,site,nodes,company)
+        done=bool(node and dep['id'] in current.get(node['id'],set()))
+        rows[key]=dict(code=code,customer=customer,site_name=site,department_id=dep['id'],name=dep['name'],count=1,
+                       node_id=node['id'] if node else '',matched=bool(node),loose=loose,assigned=done,
+                       selected=bool(node) and not done,note='割当済み' if done else how)
+    order=lambda r:(0 if not r['matched'] else 1 if r['loose'] else 3 if r['assigned'] else 2)
+    out=sorted(rows.values(),key=lambda r:(order(r),r['site_name'],r['code'],r['name']))
+    return dict(rows=out,version=library['version'],organization_version=org['version'],
+                target_versions={a['node_id']:a['version'] for a in assignments},
+                source_rows=plan['source_rows'],deleted=plan['deleted'],unregistered=skipped,blank=blank)
+
+
+def apply_assign(c, d, data, base):
+    """登録済みの部署を選んだ拠点に追加する（既存の割り当ては残す。部署は作らない）。"""
+    cid=base['customer_id'];rows=d.get('rows')
+    if not isinstance(rows,list) or not rows or len(rows)>20000:raise ValueError('割り当てる行を選択してください。')
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        org=orgs.read(c);lib=registry.library(c,base)
+        if type(d.get('version')) is not int or d['version']!=lib['version'] or d.get('organization_version')!=org['version']:raise ValueError('部署・組織が更新されています。Excelを選び直してください。')
+        ids={x['id'] for x in lib['draft']['departments']};links={}
+        for row in rows:
+            if not isinstance(row,dict):raise ValueError('割り当て内容を確認してください。')
+            nid=row.get('node_id');did=row.get('department_id')
+            if did not in ids:raise ValueError('登録されていない部署は割り当てられません。部署を先に登録してください。')
+            node=next((n for n in org['nodes'] if n['id']==nid and n['customer_id']==cid),None)
+            if not node or nid not in data['allowedNodeIds'] or not orgs.personnel_enabled(org,node):raise PermissionError('割り当て可能な登録先を選んでください。')
+            links.setdefault(nid,set()).add(did)
+        versions=d.get('target_versions')
+        if not isinstance(versions,dict):raise ValueError('割り当て情報を読み直してください。')
+        assigned=0
+        for nid,chosen_ids in links.items():
+            node=next(n for n in org['nodes'] if n['id']==nid);current=registry.selection(c,base,org,node)
+            if versions.get(nid,0)!=current['version']:raise ValueError('割り当てが更新されています。Excelを選び直してください。')
+            have=current['department_ids'];new=[x['id'] for x in lib['draft']['departments'] if x['id'] in chosen_ids and x['id'] not in have];assigned+=len(new)
+            if new:c.execute('INSERT INTO web_request_department_targets VALUES(?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,department_ids=excluded.department_ids',(nid,cid,current['version']+1,json.dumps(have+new)))
+        c.commit()
+    except Exception:c.rollback();raise
+    return dict(added=0,assigned=assigned,targets=len(links))

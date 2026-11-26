@@ -292,6 +292,17 @@ def save(c,path,d,user=None):
         cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
         if cid not in data['manageCommonCustomerIds']:raise PermissionError('この会社への取り込み権限がありません。')
         base=read_config(c,cid)
+        if d.get('assign_only'):
+            # 顧客Excelから、登録済みの部署だけを各店に割り当てる（部署は作らない）。
+            if d['action']=='department_assignment_import_preview':
+                org=organizations.read(c)
+                nodes=[n for n in org['nodes'] if n['customer_id']==cid and n['id'] in data['allowedNodeIds'] and organizations.personnel_enabled(org,n)]
+                root=next((n for n in org['nodes'] if n['kind']=='company' and n['customer_id']==cid),None)
+                company=root['name'] if root else next((x['name'] for x in data['customers'] if x['id']==cid),'')
+                ids={n['id'] for n in nodes}
+                return importer.preview_assign(d,department_registry.library(c,base),org,nodes,[a for a in data['departmentAssignments'] if a['node_id'] in ids],company)
+            result=importer.apply_assign(c,d,data,base)
+            return dict(state(c,path,user),departmentImportResult=result)
         if d.get('departments_only'):
             # 顧客Excelから部署だけを取り込む（割り当ては画面で手動）。
             if d['action']=='department_assignment_import_preview':
