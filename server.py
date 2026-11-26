@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import closing
 from datetime import datetime, date, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from auth import AuthMixin, schema, can_open_stock, stock_can_write
+from auth import AuthMixin, schema, can_open_stock, stock_can_write, stock_shelves_only, STOCK_SHELVES_ONLY_PATHS, stock_shelves_only, STOCK_SHELVES_ONLY_PATHS
 import templates
 import label_sets
 import fixed_label_formats
@@ -1099,9 +1099,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 return self.reply(302, b'', 'text/plain; charset=utf-8', {'Location': '/'})
             return self.reply(401, {'error':'ログインしてください。'})
         if u['must_change']: return self.reply(403, {'error':'最初に仮パスワードを変更してください。'})
-        if not can_open_stock(u): return self.reply(403, {'error':'在庫管理は主管理者と管理者、倉庫担当が使用します。'})
-        # overview-only and 倉庫担当 are read-only for stock quantity changes.
-        can_write = stock_can_write(u)
+        shelves_only = stock_shelves_only(u)
+        if not shelves_only and not can_open_stock(u): return self.reply(403, {'error':'在庫管理は主管理者と管理者、倉庫担当が使用します。'})
+        if shelves_only and path not in STOCK_SHELVES_ONLY_PATHS:
+            return self.reply(403, {'error':'現場３は在庫管理の「石狩倉庫2F 棚番号」だけを見られます。'})
+        # overview-only and 倉庫担当 are read-only for stock quantity changes. 現場３（棚番号だけ）も見るだけ。
+        can_write = False if shelves_only else stock_can_write(u)
         actor = {'id': u['id'], 'name': u['name'], 'role': u['role']}
         ensure_stock()
         if path in ('/inventory/api/ishikari-2f','/inventory/ishikari-2f.xlsx'):

@@ -219,7 +219,10 @@ function openPlacementPrint(item){
 }
 
 let stockSection='list'
+// 現場３（管理者・閲覧フラグなし）は在庫管理のうち「石狩倉庫2F 棚番号」だけ（サーバー側もほかは断る）
+function stockShelvesOnly(){return currentUser?.role==='floor3'&&!currentUser.manage&&!currentUser.overview}
 function normalizeStockSection(section){
+  if(stockShelvesOnly())return 'ishikari-shelves'
   // Legacy 入庫・出庫 section → 在庫一覧
   if(section==='move')return 'list'
   return section==='ishikari-shelves'||section==='setup'||section==='history'||section==='period'||section==='orders'||section==='stocktake'||section==='close'||section==='qrread'?section:'list'
@@ -374,7 +377,7 @@ async function showKintaiSection(section, reportMonth){
   }
 }
 async function showCatalog(which){
-  const stockAllowed=currentUser?.role==='owner'||currentUser?.role==='warehouse'||!!currentUser?.manage||!!currentUser?.overview;
+  const stockAllowed=currentUser?.role==='owner'||currentUser?.role==='warehouse'||currentUser?.role==='floor3'||!!currentUser?.manage||!!currentUser?.overview;
   const kintaiAllowed=currentUser?.role==='floor3'||currentUser?.role==='owner'||!!currentUser?.manage||!!currentUser?.overview||!!currentUser?.mark_kintai;
   if(which==='stock'&&!stockAllowed)which='desk';
   if(which==='kintai'&&!kintaiAllowed)which='desk';
@@ -401,6 +404,12 @@ async function showCatalog(which){
   const stockNav=$('#stocknav');if(stockNav)stockNav.hidden=which!=='stock';
   const kintaiNav=$('#kintainav');if(kintaiNav)kintaiNav.hidden=which!=='kintai';
   const stock=$('#stockdesk');if(stock)stock.hidden=which!=='stock';
+  if(which==='stock'&&stockShelvesOnly()){
+    const nav=$('#stocknav');
+    if(nav){nav.querySelectorAll('.nav').forEach(b=>b.hidden=b.dataset.stockSection!=='ishikari-shelves');nav.querySelectorAll('.navgroup,.navrow').forEach(g=>g.hidden=!g.querySelector('.nav:not([hidden])'))}
+    syncStockNav('ishikari-shelves');tellStockFrame('ishikari-shelves');
+    return;
+  }
   if(which==='stock'){
     syncStockNav('list');
     const frame=$('#stockframe');

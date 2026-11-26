@@ -139,8 +139,10 @@ function overlap(){const taken=new Map();for(const b of data.blocks)for(let r=b.
 // ---- ルート（通る順。ピッキングリストの石狩倉庫の明細をこの順に並べる） ----
 let routeMode=false,routeNote='',routeUndo=[];
 const routeShow=$('#route-show');
-try{routeShow.checked=localStorage.getItem('ishikari-route-show')!=='0'}catch{}
-routeShow.onchange=()=>{try{localStorage.setItem('ishikari-route-show',routeShow.checked?'1':'0')}catch{}drawRoute()};
+// 初期値は非表示（11/26 に全員いったん非表示へ戻すため保存キーを v2 に変更）
+const ROUTE_SHOW_KEY='ishikari-route-show-v2';
+routeShow.checked=false;try{routeShow.checked=localStorage.getItem(ROUTE_SHOW_KEY)==='1';localStorage.removeItem('ishikari-route-show')}catch{}
+routeShow.onchange=()=>{try{localStorage.setItem(ROUTE_SHOW_KEY,routeShow.checked?'1':'0')}catch{}drawRoute()};
 const SVGNS='http://www.w3.org/2000/svg';
 function svg(tag,attrs){const e=document.createElementNS(SVGNS,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);return e}
 function routeIds(){return (data&&Array.isArray(data.route)?data.route:[]).filter(id=>block(id))}
