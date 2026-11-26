@@ -333,3 +333,6 @@ body.desk-common-page header nav .contracts-nav-flow button.active .contracts-na
 
 /* ②制服の詳細：契約ごとの写真欄は廃止（写真は商品ごとのWEB表示名・写真に一本化） */
 label:has(> #uniform-photo),#photo-preview,#clear-photo{display:none!important}
+
+/* 依頼画面：ご依頼先の下の集配曜日 */
+.customer-scope-days{margin:2px 0 0;font-size:13px;font-weight:600;color:#2f6b47}
