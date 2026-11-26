@@ -62,3 +62,34 @@ def apply(c, d, data, base, user, validate_config, text):
         c.commit()
     except Exception:c.rollback();raise
     return dict(added=added,assigned=assigned,targets=len(links))
+
+
+def preview_library(d, library):
+    """顧客Excelから部署名だけを取り出す（同じ名前は1行にまとめる）。拠点への割り当てはしない。"""
+    plan=excel.preview(d.get('file'),library['draft']['departments'],'customer')
+    rows=[dict(name=g['name'],count=len(g['rows']),existing=g['existing'],selected=not g['existing'],
+               examples=[e['customer'] for e in g['examples']]) for g in plan['candidates']]
+    return dict(rows=rows,version=library['version'],source_rows=plan['source_rows'],deleted=plan['deleted'],
+                unresolved=len(plan['unresolved']))
+
+
+def apply_library(c, d, data, base, validate_config, text):
+    """選んだ部署名を会社の部署として登録する（割り当てなし＝どの拠点にも未割り当て）。"""
+    cid=base['customer_id'];rows=d.get('rows')
+    if not isinstance(rows,list) or not rows or len(rows)>2000:raise ValueError('取り込む部署を選択してください。')
+    c.execute('BEGIN IMMEDIATE')
+    try:
+        lib=registry.library(c,base)
+        if type(d.get('version')) is not int or d['version']!=lib['version']:raise ValueError('部署が更新されています。Excelを選び直してください。')
+        cfg=lib['draft'];names={excel.normalized(x['name']).casefold() for x in cfg['departments']};added=0;skipped=0
+        for row in rows:
+            if not isinstance(row,dict):raise ValueError('取り込み内容を確認してください。')
+            name=excel.normalized(text(row.get('name'),'部署名',80,True));key=name.casefold()
+            if key in names:skipped+=1;continue
+            names.add(key);cfg['departments'].append(dict(id=str(uuid.uuid4()),name=name,contracts=[]));added+=1
+        if added:
+            cfg=validate_config(cfg,data,cid)
+            c.execute('INSERT INTO web_request_department_library VALUES(?,?,?) ON CONFLICT(customer_id) DO UPDATE SET version=excluded.version,config=excluded.config',(cid,lib['version']+1,json.dumps(cfg,ensure_ascii=False)))
+        c.commit()
+    except Exception:c.rollback();raise
+    return dict(added=added,skipped=skipped,assigned=0,targets=0)

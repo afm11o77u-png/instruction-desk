@@ -117,7 +117,28 @@ function renderRegisteredContracts(){
 }
 $('#registered-contracts').addEventListener('change',e=>{if(e.target.id!=='site-no-department')return;e.stopPropagation();if(deptLockedNotice())return;const rows=draft.departments;if(e.target.checked){rows.push({id:uid(),name:'部署なし',no_department:true,contracts:[]})}else{const direct=rows.find(d=>d.no_department);if(direct?.contracts.length){notify('直接登録した契約があります。契約を削除してから切り替えてください。');renderRegisteredContracts();return}draft.departments=rows.filter(d=>!d.no_department)}touch();renderDepartments();renderRegisteredContracts()});
 const encodeExcel=async file=>{if(!file)throw Error('必要なExcelファイルを選択してください。');if(file.size>8000000)throw Error('Excelは1ファイル8MB以下で選択してください。');const bytes=new Uint8Array(await file.arrayBuffer());let raw='';for(let i=0;i<bytes.length;i+=32768)raw+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(raw)};
+// 顧客Excelからは部署名だけを取り込む（同じ名前は1行）。拠点への割り当ては右の「部署を割り当て」で行う。
+async function importDepartmentNames(){
+ if(busy||!draft)return;if(changed||pendingEditors.size)return notify('編集中の部署・契約を先に保存してから取り込んでください。');
+ const companyId=cid(),company=data.customers.find(c=>c.id===companyId);
+ let dlg=$('#department-import-dialog');if(!dlg){dlg=document.createElement('dialog');dlg.id='department-import-dialog';document.body.append(dlg)}
+ dlg.innerHTML='<h2>部署をExcelから取り込み</h2><p>登録先：<strong>'+esc(company?.name||'')+'</strong></p><label>Excel(顧客)<input type="file" id="import-customer-file" accept=".xlsx"></label><p class="small">「顧客名」の最初の空白より後ろ（例：「北雄ラッキー本部 管理」の「管理」）を部署名として取り込みます。同じ部署名は1つにまとめます。拠点には割り当てません。取り込んだ部署は、右の「部署を割り当て」で拠点に割り当ててください。</p><p id="department-import-error" role="alert"></p><div class="dialog-actions"><button type="button" id="department-import-cancel">キャンセル</button><button type="button" id="department-import-preview" class="primary">内容を確認</button></div>';
+ dlg.showModal();$('#department-import-cancel').onclick=()=>dlg.close();
+ $('#department-import-preview').onclick=async()=>{const button=$('#department-import-preview');button.disabled=true;busy=true;try{
+ const file=await encodeExcel($('#import-customer-file').files[0]);
+ const plan=await api({action:'department_assignment_import_preview',customer_id:companyId,departments_only:true,file});
+ dlg.innerHTML='<h2>部署の取り込みを確認</h2><p>登録先：<strong>'+esc(company?.name||'')+'</strong> ／ '+plan.source_rows+'行・削除対象を除外 '+plan.deleted+'行'+(plan.unresolved?'・部署名がない行 '+plan.unresolved+'行':'')+'</p><p class="small">取り込む部署にチェックし、部署名を確認してください。拠点には割り当てません。登録済みの部署は取り込みません。</p><div class="department-import-scroll"><table><thead><tr><th>取込</th><th>部署名</th><th>Excelの行数</th></tr></thead><tbody>'+(plan.rows.length?plan.rows.map((r,i)=>`<tr data-import-row><td><input type="checkbox" data-import-checked ${r.existing?'disabled':(r.selected?'checked':'')} aria-label="${i+1}件目を取り込む"></td><td><input data-import-name maxlength="80" value="${esc(r.name)}" ${r.existing?'disabled':''} aria-label="${i+1}件目の部署名">${r.existing?'<small>登録済み</small>':''}</td><td>${r.count}行<small>${esc((r.examples||[]).join('、'))}</small></td></tr>`).join(''):'<tr><td colspan="3">部署名が見つかりませんでした。</td></tr>')+'</tbody></table></div><div class="actions"><button type="button" id="department-import-all">未登録の部署をすべて選択</button><button type="button" id="department-import-none">選択を解除</button></div><p id="department-import-error" role="alert"></p><div class="dialog-actions"><button type="button" id="department-import-cancel">キャンセル</button><button type="button" id="department-import-apply" class="primary">選択した部署を取り込む</button></div>';
+ $('#department-import-cancel').onclick=()=>dlg.close();
+ $('#department-import-all').onclick=()=>dlg.querySelectorAll('[data-import-checked]:not(:disabled)').forEach(b=>b.checked=true);
+ $('#department-import-none').onclick=()=>dlg.querySelectorAll('[data-import-checked]').forEach(b=>b.checked=false);
+ $('#department-import-apply').onclick=async()=>{const rows=[...dlg.querySelectorAll('[data-import-row]')].filter(r=>{const b=r.querySelector('[data-import-checked]');return b.checked&&!b.disabled}).map(r=>({name:r.querySelector('[data-import-name]').value.trim()}));if(!rows.length||rows.some(r=>!r.name)){$('#department-import-error').textContent='取り込む部署を選び、部署名を入力してください。';return}
+ const apply=$('#department-import-apply'),cancel=$('#department-import-cancel');apply.disabled=cancel.disabled=true;busy=true;
+ try{data=await api({action:'department_assignment_import',customer_id:companyId,departments_only:true,version:plan.version,rows});draft=clone(profile().draft);changed=false;pendingEditors.clear();renderDepartments();window.dispatchEvent(new Event('web-request-data'));dlg.close();const r=data.departmentImportResult;notify('部署'+r.added+'件を登録しました'+(r.skipped?'（登録済み '+r.skipped+'件は除外）':'')+'。右の「部署を割り当て」で拠点に割り当ててください。')}
+ catch(err){$('#department-import-error').textContent=err.message}finally{busy=false;apply.disabled=cancel.disabled=false;renderRegisteredContracts();applyInheritanceMode();renderContractDiagram()}};
+ }catch(err){$('#department-import-error').textContent=err.message}finally{busy=false;button.disabled=false}};
+}
 async function importDepartments(source='customer'){
+ if(source==='customer')return importDepartmentNames();
  if(busy||!draft)return;if(changed||pendingEditors.size)return notify('編集中の部署・契約を先に保存してから取り込んでください。');
  const companyId=cid(),company=data.customers.find(c=>c.id===companyId),nodes=registrationNodes();
  let dlg=$('#department-import-dialog');if(!dlg){dlg=document.createElement('dialog');dlg.id='department-import-dialog';document.body.append(dlg)}
