@@ -8,19 +8,26 @@ SESSION_IDLE_SECONDS=12*3600  # 無操作で切れるまで（操作のたびに
 SESSION_REFRESH_SECONDS=60  # 延長の書き込み間隔
 
 
+def _flag(user, key):
+    """ログイン中の利用者（sqlite3.Row）でも dict でも、フラグを読む。Row には .get がないため。"""
+    try:
+        return bool(user[key])
+    except (KeyError, IndexError):
+        return False
+
+
 def can_open_stock(user):
     """在庫画面を開ける人。倉庫担当は管理者フラグなしで閲覧だけ入る。"""
     if not user:
         return False
-    return user['role'] in ('owner', 'warehouse') or bool(user.get('manage')) or bool(user.get('overview'))
+    return user['role'] in ('owner', 'warehouse') or _flag(user, 'manage') or _flag(user, 'overview')
 
 
 def stock_shelves_only(user):
     """現場３は在庫管理のうち「石狩倉庫2F 棚番号」だけを見るだけで入る（ほかの在庫画面・APIは不可）。"""
     if not user or user['role'] != 'floor3':
         return False
-    keys = user.keys() if hasattr(user, 'keys') else ()
-    return not any(k in keys and user[k] for k in ('manage', 'overview'))
+    return not (_flag(user, 'manage') or _flag(user, 'overview'))
 
 
 STOCK_SHELVES_ONLY_PATHS = ('/inventory/ishikari-2f.html', '/inventory/ishikari-2f.js', '/inventory/api/ishikari-2f', '/inventory/ishikari-2f.xlsx')
@@ -30,7 +37,7 @@ def stock_can_write(user):
     """在庫数量・マスタを変更できる人。倉庫担当は含めない。"""
     if not user:
         return False
-    return user['role'] == 'owner' or bool(user.get('manage'))
+    return user['role'] == 'owner' or _flag(user, 'manage')
 
 
 def session_cookie(token):
