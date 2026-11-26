@@ -20,6 +20,7 @@ import kintai
 import kintai_crimp
 import name_exe
 import web_requests
+import web_request_entries
 import web_request_product_display
 import customer_accounts
 import personal_notes
@@ -1307,6 +1308,18 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 found = web_request_product_display.photo(c, int(path.rsplit('/',1)[1]))
             if not found: return self.reply(404, {'error':'写真がありません。'})
             return self.reply(200, found[0], found[1], {'Content-Disposition':'inline', 'Content-Security-Policy':"default-src 'none'; img-src 'self' data:; sandbox"})
+        if path == '/api/web-request/requests':
+            with connect() as c:
+                u = self.session_user(c)
+                if not web_requests.can_open(u):
+                    return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
+                try:
+                    from urllib.parse import urlparse as _wr_up, parse_qs as _wr_pq
+                    rid=_wr_pq(_wr_up(self.path).query).get('id',[None])[0]
+                    return self.reply(200, web_request_entries.get(c, STOCK_DB, u, rid) if rid else web_request_entries.listing(c, STOCK_DB, u))
+                except PermissionError as e: return self.reply(403, {'error':str(e)})
+                except ValueError as e: return self.reply(400, {'error':str(e)})
+                except sqlite3.Error: return self.reply(503, {'error':'在庫の顧客・商品を読み取れません。先に在庫管理を確認してください。'})
         if path == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
@@ -1647,6 +1660,22 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(400, {'error':str(e)})
                 except sqlite3.Error:
                     return self.reply(503, {'error':'保存できませんでした。在庫の商品を確認してください。'})
+        if route == '/api/web-request/requests':
+            with connect() as c:
+                u = self.session_user(c)
+                if not web_requests.can_open(u):
+                    return self.reply(403, {'error':'主管理者・管理者・担当者だけが利用できます。'})
+                try:
+                    n = int(self.headers.get('Content-Length') or 0)
+                    if n < 1 or n > 2000000: raise ValueError('送信内容を確認してください。')
+                    d = json.loads(self.rfile.read(n))
+                    if not isinstance(d, dict): raise ValueError('送信内容を確認してください。')
+                    if d.get('action') == 'create': return self.reply(200, web_request_entries.create(c, STOCK_DB, u, d.get('request') if isinstance(d.get('request'), dict) else {}))
+                    if d.get('action') == 'status': return self.reply(200, web_request_entries.set_status(c, STOCK_DB, u, d))
+                    raise ValueError('操作を確認してください。')
+                except PermissionError as e: return self.reply(403, {'error':str(e)})
+                except ValueError as e: return self.reply(400, {'error':str(e)})
+                except sqlite3.Error: return self.reply(503, {'error':'保存できませんでした。'})
         if route == '/api/web-request/settings':
             with connect() as c:
                 u = self.session_user(c)
@@ -1985,6 +2014,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         if before=='下書き': return self.reply(403,{'error':'現場から下書きは操作できません。'})
                         if {k:v for k,v in payload.items() if k not in ('status','authorId','authorName','assigneeId','assigneeName')}!={k:v for k,v in previous.items() if k not in ('status','authorId','authorName','assigneeId','assigneeName')}: return self.reply(403,{'error':'現場の権限では作業状況のみ変更できます。'})
                     if before!='下書き' and payload['status']=='下書き': raise ValueError('投函後は下書きに戻せません。')
+                    if previous.get('webRequestId') and not payload.get('webRequestId'): payload['webRequestId']=previous['webRequestId']
                     c.execute('UPDATE orders SET version=version+1,payload=? WHERE id=?',(json.dumps(payload,ensure_ascii=False),d['id']))
                     oid=d['id']; action='内容を更新' if before==payload['status'] else f"{before} → {payload['status']}"
                 else:
@@ -1998,6 +2028,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     fix_received_and_number(c,payload,previous,None)
                     if payload['status']!='下書き': check_posting(payload)
                     cur=c.execute('INSERT INTO orders(version,payload) VALUES(1,?)',(json.dumps(payload,ensure_ascii=False),)); oid=cur.lastrowid; action='下書きを作成' if payload['status']=='下書き' else '新規作成・投函'
+                if payload.get('webRequestId'): web_request_entries.link(c, payload['webRequestId'], oid, current)
                 if payload.get('postingReady') and not previous.get('postingReady'):
                     action = '投函待ちに保存'
                 elif previous.get('postingReady') and payload['status'] == '下書き' and not payload.get('postingReady'):
