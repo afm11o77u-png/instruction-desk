@@ -15,7 +15,7 @@ def normalized(value):
     return ' '.join(unicodedata.normalize('NFKC',str(value or '')).split())
 
 
-def preview(raw,existing,source="customer"):
+def preview(raw,existing,source="customer",skip_retired=False):
     if source not in ("customer","contract"):raise ValueError("取り込みの書式を選んでください。")
     required=("顧客コード","部署名") if source=="contract" else ("顧客コード","顧客名")
     label="契約" if source=="contract" else "顧客"
@@ -51,12 +51,14 @@ def preview(raw,existing,source="customer"):
     except Exception as error:
         raise ValueError(label+'マスタのExcel（.xlsx）を読み取れませんでした。ファイルの形式・容量を確認してください。') from error
     if len(sheets)!=1:raise ValueError('「'+'」「'.join(required)+'」のあるシートを1つ含むExcelを選んでください。')
-    sheet,table,header=sheets[0];known={normalized(d['name']).casefold() for d in existing};groups={};unresolved=[];deleted=0;count=0;records=[]
+    sheet,table,header=sheets[0];known={normalized(d['name']).casefold() for d in existing};groups={};unresolved=[];deleted=0;retired=0;count=0;records=[]
     for row,cells in table[1:]:
         count+=1
         if count>20000:raise ValueError('取り込みは2万行以内のExcelで行ってください。')
         if normalized(cells.get(header.get('削除フラグ',''),'')).casefold() in ('1','true','削除'):
             deleted+=1;continue
+        if skip_retired and '退社フラグ' in header and normalized(cells.get(header['退社フラグ'],'')) not in ('','0'):
+            retired+=1;continue  # 退社(1)・異動(2)の行は使わない
         code=normalized(cells.get(header['顧客コード'],''));customer=normalized(cells.get(header.get('顧客名',''),''))
         direct=header.get('部署名') or header.get('部署');site_name=customer.split(' ',1)[0]
         if direct:name=normalized(cells.get(direct,''))
@@ -72,7 +74,7 @@ def preview(raw,existing,source="customer"):
         item=groups[key];item['rows'].append(row)
         if len(item['examples'])<3:item['examples'].append(dict(code=code,customer=customer))
     if not count:raise ValueError('取り込むデータ行がありません。')
-    return dict(sheet=sheet,source_rows=count,deleted=deleted,candidates=list(groups.values()),unresolved=unresolved,records=records)
+    return dict(sheet=sheet,source_rows=count,deleted=deleted,retired=retired,candidates=list(groups.values()),unresolved=unresolved,records=records)
 
 # The customer master puts these department labels after the location name.
 SITE_DEPARTMENT_SUFFIXES = {

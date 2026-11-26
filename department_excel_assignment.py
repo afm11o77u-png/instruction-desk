@@ -116,10 +116,12 @@ def _match_site(code, site, nodes, company, terms=(), aliases=None):
         hit=[n for n in nodes if excel.normalized(n.get('office_code')).casefold()==code.casefold()]
         if len(hit)==1:return hit[0],'コード一致',False
         if len(hit)>1:return None,'同じコードの拠点が複数あります',False
-    if not site:return None,'顧客名から店を特定できません',False
     if aliases:
-        node=next((n for n in nodes if n['id']==aliases.get(_alias_key(site))),None)
+        hit=aliases.get(code_alias(code)) if code else None
+        if not hit and site:hit=aliases.get(_alias_key(site))
+        node=next((n for n in nodes if n['id']==hit),None) if hit else None
         if node:return node,'前回選んだ店',False
+    if not site:return None,'顧客名から店を特定できません',False
     hit=[n for n in nodes if excel.normalized(n['name']).casefold()==site.casefold()]
     if len(hit)==1:return hit[0],'拠点名一致',False
     sites=[n for n in nodes if n['kind']=='site']
@@ -147,6 +149,31 @@ def _match_site(code, site, nodes, company, terms=(), aliases=None):
     return None,'一致する拠点がありません',False
 
 
+def code_alias(code):
+    return 'code:'+excel.normalized(code).casefold()
+
+
+def _contract_records(d, deps):
+    """契約マスタ（1人1行）＋顧客マスタ → (顧客コード, 顧客名, 店名, 部署) の行と、使わなかった行の理由別件数。
+    部署は契約の部署名が登録済みならそれ、違えば顧客マスタの顧客名の部署（登録済みのときだけ）。"""
+    plan=excel.preview(d.get('file'),[],'contract',skip_retired=True)
+    master={}
+    for r in excel.preview(d.get('customer_file'),[],'customer')['records']:master.setdefault(r['code'].casefold(),r)
+    out=[];reasons={}
+    for r in plan['records']:
+        m=master.get(r['code'].casefold());dep=deps.get(r['name'].casefold()) if r['name'] else None
+        site=m['site_name'] if m else ''
+        if not dep and m:
+            dep=deps.get(m['name'].casefold()) if m['name'] else None
+            head,_,last=m['customer'].rpartition(' ')
+            if not dep and ' ' in m['name'] and deps.get(last.casefold()):dep,site=deps[last.casefold()],head
+        if not dep:
+            why='部署名「'+(r['name'] or '空欄')+'」'+('' if m else '（顧客マスタにないコード）')
+            reasons[why]=reasons.get(why,0)+1;continue
+        out.append(dict(code=r['code'],customer=m['customer'] if m else '',site=site,dep=dep,in_master=bool(m)))
+    return plan,out,reasons
+
+
 def _store_code(code):
     """AI-101-01 → AI-101（同じ店の部署違い）。区切りがなければ空。"""
     head,sep,_=code.rpartition('-')
@@ -159,20 +186,28 @@ def dep_done(current, nid, did):
 
 def preview_assign(d, library, org, nodes, assignments, company, terms=(), aliases=None):
     """登録済みの部署だけを、Excelの各店（顧客コード）に割り当てる案。部署は作らない。"""
-    plan=excel.preview(d.get('file'),[], 'customer')
     deps={excel.normalized(x['name']).casefold():x for x in library['draft']['departments'] if not x.get('no_department')}
     current={a['node_id']:set(a['department_ids']) for a in assignments}
-    rows={};skipped=0;blank=0
-    for r in plan['records']:
-        code,customer,name=r['code'],r['customer'],r['name']
-        if not name:blank+=1;continue
-        dep=deps.get(name.casefold());site=r['site_name']
-        head,_,last=customer.rpartition(' ')
-        if not dep and ' ' in name and deps.get(last.casefold()):dep,site=deps[last.casefold()],head  # 「シティ あばしり店 管理」は最後の語を部署にする
-        if not dep:skipped+=1;continue
+    rows={};skipped=0;blank=0;reasons={}
+    contract=d.get('source')=='contract'
+    if contract:
+        plan,found,reasons=_contract_records(d,deps);skipped=sum(reasons.values())
+    else:
+        plan=excel.preview(d.get('file'),[], 'customer');found=[]
+        for r in plan['records']:
+            code,customer,name=r['code'],r['customer'],r['name']
+            if not name:blank+=1;continue
+            dep=deps.get(name.casefold());site=r['site_name']
+            head,_,last=customer.rpartition(' ')
+            if not dep and ' ' in name and deps.get(last.casefold()):dep,site=deps[last.casefold()],head  # 「シティ あばしり店 管理」は最後の語を部署にする
+            if not dep:skipped+=1;continue
+            found.append(dict(code=code,customer=customer,site=site,dep=dep,in_master=True))
+    for f in found:
+        code,customer,site,dep=f['code'],f['customer'],f['site'],f['dep']
         key=(code.casefold(),dep['id'])
         if key in rows:rows[key]['count']+=1;continue
         node,how,loose=_match_site(code,site,nodes,company,terms,aliases)
+        if not node and not f['in_master']:how='顧客マスタにないコードです。登録先を選んでください'
         done=bool(node and dep['id'] in current.get(node['id'],set()))
         rows[key]=dict(code=code,customer=customer,site_name=site,department_id=dep['id'],name=dep['name'],count=1,
                        node_id=node['id'] if node else '',matched=bool(node),loose=loose,assigned=done,
@@ -191,7 +226,8 @@ def preview_assign(d, library, org, nodes, assignments, company, terms=(), alias
     out=sorted(rows.values(),key=lambda r:(order(r),r['site_name'],r['code'],r['name']))
     return dict(rows=out,version=library['version'],organization_version=org['version'],
                 target_versions={a['node_id']:a['version'] for a in assignments},
-                source_rows=plan['source_rows'],deleted=plan['deleted'],unregistered=skipped,blank=blank)
+                source_rows=plan['source_rows'],deleted=plan['deleted'],retired=plan.get('retired',0),unregistered=skipped,blank=blank,
+                reasons=sorted(([k,v] for k,v in reasons.items()),key=lambda x:-x[1]),source='contract' if contract else 'customer')
 
 
 def apply_assign(c, d, data, base):
@@ -213,7 +249,10 @@ def apply_assign(c, d, data, base):
         remember=[]
         for row in rows:
             src=row.get('site_name')
-            if row.get('remember') and isinstance(src,str) and 0<len(src)<=120 and _alias_key(src):remember.append((_alias_key(src),row['node_id']))
+            if not row.get('remember'):continue
+            if isinstance(src,str) and 0<len(src)<=120 and _alias_key(src):remember.append((_alias_key(src),row['node_id']))
+            code=row.get('code')
+            if isinstance(code,str) and 0<len(code)<=60 and excel.normalized(code):remember.append((code_alias(code),row['node_id']))
         versions=d.get('target_versions')
         if not isinstance(versions,dict):raise ValueError('割り当て情報を読み直してください。')
         assigned=0
