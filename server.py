@@ -4,7 +4,7 @@ from pathlib import Path
 from contextlib import closing
 from datetime import datetime, date, timedelta
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
-from auth import AuthMixin, schema, can_open_stock, stock_can_write, stock_shelves_only, STOCK_SHELVES_ONLY_PATHS, stock_shelves_only, STOCK_SHELVES_ONLY_PATHS
+from auth import AuthMixin, schema, _flag, can_open_stock, stock_can_write, stock_shelves_only, STOCK_SHELVES_ONLY_PATHS, stock_shelves_only, STOCK_SHELVES_ONLY_PATHS
 import templates
 import label_sets
 import fixed_label_formats
@@ -1346,7 +1346,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             with connect() as c: result=self.auth_get(path,c)
             if result is not None: return self.reply(*result)
         if path.startswith('/api/processed-stats'):
-            allowed = self.user['role'] in ('owner', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview')) or bool(self.user.get('mark_kintai'))
+            allowed = self.user['role'] in ('owner', 'floor3') or bool(_flag(self.user, 'manage')) or bool(_flag(self.user, 'overview')) or bool(_flag(self.user, 'mark_kintai'))
             if not allowed:
                 return self.reply(403, {'error': '権限がありません。マーク管理の利用権限が必要です。'})
             try:
@@ -1357,7 +1357,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except Exception as e:
                 return self.reply(500, {'error': f'集計エラー: {e}'})
         if path.startswith('/api/barcode-delivery/customers'):
-            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
+            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(_flag(self.user, 'manage')) or bool(_flag(self.user, 'overview'))
             if not allowed:
                 return self.reply(403, {'error': '権限がありません。現場または管理者権限が必要です。'})
             try:
@@ -1381,7 +1381,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except Exception as e:
                 return self.reply(500, {'error': f'顧客一覧取得エラー: {e}'})
         if path == '/api/barcode-delivery/sync':
-            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
+            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(_flag(self.user, 'manage')) or bool(_flag(self.user, 'overview'))
             if not allowed:
                 return self.reply(403, {'error': '権限がありません。'})
             try:
@@ -1391,7 +1391,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except Exception as e:
                 return self.reply(500, {'error': f'同期エラー: {e}'})
         if path.startswith('/api/barcode-delivery'):
-            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(self.user.get('manage')) or bool(self.user.get('overview'))
+            allowed = self.user['role'] in ('owner', 'floor', 'floor2', 'floor3') or bool(_flag(self.user, 'manage')) or bool(_flag(self.user, 'overview'))
             if not allowed:
                 return self.reply(403, {'error': '権限がありません。現場または管理者権限が必要です。'})
             try:
@@ -1404,7 +1404,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except Exception as e:
                 return self.reply(500, {'error': f'バーコード照会エラー: {e}'})
         if path in ('/api/picking-sort/preview', '/api/picking-sort/format-xlsx'):
-            if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
+            if self.user['role'] not in ('owner', 'floor3') and not _flag(self.user, 'manage') and not _flag(self.user, 'overview'):
                 return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
             try:
                 if path == '/api/picking-sort/format-xlsx':
@@ -1777,7 +1777,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 result=self.auth_post(route,d,c)
             if result is not None: return self.reply(*result)
             if route=='/api/picking-sort/execute':
-                if self.user['role'] not in ('owner', 'floor3') and not self.user.get('manage') and not self.user.get('overview'):
+                if self.user['role'] not in ('owner', 'floor3') and not _flag(self.user, 'manage') and not _flag(self.user, 'overview'):
                     return self.reply(403, {'error': '権限がありません。現場３または主管理者が利用できます。'})
                 try:
                     custom_ishikari = (d.get('custom_ishikari_file') or '').strip() or None

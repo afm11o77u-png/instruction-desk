@@ -4442,7 +4442,7 @@ def probe_person(c, person_id: int) -> dict:
 
 def list_share_files_for_user(user, prefix: str = '', subdir: str = '', person: dict | None = None) -> dict:
     """権限者向け: 年度ルート直下、または雇用区分サブフォルダのxlsx一覧。"""
-    if not user or not (user['role'] == 'owner' or user.get('manage')):
+    if not user or not (user['role'] == 'owner' or user['manage']):
         return {'error': '共有フォルダ一覧は利用者管理の権限が必要です。'}, 403
     settings = load_local_settings()
     root_s = (settings.get('shareRoot') or '').strip()
