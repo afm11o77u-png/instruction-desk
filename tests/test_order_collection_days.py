@@ -16,6 +16,7 @@ class OrderCollectionDaysTest(unittest.TestCase):
         self.assertIn("($('#request-type-field')||head).before(label)", js)
         css = (ROOT / 'request-web.css').read_text(encoding='utf-8')
         self.assertIn('.context.customer-request .customer-scope-days[hidden]{display:none}', css)
+        self.assertIn('.customer-request-head{flex-direction:row;align-items:center;gap:10px}', css)  # 集配曜日は拠点名の右横
 
 
 if __name__ == '__main__':

@@ -338,7 +338,7 @@ label:has(> #uniform-photo),#photo-preview,#clear-photo{display:none!important}
 .customer-scope-days{margin:2px 0 0;font-size:13px;font-weight:600;color:#2f6b47}
 
 /* 依頼画面：1行目ご依頼先、2行目集配曜日、選択欄のすぐ上に「ご依頼内容の選択」 */
-.context.customer-request .customer-request-head{flex-direction:column;align-items:flex-start;gap:6px}
+.context.customer-request .customer-request-head{flex-direction:row;align-items:center;gap:10px}
 .context.customer-request #customer-scope-name{font-size:18px}
 .context.customer-request .customer-scope-days{margin:0;display:inline-block;padding:3px 12px;border-radius:999px;background:#e3f3e8;border:1px solid #7fb894;color:#1d6a3f;font-size:15px;font-weight:700}
 .context.customer-request .customer-request-label{grid-column:1/-1;margin-top:4px}
