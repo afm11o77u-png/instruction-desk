@@ -183,6 +183,19 @@ $('#org-tree').addEventListener('dragover',e=>{const st=draggedSite&&siteDropTar
 $('#org-tree').addEventListener('dragleave',e=>{const card=e.target.closest('[data-org-drop]');if(card&&!card.contains(e.relatedTarget))card.classList.remove('drop-over')});
 $('#org-tree').addEventListener('drop',e=>{const st=draggedSite&&siteDropTarget(e);if(st){const sites=draggedSites.length?draggedSites:[org.nodes.find(n=>n.id===draggedSite)].filter(Boolean);e.preventDefault();clearDropHighlights();clearSiteDropMarks();if(reorderCheck(sites,st.site)==='')reorderSites(sites,st.site,st.after);draggedSite=null;draggedSites=[];return}const card=e.target.closest('[data-org-drop]'),sites=draggedSites.length?draggedSites:[org.nodes.find(n=>n.id===draggedSite)].filter(Boolean),parent=org.nodes.find(n=>n.id===card?.dataset.orgDrop);e.preventDefault();clearDropHighlights();if(sites.length>1)moveSites(sites,parent);else if(sites[0]&&validDrop(sites[0],parent))moveSite(sites[0],parent);draggedSite=null;draggedSites=[]});
 $('#org-tree').addEventListener('dragend',()=>{draggedSite=null;draggedSites=[];clearDropHighlights();clearSiteDropMarks()});
+// ドラッグ中の自動スクロール（図の枠と画面）。端から80pxに近いほど速く（最大28px/フレーム）。
+(()=>{const EDGE=80,MAX=28;let y=null,x=null,raf=0;
+  const speed=d=>d<EDGE?Math.ceil(MAX*(EDGE-Math.max(d,0))/EDGE):0;
+  function step(){raf=0;if(y===null||!draggedSite)return;const box=document.getElementById('org-tree');let moved=false;
+    if(box){const r=box.getBoundingClientRect();if(x>=r.left&&x<=r.right&&y>=r.top-EDGE&&y<=r.bottom+EDGE){const up=speed(y-r.top),down=speed(r.bottom-y);
+      if(up&&box.scrollTop>0){box.scrollTop-=up;moved=true}else if(down&&box.scrollTop+box.clientHeight<box.scrollHeight){box.scrollTop+=down;moved=true}}}
+    if(!moved){const up=speed(y),down=speed(innerHeight-y);if(up&&scrollY>0)scrollBy(0,-up);else if(down&&scrollY+innerHeight<document.documentElement.scrollHeight)scrollBy(0,down)}
+    raf=requestAnimationFrame(step)}
+  function stop(){y=x=null;if(raf)cancelAnimationFrame(raf);raf=0}
+  document.addEventListener('dragover',e=>{if(!draggedSite)return;y=e.clientY;x=e.clientX;if(!raf)raf=requestAnimationFrame(step)},true);
+  ['drop','dragend'].forEach(t=>document.addEventListener(t,stop,true));
+  document.addEventListener('dragleave',e=>{if(!e.relatedTarget&&(e.clientX<=0||e.clientY<=0||e.clientX>=innerWidth||e.clientY>=innerHeight))stop()},true);
+  window.orgDragAutoScrollStop=stop})();
 
 let userEditor=null,userSaving=false,userDirty=false;
 async function userApi(body){const response=await fetch('/api/customer-accounts',body?{method:'POST',headers:{'Content-Type':'application/json','X-Desk-Request':'1'},body:JSON.stringify(body)}:{cache:'no-store'}),result=await response.json();if(!response.ok)throw Error(result.error||'利用者情報を保存できませんでした。');return result}
@@ -375,4 +388,5 @@ $('#org-page-delete').onclick=()=>{const id=$('#org-request-page').value;if(!adm
 $('#org-account-page').onchange=()=>{$('#org-account-direct-fields').hidden=!!$('#org-account-page').value;mark('account')};
 if(!document.getElementById('collection-days-import-js')){const sc=document.createElement('script');sc.id='collection-days-import-js';sc.src='/collection-days-import.js?v=20261126_collection_import';document.head.appendChild(sc)}
 })();
+
 
