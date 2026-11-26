@@ -66,6 +66,20 @@ class ExcelAssignmentTest(unittest.TestCase):
         again=call('department_assignment_import_preview');self.assertTrue(all(x['assigned'] and not x['selected'] for x in again['rows'] if x['matched']))
         with self.assertRaises(ValueError):call('department_assignment_import',version=plan['version'],organization_version=plan['organization_version'],target_versions=plan['target_versions'],rows=[dict(node_id='site',department_id=by['A']['department_id'])])  # 古い割り当て版は拒否
 
+    def test_assign_matching_store_code_prefix_spaces_and_remembered_pick(self):
+        raw=book([['X-1-01','札幌 製造',0],['X-1-21','別名 製造',0],['Y-2-01','札幌女性 製造',0],['S-1','シティ 札幌店 製造',0],['Q','新店 製造',0]])
+        w.save(self.c,self.path,dict(action='department_assignment_import',customer_id=1,departments_only=True,version=registry.library(self.c,w.read_config(self.c,1))['version'],rows=[dict(name='製造')]),self.owner)
+        call=lambda action,**kw:w.save(self.c,self.path,dict(action=action,customer_id=1,assign_only=True,file=raw,**kw),self.owner)
+        plan=call('department_assignment_import_preview');by={r['code']:r for r in plan['rows']}
+        self.assertEqual(plan['unregistered'],0)
+        self.assertEqual((by['X-1-21']['node_id'],by['X-1-21']['loose']),('site',True))  # 同じ店コードの行から
+        self.assertEqual((by['Y-2-01']['node_id'],by['Y-2-01']['loose']),('site',True))  # 名前の始まりが一致
+        self.assertEqual((by['S-1']['site_name'],by['S-1']['node_id']),('シティ 札幌店','site'))  # 空白2つは最後の語が部署
+        self.assertFalse(by['Q']['matched'])
+        call('department_assignment_import',version=plan['version'],organization_version=plan['organization_version'],target_versions=plan['target_versions'],rows=[dict(node_id='site',department_id=by['Q']['department_id'],site_name='新店',remember=True)])
+        again={r['code']:r for r in call('department_assignment_import_preview')['rows']}
+        self.assertEqual((again['Q']['node_id'],again['Q']['assigned']),('site',True))
+
     def test_contract_joins_customer_code_and_rejects_unknown_sites(self):
         customer=book([['A','札幌店',0],['B','新店',0]])
         contract=book([['A','製造'],['B','精肉'],['B','惣菜']],['顧客コード','部署名'])

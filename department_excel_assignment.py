@@ -95,31 +95,69 @@ def apply_library(c, d, data, base, validate_config, text):
     return dict(added=added,skipped=skipped,assigned=0,targets=0)
 
 
-def _match_site(code, site, nodes, company):
-    """営業所コード → 同じ名前 → 拠点の一括取り込みと同じゆるい一致 → 名前の一部が一致（最長の1件）。"""
+def _alias_key(site):
+    import site_name_key as snk
+    return snk._plain(site)
+
+
+def ensure_aliases(c):
+    c.execute('CREATE TABLE IF NOT EXISTS web_request_site_aliases(customer_id INTEGER NOT NULL,source TEXT NOT NULL,node_id TEXT NOT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(customer_id,source))')
+
+
+def read_aliases(c, cid):
+    ensure_aliases(c)
+    return {r[0]:r[1] for r in c.execute('SELECT source,node_id FROM web_request_site_aliases WHERE customer_id=?',(cid,))}
+
+
+def _match_site(code, site, nodes, company, terms=(), aliases=None):
+    """営業所コード → 前回選んだ店 → 同じ名前 → 拠点の一括取り込みと同じゆるい一致 → 追加の名前を省いて一致 → 名前の一部・始まりが一致（1件のときだけ・要確認）。"""
     import site_name_key as snk
     if code:
         hit=[n for n in nodes if excel.normalized(n.get('office_code')).casefold()==code.casefold()]
         if len(hit)==1:return hit[0],'コード一致',False
         if len(hit)>1:return None,'同じコードの拠点が複数あります',False
     if not site:return None,'顧客名から店を特定できません',False
+    if aliases:
+        node=next((n for n in nodes if n['id']==aliases.get(_alias_key(site))),None)
+        if node:return node,'前回選んだ店',False
     hit=[n for n in nodes if excel.normalized(n['name']).casefold()==site.casefold()]
     if len(hit)==1:return hit[0],'拠点名一致',False
     sites=[n for n in nodes if n['kind']=='site']
-    node,how,_=snk.find(site,company,sites,lambda n:company)
+    node,how,similar=snk.find(site,company,sites,lambda n:company)
     if node:return node,how,False
     if how.startswith('同じ名前'):return None,how,False
     key=(snk.site_keys(site,company) or [''])[0]
+    tkeys=[k for k in (snk._plain(t) for t in terms) if k]
+    def bare(k):
+        for t in tkeys:
+            if k.startswith(t) and len(k)>len(t):return k[len(t):]
+        return k
+    if tkeys and key:
+        top=[n for n in sites for k in (snk.site_keys(n['name'],company) or [''])[:1] if k and bare(k)==bare(key)]
+        if len(top)==1:return top[0],'拠点名一致（追加の名前を省略）',False
     if len(key)>=2:
         part=[(len(k),n) for n in sites for k in (snk.site_keys(n['name'],company) or [''])[:1] if len(k)>=2 and (k in key or key in k)]
         if part:
             best=max(p[0] for p in part);top=[n for l,n in part if l==best]
             if len(top)==1:return top[0],'名前の一部が一致（確認してください）',True
             return None,'似た拠点が複数あります',False
+    if len(similar)==1:
+        node=next(n for n in sites if n['name']==similar[0])
+        return node,'名前の始まりが一致（確認してください）',True
     return None,'一致する拠点がありません',False
 
 
-def preview_assign(d, library, org, nodes, assignments, company):
+def _store_code(code):
+    """AI-101-01 → AI-101（同じ店の部署違い）。区切りがなければ空。"""
+    head,sep,_=code.rpartition('-')
+    return head.casefold() if sep and '-' in head else ''
+
+
+def dep_done(current, nid, did):
+    return did in current.get(nid,set())
+
+
+def preview_assign(d, library, org, nodes, assignments, company, terms=(), aliases=None):
     """登録済みの部署だけを、Excelの各店（顧客コード）に割り当てる案。部署は作らない。"""
     plan=excel.preview(d.get('file'),[], 'customer')
     deps={excel.normalized(x['name']).casefold():x for x in library['draft']['departments'] if not x.get('no_department')}
@@ -128,16 +166,27 @@ def preview_assign(d, library, org, nodes, assignments, company):
     for r in plan['records']:
         code,customer,name=r['code'],r['customer'],r['name']
         if not name:blank+=1;continue
-        dep=deps.get(name.casefold())
+        dep=deps.get(name.casefold());site=r['site_name']
+        head,_,last=customer.rpartition(' ')
+        if not dep and ' ' in name and deps.get(last.casefold()):dep,site=deps[last.casefold()],head  # 「シティ あばしり店 管理」は最後の語を部署にする
         if not dep:skipped+=1;continue
         key=(code.casefold(),dep['id'])
         if key in rows:rows[key]['count']+=1;continue
-        site=customer.split(' ',1)[0]
-        node,how,loose=_match_site(code,site,nodes,company)
+        node,how,loose=_match_site(code,site,nodes,company,terms,aliases)
         done=bool(node and dep['id'] in current.get(node['id'],set()))
         rows[key]=dict(code=code,customer=customer,site_name=site,department_id=dep['id'],name=dep['name'],count=1,
                        node_id=node['id'] if node else '',matched=bool(node),loose=loose,assigned=done,
                        selected=bool(node) and not done,note='割当済み' if done else how)
+    # 同じ店コード（AI-101-01 と AI-101-21 など）で、名前から1つの店に決まった行があれば、未一致の行もその店にする（要確認）。
+    by_store={}
+    for r in rows.values():
+        sc=_store_code(r['code'])
+        if sc and r['matched'] and not r['loose']:by_store.setdefault(sc,set()).add(r['node_id'])
+    for r in rows.values():
+        cand=by_store.get(_store_code(r['code']),set())
+        if not r['matched'] and len(cand)==1:
+            nid=next(iter(cand));done=dep_done(current,nid,r['department_id'])
+            r.update(node_id=nid,matched=True,loose=True,assigned=done,selected=not done,note='割当済み' if done else '同じ店コードの行から（確認してください）')
     order=lambda r:(0 if not r['matched'] else 1 if r['loose'] else 3 if r['assigned'] else 2)
     out=sorted(rows.values(),key=lambda r:(order(r),r['site_name'],r['code'],r['name']))
     return dict(rows=out,version=library['version'],organization_version=org['version'],
@@ -161,6 +210,10 @@ def apply_assign(c, d, data, base):
             node=next((n for n in org['nodes'] if n['id']==nid and n['customer_id']==cid),None)
             if not node or nid not in data['allowedNodeIds'] or not orgs.personnel_enabled(org,node):raise PermissionError('割り当て可能な登録先を選んでください。')
             links.setdefault(nid,set()).add(did)
+        remember=[]
+        for row in rows:
+            src=row.get('site_name')
+            if row.get('remember') and isinstance(src,str) and 0<len(src)<=120 and _alias_key(src):remember.append((_alias_key(src),row['node_id']))
         versions=d.get('target_versions')
         if not isinstance(versions,dict):raise ValueError('割り当て情報を読み直してください。')
         assigned=0
@@ -169,6 +222,9 @@ def apply_assign(c, d, data, base):
             if versions.get(nid,0)!=current['version']:raise ValueError('割り当てが更新されています。Excelを選び直してください。')
             have=current['department_ids'];new=[x['id'] for x in lib['draft']['departments'] if x['id'] in chosen_ids and x['id'] not in have];assigned+=len(new)
             if new:c.execute('INSERT INTO web_request_department_targets VALUES(?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET version=excluded.version,department_ids=excluded.department_ids',(nid,cid,current['version']+1,json.dumps(have+new)))
+        if remember:
+            ensure_aliases(c)
+            for src,nid in remember:c.execute('INSERT INTO web_request_site_aliases(customer_id,source,node_id) VALUES(?,?,?) ON CONFLICT(customer_id,source) DO UPDATE SET node_id=excluded.node_id,updated_at=CURRENT_TIMESTAMP',(cid,src,nid))
         c.commit()
     except Exception:c.rollback();raise
-    return dict(added=0,assigned=assigned,targets=len(links))
+    return dict(added=0,assigned=assigned,targets=len(links),remembered=len(dict(remember)))
