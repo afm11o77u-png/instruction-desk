@@ -53,6 +53,8 @@ function showSources(){if(!current)return;flushInputs();viewingSources=true;$('#
 function hideSources(){viewingSources=false;viewingSheets=false;if($('#sourcescreen'))$('#sourcescreen').hidden=true;closeSheetsQuiet();if($('#editor'))$('#editor').hidden=false;paintLanes();paintGather();preview();pinCounts()}
 const scanForm=$('#pickbarcodeform');
 const scanStock=$('#pickbarcodestock');
+// 読み取る明細の在庫場所は石狩倉庫を初期値にする（変更は可能。空のときは追加しない確認はそのまま）。
+if(scanStock&&!scanStock.value)scanStock.value='warehouse';
 const scanInput=$('#pickbarcode');
 const scanExport=$('#pickbarcodexlsx');
 const scanStatus=$('#pickbarcodestatus');
@@ -284,6 +286,7 @@ run(async()=>{const me=await api('/api/me');user=me.user;const role=user?.role;c
  desk.append($('#metaedit'),$('#listview'));
  desk.hidden=false;
  preview();
- scanStock.focus();
+ if(!scanStock.value)scanStock.value='warehouse';
+ scanInput.focus();
  return;
 }await loadBoard();if(popupMode){const id=Number(pageQuery.get('list'));if(!id){parent.postMessage({type:'picking-back'},location.origin);return}await open(await api('/api/picking/'+id));message('保存したピッキングリストです。うしろの新規作成の入力とは別です。送信前なら、ここで修正して保存できます。');return}if(boardMode){await openFromBoard();return}await openBlank()});
