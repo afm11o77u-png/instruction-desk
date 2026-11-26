@@ -80,6 +80,21 @@ class ExcelAssignmentTest(unittest.TestCase):
         again={r['code']:r for r in call('department_assignment_import_preview')['rows']}
         self.assertEqual((again['Q']['node_id'],again['Q']['assigned']),('site',True))
 
+    def test_contract_assign_uses_active_rows_master_fallback_and_remembers_code(self):
+        master=book([['X-1-01','札幌 製造',0],['X-2-01','札幌',0]])
+        contract=book([['X-1-01','2021.11','0','0'],['X-1-01','製造','1','0'],['X-2-01','製造','0','0'],['X-2-01','製造','2','0'],['X-2-01','製造','0','1'],['C-1','製造','0','0'],['X-2-01','女性','0','0']],['顧客コード','部署名','退社フラグ','削除フラグ'])
+        w.save(self.c,self.path,dict(action='department_assignment_import',customer_id=1,departments_only=True,version=registry.library(self.c,w.read_config(self.c,1))['version'],rows=[dict(name='製造')]),self.owner)
+        names=lambda:[d['name'] for d in registry.library(self.c,w.read_config(self.c,1))['draft']['departments']]
+        call=lambda action,**kw:w.save(self.c,self.path,dict(action=action,customer_id=1,assign_only=True,source='contract',file=contract,customer_file=master,**kw),self.owner)
+        plan=call('department_assignment_import_preview');by={r['code']:r for r in plan['rows']}
+        self.assertEqual((plan['deleted'],plan['retired'],plan['reasons']),(1,2,[['部署名「女性」',1]]))
+        self.assertEqual((by['X-1-01']['name'],by['X-1-01']['node_id'],by['X-2-01']['count']),('製造','site',1))  # 日付は顧客名の部署で補う
+        self.assertFalse(by['C-1']['matched'])  # 顧客マスタにないコード
+        before=names()
+        call('department_assignment_import',version=plan['version'],organization_version=plan['organization_version'],target_versions=plan['target_versions'],rows=[dict(node_id='site',department_id=by['C-1']['department_id'],code='C-1',site_name='',remember=True)])
+        again={r['code']:r for r in call('department_assignment_import_preview')['rows']}
+        self.assertEqual((again['C-1']['node_id'],again['C-1']['assigned']),('site',True));self.assertEqual(names(),before)
+
     def test_contract_joins_customer_code_and_rejects_unknown_sites(self):
         customer=book([['A','札幌店',0],['B','新店',0]])
         contract=book([['A','製造'],['B','精肉'],['B','惣菜']],['顧客コード','部署名'])
