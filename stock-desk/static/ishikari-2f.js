@@ -26,9 +26,31 @@ function renderMap(){
     const d=el('div',{class:'cell'+(b.vertical?' vertical':'')+(editing&&selected===b.id?' selected':''),'data-id':b.id},el('span',{text:b.text}));
     d.style.cssText=cellStyle(b);
     if(editing&&selected===b.id)d.append(el('i',{class:'resize','aria-hidden':'true'}));
+    d.title=b.text;
     return d;
   }));
+  fitAll();
 }
+// 文字が枠に入りきらないときは折り返し、それでも入らなければ文字を小さくして全体を見せる（表示だけ。保存する大きさは変えない）。
+const MIN_FIT=6;
+function fitCell(d){
+  const span=d.querySelector('span'),b=block(d.dataset.id);if(!span||!b)return;
+  const max=Number(b.size)||12,w=d.clientWidth-4,h=d.clientHeight-4;if(w<=0||h<=0)return;
+  span.style.fontSize='';span.style.width='';span.style.whiteSpace='';
+  const vertical=d.classList.contains('vertical');
+  // 縦書きは回転前の幅＝枠の高さ、回転前の高さ＝枠の幅
+  const room=vertical?[h,w]:[w,h];
+  if(vertical&&span.offsetWidth>room[0]){span.style.width=room[0]+'px';span.style.whiteSpace='pre-line'}
+  const fits=()=>(vertical?span.offsetWidth:span.scrollWidth)<=room[0]+0.5&&span.offsetHeight<=room[1]+0.5;
+  if(fits())return;
+  let lo=MIN_FIT,hi=max;
+  for(let i=0;i<8;i++){const mid=(lo+hi)/2;span.style.fontSize=mid+'px';if(fits())lo=mid;else hi=mid}
+  span.style.fontSize=Math.floor(lo*10)/10+'px';
+}
+function fitAll(){for(const d of map.children)fitCell(d)}
+if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{if(data)fitAll()});
+// 非表示で読み込まれたときや画面の大きさが変わったときも合わせ直す
+let fitQueued=false;if(window.ResizeObserver)new ResizeObserver(()=>{if(fitQueued||!data)return;fitQueued=true;requestAnimationFrame(()=>{fitQueued=false;fitAll()})}).observe(map.parentElement);
 function block(id){return data.blocks.find(b=>b.id===id)}
 function starts(sizes){const out=[12];for(const s of sizes)out.push(out[out.length-1]+s);return out}
 function trackAt(st,x){for(let i=0;i<st.length-1;i++)if(x<st[i+1])return i+1;return st.length-1}
@@ -60,7 +82,7 @@ map.addEventListener('pointermove',e=>{
   }
   drag.target.style.gridArea=`${b.r}/${b.c}/span ${b.rs}/span ${b.cs}`;
 });
-function endDrag(){if(!drag)return;const d=drag;drag=null;if(d.moved&&(d.b.r!==d.orig.r||d.b.c!==d.orig.c||d.b.rs!==d.orig.rs||d.b.cs!==d.orig.cs)){markDirty();renderEditor()}}
+function endDrag(){if(!drag)return;const d=drag;drag=null;if(d.moved)fitCell(d.target);if(d.moved&&(d.b.r!==d.orig.r||d.b.c!==d.orig.c||d.b.rs!==d.orig.rs||d.b.cs!==d.orig.cs)){markDirty();renderEditor()}}
 map.addEventListener('pointerup',endDrag);map.addEventListener('pointercancel',endDrag);
 document.addEventListener('keydown',e=>{
   if(!editing||!selected||e.target.closest('input,textarea,select,button'))return;

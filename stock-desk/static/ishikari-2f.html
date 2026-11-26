@@ -14,8 +14,8 @@ a{color:#185b3b}header a{padding:7px 12px;border:1px solid #b9d1c3;border-radius
 .map-scroll,.table-scroll{overflow:auto;background:#fff;border:1px solid #c7d9cd;border-radius:8px}
 .map{display:grid;width:max-content;padding:12px}
 .cell{display:flex;align-items:center;justify-content:center;text-align:center;min-width:0;min-height:0;overflow:hidden;padding:2px;line-height:1.18}
-.cell span{overflow-wrap:anywhere;white-space:pre-line}
-.cell.vertical{position:relative}.cell.vertical span{position:absolute;width:max-content;transform:rotate(-90deg);white-space:nowrap}
+.cell span{overflow-wrap:anywhere;white-space:pre-line;max-width:100%}
+.cell.vertical{position:relative}.cell.vertical span{position:absolute;width:max-content;max-width:none;transform:rotate(-90deg);white-space:nowrap}
 .controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
 input{font:inherit;padding:6px 8px;border:1px solid #a7c1b1;border-radius:5px}
 table{border-collapse:collapse;width:100%;min-width:660px}
@@ -55,6 +55,6 @@ table.linked{min-width:0;width:auto}table.linked input{width:150px}
 <div class="table-scroll" tabindex="0"><table><thead><tr><th>名称</th><th>棚番号</th><th>名称別の枝番号</th><th>棚全体の枝番号</th><th>ラック</th><th>確認事項</th><th id="items-head-op" hidden>操作</th></tr></thead><tbody id="items"></tbody></table></div>
 <button type="button" id="item-add" hidden>＋ 行を追加</button></section>
 <div id="editbar" hidden><span id="edit-status" role="status"></span><label><input type="checkbox" id="link-names" checked> 名称の変更を図と一覧で連動する</label><button type="button" id="edit-cancel">取消（保存済みに戻す）</button><button type="button" id="edit-save" class="primary">保存</button></div>
-<script src="ishikari-2f.js?v=20261126_edit"></script>
+<script src="ishikari-2f.js?v=20261126_fit"></script>
 </body>
 </html>
