@@ -12,6 +12,7 @@ if(typeof module!=='undefined')module.exports={cellStyle,nameKey};
 if(typeof document!=='undefined')(function(){
 const $=s=>document.querySelector(s);
 const map=$('#map'),tbody=$('#items'),search=$('#search'),count=$('#count'),editBtn=$('#edit-toggle'),editor=$('#block-editor'),bar=$('#editbar'),status=$('#edit-status'),loadNote=$('#load-note');
+const mapScroll=map.closest('.map-scroll')||map.parentElement;
 let saved=null,data=null,version=0,canEdit=false,editing=false,dirty=false,selected=null,busy=false;
 const clone=v=>JSON.parse(JSON.stringify(v));
 const newId=p=>p+(crypto.randomUUID?crypto.randomUUID().slice(0,8):Date.now().toString(36)+Math.random().toString(36).slice(2,6));
@@ -51,7 +52,7 @@ function fitCell(d){
 function fitAll(){for(const d of map.children)fitCell(d)}
 if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>{if(data)fitAll()});
 // 非表示で読み込まれたときや画面の大きさが変わったときも合わせ直す
-let fitQueued=false;if(window.ResizeObserver)new ResizeObserver(()=>{if(fitQueued||!data)return;fitQueued=true;requestAnimationFrame(()=>{fitQueued=false;fitAll()})}).observe(map.parentElement);
+let fitQueued=false;if(window.ResizeObserver)new ResizeObserver(()=>{if(fitQueued||!data)return;fitQueued=true;requestAnimationFrame(()=>{fitQueued=false;fitAll()})}).observe(mapScroll);
 function block(id){return data.blocks.find(b=>b.id===id)}
 function starts(sizes){const out=[12];for(const s of sizes)out.push(out[out.length-1]+s);return out}
 function trackAt(st,x){for(let i=0;i<st.length-1;i++)if(x<st[i+1])return i+1;return st.length-1}
@@ -63,7 +64,7 @@ map.addEventListener('pointerdown',e=>{
   if(!cell){selected=null;renderMap();renderEditor();return}
   const b=block(cell.dataset.id);if(!b)return;
   e.preventDefault();
-  map.parentElement.focus({preventScroll:true}); // 矢印キー・Deleteを図で受ける
+  mapScroll.focus({preventScroll:true}); // 矢印キー・Deleteを図で受ける
   if(selected!==b.id){selected=b.id;renderMap();renderEditor()}
   const target=map.querySelector(`[data-id="${CSS.escape(b.id)}"]`);
   drag={b,mode:e.target.classList.contains('resize')?'resize':'move',x:e.clientX,y:e.clientY,orig:{r:b.r,c:b.c,rs:b.rs,cs:b.cs},moved:false,target};
@@ -84,13 +85,13 @@ map.addEventListener('pointermove',e=>{
   }
   drag.target.style.gridArea=`${b.r}/${b.c}/span ${b.rs}/span ${b.cs}`;
 });
-function endDrag(){if(!drag)return;const d=drag;drag=null;if(d.moved)fitCell(d.target);if(d.moved&&(d.b.r!==d.orig.r||d.b.c!==d.orig.c||d.b.rs!==d.orig.rs||d.b.cs!==d.orig.cs)){markDirty();renderEditor()}}
+function endDrag(){if(!drag)return;const d=drag;drag=null;if(d.moved)fitCell(d.target);if(d.moved&&(d.b.r!==d.orig.r||d.b.c!==d.orig.c||d.b.rs!==d.orig.rs||d.b.cs!==d.orig.cs)){afterPlace(d.b);markDirty();renderEditor()}}
 map.addEventListener('pointerup',endDrag);map.addEventListener('pointercancel',endDrag);
 document.addEventListener('keydown',e=>{
   if(!editing||!selected||e.target.closest('input,textarea,select,button'))return;
   const b=block(selected);if(!b)return;
   const nc=data.columns.length,nr=data.rows.length,mv={ArrowLeft:[0,-1],ArrowRight:[0,1],ArrowUp:[-1,0],ArrowDown:[1,0]}[e.key];
-  if(mv){e.preventDefault();b.r=Math.min(Math.max(1,b.r+mv[0]),nr-b.rs+1);b.c=Math.min(Math.max(1,b.c+mv[1]),nc-b.cs+1);markDirty();renderMap();renderEditor()}
+  if(mv){e.preventDefault();b.r=Math.min(Math.max(1,b.r+mv[0]),nr-b.rs+1);b.c=Math.min(Math.max(1,b.c+mv[1]),nc-b.cs+1);afterPlace(b);markDirty();renderMap();renderEditor()}
   else if(e.key==='Delete'){e.preventDefault();removeBlock()}
 });
 // ---- ブロックの編集欄（配置図の下） ----
@@ -101,11 +102,11 @@ function renderEditor(){
   if(!editing)return;
   const b=selected&&block(selected),box=$('#block-fields');
   $('#block-delete').disabled=$('#block-copy').disabled=!b;
-  if(!b){box.replaceChildren(el('p',{class:'hint',text:'図のブロックをクリックすると、ここで名称・棚番号・枝番号などを直せます。ドラッグで移動、右下の角をドラッグで大きさを変えられます（矢印キーで1マス移動、Deleteで削除）。'}));return}
+  if(!b){box.replaceChildren(...(linkNote?[el('p',{class:'hint link-note',text:linkNote})]:[]),el('p',{class:'hint',text:'図のブロックをクリックすると、ここで名称・棚番号・枝番号などを直せます。ドラッグで移動、右下の角をドラッグで大きさを変えられます（矢印キーで1マス移動、Deleteで削除）。'}));return}
   const nc=data.columns.length,nr=data.rows.length;
   const text=el('textarea',{rows:'2',maxlength:'200'});text.value=b.text;
   text.onchange=()=>{const old=b.text;b.text=text.value;if($('#link-names').checked&&nameKey(old))for(const it of data.items)if(nameKey(it.name)===nameKey(old))it.name=b.text.replace(/\s*\n\s*/g,'');markDirty();renderMap();renderItems();renderEditor()};
-  const num=(key,label,max)=>{const i=el('input',{type:'number',min:'1',max:String(max),step:'1'});i.value=b[key];i.onchange=()=>{const v=Math.round(Number(i.value));const lim={r:nr-b.rs+1,c:nc-b.cs+1,rs:nr-b.r+1,cs:nc-b.c+1}[key];if(!(v>=1&&v<=lim)){i.value=b[key];return}b[key]=v;markDirty();renderMap();renderEditor()};return field(label,i)};
+  const num=(key,label,max)=>{const i=el('input',{type:'number',min:'1',max:String(max),step:'1'});i.value=b[key];i.onchange=()=>{const v=Math.round(Number(i.value));const lim={r:nr-b.rs+1,c:nc-b.cs+1,rs:nr-b.r+1,cs:nc-b.c+1}[key];if(!(v>=1&&v<=lim)){i.value=b[key];return}b[key]=v;afterPlace(b);markDirty();renderMap();renderEditor()};return field(label,i)};
   const size=el('input',{type:'number',min:'6',max:'40',step:'0.1'});size.value=b.size;size.onchange=()=>{const v=Number(size.value);if(!(v>=6&&v<=40)){size.value=b.size;return}b.size=Math.round(v*10)/10;markDirty();renderMap()};
   const color=(key,label)=>{const i=el('input',{type:'color'});i.value=b[key];i.onchange=()=>{b[key]=i.value.toUpperCase();markDirty();renderMap()};return field(label,i)};
   const check=(label,get,set)=>{const i=el('input',{type:'checkbox'});i.checked=get();i.onchange=()=>{set(i.checked);markDirty();renderMap()};return el('label',{class:'check'},i,label)};
@@ -116,7 +117,7 @@ function renderEditor(){
     el('div',{class:'fieldrow'},field('文字',text),num('r','行',nr),num('c','列',nc),num('rs','高さ（マス）',nr),num('cs','幅（マス）',nc),field('文字の大きさ(px)',size),color('bg','背景色'),color('fg','文字色'),
       check('枠線',()=>!!b.border,v=>b.border=v?'trbl':''),check('縦書き',()=>b.vertical,v=>b.vertical=v)),
     ...(overlapWith(b)?[el('p',{class:'hint warn',text:`「${overlapWith(b).text}」と重なっています。重なったままでは保存できません。`})]:[]),
-    el('h3',{text:'棚番号一覧の同じ名称の行'}),linked);
+    el('h3',{text:'棚番号一覧の同じ名称の行'}),linked,...(linkNote?[el('p',{class:'hint link-note',text:linkNote})]:[]));
 }
 function overlapWith(b){return data.blocks.find(o=>o!==b&&o.r<b.r+b.rs&&b.r<o.r+o.rs&&o.c<b.c+b.cs&&b.c<o.c+o.cs)}
 // 希望の位置から近い順に、ほかのブロックと重ならない場所を探す。
@@ -125,12 +126,12 @@ function addBlock(){
   const src=selected&&block(selected),nc=data.columns.length,nr=data.rows.length;
   const b=src?{...clone(src),id:newId('b')}:{id:newId('b'),r:1,c:1,rs:2,cs:4,text:'新しいブロック',size:13.3,bg:'#DCECDF',fg:'#173A30',border:'trbl',vertical:false};
   if(src){b.c=Math.min(src.c+src.cs,nc-b.cs+1);b.r=Math.min(src.r,nr-b.rs+1)}
-  else{const sc=map.parentElement,cs=starts(data.columns),rs=starts(data.rows);b.c=Math.min(trackAt(cs,sc.scrollLeft+sc.clientWidth/2),nc-b.cs+1);b.r=Math.min(trackAt(rs,sc.scrollTop+Math.min(sc.clientHeight,rs[rs.length-1])/2),nr-b.rs+1)}
+  else{const sc=mapScroll,cs=starts(data.columns),rs=starts(data.rows);b.c=Math.min(trackAt(cs,sc.scrollLeft+sc.clientWidth/2),nc-b.cs+1);b.r=Math.min(trackAt(rs,sc.scrollTop+Math.min(sc.clientHeight,rs[rs.length-1])/2),nr-b.rs+1)}
   const free=freeSpot(b);if(free){b.r=free[0];b.c=free[1]}
-  data.blocks.push(b);selected=b.id;markDirty();renderMap();renderEditor();
+  data.blocks.push(b);selected=b.id;linkNote='';addItemForBlock(b);markDirty();renderMap();renderEditor();
   map.querySelector(`[data-id="${CSS.escape(b.id)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
 }
-function removeBlock(){const b=selected&&block(selected);if(!b)return;if(!confirm(`「${b.text||'（文字なし）'}」のブロックを削除しますか？（保存するまで確定しません）`))return;data.blocks=data.blocks.filter(x=>x!==b);if(Array.isArray(data.route))data.route=data.route.filter(id=>id!==b.id);selected=null;markDirty();renderMap();renderEditor();renderRoute()}
+function removeBlock(){const b=selected&&block(selected);if(!b)return;if(!confirm(`「${b.text||'（文字なし）'}」のブロックを削除しますか？（保存するまで確定しません）`))return;const rows=linkOn()&&!isLabel(b.text)&&data.blocks.filter(x=>x!==b&&nameKey(x.text)===nameKey(b.text)&&nameKey(b.text)).length===0?linkedItems(b):[];data.blocks=data.blocks.filter(x=>x!==b);linkNote='';if(rows.length&&confirm(`棚番号一覧の「${blockName(b)}」の行（${rows.length}行）も削除しますか？\n（キャンセルすると一覧の行は残します）`)){data.items=data.items.filter(it=>!rows.includes(it));linkNote=`一覧の「${blockName(b)}」の行（${rows.length}行）も削除しました。`;renderItems()}if(Array.isArray(data.route))data.route=data.route.filter(id=>id!==b.id);selected=null;markDirty();renderMap();renderEditor();renderRoute()}
 $('#block-add').onclick=()=>{selected=null;addBlock()};
 $('#block-copy').onclick=addBlock;
 $('#block-delete').onclick=removeBlock;
@@ -195,6 +196,58 @@ function undoRoute(){if(!routeUndo.length)return;data.route=routeUndo.pop();rout
 $('#route-undo').onclick=undoRoute;
 document.addEventListener('keydown',e=>{if(!editing||!routeMode||!(e.ctrlKey||e.metaKey)||e.shiftKey||e.key.toLowerCase()!=='z'||e.target.closest('input,textarea,select,[contenteditable]'))return;e.preventDefault();undoRoute()});
 $('#route-clear').onclick=()=>{if(!confirm('ルートを全部消しますか？（保存するまで確定しません）'))return;setRoute([],'ルートを全部消しました。')};
+// ---- 図と一覧の連動（「図と一覧を連動する」がオンのとき）：棚番号は図の段ラベル【N】から読む ----
+const LABEL_RE=/^[【\[]\s*(\d+)\s*[】\]]$/;
+let linkNote='';
+function linkOn(){return $('#link-names').checked}
+$('#link-names').addEventListener('change',()=>{linkNote='';renderItems();renderEditor()});
+function isLabel(text){return LABEL_RE.test(String(text||'').trim())}
+function shelfLabels(){return data.blocks.filter(b=>isLabel(b.text)).map(b=>({n:String(b.text).trim().match(LABEL_RE)[1],b}))}
+// ブロックと同じ段（行が重なる）で、左側にあるいちばん近い【N】。なければ null（判定できない）
+function inferShelf(b,labels=shelfLabels()){let best=null;for(const {n,b:l} of labels)if(l!==b&&l.r<b.r+b.rs&&b.r<l.r+l.rs&&l.c<b.c&&(!best||l.c>best.c))best={c:l.c,n};return best?best.n:null}
+// 名称の棚番号：同じ名称のブロックすべてが同じ段なら その番号、1つもない・判定できない・段が分かれるなら理由つきで null
+// 同じ名称のブロック。なければ名称を含むブロック（「キタジマDHC」のような相乗りの棚）
+const looseKey=v=>nameKey(String(v??'').replace(/[（(][^（()）]*[）)]/g,''));
+function blocksForName(name){const k=nameKey(name);if(!k)return [];const lk=looseKey(name);let exact=data.blocks.filter(b=>nameKey(b.text)===k);if(!exact.length&&lk)exact=data.blocks.filter(b=>!isLabel(b.text)&&looseKey(b.text)===lk);if(exact.length||k.length<2)return exact;return data.blocks.filter(b=>!isLabel(b.text)&&nameKey(b.text).includes(k))}
+function shelfForName(name){const k=nameKey(name);if(!k)return {shelf:null,why:'名称なし'};const bs=blocksForName(name);if(!bs.length)return {shelf:null,why:'none'};const labels=shelfLabels(),vals=bs.map(b=>inferShelf(b,labels));if(vals.some(v=>v==null))return {shelf:null,why:'unknown'};const set=[...new Set(vals)];return set.length===1?{shelf:set[0],why:''}:{shelf:null,why:'split',vals:set}}
+function blockName(b){return String(b.text||'').replace(/\s*\n\s*/g,'')}
+// 移動・大きさ変更のあと：同じ名称の一覧の行の棚番号を図に合わせる
+function syncShelfFromBlock(b){
+  if(!linkOn()||isLabel(b.text))return;
+  const rows=data.items.filter(it=>blocksForName(it.name).includes(b));if(!rows.length)return;
+  const name=blockName(b),notes=[];let touched=false;
+  for(const key of [...new Set(rows.map(it=>nameKey(it.name)))]){
+    const group=rows.filter(it=>nameKey(it.name)===key),label=group[0].name,s=shelfForName(label);
+    if(s.shelf==null){notes.push(s.why==='split'?`「${label}」は図で段が分かれている（${s.vals.map(v=>'【'+v+'】').join('・')}）ため、一覧の棚番号はそのままです。`:`「${label}」の段（【番号】）を図から判定できないため、一覧の棚番号はそのままです。`);continue}
+    const changed=group.filter(it=>String(it.shelf).trim()!==s.shelf);if(!changed.length)continue;
+    const before=[...new Set(changed.map(it=>it.shelf||'空欄'))].join('・');for(const it of changed)it.shelf=s.shelf;touched=true;
+    notes.push(`「${label}」の棚番号を ${before} → ${s.shelf} に変えました（一覧${changed.length}行）。`);
+  }
+  linkNote=notes.join(' ');if(touched)renderItems();
+}
+function afterPlace(b){syncShelfFromBlock(b)}
+// ブロックを追加したら：同じ名称の行がなければ一覧に行を足す
+function addItemForBlock(b){
+  if(!linkOn()||isLabel(b.text)||!nameKey(b.text)||linkedItems(b).length)return;
+  const s=shelfForName(b.text);
+  data.items.push({id:newId('s'),name:blockName(b),shelf:s.shelf||'',branch:'',all_branch:'',rack:'',note:''});
+  linkNote=`一覧に「${blockName(b)}」の行を追加しました${s.shelf?`（棚番号 ${s.shelf}）`:'（棚番号は図から判定できないため空欄）'}。`;
+  renderItems();
+}
+// 一覧の行と図のずれ（編集モードの操作列に表示）
+function itemMismatch(it){const s=shelfForName(it.name);if(s.why==='none')return {text:'図にありません',add:true};if(s.shelf!=null&&String(it.shelf).trim()!==s.shelf)return {text:`図では【${s.shelf}】`};if(s.why==='split'&&!s.vals.includes(String(it.shelf).trim()))return {text:`図では${s.vals.map(v=>'【'+v+'】').join('・')}`};return null}
+// 一覧の行から図にブロックを作る（棚番号の【N】の右の空きへ）
+function addBlockForItem(it){
+  const lab=shelfLabels().find(x=>x.n===String(it.shelf).trim());
+  const b={id:newId('b'),r:1,c:1,rs:2,cs:3,text:it.name,size:13.3,bg:'#DCECDF',fg:'#173A30',border:'trbl',vertical:false};
+  if(lab){b.r=lab.b.r;b.rs=lab.b.rs;b.c=Math.min(lab.b.c+1,data.columns.length-b.cs+1)}
+  const free=freeSpot(b);if(free){b.r=free[0];b.c=free[1]}
+  data.blocks.push(b);selected=b.id;
+  const s=shelfForName(b.text);
+  linkNote=`図に「${it.name}」のブロックを追加しました${s.shelf?`（図では【${s.shelf}】）`:''}。位置はドラッグで直せます。`;
+  markDirty();renderMap();renderEditor();renderItems();
+  map.querySelector(`[data-id="${CSS.escape(b.id)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
+}
 // ---- 棚番号一覧 ----
 const FIELDS=['name','shelf','branch','all_branch','rack','note'];
 function renderItems(){
@@ -208,10 +261,10 @@ function renderItems(){
     for(const f of FIELDS){
       if(!editing){tr.append(el('td',{text:it[f]}));continue}
       const i=el('input',{type:'text',maxlength:'200','data-field':f,'aria-label':f});i.value=it[f];i.style.width=colEm[f]+'em';i.title=it[f];
-      i.onchange=()=>{const old=it[f];it[f]=i.value.trim();if(f==='name'){if(!it.name){alert('名称は空にできません。行ごと消すときは「削除」を押してください。');it.name=old;i.value=old;return}if($('#link-names').checked&&nameKey(old))for(const b of data.blocks)if(nameKey(b.text)===nameKey(old))b.text=it.name;renderMap();renderEditor()}markDirty();filter()};
+      i.onchange=()=>{const old=it[f];it[f]=i.value.trim();if(f==='name'){if(!it.name){alert('名称は空にできません。行ごと消すときは「削除」を押してください。');it.name=old;i.value=old;return}if($('#link-names').checked&&nameKey(old))for(const b of data.blocks)if(nameKey(b.text)===nameKey(old))b.text=it.name;renderMap();renderEditor()}markDirty();if(f==='name'||f==='shelf')renderItems();else filter()};
       tr.append(el('td',{},i));
     }
-    if(editing)tr.append(el('td',{},el('button',{type:'button',text:'削除',onclick:()=>{if(!confirm(`「${it.name}」の行を削除しますか？（保存するまで確定しません）`))return;data.items=data.items.filter(x=>x!==it);markDirty();renderItems();renderEditor()}})));
+    if(editing){const mm=linkOn()?itemMismatch(it):null;tr.append(el('td',{class:'op'},el('button',{type:'button',text:'削除',onclick:()=>{if(!confirm(`「${it.name}」の行を削除しますか？（保存するまで確定しません）`))return;data.items=data.items.filter(x=>x!==it);markDirty();renderItems();renderEditor()}}),...(mm?[el('span',{class:'mismatch',text:mm.text,title:'図のブロックと一覧が合っていません'}),...(mm.add?[el('button',{type:'button',text:'図に追加',onclick:()=>addBlockForItem(it)})]:[])]:[])))}
     return tr;
   }));
   if(focus)tbody.querySelector(`tr[data-id="${CSS.escape(focus[0]||'')}"] [data-field="${focus[1]}"]`)?.focus();
