@@ -15,6 +15,17 @@ def can_open_stock(user):
     return user['role'] in ('owner', 'warehouse') or bool(user.get('manage')) or bool(user.get('overview'))
 
 
+def stock_shelves_only(user):
+    """現場３は在庫管理のうち「石狩倉庫2F 棚番号」だけを見るだけで入る（ほかの在庫画面・APIは不可）。"""
+    if not user or user['role'] != 'floor3':
+        return False
+    keys = user.keys() if hasattr(user, 'keys') else ()
+    return not any(k in keys and user[k] for k in ('manage', 'overview'))
+
+
+STOCK_SHELVES_ONLY_PATHS = ('/inventory/ishikari-2f.html', '/inventory/ishikari-2f.js', '/inventory/api/ishikari-2f', '/inventory/ishikari-2f.xlsx')
+
+
 def stock_can_write(user):
     """在庫数量・マスタを変更できる人。倉庫担当は含めない。"""
     if not user:
