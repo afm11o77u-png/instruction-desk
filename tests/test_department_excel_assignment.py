@@ -49,6 +49,23 @@ class ExcelAssignmentTest(unittest.TestCase):
         self.assertEqual(call('department_assignment_import',version=again['version'],rows=[dict(name='ｸﾞﾛｻﾘｰ')])['departmentImportResult']['added'],0)
         with self.assertRaises(PermissionError):w.save(self.c,self.path,dict(action='department_assignment_import_preview',customer_id=1,departments_only=True,file=raw),self.other)
 
+    def test_assign_only_uses_registered_departments_and_never_creates(self):
+        raw=book([['A','札幌店 製造',0],['Z','札幌 製造',0],['Q','新店 製造',0],['A','札幌店 精肉',0]])
+        w.save(self.c,self.path,dict(action='department_assignment_import',customer_id=1,departments_only=True,version=registry.library(self.c,w.read_config(self.c,1))['version'],rows=[dict(name='製造')]),self.owner)
+        call=lambda action,**kw:w.save(self.c,self.path,dict(action=action,customer_id=1,assign_only=True,file=raw,**kw),self.owner)
+        plan=call('department_assignment_import_preview')
+        self.assertEqual(plan['unregistered'],1)  # 精肉は未登録なので対象外
+        self.assertEqual((plan['rows'][0]['code'],plan['rows'][0]['matched']),('Q',False))  # 未一致が先頭
+        by={r['code']:r for r in plan['rows']};self.assertEqual((by['A']['note'],by['Z']['note'],by['Z']['node_id']),('コード一致','拠点名一致','site'))
+        names=lambda:[d['name'] for d in registry.library(self.c,w.read_config(self.c,1))['draft']['departments']]
+        before=names()
+        bad=dict(by['A'],department_id='nope')
+        with self.assertRaises(ValueError):call('department_assignment_import',version=plan['version'],organization_version=plan['organization_version'],target_versions=plan['target_versions'],rows=[bad])
+        r=call('department_assignment_import',version=plan['version'],organization_version=plan['organization_version'],target_versions=plan['target_versions'],rows=[dict(node_id='site',department_id=by['A']['department_id'])])['departmentImportResult']
+        self.assertEqual((r['added'],r['assigned']),(0,1));self.assertEqual(names(),before)
+        again=call('department_assignment_import_preview');self.assertTrue(all(x['assigned'] and not x['selected'] for x in again['rows'] if x['matched']))
+        with self.assertRaises(ValueError):call('department_assignment_import',version=plan['version'],organization_version=plan['organization_version'],target_versions=plan['target_versions'],rows=[dict(node_id='site',department_id=by['A']['department_id'])])  # 古い割り当て版は拒否
+
     def test_contract_joins_customer_code_and_rejects_unknown_sites(self):
         customer=book([['A','札幌店',0],['B','新店',0]])
         contract=book([['A','製造'],['B','精肉'],['B','惣菜']],['顧客コード','部署名'])
