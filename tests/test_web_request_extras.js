@@ -8,7 +8,7 @@ assert.strictEqual(X.resolveName('', '', '在庫名'), '在庫名')
 assert.strictEqual(X.resolveName('', ' WEB名 ', '在庫名'), 'WEB名')
 assert.strictEqual(X.resolveName('契約名', 'WEB名', '在庫名'), '契約名')
 assert.strictEqual(X.resolvePhoto('', 5, { photo_version: 2 }), '/api/web-request/product-photo/5?v=2')
-assert.strictEqual(X.resolvePhoto('data:image/jpeg;base64,AA', 5, { photo_version: 2 }), 'data:image/jpeg;base64,AA')
+assert.strictEqual(X.resolvePhoto('data:image/jpeg;base64,AA', 5, { photo_version: 2 }), '/api/web-request/product-photo/5?v=2')  // 契約の写真は使わない
 assert.strictEqual(X.resolvePhoto('', 5, { photo_version: 0 }), '')
 
 // 写真ファイルの事前チェック

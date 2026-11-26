@@ -19,9 +19,9 @@
   function photoUrl(productId, display) {
     return display && display.photo_version ? `/api/web-request/product-photo/${encodeURIComponent(productId)}?v=${encodeURIComponent(display.photo_version)}` : '';
   }
-  /* 契約の写真があればそれを優先し、なければ商品の写真 */
+  /* 写真は商品ごとの共通写真（WEB表示名・写真）だけを使う。契約側の古い写真（u.photo）は使わない（データは残す） */
   function resolvePhoto(contractPhoto, productId, display) {
-    return contractPhoto || photoUrl(productId, display);
+    return photoUrl(productId, display);
   }
   function checkPhotoFile(file) {
     if (!file) return '写真を選んでください。';
