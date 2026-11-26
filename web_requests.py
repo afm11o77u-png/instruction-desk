@@ -292,6 +292,12 @@ def save(c,path,d,user=None):
         cid=number(d.get('customer_id'),'顧客',1,2147483647);data=state(c,path,user)
         if cid not in data['manageCommonCustomerIds']:raise PermissionError('この会社への取り込み権限がありません。')
         base=read_config(c,cid)
+        if d.get('departments_only'):
+            # 顧客Excelから部署だけを取り込む（割り当ては画面で手動）。
+            if d['action']=='department_assignment_import_preview':
+                return importer.preview_library(d,department_registry.library(c,base))
+            result=importer.apply_library(c,d,data,base,validate_config,text)
+            return dict(state(c,path,user),departmentImportResult=result)
         if d['action']=='department_assignment_import_preview':
             org=organizations.read(c)
             nodes=[n for n in org['nodes'] if n['customer_id']==cid and n['id'] in data['allowedNodeIds'] and organizations.personnel_enabled(org,n)]
