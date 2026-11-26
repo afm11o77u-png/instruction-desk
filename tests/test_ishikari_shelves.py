@@ -60,5 +60,13 @@ class IshikariShelvesTest(unittest.TestCase):
         self.assertNotIn('width:100%;min-width:660px', page)
 
 
+
+class IshikariLinkWiringTest(unittest.TestCase):
+    def test_map_list_link_wired(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1] / 'stock-desk/static/ishikari-2f.js').read_text(encoding='utf-8')
+        for needle in ('afterPlace(d.b)', 'addItemForBlock(b)', 'itemMismatch(it)', 'addBlockForItem(it)', "map.closest('.map-scroll')"):
+            self.assertIn(needle, js)
+
 if __name__ == '__main__':
     unittest.main()

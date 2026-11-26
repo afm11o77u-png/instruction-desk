@@ -53,6 +53,8 @@ body.route-input .map .cell{cursor:crosshair}
 #route-editor button{font:inherit;padding:7px 12px;border:1px solid #b9d1c3;border-radius:7px;background:#fff;color:#185b3b;cursor:pointer}
 #route-list{margin:6px 0;padding-left:0;list-style:none;max-height:360px;overflow:auto}#route-list li{display:flex;align-items:center;gap:6px;padding:3px 0;border-bottom:1px solid #e3ece6}
 #route-list li b{min-width:2.4em;text-align:right}#route-list li span{flex:1}#route-list li button{padding:2px 8px}
+#items td.op{white-space:nowrap}#items .mismatch{margin-left:6px;color:#a3261b;font-weight:700;font-size:13px}#items td.op button+span+button{margin-left:4px}
+.link-note{color:#185b3b!important;font-weight:700}
 #edit-status{flex:1;min-width:200px;font-weight:700}
 </style>
 </head>
@@ -66,7 +68,7 @@ body.route-input .map .cell{cursor:crosshair}
 <section id="directory"><h2>棚番号一覧</h2><div class="controls"><label for="search">名称・棚番号で検索</label><input type="search" id="search"><span id="count" role="status"></span></div>
 <div class="table-scroll" tabindex="0"><table><thead><tr><th>名称</th><th>棚番号</th><th>名称別の枝番号</th><th>棚全体の枝番号</th><th>ラック</th><th>確認事項</th><th id="items-head-op" hidden>操作</th></tr></thead><tbody id="items"></tbody></table></div>
 <button type="button" id="item-add" hidden>＋ 行を追加</button></section>
-<div id="editbar" hidden><span id="edit-status" role="status"></span><label><input type="checkbox" id="link-names" checked> 名称の変更を図と一覧で連動する</label><button type="button" id="edit-cancel">取消（保存済みに戻す）</button><button type="button" id="edit-save" class="primary">保存</button></div>
-<script src="ishikari-2f.js?v=20261126_route_hidden"></script>
+<div id="editbar" hidden><span id="edit-status" role="status"></span><label><input type="checkbox" id="link-names" checked> 図と一覧を連動する（名称・棚番号・追加・削除）</label><button type="button" id="edit-cancel">取消（保存済みに戻す）</button><button type="button" id="edit-save" class="primary">保存</button></div>
+<script src="ishikari-2f.js?v=20261126_link"></script>
 </body>
 </html>
