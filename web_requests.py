@@ -300,7 +300,8 @@ def save(c,path,d,user=None):
                 root=next((n for n in org['nodes'] if n['kind']=='company' and n['customer_id']==cid),None)
                 company=root['name'] if root else next((x['name'] for x in data['customers'] if x['id']==cid),'')
                 ids={n['id'] for n in nodes}
-                return importer.preview_assign(d,department_registry.library(c,base),org,nodes,[a for a in data['departmentAssignments'] if a['node_id'] in ids],company)
+                import web_request_site_import_terms as site_terms
+                return importer.preview_assign(d,department_registry.library(c,base),org,nodes,[a for a in data['departmentAssignments'] if a['node_id'] in ids],company,site_terms.get(c,cid),importer.read_aliases(c,cid))
             result=importer.apply_assign(c,d,data,base)
             return dict(state(c,path,user),departmentImportResult=result)
         if d.get('departments_only'):

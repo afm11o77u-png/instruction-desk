@@ -58,8 +58,13 @@ def preview(raw,existing,source="customer"):
         if normalized(cells.get(header.get('削除フラグ',''),'')).casefold() in ('1','true','削除'):
             deleted+=1;continue
         code=normalized(cells.get(header['顧客コード'],''));customer=normalized(cells.get(header.get('顧客名',''),''))
-        direct=header.get('部署名') or header.get('部署');name=normalized(cells.get(direct,'')) if direct else (customer.split(' ',1)[1] if ' ' in customer else '')
-        records.append(dict(row=row,code=code,customer=customer,name=name,site_name=customer.split(' ',1)[0]))
+        direct=header.get('部署名') or header.get('部署');site_name=customer.split(' ',1)[0]
+        if direct:name=normalized(cells.get(direct,''))
+        else:
+            name=customer.split(' ',1)[1] if ' ' in customer else ''
+            head,_,last=customer.rpartition(' ')
+            if head and ' ' in name and last in SITE_DEPARTMENT_SUFFIXES:name,site_name=last,head  # 「シティ あばしり店 管理」→ 店「シティ あばしり店」・部署「管理」
+        records.append(dict(row=row,code=code,customer=customer,name=name,site_name=site_name))
         if not code or (source=="customer" and not customer) or not name or len(name)>80:
             unresolved.append(dict(row=row,code=code,customer=customer,name='',selected=False));continue
         key=name.casefold()
