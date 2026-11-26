@@ -309,3 +309,6 @@ body.desk-common-page header nav .contracts-nav-flow button.active .contracts-na
   .contracts-nav-flow{margin-left:0;padding-left:0;border-left:0;width:100%}
   #contracts-service-links{margin-left:0}
 }
+
+/* 拠点のドラッグ並べ替え：落とす位置（前＝左線、後ろ＝右線） */
+#org-tree .org-diagram-card.drop-before{box-shadow:-5px 0 0 #276a48}#org-tree .org-diagram-card.drop-after{box-shadow:5px 0 0 #276a48}
