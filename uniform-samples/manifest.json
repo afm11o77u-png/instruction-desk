@@ -1,0 +1,172 @@
+{
+ "version": 1,
+ "categories": [
+  "店舗用",
+  "ラッキー用",
+  "工場用",
+  "介護用"
+ ],
+ "items": [
+  {
+   "id": "store_coat_white",
+   "category": "店舗用",
+   "name": "白衣",
+   "color": "白",
+   "file": "store_coat_white.jpg"
+  },
+  {
+   "id": "store_pants_white",
+   "category": "店舗用",
+   "name": "ズボン",
+   "color": "白",
+   "file": "store_pants_white.jpg"
+  },
+  {
+   "id": "store_cap_white",
+   "category": "店舗用",
+   "name": "帽子",
+   "color": "白",
+   "file": "store_cap_white.jpg"
+  },
+  {
+   "id": "store_apron_white",
+   "category": "店舗用",
+   "name": "胸当てエプロン",
+   "color": "白",
+   "file": "store_apron_white.jpg"
+  },
+  {
+   "id": "lucky_casquette_brown",
+   "category": "ラッキー用",
+   "name": "キャスケット",
+   "color": "茶",
+   "file": "lucky_casquette_brown.jpg"
+  },
+  {
+   "id": "lucky_coat_34_white",
+   "category": "ラッキー用",
+   "name": "七分袖白衣",
+   "color": "白",
+   "file": "lucky_coat_34_white.jpg"
+  },
+  {
+   "id": "lucky_coat_long_white",
+   "category": "ラッキー用",
+   "name": "長袖白衣",
+   "color": "白",
+   "file": "lucky_coat_long_white.jpg"
+  },
+  {
+   "id": "lucky_pants_black",
+   "category": "ラッキー用",
+   "name": "黒パンツ",
+   "color": "黒",
+   "file": "lucky_pants_black.jpg"
+  },
+  {
+   "id": "lucky_pants_houndstooth",
+   "category": "ラッキー用",
+   "name": "千鳥パンツ",
+   "color": "千鳥柄（黒白）",
+   "file": "lucky_pants_houndstooth.jpg"
+  },
+  {
+   "id": "lucky_apron_brown",
+   "category": "ラッキー用",
+   "name": "胸当てエプロン",
+   "color": "茶",
+   "file": "lucky_apron_brown.jpg"
+  },
+  {
+   "id": "factory_smock_white",
+   "category": "工場用",
+   "name": "白衣",
+   "color": "白",
+   "file": "factory_smock_white.jpg"
+  },
+  {
+   "id": "factory_smock_blue",
+   "category": "工場用",
+   "name": "白衣",
+   "color": "青",
+   "file": "factory_smock_blue.jpg"
+  },
+  {
+   "id": "factory_smock_green",
+   "category": "工場用",
+   "name": "白衣",
+   "color": "緑",
+   "file": "factory_smock_green.jpg"
+  },
+  {
+   "id": "factory_pants_white",
+   "category": "工場用",
+   "name": "白下（ズボン）",
+   "color": "白",
+   "file": "factory_pants_white.jpg"
+  },
+  {
+   "id": "factory_pants_blue",
+   "category": "工場用",
+   "name": "白下（ズボン）",
+   "color": "青",
+   "file": "factory_pants_blue.jpg"
+  },
+  {
+   "id": "factory_pants_green",
+   "category": "工場用",
+   "name": "白下（ズボン）",
+   "color": "緑",
+   "file": "factory_pants_green.jpg"
+  },
+  {
+   "id": "factory_hood_white",
+   "category": "工場用",
+   "name": "帽子（頭巾）",
+   "color": "白",
+   "file": "factory_hood_white.jpg"
+  },
+  {
+   "id": "factory_hood_blue",
+   "category": "工場用",
+   "name": "帽子（頭巾）",
+   "color": "青",
+   "file": "factory_hood_blue.jpg"
+  },
+  {
+   "id": "factory_hood_green",
+   "category": "工場用",
+   "name": "帽子（頭巾）",
+   "color": "緑",
+   "file": "factory_hood_green.jpg"
+  },
+  {
+   "id": "factory_hood_yellow",
+   "category": "工場用",
+   "name": "帽子（頭巾）",
+   "color": "黄",
+   "file": "factory_hood_yellow.jpg"
+  },
+  {
+   "id": "factory_hood_pink",
+   "category": "工場用",
+   "name": "帽子（頭巾）",
+   "color": "ピンク",
+   "file": "factory_hood_pink.jpg"
+  },
+  {
+   "id": "care_polo_navy",
+   "category": "介護用",
+   "name": "ポロシャツ",
+   "color": "紺",
+   "file": "care_polo_navy.jpg"
+  },
+  {
+   "id": "care_pants_navy",
+   "category": "介護用",
+   "name": "パンツ",
+   "color": "紺",
+   "file": "care_pants_navy.jpg"
+  }
+ ]
+}

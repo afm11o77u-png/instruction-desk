@@ -135,7 +135,7 @@
     list.innerHTML = rows.map((p) => {
       const pd = display[p.id] || {};
       const url = photoUrl(p.id, pd);
-      return `<div class="web-product-row" data-product="${p.id}"><div class="web-product-thumb">${url ? `<img src="${esc(url)}" alt="${esc(p.name)}の写真">` : '<span>写真なし</span>'}</div><div class="web-product-main"><div class="web-product-original"><small>在庫の商品名</small><strong>${esc(p.name)}</strong><span>${esc(p.code || '品番なし')}${p.color ? ' · ' + esc(p.color) : ''}</span></div><label>WEB表示名<input data-display-name="${p.id}" maxlength="120" value="${esc(pd.display_name || '')}" placeholder="${esc(p.name)}"></label><div class="web-product-actions"><button type="button" class="primary" data-save-display="${p.id}">表示名を保存</button><label class="web-product-upload">写真を選ぶ<input type="file" accept="image/jpeg,image/png,image/webp" data-photo="${p.id}" hidden></label>${url ? `<button type="button" data-remove-photo="${p.id}">写真を外す</button>` : ''}</div></div></div>`;
+      return `<div class="web-product-row" data-product="${p.id}"><div class="web-product-thumb">${url ? `<img src="${esc(url)}" alt="${esc(p.name)}の写真">` : '<span>写真なし</span>'}</div><div class="web-product-main"><div class="web-product-original"><small>在庫の商品名</small><strong>${esc(p.name)}</strong><span>${esc(p.code || '品番なし')}${p.color ? ' · ' + esc(p.color) : ''}</span></div><label>WEB表示名<input data-display-name="${p.id}" maxlength="120" value="${esc(pd.display_name || '')}" placeholder="${esc(p.name)}"></label><div class="web-product-actions"><button type="button" class="primary" data-save-display="${p.id}">表示名を保存</button><label class="web-product-upload">写真を選ぶ<input type="file" accept="image/jpeg,image/png,image/webp" data-photo="${p.id}" hidden></label>${url ? `<button type="button" data-remove-photo="${p.id}">写真を外す</button>` : ''}<button type="button" data-sample-photo="${p.id}">見本画像から選ぶ</button></div></div></div>`;
     }).join('') || '<p class="small">該当する商品がありません。</p>';
   }
   async function saveDisplay(pid, body, row) {
@@ -161,10 +161,54 @@
       const pid = Number(b.dataset.saveDisplay);
       const input = document.querySelector(`[data-display-name="${pid}"]`);
       saveDisplay(pid, { display_name: input ? input.value : '' }, b.closest('.web-product-row'));
+    } else if (b.dataset.samplePhoto) {
+      openSamplePicker(Number(b.dataset.samplePhoto), b.closest('.web-product-row'));
     } else if (b.dataset.removePhoto) {
       if (!confirm('この商品の写真を外しますか？')) return;
       saveDisplay(Number(b.dataset.removePhoto), { remove_photo: true }, b.closest('.web-product-row'));
     }
+  }
+  /* 見本画像（uniform-samples/）から選んで、写真のアップロードと同じ保存をする */
+  let sampleManifest = null;
+  async function loadSamples() {
+    if (sampleManifest) return sampleManifest;
+    const r = await fetch('/uniform-samples/manifest.json', { credentials: 'same-origin' });
+    if (!r.ok) throw Error('見本画像の一覧を読み込めませんでした。');
+    sampleManifest = await r.json();
+    return sampleManifest;
+  }
+  async function openSamplePicker(pid, row) {
+    let man;
+    try { man = await loadSamples(); } catch (e) { desk().notify(e.message); return; }
+    let dlg = $('#uniform-sample-dialog');
+    if (!dlg) { dlg = document.createElement('dialog'); dlg.id = 'uniform-sample-dialog'; dlg.className = 'uniform-sample-dialog'; document.body.append(dlg); }
+    let cat = '';
+    const draw = () => {
+      const term = (dlg.querySelector('#uniform-sample-search') || {}).value || '';
+      const t = term.trim().toLowerCase();
+      const items = man.items.filter((x) => (!cat || x.category === cat) && (!t || (x.category + ' ' + x.name + ' ' + x.color).toLowerCase().includes(t)));
+      dlg.querySelector('#uniform-sample-tabs').innerHTML = ['', ...man.categories].map((c) => `<button type="button" data-sample-cat="${esc(c)}" class="${c === cat ? 'primary' : ''}">${esc(c || 'すべて')}</button>`).join('');
+      dlg.querySelector('#uniform-sample-grid').innerHTML = items.map((x) => `<button type="button" class="uniform-sample-item" data-sample-file="${esc(x.file)}" title="${esc(x.category + ' ' + x.name + '（' + x.color + '）')}"><img src="/uniform-samples/${esc(x.file)}" alt="" loading="lazy"><span>${esc(x.name)}</span><small>${esc(x.category)}・${esc(x.color)}</small></button>`).join('') || '<p class="small">該当する見本画像がありません。</p>';
+    };
+    dlg.innerHTML = '<h3>見本画像から選ぶ</h3><p class="small">選んだ画像がこの商品の写真になります（今の写真は置き換わります）。</p><div id="uniform-sample-tabs" class="actions"></div><input id="uniform-sample-search" type="search" placeholder="名前・色で絞り込み（例：白衣、緑）" aria-label="見本画像を絞り込み"><div id="uniform-sample-grid" class="uniform-sample-grid"></div><div class="dialog-actions"><button type="button" id="uniform-sample-close">閉じる</button></div>';
+    dlg.querySelector('#uniform-sample-search').oninput = draw;
+    dlg.querySelector('#uniform-sample-close').onclick = () => dlg.close();
+    dlg.onclick = async (e) => {
+      const c = e.target.closest('[data-sample-cat]');
+      if (c) { cat = c.dataset.sampleCat; draw(); return; }
+      const it = e.target.closest('[data-sample-file]');
+      if (!it || it.disabled) return;
+      it.disabled = true;
+      try {
+        const r = await fetch('/uniform-samples/' + it.dataset.sampleFile, { credentials: 'same-origin' });
+        if (!r.ok) throw Error('見本画像を読み込めませんでした。');
+        const url = await readAsDataUrl(await r.blob());
+        dlg.close();
+        await saveDisplay(pid, { photo: url }, row);
+      } catch (ex) { it.disabled = false; desk().notify(ex.message); }
+    };
+    draw();
+    dlg.showModal();
   }
   async function onProductChange(e) {
     const input = e.target;

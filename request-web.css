@@ -312,3 +312,13 @@ body.desk-common-page header nav .contracts-nav-flow button.active .contracts-na
 
 /* 拠点のドラッグ並べ替え：落とす位置（前＝左線、後ろ＝右線） */
 #org-tree .org-diagram-card.drop-before{box-shadow:-5px 0 0 #276a48}#org-tree .org-diagram-card.drop-after{box-shadow:5px 0 0 #276a48}
+
+/* 制服の見本画像ピッカー */
+.uniform-sample-dialog{width:min(760px,94vw);max-height:86vh;overflow:auto}
+.uniform-sample-dialog #uniform-sample-search{width:100%;margin:6px 0 10px}
+.uniform-sample-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.uniform-sample-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px;border:1px solid #d5ddd8;border-radius:8px;background:#fff;cursor:pointer;text-align:center}
+.uniform-sample-item:hover{border-color:#2f7d4f}
+.uniform-sample-item img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;background:#f2f2f2}
+.uniform-sample-item span{font-size:13px;font-weight:600}
+.uniform-sample-item small{font-size:11px;color:#667}
