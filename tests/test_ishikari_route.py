@@ -55,6 +55,12 @@ class IshikariRouteTest(unittest.TestCase):
         self.assertLess(xml.index('ニチレイ札幌'), xml.index('よつ葉'))
         self.assertLess(xml.index('よつ葉'), xml.index('A社'))
 
+    def test_route_undo_wired(self):
+        html = (ROOT / 'stock-desk/static/ishikari-2f.html').read_text(encoding='utf-8')
+        js = (ROOT / 'stock-desk/static/ishikari-2f.js').read_text(encoding='utf-8')
+        self.assertLess(html.index('id="route-clear"'), html.index('id="route-undo"'))
+        self.assertIn('routeUndo.push(routeIds())', js)
+
     @unittest.skipUnless(shutil.which('node'), 'node がありません')
     def test_js_matches_python(self):
         info = r.info(self.c)
