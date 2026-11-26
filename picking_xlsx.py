@@ -14,7 +14,8 @@ def cell(col,row,value,style=0):
     text=escape(str(value or '')).replace('\n','&#10;')
     return f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{text}</t></is></c>'
 
-def workbook(data):
+def workbook(data,route_rank=None):
+    """route_rank: 顧客名→石狩倉庫2Fのルート順（ishikari_route.ranker）。石狩倉庫の明細だけ通る順に並べ、ルート外は後ろに今の順で。"""
     out=BytesIO()
     with ZipFile(out,'w',ZIP_DEFLATED) as z:
         z.writestr('[Content_Types].xml','<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+''.join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' for i in range(1,4))+'</Types>')
@@ -27,6 +28,9 @@ def workbook(data):
         widths=[14,20,18,12,14,9,11,6,20,8,6,8,6]
         for i,(group,name) in enumerate(GROUPS,1):
             rows=sorted((r for r in data['rows'] if r['stock']==group),key=lambda r:(r['customer'],r['requester'],r['name']))
+            if group=='warehouse' and route_rank:
+                from ishikari_route import route_sorted
+                rows=route_sorted(rows,route_rank)
             sheetrows=f'<row r="1" ht="25" customHeight="1">{cell(0,1,name,2)}</row><row r="2" ht="22" customHeight="1">{cell(0,2,data["number"]+"　"+data["date"]+"　"+data["title"]+f"　{len(rows)}明細",3)}</row>'
             sheetrows+='<row r="3" ht="28" customHeight="1">'+''.join(cell(k,3,v,1) for k,v in enumerate(HEADERS))+'</row>'
             for rn,r in enumerate(rows,4):

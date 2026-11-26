@@ -30,6 +30,7 @@ function renderMap(){
     return d;
   }));
   fitAll();
+  drawRoute();
 }
 // 文字が枠に入りきらないときは折り返し、それでも入らなければ文字を小さくして全体を見せる（表示だけ。保存する大きさは変えない）。
 const MIN_FIT=6;
@@ -58,6 +59,7 @@ let drag=null;
 map.addEventListener('pointerdown',e=>{
   if(!editing||e.button!==0)return;
   const cell=e.target.closest('.cell');
+  if(routeMode){if(cell){e.preventDefault();routeClick(cell)}return}
   if(!cell){selected=null;renderMap();renderEditor();return}
   const b=block(cell.dataset.id);if(!b)return;
   e.preventDefault();
@@ -128,12 +130,65 @@ function addBlock(){
   data.blocks.push(b);selected=b.id;markDirty();renderMap();renderEditor();
   map.querySelector(`[data-id="${CSS.escape(b.id)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
 }
-function removeBlock(){const b=selected&&block(selected);if(!b)return;if(!confirm(`「${b.text||'（文字なし）'}」のブロックを削除しますか？（保存するまで確定しません）`))return;data.blocks=data.blocks.filter(x=>x!==b);selected=null;markDirty();renderMap();renderEditor()}
+function removeBlock(){const b=selected&&block(selected);if(!b)return;if(!confirm(`「${b.text||'（文字なし）'}」のブロックを削除しますか？（保存するまで確定しません）`))return;data.blocks=data.blocks.filter(x=>x!==b);if(Array.isArray(data.route))data.route=data.route.filter(id=>id!==b.id);selected=null;markDirty();renderMap();renderEditor();renderRoute()}
 $('#block-add').onclick=()=>{selected=null;addBlock()};
 $('#block-copy').onclick=addBlock;
 $('#block-delete').onclick=removeBlock;
 // 重なったブロックは保存しない（Excelの結合セルにできないため）。
 function overlap(){const taken=new Map();for(const b of data.blocks)for(let r=b.r;r<b.r+b.rs;r++)for(let c=b.c;c<b.c+b.cs;c++){const k=r*1000+c,o=taken.get(k);if(o&&o!==b)return [o,b];taken.set(k,b)}return null}
+// ---- ルート（通る順。ピッキングリストの石狩倉庫の明細をこの順に並べる） ----
+let routeMode=false,routeNote='';
+const routeShow=$('#route-show');
+try{routeShow.checked=localStorage.getItem('ishikari-route-show')!=='0'}catch{}
+routeShow.onchange=()=>{try{localStorage.setItem('ishikari-route-show',routeShow.checked?'1':'0')}catch{}drawRoute()};
+const SVGNS='http://www.w3.org/2000/svg';
+function svg(tag,attrs){const e=document.createElementNS(SVGNS,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);return e}
+function routeIds(){return (data&&Array.isArray(data.route)?data.route:[]).filter(id=>block(id))}
+function blockText(b){return String(b&&b.text||'').replace(/\s*\n\s*/g,'')||'（文字なし）'}
+function drawRoute(){
+  const layer=$('#route-layer');if(!data||!layer)return;
+  const cs=starts(data.columns),rs=starts(data.rows),W=cs[cs.length-1]+12,H=rs[rs.length-1]+12;
+  layer.setAttribute('width',W);layer.setAttribute('height',H);layer.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const ids=routeIds();
+  if(!ids.length||!(routeShow.checked||routeMode)){layer.replaceChildren();return}
+  const pts=ids.map(id=>{const b=block(id);return [(cs[b.c-1]+cs[b.c-1+b.cs])/2,(rs[b.r-1]+rs[b.r-1+b.rs])/2]});
+  const defs=svg('defs',{}),mk=svg('marker',{id:'route-arrow',viewBox:'0 0 10 10',refX:'9',refY:'5',markerWidth:'6',markerHeight:'6',orient:'auto'});
+  mk.append(svg('path',{d:'M0,0L10,5L0,10z',fill:'#d0342c'}));defs.append(mk);
+  const kids=[defs],R=11;
+  for(let i=0;i<pts.length-1;i++){const [x1,y1]=pts[i],[x2,y2]=pts[i+1],dx=x2-x1,dy=y2-y1,len=Math.hypot(dx,dy);if(len<R*2+4)continue;const ux=dx/len,uy=dy/len;
+    kids.push(svg('line',{x1:x1+ux*R,y1:y1+uy*R,x2:x2-ux*(R+2),y2:y2-uy*(R+2),stroke:'#d0342c','stroke-width':'2.5','stroke-opacity':'.85','marker-end':'url(#route-arrow)'}))}
+  pts.forEach(([x,y],i)=>{const g=svg('g',{class:'route-step'});g.append(svg('circle',{cx:x,cy:y,r:R,fill:'#d0342c',stroke:'#fff','stroke-width':'2'}));
+    const t=svg('text',{x,y:y+0.5,'text-anchor':'middle','dominant-baseline':'central','font-size':i>=99?'9':'11','font-weight':'700',fill:'#fff'});t.textContent=String(i+1);g.append(t);kids.push(g)});
+  layer.replaceChildren(...kids);
+}
+function setRoute(ids,note){data.route=ids;routeNote=note||'';markDirty();renderRoute()}
+function renderRoute(){
+  if(!data)return;
+  const ids=routeIds();
+  $('#route-summary').textContent=ids.length?`ルート ${ids.length}か所（ピッキングリストの石狩倉庫の明細をこの順に並べます）`:(canEdit?'ルートは未入力です。編集モードの「ルート入力」で入力できます。':'ルートは未入力です。');
+  $('#route-editor').hidden=!editing;
+  document.body.classList.toggle('route-input',editing&&routeMode);
+  const btn=$('#route-mode');btn.textContent=routeMode?'ルート入力を終える':'ルート入力を始める';btn.classList.toggle('primary',routeMode);
+  $('#route-clear').disabled=!ids.length;
+  $('#route-msg').textContent=routeNote||(routeMode?'図のブロックを通る順にクリックしてください。クリックした順に①②③…と矢印でつながります。':'「ルート入力を始める」を押してから、図のブロックを通る順にクリックします。順番は下の一覧の↑↓で入れ替え、×で外せます。');
+  const list=$('#route-list');
+  list.replaceChildren(...(editing?ids:[]).map((id,i)=>{
+    const mv=(d)=>{const r=ids.slice();[r[i],r[i+d]]=[r[i+d],r[i]];setRoute(r)};
+    return el('li',{},el('b',{text:`${i+1}.`}),el('span',{text:blockText(block(id))}),
+      el('button',{type:'button',text:'↑',title:'前へ','aria-label':`${i+1}番目を前へ`,onclick:()=>mv(-1),...(i===0?{disabled:''}:{})}),
+      el('button',{type:'button',text:'↓',title:'後ろへ','aria-label':`${i+1}番目を後ろへ`,onclick:()=>mv(1),...(i===ids.length-1?{disabled:''}:{})}),
+      el('button',{type:'button',text:'×',title:'ルートから外す','aria-label':`${i+1}番目をルートから外す`,onclick:()=>setRoute(ids.filter(x=>x!==id),`「${blockText(block(id))}」をルートから外しました。`)}));
+  }));
+  drawRoute();
+}
+function routeClick(cell){
+  const id=cell.dataset.id,ids=routeIds(),at=ids.indexOf(id);
+  if(at>=0){routeNote=`「${blockText(block(id))}」はすでにルートの${at+1}番目です。外すときは下の一覧の×を押してください。`;renderRoute();return}
+  setRoute([...ids,id],`${ids.length+1}番目：「${blockText(block(id))}」`);
+  const list=$('#route-list');list.scrollTop=list.scrollHeight;
+}
+$('#route-mode').onclick=()=>{routeMode=!routeMode;routeNote='';if(routeMode&&selected){selected=null;renderMap();renderEditor()}renderRoute()};
+$('#route-clear').onclick=()=>{if(!confirm('ルートを全部消しますか？（保存するまで確定しません）'))return;setRoute([],'ルートを全部消しました。')};
 // ---- 棚番号一覧 ----
 const FIELDS=['name','shelf','branch','all_branch','rack','note'];
 function renderItems(){
@@ -169,9 +224,9 @@ function filter(){
 search.addEventListener('input',filter);
 $('#item-add').onclick=()=>{const it={id:newId('s'),name:'新しい名称',shelf:'',branch:'',all_branch:'',rack:'',note:''};data.items.push(it);search.value='';markDirty();renderItems();tbody.querySelector(`tr[data-id="${CSS.escape(it.id)}"] input`)?.select()};
 // ---- 編集モード・保存・取消 ----
-function setEditing(on){editing=on;document.body.classList.toggle('editing',on);editBtn.textContent=on?'編集モードを終える':'編集モード';if(!on)selected=null;renderMap();renderItems();renderEditor();paintBar()}
+function setEditing(on){editing=on;document.body.classList.toggle('editing',on);editBtn.textContent=on?'編集モードを終える':'編集モード';if(!on){selected=null;routeMode=false;routeNote=''}renderMap();renderItems();renderEditor();renderRoute();paintBar()}
 editBtn.onclick=()=>{if(editing&&dirty&&!confirm('保存していない変更があります。変更を捨てて編集モードを終えますか？'))return;if(editing&&dirty){data=clone(saved);dirty=false}setEditing(!editing)};
-$('#edit-cancel').onclick=()=>{if(dirty&&!confirm('保存していない変更をすべて取り消して、保存済みの内容に戻しますか？'))return;data=clone(saved);dirty=false;selected=null;renderMap();renderItems();renderEditor();paintBar()};
+$('#edit-cancel').onclick=()=>{if(dirty&&!confirm('保存していない変更をすべて取り消して、保存済みの内容に戻しますか？'))return;data=clone(saved);dirty=false;selected=null;routeNote='';renderMap();renderItems();renderEditor();renderRoute();paintBar()};
 $('#edit-save').onclick=async()=>{
   if(busy||!dirty)return;
   const hit=overlap();if(hit){selected=hit[1].id;renderMap();renderEditor();const m=`配置図の「${hit[0].text}」と「${hit[1].text}」が重なっています。位置か大きさを直してから保存してください。`;status.textContent=m;alert(m);return}
@@ -180,10 +235,10 @@ $('#edit-save').onclick=async()=>{
     const res=await fetch('api/ishikari-2f',{method:'POST',headers:{'Content-Type':'application/json','X-Stock-Request':'1'},body:JSON.stringify({version,data})});
     const body=await res.json().catch(()=>({}));
     if(!res.ok)throw Error(body.error||'保存できませんでした。');
-    apply(body);dirty=false;busy=false;renderMap();renderItems();renderEditor();paintBar();status.textContent=`保存しました（版${version}）。`;
+    apply(body);dirty=false;busy=false;routeNote='';renderMap();renderItems();renderEditor();renderRoute();paintBar();status.textContent=`保存しました（版${version}）。`;
   }catch(err){busy=false;paintBar();status.textContent=err.message;alert(err.message)}
 };
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
-function apply(body){saved=body.data;data=clone(saved);version=body.version;canEdit=!!body.can_edit;editBtn.hidden=!canEdit;loadNote.textContent=body.version?`最終保存：${String(body.updated_at||'').replace('T',' ')}${body.updated_by?' '+body.updated_by:''}（版${body.version}）`:''}
-fetch('api/ishikari-2f',{headers:{'X-Stock-Request':'1'}}).then(async res=>{const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.error||'棚番号を読み込めませんでした。');apply(body);renderMap();renderItems()}).catch(err=>{loadNote.textContent=err.message});
+function apply(body){saved=body.data;if(!Array.isArray(saved.route))saved.route=[];data=clone(saved);version=body.version;canEdit=!!body.can_edit;editBtn.hidden=!canEdit;loadNote.textContent=body.version?`最終保存：${String(body.updated_at||'').replace('T',' ')}${body.updated_by?' '+body.updated_by:''}（版${body.version}）`:''}
+fetch('api/ishikari-2f',{headers:{'X-Stock-Request':'1'}}).then(async res=>{const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.error||'棚番号を読み込めませんでした。');apply(body);renderMap();renderItems();renderRoute()}).catch(err=>{loadNote.textContent=err.message});
 })();

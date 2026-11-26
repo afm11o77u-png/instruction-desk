@@ -100,6 +100,12 @@ def validate(data):
                 other = taken.setdefault((r, col), blk)
                 if other is not blk:
                     raise ValueError(f'配置図の「{other["text"]}」と「{blk["text"]}」が重なっています。位置か大きさを直してから保存してください。')
+    route = data.get('route') or []
+    if not isinstance(route, list) or len(route) > MAX_BLOCKS:
+        raise ValueError('ルートを読めませんでした。')
+    block_ids = ids
+    if any(not isinstance(x, str) or x not in block_ids for x in route) or len(set(route)) != len(route):
+        raise ValueError('ルートに配置図にない棚か、同じ棚が2回入っています。ルートを確認してください。')
     out_items, ids = [], set()
     for i, it in enumerate(items, 1):
         if not isinstance(it, dict):
@@ -114,7 +120,7 @@ def validate(data):
         if not row['name']:
             raise ValueError(f'棚番号一覧の{i}行目の名称を入力してください。')
         out_items.append(row)
-    return dict(columns=columns, rows=rows, blocks=out_blocks, items=out_items)
+    return dict(columns=columns, rows=rows, blocks=out_blocks, items=out_items, route=list(route))
 
 
 def save(c, data, base_version, user_name=''):
