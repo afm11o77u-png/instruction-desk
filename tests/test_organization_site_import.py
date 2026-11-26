@@ -44,6 +44,23 @@ class SiteImportTest(unittest.TestCase):
         self.assertIn("window.orgImportActions?.()", cd)
         self.assertIn("box=document.createElement('dialog');box.id='collection-import'", cd)
 
+    def test_extra_terms_add_candidates_and_are_remembered(self):
+        import web_request_site_import_terms as terms
+        from test_department_excel import book
+        self.save_org()
+        raw = book([['A1', 'ABCD社 札幌東店', 0], ['A2', 'ｼﾃｨ あばしり店', 0], ['A3', '他社 本店', 0]])
+        call = lambda **kw: w.save(self.c, self.path, dict(action='organization_site_import_preview', customer_id=1, file=raw, **kw), self.owner)
+        self.assertEqual([x['name'] for x in call()['candidates']], ['札幌東店'])  # 会社名で始まる行だけ
+        plan = call(extra_terms='シティ、 シティ ラッキーマート')
+        self.assertEqual(sorted(x['name'] for x in plan['candidates']), ['シティ あばしり店', '札幌東店'])
+        self.assertEqual(plan['extra_terms'], ['シティ', 'ラッキーマート'])
+        self.assertEqual(w.save(self.c, self.path, dict(action='organization_site_import_terms', customer_id=1), self.owner)['extra_terms'], ['シティ', 'ラッキーマート'])
+        self.assertEqual(len(call()['candidates']), 2)  # 次回は覚えた名前で探す
+        with self.assertRaises(PermissionError):
+            w.save(self.c, self.path, dict(action='organization_site_import_terms', customer_id=1), self.sales)
+        with self.assertRaises(ValueError):
+            terms.parse('あ' * 41)
+
 
 if __name__ == '__main__':
     unittest.main()

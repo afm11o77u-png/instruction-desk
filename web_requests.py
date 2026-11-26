@@ -273,7 +273,17 @@ def save(c,path,d,user=None):
         if not customer:raise ValueError('登録先の会社を選択してください。')
         o=organizations.read(c);root=next((n for n in o['nodes'] if n['kind']=='company' and n['customer_id']==cid),None)
         sites=[n for n in o['nodes'] if n['kind']=='site' and n['customer_id']==cid] if root else []
-        return department_excel.preview_sites(d.get('file'),root['name'] if root else customer['name'],sites)
+        import web_request_site_import_terms as site_terms
+        terms=site_terms.parse(d['extra_terms']) if 'extra_terms' in d else site_terms.get(c,cid)
+        result=department_excel.preview_sites(d.get('file'),root['name'] if root else customer['name'],sites,terms)
+        if 'extra_terms' in d:site_terms.put(c,cid,terms,user)  # 内容を確認できたときだけ覚える
+        result['extra_terms']=terms
+        return result
+    if d.get('action')=='organization_site_import_terms':
+        import web_request_site_import_terms as site_terms
+        if not user or not organizations.admin(user):raise PermissionError('拠点の一括取り込みは主管理者・管理者が行ってください。')
+        cid=number(d.get('customer_id'),'顧客',1,2147483647)
+        return dict(extra_terms=site_terms.get(c,cid))
     if d.get('action') in ('load_site_details','save_site_details'):
         import web_request_site_details as site_details
         return site_details.handle(c,path,d,user)
