@@ -343,3 +343,22 @@ label:has(> #uniform-photo),#photo-preview,#clear-photo{display:none!important}
 .context.customer-request .customer-scope-days{margin:0;display:inline-block;padding:3px 12px;border-radius:999px;background:#e3f3e8;border:1px solid #7fb894;color:#1d6a3f;font-size:15px;font-weight:700}
 .context.customer-request .customer-request-label{grid-column:1/-1;margin-top:4px}
 .context.customer-request .customer-scope-days[hidden]{display:none}
+
+/* 依頼履歴：店舗切替・状態絞り込み・1件1行の表 */
+.history-toolbar{display:flex;flex-wrap:wrap;align-items:end;gap:8px 16px;margin:0 0 10px}
+.history-toolbar label{display:flex;flex-direction:column;font-size:12px;gap:2px}
+.history-toolbar select{min-width:160px}
+.history-table-wrap{overflow-x:auto;border:1px solid #d5ddd8;border-radius:8px;background:#fff}
+.history-table{width:100%;border-collapse:collapse;font-size:13px;line-height:1.3}
+.history-table th{position:sticky;top:0;background:#eef4f0;text-align:left;font-weight:600;padding:6px 8px;white-space:nowrap;border-bottom:1px solid #cfdcd3}
+.history-table td{padding:5px 8px;border-bottom:1px solid #edf1ee;vertical-align:top;white-space:nowrap}
+.history-table td small{display:block;font-size:11px;color:#667}
+.history-table .num{text-align:right}
+.history-table .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#445}
+.history-row{cursor:pointer}.history-row:hover,.history-row.open{background:#f3f8f4}
+.history-detail td{white-space:normal;background:#fafcfb;padding:6px 16px 10px}
+.history-detail ul{margin:0;padding-left:18px}.history-detail p{margin:4px 0 0}
+.history-badge{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid}
+.history-badge.wait{color:#8a5a00;background:#fff4dc;border-color:#e8c46c}
+.history-badge.ok{color:#1d6a3f;background:#e3f3e8;border-color:#7fb894}
+.history-badge.ng{color:#9a2f1f;background:#fbe9e5;border-color:#d99a8c}
