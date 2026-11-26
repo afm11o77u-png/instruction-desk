@@ -974,6 +974,19 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
         }
         return self.serve_guide_file(*files[path])
 
+    def serve_uniform_sample(self, path):
+        """制服の見本画像（uniform-samples/ の jpg と manifest.json）。WEB依頼を開ける人だけ。"""
+        name=path[len('/uniform-samples/'):]
+        if not re.fullmatch(r'[a-z0-9_]+\.(jpg|json)',name):
+            return self.reply(404,{'error':'見つかりません。'})
+        with closing(connect()) as c:
+            u=self.session_user(c)
+            if not u:return self.reply(401,{'error':'ログインしてください。'})
+            if not web_requests.can_open(u):return self.reply(403,{'error':'WEB依頼を開ける人だけが利用できます。'})
+        f=ROOT/'uniform-samples'/name
+        if not f.is_file():return self.reply(404,{'error':'見つかりません。'})
+        return self.reply(200,f.read_bytes(),'image/jpeg' if name.endswith('.jpg') else 'application/json; charset=utf-8')
+
     def serve_desk_guide(self, path):
         with connect() as c:
             user = self.session_user(c)
@@ -1551,6 +1564,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     return self.reply(401, 'ログインしてからWEB依頼を開いてください。', 'text/plain; charset=utf-8')
                 if not web_requests.can_open(request_user):
                     return self.reply(403, 'WEB依頼は主管理者・管理者・担当者だけが利用できます。', 'text/plain; charset=utf-8')
+        if path.startswith('/uniform-samples/'):
+            return self.serve_uniform_sample(path)
         if path == '/desk-guide' or path.startswith('/desk-guide/'):
             return self.serve_desk_guide(path)
         if path in ('/mark-guide', '/mark-guide/video.mp4', '/mark-guide/demo.mp4',
