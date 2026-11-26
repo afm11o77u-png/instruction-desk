@@ -91,14 +91,16 @@ def _strip_company(name, company):
     return nm
 
 
-def preview_sites(raw, company, sites=()):
-    """会社の拠点候補。sites はその会社に登録済みの拠点（name）。登録済みと同じ拠点は existing、似た拠点は similar に入れる。"""
+def preview_sites(raw, company, sites=(), extra_terms=()):
+    """会社の拠点候補。sites はその会社に登録済みの拠点（name）。登録済みと同じ拠点は existing、似た拠点は similar に入れる。
+    extra_terms：会社名で始まらなくても、顧客名にこの文字を含む行も候補にする（例：北雄ラッキーの「シティ」）。"""
     import site_name_key
     master = preview(raw, [])
     company_key = company_name_key(company)
     if not company_key:
         raise ValueError('会社名を確認してください。')
     sites = [dict(name=n['name'], id=n.get('id')) for n in sites]
+    extra_keys = [k for k in (site_name_key._plain(t) for t in extra_terms) if k]
     candidates = {}
     matched = 0
     for record in master['records']:
@@ -107,7 +109,8 @@ def preview_sites(raw, company, sites=()):
         if suffix not in SITE_DEPARTMENT_SUFFIXES:
             name = customer
         keys = site_name_key.site_keys(name, company)
-        own = site_name_key._plain(customer).startswith(company_key) and site_name_key._plain(name) != company_key
+        plain_customer = site_name_key._plain(customer)
+        own = (plain_customer.startswith(company_key) or any(k in plain_customer for k in extra_keys)) and site_name_key._plain(name) != company_key
         node, how, similar = site_name_key.find(name, company, sites, lambda n: company) if sites and keys else (None, '', [])
         if not own and not node:
             continue  # 他社の行（登録済みの拠点と同じ名前のときだけ表示する）
