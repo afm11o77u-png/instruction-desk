@@ -46,6 +46,13 @@ class EntriesTest(unittest.TestCase):
         self.assertIn("wearerGender:wearerGender()", js); self.assertIn("r.wearerGender||'—'", js); self.assertIn("sex:r.wearerGender||''", cp)
         self.assertIn("u.searchParams.delete('web_request')", cp); self.assertIn('.then(dropParams)', cp); self.assertIn("NO_PROCESSING.has(x.embroidery||'')", cp)  # 再読み込みで再度開かない・加工未整理は備考に出さない
 
+    def test_return_requires_reason(self):
+        r = e.create(self.c, self.path, self.owner, self.req())
+        with self.assertRaises(ValueError): e.set_status(self.c, self.path, self.owner, dict(id=r['id'], status='差し戻し', reason='  '))
+        x = e.set_status(self.c, self.path, self.owner, dict(id=r['id'], status='差し戻し', reason='サイズを確認してください'))
+        self.assertEqual((x['status'], x['returnReason'], x['wearer']), ('差し戻し', 'サイズを確認してください', r['wearer']))
+        self.assertEqual(e.set_status(self.c, self.path, self.owner, dict(id=r['id'], status='受付済み'))['returnReason'], 'サイズを確認してください')
+
     def test_wiring(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8'); js = (ROOT / 'request-web.js').read_text(encoding='utf-8'); cp = (ROOT / 'contract-products.js').read_text(encoding='utf-8')
         self.assertIn("web_request_entries.link(c, payload['webRequestId'], oid, current)", server)
