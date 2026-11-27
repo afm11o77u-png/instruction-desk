@@ -27,6 +27,14 @@ class ShipmentListTest(unittest.TestCase):
         self.assertEqual(c.execute('SELECT COUNT(*) FROM shipments').fetchone()[0], 1)
         self.assertEqual(c.execute('SELECT COUNT(*) FROM shipment_list_history').fetchone()[0], 1)
 
+    def test_import_limit_5000_rows(self):
+        c = sqlite3.connect(':memory:'); c.row_factory = sqlite3.Row; shipping.schema(c)
+        blank = dict(source_id=None, id=None, method='', pack='', mark_pack='', weekday='火・金', time_band='', car='', manager='', sales='', contract_start='', contract_end='')
+        book = lambda n: shipping._workbook([dict(blank, customer=f'顧客{i}') for i in range(n)])
+        self.assertEqual(shipping.import_book(H('/api/shipment-list/import'), c, book(3200))[1]['created'], 3200)
+        status, result = shipping.import_book(H('/api/shipment-list/import'), c, book(5001))
+        self.assertEqual((status, result['error']), (400, '行が多すぎます。5000行までにしてください。'))
+
 
 if __name__ == '__main__':
     unittest.main()

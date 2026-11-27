@@ -434,6 +434,8 @@ def _xlsx_cell(col, row, value):
         letters=chr(65+rem)+letters
     return f'<c r="{letters}{row}" t="inlineStr"><is><t xml:space="preserve">{escape(str(value if value is not None else ""))}</t></is></c>'
 
+IMPORT_MAX_ROWS=5000  # Excel取込の上限行数（出荷情報・出荷情報一覧で共通）
+
 def _parse_book(blob):
     if not isinstance(blob,(bytes,bytearray)) or not blob.startswith(b'PK'):
         raise ValueError('Excelファイル（.xlsx）を選んでください。')
@@ -443,7 +445,7 @@ def _parse_book(blob):
     grid=_sheet_grid(book)
     header_row, columns=_excel_header(grid)
     parsed=[]
-    for row in range(header_row+1, header_row+3001):
+    for row in range(header_row+1, header_row+IMPORT_MAX_ROWS+1):
         values={}
         blank=True
         for col, key in columns.items():
@@ -477,7 +479,7 @@ def _excel_header(grid):
             used.add(key)
             columns[col]=key
         if 'customer' in used:
-            if any(index>row+3000 for index,_col in grid): raise ValueError('行が多すぎます。3000行までにしてください。')
+            if any(index>row+IMPORT_MAX_ROWS for index,_col in grid): raise ValueError(f'行が多すぎます。{IMPORT_MAX_ROWS}行までにしてください。')
             return row, columns
     raise ValueError('1行目に「顧客名」の列が必要です。')
 
@@ -519,7 +521,7 @@ def _sheet_rich(node, phonetic=False):
 def _zip_part(book, name):
     try: info=book.getinfo(name)
     except KeyError: raise ValueError('Excelのシートを読み取れませんでした。')
-    if info.file_size>8_000_000: raise ValueError('このExcelの書式は読み取れませんでした。')
+    if info.file_size>40_000_000: raise ValueError('このExcelの書式は読み取れませんでした。')
     return book.read(name)
 
 def _sheet_cell(cell, strings):
