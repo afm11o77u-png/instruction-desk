@@ -32,6 +32,19 @@ TIMES=[f'{h}:00～{h+1}:00' for h in range(5,17)]
 CARS=['1号車','2号車','3号車','4・8号車','5号車','6号車','7号車','9号車(アドバンス)','10号車','11号車(アドバンス)','12号車']
 PEOPLE=['森末支店長','横内課長','横内次長','山田課長','河口係長','藤浪係長','藤澤代理','田中(本社)','藤本','安藤','田中(発寒支店)','小野寺','大島','大本','菅沼']
 
+LIST_PREFIX='/api/shipment-list'
+_TABLE_WORDS=re.compile(r'\b(shipments|shipment_history)\b')
+
+class _ListStore:
+    """出荷情報一覧（別保存）用。SQLの表名だけ shipment_list / shipment_list_history に置き換える。"""
+    def __init__(self, c): self._c=c
+    def execute(self, sql, *args): return self._c.execute(_TABLE_WORDS.sub(lambda m: 'shipment_list' if m.group(1)=='shipments' else 'shipment_list_history', sql), *args)
+    def __getattr__(self, name): return getattr(self._c, name)
+
+def store(handler, c):
+    """/api/shipment-list… は出荷情報一覧、/api/shipments… は既存の出荷情報。"""
+    return _ListStore(c) if str(getattr(handler,'path','')).startswith(LIST_PREFIX) else c
+
 def schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS shipments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,6 +75,12 @@ def schema(c):
         actor TEXT NOT NULL,
         changes TEXT NOT NULL
     )''')
+
+    _schema_list(c)
+
+def _schema_list(c):
+    for sql in (r[0] for r in c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('shipments','shipment_history') ORDER BY name").fetchall()):
+        c.execute(_TABLE_WORDS.sub(lambda m: 'shipment_list' if m.group(1)=='shipments' else 'shipment_list_history', sql.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
 
 def _actor(user):
     return f"{user['name']} ({user['login']})"
@@ -118,6 +137,7 @@ def _fields(d):
     }
 
 def search(handler, c):
+    c=store(handler, c)
     from urllib.parse import parse_qs, urlparse
     blocked=_require_view(handler.user)
     if blocked: return blocked
@@ -134,12 +154,14 @@ def search(handler, c):
     return 200, {'total':total,'offset':offset,'limit':PAGE,'items':[_row_public(r) for r in rows]}
 
 def customers(handler, c):
+    c=store(handler, c)
     blocked=_require_view(handler.user)
     if blocked: return blocked
     names=[r['customer'] for r in c.execute("SELECT DISTINCT customer FROM shipments WHERE customer<>'' ORDER BY customer")]
     return 200, {'customers':names,'methods':METHODS,'packs':PACKS,'weekdays':WEEKDAYS,'times':TIMES,'cars':CARS,'people':PEOPLE}
 
 def create(handler, c, d):
+    c=store(handler, c)
     blocked=_require_edit(handler.user)
     if blocked: return blocked
     fields=_fields(d)
@@ -153,6 +175,7 @@ def create(handler, c, d):
     return 200, _row_public(c.execute('SELECT * FROM shipments WHERE id=?',(sid,)).fetchone())
 
 def update(handler, c, d):
+    c=store(handler, c)
     blocked=_require_edit(handler.user)
     if blocked: return blocked
     if type(d.get('id')) is not int or type(d.get('version')) is not int: return 400, {'error':'出荷情報を選択してください。'}
@@ -287,8 +310,11 @@ EXCEL_ALIASES={
 }
 EXCEL_FIELDS=['customer','method','pack','markPack','weekday','timeBand','car','manager','sales','contractStart','contractEnd']
 
+LIST_NUMBER_BASE=900000  # 出荷情報一覧の登録番号は900001から（既存の出荷情報のExcelと番号が重ならず、取り違えた取込は「見つかりません」で止まる）
+
 def _next_source(c):
     current=c.execute('SELECT MAX(source_id) FROM shipments').fetchone()[0] or 0
+    if isinstance(c, _ListStore): current=max(int(current), LIST_NUMBER_BASE)
     return int(current)+1
 
 def _number(row):
@@ -312,12 +338,14 @@ def _excel_day(value):
     return text
 
 def export_book(handler, c):
+    c=store(handler, c)
     blocked=_require_view(handler.user)
     if blocked: return blocked
     rows=c.execute('SELECT * FROM shipments ORDER BY customer, id').fetchall()
     return 200, _workbook(rows), XLSX
 
 def import_book(handler, c, blob):
+    c=store(handler, c)
     blocked=_require_edit(handler.user)
     if blocked: return blocked
     try: parsed=_parse_book(blob)
