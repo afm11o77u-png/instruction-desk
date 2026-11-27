@@ -7,6 +7,7 @@ links から orders を引けば作業状況を出せるようにしてある。
 import json
 from datetime import datetime
 
+GENDERS = ('', '男性', '女性')  # 着用者の性別：新規は必須、それ以外は任意（以前の依頼は空欄）
 STATUSES = ('受付待ち', '受付済み', '差し戻し')
 ITEM_KEYS = ('id', 'name', 'stock_name', 'code', 'color', 'size', 'qty', 'customer_product_id', 'product_id', 'embroidery',
              'default_qty', 'hem_processing', 'processing_days', 'hem_length', 'manual', 'note', 'maker', 'processing')
@@ -85,13 +86,16 @@ def create(c, path, user, d):
             if isinstance(v, str): y[k] = v[:300]
         if not _text(y.get('name')): raise ValueError('制服名を確認してください。')
         clean.append(y)
+    gender = d.get('wearerGender') or ''
+    if gender not in GENDERS: raise ValueError('着用者の性別を確認してください。')
+    if _text(d.get('requestType'), 40) == '新規' and not gender: raise ValueError('新規のご依頼は、着用者の性別を選んでください。')
     now = datetime.now()
     seq = c.execute("SELECT COUNT(*) FROM web_request_entries WHERE id LIKE ?", ('WR-' + now.strftime('%Y%m%d') + '-%',)).fetchone()[0] + 1
     rid = 'WR-%s-%03d' % (now.strftime('%Y%m%d'), seq)
     while c.execute('SELECT 1 FROM web_request_entries WHERE id=?', (rid,)).fetchone():
         seq += 1; rid = 'WR-%s-%03d' % (now.strftime('%Y%m%d'), seq)
     payload = dict(department=_text(d.get('department')), departmentId=_text(d.get('departmentId'), 80), contract=_text(d.get('contract')),
-                   requestType=_text(d.get('requestType'), 40), wearer=_text(d.get('wearer'), 100), delivery=_text(d.get('delivery'), 10),
+                   requestType=_text(d.get('requestType'), 40), wearer=_text(d.get('wearer'), 100), wearerGender=gender, delivery=_text(d.get('delivery'), 10),
                    notes=_text(d.get('notes'), 1000), organizationPath=_text(d.get('organizationPath'), 300), requesterName=_text(d.get('requesterName'), 100),
                    requesterAccountId=account, requestPageId=page, items=clean)
     c.execute('INSERT INTO web_request_entries(id,customer_id,node_id,payload,status,created_at,created_by) VALUES(?,?,?,?,?,?,?)',

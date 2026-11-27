@@ -367,3 +367,5 @@ label:has(> #uniform-photo),#photo-preview,#clear-photo{display:none!important}
 .web-product-order{display:flex;flex-direction:column;gap:4px}
 .web-product-order button{min-width:0;width:30px;height:30px;padding:0;line-height:1;font-size:15px}
 .web-product-order button:disabled{opacity:.3;cursor:default}
+
+.wearer-gender-field{display:flex;align-items:center;gap:12px;margin:2px 0 8px;flex-wrap:wrap}.wearer-gender-field>span{font-weight:600}.wearer-gender-field em{font-style:normal;font-size:.8em;color:#b3261e;margin-left:6px}.wearer-gender-field label{display:inline-flex;align-items:center;gap:4px;margin:0;font-weight:normal}.history-table .wearer-gender{display:block;color:#666}
