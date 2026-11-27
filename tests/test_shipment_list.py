@@ -53,6 +53,32 @@ class ShipmentListTest(unittest.TestCase):
         old_sheet = zipfile.ZipFile(io.BytesIO(shipping.export_book(H('/api/shipments'), c)[1])).read('xl/worksheets/sheet1.xml').decode()
         self.assertIn('出荷方法', old_sheet)  # 既存の出荷情報は変えない
 
+    def test_master_layout_import(self):
+        import io, openpyxl
+        c = sqlite3.connect(':memory:'); c.row_factory = sqlite3.Row; shipping.schema(c)
+        for name in ('長野病院', '長野病院', 'ひのき'):  # 以前に顧客名だけで取り込んだ行（同名あり）
+            c.execute("INSERT INTO shipment_list(source_id,customer,manager) VALUES((SELECT IFNULL(MAX(source_id),900000)+1 FROM shipment_list),?,'藤本')", (name,))
+        def book(rows):
+            wb = openpyxl.Workbook(); ws = wb.active
+            ws.append(['顧客コード', '顧客名', '住所１', '電話番号', '集配曜日フラグ', '集配サイクル', '売上金額'])
+            for r in rows: ws.append(r)
+            b = io.BytesIO(); wb.save(b); return b.getvalue()
+        rows = [['A1', '長野病院', '札幌市', '011', 91001000, '5号車', 999], ['A2', '長野病院', '', '', '90100100', '', 0], ['A3', 'ひのき', '', '', 90010010, 0, 0], ['A4', '新規', '', '', 12345, '', 0], ['', '', '', '', 90000000, '', 0]]
+        imp = lambda b: shipping.import_book(H('/api/shipment-list/import'), c, b)[1]
+        self.assertEqual(imp(book(rows)), dict(created=1, updated=3, unchanged=0, skipped=1, unknownFlags=1, master=True))
+        got = [tuple(r) for r in c.execute('SELECT customer_code,customer,weekday,car,manager FROM shipment_list ORDER BY id')]
+        self.assertEqual(got, [('A1', '長野病院', '月・木', '5号車', '藤本'), ('A2', '長野病院', '火・金', '', '藤本'), ('A3', 'ひのき', '水・土', '', '藤本'), ('A4', '新規', '', '', '')])
+        self.assertNotIn('札幌市', json_dump(c))  # 住所・電話・金額は保存しない
+        rows[0][4] = 90000000
+        self.assertEqual(imp(book(rows))['updated'], 1)  # 再取込は顧客コードで照合し、増えない
+        self.assertEqual(c.execute('SELECT COUNT(*) FROM shipment_list').fetchone()[0], 4)
+        self.assertEqual(c.execute("SELECT weekday FROM shipment_list WHERE customer_code='A1'").fetchone()[0], '')
+        self.assertEqual([shipping.decode_flag(x) for x in ('91010100', '90000001', '9100100', '81001000', '91002000', '0')], [('月・水・金', True), ('日曜日', True), ('', False), ('', False), ('', False), ('', True)])
+
+
+def json_dump(c):
+    return ' '.join(str(tuple(r)) for t in ('shipment_list', 'shipment_list_history') for r in c.execute('SELECT * FROM ' + t))
+
 
 if __name__ == '__main__':
     unittest.main()
