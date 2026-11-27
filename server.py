@@ -1652,6 +1652,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     if n < 1 or n > 5000000: raise ValueError('写真は3MB以下の画像を選んでください。')
                     d = json.loads(self.rfile.read(n))
                     if not isinstance(d, dict): raise ValueError('送信内容を確認してください。')
+                    if d.get('action') == 'order':
+                        data = web_requests.state(c, STOCK_DB, u)
+                        owned = {}
+                        for h in data['handles']: owned.setdefault(h['customer_id'], set()).add(h['product_id'])
+                        for x in data['customers']: owned.setdefault(x['id'], set())
+                        return self.reply(200, {'ok': True, 'order': web_request_product_display.save_order(c, u, d, owned)})
                     product_ids = {p['id'] for p in web_requests.catalog(STOCK_DB)['products']}
                     return self.reply(200, {'ok': True, 'productId': d.get('product_id'), 'display': web_request_product_display.save(c, u, d, product_ids)})
                 except PermissionError as e:

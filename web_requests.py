@@ -137,6 +137,7 @@ def state(c,path,user=None,preview_account_id=None,preview_page_id=None):
     for p in data['profiles']+data['scopeProfiles']:
         if p['customer_id'] in libraries:p['live']=live_config(c,bases[p['customer_id']],org,nodes.get(p.get('node_id')),handles.get(p['customer_id'],{}),products)
     data['productDisplay']=product_display.read_map(c,[p['id'] for p in data['products']])
+    data['productOrder']=product_display.read_order(c,[x['id'] for x in data['customers']])
     data['assignedCustomerIds']=sorted({x['customer_id'] for x in profiles if user and user['id'] in (x['draft'].get('primary_user_id'),x['draft'].get('backup_user_id'))}|assigned)
     return data
 

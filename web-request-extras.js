@@ -108,12 +108,42 @@
     sec = document.createElement('section');
     sec.id = 'web-product-display';
     sec.className = 'request-record web-product-display';
-    sec.innerHTML = '<h3>② 制服の表示名・写真</h3><p class="small">お客さんの依頼画面に出す商品名と写真を、商品ごとに設定します。同じ商品を使うすべての会社で共通です。表示名が空欄のときは在庫の商品名、写真がないときは今のイラストを表示します。社内の画面・指示書・在庫は元の商品名のままです。</p><input id="web-product-display-search" type="search" placeholder="商品名・品番で絞り込み" aria-label="商品を絞り込み"><div id="web-product-display-list"></div>';
+    sec.innerHTML = '<h3>② 制服の表示名・写真</h3><p class="small">お客さんの依頼画面に出す商品名と写真を、商品ごとに設定します。同じ商品を使うすべての会社で共通です。↑↓で依頼画面の並び順（左上から右へ）を変えられます（会社ごと）。表示名が空欄のときは在庫の商品名、写真がないときは今のイラストを表示します。社内の画面・指示書・在庫は元の商品名のままです。</p><input id="web-product-display-search" type="search" placeholder="商品名・品番で絞り込み" aria-label="商品を絞り込み"><div id="web-product-display-list"></div>';
     anchor.after(sec);
     sec.querySelector('#web-product-display-search').oninput = renderProductSection;
     sec.addEventListener('click', onProductClick);
     sec.addEventListener('change', onProductChange);
     return sec;
+  }
+  /* 依頼画面の表示順（顧客ごと）。順番のない商品は後ろに今の並びのまま。 */
+  function orderedProducts(data, cid, ids) {
+    const list = (data.products || []).filter((p) => ids.has(p.id));
+    const o = (data.productOrder || {})[String(cid)] || [];
+    const pos = new Map(o.map((id, i) => [id, i]));
+    return list.map((p, i) => [p, i]).sort((x, y) => (pos.has(x[0].id) ? pos.get(x[0].id) : 1e9) - (pos.has(y[0].id) ? pos.get(y[0].id) : 1e9) || x[1] - y[1]).map((x) => x[0]);
+  }
+  let orderBusy = false;
+  async function moveProduct(pid, dir) {
+    const d = desk();
+    const data = d.getData() || {};
+    const cid = Number(($('#org-root-customer') || {}).value);
+    if (orderBusy || !cid) return;
+    const all = orderedProducts(data, cid, usedProductIds(data, cid)).map((p) => p.id);
+    const visible = [...document.querySelectorAll('#web-product-display-list .web-product-row')].map((r) => Number(r.dataset.product));
+    const vi = visible.indexOf(pid), other = visible[vi + dir];
+    if (vi < 0 || other === undefined) return;
+    const a = all.indexOf(pid), b = all.indexOf(other);
+    [all[a], all[b]] = [all[b], all[a]];
+    orderBusy = true;
+    try {
+      const result = await postDisplay({ action: 'order', customer_id: cid, product_ids: all });
+      data.productOrder = data.productOrder || {};
+      data.productOrder[String(cid)] = result.order;
+      renderProductSection();
+      const btn = document.querySelector(`[data-order-${dir < 0 ? 'up' : 'down'}="${pid}"]`);
+      if (btn && !btn.disabled) btn.focus();
+    } catch (err) { d.notify(err.message); }
+    finally { orderBusy = false; }
   }
   function renderProductSection() {
     const d = desk();
@@ -129,14 +159,16 @@
     const ids = usedProductIds(data, cid);
     const term = ($('#web-product-display-search').value || '').trim().toLowerCase();
     const display = data.productDisplay || {};
-    const rows = (data.products || []).filter((p) => ids.has(p.id)).filter((p) => !term || (p.name + ' ' + p.code + ' ' + ((display[p.id] || {}).display_name || '')).toLowerCase().includes(term));
+    const rows = orderedProducts(data, cid, ids).filter((p) => !term || (p.name + ' ' + p.code + ' ' + ((display[p.id] || {}).display_name || '')).toLowerCase().includes(term));
     const list = sec.querySelector('#web-product-display-list');
     if (!ids.size) { list.innerHTML = '<p class="small">この会社の契約に制服がまだありません。制服は「顧客・契約管理」で契約に登録します。</p>'; return; }
     list.innerHTML = rows.map((p) => {
       const pd = display[p.id] || {};
       const url = photoUrl(p.id, pd);
-      return `<div class="web-product-row" data-product="${p.id}"><div class="web-product-thumb">${url ? `<img src="${esc(url)}" alt="${esc(p.name)}の写真">` : '<span>写真なし</span>'}</div><div class="web-product-main"><div class="web-product-original"><small>在庫の商品名</small><strong>${esc(p.name)}</strong><span>${esc(p.code || '品番なし')}${p.color ? ' · ' + esc(p.color) : ''}</span></div><label>WEB表示名<input data-display-name="${p.id}" maxlength="120" value="${esc(pd.display_name || '')}" placeholder="${esc(p.name)}"></label><div class="web-product-actions"><button type="button" class="primary" data-save-display="${p.id}">表示名を保存</button><label class="web-product-upload">写真を選ぶ<input type="file" accept="image/jpeg,image/png,image/webp" data-photo="${p.id}" hidden></label>${url ? `<button type="button" data-remove-photo="${p.id}">写真を外す</button>` : ''}<button type="button" data-sample-photo="${p.id}">見本画像から選ぶ</button></div></div></div>`;
+      return `<div class="web-product-row" data-product="${p.id}"><div class="web-product-order"><button type="button" data-order-up="${p.id}" aria-label="上へ" title="上へ">↑</button><button type="button" data-order-down="${p.id}" aria-label="下へ" title="下へ">↓</button></div><div class="web-product-thumb">${url ? `<img src="${esc(url)}" alt="${esc(p.name)}の写真">` : '<span>写真なし</span>'}</div><div class="web-product-main"><div class="web-product-original"><small>在庫の商品名</small><strong>${esc(p.name)}</strong><span>${esc(p.code || '品番なし')}${p.color ? ' · ' + esc(p.color) : ''}</span></div><label>WEB表示名<input data-display-name="${p.id}" maxlength="120" value="${esc(pd.display_name || '')}" placeholder="${esc(p.name)}"></label><div class="web-product-actions"><button type="button" class="primary" data-save-display="${p.id}">表示名を保存</button><label class="web-product-upload">写真を選ぶ<input type="file" accept="image/jpeg,image/png,image/webp" data-photo="${p.id}" hidden></label>${url ? `<button type="button" data-remove-photo="${p.id}">写真を外す</button>` : ''}<button type="button" data-sample-photo="${p.id}">見本画像から選ぶ</button></div></div></div>`;
     }).join('') || '<p class="small">該当する商品がありません。</p>';
+    const btns = list.querySelectorAll('.web-product-order');
+    btns.forEach((g, i) => { g.firstChild.disabled = i === 0; g.lastChild.disabled = i === btns.length - 1; });
   }
   async function saveDisplay(pid, body, row) {
     const d = desk();
@@ -157,7 +189,9 @@
   function onProductClick(e) {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.saveDisplay) {
+    if (b.dataset.orderUp || b.dataset.orderDown) {
+      moveProduct(Number(b.dataset.orderUp || b.dataset.orderDown), b.dataset.orderUp ? -1 : 1);
+    } else if (b.dataset.saveDisplay) {
       const pid = Number(b.dataset.saveDisplay);
       const input = document.querySelector(`[data-display-name="${pid}"]`);
       saveDisplay(pid, { display_name: input ? input.value : '' }, b.closest('.web-product-row'));
