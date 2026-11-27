@@ -111,12 +111,17 @@
         if (labelCountText) labelCountText.textContent = '対象フォルダがありません';
         return;
       }
-      if (res.count === 0) {
+      const bp = res.barcode_pending || {};
+      if (res.count === 0 && bp.rows > 0) {
+        if (previewCount) previewCount.textContent = `仕分け対象の指示書: 0 件 ／ 統合待ちのバーコード明細: ${bp.rows} 件（${bp.lists}リスト）`;
+        if (labelCountText) labelCountText.textContent = '宛名情報: なし';
+        if (btnExec) btnExec.disabled = false;
+      } else if (res.count === 0) {
         if (previewCount) previewCount.textContent = '現在、仕分け対象のファイルはありません（0件）。';
         if (labelCountText) labelCountText.textContent = '仕分け対象なし（0件）';
         if (btnExec) btnExec.disabled = true;
       } else {
-        if (previewCount) previewCount.textContent = `仕分け対象の指示書: ${res.count} 件`;
+        if (previewCount) previewCount.textContent = `仕分け対象の指示書: ${res.count} 件` + (bp.rows > 0 ? ` ／ 統合待ちのバーコード明細: ${bp.rows} 件（${bp.lists}リスト）` : '');
         if (previewFiles) previewFiles.innerHTML = res.files.map(f => `<li>${esc(f)}</li>`).join('');
         lastAddresses = res.addresses || [];
         if (btnLabelOnly) btnLabelOnly.disabled = !lastAddresses.length;
@@ -225,6 +230,7 @@
                   </button>
                 </div>
               ` : ''}
+              ${res.barcode_rows > 0 ? `<div style="margin-top:6px;font-size:0.88rem;color:#333;"><strong>バーコード明細 ${res.barcode_rows}件（${res.barcode_lists}リスト）を統合</strong></div>` : ''}
             `;
           }
           if (previewCount) {

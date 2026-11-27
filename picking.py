@@ -356,6 +356,20 @@ def save_scan_copy(xlsx_bytes, day, base):
         headers['X-Saved-Error'] = quote(str(exc))
     return headers
 
+def scan_payload(d):
+    """バーコード明細の検証（Excel出力・統合待ちで共通）。"""
+    raw = d.get('rows')
+    if not isinstance(raw, list) or len(raw) > 10500 or any(not isinstance(row, dict) for row in raw):
+        raise ValueError('出力する明細を確認してください。')
+    day = date.fromisoformat(text(d.get('date', ''), 10)).isoformat()
+    title = text(d.get('title', ''), 100).strip()
+    if not title:
+        raise ValueError('保存名を入力してください。')
+    rows = [{key: row.get(key, '') for key in FIELDS} for row in raw]
+    validate_rows(rows, True)
+    return day, title, rows
+
+
 def route_rank(c):
     try:
         import ishikari_route
@@ -1022,6 +1036,22 @@ def handle(h,c,path,d,can_access):
             return (200,ishikari_route.info(c)) if path=='/api/picking/route' else (404,{'error':'見つかりません。'})
         if path!='/api/picking/route-alias' or not isinstance(d,dict): return 404,{'error':'見つかりません。'}
         return 200,ishikari_route.save_alias(c,d.get('customer'),d.get('block_id'),u['name'])
+    if path == '/api/picking/merge-queue':
+        # バーコードでピッキングリスト作成の「統合待ち」（自動仕分けの実行時に指示書と一緒に統合）
+        if u['role'] not in ('owner','floor','floor3'): return 403,{'error':'この操作はできません。'}
+        import picking_merge_queue as mq
+        if d is None: return 200,{'batches':mq.listing(c)}
+        if not isinstance(d,dict): raise ValueError('内容を確認してください。')
+        if d.get('action') == 'cancel':
+            bid=d.get('id')
+            if type(bid) is not int: raise ValueError('統合待ちのリストを確認してください。')
+            mq.cancel(c,u,bid)
+            return 200,{'batches':mq.listing(c)}
+        if d.get('action') == 'add':
+            day,title,rows=scan_payload(d)
+            bid=mq.add(c,u,title,day,rows)
+            return 200,{'id':bid,'batches':mq.listing(c)}
+        raise ValueError('操作を確認してください。')
     scan_export = path == '/api/picking/scan-xlsx' and d is not None
     if u['role'] not in ('owner','floor','sales') and not (scan_export and u['role']=='floor3'): return 403,{'error':'この操作はできません。'}
     if path in ('/api/picking/carry-day','/api/picking/carry-check','/api/picking/carry-print','/api/picking/carry-month') and u['role'] not in ('owner','sales'): return 403,{'error':'管理担当持込の出力は営業と主管理者が使用します。'}
@@ -1053,15 +1083,7 @@ def handle(h,c,path,d,can_access):
     if path == '/api/picking/scan-xlsx':
         if not isinstance(d, dict):
             raise ValueError('出力する明細を確認してください。')
-        raw = d.get('rows')
-        if not isinstance(raw, list) or len(raw) > 10500 or any(not isinstance(row, dict) for row in raw):
-            raise ValueError('出力する明細を確認してください。')
-        day = date.fromisoformat(text(d.get('date', ''), 10)).isoformat()
-        title = text(d.get('title', ''), 100).strip()
-        if not title:
-            raise ValueError('保存名を入力してください。')
-        rows = [{key: row.get(key, '') for key in FIELDS} for row in raw]
-        validate_rows(rows, True)
+        day, title, rows = scan_payload(d)
         from pathlib import Path
         from urllib.parse import quote
         from picking_sorter import DEFAULT_BASE_DIR, scan_ishikari_workbook

@@ -790,9 +790,9 @@ def preview_ishikari_format() -> bytes:
         wb.close()
 
 
-def scan_ishikari_workbook(day: str, rows: list[dict], route_rank=None) -> bytes:
-    """Export legacy barcode rows using the automatic sorter workbook format."""
-    now = datetime.fromisoformat(day)
+def barcode_sort_rows(rows: list[dict], source_file: str = "") -> list[dict]:
+    """バーコード明細（stock=warehouse/factory/carry）を仕分け用の行（stock=0/a/b）にする。
+    石狩倉庫=0、発寒支店=a（工場内）、管理担当持込=b（持ち込み）。同じ明細は数量を合計して1行。"""
     stock_codes = {"warehouse": "0", "factory": "a", "carry": "b"}
     fields = ("stock", "customer", "name", "maker", "sku", "size", "condition", "note2")
     merged = {}
@@ -814,11 +814,18 @@ def scan_ishikari_workbook(day: str, rows: list[dict], route_rank=None) -> bytes
             condition = "古"
         normalized.append({
             **row,
-            "source_file": "",
+            "source_file": source_file,
             "condition": condition,
             "note": row.get("note", ""),
             "stock": stock_codes[row["stock"]],
         })
+    return normalized
+
+
+def scan_ishikari_workbook(day: str, rows: list[dict], route_rank=None) -> bytes:
+    """Export legacy barcode rows using the automatic sorter workbook format."""
+    now = datetime.fromisoformat(day)
+    normalized = barcode_sort_rows(rows)
 
     wb, _ = build_ishikari_workbook(now, normalized, f"{day}_ピッキングリスト.xlsx", route_rank=route_rank)
     try:
@@ -1211,7 +1218,8 @@ def _finish_saved_sort(path, journal, addresses=None):
     destination = _processed_destination(date.fromisoformat(result["processed_date"]))
     archived = []
     try:
-        destination.mkdir(parents=True, exist_ok=True)
+        if journal["moves"]:
+            destination.mkdir(parents=True, exist_ok=True)
         for entry in journal["moves"]:
             if any(Path(entry[key]).name != entry[key] or entry[key] in ("", ".", "..") for key in ("source", "destination")):
                 raise ValueError("移動記録のファイル名が不正です。")
@@ -1242,16 +1250,26 @@ def _finish_saved_sort(path, journal, addresses=None):
         result["message"] = "前回保存した指示書の移動を完了しました。新しい指示書は取込画面を開き直して仕分けしてください。"
     return result
 
-def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None, customer_readings=None, route_rank=None) -> dict:
-    """仕分け実行メインロジック"""
+def execute_sort(custom_ishikari_file: str | None = None, custom_report_file: str | None = None, *, processed_date: str | None = None, customer_readings=None, route_rank=None, barcode_loader=None, barcode_marker=None) -> dict:
+    """仕分け実行メインロジック。
+    barcode_loader() -> (ids, [(保存名, 明細), ...]) で統合待ちのバーコード明細を読み、指示書と一緒に仕分ける。
+    成功したら barcode_marker(ids, 石狩倉庫ブック名) で統合済みにする（失敗時は呼ばないので統合待ちのまま）。
+    読込から記録までを仕分けロックの中で行い、二重に統合しない。"""
     with _SORT_LOCK:
-        return _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings, route_rank)
+        result = _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings, route_rank, barcode_loader)
+        ids = result.get("barcode_batch_ids") or []
+        if result.get("success") and ids and barcode_marker:
+            barcode_marker(ids, result.get("ishikari_file") or "")
+        return result
 
 
-def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings=None, route_rank=None):
+def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, customer_readings=None, route_rank=None, barcode_loader=None):
     journal_path = get_base_dir() / ".instruction-desk-pending-sort.json"
     if journal_path.exists():
-        return _finish_saved_sort(journal_path, json.loads(journal_path.read_text(encoding="utf-8")))
+        # 前回Excel保存済みの再開。統合したバーコード明細のidは記録(result)に残っている
+        result = _finish_saved_sort(journal_path, json.loads(journal_path.read_text(encoding="utf-8")))
+        result.setdefault("success", True)
+        return result
 
     now = _default_sort_date(datetime.now(timezone(timedelta(hours=9))))
     move_date = now.date()
@@ -1267,7 +1285,13 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
     if custom_report_file and custom_report_file.strip():
         _sanitize_custom_filename(custom_report_file, "報告用リスト保存名")
     pending_files = get_pending_files()
-    if not pending_files:
+    barcode_ids, barcode_rows, barcode_count = [], [], 0
+    if barcode_loader:
+        barcode_ids, batches = barcode_loader()
+        for title, rows in batches:
+            barcode_count += len(rows)
+            barcode_rows.extend(barcode_sort_rows(rows, f"バーコード:{title}"))
+    if not pending_files and not barcode_rows:
         return {
             "success": False,
             "message": "【処理中・・・】に対象ファイルがありません。",
@@ -1299,6 +1323,7 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
         raise OSError("読み込み中にフォルダ内のファイルが移動または削除されました。画面を開き直して再実行してください。") from exc
     if changed:
         raise OSError("読み込み中に指示書が更新されました。保存を終えてから再実行してください。")
+    all_rows.extend(barcode_rows)
 
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)
     ishikari_path, ishikari_counts = _save_ishikari_workbook(
@@ -1320,6 +1345,9 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
         "processed_dir": str(dest_dir),
         "processed_date": move_date.isoformat(),
         "ref_repairs": ref_repairs,
+        "barcode_batch_ids": barcode_ids,
+        "barcode_lists": len(barcode_ids),
+        "barcode_rows": barcode_count,
     }
     journal = {"moves": moves, "result": result}
     _save_move_journal(journal_path, journal)
