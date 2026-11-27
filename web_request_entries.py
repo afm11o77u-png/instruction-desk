@@ -109,8 +109,18 @@ def set_status(c, path, user, d):
     r = get(c, path, user, d.get('id') if isinstance(d.get('id'), str) else '')
     st = d.get('status')
     if st not in ('受付済み', '差し戻し'): raise ValueError('状態を確認してください。')
-    c.execute('UPDATE web_request_entries SET status=?,updated_at=?,updated_by=?,version=version+1 WHERE id=?',
-              (st, datetime.now().isoformat(timespec='seconds'), user['id'] if user else None, r['id']))
+    now = datetime.now().isoformat(timespec='seconds')
+    row = c.execute('SELECT payload FROM web_request_entries WHERE id=?', (r['id'],)).fetchone()
+    payload = json.loads(row['payload'])
+    if st == '差し戻し':
+        # 差し戻しは理由必須。理由は依頼側の依頼履歴に表示する（受付済みに戻しても記録は残す）
+        reason = _text(d.get('reason'), 300)
+        if not reason: raise ValueError('差し戻しの理由を入力してください。')
+        try: by = _text(user['name'], 80) if user else ''
+        except (KeyError, IndexError, TypeError): by = ''
+        payload.update(returnReason=reason, returnedAt=now, returnedBy=by)
+    c.execute('UPDATE web_request_entries SET status=?,payload=?,updated_at=?,updated_by=?,version=version+1 WHERE id=?',
+              (st, json.dumps(payload, ensure_ascii=False), now, user['id'] if user else None, r['id']))
     c.commit()
     return get(c, path, user, r['id'])
 
