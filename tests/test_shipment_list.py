@@ -88,9 +88,9 @@ class ShipmentListTest(unittest.TestCase):
             b = io.BytesIO(); wb.save(b); return b.getvalue()
         rows = [['A社', '札幌', 'リース', '藤本', '安藤', '山田太郎'], ['A社', '', '買取', '藤本', '', ''], ['A社', '', 'リース', '藤本', '安藤', ''], ['', '', 'x', '', '', '']]
         imp = lambda b: shipping.import_book(H('/api/shipment-contract/import'), c, b)
-        self.assertEqual(imp(book(rows))[1], dict(created=2, updated=0, unchanged=0, skipped=1, duplicates=1))
+        self.assertEqual(imp(book(rows))[1], dict(created=2, updated=0, unchanged=0, skipped=1, duplicates=1, sheet='Sheet', missing=[]))
         rows[1][3] = '大島'
-        self.assertEqual(imp(book(rows))[1], dict(created=0, updated=1, unchanged=1, skipped=1, duplicates=1))  # 顧客名＋契約形態で照合
+        self.assertEqual(imp(book(rows))[1], dict(created=0, updated=1, unchanged=1, skipped=1, duplicates=1, sheet='Sheet', missing=[]))  # 顧客名＋契約形態で照合
         self.assertEqual(imp(book([['A社', '', 'リース', '藤本', '安藤', ''], ['A社', '', 'リース', '大島', '', '']]))[0], 400)  # 同じ契約で担当違いは止める
         got = [tuple(r) for r in c.execute('SELECT source_id,customer,contract_type,manager,sales FROM shipment_contract ORDER BY id')]
         self.assertEqual(got, [(800001, 'A社', 'リース', '藤本', '安藤'), (800002, 'A社', '買取', '大島', '')])
@@ -107,6 +107,23 @@ class ShipmentListTest(unittest.TestCase):
         self.assertEqual(shipping.search(staff, c)[0], 403)
         staff.path = '/api/shipment-contract?customer='
         self.assertEqual(shipping.search(staff, c)[1]['total'], 2)
+
+    def test_contract_import_picks_sheet_and_fills_blank_rows(self):
+        import io, openpyxl
+        c = sqlite3.connect(':memory:'); c.row_factory = sqlite3.Row; shipping.schema(c)
+        imp = lambda b, **k: shipping.import_book(H('/api/shipment-contract/import'), c, b, **k)[1]
+        wb = openpyxl.Workbook(); ws = wb.active; ws.title = '売上'
+        ws.append(['', '', '取引先', '2016年']); ws.append(['', '', 'A社', 100]); ws.append(['', '', 'B社', 100])
+        b = io.BytesIO(); wb.save(b); first = b.getvalue()
+        self.assertEqual(imp(first), dict(needsConfirm=True, sheet='売上', missing=['契約形態', '管理担当', '営業担当']))  # 黙って空欄で入れない
+        self.assertEqual(imp(first, allow_missing=True)['created'], 2)  # 以前の取り込みと同じ状態（名前だけ）
+        ws2 = wb.create_sheet('2021年度～'); ws2.append(['担当一覧']); ws2.append(['営業担当者', '管理\n担当', '契約形態', 'ﾄﾘﾋｷｻｷ', '取 引 先'])
+        ws2.append(['安藤', '藤本', 'ＣＬ', '', 'A社']); ws2.append(['大島', '', 'R', '', 'C社'])
+        b = io.BytesIO(); wb.save(b)
+        res = imp(b.getvalue())
+        self.assertEqual((res['sheet'], res['created'], res['updated'], res['missing']), ('2021年度～', 1, 1, []))
+        got = [tuple(r) for r in c.execute('SELECT customer,contract_type,manager,sales FROM shipment_contract ORDER BY id')]
+        self.assertEqual(got, [('A社', 'ＣＬ', '藤本', '安藤'), ('B社', '', '', ''), ('C社', 'R', '', '大島')])  # 名前だけの行を埋め、増やさない
 
 
 def json_dump(c):

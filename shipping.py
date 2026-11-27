@@ -15,7 +15,7 @@
   ConP2      -> contract_end（契約終了日。0001-01-01 は空）
 移行元に登録日時はない。アプリで新しく作った行だけ日時を入れる。
 """
-import json, re
+import json, re, unicodedata
 from datetime import datetime, date, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -391,7 +391,7 @@ def export_book(handler, c):
     cols=[x for x in EXCEL_COLUMNS if x[1] not in LIST_HIDDEN_KEYS] if isinstance(c, _ListStore) else CONTRACT_COLUMNS if isinstance(c, _ContractStore) else None
     return 200, _workbook(rows, cols), XLSX
 
-def import_book(handler, c, blob):
+def import_book(handler, c, blob, allow_missing=False):
     c=store(handler, c)
     if _legacy_denied(handler, c): return LEGACY_DENIED
     blocked=_require_edit(handler.user)
@@ -399,7 +399,7 @@ def import_book(handler, c, blob):
     if isinstance(c, _ListStore):
         master=_import_master(handler, c, blob)
         if master is not None: return master
-    if isinstance(c, _ContractStore): return _import_contract(handler, c, blob)
+    if isinstance(c, _ContractStore): return _import_contract(handler, c, blob, allow_missing)
     try: parsed=_parse_book(blob)
     except ValueError as e: return 400, {'error':str(e)}
     errors=[]
@@ -540,9 +540,9 @@ def _excel_header(grid):
             return row, columns
     raise ValueError('1行目に「顧客名」の列が必要です。')
 
-def _sheet_grid(book):
+def _sheet_grid(book, target=None):
     strings=_shared_strings(book)
-    root=ET.fromstring(_zip_part(book, _first_sheet(book)))
+    root=ET.fromstring(_zip_part(book, target or _first_sheet(book)))
     grid={}
     for cell in root.iter(f'{SHEET_TAG}c'):
         ref=cell.get('r') or ''
@@ -562,6 +562,17 @@ def _first_sheet(book):
             target=rel.get('Target','').lstrip('/')
             return target if target.startswith('xl/') else 'xl/'+target
     raise ValueError('Excelのシートを読み取れませんでした。')
+
+def _all_sheets(book):
+    """[(シート名, パーツ名)] をブックの並び順で返す。"""
+    workbook=ET.fromstring(_zip_part(book, 'xl/workbook.xml'))
+    rels={rel.get('Id'):rel.get('Target','').lstrip('/') for rel in ET.fromstring(_zip_part(book, 'xl/_rels/workbook.xml.rels')).findall(f'{PKG_NS}Relationship')}
+    out=[]
+    for sheet in workbook.findall(f'{SHEET_TAG}sheets/{SHEET_TAG}sheet'):
+        target=rels.get(sheet.get(f'{REL_NS}id'))
+        if target: out.append((sheet.get('name') or '', target if target.startswith('xl/') else 'xl/'+target))
+    if not out: raise ValueError('Excelのシートを読み取れませんでした。')
+    return out
 
 def _shared_strings(book):
     if 'xl/sharedStrings.xml' not in book.namelist(): return []
@@ -685,7 +696,25 @@ def _import_master(handler, c, blob):
 
 # ---- 出荷情報一覧「契約・担当」：顧客名・契約形態・管理担当・営業 ----
 CONTRACT_COLUMNS=[('登録番号','number'),('顧客名','customer'),('契約形態','contractType'),('管理担当','manager'),('営業','sales')]
-CONTRACT_ALIASES={'登録番号':'number','取引先':'customer','顧客名':'customer','顧客':'customer','契約形態':'contractType','管理担当':'manager','営業担当':'sales','営業':'sales'}
+CONTRACT_ALIASES={'登録番号':'number','取引先':'customer','取引先名':'customer','顧客名':'customer','顧客':'customer','契約形態':'contractType',
+                  '管理担当':'manager','管理担当者':'manager','営業担当':'sales','営業担当者':'sales','営業':'sales'}
+CONTRACT_NEEDED=[('contractType','契約形態'),('manager','管理担当'),('sales','営業担当')]
+
+def _contract_label(text):
+    """見出しの表記ゆれ（全角・半角、空白、セル内改行）をそろえる。"""
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(text or '')))
+
+def _contract_header(grid):
+    """1〜10行目から見出し行を探す。取引先（顧客名）があり、読める列が一番多い行。"""
+    best=None
+    for r in range(1, 11):
+        found={}
+        for (row, col), text in grid.items():
+            if row!=r: continue
+            key=CONTRACT_ALIASES.get(_contract_label(text))
+            if key and key not in found.values(): found[col]=key
+        if 'customer' in found.values() and (best is None or len(found)>len(best[1])): best=(r, found)
+    return best
 
 def _contract_fields(d):
     return {'customer':_text(d.get('customer'),'顧客名',50,True),'contract_type':_text(d.get('contractType'),'契約形態',50),
@@ -710,22 +739,24 @@ def _contract_save(handler, c, d, row):
     sid,_=_contract_write(handler, c, fields, row, datetime.now().isoformat(timespec='seconds'), '登録' if row is None else '修正')
     return 200, _row_public(c.execute('SELECT * FROM shipments WHERE id=?',(sid,)).fetchone())
 
-def _import_contract(handler, c, blob):
+def _import_contract(handler, c, blob, allow_missing=False):
     """取引先・契約形態・管理担当・営業担当（または画面の書き出し形式）を取り込む。ほかの列は読まない。
     照合：登録番号があればその行。なければ 顧客名＋契約形態（同じ顧客に複数の契約形態がありうるため）。"""
     if not isinstance(blob,(bytes,bytearray)) or not blob.startswith(b'PK'): return 400, {'error':'Excelファイル（.xlsx）を選んでください。'}
     if len(blob)>8_000_000: return 400, {'error':'ファイルが大きすぎます。'}
-    try: grid=_sheet_grid(ZipFile(BytesIO(blob)))
+    # シートが複数あるブックは、取引先と担当の列が一番そろっているシートを読む（先頭シートが売上表などの場合がある）
+    try:
+        book=ZipFile(BytesIO(blob)); chosen=None
+        for name, target in _all_sheets(book):
+            g=_sheet_grid(book, target); found=_contract_header(g)
+            if found and (chosen is None or len(found[1])>len(chosen[2][1])): chosen=(name, g, found)
     except BadZipFile: return 400, {'error':'Excelファイル（.xlsx）を選んでください。'}
     except ValueError as e: return 400, {'error':str(e)}
-    header=cols=None
-    for r in range(1, 6):
-        found={}
-        for col in range(1, 80):
-            key=CONTRACT_ALIASES.get(re.sub(r'\s+','',grid.get((r,col),'')))
-            if key and key not in found.values(): found[col]=key
-        if 'customer' in found.values(): header, cols=r, found; break
-    if not cols: return 400, {'error':'1行目に「取引先」（または「顧客名」）の列が必要です。'}
+    if not chosen: return 400, {'error':'見出しに「取引先」（または「顧客名」）の列が見つかりません。'}
+    sheet, grid, (header, cols) = chosen
+    missing=[label for key, label in CONTRACT_NEEDED if key not in cols.values()]
+    if missing and not allow_missing:
+        return 200, {'needsConfirm':True,'sheet':sheet,'missing':missing}
     if any(r>header+IMPORT_MAX_ROWS for r,_c in grid): return 400, {'error':f'行が多すぎます。{IMPORT_MAX_ROWS}行までにしてください。'}
     items=[]; errors=[]; keys={}; numbers=set(); skipped=duplicates=0
     for r in range(header+1, header+IMPORT_MAX_ROWS+1):
@@ -754,13 +785,22 @@ def _import_contract(handler, c, blob):
         if len(errors)>8: shown.append(f'ほか {len(errors)-8} 件')
         return 400, {'error':'\n'.join(shown)}
     if not items: return 400, {'error':'登録できる行がありません。'}
-    by_key={}
-    for row in c.execute('SELECT * FROM shipments ORDER BY id').fetchall(): by_key.setdefault((row['customer'], row['contract_type']), row)
-    now=datetime.now().isoformat(timespec='seconds'); created=updated=unchanged=0
+    by_key={}; blank={}
+    for row in c.execute('SELECT * FROM shipments ORDER BY id').fetchall():
+        by_key.setdefault((row['customer'], row['contract_type']), row)
+        # 契約形態・担当がすべて空欄の行（見出しを読めずに名前だけ入った行など）は、同じ顧客名の行で埋める
+        if not (row['contract_type'] or row['manager'] or row['sales']): blank.setdefault(row['customer'], []).append(row)
+    now=datetime.now().isoformat(timespec='seconds'); created=updated=unchanged=0; used=set()
     for fields, row in items:
-        if row is None: row=by_key.get((fields['customer'], fields['contract_type']))
+        if row is None:
+            row=by_key.get((fields['customer'], fields['contract_type']))
+            if row is not None and row['id'] in used: row=None
+            if row is None:
+                spare=[x for x in blank.get(fields['customer'], []) if x['id'] not in used]
+                row=spare[0] if spare else None
+        if row is not None: used.add(row['id'])
         _sid, changed=_contract_write(handler, c, fields, row, now, 'Excel取込')
         if row is None: created+=1
         elif changed: updated+=1
         else: unchanged+=1
-    return 200, {'created':created,'updated':updated,'unchanged':unchanged,'skipped':skipped,'duplicates':duplicates}
+    return 200, {'created':created,'updated':updated,'unchanged':unchanged,'skipped':skipped,'duplicates':duplicates,'sheet':sheet,'missing':missing}
