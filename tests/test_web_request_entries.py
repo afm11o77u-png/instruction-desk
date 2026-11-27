@@ -21,7 +21,7 @@ class EntriesTest(unittest.TestCase):
         self.c.execute('CREATE TABLE orders(id INTEGER PRIMARY KEY, version INTEGER, payload TEXT)')
 
     def req(self, **kw):
-        return dict(dict(customerId=1, nodeId='a', department='管理', requestType='新規', wearer='着用者', items=[dict(name='白衣', code='A01', size='M', qty=2, product_id=1, customer_product_id=10)]), **kw)
+        return dict(dict(customerId=1, nodeId='a', department='管理', requestType='新規', wearer='着用者', wearerGender='女性', items=[dict(name='白衣', code='A01', size='M', qty=2, product_id=1, customer_product_id=10)]), **kw)
 
     def test_create_scope_status_and_links(self):
         r = e.create(self.c, self.path, self.owner, self.req())
@@ -36,6 +36,14 @@ class EntriesTest(unittest.TestCase):
             e.link(self.c, r['id'], oid, self.owner); e.link(self.c, r['id'], oid, self.owner)  # 再保存しても重複しない
         sheets = e.listing(self.c, self.path, self.owner)['requests'][0]['sheets']
         self.assertEqual([(s['orderId'], s['number'], s['orderStatus']) for s in sheets], [(1, 'S-1', '未着手'), (2, '', '下書き')])
+
+    def test_wearer_gender(self):
+        self.assertEqual(e.create(self.c, self.path, self.owner, self.req())['wearerGender'], '女性')
+        for bad in (dict(wearerGender=''), dict(wearerGender='不明')):  # 新規は必須・値は男性/女性のみ
+            with self.assertRaises(ValueError): e.create(self.c, self.path, self.owner, self.req(**bad))
+        self.assertEqual(e.create(self.c, self.path, self.owner, self.req(requestType='サイズ交換', wearerGender=''))['wearerGender'], '')  # ほかは任意
+        js = (ROOT / 'request-web.js').read_text(encoding='utf-8'); cp = (ROOT / 'contract-products.js').read_text(encoding='utf-8')
+        self.assertIn("wearerGender:wearerGender()", js); self.assertIn("r.wearerGender||'—'", js); self.assertIn("sex:r.wearerGender||''", cp)
 
     def test_wiring(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8'); js = (ROOT / 'request-web.js').read_text(encoding='utf-8'); cp = (ROOT / 'contract-products.js').read_text(encoding='utf-8')
