@@ -1895,7 +1895,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                             if name and not name.lower().endswith('.xlsx'): raise ValueError('Excelファイル（.xlsx）を選んでください。')
                             try: blob=base64.b64decode(raw)
                             except ValueError: raise ValueError('Excelファイル（.xlsx）を選んでください。')
-                            result=shipping.import_book(self, c, blob)
+                            result=shipping.import_book(self, c, blob, allow_missing=d.get('allowMissing') is True)
                         else:
                             result=shipping.create(self, c, d) if self.path in ('/api/shipments','/api/shipment-list','/api/shipment-contract') else shipping.update(self, c, d)
                     except ValueError as e:
