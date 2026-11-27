@@ -316,12 +316,30 @@ def preview_sort() -> dict:
         "addresses": addresses
     }
 
-def _extract_rows_from_workbook(file_path: Path) -> list[dict]:
+_INVALID_FILENAME_RE = re.compile(r'[\\/:*?"<>|]')
+
+def _sanitize_custom_filename(custom_filename: str, label: str) -> str:
+    file_name = custom_filename.strip()
+    if not file_name or file_name in (".", "..") or _INVALID_FILENAME_RE.search(file_name):
+        raise ValueError(f"{label}にファイル名として使えない文字が含まれています（{file_name}）。")
+    if not file_name.lower().endswith(".xlsx"):
+        file_name += ".xlsx"
+    return file_name
+
+def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False) -> list[dict]:
     """ピッキングリストから行を抽出し、対応する指示書の備考を優先する。"""
     rows = []
+    if strict and file_path.suffix.lower() not in (".xlsx", ".xlsm"):
+        raise ValueError(f"非対応のファイル形式です（{file_path.name}）。.xlsx 形式に変換してから実行してください。")
     try:
         wb = openpyxl.load_workbook(str(file_path), data_only=True, read_only=True)
-    except Exception:
+    except PermissionError as exc:
+        if strict:
+            raise OSError(f"ファイルが開かれているかコピー中のため読み込めません（{file_path.name}）。閉じてから再実行してください。") from exc
+        return []
+    except Exception as exc:
+        if strict:
+            raise OSError(f"コピー途中または破損しているため読み込めません（{file_path.name}）。コピー完了後に再実行してください。") from exc
         return []
 
     target_sheet = None
@@ -721,9 +739,7 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
         return None, {"ishikari": 0, "factory": 0, "carry": 0}
 
     if custom_filename and custom_filename.strip():
-        file_name = custom_filename.strip()
-        if not file_name.lower().endswith(".xlsx"):
-            file_name += ".xlsx"
+        file_name = _sanitize_custom_filename(custom_filename, "石狩倉庫ブック保存名")
     else:
         file_name = get_next_ishikari_filename(now)
     # Use the date in an ordinary numbered filename even if the dialog was
@@ -740,10 +756,18 @@ def _save_ishikari_workbook(now: datetime, rows: list[dict], custom_filename: st
     out_path = target_dir / file_name
 
     wb, counts = build_ishikari_workbook(now, rows, file_name, customer_readings=customer_readings or {}, route_rank=route_rank)
+    temp_path = None
     try:
-        wb.save(str(out_path))
+        with NamedTemporaryFile(dir=target_dir, suffix=".xlsx", delete=False) as temp:
+            temp_path = Path(temp.name)
+        wb.save(str(temp_path))
+        os.replace(temp_path, out_path)
+    except PermissionError as exc:
+        raise OSError(f"石狩倉庫ブック（{file_name}）が他のPCで開かれているため保存できません。閉じてから再実行してください。") from exc
     finally:
         wb.close()
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return out_path, counts
 
 
@@ -958,9 +982,7 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
     report_dir.mkdir(parents=True, exist_ok=True)
 
     if custom_filename and custom_filename.strip():
-        file_name = custom_filename.strip()
-        if not file_name.lower().endswith(".xlsx"):
-            file_name += ".xlsx"
+        file_name = _sanitize_custom_filename(custom_filename, "報告用リスト保存名")
     else:
         file_name = get_default_report_filename(now)
     out_path = report_dir / file_name
@@ -976,12 +998,15 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 raise OSError("報告用リストが編集中に更新されました。再度仕分けを実行してください。")
             os.replace(temp_path, out_path)
+        except PermissionError as exc:
+            raise OSError(f"報告用リスト（{file_name}）が他のPCで開かれているため保存できません。閉じてから再実行してください。") from exc
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
         return out_path, {"carry": len(carry_rows), "factory": 0}
 
-    if out_path.exists():
+    before_stat = out_path.stat() if out_path.exists() else None
+    if before_stat is not None:
         wb = openpyxl.load_workbook(str(out_path))
     else:
         wb = openpyxl.Workbook()
@@ -1021,7 +1046,13 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
         with NamedTemporaryFile(dir=report_dir, suffix=".xlsx", delete=False) as temp:
             temp_path = Path(temp.name)
         wb.save(temp_path)
+        if before_stat is not None and out_path.exists():
+            after_stat = out_path.stat()
+            if (before_stat.st_size, before_stat.st_mtime_ns) != (after_stat.st_size, after_stat.st_mtime_ns):
+                raise OSError("報告用リストが編集中に更新されました。再度仕分けを実行してください。")
         os.replace(temp_path, out_path)
+    except PermissionError as exc:
+        raise OSError(f"報告用リスト（{file_name}）が他のPCで開かれているため保存できません。閉じてから再実行してください。") from exc
     finally:
         wb.close()
         if temp_path is not None:
@@ -1101,6 +1132,7 @@ def _finish_saved_sort(path, journal, addresses=None):
                 addresses.append({**address, "source_file": original_name})
     path.unlink()
     result["moved_count"] = len(archived)
+    result["remaining_count"] = len(get_pending_files())
     result["addresses"] = addresses
     result["resumed_move"] = resumed
     if resumed:
@@ -1127,6 +1159,10 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
                 raise ValueError
         except (TypeError, ValueError):
             raise ValueError("処理済みフォルダの日付を確認してください。") from None
+    if custom_ishikari_file and custom_ishikari_file.strip():
+        _sanitize_custom_filename(custom_ishikari_file, "石狩倉庫ブック保存名")
+    if custom_report_file and custom_report_file.strip():
+        _sanitize_custom_filename(custom_report_file, "報告用リスト保存名")
     pending_files = get_pending_files()
     if not pending_files:
         return {
@@ -1142,15 +1178,22 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
     all_rows = []
     addresses = []
     dest_dir = _processed_destination(move_date)
-    moves = _planned_moves(now, pending_files, dest_dir)
+    try:
+        moves = _planned_moves(now, pending_files, dest_dir)
+    except FileNotFoundError as exc:
+        raise OSError("処理開始直後にフォルダ内のファイルが移動または削除されました。画面を開き直して再実行してください。") from exc
 
     for f in pending_files:
-        rows = _extract_rows_from_workbook(f)
+        rows = _extract_rows_from_workbook(f, strict=True)
         all_rows.extend(rows)
         addr = _extract_address_from_workbook(f)
         if addr:
             addresses.append(addr)
-    if any(_file_stamp(f) != move["stamp"] for f, move in zip(pending_files, moves)):
+    try:
+        changed = any(_file_stamp(f) != move["stamp"] for f, move in zip(pending_files, moves))
+    except FileNotFoundError as exc:
+        raise OSError("読み込み中にフォルダ内のファイルが移動または削除されました。画面を開き直して再実行してください。") from exc
+    if changed:
         raise OSError("読み込み中に指示書が更新されました。保存を終えてから再実行してください。")
 
     # 1. 石狩倉庫ブック (ピッキングリスト\YYYYMMDD\YYYYMMDDNN.xlsx)

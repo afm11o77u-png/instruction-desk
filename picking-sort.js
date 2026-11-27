@@ -201,7 +201,11 @@
               ` : ''}
             `;
           }
-          if (previewCount) previewCount.textContent = '仕分け完了（処理中フォルダは空になりました）';
+          if (previewCount) {
+            previewCount.textContent = res.remaining_count > 0
+              ? `仕分け完了（実行中に新しく投入された指示書が ${res.remaining_count} 件残っています）`
+              : '仕分け完了（処理中フォルダは空になりました）';
+          }
           if (previewFiles) previewFiles.innerHTML = '';
           t.disabled = false;
           t.dataset.done = '1';
