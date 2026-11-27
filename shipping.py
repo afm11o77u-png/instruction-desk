@@ -164,7 +164,7 @@ def create(handler, c, d):
     c=store(handler, c)
     blocked=_require_edit(handler.user)
     if blocked: return blocked
-    fields=_fields(d)
+    fields=_keep_list_hidden(c, _fields(dict(d, **{k:'' for k in LIST_HIDDEN_KEYS}) if isinstance(c, _ListStore) else d), None)
     now=datetime.now().isoformat(timespec='seconds')
     cur=c.execute('''INSERT INTO shipments(source_id,customer,method,pack,mark_pack,weekday,time_band,car,manager,sales,contract_start,contract_end,created_at,updated_at,created_by_id,updated_by_id,version)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)''',(
@@ -182,7 +182,7 @@ def update(handler, c, d):
     row=c.execute('SELECT * FROM shipments WHERE id=?',(d['id'],)).fetchone()
     if not row: return 404, {'error':'出荷情報が見つかりません。'}
     if row['version']!=d['version']: return 409, {'error':'別の画面で更新されました。入力内容は残しています。一覧を更新してから、もう一度保存してください。'}
-    fields=_fields(d)
+    fields=_keep_list_hidden(c, _fields(dict(d, **{k:'' for k in LIST_HIDDEN_KEYS}) if isinstance(c, _ListStore) else d), row)
     before={k:row[k] for k in fields}
     changes={k:{'before':before[k],'after':fields[k]} for k in fields if before[k]!=fields[k]}
     if not changes: return 200, _row_public(row)
@@ -308,6 +308,15 @@ EXCEL_ALIASES={
     '集配号車':'car','管理担当':'manager','営業担当':'sales','契約開始':'contractStart','契約開始日':'contractStart',
     '契約終了':'contractEnd','契約終了日':'contractEnd',
 }
+# 出荷情報一覧では使わない項目（画面・Excel書き出しに出さず、取込では無視。保存済みの値は残す）
+LIST_HIDDEN_KEYS=('method','pack','markPack','timeBand','sales','contractStart','contractEnd')
+LIST_HIDDEN_COLUMNS=('method','pack','mark_pack','time_band','sales','contract_start','contract_end')
+
+def _keep_list_hidden(c, fields, row):
+    if isinstance(c, _ListStore):
+        for k in LIST_HIDDEN_COLUMNS: fields[k]=row[k] if row is not None else ''
+    return fields
+
 EXCEL_FIELDS=['customer','method','pack','markPack','weekday','timeBand','car','manager','sales','contractStart','contractEnd']
 
 LIST_NUMBER_BASE=900000  # 出荷情報一覧の登録番号は900001から（既存の出荷情報のExcelと番号が重ならず、取り違えた取込は「見つかりません」で止まる）
@@ -342,7 +351,8 @@ def export_book(handler, c):
     blocked=_require_view(handler.user)
     if blocked: return blocked
     rows=c.execute('SELECT * FROM shipments ORDER BY customer, id').fetchall()
-    return 200, _workbook(rows), XLSX
+    cols=[x for x in EXCEL_COLUMNS if x[1] not in LIST_HIDDEN_KEYS] if isinstance(c, _ListStore) else None
+    return 200, _workbook(rows, cols), XLSX
 
 def import_book(handler, c, blob):
     c=store(handler, c)
@@ -365,8 +375,10 @@ def import_book(handler, c, blob):
                 errors.append(f"{item['row']}行目：登録番号 {number} の出荷情報が見つかりません。空欄にすると新しい行になります。")
                 continue
             item['existing']=found
+        if isinstance(c, _ListStore):
+            for k in LIST_HIDDEN_KEYS: item['values'][k]=''
         try:
-            item['fields']=_fields(item['values'])
+            item['fields']=_keep_list_hidden(c, _fields(item['values']), item.get('existing'))
         except ValueError as e:
             errors.append(f"{item['row']}行目：{e}")
             continue
@@ -405,7 +417,8 @@ def _find_number(c, number):
     if row: return row
     return c.execute('SELECT * FROM shipments WHERE id=? AND source_id IS NULL',(number,)).fetchone()
 
-def _workbook(rows):
+def _workbook(rows, columns=None):
+    columns=columns or EXCEL_COLUMNS
     out=BytesIO()
     with ZipFile(out,'w',ZIP_DEFLATED) as book:
         book.writestr('[Content_Types].xml','<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
@@ -413,17 +426,18 @@ def _workbook(rows):
         book.writestr('xl/_rels/workbook.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
         book.writestr('xl/workbook.xml',f'<workbook xmlns="{SHEET_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="出荷情報" sheetId="1" r:id="rId1"/></sheets></workbook>')
         book.writestr('xl/styles.xml',f'<styleSheet xmlns="{SHEET_NS}"><fonts count="1"><font><sz val="11"/><name val="Yu Gothic"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>')
-        sheet=['<row r="1">'+''.join(_xlsx_cell(i,1,label) for i, (label, _) in enumerate(EXCEL_COLUMNS))+'</row>']
+        sheet=['<row r="1">'+''.join(_xlsx_cell(i,1,label) for i, (label, _) in enumerate(columns))+'</row>']
         for index, row in enumerate(rows, 2):
             values={
                 'number':_number(row),'customer':row['customer'],'method':row['method'],'pack':row['pack'],'markPack':row['mark_pack'],
                 'weekday':row['weekday'],'timeBand':row['time_band'],'car':row['car'],'manager':row['manager'],'sales':row['sales'],
                 'contractStart':row['contract_start'],'contractEnd':row['contract_end'],
             }
-            sheet.append(f'<row r="{index}">'+''.join(_xlsx_cell(i,index,values[key]) for i,(label,key) in enumerate(EXCEL_COLUMNS))+'</row>')
+            sheet.append(f'<row r="{index}">'+''.join(_xlsx_cell(i,index,values[key]) for i,(label,key) in enumerate(columns))+'</row>')
         last=max(1, len(rows)+1)
-        cols=''.join(f'<col min="{i}" max="{i}" width="{width}" customWidth="1"/>' for i,width in enumerate([12,28,16,14,18,14,16,18,14,14,14,14],1))
-        book.writestr('xl/worksheets/sheet1.xml',f'<worksheet xmlns="{SHEET_NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>{cols}</cols><sheetData>{"".join(sheet)}</sheetData><autoFilter ref="A1:L{last}"/></worksheet>')
+        widths=dict(zip([k for _l,k in EXCEL_COLUMNS],[12,28,16,14,18,14,16,18,14,14,14,14]))
+        cols=''.join(f'<col min="{i}" max="{i}" width="{widths[key]}" customWidth="1"/>' for i,(_label,key) in enumerate(columns,1))
+        book.writestr('xl/worksheets/sheet1.xml',f'<worksheet xmlns="{SHEET_NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>{cols}</cols><sheetData>{"".join(sheet)}</sheetData><autoFilter ref="A1:{chr(64+len(columns))}{last}"/></worksheet>')
     return out.getvalue()
 
 def _xlsx_cell(col, row, value):
