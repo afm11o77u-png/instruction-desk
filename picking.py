@@ -4,6 +4,7 @@ from datetime import datetime, date
 from pathlib import Path
 from auth import log
 from picking_xlsx import workbook
+PICKING_SAVE_SUBDIR = 'ピッキングリスト'  # バーコードで作成したピッキングリストExcelの自動保存先（共有の【指示書フォルダ】内）
 
 MAIL_DIR = Path(os.environ.get('INSTRUCTION_DATA', str(Path(__file__).resolve().parent / 'data'))) / 'mail-out'
 
@@ -328,6 +329,32 @@ def shift_orders(c,u,sources,before_status,after_status,now,can_access):
 
 def tune_flags(c,u,d,can_access):
     return 400,{'error':'リストの削除は「削除」を使ってください。'}
+
+
+def save_scan_copy(xlsx_bytes, day, base):
+    """バーコードで作成したピッキングリストを共有の【指示書フォルダ】\\ピッキングリスト へ保存し、結果をヘッダーで返す。"""
+    from urllib.parse import quote
+    headers = {}
+    try:
+        # 保存先は【指示書フォルダ】\ピッキングリスト の直下（日付フォルダは作らない）。無ければ直下へ逃がさずエラー表示
+        base_dir = Path(base)
+        save_dir = base_dir / PICKING_SAVE_SUBDIR
+        if not base_dir.is_dir():
+            headers['X-Saved-Error'] = quote('共有フォルダに接続できませんでした。')
+        elif not save_dir.is_dir():
+            headers['X-Saved-Error'] = quote(f'保存先フォルダ「{PICKING_SAVE_SUBDIR}」が見つかりません。')
+        else:
+            base_name = f'{day}_ピッキングリスト'
+            dest = save_dir / f'{base_name}.xlsx'
+            n = 2
+            while dest.exists():
+                dest = save_dir / f'{base_name}_{n}.xlsx'
+                n += 1
+            dest.write_bytes(xlsx_bytes)
+            headers['X-Saved-Path'] = quote(str(dest))
+    except Exception as exc:
+        headers['X-Saved-Error'] = quote(str(exc))
+    return headers
 
 def route_rank(c):
     try:
@@ -1039,22 +1066,7 @@ def handle(h,c,path,d,can_access):
         from urllib.parse import quote
         from picking_sorter import DEFAULT_BASE_DIR, scan_ishikari_workbook
         xlsx_bytes = scan_ishikari_workbook(day, rows, route_rank=route_rank(c))
-        headers = {}
-        try:
-            save_dir = Path(DEFAULT_BASE_DIR)
-            if save_dir.is_dir():
-                base_name = f'{day}_ピッキングリスト'
-                dest = save_dir / f'{base_name}.xlsx'
-                n = 2
-                while dest.exists():
-                    dest = save_dir / f'{base_name}_{n}.xlsx'
-                    n += 1
-                dest.write_bytes(xlsx_bytes)
-                headers['X-Saved-Path'] = quote(str(dest))
-            else:
-                headers['X-Saved-Error'] = quote('共有フォルダに接続できませんでした。')
-        except Exception as exc:
-            headers['X-Saved-Error'] = quote(str(exc))
+        headers = save_scan_copy(xlsx_bytes, day, DEFAULT_BASE_DIR)
         return 200, xlsx_bytes, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', headers
     if path=='/api/picking/carry-check':
         day=text(d.get('date',''),10)
