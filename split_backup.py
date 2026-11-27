@@ -47,7 +47,7 @@ CATEGORIES = {
         'label': '顧客・商品情報（貼付け位置・出荷情報・ネーム情報）',
         'tables': (
             'placements', 'placement_history', 'shipments', 'shipment_history',
-            'shipment_list', 'shipment_list_history',
+            'shipment_list', 'shipment_list_history', 'shipment_contract', 'shipment_contract_history',
             'name_customers', 'name_formats', 'name_samples', 'name_reviews',
             'name_review_history', 'name_exe_downloads',
         ),
