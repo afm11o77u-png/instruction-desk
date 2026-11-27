@@ -75,6 +75,39 @@ class ShipmentListTest(unittest.TestCase):
         self.assertEqual(c.execute("SELECT weekday FROM shipment_list WHERE customer_code='A1'").fetchone()[0], '')
         self.assertEqual([shipping.decode_flag(x) for x in ('91010100', '90000001', '9100100', '81001000', '91002000', '0')], [('月・水・金', True), ('日曜日', True), ('', False), ('', False), ('', False), ('', True)])
 
+    def test_contract_list_and_legacy_owner_only(self):
+        import io, openpyxl
+        c = sqlite3.connect(':memory:'); c.row_factory = sqlite3.Row; shipping.schema(c)
+        shipping.create(H('/api/shipments'), c, dict(customer='旧顧客'))
+        ct = H('/api/shipment-contract')
+        self.assertEqual(shipping.search(H('/api/shipment-contract?customer='), c)[1]['total'], 0)  # 別保存・空から
+        def book(rows):
+            wb = openpyxl.Workbook(); ws = wb.active
+            ws.append(['取引先', '住所', '契約形態', '管理担当', '営業担当', 'ネームラベル出力名'])
+            for r in rows: ws.append(r)
+            b = io.BytesIO(); wb.save(b); return b.getvalue()
+        rows = [['A社', '札幌', 'リース', '藤本', '安藤', '山田太郎'], ['A社', '', '買取', '藤本', '', ''], ['A社', '', 'リース', '藤本', '安藤', ''], ['', '', 'x', '', '', '']]
+        imp = lambda b: shipping.import_book(H('/api/shipment-contract/import'), c, b)
+        self.assertEqual(imp(book(rows))[1], dict(created=2, updated=0, unchanged=0, skipped=1, duplicates=1))
+        rows[1][3] = '大島'
+        self.assertEqual(imp(book(rows))[1], dict(created=0, updated=1, unchanged=1, skipped=1, duplicates=1))  # 顧客名＋契約形態で照合
+        self.assertEqual(imp(book([['A社', '', 'リース', '藤本', '安藤', ''], ['A社', '', 'リース', '大島', '', '']]))[0], 400)  # 同じ契約で担当違いは止める
+        got = [tuple(r) for r in c.execute('SELECT source_id,customer,contract_type,manager,sales FROM shipment_contract ORDER BY id')]
+        self.assertEqual(got, [(800001, 'A社', 'リース', '藤本', '安藤'), (800002, 'A社', '買取', '大島', '')])
+        self.assertNotIn('山田太郎', ' '.join(str(tuple(r)) for t in ('shipment_contract', 'shipment_contract_history') for r in c.execute('SELECT * FROM ' + t)))
+        r = shipping.search(H('/api/shipment-contract?customer='), c)[1]['items'][0]
+        self.assertEqual(shipping.update(ct, c, dict(id=r['id'], version=r['version'], customer='A社', contractType='リース', manager='藤本', sales='菅沼'))[1]['sales'], '菅沼')
+        import zipfile
+        sheet = zipfile.ZipFile(io.BytesIO(shipping.export_book(ct, c)[1])).read('xl/worksheets/sheet1.xml').decode()
+        self.assertIn('契約形態', sheet); self.assertNotIn('集配曜日', sheet)
+        self.assertEqual(imp(shipping.export_book(ct, c)[1])[1]['unchanged'], 2)  # 書き出しをそのまま戻せる
+        self.assertEqual(c.execute('SELECT COUNT(*) FROM shipments').fetchone()[0], 1)
+        # 旧データは主管理者のみ。集配・契約・担当は今までどおり閲覧できる
+        staff = H('/api/shipments?customer='); staff.user = dict(staff.user, role='sales')
+        self.assertEqual(shipping.search(staff, c)[0], 403)
+        staff.path = '/api/shipment-contract?customer='
+        self.assertEqual(shipping.search(staff, c)[1]['total'], 2)
+
 
 def json_dump(c):
     return ' '.join(str(tuple(r)) for t in ('shipment_list', 'shipment_list_history') for r in c.execute('SELECT * FROM ' + t))

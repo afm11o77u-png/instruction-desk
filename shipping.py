@@ -35,15 +35,36 @@ PEOPLE=['森末支店長','横内課長','横内次長','山田課長','河口�
 LIST_PREFIX='/api/shipment-list'
 _TABLE_WORDS=re.compile(r'\b(shipments|shipment_history)\b')
 
-class _ListStore:
-    """出荷情報一覧（別保存）用。SQLの表名だけ shipment_list / shipment_list_history に置き換える。"""
+CONTRACT_PREFIX='/api/shipment-contract'
+
+class _AltStore:
+    """別保存の一覧用。SQLの表名だけ置き換える（処理は既存の出荷情報と共通）。"""
+    TABLE='shipments'
     def __init__(self, c): self._c=c
-    def execute(self, sql, *args): return self._c.execute(_TABLE_WORDS.sub(lambda m: 'shipment_list' if m.group(1)=='shipments' else 'shipment_list_history', sql), *args)
+    def execute(self, sql, *args): return self._c.execute(_TABLE_WORDS.sub(lambda m: self.TABLE if m.group(1)=='shipments' else self.TABLE+'_history', sql), *args)
     def __getattr__(self, name): return getattr(self._c, name)
 
+class _ListStore(_AltStore):
+    """出荷情報一覧「集配」：shipment_list / shipment_list_history。"""
+    TABLE='shipment_list'
+
+class _ContractStore(_AltStore):
+    """出荷情報一覧「契約・担当」：shipment_contract / shipment_contract_history。"""
+    TABLE='shipment_contract'
+
 def store(handler, c):
-    """/api/shipment-list… は出荷情報一覧、/api/shipments… は既存の出荷情報。"""
-    return _ListStore(c) if str(getattr(handler,'path','')).startswith(LIST_PREFIX) else c
+    """/api/shipment-list…＝集配、/api/shipment-contract…＝契約・担当、/api/shipments…＝旧データ（主管理者のみ）。"""
+    path=str(getattr(handler,'path',''))
+    if path.startswith(LIST_PREFIX): return _ListStore(c)
+    if path.startswith(CONTRACT_PREFIX): return _ContractStore(c)
+    return c
+
+LEGACY_DENIED=(403, {'error':'旧データは主管理者だけが利用できます。'})
+
+def _legacy_denied(handler, c):
+    """旧データ（元の出荷情報 shipments）の画面・APIは主管理者のみ。バーコード配送などはDBを直接読むので影響しない。"""
+    user=getattr(handler,'user',None)
+    return not isinstance(c, _AltStore) and bool(user) and not user['must_change'] and user['role']!='owner'
 
 def schema(c):
     c.execute('''CREATE TABLE IF NOT EXISTS shipments (
@@ -79,8 +100,12 @@ def schema(c):
     _schema_list(c)
 
 def _schema_list(c):
-    for sql in (r[0] for r in c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('shipments','shipment_history') ORDER BY name").fetchall()):
-        c.execute(_TABLE_WORDS.sub(lambda m: 'shipment_list' if m.group(1)=='shipments' else 'shipment_list_history', sql.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+    base=[r[0] for r in c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('shipments','shipment_history') ORDER BY name").fetchall()]
+    for table in ('shipment_list','shipment_contract'):
+        for sql in base:
+            c.execute(_TABLE_WORDS.sub(lambda m: table if m.group(1)=='shipments' else table+'_history', sql.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+    if 'contract_type' not in {r[1] for r in c.execute('PRAGMA table_info(shipment_contract)')}:
+        c.execute("ALTER TABLE shipment_contract ADD COLUMN contract_type TEXT NOT NULL DEFAULT ''")
     if 'customer_code' not in {r[1] for r in c.execute('PRAGMA table_info(shipment_list)')}:
         c.execute("ALTER TABLE shipment_list ADD COLUMN customer_code TEXT NOT NULL DEFAULT ''")  # 顧客マスタ取込の照合用
 
@@ -93,7 +118,8 @@ def _row_public(row):
         'customer':row['customer'],'method':row['method'],'pack':row['pack'],'markPack':row['mark_pack'],
         'weekday':row['weekday'],'timeBand':row['time_band'],'car':row['car'],'manager':row['manager'],'sales':row['sales'],
         'contractStart':row['contract_start'],'contractEnd':row['contract_end'],
-        'createdAt':row['created_at'],'updatedAt':row['updated_at'],'version':row['version']
+        'createdAt':row['created_at'],'updatedAt':row['updated_at'],'version':row['version'],
+        **({'contractType':row['contract_type']} if 'contract_type' in row.keys() else {})
     }
 
 def _require_view(user):
@@ -140,6 +166,7 @@ def _fields(d):
 
 def search(handler, c):
     c=store(handler, c)
+    if _legacy_denied(handler, c): return LEGACY_DENIED
     from urllib.parse import parse_qs, urlparse
     blocked=_require_view(handler.user)
     if blocked: return blocked
@@ -157,6 +184,7 @@ def search(handler, c):
 
 def customers(handler, c):
     c=store(handler, c)
+    if _legacy_denied(handler, c): return LEGACY_DENIED
     blocked=_require_view(handler.user)
     if blocked: return blocked
     names=[r['customer'] for r in c.execute("SELECT DISTINCT customer FROM shipments WHERE customer<>'' ORDER BY customer")]
@@ -164,8 +192,10 @@ def customers(handler, c):
 
 def create(handler, c, d):
     c=store(handler, c)
+    if _legacy_denied(handler, c): return LEGACY_DENIED
     blocked=_require_edit(handler.user)
     if blocked: return blocked
+    if isinstance(c, _ContractStore): return _contract_save(handler, c, d, None)
     fields=_keep_list_hidden(c, _fields(dict(d, **{k:'' for k in LIST_HIDDEN_KEYS}) if isinstance(c, _ListStore) else d), None)
     now=datetime.now().isoformat(timespec='seconds')
     cur=c.execute('''INSERT INTO shipments(source_id,customer,method,pack,mark_pack,weekday,time_band,car,manager,sales,contract_start,contract_end,created_at,updated_at,created_by_id,updated_by_id,version)
@@ -178,12 +208,14 @@ def create(handler, c, d):
 
 def update(handler, c, d):
     c=store(handler, c)
+    if _legacy_denied(handler, c): return LEGACY_DENIED
     blocked=_require_edit(handler.user)
     if blocked: return blocked
     if type(d.get('id')) is not int or type(d.get('version')) is not int: return 400, {'error':'出荷情報を選択してください。'}
     row=c.execute('SELECT * FROM shipments WHERE id=?',(d['id'],)).fetchone()
     if not row: return 404, {'error':'出荷情報が見つかりません。'}
     if row['version']!=d['version']: return 409, {'error':'別の画面で更新されました。入力内容は残しています。一覧を更新してから、もう一度保存してください。'}
+    if isinstance(c, _ContractStore): return _contract_save(handler, c, d, row)
     fields=_keep_list_hidden(c, _fields(dict(d, **{k:'' for k in LIST_HIDDEN_KEYS}) if isinstance(c, _ListStore) else d), row)
     before={k:row[k] for k in fields}
     changes={k:{'before':before[k],'after':fields[k]} for k in fields if before[k]!=fields[k]}
@@ -321,11 +353,13 @@ def _keep_list_hidden(c, fields, row):
 
 EXCEL_FIELDS=['customer','method','pack','markPack','weekday','timeBand','car','manager','sales','contractStart','contractEnd']
 
+CONTRACT_NUMBER_BASE=800000  # 契約・担当の登録番号は800001から（他の一覧と重ならない）
 LIST_NUMBER_BASE=900000  # 出荷情報一覧の登録番号は900001から（既存の出荷情報のExcelと番号が重ならず、取り違えた取込は「見つかりません」で止まる）
 
 def _next_source(c):
     current=c.execute('SELECT MAX(source_id) FROM shipments').fetchone()[0] or 0
     if isinstance(c, _ListStore): current=max(int(current), LIST_NUMBER_BASE)
+    if isinstance(c, _ContractStore): current=max(int(current), CONTRACT_NUMBER_BASE)
     return int(current)+1
 
 def _number(row):
@@ -350,19 +384,22 @@ def _excel_day(value):
 
 def export_book(handler, c):
     c=store(handler, c)
+    if _legacy_denied(handler, c): return LEGACY_DENIED
     blocked=_require_view(handler.user)
     if blocked: return blocked
     rows=c.execute('SELECT * FROM shipments ORDER BY customer, id').fetchall()
-    cols=[x for x in EXCEL_COLUMNS if x[1] not in LIST_HIDDEN_KEYS] if isinstance(c, _ListStore) else None
+    cols=[x for x in EXCEL_COLUMNS if x[1] not in LIST_HIDDEN_KEYS] if isinstance(c, _ListStore) else CONTRACT_COLUMNS if isinstance(c, _ContractStore) else None
     return 200, _workbook(rows, cols), XLSX
 
 def import_book(handler, c, blob):
     c=store(handler, c)
+    if _legacy_denied(handler, c): return LEGACY_DENIED
     blocked=_require_edit(handler.user)
     if blocked: return blocked
     if isinstance(c, _ListStore):
         master=_import_master(handler, c, blob)
         if master is not None: return master
+    if isinstance(c, _ContractStore): return _import_contract(handler, c, blob)
     try: parsed=_parse_book(blob)
     except ValueError as e: return 400, {'error':str(e)}
     errors=[]
@@ -437,11 +474,12 @@ def _workbook(rows, columns=None):
                 'number':_number(row),'customer':row['customer'],'method':row['method'],'pack':row['pack'],'markPack':row['mark_pack'],
                 'weekday':row['weekday'],'timeBand':row['time_band'],'car':row['car'],'manager':row['manager'],'sales':row['sales'],
                 'contractStart':row['contract_start'],'contractEnd':row['contract_end'],
+                'contractType':row['contract_type'] if 'contract_type' in row.keys() else '',
             }
             sheet.append(f'<row r="{index}">'+''.join(_xlsx_cell(i,index,values[key]) for i,(label,key) in enumerate(columns))+'</row>')
         last=max(1, len(rows)+1)
         widths=dict(zip([k for _l,k in EXCEL_COLUMNS],[12,28,16,14,18,14,16,18,14,14,14,14]))
-        cols=''.join(f'<col min="{i}" max="{i}" width="{widths[key]}" customWidth="1"/>' for i,(_label,key) in enumerate(columns,1))
+        cols=''.join(f'<col min="{i}" max="{i}" width="{widths.get(key,16)}" customWidth="1"/>' for i,(_label,key) in enumerate(columns,1))
         book.writestr('xl/worksheets/sheet1.xml',f'<worksheet xmlns="{SHEET_NS}"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>{cols}</cols><sheetData>{"".join(sheet)}</sheetData><autoFilter ref="A1:{chr(64+len(columns))}{last}"/></worksheet>')
     return out.getvalue()
 
@@ -643,3 +681,86 @@ def _import_master(handler, c, blob):
             c.execute('INSERT INTO shipment_history(shipment_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(cur.lastrowid,now,'顧客マスタ取込',handler.user['id'],_actor(handler.user),json.dumps(changes,ensure_ascii=False)))
             created+=1
     return 200, {'created':created,'updated':updated,'unchanged':unchanged,'skipped':skipped,'unknownFlags':unknown,'master':True}
+
+
+# ---- 出荷情報一覧「契約・担当」：顧客名・契約形態・管理担当・営業 ----
+CONTRACT_COLUMNS=[('登録番号','number'),('顧客名','customer'),('契約形態','contractType'),('管理担当','manager'),('営業','sales')]
+CONTRACT_ALIASES={'登録番号':'number','取引先':'customer','顧客名':'customer','顧客':'customer','契約形態':'contractType','管理担当':'manager','営業担当':'sales','営業':'sales'}
+
+def _contract_fields(d):
+    return {'customer':_text(d.get('customer'),'顧客名',50,True),'contract_type':_text(d.get('contractType'),'契約形態',50),
+            'manager':_text(d.get('manager'),'管理担当',50),'sales':_text(d.get('sales'),'営業',50)}
+
+def _contract_write(handler, c, fields, row, now, action):
+    if row is None:
+        cur=c.execute('INSERT INTO shipments(source_id,customer,contract_type,manager,sales,created_at,updated_at,created_by_id,updated_by_id,version) VALUES(?,?,?,?,?,?,?,?,?,1)',
+            (_next_source(c),fields['customer'],fields['contract_type'],fields['manager'],fields['sales'],now,now,handler.user['id'],handler.user['id']))
+        sid=cur.lastrowid; changes={k:{'before':'','after':v} for k,v in fields.items() if v}
+    else:
+        changes={k:{'before':row[k],'after':v} for k,v in fields.items() if row[k]!=v}
+        if not changes: return row['id'], False
+        sid=row['id']
+        c.execute('UPDATE shipments SET customer=?,contract_type=?,manager=?,sales=?,updated_at=?,updated_by_id=?,version=version+1 WHERE id=?',
+            (fields['customer'],fields['contract_type'],fields['manager'],fields['sales'],now,handler.user['id'],sid))
+    c.execute('INSERT INTO shipment_history(shipment_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(sid,now,action,handler.user['id'],_actor(handler.user),json.dumps(changes,ensure_ascii=False)))
+    return sid, True
+
+def _contract_save(handler, c, d, row):
+    fields=_contract_fields(d)
+    sid,_=_contract_write(handler, c, fields, row, datetime.now().isoformat(timespec='seconds'), '登録' if row is None else '修正')
+    return 200, _row_public(c.execute('SELECT * FROM shipments WHERE id=?',(sid,)).fetchone())
+
+def _import_contract(handler, c, blob):
+    """取引先・契約形態・管理担当・営業担当（または画面の書き出し形式）を取り込む。ほかの列は読まない。
+    照合：登録番号があればその行。なければ 顧客名＋契約形態（同じ顧客に複数の契約形態がありうるため）。"""
+    if not isinstance(blob,(bytes,bytearray)) or not blob.startswith(b'PK'): return 400, {'error':'Excelファイル（.xlsx）を選んでください。'}
+    if len(blob)>8_000_000: return 400, {'error':'ファイルが大きすぎます。'}
+    try: grid=_sheet_grid(ZipFile(BytesIO(blob)))
+    except BadZipFile: return 400, {'error':'Excelファイル（.xlsx）を選んでください。'}
+    except ValueError as e: return 400, {'error':str(e)}
+    header=cols=None
+    for r in range(1, 6):
+        found={}
+        for col in range(1, 80):
+            key=CONTRACT_ALIASES.get(re.sub(r'\s+','',grid.get((r,col),'')))
+            if key and key not in found.values(): found[col]=key
+        if 'customer' in found.values(): header, cols=r, found; break
+    if not cols: return 400, {'error':'1行目に「取引先」（または「顧客名」）の列が必要です。'}
+    if any(r>header+IMPORT_MAX_ROWS for r,_c in grid): return 400, {'error':f'行が多すぎます。{IMPORT_MAX_ROWS}行までにしてください。'}
+    items=[]; errors=[]; keys={}; numbers=set(); skipped=duplicates=0
+    for r in range(header+1, header+IMPORT_MAX_ROWS+1):
+        v={key:_excel_text(grid.get((r,col),'')) for col,key in cols.items()}
+        if not any(v.values()): continue
+        if not v.get('customer'): skipped+=1; continue
+        try:
+            fields=_contract_fields(v)
+            number=_excel_number(v.get('number',''), r) if v.get('number') else None
+        except ValueError as e: errors.append(f'{r}行目：{e}'); continue
+        if number is not None:
+            if number in numbers: errors.append(f'{r}行目：登録番号 {number} がファイル内で重複しています。'); continue
+            numbers.add(number)
+            existing=_find_number(c, number)
+            if not existing: errors.append(f'{r}行目：登録番号 {number} が見つかりません。空欄にすると新しい行になります。'); continue
+            items.append((fields, existing)); continue
+        key=(fields['customer'], fields['contract_type'])
+        if key in keys:
+            if {k:v for k,v in keys[key].items() if k!='_row'}==fields: duplicates+=1; continue  # まったく同じ行は1件として扱う
+            errors.append(f'{r}行目：「{key[0]}」の契約形態「{key[1] or "空欄"}」が {keys[key]["_row"]}行目と重複していて、担当が違います。'); continue
+        keys[key]=dict(fields, _row=r)
+        items.append((fields, None))
+    for k in keys.values(): k.pop('_row', None)
+    if errors:
+        shown=errors[:8]
+        if len(errors)>8: shown.append(f'ほか {len(errors)-8} 件')
+        return 400, {'error':'\n'.join(shown)}
+    if not items: return 400, {'error':'登録できる行がありません。'}
+    by_key={}
+    for row in c.execute('SELECT * FROM shipments ORDER BY id').fetchall(): by_key.setdefault((row['customer'], row['contract_type']), row)
+    now=datetime.now().isoformat(timespec='seconds'); created=updated=unchanged=0
+    for fields, row in items:
+        if row is None: row=by_key.get((fields['customer'], fields['contract_type']))
+        _sid, changed=_contract_write(handler, c, fields, row, now, 'Excel取込')
+        if row is None: created+=1
+        elif changed: updated+=1
+        else: unchanged+=1
+    return 200, {'created':created,'updated':updated,'unchanged':unchanged,'skipped':skipped,'duplicates':duplicates}

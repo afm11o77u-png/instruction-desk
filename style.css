@@ -1129,3 +1129,6 @@ body:not(.authenticated) #workspace-home{display:none!important}
 
 /* 出荷情報一覧：使わない項目を隠す */
 #shipinfodesk.ship-list-mode .ship-extra,#shipinfoview.ship-list-mode .ship-extra{display:none}
+#shipinfodesk:not(.ship-contract-mode) .ship-ct,#shipinfoview:not(.ship-contract-mode) .ship-ct{display:none}
+#shipinfodesk.ship-contract-mode .ship-nc,#shipinfoview.ship-contract-mode .ship-nc{display:none}
+.shipkindbar{display:flex;gap:4px;margin:6px 0 4px}.shipkindbar button{padding:4px 12px}
