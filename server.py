@@ -10,6 +10,7 @@ import label_sets
 import fixed_label_formats
 import picking
 import picking_sorter
+import picking_merge_queue
 import placement
 import split_backup
 import shipping
@@ -61,6 +62,14 @@ def connect():
     c = sqlite3.connect(DB, timeout=15)
     c.row_factory = sqlite3.Row
     return c
+
+def _merge_queue_pending():
+    with connect() as c:
+        return picking_merge_queue.pending(c)
+
+def _merge_queue_mark(ids, file_name):
+    with connect() as c:
+        picking_merge_queue.mark_merged(c, ids, file_name)
 
 def initialize():
     rental_management.initialize(RENTAL_DB)
@@ -1440,6 +1449,9 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         {'Content-Disposition': 'attachment; filename="picking-list-format.xlsx"'},
                     )
                 data = picking_sorter.preview_sort()
+                with connect() as qc:
+                    batches = picking_merge_queue.listing(qc)
+                data['barcode_pending'] = {'lists': len(batches), 'rows': sum(b['rows'] for b in batches)}
                 return self.reply(200, data)
             except Exception as e:
                 return self.reply(500, {'error': f'プレビュー取得エラー: {e}'})
@@ -1844,6 +1856,8 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                         processed_date=d.get('processed_date'),
                         customer_readings=customer_readings,
                         route_rank=route_rank,
+                        barcode_loader=_merge_queue_pending,
+                        barcode_marker=_merge_queue_mark,
                     )
                     return self.reply(200, data)
                 except ValueError as e:

@@ -65,6 +65,7 @@ function syncBarcodeControls(){
  if(!scanForm)return;
  scanForm.hidden=!legacyScan||!editable();
  scanExport.disabled=busy||pendingScans>0||!current?.manual.some(row=>row.barcode);
+ const queueBtn=$('#pickbarcodequeue');if(queueBtn)queueBtn.disabled=scanExport.disabled;
 }
 
 if(scanForm)scanForm.onsubmit=e=>{
@@ -127,6 +128,26 @@ if(scanExport)scanExport.onclick=()=>run(async()=>{
  setTimeout(()=>URL.revokeObjectURL(url),10000);
  dirty=false;
  scanStatus.textContent='共有フォルダへ接続できなかったため、パソコンにダウンロードしました。';
+});
+
+// 統合待ち：Excelを作らず保存し、指示書ピッキング自動仕分けの「仕分けを実行する」で一緒に統合する
+const scanQueueBtn=scanExport&&legacyScan?document.createElement('button'):null;
+if(scanQueueBtn){scanQueueBtn.type='button';scanQueueBtn.id='pickbarcodequeue';scanQueueBtn.textContent='統合待ちにする';scanExport.after(scanQueueBtn)}
+function paintMergeQueue(list){
+ let box=$('#mergequeue');
+ if(!box){const desk=$('#legacy-scan-desk');if(!desk)return;box=document.createElement('section');box.id='mergequeue';box.className='mergequeue';desk.append(box)}
+ box.innerHTML='<h2>統合待ち</h2>'+(list.length?'<table><thead><tr><th>保存名</th><th>依頼日</th><th class="num">明細</th><th>保存日時</th><th></th></tr></thead><tbody>'+list.map(b=>`<tr><td>${esc(b.title)}</td><td>${esc(b.day)}</td><td class="num">${b.rows}</td><td>${esc(String(b.createdAt||'').slice(0,16))}</td><td><button type="button" data-mq-cancel="${b.id}">取消</button></td></tr>`).join('')+'</tbody></table>':'<p class="hint">なし</p>');
+ box.querySelectorAll('[data-mq-cancel]').forEach(b=>b.onclick=()=>{const row=list.find(x=>x.id===+b.dataset.mqCancel);if(!row||!confirm(`「${row.title}」（${row.rows}件）を統合待ちから取り消しますか？`))return;run(async()=>{const data=await api('/api/picking/merge-queue',{action:'cancel',id:row.id});paintMergeQueue(data.batches||[]);scanStatus.textContent='統合待ちを取り消しました。'})});
+}
+async function loadMergeQueue(){try{const data=await api('/api/picking/merge-queue');paintMergeQueue(data.batches||[])}catch(e){scanStatus.textContent=e.message}}
+function resetScanList(){current=blankList();current.title='バーコード取込 ピッキングリスト';$('#title').value=current.title;$('#date').value=current.date;dirty=false;preview();syncBarcodeControls()}
+if(scanQueueBtn)scanQueueBtn.onclick=()=>run(async()=>{
+ flushInputs();
+ const rows=allrows();
+ const data=await api('/api/picking/merge-queue',{action:'add',title:current.title,date:current.date,rows});
+ paintMergeQueue(data.batches||[]);
+ resetScanList();
+ scanStatus.textContent=`統合待ちにしました（${rows.length}件）。`;
 });
 
 function syncAddRow(){const btn=$('#addrow');if(!btn||!current)return;btn.hidden=legacyScan||!editable();btn.disabled=legacyScan||!editable();syncBarcodeControls()}
@@ -287,6 +308,7 @@ run(async()=>{const me=await api('/api/me');user=me.user;const role=user?.role;c
  desk.hidden=false;
  preview();
  if(!scanStock.value)scanStock.value='warehouse';
+ await loadMergeQueue();
  scanInput.focus();
  return;
 }await loadBoard();if(popupMode){const id=Number(pageQuery.get('list'));if(!id){parent.postMessage({type:'picking-back'},location.origin);return}await open(await api('/api/picking/'+id));message('保存したピッキングリストです。うしろの新規作成の入力とは別です。送信前なら、ここで修正して保存できます。');return}if(boardMode){await openFromBoard();return}await openBlank()});
