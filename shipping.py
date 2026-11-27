@@ -81,6 +81,8 @@ def schema(c):
 def _schema_list(c):
     for sql in (r[0] for r in c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name IN ('shipments','shipment_history') ORDER BY name").fetchall()):
         c.execute(_TABLE_WORDS.sub(lambda m: 'shipment_list' if m.group(1)=='shipments' else 'shipment_list_history', sql.replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS', 1)))
+    if 'customer_code' not in {r[1] for r in c.execute('PRAGMA table_info(shipment_list)')}:
+        c.execute("ALTER TABLE shipment_list ADD COLUMN customer_code TEXT NOT NULL DEFAULT ''")  # 顧客マスタ取込の照合用
 
 def _actor(user):
     return f"{user['name']} ({user['login']})"
@@ -358,6 +360,9 @@ def import_book(handler, c, blob):
     c=store(handler, c)
     blocked=_require_edit(handler.user)
     if blocked: return blocked
+    if isinstance(c, _ListStore):
+        master=_import_master(handler, c, blob)
+        if master is not None: return master
     try: parsed=_parse_book(blob)
     except ValueError as e: return 400, {'error':str(e)}
     errors=[]
@@ -559,3 +564,82 @@ def _sheet_col(ref):
     number=0
     for ch in letters: number=number*26+ord(ch)-64
     return number
+
+
+# ---- 出荷情報一覧：顧客マスタ（Access）の書き出しExcelをそのまま取り込む ----
+# 読むのは 顧客コード・顧客名・集配曜日フラグ・集配サイクル だけ。住所・電話・金額などは読まない・保存しない。
+MASTER_COLUMNS={'顧客コード':'code','顧客名':'name','集配曜日フラグ':'flag','集配サイクル':'cycle'}
+DAYS='月火水木金土日'
+
+def decode_flag(flag):
+    """集配曜日フラグ（9＋月〜日の7桁、1=集配あり）→ 集配曜日。(曜日, 読めたか)。0・空欄・90000000 は空欄。"""
+    text=_excel_text(flag)
+    if text in ('','0'): return '', True
+    if not re.fullmatch(r'9[01]{7}', text): return '', False
+    days=[DAYS[i] for i,ch in enumerate(text[1:]) if ch=='1']
+    if not days: return '', True
+    if len(days)==1: return days[0]+'曜日', True
+    if len(days)==7: return '毎日', True
+    return '・'.join(days), True
+
+def _master_header(grid):
+    for row in range(1, 6):
+        cols={}
+        for col in range(1, 80):
+            label=re.sub(r'\s+','',grid.get((row,col),''))
+            if label in MASTER_COLUMNS and MASTER_COLUMNS[label] not in cols.values(): cols[col]=MASTER_COLUMNS[label]
+        if 'flag' in cols.values() and 'name' in cols.values(): return row, cols
+    return None
+
+def _import_master(handler, c, blob):
+    if not isinstance(blob,(bytes,bytearray)) or not blob.startswith(b'PK') or len(blob)>8_000_000: return None
+    try: book=ZipFile(BytesIO(blob))
+    except BadZipFile: return None
+    try: grid=_sheet_grid(book)
+    except ValueError: return None
+    found=_master_header(grid)
+    if not found: return None
+    header, cols=found
+    if any(r>header+IMPORT_MAX_ROWS for r,_c in grid): return 400, {'error':f'行が多すぎます。{IMPORT_MAX_ROWS}行までにしてください。'}
+    items=[]; errors=[]; seen=set(); skipped=unknown=0
+    for row in range(header+1, header+IMPORT_MAX_ROWS+1):
+        v={key:_excel_text(grid.get((row,col),'')) for col,key in cols.items()}
+        if not any(v.values()): continue
+        if not v.get('name'): skipped+=1; continue
+        code=v.get('code','')
+        if len(v['name'])>50: errors.append(f'{row}行目：顧客名は50文字以内にしてください。'); continue
+        if len(code)>30: errors.append(f'{row}行目：顧客コードを確認してください。'); continue
+        if code and code in seen: errors.append(f'{row}行目：顧客コード {code} がファイル内で重複しています。'); continue
+        if code: seen.add(code)
+        weekday, ok=decode_flag(v.get('flag'))
+        if not ok: unknown+=1
+        cycle=v.get('cycle','')
+        car='' if cycle in ('','0') else cycle[:50]
+        items.append(dict(row=row, code=code, name=v['name'], weekday=weekday, car=car))
+    if errors:
+        shown=errors[:8]
+        if len(errors)>8: shown.append(f'ほか {len(errors)-8} 件')
+        return 400, {'error':'\n'.join(shown)}
+    if not items: return 400, {'error':'登録できる行がありません。'}
+    rows=c.execute('SELECT * FROM shipments ORDER BY id').fetchall()
+    by_code={r['customer_code']:r for r in rows if r['customer_code']}
+    by_name={}
+    for r in rows:
+        if not r['customer_code']: by_name.setdefault(r['customer'],[]).append(r)  # 顧客コード未設定の行は顧客名（同名は登録順）で照合
+    now=datetime.now().isoformat(timespec='seconds'); created=updated=unchanged=0
+    for it in items:
+        row=by_code.get(it['code']) if it['code'] else None
+        if row is None and by_name.get(it['name']): row=by_name[it['name']].pop(0)
+        if row is not None:
+            new={'customer':it['name'],'weekday':it['weekday'],'car':it['car'],'customer_code':it['code'] or row['customer_code']}
+            changes={k:{'before':row[k],'after':val} for k,val in new.items() if row[k]!=val}
+            if not changes: unchanged+=1; continue
+            c.execute('UPDATE shipments SET customer=?,weekday=?,car=?,customer_code=?,updated_at=?,updated_by_id=?,version=version+1 WHERE id=?',(new['customer'],new['weekday'],new['car'],new['customer_code'],now,handler.user['id'],row['id']))
+            c.execute('INSERT INTO shipment_history(shipment_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(row['id'],now,'顧客マスタ取込',handler.user['id'],_actor(handler.user),json.dumps(changes,ensure_ascii=False)))
+            updated+=1
+        else:
+            cur=c.execute('INSERT INTO shipments(source_id,customer,weekday,car,customer_code,created_at,updated_at,created_by_id,updated_by_id,version) VALUES(?,?,?,?,?,?,?,?,?,1)',(_next_source(c),it['name'],it['weekday'],it['car'],it['code'],now,now,handler.user['id'],handler.user['id']))
+            changes={k:{'before':'','after':it[k2]} for k,k2 in (('customer','name'),('weekday','weekday'),('car','car'),('customer_code','code')) if it[k2]}
+            c.execute('INSERT INTO shipment_history(shipment_id,at,action,actor_id,actor,changes) VALUES(?,?,?,?,?,?)',(cur.lastrowid,now,'顧客マスタ取込',handler.user['id'],_actor(handler.user),json.dumps(changes,ensure_ascii=False)))
+            created+=1
+    return 200, {'created':created,'updated':updated,'unchanged':unchanged,'skipped':skipped,'unknownFlags':unknown,'master':True}
