@@ -300,10 +300,12 @@ def preview_sort() -> dict:
         }
     files = get_pending_files()
     addresses = []
+    ref_repairs = []
     for f in files:
         addr = _extract_address_from_workbook(f)
         if addr:
             addresses.append(addr)
+        _extract_rows_from_workbook(f, repairs=ref_repairs)
 
     return {
         "exists": True,
@@ -313,7 +315,8 @@ def preview_sort() -> dict:
         "next_ishikari_file": next_ishikari,
         "default_report_file": def_report,
         "default_processed_date": now.date().isoformat(),
-        "addresses": addresses
+        "addresses": addresses,
+        "ref_repairs": ref_repairs,
     }
 
 _INVALID_FILENAME_RE = re.compile(r'[\\/:*?"<>|]')
@@ -326,8 +329,43 @@ def _sanitize_custom_filename(custom_filename: str, label: str) -> str:
         file_name += ".xlsx"
     return file_name
 
-def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False) -> list[dict]:
-    """ピッキングリストから行を抽出し、対応する指示書の備考を優先する。"""
+_EXCEL_ERROR_TOKENS = frozenset({"#REF!", "#VALUE!", "#NAME?", "#N/A", "#DIV/0!", "#NUM!", "#NULL!", "#REF"})
+_FIELD_LABELS = {
+    "requester": "依頼者", "customer": "顧客名", "name": "アイテム名",
+    "maker": "メーカー", "sku": "品番", "size": "サイズ",
+    "condition": "新古", "quantity": "数量", "note": "備考",
+    "note2": "備考_1", "stock": "在庫場所",
+}
+_INSTRUCTION_DETAIL_COL = {
+    "name": (0, "A"), "maker": (1, "B"), "sku": (2, "C"), "size": (3, "D"),
+    "condition": (4, "E"), "quantity": (5, "F"), "note": (6, "G"),
+    "note2": (7, "H"), "stock": (8, "I"),
+}
+
+
+def _is_excel_error(val) -> bool:
+    if not isinstance(val, str):
+        return False
+    s = val.strip().upper()
+    return s in _EXCEL_ERROR_TOKENS or s.startswith("#REF")
+
+
+def _instruction_requester_name(wb) -> str:
+    if "指示書" not in wb.sheetnames:
+        return ""
+    for row in wb["指示書"].iter_rows(min_row=1, max_row=9, max_col=12, values_only=True):
+        vals = [clean_cell_text(c) for c in row]
+        for idx, v in enumerate(vals):
+            key = v.replace(" ", "").replace("　", "")
+            if key in ("依頼者", "営業担当", "担当", "担当者", "受付者"):
+                for nxt in vals[idx + 1:idx + 4]:
+                    if nxt and not _is_excel_error(nxt):
+                        return nxt
+    return ""
+
+
+def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False, repairs: list | None = None) -> list[dict]:
+    """ピッキングリストから行を抽出し、対応する指示書の備考を優先する。#REF!等は指示書シートから自動補完する。"""
     rows = []
     if strict and file_path.suffix.lower() not in (".xlsx", ".xlsm"):
         raise ValueError(f"非対応のファイル形式です（{file_path.name}）。.xlsx 形式に変換してから実行してください。")
@@ -386,9 +424,10 @@ def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False) -> lis
         == (2, 4, 5, 7, 8, 9)
     ):
         details = wb["指示書"].iter_rows(
-            min_row=10, max_row=22, max_col=8, values_only=True
+            min_row=10, max_row=22, max_col=9, values_only=True
         )
-        if tuple(clean_cell_text(value) for value in next(details, ())) == (
+        header_tuple = tuple(clean_cell_text(value) for value in next(details, ())[:8])
+        if header_tuple == (
             "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考"
         ):
             instruction_rows = tuple(details)
@@ -402,16 +441,67 @@ def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False) -> lis
         header_row_idx = 1
 
     instruction_customer, display_customer = _instruction_customer_names(wb)
-    for detail_index, row in enumerate(
-        target_sheet.iter_rows(min_row=header_row_idx + 1, values_only=True)
-    ):
+    instruction_requester = _instruction_requester_name(wb)
+    all_pick_rows = list(target_sheet.iter_rows(min_row=header_row_idx + 1, values_only=True))
+    fallback_requester = instruction_requester
+    if not fallback_requester:
+        req_idx = header_col_map.get("requester")
+        if req_idx is not None:
+            for r in all_pick_rows:
+                if r and req_idx < len(r):
+                    cand = clean_cell_text(r[req_idx])
+                    if cand and not _is_excel_error(cand):
+                        fallback_requester = cand
+                        break
+
+    for detail_index, row in enumerate(all_pick_rows):
         if not row:
             continue
-        
+        excel_row = header_row_idx + 1 + detail_index
+        detail = instruction_rows[detail_index] if detail_index < len(instruction_rows) else None
+        inst_row_num = 11 + detail_index
+        row_repairs = []
+
         def get_val(key):
             idx = header_col_map.get(key)
-            if idx is not None and idx < len(row):
-                return row[idx]
+            val = row[idx] if (idx is not None and idx < len(row)) else None
+            if not _is_excel_error(val):
+                return val
+            # #REF! 等の数式エラーを指示書シートの対応セルから自動補完
+            repaired = None
+            source_ref = ""
+            if key in _INSTRUCTION_DETAIL_COL and detail is not None:
+                col_i, col_letter = _INSTRUCTION_DETAIL_COL[key]
+                if col_i < len(detail) and not _is_excel_error(detail[col_i]):
+                    repaired = detail[col_i]
+                    source_ref = f"指示書!{col_letter}{inst_row_num}"
+            elif key == "customer" and display_customer and not _is_excel_error(display_customer):
+                repaired = display_customer
+                source_ref = "指示書!B2"
+            elif key == "requester" and fallback_requester:
+                repaired = fallback_requester
+                source_ref = "指示書シート" if instruction_requester else "他行の依頼者"
+
+            if source_ref:
+                after_text = clean_cell_text(repaired)
+                if key == "stock":
+                    after_text = normalize_stock(repaired)
+                row_repairs.append({
+                    "file": file_path.name,
+                    "row": excel_row,
+                    "field": _FIELD_LABELS.get(key, key),
+                    "before": str(val).strip(),
+                    "after": after_text or "(空欄)",
+                    "source": source_ref,
+                })
+                return repaired
+
+            if strict:
+                wb.close()
+                raise OSError(
+                    f"{file_path.name} のピッキングリスト {excel_row}行目（{_FIELD_LABELS.get(key, key)}）に"
+                    f"「{str(val).strip()}」エラーがあり、指示書シートからも補完できませんでした。"
+                )
             return None
 
         name_val = str(get_val("name") or "").strip()
@@ -427,9 +517,21 @@ def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False) -> lis
         if qty_num <= 0:
             continue
 
-        stock_val = normalize_stock(get_val("stock"))
+        requester_val = get_val("requester")
+        customer_raw = get_val("customer")
+        maker_val = get_val("maker")
+        sku_val = get_val("sku")
+        size_val = get_val("size")
+        cond_val = get_val("condition")
+        stock_raw = get_val("stock")
+        note, note2 = get_val("note"), get_val("note2")
+
+        if repairs is not None and row_repairs:
+            repairs.extend(row_repairs)
+
+        stock_val = normalize_stock(stock_raw)
         
-        cond_raw = str(get_val("condition") or "").strip()
+        cond_raw = str(cond_val or "").strip()
         if cond_raw in ("0", "0.0", "", "未指定", "新古", "新品・中古", "新　　　　古"):
             condition_val = "新\n古"
         elif cond_raw in ("新", "新品"):
@@ -439,35 +541,36 @@ def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False) -> lis
         else:
             condition_val = cond_raw
 
-        note, note2 = get_val("note"), get_val("note2")
-        if detail_index < len(instruction_rows):
+        if detail is not None:
             # ピッキングリスト2行目と指示書11行目が対応する。除外行があっても行位置は詰めない。
-            detail = instruction_rows[detail_index]
             if all(
-                clean_cell_text(detail[col]) == clean_cell_text(get_val(key))
-                for col, key in ((0, "name"), (2, "sku"), (3, "size"), (5, "quantity"))
+                clean_cell_text(detail[col]) == clean_cell_text(val)
+                for col, val in ((0, name_val), (2, sku_val), (3, size_val), (5, qty_val))
             ):
-                note, note2 = detail[6:8]
+                if not _is_excel_error(detail[6]):
+                    note = detail[6]
+                if len(detail) > 7 and not _is_excel_error(detail[7]):
+                    note2 = detail[7]
 
-        customer = clean_cell_text(get_val("customer"))
+        customer = clean_cell_text(customer_raw)
         if customer and customer == instruction_customer:
             customer = display_customer
         rows.append({
             "source_file": file_path.name,
-            "requester": clean_cell_text(get_val("requester")),
+            "requester": clean_cell_text(requester_val),
             "customer": customer,
             "name": name_val,
-            "maker": clean_cell_text(get_val("maker")),
-            "sku": clean_cell_text(get_val("sku")),
-            "size": clean_cell_text(get_val("size")),
+            "maker": clean_cell_text(maker_val),
+            "sku": clean_cell_text(sku_val),
+            "size": clean_cell_text(size_val),
             "condition": condition_val,
             "quantity": qty_num,
             "note": clean_cell_text(note),
             "note2": clean_cell_text(note2),
             "stock": stock_val,
-            "_source_fields": tuple(get_val(key) for key in (
-                "requester", "customer", "name", "maker", "sku", "size", "condition"
-            )) + (note, note2),
+            "_source_fields": (
+                requester_val, customer_raw, name_val, maker_val, sku_val, size_val, cond_val, note, note2
+            ),
         })
 
     wb.close()
@@ -1177,6 +1280,7 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
 
     all_rows = []
     addresses = []
+    ref_repairs = []
     dest_dir = _processed_destination(move_date)
     try:
         moves = _planned_moves(now, pending_files, dest_dir)
@@ -1184,7 +1288,7 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
         raise OSError("処理開始直後にフォルダ内のファイルが移動または削除されました。画面を開き直して再実行してください。") from exc
 
     for f in pending_files:
-        rows = _extract_rows_from_workbook(f, strict=True)
+        rows = _extract_rows_from_workbook(f, strict=True, repairs=ref_repairs)
         all_rows.extend(rows)
         addr = _extract_address_from_workbook(f)
         if addr:
@@ -1215,6 +1319,7 @@ def _execute_sort(custom_ishikari_file, custom_report_file, processed_date, cust
         "report_counts": report_counts,
         "processed_dir": str(dest_dir),
         "processed_date": move_date.isoformat(),
+        "ref_repairs": ref_repairs,
     }
     journal = {"moves": moves, "result": result}
     _save_move_journal(journal_path, journal)

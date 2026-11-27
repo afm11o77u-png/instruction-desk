@@ -25,6 +25,25 @@
   let lastAddresses = [];
   let previewEpoch = 0;
 
+  function renderRefRepairsBox(repairs, isPreview) {
+    if (!repairs || !repairs.length) return '';
+    const title = isPreview
+      ? `🔧 #REF! などの数式エラーを指示書シートから自動補完します（${repairs.length}件）`
+      : `🔧 #REF! などの数式エラーを指示書シートから自動補完しました（${repairs.length}件）`;
+    const items = repairs.map(r =>
+      `<li><strong>${esc(r.file)}</strong>（${esc(r.row)}行目・${esc(r.field)}）: ` +
+      `<span style="color:#c00;">${esc(r.before)}</span> → ` +
+      `<strong style="color:#1b5e20;">${esc(r.after)}</strong> ` +
+      `<span style="color:#666;font-size:0.82rem;">（参照元: ${esc(r.source)}）</span></li>`
+    ).join('');
+    return `
+      <div style="margin-top:10px;padding:8px 10px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;font-size:0.85rem;color:#5d4037;">
+        <div style="font-weight:bold;color:#e65100;margin-bottom:4px;">${title}</div>
+        <ul style="margin:0;padding-left:18px;max-height:140px;overflow-y:auto;">${items}</ul>
+      </div>
+    `;
+  }
+
   function closeModal() {
     const modal = document.getElementById('picking-sort-modal');
     if (modal && modal.open) modal.close();
@@ -105,6 +124,12 @@
           labelCountText.textContent = lastAddresses.length > 0
             ? `宛名情報: ${lastAddresses.length}件の指示書から宛名データを検出`
             : `宛名情報: 実行時に各指示書から自動抽出します`;
+        }
+        if (resultBox && res.ref_repairs && res.ref_repairs.length > 0) {
+          resultBox.style.display = 'block';
+          resultBox.style.background = 'transparent';
+          resultBox.style.borderColor = 'transparent';
+          resultBox.innerHTML = renderRefRepairsBox(res.ref_repairs, true);
         }
         if (btnExec) btnExec.disabled = false;
       }
@@ -192,6 +217,7 @@
                 <li><strong>処理済み移動:</strong> ${esc(res.processed_date || '')} のフォルダに ${res.moved_count}件を移動</li>
                 ${lastAddresses.length > 0 ? `<li><strong>宛名書き:</strong> ${lastAddresses.length}件の宛名データを抽出完了</li>` : ''}
               </ul>
+              ${renderRefRepairsBox(res.ref_repairs, false)}
               ${lastAddresses.length > 0 ? `
                 <div style="margin-top:10px;">
                   <button type="button" id="picking-sort-open-print" class="primary" style="padding:6px 12px;font-size:0.88rem;cursor:pointer;">
@@ -213,7 +239,8 @@
           if (btnCancel) btnCancel.hidden = true;
           if (typeof toast === 'function') toast('指示書の仕分けと保存が完了しました');
 
-          if (autoPrintLabels && lastAddresses.length > 0 && typeof openImportedAddressPreview === 'function') {
+          const hasRepairs = Array.isArray(res.ref_repairs) && res.ref_repairs.length > 0;
+          if (autoPrintLabels && !hasRepairs && lastAddresses.length > 0 && typeof openImportedAddressPreview === 'function') {
             closeModal();
             openImportedAddressPreview(lastAddresses);
           }
