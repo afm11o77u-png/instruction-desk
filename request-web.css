@@ -362,3 +362,8 @@ label:has(> #uniform-photo),#photo-preview,#clear-photo{display:none!important}
 .history-badge.wait{color:#8a5a00;background:#fff4dc;border-color:#e8c46c}
 .history-badge.ok{color:#1d6a3f;background:#e3f3e8;border-color:#7fb894}
 .history-badge.ng{color:#9a2f1f;background:#fbe9e5;border-color:#d99a8c}
+/* ② 表示順の↑↓ */
+.web-product-row{grid-template-columns:30px 96px 1fr}
+.web-product-order{display:flex;flex-direction:column;gap:4px}
+.web-product-order button{min-width:0;width:30px;height:30px;padding:0;line-height:1;font-size:15px}
+.web-product-order button:disabled{opacity:.3;cursor:default}

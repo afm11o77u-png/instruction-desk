@@ -18,6 +18,9 @@ def schema(c):
       product_id INTEGER PRIMARY KEY, display_name TEXT NOT NULL DEFAULT '',
       photo BLOB, photo_type TEXT NOT NULL DEFAULT '', photo_version INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT, updated_by INTEGER)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS web_request_product_order (
+      customer_id INTEGER NOT NULL, product_id INTEGER NOT NULL, position INTEGER NOT NULL,
+      updated_at TEXT, updated_by INTEGER, PRIMARY KEY(customer_id, product_id))''')
 
 
 def resolve_name(contract_display_name, product_display_name, stock_name):
@@ -112,3 +115,31 @@ def photo(c, pid):
     if not row or row[1] not in PHOTO_TYPES:
         return None
     return bytes(row[0]), row[1]
+
+
+def read_order(c, customer_ids):
+    """顧客ごとの依頼画面での制服の表示順（商品IDの並び）。順番のない商品は後ろに今の並びのまま。"""
+    keep = set(customer_ids)
+    out = {}
+    for cid, pid in c.execute('SELECT customer_id,product_id FROM web_request_product_order ORDER BY customer_id,position'):
+        if cid in keep:
+            out.setdefault(str(cid), []).append(pid)
+    return out
+
+
+def save_order(c, user, d, customer_products):
+    """②の↑↓で並べた順を保存。customer_products は顧客ID → その顧客の商品IDの集合。"""
+    if not (user and (user['role'] == 'owner' or user['manage'])):
+        raise PermissionError('表示順の設定は主管理者・管理者が行ってください。')
+    cid, ids = d.get('customer_id'), d.get('product_ids')
+    if type(cid) is not int or cid not in customer_products:
+        raise ValueError('会社を選んでください。')
+    if not isinstance(ids, list) or not ids or len(ids) > 2000 or any(type(x) is not int for x in ids) or len(set(ids)) != len(ids):
+        raise ValueError('表示順を確認してください。')
+    if not set(ids) <= customer_products[cid]:
+        raise ValueError('この会社の制服ではない商品があります。画面を再読み込みしてください。')
+    now = datetime.now().isoformat(timespec='seconds')
+    c.execute('DELETE FROM web_request_product_order WHERE customer_id=?', (cid,))
+    c.executemany('INSERT INTO web_request_product_order VALUES(?,?,?,?,?)', [(cid, pid, i, now, user['id']) for i, pid in enumerate(ids)])
+    c.commit()
+    return read_order(c, [cid]).get(str(cid), [])
