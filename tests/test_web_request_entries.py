@@ -44,6 +44,7 @@ class EntriesTest(unittest.TestCase):
         self.assertEqual(e.create(self.c, self.path, self.owner, self.req(requestType='サイズ交換', wearerGender=''))['wearerGender'], '')  # ほかは任意
         js = (ROOT / 'request-web.js').read_text(encoding='utf-8'); cp = (ROOT / 'contract-products.js').read_text(encoding='utf-8')
         self.assertIn("wearerGender:wearerGender()", js); self.assertIn("r.wearerGender||'—'", js); self.assertIn("sex:r.wearerGender||''", cp)
+        self.assertIn("u.searchParams.delete('web_request')", cp); self.assertIn('.then(dropParams)', cp); self.assertIn("NO_PROCESSING.has(x.embroidery||'')", cp)  # 再読み込みで再度開かない・加工未整理は備考に出さない
 
     def test_wiring(self):
         server = (ROOT / 'server.py').read_text(encoding='utf-8'); js = (ROOT / 'request-web.js').read_text(encoding='utf-8'); cp = (ROOT / 'contract-products.js').read_text(encoding='utf-8')

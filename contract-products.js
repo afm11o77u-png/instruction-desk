@@ -18,6 +18,7 @@ window.ContractProducts={syncButton};
 
 /* WEB依頼から指示書を作成（入力済みで開くだけ。保存は人が確認して行う）。?web_request=依頼番号 / ?open_order=指示書ID */
 (()=>{const q=new URLSearchParams(location.search),rid=q.get('web_request'),oid=q.get('open_order');if(!rid&&!oid)return;
+const NO_PROCESSING=new Set(['','加工未整理','加工なし']);/* 加工未整理＝在庫管理の保存値で表示は「加工なし」。備考には書かない */
 const TYPE={'新規':'新規','サイズ交換':'サイズ交換','追加・補充':'追加・補充','その他':'その他','破損交換':'消耗・破損交換'};
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const get=async u=>{const r=await fetch(u,{headers:{'X-Desk-Request':'1'}});const j=await r.json().catch(()=>({}));if(!r.ok)throw Error(j.error||'読み込めませんでした。');return j};
@@ -28,7 +29,7 @@ function build(r){const flags=[],items=[];
   flags.push('在庫場所・バーコード色・ネームの有無・マーク出荷日・納品方法はWEB依頼にないため空欄です。入力してください。');
   if(!r.customerName)flags.push('顧客名：依頼の顧客が見つかりません。入力してください。');
   for(const x of r.items||[]){const warn=[];if(x.manual||!x.product_id)warn.push('要確認：手入力の制服（商品とひも付いていません）');if(!x.size)warn.push('要確認：サイズ未指定');
-    const note=[...warn.map(w=>'【'+w+'】'),x.color,x.embroidery,x.hem_processing?'裾上げあり':'',x.processing,x.note].filter(Boolean).join(' ／ ');
+    const note=[...warn.map(w=>'【'+w+'】'),x.color,NO_PROCESSING.has(x.embroidery||'')?'':x.embroidery,x.hem_processing?'裾上げあり':'',x.processing,x.note].filter(Boolean).join(' ／ ');
     if(warn.length)flags.push(`制服「${x.name||'名称なし'}」：${warn.join('、').replace(/要確認：/g,'')}`);
     const it={name:x.name||'',maker:x.maker||'',sku:x.code||'',size:x.size||'',quantity:x.qty,condition:'新品',stock:'',note};
     if(!x.manual&&x.product_id){Object.assign(it,{customer_product_id:x.customer_product_id,product_id:x.product_id,contract_customer_id:r.customerId,department_id:r.departmentId||'',contract_name:r.contract||'',department_name:r.department||'',color:x.color||'',embroidery:x.embroidery||''})}
@@ -39,6 +40,8 @@ function build(r){const flags=[],items=[];
 function banner(r,flags){document.querySelector('#web-request-banner')?.remove();const head=document.querySelector('#editor .dialoghead');if(!head)return;const s=r.sheets||[];const b=document.createElement('div');b.id='web-request-banner';b.className='web-request-banner';b.innerHTML=`<strong>WEB依頼 ${esc(r.id)} から作成中（まだ保存されていません）</strong>${s.length?`<p class="web-request-dup">この依頼には既に指示書があります：${s.map(x=>esc(x.number||'編集中・番号未発行')).join('、')}。重複していないか確認してください。</p>`:''}<ul>${flags.map(f=>`<li>${esc(f)}</li>`).join('')}</ul>`;head.after(b)}
 function cleanup(){document.querySelector('#web-request-banner')?.remove();document.querySelector('#form [name="webRequestId"]')?.remove()}
 async function openRequest(){const r=await get('/api/web-request/requests?id='+encodeURIComponent(rid));const {preset,flags}=build(r);openEditor(null,preset);const input=document.createElement('input');input.type='hidden';input.name='webRequestId';input.value=r.id;document.querySelector('#form').append(input);banner(r,flags);try{dirty=true}catch{}document.querySelector('#editor').addEventListener('close',cleanup,{once:true})}
+/* 開いたらアドレスから外す（再読み込み・戻るで再度開かない）。依頼とのひも付けはフォームの webRequestId で保持 */
+function dropParams(){try{const u=new URL(location.href);u.searchParams.delete('web_request');u.searchParams.delete('open_order');history.replaceState(history.state,'',u.pathname+u.search+u.hash)}catch{}}
 async function openOrder(){const list=await get('/api/orders');const o=list.find(x=>String(x.id)===String(oid));if(!o)throw Error('指示書が見つかりません。削除されたか、見る権限がありません。');openEditor(o)}
-let tries=0;const t=setInterval(()=>{if(!ready()){if(++tries>600)clearInterval(t);return}clearInterval(t);setTimeout(()=>(rid?openRequest():openOrder()).catch(e=>alert(e.message)),400)},250);
+let tries=0;const t=setInterval(()=>{if(!ready()){if(++tries>600)clearInterval(t);return}clearInterval(t);setTimeout(()=>(rid?openRequest():openOrder()).then(dropParams).catch(e=>alert(e.message)),400)},250);
 const st=document.createElement('style');st.textContent='.web-request-banner{margin:8px 0;padding:10px 14px;border:2px solid #d97706;background:#fff7e6;border-radius:8px;font-size:14px}.web-request-banner ul{margin:6px 0 0 1.2em;padding:0}.web-request-banner .web-request-dup{color:#b91c1c;font-weight:700;margin:6px 0 0}';document.head.append(st)})();
