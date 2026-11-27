@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import unicodedata
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 
@@ -515,8 +516,46 @@ def save_default_order(c, user, payload: dict) -> dict:
     return get_default_order(c)
 
 
+def _name_norm(name) -> str:
+    return re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(name or '')))
+
+
+def carry_shift_people(c, year: int, month: int, roster: list[dict]) -> list[dict]:
+    """未作成月用: 直近の保存済み前月シートにあるシフト専用行（手入力）を引き継ぐ。
+    氏名・並び（key）だけ。セルは引き継がない。×で外した月以降は、その月のシートに無いので続かない。
+    在籍マスタに同じ氏名がいる行は二重にしない。"""
+    row = c.execute(
+        'SELECT people_json FROM kintai_shift_sheets WHERE (year*12+month) < ? '
+        'ORDER BY year DESC, month DESC LIMIT 1',
+        (year * 12 + month,),
+    ).fetchone()
+    if not row:
+        return []
+    try:
+        saved = json.loads(row['people_json'] or '[]')
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(saved, list):
+        return []
+    roster_names = {_name_norm(p.get('displayName')) for p in roster}
+    out: list[dict] = []
+    for p in saved:
+        if not isinstance(p, dict):
+            continue
+        key = str(p.get('key') or '').strip()
+        if not (_is_shift_key(key) and PERSON_KEY_RE.match(key)):
+            continue
+        name = str(p.get('displayName') or '').strip()
+        if name and _name_norm(name) in roster_names:
+            continue
+        item = _orphan_person(key, name)
+        item['sortOrder'] = 10_000 + len(out)
+        out.append(item)
+    return out
+
+
 def _roster_with_default_order(roster: list[dict], default_keys: list[str]) -> list[dict]:
-    """未作成月: 保存済み標準並びを在籍者に適用。非在籍は飛ばし、新規在籍は末尾。"""
+    """未作成月: 保存済み標準並びを在籍者（＋引継ぎシフト専用行）に適用。非在籍は飛ばし、新規在籍は末尾。"""
     if not default_keys:
         return [dict(p) for p in roster]
     by_key = {p['key']: dict(p) for p in roster}
@@ -545,6 +584,7 @@ def _compose_people(
     *,
     sheet_exists: bool,
     default_keys: list[str] | None = None,
+    carried: list[dict] | None = None,
 ) -> list[dict]:
     """未保存月は在籍マスタ（標準並びがあれば適用）。保存済み月はシート名簿を正とし、削除した行は戻さない。"""
     roster_by_key = {p['key']: p for p in roster}
@@ -552,7 +592,7 @@ def _compose_people(
     use_default = bool(not sheet_exists and default_keys)
 
     if not sheet_exists:
-        for p in _roster_with_default_order(roster, default_keys or []):
+        for p in _roster_with_default_order(list(roster) + list(carried or []), default_keys or []):
             by_key[p['key']] = p
     else:
         for i, p in enumerate(saved or []):
@@ -679,6 +719,7 @@ def get_shift_sheet(c, year, month) -> dict:
         roster, saved_people, cells,
         sheet_exists=bool(row),
         default_keys=default_keys,
+        carried=carry_shift_people(c, y, m, roster) if not row else None,
     )
     # 未保存月のみ日曜を×で初期化。保存済みはスナップショットをそのまま返す。
     if not row:

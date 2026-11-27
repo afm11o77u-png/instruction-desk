@@ -372,6 +372,29 @@ class ShiftSheetStoreTest(unittest.TestCase):
         )
         self.assertEqual(saved2['cells']['shift:abc123']['1']['text'], '×')
 
+    def test_shift_only_rows_carry_to_uncreated_month(self):
+        """手入力のシフト専用行は次の未作成月に引き継ぐ（セルは引き継がない・在籍同名は除外・×で外せば止まる）。"""
+        base = kintai_shift.get_shift_sheet(self.c, 2026, 11)['people']
+        extra = [
+            {'key': 'shift:aaa111', 'employment': 'shift', 'displayName': '藤本', 'source': 'shift'},
+            {'key': 'shift:bbb222', 'employment': 'shift', 'displayName': '山田 太郎', 'source': 'shift'},
+        ]
+        code, _ = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2026, 'month': 11, 'version': 0, 'people': [base[0], extra[0], base[1], extra[1]],
+            'cells': {'shift:aaa111': {'2': {'kind': 'time', 'text': '9-15'}}},
+        })
+        self.assertEqual(code, 200)
+        kintai_shift.save_default_order(self.c, self.user, {'keys': ['regular:001', 'shift:aaa111', 'part:002', 'shift:bbb222']})
+        dec = kintai_shift.get_shift_sheet(self.c, 2026, 12)
+        self.assertEqual([p['key'] for p in dec['people']], ['regular:001', 'shift:aaa111', 'part:002'])
+        self.assertNotIn('2', dec['cells'].get('shift:aaa111', {}))
+        code, _ = kintai_shift.save_shift_sheet(self.c, self.user, {
+            'year': 2027, 'month': 1, 'version': 0, 'people': base, 'cells': {},
+        })
+        feb = kintai_shift.get_shift_sheet(self.c, 2027, 2)
+        self.assertNotIn('shift:aaa111', [p['key'] for p in feb['people']])
+        self.assertIn('shift:aaa111', [p['key'] for p in kintai_shift.get_shift_sheet(self.c, 2026, 12)['people']])
+
     def test_default_order_applies_to_uncreated_month(self):
         """標準並び保存 → 未作成月を開くと並びが一致する。"""
         empty = kintai_shift.get_default_order(self.c)
