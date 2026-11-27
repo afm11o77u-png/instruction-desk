@@ -1499,12 +1499,12 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                     item.update(extra)
                     rows.append(item)
             return self.reply(200,rows)
-        if path=='/api/shipments/xlsx':
+        if path in ('/api/shipments/xlsx','/api/shipment-list/xlsx'):
             with connect() as c: result=shipping.export_book(self, c)
             return self.reply(*result)
-        if path=='/api/shipments' or path=='/api/shipments/options':
+        if path in ('/api/shipments','/api/shipments/options','/api/shipment-list','/api/shipment-list/options'):
             with connect() as c:
-                result=shipping.search(self, c) if path=='/api/shipments' else shipping.customers(self, c)
+                result=shipping.search(self, c) if path in ('/api/shipments','/api/shipment-list') else shipping.customers(self, c)
             return self.reply(*result)
         if path=='/api/placements' or path=='/api/placements/options' or re.fullmatch(r'/api/placements/\d+', path) or re.fullmatch(r'/api/placements/\d+/(thumb|image)', path) or re.fullmatch(r'/api/placements/\d+/history', path):
             with connect() as c:
@@ -1725,7 +1725,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200, {'ok': True, 'notes': notes, 'history': name_exe.history(DATA)})
         try:
             n=int(self.headers.get('Content-Length','0'))
-            limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import') else 1000000
+            limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 9000000 if route in ('/api/templates/import','/api/shipments/import','/api/shipment-list/import') else 1000000
             if route == '/api/kintai/leave-balance': limit=15000000
             if n>limit: raise ValueError('データが大きすぎます。')
             d=json.loads(self.rfile.read(n))
@@ -1878,11 +1878,11 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             if self.path=='/api/orders/complete': return self.reply(*complete_shipped(self,d))
             if self.path=='/api/orders/floor-progress': return self.reply(*floor_progress(self,d))
             if self.path=='/api/orders/due-confirm': return self.reply(*due_confirm(self,d))
-            if self.path in ('/api/shipments','/api/shipments/save','/api/shipments/import'):
+            if self.path in ('/api/shipments','/api/shipments/save','/api/shipments/import','/api/shipment-list','/api/shipment-list/save','/api/shipment-list/import'):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     try:
-                        if self.path=='/api/shipments/import':
+                        if self.path in ('/api/shipments/import','/api/shipment-list/import'):
                             raw=d.get('data')
                             if not isinstance(raw,str): raise ValueError('Excelファイル（.xlsx）を選んでください。')
                             name=str(d.get('filename') or '')
@@ -1891,7 +1891,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                             except ValueError: raise ValueError('Excelファイル（.xlsx）を選んでください。')
                             result=shipping.import_book(self, c, blob)
                         else:
-                            result=shipping.create(self, c, d) if self.path=='/api/shipments' else shipping.update(self, c, d)
+                            result=shipping.create(self, c, d) if self.path in ('/api/shipments','/api/shipment-list') else shipping.update(self, c, d)
                     except ValueError as e:
                         return self.reply(400, {'error':str(e)})
                 return self.reply(*result)

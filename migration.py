@@ -81,6 +81,8 @@ OWNERSHIP_COLUMNS = (
     ('placement_corrections', 'status_by_id'),
     ('shipments', 'created_by_id'),
     ('shipments', 'updated_by_id'),
+    ('shipment_list', 'created_by_id'),
+    ('shipment_list', 'updated_by_id'),
 )
 
 # Full ネーム情報 domain kept on the destination when any of these have rows.
@@ -115,6 +117,7 @@ HISTORY_ACTOR_COLUMNS = (
     ('audit', 'actor_id', 'actor'),
     ('placement_history', 'actor_id', 'actor'),
     ('shipment_history', 'actor_id', 'actor'),
+    ('shipment_list_history', 'actor_id', 'actor'),
     ('name_review_history', 'actor_id', 'actor_name'),
 )
 
