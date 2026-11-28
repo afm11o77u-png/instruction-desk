@@ -15,6 +15,7 @@ import placement
 import split_backup
 import shipping
 import names
+import name_source
 import display_modes
 import migration
 import kintai
@@ -90,6 +91,8 @@ def initialize():
         shipping.schema(c)
         names.bind(DATA)
         names.schema(c)
+        name_source.bind(DATA)
+        name_source.schema(c)
         label_sets.initialize(c)
         fixed_label_formats.initialize(c)
         display_modes.initialize(c)
@@ -1554,6 +1557,10 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except name_exe.ExeError as e:
                 return self.reply(e.status, {'error': e.message})
             return self.reply_file(200, file, 'application/vnd.microsoft.portable-executable', {'Content-Disposition': disposition})
+        if path in ('/api/name-source', '/api/name-source/export'):
+            with connect() as c:
+                result=name_source.list_rows(self, c) if path=='/api/name-source' else name_source.export_excel(self, c)
+            return self.reply(*result)
         if path=='/api/name-labels' or path.startswith('/api/name-labels/'):
             with connect() as c:
                 if path=='/api/name-labels': result=names.search(self, c)
@@ -1581,7 +1588,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200,rows)
         if path in ('/kintai', '/kintai/attendance', '/kintai/register', '/kintai/summary', '/kintai/daily'):
             path = '/'
-        files={'/contract-products.js':'contract-products.js','/customer-data.js':'customer-data.js','/workspace-switcher.js':'workspace-switcher.js','/workspace-switcher.css':'workspace-switcher.css','/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/web-request-extras.js':'web-request-extras.js','/collection-days-import.js':'collection-days-import.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking-route.js':'picking-route.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/desk-views.js':'desk-views.js','/desk-views.css':'desk-views.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
+        files={'/contract-products.js':'contract-products.js','/customer-data.js':'customer-data.js','/workspace-switcher.js':'workspace-switcher.js','/workspace-switcher.css':'workspace-switcher.css','/customer-directory.js':'customer-directory.js','/customer-contracts':'request-web.html','/request-organizations.js':'request-organizations.js','/request-web':'request-web.html','/request-web.css':'request-web.css','/request-web.js':'request-web.js','/web-request-extras.js':'web-request-extras.js','/collection-days-import.js':'collection-days-import.js','/request-building.png':'request-building.png','/memos.js':'memos.js','/repair.js':'repair.js','/repair.css':'repair.css','/shipping.js':'shipping.js','/placement.js':'placement.js','/names.js':'names.js','/name-source.js':'name-source.js','/name-source.css':'name-source.css','/kintai.js':'kintai.js','/kintai-tot-attendance.js':'kintai-tot-attendance.js','/kintai-shift.js':'kintai-shift.js','/kintai-bihin.js':'kintai-bihin.js','/kintai-crimp.js':'kintai-crimp.js','/picking':'picking.html','/picking-history':'picking-history.html','/users':'users.html','/users.js':'users.js','/users.css':'users.css','/picking-history.js':'picking-history.js','/picking-board':'picking-board.html','/picking-board.js':'picking-board.js','/picking.js':'picking.js','/picking-route.js':'picking-route.js','/picking.css':'picking.css','/':'index.html','/personal-formats.js':'personal-formats.js','/app.js':'app.js','/work-batches.js':'work-batches.js','/picking-sort.js':'picking-sort.js','/processed-stats.js':'processed-stats.js','/barcode-delivery.js':'barcode-delivery.js','/style.css':'style.css','/account.js':'account.js','/account.css':'account.css','/box_ticket.js':'box_ticket.js','/fixed_label.js':'fixed_label.js','/handwrite_label.js':'handwrite_label.js','/label_paste.js':'label_paste.js','/sheet.js':'sheet.js','/sheet.css':'sheet.css','/display-mode.js':'display-mode.js','/display-mode.css':'display-mode.css','/desk-views.js':'desk-views.js','/desk-views.css':'desk-views.css','/logo.jpg':'logo.jpg','/favicon.png':'favicon.png','/mascots.png':'mascots.png'}
         if path in ('/customer-data.js', '/customer-directory.js', '/customer-contracts', '/request-organizations.js', '/collection-days-import.js', '/request-web', '/request-web.css', '/request-web.js', '/request-building.png'):
             with closing(connect()) as c:
                 request_user = self.session_user(c)
@@ -1743,7 +1750,7 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             return self.reply(200, {'ok': True, 'notes': notes, 'history': name_exe.history(DATA)})
         try:
             n=int(self.headers.get('Content-Length','0'))
-            limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save') else 12000000 if route in ('/api/shipments/import','/api/shipment-list/import','/api/shipment-contract/import') else 9000000 if route in ('/api/templates/import',) else 1000000
+            limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save','/api/name-source/import') else 12000000 if route in ('/api/shipments/import','/api/shipment-list/import','/api/shipment-contract/import') else 9000000 if route in ('/api/templates/import',) else 1000000
             if route == '/api/kintai/leave-balance': limit=15000000
             if n>limit: raise ValueError('データが大きすぎます。')
             d=json.loads(self.rfile.read(n))
@@ -1937,6 +1944,21 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 with connect() as c:
                     c.execute('BEGIN IMMEDIATE')
                     result=names.create(self, c, d) if self.path=='/api/name-labels' else names.update(self, c, d)
+                return self.reply(*result)
+            if self.path.startswith('/api/name-source/'):
+                handlers={'/api/name-source/save':name_source.save_cell,'/api/name-source/add':name_source.add_row,
+                    '/api/name-source/delete':name_source.delete_row,'/api/name-source/import':name_source.import_excel,
+                    '/api/name-source/diff':name_source.diff,'/api/name-source/apply':name_source.apply}
+                fn=handlers.get(self.path)
+                if not fn: return self.reply(404, {'error':'見つかりません。'})
+                with connect() as c:
+                    c.execute('BEGIN IMMEDIATE')
+                    try:
+                        result=fn(self, c, d)
+                    except Exception:
+                        c.rollback()
+                        raise
+                    if result[0]!=200: c.rollback()
                 return self.reply(*result)
             if self.path=='/api/name-labels/delete':
                 with connect() as c:
