@@ -76,7 +76,7 @@ class NameExeUpdateWiringTest(unittest.TestCase):
         self.assertIn('data-view="nameinfo">ネーム情報<span class="exebadge" data-exebadge hidden>NEW</span>', html)
         self.assertNotIn('exeupdate', js)
         self.assertNotIn('exeupdate', css)
-        self.assertIn('id="nameexeusers"', html)
+        self.assertIn('id="nameexeopen"', html)
         self.assertIn('setInterval(checkNameExeUpdate,60000)', js)
         self.assertNotIn('exepulse', css)  # 控えめな赤字、アニメーションなし
         self.assertIn('.exebadge{margin-left:6px;color:#d61f1f', css)
