@@ -180,6 +180,46 @@ class XlsxExportTest(unittest.TestCase):
         self.assertIsNone(ws['I6'].value)
         self.assertEqual(ws['A8'].value, '金額合計')
 
+    def test_borders_stay_inside_table_and_gridlines_off(self):
+        """罫線は見出し〜金額合計の A〜L だけ。表の外とグリッド線は出さない。"""
+        blob = self._get(self.user)[1]
+        with ZipFile(BytesIO(blob)) as z:
+            sheet = ET.fromstring(z.read('xl/worksheets/sheet1.xml'))
+            styles = ET.fromstring(z.read('xl/styles.xml'))
+            book = ET.fromstring(z.read('xl/workbook.xml'))
+        borders = list(styles.find(NS + 'borders'))
+        bordered = set()
+        for i, b in enumerate(borders):
+            if any(side.get('style') for side in b):
+                bordered.add(i)
+        xfs = list(styles.find(NS + 'cellXfs'))
+        xf_border = [int(x.get('borderId', 0)) for x in xfs]
+        last_row = None
+        for c in sheet.iter(NS + 'c'):
+            if c.get('t') == 'inlineStr' and ''.join(t.text or '' for t in c.iter(NS + 't')) == '金額合計':
+                last_row = int(''.join(ch for ch in c.get('r') if ch.isdigit()))
+        self.assertEqual(last_row, 8)
+        for c in sheet.iter(NS + 'c'):
+            ref = c.get('r')
+            col = ''.join(ch for ch in ref if ch.isalpha())
+            row = int(''.join(ch for ch in ref if ch.isdigit()))
+            has_border = xf_border[int(c.get('s', 0))] in bordered
+            if has_border:
+                self.assertLessEqual(col, 'L', ref)
+                self.assertGreaterEqual(row, 3, ref)
+                self.assertLessEqual(row, last_row, ref)
+            if row < 3 or col > 'L' or row > last_row:
+                self.assertFalse(has_border, ref)
+        # 表の四隅には罫線がある
+        for ref in ('A3', 'L3', 'A8', 'L8'):
+            self.assertIn(ref, {c.get('r') for c in sheet.iter(NS + 'c')})
+            cell = next(c for c in sheet.iter(NS + 'c') if c.get('r') == ref)
+            self.assertIn(xf_border[int(cell.get('s', 0))], bordered, ref)
+        view = sheet.find(NS + 'sheetViews').find(NS + 'sheetView')
+        self.assertEqual(view.get('showGridLines'), '0')
+        names = {n.get('name'): (n.text or '') for n in book.find(NS + 'definedNames')}
+        self.assertIn('$A$1:$L$8', names.get('_xlnm.Print_Area', ''))
+
 
 class XlsxExportUiTest(unittest.TestCase):
     def _fn(self, name):
