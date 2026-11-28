@@ -25,6 +25,7 @@ import posixpath
 import re
 import shutil
 import unicodedata
+from copy import copy
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -576,6 +577,127 @@ def _extract_rows_from_workbook(file_path: Path, *, strict: bool = False, repair
     wb.close()
     return rows
 
+
+_DATA_ROW_HEIGHT = 32
+_HEADER_ROW_HEIGHT = 25
+_BLANK_FILL_FALLBACK = 50  # ページ行数が取れないとき、最終データ行の下に入れる空行の目安
+
+
+def _cell_has_value(cell) -> bool:
+    value = cell.value
+    return value is not None and value != ""
+
+
+def _last_value_row(ws) -> int:
+    """書式だけの空行は無視し、値がある最終行を返す。追記位置の判定に使う。"""
+    for row in range(ws.max_row, 0, -1):
+        if any(_cell_has_value(cell) for cell in ws[row]):
+            return row
+    return 0
+
+
+def _data_rows_per_page(ws) -> int:
+    """A4（既定は横）1ページに入るデータ行数（見出し行を除く）。"""
+    landscape = ws.page_setup.orientation != 'portrait'
+    # A4: 210mm x 297mm
+    height_in = 8.27 if landscape else 11.69
+    top = 0.75 if ws.page_margins.top is None else float(ws.page_margins.top)
+    bottom = 0.75 if ws.page_margins.bottom is None else float(ws.page_margins.bottom)
+    usable_pt = max(1.0, height_in - top - bottom) * 72
+    remain = usable_pt - _HEADER_ROW_HEIGHT
+    if remain < _DATA_ROW_HEIGHT:
+        return 10
+    return max(1, int(remain // _DATA_ROW_HEIGHT))
+
+
+def _blank_format_end_row(last_data_row: int, rows_per_page: int) -> int:
+    """最終データ行が属するページの末尾。ページいっぱいなら次ページ末尾まで（手入力の余地を残す）。"""
+    if last_data_row <= 1:
+        return 1 + rows_per_page
+    page = (last_data_row - 1 + rows_per_page - 1) // rows_per_page
+    end = 1 + page * rows_per_page
+    if last_data_row >= end:
+        end += rows_per_page
+    return end
+
+
+def _copy_cell_format(src, dest):
+    """値はコピーせず、見た目の書式だけ移す。"""
+    if src.has_style:
+        dest.font = copy(src.font)
+        dest.border = copy(src.border)
+        dest.fill = copy(src.fill)
+        dest.number_format = src.number_format
+        dest.protection = copy(src.protection)
+        dest.alignment = copy(src.alignment)
+
+
+def _style_blank_data_cell(cell, col_idx: int, max_col: int):
+    """データ行の手本がないとき（見出しだけのシート）用の標準書式。"""
+    font_data = Font(name="Yu Gothic", size=11, bold=True)
+    font_cond = Font(name="Yu Gothic", size=9.5, bold=True)
+    border_thin = Border(
+        left=Side(style='thin', color='888888'),
+        right=Side(style='thin', color='888888'),
+        top=Side(style='thin', color='888888'),
+        bottom=Side(style='thin', color='888888'),
+    )
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    align_cond = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    cell.border = border_thin
+    if col_idx == 7:
+        cell.font = font_cond
+        cell.alignment = align_cond
+    elif col_idx in (1, 6, 8) or col_idx >= 11:
+        cell.font = font_data
+        cell.alignment = align_center
+    else:
+        cell.font = font_data
+        cell.alignment = align_left
+
+
+def _extend_data_validations(ws, template_row: int, start: int, end: int, max_col: int):
+    dvs = getattr(ws, "data_validations", None)
+    if not dvs or start > end:
+        return
+    extra = f"A{start}:{get_column_letter(max_col)}{end}"
+    for dv in dvs.dataValidation:
+        try:
+            covers = any(
+                range_boundaries(str(rng))[1] <= template_row <= range_boundaries(str(rng))[3]
+                for rng in (dv.sqref or [])
+            )
+        except (TypeError, ValueError):
+            covers = template_row in str(dv.sqref or "")
+        if covers:
+            dv.add(extra)
+
+
+def _fill_blank_input_rows(ws, last_data_row: int, max_col: int):
+    """最終データ行の下、現在ページ末尾まで、値なしで同じ書式を入れておく。後から手入力したとき上の行と同じ見た目になる。"""
+    if max_col < 1 or last_data_row < 1:
+        return
+    rows_per_page = _data_rows_per_page(ws) or _BLANK_FILL_FALLBACK
+    end = _blank_format_end_row(last_data_row, rows_per_page)
+    if end <= last_data_row:
+        return
+    template_row = last_data_row if last_data_row >= 2 else None
+    for row in range(last_data_row + 1, end + 1):
+        ws.row_dimensions[row].height = _DATA_ROW_HEIGHT
+        for col in range(1, max_col + 1):
+            dest = ws.cell(row=row, column=col)
+            dest.value = None
+            if template_row:
+                _copy_cell_format(ws.cell(row=template_row, column=col), dest)
+            else:
+                _style_blank_data_cell(dest, col, max_col)
+    if template_row:
+        _extend_data_validations(ws, template_row, last_data_row + 1, end, max_col)
+    # 印刷は書式を入れたページ末尾までに留め、空ページを増やさない
+    ws.print_area = f"A1:{get_column_letter(max_col)}{end}"
+
+
 def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, file_name: str, *, include_warehouse_column: bool = True):
     """ピッキング／作業シート用の共通フォーマット適用"""
     headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "倉庫から", "実行者", "確認", "入力", "確認"]
@@ -667,6 +789,8 @@ def _apply_sheet_styling(ws, rows_data: list[dict], title: str, now: datetime, f
     ws.oddHeader.center.text = f'&"-,太字"&14 {title}'
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
+    last_data_row = 1 + len(rows_data)
+    _fill_blank_input_rows(ws, last_data_row, len(headers))
 
 _ISHIKARI_IDENTITY_FIELDS = (
     "requester", "customer", "name", "maker", "sku", "size", "condition", "note", "note2",
@@ -902,12 +1026,8 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     )
     fill_header = PatternFill(start_color="EAEAEA", end_color="EAEAEA", fill_type="solid")
 
-    # ヘッダーが未設定なら設定
-    last_data_row = next(
-        (row for row in range(ws.max_row, 0, -1)
-         if any(cell.value not in (None, "") for cell in ws[row])),
-        0,
-    )
+    # 書式だけの空行はデータ行と見なさない（その下へ追記してしまうのを防ぐ）
+    last_data_row = _last_value_row(ws)
     if not last_data_row:
         ws.row_dimensions[1].height = 25
         for col_idx, header in enumerate(headers, start=1):
@@ -955,6 +1075,9 @@ def _append_rows_to_report_sheet(ws, rows_data: list[dict], title: str, now: dat
     ws.oddHeader.center.text = f'&"-,太字"&14 {title}'
     ws.oddHeader.right.text = '&"-,太字"&11 &P / &N'
     ws.print_title_rows = '1:1'
+    # 最終データ行（値がある行）の直下から、現在ページ末尾まで書式だけの空行を入れる
+    last_filled = _last_value_row(ws)
+    _fill_blank_input_rows(ws, last_filled, len(headers))
 
 def _report_has_external_data(path: Path) -> bool:
     """Identify Excel connections that a workbook round trip cannot retain."""
@@ -1062,6 +1185,50 @@ def _append_to_external_report(source: Path, destination: Path, rows: list[dict]
                         child.appendChild(text)
                     cell.appendChild(child)
                 row.insertBefore(cell, next(iter(existing_cells.values()), None))
+            row.setAttribute("ht", str(_DATA_ROW_HEIGHT))
+            row.setAttribute("customHeight", "1")
+            existing_rows[index] = row
+
+        # 追記後の最終データ行の下に、書式だけの空行を現在ページ末尾まで入れる（値は付けない）
+        last_filled = last_data_row + len(rows)
+        styles = {
+            re.sub(r"\d+$", "", cell.getAttribute("r")): cell.getAttribute("s")
+            for cell in existing_rows.get(last_filled, existing_rows.get(last_data_row, element("row"))).getElementsByTagNameNS(_SHEET_XML, "c")
+        } if last_filled > 1 else styles
+        end_format = _blank_format_end_row(last_filled, 15)  # A4横・報告用リスト既定余白
+        following_rows = iter(sorted(i for i in existing_rows if i >= last_filled + 1))
+        following = next(following_rows, None)
+        for index in range(last_filled + 1, end_format + 1):
+            row = existing_rows.get(index)
+            if row is None:
+                row = element("row")
+                row.setAttribute("r", str(index))
+                data.insertBefore(row, existing_rows[following] if following is not None else None)
+            else:
+                following = next(following_rows, None)
+            row.setAttribute("ht", str(_DATA_ROW_HEIGHT))
+            row.setAttribute("customHeight", "1")
+            existing_cells = {
+                cell.getAttribute("r"): cell for cell in row.getElementsByTagNameNS(_SHEET_XML, "c")
+            }
+            for col in range(1, 15):
+                letter = get_column_letter(col)
+                ref = f"{letter}{index}"
+                cell = existing_cells.pop(ref, None)
+                if cell is None:
+                    cell = element("c")
+                    cell.setAttribute("r", ref)
+                else:
+                    row.removeChild(cell)
+                    for child in list(cell.childNodes):
+                        cell.removeChild(child)
+                    if cell.hasAttribute("t"):
+                        cell.removeAttribute("t")
+                if styles.get(letter):
+                    cell.setAttribute("s", styles[letter])
+                row.insertBefore(cell, next(iter(existing_cells.values()), None))
+            existing_rows[index] = row
+        end_row = max(end_row, end_format)
 
         dimensions = root.getElementsByTagNameNS(_SHEET_XML, "dimension")
         if dimensions:
@@ -1141,8 +1308,7 @@ def _save_report_workbook_locked(now: datetime, rows: list[dict], custom_filenam
     # 倉庫シートがなければ枠だけ作成
     if "倉庫" not in wb.sheetnames:
         ws_ware = wb.create_sheet(title="倉庫")
-        headers = ["依頼者", "顧客名", "アイテム名", "メーカー", "品番", "サイズ", "新古", "数量", "備考", "備考_1", "実行者", "確認", "入力", "確認"]
-        ws_ware.append(headers)
+        _append_rows_to_report_sheet(ws_ware, [], "倉庫", now, out_path.name)
 
     # 開いた時に「持ち込み」シートが最初に画面に出るようアクティブ設定
     if "持ち込み" in wb.sheetnames:
