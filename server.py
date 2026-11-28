@@ -21,6 +21,7 @@ import migration
 import kintai
 import kintai_crimp
 import name_exe
+import name_setup
 import web_requests
 import web_request_entries
 import web_request_product_display
@@ -102,6 +103,7 @@ def initialize():
         kintai.bind(DATA)
         kintai.schema(c)
         name_exe.schema(c)
+        name_setup.schema(c)
         try:
             import restore_approvals
             restore_approvals.restore_name_approvals_safe(c)
@@ -1345,6 +1347,10 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
                 except PermissionError as e: return self.reply(403, {'error':str(e)})
                 except ValueError as e: return self.reply(400, {'error':str(e)})
                 except sqlite3.Error: return self.reply(503, {'error':'在庫の顧客・商品を読み取れません。先に在庫管理を確認してください。'})
+        if path == '/api/name-label/release-notes':
+            return self.reply(200, name_setup.release_notes(DATA))
+        if path == '/name-label/release-notes':
+            return self.reply(200, name_setup.release_notes_html(DATA).encode('utf-8'), 'text/html; charset=utf-8')
         if path.startswith('/api/') and migration.is_busy() and path != '/api/me':
             return self.reply(503, {'error':'移行処理の実行中です。完了するまで操作を待ってください。'})
         if path == '/api/migration/split-export':
@@ -1535,23 +1541,33 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             with connect() as c:
                 result=placement.list_corrections(self, c)
             return self.reply(*result)
-        if path in ('/api/name-labels/exe', '/api/name-labels/exe/info'):
+        if path in ('/api/name-labels/exe', '/api/name-labels/exe/info', '/api/name-labels/setup'):
             with connect() as c: u=self.session_user(c)
             try:
                 if path.endswith('/info'):
                     name_exe.check_user(u)
                     owner=u['role']=='owner'
                     meta=name_exe.info(DATA)
-                    data={'exe': dict(meta) if meta else None, 'canUpload': owner, 'maxBytes': name_exe.MAX_BYTES}
+                    setup=name_setup.info(DATA)
+                    data={'exe': dict(meta) if meta else None, 'setup': dict(setup) if setup else None, 'canUpload': owner, 'maxBytes': name_setup.MAX_BYTES}
                     if data['exe']:
                         data['exe'].pop('sha256', None)
                         data['exe']['notes']=name_exe.current_notes(DATA)
-                    data['history']=name_exe.history(DATA)
+                    if data['setup']:
+                        data['setup'].pop('sha256', None)
+                        data['setup']['notes']=name_setup.current_notes(DATA)
+                    data['history']=name_setup.display_history(DATA)
+                    data['notes']=name_setup.display_notes(DATA)
                     with connect() as c:
                         data['update']=name_exe.update_status(c, u, meta)
+                        data['setupUpdate']=name_setup.update_status(c, u, setup)
                         if owner and meta: data['downloads']=name_exe.download_report(c, meta)
                     if owner: data['dropFolder']={'path': str(EXE_DROP_DIR), 'enabled': EXE_DROP_ENABLED, 'intervalSeconds': name_exe.DROP_INTERVAL}
                     return self.reply(200, data)
+                if path.endswith('/setup'):
+                    file, meta, disposition, ctype = name_setup.download(DATA, u)
+                    with connect() as c: name_setup.record_download(c, u, meta)
+                    return self.reply_file(200, file, ctype, {'Content-Disposition': disposition})
                 file, meta, disposition = name_exe.download(DATA, u)
                 with connect() as c: name_exe.record_download(c, u, meta)
             except name_exe.ExeError as e:
@@ -1734,20 +1750,36 @@ class Handler(AuthMixin, BaseHTTPRequestHandler):
             except OSError:
                 return self.reply(500, {'error': 'exeを保存できませんでした。'})
             return self.reply(200, {'ok': True, 'exe': meta})
+        if route=='/api/name-labels/setup':
+            from urllib.parse import unquote
+            with connect() as c: u=self.session_user(c)
+            try:
+                try: n=int(self.headers.get('Content-Length') or 0)
+                except ValueError: raise name_exe.ExeError(400, '送信内容を読めませんでした。')
+                raw_notes=self.headers.get('X-Exe-Notes')
+                meta=name_setup.save(DATA, u, unquote(self.headers.get('X-File-Name') or ''), self.rfile, n, notes=unquote(raw_notes) if raw_notes is not None else None)
+            except name_exe.ExeError as e:
+                self.close_connection=True
+                return self.reply(e.status, {'error': e.message})
+            except OSError:
+                return self.reply(500, {'error': '配布ファイルを保存できませんでした。'})
+            return self.reply(200, {'ok': True, 'setup': {k: meta[k] for k in meta if k != 'sha256'}})
         if route=='/api/name-labels/exe/notes':
             with connect() as c: u=self.session_user(c)
             try:
-                name_exe.check_user(u, upload=True)
+                # 配布ファイルがあればそちらの更新内容、なければ既存 exe の更新内容
+                target = name_setup if name_setup.info(DATA) else name_exe
+                target.check_user(u, upload=True)
                 try:
                     n=int(self.headers.get('Content-Length') or 0)
                     if n>200000: raise ValueError
                     d=json.loads(self.rfile.read(n) or b'{}')
                     if not isinstance(d,dict): raise ValueError
                 except ValueError: raise name_exe.ExeError(400, '送信内容を読めませんでした。')
-                notes=name_exe.set_notes(DATA, u, d.get('notes', ''))
+                notes=target.set_notes(DATA, u, d.get('notes', ''))
             except name_exe.ExeError as e:
                 return self.reply(e.status, {'error': e.message})
-            return self.reply(200, {'ok': True, 'notes': notes, 'history': name_exe.history(DATA)})
+            return self.reply(200, {'ok': True, 'notes': notes, 'history': target.history(DATA)})
         try:
             n=int(self.headers.get('Content-Length','0'))
             limit=400000000 if route in ('/api/migration/split-restore','/api/migration/split-inspect') else 80000000 if route in ('/api/migration/inspect','/api/migration/restore') else 14000000 if route in ('/api/placements','/api/placements/save','/api/name-labels','/api/name-labels/save','/api/name-source/import') else 12000000 if route in ('/api/shipments/import','/api/shipment-list/import','/api/shipment-contract/import') else 9000000 if route in ('/api/templates/import',) else 1000000
