@@ -1107,6 +1107,13 @@ body.personal-formats-page > main { width: 100%; max-width: none; margin: 0; pad
   min-width: 0;
   text-align: right;
 }
+#kintailabelbillingtable tfoot td {
+  font-weight: 700;
+  background: #eef3ee;
+  vertical-align: middle;
+}
+#kintailabelbillingtable tfoot tr:first-child td { border-top: 2px solid #7a8f7d; }
+#kintailabelbillingtable tfoot [data-total] { text-align: right; }
 
 /* Shared workspace entry. Keep desk content out of the initial home paint. */
 html[data-workspace-entry="home"] body>aside,html[data-workspace-entry="home"] body>main{display:none!important}

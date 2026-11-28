@@ -29,7 +29,9 @@
     if (!form) return;
     const month = $('#kintailabelbillingmonth');
     const branches = $('#kintailabelbillingbranch');
-    const body = $('#kintailabelbillingtable tbody');
+    const table = $('#kintailabelbillingtable');
+    const body = table.querySelector('tbody');
+    const foot = table.tFoot || table.createTFoot();
     const status = $('#kintailabelbillingstatus');
     const total = $('#kintailabelbillingtotal');
     const downloads = form.querySelectorAll('button[type=submit]');
@@ -66,12 +68,26 @@
 
     function refreshAmounts() {
       let sum = 0;
+      const qty = {};
+      let shipping = 0;
       for (const row of body.rows) {
-        const value = valueOf(grid.entries.get(row.dataset.key), Number(row.dataset.price));
+        const entry = grid.entries.get(row.dataset.key);
+        const value = valueOf(entry, Number(row.dataset.price));
         row.lastElementChild.textContent = Number.isNaN(value) ? '—' : number.format(value);
         sum += value;
+        const kind = row.dataset.kind;
+        qty[kind] = (qty[kind] ?? 0) + (amount(entry?.quantity || '') ?? 0);
+        shipping += amount(entry?.shipping || '') ?? 0;
       }
       total.textContent = Number.isNaN(sum) ? '入力を確認' : `${number.format(sum)} 円`;
+      const fmt = n => Number.isNaN(n) ? '—' : number.format(n);
+      for (const cell of foot.querySelectorAll('[data-total^="qty-"]')) {
+        cell.textContent = fmt(qty[cell.dataset.total.slice(4)] ?? 0);
+      }
+      const shipCell = foot.querySelector('[data-total="shipping"]');
+      const amountCell = foot.querySelector('[data-total="amount"]');
+      if (shipCell) shipCell.textContent = fmt(shipping);
+      if (amountCell) amountCell.textContent = fmt(sum);
     }
 
     function render() {
@@ -89,6 +105,9 @@
           <td>${input('quantity', esc(size) + ' 枚数', 'inputmode="numeric" maxlength="9"')}</td><td>${price}</td>
           <td>${input('shipping', esc(size) + ' 送料', 'inputmode="numeric" maxlength="9"')}</td><td></td></tr>`;
       }).join('')).join('');
+      foot.innerHTML = branch.sizes.map(([size], kind) => kind === 0
+        ? `<tr><td colspan="3" rowspan="${branch.sizes.length}">合計</td><td>${esc(size)}</td><td data-total="qty-0"></td><td></td><td data-total="shipping" rowspan="${branch.sizes.length}"></td><td data-total="amount" rowspan="${branch.sizes.length}"></td></tr>`
+        : `<tr><td>${esc(size)}</td><td data-total="qty-${kind}"></td><td></td></tr>`).join('');
       refreshAmounts();
     }
 
@@ -98,6 +117,7 @@
       grid = null;
       syncButtons();
       body.replaceChildren();
+      foot.replaceChildren();
       total.textContent = '';
       status.textContent = ym ? '読み込み中…' : '対象年月を選んでください。';
       if (!ym) return;
@@ -229,6 +249,7 @@
       month.value = '';
       branches.replaceChildren();
       body.replaceChildren();
+      foot.replaceChildren();
       status.textContent = total.textContent = '';
       syncButtons();
     };
