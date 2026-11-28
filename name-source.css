@@ -1,0 +1,27 @@
+body:has(#namesourcedesk:not([hidden])){overflow:hidden}body:has(#namesourcedesk:not([hidden])) main{height:100vh;max-width:none;overflow:hidden;display:flex;flex-direction:column;padding-bottom:16px}body:has(#namesourcedesk:not([hidden])) footer{display:none}
+#namesourcedesk{min-width:0;flex:1;min-height:0;display:flex;flex-direction:column}
+#nsbar{display:flex;gap:8px;align-items:center;margin:0 0 8px}#nsbar input[type=text],#nsq{width:240px}
+#nsstatus{margin:0 0 8px;color:#3d5344;font-size:.85rem}
+.nswrap{flex:1;min-height:0;overflow:auto;border:1px solid #d5ead4;border-radius:8px;background:#fff}
+#nstable{border-collapse:collapse;font-size:12.5px;min-width:2400px}
+#nstable th{position:sticky;top:0;background:#eef5ee;z-index:1;padding:6px;border:1px solid #c9dcc9;white-space:nowrap}
+#nstable th.nssync{background:#dcefe0}
+#nstable th:first-child,#nstable td:first-child{position:sticky;left:0;background:#fff;z-index:2;min-width:180px;font-weight:700}
+#nstable th:first-child{background:#eef5ee;z-index:3}
+#nstable td{border:1px solid #e1ebe1;padding:4px 6px;vertical-align:top;white-space:pre-wrap;max-width:320px}
+#nstable tr.nsnoterow td{background:#fafaf2}#nstable td.nsnote{color:#4b4b2a}
+#nstable tr.nsnew td{background:#fff7d6}
+#nstable textarea{width:100%;min-width:160px;font:inherit}
+#nstable td.nsact{white-space:nowrap}#nstable td.nsact button{padding:0 6px;min-height:0}
+#nsdiff{width:min(1100px,96vw);border:0;border-radius:12px;padding:0}
+#nsdiff .dialoghead{display:flex;gap:12px;align-items:center;padding:12px 18px 0}#nsdiff h2{margin:0;font-size:1.15rem}#nscounts{flex:1;font-size:.85rem;color:#3d5344}
+#nsdiffbody{padding:8px 18px;max-height:70vh;overflow:auto}
+#nsdiff .dialog-actions{padding:0 18px 14px;display:flex;justify-content:flex-end}
+.nsgroup h3{display:flex;gap:10px;align-items:center;font-size:1rem;margin:12px 0 6px}
+.nsgroup table{width:100%;border-collapse:collapse;font-size:12.5px}.nsgroup td{border-bottom:1px solid #e1ebe1;padding:5px 6px;vertical-align:top}
+.nsgroup td:first-child{width:24%}.nsgroup td:first-child small{display:block;color:#3d5344}.nsgroup td:last-child{width:130px}
+.nsd{display:grid;grid-template-columns:7em 1fr 1fr;gap:6px;white-space:pre-wrap}.nsd span{color:#3d5344}
+.nsd s,.nslegend s{text-decoration:none;background:#fff1e6;padding:0 4px}.nsd i,.nslegend i{font-style:normal;background:#e6f2ff;padding:0 4px}
+.nslegend{display:flex;gap:8px;margin:0;font-size:.8rem}
+.nsbulk{position:relative;font-size:.8rem;font-weight:400}.nsbulk summary{cursor:pointer;color:#186438}
+.nsbulk div{position:absolute;z-index:5;top:1.6em;left:0;display:flex;flex-direction:column;gap:4px;padding:6px;background:#fff;border:1px solid #c9dcc9;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.12)}
