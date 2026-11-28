@@ -112,6 +112,28 @@ class NameSourceTest(unittest.TestCase):
         code, _ = name_source.save_cell(_h('sales'), c, {'id': rows[0]['id'], 'field': 'memo', 'value': 'x'})
         self.assertEqual(code, 403)
 
+    def test_non_owner_cannot_view(self):
+        """主管理者以外は一覧・書き出し・差分も見られない。"""
+        c = _db()
+        _web(c)
+        name_source.import_excel(_h(), c, {'data': _workbook(), 'confirm': True})
+        for role in ('sales', 'floor', 'floor2', 'floor3', 'warehouse'):
+            code, body = name_source.list_rows(_h(role), c)
+            self.assertEqual(code, 403, role)
+            self.assertNotIn('rows', body if isinstance(body, dict) else {})
+            result = name_source.export_excel(_h(role), c)
+            self.assertEqual(result[0], 403, role)
+            code, body = name_source.diff(_h(role), c, {})
+            self.assertEqual(code, 403, role)
+            self.assertNotIn('items', body if isinstance(body, dict) else {})
+        code, body = name_source.list_rows(_h(), c)
+        self.assertEqual(code, 200)
+        self.assertGreater(len(body['rows']), 0)
+        code, body = name_source.diff(_h(), c, {})
+        self.assertEqual(code, 200)
+        self.assertIn('counts', body)
+
+
 
 if __name__ == '__main__':
     unittest.main()
