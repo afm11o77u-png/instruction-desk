@@ -87,16 +87,16 @@ def _parse_id(value):
 
 
 def _require(user):
-    return names._require(user)
-
-
-def _owner(user):
-    blocked = _require(user)
+    blocked = names._require(user)
     if blocked:
         return blocked
     if user['role'] != 'owner':
-        return 403, {'error': 'ネーム情報（ソース）を変更できるのは主管理者です。'}
+        return 403, {'error': 'ネーム情報（ソース）は主管理者だけが閲覧できます。'}
     return None
+
+
+def _owner(user):
+    return _require(user)
 
 
 def _history(c, user, action, row_id=None, format_id=None, detail=None):

@@ -25,6 +25,7 @@ function nsMount(){
  $('#nstable').addEventListener('click',nsClick);
 }
 async function loadNameSource(){
+ if(currentUser?.role!=='owner'){const desk=document.getElementById('namesourcedesk');if(desk)desk.hidden=true;return}
  nsMount();$('#namesourcedesk').hidden=false;
  try{ns=await api('/api/name-source')}catch(e){$('#nsstatus').textContent=e.message;return}
  $('#nsimport').hidden=$('#nsadd').hidden=!ns.canEdit;
